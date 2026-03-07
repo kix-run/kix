@@ -26,6 +26,9 @@ sentinel_failover_finished() {
 
 VALKEY_SERVICE="@SENTINEL_SERVICE_FQDN@"
 
+# valkey-cli automatically consumes credentials from the REDISCLI_AUTH variable
+[[ -n "$VALKEY_PASSWORD" ]] && export REDISCLI_AUTH="$VALKEY_PASSWORD"
+[[ -f "$VALKEY_PASSWORD_FILE" ]] && export REDISCLI_AUTH="$(< "${VALKEY_PASSWORD_FILE}")"
 
 if ! sentinel_failover_finished; then
     echo "I am the primary pod and you are stopping me. Starting sentinel failover"

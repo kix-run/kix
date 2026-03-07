@@ -526,13 +526,13 @@ lib.makeExtensible (self: {
       {
         data ? { },
         immutable ? null,
+        metadata ? { },
         ...
-      }:
-      self.mkResource {
+      }@args:
+      self.mkResource (args // {
         kind = "ConfigMap";
-        data = data;
-        immutable = immutable;
-      };
+        inherit data immutable metadata;
+      });
 
     withEntry =
       key: value: configMap:

@@ -58,9 +58,9 @@ host_id() {
 }
 get_sentinel_primary_info() {
     if is_boolean_yes "$VALKEY_SENTINEL_TLS_ENABLED"; then
-        sentinel_info_command="timeout 90 valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT --tls --cert ${VALKEY_SENTINEL_TLS_CERT_FILE} --key ${VALKEY_SENTINEL_TLS_KEY_FILE} --cacert ${VALKEY_SENTINEL_TLS_CA_FILE} sentinel get-primary-addr-by-name @PRIMARY_SET@"
+        sentinel_info_command="REDISCLI_AUTH="\$VALKEY_PASSWORD" timeout 90 valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT --tls --cert ${VALKEY_SENTINEL_TLS_CERT_FILE} --key ${VALKEY_SENTINEL_TLS_KEY_FILE} --cacert ${VALKEY_SENTINEL_TLS_CA_FILE} sentinel get-primary-addr-by-name @PRIMARY_SET@"
     else
-        sentinel_info_command="timeout 90 valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT sentinel get-primary-addr-by-name @PRIMARY_SET@"
+        sentinel_info_command="REDISCLI_AUTH="\$VALKEY_PASSWORD" timeout 90 valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT sentinel get-primary-addr-by-name @PRIMARY_SET@"
     fi
     info "about to run the command: $sentinel_info_command"
     retry_while "eval $sentinel_info_command" 2 5
@@ -100,6 +100,7 @@ fi
 # as well, prepare the new config in `prepare-sentinel.conf` and move it atomically to the ultimate destination when it is complete.
 cp /opt/bitnami/valkey-sentinel/mounted-etc/sentinel.conf /opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf
 printf "\nsentinel auth-pass %s %s" "@PRIMARY_SET@" "$VALKEY_PASSWORD" >> /opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf
+printf "\nrequirepass %s" "$VALKEY_PASSWORD" >> /opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf
 printf "\nsentinel myid %s" "$(host_id "$HOSTNAME")" >> /opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf
 
 if [[ -z "$VALKEY_PRIMARY_HOST" ]] || [[ -z "$VALKEY_PRIMARY_PORT_NUMBER" ]]

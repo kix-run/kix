@@ -184,7 +184,7 @@ let
           };
           quorum = lib.mkOption { type = types.int; default = 2; };
           primarySet = lib.mkOption { type = types.str; default = "myprimary"; };
-          downAfterMilliseconds = lib.mkOption { type = types.int; default = 30000; };
+          downAfterMilliseconds = lib.mkOption { type = types.int; default = 60000; };
           failoverTimeout = lib.mkOption { type = types.int; default = 180000; };
           parallelSyncs = lib.mkOption { type = types.int; default = 1; };
           configuration = lib.mkOption {
@@ -283,19 +283,21 @@ let
       default = {};
     };
 
+    # Matches Helm chart default: networkPolicy.enabled = true
     networkPolicy = lib.mkOption {
       type = types.submodule {
         options = {
-          enabled = lib.mkOption { type = types.bool; default = false; };
+          enabled = lib.mkOption { type = types.bool; default = true; };
         };
       };
       default = {};
     };
 
+    # Matches Helm chart default: pdb.create = true
     pdb = lib.mkOption {
       type = types.submodule {
         options = {
-          enabled = lib.mkOption { type = types.bool; default = false; };
+          enabled = lib.mkOption { type = types.bool; default = true; };
           maxUnavailable = lib.mkOption { type = types.nullOr types.int; default = 1; };
           minAvailable = lib.mkOption { type = types.nullOr types.int; default = null; };
         };
@@ -415,7 +417,8 @@ let
   |> kixlib'.configMap.withEntry "ping_liveness_local_and_primary.sh" (builtins.readFile ./scripts/ping_liveness_local_and_primary.sh)
   |> (cm: if cfg.sentinel.enabled then
     kixlib'.configMap.withEntry "ping_sentinel.sh" (builtins.readFile ./scripts/ping_sentinel.sh) cm
-    |> kixlib'.configMap.withEntry "parse_sentinels.awk" (builtins.readFile ./scripts/parse_sentinels.awk)
+    # parse_sentinels.awk uses @PRIMARY_SET@ — needs readScript, not bare readFile
+    |> kixlib'.configMap.withEntry "parse_sentinels.awk" (readScript "parse_sentinels.awk")
     else cm);
 
   # --- ConfigMap: scripts ---
@@ -546,13 +549,14 @@ let
     spec = {
       type = "ClusterIP";
       clusterIP = "None";
-      publishNotReadyAddresses = cfg.sentinel.enabled;
       ports = [
         { name = "tcp-redis"; port = 6379; targetPort = "redis"; }
       ] ++ lib.optionals cfg.sentinel.enabled [
         { name = "tcp-sentinel"; port = 26379; targetPort = "valkey-sentinel"; }
       ];
       selector = selectorLabels;
+    } // lib.optionalAttrs cfg.sentinel.enabled {
+      publishNotReadyAddresses = true;
     };
   };
 

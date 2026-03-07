@@ -44,9 +44,9 @@ fi
 SENTINEL_SERVICE_PORT=$(get_port "@FULLNAME@" "SENTINEL")
 validate_quorum() {
     if is_boolean_yes "$VALKEY_TLS_ENABLED"; then
-        quorum_info_command="valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT --tls --cert ${VALKEY_TLS_CERT_FILE} --key ${VALKEY_TLS_KEY_FILE} --cacert ${VALKEY_TLS_CA_FILE} sentinel primary @PRIMARY_SET@"
+        quorum_info_command="REDISCLI_AUTH="\$VALKEY_PASSWORD" valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT --tls --cert ${VALKEY_TLS_CERT_FILE} --key ${VALKEY_TLS_KEY_FILE} --cacert ${VALKEY_TLS_CA_FILE} sentinel primary @PRIMARY_SET@"
     else
-        quorum_info_command="valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT sentinel primary @PRIMARY_SET@"
+        quorum_info_command="REDISCLI_AUTH="\$VALKEY_PASSWORD" valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT sentinel primary @PRIMARY_SET@"
     fi
     info "about to run the command: $quorum_info_command"
     eval $quorum_info_command | grep -Fq "s_down"
@@ -54,9 +54,9 @@ validate_quorum() {
 
 trigger_manual_failover() {
     if is_boolean_yes "$VALKEY_TLS_ENABLED"; then
-        failover_command="valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT --tls --cert ${VALKEY_TLS_CERT_FILE} --key ${VALKEY_TLS_KEY_FILE} --cacert ${VALKEY_TLS_CA_FILE} sentinel failover @PRIMARY_SET@"
+        failover_command="REDISCLI_AUTH="\$VALKEY_PASSWORD" valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT --tls --cert ${VALKEY_TLS_CERT_FILE} --key ${VALKEY_TLS_KEY_FILE} --cacert ${VALKEY_TLS_CA_FILE} sentinel failover @PRIMARY_SET@"
     else
-        failover_command="valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT sentinel failover @PRIMARY_SET@"
+        failover_command="REDISCLI_AUTH="\$VALKEY_PASSWORD" valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT sentinel failover @PRIMARY_SET@"
     fi
 
     info "about to run the command: $failover_command"
@@ -65,9 +65,9 @@ trigger_manual_failover() {
 
 get_sentinel_primary_info() {
     if is_boolean_yes "$VALKEY_TLS_ENABLED"; then
-        sentinel_info_command="timeout 90 valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT --tls --cert ${VALKEY_TLS_CERT_FILE} --key ${VALKEY_TLS_KEY_FILE} --cacert ${VALKEY_TLS_CA_FILE} sentinel get-primary-addr-by-name @PRIMARY_SET@"
+        sentinel_info_command="REDISCLI_AUTH="\$VALKEY_PASSWORD" timeout 90 valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT --tls --cert ${VALKEY_TLS_CERT_FILE} --key ${VALKEY_TLS_KEY_FILE} --cacert ${VALKEY_TLS_CA_FILE} sentinel get-primary-addr-by-name @PRIMARY_SET@"
     else
-        sentinel_info_command="timeout 90 valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT sentinel get-primary-addr-by-name @PRIMARY_SET@"
+        sentinel_info_command="REDISCLI_AUTH="\$VALKEY_PASSWORD" timeout 90 valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT sentinel get-primary-addr-by-name @PRIMARY_SET@"
     fi
 
     info "about to run the command: $sentinel_info_command"

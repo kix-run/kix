@@ -119,7 +119,8 @@ def nix_build(flake_pkg: str) -> dict[str, dict]:
     return resources
 
 
-def compare_resources(helm: dict[str, dict], kix: dict[str, dict], diff_lines: int = 80) -> bool:
+def compare_resources(helm: dict[str, dict], kix: dict[str, dict],
+                      diff_lines: int = 80, ignore_missing: set[str] | None = None) -> bool:
     """Compare Helm and kix resources. Returns True if parity achieved."""
 
     def by_kind(resources):
@@ -153,8 +154,11 @@ def compare_resources(helm: dict[str, dict], kix: dict[str, dict], diff_lines: i
                 )
 
             if kix_key is None:
-                click.echo(f"  {click.style('MISSING', fg='red')}  {helm_key}")
-                has_diff = True
+                if ignore_missing and helm_key in ignore_missing:
+                    click.echo(f"  {click.style('SKIPPED', fg='blue', dim=True)}  {helm_key}")
+                else:
+                    click.echo(f"  {click.style('MISSING', fg='red')}  {helm_key}")
+                    has_diff = True
                 continue
 
             matched_kix_keys.add(kix_key)
@@ -198,14 +202,15 @@ def compare_resources(helm: dict[str, dict], kix: dict[str, dict], diff_lines: i
     return not has_diff
 
 
-def run_one(chart_path: str, flake_pkg: str, values_file: str | None, diff_lines: int) -> bool:
+def run_one(chart_path: str, flake_pkg: str, values_file: str | None,
+            diff_lines: int, ignore_missing: set[str] | None = None) -> bool:
     click.echo()
     click.secho(f"  {flake_pkg}", bold=True)
     click.echo()
 
     helm_resources = helm_template(chart_path, values_file)
     kix_resources = nix_build(flake_pkg)
-    passed = compare_resources(helm_resources, kix_resources, diff_lines)
+    passed = compare_resources(helm_resources, kix_resources, diff_lines, ignore_missing)
 
     click.echo()
     if passed:
@@ -231,11 +236,13 @@ def cli(ctx):
 @click.option("--chart-version", default=None, help="Chart version to pull")
 @click.option("-f", "--values", type=click.Path(exists=True), help="Helm values file")
 @click.option("--diff-lines", default=80, show_default=True, help="Max diff lines per resource")
+@click.option("--ignore-missing", multiple=True,
+              help="Kind/name keys to ignore if missing from kix (e.g. Secret/valkey)")
 def check(chart_name: str, chart_ref: str, chart_version: str | None,
-          values: str | None, diff_lines: int):
+          values: str | None, diff_lines: int, ignore_missing: tuple[str, ...]):
     """Run a single parity test with default or custom values."""
     chart_path = ensure_chart(chart_ref, chart_name, chart_version)
-    ok = run_one(chart_path, chart_name, values, diff_lines)
+    ok = run_one(chart_path, chart_name, values, diff_lines, set(ignore_missing) or None)
     sys.exit(0 if ok else 1)
 
 
@@ -245,9 +252,13 @@ def check(chart_name: str, chart_ref: str, chart_version: str | None,
               help="Helm chart reference (OCI ref, repo/chart, URL, or local path)")
 @click.option("--chart-version", default=None, help="Chart version to pull")
 @click.option("--diff-lines", default=80, show_default=True, help="Max diff lines per resource")
-def check_all(chart_name: str, chart_ref: str, chart_version: str | None, diff_lines: int):
+@click.option("--ignore-missing", multiple=True,
+              help="Kind/name keys to ignore if missing from kix (e.g. Secret/valkey)")
+def check_all(chart_name: str, chart_ref: str, chart_version: str | None,
+              diff_lines: int, ignore_missing: tuple[str, ...]):
     """Run all test cases from tests/<chart>/cases.txt."""
     chart_path = ensure_chart(chart_ref, chart_name, chart_version)
+    ignore_set = set(ignore_missing) or None
     cases_file = REPO_ROOT / "tests" / chart_name / "cases.txt"
     if not cases_file.exists():
         raise click.ClickException(f"No test cases at {cases_file}")
@@ -272,7 +283,7 @@ def check_all(chart_name: str, chart_ref: str, chart_version: str | None, diff_l
         click.echo("╔══════════════════════════════════════════════════════════════╗")
         click.echo(f"║ {click.style(pkg, bold=True)}")
         click.echo("╚══════════════════════════════════════════════════════════════╝")
-        passed = run_one(chart_path, pkg, values_path, diff_lines)
+        passed = run_one(chart_path, pkg, values_path, diff_lines, ignore_set)
         results.append((pkg, passed))
 
     click.echo("═══════════════════════════════════════════════════════════════")

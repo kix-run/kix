@@ -45,6 +45,8 @@ def normalize_helm(doc: dict) -> dict:
     doc = _strip_labels_and_annotations(doc)
     doc = _normalize_names_recursive(doc)
     doc = _strip_empty_fields(doc)
+    doc = _normalize_configmap_data(doc)
+    doc = _normalize_paths(doc)
     doc = _sort_arrays(doc)
     return doc
 
@@ -56,6 +58,8 @@ def normalize_kix(doc: dict) -> dict:
 
     doc = _strip_labels_and_annotations(doc)
     doc = _strip_empty_fields(doc)
+    doc = _normalize_configmap_data(doc)
+    doc = _normalize_paths(doc)
     doc = _sort_arrays(doc)
     return doc
 
@@ -120,41 +124,28 @@ def _find_metadata_blocks(doc: dict) -> list[dict]:
 
 
 def _normalize_names_recursive(obj: Any) -> Any:
-    """Strip Helm release-name- prefix from all name-like fields.
+    """Strip Helm release-name- prefix from all string values.
 
     Helm names resources 'release-name-valkey' while kix uses 'valkey'.
-    Also handles serviceName, serviceAccountName, secretName, configMap.name,
-    and string values inside selectors that reference release-prefixed names.
+    This applies to name fields, but also to embedded references in env var
+    values like 'valkey-primary-0.release-name-valkey-headless.default...'.
+    We strip ALL occurrences of the prefix in every string value.
     """
     if isinstance(obj, dict):
-        result = {}
-        for k, v in obj.items():
-            if k in ("name", "serviceName", "serviceAccountName") and isinstance(v, str):
-                result[k] = _strip_release_prefix(v)
-            elif k == "secretName" and isinstance(v, str):
-                result[k] = _strip_release_prefix(v)
-            else:
-                result[k] = _normalize_names_recursive(v)
-        return result
+        return {k: _normalize_names_recursive(v) for k, v in obj.items()}
     elif isinstance(obj, list):
         return [_normalize_names_recursive(item) for item in obj]
-    elif isinstance(obj, str) and obj.startswith(HELM_RELEASE_PREFIX):
-        return _strip_release_prefix(obj)
+    elif isinstance(obj, str) and HELM_RELEASE_PREFIX in obj:
+        return obj.replace(HELM_RELEASE_PREFIX, "")
     return obj
 
 
-def _strip_release_prefix(name: str) -> str:
-    if name.startswith(HELM_RELEASE_PREFIX):
-        return name[len(HELM_RELEASE_PREFIX):]
-    return name
-
-
 def _strip_empty_fields(obj: Any) -> Any:
-    """Remove null values and empty dicts/lists recursively.
+    """Remove null values, empty dicts, and empty lists recursively.
 
-    Helm templates sometimes emit empty fields like `seLinuxOptions: {}`
-    or `seccompProfile: null` that kix's removeNulls already strips.
-    Normalizing both sides prevents false diffs.
+    Helm templates sometimes emit empty fields like `seLinuxOptions: {}`,
+    `supplementalGroups: []`, or `seccompProfile: null` that kix's removeNulls
+    already strips. Normalizing both sides prevents false diffs.
     """
     if isinstance(obj, dict):
         result = {}
@@ -164,10 +155,53 @@ def _strip_empty_fields(obj: Any) -> Any:
                 continue
             if isinstance(v, dict) and not v:
                 continue
+            if isinstance(v, list) and not v:
+                continue
             result[k] = v
         return result
     elif isinstance(obj, list):
         return [_strip_empty_fields(item) for item in obj]
+    return obj
+
+
+def _normalize_configmap_data(doc: dict) -> dict:
+    """Normalize whitespace in ConfigMap data values.
+
+    - Strip trailing whitespace (builtins.readFile preserves trailing newlines)
+    - Collapse runs of blank lines to a single newline (Nix string interpolation
+      of empty values can leave extra blank lines that Helm doesn't produce)
+    """
+    import re
+    if doc.get("kind") != "ConfigMap":
+        return doc
+    data = doc.get("data")
+    if isinstance(data, dict):
+        doc = dict(doc)
+        def normalize_text(v: str) -> str:
+            # Strip trailing whitespace from each line, collapse blank lines, strip ends
+            lines = [line.rstrip() for line in v.splitlines()]
+            return re.sub(r"\n{2,}", "\n", "\n".join(lines)).strip()
+        doc["data"] = {k: normalize_text(v) if isinstance(v, str) else v
+                       for k, v in data.items()}
+    return doc
+
+
+def _normalize_paths(obj: Any) -> Any:
+    """Strip trailing slashes from mount paths.
+
+    Kubernetes treats '/foo/bar/' and '/foo/bar' identically.
+    Helm sometimes includes trailing slashes, kix doesn't.
+    """
+    if isinstance(obj, dict):
+        result = {}
+        for k, v in obj.items():
+            if k == "mountPath" and isinstance(v, str) and len(v) > 1:
+                result[k] = v.rstrip("/")
+            else:
+                result[k] = _normalize_paths(v)
+        return result
+    elif isinstance(obj, list):
+        return [_normalize_paths(item) for item in obj]
     return obj
 
 
@@ -184,6 +218,10 @@ def _sort_arrays(obj: Any) -> Any:
                 result[k] = sorted(v, key=lambda p: (p.get("name", ""), p.get("protocol", "")))
             elif k == "env" and isinstance(v, list) and v and isinstance(v[0], dict):
                 result[k] = sorted(v, key=lambda e: e.get("name", ""))
+            elif k == "volumeMounts" and isinstance(v, list) and v and isinstance(v[0], dict):
+                result[k] = sorted(v, key=lambda vm: vm.get("mountPath", ""))
+            elif k == "volumes" and isinstance(v, list) and v and isinstance(v[0], dict):
+                result[k] = sorted(v, key=lambda vol: vol.get("name", ""))
             else:
                 result[k] = _sort_arrays(v)
         return result
