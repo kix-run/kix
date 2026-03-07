@@ -1,66 +1,90 @@
 #!/usr/bin/env bash
 # Verify behavioral parity between a Helm chart and a kix module.
 #
-# Usage: ./scripts/verify-parity.sh <chart-name> [helm-values-file]
+# Usage:
+#   ./scripts/verify-parity.sh <chart-name>                    # single default test
+#   ./scripts/verify-parity.sh <chart-name> <helm-values-file> # single test with custom values
+#   ./scripts/verify-parity.sh --all <chart-name>              # run all test cases from tests/<chart>/cases.txt
 #
-# This script:
-# 1. Renders the Helm chart with `helm template`
-# 2. Builds the kix module with `nix build`
-# 3. Normalizes both outputs (strips cosmetic differences)
-# 4. Compares resources by kind, checking behavioral equivalence
+# Test cases live in tests/<chart-name>/cases.txt. Each line maps a flake
+# package name to a Helm values file. This lets you test multiple configurations
+# (e.g., defaults, sentinel mode, everything-enabled) in one invocation.
 #
-# Exit code 0 = parity achieved, 1 = differences found
+# Exit code 0 = all parity tests pass, 1 = differences found
 
 set -euo pipefail
 
-CHART_NAME="${1:?Usage: verify-parity.sh <chart-name> [helm-values-file]}"
-VALUES_FILE="${2:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-WORK_DIR=$(mktemp -d)
 
-trap 'rm -rf "$WORK_DIR"' EXIT
+# --- Run all test cases for a chart ---
+if [ "${1:-}" = "--all" ]; then
+  CHART_NAME="${2:?Usage: verify-parity.sh --all <chart-name>}"
+  CASES_FILE="$REPO_ROOT/tests/$CHART_NAME/cases.txt"
 
-echo "=== Verifying parity for: $CHART_NAME ==="
+  if [ ! -f "$CASES_FILE" ]; then
+    echo "ERROR: No test cases file at $CASES_FILE"
+    echo "Create one with format: <flake-package> <helm-values-file>"
+    exit 1
+  fi
 
-# --- Step 1: Render Helm chart ---
-HELM_OUT="$WORK_DIR/helm"
-mkdir -p "$HELM_OUT"
+  total=0
+  passed=0
+  failed=0
+  failed_names=()
 
-HELM_ARGS=(template release-name)
+  while IFS= read -r line || [ -n "$line" ]; do
+    # Skip comments and blank lines
+    [[ "$line" =~ ^[[:space:]]*# ]] && continue
+    [[ -z "${line// /}" ]] && continue
 
-if [ -d "/tmp/$CHART_NAME" ]; then
-  HELM_ARGS+=("/tmp/$CHART_NAME")
-elif [ -d "$REPO_ROOT/charts/$CHART_NAME" ]; then
-  HELM_ARGS+=("$REPO_ROOT/charts/$CHART_NAME")
-else
-  HELM_ARGS+=("$CHART_NAME/$CHART_NAME")
-fi
+    # Parse: <flake-package> <values-file>
+    read -r pkg values_file <<< "$line"
+    total=$((total + 1))
 
-if [ -n "$VALUES_FILE" ]; then
-  HELM_ARGS+=(-f "$VALUES_FILE")
-fi
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════════╗"
+    echo "║ Test case: $pkg"
+    echo "╚══════════════════════════════════════════════════════════════╝"
+    echo ""
 
-HELM_ARGS+=(--output-dir "$HELM_OUT")
+    # Build values file path (relative to tests/<chart>/)
+    VALUES_ARG=""
+    if [ -n "$values_file" ] && [ "$values_file" != "-" ]; then
+      VALUES_PATH="$REPO_ROOT/tests/$CHART_NAME/$values_file"
+      if [ -f "$VALUES_PATH" ]; then
+        # Only pass non-empty values files to Helm
+        if [ -s "$VALUES_PATH" ] && grep -qv '^\s*#' "$VALUES_PATH"; then
+          VALUES_ARG="$VALUES_PATH"
+        fi
+      else
+        echo "WARNING: Values file not found: $VALUES_PATH"
+      fi
+    fi
 
-echo "Running: helm ${HELM_ARGS[*]}"
-helm "${HELM_ARGS[@]}" 2>/dev/null
+    if "$SCRIPT_DIR/verify-parity-one.sh" "$CHART_NAME" "$pkg" "$VALUES_ARG"; then
+      passed=$((passed + 1))
+    else
+      failed=$((failed + 1))
+      failed_names+=("$pkg")
+    fi
+  done < "$CASES_FILE"
 
-# --- Step 2: Build kix module ---
-echo "Building kix module..."
-# Capture stdout (the output path) separately from stderr (download/build logs).
-# stderr goes to the terminal so the user sees build progress.
-KIX_OUT=$(nix build "${REPO_ROOT}#${CHART_NAME}" --extra-experimental-features pipe-operators --no-link --print-out-paths) || {
   echo ""
-  echo "ERROR: nix build failed for '${CHART_NAME}'."
-  echo "Make sure the chart is wired into flake.nix packages."
-  exit 1
-}
+  echo "═══════════════════════════════════════════════════════════════"
+  echo "Results: $passed/$total passed, $failed failed"
+  if [ $failed -gt 0 ]; then
+    echo "Failed: ${failed_names[*]}"
+    echo "═══════════════════════════════════════════════════════════════"
+    exit 1
+  fi
+  echo "═══════════════════════════════════════════════════════════════"
+  exit 0
+fi
 
-# --- Step 3: Normalize and compare using Python ---
-# We use nix-shell to get PyYAML, then run one self-contained Python script
-# that handles all normalization and comparison logic. This avoids the quoting
-# nightmares of embedding Python in bash with variable interpolation.
+# --- Single test (backwards-compatible) ---
+CHART_NAME="${1:?Usage: verify-parity.sh <chart-name> [helm-values-file]}"
+VALUES_FILE="${2:-}"
+FLAKE_PKG="$CHART_NAME"
 
-HELM_OUT="$HELM_OUT" KIX_OUT="$KIX_OUT" WORK_DIR="$WORK_DIR" \
-  nix-shell -p python3Packages.pyyaml --run "python3 '$SCRIPT_DIR/verify-parity.py'"
+exec "$SCRIPT_DIR/verify-parity-one.sh" "$CHART_NAME" "$FLAKE_PKG" "$VALUES_FILE"

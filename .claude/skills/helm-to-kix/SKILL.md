@@ -204,16 +204,44 @@ in
 
 ### Phase 6: Verify Parity
 
-This is the critical feedback loop.
+This is the critical feedback loop. **Test multiple value configurations**, not just defaults.
 
-1. **Wire the chart into flake.nix** first:
+1. **Wire the chart into flake.nix** — create a package for each test variant:
    ```nix
+   # Default values
    packages.<chart-name> = mkChartManifests ./pkgs/<chart-name> {
      services.<chart-name>.enable = true;
    };
+   # Everything enabled — covers all conditional resources
+   packages.<chart-name>-full = mkChartManifests ./pkgs/<chart-name> {
+     services.<chart-name> = {
+       enable = true;
+       # Enable every optional feature...
+     };
+   };
    ```
 
-2. **Run verification**:
+2. **Create test cases** in `tests/<chart-name>/`:
+   ```
+   tests/<chart-name>/
+   ├── cases.txt        # Maps flake packages to Helm values files
+   ├── sentinel.yaml    # Helm values for sentinel variant
+   └── full.yaml        # Helm values for everything-enabled variant
+   ```
+
+   `cases.txt` format (`-` means no values file / use chart defaults):
+   ```
+   <chart-name>           -
+   <chart-name>-sentinel  sentinel.yaml
+   <chart-name>-full      full.yaml
+   ```
+
+3. **Run all test cases**:
+   ```bash
+   ./scripts/verify-parity.sh --all <chart-name>
+   ```
+
+   Or run a single case:
    ```bash
    ./scripts/verify-parity.sh <chart-name>
    ```
@@ -235,7 +263,12 @@ kix dependency annotations) and compares resources by kind.
 - `checksum/config` vs kix store-path based integrity
 - Resource naming conventions
 
-Iterate until the behavioral diff is clean.
+**Why test multiple variants**: Default values only exercise the happy path. Charts have
+conditional resources (PDB, NetworkPolicy, ServiceMonitor, etc.) behind enable flags that
+won't be compared unless you create a test case that enables them. Always include a "full"
+variant that turns everything on.
+
+Iterate until the behavioral diff is clean for all variants.
 
 ### Phase 7: Handle Advanced Features
 

@@ -123,6 +123,19 @@
                 sentinel.enabled = true;
               };
             };
+
+            # Valkey — everything enabled (sentinel + metrics + serviceMonitor + networkPolicy + PDB)
+            # Used for parity testing to cover all conditional resources.
+            valkey-full = mkChartManifests ./pkgs/valkey {
+              services.valkey = {
+                enable = true;
+                sentinel.enabled = true;
+                metrics.enabled = true;
+                metrics.serviceMonitor.enabled = true;
+                networkPolicy.enabled = true;
+                pdb.enabled = true;
+              };
+            };
           };
         };
     };

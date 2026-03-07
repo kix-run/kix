@@ -1,0 +1,8 @@
+# Parity test cases for valkey.
+# Format: <flake-package-name> <helm-values-file-or-dash>
+#
+# Each line defines a test variant. Use "-" for default values (no Helm values file).
+
+valkey          -
+valkey-sentinel sentinel.yaml
+valkey-full     full.yaml
