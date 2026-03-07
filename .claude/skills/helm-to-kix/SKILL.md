@@ -238,12 +238,12 @@ This is the critical feedback loop. **Test multiple value configurations**, not 
 
 3. **Run all test cases**:
    ```bash
-   ./scripts/verify-parity.sh --all <chart-name>
+   ./scripts/verify-parity --all <chart-name>
    ```
 
    Or run a single case:
    ```bash
-   ./scripts/verify-parity.sh <chart-name>
+   ./scripts/verify-parity <chart-name>
    ```
 
 The script strips cosmetic differences (helm.sh/chart labels, managed-by, checksum annotations,

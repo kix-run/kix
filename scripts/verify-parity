@@ -1,0 +1,258 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["pyyaml"]
+# ///
+"""
+Verify behavioral parity between Helm chart output and kix module output.
+
+Usage:
+  ./scripts/verify-parity <chart-name>                     # single test, default values
+  ./scripts/verify-parity <chart-name> -f values.yaml      # single test, custom Helm values
+  ./scripts/verify-parity --all <chart-name>               # all test cases from tests/<chart>/cases.txt
+
+Test cases live in tests/<chart-name>/cases.txt. Each line maps a flake
+package name to a Helm values file. This lets you test multiple configurations
+(e.g., defaults, sentinel mode, everything-enabled) in one invocation.
+"""
+
+import argparse
+import difflib
+import json
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+import yaml
+
+# Add scripts/ to path so we can import the parity package
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from parity.normalize import normalize_helm, normalize_kix, resource_key
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# Helm chart lookup order: /tmp/<name>, charts/<name>, <name>/<name>
+CHART_SEARCH_PATHS = [
+    lambda name: Path("/tmp") / name,
+    lambda name: REPO_ROOT / "charts" / name,
+]
+
+
+def find_chart(name: str) -> str:
+    """Find the Helm chart directory for a given chart name."""
+    for path_fn in CHART_SEARCH_PATHS:
+        p = path_fn(name)
+        if p.is_dir():
+            return str(p)
+    return f"{name}/{name}"
+
+
+def helm_template(chart_name: str, values_file: str | None = None) -> dict[str, dict]:
+    """Render a Helm chart and return {resource_key: normalized_doc}."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cmd = ["helm", "template", "release-name", find_chart(chart_name),
+               "--output-dir", tmpdir]
+        if values_file:
+            cmd += ["-f", values_file]
+
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"ERROR: helm template failed:\n{result.stderr}", file=sys.stderr)
+            sys.exit(1)
+
+        resources = {}
+        for yaml_file in Path(tmpdir).rglob("*.yaml"):
+            with open(yaml_file) as f:
+                for doc in yaml.safe_load_all(f):
+                    if doc is None:
+                        continue
+                    doc = normalize_helm(doc)
+                    key = resource_key(doc)
+                    # Handle duplicate keys (rare, but possible)
+                    if key in resources:
+                        key += f"-{len(resources)}"
+                    resources[key] = doc
+        return resources
+
+
+def nix_build(flake_pkg: str) -> dict[str, dict]:
+    """Build a kix flake package and return {resource_key: normalized_doc}."""
+    cmd = [
+        "nix", "build", f"{REPO_ROOT}#{flake_pkg}",
+        "--extra-experimental-features", "pipe-operators",
+        "--no-link", "--print-out-paths",
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"ERROR: nix build failed for '{flake_pkg}':", file=sys.stderr)
+        print(result.stderr, file=sys.stderr)
+        sys.exit(1)
+
+    out_path = Path(result.stdout.strip())
+    resources = {}
+    for json_file in out_path.glob("*.json"):
+        with open(json_file) as f:
+            doc = json.load(f)
+        doc = normalize_kix(doc)
+        key = resource_key(doc)
+        resources[key] = doc
+    return resources
+
+
+def compare_resources(helm: dict[str, dict], kix: dict[str, dict]) -> bool:
+    """Compare Helm and kix resources. Returns True if parity achieved."""
+
+    # Index by kind for matching
+    def by_kind(resources):
+        index = {}
+        for key, doc in resources.items():
+            kind = doc.get("kind", "Unknown")
+            index.setdefault(kind, {})[key] = doc
+        return index
+
+    helm_by_kind = by_kind(helm)
+    kix_by_kind = by_kind(kix)
+    all_kinds = sorted(set(helm_by_kind) | set(kix_by_kind))
+
+    print(f"Helm resources: {len(helm)}")
+    print(f"Kix resources:  {len(kix)}")
+    print()
+
+    has_diff = False
+    matched_kix_keys = set()
+
+    # Resources Helm produces that kix should match
+    for kind in all_kinds:
+        helm_resources = helm_by_kind.get(kind, {})
+        kix_resources = kix_by_kind.get(kind, {})
+
+        for helm_key, helm_doc in helm_resources.items():
+            # Try exact key match first, then any unmatched resource of same kind
+            if helm_key in kix_resources and helm_key not in matched_kix_keys:
+                kix_key = helm_key
+            else:
+                kix_key = next(
+                    (k for k in kix_resources if k not in matched_kix_keys), None
+                )
+
+            if kix_key is None:
+                print(f"  MISSING  {helm_key}")
+                has_diff = True
+                continue
+
+            matched_kix_keys.add(kix_key)
+            kix_doc = kix_resources[kix_key]
+
+            helm_json = json.dumps(helm_doc, sort_keys=True, indent=2)
+            kix_json = json.dumps(kix_doc, sort_keys=True, indent=2)
+
+            if helm_json == kix_json:
+                print(f"  MATCH    {helm_key}")
+            else:
+                label = helm_key if helm_key == kix_key else f"{helm_key} <-> {kix_key}"
+                print(f"  DIFFERS  {label}")
+                # Unified diff — much more readable than line-by-line
+                diff = difflib.unified_diff(
+                    helm_json.splitlines(),
+                    kix_json.splitlines(),
+                    fromfile=f"helm:{helm_key}",
+                    tofile=f"kix:{kix_key}",
+                    lineterm="",
+                )
+                diff_lines = list(diff)
+                for line in diff_lines[:80]:
+                    print(f"    {line}")
+                if len(diff_lines) > 80:
+                    print(f"    ... ({len(diff_lines) - 80} more lines)")
+                print()
+                has_diff = True
+
+    # Extra resources in kix not matched to Helm
+    for kind in all_kinds:
+        for kix_key in kix_by_kind.get(kind, {}):
+            if kix_key not in matched_kix_keys:
+                print(f"  EXTRA    {kix_key}")
+                has_diff = True
+
+    return not has_diff
+
+
+def run_one(chart_name: str, flake_pkg: str, values_file: str | None) -> bool:
+    """Run a single parity test. Returns True if passed."""
+    print(f"=== {flake_pkg} ===")
+    print()
+
+    helm_resources = helm_template(chart_name, values_file)
+    kix_resources = nix_build(flake_pkg)
+    passed = compare_resources(helm_resources, kix_resources)
+
+    print()
+    if passed:
+        print("RESULT: Parity achieved!")
+    else:
+        print("RESULT: Differences found")
+    print()
+    return passed
+
+
+def run_all(chart_name: str) -> bool:
+    """Run all test cases from tests/<chart>/cases.txt. Returns True if all pass."""
+    cases_file = REPO_ROOT / "tests" / chart_name / "cases.txt"
+    if not cases_file.exists():
+        print(f"ERROR: No test cases at {cases_file}", file=sys.stderr)
+        sys.exit(1)
+
+    tests_dir = cases_file.parent
+    cases = []
+    for line in cases_file.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        pkg = parts[0]
+        values = parts[1] if len(parts) > 1 else "-"
+        if values == "-":
+            values_path = None
+        else:
+            values_path = str(tests_dir / values)
+        cases.append((pkg, values_path))
+
+    results = []
+    for pkg, values_path in cases:
+        print("╔══════════════════════════════════════════════════════════════╗")
+        print(f"║ Test case: {pkg}")
+        print("╚══════════════════════════════════════════════════════════════╝")
+        print()
+        passed = run_one(chart_name, pkg, values_path)
+        results.append((pkg, passed))
+
+    print("═══════════════════════════════════════════════════════════════")
+    total = len(results)
+    passed = sum(1 for _, p in results if p)
+    failed = [name for name, p in results if not p]
+    print(f"Results: {passed}/{total} passed, {len(failed)} failed")
+    if failed:
+        print(f"Failed: {', '.join(failed)}")
+    print("═══════════════════════════════════════════════════════════════")
+    return not failed
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Verify Helm/kix parity")
+    parser.add_argument("chart_name", help="Chart name (e.g., valkey)")
+    parser.add_argument("-f", "--values", help="Helm values file for single test")
+    parser.add_argument("--all", action="store_true", dest="run_all",
+                        help="Run all test cases from tests/<chart>/cases.txt")
+    args = parser.parse_args()
+
+    if args.run_all:
+        ok = run_all(args.chart_name)
+    else:
+        ok = run_one(args.chart_name, args.chart_name, args.values)
+
+    sys.exit(0 if ok else 1)
+
+
+if __name__ == "__main__":
+    main()
