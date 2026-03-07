@@ -1,0 +1,5 @@
+chart: coredns/coredns
+chart-version: "1.45.0"
+
+cases:
+  coredns: {}

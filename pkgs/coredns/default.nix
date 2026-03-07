@@ -1,4 +1,4 @@
-# CoreDNS kix module — migrated from the coredns Helm chart (v1.36.2, appVersion 1.12.3)
+# CoreDNS kix module — migrated from the coredns Helm chart (v1.45.0, appVersion 1.13.1)
 #
 # Source Helm chart stored at: charts/coredns/ for reference and parity testing.
 #
