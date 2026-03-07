@@ -308,15 +308,20 @@ let
 
   # --- Labels ---
   # Stable selector labels — NEVER include version here (breaks rolling updates).
+  # releaseName comes from cluster.releaseName (Level 1 intent merging) via
+  # mkDefault in the config section below. Defaults to "release-name" for
+  # Helm parity, but cluster-wide config can change it for all charts at once.
   selectorLabels = {
-    "app.kubernetes.io/instance" = "release-name";
+    "app.kubernetes.io/instance" = config.cluster.releaseName;
     "app.kubernetes.io/name" = "coredns";
   } // lib.optionalAttrs cfg.isClusterService {
     "k8s-app" = "coredns";
   };
 
-  # Full metadata labels for all resources
-  allLabels = selectorLabels // {
+  # Full metadata labels for all resources.
+  # cluster.labels (Level 1) are merged as a base — chart-specific labels
+  # override them if there's a key collision.
+  allLabels = config.cluster.labels // selectorLabels // {
     "app.kubernetes.io/managed-by" = "kix";
   } // lib.optionalAttrs cfg.isClusterService {
     "kubernetes.io/cluster-service" = "true";
@@ -432,6 +437,50 @@ in
   inherit options;
 
   config = {
+    # --- Level 1: consume cluster-wide defaults ---
+    # mkDefault priority means: cluster default < this < user's explicit setting.
+    # When loaded individually (mkChartManifests), cluster.namespace defaults to
+    # "default" anyway, so behavior is unchanged for parity testing.
+    services.coredns.namespace = lib.mkDefault config.cluster.namespace;
+
+    # --- Level 2: service registry ---
+    # Advertise our endpoints so other charts/modules can discover coredns
+    # without hardcoding DNS names. The prometheus metrics endpoint is only
+    # registered if the prometheus plugin is configured in servers.
+    registry.coredns = lib.mkIf cfg.enable {
+      endpoints = {
+        dns-udp = {
+          host = "coredns.${cfg.namespace}.svc.${config.cluster.domain}";
+          port = 53;
+          protocol = "dns-udp";
+        };
+        dns-tcp = {
+          host = "coredns.${cfg.namespace}.svc.${config.cluster.domain}";
+          port = 53;
+          protocol = "dns-tcp";
+        };
+      } // lib.optionalAttrs (builtins.any (s: builtins.any (p: p.name == "prometheus") s.plugins) cfg.servers) {
+        metrics = {
+          host = "coredns.${cfg.namespace}.svc.${config.cluster.domain}";
+          port = 9153;
+          protocol = "http";
+        };
+      };
+    };
+
+    # --- Level 3: monitoring target ---
+    # Declare our metrics endpoint for the cross-cutting monitoring module.
+    # Only relevant when prometheus plugin is configured.
+    monitoring.targets.coredns = lib.mkIf (
+      cfg.enable
+      && builtins.any (s: builtins.any (p: p.name == "prometheus") s.plugins) cfg.servers
+    ) {
+      serviceName = "coredns";
+      namespace = cfg.namespace;
+      portName = "tcp-9153";
+      selector = selectorLabels;
+    };
+
     # One manifest entry per resource — this is what verify-parity.sh compares.
     manifests = lib.optionalAttrs cfg.enable ({
       "coredns-deployment" = kixlib'.mkManifest deployment;

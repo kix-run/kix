@@ -316,12 +316,14 @@ let
 
   # --- Labels ---
   # Stable selector labels — NEVER include version here.
+  # releaseName comes from cluster.releaseName (Level 1 intent merging).
   selectorLabels = {
-    "app.kubernetes.io/instance" = "release-name";
+    "app.kubernetes.io/instance" = config.cluster.releaseName;
     "app.kubernetes.io/name" = "valkey";
   };
 
-  allLabels = selectorLabels // {
+  # cluster.labels (Level 1) merged as base — chart-specific labels override.
+  allLabels = config.cluster.labels // selectorLabels // {
     "app.kubernetes.io/managed-by" = "kix";
     "app.kubernetes.io/part-of" = "valkey";
   };
@@ -1018,6 +1020,60 @@ in
   inherit options;
 
   config = {
+    # --- Level 1: consume cluster-wide defaults ---
+    # mkDefault priority means: cluster default < this < user's explicit setting.
+    services.valkey.namespace = lib.mkDefault config.cluster.namespace;
+    services.valkey.clusterDomain = lib.mkDefault config.cluster.domain;
+
+    # --- Level 2: service registry ---
+    # Advertise our endpoints. Mode-aware: sentinel mode exposes a single service
+    # (clients use sentinel protocol to discover the current primary), while
+    # replication mode exposes separate primary/replica services.
+    registry.valkey = lib.mkIf cfg.enable {
+      endpoints = (if cfg.sentinel.enabled then {
+        primary = {
+          host = "${fullname}.${cfg.namespace}.svc.${cfg.clusterDomain}";
+          port = 6379;
+          protocol = "redis";
+        };
+      } else {
+        primary = {
+          host = "${fullname}-primary.${cfg.namespace}.svc.${cfg.clusterDomain}";
+          port = 6379;
+          protocol = "redis";
+        };
+        replicas = {
+          host = "${fullname}-replicas.${cfg.namespace}.svc.${cfg.clusterDomain}";
+          port = 6379;
+          protocol = "redis";
+        };
+      })
+      // lib.optionalAttrs cfg.sentinel.enabled {
+        sentinel = {
+          host = "${fullname}.${cfg.namespace}.svc.${cfg.clusterDomain}";
+          port = 26379;
+          protocol = "redis-sentinel";
+        };
+      }
+      // lib.optionalAttrs cfg.metrics.enabled {
+        metrics = {
+          host = "${fullname}-metrics.${cfg.namespace}.svc.${cfg.clusterDomain}";
+          port = 9121;
+          protocol = "http";
+        };
+      };
+    };
+
+    # --- Level 3: monitoring target ---
+    # Declare our metrics endpoint for the cross-cutting monitoring module.
+    monitoring.targets.valkey = lib.mkIf (cfg.enable && cfg.metrics.enabled) {
+      serviceName = "${fullname}-metrics";
+      namespace = cfg.namespace;
+      portName = "http-metrics";
+      interval = cfg.metrics.serviceMonitor.interval;
+      selector = selectorLabels // { "app.kubernetes.io/component" = "metrics"; };
+    };
+
     manifests = lib.optionalAttrs cfg.enable (
       # --- Resources common to both modes ---
       {
@@ -1055,7 +1111,10 @@ in
           "valkey-replica-pdb" = kixlib'.mkManifest replicaPdb;
         }
       )
-      // lib.optionalAttrs (cfg.metrics.enabled && cfg.metrics.serviceMonitor.enabled) {
+      # Gate per-chart ServiceMonitor: when the cross-cutting monitoring module
+      # is enabled (Level 3), it takes over ServiceMonitor creation. We avoid
+      # duplicates by only creating our own when monitoring.enabled = false.
+      // lib.optionalAttrs (cfg.metrics.enabled && cfg.metrics.serviceMonitor.enabled && !config.monitoring.enabled) {
         "valkey-servicemonitor" = kixlib'.mkManifest serviceMonitor;
       }
     );
