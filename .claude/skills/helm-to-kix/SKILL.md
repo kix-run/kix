@@ -53,20 +53,90 @@ Before starting, understand these decisions (documented in `lib/default.nix` hea
 5. **Container passthrough** — `mkContainer` passes through ALL arguments. Don't worry
    about listing every field — anything you pass will be preserved.
 
+## Intent Merging (3-Level Module System)
+
+Charts participate in a shared module system with three levels. **Every new chart must
+integrate with all three.** See `modules/` for the full module infrastructure.
+
+### Level 1: Cluster Defaults (`modules/cluster.nix`)
+
+Charts inherit cluster-wide settings via `lib.mkDefault`. In the config section:
+```nix
+config = {
+  services.<chart-name>.namespace = lib.mkDefault config.cluster.namespace;
+  # If the chart uses cluster domain for DNS FQDNs:
+  services.<chart-name>.clusterDomain = lib.mkDefault config.cluster.domain;
+  # ...
+};
+```
+
+In label definitions, use `config.cluster.releaseName` (not hardcoded `"release-name"`)
+and merge `config.cluster.labels` as a base:
+```nix
+selectorLabels = {
+  "app.kubernetes.io/instance" = config.cluster.releaseName;
+  "app.kubernetes.io/name" = "<chart-name>";
+};
+allLabels = config.cluster.labels // selectorLabels // {
+  "app.kubernetes.io/managed-by" = "kix";
+};
+```
+
+### Level 2: Service Registry (`modules/registry.nix`)
+
+Charts declare their endpoints so other charts can discover them:
+```nix
+registry.<chart-name> = lib.mkIf cfg.enable {
+  endpoints = {
+    primary = {
+      host = "<service-name>.${cfg.namespace}.svc.${cfg.clusterDomain}";
+      port = 8080;
+      protocol = "http";
+    };
+  };
+};
+```
+
+If the chart has multiple modes (like valkey sentinel vs replication), make the
+endpoints mode-aware — consumers shouldn't need to know which mode is active.
+
+### Level 3: Cross-Cutting Modules (`modules/monitoring.nix`)
+
+Charts declare monitoring targets if they expose metrics:
+```nix
+monitoring.targets.<chart-name> = lib.mkIf (cfg.enable && cfg.metrics.enabled) {
+  serviceName = "<chart-name>-metrics";
+  namespace = cfg.namespace;
+  portName = "http-metrics";
+  selector = selectorLabels // { "app.kubernetes.io/component" = "metrics"; };
+};
+```
+
+Gate per-chart ServiceMonitor creation on `!config.monitoring.enabled` so the
+cross-cutting module can replace it:
+```nix
+// lib.optionalAttrs (cfg.metrics.serviceMonitor.enabled && !config.monitoring.enabled) {
+  "<chart-name>-servicemonitor" = kixlib'.mkManifest serviceMonitor;
+}
+```
+
 ## Repo Structure
 
 ```
 kixpkgs/
-├── lib/default.nix          # kixlib - shared builders (mkDeployment, mkService, etc.)
-├── modules/default.nix      # Base module (defines manifests option)
-├── pkgs/<chart-name>/       # One directory per migrated chart
-│   ├── default.nix          # Options + wiring (the main module)
-│   ├── deployment.nix       # Deployment-specific options (if complex)
-│   ├── autoscaler.nix       # Autoscaler options (if chart has one)
-│   └── ...                  # Split by resource type only when needed
-├── examples/                # Example configs showing how to use modules
-├── scripts/verify-parity.sh # Automated helm vs kix behavioral diff checker
-└── flake.nix                # Flake that wires everything together
+├── lib/default.nix              # kixlib - shared builders (mkDeployment, mkService, etc.)
+├── modules/
+│   ├── default.nix              # Base module (imports all below, defines manifests option)
+│   ├── cluster.nix              # Level 1: cluster-wide defaults (namespace, domain, labels)
+│   ├── registry.nix             # Level 2: service endpoint registry
+│   ├── monitoring.nix           # Level 3: cross-cutting ServiceMonitor generation
+│   └── network-policy.nix       # Level 3: cross-cutting NetworkPolicy (skeleton)
+├── pkgs/<chart-name>/           # One directory per migrated chart
+│   ├── default.nix              # Options + wiring (the main module)
+│   └── scripts/                 # Shell scripts with @PLACEHOLDER@ substitution
+├── tests/<chart-name>/          # Parity test cases
+├── scripts/verify-parity.py     # Automated helm vs kix behavioral diff checker
+└── flake.nix                    # Flake that wires everything together
 ```
 
 ## Migration Process
@@ -144,18 +214,23 @@ Read `references/kixlib-patterns.md` for the builder API. Critical patterns:
 let
   cfg = config.services.<chart-name>;
 
-  # Stable labels for selectors — NEVER include version labels here
+  # Stable labels for selectors — NEVER include version labels here.
+  # Use config.cluster.releaseName (Level 1) instead of hardcoding "release-name".
   selectorLabels = {
     "app.kubernetes.io/name" = "<chart-name>";
-    "app.kubernetes.io/instance" = "release-name";
+    "app.kubernetes.io/instance" = config.cluster.releaseName;
+  };
+
+  # Merge cluster.labels (Level 1) as base — chart labels override on collision.
+  allLabels = config.cluster.labels // selectorLabels // {
+    "app.kubernetes.io/managed-by" = "kix";
   };
 
   # Configure kixlib with chart-wide metadata
   kixlib' = kixlib.withMetadata {
     namespace = cfg.namespace;
-    labels = selectorLabels // {
-      "app.kubernetes.io/managed-by" = "kix";
-    };
+    labels = allLabels;
+    name = "<chart-name>";
   };
 
   # Build each resource separately
@@ -191,14 +266,28 @@ let
   };
 in
 {
-  # ONE ENTRY PER RESOURCE — not one per module
-  config.manifests = lib.optionalAttrs cfg.enable {
-    "<chart-name>-sa" = kixlib'.mkManifest sa;
-    "<chart-name>-clusterrole" = kixlib'.mkManifest clusterRole;
-    "<chart-name>-clusterrolebinding" = kixlib'.mkManifest binding;
-    "<chart-name>-configmap" = kixlib'.mkManifest configMap;
-    "<chart-name>-deployment" = kixlib'.mkManifest deployment;
-    "<chart-name>-service" = kixlib'.mkManifest service;
+  config = {
+    # Level 1: consume cluster defaults
+    services.<chart-name>.namespace = lib.mkDefault config.cluster.namespace;
+
+    # Level 2: service registry
+    registry.<chart-name> = lib.mkIf cfg.enable {
+      endpoints.primary = {
+        host = "<chart-name>.${cfg.namespace}.svc.${config.cluster.domain}";
+        port = 8080;
+        protocol = "http";
+      };
+    };
+
+    # ONE ENTRY PER RESOURCE — not one per module
+    manifests = lib.optionalAttrs cfg.enable {
+      "<chart-name>-sa" = kixlib'.mkManifest sa;
+      "<chart-name>-clusterrole" = kixlib'.mkManifest clusterRole;
+      "<chart-name>-clusterrolebinding" = kixlib'.mkManifest binding;
+      "<chart-name>-configmap" = kixlib'.mkManifest configMap;
+      "<chart-name>-deployment" = kixlib'.mkManifest deployment;
+      "<chart-name>-service" = kixlib'.mkManifest service;
+    };
   };
 }
 ```
