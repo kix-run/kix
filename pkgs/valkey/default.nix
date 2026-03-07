@@ -312,7 +312,11 @@ let
 
   fullname = "valkey";
   headlessSvcName = "${fullname}-headless";
-  headlessSvcFqdn = "${headlessSvcName}.${cfg.namespace}.svc.${cfg.clusterDomain}";
+
+  # FQDN helper — the pattern "name.namespace.svc.clusterDomain" appears 7+ times.
+  mkFqdn = name: "${name}.${cfg.namespace}.svc.${cfg.clusterDomain}";
+
+  headlessSvcFqdn = mkFqdn headlessSvcName;
 
   # --- Labels ---
   # Stable selector labels — NEVER include version here.
@@ -430,7 +434,7 @@ let
   # escaping hell of embedding bash ${VAR} in Nix multiline strings (''${...}).
   # See SKILL.md "Shell Scripts in ConfigMaps" for the rationale.
 
-  sentinelSvcFqdn = "${fullname}.${cfg.namespace}.svc.${cfg.clusterDomain}";
+  sentinelSvcFqdn = mkFqdn fullname;
   totalReplicas = cfg.replica.replicaCount;
 
   # Read a script file and substitute @PLACEHOLDER@ tokens with Nix values.
@@ -1032,32 +1036,32 @@ in
     registry.valkey = lib.mkIf cfg.enable {
       endpoints = (if cfg.sentinel.enabled then {
         primary = {
-          host = "${fullname}.${cfg.namespace}.svc.${cfg.clusterDomain}";
+          host = mkFqdn fullname;
           port = 6379;
           protocol = "redis";
         };
       } else {
         primary = {
-          host = "${fullname}-primary.${cfg.namespace}.svc.${cfg.clusterDomain}";
+          host = mkFqdn "${fullname}-primary";
           port = 6379;
           protocol = "redis";
         };
         replicas = {
-          host = "${fullname}-replicas.${cfg.namespace}.svc.${cfg.clusterDomain}";
+          host = mkFqdn "${fullname}-replicas";
           port = 6379;
           protocol = "redis";
         };
       })
       // lib.optionalAttrs cfg.sentinel.enabled {
         sentinel = {
-          host = "${fullname}.${cfg.namespace}.svc.${cfg.clusterDomain}";
+          host = mkFqdn fullname;
           port = 26379;
           protocol = "redis-sentinel";
         };
       }
       // lib.optionalAttrs cfg.metrics.enabled {
         metrics = {
-          host = "${fullname}-metrics.${cfg.namespace}.svc.${cfg.clusterDomain}";
+          host = mkFqdn "${fullname}-metrics";
           port = 9121;
           protocol = "http";
         };
@@ -1070,8 +1074,18 @@ in
       serviceName = "${fullname}-metrics";
       namespace = cfg.namespace;
       portName = "http-metrics";
-      interval = cfg.metrics.serviceMonitor.interval;
+      # null defers to monitoring.defaultInterval set by the cross-cutting module
+      interval = null;
       selector = selectorLabels // { "app.kubernetes.io/component" = "metrics"; };
+    };
+
+    # --- Level 3: network policy declaration ---
+    networkPolicies.services.valkey = lib.mkIf cfg.enable {
+      namespace = cfg.namespace;
+      podSelector = selectorLabels;
+      ingressPorts = [ 6379 ] ++ lib.optionals cfg.sentinel.enabled [ 26379 ]
+        ++ lib.optionals cfg.metrics.enabled [ 9121 ];
+      egressTo = [];
     };
 
     manifests = lib.optionalAttrs cfg.enable (

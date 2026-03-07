@@ -11,7 +11,8 @@
 #   - Service
 #
 # Optional resources (behind enable flags, not yet implemented):
-#   - HPA, PDB, ServiceMonitor, autoscaler deployment
+#   - HPA, PDB, autoscaler deployment
+# ServiceMonitor is handled via Level 3 monitoring.targets (see config section).
 #
 # Key differences from the original kix/corednsNew module:
 #   - One manifest entry per resource (not a single bundled derivation)
@@ -33,6 +34,9 @@ let
   types = lib.types;
   cfg = config.services.coredns;
 
+  # Extracted: used in registry, monitoring target, and potentially elsewhere.
+  hasPrometheus = builtins.any (s: builtins.any (p: p.name == "prometheus") s.plugins) cfg.servers;
+
   # --- Options ---
 
   options.services.coredns = {
@@ -46,6 +50,12 @@ let
       type = types.str;
       default = "default";
       description = "Kubernetes namespace for all CoreDNS resources.";
+    };
+
+    clusterDomain = lib.mkOption {
+      type = types.str;
+      default = "cluster.local";
+      description = "Kubernetes cluster domain for DNS resolution.";
     };
 
     isClusterService = lib.mkOption {
@@ -442,6 +452,7 @@ in
     # When loaded individually (mkChartManifests), cluster.namespace defaults to
     # "default" anyway, so behavior is unchanged for parity testing.
     services.coredns.namespace = lib.mkDefault config.cluster.namespace;
+    services.coredns.clusterDomain = lib.mkDefault config.cluster.domain;
 
     # --- Level 2: service registry ---
     # Advertise our endpoints so other charts/modules can discover coredns
@@ -450,18 +461,18 @@ in
     registry.coredns = lib.mkIf cfg.enable {
       endpoints = {
         dns-udp = {
-          host = "coredns.${cfg.namespace}.svc.${config.cluster.domain}";
+          host = "coredns.${cfg.namespace}.svc.${cfg.clusterDomain}";
           port = 53;
           protocol = "dns-udp";
         };
         dns-tcp = {
-          host = "coredns.${cfg.namespace}.svc.${config.cluster.domain}";
+          host = "coredns.${cfg.namespace}.svc.${cfg.clusterDomain}";
           port = 53;
           protocol = "dns-tcp";
         };
-      } // lib.optionalAttrs (builtins.any (s: builtins.any (p: p.name == "prometheus") s.plugins) cfg.servers) {
+      } // lib.optionalAttrs hasPrometheus {
         metrics = {
-          host = "coredns.${cfg.namespace}.svc.${config.cluster.domain}";
+          host = "coredns.${cfg.namespace}.svc.${cfg.clusterDomain}";
           port = 9153;
           protocol = "http";
         };
@@ -471,14 +482,23 @@ in
     # --- Level 3: monitoring target ---
     # Declare our metrics endpoint for the cross-cutting monitoring module.
     # Only relevant when prometheus plugin is configured.
-    monitoring.targets.coredns = lib.mkIf (
-      cfg.enable
-      && builtins.any (s: builtins.any (p: p.name == "prometheus") s.plugins) cfg.servers
-    ) {
+    # TODO: CoreDNS doesn't expose a dedicated metrics Service — port 9153 is only
+    # on containerPorts (derivePorts excludes plugin ports from servicePorts by design).
+    # A proper fix requires creating a separate metrics Service. Disabled until then.
+    monitoring.targets.coredns = lib.mkIf (cfg.enable && hasPrometheus) {
+      enabled = false;
       serviceName = "coredns";
       namespace = cfg.namespace;
       portName = "tcp-9153";
       selector = selectorLabels;
+    };
+
+    # --- Level 3: network policy declaration ---
+    networkPolicies.services.coredns = lib.mkIf cfg.enable {
+      namespace = cfg.namespace;
+      podSelector = selectorLabels;
+      ingressPorts = [ 53 ];
+      egressTo = [];
     };
 
     # One manifest entry per resource — this is what verify-parity.sh compares.
