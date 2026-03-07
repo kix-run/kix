@@ -1,3 +1,55 @@
+# kixlib — shared Kubernetes resource builders for kixpkgs
+#
+# Design decisions captured here (2026-03):
+#
+# 1. HUMAN-READABLE NAMES (not store paths)
+#    The original kix repo experimented with using Nix store paths as Kubernetes
+#    resource names (e.g., /nix/store/abc123-ServiceAccount.json as the actual
+#    serviceAccountName). This was content-addressable and traceable but:
+#    - Store paths contain '/' which is illegal in K8s resource names
+#    - Names change on any Nix expression change, orphaning old resources
+#    - kubectl debugging becomes impossible
+#    We now use `resourceName` to derive human-readable names from metadata.
+#    Store path hashes can still appear in annotations for traceability.
+#
+# 2. RESOURCES AS ATTRSETS (not derivations)
+#    All mk* builders return plain attrsets, not store derivations. Only
+#    `mkManifest` serializes to a store path. This means you can always pipe
+#    a resource through further transformations. The old `rbac.bind` returned
+#    a derivation directly which blocked composition — replaced by
+#    `rbac.mkClusterRoleBinding` which returns an attrset.
+#
+# 3. ONE MANIFEST PER RESOURCE
+#    Each resource should be a separate entry in config.manifests, not bundled
+#    into a single derivation with dependency annotations. This makes verification
+#    straightforward (compare per-kind) and lets operators inspect/apply selectively.
+#
+# 4. CONTAINER PASSTHROUGH
+#    mkContainer passes through ALL arguments rather than destructuring a fixed
+#    list. The old version silently dropped unknown fields (lifecycle, startupProbe,
+#    envFrom, etc.) which would cause subtle bugs on real charts.
+#
+# 5. SELECTOR vs LABELS SEPARATION
+#    mkDeployment accepts an explicit `selectorLabels` argument. Selectors must be
+#    stable across upgrades (no version labels). If you put app.kubernetes.io/version
+#    in the selector, rolling updates break because the new ReplicaSet has a different
+#    selector than the old one. The old code copied ALL template labels into selectors.
+#
+# 6. removeNulls STRIPS EMPTY COLLECTIONS (known issue)
+#    See inline comment. Kubernetes distinguishes absent vs empty in some cases.
+#    The original kix repo had 5 different removeNulls implementations trying to
+#    solve this — we've settled on one for now with a documented workaround.
+#
+# MISSING RESOURCE TYPES (add as needed during chart migrations):
+#   workload: StatefulSet, DaemonSet, Job, CronJob
+#   networking: Ingress, NetworkPolicy
+#   rbac: Role, RoleBinding (namespace-scoped)
+#   config: Secret
+#   storage: PersistentVolumeClaim
+#   policy: PodDisruptionBudget
+#   autoscaling: HorizontalPodAutoscaler
+#   monitoring: ServiceMonitor, PrometheusRule
+
 {
   pkgs,
   lib,
@@ -5,9 +57,10 @@
 }:
 
 lib.makeExtensible (self: {
+  # Default metadata merged into every resource via mkResource.
+  # Set via `withMetadata` to apply namespace, labels, annotations globally.
   _defaultMetadata = { };
 
-  # Simple builder API
   withMetadata =
     metadata:
     self.extend (
@@ -16,10 +69,10 @@ lib.makeExtensible (self: {
       }
     );
 
-  # Internal state
+  # Preprocessors run on every resource during mkManifest, after null stripping.
+  # Useful for injecting cluster-wide policies (e.g., adding a label to everything).
   _preprocessors = [ ];
 
-  # Simple builder API
   withPreprocessor =
     preprocessor:
     self.extend (
@@ -28,29 +81,23 @@ lib.makeExtensible (self: {
       }
     );
 
-  # Batch for convenience
   withPreprocessors = preprocessors: lib.foldl' (l: p: l.withPreprocessor p) self preprocessors;
 
-  # Named registration for debuggability
   addPreprocessor = name: fn: self.withPreprocessor (lib.setFunctionArgs fn { __name = name; });
 
-  # Inspection (useful for debugging)
   listPreprocessors = map (fn: fn.__name or "<anonymous>") self._preprocessors;
 
-  removeNulls2 =
-    attrs:
-    lib.filterAttrs (_: v: v != null) (
-      builtins.mapAttrs (
-        _: v: if builtins.isAttrs v && !(lib.isDerivation v) && !(v ? type) then self.removeNulls v else v
-      ) attrs
-    );
-
-  removeNulls5 =
-    attrs:
-    builtins.mapAttrs (
-      _: v: if builtins.isAttrs v && !(lib.isDerivation v) && !(v ? type) then self.removeNulls v else v
-    ) (lib.filterAttrs (_: v: v != null) attrs);
-
+  # Strips null values recursively from an attrset before JSON serialization.
+  #
+  # KNOWN ISSUE: also strips empty lists [] and empty attrsets {}. Kubernetes
+  # distinguishes between absent and explicitly-empty in some cases (e.g.,
+  # `tolerations: []` vs no `tolerations` field). The original kix repo had
+  # 5 different implementations of this function trying to solve the problem.
+  #
+  # TODO: introduce a marker value like `kixlib.explicit []` that survives
+  # removeNulls, so users can preserve intentional empties. For now, if you
+  # need an explicit empty list, set it via a preprocessor or raw merge on
+  # the resource after construction.
   removeNulls =
     attrs:
     builtins.mapAttrs
@@ -66,7 +113,7 @@ lib.makeExtensible (self: {
               v;
         in
         cleanValue
-      ) # (lib.filterAttrs (_: v: v != null) attrs);
+      )
       (
         lib.filterAttrs (
           _: v:
@@ -78,52 +125,50 @@ lib.makeExtensible (self: {
         ) attrs
       );
 
-  removeNulls3 =
-    attrs:
-    builtins.listToAttrs (
-      builtins.filter (nameValue: nameValue.value != null) (
-        map (name: {
-          inherit name;
-          value =
-            let
-              val = attrs.${name};
-            in
-            if builtins.isAttrs val && !lib.isDerivation val then self.removeNulls val else val;
-        }) (builtins.attrNames attrs)
-      )
-    );
+  # Derive a human-readable Kubernetes resource name from a resource attrset.
+  #
+  # Priority: explicit metadata.name > app label from default metadata > "unnamed"
+  #
+  # This replaces the old pattern where mkManifest store paths were used as
+  # resource names. Store paths are illegal in K8s names (contain '/') and
+  # change on any expression change, orphaning old resources in the cluster.
+  resourceName =
+    resource:
+    let
+      meta = resource.metadata or { };
+      appName =
+        self._defaultMetadata.name
+          or self._defaultMetadata.labels."app.kubernetes.io/name"
+          or "unnamed";
+    in
+    meta.name or appName;
 
-  removeNulls4 = lib.filterAttrsRecursive (name: value: value != null);
-
-  # TODO: mkResource = x: extra: removeNulls (lib.recursiveUpdate x extra);
-
-  # TODO: this could be the main "magic" and one could involve any postprocessors, filtering by kind, etc, in this step
-  # could also verify crds
-  # how do i install crds?
-
-  # TODO: needs to be overridable, extendable and injectable from the outside
-  # list of resource -> resource mappers
-  preProcessors = [ ];
-
-  # TODO: could actually turn this into a set:
-  # {
-  #   data: attrset
-  #   drv: storePath
-  # }
-  # This type would have the advantage of still using data if relevant, and otherwise being clear on the read-onlyness
-  # On the other-hand non-typing has the advantage of generating a second store path if something was changed => at least debuggable
-
-  # TODO: can add some preValidation (needs to have kind field, crd registered, etc) -> error will fail inline which is great
+  # Serialize a resource attrset to a JSON file in the Nix store.
+  # This is the only function that produces a derivation — all other builders
+  # return plain attrsets so they can be composed further.
+  #
+  # The pipeline: set name → strip nulls → run preprocessors → strip nulls again → toJSON
+  # (second removeNulls catches any nulls introduced by preprocessors)
   mkManifest =
     resource:
-    pkgs.writeText "${resource.kind}.json" (
-      resource
+    let
+      name = self.resourceName resource;
+      namedResource = lib.recursiveUpdate resource {
+        metadata = (resource.metadata or { }) // {
+          name = name;
+        };
+      };
+    in
+    pkgs.writeText "${name}-${lib.toLower resource.kind}.json" (
+      namedResource
       |> self.removeNulls
       |> (x: lib.foldl' (res: f: f res) x self._preprocessors)
       |> self.removeNulls
       |> builtins.toJSON
     );
 
+  # Base builder for any Kubernetes resource. Merges in default metadata
+  # (namespace, labels, annotations) set via withMetadata.
   mkResource =
     {
       kind,
@@ -137,37 +182,27 @@ lib.makeExtensible (self: {
       metadata = lib.recursiveUpdate self._defaultMetadata metadata;
     };
 
+  # Track inter-resource dependencies via annotations.
+  # The dependency value is a store path pointing to the depended-on resource's
+  # JSON derivation. This enables the Nix store's reference graph to capture
+  # the full deployment dependency tree (e.g., `nix-store --query --requisites`).
   addDependency =
     drv: resource:
     let
-      # Get current annotations, defaulting to empty set if they don't exist
       currentAnnotations = resource.metadata.annotations or { };
-
-      # Get current dependencies string, defaulting to empty string
       currentDeps = currentAnnotations."build.kix.dev/dependencies" or "";
-
-      # Create new dependencies string
-      newDeps = if currentDeps == "" then drv else "${currentDeps},${drv}";
-
-      # Create updated annotations
+      newDeps = if currentDeps == "" then toString drv else "${currentDeps},${toString drv}";
       newAnnotations = currentAnnotations // {
         "build.kix.dev/dependencies" = newDeps;
       };
     in
-    # Use recursiveUpdate to merge deeply, or manual path construction
     lib.recursiveUpdate resource {
       metadata = (resource.metadata or { }) // {
         annotations = newAnnotations;
       };
     };
 
-  # TODO: helm loader
-  # this could actually be patched a bit
-  # - values passed as module config (unsafe but ok)
-  # - remove name from everything - find name in all other resources, then replace with derivation hash => while no maintenance gain, you have tracability
-
   rbac = {
-
     mkClusterRole =
       {
         rules,
@@ -178,35 +213,51 @@ lib.makeExtensible (self: {
           apiVersion = "rbac.authorization.k8s.io/v1";
           kind = "ClusterRole";
           rules = rules;
+          # ClusterRoles are cluster-scoped, so namespace is null (stripped by removeNulls)
           metadata = {
             namespace = null;
           };
         }
       );
 
+    # Creates a ClusterRoleBinding resource linking a ClusterRole to a ServiceAccount.
+    #
+    # Returns a resource attrset (NOT a derivation). This is a deliberate change
+    # from the original kix `rbac.bind` which called mkManifest internally and
+    # returned a store path. That blocked composition — you couldn't add annotations
+    # or modify the binding after creation. Now you pipe through transformations
+    # and call mkManifest yourself when ready.
+    #
+    # References the ClusterRole and ServiceAccount by human-readable name
+    # (via resourceName), not by store path.
+    mkClusterRoleBinding =
+      clusterRole: serviceAccount:
+      self.mkResource {
+        apiVersion = "rbac.authorization.k8s.io/v1";
+        kind = "ClusterRoleBinding";
+        metadata = {
+          namespace = null;
+        };
+        roleRef = {
+          apiGroup = lib.elemAt (lib.strings.split "/" clusterRole.apiVersion) 0;
+          kind = clusterRole.kind;
+          name = self.resourceName clusterRole;
+        };
+        subjects = [
+          {
+            kind = serviceAccount.kind;
+            name = self.resourceName serviceAccount;
+            namespace = serviceAccount.metadata.namespace or "default";
+          }
+        ];
+      };
+
+    # DEPRECATED: use mkClusterRoleBinding for composability.
+    # This convenience function creates and immediately serializes a binding.
+    # Kept for backward compatibility with existing kix modules.
     bind =
       clusterRole: serviceAccount:
-      self.mkManifest (
-        self.mkResource {
-          apiVersion = "rbac.authorization.k8s.io/v1";
-          kind = "ClusterRoleBinding";
-          metadata = {
-            namespace = null;
-          };
-          roleRef = {
-            apiGroup = lib.elemAt (lib.strings.split "/" clusterRole.apiVersion) 0;
-            kind = clusterRole.kind;
-            name = self.mkManifest clusterRole;
-          };
-          subjects = [
-            {
-              kind = serviceAccount.kind;
-              name = self.mkManifest serviceAccount;
-              namespace = serviceAccount.metadata.namespace or "default";
-            }
-          ];
-        }
-      );
+      self.mkManifest (self.rbac.mkClusterRoleBinding clusterRole serviceAccount);
 
     mkServiceAccount =
       {
@@ -220,10 +271,13 @@ lib.makeExtensible (self: {
         imagePullSecrets = imagePullSecrets;
       };
   };
-  pod = {
 
-    # TODO: will this be smarter?
-    # TODO: mkResource?
+  pod = {
+    # Wraps containers + volumes into a pod template spec.
+    # Currently a passthrough — returns its arguments unchanged.
+    # TODO: in the future this could merge default pod-level metadata,
+    # validate the spec structure, or inject common settings like
+    # terminationGracePeriodSeconds, securityContext, etc.
     mkPodTemplate =
       args@{
         metadata ? { },
@@ -232,32 +286,20 @@ lib.makeExtensible (self: {
       }:
       args;
 
+    # Creates a container spec.
+    #
+    # IMPORTANT: this is a passthrough — it returns ALL arguments as-is.
+    # The old version destructured specific fields (name, image, env, ports, etc.)
+    # and re-assembled them, which silently dropped any field not in the explicit
+    # list. This meant lifecycle hooks, startupProbes, envFrom, workingDir, and
+    # other valid container fields were silently lost. Now everything passes through.
     mkContainer =
       {
         name,
         image,
-        imagePullPolicy ? null,
-        command ? null,
-        args ? null,
-        env ? null,
-        resources ? null,
-        volumeMounts ? [ ],
-        ports ? null,
-        securityContext ? null,
         ...
-      }:
-      {
-        name = name;
-        image = image;
-        imagePullPolicy = imagePullPolicy;
-        command = command;
-        args = args;
-        env = env;
-        resources = resources;
-        volumeMounts = volumeMounts;
-        ports = ports;
-        securityContext = securityContext;
-      };
+      }@args:
+      args;
 
     withVolumeMount =
       {
@@ -306,14 +348,28 @@ lib.makeExtensible (self: {
   };
 
   workload = {
-
-    # TODO: the template might need the preprocessor to run as well - otherwise the pods will not "look right"
+    # Creates a Deployment resource.
+    #
+    # `selectorLabels` — controls spec.selector.matchLabels. These MUST be stable
+    # across upgrades. If you include version-varying labels (e.g.,
+    # app.kubernetes.io/version), rolling updates break because the new ReplicaSet
+    # gets a different selector than the old one, and K8s treats it as a new
+    # Deployment rather than an update.
+    #
+    # The old kix code did `selector.matchLabels = template.metadata.labels` which
+    # copied ALL labels into selectors. This happened to work for CoreDNS because
+    # its template labels were carefully chosen, but would break on any chart that
+    # includes version or hash labels on pods.
+    #
+    # If selectorLabels is not provided, falls back to template.metadata.labels
+    # for backward compatibility, but this should be considered a bug in the caller.
     mkDeployment =
       {
         replicas ? 1,
         strategy ? null,
         metadata ? { },
         template,
+        selectorLabels ? null,
         ...
       }:
       self.mkResource {
@@ -322,31 +378,39 @@ lib.makeExtensible (self: {
         kind = "Deployment";
         spec = {
           inherit replicas strategy template;
-
-          # TODO: this might be too extensive
-          #selector = selector ? template.metadata.labels;
-          selector.matchLabels = template.metadata.labels;
-
+          selector.matchLabels =
+            if selectorLabels != null then selectorLabels
+            else template.metadata.labels;
         };
       };
 
+    # Sets serviceAccountName on a Deployment's pod template.
+    # Uses the human-readable resourceName, not a store path.
     withServiceAccount =
       serviceAccount: deployment:
       lib.recursiveUpdate deployment {
         spec = (deployment.spec or { }) // {
           template = (deployment.spec.template or { }) // {
             spec = (deployment.spec.template.spec or { }) // {
-              serviceAccountName = self.mkManifest serviceAccount;
+              serviceAccountName = self.resourceName serviceAccount;
             };
           };
         };
       };
 
-    # INFO: could also be called intoSameSelectorService
+    # Creates a Service that selects this Deployment's pods using the
+    # Deployment's selector labels (NOT all pod labels — see selectorLabels above).
+    #
+    # IMPORTANT: you MUST include spec.ports in serviceArgs. Ports are NOT
+    # auto-derived from the Deployment's container ports. Example:
+    #   deployment |> kixlib.workload.intoService {
+    #     spec.type = "ClusterIP";
+    #     spec.ports = [ { port = 53; targetPort = 53; protocol = "UDP"; name = "udp-53"; } ];
+    #   }
     intoService =
       serviceArgs: deployment:
       self.networking.mkService (
-        lib.recursiveUpdate serviceArgs { spec.selector = deployment.spec.template.metadata.labels; }
+        lib.recursiveUpdate serviceArgs { spec.selector = deployment.spec.selector.matchLabels; }
       )
       |> self.addDependency (self.mkManifest deployment);
   };
@@ -372,24 +436,28 @@ lib.makeExtensible (self: {
         };
       };
 
+    # Fixed: the original used `with pair; withEntry key value cm` which relied
+    # on `withEntry` being in scope via closure. Replaced with explicit
+    # `self.configMap.withEntry` to avoid potential scoping bugs.
     withEntries =
-      entries: configMap: lib.foldl' (cm: pair: with pair; withEntry key value cm) configMap entries;
+      entries: configMap:
+      lib.foldl' (cm: pair: self.configMap.withEntry pair.key pair.value cm) configMap entries;
 
-    # TODO: as valuefrom as env etc.. https://kubernetes.io/docs/concepts/configuration/configmap/
-
+    # Turn a ConfigMap resource into a volume spec for use in pod templates.
+    # `name` is the volume name (used in volumeMounts). Defaults to the
+    # ConfigMap's resourceName, but can be overridden for Helm parity
+    # (e.g., Helm's CoreDNS chart hardcodes "config-volume").
     asVolume =
       {
-        # TODO: name
         items ? null,
+        name ? null,
       }:
       configMap:
-      let
-        hashForName = builtins.hashString "md5" (builtins.toJSON configMap);
-      in
-      {
-        name = "cfgmap-${hashForName}"; # TODO: check if this is allowed or if we should derive the vol name differently
+      let volumeName = if name != null then name else self.resourceName configMap;
+      in {
+        name = volumeName;
         configMap = {
-          name = self.mkManifest configMap;
+          name = self.resourceName configMap;
           items = items;
         };
       };
