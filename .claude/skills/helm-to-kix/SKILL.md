@@ -222,37 +222,37 @@ This is the critical feedback loop. **Test multiple value configurations**, not 
    };
    ```
 
-2. **Create test cases** in `tests/<chart-name>/`:
-   ```
-   tests/<chart-name>/
-   ├── cases.txt        # Maps flake packages to Helm values files
-   ├── sentinel.yaml    # Helm values for sentinel variant
-   └── full.yaml        # Helm values for everything-enabled variant
+2. **Create test cases** in `tests/<chart-name>/cases.yaml`:
+   ```yaml
+   chart: oci://registry-1.docker.io/bitnamicharts/<chart-name>
+   chart-version: "1.2.3"
+   ignore-missing:
+     - Secret/<chart-name>   # kix doesn't generate secrets
+
+   cases:
+     <chart-name>: {}
+     <chart-name>-sentinel:
+       values: sentinel.yaml
+     <chart-name>-full:
+       values: full.yaml
    ```
 
-   `cases.txt` format (`-` means no values file / use chart defaults):
-   ```
-   <chart-name>           -
-   <chart-name>-sentinel  sentinel.yaml
-   <chart-name>-full      full.yaml
-   ```
+   The `chart` and `chart-version` fields record which Helm chart the module was
+   tested against. Update `chart-version` when re-testing against a newer chart.
 
 3. **Run all test cases**:
    ```bash
-   ./scripts/verify-parity.py all <chart-name> --chart <helm-chart-ref>
+   ./scripts/verify-parity.py all <chart-name>
    ```
 
-   Or run a single case:
+   Or run a single case (requires explicit `--chart`):
    ```bash
    ./scripts/verify-parity.py check <chart-name> --chart <helm-chart-ref>
    ```
 
-   The `--chart` flag accepts any helm-compatible chart identifier:
-   - OCI ref: `oci://registry-1.docker.io/bitnamicharts/valkey`
-   - Repo/chart: `bitnami/valkey`
-   - Local path: `/tmp/valkey`
-
-   Use `--chart-version` to pin a specific version. Charts are cached in `.cache/charts/`.
+   The `all` command reads the chart ref, version, and ignore-missing list from
+   `cases.yaml`. CLI flags `--chart` and `--chart-version` override if provided.
+   Charts are cached in `.cache/charts/`.
 
 The script strips cosmetic differences (helm.sh/chart labels, managed-by, checksum annotations,
 kix dependency annotations) and compares resources by kind.

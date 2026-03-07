@@ -1,0 +1,11 @@
+chart: oci://registry-1.docker.io/bitnamicharts/valkey
+chart-version: "3.0.2"
+ignore-missing:
+  - Secret/valkey
+
+cases:
+  valkey: {}
+  valkey-sentinel:
+    values: sentinel.yaml
+  valkey-full:
+    values: full.yaml

@@ -248,35 +248,46 @@ def check(chart_name: str, chart_ref: str, chart_version: str | None,
 
 @cli.command("all")
 @click.argument("chart_name")
-@click.option("--chart", "chart_ref", required=True,
-              help="Helm chart reference (OCI ref, repo/chart, URL, or local path)")
-@click.option("--chart-version", default=None, help="Chart version to pull")
+@click.option("--chart", "chart_ref", default=None,
+              help="Helm chart reference (overrides cases.yaml)")
+@click.option("--chart-version", default=None, help="Chart version (overrides cases.yaml)")
 @click.option("--diff-lines", default=80, show_default=True, help="Max diff lines per resource")
 @click.option("--ignore-missing", multiple=True,
-              help="Kind/name keys to ignore if missing from kix (e.g. Secret/valkey)")
-def check_all(chart_name: str, chart_ref: str, chart_version: str | None,
+              help="Additional Kind/name keys to ignore (adds to cases.yaml)")
+def check_all(chart_name: str, chart_ref: str | None, chart_version: str | None,
               diff_lines: int, ignore_missing: tuple[str, ...]):
-    """Run all test cases from tests/<chart>/cases.txt."""
-    chart_path = ensure_chart(chart_ref, chart_name, chart_version)
-    ignore_set = set(ignore_missing) or None
-    cases_file = REPO_ROOT / "tests" / chart_name / "cases.txt"
+    """Run all test cases from tests/<chart>/cases.yaml."""
+    cases_file = REPO_ROOT / "tests" / chart_name / "cases.yaml"
     if not cases_file.exists():
         raise click.ClickException(f"No test cases at {cases_file}")
 
-    tests_dir = cases_file.parent
-    cases = []
-    for line in cases_file.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        parts = line.split()
-        pkg = parts[0]
-        values = parts[1] if len(parts) > 1 else "-"
-        values_path = None if values == "-" else str(tests_dir / values)
-        cases.append((pkg, values_path))
+    with open(cases_file) as f:
+        config = yaml.safe_load(f)
 
-    if not cases:
-        raise click.ClickException(f"No test cases found in {cases_file}")
+    # Resolve chart: CLI flags override cases.yaml
+    effective_ref = chart_ref or config.get("chart")
+    if not effective_ref:
+        raise click.ClickException(
+            "No --chart flag and no 'chart' key in cases.yaml")
+    effective_version = chart_version or config.get("chart-version")
+
+    chart_path = ensure_chart(effective_ref, chart_name, effective_version)
+
+    # Merge ignore-missing from cases.yaml and CLI
+    ignore_set = set(ignore_missing) | set(config.get("ignore-missing", []))
+    ignore_set = ignore_set or None
+
+    tests_dir = cases_file.parent
+    raw_cases = config.get("cases", {})
+    if not raw_cases:
+        raise click.ClickException(f"No cases defined in {cases_file}")
+
+    cases: list[tuple[str, str | None]] = []
+    for pkg, opts in raw_cases.items():
+        opts = opts or {}
+        values = opts.get("values")
+        values_path = str(tests_dir / values) if values else None
+        cases.append((pkg, values_path))
 
     results = []
     for pkg, values_path in cases:

@@ -694,7 +694,8 @@ let
     securityContext = cfg.containerSecurityContext;
     command = [ "/bin/bash" "-c" ''
       export REDIS_PASSWORD="$(< $REDIS_PASSWORD_FILE)"
-      redis_exporter'' ];
+      redis_exporter
+    '' ];
     env = [
       { name = "REDIS_ALIAS"; value = fullname; }
       { name = "REDIS_EXPORTER_WEB_LISTEN_ADDRESS"; value = ":9121"; }
