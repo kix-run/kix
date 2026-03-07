@@ -41,14 +41,12 @@
 #    solve this — we've settled on one for now with a documented workaround.
 #
 # MISSING RESOURCE TYPES (add as needed during chart migrations):
-#   workload: StatefulSet, DaemonSet, Job, CronJob
-#   networking: Ingress, NetworkPolicy
+#   workload: DaemonSet, Job, CronJob
+#   networking: Ingress
 #   rbac: Role, RoleBinding (namespace-scoped)
 #   config: Secret
-#   storage: PersistentVolumeClaim
-#   policy: PodDisruptionBudget
 #   autoscaling: HorizontalPodAutoscaler
-#   monitoring: ServiceMonitor, PrometheusRule
+#   monitoring: PrometheusRule
 
 {
   pkgs,
@@ -345,6 +343,32 @@ lib.makeExtensible (self: {
         metadata = metadata;
         spec = spec;
       };
+
+    # Creates a NetworkPolicy resource.
+    #
+    # Controls ingress/egress traffic to/from pods matching `podSelector`.
+    # By default applies both Ingress and Egress policy types — pods that
+    # don't match any rule are denied.
+    #
+    # Added for valkey chart migration (2026-03). Valkey uses NetworkPolicy
+    # to restrict access to redis/sentinel ports and allow prometheus scraping.
+    mkNetworkPolicy =
+      {
+        podSelector,
+        policyTypes ? [ "Ingress" "Egress" ],
+        ingress ? null,
+        egress ? null,
+        metadata ? { },
+        ...
+      }:
+      self.mkResource {
+        apiVersion = "networking.k8s.io/v1";
+        kind = "NetworkPolicy";
+        metadata = metadata;
+        spec = {
+          inherit podSelector policyTypes ingress egress;
+        };
+      };
   };
 
   workload = {
@@ -384,7 +408,44 @@ lib.makeExtensible (self: {
         };
       };
 
-    # Sets serviceAccountName on a Deployment's pod template.
+    # Creates a StatefulSet resource.
+    #
+    # Like mkDeployment but for stateful workloads. Requires `serviceName` (the
+    # headless Service for pod DNS) and supports `volumeClaimTemplates` for
+    # per-pod PVCs. Same selectorLabels semantics as mkDeployment — must be
+    # stable across upgrades.
+    #
+    # Added for valkey chart migration (2026-03). The Bitnami valkey chart uses
+    # StatefulSets for both sentinel and non-sentinel modes.
+    mkStatefulSet =
+      {
+        replicas ? 1,
+        serviceName,
+        selectorLabels ? null,
+        template,
+        volumeClaimTemplates ? null,
+        updateStrategy ? null,
+        podManagementPolicy ? null,
+        metadata ? { },
+        ...
+      }:
+      self.mkResource {
+        inherit metadata;
+        apiVersion = "apps/v1";
+        kind = "StatefulSet";
+        spec = {
+          inherit replicas serviceName template;
+          updateStrategy = updateStrategy;
+          podManagementPolicy = podManagementPolicy;
+          volumeClaimTemplates = volumeClaimTemplates;
+          selector.matchLabels =
+            if selectorLabels != null then selectorLabels
+            else template.metadata.labels;
+        };
+      };
+
+    # Sets serviceAccountName on a workload's pod template.
+    # Works for both Deployments and StatefulSets (same spec.template.spec path).
     # Uses the human-readable resourceName, not a store path.
     withServiceAccount =
       serviceAccount: deployment:
@@ -413,6 +474,51 @@ lib.makeExtensible (self: {
         lib.recursiveUpdate serviceArgs { spec.selector = deployment.spec.selector.matchLabels; }
       )
       |> self.addDependency (self.mkManifest deployment);
+  };
+
+  # Pod disruption budgets control how many pods can be unavailable during
+  # voluntary disruptions (node drains, rolling updates, etc.).
+  #
+  # Added for valkey chart migration (2026-03).
+  policy = {
+    mkPodDisruptionBudget =
+      {
+        selector,
+        maxUnavailable ? null,
+        minAvailable ? null,
+        metadata ? { },
+        ...
+      }:
+      self.mkResource {
+        apiVersion = "policy/v1";
+        kind = "PodDisruptionBudget";
+        metadata = metadata;
+        spec = {
+          inherit selector maxUnavailable minAvailable;
+        };
+      };
+  };
+
+  # Prometheus Operator custom resources for monitoring.
+  #
+  # Added for valkey chart migration (2026-03).
+  monitoring = {
+    mkServiceMonitor =
+      {
+        endpoints,
+        selector,
+        namespaceSelector ? null,
+        metadata ? { },
+        ...
+      }:
+      self.mkResource {
+        apiVersion = "monitoring.coreos.com/v1";
+        kind = "ServiceMonitor";
+        metadata = metadata;
+        spec = {
+          inherit endpoints selector namespaceSelector;
+        };
+      };
   };
 
   configMap = {

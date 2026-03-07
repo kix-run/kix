@@ -247,20 +247,83 @@ Only after the core resources match, add optional features:
 
 Each should be behind an `enable` flag and only add manifests when enabled.
 
+### Phase 8: Expert Review
+
+After the module builds and parity looks reasonable, spawn a Claude Code team to do a
+thorough review. This catches issues that are easy to miss when you're deep in the
+implementation — wrong defaults, missing resources, subtle parity gaps.
+
+Spawn **two parallel agents** using the Team tool:
+
+1. **Nix module reviewer** — Reviews the kix module code for quality:
+   - Read `pkgs/<chart-name>/default.nix` and all files in `pkgs/<chart-name>/scripts/`
+   - Read `lib/default.nix` (kixlib) for API context
+   - Check: options have correct types and sensible defaults
+   - Check: resource construction follows kixlib patterns (withMetadata, selectorLabels, etc.)
+   - Check: no Nix anti-patterns (types.anything where types.submodule should be used, etc.)
+   - Check: scripts use `@PLACEHOLDER@` substitution (not inline `''${...}` escaping)
+   - Check: comments explain "why", TODOs have enough context
+   - Report any issues found
+
+2. **Helm parity auditor** — Compares kix output against the Helm chart:
+   - Read the Helm chart's `values.yaml`, `_helpers.tpl`, and all template files
+   - Read the rendered Helm output (`/tmp/<chart-name>-rendered/` or render it)
+   - Read the kix module and built manifests (`result/`)
+   - Check: every resource the Helm chart produces has a kix equivalent
+   - Check: container images, commands, args, ports, env vars match
+   - Check: volume mounts, config content, RBAC rules match
+   - Check: service ports, selectors, and service types match
+   - Check: conditional resources (behind enable flags) are all accounted for
+   - Report missing resources, wrong values, or behavioral differences
+
+Review the team's findings and fix any real issues before considering the migration done.
+
 ## When kixlib Needs New Primitives
 
 If the chart needs a resource type kixlib doesn't support yet, add the builder to
 `lib/default.nix`. Currently missing (add as needed):
-- workload: StatefulSet, DaemonSet, Job, CronJob
-- networking: Ingress, NetworkPolicy
+- workload: DaemonSet, Job, CronJob
+- networking: Ingress
 - rbac: Role, RoleBinding (namespace-scoped)
 - config: Secret
-- policy: PodDisruptionBudget
 - autoscaling: HorizontalPodAutoscaler
-- monitoring: ServiceMonitor
 
 Follow existing patterns: group by namespace, use `self.mkResource`, return an attrset.
 Add a detailed comment explaining the new builder.
+
+## Shell Scripts in ConfigMaps
+
+Many Helm charts embed shell scripts in ConfigMaps (startup scripts, health checks, etc.).
+In Nix multiline strings (`'' ... ''`), `${...}` triggers Nix interpolation — but these
+scripts use `${VAR}` for bash variable expansion. Escaping every `${` as `''${` is fragile.
+
+**Best practice: store scripts as separate `.sh` files and use `@PLACEHOLDER@` substitution.**
+
+```
+pkgs/<chart-name>/
+├── default.nix
+└── scripts/
+    ├── start-primary.sh    # plain bash, no Nix escaping needed
+    ├── start-replica.sh
+    └── health-check.sh     # uses @HEADLESS_SERVICE@ for Nix-injected values
+```
+
+In `default.nix`, read and substitute:
+```nix
+startPrimaryScript = builtins.readFile ./scripts/start-primary.sh
+  |> builtins.replaceStrings
+    [ "@HEADLESS_SERVICE@" "@NAMESPACE@" "@REPLICA_COUNT@" ]
+    [ headlessSvcFqdn      cfg.namespace   (toString totalReplicas) ];
+```
+
+This gives you:
+- **No escaping hell** — bash `${VAR}` is just literal text in `.sh` files
+- **Explicit interpolation points** — `@FOO@` stands out visually
+- **Editor/shellcheck support** — `.sh` files get proper syntax highlighting
+
+The `@PLACEHOLDER@` convention comes from nixpkgs' `substitute`/`substituteAll` builders.
+
+Use inline Nix strings only for very short scripts (< 5 lines) with no shell variables.
 
 ## Common Pitfalls
 
@@ -270,4 +333,5 @@ Add a detailed comment explaining the new builder.
 - **Don't put version labels in selectors.** This breaks rolling updates.
 - **Don't ignore conditional resources.** Mirror Helm's `if` guards with `lib.optionalAttrs`.
 - **Don't forget ports on Services.** `intoService` does NOT auto-derive ports.
+- **Don't embed large shell scripts as Nix strings.** Use separate `.sh` files with `@PLACEHOLDER@` substitution (see above).
 - **Leave comments.** Explain why, not just what. Document known issues and TODOs.

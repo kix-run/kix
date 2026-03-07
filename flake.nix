@@ -110,6 +110,19 @@
             coredns = mkChartManifests ./pkgs/coredns {
               services.coredns.enable = true;
             };
+
+            # Valkey — default replication mode (no sentinel), matching upstream Helm defaults
+            valkey = mkChartManifests ./pkgs/valkey {
+              services.valkey.enable = true;
+            };
+
+            # Valkey — sentinel HA mode, matching production usage
+            valkey-sentinel = mkChartManifests ./pkgs/valkey {
+              services.valkey = {
+                enable = true;
+                sentinel.enabled = true;
+              };
+            };
           };
         };
     };
