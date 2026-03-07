@@ -13,6 +13,31 @@ description: >
 This skill guides you through converting a Helm chart into a kix module for the kixpkgs repo.
 The kixpkgs repo lives at `~/Projects/kixpkgs` and follows a standard structure.
 
+## IMPORTANT: Plan Before You Build
+
+Helm chart migrations are large, multi-file tasks that touch kixlib, the module, the flake,
+and parity testing. Rushing in without a plan leads to rework.
+
+**Before writing any code, enter plan mode and produce a migration plan.** The plan should
+cover every phase below and be reviewed by the user before execution begins. This is not
+optional — the user expects to see and approve the plan first.
+
+### How to Plan
+
+1. **Enter plan mode** (use the EnterPlanMode tool)
+2. Work through Phases 1–2 below (fetch, analyze, inventory) as research
+3. Write a concrete plan covering:
+   - Inventory of every resource the chart produces (kind, name, conditional?)
+   - Which kixlib builders exist for each, and which need to be added
+   - Options mapping: which `values.yaml` keys become `mkOption`s in the first pass
+   - Any known gotchas (unusual template logic, CRDs, complex conditionals)
+   - What "done" looks like — expected resource count, parity check passing
+4. Present the plan to the user and wait for approval
+5. **Exit plan mode** and execute
+
+If the chart is complex (many resource types, autoscaler sidecars, CRDs), break the plan
+into stages — core resources first, optional features second — and get approval for each.
+
 ## Key Architecture Decisions
 
 Before starting, understand these decisions (documented in `lib/default.nix` header):
@@ -75,7 +100,25 @@ resources idiomatically in Nix using kixlib.
    - Which kixlib builder applies (`workload.mkDeployment`, `networking.mkService`, etc.)
    - Anything that would need a new kixlib primitive (see "When kixlib Needs New Primitives")
 
-### Phase 2: Create the Module Structure
+### Phase 2: Write the Migration Plan
+
+**This phase happens in plan mode.** Do not skip it.
+
+Using the inventory from Phase 1, write a plan that includes:
+
+1. **Resource list** — every K8s resource to produce, with the kixlib builder for each
+2. **New kixlib primitives needed** — any builders that don't exist yet
+3. **Options mapping** — which `values.yaml` keys become `mkOption`s
+   - First pass: only the options needed for default-values parity
+   - Future: optional features behind enable flags
+4. **Known complexity** — anything unusual in the Helm templates
+   (e.g., conditional RBAC, dual deployments, CRD installation, init containers)
+5. **Execution order** — what to build first, what to defer
+6. **Definition of done** — expected resource count, parity check command
+
+Present this plan to the user and wait for approval before proceeding.
+
+### Phase 3: Create the Module Structure
 
 Create `pkgs/<chart-name>/` with the module files.
 
@@ -88,11 +131,11 @@ Start with the **minimum viable module**: the core resources (usually Deployment
 ConfigMap + ServiceAccount + RBAC) with default values only. Skip optional features
 (autoscaler, HPA, PDB, ServiceMonitor) on the first pass.
 
-### Phase 3: Map values.yaml to mkOption
+### Phase 4: Map values.yaml to mkOption
 
 Read `references/options-mapping.md` for the detailed mapping rules.
 
-### Phase 4: Build Resources with kixlib
+### Phase 5: Build Resources with kixlib
 
 Read `references/kixlib-patterns.md` for the builder API. Critical patterns:
 
@@ -159,7 +202,7 @@ in
 }
 ```
 
-### Phase 5: Verify Parity
+### Phase 6: Verify Parity
 
 This is the critical feedback loop.
 
@@ -194,7 +237,7 @@ kix dependency annotations) and compares resources by kind.
 
 Iterate until the behavioral diff is clean.
 
-### Phase 6: Handle Advanced Features
+### Phase 7: Handle Advanced Features
 
 Only after the core resources match, add optional features:
 - HPA / Autoscaler (if the chart has them)
