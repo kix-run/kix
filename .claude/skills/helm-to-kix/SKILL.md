@@ -77,10 +77,11 @@ resources idiomatically in Nix using kixlib.
 
 ### Phase 1: Fetch and Analyze the Helm Chart
 
-1. **Fetch the chart** to `/tmp/<chart-name>`:
+1. **Fetch the chart** — use `verify-parity.py` which handles pulling and caching automatically.
+   For manual analysis, you can also pull directly:
    ```bash
-   helm repo add <repo> <url>  # if not already added
-   helm pull <repo>/<chart> --untar --destination /tmp/
+   helm pull <chart-ref> --untar --destination /tmp/
+   # e.g.: helm pull oci://registry-1.docker.io/bitnamicharts/valkey --untar --destination /tmp/
    ```
 
 2. **Render the default output** as your reference target:
@@ -238,13 +239,20 @@ This is the critical feedback loop. **Test multiple value configurations**, not 
 
 3. **Run all test cases**:
    ```bash
-   ./scripts/verify-parity --all <chart-name>
+   ./scripts/verify-parity.py all <chart-name> --chart <helm-chart-ref>
    ```
 
    Or run a single case:
    ```bash
-   ./scripts/verify-parity <chart-name>
+   ./scripts/verify-parity.py check <chart-name> --chart <helm-chart-ref>
    ```
+
+   The `--chart` flag accepts any helm-compatible chart identifier:
+   - OCI ref: `oci://registry-1.docker.io/bitnamicharts/valkey`
+   - Repo/chart: `bitnami/valkey`
+   - Local path: `/tmp/valkey`
+
+   Use `--chart-version` to pin a specific version. Charts are cached in `.cache/charts/`.
 
 The script strips cosmetic differences (helm.sh/chart labels, managed-by, checksum annotations,
 kix dependency annotations) and compares resources by kind.

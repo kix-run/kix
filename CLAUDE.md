@@ -7,14 +7,14 @@ Kubernetes packages built with Nix. Each package is a Helm chart migrated to a k
 - `modules/` — base module system (manifests option)
 - `pkgs/<name>/` — one directory per migrated chart
 - `examples/` — example configs showing module usage
-- `scripts/verify-parity` — diff Helm output vs kix output
+- `scripts/verify-parity.py` — diff Helm output vs kix output
 
 ## Key conventions
 - All modules receive `kixlib` via specialArgs
 - Resources are built with kixlib builders, not raw attrsets
 - Each module exports to `config.manifests.<name>` — one entry per resource, not per module
 - Resource names are human-readable (e.g., "coredns"), NOT Nix store paths
-- Verification: `./scripts/verify-parity <chart-name>`
+- Verification: `./scripts/verify-parity.py <chart-name>`
 
 ## Documentation convention
 This project is in active development. **Leave detailed comments everywhere** explaining:
