@@ -38,7 +38,11 @@ jobs:
           for cluster in cluster-example cluster-full cluster-minimal; do
             outpath=$(nix build ".#${cluster}" --no-link --print-out-paths)
             mkdir -p "artifacts/${cluster}"
-            cp "$outpath"/*.yaml "artifacts/${cluster}/"
+            # Sanitize filenames: colons are illegal in GHA artifacts (NTFS compat)
+            for f in "$outpath"/*.yaml; do
+              safe=$(basename "$f" | tr ':' '_')
+              cp "$f" "artifacts/${cluster}/${safe}"
+            done
           done
 
       - name: Upload cluster manifests
