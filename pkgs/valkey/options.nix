@@ -105,15 +105,7 @@ in
             type = types.submodule {
               options = {
                 hpa = lib.mkOption {
-                  type = types.submodule {
-                    options = {
-                      enabled = lib.mkOption { type = types.bool; default = false; };
-                      minReplicas = lib.mkOption { type = types.int; default = 1; };
-                      maxReplicas = lib.mkOption { type = types.int; default = 11; };
-                      targetCPU = lib.mkOption { type = types.nullOr types.int; default = null; };
-                      targetMemory = lib.mkOption { type = types.nullOr types.int; default = null; };
-                    };
-                  };
+                  type = opts.hpaSubmodule { defaults = { maxReplicas = 11; }; };
                   default = {};
                 };
               };
@@ -223,36 +215,16 @@ in
             default = {};
           };
           serviceMonitor = lib.mkOption {
-            type = types.submodule {
-              options = {
-                enabled = lib.mkOption { type = types.bool; default = false; };
-                namespace = lib.mkOption { type = types.nullOr types.str; default = null; };
-                interval = lib.mkOption { type = types.str; default = "30s"; };
-              };
-            };
+            type = opts.serviceMonitorSubmodule {};
             default = {};
           };
           podMonitor = lib.mkOption {
-            type = types.submodule {
-              options = {
-                enabled = lib.mkOption { type = types.bool; default = false; };
-                interval = lib.mkOption { type = types.str; default = "30s"; };
-              };
-            };
+            type = opts.podMonitorSubmodule {};
             default = {};
             description = "PodMonitor targets pods directly instead of going through a Service.";
           };
           prometheusRule = lib.mkOption {
-            type = types.submodule {
-              options = {
-                enabled = lib.mkOption { type = types.bool; default = false; };
-                rules = lib.mkOption {
-                  type = types.listOf types.anything;
-                  default = [];
-                  description = "Alerting/recording rules passed through to spec.groups[].rules.";
-                };
-              };
-            };
+            type = opts.prometheusRuleSubmodule {};
             default = {};
             description = "PrometheusRule for alerting/recording rules.";
           };
@@ -273,13 +245,7 @@ in
 
     # Matches Helm chart default: pdb.create = true
     pdb = lib.mkOption {
-      type = types.submodule {
-        options = {
-          enabled = lib.mkOption { type = types.bool; default = true; };
-          maxUnavailable = lib.mkOption { type = types.nullOr types.int; default = 1; };
-          minAvailable = lib.mkOption { type = types.nullOr types.int; default = null; };
-        };
-      };
+      type = opts.pdbSubmodule { defaults = { maxUnavailable = 1; }; };
       default = {};
     };
   } // opts.mkChartOptions { description = "Valkey"; };

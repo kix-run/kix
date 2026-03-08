@@ -355,12 +355,13 @@ lib.makeExtensible (self: {
       {
         metadata ? { },
         imagePullSecrets ? null,
+        automountServiceAccountToken ? null,
         ...
       }:
       self.mkResource {
         kind = "ServiceAccount";
         metadata = metadata;
-        imagePullSecrets = imagePullSecrets;
+        inherit imagePullSecrets automountServiceAccountToken;
       };
   };
 

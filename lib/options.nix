@@ -63,6 +63,61 @@ in
     };
   };
 
+  # Reusable ServiceMonitor option submodule.
+  # Most charts that support metrics have identical serviceMonitor options.
+  # CoreDNS is an exception (different shape: interval is nullable, no namespace).
+  serviceMonitorSubmodule = { defaults ? {} }: types.submodule {
+    options = {
+      enabled = lib.mkOption { type = types.bool; default = defaults.enabled or false; };
+      namespace = lib.mkOption { type = types.nullOr types.str; default = defaults.namespace or null; };
+      interval = lib.mkOption { type = types.str; default = defaults.interval or "30s"; };
+    };
+  };
+
+  # Reusable PodMonitor option submodule.
+  podMonitorSubmodule = { defaults ? {} }: types.submodule {
+    options = {
+      enabled = lib.mkOption { type = types.bool; default = defaults.enabled or false; };
+      interval = lib.mkOption { type = types.str; default = defaults.interval or "30s"; };
+    };
+  };
+
+  # Reusable PrometheusRule option submodule.
+  prometheusRuleSubmodule = { defaults ? {} }: types.submodule {
+    options = {
+      enabled = lib.mkOption { type = types.bool; default = defaults.enabled or false; };
+      rules = lib.mkOption {
+        type = types.listOf types.anything;
+        default = defaults.rules or [];
+        description = "Alerting/recording rules passed through to spec.groups[].rules.";
+      };
+    };
+  };
+
+  # Reusable PodDisruptionBudget option submodule.
+  # CoreDNS PDB has a different shape (no `enabled` flag, nullable min/max),
+  # so it keeps its inline def.
+  pdbSubmodule = { defaults ? {} }: types.submodule {
+    options = {
+      enabled = lib.mkOption { type = types.bool; default = defaults.enabled or true; };
+      maxUnavailable = lib.mkOption { type = types.nullOr types.int; default = defaults.maxUnavailable or null; };
+      minAvailable = lib.mkOption { type = types.nullOr types.int; default = defaults.minAvailable or null; };
+    };
+  };
+
+  # Reusable HPA option submodule.
+  # CoreDNS HPA has a different shape (metrics passthrough, no targetCPU/targetMemory),
+  # so it keeps its inline def.
+  hpaSubmodule = { defaults ? {} }: types.submodule {
+    options = {
+      enabled = lib.mkOption { type = types.bool; default = defaults.enabled or false; };
+      minReplicas = lib.mkOption { type = types.int; default = defaults.minReplicas or 1; };
+      maxReplicas = lib.mkOption { type = types.int; default = defaults.maxReplicas or 11; };
+      targetCPU = lib.mkOption { type = types.nullOr types.int; default = defaults.targetCPU or null; };
+      targetMemory = lib.mkOption { type = types.nullOr types.int; default = defaults.targetMemory or null; };
+    };
+  };
+
   # Common options every chart declares (enable, namespace, clusterDomain).
   # Returns an attrset of option declarations that can be merged into
   # options.services.<name> with `//`.

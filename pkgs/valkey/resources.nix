@@ -80,7 +80,7 @@ let
   # Contains valkey.conf, primary.conf, replica.conf, and sentinel.conf (if enabled).
 
   renderDisableCommands = cmds:
-    lib.concatStringsSep "\n" (map (cmd: ''rename-command ${cmd} ""'') cmds);
+    lib.concatMapStringsSep "\n" (cmd: ''rename-command ${cmd} ""'') cmds;
 
   configurationCM = kixlib'.configMap.mkConfigMap {
     metadata.name = "${fullname}-configuration";
@@ -238,6 +238,34 @@ let
     }];
   };
 
+  # --- Pod spec helper ---
+  # The 3 StatefulSet pod template specs (sentinel, primary, replica) share 7
+  # identical fields. This helper captures the shared structure so each caller
+  # only specifies its differences (containers, volumes, annotations).
+  mkPodSpec = { serviceAccountName, componentLabels, containers, volumes, annotations ? {} }:
+    {
+      automountServiceAccountToken = false;
+      securityContext = cfg.podSecurityContext;
+      affinity = mkAntiAffinity componentLabels;
+      enableServiceLinks = true;
+      terminationGracePeriodSeconds = 30;
+      inherit serviceAccountName containers volumes;
+    };
+
+  # --- Shared environment variables ---
+  # Both valkey server containers and sentinel share debug + password env vars.
+  # Server containers additionally need ALLOW_EMPTY_PASSWORD, TLS, and PORT.
+  sharedEnv = [
+    { name = "BITNAMI_DEBUG"; value = "false"; }
+    { name = "VALKEY_PASSWORD_FILE"; value = "/opt/bitnami/valkey/secrets/valkey-password"; }
+  ];
+
+  valkeyServerEnv = sharedEnv ++ [
+    { name = "ALLOW_EMPTY_PASSWORD"; value = "no"; }
+    { name = "VALKEY_TLS_ENABLED"; value = "no"; }
+    { name = "VALKEY_PORT"; value = "6379"; }
+  ];
+
   # --- Base valkey container helper ---
   # The primaryContainer, replicaContainer, and sentinelValkeyContainer are ~80%
   # identical. This helper captures the shared structure; each caller specifies
@@ -262,13 +290,7 @@ let
       securityContext = cfg.containerSecurityContext;
       command = [ "/bin/bash" ];
       args = [ "-c" "/opt/bitnami/scripts/start-scripts/${startScript}" ];
-      env = [
-        { name = "BITNAMI_DEBUG"; value = "false"; }
-        { name = "ALLOW_EMPTY_PASSWORD"; value = "no"; }
-        { name = "VALKEY_PASSWORD_FILE"; value = "/opt/bitnami/valkey/secrets/valkey-password"; }
-        { name = "VALKEY_TLS_ENABLED"; value = "no"; }
-        { name = "VALKEY_PORT"; value = "6379"; }
-      ] ++ env;
+      env = valkeyServerEnv ++ env;
       ports = [{ name = portName; containerPort = 6379; }];
       inherit resources volumeMounts;
     } // probes // lifecycle;
@@ -279,15 +301,18 @@ let
 
   sa = kixlib'.rbac.mkServiceAccount {
     metadata.name = fullname;
-  } // { automountServiceAccountToken = false; };
+    automountServiceAccountToken = false;
+  };
 
   primarySa = kixlib'.rbac.mkServiceAccount {
     metadata.name = "${fullname}-primary";
-  } // { automountServiceAccountToken = false; };
+    automountServiceAccountToken = false;
+  };
 
   replicaSa = kixlib'.rbac.mkServiceAccount {
     metadata.name = "${fullname}-replica";
-  } // { automountServiceAccountToken = false; };
+    automountServiceAccountToken = false;
+  };
 
   # --- Headless Service ---
   headlessSvc = kixlib'.networking.mkService {
@@ -374,6 +399,16 @@ let
     ];
   };
 
+  # Sentinel volume mounts — shares start-scripts, health, password, and data
+  # volumes with valkey containers, but mounts config to the sentinel-specific
+  # path and omits the valkey config + app-conf-dir mounts.
+  sentinelVolumeMounts =
+    builtins.filter (m: m.name != "config" && !(m.name == "empty-dir" && m ? subPath && m.subPath == "app-conf-dir")) commonVolumeMounts
+    ++ [
+      { name = "sentinel-data"; mountPath = "/opt/bitnami/valkey-sentinel/etc"; }
+      { name = "config"; mountPath = "/opt/bitnami/valkey-sentinel/mounted-etc"; }
+    ];
+
   sentinelContainer = kixlib'.pod.mkContainer {
     name = "sentinel";
     image = kixlib.imageRef cfg.sentinel.image;
@@ -384,9 +419,7 @@ let
     lifecycle.preStop.exec.command = [
       "/bin/bash" "-c" "/opt/bitnami/scripts/start-scripts/prestop-sentinel.sh"
     ];
-    env = [
-      { name = "BITNAMI_DEBUG"; value = "false"; }
-      { name = "VALKEY_PASSWORD_FILE"; value = "/opt/bitnami/valkey/secrets/valkey-password"; }
+    env = sharedEnv ++ [
       { name = "VALKEY_SENTINEL_TLS_ENABLED"; value = "no"; }
       { name = "VALKEY_SENTINEL_PORT"; value = "26379"; }
     ];
@@ -416,15 +449,7 @@ let
       exec.command = [ "sh" "-c" "/health/ping_sentinel.sh 1" ];
     };
     resources = cfg.sentinel.resources;
-    volumeMounts = [
-      { name = "empty-dir"; mountPath = "/tmp"; subPath = "tmp-dir"; }
-      { name = "start-scripts"; mountPath = "/opt/bitnami/scripts/start-scripts"; }
-      { name = "health"; mountPath = "/health"; }
-      { name = "sentinel-data"; mountPath = "/opt/bitnami/valkey-sentinel/etc"; }
-      passwordVolumeMount
-      { name = "valkey-data"; mountPath = "/data"; }
-      { name = "config"; mountPath = "/opt/bitnami/valkey-sentinel/mounted-etc"; }
-    ];
+    volumeMounts = sentinelVolumeMounts;
   };
 
   metricsContainer = kixlib'.pod.mkContainer {
@@ -483,13 +508,9 @@ let
           "prometheus.io/scrape" = "true";
         };
       };
-      spec = {
-        automountServiceAccountToken = false;
-        securityContext = cfg.podSecurityContext;
+      spec = mkPodSpec {
         serviceAccountName = fullname;
-        affinity = mkAntiAffinity (labels.withComponent "node");
-        enableServiceLinks = true;
-        terminationGracePeriodSeconds = 30;
+        componentLabels = labels.withComponent "node";
         containers = [ sentinelValkeyContainer sentinelContainer ]
           ++ lib.optionals cfg.metrics.enabled [ metricsContainer ];
         volumes = [
@@ -547,13 +568,9 @@ let
     updateStrategy = { type = "RollingUpdate"; };
     template = kixlib'.pod.mkPodTemplate {
       metadata.labels = labels.withComponent "primary";
-      spec = {
-        securityContext = cfg.podSecurityContext;
+      spec = mkPodSpec {
         serviceAccountName = "${fullname}-primary";
-        automountServiceAccountToken = false;
-        affinity = mkAntiAffinity (labels.withComponent "primary");
-        enableServiceLinks = true;
-        terminationGracePeriodSeconds = 30;
+        componentLabels = labels.withComponent "primary";
         containers = [ primaryContainer ];
         volumes = [
           startScriptsVolume
@@ -634,13 +651,9 @@ let
     updateStrategy = { type = "RollingUpdate"; };
     template = kixlib'.pod.mkPodTemplate {
       metadata.labels = labels.withComponent "replica";
-      spec = {
-        securityContext = cfg.podSecurityContext;
+      spec = mkPodSpec {
         serviceAccountName = "${fullname}-replica";
-        automountServiceAccountToken = false;
-        affinity = mkAntiAffinity (labels.withComponent "replica");
-        enableServiceLinks = true;
-        terminationGracePeriodSeconds = 30;
+        componentLabels = labels.withComponent "replica";
         containers = [ replicaContainer ];
         volumes = [
           startScriptsVolume

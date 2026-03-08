@@ -274,7 +274,7 @@ let
         volumes = [configVolume];
         terminationGracePeriodSeconds = 30;
         inherit serviceAccountName;
-      } // (if cfg.isClusterService then { dnsPolicy = "Default"; } else { });
+      } // lib.optionalAttrs cfg.isClusterService { dnsPolicy = "Default"; };
     };
   };
 
@@ -409,16 +409,6 @@ let
     image = kixlib.imageRef cfg.autoscaler.image;
     imagePullPolicy = cfg.autoscaler.image.pullPolicy;
     resources = cfg.autoscaler.resources;
-  }
-  |> (c: c // {
-    livenessProbe = {
-      httpGet = { path = "/healthz"; port = 8080; scheme = "HTTP"; };
-      initialDelaySeconds = 10;
-      periodSeconds = 5;
-      timeoutSeconds = 5;
-      successThreshold = 1;
-      failureThreshold = 3;
-    };
     command = [
       "/cluster-proportional-autoscaler"
       "--namespace=${cfg.namespace}"
@@ -427,7 +417,15 @@ let
       "--logtostderr=true"
       "--v=2"
     ];
-  });
+  }
+  |> autoscalerKixlib.pod.withLivenessProbe {
+    httpGet = { path = "/healthz"; port = 8080; scheme = "HTTP"; };
+    initialDelaySeconds = 10;
+    periodSeconds = 5;
+    timeoutSeconds = 5;
+    successThreshold = 1;
+    failureThreshold = 3;
+  };
 
   autoscalerDeployment = autoscalerKixlib.workload.mkDeployment {
     replicas = null;
@@ -496,6 +494,10 @@ let
     { name = "coredns-autoscaler-deployment"; resource = autoscalerDeployment; enable = cfg.autoscaler.enabled; kixlib = autoscalerKixlib; }
   ];
 
+  # Autoscaler resources carry their own kixlib (with autoscaler-specific metadata:
+  # different name, labels, and selector). Other resources use kixlib' (the chart-wide
+  # kixlib with coredns namespace/labels). The `r.kixlib or kixlib'` pattern selects
+  # the right one per resource.
   manifests = lib.optionalAttrs cfg.enable (
     lib.listToAttrs (
       map (r: lib.nameValuePair r.name ((r.kixlib or kixlib').mkManifest r.resource))
