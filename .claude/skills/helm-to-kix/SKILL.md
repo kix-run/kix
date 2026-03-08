@@ -60,21 +60,24 @@ integrate with all three.** See `modules/` for the full module infrastructure.
 
 ### Level 1: Cluster Defaults (`modules/cluster.nix`)
 
-Charts inherit cluster-wide settings via `lib.mkDefault`. In the config section:
+Cluster-level options are limited to genuinely cluster-scoped settings: `cluster.domain`
+and `cluster.labels`. Namespace and releaseName are per-chart (real clusters have services
+in different namespaces).
+
+Charts inherit the cluster domain via `lib.mkDefault`. In the config section of `resources.nix`:
 ```nix
 config = {
-  services.<chart-name>.namespace = lib.mkDefault config.cluster.namespace;
   # If the chart uses cluster domain for DNS FQDNs:
   services.<chart-name>.clusterDomain = lib.mkDefault config.cluster.domain;
   # ...
 };
 ```
 
-In label definitions, use `config.cluster.releaseName` (not hardcoded `"release-name"`)
-and merge `config.cluster.labels` as a base:
+In label definitions, hardcode `"release-name"` for `app.kubernetes.io/instance`
+(a Helm-ism we preserve for parity) and merge `config.cluster.labels` as a base:
 ```nix
 selectorLabels = {
-  "app.kubernetes.io/instance" = config.cluster.releaseName;
+  "app.kubernetes.io/instance" = "release-name";
   "app.kubernetes.io/name" = "<chart-name>";
 };
 allLabels = config.cluster.labels // selectorLabels // {
@@ -127,12 +130,14 @@ kixpkgs/
 ├── lib/default.nix              # kixlib - shared builders (mkDeployment, mkService, etc.)
 ├── modules/
 │   ├── default.nix              # Base module (imports all below, defines manifests option)
-│   ├── cluster.nix              # Level 1: cluster-wide defaults (namespace, domain, labels)
+│   ├── cluster.nix              # Level 1: cluster-wide defaults (domain, labels)
 │   ├── registry.nix             # Level 2: service endpoint registry
 │   ├── monitoring.nix           # Level 3: cross-cutting ServiceMonitor generation
 │   └── network-policy.nix       # Level 3: cross-cutting NetworkPolicy (skeleton)
 ├── pkgs/<chart-name>/           # One directory per migrated chart
-│   ├── default.nix              # Options + wiring (the main module)
+│   ├── default.nix              # Thin orchestrator (imports options.nix + resources.nix)
+│   ├── options.nix              # Option declarations (the API surface)
+│   ├── resources.nix            # Resource construction, helpers, and config wiring
 │   └── scripts/                 # Shell scripts with @PLACEHOLDER@ substitution
 ├── tests/<chart-name>/          # Parity test cases
 ├── scripts/verify-parity.py     # Automated helm vs kix behavioral diff checker
@@ -191,12 +196,29 @@ Present this plan to the user and wait for approval before proceeding.
 
 ### Phase 3: Create the Module Structure
 
-Create `pkgs/<chart-name>/` with the module files.
+Create `pkgs/<chart-name>/` with three files following the standard split pattern:
 
-**default.nix** is always the main file. It should contain:
-1. **Options** — one `mkOption` per meaningful Helm value (read `references/options-mapping.md`)
-2. **Resource construction** — use kixlib builders to create each K8s resource
-3. **Config output** — write EACH resource to a separate `config.manifests` entry
+**`default.nix`** — thin orchestrator that imports the other two files:
+```nix
+{ lib, ... }:
+{
+  imports = [
+    ./options.nix
+    ./resources.nix
+  ];
+}
+```
+
+**`options.nix`** — all option declarations (the API surface):
+- Function args: `{ lib, ... }:`
+- One `mkOption` per meaningful Helm value (read `references/options-mapping.md`)
+- No `config` section — only `options.services.<chart-name> = { ... };`
+
+**`resources.nix`** — resource construction and config wiring:
+- Function args: `{ lib, pkgs, config, kixlib, ... }:`
+- `let cfg = config.services.<chart-name>;` at top
+- Build each K8s resource using kixlib builders
+- `config = { ... }` section: registry, monitoring, manifests output
 
 Start with the **minimum viable module**: the core resources (usually Deployment + Service +
 ConfigMap + ServiceAccount + RBAC) with default values only. Skip optional features
@@ -208,17 +230,19 @@ Read `references/options-mapping.md` for the detailed mapping rules.
 
 ### Phase 5: Build Resources with kixlib
 
-Read `references/kixlib-patterns.md` for the builder API. Critical patterns:
+Read `references/kixlib-patterns.md` for the builder API. This code goes in `resources.nix`:
 
 ```nix
+# resources.nix — resource construction and config wiring
+{ lib, pkgs, config, kixlib, ... }:
+
 let
   cfg = config.services.<chart-name>;
 
   # Stable labels for selectors — NEVER include version labels here.
-  # Use config.cluster.releaseName (Level 1) instead of hardcoding "release-name".
   selectorLabels = {
     "app.kubernetes.io/name" = "<chart-name>";
-    "app.kubernetes.io/instance" = config.cluster.releaseName;
+    "app.kubernetes.io/instance" = "release-name";
   };
 
   # Merge cluster.labels (Level 1) as base — chart labels override on collision.
@@ -267,13 +291,13 @@ let
 in
 {
   config = {
-    # Level 1: consume cluster defaults
-    services.<chart-name>.namespace = lib.mkDefault config.cluster.namespace;
+    # Level 1: consume cluster domain default
+    services.<chart-name>.clusterDomain = lib.mkDefault config.cluster.domain;
 
     # Level 2: service registry
     registry.<chart-name> = lib.mkIf cfg.enable {
       endpoints.primary = {
-        host = "<chart-name>.${cfg.namespace}.svc.${config.cluster.domain}";
+        host = "<chart-name>.${cfg.namespace}.svc.${cfg.clusterDomain}";
         port = 8080;
         protocol = "http";
       };
@@ -386,7 +410,7 @@ implementation — wrong defaults, missing resources, subtle parity gaps.
 Spawn **two parallel agents** using the Team tool:
 
 1. **Nix module reviewer** — Reviews the kix module code for quality:
-   - Read `pkgs/<chart-name>/default.nix` and all files in `pkgs/<chart-name>/scripts/`
+   - Read `pkgs/<chart-name>/options.nix`, `pkgs/<chart-name>/resources.nix`, and all files in `pkgs/<chart-name>/scripts/`
    - Read `lib/default.nix` (kixlib) for API context
    - Check: options have correct types and sensible defaults
    - Check: resource construction follows kixlib patterns (withMetadata, selectorLabels, etc.)
@@ -431,14 +455,16 @@ scripts use `${VAR}` for bash variable expansion. Escaping every `${` as `''${` 
 
 ```
 pkgs/<chart-name>/
-├── default.nix
+├── default.nix      # thin orchestrator
+├── options.nix      # option declarations
+├── resources.nix    # resource construction (script reading happens here)
 └── scripts/
     ├── start-primary.sh    # plain bash, no Nix escaping needed
     ├── start-replica.sh
     └── health-check.sh     # uses @HEADLESS_SERVICE@ for Nix-injected values
 ```
 
-In `default.nix`, read and substitute:
+In `resources.nix`, read and substitute:
 ```nix
 startPrimaryScript = builtins.readFile ./scripts/start-primary.sh
   |> builtins.replaceStrings
