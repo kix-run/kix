@@ -94,94 +94,125 @@
               config = config;
             });
 
+          # --- Package derivations ---
+          # Defined here so both `packages` and `checks` can reference them.
+
+          # Per-chart parity test fixtures
+          corednsPkg = mkChartManifests ./pkgs/coredns {
+            services.coredns.enable = true;
+          };
+
+          valkeyPkg = mkChartManifests ./pkgs/valkey {
+            services.valkey.enable = true;
+          };
+
+          valkeySentinelPkg = mkChartManifests ./pkgs/valkey {
+            services.valkey = {
+              enable = true;
+              sentinel.enabled = true;
+            };
+          };
+
+          valkeyFullPkg = mkChartManifests ./pkgs/valkey {
+            services.valkey = {
+              enable = true;
+              sentinel.enabled = true;
+              metrics.enabled = true;
+              metrics.serviceMonitor.enabled = true;
+              networkPolicy.enabled = true;
+              pdb.enabled = true;
+            };
+          };
+
+          # Multi-chart cluster evaluation
+          exampleEval = mkCluster {
+            chartModules = [
+              ./pkgs/coredns
+              ./pkgs/valkey
+            ];
+            config = import ./clusters/example.nix;
+          };
+
+          clusterExamplePkg = mkManifests exampleEval;
+
         in
         {
-          # Exposed via legacyPackages so they're accessible as:
-          #   nix eval .#legacyPackages.<system>.kixlib
-          # Standard `packages` only allows derivations, not functions.
           legacyPackages = {
             inherit mkCluster mkManifests mkChartManifests kixlib;
           };
 
-          # Per-chart build targets. Each entry should be a derivation
-          # (the output of mkChartManifests) so `nix build .#<name>` works.
-          # verify-parity.sh uses this to build the kix side of the comparison.
+          # Per-chart build targets for parity testing, plus cluster definitions.
+          # `nix build .#<name>` builds any of these.
           packages = {
-            coredns = mkChartManifests ./pkgs/coredns {
-              services.coredns.enable = true;
-            };
-
-            # Valkey — default replication mode (no sentinel), matching upstream Helm defaults
-            valkey = mkChartManifests ./pkgs/valkey {
-              services.valkey.enable = true;
-            };
-
-            # Valkey — sentinel HA mode, matching production usage
-            valkey-sentinel = mkChartManifests ./pkgs/valkey {
-              services.valkey = {
-                enable = true;
-                sentinel.enabled = true;
-              };
-            };
-
-            # Valkey — everything enabled (sentinel + metrics + serviceMonitor + networkPolicy + PDB)
-            # Used for parity testing to cover all conditional resources.
-            valkey-full = mkChartManifests ./pkgs/valkey {
-              services.valkey = {
-                enable = true;
-                sentinel.enabled = true;
-                metrics.enabled = true;
-                metrics.serviceMonitor.enabled = true;
-                networkPolicy.enabled = true;
-                pdb.enabled = true;
-              };
-            };
-
-            # --- Cluster definitions ---
-            # Multi-chart cluster outputs. Unlike the per-chart packages above
-            # (which are parity test fixtures), cluster packages represent
-            # "declarative cluster state" — all services composed together.
-            cluster-example = let
-              evaluation = mkCluster {
-                chartModules = [
-                  ./pkgs/coredns
-                  ./pkgs/valkey
-                ];
-                config = import ./clusters/example.nix;
-              };
-            in mkManifests evaluation;
+            coredns = corednsPkg;
+            valkey = valkeyPkg;
+            valkey-sentinel = valkeySentinelPkg;
+            valkey-full = valkeyFullPkg;
+            cluster-example = clusterExamplePkg;
           };
 
-          # Structural checks for multi-chart composition.
-          # These validate that intent merging (registry, monitoring) works
-          # across charts. The check is really a Nix eval-time assertion —
-          # if any registry path is missing, Nix fails before the runCommand
-          # ever executes.
           checks = let
-            exampleEval = mkCluster {
-              chartModules = [
-                ./pkgs/coredns
-                ./pkgs/valkey
-              ];
-              config = import ./clusters/example.nix;
-            };
             reg = exampleEval.config.registry;
             mon = exampleEval.config.monitoring;
-          in {
-            cluster-example = pkgs.runCommand "check-cluster-example" {} ''
-              echo "=== Registry checks ==="
-              echo "coredns dns-udp: ${reg.coredns.endpoints.dns-udp.host}:${toString reg.coredns.endpoints.dns-udp.port}"
-              echo "coredns dns-tcp: ${reg.coredns.endpoints.dns-tcp.host}:${toString reg.coredns.endpoints.dns-tcp.port}"
-              echo "valkey primary:  ${reg.valkey.endpoints.primary.host}:${toString reg.valkey.endpoints.primary.port}"
-              echo "valkey sentinel: ${reg.valkey.endpoints.sentinel.host}:${toString reg.valkey.endpoints.sentinel.port}"
-              echo "valkey metrics:  ${reg.valkey.endpoints.metrics.host}:${toString reg.valkey.endpoints.metrics.port}"
-              echo ""
-              echo "=== Monitoring checks ==="
-              echo "valkey target:   ${mon.targets.valkey.serviceName} (port: ${mon.targets.valkey.portName})"
-              echo ""
-              echo "All checks passed."
+            manifests = exampleEval.config.manifests;
+
+            # Helper: validate a manifest directory against K8s API schemas.
+            # Skips CRDs (ServiceMonitor) since kubeconform doesn't have
+            # Prometheus Operator schemas built-in.
+            schemaCheck = name: drv: pkgs.runCommand "schema-${name}" {
+              nativeBuildInputs = [ pkgs.kubeconform ];
+            } ''
+              echo "Validating ${name}..."
+              kubeconform -strict -summary -skip ServiceMonitor ${drv}/*.json
               touch $out
             '';
+          in {
+            # --- Structural checks for multi-chart composition ---
+            # Eval-time assertions validate that intent merging works across
+            # charts. If any assertion fails, Nix aborts before the runCommand
+            # executes, with a clear error message.
+            cluster-example = let
+              # Registry: both charts populated with non-empty hosts
+              assertRegistry =
+                assert reg.coredns.endpoints.dns-udp.host != "";
+                assert reg.coredns.endpoints.dns-tcp.host != "";
+                assert reg.coredns.endpoints.dns-udp.port == 53;
+                assert reg.valkey.endpoints.primary.host != "";
+                assert reg.valkey.endpoints.primary.port == 6379;
+                assert reg.valkey.endpoints.sentinel.host != "";
+                assert reg.valkey.endpoints.sentinel.port == 26379;
+                assert reg.valkey.endpoints.metrics.host != "";
+                assert reg.valkey.endpoints.metrics.port == 9121;
+                true;
+
+              # Monitoring: cross-cutting module created the ServiceMonitor,
+              # per-chart one was suppressed.
+              assertMonitoring =
+                assert mon.targets.valkey.serviceName == "valkey-metrics";
+                assert mon.targets.valkey.portName == "http-metrics";
+                assert manifests ? "monitoring-valkey-servicemonitor";
+                assert !(manifests ? "valkey-servicemonitor");
+                true;
+
+            in assert assertRegistry; assert assertMonitoring;
+            pkgs.runCommand "check-cluster-example" {} ''
+              echo "Registry: coredns dns-udp=${reg.coredns.endpoints.dns-udp.host}:${toString reg.coredns.endpoints.dns-udp.port}"
+              echo "Registry: valkey primary=${reg.valkey.endpoints.primary.host}:${toString reg.valkey.endpoints.primary.port}"
+              echo "Registry: valkey sentinel=${reg.valkey.endpoints.sentinel.host}:${toString reg.valkey.endpoints.sentinel.port}"
+              echo "Registry: valkey metrics=${reg.valkey.endpoints.metrics.host}:${toString reg.valkey.endpoints.metrics.port}"
+              echo "Monitoring: valkey target=${mon.targets.valkey.serviceName}:${mon.targets.valkey.portName}"
+              echo "All structural assertions passed."
+              touch $out
+            '';
+
+            # --- Schema validation ---
+            # Validates manifests against K8s API schemas using kubeconform.
+            # Catches invalid apiVersions, missing required fields, wrong types.
+            schema-cluster-example = schemaCheck "cluster-example" clusterExamplePkg;
+            schema-coredns = schemaCheck "coredns" corednsPkg;
+            schema-valkey = schemaCheck "valkey" valkeyPkg;
+            schema-valkey-sentinel = schemaCheck "valkey-sentinel" valkeySentinelPkg;
+            schema-valkey-full = schemaCheck "valkey-full" valkeyFullPkg;
           };
         };
     };
