@@ -41,12 +41,9 @@
 #    solve this — we've settled on one for now with a documented workaround.
 #
 # MISSING RESOURCE TYPES (add as needed during chart migrations):
-#   workload: DaemonSet, Job, CronJob
+#   workload: DaemonSet, CronJob
 #   networking: Ingress
-#   rbac: Role, RoleBinding (namespace-scoped)
 #   config: Secret
-#   autoscaling: HorizontalPodAutoscaler
-#   monitoring: PrometheusRule
 
 {
   pkgs,
@@ -320,7 +317,7 @@ lib.makeExtensible (self: {
     #     subjects = [{ kind = "ServiceAccount"; name = "default"; namespace = "kube-system"; }];
     #   }
     mkClusterRoleBindingWith =
-      { clusterRole, serviceAccount, subjects ? null }:
+      { clusterRole, serviceAccount, subjects ? null, metadata ? {} }:
       let
         autoSubjects = [
           {
@@ -333,7 +330,7 @@ lib.makeExtensible (self: {
       self.mkResource {
         apiVersion = "rbac.authorization.k8s.io/v1";
         kind = "ClusterRoleBinding";
-        metadata = {
+        metadata = metadata // {
           namespace = null;
         };
         roleRef = {
@@ -350,6 +347,81 @@ lib.makeExtensible (self: {
     bind =
       clusterRole: serviceAccount:
       self.mkManifest (self.rbac.mkClusterRoleBinding clusterRole serviceAccount);
+
+    # Creates a namespace-scoped Role.
+    #
+    # Unlike ClusterRole, Roles keep the namespace from withMetadata (or explicit
+    # metadata.namespace). Same structure otherwise — rules list, passthrough.
+    #
+    # Added for cert-manager migration (2026-03). Cert-manager uses Roles for
+    # leader election (kube-system), webhook dynamic-serving, and startup check.
+    mkRole =
+      {
+        rules,
+        ...
+      }@r:
+      self.mkResource (
+        lib.recursiveUpdate r {
+          apiVersion = "rbac.authorization.k8s.io/v1";
+          kind = "Role";
+          rules = rules;
+        }
+      );
+
+    # Creates a namespace-scoped RoleBinding linking a Role (or ClusterRole) to a ServiceAccount.
+    #
+    # Accepts either a Role or ClusterRole as the first argument — reads `role.kind`
+    # dynamically to set the roleRef correctly. This handles the common pattern where
+    # a RoleBinding references a ClusterRole to grant namespace-scoped permissions
+    # from a cluster-wide role.
+    #
+    # Added for cert-manager migration (2026-03).
+    mkRoleBinding =
+      role: serviceAccount:
+      self.mkResource {
+        apiVersion = "rbac.authorization.k8s.io/v1";
+        kind = "RoleBinding";
+        roleRef = {
+          apiGroup = lib.elemAt (lib.strings.split "/" role.apiVersion) 0;
+          kind = role.kind;
+          name = self.resourceName role;
+        };
+        subjects = [
+          {
+            kind = serviceAccount.kind;
+            name = self.resourceName serviceAccount;
+            namespace = serviceAccount.metadata.namespace or "default";
+          }
+        ];
+      };
+
+    # Like mkRoleBinding but takes a single attrset, allowing explicit subjects
+    # override and metadata override (e.g., to put the binding in a different
+    # namespace than the default).
+    #
+    # Added for cert-manager migration (2026-03).
+    mkRoleBindingWith =
+      { role, serviceAccount, subjects ? null, metadata ? {} }:
+      let
+        autoSubjects = [
+          {
+            kind = serviceAccount.kind;
+            name = self.resourceName serviceAccount;
+            namespace = serviceAccount.metadata.namespace or "default";
+          }
+        ];
+      in
+      self.mkResource {
+        apiVersion = "rbac.authorization.k8s.io/v1";
+        kind = "RoleBinding";
+        inherit metadata;
+        roleRef = {
+          apiGroup = lib.elemAt (lib.strings.split "/" role.apiVersion) 0;
+          kind = role.kind;
+          name = self.resourceName role;
+        };
+        subjects = if subjects != null then subjects else autoSubjects;
+      };
 
     mkServiceAccount =
       {
@@ -539,6 +611,31 @@ lib.makeExtensible (self: {
         };
       };
 
+    # Creates a Job resource.
+    #
+    # Uses batch/v1 API. Accepts template (pod template spec) and passthrough
+    # for backoffLimit, completions, parallelism, etc.
+    #
+    # Added for cert-manager migration (2026-03). Cert-manager uses a Job for
+    # startup API check — verifies the API server has the CRDs installed.
+    mkJob =
+      {
+        template,
+        backoffLimit ? null,
+        completions ? null,
+        parallelism ? null,
+        metadata ? { },
+        ...
+      }:
+      self.mkResource {
+        apiVersion = "batch/v1";
+        kind = "Job";
+        inherit metadata;
+        spec = {
+          inherit template backoffLimit completions parallelism;
+        };
+      };
+
     # Sets serviceAccountName on a workload's pod template.
     # Works for both Deployments and StatefulSets (same spec.template.spec path).
     # Uses the human-readable resourceName, not a store path.
@@ -676,6 +773,42 @@ lib.makeExtensible (self: {
         spec = {
           inherit groups;
         };
+      };
+  };
+
+  # Admission webhook configurations for validating/mutating K8s API requests.
+  #
+  # Added for cert-manager migration (2026-03). Cert-manager registers both
+  # mutating and validating webhooks to intercept cert-manager CRD operations.
+  #
+  # These are cluster-scoped resources (namespace = null). The webhooks list is
+  # passed through — each entry has its own rules, clientConfig, failurePolicy, etc.
+  # caBundle is typically empty at deploy time and filled by cainjector at runtime.
+  admission = {
+    mkMutatingWebhookConfiguration =
+      {
+        webhooks,
+        metadata ? { },
+        ...
+      }:
+      self.mkResource {
+        apiVersion = "admissionregistration.k8s.io/v1";
+        kind = "MutatingWebhookConfiguration";
+        metadata = metadata // { namespace = null; };
+        inherit webhooks;
+      };
+
+    mkValidatingWebhookConfiguration =
+      {
+        webhooks,
+        metadata ? { },
+        ...
+      }:
+      self.mkResource {
+        apiVersion = "admissionregistration.k8s.io/v1";
+        kind = "ValidatingWebhookConfiguration";
+        metadata = metadata // { namespace = null; };
+        inherit webhooks;
       };
   };
 

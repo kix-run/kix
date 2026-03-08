@@ -229,6 +229,25 @@
             };
           };
 
+          # cert-manager variants
+          certManagerPkg = mkChartManifests ./pkgs/cert-manager {
+            services.cert-manager.enable = true;
+          };
+
+          certManagerNoCainjectorPkg = mkChartManifests ./pkgs/cert-manager {
+            services.cert-manager = {
+              enable = true;
+              cainjector.enabled = false;
+            };
+          };
+
+          certManagerNoStartupapicheckPkg = mkChartManifests ./pkgs/cert-manager {
+            services.cert-manager = {
+              enable = true;
+              startupapicheck.enabled = false;
+            };
+          };
+
           # Multi-chart cluster evaluation
           exampleEval = mkCluster {
             chartModules = [
@@ -262,6 +281,9 @@
             valkey-prometheusrule = valkeyPrometheusrulePkg;
             valkey-hpa = valkeyHpaPkg;
             valkey-hpa-sentinel = valkeyHpaSentinelPkg;
+            cert-manager = certManagerPkg;
+            cert-manager-no-cainjector = certManagerNoCainjectorPkg;
+            cert-manager-no-startupapicheck = certManagerNoStartupapicheckPkg;
             cluster-example = clusterExamplePkg;
           };
 
@@ -354,6 +376,9 @@
             schema-valkey-prometheusrule = schemaCheck "valkey-prometheusrule" valkeyPrometheusrulePkg;
             schema-valkey-hpa = schemaCheck "valkey-hpa" valkeyHpaPkg;
             schema-valkey-hpa-sentinel = schemaCheck "valkey-hpa-sentinel" valkeyHpaSentinelPkg;
+            schema-cert-manager = schemaCheck "cert-manager" certManagerPkg;
+            schema-cert-manager-no-cainjector = schemaCheck "cert-manager-no-cainjector" certManagerNoCainjectorPkg;
+            schema-cert-manager-no-startupapicheck = schemaCheck "cert-manager-no-startupapicheck" certManagerNoStartupapicheckPkg;
           };
         };
     };

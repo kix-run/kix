@@ -31,6 +31,7 @@ STRIP_ANNOTATIONS = {
 STRIP_ANNOTATION_PREFIXES = [
     "checksum/",       # Helm uses checksum/config, checksum/health, etc.
     "build.kix.dev/",  # kix build metadata
+    "helm.sh/",        # Helm hook annotations (hook, hook-weight, hook-delete-policy)
 ]
 
 # Helm prefixes resource names with the release name. kix uses plain app names.

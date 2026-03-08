@@ -1,0 +1,11 @@
+chart: jetstack/cert-manager
+chart-version: "v1.19.4"
+ignore-missing:
+  - CustomResourceDefinition/.*
+
+cases:
+  cert-manager: {}
+  cert-manager-no-cainjector:
+    values: no-cainjector.yaml
+  cert-manager-no-startupapicheck:
+    values: no-startupapicheck.yaml

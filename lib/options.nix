@@ -118,6 +118,66 @@ in
     };
   };
 
+  # Reusable pod-level security context submodule.
+  # Covers the most common fields. Charts that need additional fields (e.g., fsGroup,
+  # supplementalGroups) can extend via freeformType or define their own submodule.
+  #
+  # Defaults match the Kubernetes "restricted" pod security standard — most charts
+  # should use these defaults and only override if they have a specific reason.
+  podSecurityContextSubmodule = { defaults ? {} }: types.submodule {
+    options = {
+      runAsNonRoot = lib.mkOption { type = types.bool; default = defaults.runAsNonRoot or true; };
+      runAsUser = lib.mkOption {
+        type = types.nullOr types.int;
+        default = defaults.runAsUser or null;
+        description = "UID to run containers as. null = let K8s decide.";
+      };
+      runAsGroup = lib.mkOption {
+        type = types.nullOr types.int;
+        default = defaults.runAsGroup or null;
+        description = "GID to run containers as. null = let K8s decide.";
+      };
+      fsGroup = lib.mkOption {
+        type = types.nullOr types.int;
+        default = defaults.fsGroup or null;
+        description = "GID for volume ownership. null = let K8s decide.";
+      };
+      seccompProfile = lib.mkOption {
+        type = types.submodule {
+          options.type = lib.mkOption { type = types.str; default = defaults.seccompProfileType or "RuntimeDefault"; };
+        };
+        default = {};
+      };
+    };
+  };
+
+  # Reusable container-level security context submodule.
+  # Defaults match the "restricted" container security standard.
+  containerSecurityContextSubmodule = { defaults ? {} }: types.submodule {
+    options = {
+      allowPrivilegeEscalation = lib.mkOption { type = types.bool; default = defaults.allowPrivilegeEscalation or false; };
+      capabilities = lib.mkOption {
+        type = types.submodule {
+          options = {
+            add = lib.mkOption { type = types.listOf types.str; default = defaults.capabilitiesAdd or []; };
+            drop = lib.mkOption { type = types.listOf types.str; default = defaults.capabilitiesDrop or [ "ALL" ]; };
+          };
+        };
+        default = {};
+      };
+      readOnlyRootFilesystem = lib.mkOption { type = types.bool; default = defaults.readOnlyRootFilesystem or true; };
+      runAsNonRoot = lib.mkOption {
+        type = types.nullOr types.bool;
+        default = defaults.runAsNonRoot or null;
+        description = "Override pod-level runAsNonRoot for this container. null = inherit from pod.";
+      };
+      runAsUser = lib.mkOption {
+        type = types.nullOr types.int;
+        default = defaults.runAsUser or null;
+      };
+    };
+  };
+
   # Common options every chart declares (enable, namespace, clusterDomain).
   # Returns an attrset of option declarations that can be merged into
   # options.services.<name> with `//`.
