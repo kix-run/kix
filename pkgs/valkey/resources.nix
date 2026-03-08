@@ -37,42 +37,24 @@ let
   fullname = "valkey";
   headlessSvcName = "${fullname}-headless";
 
-  # FQDN helper — the pattern "name.namespace.svc.clusterDomain" appears 7+ times.
-  mkFqdn = name: "${name}.${cfg.namespace}.svc.${cfg.clusterDomain}";
+  # FQDN helper — delegates to kixlib.mkFqdn for the shared implementation.
+  fqdn = name: kixlib.mkFqdn { inherit name; namespace = cfg.namespace; clusterDomain = cfg.clusterDomain; };
 
-  headlessSvcFqdn = mkFqdn headlessSvcName;
+  headlessSvcFqdn = fqdn headlessSvcName;
 
   # --- Labels ---
+  # Using kixlib.mkLabels for the standard label hierarchy.
   # Stable selector labels — NEVER include version here (breaks rolling updates).
-  selectorLabels = {
-    "app.kubernetes.io/instance" = "release-name";
-    "app.kubernetes.io/name" = "valkey";
-  };
-
-  # cluster.labels merged as base — chart-specific labels override on collision.
-  allLabels = config.cluster.labels // selectorLabels // {
-    "app.kubernetes.io/managed-by" = "kix";
-    "app.kubernetes.io/part-of" = "valkey";
-  };
-
-  # Component-specific selector labels for non-sentinel mode
-  primarySelectorLabels = selectorLabels // {
-    "app.kubernetes.io/component" = "primary";
-  };
-
-  replicaSelectorLabels = selectorLabels // {
-    "app.kubernetes.io/component" = "replica";
-  };
-
-  # Component-specific selector labels for sentinel mode
-  nodeSelectorLabels = selectorLabels // {
-    "app.kubernetes.io/component" = "node";
+  labels = kixlib.mkLabels {
+    chart = "valkey";
+    clusterLabels = config.cluster.labels;
+    extra = { "app.kubernetes.io/part-of" = "valkey"; };
   };
 
   # --- kixlib setup ---
   kixlib' = kixlib.withMetadata {
     namespace = cfg.namespace;
-    labels = allLabels;
+    labels = labels.all;
     name = fullname;
   };
 
@@ -157,7 +139,7 @@ let
   # escaping hell of embedding bash ${VAR} in Nix multiline strings (''${...}).
   # See SKILL.md "Shell Scripts in ConfigMaps" for the rationale.
 
-  sentinelSvcFqdn = mkFqdn fullname;
+  sentinelSvcFqdn = fqdn fullname;
   totalReplicas = cfg.replica.replicaCount;
 
   # Read a script file and substitute @PLACEHOLDER@ tokens with Nix values.
@@ -256,6 +238,41 @@ let
     }];
   };
 
+  # --- Base valkey container helper ---
+  # The primaryContainer, replicaContainer, and sentinelValkeyContainer are ~80%
+  # identical. This helper captures the shared structure; each caller specifies
+  # only its differences (start script, extra env vars, probes, resources, etc.).
+  #
+  # The portName parameter handles a subtle difference: replication mode containers
+  # use "redis" (matching Helm's tcp-redis service port targetPort), while sentinel
+  # mode uses "valkey" (sentinel service targets by port number, not name).
+  mkValkeyContainer = {
+    startScript,
+    env ? [],
+    probes ? {},
+    resources,
+    portName ? "redis",
+    lifecycle ? {},
+    volumeMounts ? commonVolumeMounts,
+  }:
+    kixlib'.pod.mkContainer {
+      name = "valkey";
+      image = kixlib.imageRef cfg.image;
+      imagePullPolicy = cfg.image.pullPolicy;
+      securityContext = cfg.containerSecurityContext;
+      command = [ "/bin/bash" ];
+      args = [ "-c" "/opt/bitnami/scripts/start-scripts/${startScript}" ];
+      env = [
+        { name = "BITNAMI_DEBUG"; value = "false"; }
+        { name = "ALLOW_EMPTY_PASSWORD"; value = "no"; }
+        { name = "VALKEY_PASSWORD_FILE"; value = "/opt/bitnami/valkey/secrets/valkey-password"; }
+        { name = "VALKEY_TLS_ENABLED"; value = "no"; }
+        { name = "VALKEY_PORT"; value = "6379"; }
+      ] ++ env;
+      ports = [{ name = portName; containerPort = 6379; }];
+      inherit resources volumeMounts;
+    } // probes // lifecycle;
+
   # --- ServiceAccount ---
   # In sentinel mode: single shared SA named "valkey"
   # In non-sentinel mode: separate SAs per component ("valkey-primary", "valkey-replica")
@@ -283,7 +300,7 @@ let
       ] ++ lib.optionals cfg.sentinel.enabled [
         { name = "tcp-sentinel"; port = 26379; targetPort = "valkey-sentinel"; }
       ];
-      selector = selectorLabels;
+      selector = labels.selector;
     } // lib.optionalAttrs cfg.sentinel.enabled {
       publishNotReadyAddresses = true;
     };
@@ -296,7 +313,7 @@ let
   sentinelSvc = kixlib'.networking.mkService {
     metadata = {
       name = fullname;
-      labels = allLabels // { "app.kubernetes.io/component" = "node"; };
+      labels = labels.all // { "app.kubernetes.io/component" = "node"; };
     };
     spec = {
       type = "ClusterIP";
@@ -305,57 +322,51 @@ let
         { name = "tcp-redis"; port = 6379; targetPort = 6379; }
         { name = "tcp-sentinel"; port = 26379; targetPort = 26379; }
       ];
-      selector = nodeSelectorLabels;
+      selector = labels.withComponent "node";
     };
   };
 
   # Sentinel mode: single StatefulSet with valkey + sentinel + optional metrics containers
-  sentinelValkeyContainer = kixlib'.pod.mkContainer {
-    name = "valkey";
-    image = "${cfg.image.repository}:${cfg.image.tag}";
-    imagePullPolicy = cfg.image.pullPolicy;
-    securityContext = cfg.containerSecurityContext;
-    command = [ "/bin/bash" ];
-    args = [ "-c" "/opt/bitnami/scripts/start-scripts/start-node.sh" ];
-    lifecycle.preStop.exec.command = [
-      "/bin/bash" "-c" "/opt/bitnami/scripts/start-scripts/prestop-valkey.sh"
-    ];
+  sentinelValkeyContainer = mkValkeyContainer {
+    startScript = "start-node.sh";
+    portName = "valkey";
     env = [
-      { name = "BITNAMI_DEBUG"; value = "false"; }
       { name = "VALKEY_PRIMARY_PORT_NUMBER"; value = "6379"; }
-      { name = "ALLOW_EMPTY_PASSWORD"; value = "no"; }
-      { name = "VALKEY_PASSWORD_FILE"; value = "/opt/bitnami/valkey/secrets/valkey-password"; }
       { name = "VALKEY_PRIMARY_PASSWORD_FILE"; value = "/opt/bitnami/valkey/secrets/valkey-password"; }
-      { name = "VALKEY_TLS_ENABLED"; value = "no"; }
-      { name = "VALKEY_PORT"; value = "6379"; }
       { name = "VALKEY_SENTINEL_TLS_ENABLED"; value = "no"; }
       { name = "VALKEY_SENTINEL_PORT"; value = "26379"; }
       { name = "VALKEY_DATA_DIR"; value = "/data"; }
     ];
-    ports = [{ name = "valkey"; containerPort = 6379; }];
-    startupProbe = {
-      failureThreshold = 22;
-      initialDelaySeconds = 10;
-      periodSeconds = 10;
-      successThreshold = 1;
-      timeoutSeconds = 5;
-      exec.command = [ "sh" "-c" "/health/ping_liveness_local.sh 5" ];
+    lifecycle = {
+      lifecycle.preStop.exec.command = [
+        "/bin/bash" "-c" "/opt/bitnami/scripts/start-scripts/prestop-valkey.sh"
+      ];
     };
-    livenessProbe = {
-      initialDelaySeconds = 20;
-      periodSeconds = 5;
-      timeoutSeconds = 5;
-      successThreshold = 1;
-      failureThreshold = 5;
-      exec.command = [ "sh" "-c" "/health/ping_liveness_local.sh 5" ];
-    };
-    readinessProbe = {
-      initialDelaySeconds = 20;
-      periodSeconds = 5;
-      timeoutSeconds = 1;
-      successThreshold = 1;
-      failureThreshold = 5;
-      exec.command = [ "sh" "-c" "/health/ping_readiness_local.sh 1" ];
+    probes = {
+      startupProbe = {
+        failureThreshold = 22;
+        initialDelaySeconds = 10;
+        periodSeconds = 10;
+        successThreshold = 1;
+        timeoutSeconds = 5;
+        exec.command = [ "sh" "-c" "/health/ping_liveness_local.sh 5" ];
+      };
+      livenessProbe = {
+        initialDelaySeconds = 20;
+        periodSeconds = 5;
+        timeoutSeconds = 5;
+        successThreshold = 1;
+        failureThreshold = 5;
+        exec.command = [ "sh" "-c" "/health/ping_liveness_local.sh 5" ];
+      };
+      readinessProbe = {
+        initialDelaySeconds = 20;
+        periodSeconds = 5;
+        timeoutSeconds = 1;
+        successThreshold = 1;
+        failureThreshold = 5;
+        exec.command = [ "sh" "-c" "/health/ping_readiness_local.sh 1" ];
+      };
     };
     resources = cfg.primary.resources;
     volumeMounts = commonVolumeMounts ++ [
@@ -365,7 +376,7 @@ let
 
   sentinelContainer = kixlib'.pod.mkContainer {
     name = "sentinel";
-    image = "${cfg.sentinel.image.repository}:${cfg.sentinel.image.tag}";
+    image = kixlib.imageRef cfg.sentinel.image;
     imagePullPolicy = cfg.sentinel.image.pullPolicy;
     securityContext = cfg.containerSecurityContext;
     command = [ "/bin/bash" ];
@@ -418,7 +429,7 @@ let
 
   metricsContainer = kixlib'.pod.mkContainer {
     name = "metrics";
-    image = "${cfg.metrics.image.repository}:${cfg.metrics.image.tag}";
+    image = kixlib.imageRef cfg.metrics.image;
     imagePullPolicy = cfg.metrics.image.pullPolicy;
     securityContext = cfg.containerSecurityContext;
     command = [ "/bin/bash" "-c" ''
@@ -458,15 +469,15 @@ let
   sentinelStatefulSet = kixlib'.workload.mkStatefulSet {
     metadata = {
       name = "${fullname}-node";
-      labels = allLabels // { "app.kubernetes.io/component" = "node"; };
+      labels = labels.all // { "app.kubernetes.io/component" = "node"; };
     };
     replicas = totalReplicas;
     serviceName = headlessSvcName;
-    selectorLabels = nodeSelectorLabels;
+    selectorLabels = labels.withComponent "node";
     updateStrategy = { type = "RollingUpdate"; };
     template = kixlib'.pod.mkPodTemplate {
       metadata = {
-        labels = nodeSelectorLabels;
+        labels = labels.withComponent "node";
         annotations = lib.optionalAttrs cfg.metrics.enabled {
           "prometheus.io/port" = "9121";
           "prometheus.io/scrape" = "true";
@@ -476,7 +487,7 @@ let
         automountServiceAccountToken = false;
         securityContext = cfg.podSecurityContext;
         serviceAccountName = fullname;
-        affinity = mkAntiAffinity nodeSelectorLabels;
+        affinity = mkAntiAffinity (labels.withComponent "node");
         enableServiceLinks = true;
         terminationGracePeriodSeconds = 30;
         containers = [ sentinelValkeyContainer sentinelContainer ]
@@ -491,7 +502,7 @@ let
         ];
       };
     };
-    volumeClaimTemplates = mkDataVolumeClaimTemplate nodeSelectorLabels;
+    volumeClaimTemplates = mkDataVolumeClaimTemplate (labels.withComponent "node");
   };
 
   # ============================================================
@@ -499,58 +510,48 @@ let
   # ============================================================
 
   # Primary StatefulSet (non-sentinel)
-  primaryContainer = kixlib'.pod.mkContainer {
-    name = "valkey";
-    image = "${cfg.image.repository}:${cfg.image.tag}";
-    imagePullPolicy = cfg.image.pullPolicy;
-    securityContext = cfg.containerSecurityContext;
-    command = [ "/bin/bash" ];
-    args = [ "-c" "/opt/bitnami/scripts/start-scripts/start-primary.sh" ];
+  primaryContainer = mkValkeyContainer {
+    startScript = "start-primary.sh";
     env = [
-      { name = "BITNAMI_DEBUG"; value = "false"; }
       { name = "VALKEY_REPLICATION_MODE"; value = "primary"; }
-      { name = "ALLOW_EMPTY_PASSWORD"; value = "no"; }
-      { name = "VALKEY_PASSWORD_FILE"; value = "/opt/bitnami/valkey/secrets/valkey-password"; }
-      { name = "VALKEY_TLS_ENABLED"; value = "no"; }
-      { name = "VALKEY_PORT"; value = "6379"; }
     ];
-    ports = [{ name = "redis"; containerPort = 6379; }];
-    livenessProbe = {
-      initialDelaySeconds = 20;
-      periodSeconds = 5;
-      timeoutSeconds = 6;
-      successThreshold = 1;
-      failureThreshold = 5;
-      exec.command = [ "sh" "-c" "/health/ping_liveness_local.sh 5" ];
-    };
-    readinessProbe = {
-      initialDelaySeconds = 20;
-      periodSeconds = 5;
-      timeoutSeconds = 2;
-      successThreshold = 1;
-      failureThreshold = 5;
-      exec.command = [ "sh" "-c" "/health/ping_readiness_local.sh 1" ];
+    probes = {
+      livenessProbe = {
+        initialDelaySeconds = 20;
+        periodSeconds = 5;
+        timeoutSeconds = 6;
+        successThreshold = 1;
+        failureThreshold = 5;
+        exec.command = [ "sh" "-c" "/health/ping_liveness_local.sh 5" ];
+      };
+      readinessProbe = {
+        initialDelaySeconds = 20;
+        periodSeconds = 5;
+        timeoutSeconds = 2;
+        successThreshold = 1;
+        failureThreshold = 5;
+        exec.command = [ "sh" "-c" "/health/ping_readiness_local.sh 1" ];
+      };
     };
     resources = cfg.primary.resources;
-    volumeMounts = commonVolumeMounts;
   };
 
   primaryStatefulSet = kixlib'.workload.mkStatefulSet {
     metadata = {
       name = "${fullname}-primary";
-      labels = allLabels // { "app.kubernetes.io/component" = "primary"; };
+      labels = labels.all // { "app.kubernetes.io/component" = "primary"; };
     };
     replicas = 1;
     serviceName = headlessSvcName;
-    selectorLabels = primarySelectorLabels;
+    selectorLabels = labels.withComponent "primary";
     updateStrategy = { type = "RollingUpdate"; };
     template = kixlib'.pod.mkPodTemplate {
-      metadata.labels = primarySelectorLabels;
+      metadata.labels = labels.withComponent "primary";
       spec = {
         securityContext = cfg.podSecurityContext;
         serviceAccountName = "${fullname}-primary";
         automountServiceAccountToken = false;
-        affinity = mkAntiAffinity primarySelectorLabels;
+        affinity = mkAntiAffinity (labels.withComponent "primary");
         enableServiceLinks = true;
         terminationGracePeriodSeconds = 30;
         containers = [ primaryContainer ];
@@ -563,21 +564,21 @@ let
         ];
       };
     };
-    volumeClaimTemplates = mkDataVolumeClaimTemplate primarySelectorLabels;
+    volumeClaimTemplates = mkDataVolumeClaimTemplate (labels.withComponent "primary");
   };
 
   # Primary service (non-sentinel)
   primarySvc = kixlib'.networking.mkService {
     metadata = {
       name = "${fullname}-primary";
-      labels = allLabels // { "app.kubernetes.io/component" = "primary"; };
+      labels = labels.all // { "app.kubernetes.io/component" = "primary"; };
     };
     spec = {
       type = "ClusterIP";
       internalTrafficPolicy = "Cluster";
       sessionAffinity = "None";
       ports = [{ name = "tcp-redis"; port = 6379; targetPort = "redis"; }];
-      selector = primarySelectorLabels;
+      selector = labels.withComponent "primary";
     };
   };
 
@@ -585,69 +586,59 @@ let
   # The primary host is the first pod of the primary StatefulSet via the headless service.
   primaryHostFqdn = "${fullname}-primary-0.${headlessSvcFqdn}";
 
-  replicaContainer = kixlib'.pod.mkContainer {
-    name = "valkey";
-    image = "${cfg.image.repository}:${cfg.image.tag}";
-    imagePullPolicy = cfg.image.pullPolicy;
-    securityContext = cfg.containerSecurityContext;
-    command = [ "/bin/bash" ];
-    args = [ "-c" "/opt/bitnami/scripts/start-scripts/start-replica.sh" ];
+  replicaContainer = mkValkeyContainer {
+    startScript = "start-replica.sh";
     env = [
-      { name = "BITNAMI_DEBUG"; value = "false"; }
       { name = "VALKEY_REPLICATION_MODE"; value = "replica"; }
       { name = "VALKEY_PRIMARY_HOST"; value = primaryHostFqdn; }
       { name = "VALKEY_PRIMARY_PORT_NUMBER"; value = "6379"; }
-      { name = "ALLOW_EMPTY_PASSWORD"; value = "no"; }
-      { name = "VALKEY_PASSWORD_FILE"; value = "/opt/bitnami/valkey/secrets/valkey-password"; }
       { name = "VALKEY_PRIMARY_PASSWORD_FILE"; value = "/opt/bitnami/valkey/secrets/valkey-password"; }
-      { name = "VALKEY_TLS_ENABLED"; value = "no"; }
-      { name = "VALKEY_PORT"; value = "6379"; }
     ];
-    ports = [{ name = "redis"; containerPort = 6379; }];
-    startupProbe = {
-      failureThreshold = 22;
-      initialDelaySeconds = 10;
-      periodSeconds = 10;
-      successThreshold = 1;
-      timeoutSeconds = 5;
-      tcpSocket.port = "redis";
-    };
-    livenessProbe = {
-      initialDelaySeconds = 20;
-      periodSeconds = 5;
-      timeoutSeconds = 6;
-      successThreshold = 1;
-      failureThreshold = 5;
-      exec.command = [ "sh" "-c" "/health/ping_liveness_local_and_primary.sh 5" ];
-    };
-    readinessProbe = {
-      initialDelaySeconds = 20;
-      periodSeconds = 5;
-      timeoutSeconds = 2;
-      successThreshold = 1;
-      failureThreshold = 5;
-      exec.command = [ "sh" "-c" "/health/ping_readiness_local_and_primary.sh 1" ];
+    probes = {
+      startupProbe = {
+        failureThreshold = 22;
+        initialDelaySeconds = 10;
+        periodSeconds = 10;
+        successThreshold = 1;
+        timeoutSeconds = 5;
+        tcpSocket.port = "redis";
+      };
+      livenessProbe = {
+        initialDelaySeconds = 20;
+        periodSeconds = 5;
+        timeoutSeconds = 6;
+        successThreshold = 1;
+        failureThreshold = 5;
+        exec.command = [ "sh" "-c" "/health/ping_liveness_local_and_primary.sh 5" ];
+      };
+      readinessProbe = {
+        initialDelaySeconds = 20;
+        periodSeconds = 5;
+        timeoutSeconds = 2;
+        successThreshold = 1;
+        failureThreshold = 5;
+        exec.command = [ "sh" "-c" "/health/ping_readiness_local_and_primary.sh 1" ];
+      };
     };
     resources = cfg.replica.resources;
-    volumeMounts = commonVolumeMounts;
   };
 
   replicaStatefulSet = kixlib'.workload.mkStatefulSet {
     metadata = {
       name = "${fullname}-replicas";
-      labels = allLabels // { "app.kubernetes.io/component" = "replica"; };
+      labels = labels.all // { "app.kubernetes.io/component" = "replica"; };
     };
     replicas = cfg.replica.replicaCount;
     serviceName = headlessSvcName;
-    selectorLabels = replicaSelectorLabels;
+    selectorLabels = labels.withComponent "replica";
     updateStrategy = { type = "RollingUpdate"; };
     template = kixlib'.pod.mkPodTemplate {
-      metadata.labels = replicaSelectorLabels;
+      metadata.labels = labels.withComponent "replica";
       spec = {
         securityContext = cfg.podSecurityContext;
         serviceAccountName = "${fullname}-replica";
         automountServiceAccountToken = false;
-        affinity = mkAntiAffinity replicaSelectorLabels;
+        affinity = mkAntiAffinity (labels.withComponent "replica");
         enableServiceLinks = true;
         terminationGracePeriodSeconds = 30;
         containers = [ replicaContainer ];
@@ -660,21 +651,21 @@ let
         ];
       };
     };
-    volumeClaimTemplates = mkDataVolumeClaimTemplate replicaSelectorLabels;
+    volumeClaimTemplates = mkDataVolumeClaimTemplate (labels.withComponent "replica");
   };
 
   # Replica service (non-sentinel)
   replicaSvc = kixlib'.networking.mkService {
     metadata = {
       name = "${fullname}-replicas";
-      labels = allLabels // { "app.kubernetes.io/component" = "replica"; };
+      labels = labels.all // { "app.kubernetes.io/component" = "replica"; };
     };
     spec = {
       type = "ClusterIP";
       internalTrafficPolicy = "Cluster";
       sessionAffinity = "None";
       ports = [{ name = "tcp-redis"; port = 6379; targetPort = "redis"; }];
-      selector = replicaSelectorLabels;
+      selector = labels.withComponent "replica";
     };
   };
 
@@ -682,9 +673,9 @@ let
   replicaPdb = kixlib'.policy.mkPodDisruptionBudget {
     metadata = {
       name = "${fullname}-replicas";
-      labels = allLabels // { "app.kubernetes.io/component" = "replica"; };
+      labels = labels.all // { "app.kubernetes.io/component" = "replica"; };
     };
-    selector.matchLabels = replicaSelectorLabels;
+    selector.matchLabels = labels.withComponent "replica";
     maxUnavailable = cfg.pdb.maxUnavailable;
     minAvailable = cfg.pdb.minAvailable;
   };
@@ -697,19 +688,19 @@ let
   metricsSvc = kixlib'.networking.mkService {
     metadata = {
       name = "${fullname}-metrics";
-      labels = allLabels // { "app.kubernetes.io/component" = "metrics"; };
+      labels = labels.all // { "app.kubernetes.io/component" = "metrics"; };
     };
     spec = {
       type = "ClusterIP";
       ports = [{ name = "http-metrics"; port = 9121; protocol = "TCP"; targetPort = "metrics"; }];
-      selector = selectorLabels;
+      selector = labels.selector;
     };
   };
 
   # Network policy
   networkPolicy = kixlib'.networking.mkNetworkPolicy {
     metadata.name = fullname;
-    podSelector.matchLabels = selectorLabels;
+    podSelector.matchLabels = labels.selector;
     policyTypes = [ "Ingress" "Egress" ];
     egress = [{}]; # Allow all egress
     ingress = [
@@ -723,9 +714,9 @@ let
   sentinelPdb = kixlib'.policy.mkPodDisruptionBudget {
     metadata = {
       name = "${fullname}-node";
-      labels = allLabels // { "app.kubernetes.io/component" = "node"; };
+      labels = labels.all // { "app.kubernetes.io/component" = "node"; };
     };
-    selector.matchLabels = nodeSelectorLabels;
+    selector.matchLabels = labels.withComponent "node";
     maxUnavailable = cfg.pdb.maxUnavailable;
     minAvailable = cfg.pdb.minAvailable;
   };
@@ -736,7 +727,7 @@ let
   replicaHpa = kixlib'.autoscaling.mkHorizontalPodAutoscaler {
     metadata = {
       name = if cfg.sentinel.enabled then "${fullname}-node" else "${fullname}-replicas";
-      labels = allLabels // { "app.kubernetes.io/component" = "replica"; };
+      labels = labels.all // { "app.kubernetes.io/component" = "replica"; };
     };
     scaleTargetRef = {
       apiVersion = "apps/v1";
@@ -772,14 +763,14 @@ let
     metadata = {
       name = fullname;
       namespace = cfg.namespace;
-      labels = allLabels;
+      labels = labels.all;
     };
     podMetricsEndpoints = [{
       port = "metrics";
       interval = cfg.metrics.podMonitor.interval;
     }];
     namespaceSelector.matchNames = [ cfg.namespace ];
-    selector.matchLabels = selectorLabels;
+    selector.matchLabels = labels.selector;
   };
 
   # PrometheusRule — alerting/recording rules for Prometheus.
@@ -787,7 +778,7 @@ let
     metadata = {
       name = fullname;
       namespace = cfg.namespace;
-      labels = allLabels;
+      labels = labels.all;
     };
     groups = [{
       name = fullname;
@@ -804,8 +795,46 @@ let
     };
     endpoints = [{ port = "http-metrics"; interval = cfg.metrics.serviceMonitor.interval; }];
     namespaceSelector.matchNames = [ cfg.namespace ];
-    selector.matchLabels = selectorLabels // { "app.kubernetes.io/component" = "metrics"; };
+    selector.matchLabels = labels.selector // { "app.kubernetes.io/component" = "metrics"; };
   };
+
+  # --- Declarative manifest list ---
+  # All resources in a flat list with enable conditions. This replaces the
+  # chained `// lib.optionalAttrs` pattern for clarity and maintainability.
+  manifestList = [
+    # Common to both modes
+    { name = "valkey-configuration"; resource = configurationCM; enable = true; }
+    { name = "valkey-health"; resource = healthCM; enable = true; }
+    { name = "valkey-scripts"; resource = scriptsCM; enable = true; }
+    { name = "valkey-headless"; resource = headlessSvc; enable = true; }
+    # Sentinel mode
+    { name = "valkey-serviceaccount"; resource = sa; enable = cfg.sentinel.enabled; }
+    { name = "valkey-service"; resource = sentinelSvc; enable = cfg.sentinel.enabled; }
+    { name = "valkey-node"; resource = sentinelStatefulSet; enable = cfg.sentinel.enabled; }
+    # Replication mode
+    { name = "valkey-primary-serviceaccount"; resource = primarySa; enable = !cfg.sentinel.enabled; }
+    { name = "valkey-replica-serviceaccount"; resource = replicaSa; enable = !cfg.sentinel.enabled; }
+    { name = "valkey-primary-service"; resource = primarySvc; enable = !cfg.sentinel.enabled; }
+    { name = "valkey-replica-service"; resource = replicaSvc; enable = !cfg.sentinel.enabled; }
+    { name = "valkey-primary"; resource = primaryStatefulSet; enable = !cfg.sentinel.enabled; }
+    { name = "valkey-replicas"; resource = replicaStatefulSet; enable = !cfg.sentinel.enabled; }
+    # Optional: metrics
+    { name = "valkey-metrics"; resource = metricsSvc; enable = cfg.metrics.enabled; }
+    # Optional: network policy
+    { name = "valkey-networkpolicy"; resource = networkPolicy; enable = cfg.networkPolicy.enabled; }
+    # Optional: PDB — sentinel gets one PDB, replication gets a different one
+    { name = "valkey-pdb"; resource = sentinelPdb; enable = cfg.pdb.enabled && cfg.sentinel.enabled; }
+    { name = "valkey-replica-pdb"; resource = replicaPdb; enable = cfg.pdb.enabled && !cfg.sentinel.enabled; }
+    # Optional: monitoring — per-chart ServiceMonitor only when cross-cutting monitoring is off
+    { name = "valkey-servicemonitor"; resource = serviceMonitor;
+      enable = cfg.metrics.enabled && cfg.metrics.serviceMonitor.enabled && !config.monitoring.enabled; }
+    { name = "valkey-podmonitor"; resource = podMonitor;
+      enable = cfg.metrics.enabled && cfg.metrics.podMonitor.enabled; }
+    { name = "valkey-prometheusrule"; resource = prometheusRule;
+      enable = cfg.metrics.enabled && cfg.metrics.prometheusRule.enabled; }
+    # Optional: HPA
+    { name = "valkey-hpa"; resource = replicaHpa; enable = cfg.replica.autoscaling.hpa.enabled; }
+  ];
 
 in
 {
@@ -820,32 +849,32 @@ in
     registry.valkey = lib.mkIf cfg.enable {
       endpoints = (if cfg.sentinel.enabled then {
         primary = {
-          host = mkFqdn fullname;
+          host = fqdn fullname;
           port = 6379;
           protocol = "redis";
         };
       } else {
         primary = {
-          host = mkFqdn "${fullname}-primary";
+          host = fqdn "${fullname}-primary";
           port = 6379;
           protocol = "redis";
         };
         replicas = {
-          host = mkFqdn "${fullname}-replicas";
+          host = fqdn "${fullname}-replicas";
           port = 6379;
           protocol = "redis";
         };
       })
       // lib.optionalAttrs cfg.sentinel.enabled {
         sentinel = {
-          host = mkFqdn fullname;
+          host = fqdn fullname;
           port = 26379;
           protocol = "redis-sentinel";
         };
       }
       // lib.optionalAttrs cfg.metrics.enabled {
         metrics = {
-          host = mkFqdn "${fullname}-metrics";
+          host = fqdn "${fullname}-metrics";
           port = 9121;
           protocol = "http";
         };
@@ -860,70 +889,24 @@ in
       portName = "http-metrics";
       # null defers to monitoring.defaultInterval set by the cross-cutting module
       interval = null;
-      selector = selectorLabels // { "app.kubernetes.io/component" = "metrics"; };
+      selector = labels.selector // { "app.kubernetes.io/component" = "metrics"; };
     };
 
     # --- Level 3: network policy declaration ---
     networkPolicies.services.valkey = lib.mkIf cfg.enable {
       namespace = cfg.namespace;
-      podSelector = selectorLabels;
+      podSelector = labels.selector;
       ingressPorts = [ 6379 ] ++ lib.optionals cfg.sentinel.enabled [ 26379 ]
         ++ lib.optionals cfg.metrics.enabled [ 9121 ];
       egressTo = [];
     };
 
+    # Build manifests from the declarative list — filter by enable, then serialize.
     manifests = lib.optionalAttrs cfg.enable (
-      # --- Resources common to both modes ---
-      {
-        "valkey-configuration" = kixlib'.mkManifest configurationCM;
-        "valkey-health" = kixlib'.mkManifest healthCM;
-        "valkey-scripts" = kixlib'.mkManifest scriptsCM;
-        "valkey-headless" = kixlib'.mkManifest headlessSvc;
-      }
-      # --- Mode-specific resources ---
-      // (if cfg.sentinel.enabled then {
-        # Sentinel mode
-        "valkey-serviceaccount" = kixlib'.mkManifest sa;
-        "valkey-service" = kixlib'.mkManifest sentinelSvc;
-        "valkey-node" = kixlib'.mkManifest sentinelStatefulSet;
-      } else {
-        # Replication mode (non-sentinel)
-        "valkey-primary-serviceaccount" = kixlib'.mkManifest primarySa;
-        "valkey-replica-serviceaccount" = kixlib'.mkManifest replicaSa;
-        "valkey-primary-service" = kixlib'.mkManifest primarySvc;
-        "valkey-replica-service" = kixlib'.mkManifest replicaSvc;
-        "valkey-primary" = kixlib'.mkManifest primaryStatefulSet;
-        "valkey-replicas" = kixlib'.mkManifest replicaStatefulSet;
-      })
-      # --- Optional resources ---
-      // lib.optionalAttrs cfg.metrics.enabled {
-        "valkey-metrics" = kixlib'.mkManifest metricsSvc;
-      }
-      // lib.optionalAttrs cfg.networkPolicy.enabled {
-        "valkey-networkpolicy" = kixlib'.mkManifest networkPolicy;
-      }
-      // lib.optionalAttrs cfg.pdb.enabled (
-        if cfg.sentinel.enabled then {
-          "valkey-pdb" = kixlib'.mkManifest sentinelPdb;
-        } else {
-          "valkey-replica-pdb" = kixlib'.mkManifest replicaPdb;
-        }
+      lib.listToAttrs (
+        map (r: lib.nameValuePair r.name (kixlib'.mkManifest r.resource))
+        (builtins.filter (r: r.enable) manifestList)
       )
-      # Gate per-chart ServiceMonitor: when the cross-cutting monitoring module
-      # is enabled (Level 3), it takes over ServiceMonitor creation. We avoid
-      # duplicates by only creating our own when monitoring.enabled = false.
-      // lib.optionalAttrs (cfg.metrics.enabled && cfg.metrics.serviceMonitor.enabled && !config.monitoring.enabled) {
-        "valkey-servicemonitor" = kixlib'.mkManifest serviceMonitor;
-      }
-      // lib.optionalAttrs (cfg.metrics.enabled && cfg.metrics.podMonitor.enabled) {
-        "valkey-podmonitor" = kixlib'.mkManifest podMonitor;
-      }
-      // lib.optionalAttrs (cfg.metrics.enabled && cfg.metrics.prometheusRule.enabled) {
-        "valkey-prometheusrule" = kixlib'.mkManifest prometheusRule;
-      }
-      // lib.optionalAttrs cfg.replica.autoscaling.hpa.enabled {
-        "valkey-hpa" = kixlib'.mkManifest replicaHpa;
-      }
     );
   };
 }

@@ -55,6 +55,64 @@
 }:
 
 lib.makeExtensible (self: {
+
+  # --- Shared helpers ---
+  # Utility functions used across chart modules. These avoid repeating common
+  # patterns like image string formatting, FQDN construction, and label hierarchy
+  # assembly that every chart needs.
+
+  # Converts an image attrset { repository, tag } to a Docker image reference string.
+  # Used in mkContainer calls: `image = kixlib.imageRef cfg.image;`
+  imageRef = img: "${img.repository}:${img.tag}";
+
+  # Builds a fully-qualified K8s service DNS name.
+  # Used by registry endpoints and anywhere a chart needs to reference another
+  # service by its cluster-internal DNS name.
+  mkFqdn = { name, namespace, clusterDomain ? "cluster.local" }:
+    "${name}.${namespace}.svc.${clusterDomain}";
+
+  # Builds the standard label hierarchy every chart needs.
+  #
+  # Returns an attrset with three members:
+  #   - `selector` — stable labels for spec.selector.matchLabels (NEVER include version)
+  #   - `all` — full metadata labels (cluster labels + selector + managed-by + extras)
+  #   - `withComponent` — function that returns selector labels scoped to a component
+  #
+  # The `withComponent` function is particularly useful for charts like valkey that
+  # have multiple components (primary, replica, sentinel) each needing their own
+  # selector labels for separate StatefulSets/Services.
+  #
+  # Example:
+  #   labels = kixlib.mkLabels { chart = "valkey"; clusterLabels = config.cluster.labels; };
+  #   labels.selector              # => { app.kubernetes.io/instance = ...; app.kubernetes.io/name = "valkey"; }
+  #   labels.withComponent "node"  # => selector // { app.kubernetes.io/component = "node"; }
+  mkLabels = {
+    chart,
+    clusterLabels ? {},
+    instance ? "release-name",
+    component ? null,
+    extra ? {},
+  }:
+  let
+    selector = {
+      "app.kubernetes.io/instance" = instance;
+      "app.kubernetes.io/name" = chart;
+    } // lib.optionalAttrs (component != null) {
+      "app.kubernetes.io/component" = component;
+    };
+    all = clusterLabels // selector // {
+      "app.kubernetes.io/managed-by" = "kix";
+    } // extra;
+  in {
+    inherit selector all;
+    withComponent = c: selector // { "app.kubernetes.io/component" = c; };
+  };
+
+  # Shared option type constructors for chart modules.
+  # Imported from lib/options.nix — see that file for usage examples.
+  # Accessible as kixlib.options.imageSubmodule, kixlib.options.resourcesSubmodule, etc.
+  options = import ./options.nix { inherit lib; };
+
   # Default metadata merged into every resource via mkResource.
   # Set via `withMetadata` to apply namespace, labels, annotations globally.
   _defaultMetadata = { };
@@ -248,6 +306,42 @@ lib.makeExtensible (self: {
             namespace = serviceAccount.metadata.namespace or "default";
           }
         ];
+      };
+
+    # Like mkClusterRoleBinding but takes a single attrset, allowing explicit
+    # subjects override. Avoids the `recursiveUpdate` workaround needed when
+    # the auto-generated subject doesn't match (e.g., coredns binds to "default"
+    # SA when serviceAccount.create is false).
+    #
+    # Example:
+    #   kixlib.rbac.mkClusterRoleBindingWith {
+    #     clusterRole = myRole;
+    #     serviceAccount = mySa;
+    #     subjects = [{ kind = "ServiceAccount"; name = "default"; namespace = "kube-system"; }];
+    #   }
+    mkClusterRoleBindingWith =
+      { clusterRole, serviceAccount, subjects ? null }:
+      let
+        autoSubjects = [
+          {
+            kind = serviceAccount.kind;
+            name = self.resourceName serviceAccount;
+            namespace = serviceAccount.metadata.namespace or "default";
+          }
+        ];
+      in
+      self.mkResource {
+        apiVersion = "rbac.authorization.k8s.io/v1";
+        kind = "ClusterRoleBinding";
+        metadata = {
+          namespace = null;
+        };
+        roleRef = {
+          apiGroup = lib.elemAt (lib.strings.split "/" clusterRole.apiVersion) 0;
+          kind = clusterRole.kind;
+          name = self.resourceName clusterRole;
+        };
+        subjects = if subjects != null then subjects else autoSubjects;
       };
 
     # DEPRECATED: use mkClusterRoleBinding for composability.

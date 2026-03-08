@@ -5,32 +5,16 @@
 
 {
   lib,
+  kixlib,
   ...
 }:
 
 let
   types = lib.types;
+  opts = kixlib.options;
 in
 {
   options.services.coredns = {
-    enable = lib.mkOption {
-      type = types.bool;
-      default = false;
-      description = "Enable CoreDNS service.";
-    };
-
-    namespace = lib.mkOption {
-      type = types.str;
-      default = "default";
-      description = "Kubernetes namespace for all CoreDNS resources.";
-    };
-
-    clusterDomain = lib.mkOption {
-      type = types.str;
-      default = "cluster.local";
-      description = "Kubernetes cluster domain for DNS resolution.";
-    };
-
     isClusterService = lib.mkOption {
       type = types.bool;
       default = true;
@@ -44,23 +28,15 @@ in
     };
 
     image = lib.mkOption {
-      type = types.submodule {
-        options = {
-          repository = lib.mkOption { type = types.str; default = "coredns/coredns"; };
-          tag = lib.mkOption { type = types.str; default = "1.13.1"; };
-          pullPolicy = lib.mkOption { type = types.str; default = "IfNotPresent"; };
-        };
-      };
+      type = opts.imageSubmodule { repository = "coredns/coredns"; tag = "1.13.1"; };
       default = { };
       description = "Container image configuration.";
     };
 
     resources = lib.mkOption {
-      type = types.submodule {
-        options = {
-          limits = lib.mkOption { type = types.attrsOf types.str; default = { cpu = "100m"; memory = "128Mi"; }; };
-          requests = lib.mkOption { type = types.attrsOf types.str; default = { cpu = "100m"; memory = "128Mi"; }; };
-        };
+      type = opts.resourcesSubmodule {
+        defaultLimits = { cpu = "100m"; memory = "128Mi"; };
+        defaultRequests = { cpu = "100m"; memory = "128Mi"; };
       };
       default = { };
       description = "CPU/memory requests and limits.";
@@ -203,14 +179,14 @@ in
     };
 
     livenessProbe = lib.mkOption {
-      type = types.submodule {
-        options = {
-          enabled = lib.mkOption { type = types.bool; default = true; };
-          initialDelaySeconds = lib.mkOption { type = types.int; default = 60; };
-          periodSeconds = lib.mkOption { type = types.int; default = 10; };
-          timeoutSeconds = lib.mkOption { type = types.int; default = 5; };
-          failureThreshold = lib.mkOption { type = types.int; default = 5; };
-          successThreshold = lib.mkOption { type = types.int; default = 1; };
+      type = opts.probeSubmodule {
+        defaults = {
+          enabled = true;
+          initialDelaySeconds = 60;
+          periodSeconds = 10;
+          timeoutSeconds = 5;
+          failureThreshold = 5;
+          successThreshold = 1;
         };
       };
       default = { };
@@ -264,21 +240,16 @@ in
         options = {
           enabled = lib.mkOption { type = types.bool; default = false; };
           image = lib.mkOption {
-            type = types.submodule {
-              options = {
-                repository = lib.mkOption { type = types.str; default = "registry.k8s.io/cpa/cluster-proportional-autoscaler"; };
-                tag = lib.mkOption { type = types.str; default = "v1.9.0"; };
-                pullPolicy = lib.mkOption { type = types.str; default = "IfNotPresent"; };
-              };
+            type = opts.imageSubmodule {
+              repository = "registry.k8s.io/cpa/cluster-proportional-autoscaler";
+              tag = "v1.9.0";
             };
             default = { };
           };
           resources = lib.mkOption {
-            type = types.submodule {
-              options = {
-                limits = lib.mkOption { type = types.attrsOf types.str; default = { cpu = "20m"; memory = "10Mi"; }; };
-                requests = lib.mkOption { type = types.attrsOf types.str; default = { cpu = "20m"; memory = "10Mi"; }; };
-              };
+            type = opts.resourcesSubmodule {
+              defaultLimits = { cpu = "20m"; memory = "10Mi"; };
+              defaultRequests = { cpu = "20m"; memory = "10Mi"; };
             };
             default = { };
           };
@@ -295,17 +266,17 @@ in
     };
 
     readinessProbe = lib.mkOption {
-      type = types.submodule {
-        options = {
-          enabled = lib.mkOption { type = types.bool; default = true; };
-          initialDelaySeconds = lib.mkOption { type = types.int; default = 30; };
-          periodSeconds = lib.mkOption { type = types.int; default = 5; };
-          timeoutSeconds = lib.mkOption { type = types.int; default = 5; };
-          failureThreshold = lib.mkOption { type = types.int; default = 1; };
-          successThreshold = lib.mkOption { type = types.int; default = 1; };
+      type = opts.probeSubmodule {
+        defaults = {
+          enabled = true;
+          initialDelaySeconds = 30;
+          periodSeconds = 5;
+          timeoutSeconds = 5;
+          failureThreshold = 1;
+          successThreshold = 1;
         };
       };
       default = { };
     };
-  };
+  } // opts.mkChartOptions { description = "CoreDNS"; };
 }

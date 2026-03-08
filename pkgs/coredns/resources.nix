@@ -149,21 +149,35 @@ let
   ports = derivePorts;
 
   # --- Labels ---
-  # Stable selector labels — NEVER include version here (breaks rolling updates).
-  selectorLabels = {
-    "app.kubernetes.io/instance" = "release-name";
-    "app.kubernetes.io/name" = "coredns";
-  } // lib.optionalAttrs cfg.isClusterService {
+  # Built using kixlib.mkLabels for consistent label hierarchy across charts.
+  # CoreDNS adds cluster-service labels as extras and a coredns-specific
+  # "k8s-app" selector label when isClusterService is true.
+  labels = kixlib.mkLabels {
+    chart = "coredns";
+    clusterLabels = config.cluster.labels;
+    extra = lib.optionalAttrs cfg.isClusterService {
+      "kubernetes.io/cluster-service" = "true";
+      "kubernetes.io/name" = "CoreDNS";
+    };
+  };
+
+  # CoreDNS-specific: k8s-app selector label for cluster service discovery.
+  # This is added to the selector (not just metadata) because kube-system
+  # components discover CoreDNS via this label.
+  selectorLabels = labels.selector // lib.optionalAttrs cfg.isClusterService {
     "k8s-app" = "coredns";
   };
 
-  # Full metadata labels for all resources.
-  # cluster.labels are merged as a base — chart-specific labels override on collision.
-  allLabels = config.cluster.labels // selectorLabels // {
-    "app.kubernetes.io/managed-by" = "kix";
-  } // lib.optionalAttrs cfg.isClusterService {
-    "kubernetes.io/cluster-service" = "true";
-    "kubernetes.io/name" = "CoreDNS";
+  allLabels = labels.all // lib.optionalAttrs cfg.isClusterService {
+    "k8s-app" = "coredns";
+  };
+
+  # FQDN used in registry endpoints and anywhere we reference the CoreDNS
+  # service by its cluster-internal DNS name.
+  corednsFqdn = kixlib.mkFqdn {
+    name = "coredns";
+    namespace = cfg.namespace;
+    clusterDomain = cfg.clusterDomain;
   };
 
   # --- kixlib setup ---
@@ -187,9 +201,9 @@ let
   # The ClusterRoleBinding subject name must match the actual serviceAccountName
   # used by the Deployment. When serviceAccount.create is false, Helm binds to
   # "default" (the K8s default SA), not the chart's SA resource name.
-  binding = let
-    rawBinding = kixlib'.rbac.mkClusterRoleBinding clusterRole sa;
-  in lib.recursiveUpdate rawBinding {
+  binding = kixlib'.rbac.mkClusterRoleBindingWith {
+    inherit clusterRole;
+    serviceAccount = sa;
     subjects = [{
       kind = "ServiceAccount";
       name = serviceAccountName;
@@ -209,7 +223,7 @@ let
 
   container = kixlib'.pod.mkContainer {
     name = "coredns";
-    image = "${cfg.image.repository}:${cfg.image.tag}";
+    image = kixlib.imageRef cfg.image;
     imagePullPolicy = cfg.image.pullPolicy;
     args = ["-conf" "/etc/coredns/Corefile"];
     resources = cfg.resources;
@@ -339,22 +353,25 @@ let
 
   autoscalerName = "coredns-autoscaler";
 
-  # Helm includes the isClusterService labels on autoscaler resources too
-  # (they use the same coredns.labels helper).
-  autoscalerLabels = config.cluster.labels // {
-    "k8s-app" = autoscalerName;
-    "app.kubernetes.io/name" = autoscalerName;
-    "app.kubernetes.io/instance" = "release-name";
-    "app.kubernetes.io/managed-by" = "kix";
-  } // lib.optionalAttrs cfg.isClusterService {
-    "kubernetes.io/cluster-service" = "true";
-    "kubernetes.io/name" = "CoreDNS";
+  # Autoscaler gets its own label set via kixlib.mkLabels. Helm includes the
+  # isClusterService labels on autoscaler resources too (they use the same
+  # coredns.labels helper).
+  autoscalerLabelSet = kixlib.mkLabels {
+    chart = autoscalerName;
+    clusterLabels = config.cluster.labels;
+    extra = lib.optionalAttrs cfg.isClusterService {
+      "kubernetes.io/cluster-service" = "true";
+      "kubernetes.io/name" = "CoreDNS";
+    };
   };
 
-  autoscalerSelectorLabels = {
-    "app.kubernetes.io/instance" = "release-name";
+  # Autoscaler uses k8s-app as a selector label (Helm convention for system components).
+  autoscalerSelectorLabels = autoscalerLabelSet.selector // {
     "k8s-app" = autoscalerName;
-    "app.kubernetes.io/name" = autoscalerName;
+  };
+
+  autoscalerLabels = autoscalerLabelSet.all // {
+    "k8s-app" = autoscalerName;
   };
 
   autoscalerKixlib = kixlib.withMetadata {
@@ -365,23 +382,13 @@ let
 
   autoscalerSa = autoscalerKixlib.rbac.mkServiceAccount { };
 
-  # Helm's configmap-autoscaler.yaml renders this as pretty-printed JSON via
-  # Go's toJson (which produces compact) then wraps in |-. But the actual
-  # Helm output has specific field order and newlines. We match it exactly.
+  # Helm's configmap-autoscaler.yaml renders this as JSON via Go's toJson.
+  # We use builtins.toJSON for the same compact output.
   autoscalerConfigObj = {
     inherit (cfg.autoscaler) coresPerReplica nodesPerReplica
       preventSinglePointFailure min max includeUnschedulableNodes;
   };
-  autoscalerConfigData = builtins.concatStringsSep "\n" [
-    "{"
-    "  \"coresPerReplica\": ${builtins.toJSON autoscalerConfigObj.coresPerReplica},"
-    "  \"nodesPerReplica\": ${builtins.toJSON autoscalerConfigObj.nodesPerReplica},"
-    "  \"preventSinglePointFailure\": ${builtins.toJSON autoscalerConfigObj.preventSinglePointFailure},"
-    "  \"min\": ${builtins.toJSON autoscalerConfigObj.min},"
-    "  \"max\": ${builtins.toJSON autoscalerConfigObj.max},"
-    "  \"includeUnschedulableNodes\": ${builtins.toJSON autoscalerConfigObj.includeUnschedulableNodes}"
-    "}"
-  ];
+  autoscalerConfigData = builtins.toJSON autoscalerConfigObj;
 
   autoscalerConfigMap = autoscalerKixlib.configMap.mkConfigMap { }
     |> autoscalerKixlib.configMap.withEntry "linear" autoscalerConfigData;
@@ -399,7 +406,7 @@ let
 
   autoscalerContainer = autoscalerKixlib.pod.mkContainer {
     name = "autoscaler";
-    image = "${cfg.autoscaler.image.repository}:${cfg.autoscaler.image.tag}";
+    image = kixlib.imageRef cfg.autoscaler.image;
     imagePullPolicy = cfg.autoscaler.image.pullPolicy;
     resources = cfg.autoscaler.resources;
   }
@@ -467,6 +474,35 @@ let
     };
   };
 
+  # --- Manifest list ---
+  # Declarative list of all resources with their enable conditions, replacing
+  # the chained `// lib.optionalAttrs` pattern for better readability.
+  manifestList = [
+    { name = "coredns-deployment"; resource = deployment; enable = true; }
+    { name = "coredns-configmap"; resource = coreDnsConfigMap; enable = true; }
+    { name = "coredns-service"; resource = service; enable = true; }
+    { name = "coredns-clusterrole"; resource = clusterRole; enable = true; }
+    { name = "coredns-clusterrolebinding"; resource = binding; enable = true; }
+    { name = "coredns-serviceaccount"; resource = sa; enable = cfg.serviceAccount.create; }
+    { name = "coredns-service-metrics"; resource = metricsService; enable = hasPrometheus && cfg.prometheus.service.enabled; }
+    { name = "coredns-servicemonitor"; resource = serviceMonitor; enable = hasPrometheus && cfg.prometheus.monitor.enabled && !config.monitoring.enabled; }
+    { name = "coredns-poddisruptionbudget"; resource = pdb; enable = pdbEnabled; }
+    { name = "coredns-hpa"; resource = hpa; enable = cfg.hpa.enabled; }
+    # Autoscaler resources — all gated on cfg.autoscaler.enabled
+    { name = "coredns-autoscaler-serviceaccount"; resource = autoscalerSa; enable = cfg.autoscaler.enabled; kixlib = autoscalerKixlib; }
+    { name = "coredns-autoscaler-configmap"; resource = autoscalerConfigMap; enable = cfg.autoscaler.enabled; kixlib = autoscalerKixlib; }
+    { name = "coredns-autoscaler-clusterrole"; resource = autoscalerClusterRole; enable = cfg.autoscaler.enabled; kixlib = autoscalerKixlib; }
+    { name = "coredns-autoscaler-clusterrolebinding"; resource = autoscalerBinding; enable = cfg.autoscaler.enabled; kixlib = autoscalerKixlib; }
+    { name = "coredns-autoscaler-deployment"; resource = autoscalerDeployment; enable = cfg.autoscaler.enabled; kixlib = autoscalerKixlib; }
+  ];
+
+  manifests = lib.optionalAttrs cfg.enable (
+    lib.listToAttrs (
+      map (r: lib.nameValuePair r.name ((r.kixlib or kixlib').mkManifest r.resource))
+      (builtins.filter (r: r.enable) manifestList)
+    )
+  );
+
 in
 {
   config = {
@@ -480,18 +516,18 @@ in
     registry.coredns = lib.mkIf cfg.enable {
       endpoints = {
         dns-udp = {
-          host = "coredns.${cfg.namespace}.svc.${cfg.clusterDomain}";
+          host = corednsFqdn;
           port = 53;
           protocol = "dns-udp";
         };
         dns-tcp = {
-          host = "coredns.${cfg.namespace}.svc.${cfg.clusterDomain}";
+          host = corednsFqdn;
           port = 53;
           protocol = "dns-tcp";
         };
       } // lib.optionalAttrs hasPrometheus {
         metrics = {
-          host = "coredns.${cfg.namespace}.svc.${cfg.clusterDomain}";
+          host = corednsFqdn;
           port = 9153;
           protocol = "http";
         };
@@ -520,28 +556,6 @@ in
     };
 
     # One manifest entry per resource — this is what verify-parity.sh compares.
-    manifests = lib.optionalAttrs cfg.enable ({
-      "coredns-deployment" = kixlib'.mkManifest deployment;
-      "coredns-configmap" = kixlib'.mkManifest coreDnsConfigMap;
-      "coredns-service" = kixlib'.mkManifest service;
-      "coredns-clusterrole" = kixlib'.mkManifest clusterRole;
-      "coredns-clusterrolebinding" = kixlib'.mkManifest binding;
-    } // lib.optionalAttrs cfg.serviceAccount.create {
-      "coredns-serviceaccount" = kixlib'.mkManifest sa;
-    } // lib.optionalAttrs (hasPrometheus && cfg.prometheus.service.enabled) {
-      "coredns-service-metrics" = kixlib'.mkManifest metricsService;
-    } // lib.optionalAttrs (hasPrometheus && cfg.prometheus.monitor.enabled && !config.monitoring.enabled) {
-      "coredns-servicemonitor" = kixlib'.mkManifest serviceMonitor;
-    } // lib.optionalAttrs pdbEnabled {
-      "coredns-poddisruptionbudget" = kixlib'.mkManifest pdb;
-    } // lib.optionalAttrs cfg.hpa.enabled {
-      "coredns-hpa" = kixlib'.mkManifest hpa;
-    } // lib.optionalAttrs cfg.autoscaler.enabled {
-      "coredns-autoscaler-serviceaccount" = autoscalerKixlib.mkManifest autoscalerSa;
-      "coredns-autoscaler-configmap" = autoscalerKixlib.mkManifest autoscalerConfigMap;
-      "coredns-autoscaler-clusterrole" = autoscalerKixlib.mkManifest autoscalerClusterRole;
-      "coredns-autoscaler-clusterrolebinding" = autoscalerKixlib.mkManifest autoscalerBinding;
-      "coredns-autoscaler-deployment" = autoscalerKixlib.mkManifest autoscalerDeployment;
-    });
+    inherit manifests;
   };
 }

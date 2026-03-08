@@ -5,54 +5,21 @@
 
 {
   lib,
+  kixlib,
   ...
 }:
 
 let
   types = lib.types;
-
-  # --- Reusable option submodules ---
-
-  imageSubmodule = { repository, tag, pullPolicy ? "IfNotPresent" }: types.submodule {
-    options = {
-      repository = lib.mkOption { type = types.str; default = repository; };
-      tag = lib.mkOption { type = types.str; default = tag; };
-      pullPolicy = lib.mkOption { type = types.str; default = pullPolicy; };
-    };
-  };
-
-  resourcesSubmodule = { defaultRequests ? {}, defaultLimits ? {} }: types.submodule {
-    options = {
-      requests = lib.mkOption { type = types.attrsOf types.str; default = defaultRequests; };
-      limits = lib.mkOption { type = types.attrsOf types.str; default = defaultLimits; };
-    };
-  };
+  opts = kixlib.options;
 
 in
 {
   options.services.valkey = {
-    enable = lib.mkOption {
-      type = types.bool;
-      default = false;
-      description = "Enable Valkey service.";
-    };
-
-    namespace = lib.mkOption {
-      type = types.str;
-      default = "default";
-      description = "Kubernetes namespace for all Valkey resources.";
-    };
-
-    clusterDomain = lib.mkOption {
-      type = types.str;
-      default = "cluster.local";
-      description = "Kubernetes cluster domain for DNS resolution in scripts.";
-    };
-
     # --- Images ---
 
     image = lib.mkOption {
-      type = imageSubmodule {
+      type = opts.imageSubmodule {
         repository = "docker.io/bitnami/valkey";
         tag = "8.1.1-debian-12-r0";
       };
@@ -107,7 +74,7 @@ in
             default = [ "FLUSHDB" "FLUSHALL" ];
           };
           resources = lib.mkOption {
-            type = resourcesSubmodule {
+            type = opts.resourcesSubmodule {
               defaultRequests = { cpu = "100m"; memory = "128Mi"; ephemeral-storage = "50Mi"; };
               defaultLimits = { cpu = "150m"; memory = "192Mi"; ephemeral-storage = "2Gi"; };
             };
@@ -128,7 +95,7 @@ in
             default = [ "FLUSHDB" "FLUSHALL" ];
           };
           resources = lib.mkOption {
-            type = resourcesSubmodule {
+            type = opts.resourcesSubmodule {
               defaultRequests = { cpu = "100m"; memory = "128Mi"; ephemeral-storage = "50Mi"; };
               defaultLimits = { cpu = "150m"; memory = "192Mi"; ephemeral-storage = "2Gi"; };
             };
@@ -180,14 +147,14 @@ in
             description = "Extra sentinel.conf content.";
           };
           image = lib.mkOption {
-            type = imageSubmodule {
+            type = opts.imageSubmodule {
               repository = "docker.io/bitnami/valkey-sentinel";
               tag = "8.1.1-debian-12-r0";
             };
             default = {};
           };
           resources = lib.mkOption {
-            type = resourcesSubmodule {
+            type = opts.resourcesSubmodule {
               defaultRequests = { cpu = "100m"; memory = "128Mi"; ephemeral-storage = "50Mi"; };
               defaultLimits = { cpu = "150m"; memory = "192Mi"; ephemeral-storage = "2Gi"; };
             };
@@ -242,14 +209,14 @@ in
         options = {
           enabled = lib.mkOption { type = types.bool; default = false; };
           image = lib.mkOption {
-            type = imageSubmodule {
+            type = opts.imageSubmodule {
               repository = "docker.io/bitnami/redis-exporter";
               tag = "1.70.0-debian-12-r2";
             };
             default = {};
           };
           resources = lib.mkOption {
-            type = resourcesSubmodule {
+            type = opts.resourcesSubmodule {
               defaultRequests = { cpu = "100m"; memory = "128Mi"; ephemeral-storage = "50Mi"; };
               defaultLimits = { cpu = "150m"; memory = "192Mi"; ephemeral-storage = "2Gi"; };
             };
@@ -315,5 +282,5 @@ in
       };
       default = {};
     };
-  };
+  } // opts.mkChartOptions { description = "Valkey"; };
 }
