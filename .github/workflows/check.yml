@@ -5,8 +5,10 @@
 # - Golden-file snapshot tests for regression detection
 # - Cluster composition assertions (registry, monitoring, negative)
 # - Behavioral invariants (managed-by labels, etc.)
+# - Cross-resource validation (referential integrity)
 #
-# Total: ~40 checks per run.
+# Additionally builds all cluster definitions and uploads the rendered
+# manifests as artifacts for inspection.
 
 name: Check
 
@@ -29,3 +31,18 @@ jobs:
 
       - name: Run all flake checks
         run: nix flake check --print-build-logs
+
+      - name: Build cluster manifests
+        run: |
+          mkdir -p artifacts
+          for cluster in cluster-example cluster-full cluster-minimal; do
+            outpath=$(nix build ".#${cluster}" --no-link --print-out-paths)
+            mkdir -p "artifacts/${cluster}"
+            cp "$outpath"/*.yaml "artifacts/${cluster}/"
+          done
+
+      - name: Upload cluster manifests
+        uses: actions/upload-artifact@v4
+        with:
+          name: cluster-manifests
+          path: artifacts/
