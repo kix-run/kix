@@ -319,14 +319,13 @@ let
   headlessSvcFqdn = mkFqdn headlessSvcName;
 
   # --- Labels ---
-  # Stable selector labels — NEVER include version here.
-  # releaseName comes from cluster.releaseName (Level 1 intent merging).
+  # Stable selector labels — NEVER include version here (breaks rolling updates).
   selectorLabels = {
-    "app.kubernetes.io/instance" = config.cluster.releaseName;
+    "app.kubernetes.io/instance" = "release-name";
     "app.kubernetes.io/name" = "valkey";
   };
 
-  # cluster.labels (Level 1) merged as base — chart-specific labels override.
+  # cluster.labels merged as base — chart-specific labels override on collision.
   allLabels = config.cluster.labels // selectorLabels // {
     "app.kubernetes.io/managed-by" = "kix";
     "app.kubernetes.io/part-of" = "valkey";
@@ -1024,9 +1023,7 @@ in
   inherit options;
 
   config = {
-    # --- Level 1: consume cluster-wide defaults ---
-    # mkDefault priority means: cluster default < this < user's explicit setting.
-    services.valkey.namespace = lib.mkDefault config.cluster.namespace;
+    # Consume cluster-wide DNS domain via mkDefault so per-chart override still wins.
     services.valkey.clusterDomain = lib.mkDefault config.cluster.domain;
 
     # --- Level 2: service registry ---

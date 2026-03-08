@@ -318,19 +318,15 @@ let
 
   # --- Labels ---
   # Stable selector labels — NEVER include version here (breaks rolling updates).
-  # releaseName comes from cluster.releaseName (Level 1 intent merging) via
-  # mkDefault in the config section below. Defaults to "release-name" for
-  # Helm parity, but cluster-wide config can change it for all charts at once.
   selectorLabels = {
-    "app.kubernetes.io/instance" = config.cluster.releaseName;
+    "app.kubernetes.io/instance" = "release-name";
     "app.kubernetes.io/name" = "coredns";
   } // lib.optionalAttrs cfg.isClusterService {
     "k8s-app" = "coredns";
   };
 
   # Full metadata labels for all resources.
-  # cluster.labels (Level 1) are merged as a base — chart-specific labels
-  # override them if there's a key collision.
+  # cluster.labels are merged as a base — chart-specific labels override on collision.
   allLabels = config.cluster.labels // selectorLabels // {
     "app.kubernetes.io/managed-by" = "kix";
   } // lib.optionalAttrs cfg.isClusterService {
@@ -447,11 +443,7 @@ in
   inherit options;
 
   config = {
-    # --- Level 1: consume cluster-wide defaults ---
-    # mkDefault priority means: cluster default < this < user's explicit setting.
-    # When loaded individually (mkChartManifests), cluster.namespace defaults to
-    # "default" anyway, so behavior is unchanged for parity testing.
-    services.coredns.namespace = lib.mkDefault config.cluster.namespace;
+    # Consume cluster-wide DNS domain via mkDefault so per-chart override still wins.
     services.coredns.clusterDomain = lib.mkDefault config.cluster.domain;
 
     # --- Level 2: service registry ---

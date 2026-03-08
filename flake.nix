@@ -136,6 +136,52 @@
                 pdb.enabled = true;
               };
             };
+
+            # --- Cluster definitions ---
+            # Multi-chart cluster outputs. Unlike the per-chart packages above
+            # (which are parity test fixtures), cluster packages represent
+            # "declarative cluster state" — all services composed together.
+            cluster-example = let
+              evaluation = mkCluster {
+                chartModules = [
+                  ./pkgs/coredns
+                  ./pkgs/valkey
+                ];
+                config = import ./clusters/example.nix;
+              };
+            in mkManifests evaluation;
+          };
+
+          # Structural checks for multi-chart composition.
+          # These validate that intent merging (registry, monitoring) works
+          # across charts. The check is really a Nix eval-time assertion —
+          # if any registry path is missing, Nix fails before the runCommand
+          # ever executes.
+          checks = let
+            exampleEval = mkCluster {
+              chartModules = [
+                ./pkgs/coredns
+                ./pkgs/valkey
+              ];
+              config = import ./clusters/example.nix;
+            };
+            reg = exampleEval.config.registry;
+            mon = exampleEval.config.monitoring;
+          in {
+            cluster-example = pkgs.runCommand "check-cluster-example" {} ''
+              echo "=== Registry checks ==="
+              echo "coredns dns-udp: ${reg.coredns.endpoints.dns-udp.host}:${toString reg.coredns.endpoints.dns-udp.port}"
+              echo "coredns dns-tcp: ${reg.coredns.endpoints.dns-tcp.host}:${toString reg.coredns.endpoints.dns-tcp.port}"
+              echo "valkey primary:  ${reg.valkey.endpoints.primary.host}:${toString reg.valkey.endpoints.primary.port}"
+              echo "valkey sentinel: ${reg.valkey.endpoints.sentinel.host}:${toString reg.valkey.endpoints.sentinel.port}"
+              echo "valkey metrics:  ${reg.valkey.endpoints.metrics.host}:${toString reg.valkey.endpoints.metrics.port}"
+              echo ""
+              echo "=== Monitoring checks ==="
+              echo "valkey target:   ${mon.targets.valkey.serviceName} (port: ${mon.targets.valkey.portName})"
+              echo ""
+              echo "All checks passed."
+              touch $out
+            '';
           };
         };
     };
