@@ -1,31 +1,22 @@
 # CoreDNS kix module — migrated from the coredns Helm chart (v1.45.0, appVersion 1.13.1)
 #
+# Uses mkChartModule to enforce the chart module contract:
+#   - options.nix returns chart-specific options (enable/namespace/clusterDomain added by contract)
+#   - resources.nix returns { manifestList, extraConfig }
+#
 # Source Helm chart stored at: charts/coredns/ for reference and parity testing.
-#
-# Split into:
-#   options.nix   — all option declarations (the API surface)
-#   resources.nix — resource construction, helpers, and config wiring
-#
-# Resources produced:
-#   - ServiceAccount (optional, behind serviceAccount.create)
-#   - ClusterRole + ClusterRoleBinding
-#   - ConfigMap (Corefile + zone files)
-#   - Deployment
-#   - Service
-#   - Service (metrics, optional — behind prometheus.service.enabled)
-#   - ServiceMonitor (optional — behind prometheus.monitor.enabled)
-#
-# When the cross-cutting monitoring module is active (monitoring.enabled = true),
-# the per-chart ServiceMonitor is suppressed in favor of the centralized one.
 
 {
   lib,
+  pkgs,
+  config,
+  kixlib,
   ...
 }:
 
-{
-  imports = [
-    ./options.nix
-    ./resources.nix
-  ];
+kixlib.mkChartModule {
+  name = "coredns";
+  inherit lib pkgs config kixlib;
+  chartOptions = import ./options.nix;
+  resources = import ./resources.nix;
 }

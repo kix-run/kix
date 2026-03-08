@@ -1,0 +1,33 @@
+{
+  "apiVersion": "monitoring.coreos.com/v1",
+  "kind": "ServiceMonitor",
+  "metadata": {
+    "labels": {
+      "app.kubernetes.io/managed-by": "kix",
+      "app.kubernetes.io/part-of": "monitoring",
+      "team": "platform"
+    },
+    "name": "cert-manager-webhook-monitor",
+    "namespace": "cert-manager"
+  },
+  "spec": {
+    "endpoints": [
+      {
+        "interval": "15s",
+        "port": "metrics"
+      }
+    ],
+    "namespaceSelector": {
+      "matchNames": [
+        "cert-manager"
+      ]
+    },
+    "selector": {
+      "matchLabels": {
+        "app.kubernetes.io/component": "webhook",
+        "app.kubernetes.io/instance": "release-name",
+        "app.kubernetes.io/name": "webhook"
+      }
+    }
+  }
+}

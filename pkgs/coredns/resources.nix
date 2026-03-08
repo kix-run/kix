@@ -1,39 +1,18 @@
 # CoreDNS resource construction and config wiring.
 #
-# This file builds all Kubernetes resources for the CoreDNS module and wires
-# them into config.manifests, config.registry, and config.monitoring.
-# Option declarations live in options.nix.
+# This is a plain function (not a NixOS module) called by mkChartModule.
+# It receives kixlib' (chart-scoped) and labels from mkChartModule, plus
+# the full module environment for cross-references.
+#
+# Returns { manifestList, extraConfig } where:
+#   - manifestList: resources to serialize into config.manifests
+#   - extraConfig: registry, monitoring, networkPolicies declarations
 #
 # Source Helm chart: coredns/coredns (v1.45.0, appVersion 1.13.1)
-#
-# Resources produced:
-#   - ServiceAccount (optional, behind serviceAccount.create)
-#   - ClusterRole + ClusterRoleBinding
-#   - ConfigMap (Corefile + zone files)
-#   - Deployment
-#   - Service
-#   - Service (metrics, optional — behind prometheus.service.enabled)
-#   - ServiceMonitor (optional — behind prometheus.monitor.enabled)
-#
-# Key differences from the original kix/corednsNew module:
-#   - One manifest entry per resource (not a single bundled derivation)
-#   - Human-readable resource names (not store paths)
-#   - Explicit selectorLabels separate from metadata labels
-#   - Ports specified explicitly on the Service (not auto-derived)
-#   - Fixed: readinessProbe no longer accidentally reads livenessProbe config
-#   - Fixed: dnsPolicy uses `if` not `lib.optionalAttrs` (which expects an attrset)
 
-{
-  lib,
-  pkgs,
-  config,
-  kixlib,
-  ...
-}:
+{ lib, config, kixlib, kixlib', cfg, labels, ... }:
 
 let
-  cfg = config.services.coredns;
-
   # Extracted: used in registry, monitoring target, and potentially elsewhere.
   hasPrometheus = builtins.any (s: builtins.any (p: p.name == "prometheus") s.plugins) cfg.servers;
 
@@ -67,20 +46,9 @@ let
   # --- Port derivation ---
   # Derives service/container ports from server blocks, matching the Helm
   # chart's _helpers.tpl coredns.servicePorts / coredns.containerPorts logic.
-
-  # Port derivation mirrors the Helm chart's _helpers.tpl logic, but with one
-  # important distinction: Helm has SEPARATE helpers for servicePorts and
-  # containerPorts. servicePorts only derives from server block zones (the ports
-  # users connect to). containerPorts ALSO includes plugin ports like prometheus
-  # (9153). This makes sense — prometheus metrics are exposed on the container
-  # but shouldn't be in the Service (users don't query metrics via the DNS Service).
   derivePorts = let
     inherit (lib) flatten concatMap groupBy mapAttrs any optional;
 
-    # Determine protocols for a zone. Note: zone.scheme comes from the module
-    # system so it's explicitly null (not absent). We must use `if` rather than
-    # `or` — `zone.scheme or "dns://"` returns null when scheme exists but is null,
-    # because `or` only provides a default for *missing* keys, not null values.
     zoneToProtocol = server: zone: let
       scheme = if zone.scheme != null then zone.scheme else "";
     in {
@@ -89,18 +57,14 @@ let
       isudp = builtins.elem scheme ["dns://" ""];
     };
 
-    # Plugin ports (e.g., prometheus) — only for containerPorts, NOT servicePorts.
     pluginToProtocol = plugin:
       if plugin.name == "prometheus" && plugin.parameters != null then
         let port = lib.last (lib.splitString ":" (toString plugin.parameters));
         in [{ inherit port; istcp = true; isudp = false; }]
       else [];
 
-    # Zone-derived ports (for both service and container)
     zoneReqs = concatMap (server: map (zoneToProtocol server) server.zones) cfg.servers;
     zoneGrouped = groupBy (r: r.port) zoneReqs;
-
-    # All ports including plugins (for container only)
     allReqs = zoneReqs ++ concatMap (server: concatMap pluginToProtocol server.plugins) cfg.servers;
     allGrouped = groupBy (r: r.port) allReqs;
 
@@ -140,68 +104,55 @@ let
       });
 
   in {
-    # servicePorts: only zone-derived ports (not plugin ports like prometheus)
     servicePorts = flatten (map toServicePorts (builtins.attrValues zoneMerged));
-    # containerPorts: all ports including plugins
     containerPorts = flatten (map toContainerPorts (builtins.attrValues allMerged));
   };
 
   ports = derivePorts;
 
   # --- Labels ---
-  # Built using kixlib.mkLabels for consistent label hierarchy across charts.
   # CoreDNS adds cluster-service labels as extras and a coredns-specific
   # "k8s-app" selector label when isClusterService is true.
-  labels = kixlib.mkLabels {
-    chart = "coredns";
-    clusterLabels = config.cluster.labels;
-    extra = lib.optionalAttrs cfg.isClusterService {
-      "kubernetes.io/cluster-service" = "true";
-      "kubernetes.io/name" = "CoreDNS";
-    };
-  };
-
-  # CoreDNS-specific: k8s-app selector label for cluster service discovery.
-  # This is added to the selector (not just metadata) because kube-system
-  # components discover CoreDNS via this label.
+  # We extend the labels provided by mkChartModule.
   selectorLabels = labels.selector // lib.optionalAttrs cfg.isClusterService {
     "k8s-app" = "coredns";
   };
 
   allLabels = labels.all // lib.optionalAttrs cfg.isClusterService {
+    "kubernetes.io/cluster-service" = "true";
+    "kubernetes.io/name" = "CoreDNS";
     "k8s-app" = "coredns";
   };
 
-  # FQDN used in registry endpoints and anywhere we reference the CoreDNS
-  # service by its cluster-internal DNS name.
+  # Override kixlib' to use coredns-specific labels (with cluster-service extras).
+  kixlibCoredns = kixlib.withMetadata {
+    namespace = cfg.namespace;
+    labels = allLabels;
+    name = "coredns";
+  };
+
+  # FQDN used in registry endpoints.
   corednsFqdn = kixlib.mkFqdn {
     name = "coredns";
     namespace = cfg.namespace;
     clusterDomain = cfg.clusterDomain;
   };
 
-  # --- kixlib setup ---
-  kixlib' = kixlib.withMetadata {
-    namespace = cfg.namespace;
-    labels = allLabels;
-    name = "coredns";
-  };
-
   # --- Resource construction ---
 
-  sa = kixlib'.rbac.mkServiceAccount { };
+  sa = kixlibCoredns.rbac.mkServiceAccount { };
 
-  clusterRole = kixlib'.rbac.mkClusterRole {
+  clusterRole = kixlibCoredns.rbac.mkClusterRole {
     rules = [
       { apiGroups = [""]; resources = ["endpoints" "services" "pods" "namespaces"]; verbs = ["list" "watch"]; }
       { apiGroups = ["discovery.k8s.io"]; resources = ["endpointslices"]; verbs = ["list" "watch"]; }
     ];
   };
 
-  # The ClusterRoleBinding subject name must match the actual serviceAccountName
-  # used by the Deployment. When serviceAccount.create is false, Helm binds to
-  # "default" (the K8s default SA), not the chart's SA resource name.
-  binding = kixlib'.rbac.mkClusterRoleBindingWith {
+  serviceAccountName =
+    if cfg.serviceAccount.create then kixlibCoredns.resourceName sa else "default";
+
+  binding = kixlibCoredns.rbac.mkClusterRoleBindingWith {
     inherit clusterRole;
     serviceAccount = sa;
     subjects = [{
@@ -211,17 +162,16 @@ let
     }];
   };
 
-  coreDnsConfigMap = kixlib'.configMap.mkConfigMap { }
-    |> kixlib'.configMap.withEntry "Corefile" buildCorefile;
+  coreDnsConfigMap = kixlibCoredns.configMap.mkConfigMap { }
+    |> kixlibCoredns.configMap.withEntry "Corefile" buildCorefile;
 
-  # Volume name "config-volume" matches the Helm chart's hardcoded name.
-  configVolume = coreDnsConfigMap |> kixlib'.configMap.asVolume {
+  configVolume = coreDnsConfigMap |> kixlibCoredns.configMap.asVolume {
     name = "config-volume";
     items = [{ key = "Corefile"; path = "Corefile"; }]
       ++ map (zf: { key = zf.filename; path = zf.filename; }) cfg.zoneFiles;
   };
 
-  container = kixlib'.pod.mkContainer {
+  container = kixlibCoredns.pod.mkContainer {
     name = "coredns";
     image = kixlib.imageRef cfg.image;
     imagePullPolicy = cfg.image.pullPolicy;
@@ -230,28 +180,20 @@ let
     ports = ports.containerPorts;
     securityContext = cfg.securityContext;
   }
-  |> kixlib'.pod.withVolumeMount {
+  |> kixlibCoredns.pod.withVolumeMount {
     name = configVolume.name;
     mountPath = "/etc/coredns";
   }
-  |> (c: if cfg.livenessProbe.enabled then kixlib'.pod.withLivenessProbe {
+  |> (c: if cfg.livenessProbe.enabled then kixlibCoredns.pod.withLivenessProbe {
     httpGet = { path = "/health"; port = 8080; scheme = "HTTP"; };
     inherit (cfg.livenessProbe) initialDelaySeconds periodSeconds timeoutSeconds failureThreshold successThreshold;
   } c else c)
-  |> (c: if cfg.readinessProbe.enabled then kixlib'.pod.withReadinessProbe {
+  |> (c: if cfg.readinessProbe.enabled then kixlibCoredns.pod.withReadinessProbe {
     httpGet = { path = "/ready"; port = 8181; scheme = "HTTP"; };
     inherit (cfg.readinessProbe) initialDelaySeconds periodSeconds timeoutSeconds failureThreshold successThreshold;
   } c else c);
 
-  # Match Helm's serviceAccountName logic: when serviceAccount.create is true,
-  # use the SA's resource name. Otherwise, explicitly set "default" (Helm does
-  # this too via its serviceAccountName helper).
-  serviceAccountName =
-    if cfg.serviceAccount.create then kixlib'.resourceName sa else "default";
-
-  # When HPA is enabled, Helm omits the replicas field from the Deployment,
-  # letting the HPA control scaling. We pass null which mkResource strips.
-  deployment = kixlib'.workload.mkDeployment {
+  deployment = kixlibCoredns.workload.mkDeployment {
     replicas = if cfg.hpa.enabled || cfg.autoscaler.enabled then null else cfg.replicaCount;
     selectorLabels = selectorLabels;
     strategy = {
@@ -261,7 +203,7 @@ let
     metadata.labels = {
       "app.kubernetes.io/version" = cfg.image.tag;
     };
-    template = kixlib'.pod.mkPodTemplate {
+    template = kixlibCoredns.pod.mkPodTemplate {
       metadata = {
         labels = selectorLabels;
         annotations = lib.optionalAttrs cfg.isClusterService {
@@ -278,7 +220,7 @@ let
     };
   };
 
-  service = kixlib'.networking.mkService {
+  service = kixlibCoredns.networking.mkService {
     spec = {
       type = cfg.serviceType;
       ports = ports.servicePorts;
@@ -286,15 +228,7 @@ let
     };
   };
 
-  # --- Metrics Service ---
-  # Dedicated Service exposing only port 9153 for Prometheus scraping.
-  # Mirrors Helm's templates/service-metrics.yaml. The main DNS Service
-  # intentionally excludes plugin ports (see derivePorts above), so this
-  # separate Service is needed for ServiceMonitor/annotation-based discovery.
-  #
-  # Uses `app.kubernetes.io/component: metrics` label so the ServiceMonitor
-  # can select it independently of the main DNS Service.
-  metricsService = kixlib'.networking.mkService {
+  metricsService = kixlibCoredns.networking.mkService {
     metadata = {
       name = "coredns-metrics";
       labels = {
@@ -312,21 +246,10 @@ let
     };
   };
 
-  # --- ServiceMonitor ---
-  # Targets the metrics Service via the `app.kubernetes.io/component: metrics`
-  # selector label. Mirrors Helm's templates/servicemonitor.yaml.
-  #
-  # When the cross-cutting monitoring module is active (config.monitoring.enabled),
-  # this per-chart ServiceMonitor is suppressed — the monitoring module creates
-  # one from our monitoring.targets declaration instead. See the manifests section
-  # below for the gating logic.
-  # --- PodDisruptionBudget ---
-  # Created when minAvailable or maxUnavailable is set (same condition as Helm:
-  # Go template treats non-empty podDisruptionBudget as truthy).
   pdbEnabled = cfg.podDisruptionBudget.minAvailable != null
     || cfg.podDisruptionBudget.maxUnavailable != null;
 
-  pdb = kixlib'.policy.mkPodDisruptionBudget ({
+  pdb = kixlibCoredns.policy.mkPodDisruptionBudget ({
     selector.matchLabels = selectorLabels;
   } // lib.optionalAttrs (cfg.podDisruptionBudget.minAvailable != null) {
     minAvailable = cfg.podDisruptionBudget.minAvailable;
@@ -334,10 +257,7 @@ let
     maxUnavailable = cfg.podDisruptionBudget.maxUnavailable;
   });
 
-  # --- HorizontalPodAutoscaler ---
-  # When HPA is enabled, the Deployment omits its replicas field so HPA controls scaling.
-  # Mutually exclusive with the autoscaler (cluster-proportional-autoscaler).
-  hpa = kixlib'.autoscaling.mkHorizontalPodAutoscaler {
+  hpa = kixlibCoredns.autoscaling.mkHorizontalPodAutoscaler {
     scaleTargetRef = {
       apiVersion = "apps/v1";
       kind = "Deployment";
@@ -347,15 +267,8 @@ let
   };
 
   # --- Cluster-proportional autoscaler ---
-  # A sidecar deployment that scales CoreDNS proportionally to cluster size.
-  # Produces 5 resources: ServiceAccount, ConfigMap, ClusterRole,
-  # ClusterRoleBinding, Deployment. All use "coredns-autoscaler" as the name.
-
   autoscalerName = "coredns-autoscaler";
 
-  # Autoscaler gets its own label set via kixlib.mkLabels. Helm includes the
-  # isClusterService labels on autoscaler resources too (they use the same
-  # coredns.labels helper).
   autoscalerLabelSet = kixlib.mkLabels {
     chart = autoscalerName;
     clusterLabels = config.cluster.labels;
@@ -365,7 +278,6 @@ let
     };
   };
 
-  # Autoscaler uses k8s-app as a selector label (Helm convention for system components).
   autoscalerSelectorLabels = autoscalerLabelSet.selector // {
     "k8s-app" = autoscalerName;
   };
@@ -382,8 +294,6 @@ let
 
   autoscalerSa = autoscalerKixlib.rbac.mkServiceAccount { };
 
-  # Helm's configmap-autoscaler.yaml renders this as JSON via Go's toJson.
-  # We use builtins.toJSON for the same compact output.
   autoscalerConfigObj = {
     inherit (cfg.autoscaler) coresPerReplica nodesPerReplica
       preventSinglePointFailure min max includeUnschedulableNodes;
@@ -434,8 +344,6 @@ let
       metadata = {
         labels = autoscalerSelectorLabels;
         annotations = {
-          # Helm uses a checksum to trigger rollout on config changes.
-          # We use a content hash for the same purpose.
           "checksum/configmap" = builtins.hashString "sha256" autoscalerConfigData;
         } // lib.optionalAttrs cfg.isClusterService {
           "scheduler.alpha.kubernetes.io/tolerations" =
@@ -449,32 +357,8 @@ let
     };
   };
 
-  # Helm only sets namespace on the ServiceMonitor when prometheus.monitor.namespace
-  # is explicitly configured (to a different namespace than the release). When omitted,
-  # the ServiceMonitor inherits the release namespace. We mirror this by not setting
-  # namespace in metadata — kixlib's preprocessor would normally add it, but we use
-  # raw kixlib here (not kixlib') to avoid the automatic namespace injection.
-  serviceMonitor = kixlib.monitoring.mkServiceMonitor {
-    metadata = {
-      name = "coredns";
-      labels = allLabels;
-    };
-    endpoints = [
-      ({
-        port = "metrics";
-      } // lib.optionalAttrs (cfg.prometheus.monitor.interval != null) {
-        interval = cfg.prometheus.monitor.interval;
-      })
-    ];
-    namespaceSelector.matchNames = [ cfg.namespace ];
-    selector.matchLabels = selectorLabels // {
-      "app.kubernetes.io/component" = "metrics";
-    };
-  };
-
-  # --- Manifest list ---
-  # Declarative list of all resources with their enable conditions, replacing
-  # the chained `// lib.optionalAttrs` pattern for better readability.
+in
+{
   manifestList = [
     { name = "coredns-deployment"; resource = deployment; enable = true; }
     { name = "coredns-configmap"; resource = coreDnsConfigMap; enable = true; }
@@ -483,10 +367,9 @@ let
     { name = "coredns-clusterrolebinding"; resource = binding; enable = true; }
     { name = "coredns-serviceaccount"; resource = sa; enable = cfg.serviceAccount.create; }
     { name = "coredns-service-metrics"; resource = metricsService; enable = hasPrometheus && cfg.prometheus.service.enabled; }
-    { name = "coredns-servicemonitor"; resource = serviceMonitor; enable = hasPrometheus && cfg.prometheus.monitor.enabled && !config.monitoring.enabled; }
     { name = "coredns-poddisruptionbudget"; resource = pdb; enable = pdbEnabled; }
     { name = "coredns-hpa"; resource = hpa; enable = cfg.hpa.enabled; }
-    # Autoscaler resources — all gated on cfg.autoscaler.enabled
+    # Autoscaler resources — all gated on cfg.autoscaler.enabled, use their own kixlib
     { name = "coredns-autoscaler-serviceaccount"; resource = autoscalerSa; enable = cfg.autoscaler.enabled; kixlib = autoscalerKixlib; }
     { name = "coredns-autoscaler-configmap"; resource = autoscalerConfigMap; enable = cfg.autoscaler.enabled; kixlib = autoscalerKixlib; }
     { name = "coredns-autoscaler-clusterrole"; resource = autoscalerClusterRole; enable = cfg.autoscaler.enabled; kixlib = autoscalerKixlib; }
@@ -494,28 +377,9 @@ let
     { name = "coredns-autoscaler-deployment"; resource = autoscalerDeployment; enable = cfg.autoscaler.enabled; kixlib = autoscalerKixlib; }
   ];
 
-  # Autoscaler resources carry their own kixlib (with autoscaler-specific metadata:
-  # different name, labels, and selector). Other resources use kixlib' (the chart-wide
-  # kixlib with coredns namespace/labels). The `r.kixlib or kixlib'` pattern selects
-  # the right one per resource.
-  manifests = lib.optionalAttrs cfg.enable (
-    lib.listToAttrs (
-      map (r: lib.nameValuePair r.name ((r.kixlib or kixlib').mkManifest r.resource))
-      (builtins.filter (r: r.enable) manifestList)
-    )
-  );
-
-in
-{
-  config = {
-    # Consume cluster-wide DNS domain via mkDefault so per-chart override still wins.
-    services.coredns.clusterDomain = lib.mkDefault config.cluster.domain;
-
-    # --- Level 2: service registry ---
-    # Advertise our endpoints so other charts/modules can discover coredns
-    # without hardcoding DNS names. The prometheus metrics endpoint is only
-    # registered if the prometheus plugin is configured in servers.
-    registry.coredns = lib.mkIf cfg.enable {
+  extraConfig = {
+    # Level 2: service registry
+    registry.coredns = {
       endpoints = {
         dns-udp = {
           host = corednsFqdn;
@@ -536,11 +400,10 @@ in
       };
     };
 
-    # --- Level 3: monitoring target ---
-    # Declare our metrics endpoint for the cross-cutting monitoring module.
-    # Only relevant when the prometheus plugin is configured AND the metrics
-    # Service is enabled (since the ServiceMonitor targets the metrics Service).
-    monitoring.targets.coredns = lib.mkIf (cfg.enable && hasPrometheus && cfg.prometheus.service.enabled) {
+    # Level 3: monitoring target
+    # prometheus.monitor.enabled controls whether the chart declares a monitoring
+    # target — the monitoring module is the sole creator of ServiceMonitors.
+    monitoring.targets.coredns = lib.mkIf (hasPrometheus && cfg.prometheus.service.enabled && cfg.prometheus.monitor.enabled) {
       serviceName = "coredns-metrics";
       namespace = cfg.namespace;
       portName = "metrics";
@@ -549,15 +412,12 @@ in
       };
     };
 
-    # --- Level 3: network policy declaration ---
-    networkPolicies.services.coredns = lib.mkIf cfg.enable {
+    # Level 3: network policy declaration
+    networkPolicies.services.coredns = {
       namespace = cfg.namespace;
       podSelector = selectorLabels;
       ingressPorts = [ 53 ];
       egressTo = [];
     };
-
-    # One manifest entry per resource — this is what verify-parity.sh compares.
-    inherit manifests;
   };
 }

@@ -44,8 +44,21 @@
     ./network-policy.nix
   ];
 
+  # Manifest type that errors on key collision between modules.
+  # Without this, `types.attrsOf types.anything` silently merges values from
+  # different modules — so two charts writing the same manifest key would
+  # silently overwrite each other. This custom type makes that a hard error
+  # with a clear message showing which module files collided.
   options.manifests = lib.mkOption {
-    type = lib.types.attrsOf lib.types.anything;
+    type = lib.types.attrsOf (lib.types.mkOptionType {
+      name = "manifest";
+      description = "path to a JSON manifest file (store derivation)";
+      check = lib.isDerivation;
+      merge = loc: defs:
+        if builtins.length defs == 1
+        then (builtins.head defs).value
+        else throw "Manifest key collision at ${lib.showOption loc}: defined by ${lib.concatMapStringsSep ", " (d: d.file) defs}";
+    });
     default = { };
     description = ''
       Collected Kubernetes manifests from all enabled modules.

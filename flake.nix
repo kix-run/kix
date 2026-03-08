@@ -94,38 +94,28 @@
               config = config;
             });
 
-          # --- Package derivations ---
-          # Defined here so both `packages` and `checks` can reference them.
-
-          # Per-chart parity test fixtures
-          corednsPkg = mkChartManifests ./pkgs/coredns {
-            services.coredns.enable = true;
-          };
-
-          corednsPrometheusPkg = mkChartManifests ./pkgs/coredns {
-            services.coredns = {
+          # --- Programmatic chart variant registry ---
+          # Instead of 16 manual `<name>Pkg = mkChartManifests ./pkgs/<chart> { ... }`
+          # definitions, all single-chart variants are declared in one data structure.
+          # Adding a new variant is a single line — the packages and schema checks
+          # are generated automatically below.
+          chartVariants = {
+            # CoreDNS variants
+            coredns = { chart = ./pkgs/coredns; config.services.coredns.enable = true; };
+            coredns-prometheus = { chart = ./pkgs/coredns; config.services.coredns = {
               enable = true;
               prometheus.service.enabled = true;
               prometheus.monitor.enabled = true;
-            };
-          };
-
-          corednsServiceaccountPkg = mkChartManifests ./pkgs/coredns {
-            services.coredns = {
+            }; };
+            coredns-serviceaccount = { chart = ./pkgs/coredns; config.services.coredns = {
               enable = true;
               serviceAccount.create = true;
-            };
-          };
-
-          corednsPdbPkg = mkChartManifests ./pkgs/coredns {
-            services.coredns = {
+            }; };
+            coredns-pdb = { chart = ./pkgs/coredns; config.services.coredns = {
               enable = true;
               podDisruptionBudget.minAvailable = 1;
-            };
-          };
-
-          corednsHpaPkg = mkChartManifests ./pkgs/coredns {
-            services.coredns = {
+            }; };
+            coredns-hpa = { chart = ./pkgs/coredns; config.services.coredns = {
               enable = true;
               hpa = {
                 enabled = true;
@@ -142,51 +132,35 @@
                   };
                 }];
               };
-            };
-          };
-
-          corednsAutoscalerPkg = mkChartManifests ./pkgs/coredns {
-            services.coredns = {
+            }; };
+            coredns-autoscaler = { chart = ./pkgs/coredns; config.services.coredns = {
               enable = true;
               autoscaler.enabled = true;
-            };
-          };
+            }; };
 
-          valkeyPkg = mkChartManifests ./pkgs/valkey {
-            services.valkey.enable = true;
-          };
-
-          valkeySentinelPkg = mkChartManifests ./pkgs/valkey {
-            services.valkey = {
+            # Valkey variants
+            valkey = { chart = ./pkgs/valkey; config.services.valkey.enable = true; };
+            valkey-sentinel = { chart = ./pkgs/valkey; config.services.valkey = {
               enable = true;
               sentinel.enabled = true;
-            };
-          };
-
-          valkeyFullPkg = mkChartManifests ./pkgs/valkey {
-            services.valkey = {
+            }; };
+            valkey-full = { chart = ./pkgs/valkey; config.services.valkey = {
               enable = true;
               sentinel.enabled = true;
               metrics.enabled = true;
               metrics.serviceMonitor.enabled = true;
               networkPolicy.enabled = true;
               pdb.enabled = true;
-            };
-          };
-
-          valkeyPodmonitorPkg = mkChartManifests ./pkgs/valkey {
-            services.valkey = {
+            }; };
+            valkey-podmonitor = { chart = ./pkgs/valkey; config.services.valkey = {
               enable = true;
               sentinel.enabled = true;
               metrics.enabled = true;
               metrics.serviceMonitor.enabled = true;
               metrics.podMonitor.enabled = true;
               networkPolicy.enabled = true;
-            };
-          };
-
-          valkeyPrometheusrulePkg = mkChartManifests ./pkgs/valkey {
-            services.valkey = {
+            }; };
+            valkey-prometheusrule = { chart = ./pkgs/valkey; config.services.valkey = {
               enable = true;
               sentinel.enabled = true;
               metrics.enabled = true;
@@ -201,11 +175,8 @@
                 }];
               };
               networkPolicy.enabled = true;
-            };
-          };
-
-          valkeyHpaPkg = mkChartManifests ./pkgs/valkey {
-            services.valkey = {
+            }; };
+            valkey-hpa = { chart = ./pkgs/valkey; config.services.valkey = {
               enable = true;
               replica.autoscaling.hpa = {
                 enabled = true;
@@ -213,11 +184,8 @@
                 maxReplicas = 5;
                 targetCPU = 80;
               };
-            };
-          };
-
-          valkeyHpaSentinelPkg = mkChartManifests ./pkgs/valkey {
-            services.valkey = {
+            }; };
+            valkey-hpa-sentinel = { chart = ./pkgs/valkey; config.services.valkey = {
               enable = true;
               sentinel.enabled = true;
               replica.autoscaling.hpa = {
@@ -226,38 +194,111 @@
                 maxReplicas = 5;
                 targetCPU = 80;
               };
-            };
-          };
+            }; };
 
-          # cert-manager variants
-          certManagerPkg = mkChartManifests ./pkgs/cert-manager {
-            services.cert-manager.enable = true;
-          };
-
-          certManagerNoCainjectorPkg = mkChartManifests ./pkgs/cert-manager {
-            services.cert-manager = {
+            # cert-manager variants
+            cert-manager = { chart = ./pkgs/cert-manager; config.services.cert-manager.enable = true; };
+            cert-manager-no-cainjector = { chart = ./pkgs/cert-manager; config.services.cert-manager = {
               enable = true;
               cainjector.enabled = false;
-            };
-          };
-
-          certManagerNoStartupapicheckPkg = mkChartManifests ./pkgs/cert-manager {
-            services.cert-manager = {
+            }; };
+            cert-manager-no-startupapicheck = { chart = ./pkgs/cert-manager; config.services.cert-manager = {
               enable = true;
               startupapicheck.enabled = false;
-            };
+            }; };
           };
 
-          # Multi-chart cluster evaluation
+          # Generate package derivations from chartVariants.
+          chartPackages = lib.mapAttrs (_: v:
+            mkChartManifests v.chart v.config
+          ) chartVariants;
+
+          # Multi-chart cluster evaluation — kept separate because it uses
+          # multiple chart modules and has its own assertion-based check.
           exampleEval = mkCluster {
             chartModules = [
               ./pkgs/coredns
               ./pkgs/valkey
+              ./pkgs/cert-manager
             ];
             config = import ./clusters/example.nix;
           };
 
           clusterExamplePkg = mkManifests exampleEval;
+
+          # --- Additional test clusters ---
+          # Full cluster: all features enabled
+          fullEval = mkCluster {
+            chartModules = [ ./pkgs/coredns ./pkgs/valkey ./pkgs/cert-manager ];
+            config = import ./clusters/test-full.nix;
+          };
+          clusterFullPkg = mkManifests fullEval;
+
+          # Minimal cluster: single chart, all defaults
+          minimalEval = mkCluster {
+            chartModules = [ ./pkgs/coredns ];
+            config = import ./clusters/test-minimal.nix;
+          };
+          clusterMinimalPkg = mkManifests minimalEval;
+
+          # Helper: validate a manifest directory against K8s API schemas.
+          # Skips Prometheus Operator CRDs since kubeconform doesn't have
+          # their schemas built-in.
+          schemaCheck = name: drv: pkgs.runCommand "schema-${name}" {
+            nativeBuildInputs = [ pkgs.kubeconform ];
+          } ''
+            echo "Validating ${name}..."
+            kubeconform -strict -summary \
+              -ignore-missing-schemas \
+              ${drv}/*.json
+            touch $out
+          '';
+
+          # Generate schema checks from chartVariants programmatically.
+          schemaChecks = lib.mapAttrs' (name: drv:
+            lib.nameValuePair "schema-${name}" (schemaCheck name drv)
+          ) chartPackages;
+
+          # Golden-file snapshot tests — compares built manifests against
+          # checked-in golden files. Run `./scripts/update-golden.sh` to
+          # regenerate after intentional changes.
+          goldenCheck = name: drv: pkgs.runCommand "golden-${name}" {
+            nativeBuildInputs = [ pkgs.jq pkgs.diffutils ];
+          } ''
+            fail=0
+            # Check each built manifest matches its golden file
+            for f in ${drv}/*.json; do
+              base=$(basename "$f")
+              golden="${./tests}/${name}/golden/$base"
+              if [ ! -f "$golden" ]; then
+                echo "FAIL: $base is new (no golden file)"
+                fail=1
+                continue
+              fi
+              jq -S '.' "$f" > /tmp/actual.json
+              if ! diff -u "$golden" /tmp/actual.json; then
+                echo "FAIL: $base differs from golden"
+                fail=1
+              fi
+            done
+            # Check for removed resources (golden file with no matching output)
+            for f in ${./tests}/${name}/golden/*.json; do
+              base=$(basename "$f")
+              if [ ! -f "${drv}/$base" ]; then
+                echo "FAIL: $base removed (golden file exists but no output)"
+                fail=1
+              fi
+            done
+            [ "$fail" -eq 0 ] || exit 1
+            touch $out
+          '';
+
+          # Generate golden checks for all variants that have golden dirs.
+          goldenChecks = lib.mapAttrs' (name: drv:
+            lib.nameValuePair "golden-${name}" (goldenCheck name drv)
+          ) (lib.filterAttrs (name: _:
+            builtins.pathExists (./tests + "/${name}/golden")
+          ) (chartPackages // { cluster-example = clusterExamplePkg; }));
 
         in
         {
@@ -267,60 +308,38 @@
 
           # Per-chart build targets for parity testing, plus cluster definitions.
           # `nix build .#<name>` builds any of these.
-          packages = {
-            coredns = corednsPkg;
-            coredns-prometheus = corednsPrometheusPkg;
-            coredns-serviceaccount = corednsServiceaccountPkg;
-            coredns-pdb = corednsPdbPkg;
-            coredns-hpa = corednsHpaPkg;
-            coredns-autoscaler = corednsAutoscalerPkg;
-            valkey = valkeyPkg;
-            valkey-sentinel = valkeySentinelPkg;
-            valkey-full = valkeyFullPkg;
-            valkey-podmonitor = valkeyPodmonitorPkg;
-            valkey-prometheusrule = valkeyPrometheusrulePkg;
-            valkey-hpa = valkeyHpaPkg;
-            valkey-hpa-sentinel = valkeyHpaSentinelPkg;
-            cert-manager = certManagerPkg;
-            cert-manager-no-cainjector = certManagerNoCainjectorPkg;
-            cert-manager-no-startupapicheck = certManagerNoStartupapicheckPkg;
+          packages = chartPackages // {
             cluster-example = clusterExamplePkg;
+            cluster-full = clusterFullPkg;
+            cluster-minimal = clusterMinimalPkg;
           };
 
           checks = let
             reg = exampleEval.config.registry;
             mon = exampleEval.config.monitoring;
             manifests = exampleEval.config.manifests;
-
-            # Helper: validate a manifest directory against K8s API schemas.
-            # Skips Prometheus Operator CRDs since kubeconform doesn't have
-            # their schemas built-in.
-            schemaCheck = name: drv: pkgs.runCommand "schema-${name}" {
-              nativeBuildInputs = [ pkgs.kubeconform ];
-            } ''
-              echo "Validating ${name}..."
-              kubeconform -strict -summary \
-                -ignore-missing-schemas \
-                ${drv}/*.json
-              touch $out
-            '';
-          in {
+          in schemaChecks // goldenChecks // {
             # --- Structural checks for multi-chart composition ---
             # Eval-time assertions validate that intent merging works across
             # charts. If any assertion fails, Nix aborts before the runCommand
             # executes, with a clear error message.
             cluster-example = let
-              # Registry: both charts populated with non-empty hosts
+              # Registry: all charts populated with non-empty hosts and correct values
               assertRegistry =
                 assert reg.coredns.endpoints.dns-udp.host != "";
                 assert reg.coredns.endpoints.dns-tcp.host != "";
                 assert reg.coredns.endpoints.dns-udp.port == 53;
+                assert reg.coredns.endpoints.dns-udp.protocol == "dns-udp";
                 assert reg.valkey.endpoints.primary.host != "";
                 assert reg.valkey.endpoints.primary.port == 6379;
+                assert reg.valkey.endpoints.primary.protocol == "redis";
                 assert reg.valkey.endpoints.sentinel.host != "";
                 assert reg.valkey.endpoints.sentinel.port == 26379;
                 assert reg.valkey.endpoints.metrics.host != "";
                 assert reg.valkey.endpoints.metrics.port == 9121;
+                assert reg.cert-manager.endpoints.webhook.port == 443;
+                assert reg.cert-manager.endpoints.webhook.protocol == "https";
+                assert reg.cert-manager.endpoints.metrics.port == 9402;
                 true;
 
               # Registry ownership: each registry key must match a chart that
@@ -346,39 +365,114 @@
                 assert !(manifests ? "coredns-servicemonitor");
                 # Metrics Service should still exist (ServiceMonitor targets it)
                 assert manifests ? "coredns-service-metrics";
+                # cert-manager monitoring targets
+                assert mon.targets.cert-manager.serviceName == "cert-manager";
+                assert mon.targets.cert-manager-webhook.serviceName == "cert-manager-webhook";
+                assert mon.targets.cert-manager-cainjector.serviceName == "cert-manager-cainjector";
+                assert manifests ? "monitoring-cert-manager-servicemonitor";
+                assert manifests ? "monitoring-cert-manager-webhook-servicemonitor";
+                assert manifests ? "monitoring-cert-manager-cainjector-servicemonitor";
                 true;
 
-            in assert assertRegistry; assert assertOwnership; assert assertMonitoring;
+              # Negative assertions: disabled features must not produce resources
+              assertNegative =
+                # CoreDNS serviceAccount.create is false by default
+                assert !(manifests ? "coredns-serviceaccount");
+                # CoreDNS HPA is disabled by default
+                assert !(manifests ? "coredns-hpa");
+                true;
+
+            in assert assertRegistry; assert assertOwnership; assert assertMonitoring; assert assertNegative;
             pkgs.runCommand "check-cluster-example" {} ''
               echo "Registry: coredns dns-udp=${reg.coredns.endpoints.dns-udp.host}:${toString reg.coredns.endpoints.dns-udp.port}"
               echo "Registry: valkey primary=${reg.valkey.endpoints.primary.host}:${toString reg.valkey.endpoints.primary.port}"
               echo "Registry: valkey sentinel=${reg.valkey.endpoints.sentinel.host}:${toString reg.valkey.endpoints.sentinel.port}"
               echo "Registry: valkey metrics=${reg.valkey.endpoints.metrics.host}:${toString reg.valkey.endpoints.metrics.port}"
+              echo "Registry: cert-manager webhook=${reg.cert-manager.endpoints.webhook.host}:${toString reg.cert-manager.endpoints.webhook.port}"
+              echo "Registry: cert-manager metrics=${reg.cert-manager.endpoints.metrics.host}:${toString reg.cert-manager.endpoints.metrics.port}"
               echo "Monitoring: valkey target=${mon.targets.valkey.serviceName}:${mon.targets.valkey.portName}"
+              echo "Monitoring: cert-manager target=${mon.targets.cert-manager.serviceName}"
               echo "All structural assertions passed."
               touch $out
             '';
 
-            # --- Schema validation ---
-            # Validates manifests against K8s API schemas using kubeconform.
-            # Catches invalid apiVersions, missing required fields, wrong types.
+            # Schema validation for cluster configs (not in chartVariants)
             schema-cluster-example = schemaCheck "cluster-example" clusterExamplePkg;
-            schema-coredns = schemaCheck "coredns" corednsPkg;
-            schema-coredns-prometheus = schemaCheck "coredns-prometheus" corednsPrometheusPkg;
-            schema-coredns-serviceaccount = schemaCheck "coredns-serviceaccount" corednsServiceaccountPkg;
-            schema-coredns-pdb = schemaCheck "coredns-pdb" corednsPdbPkg;
-            schema-coredns-hpa = schemaCheck "coredns-hpa" corednsHpaPkg;
-            schema-coredns-autoscaler = schemaCheck "coredns-autoscaler" corednsAutoscalerPkg;
-            schema-valkey = schemaCheck "valkey" valkeyPkg;
-            schema-valkey-sentinel = schemaCheck "valkey-sentinel" valkeySentinelPkg;
-            schema-valkey-full = schemaCheck "valkey-full" valkeyFullPkg;
-            schema-valkey-podmonitor = schemaCheck "valkey-podmonitor" valkeyPodmonitorPkg;
-            schema-valkey-prometheusrule = schemaCheck "valkey-prometheusrule" valkeyPrometheusrulePkg;
-            schema-valkey-hpa = schemaCheck "valkey-hpa" valkeyHpaPkg;
-            schema-valkey-hpa-sentinel = schemaCheck "valkey-hpa-sentinel" valkeyHpaSentinelPkg;
-            schema-cert-manager = schemaCheck "cert-manager" certManagerPkg;
-            schema-cert-manager-no-cainjector = schemaCheck "cert-manager-no-cainjector" certManagerNoCainjectorPkg;
-            schema-cert-manager-no-startupapicheck = schemaCheck "cert-manager-no-startupapicheck" certManagerNoStartupapicheckPkg;
+            schema-cluster-full = schemaCheck "cluster-full" clusterFullPkg;
+            schema-cluster-minimal = schemaCheck "cluster-minimal" clusterMinimalPkg;
+
+            # --- Composition test: full cluster ---
+            # All features enabled — validates feature interaction.
+            cluster-full = let
+              freg = fullEval.config.registry;
+              fmon = fullEval.config.monitoring;
+              fman = fullEval.config.manifests;
+            in
+              # All 3 charts in registry
+              assert freg ? coredns;
+              assert freg ? valkey;
+              assert freg ? cert-manager;
+              # Monitoring targets exist for all monitored services
+              assert fmon.targets ? coredns;
+              assert fmon.targets ? valkey;
+              assert fmon.targets ? cert-manager;
+              assert fmon.targets ? cert-manager-webhook;
+              # HPA resources created for both coredns and valkey
+              assert fman ? "coredns-hpa";
+              assert fman ? "valkey-hpa";
+              # PDB for both coredns and valkey
+              assert fman ? "coredns-poddisruptionbudget";
+              assert fman ? "valkey-pdb";
+              # ServiceAccount created (coredns has it enabled)
+              assert fman ? "coredns-serviceaccount";
+              # All charts produce ServiceMonitors via monitoring module
+              assert fman ? "monitoring-coredns-servicemonitor";
+              assert fman ? "monitoring-valkey-servicemonitor";
+              assert fman ? "monitoring-cert-manager-servicemonitor";
+              pkgs.runCommand "check-cluster-full" {} ''
+                echo "Full cluster composition: all assertions passed."
+                touch $out
+              '';
+
+            # --- Composition test: minimal cluster ---
+            # Single chart, all defaults — validates nothing extra is produced.
+            cluster-minimal = let
+              mman = minimalEval.config.manifests;
+              manifestNames = lib.attrNames mman;
+            in
+              # Only coredns resources should exist
+              assert lib.all (n: lib.hasPrefix "coredns" n) manifestNames;
+              # No ServiceAccount (create = false by default)
+              assert !(mman ? "coredns-serviceaccount");
+              # No HPA, PDB, ServiceMonitor
+              assert !(mman ? "coredns-hpa");
+              assert !(mman ? "coredns-pdb");
+              assert !(lib.any (n: lib.hasInfix "servicemonitor" n) manifestNames);
+              # No monitoring targets (prometheus.monitor.enabled = false by default)
+              assert minimalEval.config.monitoring.targets == {};
+              pkgs.runCommand "check-cluster-minimal" {} ''
+                echo "Minimal cluster: all negative assertions passed."
+                touch $out
+              '';
+
+            # --- Behavioral invariant: all resources have managed-by label ---
+            invariant-managed-by = let
+              allManifests = exampleEval.config.manifests;
+            in pkgs.runCommand "invariant-managed-by" {
+              nativeBuildInputs = [ pkgs.jq ];
+            } ''
+              fail=0
+              for f in ${clusterExamplePkg}/*.json; do
+                managed=$(jq -r '.metadata.labels["app.kubernetes.io/managed-by"] // empty' "$f")
+                if [ "$managed" != "kix" ]; then
+                  echo "FAIL: $(basename "$f") missing app.kubernetes.io/managed-by=kix (got: '$managed')"
+                  fail=1
+                fi
+              done
+              [ "$fail" -eq 0 ] || exit 1
+              echo "All resources have managed-by=kix label."
+              touch $out
+            '';
           };
         };
     };

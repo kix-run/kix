@@ -1,0 +1,24 @@
+{
+  "apiVersion": "v1",
+  "data": {
+    "parse_sentinels.awk": "/ip/ {FOUND_IP=1}\n/port/ {FOUND_PORT=1}\n/runid/ {FOUND_RUNID=1}\n!/ip|port|runid/ {\n  if (FOUND_IP==1) {\n    IP=$1; FOUND_IP=0;\n  }\n  else if (FOUND_PORT==1) {\n    PORT=$1;\n    FOUND_PORT=0;\n  } else if (FOUND_RUNID==1) {\n    printf \"\\nsentinel known-sentinel myprimary %s %s %s\", IP, PORT, $0; FOUND_RUNID=0;\n  }\n}\n",
+    "ping_liveness_local.sh": "#!/bin/bash\n\n[[ -f $VALKEY_PASSWORD_FILE ]] && export VALKEY_PASSWORD=\"$(< \"${VALKEY_PASSWORD_FILE}\")\"\n[[ -n \"$VALKEY_PASSWORD\" ]] && export REDISCLI_AUTH=\"$VALKEY_PASSWORD\"\nresponse=$(\n  timeout -s 15 $1 \\\n  valkey-cli \\\n    -h localhost \\\n    -p $VALKEY_PORT \\\n    ping\n)\nif [ \"$?\" -eq \"124\" ]; then\n  echo \"Timed out\"\n  exit 1\nfi\nresponseFirstWord=$(echo $response | head -n1 | awk '{print $1;}')\nif [ \"$response\" != \"PONG\" ] && [ \"$responseFirstWord\" != \"LOADING\" ] && [ \"$responseFirstWord\" != \"MASTERDOWN\" ]; then\n  echo \"$response\"\n  exit 1\nfi\n",
+    "ping_liveness_local_and_primary.sh": "script_dir=\"$(dirname \"$0\")\"\nexit_status=0\n\"$script_dir/ping_liveness_local.sh\" $1 || exit_status=$?\n\"$script_dir/ping_liveness_primary.sh\" $1 || exit_status=$?\nexit $exit_status\n",
+    "ping_liveness_primary.sh": "#!/bin/bash\n\n[[ -f $VALKEY_PRIMARY_PASSWORD_FILE ]] && export VALKEY_PRIMARY_PASSWORD=\"$(< \"${VALKEY_PRIMARY_PASSWORD_FILE}\")\"\n[[ -n \"$VALKEY_PRIMARY_PASSWORD\" ]] && export REDISCLI_AUTH=\"$VALKEY_PRIMARY_PASSWORD\"\nresponse=$(\n  timeout -s 15 $1 \\\n  valkey-cli \\\n    -h $VALKEY_PRIMARY_HOST \\\n    -p $VALKEY_PRIMARY_PORT_NUMBER \\\n    ping\n)\nif [ \"$?\" -eq \"124\" ]; then\n  echo \"Timed out\"\n  exit 1\nfi\nresponseFirstWord=$(echo $response | head -n1 | awk '{print $1;}')\nif [ \"$response\" != \"PONG\" ] && [ \"$responseFirstWord\" != \"LOADING\" ]; then\n  echo \"$response\"\n  exit 1\nfi\n",
+    "ping_readiness_local.sh": "#!/bin/bash\n\n[[ -f $VALKEY_PASSWORD_FILE ]] && export VALKEY_PASSWORD=\"$(< \"${VALKEY_PASSWORD_FILE}\")\"\n[[ -n \"$VALKEY_PASSWORD\" ]] && export REDISCLI_AUTH=\"$VALKEY_PASSWORD\"\nresponse=$(\n  timeout -s 15 $1 \\\n  valkey-cli \\\n    -h localhost \\\n    -p $VALKEY_PORT \\\n    ping\n)\nif [ \"$?\" -eq \"124\" ]; then\n  echo \"Timed out\"\n  exit 1\nfi\nif [ \"$response\" != \"PONG\" ]; then\n  echo \"$response\"\n  exit 1\nfi\n",
+    "ping_readiness_local_and_primary.sh": "script_dir=\"$(dirname \"$0\")\"\nexit_status=0\n\"$script_dir/ping_readiness_local.sh\" $1 || exit_status=$?\n\"$script_dir/ping_readiness_primary.sh\" $1 || exit_status=$?\nexit $exit_status\n",
+    "ping_readiness_primary.sh": "#!/bin/bash\n\n[[ -f $VALKEY_PRIMARY_PASSWORD_FILE ]] && export VALKEY_PRIMARY_PASSWORD=\"$(< \"${VALKEY_PRIMARY_PASSWORD_FILE}\")\"\n[[ -n \"$VALKEY_PRIMARY_PASSWORD\" ]] && export REDISCLI_AUTH=\"$VALKEY_PRIMARY_PASSWORD\"\nresponse=$(\n  timeout -s 15 $1 \\\n  valkey-cli \\\n    -h $VALKEY_PRIMARY_HOST \\\n    -p $VALKEY_PRIMARY_PORT_NUMBER \\\n    ping\n)\nif [ \"$?\" -eq \"124\" ]; then\n  echo \"Timed out\"\n  exit 1\nfi\nif [ \"$response\" != \"PONG\" ]; then\n  echo \"$response\"\n  exit 1\nfi\n",
+    "ping_sentinel.sh": "#!/bin/bash\n[[ -f $VALKEY_PASSWORD_FILE ]] && export VALKEY_PASSWORD=\"$(< \"${VALKEY_PASSWORD_FILE}\")\"\n[[ -n \"$VALKEY_PASSWORD\" ]] && export REDISCLI_AUTH=\"$VALKEY_PASSWORD\"\nresponse=$(\n  timeout -s 15 $1 \\\n  valkey-cli \\\n    -h localhost \\\n    -p $VALKEY_SENTINEL_PORT \\\n    ping\n)\nif [ \"$?\" -eq \"124\" ]; then\n  echo \"Timed out\"\n  exit 1\nfi\nif [ \"$response\" != \"PONG\" ]; then\n  echo \"$response\"\n  exit 1\nfi\n"
+  },
+  "kind": "ConfigMap",
+  "metadata": {
+    "labels": {
+      "app.kubernetes.io/instance": "release-name",
+      "app.kubernetes.io/managed-by": "kix",
+      "app.kubernetes.io/name": "valkey",
+      "app.kubernetes.io/part-of": "valkey"
+    },
+    "name": "valkey-health",
+    "namespace": "default"
+  }
+}

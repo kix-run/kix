@@ -1,34 +1,16 @@
 # Valkey resource construction and config wiring.
 #
-# This file builds all Kubernetes resources for the Valkey module and wires
-# them into config.manifests, config.registry, and config.monitoring.
-# Option declarations live in options.nix.
+# Plain function called by mkChartModule. Returns { manifestList, extraConfig }.
 #
 # Source Helm chart: oci://registry-1.docker.io/bitnamicharts/valkey (v3.0.2, appVersion 8.1.1)
 #
 # Two modes:
 #   REPLICATION (default): primary SS + replica SS + separate services/SAs
 #   SENTINEL (sentinel.enabled = true): single "node" SS with valkey + sentinel + metrics containers
-#
-# Key design decisions:
-#   - Scripts are stored as separate .sh files in scripts/ for editor support,
-#     shellcheck compatibility, and to avoid Nix ''${...} escaping hell.
-#     Scripts needing Nix values use @PLACEHOLDER@ tokens substituted at eval time
-#     via builtins.replaceStrings (standard nixpkgs pattern).
-#   - Auth secrets are ALWAYS external (auth.existingSecret). This module never
-#     generates secrets — that's handled by the deployer (Ansible, etc.).
-#   - Default values match upstream Helm chart defaults for parity testing.
 
-{
-  lib,
-  pkgs,
-  config,
-  kixlib,
-  ...
-}:
+{ lib, config, kixlib, kixlib', cfg, labels, ... }:
 
 let
-  cfg = config.services.valkey;
 
   # --- Naming helpers ---
   # Helm uses "release-name-valkey" as the base name. We just use "valkey".
@@ -838,9 +820,8 @@ let
     # Optional: PDB — sentinel gets one PDB, replication gets a different one
     { name = "valkey-pdb"; resource = sentinelPdb; enable = cfg.pdb.enabled && cfg.sentinel.enabled; }
     { name = "valkey-replica-pdb"; resource = replicaPdb; enable = cfg.pdb.enabled && !cfg.sentinel.enabled; }
-    # Optional: monitoring — per-chart ServiceMonitor only when cross-cutting monitoring is off
-    { name = "valkey-servicemonitor"; resource = serviceMonitor;
-      enable = cfg.metrics.enabled && cfg.metrics.serviceMonitor.enabled && !config.monitoring.enabled; }
+    # Per-chart ServiceMonitor removed — monitoring module is the sole creator.
+    # serviceMonitor.enabled now gates the monitoring.targets declaration in extraConfig.
     { name = "valkey-podmonitor"; resource = podMonitor;
       enable = cfg.metrics.enabled && cfg.metrics.podMonitor.enabled; }
     { name = "valkey-prometheusrule"; resource = prometheusRule;
@@ -851,15 +832,11 @@ let
 
 in
 {
-  config = {
-    # Consume cluster-wide DNS domain via mkDefault so per-chart override still wins.
-    services.valkey.clusterDomain = lib.mkDefault config.cluster.domain;
+  inherit manifestList;
 
-    # --- Level 2: service registry ---
-    # Advertise our endpoints. Mode-aware: sentinel mode exposes a single service
-    # (clients use sentinel protocol to discover the current primary), while
-    # replication mode exposes separate primary/replica services.
-    registry.valkey = lib.mkIf cfg.enable {
+  extraConfig = {
+    # Level 2: service registry
+    registry.valkey = {
       endpoints = (if cfg.sentinel.enabled then {
         primary = {
           host = fqdn fullname;
@@ -894,32 +871,24 @@ in
       };
     };
 
-    # --- Level 3: monitoring target ---
-    # Declare our metrics endpoint for the cross-cutting monitoring module.
-    monitoring.targets.valkey = lib.mkIf (cfg.enable && cfg.metrics.enabled) {
+    # Level 3: monitoring target
+    # metrics.serviceMonitor.enabled gates the target declaration — monitoring
+    # module is the sole creator of ServiceMonitors.
+    monitoring.targets.valkey = lib.mkIf (cfg.metrics.enabled && cfg.metrics.serviceMonitor.enabled) {
       serviceName = "${fullname}-metrics";
       namespace = cfg.namespace;
       portName = "http-metrics";
-      # null defers to monitoring.defaultInterval set by the cross-cutting module
       interval = null;
       selector = labels.selector // { "app.kubernetes.io/component" = "metrics"; };
     };
 
-    # --- Level 3: network policy declaration ---
-    networkPolicies.services.valkey = lib.mkIf cfg.enable {
+    # Level 3: network policy declaration
+    networkPolicies.services.valkey = {
       namespace = cfg.namespace;
       podSelector = labels.selector;
       ingressPorts = [ 6379 ] ++ lib.optionals cfg.sentinel.enabled [ 26379 ]
         ++ lib.optionals cfg.metrics.enabled [ 9121 ];
       egressTo = [];
     };
-
-    # Build manifests from the declarative list — filter by enable, then serialize.
-    manifests = lib.optionalAttrs cfg.enable (
-      lib.listToAttrs (
-        map (r: lib.nameValuePair r.name (kixlib'.mkManifest r.resource))
-        (builtins.filter (r: r.enable) manifestList)
-      )
-    );
   };
 }

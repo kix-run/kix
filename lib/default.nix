@@ -10,14 +10,14 @@
 #    - Names change on any Nix expression change, orphaning old resources
 #    - kubectl debugging becomes impossible
 #    We now use `resourceName` to derive human-readable names from metadata.
-#    Store path hashes can still appear in annotations for traceability.
+#    Store path hashes could still appear in annotations for traceability.
 #
 # 2. RESOURCES AS ATTRSETS (not derivations)
 #    All mk* builders return plain attrsets, not store derivations. Only
 #    `mkManifest` serializes to a store path. This means you can always pipe
 #    a resource through further transformations. The old `rbac.bind` returned
-#    a derivation directly which blocked composition — replaced by
-#    `rbac.mkClusterRoleBinding` which returns an attrset.
+#    a derivation directly which blocked composition — all mk* builders
+#    now return attrsets.
 #
 # 3. ONE MANIFEST PER RESOURCE
 #    Each resource should be a separate entry in config.manifests, not bundled
@@ -35,15 +35,20 @@
 #    in the selector, rolling updates break because the new ReplicaSet has a different
 #    selector than the old one. The old code copied ALL template labels into selectors.
 #
-# 6. removeNulls STRIPS EMPTY COLLECTIONS (known issue)
+# 6. RBAC BATCH GENERATION
+#    `rbac.mkRoleSet` creates multiple roles and their bindings in one call,
+#    eliminating the repeated subjects/binding boilerplate. Returns
+#    { roles, bindings, toManifestList } — the last is a convenience function
+#    for generating manifestList entries. Subject helpers (`rbac.subjects.sa`,
+#    `rbac.subjects.group`) further reduce boilerplate.
+#
+# 7. removeNulls STRIPS EMPTY COLLECTIONS (known issue)
 #    See inline comment. Kubernetes distinguishes absent vs empty in some cases.
 #    The original kix repo had 5 different removeNulls implementations trying to
 #    solve this — we've settled on one for now with a documented workaround.
 #
-# MISSING RESOURCE TYPES (add as needed during chart migrations):
-#   workload: DaemonSet, CronJob
-#   networking: Ingress
-#   config: Secret
+# All common resource types are now covered. Add more as needed during
+# chart migrations (e.g., PersistentVolumeClaim, StorageClass).
 
 {
   pkgs,
@@ -140,17 +145,22 @@ lib.makeExtensible (self: {
 
   listPreprocessors = map (fn: fn.__name or "<anonymous>") self._preprocessors;
 
+  # Marker that preserves a value through removeNulls.
+  #
+  # Use `kixlib.explicit []` or `kixlib.explicit {}` when you need Kubernetes
+  # to see an explicit empty value rather than an absent field. For example,
+  # `tolerations: []` means "tolerate nothing" while absent `tolerations` means
+  # "use defaults."
+  #
+  # Example: `spec.tolerations = kixlib.explicit [];`
+  # This produces `"tolerations": []` in the JSON output.
+  explicit = value: { __kixExplicit = true; __value = value; };
+
   # Strips null values recursively from an attrset before JSON serialization.
   #
-  # KNOWN ISSUE: also strips empty lists [] and empty attrsets {}. Kubernetes
-  # distinguishes between absent and explicitly-empty in some cases (e.g.,
-  # `tolerations: []` vs no `tolerations` field). The original kix repo had
-  # 5 different implementations of this function trying to solve the problem.
-  #
-  # TODO: introduce a marker value like `kixlib.explicit []` that survives
-  # removeNulls, so users can preserve intentional empties. For now, if you
-  # need an explicit empty list, set it via a preprocessor or raw merge on
-  # the resource after construction.
+  # Also strips empty lists [] and empty attrsets {} UNLESS wrapped in
+  # `kixlib.explicit`. Kubernetes distinguishes absent vs empty in some cases
+  # (e.g., `tolerations: []` vs no `tolerations` field).
   removeNulls =
     attrs:
     builtins.mapAttrs
@@ -158,7 +168,10 @@ lib.makeExtensible (self: {
         _: v:
         let
           cleanValue =
-            if builtins.isAttrs v && !(lib.isDerivation v) && !(v ? type) then
+            # Unwrap explicit markers — these survive removeNulls.
+            if builtins.isAttrs v && v ? __kixExplicit then
+              v.__value
+            else if builtins.isAttrs v && !(lib.isDerivation v) && !(v ? type) then
               self.removeNulls v
             else if builtins.isList v then
               builtins.map (x: if builtins.isAttrs x && !(lib.isDerivation x) then self.removeNulls x else x) v
@@ -171,9 +184,13 @@ lib.makeExtensible (self: {
         lib.filterAttrs (
           _: v:
           v != null
-          && !(
-            (builtins.isAttrs v && !(lib.isDerivation v) && !(v ? type) && v == { })
-            || (builtins.isList v && v == [ ])
+          # Explicit markers always pass through — they represent intentional empties.
+          && (
+            (builtins.isAttrs v && v ? __kixExplicit)
+            || !(
+              (builtins.isAttrs v && !(lib.isDerivation v) && !(v ? type) && v == { })
+              || (builtins.isList v && v == [ ])
+            )
           )
         ) attrs
       );
@@ -200,12 +217,23 @@ lib.makeExtensible (self: {
   # This is the only function that produces a derivation — all other builders
   # return plain attrsets so they can be composed further.
   #
-  # The pipeline: set name → strip nulls → run preprocessors → strip nulls again → toJSON
+  # The pipeline: validate → set name → strip nulls → run preprocessors → strip nulls again → toJSON
   # (second removeNulls catches any nulls introduced by preprocessors)
+  #
+  # Phase 6 validation: every resource MUST have kind, apiVersion, and a resolvable name.
+  # These catch structural bugs at build time rather than at deploy time.
   mkManifest =
     resource:
+    assert resource ? kind
+      || throw "mkManifest: resource missing 'kind' — did you forget to use a mk* builder?";
+    assert resource ? apiVersion
+      || throw "mkManifest: resource missing 'apiVersion'";
     let
       name = self.resourceName resource;
+    in
+    assert name != "unnamed"
+      || throw "mkManifest: resource of kind ${resource.kind} has no name — set metadata.name or use withMetadata";
+    let
       namedResource = lib.recursiveUpdate resource {
         metadata = (resource.metadata or { }) // {
           name = name;
@@ -233,26 +261,6 @@ lib.makeExtensible (self: {
     // {
       inherit apiVersion kind;
       metadata = lib.recursiveUpdate self._defaultMetadata metadata;
-    };
-
-  # Track inter-resource dependencies via annotations.
-  # The dependency value is a store path pointing to the depended-on resource's
-  # JSON derivation. This enables the Nix store's reference graph to capture
-  # the full deployment dependency tree (e.g., `nix-store --query --requisites`).
-  addDependency =
-    drv: resource:
-    let
-      currentAnnotations = resource.metadata.annotations or { };
-      currentDeps = currentAnnotations."build.kix.dev/dependencies" or "";
-      newDeps = if currentDeps == "" then toString drv else "${currentDeps},${toString drv}";
-      newAnnotations = currentAnnotations // {
-        "build.kix.dev/dependencies" = newDeps;
-      };
-    in
-    lib.recursiveUpdate resource {
-      metadata = (resource.metadata or { }) // {
-        annotations = newAnnotations;
-      };
     };
 
   rbac = {
@@ -341,13 +349,6 @@ lib.makeExtensible (self: {
         subjects = if subjects != null then subjects else autoSubjects;
       };
 
-    # DEPRECATED: use mkClusterRoleBinding for composability.
-    # This convenience function creates and immediately serializes a binding.
-    # Kept for backward compatibility with existing kix modules.
-    bind =
-      clusterRole: serviceAccount:
-      self.mkManifest (self.rbac.mkClusterRoleBinding clusterRole serviceAccount);
-
     # Creates a namespace-scoped Role.
     #
     # Unlike ClusterRole, Roles keep the namespace from withMetadata (or explicit
@@ -435,20 +436,110 @@ lib.makeExtensible (self: {
         metadata = metadata;
         inherit imagePullSecrets automountServiceAccountToken;
       };
+
+    # --- Subject helpers ---
+    # Convenience constructors for the `subjects` field in role bindings.
+    # Eliminates the repeated `[{ kind = "ServiceAccount"; name = ...; namespace = ...; }]`
+    # pattern that appears ~15 times in cert-manager alone.
+    subjects = {
+      sa = { name, namespace ? "default" }: [{
+        kind = "ServiceAccount";
+        inherit name namespace;
+      }];
+      group = name: [{
+        kind = "Group";
+        inherit name;
+        apiGroup = "rbac.authorization.k8s.io";
+      }];
+    };
+
+    # --- Batch role + binding generation ---
+    # Creates multiple roles and their bindings in one call. Dramatically reduces
+    # RBAC boilerplate for charts like cert-manager that have 8+ ClusterRoles all
+    # bound to the same ServiceAccount.
+    #
+    # Returns { roles, bindings, toManifestList }:
+    #   - roles: attrset of name → role resource
+    #   - bindings: attrset of name → binding resource
+    #   - toManifestList: function (enable) → list of manifestList entries
+    #
+    # Example:
+    #   controllerRbac = kixlib'.rbac.mkRoleSet {
+    #     subjects = kixlib.rbac.subjects.sa { name = "cert-manager"; namespace = cfg.namespace; };
+    #     roles = {
+    #       "cert-manager-controller-issuers" = { rules = [ ... ]; };
+    #       "cert-manager-controller-certificates" = { rules = [ ... ]; };
+    #     };
+    #   };
+    #   # In manifestList: controllerRbac.toManifestList cfg.rbac.create
+    mkRoleSet =
+      {
+        roles,           # attrset: name → { rules, metadata?, ... }
+        subjects,        # list of subject entries (use rbac.subjects.sa etc.)
+        scope ? "cluster", # "cluster" for ClusterRole/Binding, "namespace" for Role/Binding
+        metadata ? {},   # base metadata merged into all roles and bindings
+      }:
+      let
+        mkRole = if scope == "cluster" then self.rbac.mkClusterRole else self.rbac.mkRole;
+        mkBinding = if scope == "cluster"
+          then (role: self.mkResource {
+            apiVersion = "rbac.authorization.k8s.io/v1";
+            kind = "ClusterRoleBinding";
+            metadata = (metadata // { namespace = null; }) // { name = self.resourceName role; };
+            roleRef = {
+              apiGroup = "rbac.authorization.k8s.io";
+              kind = role.kind;
+              name = self.resourceName role;
+            };
+            inherit subjects;
+          })
+          else (role: self.mkResource {
+            apiVersion = "rbac.authorization.k8s.io/v1";
+            kind = "RoleBinding";
+            metadata = metadata // { name = self.resourceName role; };
+            roleRef = {
+              apiGroup = "rbac.authorization.k8s.io";
+              kind = role.kind;
+              name = self.resourceName role;
+            };
+            inherit subjects;
+          });
+
+        builtRoles = lib.mapAttrs (name: args:
+          mkRole ((args // { metadata = (metadata // (args.metadata or {})) // { name = name; }; }))
+        ) roles;
+
+        builtBindings = lib.mapAttrs (_: role: mkBinding role) builtRoles;
+      in {
+        roles = builtRoles;
+        bindings = builtBindings;
+        # Convenience: flatten roles + bindings into a manifestList fragment.
+        # Uses the role name as prefix for both role and binding entries.
+        toManifestList = enable:
+          (lib.mapAttrsToList (n: role:
+            { name = n; resource = role; inherit enable; }
+          ) builtRoles)
+          ++ (lib.mapAttrsToList (n: binding:
+            { name = "${n}-binding"; resource = binding; inherit enable; }
+          ) builtBindings);
+      };
   };
 
   pod = {
     # Wraps containers + volumes into a pod template spec.
-    # Currently a passthrough — returns its arguments unchanged.
-    # TODO: in the future this could merge default pod-level metadata,
-    # validate the spec structure, or inject common settings like
-    # terminationGracePeriodSeconds, securityContext, etc.
+    # Currently a passthrough with validation — returns its arguments unchanged
+    # after asserting the spec has at least one container.
+    #
+    # Phase 6 validation: spec.containers must be non-empty. A pod template
+    # without containers is always a bug.
     mkPodTemplate =
       args@{
         metadata ? { },
         spec,
         ...
       }:
+      assert (spec.containers or []) != []
+        || throw "mkPodTemplate: spec.containers must be non-empty";
       args;
 
     # Creates a container spec.
@@ -458,12 +549,18 @@ lib.makeExtensible (self: {
     # and re-assembled them, which silently dropped any field not in the explicit
     # list. This meant lifecycle hooks, startupProbes, envFrom, workingDir, and
     # other valid container fields were silently lost. Now everything passes through.
+    #
+    # Phase 6 validation: name and image must be non-empty strings.
     mkContainer =
       {
         name,
         image,
         ...
       }@args:
+      assert name != ""
+        || throw "mkContainer: name must be non-empty";
+      assert image != ""
+        || throw "mkContainer: image must be non-empty";
       args;
 
     withVolumeMount =
@@ -499,12 +596,15 @@ lib.makeExtensible (self: {
   };
 
   networking = {
+    # Phase 6 validation: spec.ports must be non-empty.
     mkService =
       {
         metadata ? { },
         spec,
         ...
       }:
+      assert (spec.ports or []) != []
+        || throw "mkService: spec.ports must be non-empty";
       self.mkResource {
         kind = "Service";
         metadata = metadata;
@@ -536,6 +636,30 @@ lib.makeExtensible (self: {
           inherit podSelector policyTypes ingress egress;
         };
       };
+
+    # Creates an Ingress resource.
+    #
+    # networking.k8s.io/v1 Ingress with rules, tls, and ingressClassName.
+    # Phase 8: added as missing builder.
+    mkIngress =
+      {
+        rules ? [],
+        tls ? null,
+        ingressClassName ? null,
+        defaultBackend ? null,
+        metadata ? {},
+        ...
+      }:
+      assert rules != [] || defaultBackend != null
+        || throw "mkIngress: must have at least one rule or a defaultBackend";
+      self.mkResource {
+        apiVersion = "networking.k8s.io/v1";
+        kind = "Ingress";
+        inherit metadata;
+        spec = {
+          inherit rules tls ingressClassName defaultBackend;
+        };
+      };
   };
 
   workload = {
@@ -554,6 +678,7 @@ lib.makeExtensible (self: {
     #
     # If selectorLabels is not provided, falls back to template.metadata.labels
     # for backward compatibility, but this should be considered a bug in the caller.
+    # Phase 6 validation: template.spec.containers must be non-empty.
     mkDeployment =
       {
         replicas ? 1,
@@ -563,6 +688,8 @@ lib.makeExtensible (self: {
         selectorLabels ? null,
         ...
       }:
+      assert (template.spec.containers or []) != []
+        || throw "mkDeployment: template.spec.containers must be non-empty";
       self.mkResource {
         inherit metadata;
         apiVersion = "apps/v1";
@@ -584,6 +711,7 @@ lib.makeExtensible (self: {
     #
     # Added for valkey chart migration (2026-03). The Bitnami valkey chart uses
     # StatefulSets for both sentinel and non-sentinel modes.
+    # Phase 6 validation: serviceName required, containers must be non-empty.
     mkStatefulSet =
       {
         replicas ? 1,
@@ -596,6 +724,10 @@ lib.makeExtensible (self: {
         metadata ? { },
         ...
       }:
+      assert serviceName != ""
+        || throw "mkStatefulSet: serviceName is required (headless Service for pod DNS)";
+      assert (template.spec.containers or []) != []
+        || throw "mkStatefulSet: template.spec.containers must be non-empty";
       self.mkResource {
         inherit metadata;
         apiVersion = "apps/v1";
@@ -618,6 +750,7 @@ lib.makeExtensible (self: {
     #
     # Added for cert-manager migration (2026-03). Cert-manager uses a Job for
     # startup API check — verifies the API server has the CRDs installed.
+    # Phase 6 validation: template.spec.containers must be non-empty.
     mkJob =
       {
         template,
@@ -627,12 +760,67 @@ lib.makeExtensible (self: {
         metadata ? { },
         ...
       }:
+      assert (template.spec.containers or []) != []
+        || throw "mkJob: template.spec.containers must be non-empty";
       self.mkResource {
         apiVersion = "batch/v1";
         kind = "Job";
         inherit metadata;
         spec = {
           inherit template backoffLimit completions parallelism;
+        };
+      };
+
+    # Creates a DaemonSet resource.
+    #
+    # Like Deployment but runs exactly one pod per node (or per matching node).
+    # No replicas — scheduling is controlled by nodeSelector/tolerations.
+    # Phase 8: added as missing builder.
+    mkDaemonSet =
+      {
+        template,
+        selectorLabels ? null,
+        updateStrategy ? null,
+        metadata ? { },
+        ...
+      }:
+      assert (template.spec.containers or []) != []
+        || throw "mkDaemonSet: template.spec.containers must be non-empty";
+      self.mkResource {
+        inherit metadata;
+        apiVersion = "apps/v1";
+        kind = "DaemonSet";
+        spec = {
+          inherit template updateStrategy;
+          selector.matchLabels =
+            if selectorLabels != null then selectorLabels
+            else template.metadata.labels;
+        };
+      };
+
+    # Creates a CronJob resource.
+    #
+    # Runs Jobs on a cron schedule. The `jobTemplate` contains the Job spec
+    # (which itself contains a pod template).
+    # Phase 8: added as missing builder.
+    mkCronJob =
+      {
+        schedule,
+        jobTemplate,
+        concurrencyPolicy ? null,
+        successfulJobsHistoryLimit ? null,
+        failedJobsHistoryLimit ? null,
+        suspend ? null,
+        metadata ? { },
+        ...
+      }:
+      self.mkResource {
+        apiVersion = "batch/v1";
+        kind = "CronJob";
+        inherit metadata;
+        spec = {
+          inherit schedule jobTemplate concurrencyPolicy
+            successfulJobsHistoryLimit failedJobsHistoryLimit suspend;
         };
       };
 
@@ -664,8 +852,7 @@ lib.makeExtensible (self: {
       serviceArgs: deployment:
       self.networking.mkService (
         lib.recursiveUpdate serviceArgs { spec.selector = deployment.spec.selector.matchLabels; }
-      )
-      |> self.addDependency (self.mkManifest deployment);
+      );
   };
 
   # HorizontalPodAutoscaler for autoscaling workloads based on metrics.
@@ -859,4 +1046,154 @@ lib.makeExtensible (self: {
         };
       };
   };
+
+  # Secret builder — v1 Secret with data, stringData, and type.
+  # Phase 8: added as missing builder.
+  #
+  # Use `stringData` for plaintext values (K8s base64-encodes them automatically).
+  # Use `data` for pre-encoded values. `type` defaults to "Opaque".
+  secret = {
+    mkSecret =
+      {
+        data ? null,
+        stringData ? null,
+        type ? "Opaque",
+        immutable ? null,
+        metadata ? {},
+        ...
+      }:
+      assert data != null || stringData != null
+        || throw "mkSecret: must provide 'data' or 'stringData'";
+      self.mkResource {
+        kind = "Secret";
+        inherit metadata data stringData type immutable;
+      };
+  };
+
+  # --- mkChartModule: the contract for chart modules ---
+  #
+  # Every chart module follows the same pattern:
+  #   1. Declare options under services.<name> (+ enable/namespace/clusterDomain)
+  #   2. Create kixlib' with chart metadata
+  #   3. Build resources, serialize via manifestList
+  #   4. Wire registry, monitoring, networkPolicies into config
+  #   5. Gate everything on cfg.enable
+  #
+  # mkChartModule formalizes this pattern as a contract. Charts provide:
+  #   - chartOptions: function returning chart-specific option declarations
+  #   - resources: function returning manifestList + extraConfig
+  #
+  # mkChartModule handles the mechanical parts:
+  #   - Adding enable/namespace/clusterDomain options (no more `// opts.mkChartOptions`)
+  #   - Creating kixlib' and labels
+  #   - Wiring clusterDomain default from cluster.domain
+  #   - Gating all config on cfg.enable
+  #   - Serializing manifestList to config.manifests
+  #   - Asserting manifest name uniqueness within the chart
+  #
+  # Multi-component handling: The resources function receives both kixlib (unadorned)
+  # and kixlib' (chart-scoped). Multi-component charts create additional label sets
+  # and kixlib instances inside the resources function. Individual manifestList entries
+  # can carry their own `kixlib` attribute for component-scoped serialization.
+  #
+  # Usage:
+  #   # pkgs/coredns/default.nix
+  #   { lib, pkgs, config, kixlib, ... }:
+  #   kixlib.mkChartModule {
+  #     name = "coredns";
+  #     inherit lib pkgs config kixlib;
+  #     chartOptions = import ./options.nix;
+  #     resources = import ./resources.nix;
+  #   }
+  mkChartModule =
+    {
+      name,
+      lib,
+      pkgs,
+      config,
+      kixlib,
+
+      # Function: { lib, kixlib, opts } -> attrset of option declarations.
+      # Returns chart-specific options only — enable/namespace/clusterDomain
+      # are added automatically by mkChartModule.
+      chartOptions,
+
+      # Function: { lib, pkgs, config, kixlib, kixlib', cfg, labels } -> {
+      #   manifestList: list of { name, resource, enable, kixlib? }
+      #   extraConfig: attrset merged into module config (registry, monitoring, etc.)
+      # }
+      resources,
+    }:
+    let
+      opts = kixlib.options;
+      cfg = config.services.${name};
+
+      # Standard label hierarchy — charts can extend via their resources function.
+      chartLabels = kixlib.mkLabels {
+        chart = name;
+        clusterLabels = config.cluster.labels;
+      };
+
+      # Chart-scoped kixlib with default metadata (namespace, labels, name).
+      chartKixlib = kixlib.withMetadata {
+        namespace = cfg.namespace;
+        labels = chartLabels.all;
+        inherit name;
+      };
+
+      # Evaluate the resources function.
+      result = resources {
+        inherit lib pkgs config kixlib cfg;
+        kixlib' = chartKixlib;
+        labels = chartLabels;
+      };
+
+      # Assert no duplicate names in manifestList.
+      # Duplicates would silently overwrite each other in listToAttrs.
+      enabledManifests = builtins.filter (r: r.enable) result.manifestList;
+      manifestNames = map (r: r.name) enabledManifests;
+      uniqueNames = lib.unique manifestNames;
+      hasDuplicates = builtins.length manifestNames != builtins.length uniqueNames;
+
+      # Serialize manifestList → config.manifests attrset.
+      # Each entry uses its own kixlib if provided (for multi-component charts
+      # like CoreDNS autoscaler), falling back to the chart-scoped kixlib'.
+      manifests =
+        assert !hasDuplicates
+          || throw "mkChartModule(${name}): duplicate manifest names: ${builtins.toJSON manifestNames}";
+        lib.listToAttrs (
+          map (r: lib.nameValuePair r.name ((r.kixlib or chartKixlib).mkManifest r.resource))
+          enabledManifests
+        );
+    in
+    {
+      options.services.${name} =
+        (chartOptions { inherit lib kixlib opts; })
+        // {
+          enable = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = "Enable ${name}.";
+          };
+          namespace = lib.mkOption {
+            type = lib.types.str;
+            default = "default";
+            description = "Kubernetes namespace for ${name} resources.";
+          };
+          clusterDomain = lib.mkOption {
+            type = lib.types.str;
+            default = "cluster.local";
+            description = "Kubernetes cluster domain for DNS resolution.";
+          };
+        };
+
+      config = lib.mkIf cfg.enable (
+        {
+          # Consume cluster-wide domain — per-chart override still wins.
+          services.${name}.clusterDomain = lib.mkDefault config.cluster.domain;
+          inherit manifests;
+        }
+        // (result.extraConfig or {})
+      );
+    };
 })

@@ -1,4 +1,4 @@
-# clusters/example.nix — Example cluster: coredns + valkey with sentinel.
+# clusters/example.nix — Example cluster: coredns + valkey + cert-manager.
 #
 # This is what "declarative cluster state" looks like in kixpkgs.
 # One file declares what runs in your cluster. Services get their own
@@ -33,8 +33,14 @@
     namespace = "cache";
     sentinel.enabled = true;
     metrics.enabled = true;
+    metrics.serviceMonitor.enabled = true;
     # Auth secret must exist in the target cluster — kix never generates secrets.
     auth.existingSecret = "valkey-auth";
+  };
+
+  services.cert-manager = {
+    enable = true;
+    namespace = "cert-manager";
   };
 
   # --- Cross-cutting concerns ---
