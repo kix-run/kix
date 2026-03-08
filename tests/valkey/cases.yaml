@@ -9,3 +9,11 @@ cases:
     values: sentinel.yaml
   valkey-full:
     values: full.yaml
+  valkey-podmonitor:
+    values: podmonitor.yaml
+  valkey-prometheusrule:
+    values: prometheusrule.yaml
+  valkey-hpa:
+    values: hpa.yaml
+  valkey-hpa-sentinel:
+    values: hpa-sentinel.yaml

@@ -127,6 +127,59 @@ in
       }];
     };
 
+    # Prometheus monitoring options — mirrors Helm's prometheus.service and
+    # prometheus.monitor values. Both disabled by default (matching Helm).
+    prometheus = lib.mkOption {
+      type = types.submodule {
+        options = {
+          service = lib.mkOption {
+            type = types.submodule {
+              options = {
+                enabled = lib.mkOption {
+                  type = types.bool;
+                  default = false;
+                  description = "Create a dedicated metrics Service exposing port 9153.";
+                };
+                annotations = lib.mkOption {
+                  type = types.attrsOf types.str;
+                  default = {
+                    "prometheus.io/scrape" = "true";
+                    "prometheus.io/port" = "9153";
+                  };
+                  description = "Annotations on the metrics Service.";
+                };
+              };
+            };
+            default = { };
+          };
+          monitor = lib.mkOption {
+            type = types.submodule {
+              options = {
+                enabled = lib.mkOption {
+                  type = types.bool;
+                  default = false;
+                  description = "Create a ServiceMonitor targeting the metrics Service.";
+                };
+                interval = lib.mkOption {
+                  type = types.nullOr types.str;
+                  default = null;
+                  description = "Scrape interval. Null uses Prometheus default.";
+                };
+              };
+            };
+            default = { };
+          };
+        };
+      };
+      default = { };
+      description = ''
+        Prometheus monitoring configuration. Requires the prometheus plugin
+        to be configured in servers[].plugins for metrics to be available.
+        prometheus.service creates a dedicated Service for port 9153.
+        prometheus.monitor creates a ServiceMonitor (requires Prometheus Operator).
+      '';
+    };
+
     zoneFiles = lib.mkOption {
       type = types.listOf (types.submodule {
         options = {
@@ -158,6 +211,84 @@ in
           timeoutSeconds = lib.mkOption { type = types.int; default = 5; };
           failureThreshold = lib.mkOption { type = types.int; default = 5; };
           successThreshold = lib.mkOption { type = types.int; default = 1; };
+        };
+      };
+      default = { };
+    };
+
+    # PodDisruptionBudget — mirrors Helm's podDisruptionBudget value.
+    # Helm creates a PDB when this is non-empty (truthy in Go templates).
+    podDisruptionBudget = lib.mkOption {
+      type = types.submodule {
+        options = {
+          minAvailable = lib.mkOption {
+            type = types.nullOr (types.either types.int types.str);
+            default = null;
+            description = "Minimum available pods. Can be int or percentage string.";
+          };
+          maxUnavailable = lib.mkOption {
+            type = types.nullOr (types.either types.int types.str);
+            default = null;
+            description = "Maximum unavailable pods. Can be int or percentage string.";
+          };
+        };
+      };
+      default = { };
+      description = "PodDisruptionBudget config. PDB is created when minAvailable or maxUnavailable is set.";
+    };
+
+    # HorizontalPodAutoscaler — mirrors Helm's hpa values.
+    # Mutually exclusive with autoscaler (cluster-proportional-autoscaler).
+    # When enabled, the Deployment omits replicas (letting HPA control it).
+    hpa = lib.mkOption {
+      type = types.submodule {
+        options = {
+          enabled = lib.mkOption { type = types.bool; default = false; };
+          minReplicas = lib.mkOption { type = types.int; default = 1; };
+          maxReplicas = lib.mkOption { type = types.int; default = 5; };
+          metrics = lib.mkOption {
+            type = types.listOf types.anything;
+            default = [];
+            description = "HPA metrics spec — passed through directly to spec.metrics.";
+          };
+        };
+      };
+      default = { };
+    };
+
+    # Cluster-proportional autoscaler — mirrors Helm's autoscaler values.
+    # Deploys a sidecar that scales CoreDNS proportionally to cluster size.
+    # Mutually exclusive with hpa.
+    autoscaler = lib.mkOption {
+      type = types.submodule {
+        options = {
+          enabled = lib.mkOption { type = types.bool; default = false; };
+          image = lib.mkOption {
+            type = types.submodule {
+              options = {
+                repository = lib.mkOption { type = types.str; default = "registry.k8s.io/cpa/cluster-proportional-autoscaler"; };
+                tag = lib.mkOption { type = types.str; default = "v1.9.0"; };
+                pullPolicy = lib.mkOption { type = types.str; default = "IfNotPresent"; };
+              };
+            };
+            default = { };
+          };
+          resources = lib.mkOption {
+            type = types.submodule {
+              options = {
+                limits = lib.mkOption { type = types.attrsOf types.str; default = { cpu = "20m"; memory = "10Mi"; }; };
+                requests = lib.mkOption { type = types.attrsOf types.str; default = { cpu = "20m"; memory = "10Mi"; }; };
+              };
+            };
+            default = { };
+          };
+          # Scaling config — passed as JSON to the autoscaler ConfigMap.
+          coresPerReplica = lib.mkOption { type = types.int; default = 256; };
+          nodesPerReplica = lib.mkOption { type = types.int; default = 16; };
+          preventSinglePointFailure = lib.mkOption { type = types.bool; default = true; };
+          min = lib.mkOption { type = types.int; default = 0; };
+          max = lib.mkOption { type = types.int; default = 0; };
+          includeUnschedulableNodes = lib.mkOption { type = types.bool; default = false; };
         };
       };
       default = { };

@@ -1,0 +1,7 @@
+# Prometheus monitoring — enables metrics Service and ServiceMonitor.
+# Flake package: coredns-prometheus
+prometheus:
+  service:
+    enabled: true
+  monitor:
+    enabled: true

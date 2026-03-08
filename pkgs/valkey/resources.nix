@@ -730,6 +730,71 @@ let
     minAvailable = cfg.pdb.minAvailable;
   };
 
+  # --- HPA ---
+  # In replication mode, targets the replica StatefulSet.
+  # In sentinel mode, targets the node StatefulSet.
+  replicaHpa = kixlib'.autoscaling.mkHorizontalPodAutoscaler {
+    metadata = {
+      name = if cfg.sentinel.enabled then "${fullname}-node" else "${fullname}-replicas";
+      labels = allLabels // { "app.kubernetes.io/component" = "replica"; };
+    };
+    scaleTargetRef = {
+      apiVersion = "apps/v1";
+      kind = "StatefulSet";
+      name = if cfg.sentinel.enabled then "${fullname}-node" else "${fullname}-replicas";
+    };
+    inherit (cfg.replica.autoscaling.hpa) minReplicas maxReplicas;
+    metrics =
+      lib.optional (cfg.replica.autoscaling.hpa.targetCPU != null) {
+        type = "Resource";
+        resource = {
+          name = "cpu";
+          target = {
+            type = "Utilization";
+            averageUtilization = cfg.replica.autoscaling.hpa.targetCPU;
+          };
+        };
+      }
+      ++ lib.optional (cfg.replica.autoscaling.hpa.targetMemory != null) {
+        type = "Resource";
+        resource = {
+          name = "memory";
+          target = {
+            type = "Utilization";
+            averageUtilization = cfg.replica.autoscaling.hpa.targetMemory;
+          };
+        };
+      };
+  };
+
+  # PodMonitor — targets pods directly (no Service needed).
+  podMonitor = kixlib'.monitoring.mkPodMonitor {
+    metadata = {
+      name = fullname;
+      namespace = cfg.namespace;
+      labels = allLabels;
+    };
+    podMetricsEndpoints = [{
+      port = "metrics";
+      interval = cfg.metrics.podMonitor.interval;
+    }];
+    namespaceSelector.matchNames = [ cfg.namespace ];
+    selector.matchLabels = selectorLabels;
+  };
+
+  # PrometheusRule — alerting/recording rules for Prometheus.
+  prometheusRule = kixlib'.monitoring.mkPrometheusRule {
+    metadata = {
+      name = fullname;
+      namespace = cfg.namespace;
+      labels = allLabels;
+    };
+    groups = [{
+      name = fullname;
+      rules = cfg.metrics.prometheusRule.rules;
+    }];
+  };
+
   # ServiceMonitor
   serviceMonitor = kixlib'.monitoring.mkServiceMonitor {
     metadata = {
@@ -849,6 +914,15 @@ in
       # duplicates by only creating our own when monitoring.enabled = false.
       // lib.optionalAttrs (cfg.metrics.enabled && cfg.metrics.serviceMonitor.enabled && !config.monitoring.enabled) {
         "valkey-servicemonitor" = kixlib'.mkManifest serviceMonitor;
+      }
+      // lib.optionalAttrs (cfg.metrics.enabled && cfg.metrics.podMonitor.enabled) {
+        "valkey-podmonitor" = kixlib'.mkManifest podMonitor;
+      }
+      // lib.optionalAttrs (cfg.metrics.enabled && cfg.metrics.prometheusRule.enabled) {
+        "valkey-prometheusrule" = kixlib'.mkManifest prometheusRule;
+      }
+      // lib.optionalAttrs cfg.replica.autoscaling.hpa.enabled {
+        "valkey-hpa" = kixlib'.mkManifest replicaHpa;
       }
     );
   };

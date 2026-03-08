@@ -24,6 +24,8 @@
     enable = true;
     namespace = "kube-system";
     replicaCount = 2;
+    prometheus.service.enabled = true;
+    prometheus.monitor.enabled = true;
   };
 
   services.valkey = {

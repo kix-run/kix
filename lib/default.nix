@@ -476,6 +476,29 @@ lib.makeExtensible (self: {
       |> self.addDependency (self.mkManifest deployment);
   };
 
+  # HorizontalPodAutoscaler for autoscaling workloads based on metrics.
+  #
+  # Added for CoreDNS chart migration (2026-03). Uses autoscaling/v2 API.
+  autoscaling = {
+    mkHorizontalPodAutoscaler =
+      {
+        scaleTargetRef,
+        minReplicas ? 1,
+        maxReplicas,
+        metrics ? [],
+        metadata ? {},
+        ...
+      }:
+      self.mkResource {
+        apiVersion = "autoscaling/v2";
+        kind = "HorizontalPodAutoscaler";
+        inherit metadata;
+        spec = {
+          inherit scaleTargetRef minReplicas maxReplicas metrics;
+        };
+      };
+  };
+
   # Pod disruption budgets control how many pods can be unavailable during
   # voluntary disruptions (node drains, rolling updates, etc.).
   #
@@ -517,6 +540,46 @@ lib.makeExtensible (self: {
         metadata = metadata;
         spec = {
           inherit endpoints selector namespaceSelector;
+        };
+      };
+
+    # PodMonitor — like ServiceMonitor but targets pods directly (no Service needed).
+    # Uses podMetricsEndpoints instead of endpoints.
+    #
+    # Added for Valkey chart migration (2026-03). Valkey's Helm chart offers
+    # both ServiceMonitor and PodMonitor as monitoring options.
+    mkPodMonitor =
+      {
+        podMetricsEndpoints,
+        selector,
+        namespaceSelector ? null,
+        metadata ? {},
+        ...
+      }:
+      self.mkResource {
+        apiVersion = "monitoring.coreos.com/v1";
+        kind = "PodMonitor";
+        inherit metadata;
+        spec = {
+          inherit podMetricsEndpoints selector namespaceSelector;
+        };
+      };
+
+    # PrometheusRule — defines alerting/recording rules for Prometheus.
+    #
+    # Added for Valkey chart migration (2026-03).
+    mkPrometheusRule =
+      {
+        groups,
+        metadata ? {},
+        ...
+      }:
+      self.mkResource {
+        apiVersion = "monitoring.coreos.com/v1";
+        kind = "PrometheusRule";
+        inherit metadata;
+        spec = {
+          inherit groups;
         };
       };
   };

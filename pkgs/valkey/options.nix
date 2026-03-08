@@ -134,6 +134,26 @@ in
             };
             default = {};
           };
+          autoscaling = lib.mkOption {
+            type = types.submodule {
+              options = {
+                hpa = lib.mkOption {
+                  type = types.submodule {
+                    options = {
+                      enabled = lib.mkOption { type = types.bool; default = false; };
+                      minReplicas = lib.mkOption { type = types.int; default = 1; };
+                      maxReplicas = lib.mkOption { type = types.int; default = 11; };
+                      targetCPU = lib.mkOption { type = types.nullOr types.int; default = null; };
+                      targetMemory = lib.mkOption { type = types.nullOr types.int; default = null; };
+                    };
+                  };
+                  default = {};
+                };
+              };
+            };
+            default = {};
+            description = "Autoscaling options for replica pods.";
+          };
         };
       };
       default = {};
@@ -244,6 +264,30 @@ in
               };
             };
             default = {};
+          };
+          podMonitor = lib.mkOption {
+            type = types.submodule {
+              options = {
+                enabled = lib.mkOption { type = types.bool; default = false; };
+                interval = lib.mkOption { type = types.str; default = "30s"; };
+              };
+            };
+            default = {};
+            description = "PodMonitor targets pods directly instead of going through a Service.";
+          };
+          prometheusRule = lib.mkOption {
+            type = types.submodule {
+              options = {
+                enabled = lib.mkOption { type = types.bool; default = false; };
+                rules = lib.mkOption {
+                  type = types.listOf types.anything;
+                  default = [];
+                  description = "Alerting/recording rules passed through to spec.groups[].rules.";
+                };
+              };
+            };
+            default = {};
+            description = "PrometheusRule for alerting/recording rules.";
           };
         };
       };

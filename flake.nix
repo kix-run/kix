@@ -102,6 +102,56 @@
             services.coredns.enable = true;
           };
 
+          corednsPrometheusPkg = mkChartManifests ./pkgs/coredns {
+            services.coredns = {
+              enable = true;
+              prometheus.service.enabled = true;
+              prometheus.monitor.enabled = true;
+            };
+          };
+
+          corednsServiceaccountPkg = mkChartManifests ./pkgs/coredns {
+            services.coredns = {
+              enable = true;
+              serviceAccount.create = true;
+            };
+          };
+
+          corednsPdbPkg = mkChartManifests ./pkgs/coredns {
+            services.coredns = {
+              enable = true;
+              podDisruptionBudget.minAvailable = 1;
+            };
+          };
+
+          corednsHpaPkg = mkChartManifests ./pkgs/coredns {
+            services.coredns = {
+              enable = true;
+              hpa = {
+                enabled = true;
+                minReplicas = 2;
+                maxReplicas = 5;
+                metrics = [{
+                  type = "Resource";
+                  resource = {
+                    name = "cpu";
+                    target = {
+                      type = "Utilization";
+                      averageUtilization = 80;
+                    };
+                  };
+                }];
+              };
+            };
+          };
+
+          corednsAutoscalerPkg = mkChartManifests ./pkgs/coredns {
+            services.coredns = {
+              enable = true;
+              autoscaler.enabled = true;
+            };
+          };
+
           valkeyPkg = mkChartManifests ./pkgs/valkey {
             services.valkey.enable = true;
           };
@@ -121,6 +171,61 @@
               metrics.serviceMonitor.enabled = true;
               networkPolicy.enabled = true;
               pdb.enabled = true;
+            };
+          };
+
+          valkeyPodmonitorPkg = mkChartManifests ./pkgs/valkey {
+            services.valkey = {
+              enable = true;
+              sentinel.enabled = true;
+              metrics.enabled = true;
+              metrics.serviceMonitor.enabled = true;
+              metrics.podMonitor.enabled = true;
+              networkPolicy.enabled = true;
+            };
+          };
+
+          valkeyPrometheusrulePkg = mkChartManifests ./pkgs/valkey {
+            services.valkey = {
+              enable = true;
+              sentinel.enabled = true;
+              metrics.enabled = true;
+              metrics.serviceMonitor.enabled = true;
+              metrics.prometheusRule = {
+                enabled = true;
+                rules = [{
+                  alert = "ValkeyDown";
+                  expr = "valkey_up == 0";
+                  "for" = "5m";
+                  labels.severity = "critical";
+                }];
+              };
+              networkPolicy.enabled = true;
+            };
+          };
+
+          valkeyHpaPkg = mkChartManifests ./pkgs/valkey {
+            services.valkey = {
+              enable = true;
+              replica.autoscaling.hpa = {
+                enabled = true;
+                minReplicas = 1;
+                maxReplicas = 5;
+                targetCPU = 80;
+              };
+            };
+          };
+
+          valkeyHpaSentinelPkg = mkChartManifests ./pkgs/valkey {
+            services.valkey = {
+              enable = true;
+              sentinel.enabled = true;
+              replica.autoscaling.hpa = {
+                enabled = true;
+                minReplicas = 1;
+                maxReplicas = 5;
+                targetCPU = 80;
+              };
             };
           };
 
@@ -145,9 +250,18 @@
           # `nix build .#<name>` builds any of these.
           packages = {
             coredns = corednsPkg;
+            coredns-prometheus = corednsPrometheusPkg;
+            coredns-serviceaccount = corednsServiceaccountPkg;
+            coredns-pdb = corednsPdbPkg;
+            coredns-hpa = corednsHpaPkg;
+            coredns-autoscaler = corednsAutoscalerPkg;
             valkey = valkeyPkg;
             valkey-sentinel = valkeySentinelPkg;
             valkey-full = valkeyFullPkg;
+            valkey-podmonitor = valkeyPodmonitorPkg;
+            valkey-prometheusrule = valkeyPrometheusrulePkg;
+            valkey-hpa = valkeyHpaPkg;
+            valkey-hpa-sentinel = valkeyHpaSentinelPkg;
             cluster-example = clusterExamplePkg;
           };
 
@@ -157,13 +271,15 @@
             manifests = exampleEval.config.manifests;
 
             # Helper: validate a manifest directory against K8s API schemas.
-            # Skips CRDs (ServiceMonitor) since kubeconform doesn't have
-            # Prometheus Operator schemas built-in.
+            # Skips Prometheus Operator CRDs since kubeconform doesn't have
+            # their schemas built-in.
             schemaCheck = name: drv: pkgs.runCommand "schema-${name}" {
               nativeBuildInputs = [ pkgs.kubeconform ];
             } ''
               echo "Validating ${name}..."
-              kubeconform -strict -summary -skip ServiceMonitor ${drv}/*.json
+              kubeconform -strict -summary \
+                -ignore-missing-schemas \
+                ${drv}/*.json
               touch $out
             '';
           in {
@@ -195,13 +311,19 @@
                   (lib.attrNames manifests)
               ) registryKeys;
 
-              # Monitoring: cross-cutting module created the ServiceMonitor,
-              # per-chart one was suppressed.
+              # Monitoring: cross-cutting module created ServiceMonitors,
+              # per-chart ones were suppressed.
               assertMonitoring =
                 assert mon.targets.valkey.serviceName == "valkey-metrics";
                 assert mon.targets.valkey.portName == "http-metrics";
                 assert manifests ? "monitoring-valkey-servicemonitor";
                 assert !(manifests ? "valkey-servicemonitor");
+                assert mon.targets.coredns.serviceName == "coredns-metrics";
+                assert mon.targets.coredns.portName == "metrics";
+                assert manifests ? "monitoring-coredns-servicemonitor";
+                assert !(manifests ? "coredns-servicemonitor");
+                # Metrics Service should still exist (ServiceMonitor targets it)
+                assert manifests ? "coredns-service-metrics";
                 true;
 
             in assert assertRegistry; assert assertOwnership; assert assertMonitoring;
@@ -220,9 +342,18 @@
             # Catches invalid apiVersions, missing required fields, wrong types.
             schema-cluster-example = schemaCheck "cluster-example" clusterExamplePkg;
             schema-coredns = schemaCheck "coredns" corednsPkg;
+            schema-coredns-prometheus = schemaCheck "coredns-prometheus" corednsPrometheusPkg;
+            schema-coredns-serviceaccount = schemaCheck "coredns-serviceaccount" corednsServiceaccountPkg;
+            schema-coredns-pdb = schemaCheck "coredns-pdb" corednsPdbPkg;
+            schema-coredns-hpa = schemaCheck "coredns-hpa" corednsHpaPkg;
+            schema-coredns-autoscaler = schemaCheck "coredns-autoscaler" corednsAutoscalerPkg;
             schema-valkey = schemaCheck "valkey" valkeyPkg;
             schema-valkey-sentinel = schemaCheck "valkey-sentinel" valkeySentinelPkg;
             schema-valkey-full = schemaCheck "valkey-full" valkeyFullPkg;
+            schema-valkey-podmonitor = schemaCheck "valkey-podmonitor" valkeyPodmonitorPkg;
+            schema-valkey-prometheusrule = schemaCheck "valkey-prometheusrule" valkeyPrometheusrulePkg;
+            schema-valkey-hpa = schemaCheck "valkey-hpa" valkeyHpaPkg;
+            schema-valkey-hpa-sentinel = schemaCheck "valkey-hpa-sentinel" valkeyHpaSentinelPkg;
           };
         };
     };

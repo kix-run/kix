@@ -1,0 +1,4 @@
+# PodDisruptionBudget enabled.
+# Flake package: coredns-pdb
+podDisruptionBudget:
+  minAvailable: 1

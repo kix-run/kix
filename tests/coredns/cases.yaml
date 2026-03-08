@@ -3,3 +3,13 @@ chart-version: "1.45.0"
 
 cases:
   coredns: {}
+  coredns-prometheus:
+    values: prometheus.yaml
+  coredns-serviceaccount:
+    values: serviceaccount.yaml
+  coredns-pdb:
+    values: pdb.yaml
+  coredns-hpa:
+    values: hpa.yaml
+  coredns-autoscaler:
+    values: autoscaler.yaml

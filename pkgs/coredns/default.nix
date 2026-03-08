@@ -12,8 +12,11 @@
 #   - ConfigMap (Corefile + zone files)
 #   - Deployment
 #   - Service
+#   - Service (metrics, optional — behind prometheus.service.enabled)
+#   - ServiceMonitor (optional — behind prometheus.monitor.enabled)
 #
-# ServiceMonitor is handled via Level 3 monitoring.targets (see resources.nix).
+# When the cross-cutting monitoring module is active (monitoring.enabled = true),
+# the per-chart ServiceMonitor is suppressed in favor of the centralized one.
 
 {
   lib,

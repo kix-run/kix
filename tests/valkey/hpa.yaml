@@ -1,0 +1,9 @@
+# HPA enabled in replication mode (no sentinel).
+# Flake package: valkey-hpa
+replica:
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 1
+      maxReplicas: 5
+      targetCPU: 80
