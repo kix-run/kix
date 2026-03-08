@@ -313,6 +313,176 @@
             builtins.pathExists (./tests + "/${name}/golden")
           ) (chartPackages // { cluster-example = clusterExamplePkg; }));
 
+          # --- Cross-resource validation (Phase 9) ---
+          #
+          # Validates referential integrity across the manifest set:
+          # - ServiceAccount references resolve to SAs in the set
+          # - RoleBinding/ClusterRoleBinding roleRefs resolve to Roles/ClusterRoles
+          # - ConfigMap volume refs resolve to ConfigMaps in the set
+          # - Service selectors match at least one workload's pod template labels
+          #
+          # Only validates INTERNAL references (resources created by kix).
+          # External references (e.g., auth.existingSecret) are intentionally
+          # skipped — those are cluster-provided resources outside kix's scope.
+          #
+          # This is pure eval-time Nix — no IFD, no runtime check. Made possible
+          # by the deferred serialization design where config.manifests stores
+          # raw attrsets instead of opaque store derivations.
+          validateManifestSet = clusterName: manifests:
+            let
+              resources = lib.attrValues manifests;
+
+              # Index resources by (kind, name) for lookup.
+              byKindName = builtins.foldl' (acc: r:
+                let
+                  name = r.metadata.name or "";
+                  kind = r.kind;
+                in acc // { "${kind}:${name}" = r; }
+              ) {} resources;
+
+              hasResource = kind: name: byKindName ? "${kind}:${name}";
+
+              # --- 1. ServiceAccount references ---
+              # Extract serviceAccountName from pod templates in workloads.
+              workloadKinds = [ "Deployment" "StatefulSet" "DaemonSet" "Job" ];
+              workloads = builtins.filter (r: builtins.elem r.kind workloadKinds) resources;
+
+              # Get the pod spec from a workload (handles Job's extra nesting).
+              getPodSpec = r:
+                if r.kind == "Job"
+                then r.spec.template.spec or {}
+                else r.spec.template.spec or {};
+
+              saRefs = builtins.concatMap (r:
+                let
+                  podSpec = getPodSpec r;
+                  saName = podSpec.serviceAccountName or null;
+                in
+                if saName != null
+                then [{ workload = r.metadata.name; inherit saName; kind = r.kind; }]
+                else []
+              ) workloads;
+
+              # Only validate SA refs where the SA is created by kix (not external).
+              # A ServiceAccount exists in our set if hasResource "ServiceAccount" saName.
+              # We only flag refs where the SA name matches a chart prefix but is missing.
+              saValidation = builtins.all (ref:
+                hasResource "ServiceAccount" ref.saName
+                # Allow external SAs: if no SA with this name is expected
+                # (i.e., default SA or external), skip validation.
+                || !(builtins.any (r:
+                  r.kind == "ServiceAccount" && lib.hasPrefix (lib.removeSuffix ref.saName ref.saName) r.metadata.name
+                ) resources)
+                # Always allow "default" SA — it's created by K8s itself.
+                || ref.saName == "default"
+              ) saRefs;
+
+              # --- 2. RoleBinding/ClusterRoleBinding roleRef validation ---
+              bindingKinds = [ "RoleBinding" "ClusterRoleBinding" ];
+              bindings = builtins.filter (r: builtins.elem r.kind bindingKinds) resources;
+
+              roleRefValidation = builtins.all (binding:
+                let
+                  ref = binding.roleRef or {};
+                  refKind = ref.kind or "";
+                  refName = ref.name or "";
+                in
+                # roleRef must point to a Role/ClusterRole that exists in our set.
+                hasResource refKind refName
+                # Allow external roles (e.g., system:auth-delegator) — K8s built-in.
+                || lib.hasPrefix "system:" refName
+                # Allow admin/edit/view — K8s built-in aggregated roles.
+                || builtins.elem refName [ "admin" "edit" "view" ]
+              ) bindings;
+
+              # --- 3. ConfigMap volume references ---
+              configMapVolRefs = builtins.concatMap (r:
+                let
+                  podSpec = getPodSpec r;
+                  volumes = podSpec.volumes or [];
+                in
+                builtins.concatMap (vol:
+                  let cmName = vol.configMap.name or null;
+                  in if cmName != null
+                     then [{ workload = r.metadata.name; inherit cmName; }]
+                     else []
+                ) volumes
+              ) workloads;
+
+              configMapValidation = builtins.all (ref:
+                hasResource "ConfigMap" ref.cmName
+              ) configMapVolRefs;
+
+              # --- 4. Service selector → workload label matching ---
+              services = builtins.filter (r: r.kind == "Service") resources;
+
+              # Check that each Service's selector matches at least one
+              # workload's pod template labels.
+              selectorMatchesLabels = selector: labels:
+                builtins.all (k:
+                  (labels.${k} or null) == selector.${k}
+                ) (lib.attrNames selector);
+
+              serviceValidation = builtins.all (svc:
+                let
+                  selector = svc.spec.selector or {};
+                in
+                # Skip headless services with no selector
+                selector == {}
+                || builtins.any (w:
+                  let
+                    templateLabels = w.spec.template.metadata.labels or {};
+                  in selectorMatchesLabels selector templateLabels
+                ) workloads
+              ) services;
+
+              # --- 5. HPA scaleTargetRef validation ---
+              hpas = builtins.filter (r: r.kind == "HorizontalPodAutoscaler") resources;
+
+              hpaValidation = builtins.all (hpa:
+                let ref = hpa.spec.scaleTargetRef or {};
+                in hasResource (ref.kind or "") (ref.name or "")
+              ) hpas;
+
+              # --- 6. No duplicate (kind, namespace, name) tuples ---
+              # Two resources with the same identity would collide in the cluster.
+              resourceIds = map (r:
+                let
+                  ns = r.metadata.namespace or null;
+                  nsStr = if ns == null then "cluster-scoped" else ns;
+                  name = r.metadata.name or "unnamed";
+                in "${r.kind}/${nsStr}/${name}"
+              ) resources;
+              uniqueIds = lib.unique resourceIds;
+              noDuplicateIds = builtins.length resourceIds == builtins.length uniqueIds;
+
+              # --- 7. managed-by label on all resources ---
+              # Pure Nix replacement for the invariant-managed-by shell check.
+              managedByValidation = builtins.all (r:
+                (r.metadata.labels."app.kubernetes.io/managed-by" or "") == "kix"
+              ) resources;
+
+              # --- Collect failures for clear error messages ---
+              failures =
+                (lib.optional (!saValidation)
+                  "ServiceAccount reference validation failed")
+                ++ (lib.optional (!roleRefValidation)
+                  "RoleBinding roleRef validation failed — a binding references a Role/ClusterRole not in the manifest set")
+                ++ (lib.optional (!configMapValidation)
+                  "ConfigMap volume reference validation failed — a workload references a ConfigMap not in the manifest set")
+                ++ (lib.optional (!serviceValidation)
+                  "Service selector validation failed — a Service's selector doesn't match any workload's pod template labels")
+                ++ (lib.optional (!hpaValidation)
+                  "HPA scaleTargetRef validation failed — an HPA targets a workload not in the manifest set")
+                ++ (lib.optional (!noDuplicateIds)
+                  "Duplicate resource identity (kind/namespace/name) detected")
+                ++ (lib.optional (!managedByValidation)
+                  "managed-by label validation failed — a resource is missing app.kubernetes.io/managed-by=kix");
+            in
+            if failures == []
+            then true
+            else throw "validateManifestSet(${clusterName}): ${lib.concatStringsSep "; " failures}";
+
         in
         {
           legacyPackages = {
@@ -468,24 +638,30 @@
                 touch $out
               '';
 
-            # --- Behavioral invariant: all resources have managed-by label ---
-            invariant-managed-by = let
-              allManifests = exampleEval.config.manifests;
-            in pkgs.runCommand "invariant-managed-by" {
-              nativeBuildInputs = [ pkgs.jq ];
-            } ''
-              fail=0
-              for f in ${clusterExamplePkg}/*.json; do
-                managed=$(jq -r '.metadata.labels["app.kubernetes.io/managed-by"] // empty' "$f")
-                if [ "$managed" != "kix" ]; then
-                  echo "FAIL: $(basename "$f") missing app.kubernetes.io/managed-by=kix (got: '$managed')"
-                  fail=1
-                fi
-              done
-              [ "$fail" -eq 0 ] || exit 1
-              echo "All resources have managed-by=kix label."
-              touch $out
-            '';
+            # --- Cross-resource validation ---
+            # Pure eval-time checks over raw manifest attrsets. Validates
+            # referential integrity: SA refs, roleRefs, ConfigMap volumes,
+            # Service selectors, HPA targets, duplicate IDs, managed-by labels.
+            validate-cluster-example =
+              assert validateManifestSet "cluster-example" manifests;
+              pkgs.runCommand "validate-cluster-example" {} ''
+                echo "Cross-resource validation passed for cluster-example."
+                touch $out
+              '';
+
+            validate-cluster-full =
+              assert validateManifestSet "cluster-full" fullEval.config.manifests;
+              pkgs.runCommand "validate-cluster-full" {} ''
+                echo "Cross-resource validation passed for cluster-full."
+                touch $out
+              '';
+
+            validate-cluster-minimal =
+              assert validateManifestSet "cluster-minimal" minimalEval.config.manifests;
+              pkgs.runCommand "validate-cluster-minimal" {} ''
+                echo "Cross-resource validation passed for cluster-minimal."
+                touch $out
+              '';
           };
         };
     };
