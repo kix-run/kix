@@ -47,6 +47,16 @@
 
           kixlib = import ./lib { inherit pkgs lib; };
 
+          # Offline K8s JSON schemas for kubeconform — the Nix sandbox has no
+          # network access, so we can't let kubeconform download schemas at
+          # build time. Sparse checkout to avoid fetching the entire (~2GB) repo.
+          kubernetesSchemas = pkgs.fetchgit {
+            url = "https://github.com/yannh/kubernetes-json-schema.git";
+            rev = "5040e4b99f6b2b6fd3801c7798cce29a077acf56";
+            sparseCheckout = [ "master-standalone-strict" ];
+            hash = "sha256-izt9E+RqmGuxLLwggPsRjaSx/QXHz8ZlcluiyHawikw=";
+          };
+
           # Evaluate modules with a given config.
           #
           # `chartModules` — list of chart module paths to include
@@ -263,6 +273,7 @@
             echo "Validating ${name}..."
             kubeconform -strict -summary \
               -ignore-missing-schemas \
+              -schema-location '${kubernetesSchemas}/master-standalone-strict/{{ .ResourceKind }}{{ .KindSuffix }}.json' \
               ${drv}/*.json
             touch $out
           '';
