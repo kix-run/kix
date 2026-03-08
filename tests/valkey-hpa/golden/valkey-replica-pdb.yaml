@@ -1,0 +1,18 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  labels:
+    app.kubernetes.io/component: replica
+    app.kubernetes.io/instance: release-name
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: valkey
+    app.kubernetes.io/part-of: valkey
+  name: valkey-replicas
+  namespace: default
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: replica
+      app.kubernetes.io/instance: release-name
+      app.kubernetes.io/name: valkey

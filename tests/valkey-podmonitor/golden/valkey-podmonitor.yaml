@@ -1,0 +1,21 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  labels:
+    app.kubernetes.io/instance: release-name
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: valkey
+    app.kubernetes.io/part-of: valkey
+  name: valkey
+  namespace: default
+spec:
+  namespaceSelector:
+    matchNames:
+    - default
+  podMetricsEndpoints:
+  - interval: 30s
+    port: metrics
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: release-name
+      app.kubernetes.io/name: valkey

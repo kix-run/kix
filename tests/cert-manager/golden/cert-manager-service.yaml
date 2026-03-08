@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: cert-manager
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: release-name
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: cert-manager
+  name: cert-manager
+  namespace: default
+spec:
+  ports:
+  - name: tcp-prometheus-servicemonitor
+    port: 9402
+    protocol: TCP
+    targetPort: http-metrics
+  selector:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: release-name
+    app.kubernetes.io/name: cert-manager
+  type: ClusterIP

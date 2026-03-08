@@ -1,0 +1,206 @@
+apiVersion: v1
+data:
+  prestop-sentinel.sh: "#!/bin/bash\n\n. /opt/bitnami/scripts/libvalidations.sh\n\
+    . /opt/bitnami/scripts/libos.sh\n\nHEADLESS_SERVICE=\"valkey-headless.default.svc.cluster.local\"\
+    \n\nget_full_hostname() {\n    hostname=\"$1\"\n    full_hostname=\"${hostname}.${HEADLESS_SERVICE}\"\
+    \n    echo \"${full_hostname}\"\n}\n\nrun_sentinel_command() {\n    if is_boolean_yes\
+    \ \"$VALKEY_SENTINEL_TLS_ENABLED\"; then\n        valkey-cli -h \"$VALKEY_SERVICE\"\
+    \ -p \"$VALKEY_SENTINEL_TLS_PORT_NUMBER\" --tls --cert \"$VALKEY_SENTINEL_TLS_CERT_FILE\"\
+    \ --key \"$VALKEY_SENTINEL_TLS_KEY_FILE\" --cacert \"$VALKEY_SENTINEL_TLS_CA_FILE\"\
+    \ sentinel \"$@\"\n    else\n        valkey-cli -h \"$VALKEY_SERVICE\" -p \"$VALKEY_SENTINEL_PORT\"\
+    \ sentinel \"$@\"\n    fi\n}\nsentinel_failover_finished() {\n  VALKEY_SENTINEL_INFO=($(run_sentinel_command\
+    \ get-primary-addr-by-name \"myprimary\"))\n  VALKEY_PRIMARY_HOST=\"${VALKEY_SENTINEL_INFO[0]}\"\
+    \n  [[ \"$VALKEY_PRIMARY_HOST\" != \"$(get_full_hostname $HOSTNAME)\" ]]\n}\n\n\
+    VALKEY_SERVICE=\"valkey.default.svc.cluster.local\"\n\n# valkey-cli automatically\
+    \ consumes credentials from the REDISCLI_AUTH variable\n[[ -n \"$VALKEY_PASSWORD\"\
+    \ ]] && export REDISCLI_AUTH=\"$VALKEY_PASSWORD\"\n[[ -f \"$VALKEY_PASSWORD_FILE\"\
+    \ ]] && export REDISCLI_AUTH=\"$(< \"${VALKEY_PASSWORD_FILE}\")\"\n\nif ! sentinel_failover_finished;\
+    \ then\n    echo \"I am the primary pod and you are stopping me. Starting sentinel\
+    \ failover\"\n    if retry_while \"sentinel_failover_finished\" \"20\" 1; then\n\
+    \        echo \"Primary has been successfuly failed over to a different pod.\"\
+    \n        exit 0\n    else\n        echo \"Primary failover failed\"\n       \
+    \ exit 1\n    fi\nelse\n    exit 0\nfi\n"
+  prestop-valkey.sh: "#!/bin/bash\n\n. /opt/bitnami/scripts/libvalidations.sh\n. /opt/bitnami/scripts/libos.sh\n\
+    \nrun_valkey_command() {\n    if is_boolean_yes \"$VALKEY_TLS_ENABLED\"; then\n\
+    \        valkey-cli -h 127.0.0.1 -p \"$VALKEY_TLS_PORT\" --tls --cert \"$VALKEY_TLS_CERT_FILE\"\
+    \ --key \"$VALKEY_TLS_KEY_FILE\" --cacert \"$VALKEY_TLS_CA_FILE\" \"$@\"\n   \
+    \ else\n        valkey-cli -h 127.0.0.1 -p \"$VALKEY_PORT\" \"$@\"\n    fi\n}\n\
+    is_primary() {\n    VALKEY_ROLE=$(run_valkey_command role | head -1)\n    [[ \"\
+    $VALKEY_ROLE\" == \"master\" ]]\n}\n\nHEADLESS_SERVICE=\"valkey-headless.default.svc.cluster.local\"\
+    \n\nget_full_hostname() {\n    hostname=\"$1\"\n    full_hostname=\"${hostname}.${HEADLESS_SERVICE}\"\
+    \n    echo \"${full_hostname}\"\n}\n\nrun_sentinel_command() {\n    if is_boolean_yes\
+    \ \"$VALKEY_SENTINEL_TLS_ENABLED\"; then\n        valkey-cli -h \"$VALKEY_SERVICE\"\
+    \ -p \"$VALKEY_SENTINEL_TLS_PORT_NUMBER\" --tls --cert \"$VALKEY_SENTINEL_TLS_CERT_FILE\"\
+    \ --key \"$VALKEY_SENTINEL_TLS_KEY_FILE\" --cacert \"$VALKEY_SENTINEL_TLS_CA_FILE\"\
+    \ sentinel \"$@\"\n    else\n        valkey-cli -h \"$VALKEY_SERVICE\" -p \"$VALKEY_SENTINEL_PORT\"\
+    \ sentinel \"$@\"\n    fi\n}\nsentinel_failover_finished() {\n    VALKEY_SENTINEL_INFO=($(run_sentinel_command\
+    \ get-primary-addr-by-name \"myprimary\"))\n    VALKEY_PRIMARY_HOST=\"${VALKEY_SENTINEL_INFO[0]}\"\
+    \n    [[ \"$VALKEY_PRIMARY_HOST\" != \"$(get_full_hostname $HOSTNAME)\" ]]\n}\n\
+    \nVALKEY_SERVICE=\"valkey.default.svc.cluster.local\"\n\n# valkey-cli automatically\
+    \ consumes credentials from the REDISCLI_AUTH variable\n[[ -n \"$VALKEY_PASSWORD\"\
+    \ ]] && export REDISCLI_AUTH=\"$VALKEY_PASSWORD\"\n[[ -f \"$VALKEY_PASSWORD_FILE\"\
+    \ ]] && export REDISCLI_AUTH=\"$(< \"${VALKEY_PASSWORD_FILE}\")\"\n\n\nif is_primary\
+    \ && ! sentinel_failover_finished; then\n    echo \"I am the primary pod and you\
+    \ are stopping me. Pausing client connections.\"\n    # Pausing client write connections\
+    \ to avoid data loss\n    run_valkey_command CLIENT PAUSE \"22000\" WRITE\n\n\
+    \    echo \"Issuing failover\"\n    # if I am the primary, issue a command to\
+    \ failover once\n    run_sentinel_command failover \"myprimary\"\n    echo \"\
+    Waiting for sentinel to complete failover for up to 20s\"\n    retry_while \"\
+    sentinel_failover_finished\" \"20\" 1\nelse\n    exit 0\nfi\n"
+  start-node.sh: "#!/bin/bash\n\n. /opt/bitnami/scripts/libos.sh\n. /opt/bitnami/scripts/liblog.sh\n\
+    . /opt/bitnami/scripts/libvalidations.sh\n\nget_port() {\n    hostname=\"$1\"\n\
+    \    type=\"$2\"\n\n    port_var=$(echo \"${hostname^^}_SERVICE_PORT_$type\" |\
+    \ sed \"s/-/_/g\")\n    port=${!port_var}\n\n    if [ -z \"$port\" ]; then\n \
+    \       case $type in\n            \"SENTINEL\")\n                echo 26379\n\
+    \                ;;\n            \"VALKEY\")\n                echo 6379\n    \
+    \            ;;\n        esac\n    else\n        echo $port\n    fi\n}\n\nget_full_hostname()\
+    \ {\n    hostname=\"$1\"\n    full_hostname=\"${hostname}.${HEADLESS_SERVICE}\"\
+    \n    echo \"${full_hostname}\"\n}\n\nVALKEYPORT=$(get_port \"$HOSTNAME\" \"VALKEY\"\
+    )\n\nHEADLESS_SERVICE=\"valkey-headless.default.svc.cluster.local\"\n\nif [ -n\
+    \ \"$VALKEY_EXTERNAL_PRIMARY_HOST\" ]; then\n    VALKEY_SERVICE=\"$VALKEY_EXTERNAL_PRIMARY_HOST\"\
+    \nelse\n    VALKEY_SERVICE=\"valkey.default.svc.cluster.local\"\nfi\n\nSENTINEL_SERVICE_PORT=$(get_port\
+    \ \"valkey\" \"SENTINEL\")\nvalidate_quorum() {\n    if is_boolean_yes \"$VALKEY_TLS_ENABLED\"\
+    ; then\n        quorum_info_command=\"REDISCLI_AUTH=\"\\$VALKEY_PASSWORD\" valkey-cli\
+    \ -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT --tls --cert ${VALKEY_TLS_CERT_FILE}\
+    \ --key ${VALKEY_TLS_KEY_FILE} --cacert ${VALKEY_TLS_CA_FILE} sentinel primary\
+    \ myprimary\"\n    else\n        quorum_info_command=\"REDISCLI_AUTH=\"\\$VALKEY_PASSWORD\"\
+    \ valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT sentinel primary myprimary\"\
+    \n    fi\n    info \"about to run the command: $quorum_info_command\"\n    eval\
+    \ $quorum_info_command | grep -Fq \"s_down\"\n}\n\ntrigger_manual_failover() {\n\
+    \    if is_boolean_yes \"$VALKEY_TLS_ENABLED\"; then\n        failover_command=\"\
+    REDISCLI_AUTH=\"\\$VALKEY_PASSWORD\" valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT\
+    \ --tls --cert ${VALKEY_TLS_CERT_FILE} --key ${VALKEY_TLS_KEY_FILE} --cacert ${VALKEY_TLS_CA_FILE}\
+    \ sentinel failover myprimary\"\n    else\n        failover_command=\"REDISCLI_AUTH=\"\
+    \\$VALKEY_PASSWORD\" valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT sentinel\
+    \ failover myprimary\"\n    fi\n\n    info \"about to run the command: $failover_command\"\
+    \n    eval $failover_command\n}\n\nget_sentinel_primary_info() {\n    if is_boolean_yes\
+    \ \"$VALKEY_TLS_ENABLED\"; then\n        sentinel_info_command=\"REDISCLI_AUTH=\"\
+    \\$VALKEY_PASSWORD\" timeout 90 valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT\
+    \ --tls --cert ${VALKEY_TLS_CERT_FILE} --key ${VALKEY_TLS_KEY_FILE} --cacert ${VALKEY_TLS_CA_FILE}\
+    \ sentinel get-primary-addr-by-name myprimary\"\n    else\n        sentinel_info_command=\"\
+    REDISCLI_AUTH=\"\\$VALKEY_PASSWORD\" timeout 90 valkey-cli -h $VALKEY_SERVICE\
+    \ -p $SENTINEL_SERVICE_PORT sentinel get-primary-addr-by-name myprimary\"\n  \
+    \  fi\n\n    info \"about to run the command: $sentinel_info_command\"\n    retry_while\
+    \ \"eval $sentinel_info_command\" 2 5\n}\n\n[[ -f $VALKEY_PASSWORD_FILE ]] &&\
+    \ export VALKEY_PASSWORD=\"$(< \"${VALKEY_PASSWORD_FILE}\")\"\n[[ -f $VALKEY_PRIMARY_PASSWORD_FILE\
+    \ ]] && export VALKEY_PRIMARY_PASSWORD=\"$(< \"${VALKEY_PRIMARY_PASSWORD_FILE}\"\
+    )\"\n\n# check if there is a primary\nprimary_in_persisted_conf=\"$(get_full_hostname\
+    \ \"$HOSTNAME\")\"\nprimary_port_in_persisted_conf=\"$VALKEY_PRIMARY_PORT_NUMBER\"\
+    \nprimary_in_sentinel=\"$(get_sentinel_primary_info)\"\nvalkeyRetVal=$?\n\nif\
+    \ [[ -f /opt/bitnami/valkey-sentinel/etc/sentinel.conf ]]; then\n    primary_in_persisted_conf=\"\
+    $(awk '/monitor/ {print $4}' /opt/bitnami/valkey-sentinel/etc/sentinel.conf)\"\
+    \n    primary_port_in_persisted_conf=\"$(awk '/monitor/ {print $5}' /opt/bitnami/valkey-sentinel/etc/sentinel.conf)\"\
+    \n    info \"Found previous primary ${primary_in_persisted_conf}:${primary_port_in_persisted_conf}\
+    \ in /opt/bitnami/valkey-sentinel/etc/sentinel.conf\"\n    debug \"$(cat /opt/bitnami/valkey-sentinel/etc/sentinel.conf\
+    \ | grep monitor)\"\nfi\n\nif [[ $valkeyRetVal -ne 0 ]]; then\n    if [[ \"$primary_in_persisted_conf\"\
+    \ == \"$(get_full_hostname \"$HOSTNAME\")\" ]]; then\n        # Case 1: No active\
+    \ sentinel and in previous sentinel.conf we were the primary --> PRIMARY\n   \
+    \     info \"Configuring the node as primary\"\n        export VALKEY_REPLICATION_MODE=\"\
+    primary\"\n    else\n        # Case 2: No active sentinel and in previous sentinel.conf\
+    \ we were not primary --> REPLICA\n        info \"Configuring the node as replica\"\
+    \n        export VALKEY_REPLICATION_MODE=\"replica\"\n        VALKEY_PRIMARY_HOST=${primary_in_persisted_conf}\n\
+    \        VALKEY_PRIMARY_PORT_NUMBER=${primary_port_in_persisted_conf}\n    fi\n\
+    else\n    # Fetches current primary's host and port\n    VALKEY_SENTINEL_INFO=($(get_sentinel_primary_info))\n\
+    \    info \"Current primary: VALKEY_SENTINEL_INFO=(${VALKEY_SENTINEL_INFO[0]},${VALKEY_SENTINEL_INFO[1]})\"\
+    \n    VALKEY_PRIMARY_HOST=${VALKEY_SENTINEL_INFO[0]}\n    VALKEY_PRIMARY_PORT_NUMBER=${VALKEY_SENTINEL_INFO[1]}\n\
+    \n    if [[ \"$VALKEY_PRIMARY_HOST\" == \"$(get_full_hostname \"$HOSTNAME\")\"\
+    \ ]]; then\n        # Case 3: Active sentinel and primary it is this node -->\
+    \ PRIMARY\n        info \"Configuring the node as primary\"\n        export VALKEY_REPLICATION_MODE=\"\
+    primary\"\n    else\n        # Case 4: Active sentinel and primary is not this\
+    \ node --> REPLICA\n        info \"Configuring the node as replica\"\n       \
+    \ export VALKEY_REPLICATION_MODE=\"replica\"\n    fi\nfi\n\nif [[ -n \"$VALKEY_EXTERNAL_PRIMARY_HOST\"\
+    \ ]]; then\n  VALKEY_PRIMARY_HOST=\"$VALKEY_EXTERNAL_PRIMARY_HOST\"\n  VALKEY_PRIMARY_PORT_NUMBER=\"\
+    ${VALKEY_EXTERNAL_PRIMARY_PORT}\"\nfi\n\nif [[ -f /opt/bitnami/valkey/mounted-etc/replica.conf\
+    \ ]];then\n    cp /opt/bitnami/valkey/mounted-etc/replica.conf /opt/bitnami/valkey/etc/replica.conf\n\
+    fi\n\nif [[ -f /opt/bitnami/valkey/mounted-etc/valkey.conf ]];then\n    cp /opt/bitnami/valkey/mounted-etc/valkey.conf\
+    \ /opt/bitnami/valkey/etc/valkey.conf\nfi\n\necho \"\" >> /opt/bitnami/valkey/etc/replica.conf\n\
+    echo \"replica-announce-port $VALKEYPORT\" >> /opt/bitnami/valkey/etc/replica.conf\n\
+    echo \"replica-announce-ip $(get_full_hostname \"$HOSTNAME\")\" >> /opt/bitnami/valkey/etc/replica.conf\n\
+    ARGS=(\"--port\" \"${VALKEY_PORT}\")\n\nif [[ \"$VALKEY_REPLICATION_MODE\" = \"\
+    replica\" ]]; then\n    ARGS+=(\"--replicaof\" \"${VALKEY_PRIMARY_HOST}\" \"${VALKEY_PRIMARY_PORT_NUMBER}\"\
+    )\nfi\nARGS+=(\"--requirepass\" \"${VALKEY_PASSWORD}\")\nARGS+=(\"--primaryauth\"\
+    \ \"${VALKEY_PRIMARY_PASSWORD}\")\nARGS+=(\"--include\" \"/opt/bitnami/valkey/etc/replica.conf\"\
+    )\nARGS+=(\"--include\" \"/opt/bitnami/valkey/etc/valkey.conf\")\nexec valkey-server\
+    \ \"${ARGS[@]}\"\n"
+  start-sentinel.sh: "#!/bin/bash\n\n. /opt/bitnami/scripts/libos.sh\n. /opt/bitnami/scripts/libvalidations.sh\n\
+    . /opt/bitnami/scripts/libfile.sh\n\nHEADLESS_SERVICE=\"valkey-headless.default.svc.cluster.local\"\
+    \nVALKEY_SERVICE=\"valkey.default.svc.cluster.local\"\n\nget_port() {\n    hostname=\"\
+    $1\"\n    type=\"$2\"\n\n    port_var=$(echo \"${hostname^^}_SERVICE_PORT_$type\"\
+    \ | sed \"s/-/_/g\")\n    port=${!port_var}\n\n    if [ -z \"$port\" ]; then\n\
+    \        case $type in\n            \"SENTINEL\")\n                echo 26379\n\
+    \                ;;\n            \"VALKEY\")\n                echo 6379\n    \
+    \            ;;\n        esac\n    else\n        echo $port\n    fi\n}\n\nget_full_hostname()\
+    \ {\n    hostname=\"$1\"\n    full_hostname=\"${hostname}.${HEADLESS_SERVICE}\"\
+    \n    echo \"${full_hostname}\"\n}\n\nSERVPORT=$(get_port \"$HOSTNAME\" \"SENTINEL\"\
+    )\nVALKEYPORT=$(get_port \"$HOSTNAME\" \"VALKEY\")\nSENTINEL_SERVICE_PORT=$(get_port\
+    \ \"valkey\" \"SENTINEL\")\n\nsentinel_conf_set() {\n    local -r key=\"${1:?missing\
+    \ key}\"\n    local value=\"${2:-}\"\n\n    # Sanitize inputs\n    value=\"${value//\\\
+    \\/\\\\\\\\}\"\n    value=\"${value//&/\\\\&}\"\n    value=\"${value//\\?/\\\\\
+    ?}\"\n    [[ \"$value\" = \"\" ]] && value=\"\\\"$value\\\"\"\n\n    replace_in_file\
+    \ \"/opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf\" \"^#*\\s*${key} .*\"\
+    \ \"${key} ${value}\" false\n}\nsentinel_conf_add() {\n    echo $'\\n'\"$@\" >>\
+    \ \"/opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf\"\n}\nhost_id() {\n\
+    \    echo \"$1\" | openssl sha1 | awk '{print $2}'\n}\nget_sentinel_primary_info()\
+    \ {\n    if is_boolean_yes \"$VALKEY_SENTINEL_TLS_ENABLED\"; then\n        sentinel_info_command=\"\
+    REDISCLI_AUTH=\"\\$VALKEY_PASSWORD\" timeout 90 valkey-cli -h $VALKEY_SERVICE\
+    \ -p $SENTINEL_SERVICE_PORT --tls --cert ${VALKEY_SENTINEL_TLS_CERT_FILE} --key\
+    \ ${VALKEY_SENTINEL_TLS_KEY_FILE} --cacert ${VALKEY_SENTINEL_TLS_CA_FILE} sentinel\
+    \ get-primary-addr-by-name myprimary\"\n    else\n        sentinel_info_command=\"\
+    REDISCLI_AUTH=\"\\$VALKEY_PASSWORD\" timeout 90 valkey-cli -h $VALKEY_SERVICE\
+    \ -p $SENTINEL_SERVICE_PORT sentinel get-primary-addr-by-name myprimary\"\n  \
+    \  fi\n    info \"about to run the command: $sentinel_info_command\"\n    retry_while\
+    \ \"eval $sentinel_info_command\" 2 5\n}\n\n[[ -f $VALKEY_PASSWORD_FILE ]] &&\
+    \ export VALKEY_PASSWORD=\"$(< \"${VALKEY_PASSWORD_FILE}\")\"\n\nprimary_in_persisted_conf=\"\
+    $(get_full_hostname \"$HOSTNAME\")\"\n\nif [[ -f /opt/bitnami/valkey-sentinel/etc/sentinel.conf\
+    \ ]]; then\n    primary_in_persisted_conf=\"$(awk '/monitor/ {print $4}' /opt/bitnami/valkey-sentinel/etc/sentinel.conf)\"\
+    \n    info \"Found previous primary $primary_in_persisted_conf in /opt/bitnami/valkey-sentinel/etc/sentinel.conf\"\
+    \n    debug \"$(cat /opt/bitnami/valkey-sentinel/etc/sentinel.conf | grep monitor)\"\
+    \nfi\nVALKEY_SENTINEL_INFO=($(get_sentinel_primary_info))\nif [ \"$?\" -eq \"\
+    0\" ]; then\n    # current primary's host and port obtained from other Sentinel\n\
+    \    info \"printing VALKEY_SENTINEL_INFO=(${VALKEY_SENTINEL_INFO[0]},${VALKEY_SENTINEL_INFO[1]})\"\
+    \n    VALKEY_PRIMARY_HOST=${VALKEY_SENTINEL_INFO[0]}\n    VALKEY_PRIMARY_PORT_NUMBER=${VALKEY_SENTINEL_INFO[1]}\n\
+    else\n    VALKEY_PRIMARY_HOST=\"$primary_in_persisted_conf\"\n    VALKEY_PRIMARY_PORT_NUMBER=\"\
+    $VALKEYPORT\"\nfi\nif [[ \"$VALKEY_PRIMARY_HOST\" == \"$(get_full_hostname \"\
+    $HOSTNAME\")\" ]]; then\n    export VALKEY_REPLICATION_MODE=\"primary\"\nelse\n\
+    \    export VALKEY_REPLICATION_MODE=\"replica\"\nfi\n\nif [[ -n \"$VALKEY_EXTERNAL_PRIMARY_HOST\"\
+    \ ]]; then\n  VALKEY_PRIMARY_HOST=\"$VALKEY_EXTERNAL_PRIMARY_HOST\"\n  VALKEY_PRIMARY_PORT_NUMBER=\"\
+    ${VALKEY_EXTERNAL_PRIMARY_PORT}\"\nfi\n\n# To prevent incomplete configuration\
+    \ and as the valkey container accesses /opt/bitnami/valkey-sentinel/etc/sentinel.conf\n\
+    # as well, prepare the new config in `prepare-sentinel.conf` and move it atomically\
+    \ to the ultimate destination when it is complete.\ncp /opt/bitnami/valkey-sentinel/mounted-etc/sentinel.conf\
+    \ /opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf\nprintf \"\\nsentinel\
+    \ auth-pass %s %s\" \"myprimary\" \"$VALKEY_PASSWORD\" >> /opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf\n\
+    printf \"\\nrequirepass %s\" \"$VALKEY_PASSWORD\" >> /opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf\n\
+    printf \"\\nsentinel myid %s\" \"$(host_id \"$HOSTNAME\")\" >> /opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf\n\
+    \nif [[ -z \"$VALKEY_PRIMARY_HOST\" ]] || [[ -z \"$VALKEY_PRIMARY_PORT_NUMBER\"\
+    \ ]]\nthen\n    # Prevent incorrect configuration to be written to sentinel.conf\n\
+    \    error \"Valkey primary host is configured incorrectly (host: $VALKEY_PRIMARY_HOST,\
+    \ port: $VALKEY_PRIMARY_PORT_NUMBER)\"\n    exit 1\nfi\n\nsentinel_conf_set \"\
+    sentinel monitor\" \"myprimary \"$VALKEY_PRIMARY_HOST\" \"$VALKEY_PRIMARY_PORT_NUMBER\"\
+    \ 2\"\n\nadd_known_sentinel() {\n    hostname=\"$1\"\n    ip=\"$2\"\n\n    if\
+    \ [[ -n \"$hostname\" && -n \"$ip\" && \"$hostname\" != \"$HOSTNAME\" ]]; then\n\
+    \        sentinel_conf_add \"sentinel known-sentinel myprimary $(get_full_hostname\
+    \ \"$hostname\") $(get_port \"$hostname\" \"SENTINEL\") $(host_id \"$hostname\"\
+    )\"\n    fi\n}\nadd_known_replica() {\n    hostname=\"$1\"\n    ip=\"$2\"\n\n\
+    \    if [[ -n \"$ip\" && \"$(get_full_hostname \"$hostname\")\" != \"$VALKEY_PRIMARY_HOST\"\
+    \ ]]; then\n        sentinel_conf_add \"sentinel known-replica myprimary $(get_full_hostname\
+    \ \"$hostname\") $(get_port \"$hostname\" \"VALKEY\")\"\n    fi\n}\n\n# Add available\
+    \ hosts on the network as known replicas & sentinels\nfor node in $(seq 0 $((3-1)));\
+    \ do\n    hostname=\"valkey-node-$node\"\n    ip=\"$(getent hosts \"$hostname.$HEADLESS_SERVICE\"\
+    \ | awk '{ print $1 }')\"\n    add_known_sentinel \"$hostname\" \"$ip\"\n    add_known_replica\
+    \ \"$hostname\" \"$ip\"\ndone\n\necho \"\" >> /opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf\n\
+    echo \"sentinel announce-hostnames yes\" >> /opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf\n\
+    echo \"sentinel resolve-hostnames yes\" >> /opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf\n\
+    echo \"sentinel announce-port $SERVPORT\" >> /opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf\n\
+    echo \"sentinel announce-ip $(get_full_hostname \"$HOSTNAME\")\" >> /opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf\n\
+    mv /opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf /opt/bitnami/valkey-sentinel/etc/sentinel.conf\n\
+    exec valkey-server /opt/bitnami/valkey-sentinel/etc/sentinel.conf --sentinel\n"
+kind: ConfigMap
+metadata:
+  labels:
+    app.kubernetes.io/instance: release-name
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: valkey
+    app.kubernetes.io/part-of: valkey
+  name: valkey-scripts
+  namespace: default

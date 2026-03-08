@@ -1,0 +1,40 @@
+apiVersion: v1
+data:
+  primary.conf: 'dir /data
+
+    # User-supplied primary configuration:
+
+    rename-command FLUSHDB ""
+
+    rename-command FLUSHALL ""
+
+    # End of primary configuration'
+  replica.conf: 'dir /data
+
+    # User-supplied replica configuration:
+
+    rename-command FLUSHDB ""
+
+    rename-command FLUSHALL ""
+
+    # End of replica configuration'
+  valkey.conf: '# User-supplied common configuration:
+
+    # Enable AOF https://valkey.io/docs/topics/persistence.html
+
+    appendonly yes
+
+    # Disable RDB persistence, AOF persistence already enabled.
+
+    save ""
+
+    # End of common configuration'
+kind: ConfigMap
+metadata:
+  labels:
+    app.kubernetes.io/instance: release-name
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: valkey
+    app.kubernetes.io/part-of: valkey
+  name: valkey-configuration
+  namespace: default

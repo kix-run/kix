@@ -15,7 +15,7 @@
 # 2. RESOURCES AS ATTRSETS (not derivations)
 #    All mk* builders return plain attrsets, not store derivations.
 #    config.manifests also stores raw attrsets — serialization (removeNulls →
-#    toJSON → writeText via mkManifest) is deferred to mkManifests in
+#    removeNulls → YAML via mkManifest) is deferred to mkManifests in
 #    flake.nix, the output boundary. This keeps structured data available
 #    throughout the module system for cross-resource validation, behavioral
 #    invariants, and any module that needs to inspect other charts' resources.
@@ -243,13 +243,15 @@ lib.makeExtensible (self: {
         };
       };
     in
-    pkgs.writeText "${name}-${lib.toLower resource.kind}.json" (
-      namedResource
-      |> self.removeNulls
-      |> (x: lib.foldl' (res: f: f res) x self._preprocessors)
-      |> self.removeNulls
-      |> builtins.toJSON
-    );
+    let
+      yamlFormat = pkgs.formats.yaml {};
+      cleaned =
+        namedResource
+        |> self.removeNulls
+        |> (x: lib.foldl' (res: f: f res) x self._preprocessors)
+        |> self.removeNulls;
+    in
+    yamlFormat.generate "${name}-${lib.toLower resource.kind}.yaml" cleaned;
 
   # Base builder for any Kubernetes resource. Merges in default metadata
   # (namespace, labels, annotations) set via withMetadata.

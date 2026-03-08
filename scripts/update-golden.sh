@@ -5,7 +5,7 @@
 #   ./scripts/update-golden.sh          # update all variants
 #   ./scripts/update-golden.sh coredns  # update one variant
 #
-# Golden files live in tests/<variant>/golden/*.json.
+# Golden files live in tests/<variant>/golden/*.yaml.
 # After updating, review the diff with `git diff tests/` before committing.
 
 set -euo pipefail
@@ -34,14 +34,14 @@ for variant in "${variants[@]}"; do
   golden_dir="tests/${variant}/golden"
   mkdir -p "$golden_dir"
 
-  # Remove old golden files (catches renames/removals)
-  rm -f "$golden_dir"/*.json
+  # Remove old golden files (catches renames/removals and format changes)
+  rm -f "$golden_dir"/*.yaml "$golden_dir"/*.json
 
-  # Copy and normalize each manifest.
-  # jq -S sorts keys for deterministic output.
-  for f in "$result"/*.json; do
+  # Copy each manifest as-is.
+  # YAML output from pkgs.formats.yaml is already deterministic (sorted keys).
+  for f in "$result"/*.yaml; do
     base=$(basename "$f")
-    jq -S '.' "$f" > "$golden_dir/$base"
+    cp "$f" "$golden_dir/$base"
   done
 
   echo "    $(ls "$golden_dir" | wc -l | tr -d ' ') golden files written"

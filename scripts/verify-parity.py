@@ -12,7 +12,7 @@ equivalence.
 """
 
 import difflib
-import json
+import yaml
 import subprocess
 import sys
 import tempfile
@@ -111,9 +111,9 @@ def nix_build(flake_pkg: str) -> dict[str, dict]:
 
     out_path = Path(result.stdout.strip())
     resources = {}
-    for json_file in out_path.glob("*.json"):
+    for json_file in out_path.glob("*.yaml"):
         with open(json_file) as f:
-            doc = json.load(f)
+            doc = yaml.safe_load(f)
         doc = normalize_kix(doc)
         key = resource_key(doc)
         resources[key] = doc

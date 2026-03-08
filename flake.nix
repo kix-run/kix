@@ -100,7 +100,7 @@
               mkdir -p $out
               ${lib.concatStringsSep "\n" (
                 lib.mapAttrsToList (
-                  name: path: "cp ${path} $out/${name}.json"
+                  name: path: "cp ${path} $out/${name}.yaml"
                 ) serialized
               )}
             '';
@@ -274,7 +274,7 @@
             kubeconform -strict -summary \
               -ignore-missing-schemas \
               -schema-location '${kubernetesSchemas}/master-standalone-strict/{{ .ResourceKind }}{{ .KindSuffix }}.json' \
-              ${drv}/*.json
+              ${drv}/*.yaml
             touch $out
           '';
 
@@ -287,11 +287,11 @@
           # checked-in golden files. Run `./scripts/update-golden.sh` to
           # regenerate after intentional changes.
           goldenCheck = name: drv: pkgs.runCommand "golden-${name}" {
-            nativeBuildInputs = [ pkgs.jq pkgs.diffutils ];
+            nativeBuildInputs = [ pkgs.diffutils ];
           } ''
             fail=0
             # Check each built manifest matches its golden file
-            for f in ${drv}/*.json; do
+            for f in ${drv}/*.yaml; do
               base=$(basename "$f")
               golden="${./tests}/${name}/golden/$base"
               if [ ! -f "$golden" ]; then
@@ -299,14 +299,13 @@
                 fail=1
                 continue
               fi
-              jq -S '.' "$f" > /tmp/actual.json
-              if ! diff -u "$golden" /tmp/actual.json; then
+              if ! diff -u "$golden" "$f"; then
                 echo "FAIL: $base differs from golden"
                 fail=1
               fi
             done
             # Check for removed resources (golden file with no matching output)
-            for f in ${./tests}/${name}/golden/*.json; do
+            for f in ${./tests}/${name}/golden/*.yaml; do
               base=$(basename "$f")
               if [ ! -f "${drv}/$base" ]; then
                 echo "FAIL: $base removed (golden file exists but no output)"

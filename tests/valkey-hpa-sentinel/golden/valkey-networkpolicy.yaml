@@ -1,0 +1,24 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/instance: release-name
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: valkey
+    app.kubernetes.io/part-of: valkey
+  name: valkey
+  namespace: default
+spec:
+  egress:
+  - {}
+  ingress:
+  - ports:
+    - port: 6379
+    - port: 26379
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: release-name
+      app.kubernetes.io/name: valkey
+  policyTypes:
+  - Ingress
+  - Egress
