@@ -185,6 +185,16 @@
                 assert reg.valkey.endpoints.metrics.port == 9121;
                 true;
 
+              # Registry ownership: each registry key must match a chart that
+              # actually produced manifests with that prefix. Catches copy-paste
+              # errors where a chart accidentally writes to another chart's
+              # registry entry (e.g., valkey writing to registry.coredns).
+              registryKeys = lib.attrNames reg;
+              assertOwnership = lib.all (key:
+                lib.any (mName: lib.hasPrefix "${key}-" mName || mName == key)
+                  (lib.attrNames manifests)
+              ) registryKeys;
+
               # Monitoring: cross-cutting module created the ServiceMonitor,
               # per-chart one was suppressed.
               assertMonitoring =
@@ -194,7 +204,7 @@
                 assert !(manifests ? "valkey-servicemonitor");
                 true;
 
-            in assert assertRegistry; assert assertMonitoring;
+            in assert assertRegistry; assert assertOwnership; assert assertMonitoring;
             pkgs.runCommand "check-cluster-example" {} ''
               echo "Registry: coredns dns-udp=${reg.coredns.endpoints.dns-udp.host}:${toString reg.coredns.endpoints.dns-udp.port}"
               echo "Registry: valkey primary=${reg.valkey.endpoints.primary.host}:${toString reg.valkey.endpoints.primary.port}"
