@@ -8,11 +8,13 @@
 #
 # kixlib is passed to every module via specialArgs. It provides resource
 # builders (mkDeployment, mkService, etc.) that produce plain attrsets.
-# Only mkManifest serializes to a Nix store derivation.
 #
-# Each module writes its resources to config.manifests.<name>, where each
-# entry is one resource (not one-per-module). This makes verification and
-# inspection straightforward — each JSON file is one Kubernetes resource.
+# Each module writes its resources to config.manifests.<name> as raw attrsets
+# (with kind, apiVersion, metadata, etc.). Serialization to JSON store
+# derivations is deferred to mkManifests — the output boundary. This keeps
+# structured data available throughout the module system for cross-resource
+# validation, behavioral invariants, and any module that needs to inspect
+# other charts' resources.
 #
 # To build a chart's manifests:
 #   nix build .#<chart-name>
@@ -70,15 +72,26 @@
 
           # Collect all manifests from an evaluation into a directory.
           # Each manifest becomes a separate .json file, named by its key
-          # in config.manifests. This is what verify-parity.sh compares against.
+          # in config.manifests.
+          #
+          # SERIALIZATION BOUNDARY: config.manifests stores raw attrsets
+          # (with kind, apiVersion, metadata, etc.). This function is the
+          # sole point where attrsets become JSON store derivations. This
+          # keeps structured data available throughout the module system for
+          # cross-resource validation and behavioral invariants.
           mkManifests =
             evaluation:
+            let
+              serialized = lib.mapAttrs (name: resource:
+                kixlib.mkManifest resource
+              ) evaluation.config.manifests;
+            in
             pkgs.runCommand "k8s-manifests" { } ''
               mkdir -p $out
               ${lib.concatStringsSep "\n" (
                 lib.mapAttrsToList (
                   name: path: "cp ${path} $out/${name}.json"
-                ) evaluation.config.manifests
+                ) serialized
               )}
             '';
 

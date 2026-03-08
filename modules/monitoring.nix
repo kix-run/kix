@@ -58,11 +58,13 @@
 #
 # CURRENT STATUS:
 #
-# With only 2 charts (coredns, valkey), this module is more infrastructure
-# than immediately needed. But it establishes the pattern for charts 3-10,
-# and the documentation value justifies the code. It also serves as a proof
-# of concept for Level 3 intent merging — if this works for monitoring,
-# the same pattern works for network policy, RBAC aggregation, etc.
+# All 3 migrated charts (coredns, valkey, cert-manager) declare monitoring
+# targets. Charts ONLY declare targets — this module is the sole creator
+# of ServiceMonitor resources. Per-chart ServiceMonitor creation was
+# removed in Phase 5 of the nixification plan.
+#
+# This module writes raw attrsets to config.manifests (not derivations).
+# Serialization is deferred to mkManifests in flake.nix — the output boundary.
 
 {
   lib,
@@ -164,29 +166,28 @@ in
     # Materialize a ServiceMonitor for each enabled target.
     # Uses kixlib.monitoring.mkServiceMonitor (same builder charts use internally),
     # ensuring consistent resource structure.
+    # Store raw attrsets — serialization deferred to mkManifests in flake.nix.
     manifests = lib.mapAttrs' (
       name: target:
       lib.nameValuePair "monitoring-${name}-servicemonitor" (
-        kixlib.mkManifest (
-          kixlib.monitoring.mkServiceMonitor {
-            metadata = {
-              name = "${name}-monitor";
-              namespace = target.namespace;
-              labels = config.cluster.labels // {
-                "app.kubernetes.io/managed-by" = "kix";
-                "app.kubernetes.io/part-of" = "monitoring";
-              };
+        kixlib.monitoring.mkServiceMonitor {
+          metadata = {
+            name = "${name}-monitor";
+            namespace = target.namespace;
+            labels = config.cluster.labels // {
+              "app.kubernetes.io/managed-by" = "kix";
+              "app.kubernetes.io/part-of" = "monitoring";
             };
-            endpoints = [
-              {
-                port = target.portName;
-                interval = if target.interval != null then target.interval else cfg.defaultInterval;
-              }
-            ];
-            namespaceSelector.matchNames = [ target.namespace ];
-            selector.matchLabels = target.selector;
-          }
-        )
+          };
+          endpoints = [
+            {
+              port = target.portName;
+              interval = if target.interval != null then target.interval else cfg.defaultInterval;
+            }
+          ];
+          namespaceSelector.matchNames = [ target.namespace ];
+          selector.matchLabels = target.selector;
+        }
       )
     ) (lib.filterAttrs (_: t: t.enabled) cfg.targets);
   };

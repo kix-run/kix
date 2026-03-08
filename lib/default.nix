@@ -13,11 +13,14 @@
 #    Store path hashes could still appear in annotations for traceability.
 #
 # 2. RESOURCES AS ATTRSETS (not derivations)
-#    All mk* builders return plain attrsets, not store derivations. Only
-#    `mkManifest` serializes to a store path. This means you can always pipe
-#    a resource through further transformations. The old `rbac.bind` returned
-#    a derivation directly which blocked composition — all mk* builders
-#    now return attrsets.
+#    All mk* builders return plain attrsets, not store derivations.
+#    config.manifests also stores raw attrsets — serialization (removeNulls →
+#    toJSON → writeText via mkManifest) is deferred to mkManifests in
+#    flake.nix, the output boundary. This keeps structured data available
+#    throughout the module system for cross-resource validation, behavioral
+#    invariants, and any module that needs to inspect other charts' resources.
+#    The old `rbac.bind` returned a derivation directly which blocked
+#    composition — all mk* builders now return attrsets.
 #
 # 3. ONE MANIFEST PER RESOURCE
 #    Each resource should be a separate entry in config.manifests, not bundled
@@ -1155,14 +1158,22 @@ lib.makeExtensible (self: {
       uniqueNames = lib.unique manifestNames;
       hasDuplicates = builtins.length manifestNames != builtins.length uniqueNames;
 
-      # Serialize manifestList → config.manifests attrset.
-      # Each entry uses its own kixlib if provided (for multi-component charts
-      # like CoreDNS autoscaler), falling back to the chart-scoped kixlib'.
+      # Store raw attrsets in config.manifests — serialization is deferred
+      # to the output boundary (mkManifests in flake.nix). This keeps
+      # structured data available throughout the module system for
+      # cross-resource validation, behavioral invariants, and any module
+      # that needs to inspect other charts' resources.
+      #
+      # Previously, this called mkManifest here, serializing to JSON store
+      # paths and losing the structured data before the module system was
+      # done with it. Now mkResource (called by each builder) already
+      # merges _defaultMetadata at construction time, so the attrsets
+      # stored here have correct metadata.name, labels, and namespace.
       manifests =
         assert !hasDuplicates
           || throw "mkChartModule(${name}): duplicate manifest names: ${builtins.toJSON manifestNames}";
         lib.listToAttrs (
-          map (r: lib.nameValuePair r.name ((r.kixlib or chartKixlib).mkManifest r.resource))
+          map (r: lib.nameValuePair r.name r.resource)
           enabledManifests
         );
     in

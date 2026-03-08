@@ -49,11 +49,18 @@
   # different modules — so two charts writing the same manifest key would
   # silently overwrite each other. This custom type makes that a hard error
   # with a clear message showing which module files collided.
+  #
+  # DESIGN: manifests stores raw attrsets, NOT derivations.
+  # Serialization (removeNulls → toJSON → writeText) is deferred to the
+  # output boundary (mkManifests in flake.nix). This keeps structured data
+  # available throughout the module system for cross-resource validation,
+  # behavioral invariants, and any module that needs to inspect other
+  # charts' resources.
   options.manifests = lib.mkOption {
     type = lib.types.attrsOf (lib.types.mkOptionType {
       name = "manifest";
-      description = "path to a JSON manifest file (store derivation)";
-      check = lib.isDerivation;
+      description = "Kubernetes resource attrset (must have kind and apiVersion)";
+      check = v: builtins.isAttrs v && v ? kind && v ? apiVersion;
       merge = loc: defs:
         if builtins.length defs == 1
         then (builtins.head defs).value
@@ -61,14 +68,13 @@
     });
     default = { };
     description = ''
-      Collected Kubernetes manifests from all enabled modules.
-      Each value is a Nix store path to a JSON file containing one
-      Kubernetes resource. Keyed by human-readable name (e.g.,
-      "coredns-deployment", "valkey-primary").
+      Collected Kubernetes resource attrsets from all enabled modules.
+      Each value is a plain attrset with at least `kind` and `apiVersion`.
+      Keyed by human-readable name (e.g., "coredns-deployment", "valkey-primary").
 
-      Chart modules write here: config.manifests."coredns-deployment" = ...;
+      Chart modules write here: config.manifests."coredns-deployment" = <attrset>;
       Cross-cutting modules (monitoring.nix) also write here.
-      The flake's mkManifests collects all entries into a directory.
+      The flake's mkManifests serializes all entries to JSON at the output boundary.
     '';
   };
 }
