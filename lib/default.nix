@@ -1145,6 +1145,99 @@ lib.makeExtensible (self: {
           selector.matchLabels = selectorLabels;
         } // pdbArgs);
       };
+
+    # Creates a Deployment + Service group from a single specification.
+    # Returns { "${name}-deployment" = ...; "${name}-service" = ...; }
+    # This is the primary composition unit for charts — most K8s apps are a
+    # Deployment behind a Service, and this combinator captures that pattern.
+    #
+    # The group keys use "${name}-deployment" and "${name}-service" to match
+    # existing manifest names in the test suite (42 golden-file checks).
+    mkServiceDeployment = {
+      name,              # Base name — becomes manifest key prefix
+      containers,
+      selectorLabels,    # Explicit — charts extend these with component labels
+      servicePorts,
+      replicas ? 1,
+      serviceType ? "ClusterIP",
+      strategy ? null,
+      volumes ? [],
+      serviceAccountName ? null,
+      podAnnotations ? {},
+      podLabels ? {},          # Extra labels on pod template (merged with selectorLabels)
+      deploymentLabels ? {},   # Extra labels on the Deployment metadata
+      serviceLabels ? {},      # Extra labels on the Service metadata
+      serviceAnnotations ? {},
+      podSpec ? {},            # Extra fields merged into pod spec (dnsPolicy, securityContext, etc.)
+      deploymentMetadata ? {}, # Extra fields on deployment metadata (e.g., name override)
+    }: let
+      deployment = self.workload.mkDeployment ({
+        metadata = { inherit name; labels = deploymentLabels; } // deploymentMetadata;
+        inherit replicas selectorLabels;
+        template = self.pod.mkPodTemplate {
+          metadata = {
+            labels = selectorLabels // podLabels;
+            annotations = podAnnotations;
+          };
+          spec = {
+            inherit containers volumes;
+          } // lib.optionalAttrs (serviceAccountName != null) {
+            inherit serviceAccountName;
+          } // podSpec;
+        };
+      } // lib.optionalAttrs (strategy != null) { inherit strategy; });
+      service = self.networking.mkService {
+        metadata = {
+          inherit name;
+          labels = serviceLabels;
+          annotations = serviceAnnotations;
+        };
+        spec = {
+          type = serviceType;
+          ports = servicePorts;
+          selector = selectorLabels;
+        };
+      };
+    in {
+      "${name}-deployment" = deployment;
+      "${name}-service" = service;
+    };
+
+    # Adds a metrics Service to a group, extracting selector from a workload.
+    # Used for charts that expose a separate metrics port via a dedicated Service
+    # (e.g., coredns-metrics, valkey-metrics). The workloadKey identifies which
+    # resource to read matchLabels from for the metrics Service's selector.
+    withMetrics = {
+      workloadKey,              # Key of workload to get selector from
+      metricsName,              # Manifest key for the metrics Service in the group
+      metricsPort,
+      portName ? "metrics",
+      metricsServiceName ? null, # K8s Service metadata.name (defaults to metricsName)
+      monitoringLabels ? {},
+      monitoringAnnotations ? {},
+      extraServiceAnnotations ? {},
+      extraLabels ? {},
+    }: group: let
+      workload = group.${workloadKey};
+      selectorLabels = workload.spec.selector.matchLabels;
+    in group // {
+      ${metricsName} = self.networking.mkService {
+        metadata = {
+          name = if metricsServiceName != null then metricsServiceName else metricsName;
+          labels = { "app.kubernetes.io/component" = "metrics"; } // extraLabels // monitoringLabels;
+          annotations = extraServiceAnnotations // monitoringAnnotations;
+        };
+        spec = {
+          type = "ClusterIP";
+          ports = [{ name = portName; port = metricsPort; targetPort = metricsPort; protocol = "TCP"; }];
+          selector = selectorLabels;
+        };
+      };
+    };
+
+    # Maps an `enable` flag over a manifestList (for conditional groups).
+    # Usage: withEnable cfg.cainjector.enabled (groupToManifestList cainjectorGroup)
+    withEnable = enable: list: map (entry: entry // { inherit enable; }) list;
   };
 
   # --- mkChartModule: the contract for chart modules ---

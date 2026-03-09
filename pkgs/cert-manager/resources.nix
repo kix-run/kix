@@ -95,25 +95,6 @@ let
     };
   };
 
-  controllerDeployment = kixlib'.workload.mkDeployment {
-    metadata = { name = "cert-manager"; };
-    replicas = cfg.replicaCount;
-    selectorLabels = controllerLabels.selector // { "app.kubernetes.io/component" = "controller"; };
-    template = kixlib'.pod.mkPodTemplate {
-      metadata = {
-        labels = controllerLabels.all // { "app.kubernetes.io/component" = "controller"; };
-        annotations = prometheusAnnotations;
-      };
-      spec = {
-        containers = [ controllerContainer ];
-        serviceAccountName = "cert-manager";
-        enableServiceLinks = false;
-        securityContext = podSecurityContext;
-        inherit nodeSelector;
-      };
-    };
-  };
-
   # Capability output labels for cert-manager Services.
   # Controller and webhook targets are unconditional (no mkIf), so their output
   # can be read without guards. Cainjector needs a guard on cfg.cainjector.enabled.
@@ -131,19 +112,49 @@ let
     then config.capabilities.monitoring.cert-manager-cainjector.output.annotations
     else {};
 
-  controllerService = kixlib'.networking.mkService {
-    metadata = {
-      name = "cert-manager";
-      labels = controllerLabels.all // { "app.kubernetes.io/component" = "controller"; } // controllerMonitoringLabels;
-      annotations = controllerMonitoringAnnotations;
-    };
-    spec = {
-      type = "ClusterIP";
-      ports = [
-        { port = 9402; protocol = "TCP"; targetPort = "http-metrics"; name = "tcp-prometheus-servicemonitor"; }
-      ];
+  # --- Component helper: wraps mkServiceDeployment for cert-manager's 3 near-identical components ---
+  # Each component (controller, webhook, cainjector) is a Deployment + Service with the same
+  # pod security context, prometheus annotations, and node selector. Only the container,
+  # labels, replicas, service ports, and monitoring labels differ.
+  inherit (kixlib'.combinators) mkServiceDeployment groupToManifestList withEnable;
+
+  # mkComponent: local helper wrapping mkServiceDeployment for cert-manager's components.
+  # deploymentLabels defaults to {} (inherits kixlib' defaults) because the original
+  # controller deployment had no explicit labels, while webhook/cainjector did.
+  mkComponent = {
+    componentName,
+    componentLabels,
+    container,
+    replicas,
+    servicePorts,
+    serviceAccountName,
+    monitoringLabels ? {},
+    monitoringAnnotations ? {},
+    deploymentLabels ? {},
+  }: mkServiceDeployment {
+    name = componentName;
+    containers = [ container ];
+    selectorLabels = componentLabels.selector;
+    inherit servicePorts replicas serviceAccountName deploymentLabels;
+    serviceLabels = componentLabels.all // monitoringLabels;
+    serviceAnnotations = monitoringAnnotations;
+    podLabels = componentLabels.all;
+    podAnnotations = prometheusAnnotations;
+    podSpec = { enableServiceLinks = false; securityContext = podSecurityContext; inherit nodeSelector; };
+  };
+
+  controllerGroup = mkComponent {
+    componentName = "cert-manager";
+    componentLabels = controllerLabels // {
       selector = controllerLabels.selector // { "app.kubernetes.io/component" = "controller"; };
+      all = controllerLabels.all // { "app.kubernetes.io/component" = "controller"; };
     };
+    container = controllerContainer;
+    replicas = cfg.replicaCount;
+    servicePorts = [{ port = 9402; protocol = "TCP"; targetPort = "http-metrics"; name = "tcp-prometheus-servicemonitor"; }];
+    serviceAccountName = "cert-manager";
+    monitoringLabels = controllerMonitoringLabels;
+    monitoringAnnotations = controllerMonitoringAnnotations;
   };
 
   # --- Controller RBAC ---
@@ -328,36 +339,19 @@ let
     };
   };
 
-  webhookDeployment = kixlib'.workload.mkDeployment {
-    metadata = { name = "cert-manager-webhook"; labels = webhookLabels.all; };
+  webhookGroup = mkComponent {
+    componentName = "cert-manager-webhook";
+    componentLabels = webhookLabels;
+    deploymentLabels = webhookLabels.all;
+    container = webhookContainer;
     replicas = cfg.webhook.replicaCount;
-    selectorLabels = webhookLabels.selector;
-    template = kixlib'.pod.mkPodTemplate {
-      metadata = { labels = webhookLabels.all; annotations = prometheusAnnotations; };
-      spec = {
-        containers = [ webhookContainer ];
-        serviceAccountName = "cert-manager-webhook";
-        enableServiceLinks = false;
-        securityContext = podSecurityContext;
-        inherit nodeSelector;
-      };
-    };
-  };
-
-  webhookService = kixlib'.networking.mkService {
-    metadata = {
-      name = "cert-manager-webhook";
-      labels = webhookLabels.all // webhookMonitoringLabels;
-      annotations = webhookMonitoringAnnotations;
-    };
-    spec = {
-      type = "ClusterIP";
-      ports = [
-        { port = 443; protocol = "TCP"; targetPort = "https"; name = "https"; }
-        { port = 9402; protocol = "TCP"; targetPort = "http-metrics"; name = "metrics"; }
-      ];
-      selector = webhookLabels.selector;
-    };
+    servicePorts = [
+      { port = 443; protocol = "TCP"; targetPort = "https"; name = "https"; }
+      { port = 9402; protocol = "TCP"; targetPort = "http-metrics"; name = "metrics"; }
+    ];
+    serviceAccountName = "cert-manager-webhook";
+    monitoringLabels = webhookMonitoringLabels;
+    monitoringAnnotations = webhookMonitoringAnnotations;
   };
 
   webhookSubjects = kixlib.rbac.subjects.sa { name = "cert-manager-webhook"; namespace = cfg.namespace; };
@@ -430,33 +424,16 @@ let
     env = [ podNamespaceEnv ];
   };
 
-  cainjectorDeployment = kixlib'.workload.mkDeployment {
-    metadata = { name = "cert-manager-cainjector"; labels = cainjectorLabels.all; };
+  cainjectorGroup = mkComponent {
+    componentName = "cert-manager-cainjector";
+    componentLabels = cainjectorLabels;
+    deploymentLabels = cainjectorLabels.all;
+    container = cainjectorContainer;
     replicas = cfg.cainjector.replicaCount;
-    selectorLabels = cainjectorLabels.selector;
-    template = kixlib'.pod.mkPodTemplate {
-      metadata = { labels = cainjectorLabels.all; annotations = prometheusAnnotations; };
-      spec = {
-        containers = [ cainjectorContainer ];
-        serviceAccountName = "cert-manager-cainjector";
-        enableServiceLinks = false;
-        securityContext = podSecurityContext;
-        inherit nodeSelector;
-      };
-    };
-  };
-
-  cainjectorService = kixlib'.networking.mkService {
-    metadata = {
-      name = "cert-manager-cainjector";
-      labels = cainjectorLabels.all // cainjectorMonitoringLabels;
-      annotations = cainjectorMonitoringAnnotations;
-    };
-    spec = {
-      type = "ClusterIP";
-      ports = [{ port = 9402; protocol = "TCP"; name = "http-metrics"; }];
-      selector = cainjectorLabels.selector;
-    };
+    servicePorts = [{ port = 9402; protocol = "TCP"; name = "http-metrics"; }];
+    serviceAccountName = "cert-manager-cainjector";
+    monitoringLabels = cainjectorMonitoringLabels;
+    monitoringAnnotations = cainjectorMonitoringAnnotations;
   };
 
   cainjectorSubjects = kixlib.rbac.subjects.sa { name = "cert-manager-cainjector"; namespace = cfg.namespace; };
@@ -541,11 +518,9 @@ let
 in
 {
   manifestList =
-    [
-      { name = "cert-manager-sa"; resource = controllerSa; enable = cfg.serviceAccount.create; }
-      { name = "cert-manager-deployment"; resource = controllerDeployment; enable = true; }
-      { name = "cert-manager-service"; resource = controllerService; enable = true; }
-    ]
+    # Controller: Deployment + Service via mkComponent, plus SA
+    [{ name = "cert-manager-sa"; resource = controllerSa; enable = cfg.serviceAccount.create; }]
+    ++ groupToManifestList controllerGroup
     # Controller cluster RBAC — 8 ClusterRoles + 8 ClusterRoleBindings via mkRoleSet
     ++ controllerRbac.toManifestList cfg.rbac.create
     # Aggregated ClusterRoles — no bindings, just roles with aggregation labels
@@ -554,21 +529,19 @@ in
     ) aggregatedClusterRoles
     # Controller namespace-scoped RBAC (leader election + tokenrequest)
     ++ controllerNamespacedRbac.toManifestList cfg.rbac.create
+    # Webhook: Deployment + Service via mkComponent, plus SA + admission webhooks
+    ++ [{ name = "cert-manager-webhook-sa"; resource = webhookSa; enable = cfg.serviceAccount.create; }]
+    ++ groupToManifestList webhookGroup
     ++ [
-      { name = "cert-manager-webhook-sa"; resource = webhookSa; enable = cfg.serviceAccount.create; }
-      { name = "cert-manager-webhook-deployment"; resource = webhookDeployment; enable = true; }
-      { name = "cert-manager-webhook-service"; resource = webhookService; enable = true; }
       { name = "cert-manager-webhook-mutatingwebhookconfig"; resource = mutatingWebhook; enable = true; }
       { name = "cert-manager-webhook-validatingwebhookconfig"; resource = validatingWebhook; enable = true; }
     ]
     # Webhook RBAC
     ++ webhookClusterRbac.toManifestList cfg.rbac.create
     ++ webhookNamespacedRbac.toManifestList cfg.rbac.create
-    ++ [
-      { name = "cert-manager-cainjector-sa"; resource = cainjectorSa; enable = cfg.cainjector.enabled && cfg.serviceAccount.create; }
-      { name = "cert-manager-cainjector-deployment"; resource = cainjectorDeployment; enable = cfg.cainjector.enabled; }
-      { name = "cert-manager-cainjector-service"; resource = cainjectorService; enable = cfg.cainjector.enabled; }
-    ]
+    # Cainjector: Deployment + Service via mkComponent (gated on cainjector.enabled)
+    ++ [{ name = "cert-manager-cainjector-sa"; resource = cainjectorSa; enable = cfg.cainjector.enabled && cfg.serviceAccount.create; }]
+    ++ withEnable cfg.cainjector.enabled (groupToManifestList cainjectorGroup)
     # Cainjector RBAC
     ++ cainjectorClusterRbac.toManifestList (cfg.cainjector.enabled && cfg.rbac.create)
     ++ cainjectorNamespacedRbac.toManifestList (cfg.cainjector.enabled && cfg.rbac.create)

@@ -193,41 +193,6 @@ let
     inherit (cfg.readinessProbe) initialDelaySeconds periodSeconds timeoutSeconds failureThreshold successThreshold;
   } c else c);
 
-  deployment = kixlibCoredns.workload.mkDeployment {
-    replicas = if cfg.hpa.enabled || cfg.autoscaler.enabled then null else cfg.replicaCount;
-    selectorLabels = selectorLabels;
-    strategy = {
-      type = "RollingUpdate";
-      rollingUpdate = { maxUnavailable = 1; maxSurge = "25%"; };
-    };
-    metadata.labels = {
-      "app.kubernetes.io/version" = cfg.image.tag;
-    };
-    template = kixlibCoredns.pod.mkPodTemplate {
-      metadata = {
-        labels = selectorLabels;
-        annotations = lib.optionalAttrs cfg.isClusterService {
-          "scheduler.alpha.kubernetes.io/tolerations" =
-            ''[{"key":"CriticalAddonsOnly", "operator":"Exists"}]'';
-        };
-      };
-      spec = {
-        containers = [container];
-        volumes = [configVolume];
-        terminationGracePeriodSeconds = 30;
-        inherit serviceAccountName;
-      } // lib.optionalAttrs cfg.isClusterService { dnsPolicy = "Default"; };
-    };
-  };
-
-  service = kixlibCoredns.networking.mkService {
-    spec = {
-      type = cfg.serviceType;
-      ports = ports.servicePorts;
-      selector = selectorLabels;
-    };
-  };
-
   # Capability output labels for the metrics Service.
   # Guard MUST match the mkIf on capabilities.monitoring.coredns declaration below.
   # If the guard drifts from the target declaration, the chart crashes when monitoring
@@ -241,43 +206,57 @@ let
     then config.capabilities.monitoring.coredns.output.annotations
     else {};
 
-  metricsService = kixlibCoredns.networking.mkService {
-    metadata = {
-      name = "coredns-metrics";
-      labels = {
-        "app.kubernetes.io/component" = "metrics";
-      } // monitoringLabels;
-      annotations = cfg.prometheus.service.annotations // monitoringAnnotations;
-    };
-    spec = {
-      ports = [{
-        name = "metrics";
-        port = 9153;
-        targetPort = 9153;
-      }];
-      selector = selectorLabels;
-    };
-  };
-
   pdbEnabled = cfg.podDisruptionBudget.minAvailable != null
     || cfg.podDisruptionBudget.maxUnavailable != null;
 
-  pdb = kixlibCoredns.policy.mkPodDisruptionBudget ({
-    selector.matchLabels = selectorLabels;
-  } // lib.optionalAttrs (cfg.podDisruptionBudget.minAvailable != null) {
-    minAvailable = cfg.podDisruptionBudget.minAvailable;
-  } // lib.optionalAttrs (cfg.podDisruptionBudget.maxUnavailable != null) {
-    maxUnavailable = cfg.podDisruptionBudget.maxUnavailable;
-  });
+  # --- Main resource group: Deployment + Service + optional HPA/PDB/metrics ---
+  # Pipeline replaces 5 separate resource definitions (deployment, service,
+  # metricsService, pdb, hpa) with a single composition chain.
+  inherit (kixlibCoredns.combinators) mkServiceDeployment optionalPipe
+    withAutoscaler withPodDisruptionBudget withMetrics groupToManifestList;
 
-  hpa = kixlibCoredns.autoscaling.mkHorizontalPodAutoscaler {
-    scaleTargetRef = {
-      apiVersion = "apps/v1";
-      kind = "Deployment";
-      name = "coredns";
+  mainGroup = mkServiceDeployment {
+    name = "coredns";
+    containers = [ container ];
+    inherit selectorLabels;
+    servicePorts = ports.servicePorts;
+    replicas = if cfg.hpa.enabled || cfg.autoscaler.enabled then null else cfg.replicaCount;
+    serviceType = cfg.serviceType;
+    strategy = { type = "RollingUpdate"; rollingUpdate = { maxUnavailable = 1; maxSurge = "25%"; }; };
+    volumes = [ configVolume ];
+    inherit serviceAccountName;
+    deploymentLabels = { "app.kubernetes.io/version" = cfg.image.tag; };
+    podAnnotations = lib.optionalAttrs cfg.isClusterService {
+      "scheduler.alpha.kubernetes.io/tolerations" =
+        ''[{"key":"CriticalAddonsOnly", "operator":"Exists"}]'';
     };
-    inherit (cfg.hpa) minReplicas maxReplicas metrics;
-  };
+    podSpec = { terminationGracePeriodSeconds = 30; }
+      // lib.optionalAttrs cfg.isClusterService { dnsPolicy = "Default"; };
+  }
+  |> optionalPipe (hasPrometheus && cfg.prometheus.service.enabled) (withMetrics {
+    workloadKey = "coredns-deployment";
+    metricsName = "coredns-service-metrics";
+    metricsServiceName = "coredns-metrics";
+    metricsPort = 9153;
+    monitoringLabels = monitoringLabels;
+    monitoringAnnotations = monitoringAnnotations;
+    extraServiceAnnotations = cfg.prometheus.service.annotations;
+  })
+  |> optionalPipe cfg.hpa.enabled (withAutoscaler {
+    workloadKey = "coredns-deployment";
+    hpaName = "coredns-hpa";
+    hpaArgs = { inherit (cfg.hpa) minReplicas maxReplicas metrics; };
+  })
+  |> optionalPipe pdbEnabled (withPodDisruptionBudget {
+    workloadKey = "coredns-deployment";
+    pdbName = "coredns-poddisruptionbudget";
+    pdbArgs = {}
+      // lib.optionalAttrs (cfg.podDisruptionBudget.minAvailable != null) {
+        minAvailable = cfg.podDisruptionBudget.minAvailable;
+      } // lib.optionalAttrs (cfg.podDisruptionBudget.maxUnavailable != null) {
+        maxUnavailable = cfg.podDisruptionBudget.maxUnavailable;
+      };
+  });
 
   # --- Cluster-proportional autoscaler ---
   autoscalerName = "coredns-autoscaler";
@@ -372,23 +351,21 @@ let
 
 in
 {
-  manifestList = [
-    { name = "coredns-deployment"; resource = deployment; enable = true; }
-    { name = "coredns-configmap"; resource = coreDnsConfigMap; enable = true; }
-    { name = "coredns-service"; resource = service; enable = true; }
-    { name = "coredns-clusterrole"; resource = clusterRole; enable = true; }
-    { name = "coredns-clusterrolebinding"; resource = binding; enable = true; }
-    { name = "coredns-serviceaccount"; resource = sa; enable = cfg.serviceAccount.create; }
-    { name = "coredns-service-metrics"; resource = metricsService; enable = hasPrometheus && cfg.prometheus.service.enabled; }
-    { name = "coredns-poddisruptionbudget"; resource = pdb; enable = pdbEnabled; }
-    { name = "coredns-hpa"; resource = hpa; enable = cfg.hpa.enabled; }
-    # Autoscaler resources — all gated on cfg.autoscaler.enabled, use their own kixlib
-    { name = "coredns-autoscaler-serviceaccount"; resource = autoscalerSa; enable = cfg.autoscaler.enabled; kixlib = autoscalerKixlib; }
-    { name = "coredns-autoscaler-configmap"; resource = autoscalerConfigMap; enable = cfg.autoscaler.enabled; kixlib = autoscalerKixlib; }
-    { name = "coredns-autoscaler-clusterrole"; resource = autoscalerClusterRole; enable = cfg.autoscaler.enabled; kixlib = autoscalerKixlib; }
-    { name = "coredns-autoscaler-clusterrolebinding"; resource = autoscalerBinding; enable = cfg.autoscaler.enabled; kixlib = autoscalerKixlib; }
-    { name = "coredns-autoscaler-deployment"; resource = autoscalerDeployment; enable = cfg.autoscaler.enabled; kixlib = autoscalerKixlib; }
-  ];
+  manifestList =
+    # Main group: deployment + service + optional metrics/hpa/pdb via pipeline
+    groupToManifestList mainGroup
+    ++ [
+      { name = "coredns-configmap"; resource = coreDnsConfigMap; enable = true; }
+      { name = "coredns-clusterrole"; resource = clusterRole; enable = true; }
+      { name = "coredns-clusterrolebinding"; resource = binding; enable = true; }
+      { name = "coredns-serviceaccount"; resource = sa; enable = cfg.serviceAccount.create; }
+      # Autoscaler resources — all gated on cfg.autoscaler.enabled, use their own kixlib
+      { name = "coredns-autoscaler-serviceaccount"; resource = autoscalerSa; enable = cfg.autoscaler.enabled; kixlib = autoscalerKixlib; }
+      { name = "coredns-autoscaler-configmap"; resource = autoscalerConfigMap; enable = cfg.autoscaler.enabled; kixlib = autoscalerKixlib; }
+      { name = "coredns-autoscaler-clusterrole"; resource = autoscalerClusterRole; enable = cfg.autoscaler.enabled; kixlib = autoscalerKixlib; }
+      { name = "coredns-autoscaler-clusterrolebinding"; resource = autoscalerBinding; enable = cfg.autoscaler.enabled; kixlib = autoscalerKixlib; }
+      { name = "coredns-autoscaler-deployment"; resource = autoscalerDeployment; enable = cfg.autoscaler.enabled; kixlib = autoscalerKixlib; }
+    ];
 
   extraConfig = {
     # Level 2: service registry
