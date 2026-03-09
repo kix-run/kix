@@ -41,3 +41,4 @@ contains one file per finding.
 - `07-proposed-architecture.md` — The layered architecture that emerges
 - `08-questions-for-luca.md` — Open questions and decisions needed
 - `09-nix-development.md` — Recent Nix development (2.24–2.33), relevant PRs, RFCs
+- `10-lucas-feedback.md` — Luca's feedback on V4, decisions, and external references (RFC 189, selfhostblocks, Modular Services)
