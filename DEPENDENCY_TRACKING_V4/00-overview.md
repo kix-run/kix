@@ -40,3 +40,4 @@ contains one file per finding.
 - `06-ecosystem-validation.md` — How Helm/Argo/Crossplane/cdk8s/Pulumi validate these ideas
 - `07-proposed-architecture.md` — The layered architecture that emerges
 - `08-questions-for-luca.md` — Open questions and decisions needed
+- `09-nix-development.md` — Recent Nix development (2.24–2.33), relevant PRs, RFCs
