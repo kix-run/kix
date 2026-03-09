@@ -38,7 +38,8 @@ contains one file per finding.
 - `04-with-autoscaler.md` — Solving the `|> withAutoscaler` brain-breaker
 - `05-nested-eval.md` — Nested evalModules and the pragmatic path
 - `06-ecosystem-validation.md` — How Helm/Argo/Crossplane/cdk8s/Pulumi validate these ideas
-- `07-proposed-architecture.md` — The layered architecture that emerges
+- `07-proposed-architecture.md` — The layered architecture that emerges (SUPERSEDED by 07A)
+- `07A-proposed-architecture.md` — **Revised architecture incorporating all feedback and decisions**
 - `08-questions-for-luca.md` — Open questions and decisions needed
 - `09-nix-development.md` — Recent Nix development (2.24–2.33), relevant PRs, RFCs
 - `10-lucas-feedback.md` — Luca's feedback on V4, decisions, and external references (RFC 189, selfhostblocks, Modular Services)
