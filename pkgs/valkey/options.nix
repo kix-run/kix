@@ -3,7 +3,11 @@
 # Returns chart-specific options only. Enable, namespace, and clusterDomain
 # are added automatically by mkChartModule.
 
-{ lib, kixlib, opts }:
+{
+  lib,
+  kixlib,
+  opts,
+}:
 
 let
   types = lib.types;
@@ -16,7 +20,7 @@ in
       repository = "docker.io/bitnami/valkey";
       tag = "8.1.1-debian-12-r0";
     };
-    default = {};
+    default = { };
     description = "Valkey container image.";
   };
 
@@ -25,7 +29,10 @@ in
   auth = lib.mkOption {
     type = types.submodule {
       options = {
-        enabled = lib.mkOption { type = types.bool; default = true; };
+        enabled = lib.mkOption {
+          type = types.bool;
+          default = true;
+        };
         existingSecret = lib.mkOption {
           type = types.str;
           default = "";
@@ -42,7 +49,7 @@ in
         };
       };
     };
-    default = {};
+    default = { };
   };
 
   # --- Configuration ---
@@ -60,53 +67,88 @@ in
   primary = lib.mkOption {
     type = types.submodule {
       options = {
-        configuration = lib.mkOption { type = types.str; default = ""; };
+        configuration = lib.mkOption {
+          type = types.str;
+          default = "";
+        };
         disableCommands = lib.mkOption {
           type = types.listOf types.str;
-          default = [ "FLUSHDB" "FLUSHALL" ];
+          default = [
+            "FLUSHDB"
+            "FLUSHALL"
+          ];
         };
         resources = lib.mkOption {
           type = opts.resourcesSubmodule {
-            defaultRequests = { cpu = "100m"; memory = "128Mi"; ephemeral-storage = "50Mi"; };
-            defaultLimits = { cpu = "150m"; memory = "192Mi"; ephemeral-storage = "2Gi"; };
+            defaultRequests = {
+              cpu = "100m";
+              memory = "128Mi";
+              ephemeral-storage = "50Mi";
+            };
+            defaultLimits = {
+              cpu = "150m";
+              memory = "192Mi";
+              ephemeral-storage = "2Gi";
+            };
           };
-          default = {};
+          default = { };
         };
       };
     };
-    default = {};
+    default = { };
   };
 
   replica = lib.mkOption {
     type = types.submodule {
       options = {
-        replicaCount = lib.mkOption { type = types.int; default = 3; };
-        configuration = lib.mkOption { type = types.str; default = ""; };
+        replicaCount = lib.mkOption {
+          type = types.int;
+          default = 3;
+        };
+        configuration = lib.mkOption {
+          type = types.str;
+          default = "";
+        };
         disableCommands = lib.mkOption {
           type = types.listOf types.str;
-          default = [ "FLUSHDB" "FLUSHALL" ];
+          default = [
+            "FLUSHDB"
+            "FLUSHALL"
+          ];
         };
         resources = lib.mkOption {
           type = opts.resourcesSubmodule {
-            defaultRequests = { cpu = "100m"; memory = "128Mi"; ephemeral-storage = "50Mi"; };
-            defaultLimits = { cpu = "150m"; memory = "192Mi"; ephemeral-storage = "2Gi"; };
+            defaultRequests = {
+              cpu = "100m";
+              memory = "128Mi";
+              ephemeral-storage = "50Mi";
+            };
+            defaultLimits = {
+              cpu = "150m";
+              memory = "192Mi";
+              ephemeral-storage = "2Gi";
+            };
           };
-          default = {};
+          default = { };
         };
         autoscaling = lib.mkOption {
           type = types.submodule {
             options = {
               hpa = lib.mkOption {
-                type = opts.hpaSubmodule { defaults = { maxReplicas = 11; }; };
-                default = {};
+                type = opts.hpaSubmodule {
+                  defaults = {
+                    maxReplicas = 11;
+                  };
+                };
+                default = { };
               };
             };
           };
-          default = {};
+          default = { };
         };
       };
     };
-    default = {};
+    default = { };
   };
 
   # --- Sentinel ---
@@ -114,30 +156,59 @@ in
   sentinel = lib.mkOption {
     type = types.submodule {
       options = {
-        enabled = lib.mkOption { type = types.bool; default = false; };
-        quorum = lib.mkOption { type = types.int; default = 2; };
-        primarySet = lib.mkOption { type = types.str; default = "myprimary"; };
-        downAfterMilliseconds = lib.mkOption { type = types.int; default = 60000; };
-        failoverTimeout = lib.mkOption { type = types.int; default = 180000; };
-        parallelSyncs = lib.mkOption { type = types.int; default = 1; };
-        configuration = lib.mkOption { type = types.str; default = ""; };
+        enabled = lib.mkOption {
+          type = types.bool;
+          default = false;
+        };
+        quorum = lib.mkOption {
+          type = types.int;
+          default = 2;
+        };
+        primarySet = lib.mkOption {
+          type = types.str;
+          default = "myprimary";
+        };
+        downAfterMilliseconds = lib.mkOption {
+          type = types.int;
+          default = 60000;
+        };
+        failoverTimeout = lib.mkOption {
+          type = types.int;
+          default = 180000;
+        };
+        parallelSyncs = lib.mkOption {
+          type = types.int;
+          default = 1;
+        };
+        configuration = lib.mkOption {
+          type = types.str;
+          default = "";
+        };
         image = lib.mkOption {
           type = opts.imageSubmodule {
             repository = "docker.io/bitnami/valkey-sentinel";
             tag = "8.1.1-debian-12-r0";
           };
-          default = {};
+          default = { };
         };
         resources = lib.mkOption {
           type = opts.resourcesSubmodule {
-            defaultRequests = { cpu = "100m"; memory = "128Mi"; ephemeral-storage = "50Mi"; };
-            defaultLimits = { cpu = "150m"; memory = "192Mi"; ephemeral-storage = "2Gi"; };
+            defaultRequests = {
+              cpu = "100m";
+              memory = "128Mi";
+              ephemeral-storage = "50Mi";
+            };
+            defaultLimits = {
+              cpu = "150m";
+              memory = "192Mi";
+              ephemeral-storage = "2Gi";
+            };
           };
-          default = {};
+          default = { };
         };
       };
     };
-    default = {};
+    default = { };
   };
 
   # --- Persistence ---
@@ -145,20 +216,35 @@ in
   persistence = lib.mkOption {
     type = types.submodule {
       options = {
-        enabled = lib.mkOption { type = types.bool; default = true; };
-        size = lib.mkOption { type = types.str; default = "8Gi"; };
-        storageClass = lib.mkOption { type = types.nullOr types.str; default = null; };
-        accessModes = lib.mkOption { type = types.listOf types.str; default = [ "ReadWriteOnce" ]; };
+        enabled = lib.mkOption {
+          type = types.bool;
+          default = true;
+        };
+        size = lib.mkOption {
+          type = types.str;
+          default = "8Gi";
+        };
+        storageClass = lib.mkOption {
+          type = types.nullOr types.str;
+          default = null;
+        };
+        accessModes = lib.mkOption {
+          type = types.listOf types.str;
+          default = [ "ReadWriteOnce" ];
+        };
       };
     };
-    default = {};
+    default = { };
   };
 
   # --- Security contexts ---
 
   podSecurityContext = lib.mkOption {
     type = types.attrsOf types.anything;
-    default = { fsGroup = 1001; fsGroupChangePolicy = "Always"; };
+    default = {
+      fsGroup = 1001;
+      fsGroupChangePolicy = "Always";
+    };
   };
 
   containerSecurityContext = lib.mkOption {
@@ -179,47 +265,65 @@ in
   metrics = lib.mkOption {
     type = types.submodule {
       options = {
-        enabled = lib.mkOption { type = types.bool; default = false; };
+        enabled = lib.mkOption {
+          type = types.bool;
+          default = false;
+        };
         image = lib.mkOption {
           type = opts.imageSubmodule {
             repository = "docker.io/bitnami/redis-exporter";
             tag = "1.70.0-debian-12-r2";
           };
-          default = {};
+          default = { };
         };
         resources = lib.mkOption {
           type = opts.resourcesSubmodule {
-            defaultRequests = { cpu = "100m"; memory = "128Mi"; ephemeral-storage = "50Mi"; };
-            defaultLimits = { cpu = "150m"; memory = "192Mi"; ephemeral-storage = "2Gi"; };
+            defaultRequests = {
+              cpu = "100m";
+              memory = "128Mi";
+              ephemeral-storage = "50Mi";
+            };
+            defaultLimits = {
+              cpu = "150m";
+              memory = "192Mi";
+              ephemeral-storage = "2Gi";
+            };
           };
-          default = {};
+          default = { };
         };
         serviceMonitor = lib.mkOption {
-          type = opts.serviceMonitorSubmodule {};
-          default = {};
+          type = opts.serviceMonitorSubmodule { };
+          default = { };
         };
         podMonitor = lib.mkOption {
-          type = opts.podMonitorSubmodule {};
-          default = {};
+          type = opts.podMonitorSubmodule { };
+          default = { };
         };
         prometheusRule = lib.mkOption {
-          type = opts.prometheusRuleSubmodule {};
-          default = {};
+          type = opts.prometheusRuleSubmodule { };
+          default = { };
         };
       };
     };
-    default = {};
+    default = { };
   };
 
   networkPolicy = lib.mkOption {
     type = types.submodule {
-      options.enabled = lib.mkOption { type = types.bool; default = true; };
+      options.enabled = lib.mkOption {
+        type = types.bool;
+        default = true;
+      };
     };
-    default = {};
+    default = { };
   };
 
   pdb = lib.mkOption {
-    type = opts.pdbSubmodule { defaults = { maxUnavailable = 1; }; };
-    default = {};
+    type = opts.pdbSubmodule {
+      defaults = {
+        maxUnavailable = 1;
+      };
+    };
+    default = { };
   };
 }

@@ -5,7 +5,11 @@
 #
 # Source Helm chart: jetstack/cert-manager (v1.19.4)
 
-{ lib, kixlib, opts }:
+{
+  lib,
+  kixlib,
+  opts,
+}:
 
 let
   types = lib.types;
@@ -18,7 +22,7 @@ in
       repository = "quay.io/jetstack/cert-manager-controller";
       tag = "v1.19.4";
     };
-    default = {};
+    default = { };
     description = "Controller container image.";
   };
 
@@ -45,13 +49,13 @@ in
       repository = "quay.io/jetstack/cert-manager-acmesolver";
       tag = "v1.19.4";
     };
-    default = {};
+    default = { };
     description = "ACME HTTP01 solver container image.";
   };
 
   resources = lib.mkOption {
-    type = opts.resourcesSubmodule {};
-    default = {};
+    type = opts.resourcesSubmodule { };
+    default = { };
     description = "Controller container resource requests/limits.";
   };
 
@@ -63,23 +67,32 @@ in
         description = "Namespace for leader election leases.";
       };
     };
-    default = {};
+    default = { };
   };
 
   serviceAccount = lib.mkOption {
     type = types.submodule {
       options = {
-        create = lib.mkOption { type = types.bool; default = true; };
-        automountServiceAccountToken = lib.mkOption { type = types.bool; default = true; };
+        create = lib.mkOption {
+          type = types.bool;
+          default = true;
+        };
+        automountServiceAccountToken = lib.mkOption {
+          type = types.bool;
+          default = true;
+        };
       };
     };
-    default = {};
+    default = { };
   };
 
   rbac = lib.mkOption {
     type = types.submodule {
       options = {
-        create = lib.mkOption { type = types.bool; default = true; };
+        create = lib.mkOption {
+          type = types.bool;
+          default = true;
+        };
         aggregateClusterRoles = lib.mkOption {
           type = types.bool;
           default = true;
@@ -87,18 +100,18 @@ in
         };
       };
     };
-    default = {};
+    default = { };
   };
 
   securityContext = lib.mkOption {
-    type = opts.podSecurityContextSubmodule {};
-    default = {};
+    type = opts.podSecurityContextSubmodule { };
+    default = { };
     description = "Pod-level security context applied to all components.";
   };
 
   containerSecurityContext = lib.mkOption {
-    type = opts.containerSecurityContextSubmodule {};
-    default = {};
+    type = opts.containerSecurityContextSubmodule { };
+    default = { };
     description = "Container-level security context applied to all components.";
   };
 
@@ -110,7 +123,7 @@ in
         description = "Add Prometheus scrape annotations to Services.";
       };
     };
-    default = {};
+    default = { };
   };
 
   # --- Webhook options ---
@@ -123,12 +136,15 @@ in
             repository = "quay.io/jetstack/cert-manager-webhook";
             tag = "v1.19.4";
           };
-          default = {};
+          default = { };
         };
-        replicaCount = lib.mkOption { type = types.int; default = 1; };
+        replicaCount = lib.mkOption {
+          type = types.int;
+          default = 1;
+        };
         resources = lib.mkOption {
-          type = opts.resourcesSubmodule {};
-          default = {};
+          type = opts.resourcesSubmodule { };
+          default = { };
         };
         securePort = lib.mkOption {
           type = types.int;
@@ -140,7 +156,7 @@ in
         };
       };
     };
-    default = {};
+    default = { };
   };
 
   # --- CA Injector options ---
@@ -158,16 +174,19 @@ in
             repository = "quay.io/jetstack/cert-manager-cainjector";
             tag = "v1.19.4";
           };
-          default = {};
+          default = { };
         };
-        replicaCount = lib.mkOption { type = types.int; default = 1; };
+        replicaCount = lib.mkOption {
+          type = types.int;
+          default = 1;
+        };
         resources = lib.mkOption {
-          type = opts.resourcesSubmodule {};
-          default = {};
+          type = opts.resourcesSubmodule { };
+          default = { };
         };
       };
     };
-    default = {};
+    default = { };
   };
 
   # --- Startup API Check options ---
@@ -185,14 +204,14 @@ in
             repository = "quay.io/jetstack/cert-manager-startupapicheck";
             tag = "v1.19.4";
           };
-          default = {};
+          default = { };
         };
         resources = lib.mkOption {
-          type = opts.resourcesSubmodule {};
-          default = {};
+          type = opts.resourcesSubmodule { };
+          default = { };
         };
       };
     };
-    default = {};
+    default = { };
   };
 }

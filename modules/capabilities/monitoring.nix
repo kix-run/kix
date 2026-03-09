@@ -41,110 +41,116 @@ let
   # Inside the submodule, `config` refers to the submodule's own config.
   parentConfig = config;
 
-  capabilitySubmodule = types.submodule ({ config, ... }: {
-    options = {
-      # --- Input fields (charts write these) ---
+  capabilitySubmodule = types.submodule (
+    { config, ... }:
+    {
+      options = {
+        # --- Input fields (charts write these) ---
 
-      serviceName = lib.mkOption {
-        type = types.str;
-        description = "Name of the Kubernetes Service to scrape.";
-      };
+        serviceName = lib.mkOption {
+          type = types.str;
+          description = "Name of the Kubernetes Service to scrape.";
+        };
 
-      namespace = lib.mkOption {
-        type = types.str;
-        description = "Namespace of the Service to scrape.";
-      };
+        namespace = lib.mkOption {
+          type = types.str;
+          description = "Namespace of the Service to scrape.";
+        };
 
-      portName = lib.mkOption {
-        type = types.str;
-        description = ''
-          Name of the port on the Service to scrape. Must match a named
-          port in the Service spec. This is the primary port identifier —
-          mkServiceMonitor needs a string port name.
-        '';
-      };
-
-      port = lib.mkOption {
-        type = types.nullOr types.int;
-        default = null;
-        description = ''
-          Numeric port for the metrics endpoint. Optional — portName is the
-          primary identifier. Stored for future use (e.g., withMetrics combinator).
-          Known duplication: this port is also hardcoded in the container spec.
-          Unavoidable without withMetrics (deferred). See doc 12 / 10C.
-        '';
-      };
-
-      path = lib.mkOption {
-        type = types.str;
-        default = "/metrics";
-        description = "HTTP path for the metrics endpoint.";
-      };
-
-      interval = lib.mkOption {
-        type = types.nullOr types.str;
-        default = null;
-        description = ''
-          Scrape interval override for this target. Null means use
-          monitoring.defaultInterval. Per-target override allows services
-          like valkey to have different scrape frequencies.
-        '';
-      };
-
-      selector = lib.mkOption {
-        type = types.attrsOf types.str;
-        description = ''
-          Label selector to match the target Service. Typically the chart's
-          selector labels plus a component label. Kept because removing it
-          would require selector inference, which is complex.
-        '';
-      };
-
-      # --- Output fields (computed from inputs, read by charts) ---
-
-      output = {
-        labels = lib.mkOption {
-          type = types.attrsOf types.str;
-          default = {};
+        portName = lib.mkOption {
+          type = types.str;
           description = ''
-            Labels computed from inputs. Charts may READ these to merge into
-            Service metadata (e.g., kix.monitoring/scrape label).
-            Charts must NEVER write to output fields.
+            Name of the port on the Service to scrape. Must match a named
+            port in the Service spec. This is the primary port identifier —
+            mkServiceMonitor needs a string port name.
           '';
         };
 
-        annotations = lib.mkOption {
-          type = types.attrsOf types.str;
-          default = {};
+        port = lib.mkOption {
+          type = types.nullOr types.int;
+          default = null;
           description = ''
-            Annotations computed from inputs. Charts may READ these to merge
-            into Service metadata. Charts must NEVER write to output fields.
+            Numeric port for the metrics endpoint. Optional — portName is the
+            primary identifier. Stored for future use (e.g., withMetrics combinator).
+            Known duplication: this port is also hardcoded in the container spec.
+            Unavoidable without withMetrics (deferred). See doc 12 / 10C.
           '';
         };
-      };
-    };
 
-    # Compute output from the submodule's own inputs + parent monitoring config.
-    # This runs inside each target submodule — `config` here is the target's own
-    # config (serviceName, portName, etc.), NOT the parent module config.
-    # parentConfig.monitoring.enabled/provider gates the output computation.
-    #
-    # This avoids infinite recursion: the submodule reads its OWN inputs (no
-    # cross-module dependency) and writes its OWN output. The implementation
-    # module (monitoring-prometheus.nix) only reads capabilities.monitoring to
-    # create manifests — it never writes back to capabilities.monitoring.
-    config = lib.mkIf (parentConfig.monitoring.enabled && parentConfig.monitoring.provider == "prometheus") {
-      output.labels = {
-        "kix.monitoring/scrape" = "true";
+        path = lib.mkOption {
+          type = types.str;
+          default = "/metrics";
+          description = "HTTP path for the metrics endpoint.";
+        };
+
+        interval = lib.mkOption {
+          type = types.nullOr types.str;
+          default = null;
+          description = ''
+            Scrape interval override for this target. Null means use
+            monitoring.defaultInterval. Per-target override allows services
+            like valkey to have different scrape frequencies.
+          '';
+        };
+
+        selector = lib.mkOption {
+          type = types.attrsOf types.str;
+          description = ''
+            Label selector to match the target Service. Typically the chart's
+            selector labels plus a component label. Kept because removing it
+            would require selector inference, which is complex.
+          '';
+        };
+
+        # --- Output fields (computed from inputs, read by charts) ---
+
+        output = {
+          labels = lib.mkOption {
+            type = types.attrsOf types.str;
+            default = { };
+            description = ''
+              Labels computed from inputs. Charts may READ these to merge into
+              Service metadata (e.g., kix.monitoring/scrape label).
+              Charts must NEVER write to output fields.
+            '';
+          };
+
+          annotations = lib.mkOption {
+            type = types.attrsOf types.str;
+            default = { };
+            description = ''
+              Annotations computed from inputs. Charts may READ these to merge
+              into Service metadata. Charts must NEVER write to output fields.
+            '';
+          };
+        };
       };
-      output.annotations = {
-        "kix.monitoring/port-name" = config.portName;
-        "kix.monitoring/path" = config.path;
-      } // lib.optionalAttrs (config.port != null) {
-        "kix.monitoring/port" = toString config.port;
-      };
-    };
-  });
+
+      # Compute output from the submodule's own inputs + parent monitoring config.
+      # This runs inside each target submodule — `config` here is the target's own
+      # config (serviceName, portName, etc.), NOT the parent module config.
+      # parentConfig.monitoring.enabled/provider gates the output computation.
+      #
+      # This avoids infinite recursion: the submodule reads its OWN inputs (no
+      # cross-module dependency) and writes its OWN output. The implementation
+      # module (monitoring-prometheus.nix) only reads capabilities.monitoring to
+      # create manifests — it never writes back to capabilities.monitoring.
+      config =
+        lib.mkIf (parentConfig.monitoring.enabled && parentConfig.monitoring.provider == "prometheus")
+          {
+            output.labels = {
+              "kix.monitoring/scrape" = "true";
+            };
+            output.annotations = {
+              "kix.monitoring/port-name" = config.portName;
+              "kix.monitoring/path" = config.path;
+            }
+            // lib.optionalAttrs (config.port != null) {
+              "kix.monitoring/port" = toString config.port;
+            };
+          };
+    }
+  );
 in
 {
   options = {
@@ -170,7 +176,10 @@ in
     };
 
     monitoring.provider = lib.mkOption {
-      type = types.enum [ "prometheus" "none" ];
+      type = types.enum [
+        "prometheus"
+        "none"
+      ];
       default = "prometheus";
       description = ''
         Which monitoring backend to use. "prometheus" enables output computation
@@ -182,7 +191,7 @@ in
     # Capability submodule — charts declare intent here.
     capabilities.monitoring = lib.mkOption {
       type = types.attrsOf capabilitySubmodule;
-      default = {};
+      default = { };
       description = ''
         Monitoring capabilities declared by chart modules. Each chart adds its
         own entry (e.g., capabilities.monitoring.coredns). Output metadata is

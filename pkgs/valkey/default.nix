@@ -13,7 +13,12 @@
 
 kixlib.mkChartModule {
   name = "valkey";
-  inherit lib pkgs config kixlib;
+  inherit
+    lib
+    pkgs
+    config
+    kixlib
+    ;
   chartOptions = import ./options.nix;
   resources = import ./resources.nix;
 }

@@ -100,45 +100,47 @@ in
     };
 
     services = lib.mkOption {
-      type = types.attrsOf (types.submodule {
-        options = {
-          namespace = lib.mkOption {
-            type = types.str;
-            description = "Namespace of the service.";
-          };
+      type = types.attrsOf (
+        types.submodule {
+          options = {
+            namespace = lib.mkOption {
+              type = types.str;
+              description = "Namespace of the service.";
+            };
 
-          podSelector = lib.mkOption {
-            type = types.attrsOf types.str;
-            description = ''
-              Label selector matching the service's pods.
-              Used as spec.podSelector.matchLabels in the generated
-              NetworkPolicy.
-            '';
-          };
+            podSelector = lib.mkOption {
+              type = types.attrsOf types.str;
+              description = ''
+                Label selector matching the service's pods.
+                Used as spec.podSelector.matchLabels in the generated
+                NetworkPolicy.
+              '';
+            };
 
-          ingressPorts = lib.mkOption {
-            type = types.listOf types.int;
-            default = [ ];
-            description = ''
-              Ports that accept incoming traffic. The generated
-              NetworkPolicy will allow ingress to these ports from
-              any source (or from declared dependents, depending on
-              defaultDeny setting).
-            '';
-          };
+            ingressPorts = lib.mkOption {
+              type = types.listOf types.int;
+              default = [ ];
+              description = ''
+                Ports that accept incoming traffic. The generated
+                NetworkPolicy will allow ingress to these ports from
+                any source (or from declared dependents, depending on
+                defaultDeny setting).
+              '';
+            };
 
-          egressTo = lib.mkOption {
-            type = types.listOf types.str;
-            default = [ ];
-            description = ''
-              List of registry service names this service needs to reach.
-              E.g., ["valkey"] means "allow egress to valkey's primary
-              endpoint port". Resolved via config.registry at materialization
-              time.
-            '';
+            egressTo = lib.mkOption {
+              type = types.listOf types.str;
+              default = [ ];
+              description = ''
+                List of registry service names this service needs to reach.
+                E.g., ["valkey"] means "allow egress to valkey's primary
+                endpoint port". Resolved via config.registry at materialization
+                time.
+              '';
+            };
           };
-        };
-      });
+        }
+      );
       default = { };
       description = ''
         Network surface area declarations from chart modules.

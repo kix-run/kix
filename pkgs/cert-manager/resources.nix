@@ -5,26 +5,40 @@
 # Source Helm chart: jetstack/cert-manager (v1.19.4)
 # Components: controller, webhook, cainjector, startupapicheck
 
-{ lib, config, kixlib, kixlib', cfg, labels, ... }:
+{
+  lib,
+  config,
+  kixlib,
+  kixlib',
+  cfg,
+  labels,
+  ...
+}:
 
 let
   fullname = "cert-manager";
 
   # --- Component labels ---
   # Cert-manager uses different app.kubernetes.io/name per component.
-  mkComponentLabels = component: let
-    appName = if component == "controller" then "cert-manager" else component;
-    base = kixlib.mkLabels {
-      chart = appName;
-      clusterLabels = config.cluster.labels;
-      extra = {
-        app = appName;
+  mkComponentLabels =
+    component:
+    let
+      appName = if component == "controller" then "cert-manager" else component;
+      base = kixlib.mkLabels {
+        chart = appName;
+        clusterLabels = config.cluster.labels;
+        extra = {
+          app = appName;
+          "app.kubernetes.io/component" = component;
+        };
+      };
+    in
+    base
+    // {
+      selector = base.selector // {
         "app.kubernetes.io/component" = component;
       };
     };
-  in base // {
-    selector = base.selector // { "app.kubernetes.io/component" = component; };
-  };
 
   controllerLabels = mkComponentLabels "controller";
   webhookLabels = mkComponentLabels "webhook";
@@ -37,7 +51,9 @@ let
     runAsUser = cfg.securityContext.runAsUser;
     runAsGroup = cfg.securityContext.runAsGroup;
     fsGroup = cfg.securityContext.fsGroup;
-    seccompProfile = { type = cfg.securityContext.seccompProfile.type; };
+    seccompProfile = {
+      type = cfg.securityContext.seccompProfile.type;
+    };
   };
 
   containerSecCtx = {
@@ -51,7 +67,10 @@ let
     runAsUser = cfg.containerSecurityContext.runAsUser;
   };
 
-  podNamespaceEnv = { name = "POD_NAMESPACE"; valueFrom.fieldRef.fieldPath = "metadata.namespace"; };
+  podNamespaceEnv = {
+    name = "POD_NAMESPACE";
+    valueFrom.fieldRef.fieldPath = "metadata.namespace";
+  };
 
   prometheusAnnotations = lib.optionalAttrs cfg.prometheus.enabled {
     "prometheus.io/path" = "/metrics";
@@ -59,14 +78,21 @@ let
     "prometheus.io/port" = "9402";
   };
 
-  nodeSelector = { "kubernetes.io/os" = "linux"; };
+  nodeSelector = {
+    "kubernetes.io/os" = "linux";
+  };
 
   # ============================================================================
   # CONTROLLER
   # ============================================================================
 
   controllerSa = kixlib'.rbac.mkServiceAccount {
-    metadata = { name = "cert-manager"; labels = controllerLabels.all // { "app.kubernetes.io/component" = "controller"; }; };
+    metadata = {
+      name = "cert-manager";
+      labels = controllerLabels.all // {
+        "app.kubernetes.io/component" = "controller";
+      };
+    };
     automountServiceAccountToken = cfg.serviceAccount.automountServiceAccountToken;
   };
 
@@ -82,16 +108,31 @@ let
       "--max-concurrent-challenges=${toString cfg.maxConcurrentChallenges}"
     ];
     ports = [
-      { containerPort = 9402; protocol = "TCP"; name = "http-metrics"; }
-      { containerPort = 9403; protocol = "TCP"; name = "http-healthz"; }
+      {
+        containerPort = 9402;
+        protocol = "TCP";
+        name = "http-metrics";
+      }
+      {
+        containerPort = 9403;
+        protocol = "TCP";
+        name = "http-healthz";
+      }
     ];
     securityContext = containerSecCtx;
     resources = cfg.resources;
     env = [ podNamespaceEnv ];
     livenessProbe = {
-      httpGet = { path = "/livez"; port = "http-healthz"; scheme = "HTTP"; };
-      initialDelaySeconds = 10; periodSeconds = 10; timeoutSeconds = 15;
-      failureThreshold = 8; successThreshold = 1;
+      httpGet = {
+        path = "/livez";
+        port = "http-healthz";
+        scheme = "HTTP";
+      };
+      initialDelaySeconds = 10;
+      periodSeconds = 10;
+      timeoutSeconds = 15;
+      failureThreshold = 8;
+      successThreshold = 1;
     };
   };
 
@@ -102,15 +143,18 @@ let
   controllerMonitoringLabels = config.capabilities.monitoring.cert-manager.output.labels;
   controllerMonitoringAnnotations = config.capabilities.monitoring.cert-manager.output.annotations;
   webhookMonitoringLabels = config.capabilities.monitoring.cert-manager-webhook.output.labels;
-  webhookMonitoringAnnotations = config.capabilities.monitoring.cert-manager-webhook.output.annotations;
+  webhookMonitoringAnnotations =
+    config.capabilities.monitoring.cert-manager-webhook.output.annotations;
   cainjectorMonitoringLabels =
-    if cfg.cainjector.enabled
-    then config.capabilities.monitoring.cert-manager-cainjector.output.labels
-    else {};
+    if cfg.cainjector.enabled then
+      config.capabilities.monitoring.cert-manager-cainjector.output.labels
+    else
+      { };
   cainjectorMonitoringAnnotations =
-    if cfg.cainjector.enabled
-    then config.capabilities.monitoring.cert-manager-cainjector.output.annotations
-    else {};
+    if cfg.cainjector.enabled then
+      config.capabilities.monitoring.cert-manager-cainjector.output.annotations
+    else
+      { };
 
   # --- Component helper: wraps mkServiceDeployment for cert-manager's 3 near-identical components ---
   # Each component (controller, webhook, cainjector) is a Deployment + Service with the same
@@ -121,37 +165,59 @@ let
   # mkComponent: local helper wrapping mkServiceDeployment for cert-manager's components.
   # deploymentLabels defaults to {} (inherits kixlib' defaults) because the original
   # controller deployment had no explicit labels, while webhook/cainjector did.
-  mkComponent = {
-    componentName,
-    componentLabels,
-    container,
-    replicas,
-    servicePorts,
-    serviceAccountName,
-    monitoringLabels ? {},
-    monitoringAnnotations ? {},
-    deploymentLabels ? {},
-  }: mkServiceDeployment {
-    name = componentName;
-    containers = [ container ];
-    selectorLabels = componentLabels.selector;
-    inherit servicePorts replicas serviceAccountName deploymentLabels;
-    serviceLabels = componentLabels.all // monitoringLabels;
-    serviceAnnotations = monitoringAnnotations;
-    podLabels = componentLabels.all;
-    podAnnotations = prometheusAnnotations;
-    podSpec = { enableServiceLinks = false; securityContext = podSecurityContext; inherit nodeSelector; };
-  };
+  mkComponent =
+    {
+      componentName,
+      componentLabels,
+      container,
+      replicas,
+      servicePorts,
+      serviceAccountName,
+      monitoringLabels ? { },
+      monitoringAnnotations ? { },
+      deploymentLabels ? { },
+    }:
+    mkServiceDeployment {
+      name = componentName;
+      containers = [ container ];
+      selectorLabels = componentLabels.selector;
+      inherit
+        servicePorts
+        replicas
+        serviceAccountName
+        deploymentLabels
+        ;
+      serviceLabels = componentLabels.all // monitoringLabels;
+      serviceAnnotations = monitoringAnnotations;
+      podLabels = componentLabels.all;
+      podAnnotations = prometheusAnnotations;
+      podSpec = {
+        enableServiceLinks = false;
+        securityContext = podSecurityContext;
+        inherit nodeSelector;
+      };
+    };
 
   controllerGroup = mkComponent {
     componentName = "cert-manager";
     componentLabels = controllerLabels // {
-      selector = controllerLabels.selector // { "app.kubernetes.io/component" = "controller"; };
-      all = controllerLabels.all // { "app.kubernetes.io/component" = "controller"; };
+      selector = controllerLabels.selector // {
+        "app.kubernetes.io/component" = "controller";
+      };
+      all = controllerLabels.all // {
+        "app.kubernetes.io/component" = "controller";
+      };
     };
     container = controllerContainer;
     replicas = cfg.replicaCount;
-    servicePorts = [{ port = 9402; protocol = "TCP"; targetPort = "http-metrics"; name = "tcp-prometheus-servicemonitor"; }];
+    servicePorts = [
+      {
+        port = 9402;
+        protocol = "TCP";
+        targetPort = "http-metrics";
+        name = "tcp-prometheus-servicemonitor";
+      }
+    ];
     serviceAccountName = "cert-manager";
     monitoringLabels = controllerMonitoringLabels;
     monitoringAnnotations = controllerMonitoringAnnotations;
@@ -160,77 +226,477 @@ let
   # --- Controller RBAC ---
   # Uses mkRoleSet to batch-generate 8 ClusterRoles + 8 ClusterRoleBindings,
   # eliminating ~80 lines of repeated subjects/binding boilerplate.
-  controllerSubjects = kixlib.rbac.subjects.sa { name = "cert-manager"; namespace = cfg.namespace; };
+  controllerSubjects = kixlib.rbac.subjects.sa {
+    name = "cert-manager";
+    namespace = cfg.namespace;
+  };
 
   controllerRbac = kixlib'.rbac.mkRoleSet {
     subjects = controllerSubjects;
     roles = {
-      "cert-manager-controller-issuers" = { rules = [
-        { apiGroups = [ "cert-manager.io" ]; resources = [ "issuers" "issuers/status" ]; verbs = [ "update" "patch" ]; }
-        { apiGroups = [ "cert-manager.io" ]; resources = [ "issuers" ]; verbs = [ "get" "list" "watch" ]; }
-        { apiGroups = [ "" ]; resources = [ "secrets" ]; verbs = [ "get" "list" "watch" "create" "update" "delete" ]; }
-        { apiGroups = [ "" ]; resources = [ "events" ]; verbs = [ "create" "patch" ]; }
-      ]; };
-      "cert-manager-controller-clusterissuers" = { rules = [
-        { apiGroups = [ "cert-manager.io" ]; resources = [ "clusterissuers" "clusterissuers/status" ]; verbs = [ "update" "patch" ]; }
-        { apiGroups = [ "cert-manager.io" ]; resources = [ "clusterissuers" ]; verbs = [ "get" "list" "watch" ]; }
-        { apiGroups = [ "" ]; resources = [ "secrets" ]; verbs = [ "get" "list" "watch" "create" "update" "delete" ]; }
-        { apiGroups = [ "" ]; resources = [ "events" ]; verbs = [ "create" "patch" ]; }
-      ]; };
-      "cert-manager-controller-certificates" = { rules = [
-        { apiGroups = [ "cert-manager.io" ]; resources = [ "certificates" "certificates/status" "certificaterequests" "certificaterequests/status" ]; verbs = [ "update" "patch" ]; }
-        { apiGroups = [ "cert-manager.io" ]; resources = [ "certificates" "certificaterequests" "clusterissuers" "issuers" ]; verbs = [ "get" "list" "watch" ]; }
-        { apiGroups = [ "cert-manager.io" ]; resources = [ "certificates/finalizers" "certificaterequests/finalizers" ]; verbs = [ "update" ]; }
-        { apiGroups = [ "acme.cert-manager.io" ]; resources = [ "orders" ]; verbs = [ "create" "delete" "get" "list" "watch" ]; }
-        { apiGroups = [ "" ]; resources = [ "secrets" ]; verbs = [ "get" "list" "watch" "create" "update" "delete" "patch" ]; }
-        { apiGroups = [ "" ]; resources = [ "events" ]; verbs = [ "create" "patch" ]; }
-      ]; };
-      "cert-manager-controller-orders" = { rules = [
-        { apiGroups = [ "acme.cert-manager.io" ]; resources = [ "orders" "orders/status" ]; verbs = [ "update" "patch" ]; }
-        { apiGroups = [ "acme.cert-manager.io" ]; resources = [ "orders" "challenges" ]; verbs = [ "get" "list" "watch" ]; }
-        { apiGroups = [ "cert-manager.io" ]; resources = [ "clusterissuers" "issuers" ]; verbs = [ "get" "list" "watch" ]; }
-        { apiGroups = [ "acme.cert-manager.io" ]; resources = [ "challenges" ]; verbs = [ "create" "delete" ]; }
-        { apiGroups = [ "acme.cert-manager.io" ]; resources = [ "orders/finalizers" ]; verbs = [ "update" ]; }
-        { apiGroups = [ "" ]; resources = [ "secrets" ]; verbs = [ "get" "list" "watch" ]; }
-        { apiGroups = [ "" ]; resources = [ "events" ]; verbs = [ "create" "patch" ]; }
-      ]; };
-      "cert-manager-controller-challenges" = { rules = [
-        { apiGroups = [ "acme.cert-manager.io" ]; resources = [ "challenges" "challenges/status" ]; verbs = [ "update" "patch" ]; }
-        { apiGroups = [ "acme.cert-manager.io" ]; resources = [ "challenges" ]; verbs = [ "get" "list" "watch" ]; }
-        { apiGroups = [ "cert-manager.io" ]; resources = [ "issuers" "clusterissuers" ]; verbs = [ "get" "list" "watch" ]; }
-        { apiGroups = [ "" ]; resources = [ "secrets" ]; verbs = [ "get" "list" "watch" ]; }
-        { apiGroups = [ "" ]; resources = [ "events" ]; verbs = [ "create" "patch" ]; }
-        { apiGroups = [ "" ]; resources = [ "pods" "services" ]; verbs = [ "get" "list" "watch" "create" "delete" ]; }
-        { apiGroups = [ "networking.k8s.io" ]; resources = [ "ingresses" ]; verbs = [ "get" "list" "watch" "create" "delete" "update" ]; }
-        { apiGroups = [ "gateway.networking.k8s.io" ]; resources = [ "httproutes" ]; verbs = [ "get" "list" "watch" "create" "delete" "update" ]; }
-        { apiGroups = [ "route.openshift.io" ]; resources = [ "routes/custom-host" ]; verbs = [ "create" ]; }
-        { apiGroups = [ "acme.cert-manager.io" ]; resources = [ "challenges/finalizers" ]; verbs = [ "update" ]; }
-        { apiGroups = [ "" ]; resources = [ "secrets" ]; verbs = [ "get" "list" "watch" ]; }
-      ]; };
-      "cert-manager-controller-ingress-shim" = { rules = [
-        { apiGroups = [ "cert-manager.io" ]; resources = [ "certificates" "certificaterequests" ]; verbs = [ "create" "update" "delete" ]; }
-        { apiGroups = [ "cert-manager.io" ]; resources = [ "certificates" "certificaterequests" "issuers" "clusterissuers" ]; verbs = [ "get" "list" "watch" ]; }
-        { apiGroups = [ "networking.k8s.io" ]; resources = [ "ingresses" ]; verbs = [ "get" "list" "watch" ]; }
-        { apiGroups = [ "networking.k8s.io" ]; resources = [ "ingresses/finalizers" ]; verbs = [ "update" ]; }
-        { apiGroups = [ "gateway.networking.k8s.io" ]; resources = [ "gateways" "httproutes" ]; verbs = [ "get" "list" "watch" ]; }
-        { apiGroups = [ "gateway.networking.k8s.io" ]; resources = [ "gateways/finalizers" "httproutes/finalizers" ]; verbs = [ "update" ]; }
-        { apiGroups = [ "" ]; resources = [ "events" ]; verbs = [ "create" "patch" ]; }
-      ]; };
-      "cert-manager-controller-approve:cert-manager-io" = {
-        metadata.labels = controllerLabels.all // { "app.kubernetes.io/component" = "cert-manager"; };
+      "cert-manager-controller-issuers" = {
         rules = [
-          { apiGroups = [ "cert-manager.io" ]; resources = [ "signers" ]; verbs = [ "approve" ];
-            resourceNames = [ "issuers.cert-manager.io/*" "clusterissuers.cert-manager.io/*" ]; }
+          {
+            apiGroups = [ "cert-manager.io" ];
+            resources = [
+              "issuers"
+              "issuers/status"
+            ];
+            verbs = [
+              "update"
+              "patch"
+            ];
+          }
+          {
+            apiGroups = [ "cert-manager.io" ];
+            resources = [ "issuers" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          {
+            apiGroups = [ "" ];
+            resources = [ "secrets" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "create"
+              "update"
+              "delete"
+            ];
+          }
+          {
+            apiGroups = [ "" ];
+            resources = [ "events" ];
+            verbs = [
+              "create"
+              "patch"
+            ];
+          }
+        ];
+      };
+      "cert-manager-controller-clusterissuers" = {
+        rules = [
+          {
+            apiGroups = [ "cert-manager.io" ];
+            resources = [
+              "clusterissuers"
+              "clusterissuers/status"
+            ];
+            verbs = [
+              "update"
+              "patch"
+            ];
+          }
+          {
+            apiGroups = [ "cert-manager.io" ];
+            resources = [ "clusterissuers" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          {
+            apiGroups = [ "" ];
+            resources = [ "secrets" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "create"
+              "update"
+              "delete"
+            ];
+          }
+          {
+            apiGroups = [ "" ];
+            resources = [ "events" ];
+            verbs = [
+              "create"
+              "patch"
+            ];
+          }
+        ];
+      };
+      "cert-manager-controller-certificates" = {
+        rules = [
+          {
+            apiGroups = [ "cert-manager.io" ];
+            resources = [
+              "certificates"
+              "certificates/status"
+              "certificaterequests"
+              "certificaterequests/status"
+            ];
+            verbs = [
+              "update"
+              "patch"
+            ];
+          }
+          {
+            apiGroups = [ "cert-manager.io" ];
+            resources = [
+              "certificates"
+              "certificaterequests"
+              "clusterissuers"
+              "issuers"
+            ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          {
+            apiGroups = [ "cert-manager.io" ];
+            resources = [
+              "certificates/finalizers"
+              "certificaterequests/finalizers"
+            ];
+            verbs = [ "update" ];
+          }
+          {
+            apiGroups = [ "acme.cert-manager.io" ];
+            resources = [ "orders" ];
+            verbs = [
+              "create"
+              "delete"
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          {
+            apiGroups = [ "" ];
+            resources = [ "secrets" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "create"
+              "update"
+              "delete"
+              "patch"
+            ];
+          }
+          {
+            apiGroups = [ "" ];
+            resources = [ "events" ];
+            verbs = [
+              "create"
+              "patch"
+            ];
+          }
+        ];
+      };
+      "cert-manager-controller-orders" = {
+        rules = [
+          {
+            apiGroups = [ "acme.cert-manager.io" ];
+            resources = [
+              "orders"
+              "orders/status"
+            ];
+            verbs = [
+              "update"
+              "patch"
+            ];
+          }
+          {
+            apiGroups = [ "acme.cert-manager.io" ];
+            resources = [
+              "orders"
+              "challenges"
+            ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          {
+            apiGroups = [ "cert-manager.io" ];
+            resources = [
+              "clusterissuers"
+              "issuers"
+            ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          {
+            apiGroups = [ "acme.cert-manager.io" ];
+            resources = [ "challenges" ];
+            verbs = [
+              "create"
+              "delete"
+            ];
+          }
+          {
+            apiGroups = [ "acme.cert-manager.io" ];
+            resources = [ "orders/finalizers" ];
+            verbs = [ "update" ];
+          }
+          {
+            apiGroups = [ "" ];
+            resources = [ "secrets" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          {
+            apiGroups = [ "" ];
+            resources = [ "events" ];
+            verbs = [
+              "create"
+              "patch"
+            ];
+          }
+        ];
+      };
+      "cert-manager-controller-challenges" = {
+        rules = [
+          {
+            apiGroups = [ "acme.cert-manager.io" ];
+            resources = [
+              "challenges"
+              "challenges/status"
+            ];
+            verbs = [
+              "update"
+              "patch"
+            ];
+          }
+          {
+            apiGroups = [ "acme.cert-manager.io" ];
+            resources = [ "challenges" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          {
+            apiGroups = [ "cert-manager.io" ];
+            resources = [
+              "issuers"
+              "clusterissuers"
+            ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          {
+            apiGroups = [ "" ];
+            resources = [ "secrets" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          {
+            apiGroups = [ "" ];
+            resources = [ "events" ];
+            verbs = [
+              "create"
+              "patch"
+            ];
+          }
+          {
+            apiGroups = [ "" ];
+            resources = [
+              "pods"
+              "services"
+            ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "create"
+              "delete"
+            ];
+          }
+          {
+            apiGroups = [ "networking.k8s.io" ];
+            resources = [ "ingresses" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "create"
+              "delete"
+              "update"
+            ];
+          }
+          {
+            apiGroups = [ "gateway.networking.k8s.io" ];
+            resources = [ "httproutes" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "create"
+              "delete"
+              "update"
+            ];
+          }
+          {
+            apiGroups = [ "route.openshift.io" ];
+            resources = [ "routes/custom-host" ];
+            verbs = [ "create" ];
+          }
+          {
+            apiGroups = [ "acme.cert-manager.io" ];
+            resources = [ "challenges/finalizers" ];
+            verbs = [ "update" ];
+          }
+          {
+            apiGroups = [ "" ];
+            resources = [ "secrets" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+        ];
+      };
+      "cert-manager-controller-ingress-shim" = {
+        rules = [
+          {
+            apiGroups = [ "cert-manager.io" ];
+            resources = [
+              "certificates"
+              "certificaterequests"
+            ];
+            verbs = [
+              "create"
+              "update"
+              "delete"
+            ];
+          }
+          {
+            apiGroups = [ "cert-manager.io" ];
+            resources = [
+              "certificates"
+              "certificaterequests"
+              "issuers"
+              "clusterissuers"
+            ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          {
+            apiGroups = [ "networking.k8s.io" ];
+            resources = [ "ingresses" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          {
+            apiGroups = [ "networking.k8s.io" ];
+            resources = [ "ingresses/finalizers" ];
+            verbs = [ "update" ];
+          }
+          {
+            apiGroups = [ "gateway.networking.k8s.io" ];
+            resources = [
+              "gateways"
+              "httproutes"
+            ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          {
+            apiGroups = [ "gateway.networking.k8s.io" ];
+            resources = [
+              "gateways/finalizers"
+              "httproutes/finalizers"
+            ];
+            verbs = [ "update" ];
+          }
+          {
+            apiGroups = [ "" ];
+            resources = [ "events" ];
+            verbs = [
+              "create"
+              "patch"
+            ];
+          }
+        ];
+      };
+      "cert-manager-controller-approve:cert-manager-io" = {
+        metadata.labels = controllerLabels.all // {
+          "app.kubernetes.io/component" = "cert-manager";
+        };
+        rules = [
+          {
+            apiGroups = [ "cert-manager.io" ];
+            resources = [ "signers" ];
+            verbs = [ "approve" ];
+            resourceNames = [
+              "issuers.cert-manager.io/*"
+              "clusterissuers.cert-manager.io/*"
+            ];
+          }
         ];
       };
       "cert-manager-controller-certificatesigningrequests" = {
-        metadata.labels = controllerLabels.all // { "app.kubernetes.io/component" = "cert-manager"; };
+        metadata.labels = controllerLabels.all // {
+          "app.kubernetes.io/component" = "cert-manager";
+        };
         rules = [
-          { apiGroups = [ "certificates.k8s.io" ]; resources = [ "certificatesigningrequests" ]; verbs = [ "get" "list" "watch" "update" ]; }
-          { apiGroups = [ "certificates.k8s.io" ]; resources = [ "certificatesigningrequests/status" ]; verbs = [ "update" "patch" ]; }
-          { apiGroups = [ "certificates.k8s.io" ]; resources = [ "signers" ]; verbs = [ "sign" ];
-            resourceNames = [ "issuers.cert-manager.io/*" "clusterissuers.cert-manager.io/*" ]; }
-          { apiGroups = [ "authorization.k8s.io" ]; resources = [ "subjectaccessreviews" ]; verbs = [ "create" ]; }
+          {
+            apiGroups = [ "certificates.k8s.io" ];
+            resources = [ "certificatesigningrequests" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "update"
+            ];
+          }
+          {
+            apiGroups = [ "certificates.k8s.io" ];
+            resources = [ "certificatesigningrequests/status" ];
+            verbs = [
+              "update"
+              "patch"
+            ];
+          }
+          {
+            apiGroups = [ "certificates.k8s.io" ];
+            resources = [ "signers" ];
+            verbs = [ "sign" ];
+            resourceNames = [
+              "issuers.cert-manager.io/*"
+              "clusterissuers.cert-manager.io/*"
+            ];
+          }
+          {
+            apiGroups = [ "authorization.k8s.io" ];
+            resources = [ "subjectaccessreviews" ];
+            verbs = [ "create" ];
+          }
         ];
       };
     };
@@ -239,35 +705,105 @@ let
   # Aggregated ClusterRoles — no bindings, only roles with aggregation labels.
   aggregatedClusterRoles = {
     cluster-view = kixlib'.rbac.mkClusterRole {
-      metadata = { name = "cert-manager-cluster-view";
-        labels = controllerLabels.all // { "rbac.authorization.k8s.io/aggregate-to-cluster-reader" = "true"; }; };
+      metadata = {
+        name = "cert-manager-cluster-view";
+        labels = controllerLabels.all // {
+          "rbac.authorization.k8s.io/aggregate-to-cluster-reader" = "true";
+        };
+      };
       rules = [
-        { apiGroups = [ "cert-manager.io" ]; resources = [ "clusterissuers" ]; verbs = [ "get" "list" "watch" ]; }
+        {
+          apiGroups = [ "cert-manager.io" ];
+          resources = [ "clusterissuers" ];
+          verbs = [
+            "get"
+            "list"
+            "watch"
+          ];
+        }
       ];
     };
     view = kixlib'.rbac.mkClusterRole {
-      metadata = { name = "cert-manager-view";
+      metadata = {
+        name = "cert-manager-view";
         labels = controllerLabels.all // {
           "rbac.authorization.k8s.io/aggregate-to-view" = "true";
           "rbac.authorization.k8s.io/aggregate-to-edit" = "true";
           "rbac.authorization.k8s.io/aggregate-to-admin" = "true";
           "rbac.authorization.k8s.io/aggregate-to-cluster-reader" = "true";
-        }; };
+        };
+      };
       rules = [
-        { apiGroups = [ "cert-manager.io" ]; resources = [ "certificates" "certificaterequests" "issuers" ]; verbs = [ "get" "list" "watch" ]; }
-        { apiGroups = [ "acme.cert-manager.io" ]; resources = [ "challenges" "orders" ]; verbs = [ "get" "list" "watch" ]; }
+        {
+          apiGroups = [ "cert-manager.io" ];
+          resources = [
+            "certificates"
+            "certificaterequests"
+            "issuers"
+          ];
+          verbs = [
+            "get"
+            "list"
+            "watch"
+          ];
+        }
+        {
+          apiGroups = [ "acme.cert-manager.io" ];
+          resources = [
+            "challenges"
+            "orders"
+          ];
+          verbs = [
+            "get"
+            "list"
+            "watch"
+          ];
+        }
       ];
     };
     edit = kixlib'.rbac.mkClusterRole {
-      metadata = { name = "cert-manager-edit";
+      metadata = {
+        name = "cert-manager-edit";
         labels = controllerLabels.all // {
           "rbac.authorization.k8s.io/aggregate-to-edit" = "true";
           "rbac.authorization.k8s.io/aggregate-to-admin" = "true";
-        }; };
+        };
+      };
       rules = [
-        { apiGroups = [ "cert-manager.io" ]; resources = [ "certificates" "certificaterequests" "issuers" ]; verbs = [ "create" "delete" "deletecollection" "patch" "update" ]; }
-        { apiGroups = [ "cert-manager.io" ]; resources = [ "certificates/status" ]; verbs = [ "update" ]; }
-        { apiGroups = [ "acme.cert-manager.io" ]; resources = [ "challenges" "orders" ]; verbs = [ "create" "delete" "deletecollection" "patch" "update" ]; }
+        {
+          apiGroups = [ "cert-manager.io" ];
+          resources = [
+            "certificates"
+            "certificaterequests"
+            "issuers"
+          ];
+          verbs = [
+            "create"
+            "delete"
+            "deletecollection"
+            "patch"
+            "update"
+          ];
+        }
+        {
+          apiGroups = [ "cert-manager.io" ];
+          resources = [ "certificates/status" ];
+          verbs = [ "update" ];
+        }
+        {
+          apiGroups = [ "acme.cert-manager.io" ];
+          resources = [
+            "challenges"
+            "orders"
+          ];
+          verbs = [
+            "create"
+            "delete"
+            "deletecollection"
+            "patch"
+            "update"
+          ];
+        }
       ];
     };
   };
@@ -279,19 +815,41 @@ let
     scope = "namespace";
     roles = {
       "cert-manager:leaderelection" = {
-        metadata = { namespace = cfg.leaderElection.namespace;
-          labels = controllerLabels.all // { "app.kubernetes.io/component" = "controller"; }; };
+        metadata = {
+          namespace = cfg.leaderElection.namespace;
+          labels = controllerLabels.all // {
+            "app.kubernetes.io/component" = "controller";
+          };
+        };
         rules = [
-          { apiGroups = [ "coordination.k8s.io" ]; resources = [ "leases" ]; verbs = [ "get" "update" "patch" ];
-            resourceNames = [ "cert-manager-controller" ]; }
-          { apiGroups = [ "coordination.k8s.io" ]; resources = [ "leases" ]; verbs = [ "create" ]; }
+          {
+            apiGroups = [ "coordination.k8s.io" ];
+            resources = [ "leases" ];
+            verbs = [
+              "get"
+              "update"
+              "patch"
+            ];
+            resourceNames = [ "cert-manager-controller" ];
+          }
+          {
+            apiGroups = [ "coordination.k8s.io" ];
+            resources = [ "leases" ];
+            verbs = [ "create" ];
+          }
         ];
       };
       "cert-manager-tokenrequest" = {
-        metadata.labels = controllerLabels.all // { "app.kubernetes.io/component" = "controller"; };
+        metadata.labels = controllerLabels.all // {
+          "app.kubernetes.io/component" = "controller";
+        };
         rules = [
-          { apiGroups = [ "" ]; resources = [ "serviceaccounts/token" ]; verbs = [ "create" ];
-            resourceNames = [ "cert-manager" ]; }
+          {
+            apiGroups = [ "" ];
+            resources = [ "serviceaccounts/token" ];
+            verbs = [ "create" ];
+            resourceNames = [ "cert-manager" ];
+          }
         ];
       };
     };
@@ -302,7 +860,10 @@ let
   # ============================================================================
 
   webhookSa = kixlib'.rbac.mkServiceAccount {
-    metadata = { name = "cert-manager-webhook"; labels = webhookLabels.all; };
+    metadata = {
+      name = "cert-manager-webhook";
+      labels = webhookLabels.all;
+    };
     automountServiceAccountToken = cfg.serviceAccount.automountServiceAccountToken;
   };
 
@@ -320,22 +881,48 @@ let
       "--dynamic-serving-dns-names=cert-manager-webhook.$(POD_NAMESPACE).svc"
     ];
     ports = [
-      { containerPort = cfg.webhook.securePort; protocol = "TCP"; name = "https"; }
-      { containerPort = 6080; protocol = "TCP"; name = "healthcheck"; }
-      { containerPort = 9402; protocol = "TCP"; name = "http-metrics"; }
+      {
+        containerPort = cfg.webhook.securePort;
+        protocol = "TCP";
+        name = "https";
+      }
+      {
+        containerPort = 6080;
+        protocol = "TCP";
+        name = "healthcheck";
+      }
+      {
+        containerPort = 9402;
+        protocol = "TCP";
+        name = "http-metrics";
+      }
     ];
     securityContext = containerSecCtx;
     resources = cfg.webhook.resources;
     env = [ podNamespaceEnv ];
     livenessProbe = {
-      httpGet = { path = "/livez"; port = "healthcheck"; scheme = "HTTP"; };
-      initialDelaySeconds = 60; periodSeconds = 10; timeoutSeconds = 1;
-      failureThreshold = 3; successThreshold = 1;
+      httpGet = {
+        path = "/livez";
+        port = "healthcheck";
+        scheme = "HTTP";
+      };
+      initialDelaySeconds = 60;
+      periodSeconds = 10;
+      timeoutSeconds = 1;
+      failureThreshold = 3;
+      successThreshold = 1;
     };
     readinessProbe = {
-      httpGet = { path = "/healthz"; port = "healthcheck"; scheme = "HTTP"; };
-      initialDelaySeconds = 5; periodSeconds = 5; timeoutSeconds = 1;
-      failureThreshold = 3; successThreshold = 1;
+      httpGet = {
+        path = "/healthz";
+        port = "healthcheck";
+        scheme = "HTTP";
+      };
+      initialDelaySeconds = 5;
+      periodSeconds = 5;
+      timeoutSeconds = 1;
+      failureThreshold = 3;
+      successThreshold = 1;
     };
   };
 
@@ -346,23 +933,42 @@ let
     container = webhookContainer;
     replicas = cfg.webhook.replicaCount;
     servicePorts = [
-      { port = 443; protocol = "TCP"; targetPort = "https"; name = "https"; }
-      { port = 9402; protocol = "TCP"; targetPort = "http-metrics"; name = "metrics"; }
+      {
+        port = 443;
+        protocol = "TCP";
+        targetPort = "https";
+        name = "https";
+      }
+      {
+        port = 9402;
+        protocol = "TCP";
+        targetPort = "http-metrics";
+        name = "metrics";
+      }
     ];
     serviceAccountName = "cert-manager-webhook";
     monitoringLabels = webhookMonitoringLabels;
     monitoringAnnotations = webhookMonitoringAnnotations;
   };
 
-  webhookSubjects = kixlib.rbac.subjects.sa { name = "cert-manager-webhook"; namespace = cfg.namespace; };
+  webhookSubjects = kixlib.rbac.subjects.sa {
+    name = "cert-manager-webhook";
+    namespace = cfg.namespace;
+  };
 
   webhookClusterRbac = kixlib'.rbac.mkRoleSet {
     subjects = webhookSubjects;
     metadata.labels = webhookLabels.all;
     roles = {
-      "cert-manager-webhook:subjectaccessreviews" = { rules = [
-        { apiGroups = [ "authorization.k8s.io" ]; resources = [ "subjectaccessreviews" ]; verbs = [ "create" ]; }
-      ]; };
+      "cert-manager-webhook:subjectaccessreviews" = {
+        rules = [
+          {
+            apiGroups = [ "authorization.k8s.io" ];
+            resources = [ "subjectaccessreviews" ];
+            verbs = [ "create" ];
+          }
+        ];
+      };
     };
   };
 
@@ -371,37 +977,106 @@ let
     scope = "namespace";
     metadata.labels = webhookLabels.all;
     roles = {
-      "cert-manager-webhook:dynamic-serving" = { rules = [
-        { apiGroups = [ "" ]; resources = [ "secrets" ]; verbs = [ "get" "list" "watch" "update" ];
-          resourceNames = [ "cert-manager-webhook-ca" ]; }
-        { apiGroups = [ "" ]; resources = [ "secrets" ]; verbs = [ "create" ]; }
-      ]; };
+      "cert-manager-webhook:dynamic-serving" = {
+        rules = [
+          {
+            apiGroups = [ "" ];
+            resources = [ "secrets" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "update"
+            ];
+            resourceNames = [ "cert-manager-webhook-ca" ];
+          }
+          {
+            apiGroups = [ "" ];
+            resources = [ "secrets" ];
+            verbs = [ "create" ];
+          }
+        ];
+      };
     };
   };
 
   mutatingWebhook = kixlib'.admission.mkMutatingWebhookConfiguration {
-    metadata = { name = "cert-manager-webhook"; labels = webhookLabels.all;
-      annotations = { "cert-manager.io/inject-ca-from-secret" = "${cfg.namespace}/cert-manager-webhook-ca"; }; };
-    webhooks = [{
-      name = "webhook.cert-manager.io";
-      rules = [{ apiGroups = [ "cert-manager.io" ]; apiVersions = [ "v1" ]; operations = [ "CREATE" ]; resources = [ "certificaterequests" ]; }];
-      admissionReviewVersions = [ "v1" ]; matchPolicy = "Equivalent";
-      timeoutSeconds = cfg.webhook.timeoutSeconds; failurePolicy = "Fail"; sideEffects = "None";
-      clientConfig.service = { name = "cert-manager-webhook"; namespace = cfg.namespace; path = "/mutate"; };
-    }];
+    metadata = {
+      name = "cert-manager-webhook";
+      labels = webhookLabels.all;
+      annotations = {
+        "cert-manager.io/inject-ca-from-secret" = "${cfg.namespace}/cert-manager-webhook-ca";
+      };
+    };
+    webhooks = [
+      {
+        name = "webhook.cert-manager.io";
+        rules = [
+          {
+            apiGroups = [ "cert-manager.io" ];
+            apiVersions = [ "v1" ];
+            operations = [ "CREATE" ];
+            resources = [ "certificaterequests" ];
+          }
+        ];
+        admissionReviewVersions = [ "v1" ];
+        matchPolicy = "Equivalent";
+        timeoutSeconds = cfg.webhook.timeoutSeconds;
+        failurePolicy = "Fail";
+        sideEffects = "None";
+        clientConfig.service = {
+          name = "cert-manager-webhook";
+          namespace = cfg.namespace;
+          path = "/mutate";
+        };
+      }
+    ];
   };
 
   validatingWebhook = kixlib'.admission.mkValidatingWebhookConfiguration {
-    metadata = { name = "cert-manager-webhook"; labels = webhookLabels.all;
-      annotations = { "cert-manager.io/inject-ca-from-secret" = "${cfg.namespace}/cert-manager-webhook-ca"; }; };
-    webhooks = [{
-      name = "webhook.cert-manager.io";
-      namespaceSelector.matchExpressions = [{ key = "cert-manager.io/disable-validation"; operator = "NotIn"; values = [ "true" ]; }];
-      rules = [{ apiGroups = [ "cert-manager.io" "acme.cert-manager.io" ]; apiVersions = [ "v1" ]; operations = [ "CREATE" "UPDATE" ]; resources = [ "*/*" ]; }];
-      admissionReviewVersions = [ "v1" ]; matchPolicy = "Equivalent";
-      timeoutSeconds = cfg.webhook.timeoutSeconds; failurePolicy = "Fail"; sideEffects = "None";
-      clientConfig.service = { name = "cert-manager-webhook"; namespace = cfg.namespace; path = "/validate"; };
-    }];
+    metadata = {
+      name = "cert-manager-webhook";
+      labels = webhookLabels.all;
+      annotations = {
+        "cert-manager.io/inject-ca-from-secret" = "${cfg.namespace}/cert-manager-webhook-ca";
+      };
+    };
+    webhooks = [
+      {
+        name = "webhook.cert-manager.io";
+        namespaceSelector.matchExpressions = [
+          {
+            key = "cert-manager.io/disable-validation";
+            operator = "NotIn";
+            values = [ "true" ];
+          }
+        ];
+        rules = [
+          {
+            apiGroups = [
+              "cert-manager.io"
+              "acme.cert-manager.io"
+            ];
+            apiVersions = [ "v1" ];
+            operations = [
+              "CREATE"
+              "UPDATE"
+            ];
+            resources = [ "*/*" ];
+          }
+        ];
+        admissionReviewVersions = [ "v1" ];
+        matchPolicy = "Equivalent";
+        timeoutSeconds = cfg.webhook.timeoutSeconds;
+        failurePolicy = "Fail";
+        sideEffects = "None";
+        clientConfig.service = {
+          name = "cert-manager-webhook";
+          namespace = cfg.namespace;
+          path = "/validate";
+        };
+      }
+    ];
   };
 
   # ============================================================================
@@ -409,7 +1084,10 @@ let
   # ============================================================================
 
   cainjectorSa = kixlib'.rbac.mkServiceAccount {
-    metadata = { name = "cert-manager-cainjector"; labels = cainjectorLabels.all; };
+    metadata = {
+      name = "cert-manager-cainjector";
+      labels = cainjectorLabels.all;
+    };
     automountServiceAccountToken = cfg.serviceAccount.automountServiceAccountToken;
   };
 
@@ -417,8 +1095,17 @@ let
     name = "cert-manager-cainjector";
     image = kixlib.imageRef cfg.cainjector.image;
     imagePullPolicy = cfg.cainjector.image.pullPolicy;
-    args = [ "--v=${toString cfg.logLevel}" "--leader-election-namespace=${cfg.leaderElection.namespace}" ];
-    ports = [{ containerPort = 9402; protocol = "TCP"; name = "http-metrics"; }];
+    args = [
+      "--v=${toString cfg.logLevel}"
+      "--leader-election-namespace=${cfg.leaderElection.namespace}"
+    ];
+    ports = [
+      {
+        containerPort = 9402;
+        protocol = "TCP";
+        name = "http-metrics";
+      }
+    ];
     securityContext = containerSecCtx;
     resources = cfg.cainjector.resources;
     env = [ podNamespaceEnv ];
@@ -430,26 +1117,95 @@ let
     deploymentLabels = cainjectorLabels.all;
     container = cainjectorContainer;
     replicas = cfg.cainjector.replicaCount;
-    servicePorts = [{ port = 9402; protocol = "TCP"; name = "http-metrics"; }];
+    servicePorts = [
+      {
+        port = 9402;
+        protocol = "TCP";
+        name = "http-metrics";
+      }
+    ];
     serviceAccountName = "cert-manager-cainjector";
     monitoringLabels = cainjectorMonitoringLabels;
     monitoringAnnotations = cainjectorMonitoringAnnotations;
   };
 
-  cainjectorSubjects = kixlib.rbac.subjects.sa { name = "cert-manager-cainjector"; namespace = cfg.namespace; };
+  cainjectorSubjects = kixlib.rbac.subjects.sa {
+    name = "cert-manager-cainjector";
+    namespace = cfg.namespace;
+  };
 
   cainjectorClusterRbac = kixlib'.rbac.mkRoleSet {
     subjects = cainjectorSubjects;
     metadata.labels = cainjectorLabels.all;
     roles = {
-      "cert-manager-cainjector" = { rules = [
-        { apiGroups = [ "cert-manager.io" ]; resources = [ "certificates" ]; verbs = [ "get" "list" "watch" ]; }
-        { apiGroups = [ "" ]; resources = [ "secrets" ]; verbs = [ "get" "list" "watch" ]; }
-        { apiGroups = [ "" ]; resources = [ "events" ]; verbs = [ "get" "create" "update" "patch" ]; }
-        { apiGroups = [ "admissionregistration.k8s.io" ]; resources = [ "validatingwebhookconfigurations" "mutatingwebhookconfigurations" ]; verbs = [ "get" "list" "watch" "update" "patch" ]; }
-        { apiGroups = [ "apiregistration.k8s.io" ]; resources = [ "apiservices" ]; verbs = [ "get" "list" "watch" "update" "patch" ]; }
-        { apiGroups = [ "apiextensions.k8s.io" ]; resources = [ "customresourcedefinitions" ]; verbs = [ "get" "list" "watch" "update" "patch" ]; }
-      ]; };
+      "cert-manager-cainjector" = {
+        rules = [
+          {
+            apiGroups = [ "cert-manager.io" ];
+            resources = [ "certificates" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          {
+            apiGroups = [ "" ];
+            resources = [ "secrets" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          {
+            apiGroups = [ "" ];
+            resources = [ "events" ];
+            verbs = [
+              "get"
+              "create"
+              "update"
+              "patch"
+            ];
+          }
+          {
+            apiGroups = [ "admissionregistration.k8s.io" ];
+            resources = [
+              "validatingwebhookconfigurations"
+              "mutatingwebhookconfigurations"
+            ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "update"
+              "patch"
+            ];
+          }
+          {
+            apiGroups = [ "apiregistration.k8s.io" ];
+            resources = [ "apiservices" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "update"
+              "patch"
+            ];
+          }
+          {
+            apiGroups = [ "apiextensions.k8s.io" ];
+            resources = [ "customresourcedefinitions" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "update"
+              "patch"
+            ];
+          }
+        ];
+      };
     };
   };
 
@@ -461,9 +1217,24 @@ let
       "cert-manager-cainjector:leaderelection" = {
         metadata.namespace = cfg.leaderElection.namespace;
         rules = [
-          { apiGroups = [ "coordination.k8s.io" ]; resources = [ "leases" ]; verbs = [ "get" "update" "patch" ];
-            resourceNames = [ "cert-manager-cainjector-leader-election" "cert-manager-cainjector-leader-election-core" ]; }
-          { apiGroups = [ "coordination.k8s.io" ]; resources = [ "leases" ]; verbs = [ "create" ]; }
+          {
+            apiGroups = [ "coordination.k8s.io" ];
+            resources = [ "leases" ];
+            verbs = [
+              "get"
+              "update"
+              "patch"
+            ];
+            resourceNames = [
+              "cert-manager-cainjector-leader-election"
+              "cert-manager-cainjector-leader-election-core"
+            ];
+          }
+          {
+            apiGroups = [ "coordination.k8s.io" ];
+            resources = [ "leases" ];
+            verbs = [ "create" ];
+          }
         ];
       };
     };
@@ -474,15 +1245,23 @@ let
   # ============================================================================
 
   startupapicheckSa = kixlib'.rbac.mkServiceAccount {
-    metadata = { name = "cert-manager-startupapicheck"; labels = startupapicheckLabels.all; };
+    metadata = {
+      name = "cert-manager-startupapicheck";
+      labels = startupapicheckLabels.all;
+    };
     automountServiceAccountToken = cfg.serviceAccount.automountServiceAccountToken;
   };
 
   startupapicheckJob = kixlib'.workload.mkJob {
-    metadata = { name = "cert-manager-startupapicheck"; labels = startupapicheckLabels.all; };
+    metadata = {
+      name = "cert-manager-startupapicheck";
+      labels = startupapicheckLabels.all;
+    };
     backoffLimit = 4;
     template = kixlib'.pod.mkPodTemplate {
-      metadata = { labels = startupapicheckLabels.all; };
+      metadata = {
+        labels = startupapicheckLabels.all;
+      };
       spec = {
         restartPolicy = "OnFailure";
         containers = [
@@ -490,7 +1269,12 @@ let
             name = "cert-manager-startupapicheck";
             image = kixlib.imageRef cfg.startupapicheck.image;
             imagePullPolicy = cfg.startupapicheck.image.pullPolicy;
-            args = [ "check" "api" "--wait=1m" "-v" ];
+            args = [
+              "check"
+              "api"
+              "--wait=1m"
+              "-v"
+            ];
             securityContext = containerSecCtx;
             resources = cfg.startupapicheck.resources;
             env = [ podNamespaceEnv ];
@@ -505,13 +1289,22 @@ let
   };
 
   startupapicheckRbac = kixlib'.rbac.mkRoleSet {
-    subjects = kixlib.rbac.subjects.sa { name = "cert-manager-startupapicheck"; namespace = cfg.namespace; };
+    subjects = kixlib.rbac.subjects.sa {
+      name = "cert-manager-startupapicheck";
+      namespace = cfg.namespace;
+    };
     scope = "namespace";
     metadata.labels = startupapicheckLabels.all;
     roles = {
-      "cert-manager-startupapicheck:create-cert" = { rules = [
-        { apiGroups = [ "cert-manager.io" ]; resources = [ "certificaterequests" ]; verbs = [ "create" ]; }
-      ]; };
+      "cert-manager-startupapicheck:create-cert" = {
+        rules = [
+          {
+            apiGroups = [ "cert-manager.io" ];
+            resources = [ "certificaterequests" ];
+            verbs = [ "create" ];
+          }
+        ];
+      };
     };
   };
 
@@ -519,35 +1312,71 @@ in
 {
   manifestList =
     # Controller: Deployment + Service via mkComponent, plus SA
-    [{ name = "cert-manager-sa"; resource = controllerSa; enable = cfg.serviceAccount.create; }]
+    [
+      {
+        name = "cert-manager-sa";
+        resource = controllerSa;
+        enable = cfg.serviceAccount.create;
+      }
+    ]
     ++ groupToManifestList controllerGroup
     # Controller cluster RBAC — 8 ClusterRoles + 8 ClusterRoleBindings via mkRoleSet
     ++ controllerRbac.toManifestList cfg.rbac.create
     # Aggregated ClusterRoles — no bindings, just roles with aggregation labels
-    ++ lib.mapAttrsToList (n: role:
-      { name = "cert-manager-clusterrole-${n}"; resource = role; enable = cfg.rbac.create && cfg.rbac.aggregateClusterRoles; }
-    ) aggregatedClusterRoles
+    ++ lib.mapAttrsToList (n: role: {
+      name = "cert-manager-clusterrole-${n}";
+      resource = role;
+      enable = cfg.rbac.create && cfg.rbac.aggregateClusterRoles;
+    }) aggregatedClusterRoles
     # Controller namespace-scoped RBAC (leader election + tokenrequest)
     ++ controllerNamespacedRbac.toManifestList cfg.rbac.create
     # Webhook: Deployment + Service via mkComponent, plus SA + admission webhooks
-    ++ [{ name = "cert-manager-webhook-sa"; resource = webhookSa; enable = cfg.serviceAccount.create; }]
+    ++ [
+      {
+        name = "cert-manager-webhook-sa";
+        resource = webhookSa;
+        enable = cfg.serviceAccount.create;
+      }
+    ]
     ++ groupToManifestList webhookGroup
     ++ [
-      { name = "cert-manager-webhook-mutatingwebhookconfig"; resource = mutatingWebhook; enable = true; }
-      { name = "cert-manager-webhook-validatingwebhookconfig"; resource = validatingWebhook; enable = true; }
+      {
+        name = "cert-manager-webhook-mutatingwebhookconfig";
+        resource = mutatingWebhook;
+        enable = true;
+      }
+      {
+        name = "cert-manager-webhook-validatingwebhookconfig";
+        resource = validatingWebhook;
+        enable = true;
+      }
     ]
     # Webhook RBAC
     ++ webhookClusterRbac.toManifestList cfg.rbac.create
     ++ webhookNamespacedRbac.toManifestList cfg.rbac.create
     # Cainjector: Deployment + Service via mkComponent (gated on cainjector.enabled)
-    ++ [{ name = "cert-manager-cainjector-sa"; resource = cainjectorSa; enable = cfg.cainjector.enabled && cfg.serviceAccount.create; }]
+    ++ [
+      {
+        name = "cert-manager-cainjector-sa";
+        resource = cainjectorSa;
+        enable = cfg.cainjector.enabled && cfg.serviceAccount.create;
+      }
+    ]
     ++ withEnable cfg.cainjector.enabled (groupToManifestList cainjectorGroup)
     # Cainjector RBAC
     ++ cainjectorClusterRbac.toManifestList (cfg.cainjector.enabled && cfg.rbac.create)
     ++ cainjectorNamespacedRbac.toManifestList (cfg.cainjector.enabled && cfg.rbac.create)
     ++ [
-      { name = "cert-manager-startupapicheck-sa"; resource = startupapicheckSa; enable = cfg.startupapicheck.enabled && cfg.serviceAccount.create; }
-      { name = "cert-manager-startupapicheck-job"; resource = startupapicheckJob; enable = cfg.startupapicheck.enabled; }
+      {
+        name = "cert-manager-startupapicheck-sa";
+        resource = startupapicheckSa;
+        enable = cfg.startupapicheck.enabled && cfg.serviceAccount.create;
+      }
+      {
+        name = "cert-manager-startupapicheck-job";
+        resource = startupapicheckJob;
+        enable = cfg.startupapicheck.enabled;
+      }
     ]
     # Startupapicheck RBAC
     ++ startupapicheckRbac.toManifestList (cfg.startupapicheck.enabled && cfg.rbac.create);
@@ -557,12 +1386,20 @@ in
     registry.cert-manager = {
       endpoints = {
         webhook = {
-          host = kixlib.mkFqdn { name = "cert-manager-webhook"; namespace = cfg.namespace; clusterDomain = cfg.clusterDomain; };
+          host = kixlib.mkFqdn {
+            name = "cert-manager-webhook";
+            namespace = cfg.namespace;
+            clusterDomain = cfg.clusterDomain;
+          };
           port = 443;
           protocol = "https";
         };
         metrics = {
-          host = kixlib.mkFqdn { name = "cert-manager"; namespace = cfg.namespace; clusterDomain = cfg.clusterDomain; };
+          host = kixlib.mkFqdn {
+            name = "cert-manager";
+            namespace = cfg.namespace;
+            clusterDomain = cfg.clusterDomain;
+          };
           port = 9402;
           protocol = "http";
         };
@@ -578,7 +1415,7 @@ in
       serviceName = "cert-manager";
       namespace = cfg.namespace;
       portName = "tcp-prometheus-servicemonitor";
-      port = 9402;  # Known duplication with container spec — unavoidable without withMetrics
+      port = 9402; # Known duplication with container spec — unavoidable without withMetrics
       path = "/metrics";
       selector = controllerLabels.selector;
     };

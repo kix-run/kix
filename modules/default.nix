@@ -52,15 +52,21 @@
   # behavioral invariants, and any module that needs to inspect other
   # charts' resources.
   options.manifests = lib.mkOption {
-    type = lib.types.attrsOf (lib.types.mkOptionType {
-      name = "manifest";
-      description = "Kubernetes resource attrset (must have kind and apiVersion)";
-      check = v: builtins.isAttrs v && v ? kind && v ? apiVersion;
-      merge = loc: defs:
-        if builtins.length defs == 1
-        then (builtins.head defs).value
-        else throw "Manifest key collision at ${lib.showOption loc}: defined by ${lib.concatMapStringsSep ", " (d: d.file) defs}";
-    });
+    type = lib.types.attrsOf (
+      lib.types.mkOptionType {
+        name = "manifest";
+        description = "Kubernetes resource attrset (must have kind and apiVersion)";
+        check = v: builtins.isAttrs v && v ? kind && v ? apiVersion;
+        merge =
+          loc: defs:
+          if builtins.length defs == 1 then
+            (builtins.head defs).value
+          else
+            throw "Manifest key collision at ${lib.showOption loc}: defined by ${
+              lib.concatMapStringsSep ", " (d: d.file) defs
+            }";
+      }
+    );
     default = { };
     description = ''
       Collected Kubernetes resource attrsets from all enabled modules.

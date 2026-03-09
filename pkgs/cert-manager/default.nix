@@ -13,7 +13,12 @@
 
 kixlib.mkChartModule {
   name = "cert-manager";
-  inherit lib pkgs config kixlib;
+  inherit
+    lib
+    pkgs
+    config
+    kixlib
+    ;
   chartOptions = import ./options.nix;
   resources = import ./resources.nix;
 }

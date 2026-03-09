@@ -21,10 +21,18 @@
       enabled = true;
       minReplicas = 2;
       maxReplicas = 10;
-      metrics = [{
-        type = "Resource";
-        resource = { name = "cpu"; target = { type = "Utilization"; averageUtilization = 80; }; };
-      }];
+      metrics = [
+        {
+          type = "Resource";
+          resource = {
+            name = "cpu";
+            target = {
+              type = "Utilization";
+              averageUtilization = 80;
+            };
+          };
+        }
+      ];
     };
   };
 

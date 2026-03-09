@@ -16,7 +16,12 @@
 
 kixlib.mkChartModule {
   name = "coredns";
-  inherit lib pkgs config kixlib;
+  inherit
+    lib
+    pkgs
+    config
+    kixlib
+    ;
   chartOptions = import ./options.nix;
   resources = import ./resources.nix;
 }

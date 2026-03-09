@@ -1,0 +1,5 @@
+pre-commit:
+  commands:
+    nixfmt:
+      glob: "*.nix"
+      run: nix shell nixpkgs#nixfmt -c nixfmt --check {staged_files}

@@ -73,7 +73,12 @@ lib.makeExtensible (self: {
   # Builds a fully-qualified K8s service DNS name.
   # Used by registry endpoints and anywhere a chart needs to reference another
   # service by its cluster-internal DNS name.
-  mkFqdn = { name, namespace, clusterDomain ? "cluster.local" }:
+  mkFqdn =
+    {
+      name,
+      namespace,
+      clusterDomain ? "cluster.local",
+    }:
     "${name}.${namespace}.svc.${clusterDomain}";
 
   # Builds the standard label hierarchy every chart needs.
@@ -91,27 +96,34 @@ lib.makeExtensible (self: {
   #   labels = kixlib.mkLabels { chart = "valkey"; clusterLabels = config.cluster.labels; };
   #   labels.selector              # => { app.kubernetes.io/instance = ...; app.kubernetes.io/name = "valkey"; }
   #   labels.withComponent "node"  # => selector // { app.kubernetes.io/component = "node"; }
-  mkLabels = {
-    chart,
-    clusterLabels ? {},
-    instance ? "release-name",
-    component ? null,
-    extra ? {},
-  }:
-  let
-    selector = {
-      "app.kubernetes.io/instance" = instance;
-      "app.kubernetes.io/name" = chart;
-    } // lib.optionalAttrs (component != null) {
-      "app.kubernetes.io/component" = component;
+  mkLabels =
+    {
+      chart,
+      clusterLabels ? { },
+      instance ? "release-name",
+      component ? null,
+      extra ? { },
+    }:
+    let
+      selector = {
+        "app.kubernetes.io/instance" = instance;
+        "app.kubernetes.io/name" = chart;
+      }
+      // lib.optionalAttrs (component != null) {
+        "app.kubernetes.io/component" = component;
+      };
+      all =
+        clusterLabels
+        // selector
+        // {
+          "app.kubernetes.io/managed-by" = "kix";
+        }
+        // extra;
+    in
+    {
+      inherit selector all;
+      withComponent = c: selector // { "app.kubernetes.io/component" = c; };
     };
-    all = clusterLabels // selector // {
-      "app.kubernetes.io/managed-by" = "kix";
-    } // extra;
-  in {
-    inherit selector all;
-    withComponent = c: selector // { "app.kubernetes.io/component" = c; };
-  };
 
   # Shared option type constructors for chart modules.
   # Imported from lib/options.nix — see that file for usage examples.
@@ -157,7 +169,10 @@ lib.makeExtensible (self: {
   #
   # Example: `spec.tolerations = kixlib.explicit [];`
   # This produces `"tolerations": []` in the JSON output.
-  explicit = value: { __kixExplicit = true; __value = value; };
+  explicit = value: {
+    __kixExplicit = true;
+    __value = value;
+  };
 
   # Strips null values recursively from an attrset before JSON serialization.
   #
@@ -210,9 +225,7 @@ lib.makeExtensible (self: {
     let
       meta = resource.metadata or { };
       appName =
-        self._defaultMetadata.name
-          or self._defaultMetadata.labels."app.kubernetes.io/name"
-          or "unnamed";
+        self._defaultMetadata.name or self._defaultMetadata.labels."app.kubernetes.io/name" or "unnamed";
     in
     meta.name or appName;
 
@@ -227,14 +240,15 @@ lib.makeExtensible (self: {
   # These catch structural bugs at build time rather than at deploy time.
   mkManifest =
     resource:
-    assert resource ? kind
+    assert
+      resource ? kind
       || throw "mkManifest: resource missing 'kind' — did you forget to use a mk* builder?";
-    assert resource ? apiVersion
-      || throw "mkManifest: resource missing 'apiVersion'";
+    assert resource ? apiVersion || throw "mkManifest: resource missing 'apiVersion'";
     let
       name = self.resourceName resource;
     in
-    assert name != "unnamed"
+    assert
+      name != "unnamed"
       || throw "mkManifest: resource of kind ${resource.kind} has no name — set metadata.name or use withMetadata";
     let
       namedResource = lib.recursiveUpdate resource {
@@ -244,7 +258,7 @@ lib.makeExtensible (self: {
       };
     in
     let
-      yamlFormat = pkgs.formats.yaml {};
+      yamlFormat = pkgs.formats.yaml { };
       cleaned =
         namedResource
         |> self.removeNulls
@@ -330,7 +344,12 @@ lib.makeExtensible (self: {
     #     subjects = [{ kind = "ServiceAccount"; name = "default"; namespace = "kube-system"; }];
     #   }
     mkClusterRoleBindingWith =
-      { clusterRole, serviceAccount, subjects ? null, metadata ? {} }:
+      {
+        clusterRole,
+        serviceAccount,
+        subjects ? null,
+        metadata ? { },
+      }:
       let
         autoSubjects = [
           {
@@ -407,7 +426,12 @@ lib.makeExtensible (self: {
     #
     # Added for cert-manager migration (2026-03).
     mkRoleBindingWith =
-      { role, serviceAccount, subjects ? null, metadata ? {} }:
+      {
+        role,
+        serviceAccount,
+        subjects ? null,
+        metadata ? { },
+      }:
       let
         autoSubjects = [
           {
@@ -447,15 +471,24 @@ lib.makeExtensible (self: {
     # Eliminates the repeated `[{ kind = "ServiceAccount"; name = ...; namespace = ...; }]`
     # pattern that appears ~15 times in cert-manager alone.
     subjects = {
-      sa = { name, namespace ? "default" }: [{
-        kind = "ServiceAccount";
-        inherit name namespace;
-      }];
-      group = name: [{
-        kind = "Group";
-        inherit name;
-        apiGroup = "rbac.authorization.k8s.io";
-      }];
+      sa =
+        {
+          name,
+          namespace ? "default",
+        }:
+        [
+          {
+            kind = "ServiceAccount";
+            inherit name namespace;
+          }
+        ];
+      group = name: [
+        {
+          kind = "Group";
+          inherit name;
+          apiGroup = "rbac.authorization.k8s.io";
+        }
+      ];
     };
 
     # --- Batch role + binding generation ---
@@ -479,54 +512,82 @@ lib.makeExtensible (self: {
     #   # In manifestList: controllerRbac.toManifestList cfg.rbac.create
     mkRoleSet =
       {
-        roles,           # attrset: name → { rules, metadata?, ... }
-        subjects,        # list of subject entries (use rbac.subjects.sa etc.)
+        roles, # attrset: name → { rules, metadata?, ... }
+        subjects, # list of subject entries (use rbac.subjects.sa etc.)
         scope ? "cluster", # "cluster" for ClusterRole/Binding, "namespace" for Role/Binding
-        metadata ? {},   # base metadata merged into all roles and bindings
+        metadata ? { }, # base metadata merged into all roles and bindings
       }:
       let
         mkRole = if scope == "cluster" then self.rbac.mkClusterRole else self.rbac.mkRole;
-        mkBinding = if scope == "cluster"
-          then (role: self.mkResource {
-            apiVersion = "rbac.authorization.k8s.io/v1";
-            kind = "ClusterRoleBinding";
-            metadata = (metadata // { namespace = null; }) // { name = self.resourceName role; };
-            roleRef = {
-              apiGroup = "rbac.authorization.k8s.io";
-              kind = role.kind;
-              name = self.resourceName role;
-            };
-            inherit subjects;
-          })
-          else (role: self.mkResource {
-            apiVersion = "rbac.authorization.k8s.io/v1";
-            kind = "RoleBinding";
-            metadata = metadata // { name = self.resourceName role; };
-            roleRef = {
-              apiGroup = "rbac.authorization.k8s.io";
-              kind = role.kind;
-              name = self.resourceName role;
-            };
-            inherit subjects;
-          });
+        mkBinding =
+          if scope == "cluster" then
+            (
+              role:
+              self.mkResource {
+                apiVersion = "rbac.authorization.k8s.io/v1";
+                kind = "ClusterRoleBinding";
+                metadata = (metadata // { namespace = null; }) // {
+                  name = self.resourceName role;
+                };
+                roleRef = {
+                  apiGroup = "rbac.authorization.k8s.io";
+                  kind = role.kind;
+                  name = self.resourceName role;
+                };
+                inherit subjects;
+              }
+            )
+          else
+            (
+              role:
+              self.mkResource {
+                apiVersion = "rbac.authorization.k8s.io/v1";
+                kind = "RoleBinding";
+                metadata = metadata // {
+                  name = self.resourceName role;
+                };
+                roleRef = {
+                  apiGroup = "rbac.authorization.k8s.io";
+                  kind = role.kind;
+                  name = self.resourceName role;
+                };
+                inherit subjects;
+              }
+            );
 
-        builtRoles = lib.mapAttrs (name: args:
-          mkRole ((args // { metadata = (metadata // (args.metadata or {})) // { name = name; }; }))
+        builtRoles = lib.mapAttrs (
+          name: args:
+          mkRole (
+            (
+              args
+              // {
+                metadata = (metadata // (args.metadata or { })) // {
+                  name = name;
+                };
+              }
+            )
+          )
         ) roles;
 
         builtBindings = lib.mapAttrs (_: role: mkBinding role) builtRoles;
-      in {
+      in
+      {
         roles = builtRoles;
         bindings = builtBindings;
         # Convenience: flatten roles + bindings into a manifestList fragment.
         # Uses the role name as prefix for both role and binding entries.
-        toManifestList = enable:
-          (lib.mapAttrsToList (n: role:
-            { name = n; resource = role; inherit enable; }
-          ) builtRoles)
-          ++ (lib.mapAttrsToList (n: binding:
-            { name = "${n}-binding"; resource = binding; inherit enable; }
-          ) builtBindings);
+        toManifestList =
+          enable:
+          (lib.mapAttrsToList (n: role: {
+            name = n;
+            resource = role;
+            inherit enable;
+          }) builtRoles)
+          ++ (lib.mapAttrsToList (n: binding: {
+            name = "${n}-binding";
+            resource = binding;
+            inherit enable;
+          }) builtBindings);
       };
   };
 
@@ -543,8 +604,7 @@ lib.makeExtensible (self: {
         spec,
         ...
       }:
-      assert (spec.containers or []) != []
-        || throw "mkPodTemplate: spec.containers must be non-empty";
+      assert (spec.containers or [ ]) != [ ] || throw "mkPodTemplate: spec.containers must be non-empty";
       args;
 
     # Creates a container spec.
@@ -562,10 +622,8 @@ lib.makeExtensible (self: {
         image,
         ...
       }@args:
-      assert name != ""
-        || throw "mkContainer: name must be non-empty";
-      assert image != ""
-        || throw "mkContainer: image must be non-empty";
+      assert name != "" || throw "mkContainer: name must be non-empty";
+      assert image != "" || throw "mkContainer: image must be non-empty";
       args;
 
     withVolumeMount =
@@ -608,8 +666,7 @@ lib.makeExtensible (self: {
         spec,
         ...
       }:
-      assert (spec.ports or []) != []
-        || throw "mkService: spec.ports must be non-empty";
+      assert (spec.ports or [ ]) != [ ] || throw "mkService: spec.ports must be non-empty";
       self.mkResource {
         kind = "Service";
         metadata = metadata;
@@ -627,7 +684,10 @@ lib.makeExtensible (self: {
     mkNetworkPolicy =
       {
         podSelector,
-        policyTypes ? [ "Ingress" "Egress" ],
+        policyTypes ? [
+          "Ingress"
+          "Egress"
+        ],
         ingress ? null,
         egress ? null,
         metadata ? { },
@@ -638,7 +698,12 @@ lib.makeExtensible (self: {
         kind = "NetworkPolicy";
         metadata = metadata;
         spec = {
-          inherit podSelector policyTypes ingress egress;
+          inherit
+            podSelector
+            policyTypes
+            ingress
+            egress
+            ;
         };
       };
 
@@ -648,21 +713,28 @@ lib.makeExtensible (self: {
     # Phase 8: added as missing builder.
     mkIngress =
       {
-        rules ? [],
+        rules ? [ ],
         tls ? null,
         ingressClassName ? null,
         defaultBackend ? null,
-        metadata ? {},
+        metadata ? { },
         ...
       }:
-      assert rules != [] || defaultBackend != null
+      assert
+        rules != [ ]
+        || defaultBackend != null
         || throw "mkIngress: must have at least one rule or a defaultBackend";
       self.mkResource {
         apiVersion = "networking.k8s.io/v1";
         kind = "Ingress";
         inherit metadata;
         spec = {
-          inherit rules tls ingressClassName defaultBackend;
+          inherit
+            rules
+            tls
+            ingressClassName
+            defaultBackend
+            ;
         };
       };
   };
@@ -693,7 +765,8 @@ lib.makeExtensible (self: {
         selectorLabels ? null,
         ...
       }:
-      assert (template.spec.containers or []) != []
+      assert
+        (template.spec.containers or [ ]) != [ ]
         || throw "mkDeployment: template.spec.containers must be non-empty";
       self.mkResource {
         inherit metadata;
@@ -701,9 +774,7 @@ lib.makeExtensible (self: {
         kind = "Deployment";
         spec = {
           inherit replicas strategy template;
-          selector.matchLabels =
-            if selectorLabels != null then selectorLabels
-            else template.metadata.labels;
+          selector.matchLabels = if selectorLabels != null then selectorLabels else template.metadata.labels;
         };
       };
 
@@ -729,9 +800,10 @@ lib.makeExtensible (self: {
         metadata ? { },
         ...
       }:
-      assert serviceName != ""
-        || throw "mkStatefulSet: serviceName is required (headless Service for pod DNS)";
-      assert (template.spec.containers or []) != []
+      assert
+        serviceName != "" || throw "mkStatefulSet: serviceName is required (headless Service for pod DNS)";
+      assert
+        (template.spec.containers or [ ]) != [ ]
         || throw "mkStatefulSet: template.spec.containers must be non-empty";
       self.mkResource {
         inherit metadata;
@@ -742,9 +814,7 @@ lib.makeExtensible (self: {
           updateStrategy = updateStrategy;
           podManagementPolicy = podManagementPolicy;
           volumeClaimTemplates = volumeClaimTemplates;
-          selector.matchLabels =
-            if selectorLabels != null then selectorLabels
-            else template.metadata.labels;
+          selector.matchLabels = if selectorLabels != null then selectorLabels else template.metadata.labels;
         };
       };
 
@@ -765,14 +835,20 @@ lib.makeExtensible (self: {
         metadata ? { },
         ...
       }:
-      assert (template.spec.containers or []) != []
+      assert
+        (template.spec.containers or [ ]) != [ ]
         || throw "mkJob: template.spec.containers must be non-empty";
       self.mkResource {
         apiVersion = "batch/v1";
         kind = "Job";
         inherit metadata;
         spec = {
-          inherit template backoffLimit completions parallelism;
+          inherit
+            template
+            backoffLimit
+            completions
+            parallelism
+            ;
         };
       };
 
@@ -789,7 +865,8 @@ lib.makeExtensible (self: {
         metadata ? { },
         ...
       }:
-      assert (template.spec.containers or []) != []
+      assert
+        (template.spec.containers or [ ]) != [ ]
         || throw "mkDaemonSet: template.spec.containers must be non-empty";
       self.mkResource {
         inherit metadata;
@@ -797,9 +874,7 @@ lib.makeExtensible (self: {
         kind = "DaemonSet";
         spec = {
           inherit template updateStrategy;
-          selector.matchLabels =
-            if selectorLabels != null then selectorLabels
-            else template.metadata.labels;
+          selector.matchLabels = if selectorLabels != null then selectorLabels else template.metadata.labels;
         };
       };
 
@@ -824,8 +899,14 @@ lib.makeExtensible (self: {
         kind = "CronJob";
         inherit metadata;
         spec = {
-          inherit schedule jobTemplate concurrencyPolicy
-            successfulJobsHistoryLimit failedJobsHistoryLimit suspend;
+          inherit
+            schedule
+            jobTemplate
+            concurrencyPolicy
+            successfulJobsHistoryLimit
+            failedJobsHistoryLimit
+            suspend
+            ;
         };
       };
 
@@ -869,8 +950,8 @@ lib.makeExtensible (self: {
         scaleTargetRef,
         minReplicas ? 1,
         maxReplicas,
-        metrics ? [],
-        metadata ? {},
+        metrics ? [ ],
+        metadata ? { },
         ...
       }:
       self.mkResource {
@@ -878,7 +959,12 @@ lib.makeExtensible (self: {
         kind = "HorizontalPodAutoscaler";
         inherit metadata;
         spec = {
-          inherit scaleTargetRef minReplicas maxReplicas metrics;
+          inherit
+            scaleTargetRef
+            minReplicas
+            maxReplicas
+            metrics
+            ;
         };
       };
   };
@@ -937,7 +1023,7 @@ lib.makeExtensible (self: {
         podMetricsEndpoints,
         selector,
         namespaceSelector ? null,
-        metadata ? {},
+        metadata ? { },
         ...
       }:
       self.mkResource {
@@ -955,7 +1041,7 @@ lib.makeExtensible (self: {
     mkPrometheusRule =
       {
         groups,
-        metadata ? {},
+        metadata ? { },
         ...
       }:
       self.mkResource {
@@ -986,7 +1072,9 @@ lib.makeExtensible (self: {
       self.mkResource {
         apiVersion = "admissionregistration.k8s.io/v1";
         kind = "MutatingWebhookConfiguration";
-        metadata = metadata // { namespace = null; };
+        metadata = metadata // {
+          namespace = null;
+        };
         inherit webhooks;
       };
 
@@ -999,7 +1087,9 @@ lib.makeExtensible (self: {
       self.mkResource {
         apiVersion = "admissionregistration.k8s.io/v1";
         kind = "ValidatingWebhookConfiguration";
-        metadata = metadata // { namespace = null; };
+        metadata = metadata // {
+          namespace = null;
+        };
         inherit webhooks;
       };
   };
@@ -1012,10 +1102,13 @@ lib.makeExtensible (self: {
         metadata ? { },
         ...
       }@args:
-      self.mkResource (args // {
-        kind = "ConfigMap";
-        inherit data immutable metadata;
-      });
+      self.mkResource (
+        args
+        // {
+          kind = "ConfigMap";
+          inherit data immutable metadata;
+        }
+      );
 
     withEntry =
       key: value: configMap:
@@ -1042,8 +1135,10 @@ lib.makeExtensible (self: {
         name ? null,
       }:
       configMap:
-      let volumeName = if name != null then name else self.resourceName configMap;
-      in {
+      let
+        volumeName = if name != null then name else self.resourceName configMap;
+      in
+      {
         name = volumeName;
         configMap = {
           name = self.resourceName configMap;
@@ -1064,14 +1159,19 @@ lib.makeExtensible (self: {
         stringData ? null,
         type ? "Opaque",
         immutable ? null,
-        metadata ? {},
+        metadata ? { },
         ...
       }:
-      assert data != null || stringData != null
-        || throw "mkSecret: must provide 'data' or 'stringData'";
+      assert data != null || stringData != null || throw "mkSecret: must provide 'data' or 'stringData'";
       self.mkResource {
         kind = "Secret";
-        inherit metadata data stringData type immutable;
+        inherit
+          metadata
+          data
+          stringData
+          type
+          immutable
+          ;
       };
   };
 
@@ -1097,7 +1197,8 @@ lib.makeExtensible (self: {
 
     # Converts a group → manifestList format for use in mkChartModule.
     # Each entry gets { name, resource, enable = true }.
-    groupToManifestList = group:
+    groupToManifestList =
+      group:
       lib.mapAttrsToList (name: resource: {
         inherit name resource;
         enable = true;
@@ -1105,7 +1206,9 @@ lib.makeExtensible (self: {
 
     # Conditional pipe: applies f to x only if cond is true.
     # Usage: resource |> optionalPipe cfg.hpa.enabled (withAutoscaler { ... })
-    optionalPipe = cond: f: x: if cond then f x else x;
+    optionalPipe =
+      cond: f: x:
+      if cond then f x else x;
 
     # Adds an HPA and nulls out the workload's replicas.
     # workloadKey: the key of the workload resource in the group (optional if scaleTargetRef provided)
@@ -1119,26 +1222,46 @@ lib.makeExtensible (self: {
     # caller is responsible for that.
     #
     # Uses lib.recursiveUpdate to set spec.replicas = null (scalar field, safe).
-    withAutoscaler = { workloadKey ? null, hpaName, hpaArgs, scaleTargetRef ? null }: group:
+    withAutoscaler =
+      {
+        workloadKey ? null,
+        hpaName,
+        hpaArgs,
+        scaleTargetRef ? null,
+      }:
+      group:
       let
         targetRef =
-          if scaleTargetRef != null then scaleTargetRef
+          if scaleTargetRef != null then
+            scaleTargetRef
           else if workloadKey != null then
-            let workload = group.${workloadKey}; in {
+            let
+              workload = group.${workloadKey};
+            in
+            {
               apiVersion = workload.apiVersion;
               kind = workload.kind;
               name = workload.metadata.name;
             }
-          else throw "withAutoscaler: provide either workloadKey or scaleTargetRef";
-        hpa = self.autoscaling.mkHorizontalPodAutoscaler ({
-          scaleTargetRef = targetRef;
-        } // hpaArgs);
+          else
+            throw "withAutoscaler: provide either workloadKey or scaleTargetRef";
+        hpa = self.autoscaling.mkHorizontalPodAutoscaler (
+          {
+            scaleTargetRef = targetRef;
+          }
+          // hpaArgs
+        );
         # Null out replicas only when the workload is in our group
-        base = if workloadKey != null then group // {
-          ${workloadKey} = lib.recursiveUpdate group.${workloadKey} {
-            spec.replicas = null;
-          };
-        } else group;
+        base =
+          if workloadKey != null then
+            group
+            // {
+              ${workloadKey} = lib.recursiveUpdate group.${workloadKey} {
+                spec.replicas = null;
+              };
+            }
+          else
+            group;
       in
       base // { ${hpaName} = hpa; };
 
@@ -1152,17 +1275,31 @@ lib.makeExtensible (self: {
     # use `selector` directly — the target workload may not be in this group,
     # or the desired selector may differ from the workload's matchLabels.
     # Custom metadata (name, labels) can be passed via pdbArgs.metadata.
-    withPodDisruptionBudget = { workloadKey ? null, selector ? null, pdbName, pdbArgs ? {} }: group:
+    withPodDisruptionBudget =
+      {
+        workloadKey ? null,
+        selector ? null,
+        pdbName,
+        pdbArgs ? { },
+      }:
+      group:
       let
         selectorLabels =
-          if selector != null then selector
-          else if workloadKey != null then group.${workloadKey}.spec.selector.matchLabels
-          else throw "withPodDisruptionBudget: provide either selector or workloadKey";
+          if selector != null then
+            selector
+          else if workloadKey != null then
+            group.${workloadKey}.spec.selector.matchLabels
+          else
+            throw "withPodDisruptionBudget: provide either selector or workloadKey";
       in
-      group // {
-        ${pdbName} = self.policy.mkPodDisruptionBudget ({
-          selector.matchLabels = selectorLabels;
-        } // pdbArgs);
+      group
+      // {
+        ${pdbName} = self.policy.mkPodDisruptionBudget (
+          {
+            selector.matchLabels = selectorLabels;
+          }
+          // pdbArgs
+        );
       };
 
     # Creates a Deployment + Service group from a single specification.
@@ -1172,55 +1309,67 @@ lib.makeExtensible (self: {
     #
     # The group keys use "${name}-deployment" and "${name}-service" to match
     # existing manifest names in the test suite (42 golden-file checks).
-    mkServiceDeployment = {
-      name,              # Base name — becomes manifest key prefix
-      containers,
-      selectorLabels,    # Explicit — charts extend these with component labels
-      servicePorts,
-      replicas ? 1,
-      serviceType ? "ClusterIP",
-      strategy ? null,
-      volumes ? [],
-      serviceAccountName ? null,
-      podAnnotations ? {},
-      podLabels ? {},          # Extra labels on pod template (merged with selectorLabels)
-      deploymentLabels ? {},   # Extra labels on the Deployment metadata
-      serviceLabels ? {},      # Extra labels on the Service metadata
-      serviceAnnotations ? {},
-      podSpec ? {},            # Extra fields merged into pod spec (dnsPolicy, securityContext, etc.)
-      deploymentMetadata ? {}, # Extra fields on deployment metadata (e.g., name override)
-    }: let
-      deployment = self.workload.mkDeployment ({
-        metadata = { inherit name; labels = deploymentLabels; } // deploymentMetadata;
-        inherit replicas selectorLabels;
-        template = self.pod.mkPodTemplate {
+    mkServiceDeployment =
+      {
+        name, # Base name — becomes manifest key prefix
+        containers,
+        selectorLabels, # Explicit — charts extend these with component labels
+        servicePorts,
+        replicas ? 1,
+        serviceType ? "ClusterIP",
+        strategy ? null,
+        volumes ? [ ],
+        serviceAccountName ? null,
+        podAnnotations ? { },
+        podLabels ? { }, # Extra labels on pod template (merged with selectorLabels)
+        deploymentLabels ? { }, # Extra labels on the Deployment metadata
+        serviceLabels ? { }, # Extra labels on the Service metadata
+        serviceAnnotations ? { },
+        podSpec ? { }, # Extra fields merged into pod spec (dnsPolicy, securityContext, etc.)
+        deploymentMetadata ? { }, # Extra fields on deployment metadata (e.g., name override)
+      }:
+      let
+        deployment = self.workload.mkDeployment (
+          {
+            metadata = {
+              inherit name;
+              labels = deploymentLabels;
+            }
+            // deploymentMetadata;
+            inherit replicas selectorLabels;
+            template = self.pod.mkPodTemplate {
+              metadata = {
+                labels = selectorLabels // podLabels;
+                annotations = podAnnotations;
+              };
+              spec = {
+                inherit containers volumes;
+              }
+              // lib.optionalAttrs (serviceAccountName != null) {
+                inherit serviceAccountName;
+              }
+              // podSpec;
+            };
+          }
+          // lib.optionalAttrs (strategy != null) { inherit strategy; }
+        );
+        service = self.networking.mkService {
           metadata = {
-            labels = selectorLabels // podLabels;
-            annotations = podAnnotations;
+            inherit name;
+            labels = serviceLabels;
+            annotations = serviceAnnotations;
           };
           spec = {
-            inherit containers volumes;
-          } // lib.optionalAttrs (serviceAccountName != null) {
-            inherit serviceAccountName;
-          } // podSpec;
+            type = serviceType;
+            ports = servicePorts;
+            selector = selectorLabels;
+          };
         };
-      } // lib.optionalAttrs (strategy != null) { inherit strategy; });
-      service = self.networking.mkService {
-        metadata = {
-          inherit name;
-          labels = serviceLabels;
-          annotations = serviceAnnotations;
-        };
-        spec = {
-          type = serviceType;
-          ports = servicePorts;
-          selector = selectorLabels;
-        };
+      in
+      {
+        "${name}-deployment" = deployment;
+        "${name}-service" = service;
       };
-    in {
-      "${name}-deployment" = deployment;
-      "${name}-service" = service;
-    };
 
     # Adds a metrics Service to a group.
     # Used for charts that expose a separate metrics port via a dedicated Service
@@ -1232,36 +1381,55 @@ lib.makeExtensible (self: {
     #
     # At least one of selector or workloadKey must be provided. When both are
     # given, selector wins (workload is never forced — good for laziness).
-    withMetrics = {
-      workloadKey ? null,       # Key of workload to extract selector from
-      selector ? null,          # Explicit selector (takes precedence over workloadKey)
-      metricsName,              # Manifest key for the metrics Service in the group
-      metricsPort,
-      portName ? "metrics",
-      metricsServiceName ? null, # K8s Service metadata.name (defaults to metricsName)
-      monitoringLabels ? {},
-      monitoringAnnotations ? {},
-      extraServiceAnnotations ? {},
-      extraLabels ? {},
-    }: group: let
-      selectorLabels =
-        if selector != null then selector
-        else if workloadKey != null then group.${workloadKey}.spec.selector.matchLabels
-        else throw "withMetrics: provide either selector or workloadKey";
-    in group // {
-      ${metricsName} = self.networking.mkService {
-        metadata = {
-          name = if metricsServiceName != null then metricsServiceName else metricsName;
-          labels = { "app.kubernetes.io/component" = "metrics"; } // extraLabels // monitoringLabels;
-          annotations = extraServiceAnnotations // monitoringAnnotations;
-        };
-        spec = {
-          type = "ClusterIP";
-          ports = [{ name = portName; port = metricsPort; targetPort = metricsPort; protocol = "TCP"; }];
-          selector = selectorLabels;
+    withMetrics =
+      {
+        workloadKey ? null, # Key of workload to extract selector from
+        selector ? null, # Explicit selector (takes precedence over workloadKey)
+        metricsName, # Manifest key for the metrics Service in the group
+        metricsPort,
+        portName ? "metrics",
+        metricsServiceName ? null, # K8s Service metadata.name (defaults to metricsName)
+        monitoringLabels ? { },
+        monitoringAnnotations ? { },
+        extraServiceAnnotations ? { },
+        extraLabels ? { },
+      }:
+      group:
+      let
+        selectorLabels =
+          if selector != null then
+            selector
+          else if workloadKey != null then
+            group.${workloadKey}.spec.selector.matchLabels
+          else
+            throw "withMetrics: provide either selector or workloadKey";
+      in
+      group
+      // {
+        ${metricsName} = self.networking.mkService {
+          metadata = {
+            name = if metricsServiceName != null then metricsServiceName else metricsName;
+            labels = {
+              "app.kubernetes.io/component" = "metrics";
+            }
+            // extraLabels
+            // monitoringLabels;
+            annotations = extraServiceAnnotations // monitoringAnnotations;
+          };
+          spec = {
+            type = "ClusterIP";
+            ports = [
+              {
+                name = portName;
+                port = metricsPort;
+                targetPort = metricsPort;
+                protocol = "TCP";
+              }
+            ];
+            selector = selectorLabels;
+          };
         };
       };
-    };
 
     # Maps an `enable` flag over a manifestList (for conditional groups).
     # Usage: withEnable cfg.cainjector.enabled (groupToManifestList cainjectorGroup)
@@ -1341,7 +1509,13 @@ lib.makeExtensible (self: {
 
       # Evaluate the resources function.
       result = resources {
-        inherit lib pkgs config kixlib cfg;
+        inherit
+          lib
+          pkgs
+          config
+          kixlib
+          cfg
+          ;
         kixlib' = chartKixlib;
         labels = chartLabels;
       };
@@ -1365,33 +1539,29 @@ lib.makeExtensible (self: {
       # merges _defaultMetadata at construction time, so the attrsets
       # stored here have correct metadata.name, labels, and namespace.
       manifests =
-        assert !hasDuplicates
+        assert
+          !hasDuplicates
           || throw "mkChartModule(${name}): duplicate manifest names: ${builtins.toJSON manifestNames}";
-        lib.listToAttrs (
-          map (r: lib.nameValuePair r.name r.resource)
-          enabledManifests
-        );
+        lib.listToAttrs (map (r: lib.nameValuePair r.name r.resource) enabledManifests);
     in
     {
-      options.services.${name} =
-        (chartOptions { inherit lib kixlib opts; })
-        // {
-          enable = lib.mkOption {
-            type = lib.types.bool;
-            default = false;
-            description = "Enable ${name}.";
-          };
-          namespace = lib.mkOption {
-            type = lib.types.str;
-            default = "default";
-            description = "Kubernetes namespace for ${name} resources.";
-          };
-          clusterDomain = lib.mkOption {
-            type = lib.types.str;
-            default = "cluster.local";
-            description = "Kubernetes cluster domain for DNS resolution.";
-          };
+      options.services.${name} = (chartOptions { inherit lib kixlib opts; }) // {
+        enable = lib.mkOption {
+          type = lib.types.bool;
+          default = false;
+          description = "Enable ${name}.";
         };
+        namespace = lib.mkOption {
+          type = lib.types.str;
+          default = "default";
+          description = "Kubernetes namespace for ${name} resources.";
+        };
+        clusterDomain = lib.mkOption {
+          type = lib.types.str;
+          default = "cluster.local";
+          description = "Kubernetes cluster domain for DNS resolution.";
+        };
+      };
 
       config = lib.mkIf cfg.enable (
         {
@@ -1399,7 +1569,7 @@ lib.makeExtensible (self: {
           services.${name}.clusterDomain = lib.mkDefault config.cluster.domain;
           inherit manifests;
         }
-        // (result.extraConfig or {})
+        // (result.extraConfig or { })
       );
     };
 })

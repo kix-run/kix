@@ -3,7 +3,11 @@
 # Returns chart-specific options only. Enable, namespace, and clusterDomain
 # are added automatically by mkChartModule.
 
-{ lib, kixlib, opts }:
+{
+  lib,
+  kixlib,
+  opts,
+}:
 
 let
   types = lib.types;
@@ -22,15 +26,24 @@ in
   };
 
   image = lib.mkOption {
-    type = opts.imageSubmodule { repository = "coredns/coredns"; tag = "1.13.1"; };
+    type = opts.imageSubmodule {
+      repository = "coredns/coredns";
+      tag = "1.13.1";
+    };
     default = { };
     description = "Container image configuration.";
   };
 
   resources = lib.mkOption {
     type = opts.resourcesSubmodule {
-      defaultLimits = { cpu = "100m"; memory = "128Mi"; };
-      defaultRequests = { cpu = "100m"; memory = "128Mi"; };
+      defaultLimits = {
+        cpu = "100m";
+        memory = "128Mi";
+      };
+      defaultRequests = {
+        cpu = "100m";
+        memory = "128Mi";
+      };
     };
     default = { };
     description = "CPU/memory requests and limits.";
@@ -39,7 +52,11 @@ in
   serviceAccount = lib.mkOption {
     type = types.submodule {
       options = {
-        create = lib.mkOption { type = types.bool; default = false; description = "Create a ServiceAccount. Helm default is false."; };
+        create = lib.mkOption {
+          type = types.bool;
+          default = false;
+          description = "Create a ServiceAccount. Helm default is false.";
+        };
       };
     };
     default = { };
@@ -53,48 +70,95 @@ in
 
   # Server blocks — the core of CoreDNS config. Matches Helm values.servers structure.
   servers = lib.mkOption {
-    type = types.listOf (types.submodule {
-      options = {
-        port = lib.mkOption { type = types.int; default = 53; };
-        zones = lib.mkOption {
-          type = types.listOf (types.submodule {
-            options = {
-              zone = lib.mkOption { type = types.str; default = "."; };
-              scheme = lib.mkOption { type = types.nullOr types.str; default = null; };
-              use_tcp = lib.mkOption { type = types.bool; default = false; };
-            };
-          });
-          default = [{ zone = "."; }];
+    type = types.listOf (
+      types.submodule {
+        options = {
+          port = lib.mkOption {
+            type = types.int;
+            default = 53;
+          };
+          zones = lib.mkOption {
+            type = types.listOf (
+              types.submodule {
+                options = {
+                  zone = lib.mkOption {
+                    type = types.str;
+                    default = ".";
+                  };
+                  scheme = lib.mkOption {
+                    type = types.nullOr types.str;
+                    default = null;
+                  };
+                  use_tcp = lib.mkOption {
+                    type = types.bool;
+                    default = false;
+                  };
+                };
+              }
+            );
+            default = [ { zone = "."; } ];
+          };
+          plugins = lib.mkOption {
+            type = types.listOf (
+              types.submodule {
+                options = {
+                  name = lib.mkOption { type = types.str; };
+                  parameters = lib.mkOption {
+                    type = types.nullOr types.str;
+                    default = null;
+                  };
+                  configBlock = lib.mkOption {
+                    type = types.nullOr types.str;
+                    default = null;
+                  };
+                };
+              }
+            );
+            default = [ ];
+          };
         };
-        plugins = lib.mkOption {
-          type = types.listOf (types.submodule {
-            options = {
-              name = lib.mkOption { type = types.str; };
-              parameters = lib.mkOption { type = types.nullOr types.str; default = null; };
-              configBlock = lib.mkOption { type = types.nullOr types.str; default = null; };
-            };
-          });
-          default = [];
-        };
-      };
-    });
+      }
+    );
     # Default matches Helm chart's values.yaml
-    default = [{
-      zones = [{ zone = "."; use_tcp = true; }];
-      port = 53;
-      plugins = [
-        { name = "errors"; }
-        { name = "health"; configBlock = "lameduck 10s"; }
-        { name = "ready"; }
-        { name = "kubernetes"; parameters = "cluster.local in-addr.arpa ip6.arpa"; configBlock = "pods insecure\nfallthrough in-addr.arpa ip6.arpa\nttl 30"; }
-        { name = "prometheus"; parameters = "0.0.0.0:9153"; }
-        { name = "forward"; parameters = ". /etc/resolv.conf"; }
-        { name = "cache"; parameters = "30"; }
-        { name = "loop"; }
-        { name = "reload"; }
-        { name = "loadbalance"; }
-      ];
-    }];
+    default = [
+      {
+        zones = [
+          {
+            zone = ".";
+            use_tcp = true;
+          }
+        ];
+        port = 53;
+        plugins = [
+          { name = "errors"; }
+          {
+            name = "health";
+            configBlock = "lameduck 10s";
+          }
+          { name = "ready"; }
+          {
+            name = "kubernetes";
+            parameters = "cluster.local in-addr.arpa ip6.arpa";
+            configBlock = "pods insecure\nfallthrough in-addr.arpa ip6.arpa\nttl 30";
+          }
+          {
+            name = "prometheus";
+            parameters = "0.0.0.0:9153";
+          }
+          {
+            name = "forward";
+            parameters = ". /etc/resolv.conf";
+          }
+          {
+            name = "cache";
+            parameters = "30";
+          }
+          { name = "loop"; }
+          { name = "reload"; }
+          { name = "loadbalance"; }
+        ];
+      }
+    ];
   };
 
   # Prometheus monitoring options — mirrors Helm's prometheus.service and
@@ -151,14 +215,16 @@ in
   };
 
   zoneFiles = lib.mkOption {
-    type = types.listOf (types.submodule {
-      options = {
-        filename = lib.mkOption { type = types.str; };
-        domain = lib.mkOption { type = types.str; };
-        contents = lib.mkOption { type = types.str; };
-      };
-    });
-    default = [];
+    type = types.listOf (
+      types.submodule {
+        options = {
+          filename = lib.mkOption { type = types.str; };
+          domain = lib.mkOption { type = types.str; };
+          contents = lib.mkOption { type = types.str; };
+        };
+      }
+    );
+    default = [ ];
     description = "Custom zone files to include in the ConfigMap.";
   };
 
@@ -166,7 +232,10 @@ in
     type = types.attrsOf types.anything;
     default = {
       allowPrivilegeEscalation = false;
-      capabilities = { add = ["NET_BIND_SERVICE"]; drop = ["ALL"]; };
+      capabilities = {
+        add = [ "NET_BIND_SERVICE" ];
+        drop = [ "ALL" ];
+      };
       readOnlyRootFilesystem = true;
     };
     description = "Container security context. Matches Helm defaults.";
@@ -213,12 +282,21 @@ in
   hpa = lib.mkOption {
     type = types.submodule {
       options = {
-        enabled = lib.mkOption { type = types.bool; default = false; };
-        minReplicas = lib.mkOption { type = types.int; default = 1; };
-        maxReplicas = lib.mkOption { type = types.int; default = 5; };
+        enabled = lib.mkOption {
+          type = types.bool;
+          default = false;
+        };
+        minReplicas = lib.mkOption {
+          type = types.int;
+          default = 1;
+        };
+        maxReplicas = lib.mkOption {
+          type = types.int;
+          default = 5;
+        };
         metrics = lib.mkOption {
           type = types.listOf types.anything;
-          default = [];
+          default = [ ];
           description = "HPA metrics spec — passed through directly to spec.metrics.";
         };
       };
@@ -232,7 +310,10 @@ in
   autoscaler = lib.mkOption {
     type = types.submodule {
       options = {
-        enabled = lib.mkOption { type = types.bool; default = false; };
+        enabled = lib.mkOption {
+          type = types.bool;
+          default = false;
+        };
         image = lib.mkOption {
           type = opts.imageSubmodule {
             repository = "registry.k8s.io/cpa/cluster-proportional-autoscaler";
@@ -242,18 +323,42 @@ in
         };
         resources = lib.mkOption {
           type = opts.resourcesSubmodule {
-            defaultLimits = { cpu = "20m"; memory = "10Mi"; };
-            defaultRequests = { cpu = "20m"; memory = "10Mi"; };
+            defaultLimits = {
+              cpu = "20m";
+              memory = "10Mi";
+            };
+            defaultRequests = {
+              cpu = "20m";
+              memory = "10Mi";
+            };
           };
           default = { };
         };
         # Scaling config — passed as JSON to the autoscaler ConfigMap.
-        coresPerReplica = lib.mkOption { type = types.int; default = 256; };
-        nodesPerReplica = lib.mkOption { type = types.int; default = 16; };
-        preventSinglePointFailure = lib.mkOption { type = types.bool; default = true; };
-        min = lib.mkOption { type = types.int; default = 0; };
-        max = lib.mkOption { type = types.int; default = 0; };
-        includeUnschedulableNodes = lib.mkOption { type = types.bool; default = false; };
+        coresPerReplica = lib.mkOption {
+          type = types.int;
+          default = 256;
+        };
+        nodesPerReplica = lib.mkOption {
+          type = types.int;
+          default = 16;
+        };
+        preventSinglePointFailure = lib.mkOption {
+          type = types.bool;
+          default = true;
+        };
+        min = lib.mkOption {
+          type = types.int;
+          default = 0;
+        };
+        max = lib.mkOption {
+          type = types.int;
+          default = 0;
+        };
+        includeUnschedulableNodes = lib.mkOption {
+          type = types.bool;
+          default = false;
+        };
       };
     };
     default = { };

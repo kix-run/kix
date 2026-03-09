@@ -31,7 +31,8 @@ in
     #
     # No filterAttrs needed: when mkIf false suppresses a target, the key doesn't
     # exist in the attrset — there's nothing to filter.
-    manifests = lib.mapAttrs' (name: target:
+    manifests = lib.mapAttrs' (
+      name: target:
       lib.nameValuePair "monitoring-${name}-servicemonitor" (
         kixlib.monitoring.mkServiceMonitor {
           metadata = {
@@ -42,12 +43,12 @@ in
               "app.kubernetes.io/part-of" = "monitoring";
             };
           };
-          endpoints = [{
-            port = target.portName;
-            interval =
-              if target.interval != null then target.interval
-              else cfg.defaultInterval;
-          }];
+          endpoints = [
+            {
+              port = target.portName;
+              interval = if target.interval != null then target.interval else cfg.defaultInterval;
+            }
+          ];
           namespaceSelector.matchNames = [ target.namespace ];
           selector.matchLabels = target.selector;
         }
