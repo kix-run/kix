@@ -187,7 +187,7 @@ in
   };
 
   # PodDisruptionBudget — mirrors Helm's podDisruptionBudget value.
-  # Helm creates a PDB when this is non-empty (truthy in Go templates).
+  # Helm creates a PodDisruptionBudget when this is non-empty (truthy in Go templates).
   podDisruptionBudget = lib.mkOption {
     type = types.submodule {
       options = {
@@ -204,7 +204,7 @@ in
       };
     };
     default = { };
-    description = "PodDisruptionBudget config. PDB is created when minAvailable or maxUnavailable is set.";
+    description = "PodDisruptionBudget config. Created when minAvailable or maxUnavailable is set.";
   };
 
   # HorizontalPodAutoscaler — mirrors Helm's hpa values.

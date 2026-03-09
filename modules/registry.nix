@@ -68,7 +68,7 @@
 #
 # EVOLUTION:
 #
-# Level 3 modules (monitoring, network-policy) consume the registry.
+# Cross-cutting modules (monitoring capability, network-policy) consume the registry.
 # Monitoring reads endpoints to find scrape targets for validation.
 # Network policy modules read endpoints to know which ports need rules.
 # Future chart modules will reference registry entries for service discovery.

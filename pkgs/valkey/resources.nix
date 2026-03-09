@@ -664,7 +664,7 @@ let
     };
   };
 
-  # Replica PDB (non-sentinel default mode creates a PDB for replicas)
+  # Replica PodDisruptionBudget (non-sentinel default mode creates one for replicas)
   replicaPdb = kixlib'.policy.mkPodDisruptionBudget {
     metadata = {
       name = "${fullname}-replicas";
@@ -679,11 +679,24 @@ let
   # SHARED OPTIONAL RESOURCES (both modes)
   # ============================================================
 
+  # Capability output labels for the metrics Service.
+  # Guard MUST match the mkIf on capabilities.monitoring.valkey declaration below.
+  # If the guard drifts, the chart crashes when monitoring is disabled. Doc 12 rule #10.
+  valkeyMonitoringLabels =
+    if (cfg.metrics.enabled && cfg.metrics.serviceMonitor.enabled)
+    then config.capabilities.monitoring.valkey.output.labels
+    else {};
+  valkeyMonitoringAnnotations =
+    if (cfg.metrics.enabled && cfg.metrics.serviceMonitor.enabled)
+    then config.capabilities.monitoring.valkey.output.annotations
+    else {};
+
   # Metrics service
   metricsSvc = kixlib'.networking.mkService {
     metadata = {
       name = "${fullname}-metrics";
-      labels = labels.all // { "app.kubernetes.io/component" = "metrics"; };
+      labels = labels.all // { "app.kubernetes.io/component" = "metrics"; } // valkeyMonitoringLabels;
+      annotations = valkeyMonitoringAnnotations;
     };
     spec = {
       type = "ClusterIP";
@@ -705,7 +718,7 @@ let
     ];
   };
 
-  # PDB for sentinel mode
+  # PodDisruptionBudget for sentinel mode
   sentinelPdb = kixlib'.policy.mkPodDisruptionBudget {
     metadata = {
       name = "${fullname}-node";
@@ -817,11 +830,11 @@ let
     { name = "valkey-metrics"; resource = metricsSvc; enable = cfg.metrics.enabled; }
     # Optional: network policy
     { name = "valkey-networkpolicy"; resource = networkPolicy; enable = cfg.networkPolicy.enabled; }
-    # Optional: PDB — sentinel gets one PDB, replication gets a different one
+    # Optional: PodDisruptionBudget — sentinel gets one, replication gets a different one
     { name = "valkey-pdb"; resource = sentinelPdb; enable = cfg.pdb.enabled && cfg.sentinel.enabled; }
     { name = "valkey-replica-pdb"; resource = replicaPdb; enable = cfg.pdb.enabled && !cfg.sentinel.enabled; }
-    # Per-chart ServiceMonitor removed — monitoring module is the sole creator.
-    # serviceMonitor.enabled now gates the monitoring.targets declaration in extraConfig.
+    # Per-chart ServiceMonitor removed — implementation module is the sole creator.
+    # serviceMonitor.enabled now gates the capabilities.monitoring declaration in extraConfig.
     { name = "valkey-podmonitor"; resource = podMonitor;
       enable = cfg.metrics.enabled && cfg.metrics.podMonitor.enabled; }
     { name = "valkey-prometheusrule"; resource = prometheusRule;
@@ -871,14 +884,17 @@ in
       };
     };
 
-    # Level 3: monitoring target
-    # metrics.serviceMonitor.enabled gates the target declaration — monitoring
-    # module is the sole creator of ServiceMonitors.
-    monitoring.targets.valkey = lib.mkIf (cfg.metrics.enabled && cfg.metrics.serviceMonitor.enabled) {
+    # V4 capability: monitoring target
+    # metrics.serviceMonitor.enabled gates the capability declaration — the
+    # implementation module creates ServiceMonitors and writes back output.
+    # Guard on valkeyMonitoringLabels/valkeyMonitoringAnnotations above MUST
+    # match this mkIf condition exactly (doc 12 rule #10).
+    capabilities.monitoring.valkey = lib.mkIf (cfg.metrics.enabled && cfg.metrics.serviceMonitor.enabled) {
       serviceName = "${fullname}-metrics";
       namespace = cfg.namespace;
       portName = "http-metrics";
-      interval = null;
+      port = 9121;  # Known duplication with container spec — unavoidable without withMetrics (deferred)
+      path = "/metrics";
       selector = labels.selector // { "app.kubernetes.io/component" = "metrics"; };
     };
 

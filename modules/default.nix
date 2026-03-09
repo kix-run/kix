@@ -1,31 +1,25 @@
 # Base module for kixpkgs — imports all shared module infrastructure.
 #
-# ARCHITECTURE (2026-03):
+# ARCHITECTURE:
 #
 # kixpkgs uses the NixOS module system (lib.evalModules) for chart evaluation.
-# Originally, this was used as a templating engine — each chart evaluated in
-# isolation, reading its own options and writing to config.manifests. Luca's
-# feedback: "you are not merging intents but more do linear composition."
-#
-# We've since added three levels of intent merging, building toward a system
-# where charts can interact, share defaults, and delegate resource creation
-# to cross-cutting modules:
+# Intent merging happens at three levels:
 #
 #   Level 1 — cluster.nix: Cluster-wide defaults (namespace, domain, labels).
 #     Charts consume these via lib.mkDefault, so cluster-level settings apply
-#     everywhere but per-chart overrides still win. Validates against kubenix's
-#     _m.propagate pattern which does the same thing with more machinery.
+#     everywhere but per-chart overrides still win.
 #
 #   Level 2 — registry.nix: Service endpoint registry.
 #     Charts declare their endpoints (host, port, protocol). Other charts or
-#     modules can reference them without hardcoding DNS names. More structured
-#     than kubenix's approach of reaching directly into the resource config tree.
+#     modules can reference them without hardcoding DNS names.
 #
-#   Level 3 — monitoring.nix, network-policy.nix: Cross-cutting modules.
-#     Aggregate declarations from all charts and materialize shared resources.
-#     monitoring.nix creates ServiceMonitors from declared scrape targets.
+#   Level 3 — Capabilities + implementations:
+#     Charts declare abstract intent via capabilities (e.g., capabilities.monitoring.*).
+#     Capability submodules compute output metadata (labels, annotations) from inputs.
+#     Implementation modules (e.g., monitoring-prometheus.nix) read capability inputs
+#     and materialize shared resources (ServiceMonitors). Charts read output metadata
+#     to merge into their own resources (e.g., Service labels).
 #     network-policy.nix is a skeleton for future NetworkPolicy generation.
-#     Neither kubenix nor Helm has an equivalent — this is novel.
 #
 # All levels are always loaded, even for single-chart evaluation. This is safe
 # because Nix is lazy — unused options are declared but never evaluated, so
@@ -40,7 +34,8 @@
   imports = [
     ./cluster.nix
     ./registry.nix
-    ./monitoring.nix
+    ./capabilities/monitoring.nix
+    ./implementations/monitoring-prometheus.nix
     ./network-policy.nix
   ];
 
@@ -73,7 +68,7 @@
       Keyed by human-readable name (e.g., "coredns-deployment", "valkey-primary").
 
       Chart modules write here: config.manifests."coredns-deployment" = <attrset>;
-      Cross-cutting modules (monitoring.nix) also write here.
+      Implementation modules also write here (e.g., ServiceMonitors).
       The flake's mkManifests serializes all entries to JSON at the output boundary.
     '';
   };

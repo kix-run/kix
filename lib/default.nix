@@ -1075,6 +1075,78 @@ lib.makeExtensible (self: {
       };
   };
 
+  # --- Combinators: pure functions for composing resource groups ---
+  #
+  # These are functional building blocks for piping resources through
+  # transformations. Charts are NOT yet refactored to use them — they're
+  # available in kixlib for testing and future chart refactors.
+  #
+  # All combinators are pure functions over attrsets — no module system involvement.
+  # They operate on "groups" (attrsets of named resources) and produce groups.
+  #
+  # CAVEAT: lib.recursiveUpdate replaces lists, doesn't merge them.
+  # Fine for withAutoscaler (sets scalar replicas) and withPodDisruptionBudget (adds new resource).
+  # But a future withSidecar that tries to add to spec.containers via recursiveUpdate
+  # would silently DROP all existing containers. Future combinator authors: use
+  # list-specific merge logic (e.g., containers ++ [sidecar]) instead.
+  combinators = {
+    # Wraps an attrset of named resources into a group.
+    # Pure passthrough — no _extraConfig (deferred per doc 12).
+    # Groups are just attrsets: { "my-deployment" = <resource>; "my-service" = <resource>; }
+    mkGroup = resources: resources;
+
+    # Converts a group → manifestList format for use in mkChartModule.
+    # Each entry gets { name, resource, enable = true }.
+    groupToManifestList = group:
+      lib.mapAttrsToList (name: resource: {
+        inherit name resource;
+        enable = true;
+      }) group;
+
+    # Conditional pipe: applies f to x only if cond is true.
+    # Usage: resource |> optionalPipe cfg.hpa.enabled (withAutoscaler { ... })
+    optionalPipe = cond: f: x: if cond then f x else x;
+
+    # Adds an HPA and nulls out the workload's replicas.
+    # workloadKey: the key of the workload resource in the group
+    # hpaName: name for the HPA resource
+    # hpaArgs: { minReplicas, maxReplicas, metrics }
+    #
+    # Uses lib.recursiveUpdate to set spec.replicas = null (scalar field, safe).
+    withAutoscaler = { workloadKey, hpaName, hpaArgs }: group:
+      let
+        workload = group.${workloadKey};
+        hpa = self.autoscaling.mkHorizontalPodAutoscaler ({
+          scaleTargetRef = {
+            apiVersion = workload.apiVersion;
+            kind = workload.kind;
+            name = workload.metadata.name;
+          };
+        } // hpaArgs);
+      in
+      group // {
+        ${workloadKey} = lib.recursiveUpdate workload {
+          spec.replicas = null;
+        };
+        ${hpaName} = hpa;
+      };
+
+    # Adds a PodDisruptionBudget using the workload's selector labels.
+    # workloadKey: the key of the workload resource in the group
+    # pdbName: name for the PodDisruptionBudget resource
+    # pdbArgs: { minAvailable?, maxUnavailable? }
+    withPodDisruptionBudget = { workloadKey, pdbName, pdbArgs ? {} }: group:
+      let
+        workload = group.${workloadKey};
+        selectorLabels = workload.spec.selector.matchLabels;
+      in
+      group // {
+        ${pdbName} = self.policy.mkPodDisruptionBudget ({
+          selector.matchLabels = selectorLabels;
+        } // pdbArgs);
+      };
+  };
+
   # --- mkChartModule: the contract for chart modules ---
   #
   # Every chart module follows the same pattern:

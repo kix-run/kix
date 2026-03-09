@@ -509,7 +509,7 @@
 
           checks = let
             reg = exampleEval.config.registry;
-            mon = exampleEval.config.monitoring;
+            caps = exampleEval.config.capabilities.monitoring;
             manifests = exampleEval.config.manifests;
           in schemaChecks // goldenChecks // {
             # --- Structural checks for multi-chart composition ---
@@ -545,26 +545,32 @@
                   (lib.attrNames manifests)
               ) registryKeys;
 
-              # Monitoring: cross-cutting module created ServiceMonitors,
-              # per-chart ones were suppressed.
+              # V4 Capabilities: implementation module created ServiceMonitors,
+              # per-chart ones were suppressed. Verify capability inputs and outputs.
               assertMonitoring =
-                assert mon.targets.valkey.serviceName == "valkey-metrics";
-                assert mon.targets.valkey.portName == "http-metrics";
+                # Capability inputs populated correctly
+                assert caps.valkey.serviceName == "valkey-metrics";
+                assert caps.valkey.portName == "http-metrics";
+                assert caps.coredns.serviceName == "coredns-metrics";
+                assert caps.coredns.portName == "metrics";
+                assert caps.cert-manager.serviceName == "cert-manager";
+                assert caps.cert-manager-webhook.serviceName == "cert-manager-webhook";
+                assert caps.cert-manager-cainjector.serviceName == "cert-manager-cainjector";
+                # ServiceMonitors created by implementation module
                 assert manifests ? "monitoring-valkey-servicemonitor";
-                assert !(manifests ? "valkey-servicemonitor");
-                assert mon.targets.coredns.serviceName == "coredns-metrics";
-                assert mon.targets.coredns.portName == "metrics";
                 assert manifests ? "monitoring-coredns-servicemonitor";
-                assert !(manifests ? "coredns-servicemonitor");
-                # Metrics Service should still exist (ServiceMonitor targets it)
-                assert manifests ? "coredns-service-metrics";
-                # cert-manager monitoring targets
-                assert mon.targets.cert-manager.serviceName == "cert-manager";
-                assert mon.targets.cert-manager-webhook.serviceName == "cert-manager-webhook";
-                assert mon.targets.cert-manager-cainjector.serviceName == "cert-manager-cainjector";
                 assert manifests ? "monitoring-cert-manager-servicemonitor";
                 assert manifests ? "monitoring-cert-manager-webhook-servicemonitor";
                 assert manifests ? "monitoring-cert-manager-cainjector-servicemonitor";
+                # Per-chart ServiceMonitors suppressed
+                assert !(manifests ? "valkey-servicemonitor");
+                assert !(manifests ? "coredns-servicemonitor");
+                # Metrics Service should still exist (ServiceMonitor targets it)
+                assert manifests ? "coredns-service-metrics";
+                # V4 writeback: output labels populated by implementation module
+                assert caps.coredns.output.labels ? "kix.monitoring/scrape";
+                assert caps.valkey.output.labels ? "kix.monitoring/scrape";
+                assert caps.cert-manager.output.labels ? "kix.monitoring/scrape";
                 true;
 
               # Negative assertions: disabled features must not produce resources
@@ -583,8 +589,8 @@
               echo "Registry: valkey metrics=${reg.valkey.endpoints.metrics.host}:${toString reg.valkey.endpoints.metrics.port}"
               echo "Registry: cert-manager webhook=${reg.cert-manager.endpoints.webhook.host}:${toString reg.cert-manager.endpoints.webhook.port}"
               echo "Registry: cert-manager metrics=${reg.cert-manager.endpoints.metrics.host}:${toString reg.cert-manager.endpoints.metrics.port}"
-              echo "Monitoring: valkey target=${mon.targets.valkey.serviceName}:${mon.targets.valkey.portName}"
-              echo "Monitoring: cert-manager target=${mon.targets.cert-manager.serviceName}"
+              echo "Monitoring: valkey capability=${caps.valkey.serviceName}:${caps.valkey.portName}"
+              echo "Monitoring: cert-manager capability=${caps.cert-manager.serviceName}"
               echo "All structural assertions passed."
               touch $out
             '';
@@ -598,27 +604,27 @@
             # All features enabled — validates feature interaction.
             cluster-full = let
               freg = fullEval.config.registry;
-              fmon = fullEval.config.monitoring;
+              fullCaps = fullEval.config.capabilities.monitoring;
               fman = fullEval.config.manifests;
             in
               # All 3 charts in registry
               assert freg ? coredns;
               assert freg ? valkey;
               assert freg ? cert-manager;
-              # Monitoring targets exist for all monitored services
-              assert fmon.targets ? coredns;
-              assert fmon.targets ? valkey;
-              assert fmon.targets ? cert-manager;
-              assert fmon.targets ? cert-manager-webhook;
+              # Capability targets exist for all monitored services
+              assert fullCaps ? coredns;
+              assert fullCaps ? valkey;
+              assert fullCaps ? cert-manager;
+              assert fullCaps ? cert-manager-webhook;
               # HPA resources created for both coredns and valkey
               assert fman ? "coredns-hpa";
               assert fman ? "valkey-hpa";
-              # PDB for both coredns and valkey
+              # PodDisruptionBudget for both coredns and valkey
               assert fman ? "coredns-poddisruptionbudget";
               assert fman ? "valkey-pdb";
               # ServiceAccount created (coredns has it enabled)
               assert fman ? "coredns-serviceaccount";
-              # All charts produce ServiceMonitors via monitoring module
+              # All charts produce ServiceMonitors via implementation module
               assert fman ? "monitoring-coredns-servicemonitor";
               assert fman ? "monitoring-valkey-servicemonitor";
               assert fman ? "monitoring-cert-manager-servicemonitor";
@@ -637,12 +643,12 @@
               assert lib.all (n: lib.hasPrefix "coredns" n) manifestNames;
               # No ServiceAccount (create = false by default)
               assert !(mman ? "coredns-serviceaccount");
-              # No HPA, PDB, ServiceMonitor
+              # No HPA, PodDisruptionBudget, ServiceMonitor
               assert !(mman ? "coredns-hpa");
               assert !(mman ? "coredns-pdb");
               assert !(lib.any (n: lib.hasInfix "servicemonitor" n) manifestNames);
-              # No monitoring targets (prometheus.monitor.enabled = false by default)
-              assert minimalEval.config.monitoring.targets == {};
+              # No monitoring capabilities (prometheus.monitor.enabled = false by default)
+              assert minimalEval.config.capabilities.monitoring == {};
               pkgs.runCommand "check-cluster-minimal" {} ''
                 echo "Minimal cluster: all negative assertions passed."
                 touch $out

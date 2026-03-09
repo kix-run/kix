@@ -95,7 +95,7 @@ in
   };
 
   # Reusable PodDisruptionBudget option submodule.
-  # CoreDNS PDB has a different shape (no `enabled` flag, nullable min/max),
+  # CoreDNS PodDisruptionBudget has a different shape (no `enabled` flag, nullable min/max),
   # so it keeps its inline def.
   pdbSubmodule = { defaults ? {} }: types.submodule {
     options = {

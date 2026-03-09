@@ -44,9 +44,9 @@
   };
 
   # --- Cross-cutting concerns ---
-  # monitoring.enabled = true activates Level 3 intent merging:
-  # the monitoring module creates ServiceMonitors from declared targets
-  # across all charts, replacing per-chart ServiceMonitor creation.
+  # monitoring.enabled activates the capability system: charts declare
+  # capabilities.monitoring.* targets, the implementation module creates
+  # ServiceMonitors, and output metadata flows back into chart Services.
   monitoring = {
     enabled = true;
     defaultInterval = "15s";

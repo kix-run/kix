@@ -48,8 +48,8 @@
 #
 # ALTERNATIVES CONSIDERED:
 #
-# 1. Replacing per-chart NetworkPolicies immediately (like monitoring.nix does
-#    for ServiceMonitors).
+# 1. Replacing per-chart NetworkPolicies immediately (like the monitoring
+#    capability system does for ServiceMonitors).
 #    Deferred: network policies are more complex than monitoring. A chart's
 #    NetworkPolicy may include non-kix traffic rules (e.g., allow traffic from
 #    any pod, allow DNS egress). The cross-cutting module would need to handle

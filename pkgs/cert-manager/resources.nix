@@ -114,10 +114,28 @@ let
     };
   };
 
+  # Capability output labels for cert-manager Services.
+  # Controller and webhook targets are unconditional (no mkIf), so their output
+  # can be read without guards. Cainjector needs a guard on cfg.cainjector.enabled.
+  # Guard conditions MUST match the corresponding capability declarations below (doc 12 rule #10).
+  controllerMonitoringLabels = config.capabilities.monitoring.cert-manager.output.labels;
+  controllerMonitoringAnnotations = config.capabilities.monitoring.cert-manager.output.annotations;
+  webhookMonitoringLabels = config.capabilities.monitoring.cert-manager-webhook.output.labels;
+  webhookMonitoringAnnotations = config.capabilities.monitoring.cert-manager-webhook.output.annotations;
+  cainjectorMonitoringLabels =
+    if cfg.cainjector.enabled
+    then config.capabilities.monitoring.cert-manager-cainjector.output.labels
+    else {};
+  cainjectorMonitoringAnnotations =
+    if cfg.cainjector.enabled
+    then config.capabilities.monitoring.cert-manager-cainjector.output.annotations
+    else {};
+
   controllerService = kixlib'.networking.mkService {
     metadata = {
       name = "cert-manager";
-      labels = controllerLabels.all // { "app.kubernetes.io/component" = "controller"; };
+      labels = controllerLabels.all // { "app.kubernetes.io/component" = "controller"; } // controllerMonitoringLabels;
+      annotations = controllerMonitoringAnnotations;
     };
     spec = {
       type = "ClusterIP";
@@ -327,7 +345,11 @@ let
   };
 
   webhookService = kixlib'.networking.mkService {
-    metadata = { name = "cert-manager-webhook"; labels = webhookLabels.all; };
+    metadata = {
+      name = "cert-manager-webhook";
+      labels = webhookLabels.all // webhookMonitoringLabels;
+      annotations = webhookMonitoringAnnotations;
+    };
     spec = {
       type = "ClusterIP";
       ports = [
@@ -425,7 +447,11 @@ let
   };
 
   cainjectorService = kixlib'.networking.mkService {
-    metadata = { name = "cert-manager-cainjector"; labels = cainjectorLabels.all; };
+    metadata = {
+      name = "cert-manager-cainjector";
+      labels = cainjectorLabels.all // cainjectorMonitoringLabels;
+      annotations = cainjectorMonitoringAnnotations;
+    };
     spec = {
       type = "ClusterIP";
       ports = [{ port = 9402; protocol = "TCP"; name = "http-metrics"; }];
@@ -570,23 +596,33 @@ in
       };
     };
 
-    # Level 3: monitoring targets
-    monitoring.targets.cert-manager = {
+    # V4 capability: monitoring targets
+    # Controller and webhook are unconditional — no mkIf needed.
+    # Cainjector is gated on cfg.cainjector.enabled. The guard on
+    # cainjectorMonitoringLabels/cainjectorMonitoringAnnotations above MUST match
+    # this mkIf condition exactly (doc 12 rule #10).
+    capabilities.monitoring.cert-manager = {
       serviceName = "cert-manager";
       namespace = cfg.namespace;
       portName = "tcp-prometheus-servicemonitor";
+      port = 9402;  # Known duplication with container spec — unavoidable without withMetrics
+      path = "/metrics";
       selector = controllerLabels.selector;
     };
-    monitoring.targets.cert-manager-webhook = {
+    capabilities.monitoring.cert-manager-webhook = {
       serviceName = "cert-manager-webhook";
       namespace = cfg.namespace;
       portName = "metrics";
+      port = 9402;
+      path = "/metrics";
       selector = webhookLabels.selector;
     };
-    monitoring.targets.cert-manager-cainjector = lib.mkIf cfg.cainjector.enabled {
+    capabilities.monitoring.cert-manager-cainjector = lib.mkIf cfg.cainjector.enabled {
       serviceName = "cert-manager-cainjector";
       namespace = cfg.namespace;
       portName = "http-metrics";
+      port = 9402;
+      path = "/metrics";
       selector = cainjectorLabels.selector;
     };
   };

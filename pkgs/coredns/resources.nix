@@ -228,13 +228,26 @@ let
     };
   };
 
+  # Capability output labels for the metrics Service.
+  # Guard MUST match the mkIf on capabilities.monitoring.coredns declaration below.
+  # If the guard drifts from the target declaration, the chart crashes when monitoring
+  # is disabled (attribute-missing on a non-existent target). See doc 12 rule #10.
+  monitoringLabels =
+    if (hasPrometheus && cfg.prometheus.service.enabled && cfg.prometheus.monitor.enabled)
+    then config.capabilities.monitoring.coredns.output.labels
+    else {};
+  monitoringAnnotations =
+    if (hasPrometheus && cfg.prometheus.service.enabled && cfg.prometheus.monitor.enabled)
+    then config.capabilities.monitoring.coredns.output.annotations
+    else {};
+
   metricsService = kixlibCoredns.networking.mkService {
     metadata = {
       name = "coredns-metrics";
       labels = {
         "app.kubernetes.io/component" = "metrics";
-      };
-      annotations = cfg.prometheus.service.annotations;
+      } // monitoringLabels;
+      annotations = cfg.prometheus.service.annotations // monitoringAnnotations;
     };
     spec = {
       ports = [{
@@ -400,13 +413,17 @@ in
       };
     };
 
-    # Level 3: monitoring target
+    # V4 capability: monitoring target
     # prometheus.monitor.enabled controls whether the chart declares a monitoring
-    # target — the monitoring module is the sole creator of ServiceMonitors.
-    monitoring.targets.coredns = lib.mkIf (hasPrometheus && cfg.prometheus.service.enabled && cfg.prometheus.monitor.enabled) {
+    # capability — the implementation module creates ServiceMonitors and writes
+    # back output labels/annotations. Guard on monitoringLabels/monitoringAnnotations
+    # above MUST match this mkIf condition exactly (doc 12 rule #10).
+    capabilities.monitoring.coredns = lib.mkIf (hasPrometheus && cfg.prometheus.service.enabled && cfg.prometheus.monitor.enabled) {
       serviceName = "coredns-metrics";
       namespace = cfg.namespace;
       portName = "metrics";
+      port = 9153;  # Known duplication with container spec — unavoidable without withMetrics (deferred)
+      path = "/metrics";
       selector = selectorLabels // {
         "app.kubernetes.io/component" = "metrics";
       };
