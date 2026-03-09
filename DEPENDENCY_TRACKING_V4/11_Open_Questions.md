@@ -120,3 +120,43 @@ but because if he comes back after the migration and says "actually I want
 derivations throughout," we'd be ripping out what we just built. A quick "we're
 building on attrsets, derivations are a future layer at the output boundary,
 yes?" would derisk the whole effort.
+
+---
+
+### 8. Resource naming: store paths vs static names (Adam's question)
+
+Luca's `ref` vision (decision #1) leans toward store-path-derived names —
+content-addressable, automatically unique, traceable. But the original kix
+experiment with store paths hit real problems (documented in lib/default.nix
+header comment #1):
+
+- Store paths contain `/` which is illegal in K8s resource names
+- Names change on *any* Nix expression change, orphaning old resources in the
+  cluster (the Deployment gets a new name, the old one is never deleted)
+- `kubectl get pods` becomes unreadable — you're debugging `nix-abc123-coredns`
+  instead of `coredns`
+- Some K8s resources **require** well-known static names:
+  - RBAC `resourceNames` fields reference specific names
+    (e.g., `resourceNames = ["cert-manager-controller"]` for leader election
+    leases)
+  - Webhook configurations reference Services by name
+    (`clientConfig.service.name = "cert-manager-webhook"`)
+  - cert-manager's `--dynamic-serving-ca-secret-name=cert-manager-webhook-ca`
+    is a CLI flag pointing at a specific Secret name
+  - Headless Services for StatefulSets must have stable names (pods get DNS
+    entries like `valkey-0.valkey-headless.namespace.svc`)
+  - CRDs reference controllers by name in conversion webhook configs
+
+The current system uses `kixlib.resourceName` to derive human-readable names
+from metadata. This works and is what all three charts use today.
+
+**The question for Luca:** Is the `ref` system meant to *replace* static names
+entirely, or to *wrap* them (so you still write `name = "cert-manager"` but
+cross-references go through a ref that validates the target exists)? The
+wrapping approach gives you eval-time safety without the orphaning problem.
+The replacement approach gives you content-addressability but breaks the cases
+above.
+
+This is entangled with decision #1 (attrsets vs derivations) — store paths
+are a derivation concept. If we stay on attrsets, refs would need to be a
+custom validation layer, not native Nix store paths.
