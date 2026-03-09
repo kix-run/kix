@@ -691,19 +691,23 @@ let
     then config.capabilities.monitoring.valkey.output.annotations
     else {};
 
-  # Metrics service
-  metricsSvc = kixlib'.networking.mkService {
-    metadata = {
-      name = "${fullname}-metrics";
-      labels = labels.all // { "app.kubernetes.io/component" = "metrics"; } // valkeyMonitoringLabels;
-      annotations = valkeyMonitoringAnnotations;
-    };
-    spec = {
-      type = "ClusterIP";
-      ports = [{ name = "http-metrics"; port = 9121; protocol = "TCP"; targetPort = "metrics"; }];
+  # --- Metrics Service via pipeline ---
+  # Uses explicit `selector` (base labels, no component) to match ALL valkey pods.
+  # This is why we pass `selector` directly to `withMetrics` rather than extracting
+  # from a workload — no single workload represents "all valkey pods."
+  inherit (kixlib'.combinators) optionalPipe withMetrics groupToManifestList withEnable;
+
+  metricsGroup = {}
+    |> optionalPipe cfg.metrics.enabled (withMetrics {
       selector = labels.selector;
-    };
-  };
+      metricsName = "valkey-metrics";
+      metricsServiceName = "${fullname}-metrics";
+      metricsPort = 9121;
+      portName = "http-metrics";
+      monitoringLabels = valkeyMonitoringLabels;
+      monitoringAnnotations = valkeyMonitoringAnnotations;
+      extraLabels = labels.all;
+    });
 
   # Network policy
   networkPolicy = kixlib'.networking.mkNetworkPolicy {
@@ -826,8 +830,6 @@ let
     { name = "valkey-replica-service"; resource = replicaSvc; enable = !cfg.sentinel.enabled; }
     { name = "valkey-primary"; resource = primaryStatefulSet; enable = !cfg.sentinel.enabled; }
     { name = "valkey-replicas"; resource = replicaStatefulSet; enable = !cfg.sentinel.enabled; }
-    # Optional: metrics
-    { name = "valkey-metrics"; resource = metricsSvc; enable = cfg.metrics.enabled; }
     # Optional: network policy
     { name = "valkey-networkpolicy"; resource = networkPolicy; enable = cfg.networkPolicy.enabled; }
     # Optional: PodDisruptionBudget — sentinel gets one, replication gets a different one
@@ -841,7 +843,9 @@ let
       enable = cfg.metrics.enabled && cfg.metrics.prometheusRule.enabled; }
     # Optional: HPA
     { name = "valkey-hpa"; resource = replicaHpa; enable = cfg.replica.autoscaling.hpa.enabled; }
-  ];
+  ]
+  # Optional: metrics — via withMetrics pipeline with explicit selector
+  ++ withEnable cfg.metrics.enabled (groupToManifestList metricsGroup);
 
 in
 {

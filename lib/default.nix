@@ -1108,37 +1108,56 @@ lib.makeExtensible (self: {
     optionalPipe = cond: f: x: if cond then f x else x;
 
     # Adds an HPA and nulls out the workload's replicas.
-    # workloadKey: the key of the workload resource in the group
+    # workloadKey: the key of the workload resource in the group (optional if scaleTargetRef provided)
+    # scaleTargetRef: explicit target ref (overrides extraction from workloadKey)
     # hpaName: name for the HPA resource
     # hpaArgs: { minReplicas, maxReplicas, metrics }
     #
+    # When workloadKey is provided, the combinator auto-derives scaleTargetRef
+    # and nulls out spec.replicas. When scaleTargetRef is provided directly
+    # (multi-component charts like valkey), replicas are NOT nulled — the
+    # caller is responsible for that.
+    #
     # Uses lib.recursiveUpdate to set spec.replicas = null (scalar field, safe).
-    withAutoscaler = { workloadKey, hpaName, hpaArgs }: group:
+    withAutoscaler = { workloadKey ? null, hpaName, hpaArgs, scaleTargetRef ? null }: group:
       let
-        workload = group.${workloadKey};
+        targetRef =
+          if scaleTargetRef != null then scaleTargetRef
+          else if workloadKey != null then
+            let workload = group.${workloadKey}; in {
+              apiVersion = workload.apiVersion;
+              kind = workload.kind;
+              name = workload.metadata.name;
+            }
+          else throw "withAutoscaler: provide either workloadKey or scaleTargetRef";
         hpa = self.autoscaling.mkHorizontalPodAutoscaler ({
-          scaleTargetRef = {
-            apiVersion = workload.apiVersion;
-            kind = workload.kind;
-            name = workload.metadata.name;
-          };
+          scaleTargetRef = targetRef;
         } // hpaArgs);
+        # Null out replicas only when the workload is in our group
+        base = if workloadKey != null then group // {
+          ${workloadKey} = lib.recursiveUpdate group.${workloadKey} {
+            spec.replicas = null;
+          };
+        } else group;
       in
-      group // {
-        ${workloadKey} = lib.recursiveUpdate workload {
-          spec.replicas = null;
-        };
-        ${hpaName} = hpa;
-      };
+      base // { ${hpaName} = hpa; };
 
     # Adds a PodDisruptionBudget using the workload's selector labels.
-    # workloadKey: the key of the workload resource in the group
+    # workloadKey: the key of the workload resource in the group (optional if selector provided)
+    # selector: explicit selector labels (overrides workloadKey extraction)
     # pdbName: name for the PodDisruptionBudget resource
-    # pdbArgs: { minAvailable?, maxUnavailable? }
-    withPodDisruptionBudget = { workloadKey, pdbName, pdbArgs ? {} }: group:
+    # pdbArgs: { minAvailable?, maxUnavailable?, metadata? }
+    #
+    # For multi-component charts (e.g., valkey with primary/replica/sentinel),
+    # use `selector` directly — the target workload may not be in this group,
+    # or the desired selector may differ from the workload's matchLabels.
+    # Custom metadata (name, labels) can be passed via pdbArgs.metadata.
+    withPodDisruptionBudget = { workloadKey ? null, selector ? null, pdbName, pdbArgs ? {} }: group:
       let
-        workload = group.${workloadKey};
-        selectorLabels = workload.spec.selector.matchLabels;
+        selectorLabels =
+          if selector != null then selector
+          else if workloadKey != null then group.${workloadKey}.spec.selector.matchLabels
+          else throw "withPodDisruptionBudget: provide either selector or workloadKey";
       in
       group // {
         ${pdbName} = self.policy.mkPodDisruptionBudget ({
@@ -1203,12 +1222,19 @@ lib.makeExtensible (self: {
       "${name}-service" = service;
     };
 
-    # Adds a metrics Service to a group, extracting selector from a workload.
+    # Adds a metrics Service to a group.
     # Used for charts that expose a separate metrics port via a dedicated Service
-    # (e.g., coredns-metrics, valkey-metrics). The workloadKey identifies which
-    # resource to read matchLabels from for the metrics Service's selector.
+    # (e.g., coredns-metrics, valkey-metrics).
+    #
+    # selector: explicit selector labels (preferred for multi-component charts
+    #   like valkey where the metrics service targets ALL pods, not one workload)
+    # workloadKey: fallback — extracts selector from this workload's matchLabels
+    #
+    # At least one of selector or workloadKey must be provided. When both are
+    # given, selector wins (workload is never forced — good for laziness).
     withMetrics = {
-      workloadKey,              # Key of workload to get selector from
+      workloadKey ? null,       # Key of workload to extract selector from
+      selector ? null,          # Explicit selector (takes precedence over workloadKey)
       metricsName,              # Manifest key for the metrics Service in the group
       metricsPort,
       portName ? "metrics",
@@ -1218,8 +1244,10 @@ lib.makeExtensible (self: {
       extraServiceAnnotations ? {},
       extraLabels ? {},
     }: group: let
-      workload = group.${workloadKey};
-      selectorLabels = workload.spec.selector.matchLabels;
+      selectorLabels =
+        if selector != null then selector
+        else if workloadKey != null then group.${workloadKey}.spec.selector.matchLabels
+        else throw "withMetrics: provide either selector or workloadKey";
     in group // {
       ${metricsName} = self.networking.mkService {
         metadata = {

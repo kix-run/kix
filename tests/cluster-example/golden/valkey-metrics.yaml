@@ -20,7 +20,7 @@ spec:
   - name: http-metrics
     port: 9121
     protocol: TCP
-    targetPort: metrics
+    targetPort: 9121
   selector:
     app.kubernetes.io/instance: release-name
     app.kubernetes.io/name: valkey
