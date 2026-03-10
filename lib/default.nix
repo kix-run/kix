@@ -645,6 +645,16 @@ lib.makeExtensible (self: {
         ];
       };
 
+    # Adds multiple volume mounts to a container in one call.
+    # Preferred over chaining withVolumeMount when attaching 3+ mounts (e.g., valkey
+    # attaches 6+ mounts per container). Each mount is an attrset with name, mountPath,
+    # and optional subPath/readOnly.
+    withVolumeMounts =
+      mounts: container:
+      lib.recursiveUpdate container {
+        volumeMounts = (container.volumeMounts or [ ]) ++ mounts;
+      };
+
     withLivenessProbe =
       probeConfig: container:
       lib.recursiveUpdate container {
@@ -655,6 +665,15 @@ lib.makeExtensible (self: {
       probeConfig: container:
       lib.recursiveUpdate container {
         readinessProbe = probeConfig;
+      };
+
+    # Adds a startup probe to a container. Startup probes run once during pod startup
+    # and disable liveness/readiness probes until they succeed. Used by valkey to allow
+    # slow initial data loading without being killed by liveness checks.
+    withStartupProbe =
+      probeConfig: container:
+      lib.recursiveUpdate container {
+        startupProbe = probeConfig;
       };
   };
 
@@ -1368,6 +1387,85 @@ lib.makeExtensible (self: {
       in
       {
         "${name}-deployment" = deployment;
+        "${name}-service" = service;
+      };
+
+    # Creates a StatefulSet + Service group from a single specification.
+    # Returns { "${name}-statefulset" = ...; "${name}-service" = ...; }
+    # Mirrors mkServiceDeployment but for stateful workloads (valkey, databases, etc.).
+    #
+    # Key differences from mkServiceDeployment:
+    # - Creates StatefulSet instead of Deployment
+    # - Requires `serviceName` (headless Service name for pod DNS identity)
+    # - Supports `volumeClaimTemplates` for per-pod persistent storage
+    # - Uses `updateStrategy` instead of `strategy`
+    # - Accepts `clusterIP` for the generated Service (use "None" for headless)
+    mkServiceStatefulSet =
+      {
+        name, # Base name — becomes manifest key prefix
+        containers,
+        selectorLabels, # Explicit — must be stable across upgrades
+        servicePorts,
+        serviceName, # Headless service name (required for StatefulSet pod DNS)
+        replicas ? 1,
+        serviceType ? "ClusterIP",
+        clusterIP ? null, # Set to "None" for headless service
+        volumes ? [ ],
+        volumeClaimTemplates ? null,
+        serviceAccountName ? null,
+        updateStrategy ? null,
+        podManagementPolicy ? null,
+        podAnnotations ? { },
+        podLabels ? { }, # Extra labels on pod template (merged with selectorLabels)
+        statefulSetLabels ? { }, # Extra labels on StatefulSet metadata
+        serviceLabels ? { }, # Extra labels on Service metadata
+        serviceAnnotations ? { },
+        podSpec ? { }, # Extra fields merged into pod spec (securityContext, affinity, etc.)
+        statefulSetMetadata ? { }, # Extra fields on StatefulSet metadata
+      }:
+      let
+        statefulSet = self.workload.mkStatefulSet (
+          {
+            metadata = {
+              inherit name;
+              labels = statefulSetLabels;
+            }
+            // statefulSetMetadata;
+            inherit replicas serviceName selectorLabels;
+            template = self.pod.mkPodTemplate {
+              metadata = {
+                labels = selectorLabels // podLabels;
+                annotations = podAnnotations;
+              };
+              spec = {
+                inherit containers volumes;
+              }
+              // lib.optionalAttrs (serviceAccountName != null) {
+                inherit serviceAccountName;
+              }
+              // podSpec;
+            };
+          }
+          // lib.optionalAttrs (updateStrategy != null) { inherit updateStrategy; }
+          // lib.optionalAttrs (podManagementPolicy != null) { inherit podManagementPolicy; }
+          // lib.optionalAttrs (volumeClaimTemplates != null) { inherit volumeClaimTemplates; }
+        );
+        service = self.networking.mkService {
+          metadata = {
+            inherit name;
+            labels = serviceLabels;
+            annotations = serviceAnnotations;
+          };
+          spec = {
+            type = serviceType;
+            ports = servicePorts;
+            selector = selectorLabels;
+          }
+          // lib.optionalAttrs (clusterIP != null) { inherit clusterIP; };
+        };
+      in
+      {
+        "${name}-statefulset" = statefulSet;
         "${name}-service" = service;
       };
 
