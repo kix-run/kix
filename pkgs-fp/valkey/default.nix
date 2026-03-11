@@ -250,7 +250,7 @@ k8s.mkPackage
             (toString totalReplicas)
             (toString sentinel.quorum)
           ]
-          (builtins.readFile (../../pkgs/valkey/scripts + "/${file}"));
+          (builtins.readFile (./scripts + "/${file}"));
 
       renderDisableCommands = cmds:
         lib.concatMapStringsSep "\n" (cmd: ''rename-command ${cmd} ""'') cmds;
@@ -837,15 +837,15 @@ k8s.mkPackage
         inherit namespace;
         labels = allLabels;
         data = {
-          "ping_readiness_local.sh" = builtins.readFile ../../pkgs/valkey/scripts/ping_readiness_local.sh;
-          "ping_liveness_local.sh" = builtins.readFile ../../pkgs/valkey/scripts/ping_liveness_local.sh;
-          "ping_readiness_primary.sh" = builtins.readFile ../../pkgs/valkey/scripts/ping_readiness_primary.sh;
-          "ping_liveness_primary.sh" = builtins.readFile ../../pkgs/valkey/scripts/ping_liveness_primary.sh;
-          "ping_readiness_local_and_primary.sh" = builtins.readFile ../../pkgs/valkey/scripts/ping_readiness_local_and_primary.sh;
-          "ping_liveness_local_and_primary.sh" = builtins.readFile ../../pkgs/valkey/scripts/ping_liveness_local_and_primary.sh;
+          "ping_readiness_local.sh" = builtins.readFile ./scripts/ping_readiness_local.sh;
+          "ping_liveness_local.sh" = builtins.readFile ./scripts/ping_liveness_local.sh;
+          "ping_readiness_primary.sh" = builtins.readFile ./scripts/ping_readiness_primary.sh;
+          "ping_liveness_primary.sh" = builtins.readFile ./scripts/ping_liveness_primary.sh;
+          "ping_readiness_local_and_primary.sh" = builtins.readFile ./scripts/ping_readiness_local_and_primary.sh;
+          "ping_liveness_local_and_primary.sh" = builtins.readFile ./scripts/ping_liveness_local_and_primary.sh;
         }
         // lib.optionalAttrs sentinel.enabled {
-          "ping_sentinel.sh" = builtins.readFile ../../pkgs/valkey/scripts/ping_sentinel.sh;
+          "ping_sentinel.sh" = builtins.readFile ./scripts/ping_sentinel.sh;
           "parse_sentinels.awk" = readScript "parse_sentinels.awk";
         };
       };
@@ -863,7 +863,7 @@ k8s.mkPackage
             "prestop-sentinel.sh" = readScript "prestop-sentinel.sh";
             "prestop-valkey.sh" = readScript "prestop-valkey.sh";
           } else {
-            "start-primary.sh" = builtins.readFile ../../pkgs/valkey/scripts/start-primary.sh;
+            "start-primary.sh" = builtins.readFile ./scripts/start-primary.sh;
             "start-replica.sh" = readScript "start-replica.sh";
           };
       };

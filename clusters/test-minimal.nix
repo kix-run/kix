@@ -3,9 +3,10 @@
 # Tests that a minimal configuration produces no extra resources.
 # Used for negative assertions (disabled features absent).
 
-{
-  services.coredns = {
-    enable = true;
-    namespace = "kube-system";
+{ k8s, lib }:
+
+k8s.mkCluster {
+  basePackages = self: {
+    coredns = import ../pkgs-fp/coredns { inherit k8s lib; };
   };
 }

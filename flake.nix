@@ -1,26 +1,20 @@
-# kixpkgs flake — the entry point for building kix modules.
+# kixpkgs flake — the entry point for building kix packages.
 #
 # Architecture (2026-03):
 #
-# Each Helm chart migration lives in pkgs/<chart-name>/ as a Nix module.
-# Modules are evaluated using lib.evalModules (the NixOS module system),
-# which gives us typed options, submodules, and cross-module references.
+# Each Kubernetes package lives in pkgs-fp/<chart-name>/ using the fixpoint
+# pattern. Packages are self-referential resource sets composed via
+# k8s.mkPackage (inner fixpoint) and k8s.mkCluster (outer fixpoint).
 #
-# kixlib is passed to every module via specialArgs. It provides resource
-# builders (mkDeployment, mkService, etc.) that produce plain attrsets.
-#
-# Each module writes its resources to config.manifests.<name> as raw attrsets
-# (with kind, apiVersion, metadata, etc.). Serialization to JSON store
-# derivations is deferred to mkManifests — the output boundary. This keeps
-# structured data available throughout the module system for cross-resource
-# validation, behavioral invariants, and any module that needs to inspect
-# other charts' resources.
+# kixlib provides YAML serialization (mkManifest). The fixpoint library
+# (lib/fixpoint/) adds ref tracking, closure computation, and self-referential
+# package composition.
 #
 # To build a chart's manifests:
 #   nix build .#<chart-name>
 #
-# To evaluate without building (useful for debugging):
-#   nix eval .#legacyPackages.<system>.mkCluster { ... }
+# To build a cluster:
+#   nix build .#cluster-example
 
 {
   description = "kixpkgs - Kubernetes packages built with Nix";
@@ -59,11 +53,11 @@
           fpClusterFull = import ./clusters/test-full.nix { inherit k8s lib; };
           fpClusterExample = import ./clusters/example.nix { inherit k8s lib; };
 
-          # Serializes fixpoint cluster manifests into a directory of YAML files.
-          # This is the fixpoint equivalent of mkManifests for the module system.
+          # Serializes a list of fixpoint resources into a directory of YAML files.
           # Each resource becomes a separate file named by {name}-{kind}.
+          # Works for both clusters (.manifests) and single packages (.closure).
           mkFpManifests =
-            cluster:
+            resources:
             let
               fileEntries = map (
                 r:
@@ -74,28 +68,28 @@
                   fileName = "${r.name}-${kindLower}";
                   drv = kixlib.mkManifest r.manifest;
                 }
-              ) cluster.manifests;
+              ) resources;
             in
             pkgs.runCommand "k8s-manifests" { } ''
               mkdir -p $out
               ${lib.concatStringsSep "\n" (map (e: "cp ${e.drv} $out/${e.fileName}.yaml") fileEntries)}
             '';
 
-          # Converts fixpoint cluster manifests list to an attrset keyed by
+          # Converts a fixpoint resource list to an attrset keyed by
           # {name}-{kind}, matching the shape expected by validateManifestSet.
           fpManifestMap =
-            cluster:
+            resources:
             builtins.listToAttrs (
               map (r: {
                 name = "${r.name}-${lib.toLower r.kind}";
                 value = r.manifest;
-              }) cluster.manifests
+              }) resources
             );
 
           # Manifest packages for fixpoint clusters.
-          fpClusterMinimalPkg = mkFpManifests fpClusterMinimal;
-          fpClusterFullPkg = mkFpManifests fpClusterFull;
-          fpClusterExamplePkg = mkFpManifests fpClusterExample;
+          fpClusterMinimalPkg = mkFpManifests fpClusterMinimal.manifests;
+          fpClusterFullPkg = mkFpManifests fpClusterFull.manifests;
+          fpClusterExamplePkg = mkFpManifests fpClusterExample.manifests;
 
           # Offline K8s JSON schemas for kubeconform — the Nix sandbox has no
           # network access, so we can't let kubeconform download schemas at
@@ -107,240 +101,281 @@
             hash = "sha256-izt9E+RqmGuxLLwggPsRjaSx/QXHz8ZlcluiyHawikw=";
           };
 
-          # Evaluate modules with a given config.
+          # --- Fixpoint package variant registry ---
+          # Each variant imports a package from pkgs-fp/ and optionally overrides it.
+          # Packages and schema checks are generated automatically from this registry.
           #
-          # `chartModules` — list of chart module paths to include
-          #   (e.g., [ ./pkgs/coredns ])
-          # `config` — the user's config module that sets options
-          #   (e.g., { services.coredns.enable = true; replicas = 3; })
-          #
-          # The base ./modules provides the `manifests` option that all chart
-          # modules write into. Each chart module adds its own options under
-          # services.<name> and its resources under config.manifests.
-          mkCluster =
-            {
-              chartModules ? [ ],
-              config ? { },
-            }:
-            lib.evalModules {
-              modules = [
-                ./modules
-              ]
-              ++ chartModules
-              ++ [
-                config
-              ];
-              specialArgs = {
-                inherit pkgs lib kixlib;
-              };
-            };
+          # Each entry is a fixpoint package (has .closure with all resources).
+          # The registry key becomes the `nix build .#<key>` target.
+          importCoredns = import ./pkgs-fp/coredns { inherit k8s lib; };
+          importValkey = import ./pkgs-fp/valkey { inherit k8s lib; };
+          importCertManager = import ./pkgs-fp/cert-manager { inherit k8s lib; };
 
-          # Collect all manifests from an evaluation into a directory.
-          # Each manifest becomes a separate .json file, named by its key
-          # in config.manifests.
-          #
-          # SERIALIZATION BOUNDARY: config.manifests stores raw attrsets
-          # (with kind, apiVersion, metadata, etc.). This function is the
-          # sole point where attrsets become JSON store derivations. This
-          # keeps structured data available throughout the module system for
-          # cross-resource validation and behavioral invariants.
-          mkManifests =
-            evaluation:
-            let
-              serialized = lib.mapAttrs (name: resource: kixlib.mkManifest resource) evaluation.config.manifests;
-            in
-            pkgs.runCommand "k8s-manifests" { } ''
-              mkdir -p $out
-              ${lib.concatStringsSep "\n" (
-                lib.mapAttrsToList (name: path: "cp ${path} $out/${name}.yaml") serialized
-              )}
-            '';
-
-          # Convenience: evaluate a single chart with a config and build manifests.
-          # This is what the flake packages use:
-          #   packages.coredns = mkChartManifests ./pkgs/coredns {
-          #     services.coredns.enable = true;
-          #   };
-          mkChartManifests =
-            chartPath: config:
-            mkManifests (mkCluster {
-              chartModules = [ chartPath ];
-              config = config;
-            });
-
-          # --- Programmatic chart variant registry ---
-          # Instead of 16 manual `<name>Pkg = mkChartManifests ./pkgs/<chart> { ... }`
-          # definitions, all single-chart variants are declared in one data structure.
-          # Adding a new variant is a single line — the packages and schema checks
-          # are generated automatically below.
           chartVariants = {
             # CoreDNS variants
-            coredns = {
-              chart = ./pkgs/coredns;
-              config.services.coredns.enable = true;
-            };
-            coredns-prometheus = {
-              chart = ./pkgs/coredns;
-              config.services.coredns = {
-                enable = true;
-                prometheus.service.enabled = true;
-                prometheus.monitor.enabled = true;
-              };
-            };
-            coredns-serviceaccount = {
-              chart = ./pkgs/coredns;
-              config.services.coredns = {
-                enable = true;
-                serviceAccount.create = true;
-              };
-            };
-            coredns-pdb = {
-              chart = ./pkgs/coredns;
-              config.services.coredns = {
-                enable = true;
-                podDisruptionBudget.minAvailable = 1;
-              };
-            };
-            coredns-hpa = {
-              chart = ./pkgs/coredns;
-              config.services.coredns = {
-                enable = true;
-                hpa = {
+            coredns = importCoredns;
+            coredns-prometheus = importCoredns.override {
+              prometheus = {
+                service = {
                   enabled = true;
-                  minReplicas = 2;
-                  maxReplicas = 5;
-                  metrics = [
-                    {
-                      type = "Resource";
-                      resource = {
-                        name = "cpu";
-                        target = {
-                          type = "Utilization";
-                          averageUtilization = 80;
-                        };
-                      };
-                    }
-                  ];
+                  annotations = {
+                    "prometheus.io/scrape" = "true";
+                    "prometheus.io/port" = "9153";
+                  };
+                };
+                monitor = {
+                  enabled = true;
+                  interval = null;
                 };
               };
             };
-            coredns-autoscaler = {
-              chart = ./pkgs/coredns;
-              config.services.coredns = {
-                enable = true;
-                autoscaler.enabled = true;
+            coredns-serviceaccount = importCoredns.override {
+              serviceAccount = { create = true; };
+            };
+            coredns-pdb = importCoredns.override {
+              podDisruptionBudget = {
+                minAvailable = 1;
+                maxUnavailable = null;
+              };
+            };
+            coredns-hpa = importCoredns.override {
+              hpa = {
+                enabled = true;
+                minReplicas = 2;
+                maxReplicas = 5;
+                metrics = [
+                  {
+                    type = "Resource";
+                    resource = {
+                      name = "cpu";
+                      target = {
+                        type = "Utilization";
+                        averageUtilization = 80;
+                      };
+                    };
+                  }
+                ];
+              };
+            };
+            coredns-autoscaler = importCoredns.override {
+              autoscaler = {
+                enabled = true;
+                image = {
+                  repository = "registry.k8s.io/cpa/cluster-proportional-autoscaler";
+                  tag = "v1.9.0";
+                  pullPolicy = "IfNotPresent";
+                };
+                resources = {
+                  limits = {
+                    cpu = "20m";
+                    memory = "10Mi";
+                  };
+                  requests = {
+                    cpu = "20m";
+                    memory = "10Mi";
+                  };
+                };
+                coresPerReplica = 256;
+                nodesPerReplica = 16;
+                preventSinglePointFailure = true;
+                min = 0;
+                max = 0;
+                includeUnschedulableNodes = false;
               };
             };
 
             # Valkey variants
-            valkey = {
-              chart = ./pkgs/valkey;
-              config.services.valkey.enable = true;
-            };
-            valkey-sentinel = {
-              chart = ./pkgs/valkey;
-              config.services.valkey = {
-                enable = true;
-                sentinel.enabled = true;
-              };
-            };
-            valkey-full = {
-              chart = ./pkgs/valkey;
-              config.services.valkey = {
-                enable = true;
-                sentinel.enabled = true;
-                metrics.enabled = true;
-                metrics.serviceMonitor.enabled = true;
-                networkPolicy.enabled = true;
-                pdb.enabled = true;
-              };
-            };
-            valkey-podmonitor = {
-              chart = ./pkgs/valkey;
-              config.services.valkey = {
-                enable = true;
-                sentinel.enabled = true;
-                metrics.enabled = true;
-                metrics.serviceMonitor.enabled = true;
-                metrics.podMonitor.enabled = true;
-                networkPolicy.enabled = true;
-              };
-            };
-            valkey-prometheusrule = {
-              chart = ./pkgs/valkey;
-              config.services.valkey = {
-                enable = true;
-                sentinel.enabled = true;
-                metrics.enabled = true;
-                metrics.serviceMonitor.enabled = true;
-                metrics.prometheusRule = {
-                  enabled = true;
-                  rules = [
-                    {
-                      alert = "ValkeyDown";
-                      expr = "valkey_up == 0";
-                      "for" = "5m";
-                      labels.severity = "critical";
-                    }
-                  ];
+            valkey = importValkey;
+            valkey-sentinel = importValkey.override {
+              sentinel = {
+                enabled = true;
+                quorum = 2;
+                primarySet = "myprimary";
+                downAfterMilliseconds = 60000;
+                failoverTimeout = 180000;
+                parallelSyncs = 1;
+                configuration = "";
+                image = {
+                  repository = "docker.io/bitnami/valkey-sentinel";
+                  tag = "8.1.1-debian-12-r0";
+                  pullPolicy = "IfNotPresent";
                 };
-                networkPolicy.enabled = true;
+                resources = {
+                  requests = {
+                    cpu = "100m";
+                    memory = "128Mi";
+                    ephemeral-storage = "50Mi";
+                  };
+                  limits = {
+                    cpu = "150m";
+                    memory = "192Mi";
+                    ephemeral-storage = "2Gi";
+                  };
+                };
               };
             };
-            valkey-hpa = {
-              chart = ./pkgs/valkey;
-              config.services.valkey = {
-                enable = true;
-                replica.autoscaling.hpa = {
+            valkey-full = importValkey.override {
+              sentinel = {
+                enabled = true;
+                quorum = 2;
+                primarySet = "myprimary";
+                downAfterMilliseconds = 60000;
+                failoverTimeout = 180000;
+                parallelSyncs = 1;
+                configuration = "";
+                image = {
+                  repository = "docker.io/bitnami/valkey-sentinel";
+                  tag = "8.1.1-debian-12-r0";
+                  pullPolicy = "IfNotPresent";
+                };
+                resources = {
+                  requests = {
+                    cpu = "100m";
+                    memory = "128Mi";
+                    ephemeral-storage = "50Mi";
+                  };
+                  limits = {
+                    cpu = "150m";
+                    memory = "192Mi";
+                    ephemeral-storage = "2Gi";
+                  };
+                };
+              };
+              metrics = {
+                enabled = true;
+                image = {
+                  repository = "docker.io/bitnami/redis-exporter";
+                  tag = "1.70.0-debian-12-r2";
+                  pullPolicy = "IfNotPresent";
+                };
+                resources = {
+                  requests = {
+                    cpu = "100m";
+                    memory = "128Mi";
+                    ephemeral-storage = "50Mi";
+                  };
+                  limits = {
+                    cpu = "150m";
+                    memory = "192Mi";
+                    ephemeral-storage = "2Gi";
+                  };
+                };
+              };
+              networkPolicy = { enabled = true; };
+              pdb = {
+                enabled = true;
+                maxUnavailable = 1;
+                minAvailable = null;
+              };
+            };
+            valkey-hpa = importValkey.override {
+              replica = {
+                replicaCount = 3;
+                configuration = "";
+                disableCommands = [ "FLUSHDB" "FLUSHALL" ];
+                resources = {
+                  requests = {
+                    cpu = "100m";
+                    memory = "128Mi";
+                    ephemeral-storage = "50Mi";
+                  };
+                  limits = {
+                    cpu = "150m";
+                    memory = "192Mi";
+                    ephemeral-storage = "2Gi";
+                  };
+                };
+                autoscaling.hpa = {
                   enabled = true;
                   minReplicas = 1;
                   maxReplicas = 5;
                   targetCPU = 80;
+                  targetMemory = null;
                 };
               };
             };
-            valkey-hpa-sentinel = {
-              chart = ./pkgs/valkey;
-              config.services.valkey = {
-                enable = true;
-                sentinel.enabled = true;
-                replica.autoscaling.hpa = {
+            valkey-hpa-sentinel = importValkey.override {
+              sentinel = {
+                enabled = true;
+                quorum = 2;
+                primarySet = "myprimary";
+                downAfterMilliseconds = 60000;
+                failoverTimeout = 180000;
+                parallelSyncs = 1;
+                configuration = "";
+                image = {
+                  repository = "docker.io/bitnami/valkey-sentinel";
+                  tag = "8.1.1-debian-12-r0";
+                  pullPolicy = "IfNotPresent";
+                };
+                resources = {
+                  requests = {
+                    cpu = "100m";
+                    memory = "128Mi";
+                    ephemeral-storage = "50Mi";
+                  };
+                  limits = {
+                    cpu = "150m";
+                    memory = "192Mi";
+                    ephemeral-storage = "2Gi";
+                  };
+                };
+              };
+              replica = {
+                replicaCount = 3;
+                configuration = "";
+                disableCommands = [ "FLUSHDB" "FLUSHALL" ];
+                resources = {
+                  requests = {
+                    cpu = "100m";
+                    memory = "128Mi";
+                    ephemeral-storage = "50Mi";
+                  };
+                  limits = {
+                    cpu = "150m";
+                    memory = "192Mi";
+                    ephemeral-storage = "2Gi";
+                  };
+                };
+                autoscaling.hpa = {
                   enabled = true;
                   minReplicas = 1;
                   maxReplicas = 5;
                   targetCPU = 80;
+                  targetMemory = null;
                 };
               };
             };
 
             # cert-manager variants
-            cert-manager = {
-              chart = ./pkgs/cert-manager;
-              config.services.cert-manager.enable = true;
-            };
-            cert-manager-no-cainjector = {
-              chart = ./pkgs/cert-manager;
-              config.services.cert-manager = {
-                enable = true;
-                cainjector.enabled = false;
+            cert-manager = importCertManager;
+            cert-manager-no-cainjector = importCertManager.override {
+              cainjector = {
+                enabled = false;
+                image = {
+                  repository = "quay.io/jetstack/cert-manager-cainjector";
+                  tag = "v1.19.4";
+                  pullPolicy = "IfNotPresent";
+                };
+                replicaCount = 1;
+                resources = { };
               };
             };
-            cert-manager-no-startupapicheck = {
-              chart = ./pkgs/cert-manager;
-              config.services.cert-manager = {
-                enable = true;
-                startupapicheck.enabled = false;
+            cert-manager-no-startupapicheck = importCertManager.override {
+              startupapicheck = {
+                enabled = false;
+                image = {
+                  repository = "quay.io/jetstack/cert-manager-startupapicheck";
+                  tag = "v1.19.4";
+                  pullPolicy = "IfNotPresent";
+                };
+                resources = { };
               };
             };
           };
 
-          # Generate package derivations from chartVariants.
-          chartPackages = lib.mapAttrs (_: v: mkChartManifests v.chart v.config) chartVariants;
-
-          # NOTE: Module-system cluster evaluations removed.
-          # Clusters are now evaluated via the fixpoint pattern (fpCluster* above).
-          # The old module-system path (mkCluster + lib.evalModules) is still
-          # available for individual chart variant testing via chartVariants.
+          # Generate manifest directories from fixpoint package closures.
+          chartPackages = lib.mapAttrs (_: pkg: mkFpManifests pkg.closure) chartVariants;
 
           # Helper: validate a manifest directory against K8s API schemas.
           # Skips Prometheus Operator CRDs since kubeconform doesn't have
@@ -364,52 +399,6 @@
           schemaChecks = lib.mapAttrs' (
             name: drv: lib.nameValuePair "schema-${name}" (schemaCheck name drv)
           ) chartPackages;
-
-          # Golden-file snapshot tests — compares built manifests against
-          # checked-in golden files. Run `./scripts/update-golden.sh` to
-          # regenerate after intentional changes.
-          goldenCheck =
-            name: drv:
-            pkgs.runCommand "golden-${name}"
-              {
-                nativeBuildInputs = [ pkgs.diffutils ];
-              }
-              ''
-                fail=0
-                # Check each built manifest matches its golden file
-                for f in ${drv}/*.yaml; do
-                  base=$(basename "$f")
-                  golden="${./tests}/${name}/golden/$base"
-                  if [ ! -f "$golden" ]; then
-                    echo "FAIL: $base is new (no golden file)"
-                    fail=1
-                    continue
-                  fi
-                  if ! diff -u "$golden" "$f"; then
-                    echo "FAIL: $base differs from golden"
-                    fail=1
-                  fi
-                done
-                # Check for removed resources (golden file with no matching output)
-                for f in ${./tests}/${name}/golden/*.yaml; do
-                  base=$(basename "$f")
-                  if [ ! -f "${drv}/$base" ]; then
-                    echo "FAIL: $base removed (golden file exists but no output)"
-                    fail=1
-                  fi
-                done
-                [ "$fail" -eq 0 ] || exit 1
-                touch $out
-              '';
-
-          # Generate golden checks for all variants that have golden dirs.
-          goldenChecks =
-            lib.mapAttrs' (name: drv: lib.nameValuePair "golden-${name}" (goldenCheck name drv))
-              (
-                lib.filterAttrs (name: _: builtins.pathExists (./tests + "/${name}/golden")) (
-                  chartPackages // { cluster-example = fpClusterExamplePkg; }
-                )
-              );
 
           # --- Cross-resource validation (Phase 9) ---
           #
@@ -627,9 +616,6 @@
         {
           legacyPackages = {
             inherit
-              mkCluster
-              mkManifests
-              mkChartManifests
               kixlib
               k8s
               fpClusterMinimal
@@ -638,7 +624,7 @@
               ;
           };
 
-          # Per-chart build targets for parity testing, plus cluster definitions.
+          # Per-chart build targets plus cluster definitions.
           # `nix build .#<name>` builds any of these.
           packages = chartPackages // {
             cluster-example = fpClusterExamplePkg;
@@ -689,12 +675,11 @@
             let
               # Convert fixpoint cluster manifests to the attrset format
               # expected by validateManifestSet and assertion checks.
-              exampleManifests = fpManifestMap fpClusterExample;
-              fullManifests = fpManifestMap fpClusterFull;
-              minimalManifests = fpManifestMap fpClusterMinimal;
+              exampleManifests = fpManifestMap fpClusterExample.manifests;
+              fullManifests = fpManifestMap fpClusterFull.manifests;
+              minimalManifests = fpManifestMap fpClusterMinimal.manifests;
             in
             schemaChecks
-            // goldenChecks
             // {
               # --- Fixpoint cluster: example ---
               # Validates that the example cluster produces the expected resources.

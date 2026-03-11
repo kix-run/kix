@@ -1,54 +1,102 @@
 # clusters/example.nix — Example cluster: coredns + valkey + cert-manager.
 #
-# This is what "declarative cluster state" looks like in kixpkgs.
-# One file declares what runs in your cluster. Services get their own
-# namespaces, the registry populates automatically, and cross-cutting
-# modules (monitoring) aggregate across all services.
+# This is what "declarative cluster state" looks like in the fixpoint pattern.
+# One file declares what runs in your cluster. Package closures handle
+# dependency tracking — you don't list resources, you list packages.
 #
 # Build:  nix build .#cluster-example
-# Check:  nix flake check
+# DAG:    nix eval --raw .#legacyPackages.<system>.fpClusterExample.dagTree
 
-{
-  # --- Cluster-wide settings ---
-  # These apply to every resource across all charts.
-  cluster.labels = {
+{ k8s, lib }:
+
+let
+  clusterLabels = {
     "app.kubernetes.io/part-of" = "kix-example";
     "team" = "platform";
   };
+in
 
-  # --- Services ---
-  # Each service declares its own namespace — real clusters don't
-  # shove everything into one namespace.
+k8s.mkCluster {
+  basePackages = self: {
+    coredns = (import ../pkgs-fp/coredns { inherit k8s lib; }).override {
+      namespace = "kube-system";
+      replicaCount = 2;
+      prometheus = {
+        service = {
+          enabled = true;
+          annotations = {
+            "prometheus.io/scrape" = "true";
+            "prometheus.io/port" = "9153";
+          };
+        };
+        monitor = {
+          enabled = true;
+          interval = null;
+        };
+      };
+      inherit clusterLabels;
+    };
 
-  services.coredns = {
-    enable = true;
-    namespace = "kube-system";
-    replicaCount = 2;
-    prometheus.service.enabled = true;
-    prometheus.monitor.enabled = true;
-  };
+    valkey = (import ../pkgs-fp/valkey { inherit k8s lib; }).override {
+      namespace = "cache";
+      sentinel = {
+        enabled = true;
+        quorum = 2;
+        primarySet = "myprimary";
+        downAfterMilliseconds = 60000;
+        failoverTimeout = 180000;
+        parallelSyncs = 1;
+        configuration = "";
+        image = {
+          repository = "docker.io/bitnami/valkey-sentinel";
+          tag = "8.1.1-debian-12-r0";
+          pullPolicy = "IfNotPresent";
+        };
+        resources = {
+          requests = {
+            cpu = "100m";
+            memory = "128Mi";
+            ephemeral-storage = "50Mi";
+          };
+          limits = {
+            cpu = "150m";
+            memory = "192Mi";
+            ephemeral-storage = "2Gi";
+          };
+        };
+      };
+      metrics = {
+        enabled = true;
+        image = {
+          repository = "docker.io/bitnami/redis-exporter";
+          tag = "1.70.0-debian-12-r2";
+          pullPolicy = "IfNotPresent";
+        };
+        resources = {
+          requests = {
+            cpu = "100m";
+            memory = "128Mi";
+            ephemeral-storage = "50Mi";
+          };
+          limits = {
+            cpu = "150m";
+            memory = "192Mi";
+            ephemeral-storage = "2Gi";
+          };
+        };
+      };
+      auth = {
+        enabled = true;
+        existingSecret = "valkey-auth";
+        existingSecretPasswordKey = "valkey-password";
+        sentinel = true;
+      };
+      inherit clusterLabels;
+    };
 
-  services.valkey = {
-    enable = true;
-    namespace = "cache";
-    sentinel.enabled = true;
-    metrics.enabled = true;
-    metrics.serviceMonitor.enabled = true;
-    # Auth secret must exist in the target cluster — kix never generates secrets.
-    auth.existingSecret = "valkey-auth";
-  };
-
-  services.cert-manager = {
-    enable = true;
-    namespace = "cert-manager";
-  };
-
-  # --- Cross-cutting concerns ---
-  # monitoring.enabled activates the capability system: charts declare
-  # capabilities.monitoring.* targets, the implementation module creates
-  # ServiceMonitors, and output metadata flows back into chart Services.
-  monitoring = {
-    enabled = true;
-    defaultInterval = "15s";
+    cert-manager = (import ../pkgs-fp/cert-manager { inherit k8s lib; }).override {
+      namespace = "cert-manager";
+      inherit clusterLabels;
+    };
   };
 }
