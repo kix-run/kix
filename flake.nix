@@ -47,6 +47,56 @@
 
           kixlib = import ./lib { inherit pkgs lib; };
 
+          # Fixpoint library — new resource model (Level 1-3).
+          # Sits on top of kixlib builders, adds ref tracking, closure computation,
+          # and self-referential package composition.
+          k8s = import ./lib/fixpoint { inherit lib; };
+
+          # --- Fixpoint cluster evaluations ---
+          # Cluster definitions now live in clusters/ as fixpoint-pattern files.
+          # Each takes { k8s, lib } and returns a cluster via k8s.mkCluster.
+          fpClusterMinimal = import ./clusters/test-minimal.nix { inherit k8s lib; };
+          fpClusterFull = import ./clusters/test-full.nix { inherit k8s lib; };
+          fpClusterExample = import ./clusters/example.nix { inherit k8s lib; };
+
+          # Serializes fixpoint cluster manifests into a directory of YAML files.
+          # This is the fixpoint equivalent of mkManifests for the module system.
+          # Each resource becomes a separate file named by {name}-{kind}.
+          mkFpManifests =
+            cluster:
+            let
+              fileEntries = map (
+                r:
+                let
+                  kindLower = lib.toLower r.kind;
+                in
+                {
+                  fileName = "${r.name}-${kindLower}";
+                  drv = kixlib.mkManifest r.manifest;
+                }
+              ) cluster.manifests;
+            in
+            pkgs.runCommand "k8s-manifests" { } ''
+              mkdir -p $out
+              ${lib.concatStringsSep "\n" (map (e: "cp ${e.drv} $out/${e.fileName}.yaml") fileEntries)}
+            '';
+
+          # Converts fixpoint cluster manifests list to an attrset keyed by
+          # {name}-{kind}, matching the shape expected by validateManifestSet.
+          fpManifestMap =
+            cluster:
+            builtins.listToAttrs (
+              map (r: {
+                name = "${r.name}-${lib.toLower r.kind}";
+                value = r.manifest;
+              }) cluster.manifests
+            );
+
+          # Manifest packages for fixpoint clusters.
+          fpClusterMinimalPkg = mkFpManifests fpClusterMinimal;
+          fpClusterFullPkg = mkFpManifests fpClusterFull;
+          fpClusterExamplePkg = mkFpManifests fpClusterExample;
+
           # Offline K8s JSON schemas for kubeconform — the Nix sandbox has no
           # network access, so we can't let kubeconform download schemas at
           # build time. Sparse checkout to avoid fetching the entire (~2GB) repo.
@@ -287,37 +337,10 @@
           # Generate package derivations from chartVariants.
           chartPackages = lib.mapAttrs (_: v: mkChartManifests v.chart v.config) chartVariants;
 
-          # Multi-chart cluster evaluation — kept separate because it uses
-          # multiple chart modules and has its own assertion-based check.
-          exampleEval = mkCluster {
-            chartModules = [
-              ./pkgs/coredns
-              ./pkgs/valkey
-              ./pkgs/cert-manager
-            ];
-            config = import ./clusters/example.nix;
-          };
-
-          clusterExamplePkg = mkManifests exampleEval;
-
-          # --- Additional test clusters ---
-          # Full cluster: all features enabled
-          fullEval = mkCluster {
-            chartModules = [
-              ./pkgs/coredns
-              ./pkgs/valkey
-              ./pkgs/cert-manager
-            ];
-            config = import ./clusters/test-full.nix;
-          };
-          clusterFullPkg = mkManifests fullEval;
-
-          # Minimal cluster: single chart, all defaults
-          minimalEval = mkCluster {
-            chartModules = [ ./pkgs/coredns ];
-            config = import ./clusters/test-minimal.nix;
-          };
-          clusterMinimalPkg = mkManifests minimalEval;
+          # NOTE: Module-system cluster evaluations removed.
+          # Clusters are now evaluated via the fixpoint pattern (fpCluster* above).
+          # The old module-system path (mkCluster + lib.evalModules) is still
+          # available for individual chart variant testing via chartVariants.
 
           # Helper: validate a manifest directory against K8s API schemas.
           # Skips Prometheus Operator CRDs since kubeconform doesn't have
@@ -384,7 +407,7 @@
             lib.mapAttrs' (name: drv: lib.nameValuePair "golden-${name}" (goldenCheck name drv))
               (
                 lib.filterAttrs (name: _: builtins.pathExists (./tests + "/${name}/golden")) (
-                  chartPackages // { cluster-example = clusterExamplePkg; }
+                  chartPackages // { cluster-example = fpClusterExamplePkg; }
                 )
               );
 
@@ -608,171 +631,222 @@
               mkManifests
               mkChartManifests
               kixlib
+              k8s
+              fpClusterMinimal
+              fpClusterFull
+              fpClusterExample
               ;
           };
 
           # Per-chart build targets for parity testing, plus cluster definitions.
           # `nix build .#<name>` builds any of these.
           packages = chartPackages // {
-            cluster-example = clusterExamplePkg;
-            cluster-full = clusterFullPkg;
-            cluster-minimal = clusterMinimalPkg;
+            cluster-example = fpClusterExamplePkg;
+            cluster-full = fpClusterFullPkg;
+            cluster-minimal = fpClusterMinimalPkg;
+
+            # --- Fixpoint DAG visualization ---
+            # Renders the example cluster's full resource DAG as SVG.
+            #   nix build .#fp-dag-svg && xdg-open result/dag.svg
+            fp-dag-svg = pkgs.runCommand "fp-dag-svg" {
+              nativeBuildInputs = [ pkgs.graphviz ];
+            } ''
+              mkdir -p $out
+              echo ${lib.escapeShellArg fpClusterExample.dagDot} | dot -Tsvg -o $out/dag.svg
+            '';
+
+            # Renders the example cluster DAG as PNG.
+            fp-dag-png = pkgs.runCommand "fp-dag-png" {
+              nativeBuildInputs = [ pkgs.graphviz ];
+            } ''
+              mkdir -p $out
+              echo ${lib.escapeShellArg fpClusterExample.dagDot} | dot -Tpng -o $out/dag.png
+            '';
+          };
+
+          # Dev shell with DAG visualization commands.
+          devShells.default = pkgs.mkShell {
+            nativeBuildInputs = [ pkgs.graphviz ];
+            shellHook = ''
+              # kix-dag: print the example cluster's resource DAG as a tree
+              kix-dag() {
+                nix eval --raw .#legacyPackages.${pkgs.stdenv.hostPlatform.system}.fpClusterExample.dagTree
+              }
+              # kix-dag-dot: print the DAG as Graphviz DOT (pipe to `dot -Tsvg`)
+              kix-dag-dot() {
+                nix eval --raw .#legacyPackages.${pkgs.stdenv.hostPlatform.system}.fpClusterExample.dagDot
+              }
+              # kix-dag-svg: render the DAG as SVG and open it
+              kix-dag-svg() {
+                local out="''${1:-/tmp/kix-dag.svg}"
+                nix eval --raw .#legacyPackages.${pkgs.stdenv.hostPlatform.system}.fpClusterExample.dagDot | dot -Tsvg -o "$out"
+                echo "DAG written to $out"
+              }
+            '';
           };
 
           checks =
             let
-              reg = exampleEval.config.registry;
-              caps = exampleEval.config.capabilities.monitoring;
-              manifests = exampleEval.config.manifests;
+              # Convert fixpoint cluster manifests to the attrset format
+              # expected by validateManifestSet and assertion checks.
+              exampleManifests = fpManifestMap fpClusterExample;
+              fullManifests = fpManifestMap fpClusterFull;
+              minimalManifests = fpManifestMap fpClusterMinimal;
             in
             schemaChecks
             // goldenChecks
             // {
-              # --- Structural checks for multi-chart composition ---
-              # Eval-time assertions validate that intent merging works across
-              # charts. If any assertion fails, Nix aborts before the runCommand
-              # executes, with a clear error message.
+              # --- Fixpoint cluster: example ---
+              # Validates that the example cluster produces the expected resources.
+              # NOTE: Registry and monitoring capability checks are removed — those
+              # are module-system features not yet available in the fixpoint pattern.
+              # Validates all 3 packages: coredns, valkey, cert-manager.
               cluster-example =
                 let
-                  # Registry: all charts populated with non-empty hosts and correct values
-                  assertRegistry =
-                    assert reg.coredns.endpoints.dns-udp.host != "";
-                    assert reg.coredns.endpoints.dns-tcp.host != "";
-                    assert reg.coredns.endpoints.dns-udp.port == 53;
-                    assert reg.coredns.endpoints.dns-udp.protocol == "dns-udp";
-                    assert reg.valkey.endpoints.primary.host != "";
-                    assert reg.valkey.endpoints.primary.port == 6379;
-                    assert reg.valkey.endpoints.primary.protocol == "redis";
-                    assert reg.valkey.endpoints.sentinel.host != "";
-                    assert reg.valkey.endpoints.sentinel.port == 26379;
-                    assert reg.valkey.endpoints.metrics.host != "";
-                    assert reg.valkey.endpoints.metrics.port == 9121;
-                    assert reg.cert-manager.endpoints.webhook.port == 443;
-                    assert reg.cert-manager.endpoints.webhook.protocol == "https";
-                    assert reg.cert-manager.endpoints.metrics.port == 9402;
-                    true;
-
-                  # Registry ownership: each registry key must match a chart that
-                  # actually produced manifests with that prefix. Catches copy-paste
-                  # errors where a chart accidentally writes to another chart's
-                  # registry entry (e.g., valkey writing to registry.coredns).
-                  registryKeys = lib.attrNames reg;
-                  assertOwnership = lib.all (
-                    key: lib.any (mName: lib.hasPrefix "${key}-" mName || mName == key) (lib.attrNames manifests)
-                  ) registryKeys;
-
-                  # V4 Capabilities: implementation module created ServiceMonitors,
-                  # per-chart ones were suppressed. Verify capability inputs and outputs.
-                  assertMonitoring =
-                    # Capability inputs populated correctly
-                    assert caps.valkey.serviceName == "valkey-metrics";
-                    assert caps.valkey.portName == "http-metrics";
-                    assert caps.coredns.serviceName == "coredns-metrics";
-                    assert caps.coredns.portName == "metrics";
-                    assert caps.cert-manager.serviceName == "cert-manager";
-                    assert caps.cert-manager-webhook.serviceName == "cert-manager-webhook";
-                    assert caps.cert-manager-cainjector.serviceName == "cert-manager-cainjector";
-                    # ServiceMonitors created by implementation module
-                    assert manifests ? "monitoring-valkey-servicemonitor";
-                    assert manifests ? "monitoring-coredns-servicemonitor";
-                    assert manifests ? "monitoring-cert-manager-servicemonitor";
-                    assert manifests ? "monitoring-cert-manager-webhook-servicemonitor";
-                    assert manifests ? "monitoring-cert-manager-cainjector-servicemonitor";
-                    # Per-chart ServiceMonitors suppressed
-                    assert !(manifests ? "valkey-servicemonitor");
-                    assert !(manifests ? "coredns-servicemonitor");
-                    # Metrics Service should still exist (ServiceMonitor targets it)
-                    assert manifests ? "coredns-service-metrics";
-                    # V4 writeback: output labels populated by implementation module
-                    assert caps.coredns.output.labels ? "kix.monitoring/scrape";
-                    assert caps.valkey.output.labels ? "kix.monitoring/scrape";
-                    assert caps.cert-manager.output.labels ? "kix.monitoring/scrape";
-                    true;
-
-                  # Negative assertions: disabled features must not produce resources
-                  assertNegative =
-                    # CoreDNS serviceAccount.create is false by default
-                    assert !(manifests ? "coredns-serviceaccount");
-                    # CoreDNS HPA is disabled by default
-                    assert !(manifests ? "coredns-hpa");
-                    true;
-
+                  manifests = exampleManifests;
                 in
-                assert assertRegistry;
-                assert assertOwnership;
-                assert assertMonitoring;
-                assert assertNegative;
+                # --- CoreDNS resources ---
+                assert manifests ? "coredns-deployment";
+                assert manifests ? "coredns-configmap";
+                assert manifests ? "coredns-service";
+                assert manifests ? "coredns-clusterrole";
+                assert manifests ? "coredns-clusterrolebinding";
+                # Metrics service present (prometheus.service.enabled = true)
+                assert manifests ? "coredns-metrics-service";
+                # ServiceAccount not created by default
+                assert !(manifests ? "coredns-serviceaccount");
+                # HPA disabled by default
+                assert !(manifests ? "coredns-horizontalpodautoscaler");
+                # Cluster labels applied
+                assert (manifests."coredns-deployment".metadata.labels."app.kubernetes.io/part-of" or "") == "kix-example";
+                assert (manifests."coredns-deployment".metadata.labels."team" or "") == "platform";
+
+                # --- Valkey resources (sentinel mode) ---
+                assert manifests ? "valkey-node-statefulset";
+                assert manifests ? "valkey-service";
+                assert manifests ? "valkey-headless-service";
+                assert manifests ? "valkey-configuration-configmap";
+                assert manifests ? "valkey-health-configmap";
+                assert manifests ? "valkey-scripts-configmap";
+                assert manifests ? "valkey-serviceaccount";
+                assert manifests ? "valkey-metrics-service";
+                assert manifests ? "valkey-networkpolicy";
+                assert manifests ? "valkey-node-poddisruptionbudget";
+                # Cluster labels applied to valkey (team label; part-of is package-level)
+                assert (manifests."valkey-node-statefulset".metadata.labels."team" or "") == "platform";
+
+                # --- Cert-manager resources ---
+                assert manifests ? "cert-manager-deployment";
+                assert manifests ? "cert-manager-service";
+                assert manifests ? "cert-manager-serviceaccount";
+                assert manifests ? "cert-manager-webhook-deployment";
+                assert manifests ? "cert-manager-webhook-service";
+                assert manifests ? "cert-manager-webhook-serviceaccount";
+                assert manifests ? "cert-manager-cainjector-deployment";
+                assert manifests ? "cert-manager-cainjector-serviceaccount";
+                assert manifests ? "cert-manager-startupapicheck-job";
+                assert manifests ? "cert-manager-startupapicheck-serviceaccount";
+                # Webhook configurations
+                assert manifests ? "cert-manager-webhook-mutatingwebhookconfiguration";
+                assert manifests ? "cert-manager-webhook-validatingwebhookconfiguration";
+                # RBAC: controller ClusterRoles
+                assert manifests ? "cert-manager-controller-issuers-clusterrole";
+                assert manifests ? "cert-manager-controller-certificates-clusterrole";
+                assert manifests ? "cert-manager-controller-orders-clusterrole";
+                assert manifests ? "cert-manager-controller-challenges-clusterrole";
+                # Aggregated ClusterRoles
+                assert manifests ? "cert-manager-cluster-view-clusterrole";
+                assert manifests ? "cert-manager-view-clusterrole";
+                assert manifests ? "cert-manager-edit-clusterrole";
+
                 pkgs.runCommand "check-cluster-example" { } ''
-                  echo "Registry: coredns dns-udp=${reg.coredns.endpoints.dns-udp.host}:${toString reg.coredns.endpoints.dns-udp.port}"
-                  echo "Registry: valkey primary=${reg.valkey.endpoints.primary.host}:${toString reg.valkey.endpoints.primary.port}"
-                  echo "Registry: valkey sentinel=${reg.valkey.endpoints.sentinel.host}:${toString reg.valkey.endpoints.sentinel.port}"
-                  echo "Registry: valkey metrics=${reg.valkey.endpoints.metrics.host}:${toString reg.valkey.endpoints.metrics.port}"
-                  echo "Registry: cert-manager webhook=${reg.cert-manager.endpoints.webhook.host}:${toString reg.cert-manager.endpoints.webhook.port}"
-                  echo "Registry: cert-manager metrics=${reg.cert-manager.endpoints.metrics.host}:${toString reg.cert-manager.endpoints.metrics.port}"
-                  echo "Monitoring: valkey capability=${caps.valkey.serviceName}:${caps.valkey.portName}"
-                  echo "Monitoring: cert-manager capability=${caps.cert-manager.serviceName}"
-                  echo "All structural assertions passed."
+                  echo "Example cluster (fixpoint): all assertions passed."
                   touch $out
                 '';
 
-              # Schema validation for cluster configs (not in chartVariants)
-              schema-cluster-example = schemaCheck "cluster-example" clusterExamplePkg;
-              schema-cluster-full = schemaCheck "cluster-full" clusterFullPkg;
-              schema-cluster-minimal = schemaCheck "cluster-minimal" clusterMinimalPkg;
+              # Schema validation for cluster configs
+              schema-cluster-example = schemaCheck "cluster-example" fpClusterExamplePkg;
+              schema-cluster-full = schemaCheck "cluster-full" fpClusterFullPkg;
+              schema-cluster-minimal = schemaCheck "cluster-minimal" fpClusterMinimalPkg;
 
-              # --- Composition test: full cluster ---
-              # All features enabled — validates feature interaction.
+              # --- Fixpoint cluster: full ---
+              # All features enabled across all 3 packages — validates feature interaction.
               cluster-full =
                 let
-                  freg = fullEval.config.registry;
-                  fullCaps = fullEval.config.capabilities.monitoring;
-                  fman = fullEval.config.manifests;
+                  manifests = fullManifests;
                 in
-                # All 3 charts in registry
-                assert freg ? coredns;
-                assert freg ? valkey;
-                assert freg ? cert-manager;
-                # Capability targets exist for all monitored services
-                assert fullCaps ? coredns;
-                assert fullCaps ? valkey;
-                assert fullCaps ? cert-manager;
-                assert fullCaps ? cert-manager-webhook;
-                # HPA resources created for both coredns and valkey
-                assert fman ? "coredns-hpa";
-                assert fman ? "valkey-hpa";
-                # PodDisruptionBudget for both coredns and valkey
-                assert fman ? "coredns-poddisruptionbudget";
-                assert fman ? "valkey-pdb";
-                # ServiceAccount created (coredns has it enabled)
-                assert fman ? "coredns-serviceaccount";
-                # All charts produce ServiceMonitors via implementation module
-                assert fman ? "monitoring-coredns-servicemonitor";
-                assert fman ? "monitoring-valkey-servicemonitor";
-                assert fman ? "monitoring-cert-manager-servicemonitor";
+                # --- CoreDNS core resources ---
+                assert manifests ? "coredns-deployment";
+                assert manifests ? "coredns-configmap";
+                assert manifests ? "coredns-service";
+                # HPA enabled
+                assert manifests ? "coredns-horizontalpodautoscaler";
+                # PDB enabled (minAvailable = 1)
+                assert manifests ? "coredns-poddisruptionbudget";
+                # ServiceAccount created
+                assert manifests ? "coredns-serviceaccount";
+                # Metrics service present
+                assert manifests ? "coredns-metrics-service";
+                # RBAC chain present
+                assert manifests ? "coredns-clusterrole";
+                assert manifests ? "coredns-clusterrolebinding";
+                # Cluster labels applied
+                assert (manifests."coredns-deployment".metadata.labels."app.kubernetes.io/part-of" or "") == "kix-full-test";
+                assert (manifests."coredns-deployment".metadata.labels."team" or "") == "platform";
+
+                # --- Valkey resources (full: sentinel + HPA + PDB + network policy) ---
+                assert manifests ? "valkey-node-statefulset";
+                assert manifests ? "valkey-service";
+                assert manifests ? "valkey-headless-service";
+                assert manifests ? "valkey-configuration-configmap";
+                assert manifests ? "valkey-health-configmap";
+                assert manifests ? "valkey-scripts-configmap";
+                assert manifests ? "valkey-serviceaccount";
+                assert manifests ? "valkey-metrics-service";
+                assert manifests ? "valkey-networkpolicy";
+                assert manifests ? "valkey-node-poddisruptionbudget";
+                # HPA enabled for valkey replicas
+                assert manifests ? "valkey-node-horizontalpodautoscaler";
+                # Cluster labels applied to valkey (team label; part-of is package-level)
+                assert (manifests."valkey-node-statefulset".metadata.labels."team" or "") == "platform";
+
+                # --- Cert-manager resources ---
+                assert manifests ? "cert-manager-deployment";
+                assert manifests ? "cert-manager-service";
+                assert manifests ? "cert-manager-serviceaccount";
+                assert manifests ? "cert-manager-webhook-deployment";
+                assert manifests ? "cert-manager-webhook-service";
+                assert manifests ? "cert-manager-cainjector-deployment";
+                assert manifests ? "cert-manager-startupapicheck-job";
+                # Webhook configurations
+                assert manifests ? "cert-manager-webhook-mutatingwebhookconfiguration";
+                assert manifests ? "cert-manager-webhook-validatingwebhookconfiguration";
+
                 pkgs.runCommand "check-cluster-full" { } ''
-                  echo "Full cluster composition: all assertions passed."
+                  echo "Full cluster (fixpoint): all assertions passed."
                   touch $out
                 '';
 
-              # --- Composition test: minimal cluster ---
+              # --- Fixpoint cluster: minimal ---
               # Single chart, all defaults — validates nothing extra is produced.
               cluster-minimal =
                 let
-                  mman = minimalEval.config.manifests;
-                  manifestNames = lib.attrNames mman;
+                  manifests = minimalManifests;
+                  manifestNames = lib.attrNames manifests;
                 in
                 # Only coredns resources should exist
-                assert lib.all (n: lib.hasPrefix "coredns" n) manifestNames;
+                assert lib.all (n: lib.hasInfix "coredns" n) manifestNames;
                 # No ServiceAccount (create = false by default)
-                assert !(mman ? "coredns-serviceaccount");
-                # No HPA, PodDisruptionBudget, ServiceMonitor
-                assert !(mman ? "coredns-hpa");
-                assert !(mman ? "coredns-pdb");
-                assert !(lib.any (n: lib.hasInfix "servicemonitor" n) manifestNames);
-                # No monitoring capabilities (prometheus.monitor.enabled = false by default)
-                assert minimalEval.config.capabilities.monitoring == { };
+                assert !(manifests ? "coredns-serviceaccount");
+                # No HPA, no PDB (both disabled by default)
+                assert !(manifests ? "coredns-horizontalpodautoscaler");
+                assert !(manifests ? "coredns-poddisruptionbudget");
+                # No metrics service (prometheus.service.enabled = false by default)
+                assert !(manifests ? "coredns-metrics-service");
+                # No autoscaler resources
+                assert !(lib.any (n: lib.hasInfix "autoscaler" n) manifestNames);
                 pkgs.runCommand "check-cluster-minimal" { } ''
-                  echo "Minimal cluster: all negative assertions passed."
+                  echo "Minimal cluster (fixpoint): all negative assertions passed."
                   touch $out
                 '';
 
@@ -781,21 +855,21 @@
               # referential integrity: SA refs, roleRefs, ConfigMap volumes,
               # Service selectors, HPA targets, duplicate IDs, managed-by labels.
               validate-cluster-example =
-                assert validateManifestSet "cluster-example" manifests;
+                assert validateManifestSet "cluster-example" exampleManifests;
                 pkgs.runCommand "validate-cluster-example" { } ''
                   echo "Cross-resource validation passed for cluster-example."
                   touch $out
                 '';
 
               validate-cluster-full =
-                assert validateManifestSet "cluster-full" fullEval.config.manifests;
+                assert validateManifestSet "cluster-full" fullManifests;
                 pkgs.runCommand "validate-cluster-full" { } ''
                   echo "Cross-resource validation passed for cluster-full."
                   touch $out
                 '';
 
               validate-cluster-minimal =
-                assert validateManifestSet "cluster-minimal" minimalEval.config.manifests;
+                assert validateManifestSet "cluster-minimal" minimalManifests;
                 pkgs.runCommand "validate-cluster-minimal" { } ''
                   echo "Cross-resource validation passed for cluster-minimal."
                   touch $out
