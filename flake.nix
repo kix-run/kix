@@ -130,7 +130,9 @@
               };
             };
             coredns-serviceaccount = importCoredns.override {
-              serviceAccount = { create = true; };
+              serviceAccount = {
+                create = true;
+              };
             };
             coredns-pdb = importCoredns.override {
               podDisruptionBudget = {
@@ -261,7 +263,9 @@
                   };
                 };
               };
-              networkPolicy = { enabled = true; };
+              networkPolicy = {
+                enabled = true;
+              };
               pdb = {
                 enabled = true;
                 maxUnavailable = 1;
@@ -272,7 +276,10 @@
               replica = {
                 replicaCount = 3;
                 configuration = "";
-                disableCommands = [ "FLUSHDB" "FLUSHALL" ];
+                disableCommands = [
+                  "FLUSHDB"
+                  "FLUSHALL"
+                ];
                 resources = {
                   requests = {
                     cpu = "100m";
@@ -324,7 +331,10 @@
               replica = {
                 replicaCount = 3;
                 configuration = "";
-                disableCommands = [ "FLUSHDB" "FLUSHALL" ];
+                disableCommands = [
+                  "FLUSHDB"
+                  "FLUSHALL"
+                ];
                 resources = {
                   requests = {
                     cpu = "100m";
@@ -634,20 +644,26 @@
             # --- Fixpoint DAG visualization ---
             # Renders the example cluster's full resource DAG as SVG.
             #   nix build .#fp-dag-svg && xdg-open result/dag.svg
-            fp-dag-svg = pkgs.runCommand "fp-dag-svg" {
-              nativeBuildInputs = [ pkgs.graphviz ];
-            } ''
-              mkdir -p $out
-              echo ${lib.escapeShellArg fpClusterExample.dagDot} | dot -Tsvg -o $out/dag.svg
-            '';
+            fp-dag-svg =
+              pkgs.runCommand "fp-dag-svg"
+                {
+                  nativeBuildInputs = [ pkgs.graphviz ];
+                }
+                ''
+                  mkdir -p $out
+                  echo ${lib.escapeShellArg fpClusterExample.dagDot} | dot -Tsvg -o $out/dag.svg
+                '';
 
             # Renders the example cluster DAG as PNG.
-            fp-dag-png = pkgs.runCommand "fp-dag-png" {
-              nativeBuildInputs = [ pkgs.graphviz ];
-            } ''
-              mkdir -p $out
-              echo ${lib.escapeShellArg fpClusterExample.dagDot} | dot -Tpng -o $out/dag.png
-            '';
+            fp-dag-png =
+              pkgs.runCommand "fp-dag-png"
+                {
+                  nativeBuildInputs = [ pkgs.graphviz ];
+                }
+                ''
+                  mkdir -p $out
+                  echo ${lib.escapeShellArg fpClusterExample.dagDot} | dot -Tpng -o $out/dag.png
+                '';
           };
 
           # Dev shell with DAG visualization commands.
@@ -703,7 +719,8 @@
                 # HPA disabled by default
                 assert !(manifests ? "coredns-horizontalpodautoscaler");
                 # Cluster labels applied
-                assert (manifests."coredns-deployment".metadata.labels."app.kubernetes.io/part-of" or "") == "kix-example";
+                assert
+                  (manifests."coredns-deployment".metadata.labels."app.kubernetes.io/part-of" or "") == "kix-example";
                 assert (manifests."coredns-deployment".metadata.labels."team" or "") == "platform";
 
                 # --- Valkey resources (sentinel mode) ---
@@ -776,7 +793,9 @@
                 assert manifests ? "coredns-clusterrole";
                 assert manifests ? "coredns-clusterrolebinding";
                 # Cluster labels applied
-                assert (manifests."coredns-deployment".metadata.labels."app.kubernetes.io/part-of" or "") == "kix-full-test";
+                assert
+                  (manifests."coredns-deployment".metadata.labels."app.kubernetes.io/part-of" or "")
+                  == "kix-full-test";
                 assert (manifests."coredns-deployment".metadata.labels."team" or "") == "platform";
 
                 # --- Valkey resources (full: sentinel + HPA + PDB + network policy) ---

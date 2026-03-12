@@ -84,23 +84,26 @@ rec {
   # Usage:
   #   nix eval --raw --impure --expr '...' | dot -Tsvg -o dag.svg
   #   nix eval --raw --impure --expr '...' | dot -Tpng -o dag.png
-  closureToDot = root:
+  closureToDot =
+    root:
     let
       closure' = computeClosure root;
-      resourceId = r:
-        let ns = if r.namespace or null == null then "cluster" else r.namespace;
-        in "${r.kind}/${r.name}@${ns}";
+      resourceId =
+        r:
+        let
+          ns = if r.namespace or null == null then "cluster" else r.namespace;
+        in
+        "${r.kind}/${r.name}@${ns}";
       # Sanitize for DOT node IDs (replace special chars)
       dotId = r: builtins.replaceStrings [ "/" "@" "-" ":" "." ] [ "_" "_" "_" "_" "_" ] (resourceId r);
       dotLabel = r: "${r.kind}\\n${r.name}";
 
-      nodeLines = map (r:
-        ''  ${dotId r} [label="${dotLabel r}"];''
-      ) closure';
+      nodeLines = map (r: ''${dotId r} [label="${dotLabel r}"];'') closure';
 
-      edgeLines = lib.concatMap (r:
-        (map (d: ''  ${dotId r} -> ${dotId d} [style=solid, color=blue];'') r.deps)
-        ++ (map (d: ''  ${dotId r} -> ${dotId d} [style=dashed, color=red];'') (r.requires or []))
+      edgeLines = lib.concatMap (
+        r:
+        (map (d: "${dotId r} -> ${dotId d} [style=solid, color=blue];") r.deps)
+        ++ (map (d: "${dotId r} -> ${dotId d} [style=dashed, color=red];") (r.requires or [ ]))
       ) closure';
     in
     ''
@@ -116,17 +119,22 @@ rec {
   # Renders a closure as a human-readable tree string (for terminal output).
   #
   # Shows each resource with its deps and requires indented below.
-  closureToTree = root:
+  closureToTree =
+    root:
     let
       closure' = computeClosure root;
-      resourceId = r:
-        let ns = if r.namespace or null == null then "cluster" else r.namespace;
-        in "${r.kind}/${r.name}@${ns}";
+      resourceId =
+        r:
+        let
+          ns = if r.namespace or null == null then "cluster" else r.namespace;
+        in
+        "${r.kind}/${r.name}@${ns}";
 
-      renderResource = r:
+      renderResource =
+        r:
         let
           depLines = map (d: "  dep-> ${resourceId d}") r.deps;
-          reqLines = map (d: "  req-> ${resourceId d}") (r.requires or []);
+          reqLines = map (d: "  req-> ${resourceId d}") (r.requires or [ ]);
           lines = [ (resourceId r) ] ++ depLines ++ reqLines;
         in
         builtins.concatStringsSep "\n" lines;

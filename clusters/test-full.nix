@@ -122,7 +122,10 @@ k8s.mkCluster {
       replica = {
         replicaCount = 3;
         configuration = "";
-        disableCommands = [ "FLUSHDB" "FLUSHALL" ];
+        disableCommands = [
+          "FLUSHDB"
+          "FLUSHALL"
+        ];
         resources = {
           requests = {
             cpu = "100m";

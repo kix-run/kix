@@ -8,6 +8,25 @@
 
 rec {
 
+  # --- Plugin DSL ---
+  # Pipe-composable constructors for CoreDNS server plugins. Without the
+  # module system there are no submodule defaults, so every plugin would
+  # need explicit `parameters = null; configBlock = null;`. These helpers
+  # eliminate that boilerplate:
+  #
+  #   plugin "errors"
+  #   plugin "health"     |> withBlock "lameduck 10s"
+  #   plugin "kubernetes" |> withParams "cluster.local" |> withBlock "pods insecure"
+  #   plugin "prometheus" |> withParams "0.0.0.0:9153"
+  #
+  plugin = name: {
+    inherit name;
+    parameters = null;
+    configBlock = null;
+  };
+  withParams = parameters: p: p // { inherit parameters; };
+  withBlock = configBlock: p: p // { inherit configBlock; };
+
   # --- Corefile builder ---
   # Generates the CoreDNS configuration file from the servers option.
   # Mirrors the Helm chart's configmap.yaml template logic.

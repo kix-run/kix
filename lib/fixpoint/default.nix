@@ -49,7 +49,13 @@ in
   inherit (resolver) resolve;
 
   # --- Closure (Level 1) ---
-  inherit (closureLib) computeClosure closureManifests validateClosure closureToDot closureToTree;
+  inherit (closureLib)
+    computeClosure
+    closureManifests
+    validateClosure
+    closureToDot
+    closureToTree
+    ;
 
   # --- Resource constructor (Level 2) ---
   inherit (resourceLib) mkResource withRequires;
@@ -58,5 +64,10 @@ in
   inherit (packageLib) mkPackage;
 
   # --- Cluster composition (Level 3) ---
-  inherit (clusterLib) mkCluster applyOverlays clusterToDot clusterToTree;
+  inherit (clusterLib)
+    mkCluster
+    applyOverlays
+    clusterToDot
+    clusterToTree
+    ;
 }

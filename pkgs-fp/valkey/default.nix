@@ -215,24 +215,34 @@ k8s.mkPackage
 
       selectorLabels = baseSelectorLabels;
 
-      withComponent = component: selectorLabels // {
-        "app.kubernetes.io/component" = component;
-      };
+      withComponent =
+        component:
+        selectorLabels
+        // {
+          "app.kubernetes.io/component" = component;
+        };
 
-      allLabels = clusterLabels // selectorLabels // {
-        "app.kubernetes.io/managed-by" = "kix";
-        "app.kubernetes.io/part-of" = "valkey";
-      };
+      allLabels =
+        clusterLabels
+        // selectorLabels
+        // {
+          "app.kubernetes.io/managed-by" = "kix";
+          "app.kubernetes.io/part-of" = "valkey";
+        };
 
-      allLabelsWithComponent = component: allLabels // {
-        "app.kubernetes.io/component" = component;
-      };
+      allLabelsWithComponent =
+        component:
+        allLabels
+        // {
+          "app.kubernetes.io/component" = component;
+        };
 
       # ── Script templating ─────────────────────────────────────────
       # Scripts with @PLACEHOLDER@ tokens are substituted at eval time.
       # This avoids escaping hell of embedding bash ${VAR} in Nix multiline strings.
 
-      readScript = file:
+      readScript =
+        file:
         builtins.replaceStrings
           [
             "@HEADLESS_SERVICE_FQDN@"
@@ -252,8 +262,7 @@ k8s.mkPackage
           ]
           (builtins.readFile (./scripts + "/${file}"));
 
-      renderDisableCommands = cmds:
-        lib.concatMapStringsSep "\n" (cmd: ''rename-command ${cmd} ""'') cmds;
+      renderDisableCommands = cmds: lib.concatMapStringsSep "\n" (cmd: ''rename-command ${cmd} ""'') cmds;
 
       # ── Volume definitions ────────────────────────────────────────
 
@@ -395,7 +404,8 @@ k8s.mkPackage
 
       # ── VolumeClaimTemplate ────────────────────────────────────────
 
-      mkDataVolumeClaimTemplate = componentLabels:
+      mkDataVolumeClaimTemplate =
+        componentLabels:
         lib.optionals persistence.enabled [
           {
             apiVersion = "v1";
@@ -841,8 +851,10 @@ k8s.mkPackage
           "ping_liveness_local.sh" = builtins.readFile ./scripts/ping_liveness_local.sh;
           "ping_readiness_primary.sh" = builtins.readFile ./scripts/ping_readiness_primary.sh;
           "ping_liveness_primary.sh" = builtins.readFile ./scripts/ping_liveness_primary.sh;
-          "ping_readiness_local_and_primary.sh" = builtins.readFile ./scripts/ping_readiness_local_and_primary.sh;
-          "ping_liveness_local_and_primary.sh" = builtins.readFile ./scripts/ping_liveness_local_and_primary.sh;
+          "ping_readiness_local_and_primary.sh" =
+            builtins.readFile ./scripts/ping_readiness_local_and_primary.sh;
+          "ping_liveness_local_and_primary.sh" =
+            builtins.readFile ./scripts/ping_liveness_local_and_primary.sh;
         }
         // lib.optionalAttrs sentinel.enabled {
           "ping_sentinel.sh" = builtins.readFile ./scripts/ping_sentinel.sh;
@@ -857,15 +869,18 @@ k8s.mkPackage
         inherit namespace;
         labels = allLabels;
         data =
-          if sentinel.enabled then {
-            "start-node.sh" = readScript "start-node.sh";
-            "start-sentinel.sh" = readScript "start-sentinel.sh";
-            "prestop-sentinel.sh" = readScript "prestop-sentinel.sh";
-            "prestop-valkey.sh" = readScript "prestop-valkey.sh";
-          } else {
-            "start-primary.sh" = builtins.readFile ./scripts/start-primary.sh;
-            "start-replica.sh" = readScript "start-replica.sh";
-          };
+          if sentinel.enabled then
+            {
+              "start-node.sh" = readScript "start-node.sh";
+              "start-sentinel.sh" = readScript "start-sentinel.sh";
+              "prestop-sentinel.sh" = readScript "prestop-sentinel.sh";
+              "prestop-valkey.sh" = readScript "prestop-valkey.sh";
+            }
+          else
+            {
+              "start-primary.sh" = builtins.readFile ./scripts/start-primary.sh;
+              "start-replica.sh" = readScript "start-replica.sh";
+            };
       };
 
       # ── Headless Service (shared across both modes) ───────────────
@@ -1184,8 +1199,7 @@ k8s.mkPackage
           egress = [ { } ];
           ingress = [
             {
-              ports = [ { port = 6379; } ]
-                ++ lib.optionals sentinel.enabled [ { port = 26379; } ];
+              ports = [ { port = 6379; } ] ++ lib.optionals sentinel.enabled [ { port = 26379; } ];
             }
           ]
           ++ lib.optionals metrics.enabled [
@@ -1198,17 +1212,12 @@ k8s.mkPackage
       pdb = k8s.mkResource {
         apiVersion = "policy/v1";
         kind = "PodDisruptionBudget";
-        name =
-          if sentinel.enabled then "${fullname}-node"
-          else "${fullname}-replicas";
+        name = if sentinel.enabled then "${fullname}-node" else "${fullname}-replicas";
         inherit namespace;
         labels =
-          if sentinel.enabled then allLabelsWithComponent "node"
-          else allLabelsWithComponent "replica";
+          if sentinel.enabled then allLabelsWithComponent "node" else allLabelsWithComponent "replica";
         spec = {
-          selector.matchLabels =
-            if sentinel.enabled then withComponent "node"
-            else withComponent "replica";
+          selector.matchLabels = if sentinel.enabled then withComponent "node" else withComponent "replica";
         }
         // lib.optionalAttrs (pdb.maxUnavailable != null) {
           maxUnavailable = pdb.maxUnavailable;
@@ -1222,18 +1231,14 @@ k8s.mkPackage
       hpa = k8s.mkResource {
         apiVersion = "autoscaling/v2";
         kind = "HorizontalPodAutoscaler";
-        name =
-          if sentinel.enabled then "${fullname}-node"
-          else "${fullname}-replicas";
+        name = if sentinel.enabled then "${fullname}-node" else "${fullname}-replicas";
         inherit namespace;
         labels = allLabelsWithComponent "replica";
         spec = {
           scaleTargetRef = {
             apiVersion = "apps/v1";
             kind = "StatefulSet";
-            name =
-              if sentinel.enabled then self.sentinelSs.ref
-              else self.replicaSs.ref;
+            name = if sentinel.enabled then self.sentinelSs.ref else self.replicaSs.ref;
           };
           inherit (replica.autoscaling.hpa) minReplicas maxReplicas;
           metrics =
@@ -1272,7 +1277,10 @@ k8s.mkPackage
           ++ lib.optional metrics.enabled self.metricsService
           ++ lib.optional networkPolicy.enabled self.networkPolicyRes
         else
-          [ self.primarySs self.replicaSs ]
+          [
+            self.primarySs
+            self.replicaSs
+          ]
           ++ lib.optional metrics.enabled self.metricsService
           ++ lib.optional networkPolicy.enabled self.networkPolicyRes
       ) (if sentinel.enabled then self.sentinelSvc else self.primarySvc);

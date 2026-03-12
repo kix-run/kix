@@ -21,6 +21,7 @@ let
   # These are imported from the original pkgs/coredns/helpers.nix but adapted
   # to work without the module system (no cfg/config/labels arguments).
   helpers = import ./helpers.nix { inherit lib; };
+  inherit (helpers) plugin withParams withBlock;
 in
 
 k8s.mkPackage
@@ -54,56 +55,20 @@ k8s.mkPackage
           ];
           port = 53;
           plugins = [
-            {
-              name = "errors";
-              parameters = null;
-              configBlock = null;
-            }
-            {
-              name = "health";
-              parameters = null;
-              configBlock = "lameduck 10s";
-            }
-            {
-              name = "ready";
-              parameters = null;
-              configBlock = null;
-            }
-            {
-              name = "kubernetes";
-              parameters = "cluster.local in-addr.arpa ip6.arpa";
-              configBlock = "pods insecure\nfallthrough in-addr.arpa ip6.arpa\nttl 30";
-            }
-            {
-              name = "prometheus";
-              parameters = "0.0.0.0:9153";
-              configBlock = null;
-            }
-            {
-              name = "forward";
-              parameters = ". /etc/resolv.conf";
-              configBlock = null;
-            }
-            {
-              name = "cache";
-              parameters = "30";
-              configBlock = null;
-            }
-            {
-              name = "loop";
-              parameters = null;
-              configBlock = null;
-            }
-            {
-              name = "reload";
-              parameters = null;
-              configBlock = null;
-            }
-            {
-              name = "loadbalance";
-              parameters = null;
-              configBlock = null;
-            }
+            (plugin "errors")
+            (plugin "health" |> withBlock "lameduck 10s")
+            (plugin "ready")
+            (
+              plugin "kubernetes"
+              |> withParams "cluster.local in-addr.arpa ip6.arpa"
+              |> withBlock "pods insecure\nfallthrough in-addr.arpa ip6.arpa\nttl 30"
+            )
+            (plugin "prometheus" |> withParams "0.0.0.0:9153")
+            (plugin "forward" |> withParams ". /etc/resolv.conf")
+            (plugin "cache" |> withParams "30")
+            (plugin "loop")
+            (plugin "reload")
+            (plugin "loadbalance")
           ];
         }
       ],

@@ -62,6 +62,8 @@ let
     withPodDisruptionBudget
     withMetrics
     groupToManifestList
+    manifest
+    manifestIf
     ;
 
   # --- ConfigMap ---
@@ -134,14 +136,9 @@ let
     |> optionalPipe pdbEnabled (withPodDisruptionBudget {
       workloadKey = "coredns-deployment";
       pdbName = "coredns-poddisruptionbudget";
-      pdbArgs =
-        { }
-        // lib.optionalAttrs (cfg.podDisruptionBudget.minAvailable != null) {
-          minAvailable = cfg.podDisruptionBudget.minAvailable;
-        }
-        // lib.optionalAttrs (cfg.podDisruptionBudget.maxUnavailable != null) {
-          maxUnavailable = cfg.podDisruptionBudget.maxUnavailable;
-        };
+      # removeNulls strips null fields at serialization time, so we can
+      # pass both through directly without optionalAttrs gating.
+      pdbArgs = { inherit (cfg.podDisruptionBudget) minAvailable maxUnavailable; };
     });
 
   # --- Autoscaler sub-deployment (separate kixlib, cannot pipe into main group) ---
@@ -187,28 +184,12 @@ in
 {
   manifestList =
     groupToManifestList mainGroup
-    ++ [
-      {
-        name = "coredns-configmap";
-        resource = coreDnsConfigMap;
-        enable = true;
-      }
-    ]
+    ++ [ (manifest "coredns-configmap" coreDnsConfigMap) ]
     ++ rbac.manifestList
     ++ rbac.autoscalerManifestList
     ++ [
-      {
-        name = "coredns-autoscaler-configmap";
-        resource = autoscalerConfigMap;
-        enable = cfg.autoscaler.enabled;
-        kixlib = rbac.autoscalerKixlib;
-      }
-      {
-        name = "coredns-autoscaler-deployment";
-        resource = autoscalerDeployment;
-        enable = cfg.autoscaler.enabled;
-        kixlib = rbac.autoscalerKixlib;
-      }
+      (manifestIf cfg.autoscaler.enabled "coredns-autoscaler-configmap" autoscalerConfigMap)
+      (manifestIf cfg.autoscaler.enabled "coredns-autoscaler-deployment" autoscalerDeployment)
     ];
 
   extraConfig = {

@@ -13,12 +13,14 @@
 
 let
   # Shared identity helpers for resource nodes and edges.
-  resourceId = r:
-    let ns = if r.namespace or null == null then "cluster" else r.namespace;
-    in "${r.kind}/${r.name}@${ns}";
+  resourceId =
+    r:
+    let
+      ns = if r.namespace or null == null then "cluster" else r.namespace;
+    in
+    "${r.kind}/${r.name}@${ns}";
 
-  dotId = r:
-    builtins.replaceStrings [ "/" "@" "-" ":" "." ] [ "_" "_" "_" "_" "_" ] (resourceId r);
+  dotId = r: builtins.replaceStrings [ "/" "@" "-" ":" "." ] [ "_" "_" "_" "_" "_" ] (resourceId r);
 
   dotLabel = r: "${r.kind}\\n${r.name}";
 in
@@ -131,12 +133,11 @@ rec {
   clusterToDot =
     resources:
     let
-      nodeLines = map (r:
-        ''  ${dotId r} [label="${dotLabel r}"];''
-      ) resources;
-      edgeLines = lib.concatMap (r:
-        (map (d: ''  ${dotId r} -> ${dotId d} [style=solid, color=blue];'') r.deps)
-        ++ (map (d: ''  ${dotId r} -> ${dotId d} [style=dashed, color=red];'') (r.requires or []))
+      nodeLines = map (r: ''${dotId r} [label="${dotLabel r}"];'') resources;
+      edgeLines = lib.concatMap (
+        r:
+        (map (d: "${dotId r} -> ${dotId d} [style=solid, color=blue];") r.deps)
+        ++ (map (d: "${dotId r} -> ${dotId d} [style=dashed, color=red];") (r.requires or [ ]))
       ) resources;
     in
     ''
@@ -153,10 +154,11 @@ rec {
   clusterToTree =
     resources:
     let
-      renderResource = r:
+      renderResource =
+        r:
         let
           depLines = map (d: "  dep-> ${resourceId d}") r.deps;
-          reqLines = map (d: "  req-> ${resourceId d}") (r.requires or []);
+          reqLines = map (d: "  req-> ${resourceId d}") (r.requires or [ ]);
           lines = [ (resourceId r) ] ++ depLines ++ reqLines;
         in
         builtins.concatStringsSep "\n" lines;

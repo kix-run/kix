@@ -11,6 +11,16 @@
 
 let
   types = lib.types;
+
+  # Plugin constructors — same as helpers.nix, redefined here because options.nix
+  # doesn't have access to helpers. Trivial enough that duplication is harmless.
+  plugin = name: {
+    inherit name;
+    parameters = null;
+    configBlock = null;
+  };
+  withParams = parameters: p: p // { inherit parameters; };
+  withBlock = configBlock: p: p // { inherit configBlock; };
 in
 {
   isClusterService = lib.mkOption {
@@ -119,7 +129,8 @@ in
         };
       }
     );
-    # Default matches Helm chart's values.yaml
+    # Default matches Helm chart's values.yaml.
+    # Uses the plugin/withParams/withBlock pipe DSL defined above.
     default = [
       {
         zones = [
@@ -130,32 +141,20 @@ in
         ];
         port = 53;
         plugins = [
-          { name = "errors"; }
-          {
-            name = "health";
-            configBlock = "lameduck 10s";
-          }
-          { name = "ready"; }
-          {
-            name = "kubernetes";
-            parameters = "cluster.local in-addr.arpa ip6.arpa";
-            configBlock = "pods insecure\nfallthrough in-addr.arpa ip6.arpa\nttl 30";
-          }
-          {
-            name = "prometheus";
-            parameters = "0.0.0.0:9153";
-          }
-          {
-            name = "forward";
-            parameters = ". /etc/resolv.conf";
-          }
-          {
-            name = "cache";
-            parameters = "30";
-          }
-          { name = "loop"; }
-          { name = "reload"; }
-          { name = "loadbalance"; }
+          (plugin "errors")
+          (plugin "health" |> withBlock "lameduck 10s")
+          (plugin "ready")
+          (
+            plugin "kubernetes"
+            |> withParams "cluster.local in-addr.arpa ip6.arpa"
+            |> withBlock "pods insecure\nfallthrough in-addr.arpa ip6.arpa\nttl 30"
+          )
+          (plugin "prometheus" |> withParams "0.0.0.0:9153")
+          (plugin "forward" |> withParams ". /etc/resolv.conf")
+          (plugin "cache" |> withParams "30")
+          (plugin "loop")
+          (plugin "reload")
+          (plugin "loadbalance")
         ];
       }
     ];

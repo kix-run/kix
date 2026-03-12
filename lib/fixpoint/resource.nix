@@ -189,41 +189,43 @@ rec {
         # spec.volumeClaimTemplates) don't clobber the resolved spec.
         # Shallow `//` would replace the entire `spec` key, losing the
         # resolved template/selector/etc.
-        manifest = lib.recursiveUpdate ({
-          inherit apiVersion kind;
-          metadata = {
-            inherit name;
-            # namespace = null for cluster-scoped resources (removeNulls strips it)
-            namespace = if namespace != null then namespace else null;
+        manifest = lib.recursiveUpdate (
+          {
+            inherit apiVersion kind;
+            metadata = {
+              inherit name;
+              # namespace = null for cluster-scoped resources (removeNulls strips it)
+              namespace = if namespace != null then namespace else null;
+            }
+            // lib.optionalAttrs (labels != { }) {
+              labels = labels;
+            }
+            // lib.optionalAttrs (resolvedAnnotations.resolved != { }) {
+              annotations = resolvedAnnotations.resolved;
+            };
           }
-          // lib.optionalAttrs (labels != { }) {
-            labels = labels;
+          // lib.optionalAttrs (resolvedSpec.resolved != { }) {
+            spec = resolvedSpec.resolved;
           }
-          // lib.optionalAttrs (resolvedAnnotations.resolved != { }) {
-            annotations = resolvedAnnotations.resolved;
-          };
-        }
-        // lib.optionalAttrs (resolvedSpec.resolved != { }) {
-          spec = resolvedSpec.resolved;
-        }
-        // lib.optionalAttrs (resolvedData.resolved != { }) {
-          data = resolvedData.resolved;
-        }
-        // lib.optionalAttrs (resolvedStringData.resolved != { }) {
-          stringData = resolvedStringData.resolved;
-        }
-        // lib.optionalAttrs (resolvedRules.resolved != null) {
-          rules = resolvedRules.resolved;
-        }
-        // lib.optionalAttrs (resolvedSubjects.resolved != null) {
-          subjects = resolvedSubjects.resolved;
-        }
-        // lib.optionalAttrs (resolvedRoleRef.resolved != null) {
-          roleRef = resolvedRoleRef.resolved;
-        }
-        // lib.optionalAttrs (resolvedWebhooks.resolved != null) {
-          webhooks = resolvedWebhooks.resolved;
-        }) extra;
+          // lib.optionalAttrs (resolvedData.resolved != { }) {
+            data = resolvedData.resolved;
+          }
+          // lib.optionalAttrs (resolvedStringData.resolved != { }) {
+            stringData = resolvedStringData.resolved;
+          }
+          // lib.optionalAttrs (resolvedRules.resolved != null) {
+            rules = resolvedRules.resolved;
+          }
+          // lib.optionalAttrs (resolvedSubjects.resolved != null) {
+            subjects = resolvedSubjects.resolved;
+          }
+          // lib.optionalAttrs (resolvedRoleRef.resolved != null) {
+            roleRef = resolvedRoleRef.resolved;
+          }
+          // lib.optionalAttrs (resolvedWebhooks.resolved != null) {
+            webhooks = resolvedWebhooks.resolved;
+          }
+        ) extra;
       };
     in
     self;

@@ -14,6 +14,25 @@
 }:
 
 let
+  # --- Plugin DSL ---
+  # Pipe-composable constructors for CoreDNS server plugins. Eliminates the
+  # verbose `{ name = "foo"; parameters = null; configBlock = null; }` pattern.
+  #
+  #   plugin "errors"
+  #   plugin "health" |> withBlock "lameduck 10s"
+  #   plugin "kubernetes" |> withParams "cluster.local" |> withBlock "pods insecure"
+  #   plugin "prometheus" |> withParams "0.0.0.0:9153"
+  #
+  # Each returns the same attrset shape that the servers[].plugins submodule
+  # expects, so these work both in option defaults and in user config.
+  plugin = name: {
+    inherit name;
+    parameters = null;
+    configBlock = null;
+  };
+  withParams = parameters: p: p // { inherit parameters; };
+  withBlock = configBlock: p: p // { inherit configBlock; };
+
   # Extracted: used in registry, monitoring target, and potentially elsewhere.
   hasPrometheus = builtins.any (s: builtins.any (p: p.name == "prometheus") s.plugins) cfg.servers;
 
@@ -206,6 +225,9 @@ let
 in
 {
   inherit
+    plugin
+    withParams
+    withBlock
     hasPrometheus
     buildCorefile
     ports

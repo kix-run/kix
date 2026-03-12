@@ -491,6 +491,136 @@ lib.makeExtensible (self: {
       ];
     };
 
+    # --- Intent-based verb DSL ---
+    # Declarative helpers for constructing RBAC rule specs. Instead of writing
+    # out `{ apiGroups = ...; resources = ...; verbs = ["get" "list" "watch"]; }`
+    # repeatedly, you compose intent verbs onto a rule constructor:
+    #
+    #   rule [""] ["endpoints" "services"] |> watch
+    #
+    # Each intent verb adds a semantically meaningful set of Kubernetes verbs.
+    # `grant` compiles a list of rule specs into `{ rules = [...]; }` ready
+    # for mkClusterRole / mkRole.
+    #
+    # Design: the `group` concept from the 10A RBAC DSL example is intentionally
+    # dropped — fixpoint refs supersede it. Only the verb layer remains.
+    dsl = rec {
+      # Constructor: rule apiGroups resources → internal rule spec (underscore-prefixed fields)
+      rule = apiGroups: resources: {
+        _apiGroups = apiGroups;
+        _resources = resources;
+        _verbs = [ ];
+        _resourceNames = null;
+      };
+
+      # Intent verbs — each adds semantically meaningful verb sets.
+      # These compose via pipe: `rule [...] [...] |> watch |> allow ["patch"]`
+      watch =
+        spec:
+        spec
+        // {
+          _verbs = spec._verbs ++ [
+            "get"
+            "list"
+            "watch"
+          ];
+        };
+      reconcile =
+        spec:
+        spec
+        // {
+          _verbs = spec._verbs ++ [
+            "get"
+            "list"
+            "watch"
+            "update"
+            "patch"
+          ];
+          _resources =
+            spec._resources
+            ++ map (r: "${r}/status") spec._resources
+            ++ map (r: "${r}/finalizers") spec._resources;
+        };
+      own =
+        spec:
+        spec
+        // {
+          _verbs = spec._verbs ++ [
+            "get"
+            "list"
+            "watch"
+            "create"
+            "delete"
+          ];
+        };
+      readWrite =
+        spec:
+        spec
+        // {
+          _verbs = spec._verbs ++ [
+            "get"
+            "list"
+            "watch"
+            "create"
+            "update"
+            "delete"
+          ];
+        };
+      full =
+        spec:
+        spec
+        // {
+          _verbs = spec._verbs ++ [
+            "get"
+            "list"
+            "watch"
+            "create"
+            "update"
+            "delete"
+            "patch"
+          ];
+        };
+      emit =
+        spec:
+        spec
+        // {
+          _verbs = [
+            "create"
+            "patch"
+          ];
+        };
+      watchAndFinalize =
+        spec:
+        spec
+        // {
+          _verbs = spec._verbs ++ [
+            "get"
+            "list"
+            "watch"
+            "update"
+          ];
+          _resources = spec._resources ++ map (r: "${r}/finalizers") spec._resources;
+        };
+
+      # Escape hatches for non-standard verb combos
+      allow = verbs: spec: spec // { _verbs = spec._verbs ++ verbs; };
+      restrictTo = names: spec: spec // { _resourceNames = names; };
+
+      # Compile a list of rule specs into { rules = [...]; } for mkClusterRole / mkRole.
+      # Deduplicates verbs and resources via lib.unique.
+      grant = specs: { rules = map compileSpec specs; };
+      compileSpec =
+        spec:
+        {
+          apiGroups = spec._apiGroups;
+          resources = lib.unique spec._resources;
+          verbs = lib.unique spec._verbs;
+        }
+        // lib.optionalAttrs (spec._resourceNames != null) {
+          resourceNames = spec._resourceNames;
+        };
+    };
+
     # --- Batch role + binding generation ---
     # Creates multiple roles and their bindings in one call. Dramatically reduces
     # RBAC boilerplate for charts like cert-manager that have 8+ ClusterRoles all
@@ -1222,6 +1352,17 @@ lib.makeExtensible (self: {
         inherit name resource;
         enable = true;
       }) group;
+
+    # Shorthand for a single always-enabled manifest entry.
+    # Usage: manifest "coredns-configmap" coreDnsConfigMap
+    manifest = name: resource: {
+      inherit name resource;
+      enable = true;
+    };
+
+    # Shorthand for a conditionally-enabled manifest entry.
+    # Usage: manifestIf cfg.autoscaler.enabled "coredns-autoscaler-cm" autoscalerConfigMap
+    manifestIf = enable: name: resource: { inherit name resource enable; };
 
     # Conditional pipe: applies f to x only if cond is true.
     # Usage: resource |> optionalPipe cfg.hpa.enabled (withAutoscaler { ... })

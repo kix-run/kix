@@ -13,6 +13,7 @@
 
 let
   inherit (helpers) kixlibCoredns ports;
+  inherit (kixlibCoredns.combinators) optionalPipe;
 in
 {
   # --- Main CoreDNS container ---
@@ -33,45 +34,37 @@ in
       name = "config-volume";
       mountPath = "/etc/coredns";
     }
-    |> (
-      c:
-      if cfg.livenessProbe.enabled then
-        kixlibCoredns.pod.withLivenessProbe {
-          httpGet = {
-            path = "/health";
-            port = 8080;
-            scheme = "HTTP";
-          };
-          inherit (cfg.livenessProbe)
-            initialDelaySeconds
-            periodSeconds
-            timeoutSeconds
-            failureThreshold
-            successThreshold
-            ;
-        } c
-      else
-        c
+    |> optionalPipe cfg.livenessProbe.enabled (
+      kixlibCoredns.pod.withLivenessProbe {
+        httpGet = {
+          path = "/health";
+          port = 8080;
+          scheme = "HTTP";
+        };
+        inherit (cfg.livenessProbe)
+          initialDelaySeconds
+          periodSeconds
+          timeoutSeconds
+          failureThreshold
+          successThreshold
+          ;
+      }
     )
-    |> (
-      c:
-      if cfg.readinessProbe.enabled then
-        kixlibCoredns.pod.withReadinessProbe {
-          httpGet = {
-            path = "/ready";
-            port = 8181;
-            scheme = "HTTP";
-          };
-          inherit (cfg.readinessProbe)
-            initialDelaySeconds
-            periodSeconds
-            timeoutSeconds
-            failureThreshold
-            successThreshold
-            ;
-        } c
-      else
-        c
+    |> optionalPipe cfg.readinessProbe.enabled (
+      kixlibCoredns.pod.withReadinessProbe {
+        httpGet = {
+          path = "/ready";
+          port = 8181;
+          scheme = "HTTP";
+        };
+        inherit (cfg.readinessProbe)
+          initialDelaySeconds
+          periodSeconds
+          timeoutSeconds
+          failureThreshold
+          successThreshold
+          ;
+      }
     );
 
   # --- Cluster-proportional autoscaler container ---

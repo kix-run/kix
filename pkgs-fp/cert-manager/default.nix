@@ -47,7 +47,9 @@ k8s.mkPackage
         pullPolicy = "IfNotPresent";
       },
       resources ? { },
-      leaderElection ? { namespace = "kube-system"; },
+      leaderElection ? {
+        namespace = "kube-system";
+      },
 
       # Service account
       serviceAccount ? {
@@ -70,12 +72,16 @@ k8s.mkPackage
       # Container-level security context applied to all components.
       containerSecurityContext ? {
         allowPrivilegeEscalation = false;
-        capabilities = { drop = [ "ALL" ]; };
+        capabilities = {
+          drop = [ "ALL" ];
+        };
         readOnlyRootFilesystem = true;
       },
 
       # Prometheus
-      prometheus ? { enabled = true; },
+      prometheus ? {
+        enabled = true;
+      },
 
       # Webhook
       webhook ? {
@@ -128,13 +134,16 @@ k8s.mkPackage
       # The controller uses "cert-manager" as app name; all others use
       # "cert-manager-<component>".
 
-      mkComponentLabels = component: {
-        "app.kubernetes.io/name" =
-          if component == "controller" then "cert-manager" else "cert-manager-${component}";
-        "app.kubernetes.io/instance" = instance;
-        "app.kubernetes.io/component" = component;
-        "app.kubernetes.io/managed-by" = "kix";
-      } // clusterLabels;
+      mkComponentLabels =
+        component:
+        {
+          "app.kubernetes.io/name" =
+            if component == "controller" then "cert-manager" else "cert-manager-${component}";
+          "app.kubernetes.io/instance" = instance;
+          "app.kubernetes.io/component" = component;
+          "app.kubernetes.io/managed-by" = "kix";
+        }
+        // clusterLabels;
 
       controllerLabels = mkComponentLabels "controller";
       webhookLabels = mkComponentLabels "webhook";
@@ -191,20 +200,33 @@ k8s.mkPackage
           "--max-concurrent-challenges=${toString maxConcurrentChallenges}"
         ];
         ports = [
-          { containerPort = 9402; protocol = "TCP"; name = "http-metrics"; }
-          { containerPort = 9403; protocol = "TCP"; name = "http-healthz"; }
+          {
+            containerPort = 9402;
+            protocol = "TCP";
+            name = "http-metrics";
+          }
+          {
+            containerPort = 9403;
+            protocol = "TCP";
+            name = "http-healthz";
+          }
         ];
         securityContext = containerSecCtx;
         env = [ podNamespaceEnv ];
         livenessProbe = {
-          httpGet = { path = "/livez"; port = "http-healthz"; scheme = "HTTP"; };
+          httpGet = {
+            path = "/livez";
+            port = "http-healthz";
+            scheme = "HTTP";
+          };
           initialDelaySeconds = 10;
           periodSeconds = 10;
           timeoutSeconds = 15;
           failureThreshold = 8;
           successThreshold = 1;
         };
-      } // lib.optionalAttrs (resources != { }) { inherit resources; };
+      }
+      // lib.optionalAttrs (resources != { }) { inherit resources; };
 
       webhookContainer = {
         name = "cert-manager-webhook";
@@ -220,14 +242,30 @@ k8s.mkPackage
           "--dynamic-serving-dns-names=cert-manager-webhook.$(POD_NAMESPACE).svc"
         ];
         ports = [
-          { containerPort = webhook.securePort; protocol = "TCP"; name = "https"; }
-          { containerPort = 6080; protocol = "TCP"; name = "healthcheck"; }
-          { containerPort = 9402; protocol = "TCP"; name = "http-metrics"; }
+          {
+            containerPort = webhook.securePort;
+            protocol = "TCP";
+            name = "https";
+          }
+          {
+            containerPort = 6080;
+            protocol = "TCP";
+            name = "healthcheck";
+          }
+          {
+            containerPort = 9402;
+            protocol = "TCP";
+            name = "http-metrics";
+          }
         ];
         securityContext = containerSecCtx;
         env = [ podNamespaceEnv ];
         livenessProbe = {
-          httpGet = { path = "/livez"; port = "healthcheck"; scheme = "HTTP"; };
+          httpGet = {
+            path = "/livez";
+            port = "healthcheck";
+            scheme = "HTTP";
+          };
           initialDelaySeconds = 60;
           periodSeconds = 10;
           timeoutSeconds = 1;
@@ -235,14 +273,19 @@ k8s.mkPackage
           successThreshold = 1;
         };
         readinessProbe = {
-          httpGet = { path = "/healthz"; port = "healthcheck"; scheme = "HTTP"; };
+          httpGet = {
+            path = "/healthz";
+            port = "healthcheck";
+            scheme = "HTTP";
+          };
           initialDelaySeconds = 5;
           periodSeconds = 5;
           timeoutSeconds = 1;
           failureThreshold = 3;
           successThreshold = 1;
         };
-      } // lib.optionalAttrs (webhook.resources != { }) {
+      }
+      // lib.optionalAttrs (webhook.resources != { }) {
         resources = webhook.resources;
       };
 
@@ -255,11 +298,16 @@ k8s.mkPackage
           "--leader-election-namespace=${leaderElection.namespace}"
         ];
         ports = [
-          { containerPort = 9402; protocol = "TCP"; name = "http-metrics"; }
+          {
+            containerPort = 9402;
+            protocol = "TCP";
+            name = "http-metrics";
+          }
         ];
         securityContext = containerSecCtx;
         env = [ podNamespaceEnv ];
-      } // lib.optionalAttrs (cainjector.resources != { }) {
+      }
+      // lib.optionalAttrs (cainjector.resources != { }) {
         resources = cainjector.resources;
       };
 
@@ -267,23 +315,25 @@ k8s.mkPackage
         name = "cert-manager-startupapicheck";
         image = startupapicheckImageRef;
         imagePullPolicy = startupapicheck.image.pullPolicy;
-        args = [ "check" "api" "--wait=1m" "-v" ];
+        args = [
+          "check"
+          "api"
+          "--wait=1m"
+          "-v"
+        ];
         securityContext = containerSecCtx;
         env = [ podNamespaceEnv ];
-      } // lib.optionalAttrs (startupapicheck.resources != { }) {
+      }
+      // lib.optionalAttrs (startupapicheck.resources != { }) {
         resources = startupapicheck.resources;
       };
 
       # ── SA name helpers ──────────────────────────────────────────────
 
-      controllerSaName =
-        if serviceAccount.create then self.controllerSa.ref else "default";
-      webhookSaName =
-        if serviceAccount.create then self.webhookSa.ref else "default";
-      cainjectorSaName =
-        if serviceAccount.create then self.cainjectorSa.ref else "default";
-      startupapicheckSaName =
-        if serviceAccount.create then self.startupapicheckSa.ref else "default";
+      controllerSaName = if serviceAccount.create then self.controllerSa.ref else "default";
+      webhookSaName = if serviceAccount.create then self.webhookSa.ref else "default";
+      cainjectorSaName = if serviceAccount.create then self.cainjectorSa.ref else "default";
+      startupapicheckSaName = if serviceAccount.create then self.startupapicheckSa.ref else "default";
 
     in
     {
@@ -310,23 +360,43 @@ k8s.mkPackage
         rules = [
           {
             apiGroups = [ "cert-manager.io" ];
-            resources = [ "issuers" "issuers/status" ];
-            verbs = [ "update" "patch" ];
+            resources = [
+              "issuers"
+              "issuers/status"
+            ];
+            verbs = [
+              "update"
+              "patch"
+            ];
           }
           {
             apiGroups = [ "cert-manager.io" ];
             resources = [ "issuers" ];
-            verbs = [ "get" "list" "watch" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
           }
           {
             apiGroups = [ "" ];
             resources = [ "secrets" ];
-            verbs = [ "get" "list" "watch" "create" "update" "delete" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "create"
+              "update"
+              "delete"
+            ];
           }
           {
             apiGroups = [ "" ];
             resources = [ "events" ];
-            verbs = [ "create" "patch" ];
+            verbs = [
+              "create"
+              "patch"
+            ];
           }
         ];
       };
@@ -340,23 +410,43 @@ k8s.mkPackage
         rules = [
           {
             apiGroups = [ "cert-manager.io" ];
-            resources = [ "clusterissuers" "clusterissuers/status" ];
-            verbs = [ "update" "patch" ];
+            resources = [
+              "clusterissuers"
+              "clusterissuers/status"
+            ];
+            verbs = [
+              "update"
+              "patch"
+            ];
           }
           {
             apiGroups = [ "cert-manager.io" ];
             resources = [ "clusterissuers" ];
-            verbs = [ "get" "list" "watch" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
           }
           {
             apiGroups = [ "" ];
             resources = [ "secrets" ];
-            verbs = [ "get" "list" "watch" "create" "update" "delete" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "create"
+              "update"
+              "delete"
+            ];
           }
           {
             apiGroups = [ "" ];
             resources = [ "events" ];
-            verbs = [ "create" "patch" ];
+            verbs = [
+              "create"
+              "patch"
+            ];
           }
         ];
       };
@@ -370,33 +460,70 @@ k8s.mkPackage
         rules = [
           {
             apiGroups = [ "cert-manager.io" ];
-            resources = [ "certificates" "certificates/status" "certificaterequests" "certificaterequests/status" ];
-            verbs = [ "update" "patch" ];
+            resources = [
+              "certificates"
+              "certificates/status"
+              "certificaterequests"
+              "certificaterequests/status"
+            ];
+            verbs = [
+              "update"
+              "patch"
+            ];
           }
           {
             apiGroups = [ "cert-manager.io" ];
-            resources = [ "certificates" "certificaterequests" "clusterissuers" "issuers" ];
-            verbs = [ "get" "list" "watch" ];
+            resources = [
+              "certificates"
+              "certificaterequests"
+              "clusterissuers"
+              "issuers"
+            ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
           }
           {
             apiGroups = [ "cert-manager.io" ];
-            resources = [ "certificates/finalizers" "certificaterequests/finalizers" ];
+            resources = [
+              "certificates/finalizers"
+              "certificaterequests/finalizers"
+            ];
             verbs = [ "update" ];
           }
           {
             apiGroups = [ "acme.cert-manager.io" ];
             resources = [ "orders" ];
-            verbs = [ "create" "delete" "get" "list" "watch" ];
+            verbs = [
+              "create"
+              "delete"
+              "get"
+              "list"
+              "watch"
+            ];
           }
           {
             apiGroups = [ "" ];
             resources = [ "secrets" ];
-            verbs = [ "get" "list" "watch" "create" "update" "delete" "patch" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "create"
+              "update"
+              "delete"
+              "patch"
+            ];
           }
           {
             apiGroups = [ "" ];
             resources = [ "events" ];
-            verbs = [ "create" "patch" ];
+            verbs = [
+              "create"
+              "patch"
+            ];
           }
         ];
       };
@@ -410,23 +537,46 @@ k8s.mkPackage
         rules = [
           {
             apiGroups = [ "acme.cert-manager.io" ];
-            resources = [ "orders" "orders/status" ];
-            verbs = [ "update" "patch" ];
+            resources = [
+              "orders"
+              "orders/status"
+            ];
+            verbs = [
+              "update"
+              "patch"
+            ];
           }
           {
             apiGroups = [ "acme.cert-manager.io" ];
-            resources = [ "orders" "challenges" ];
-            verbs = [ "get" "list" "watch" ];
+            resources = [
+              "orders"
+              "challenges"
+            ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
           }
           {
             apiGroups = [ "cert-manager.io" ];
-            resources = [ "clusterissuers" "issuers" ];
-            verbs = [ "get" "list" "watch" ];
+            resources = [
+              "clusterissuers"
+              "issuers"
+            ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
           }
           {
             apiGroups = [ "acme.cert-manager.io" ];
             resources = [ "challenges" ];
-            verbs = [ "create" "delete" ];
+            verbs = [
+              "create"
+              "delete"
+            ];
           }
           {
             apiGroups = [ "acme.cert-manager.io" ];
@@ -436,12 +586,19 @@ k8s.mkPackage
           {
             apiGroups = [ "" ];
             resources = [ "secrets" ];
-            verbs = [ "get" "list" "watch" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
           }
           {
             apiGroups = [ "" ];
             resources = [ "events" ];
-            verbs = [ "create" "patch" ];
+            verbs = [
+              "create"
+              "patch"
+            ];
           }
         ];
       };
@@ -455,43 +612,90 @@ k8s.mkPackage
         rules = [
           {
             apiGroups = [ "acme.cert-manager.io" ];
-            resources = [ "challenges" "challenges/status" ];
-            verbs = [ "update" "patch" ];
+            resources = [
+              "challenges"
+              "challenges/status"
+            ];
+            verbs = [
+              "update"
+              "patch"
+            ];
           }
           {
             apiGroups = [ "acme.cert-manager.io" ];
             resources = [ "challenges" ];
-            verbs = [ "get" "list" "watch" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
           }
           {
             apiGroups = [ "cert-manager.io" ];
-            resources = [ "issuers" "clusterissuers" ];
-            verbs = [ "get" "list" "watch" ];
+            resources = [
+              "issuers"
+              "clusterissuers"
+            ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
           }
           {
             apiGroups = [ "" ];
             resources = [ "secrets" ];
-            verbs = [ "get" "list" "watch" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
           }
           {
             apiGroups = [ "" ];
             resources = [ "events" ];
-            verbs = [ "create" "patch" ];
+            verbs = [
+              "create"
+              "patch"
+            ];
           }
           {
             apiGroups = [ "" ];
-            resources = [ "pods" "services" ];
-            verbs = [ "get" "list" "watch" "create" "delete" ];
+            resources = [
+              "pods"
+              "services"
+            ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "create"
+              "delete"
+            ];
           }
           {
             apiGroups = [ "networking.k8s.io" ];
             resources = [ "ingresses" ];
-            verbs = [ "get" "list" "watch" "create" "delete" "update" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "create"
+              "delete"
+              "update"
+            ];
           }
           {
             apiGroups = [ "gateway.networking.k8s.io" ];
             resources = [ "httproutes" ];
-            verbs = [ "get" "list" "watch" "create" "delete" "update" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "create"
+              "delete"
+              "update"
+            ];
           }
           {
             apiGroups = [ "route.openshift.io" ];
@@ -506,7 +710,11 @@ k8s.mkPackage
           {
             apiGroups = [ "" ];
             resources = [ "secrets" ];
-            verbs = [ "get" "list" "watch" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
           }
         ];
       };
@@ -520,18 +728,38 @@ k8s.mkPackage
         rules = [
           {
             apiGroups = [ "cert-manager.io" ];
-            resources = [ "certificates" "certificaterequests" ];
-            verbs = [ "create" "update" "delete" ];
+            resources = [
+              "certificates"
+              "certificaterequests"
+            ];
+            verbs = [
+              "create"
+              "update"
+              "delete"
+            ];
           }
           {
             apiGroups = [ "cert-manager.io" ];
-            resources = [ "certificates" "certificaterequests" "issuers" "clusterissuers" ];
-            verbs = [ "get" "list" "watch" ];
+            resources = [
+              "certificates"
+              "certificaterequests"
+              "issuers"
+              "clusterissuers"
+            ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
           }
           {
             apiGroups = [ "networking.k8s.io" ];
             resources = [ "ingresses" ];
-            verbs = [ "get" "list" "watch" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
           }
           {
             apiGroups = [ "networking.k8s.io" ];
@@ -540,18 +768,31 @@ k8s.mkPackage
           }
           {
             apiGroups = [ "gateway.networking.k8s.io" ];
-            resources = [ "gateways" "httproutes" ];
-            verbs = [ "get" "list" "watch" ];
+            resources = [
+              "gateways"
+              "httproutes"
+            ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
           }
           {
             apiGroups = [ "gateway.networking.k8s.io" ];
-            resources = [ "gateways/finalizers" "httproutes/finalizers" ];
+            resources = [
+              "gateways/finalizers"
+              "httproutes/finalizers"
+            ];
             verbs = [ "update" ];
           }
           {
             apiGroups = [ "" ];
             resources = [ "events" ];
-            verbs = [ "create" "patch" ];
+            verbs = [
+              "create"
+              "patch"
+            ];
           }
         ];
       };
@@ -567,7 +808,10 @@ k8s.mkPackage
             apiGroups = [ "cert-manager.io" ];
             resources = [ "signers" ];
             verbs = [ "approve" ];
-            resourceNames = [ "issuers.cert-manager.io/*" "clusterissuers.cert-manager.io/*" ];
+            resourceNames = [
+              "issuers.cert-manager.io/*"
+              "clusterissuers.cert-manager.io/*"
+            ];
           }
         ];
       };
@@ -582,18 +826,29 @@ k8s.mkPackage
           {
             apiGroups = [ "certificates.k8s.io" ];
             resources = [ "certificatesigningrequests" ];
-            verbs = [ "get" "list" "watch" "update" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "update"
+            ];
           }
           {
             apiGroups = [ "certificates.k8s.io" ];
             resources = [ "certificatesigningrequests/status" ];
-            verbs = [ "update" "patch" ];
+            verbs = [
+              "update"
+              "patch"
+            ];
           }
           {
             apiGroups = [ "certificates.k8s.io" ];
             resources = [ "signers" ];
             verbs = [ "sign" ];
-            resourceNames = [ "issuers.cert-manager.io/*" "clusterissuers.cert-manager.io/*" ];
+            resourceNames = [
+              "issuers.cert-manager.io/*"
+              "clusterissuers.cert-manager.io/*"
+            ];
           }
           {
             apiGroups = [ "authorization.k8s.io" ];
@@ -616,7 +871,13 @@ k8s.mkPackage
           kind = "ClusterRole";
           name = self.controllerClusterRoleIssuers.ref;
         };
-        subjects = [{ kind = "ServiceAccount"; name = controllerSaName; inherit namespace; }];
+        subjects = [
+          {
+            kind = "ServiceAccount";
+            name = controllerSaName;
+            inherit namespace;
+          }
+        ];
       };
 
       controllerBindingClusterissuers = k8s.mkResource {
@@ -630,7 +891,13 @@ k8s.mkPackage
           kind = "ClusterRole";
           name = self.controllerClusterRoleClusterissuers.ref;
         };
-        subjects = [{ kind = "ServiceAccount"; name = controllerSaName; inherit namespace; }];
+        subjects = [
+          {
+            kind = "ServiceAccount";
+            name = controllerSaName;
+            inherit namespace;
+          }
+        ];
       };
 
       controllerBindingCertificates = k8s.mkResource {
@@ -644,7 +911,13 @@ k8s.mkPackage
           kind = "ClusterRole";
           name = self.controllerClusterRoleCertificates.ref;
         };
-        subjects = [{ kind = "ServiceAccount"; name = controllerSaName; inherit namespace; }];
+        subjects = [
+          {
+            kind = "ServiceAccount";
+            name = controllerSaName;
+            inherit namespace;
+          }
+        ];
       };
 
       controllerBindingOrders = k8s.mkResource {
@@ -658,7 +931,13 @@ k8s.mkPackage
           kind = "ClusterRole";
           name = self.controllerClusterRoleOrders.ref;
         };
-        subjects = [{ kind = "ServiceAccount"; name = controllerSaName; inherit namespace; }];
+        subjects = [
+          {
+            kind = "ServiceAccount";
+            name = controllerSaName;
+            inherit namespace;
+          }
+        ];
       };
 
       controllerBindingChallenges = k8s.mkResource {
@@ -672,7 +951,13 @@ k8s.mkPackage
           kind = "ClusterRole";
           name = self.controllerClusterRoleChallenges.ref;
         };
-        subjects = [{ kind = "ServiceAccount"; name = controllerSaName; inherit namespace; }];
+        subjects = [
+          {
+            kind = "ServiceAccount";
+            name = controllerSaName;
+            inherit namespace;
+          }
+        ];
       };
 
       controllerBindingIngressShim = k8s.mkResource {
@@ -686,7 +971,13 @@ k8s.mkPackage
           kind = "ClusterRole";
           name = self.controllerClusterRoleIngressShim.ref;
         };
-        subjects = [{ kind = "ServiceAccount"; name = controllerSaName; inherit namespace; }];
+        subjects = [
+          {
+            kind = "ServiceAccount";
+            name = controllerSaName;
+            inherit namespace;
+          }
+        ];
       };
 
       controllerBindingApprove = k8s.mkResource {
@@ -700,7 +991,13 @@ k8s.mkPackage
           kind = "ClusterRole";
           name = self.controllerClusterRoleApprove.ref;
         };
-        subjects = [{ kind = "ServiceAccount"; name = controllerSaName; inherit namespace; }];
+        subjects = [
+          {
+            kind = "ServiceAccount";
+            name = controllerSaName;
+            inherit namespace;
+          }
+        ];
       };
 
       controllerBindingCertificatesigningrequests = k8s.mkResource {
@@ -714,7 +1011,13 @@ k8s.mkPackage
           kind = "ClusterRole";
           name = self.controllerClusterRoleCertificatesigningrequests.ref;
         };
-        subjects = [{ kind = "ServiceAccount"; name = controllerSaName; inherit namespace; }];
+        subjects = [
+          {
+            kind = "ServiceAccount";
+            name = controllerSaName;
+            inherit namespace;
+          }
+        ];
       };
 
       # --- Aggregated ClusterRoles (no bindings, just roles with aggregation labels) ---
@@ -733,7 +1036,11 @@ k8s.mkPackage
           {
             apiGroups = [ "cert-manager.io" ];
             resources = [ "clusterissuers" ];
-            verbs = [ "get" "list" "watch" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
           }
         ];
       };
@@ -752,13 +1059,28 @@ k8s.mkPackage
         rules = [
           {
             apiGroups = [ "cert-manager.io" ];
-            resources = [ "certificates" "certificaterequests" "issuers" ];
-            verbs = [ "get" "list" "watch" ];
+            resources = [
+              "certificates"
+              "certificaterequests"
+              "issuers"
+            ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
           }
           {
             apiGroups = [ "acme.cert-manager.io" ];
-            resources = [ "challenges" "orders" ];
-            verbs = [ "get" "list" "watch" ];
+            resources = [
+              "challenges"
+              "orders"
+            ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
           }
         ];
       };
@@ -775,8 +1097,18 @@ k8s.mkPackage
         rules = [
           {
             apiGroups = [ "cert-manager.io" ];
-            resources = [ "certificates" "certificaterequests" "issuers" ];
-            verbs = [ "create" "delete" "deletecollection" "patch" "update" ];
+            resources = [
+              "certificates"
+              "certificaterequests"
+              "issuers"
+            ];
+            verbs = [
+              "create"
+              "delete"
+              "deletecollection"
+              "patch"
+              "update"
+            ];
           }
           {
             apiGroups = [ "cert-manager.io" ];
@@ -785,8 +1117,17 @@ k8s.mkPackage
           }
           {
             apiGroups = [ "acme.cert-manager.io" ];
-            resources = [ "challenges" "orders" ];
-            verbs = [ "create" "delete" "deletecollection" "patch" "update" ];
+            resources = [
+              "challenges"
+              "orders"
+            ];
+            verbs = [
+              "create"
+              "delete"
+              "deletecollection"
+              "patch"
+              "update"
+            ];
           }
         ];
       };
@@ -803,7 +1144,11 @@ k8s.mkPackage
           {
             apiGroups = [ "coordination.k8s.io" ];
             resources = [ "leases" ];
-            verbs = [ "get" "update" "patch" ];
+            verbs = [
+              "get"
+              "update"
+              "patch"
+            ];
             resourceNames = [ "cert-manager-controller" ];
           }
           {
@@ -825,7 +1170,13 @@ k8s.mkPackage
           kind = "Role";
           name = self.controllerRoleLeaderelection.ref;
         };
-        subjects = [{ kind = "ServiceAccount"; name = controllerSaName; inherit namespace; }];
+        subjects = [
+          {
+            kind = "ServiceAccount";
+            name = controllerSaName;
+            inherit namespace;
+          }
+        ];
       };
 
       controllerRoleTokenrequest = k8s.mkResource {
@@ -855,7 +1206,13 @@ k8s.mkPackage
           kind = "Role";
           name = self.controllerRoleTokenrequest.ref;
         };
-        subjects = [{ kind = "ServiceAccount"; name = controllerSaName; inherit namespace; }];
+        subjects = [
+          {
+            kind = "ServiceAccount";
+            name = controllerSaName;
+            inherit namespace;
+          }
+        ];
       };
 
       # ── Controller ServiceAccount ─────────────────────────────────────
@@ -900,8 +1257,7 @@ k8s.mkPackage
         labels = controllerLabels // {
           "app.kubernetes.io/version" = image.tag;
         };
-        requires =
-          lib.optional serviceAccount.create self.controllerSa;
+        requires = lib.optional serviceAccount.create self.controllerSa;
         spec = {
           replicas = replicaCount;
           selector.matchLabels = controllerSelectorLabels;
@@ -976,7 +1332,13 @@ k8s.mkPackage
           kind = "ClusterRole";
           name = self.webhookClusterRoleSubjectaccessreviews.ref;
         };
-        subjects = [{ kind = "ServiceAccount"; name = webhookSaName; inherit namespace; }];
+        subjects = [
+          {
+            kind = "ServiceAccount";
+            name = webhookSaName;
+            inherit namespace;
+          }
+        ];
       };
 
       webhookRoleDynamicServing = k8s.mkResource {
@@ -989,7 +1351,12 @@ k8s.mkPackage
           {
             apiGroups = [ "" ];
             resources = [ "secrets" ];
-            verbs = [ "get" "list" "watch" "update" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "update"
+            ];
             resourceNames = [ "cert-manager-webhook-ca" ];
           }
           {
@@ -1011,7 +1378,13 @@ k8s.mkPackage
           kind = "Role";
           name = self.webhookRoleDynamicServing.ref;
         };
-        subjects = [{ kind = "ServiceAccount"; name = webhookSaName; inherit namespace; }];
+        subjects = [
+          {
+            kind = "ServiceAccount";
+            name = webhookSaName;
+            inherit namespace;
+          }
+        ];
       };
 
       # ── Webhook ServiceAccount ─────────────────────────────────────────
@@ -1041,8 +1414,7 @@ k8s.mkPackage
         labels = webhookLabels // {
           "app.kubernetes.io/version" = webhook.image.tag;
         };
-        requires =
-          lib.optional serviceAccount.create self.webhookSa;
+        requires = lib.optional serviceAccount.create self.webhookSa;
         spec = {
           replicas = webhook.replicaCount;
           selector.matchLabels = webhookSelectorLabels;
@@ -1154,9 +1526,15 @@ k8s.mkPackage
             ];
             rules = [
               {
-                apiGroups = [ "cert-manager.io" "acme.cert-manager.io" ];
+                apiGroups = [
+                  "cert-manager.io"
+                  "acme.cert-manager.io"
+                ];
                 apiVersions = [ "v1" ];
-                operations = [ "CREATE" "UPDATE" ];
+                operations = [
+                  "CREATE"
+                  "UPDATE"
+                ];
                 resources = [ "*/*" ];
               }
             ];
@@ -1188,32 +1566,66 @@ k8s.mkPackage
           {
             apiGroups = [ "cert-manager.io" ];
             resources = [ "certificates" ];
-            verbs = [ "get" "list" "watch" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
           }
           {
             apiGroups = [ "" ];
             resources = [ "secrets" ];
-            verbs = [ "get" "list" "watch" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
           }
           {
             apiGroups = [ "" ];
             resources = [ "events" ];
-            verbs = [ "get" "create" "update" "patch" ];
+            verbs = [
+              "get"
+              "create"
+              "update"
+              "patch"
+            ];
           }
           {
             apiGroups = [ "admissionregistration.k8s.io" ];
-            resources = [ "validatingwebhookconfigurations" "mutatingwebhookconfigurations" ];
-            verbs = [ "get" "list" "watch" "update" "patch" ];
+            resources = [
+              "validatingwebhookconfigurations"
+              "mutatingwebhookconfigurations"
+            ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "update"
+              "patch"
+            ];
           }
           {
             apiGroups = [ "apiregistration.k8s.io" ];
             resources = [ "apiservices" ];
-            verbs = [ "get" "list" "watch" "update" "patch" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "update"
+              "patch"
+            ];
           }
           {
             apiGroups = [ "apiextensions.k8s.io" ];
             resources = [ "customresourcedefinitions" ];
-            verbs = [ "get" "list" "watch" "update" "patch" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "update"
+              "patch"
+            ];
           }
         ];
       };
@@ -1229,7 +1641,13 @@ k8s.mkPackage
           kind = "ClusterRole";
           name = self.cainjectorClusterRole.ref;
         };
-        subjects = [{ kind = "ServiceAccount"; name = cainjectorSaName; inherit namespace; }];
+        subjects = [
+          {
+            kind = "ServiceAccount";
+            name = cainjectorSaName;
+            inherit namespace;
+          }
+        ];
       };
 
       cainjectorRoleLeaderelection = k8s.mkResource {
@@ -1242,7 +1660,11 @@ k8s.mkPackage
           {
             apiGroups = [ "coordination.k8s.io" ];
             resources = [ "leases" ];
-            verbs = [ "get" "update" "patch" ];
+            verbs = [
+              "get"
+              "update"
+              "patch"
+            ];
             resourceNames = [
               "cert-manager-cainjector-leader-election"
               "cert-manager-cainjector-leader-election-core"
@@ -1267,7 +1689,13 @@ k8s.mkPackage
           kind = "Role";
           name = self.cainjectorRoleLeaderelection.ref;
         };
-        subjects = [{ kind = "ServiceAccount"; name = cainjectorSaName; inherit namespace; }];
+        subjects = [
+          {
+            kind = "ServiceAccount";
+            name = cainjectorSaName;
+            inherit namespace;
+          }
+        ];
       };
 
       # ── CA Injector ServiceAccount ─────────────────────────────────────
@@ -1297,8 +1725,7 @@ k8s.mkPackage
         labels = cainjectorLabels // {
           "app.kubernetes.io/version" = cainjector.image.tag;
         };
-        requires =
-          lib.optional serviceAccount.create self.cainjectorSa;
+        requires = lib.optional serviceAccount.create self.cainjectorSa;
         spec = {
           replicas = cainjector.replicaCount;
           selector.matchLabels = cainjectorSelectorLabels;
@@ -1370,7 +1797,13 @@ k8s.mkPackage
           kind = "Role";
           name = self.startupapicheckRoleCreateCert.ref;
         };
-        subjects = [{ kind = "ServiceAccount"; name = startupapicheckSaName; inherit namespace; }];
+        subjects = [
+          {
+            kind = "ServiceAccount";
+            name = startupapicheckSaName;
+            inherit namespace;
+          }
+        ];
       };
 
       # ── Startup API Check ServiceAccount ───────────────────────────────
@@ -1395,8 +1828,7 @@ k8s.mkPackage
         name = "cert-manager-startupapicheck";
         inherit namespace;
         labels = startupapicheckLabels;
-        requires =
-          lib.optional serviceAccount.create self.startupapicheckSa;
+        requires = lib.optional serviceAccount.create self.startupapicheckSa;
         spec = {
           backoffLimit = 4;
           template = {
@@ -1424,7 +1856,12 @@ k8s.mkPackage
       # cainjector and startupapicheck.
 
       main = k8s.withRequires (
-        [ self.controllerDeployment self.webhookService self.mutatingWebhook self.validatingWebhook ]
+        [
+          self.controllerDeployment
+          self.webhookService
+          self.mutatingWebhook
+          self.validatingWebhook
+        ]
         ++ lib.optional cainjector.enabled self.cainjectorDeployment
         ++ lib.optional startupapicheck.enabled self.startupapicheckJob
       ) self.controllerService;
