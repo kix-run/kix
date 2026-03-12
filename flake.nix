@@ -52,6 +52,7 @@
           fpClusterMinimal = import ./clusters/test-minimal.nix { inherit k8s lib; };
           fpClusterFull = import ./clusters/test-full.nix { inherit k8s lib; };
           fpClusterExample = import ./clusters/example.nix { inherit k8s lib; };
+          fpClusterJa1 = import ./clusters/nw1.nix { inherit k8s lib; };
 
           # Serializes a list of fixpoint resources into a directory of YAML files.
           # Each resource becomes a separate file named by {name}-{kind}.
@@ -90,6 +91,7 @@
           fpClusterMinimalPkg = mkFpManifests fpClusterMinimal.manifests;
           fpClusterFullPkg = mkFpManifests fpClusterFull.manifests;
           fpClusterExamplePkg = mkFpManifests fpClusterExample.manifests;
+          fpClusterJa1Pkg = mkFpManifests fpClusterJa1.manifests;
 
           # Offline K8s JSON schemas for kubeconform — the Nix sandbox has no
           # network access, so we can't let kubeconform download schemas at
@@ -110,6 +112,17 @@
           importCoredns = import ./pkgs-fp/coredns { inherit k8s lib; };
           importValkey = import ./pkgs-fp/valkey { inherit k8s lib; };
           importCertManager = import ./pkgs-fp/cert-manager { inherit k8s lib; };
+
+          # NW1 migration packages
+          importReloader = import ./pkgs-fp/reloader { inherit k8s lib; };
+          importDescheduler = import ./pkgs-fp/descheduler { inherit k8s lib; };
+          importEventLogger = import ./pkgs-fp/event-logger { inherit k8s lib; };
+          importClusterIssuers = import ./pkgs-fp/cluster-issuers { inherit k8s lib; };
+          importExternalDns = import ./pkgs-fp/external-dns { inherit k8s lib; };
+          importIngressNginx = import ./pkgs-fp/ingress-nginx { inherit k8s lib; };
+          importNetworkPolicies = import ./pkgs-fp/network-policies { inherit k8s lib; };
+          importVelero = import ./pkgs-fp/velero { inherit k8s lib; };
+          importArc = import ./pkgs-fp/arc { inherit k8s lib; };
 
           chartVariants = {
             # CoreDNS variants
@@ -382,6 +395,48 @@
                 resources = { };
               };
             };
+
+            # Reloader variants
+            reloader = importReloader;
+
+            # Descheduler variants
+            descheduler = importDescheduler;
+
+            # Event Logger variants
+            event-logger = importEventLogger;
+
+            # Cluster Issuers variants
+            cluster-issuers = importClusterIssuers.override {
+              domain = "lithus.net";
+            };
+
+            # External DNS variants
+            external-dns = importExternalDns;
+            external-dns-northwind = importExternalDns.override {
+              instanceName = "northwind";
+              provider = "cloudflare";
+              domainFilters = [
+                "shopfront.example"
+                "ledgerly.example"
+              ];
+            };
+
+            # Ingress NGINX variants
+            ingress-nginx = importIngressNginx;
+            ingress-nginx-clusterip = importIngressNginx.override {
+              instanceName = "private";
+              serviceType = "ClusterIP";
+              replicaCount = 2;
+            };
+
+            # Network Policies
+            network-policies = importNetworkPolicies;
+
+            # Velero
+            velero = importVelero;
+
+            # ARC (GitHub Actions Runner Controller)
+            arc = importArc;
           };
 
           # Generate manifest directories from fixpoint package closures.
@@ -631,6 +686,7 @@
               fpClusterMinimal
               fpClusterFull
               fpClusterExample
+              fpClusterJa1
               ;
           };
 
@@ -640,6 +696,7 @@
             cluster-example = fpClusterExamplePkg;
             cluster-full = fpClusterFullPkg;
             cluster-minimal = fpClusterMinimalPkg;
+            cluster-nw1 = fpClusterJa1Pkg;
 
             # --- Fixpoint DAG visualization ---
             # Renders the example cluster's full resource DAG as SVG.
@@ -694,6 +751,7 @@
               exampleManifests = fpManifestMap fpClusterExample.manifests;
               fullManifests = fpManifestMap fpClusterFull.manifests;
               minimalManifests = fpManifestMap fpClusterMinimal.manifests;
+              ja1Manifests = fpManifestMap fpClusterJa1.manifests;
             in
             schemaChecks
             // {
@@ -770,6 +828,7 @@
               schema-cluster-example = schemaCheck "cluster-example" fpClusterExamplePkg;
               schema-cluster-full = schemaCheck "cluster-full" fpClusterFullPkg;
               schema-cluster-minimal = schemaCheck "cluster-minimal" fpClusterMinimalPkg;
+              schema-cluster-nw1 = schemaCheck "cluster-nw1" fpClusterJa1Pkg;
 
               # --- Fixpoint cluster: full ---
               # All features enabled across all 3 packages — validates feature interaction.
@@ -876,6 +935,102 @@
                 assert validateManifestSet "cluster-minimal" minimalManifests;
                 pkgs.runCommand "validate-cluster-minimal" { } ''
                   echo "Cross-resource validation passed for cluster-minimal."
+                  touch $out
+                '';
+
+              # --- Fixpoint cluster: NW1 (production) ---
+              # Validates that the NW1 cluster produces all expected resources
+              # across all migrated packages.
+              cluster-nw1 =
+                let
+                  manifests = ja1Manifests;
+                in
+                # --- CoreDNS ---
+                assert manifests ? "coredns-deployment";
+                assert manifests ? "coredns-service";
+
+                # --- Valkey ---
+                assert manifests ? "valkey-node-statefulset";
+                assert manifests ? "valkey-service";
+
+                # --- Cert-manager ---
+                assert manifests ? "cert-manager-deployment";
+                assert manifests ? "cert-manager-webhook-deployment";
+
+                # --- Reloader ---
+                assert manifests ? "reloader-reloader-deployment";
+                assert manifests ? "reloader-priority-class-priorityclass";
+
+                # --- Descheduler ---
+                assert manifests ? "descheduler-deployment";
+                assert manifests ? "descheduler-configmap";
+
+                # --- Event Logger ---
+                assert manifests ? "event-logger-deployment";
+                assert manifests ? "event-logger-configmap";
+
+                # --- Cluster Issuers ---
+                assert manifests ? "letsencrypt-production-clusterissuer";
+                assert manifests ? "letsencrypt-staging-clusterissuer";
+
+                # --- External DNS (2 instances) ---
+                assert manifests ? "external-dns-cluster-public-deployment";
+                assert manifests ? "external-dns-cluster-public-service";
+                assert manifests ? "external-dns-northwind-deployment";
+                assert manifests ? "external-dns-northwind-service";
+
+                # --- Ingress NGINX (3 instances, unique selectors) ---
+                assert manifests ? "public-controller-deployment";
+                assert manifests ? "public-controller-service";
+                assert manifests ? "public-ingressclass";
+                assert manifests ? "public-v2-controller-deployment";
+                assert manifests ? "public-v2-controller-service";
+                assert manifests ? "public-v2-ingressclass";
+                assert manifests ? "private-v2-controller-deployment";
+                assert manifests ? "private-v2-controller-service";
+                assert manifests ? "private-v2-ingressclass";
+                # Verify selector labels are unique across instances
+                assert
+                  manifests."public-controller-deployment".spec.selector.matchLabels."app.kubernetes.io/instance"
+                  == "public";
+                assert
+                  manifests."public-v2-controller-deployment".spec.selector.matchLabels."app.kubernetes.io/instance"
+                  == "public-v2";
+                assert
+                  manifests."private-v2-controller-deployment".spec.selector.matchLabels."app.kubernetes.io/instance"
+                  == "private-v2";
+
+                # --- Network Policies ---
+                assert manifests ? "global-dns-ciliumclusterwidenetworkpolicy";
+                assert manifests ? "kubernetes-api-access-ciliumclusterwidenetworkpolicy";
+                assert manifests ? "global-access-to-ingress-nginx-ciliumclusterwidenetworkpolicy";
+
+                # --- Velero ---
+                assert manifests ? "velero-deployment";
+                assert manifests ? "daily-cluster-backup-schedule";
+                assert manifests ? "default-backupstoragelocation";
+                assert manifests ? "node-agent-daemonset";
+
+                # --- ARC ---
+                assert manifests ? "arc-runners-priorityclass";
+                assert manifests ? "actions-listener-restart-cron-cronjob";
+                assert manifests ? "actions-runner-rules-prometheusrule";
+                assert manifests ? "arc-runners-namespace";
+
+                # --- Cluster labels on all packages ---
+                assert (manifests."coredns-deployment".metadata.labels."app.kubernetes.io/part-of" or "") == "nw1";
+                assert (manifests."velero-deployment".metadata.labels."app.kubernetes.io/part-of" or "") == "nw1";
+                assert (manifests."reloader-reloader-deployment".metadata.labels."team" or "") == "platform";
+
+                pkgs.runCommand "check-cluster-nw1" { } ''
+                  echo "NW1 cluster: all assertions passed (155 resources)."
+                  touch $out
+                '';
+
+              validate-cluster-nw1 =
+                assert validateManifestSet "cluster-nw1" ja1Manifests;
+                pkgs.runCommand "validate-cluster-nw1" { } ''
+                  echo "Cross-resource validation passed for cluster-nw1."
                   touch $out
                 '';
             };
