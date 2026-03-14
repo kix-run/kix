@@ -1,8 +1,8 @@
-# cncf-nix: Instances Design Document
+# kixpkgs: Instances Design Document
 
 ## Executive Summary
 
-This document describes the developer experience for `cncf-nix`, a Nix-based Kubernetes resource manager. The central abstraction is the **instance** — a configured deployment of a package into a namespace. Users declare instances, point them at each other, and the system produces a fully-tracked, topo-sorted resource DAG with correct cross-namespace dependencies.
+This document describes the developer experience for `kixpkgs`, a Nix-based Kubernetes resource manager. The central abstraction is the **instance** — a configured deployment of a package into a namespace. Users declare instances grouped by namespace, point them at each other via `ref`, and the system produces a fully-tracked, topo-sorted resource DAG with correct cross-namespace dependencies.
 
 The design has three layers:
 
@@ -20,12 +20,11 @@ The user operates almost entirely at the instance layer. They never call `mkReso
 
 ```nix
 # clusters/production.nix
-{ cncf }:
+{ kixpkgs, packages }:
 
-cncf.buildCluster {
+kixpkgs.buildCluster {
 
   namespaces = {
-    kube-system = {};
     production = {
       resourceQuota.hard = {
         "requests.cpu" = "20";
@@ -39,30 +38,40 @@ cncf.buildCluster {
     };
   };
 
-  instances = { config, ... }: {
-
-    coredns = {
-      package = cncf.packages.coredns;
-      namespace = "kube-system";
-    };
-
-    postgres = {
-      package = cncf.packages.postgresql;
-      namespace = "data";
-      config = {
-        storage = "100Gi";
-        replicas = 3;
+  instances = { ref, ... }: {
+    kube-system = {
+      coredns = {
+        package = kixpkgs.packages.coredns;
       };
     };
 
-    api = {
-      package = cncf.packages.myApp;
-      namespace = "production";
-      config = {
-        image = "myregistry.io/api:v2.1.0";
-        replicas = 5;
-        database = config.instances.postgres;
-        dns = config.instances.coredns;
+    data = {
+      postgres = {
+        package = kixpkgs.packages.postgresql;
+        config = {
+          storage = "100Gi";
+          replicas = 3;
+        };
+      };
+    };
+
+    production = {
+      api = {
+        package = packages.acme-api;
+        config = {
+          image = "myregistry.io/api:v2.1.0";
+          replicas = 5;
+          database = ref.data.postgres;
+          dns = ref.coredns;             # unambiguous — only one coredns
+        };
+      };
+
+      worker = {
+        package = packages.acme-worker;
+        config = {
+          database = ref.data.postgres;
+          api = ref.production.api;
+        };
       };
     };
   };
@@ -77,73 +86,82 @@ That's the entire user-facing API. Everything else — namespace resources, depe
 
 Users don't think in individual ConfigMaps and ServiceAccounts. They think "I need a postgres" and "I need my app talking to that postgres." The instance is the atom from the user's perspective. Resources are implementation details inside packages.
 
-**2. Cross-references are between instances, not resources.**
+**2. Instances are scoped by namespace.**
 
-When the user writes `config.instances.postgres`, they get the fully-evaluated postgres instance — its `main` resource's `ref`, `out`, `fqdn`, and the entire transitive closure. The package author uses these to build connection strings, env vars, etc. The user never needs to know which specific resource inside postgres is the "right one" to reference.
+Instances are nested under their namespace: `production.api`, `data.postgres`, `kube-system.coredns`. Two teams can both define a `postgres` instance — as long as they're in different namespaces, there's no conflict. This mirrors how K8s itself scopes resources and eliminates the need for team-prefixed naming conventions.
 
-**3. Namespaces are declared, not constructed.**
+**3. Cross-references use `ref`, not raw instance paths.**
 
-The user writes `namespace = "production"` as a string. The system resolves it to the namespace resource declared in `namespaces = { ... }`, attaches policies, and injects it into every resource the instance creates. If the string doesn't match a declared namespace, evaluation fails with a clear error.
+When the user writes `ref.data.postgres`, they get the fully-evaluated postgres instance — its `main` resource's `ref`, `out`, `fqdn`, and the entire transitive closure. The package author uses these to build connection strings, env vars, etc. The user never needs to know which specific resource inside postgres is the "right one" to reference.
 
-**4. Config is freeform but scoped.**
+For instances with a unique name across all namespaces, the short form `ref.coredns` works. If the name is ambiguous, the system errors with a helpful message listing the namespaces where it exists.
 
-Each package defines what it expects in `config`. There's no global `values.yaml` — each instance has its own `config` attrset that only that package sees. Cross-instance references live in config too, as `config.instances.other`.
+**4. Namespaces are implied by usage.**
 
-### The `instances` function
+If you list instances under `production`, the namespace `production` exists. The separate `namespaces` block is purely about policy (quotas, limits, netpols), not about declaring existence. A namespace with no special policy doesn't need to appear in `namespaces` at all.
 
-The `instances` attribute is a function, not an attrset. It receives `{ config, ... }` where `config.instances` is the final fixpoint of all evaluated instances. This is what enables cross-references:
+**5. Config is freeform but scoped.**
+
+Each package defines what it expects in `config`. There's no global `values.yaml` — each instance has its own `config` attrset that only that package sees. Cross-instance references live in config too, as `ref.namespace.instance`.
+
+### The `ref` system
+
+The `instances` attribute is a function that receives `{ ref, ... }` where `ref` is a structured accessor into all evaluated instances across all namespaces.
 
 ```nix
-instances = { config, ... }: {
-  postgres = { ... };
-  api = {
-    config = {
-      # This refers to the FINAL evaluated postgres, including
-      # its .ref, .out, .fqdn, .closure — everything.
-      database = config.instances.postgres;
+instances = { ref, ... }: {
+  production = {
+    api = {
+      config = {
+        # Full path — always works, explicit namespace
+        database = ref.data.postgres;
+
+        # Short path — works when the name is globally unique
+        dns = ref.coredns;
+      };
     };
   };
 };
 ```
 
-The fixpoint evaluation order:
+`ref.data.postgres` gives you the final evaluated postgres instance, including its `.ref`, `.out`, `.fqdn`, `.closure` — everything. The fixpoint ties all instances together so references resolve to final values.
 
-1. All instance definitions are collected.
-2. For each instance, a `scope` is created from its namespace.
-3. Each package function is called with `{ scope, config }` and wrapped in `lib.fix` to form the inner fixpoint (the package's self-referential parts).
-4. The outer fixpoint ties all instances together so `config.instances.x` resolves to the final value of instance `x`.
-5. Lazy evaluation means cycles are caught, and only referenced instances are forced.
+Ambiguous short refs produce a clear error:
+
+```
+error: ambiguous ref 'postgres' — found in namespaces: data, production, staging.
+       Use ref.data.postgres, ref.production.postgres, or ref.staging.postgres.
+```
 
 ### Instance-level overrides
 
 For the common case where the user needs to tweak one resource inside a package:
 
 ```nix
-instances = { config, ... }: {
-  coredns = {
-    package = cncf.packages.coredns;
-    namespace = "kube-system";
+instances = { ref, ... }: {
+  kube-system = {
+    coredns = {
+      package = kixpkgs.packages.coredns;
 
-    # Override individual parts — like overrideAttrs
-    parts = self: super: {
-      workload = self.scope.mkResource {
-        apiVersion = "apps/v1";
-        kind = "StatefulSet";
-        name = "${self.scope.instanceName}-coredns";
-        spec = {
-          replicas = 3;
-          serviceName = self.service.ref;
-          selector.matchLabels = super.workload.spec.selector.matchLabels;
-          template = super.workload.spec.template // {
-            # keep the same pod spec, just change the wrapping workload kind
+      # Override individual parts — like overrideAttrs
+      parts = self: super: {
+        workload = self.scope.mkResource {
+          apiVersion = "apps/v1";
+          kind = "StatefulSet";
+          name = "${self.scope.instanceName}-coredns";
+          spec = {
+            replicas = 3;
+            serviceName = self.service.ref;
+            selector.matchLabels = super.workload.spec.selector.matchLabels;
+            template = super.workload.spec.template;
+            volumeClaimTemplates = [{
+              metadata.name = "data";
+              spec = {
+                accessModes = [ "ReadWriteOnce" ];
+                resources.requests.storage = "1Gi";
+              };
+            }];
           };
-          volumeClaimTemplates = [{
-            metadata.name = "data";
-            spec = {
-              accessModes = [ "ReadWriteOnce" ];
-              resources.requests.storage = "1Gi";
-            };
-          }];
         };
       };
     };
@@ -153,187 +171,329 @@ instances = { config, ... }: {
 
 The `parts` key is optional. When present, it's applied as an overlay on the package's inner fixpoint. `super` gives you the original parts, `self` gives you the final (overridden) parts.
 
-### What the user gets back
-
-```nix
-cluster = import ./clusters/production.nix { inherit cncf; };
-
-# Per-instance operations
-cluster.instances.api.closure       # all resources needed, topo-sorted
-cluster.instances.api.manifests     # YAML-ready attrsets for kubectl
-cluster.instances.api.main          # the "public" resource (Service)
-cluster.instances.api.ref           # shortcut to main.ref
-cluster.instances.api.fqdn          # "api.production.svc.cluster.local"
-cluster.instances.api.out           # main's outputs (e.g. { port = 8080; })
-
-# Drill into parts
-cluster.instances.api.deployment    # the Deployment resource
-cluster.instances.api.configmap     # the ConfigMap resource
-
-# Cluster-wide operations
-cluster.closure                     # every resource in the cluster
-cluster.manifests                   # everything, ready for kubectl apply
-cluster.namespaces                  # all namespace resources
-
-# Targeted deploy
-cluster.deploy.api                  # just api + its deps (incl. postgres, coredns, namespaces)
-cluster.deploy.postgres             # just postgres + its deps
-
-# DAG queries
-cluster.dag.closureOf "api"         # what does api need?
-cluster.dag.dependentsOf "postgres" # what breaks if postgres changes?
-cluster.dag.diff oldCluster         # what changed between two evaluations?
-```
-
 ### Error messages
 
-The system should produce clear errors at evaluation time, not deploy time:
+The system produces clear errors at evaluation time, not deploy time:
 
 ```
-error: namespace 'produktion' referenced by instance 'api' is not declared.
-       Did you mean 'production'?
-       Declared namespaces: data, kube-system, production, staging
+error: instance 'api' in namespace 'production' references ref.data.redis,
+       but no instance named 'redis' exists in namespace 'data'.
+       Instances in 'data': postgres
 
-error: instance 'api' references instance 'redis' via config.instances.redis,
-       but no instance named 'redis' exists.
-       Declared instances: api, coredns, postgres
+error: ambiguous ref 'postgres' — found in namespaces: data, production, staging.
+       Use ref.data.postgres, ref.production.postgres, or ref.staging.postgres.
 
-error: package 'myApp' does not define a 'main' resource.
-       Every package must set 'main' to indicate its primary interface.
+error: package for instance 'api' in namespace 'production' does not define
+       a 'main' resource. Every package must set 'main' to indicate its
+       primary interface.
 
 error: cycle detected in instance dependencies:
-       api → postgres → api
+       production/api → data/postgres → production/api
        Instance cross-references must form a DAG.
+
+error: instance 'postgres' in namespace 'data' is defined by both
+       fragment 'backend-team' and fragment 'ml-team'.
+       Only one fragment may define a given (namespace, instance) pair.
 ```
 
 ---
 
-## Part 2: How `cncf.packages` Is Populated
+## Part 2: Environments — `mkEnv`
 
-### The package registry
+### The problem
 
-`cncf.packages` is an attrset of package functions, built from a directory of package definitions. This is identical to how nixpkgs builds its top-level package set from `pkgs/` directories.
+Teams often need the same set of instances across multiple environments (dev, staging, prod) with only minor config differences — replica counts, storage sizes, image tags. Copy-pasting instance blocks violates DRY and drifts over time.
 
-```
-cncf-nix/
-├── flake.nix
-├── lib/
-│   ├── k8s.nix          # core resource/ref/closure machinery
-│   ├── eval.nix          # buildCluster, scope, instance evaluation
-│   └── package.nix       # mkCncfPackage helper
-├── packages/
-│   ├── coredns/
-│   │   ├── default.nix   # the package definition
-│   │   └── README.md     # docs, example configs
-│   ├── postgresql/
-│   │   └── default.nix
-│   ├── cert-manager/
-│   │   └── default.nix
-│   ├── nginx-ingress/
-│   │   └── default.nix
-│   └── ...
-└── default.nix           # collects all packages
-```
+### The solution: instance sets stamped per environment
 
-### The top-level collector
+Define your instances once as **instance sets**, then stamp them into environments with `mkEnv`:
 
 ```nix
-# default.nix / flake.nix output
-{
-  packages = let
-    packageDirs = builtins.readDir ./packages;
-    packageNames = builtins.attrNames
-      (lib.filterAttrs (_: type: type == "directory") packageDirs);
-  in lib.genAttrs packageNames (name:
-    import ./packages/${name} { inherit lib k8s; }
-  );
+{ kixpkgs, packages }:
+
+let
+  # ── Instance sets: define once ────────────────────────────
+
+  appStack = { ref, env }: {
+    frontend = {
+      package = packages.frontend;
+      config = {
+        database = ref."${env.name}-data".postgres;
+        cdn = env.config.cdnUrl or null;
+      };
+    };
+    api = {
+      package = packages.backend-api;
+      config = {
+        database = ref."${env.name}-data".postgres;
+        dns = ref.coredns;
+      };
+    };
+  };
+
+  dataStack = { ref, env }: {
+    postgres = {
+      package = packages.postgresql;
+      config.storage = env.config.pgStorage or "10Gi";
+    };
+    redis = {
+      package = packages.redis;
+    };
+  };
+
+in kixpkgs.buildCluster {
+
+  namespaces = {
+    prod-app = { resourceQuota.hard."limits.cpu" = "40"; };
+    prod-data = { resourceQuota.hard."requests.storage" = "500Gi"; };
+    # dev namespaces need no policies — implied by usage
+  };
+
+  instances = { ref, ... }:
+    # ── Shared infrastructure ───────────────────────────────
+    {
+      kube-system.coredns = {
+        package = kixpkgs.packages.coredns;
+      };
+    }
+    # ── Dev: replicas=1, small storage ──────────────────────
+    // kixpkgs.mkEnv "dev" {
+      defaults = { replicas = 1; };
+      config = { pgStorage = "10Gi"; };
+    } {
+      app = appStack;
+      data = dataStack;
+    }
+    # ── Prod: replicas=5, big storage ───────────────────────
+    // kixpkgs.mkEnv "prod" {
+      defaults = { replicas = 5; };
+      config = {
+        pgStorage = "200Gi";
+        cdnUrl = "https://cdn.acme.com";
+      };
+    } {
+      app = appStack;
+      data = dataStack;
+    };
 }
 ```
 
-This produces `cncf.packages.coredns`, `cncf.packages.postgresql`, etc.
+### What `mkEnv` produces
 
-### Anatomy of a package: CoreDNS
+For `mkEnv "dev" { defaults = { replicas = 1; }; } { app = appStack; data = dataStack; }`:
+
+```
+Namespaces created:
+  dev-app
+  dev-data
+
+Instances created:
+  dev-app/frontend    (replicas=1)
+  dev-app/api         (replicas=1)
+  dev-data/postgres   (replicas=1, storage=10Gi)
+  dev-data/redis      (replicas=1)
+```
+
+For `mkEnv "prod" ...`:
+
+```
+Namespaces created:
+  prod-app
+  prod-data
+
+Instances created:
+  prod-app/frontend   (replicas=5)
+  prod-app/api        (replicas=5)
+  prod-data/postgres  (replicas=5, storage=200Gi)
+  prod-data/redis     (replicas=5)
+```
+
+The namespace names are `${envName}-${setName}`. Refs within a set use the env-prefixed namespace: `ref."${env.name}-data".postgres`. Refs to shared infrastructure (like `ref.coredns`) work unchanged because they're outside the env scope.
+
+### Per-instance overrides within an env
+
+When prod needs tweaks beyond just defaults:
+
+```nix
+// kixpkgs.mkEnv "prod" {
+  defaults = { replicas = 5; };
+  config = { pgStorage = "200Gi"; };
+  overrides = {
+    app.api.config.replicas = 10;
+    app.api.config.minAvailable = 3;
+    data.postgres.config.backups = true;
+  };
+} {
+  app = appStack;
+  data = dataStack;
+}
+```
+
+### Adding a new environment
+
+One line stamps the entire stack:
+
+```nix
+// kixpkgs.mkEnv "canary" {
+  defaults = { replicas = 1; };
+  config = { pgStorage = "10Gi"; };
+} {
+  app = appStack;
+  data = dataStack;
+}
+```
+
+This creates `canary-app/frontend`, `canary-app/api`, `canary-data/postgres`, `canary-data/redis` — all with replicas=1 and small storage. Adding a new service to `appStack` automatically appears in every environment.
+
+### The mental model
+
+```
+                 ┌──────────────────────────┐
+                 │   Instance Sets           │
+                 │   (define once)           │
+                 │                           │
+                 │   appStack:               │
+                 │     frontend, api         │
+                 │                           │
+                 │   dataStack:              │
+                 │     postgres, redis       │
+                 └───────────┬──────────────┘
+                             │
+              ┌──────────────┼──────────────┐
+              │              │              │
+         mkEnv "dev"    mkEnv "prod"   mkEnv "canary"
+         replicas=1     replicas=5     replicas=1
+              │              │              │
+              ▼              ▼              ▼
+        dev-app/          prod-app/      canary-app/
+          frontend          frontend       frontend
+          api               api            api
+        dev-data/         prod-data/     canary-data/
+          postgres          postgres       postgres
+          redis             redis          redis
+```
+
+`mkEnv` is a ~15 line user-space helper, not a new system concept. It composes with everything else — fragments, overrides, cross-references — because the output is just a regular nested instances attrset.
+
+---
+
+## Part 3: Package Authoring
+
+### The package signature
+
+A package is a single function. It takes three arguments, returns an attrset of resources.
 
 ```nix
 # packages/coredns/default.nix
-{ lib, k8s }:
+{ self, scope, config }:
 
-# A package is a function: { scope, config } -> (self -> attrset)
-#
-# It does NOT know:
-#   - what namespace it's in (scope handles that)
-#   - what instance name it has (scope handles that)
-#   - who references it (the DAG handles that)
-#
-# It DOES know:
-#   - what resources it needs to create
-#   - what config options it accepts
-#   - what its public interface is (main + outputs)
+{
+  # ... resources ...
+  main = self.someResource;
+}
+```
 
-{ scope, config }:
+That's the entire contract:
 
-let
-  cfg = {
-    image = config.image
-      or "registry.k8s.io/coredns/coredns:v1.11.1";
-    replicas = config.replicas or 2;
-    corefile = config.corefile or ''
-      .:53 {
-        errors
-        health { latefatal }
-        ready
-        kubernetes cluster.local in-addr.arpa ip6.arpa {
-          pods insecure
-          fallthrough in-addr.arpa ip6.arpa
-        }
-        forward . /etc/resolv.conf
-        cache 30
-        loop
-        reload
-        loadbalance
+- `self` — the final value of this attrset (for cross-referencing your own resources).
+- `scope` — helpers for creating resources, bound to the instance's namespace.
+- `config` — freeform attrset from the user's instance config.
+
+The system wraps this in a fixpoint internally. The package author never needs to know the word "fixpoint." They just know that `self.configmap` gives them the final value of `configmap`, even if `configmap` also references `self.service`.
+
+### Scope API
+
+| Attribute | Description |
+|---|---|
+| `scope.instanceName` | The unique instance name from the cluster config |
+| `scope.namespace` | The namespace resource (auto-injected into mkResource) |
+| `scope.mkResource { ... }` | Create a namespaced resource (namespace injected automatically) |
+| `scope.mkClusterResource { ... }` | Create a cluster-scoped resource (no namespace) |
+| `scope.str [ parts ]` | Build a tracked string with dependency tracking |
+| `scope.defaults config { ... }` | Merge user config with defaults, catch unknown keys |
+
+### Config with defaults
+
+Packages declare their config schema and defaults with `scope.defaults`:
+
+```nix
+{ self, scope, config }:
+
+let cfg = scope.defaults config {
+  image = "registry.k8s.io/coredns/coredns:v1.11.1";
+  replicas = 2;
+  corefile = ''
+    .:53 {
+      forward . /etc/resolv.conf
+      cache 30
+    }
+  '';
+  clusterIP = null;       # null = let K8s assign
+}; in
+
+{
+  # Use cfg.image, cfg.replicas, etc.
+}
+```
+
+`scope.defaults` merges user config over defaults. Unknown keys in the user's config can optionally produce a warning or error, catching typos at evaluation time rather than runtime.
+
+### Full example: CoreDNS
+
+```nix
+# packages/coredns/default.nix
+{ self, scope, config }:
+
+let cfg = scope.defaults config {
+  image = "registry.k8s.io/coredns/coredns:v1.11.1";
+  replicas = 2;
+  corefile = ''
+    .:53 {
+      errors
+      health { latefatal }
+      ready
+      kubernetes cluster.local in-addr.arpa ip6.arpa {
+        pods insecure
+        fallthrough in-addr.arpa ip6.arpa
       }
-    '';
-    forwardTo = config.forwardTo or "/etc/resolv.conf";
-    clusterDomain = config.clusterDomain or "cluster.local";
-  };
+      forward . /etc/resolv.conf
+      cache 30
+      loop
+      reload
+      loadbalance
+    }
+  '';
+};
 
-  # Common labels for all resources in this package
-  instanceLabels = {
-    "app.kubernetes.io/name" = "coredns";
-    "app.kubernetes.io/instance" = scope.instanceName;
-    "app.kubernetes.io/managed-by" = "cncf-nix";
-  };
+labels = {
+  "app.kubernetes.io/name" = "coredns";
+  "app.kubernetes.io/instance" = scope.instanceName;
+};
 
-  # Selector labels (subset used for pod selection)
-  selectorLabels = {
-    "k8s-app" = "kube-dns";
-    "app.kubernetes.io/instance" = scope.instanceName;
-  };
+selectorLabels = {
+  "k8s-app" = "kube-dns";
+  "app.kubernetes.io/instance" = scope.instanceName;
+};
 
-# The inner fixpoint — self-referential resource set
-in self: {
+in {
 
-  # ── Configuration Resources ──────────────────────────────────
+  # ── Configuration ──────────────────────────────────────────
 
   configmap = scope.mkResource {
     apiVersion = "v1";
     kind = "ConfigMap";
     name = "${scope.instanceName}-coredns";
-    labels = instanceLabels;
+    inherit labels;
     data.Corefile = cfg.corefile;
   };
 
-  # ── RBAC ─────────────────────────────────────────────────────
-  #
-  # ClusterRole and ClusterRoleBinding are cluster-scoped.
-  # ServiceAccount is namespaced.
-  # The SA requires its binding (inverted ref).
+  # ── RBAC ───────────────────────────────────────────────────
 
   clusterRole = scope.mkClusterResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "ClusterRole";
     name = "${scope.instanceName}-coredns";
-    labels = instanceLabels;
+    inherit labels;
     spec.rules = [
       {
         apiGroups = [ "" ];
@@ -352,7 +512,7 @@ in self: {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "ClusterRoleBinding";
     name = "${scope.instanceName}-coredns";
-    labels = instanceLabels;
+    inherit labels;
     spec = {
       roleRef = {
         apiGroup = "rbac.authorization.k8s.io";
@@ -371,17 +531,17 @@ in self: {
     apiVersion = "v1";
     kind = "ServiceAccount";
     name = "${scope.instanceName}-coredns";
-    labels = instanceLabels;
+    inherit labels;
     requires = [ self.clusterRoleBinding ];
   };
 
-  # ── Workload ─────────────────────────────────────────────────
+  # ── Workload ───────────────────────────────────────────────
 
   pdb = scope.mkResource {
     apiVersion = "policy/v1";
     kind = "PodDisruptionBudget";
     name = "${scope.instanceName}-coredns";
-    labels = instanceLabels;
+    inherit labels;
     spec = {
       maxUnavailable = 1;
       selector.matchLabels = selectorLabels;
@@ -392,13 +552,13 @@ in self: {
     apiVersion = "apps/v1";
     kind = "Deployment";
     name = "${scope.instanceName}-coredns";
-    labels = instanceLabels;
+    inherit labels;
     requires = [ self.pdb ];
     spec = {
       replicas = cfg.replicas;
       selector.matchLabels = selectorLabels;
       template = {
-        metadata.labels = instanceLabels // selectorLabels;
+        metadata.labels = labels // selectorLabels;
         spec = {
           serviceAccountName = self.serviceAccount.ref;
           tolerations = [{
@@ -444,20 +604,19 @@ in self: {
     };
   };
 
-  # ── Service ──────────────────────────────────────────────────
+  # ── Service ────────────────────────────────────────────────
 
   service = scope.mkResource {
     apiVersion = "v1";
     kind = "Service";
     name = "${scope.instanceName}-coredns";
-    labels = instanceLabels;
+    inherit labels;
     outputs = {
       port = 53;
       metricsPort = 9153;
     };
     spec = {
       selector = selectorLabels;
-      clusterIP = config.clusterIP or null;
       ports = [
         { name = "dns"; port = 53; protocol = "UDP"; }
         { name = "dns-tcp"; port = 53; protocol = "TCP"; }
@@ -466,59 +625,87 @@ in self: {
     };
   };
 
-  # ── Public Interface ─────────────────────────────────────────
+  # ── Public Interface ───────────────────────────────────────
 
   main = self.service // {
     requires = [ self.workload ];
   };
-};
+}
 ```
 
 ### What makes a good package
 
-A well-structured cncf-nix package follows these conventions:
+**Uses `scope.instanceName` for all resource names.** This prevents collisions when two instances of the same package exist in different namespaces.
 
-**Uses `scope.instanceName` for all resource names.** This prevents collisions when two instances of the same package exist (e.g., `coredns` in `kube-system` and a second `coredns-custom` in `monitoring`).
+**Accepts config through `config` with `scope.defaults`.** Every tunable has a default. Unknown keys are caught early.
 
-**Accepts config through `config`, not hardcoded values.** Every tunable should have a default in `cfg`, overridable through the instance's `config` attrset.
+**Uses `scope.mkResource` and `scope.mkClusterResource`.** Never sets `namespace` manually.
 
-**Uses `scope.mkResource` for namespaced resources and `scope.mkClusterResource` for cluster-scoped ones.** Never sets `namespace` manually.
-
-**Declares `main` as the resource other instances interact with.** Typically a Service. The `main` resource `requires` the workload so that pulling on `main` gets everything.
+**Declares `main`.** The resource other instances interact with. Typically a Service. `main` carries `requires` that pull in the workload so that pulling on `main` gets everything.
 
 **Annotates inverted dependencies with `requires`.** SA → binding, workload → PDB, workload → HPA.
 
-**Does not reference other instances directly.** Cross-instance references come through `config` at the user level, not inside the package. A package that needs a database accepts `config.database` (an instance), not `config.databaseHost` (a string).
+**Does not reference other instances directly.** Cross-instance references come through `config` at the user level. A package that needs a database accepts `config.database` (a ref to another instance), not `config.databaseHost` (a string).
 
 ---
 
-## Part 3: External Package Registries
+## Part 4: Package Registries
 
-### The problem
+### The `kixpkgs.packages` registry
 
-`cncf.packages` covers community-maintained, open-source K8s applications. But teams also need:
+`kixpkgs.packages` is an attrset of package functions, built from a directory of package definitions. Identical to how nixpkgs builds its top-level package set from `pkgs/` directories.
 
-- **Internal packages** — proprietary microservices, internal tooling.
-- **Vendor packages** — from a SaaS provider, partner, or internal platform team.
-- **Forked packages** — a community package with local patches.
+```
+kixpkgs/
+├── flake.nix
+├── lib/
+│   ├── k8s.nix          # core resource/ref/closure machinery
+│   ├── eval.nix          # buildCluster, scope, instance evaluation
+│   └── env.nix           # mkEnv helper
+├── packages/
+│   ├── coredns/
+│   │   └── default.nix
+│   ├── postgresql/
+│   │   └── default.nix
+│   ├── cert-manager/
+│   │   └── default.nix
+│   ├── nginx-ingress/
+│   │   └── default.nix
+│   └── ...
+└── default.nix           # collects all packages
+```
 
-### Package registries as flake inputs
+The collector:
+
+```nix
+# default.nix
+{
+  packages = let
+    packageDirs = builtins.readDir ./packages;
+    packageNames = builtins.attrNames
+      (lib.filterAttrs (_: type: type == "directory") packageDirs);
+  in lib.genAttrs packageNames (name:
+    import ./packages/${name}
+  );
+}
+```
+
+This produces `kixpkgs.packages.coredns`, `kixpkgs.packages.postgresql`, etc. Each package is a function `{ self, scope, config } -> attrset` — the system calls it with the right arguments when evaluating an instance.
+
+### External package registries
 
 A package registry is just a flake that exports a `packages` attrset. Any flake can be a registry.
 
 ```nix
-# The cncf-nix flake — the community registry
+# The kixpkgs flake — the community registry
 {
-  description = "Community CNCF packages for cncf-nix";
+  description = "Community K8s packages for kixpkgs";
 
   outputs = { self, nixpkgs }: let
     lib = nixpkgs.lib;
     k8s = import ./lib/k8s.nix { inherit lib; };
   in {
-    # The package registry
     packages = import ./packages { inherit lib k8s; };
-
-    # The evaluation machinery
     lib = import ./lib { inherit lib k8s; };
   };
 }
@@ -530,18 +717,16 @@ A package registry is just a flake that exports a `packages` attrset. Any flake 
 {
   description = "Internal K8s packages for Acme Corp";
 
-  inputs.cncf-nix.url = "github:cncf-nix/cncf-nix";
+  inputs.kixpkgs.url = "github:kixpkgs/kixpkgs";
 
-  outputs = { self, cncf-nix, nixpkgs }: let
-    inherit (cncf-nix) lib k8s;
-  in {
+  outputs = { self, kixpkgs, nixpkgs }: {
     packages = {
-      acme-api = import ./packages/acme-api { inherit lib k8s; };
-      acme-worker = import ./packages/acme-worker { inherit lib k8s; };
-      acme-gateway = import ./packages/acme-gateway { inherit lib k8s; };
-      
-      # An internal fork of a community package with custom patches
-      postgresql = import ./packages/postgresql-acme { inherit lib k8s; };
+      acme-api = import ./packages/acme-api;
+      acme-worker = import ./packages/acme-worker;
+      acme-gateway = import ./packages/acme-gateway;
+
+      # An internal fork of a community package
+      postgresql = import ./packages/postgresql-acme;
     };
   };
 }
@@ -553,17 +738,17 @@ A package registry is just a flake that exports a `packages` attrset. Any flake 
 # flake.nix for a team's cluster
 {
   inputs = {
-    cncf-nix.url = "github:cncf-nix/cncf-nix";
+    kixpkgs.url = "github:kixpkgs/kixpkgs";
     internal.url = "git+ssh://git.internal/platform/k8s-packages";
-    ml-team.url = "git+ssh://git.internal/ml/k8s-packages";
+    ml-pkgs.url = "git+ssh://git.internal/ml/k8s-packages";
   };
 
-  outputs = { self, cncf-nix, internal, ml-team }: {
+  outputs = { self, kixpkgs, internal, ml-pkgs }: {
     cluster = import ./cluster.nix {
-      cncf = cncf-nix;
+      inherit kixpkgs;
       packages = {
         # Community packages
-        inherit (cncf-nix.packages) coredns cert-manager nginx-ingress;
+        inherit (kixpkgs.packages) coredns cert-manager nginx-ingress;
 
         # Internal packages
         inherit (internal.packages) acme-api acme-worker acme-gateway;
@@ -572,7 +757,7 @@ A package registry is just a flake that exports a `packages` attrset. Any flake 
         inherit (internal.packages) postgresql;
 
         # ML team's packages
-        inherit (ml-team.packages) jupyter mlflow;
+        inherit (ml-pkgs.packages) jupyter mlflow;
       };
     };
   };
@@ -581,33 +766,30 @@ A package registry is just a flake that exports a `packages` attrset. Any flake 
 
 ```nix
 # cluster.nix
-{ cncf, packages }:
+{ kixpkgs, packages }:
 
-cncf.lib.buildCluster {
-  namespaces = { ... };
-
-  instances = { config, ... }: {
-    coredns = {
-      package = packages.coredns;           # from cncf-nix
-      namespace = "kube-system";
+kixpkgs.buildCluster {
+  instances = { ref, ... }: {
+    kube-system = {
+      coredns = { package = packages.coredns; };
     };
-
-    postgres = {
-      package = packages.postgresql;        # from internal (forked)
-      namespace = "data";
-      config.storage = "200Gi";
+    data = {
+      postgres = {
+        package = packages.postgresql;      # internal fork
+        config.storage = "200Gi";
+      };
     };
-
-    api = {
-      package = packages.acme-api;          # from internal
-      namespace = "production";
-      config.database = config.instances.postgres;
+    production = {
+      api = {
+        package = packages.acme-api;        # internal
+        config.database = ref.data.postgres;
+      };
     };
-
-    jupyter = {
-      package = packages.jupyter;           # from ml-team
-      namespace = "ml";
-      config.gpu = true;
+    ml = {
+      jupyter = {
+        package = packages.jupyter;         # from ml-team
+        config.gpu = true;
+      };
     };
   };
 }
@@ -618,57 +800,45 @@ cncf.lib.buildCluster {
 For the common case where you want all packages from a registry plus selective overrides:
 
 ```nix
-# In flake.nix
-packages = cncf-nix.lib.mergeRegistries [
-  cncf-nix.packages                        # base: all community packages
+packages = kixpkgs.lib.mergeRegistries [
+  kixpkgs.packages                         # base: all community packages
   internal.packages                         # override: internal packages win
   { postgresql = internal.packages.postgresql; }  # explicit cherry-pick
 ];
 ```
 
-```nix
-# lib/registry.nix
-mergeRegistries = registries:
-  lib.foldl' (acc: reg: acc // reg) {} registries;
+For strict mode that rejects unintentional overlaps:
 
-# With conflict detection
-mergeRegistriesStrict = registries:
-  let
-    merged = lib.foldl' (acc: reg:
-      let conflicts = lib.intersectAttrs acc reg;
-      in if conflicts != {}
-         then throw "Package registry conflict: ${toString (builtins.attrNames conflicts)} exist in multiple registries. Use explicit selection."
-         else acc // reg
-    ) {} registries;
-  in merged;
+```nix
+packages = kixpkgs.lib.mergeRegistriesStrict [
+  kixpkgs.packages
+  internal.packages
+];
+# error: Package registry conflict: 'postgresql' exists in multiple registries.
+#        Use explicit selection.
 ```
 
 ### Package versioning
 
-Since registries are flake inputs, versioning is handled by the flake lock:
+Registries are flake inputs. Versioning is handled by the flake lock:
 
 ```nix
 inputs = {
-  # Pin to a specific release
-  cncf-nix.url = "github:cncf-nix/cncf-nix/v0.3.0";
-
-  # Pin to a commit
-  internal.url = "git+ssh://git.internal/platform/k8s-packages?rev=abc123";
-
-  # Follow main (updated with nix flake update)
-  ml-team.url = "git+ssh://git.internal/ml/k8s-packages";
+  kixpkgs.url = "github:kixpkgs/kixpkgs/v0.3.0";          # pinned release
+  internal.url = "git+ssh://git.internal/platform/k8s-packages?rev=abc123";  # pinned commit
+  ml-pkgs.url = "git+ssh://git.internal/ml/k8s-packages";   # follows main
 };
 ```
 
-`nix flake update internal` bumps the internal packages. `nix flake lock --update-input cncf-nix` updates just the community packages. The lock file records exact commits, so builds are reproducible.
+`nix flake update internal` bumps internal packages. `nix flake lock --update-input kixpkgs` updates just the community packages. The lock file records exact commits, so builds are reproducible.
 
 ---
 
-## Part 4: Multi-Team Collaboration and Cluster Merging
+## Part 5: Multi-Team Collaboration
 
 ### The problem
 
-In practice, a cluster isn't owned by one team. Platform engineering owns the infrastructure (ingress, DNS, monitoring, cert-manager). Application teams own their services. ML teams own their workloads. Everyone deploys to the same cluster but manages different pieces.
+A cluster isn't owned by one team. Platform engineering owns the infrastructure. Application teams own their services. ML teams own their workloads. Everyone deploys to the same cluster but manages different pieces.
 
 We need a model where:
 
@@ -688,37 +858,25 @@ Each team produces a **cluster fragment** — a partial cluster definition that 
 { packages }:
 
 {
-  # Platform owns namespace definitions
   namespaces = {
     kube-system = {};
     ingress = {
       resourceQuota.hard."requests.cpu" = "4";
     };
     monitoring = {};
-    cert-manager = {};
   };
 
-  # Platform owns infrastructure instances
-  instances = { config, ... }: {
-    coredns = {
-      package = packages.coredns;
-      namespace = "kube-system";
+  instances = { ref, ... }: {
+    kube-system = {
+      coredns = { package = packages.coredns; };
     };
-
-    nginx-ingress = {
-      package = packages.nginx-ingress;
-      namespace = "ingress";
+    ingress = {
+      nginx-ingress = {
+        package = packages.nginx-ingress;
+      };
     };
-
-    cert-manager = {
-      package = packages.cert-manager;
-      namespace = "cert-manager";
-      config.email = "platform@acme.com";
-    };
-
-    prometheus = {
-      package = packages.prometheus;
-      namespace = "monitoring";
+    monitoring = {
+      prometheus = { package = packages.prometheus; };
     };
   };
 }
@@ -727,12 +885,9 @@ Each team produces a **cluster fragment** — a partial cluster definition that 
 ```nix
 # teams/backend/fragment.nix
 # Owned by: backend team
-{ packages, config }:
+{ packages }:
 
 {
-  # Backend team requests these namespaces.
-  # They can set labels/annotations but NOT policies.
-  # Policies come from the platform fragment (see merge rules below).
   namespaces = {
     production = {
       labels."team" = "backend";
@@ -742,35 +897,31 @@ Each team produces a **cluster fragment** — a partial cluster definition that 
     };
   };
 
-  instances = { config, ... }: {
-    postgres = {
-      package = packages.postgresql;
-      namespace = "data";
-      config = {
-        storage = "100Gi";
-        replicas = 3;
+  instances = { ref, ... }: {
+    data = {
+      postgres = {
+        package = packages.postgresql;
+        config.storage = "100Gi";
       };
     };
-
-    api = {
-      package = packages.acme-api;
-      namespace = "production";
-      config = {
-        replicas = 5;
-        image = "api:v2.1.0";
-        database = config.instances.postgres;
-        ingress = config.instances.nginx-ingress;
+    production = {
+      api = {
+        package = packages.acme-api;
+        config = {
+          replicas = 5;
+          database = ref.data.postgres;
+          ingress = ref.nginx-ingress;
+        };
       };
     };
-
-    api-staging = {
-      package = packages.acme-api;
-      namespace = "staging";
-      config = {
-        replicas = 1;
-        image = "api:staging-latest";
-        database = config.instances.postgres;
-        ingress = config.instances.nginx-ingress;
+    staging = {
+      api = {
+        package = packages.acme-api;
+        config = {
+          replicas = 1;
+          database = ref.data.postgres;
+          ingress = ref.nginx-ingress;
+        };
       };
     };
   };
@@ -780,119 +931,60 @@ Each team produces a **cluster fragment** — a partial cluster definition that 
 ```nix
 # teams/ml/fragment.nix
 # Owned by: ML team
-{ packages, config }:
+{ packages }:
 
 {
-  namespaces = {
+  instances = { ref, ... }: {
     ml = {
-      labels."team" = "ml";
-    };
-  };
-
-  instances = { config, ... }: {
-    jupyter = {
-      package = packages.jupyter;
-      namespace = "ml";
-      config = {
-        gpu = true;
-        storage = "50Gi";
+      jupyter = {
+        package = packages.jupyter;
+        config.gpu = true;
       };
-    };
-
-    mlflow = {
-      package = packages.mlflow;
-      namespace = "ml";
-      config = {
-        database = config.instances.postgres;   # shared postgres from backend team
+      mlflow = {
+        package = packages.mlflow;
+        config.database = ref.data.postgres;   # backend team's DB
       };
     };
   };
 }
 ```
 
-### The merge function
+### Merge rules
 
-```nix
-# lib/merge.nix
+**Namespaces:** Multiple fragments can reference the same namespace. Labels and annotations are merged with `lib.recursiveUpdate` (last fragment wins on key conflicts). Policies from `namespacePolicies` (platform-owned, see below) always override fragment-level policy declarations. This ensures the platform team controls security and resource boundaries.
 
-mergeFragments = { fragments, namespacePolicies ? {} }:
-  let
-    # ── 1. Merge namespaces ──────────────────────────────
-    #
-    # Multiple fragments can reference the same namespace.
-    # Labels and annotations are merged (last wins for conflicts).
-    # Policies (quotas, limits, netpols) come from namespacePolicies
-    # or the fragment that has the deepest definition.
-    
-    allNamespaces = lib.foldl' (acc: fragment:
-      lib.recursiveUpdate acc (fragment.namespaces or {})
-    ) {} fragments;
+**Instances:** Scoped by `(namespace, instance-name)`. Two fragments contributing different instance names to the same namespace merge cleanly. Two fragments defining the same instance name in the same namespace is an error:
 
-    # Platform-defined policies override fragment-level ones
-    namespacesWithPolicies = lib.mapAttrs (name: nsCfg:
-      nsCfg // (namespacePolicies.${name} or {})
-    ) allNamespaces;
-
-    # ── 2. Check for instance name conflicts ─────────────
-
-    allInstanceNames = lib.concatMap (fragment:
-      let
-        # Force the function to get the attrnames
-        # (instances is a function, we need a dummy config to inspect names)
-        dummyInstances = fragment.instances {
-          config = {
-            instances = {};  # placeholder — only used for name collection
-          };
-        };
-      in builtins.attrNames dummyInstances
-    ) fragments;
-
-    duplicates = let
-      counts = lib.foldl' (acc: name:
-        acc // { ${name} = (acc.${name} or 0) + 1; }
-      ) {} allInstanceNames;
-    in lib.filterAttrs (_: count: count > 1) counts;
-
-    # ── 3. Merge instance functions ──────────────────────
-
-    mergedInstances = { config, ... }:
-      let
-        fragmentInstances = map (fragment:
-          fragment.instances { inherit config; }
-        ) fragments;
-      in lib.foldl' (acc: instances: acc // instances) {} fragmentInstances;
-
-  in
-    assert duplicates == {} ||
-      throw "Instance name conflicts across fragments: ${toString (builtins.attrNames duplicates)}. Use team prefixes or rename.";
-    {
-      namespaces = namespacesWithPolicies;
-      instances = mergedInstances;
-    };
+```
+error: instance 'postgres' in namespace 'data' is defined by both
+       fragment 'backend-team' and fragment 'ml-team'.
+       Only one fragment may define a given (namespace, instance) pair.
 ```
 
-### The flake that ties it together
+Different fragments defining `api` in `production` and `api` in `ml` is fine — different namespaces.
+
+**Cross-fragment references:** Work through `ref` as usual. The ML team's mlflow can reference `ref.data.postgres` without coordinating with the backend team directly. The merge makes it work. CI catches if someone removes an instance that others depend on.
+
+### The assembly flake
 
 ```nix
 # flake.nix — the cluster repo, owned by platform / SRE
 {
   inputs = {
-    cncf-nix.url = "github:cncf-nix/cncf-nix";
+    kixpkgs.url = "github:kixpkgs/kixpkgs";
     internal.url = "git+ssh://git.internal/platform/k8s-packages";
     ml-pkgs.url = "git+ssh://git.internal/ml/k8s-packages";
 
-    # Team fragments as separate flake inputs
-    # Each team owns their fragment in their own repo
     team-platform.url = "git+ssh://git.internal/teams/platform/k8s-fragment";
     team-backend.url = "git+ssh://git.internal/teams/backend/k8s-fragment";
     team-ml.url = "git+ssh://git.internal/teams/ml/k8s-fragment";
   };
 
-  outputs = { self, cncf-nix, internal, ml-pkgs,
+  outputs = { self, kixpkgs, internal, ml-pkgs,
               team-platform, team-backend, team-ml }:
     let
-      packages = cncf-nix.lib.mergeRegistries [
-        cncf-nix.packages
+      packages = kixpkgs.lib.mergeRegistries [
+        kixpkgs.packages
         internal.packages
         ml-pkgs.packages
       ];
@@ -917,68 +1009,63 @@ mergeFragments = { fragments, namespacePolicies ? {} }:
         };
       };
 
-      clusterConfig = cncf-nix.lib.mergeFragments {
+      clusterConfig = kixpkgs.lib.mergeFragments {
         inherit fragments namespacePolicies;
       };
 
     in {
-      # ── The cluster ────────────────────────────────────
-      cluster = cncf-nix.lib.buildCluster clusterConfig;
-
-      # ── CI/CD outputs ──────────────────────────────────
-
-      # Full cluster manifests
-      manifests = self.cluster.manifests;
+      cluster = kixpkgs.lib.buildCluster clusterConfig;
 
       # Per-team deploy targets
       deploy = {
         platform = self.cluster.deployGroup [
-          "coredns" "nginx-ingress" "cert-manager" "prometheus"
+          "kube-system/coredns"
+          "ingress/nginx-ingress"
+          "monitoring/prometheus"
         ];
         backend = self.cluster.deployGroup [
-          "postgres" "api" "api-staging"
+          "data/postgres"
+          "production/api"
+          "staging/api"
         ];
         ml = self.cluster.deployGroup [
-          "jupyter" "mlflow"
+          "ml/jupyter"
+          "ml/mlflow"
         ];
       };
 
-      # Diff against the running cluster
-      # nix run .#diff
-      apps.diff = cncf-nix.lib.mkDiffApp self.cluster;
-
-      # Validation
-      # nix run .#validate
-      apps.validate = cncf-nix.lib.mkValidateApp self.cluster;
+      # Validation and diffing
+      apps.validate = kixpkgs.lib.mkValidateApp self.cluster;
+      apps.diff = kixpkgs.lib.mkDiffApp self.cluster;
     };
 }
 ```
+
+Note that `deployGroup` now takes `"namespace/instance"` paths, matching the namespace-scoped instance model. Each team's deploy target includes its own instances plus all transitive dependencies — if the backend team's api depends on coredns, coredns is in the backend deploy group's closure.
 
 ### What a team's fragment flake looks like
 
 ```nix
 # git+ssh://git.internal/teams/backend/k8s-fragment/flake.nix
 {
-  description = "Backend team's K8s fragment";
+  description = "Backend team K8s fragment";
 
-  # No inputs needed — packages come from the caller
   outputs = { self }: {
-    # The fragment is a function that takes { packages }
     fragment = { packages }: import ./fragment.nix { inherit packages; };
   };
 }
 ```
 
-This is intentionally minimal. The team's repo contains `fragment.nix` and nothing else K8s-related. They don't need `cncf-nix` as an input — the platform flake provides everything. This keeps team repos lightweight and decoupled.
+Minimal. The team's repo contains `fragment.nix` and nothing else K8s-related. They don't need `kixpkgs` as an input — the platform flake provides everything.
 
-### The alternative: monorepo layout
+### The monorepo alternative
 
-Not every org uses separate repos per team. For a monorepo:
+For teams using a monorepo instead of separate fragment repos:
 
 ```
 cluster-repo/
 ├── flake.nix
-├── packages/            # internal packages
+├── packages/                  # internal packages
 │   ├── acme-api/
 │   └── acme-worker/
 ├── teams/
@@ -989,15 +1076,28 @@ cluster-repo/
 │   └── ml/
 │       └── fragment.nix
 ├── policies/
-│   └── namespaces.nix   # platform-owned namespace policies
+│   └── namespaces.nix         # platform-owned
 └── clusters/
-    ├── production.nix   # production cluster assembly
-    └── staging.nix      # staging cluster assembly
+    ├── production.nix          # production assembly
+    └── staging.nix             # staging assembly
 ```
+
+CODEOWNERS enforces team boundaries:
+
+```
+/teams/platform/     @platform-team
+/teams/backend/      @backend-team
+/teams/ml/           @ml-team
+/policies/           @platform-team
+/clusters/           @platform-team
+/packages/acme-api/  @backend-team
+```
+
+Assembly in the monorepo is just local imports instead of flake inputs:
 
 ```nix
 # clusters/production.nix
-{ cncf, packages }:
+{ kixpkgs, packages }:
 
 let
   fragments = [
@@ -1005,156 +1105,129 @@ let
     (import ../teams/backend/fragment.nix { inherit packages; })
     (import ../teams/ml/fragment.nix { inherit packages; })
   ];
-
   namespacePolicies = import ../policies/namespaces.nix;
 
-in cncf.lib.buildCluster (
-  cncf.lib.mergeFragments { inherit fragments namespacePolicies; }
+in kixpkgs.lib.buildCluster (
+  kixpkgs.lib.mergeFragments { inherit fragments namespacePolicies; }
 );
 ```
 
-CODEOWNERS enforces team boundaries:
-
-```
-# CODEOWNERS
-/teams/platform/     @platform-team
-/teams/backend/      @backend-team
-/teams/ml/           @ml-team
-/policies/           @platform-team    # only platform can change policies
-/clusters/           @platform-team    # only platform can change assembly
-/packages/acme-api/  @backend-team
-```
-
-### Merge rules and conflict resolution
-
-The merge follows these rules, ordered by priority:
-
-**Namespaces:**
-- Multiple fragments can declare the same namespace.
-- Labels and annotations are merged with `lib.recursiveUpdate` (last fragment wins on key conflicts).
-- Policies from `namespacePolicies` (platform-owned) always override fragment-level policy declarations. This ensures the platform team controls security and resource boundaries even if a team declares a namespace with different quotas.
-
-**Instances:**
-- Instance names must be unique across all fragments. A conflict is an evaluation error.
-- Convention: prefix with team name if ambiguity is likely (`backend-postgres` vs `ml-postgres`).
-- Cross-fragment instance references work through `config.instances.*` — the fixpoint spans all fragments.
-
-**Packages:**
-- No merging at the package level — the consuming flake explicitly selects which registry each package comes from. Conflicts are resolved by the person assembling the registries.
-
 ### CI/CD integration
-
-The flake outputs are designed for CI pipelines:
 
 ```yaml
 # .github/workflows/deploy.yaml
-# Triggered by changes to a team's fragment
-
 jobs:
   validate:
     steps:
       - run: nix run .#validate
-        # Checks: all refs resolve, no cycles, no namespace conflicts,
-        # all packages define main, all namespaces are declared
 
   diff:
     steps:
       - run: nix run .#diff
-        # Shows: which resources changed, which instances are affected,
-        # the topo-sorted deploy order
 
   deploy-backend:
     needs: [validate, diff]
     if: contains(github.event.paths, 'teams/backend/')
     steps:
       - run: nix eval .#deploy.backend.manifests | kubectl apply -f -
-        # Only deploys backend instances + their transitive deps.
-        # If postgres changed, it's included. If coredns didn't, it's not.
 ```
+
+A team's deploy includes its instances plus transitive deps. If postgres changed, it's included. If coredns didn't change and isn't in the diff, it's skipped.
 
 ### The `deployGroup` helper
 
+`deployGroup` takes a list of `"namespace/instance"` paths, merges their closures, and produces a topo-sorted manifest list:
+
 ```nix
-# lib/eval.nix — addition to buildCluster
-
-deployGroup = instanceNames:
+deployGroup = instancePaths:
   let
-    instances = map (name:
-      evaluatedInstances.${name}
-        or (throw "deployGroup: instance '${name}' not found")
-    ) instanceNames;
+    instances = map (path:
+      let parts = lib.splitString "/" path;
+          ns = builtins.elemAt parts 0;
+          name = builtins.elemAt parts 1;
+      in evaluatedInstances.${ns}.${name}
+        or (throw "deployGroup: instance '${path}' not found")
+    ) instancePaths;
 
-    # Merge all closures, deduplicate
     allResources = lib.unique (
       lib.concatMap (inst: inst.closure) instances
     );
 
-    # Topo-sort the merged closure
     sorted = topoSort allResources;
 
   in {
     resources = sorted;
     manifests = map (r: r.manifest) sorted;
-    instances = instanceNames;
-
-    # What's in this deploy group's closure that ISN'T
-    # in the instance list? (transitive deps from other teams)
-    externalDeps = lib.filter (r:
-      !(builtins.any (name:
-        builtins.any (ir: ir.name == r.name && ir.namespace == r.namespace)
-          evaluatedInstances.${name}.closure
-      ) instanceNames)
-    ) sorted;
   };
 ```
 
-This lets a team see exactly what their deploy touches, including resources owned by other teams that they transitively depend on.
-
 ---
 
-## Part 5: Complete API Reference
+## Part 6: Complete API Reference
 
 ### `buildCluster`
 
 ```nix
 buildCluster {
-  namespaces = { <name> = { <namespace-config> }; ... };
-  instances = { config, ... }: { <name> = { <instance-config> }; ... };
+  namespaces = { <name> = { <namespace-policy-config> }; ... };    # optional
+  instances = { ref, ... }: {
+    <namespace> = {
+      <instance> = { <instance-config> };
+      ...
+    };
+    ...
+  };
 }
 ```
 
-Returns:
+### `mkEnv`
 
-| Attribute | Type | Description |
-|---|---|---|
-| `instances.<name>` | Instance | Fully evaluated instance with all parts accessible |
-| `instances.<name>.main` | Resource | The public-facing resource |
-| `instances.<name>.ref` | Ref | Shortcut to `main.ref` |
-| `instances.<name>.out` | AttrSet of Refs | Shortcut to `main.out` |
-| `instances.<name>.fqdn` | Ref | Cross-namespace DNS name |
-| `instances.<name>.closure` | [Resource] | All resources needed, topo-sorted |
-| `instances.<name>.manifests` | [AttrSet] | YAML-ready manifests for closure |
-| `instances.<name>.<part>` | Resource | Direct access to any package part |
-| `namespaces.<name>` | Namespace Resource | The namespace with policies |
-| `closure` | [Resource] | Every resource in the cluster, topo-sorted |
-| `manifests` | [AttrSet] | All manifests |
-| `deploy.<name>` | Deploy Target | Per-instance deploy with closure |
-| `deployGroup [names]` | Deploy Target | Multi-instance deploy with merged closure |
-| `dag.closureOf name` | [Resource] | Closure of a specific instance |
-| `dag.dependentsOf name` | { instances } | Instances affected by changes to `name` |
+```nix
+mkEnv "<env-name>" {
+  defaults = { ... };        # merged into every instance's config
+  config = { ... };          # passed to instance sets as env.config
+  overrides = {              # optional, per-set per-instance overrides
+    <set>.<instance>.config.<key> = <value>;
+  };
+} {
+  <set-name> = <instance-set-function>;
+  ...
+}
+```
+
+Produces a nested attrset where namespaces are `"${envName}-${setName}"` and instances are keyed within those namespaces.
+
+### `mergeFragments`
+
+```nix
+mergeFragments {
+  fragments = [ <fragment> ... ];
+  namespacePolicies = { <ns> = { <policy> }; ... };    # optional, platform-owned
+}
+```
+
+Returns a `{ namespaces, instances }` attrset suitable for `buildCluster`.
+
+### `mergeRegistries` / `mergeRegistriesStrict`
+
+```nix
+mergeRegistries [ <registry> ... ]         # last wins on conflicts
+mergeRegistriesStrict [ <registry> ... ]   # errors on conflicts
+```
 
 ### Instance config
 
 ```nix
 {
   package = <package function>;     # required
-  namespace = "<namespace name>";   # required, must be in namespaces
   config = { ... };                 # optional, freeform, passed to package
   parts = self: super: { ... };     # optional, override individual resources
 }
 ```
 
-### Namespace config
+Namespace is implied by the key under which the instance is nested.
+
+### Namespace policy config
 
 ```nix
 {
@@ -1169,22 +1242,24 @@ Returns:
 ### Package signature
 
 ```nix
-# Every package is:
-{ scope, config }:    # arguments injected by buildCluster
-  self:               # inner fixpoint
-    {
-      <part-name> = scope.mkResource { ... };   # one or more resources
-      main = self.<some-part>;                   # required: public interface
-    }
+{ self, scope, config }:
+{
+  <part-name> = scope.mkResource { ... };
+  main = self.<some-part>;                    # required
+}
 ```
 
-### Scope API
+### Instance set signature (for `mkEnv`)
 
-| Attribute | Description |
-|---|---|
-| `scope.instanceName` | The unique instance name from the cluster config |
-| `scope.namespace` | The namespace resource (auto-injected into mkResource) |
-| `scope.mkResource { ... }` | Create a namespaced resource |
-| `scope.mkClusterResource { ... }` | Create a cluster-scoped resource |
-| `scope.str [ parts ]` | Build a tracked string with dependency tracking |
-| `scope.clusterScoped` | The cluster-scope sentinel |
+```nix
+{ ref, env }:
+{
+  <instance-name> = {
+    package = <package>;
+    config = { ... };
+  };
+  ...
+}
+```
+
+`env.name` is the environment name, `env.config` is the env-level config, `env.defaults` is the defaults merged into every instance.
