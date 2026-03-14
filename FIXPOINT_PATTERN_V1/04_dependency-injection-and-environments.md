@@ -37,13 +37,25 @@ For an instance in namespace `production` requesting `postgres`:
 
 ### 2.3 Match Key
 
-Resolution matches on **package type**, not instance name. A service declared as:
+Resolution matches on **package type** and **aliases**, not instance name. A service declared as:
 
 ```nix
 services.analytics-db = { package = "postgres"; namespace = "data"; };
 ```
 
 ...satisfies a `postgres` argument. The package type is `cfg.package or cfg.name` — defaulting to the attribute name when no explicit `package` is set.
+
+Instances can also declare **aliases** — additional names they're discoverable under:
+
+```nix
+namespaces.data.services.valkey = {
+  package = "valkey";
+  aliases = [ "sessionStore" "kvStore" ];
+  # Now resolvable as "valkey", "sessionStore", or "kvStore"
+};
+```
+
+This lets packages request dependencies by *role* rather than by implementation. A package argument `sessionStore` resolves to whatever instance advertises that alias — which could be a valkey, a redis, or anything else that declares `aliases = [ "sessionStore" ]`.
 
 ### 2.4 Package Function Signature
 
@@ -139,50 +151,62 @@ Reachability checking is best-effort. Complex selectors (label-based pod selecto
 
 ### 4.1 The Problem
 
-Real clusters have repeating structure: dev and prod run the same services with different configs. Namespaces group related services. The DSL should make this structure obvious and concise, not force you to repeat yourself.
+Real clusters have repeating structure: dev and prod run the same services with different configs. The DSL should make this structure obvious and concise, not force you to repeat yourself.
 
-### 4.2 Namespace Blocks
+### 4.2 Structure
 
-Namespaces are first-class grouping constructs. Services declared inside a namespace block inherit that namespace — no need to specify it per-service.
+Following the established pattern from `02_kixpkgs-design-doc.md`:
+
+- `namespaces.*` — namespace config only (policies, quotas). No services inside.
+- `services.*` — flat, each with a `namespace` field. The instance name is the attribute key.
 
 ```nix
 {
-  namespaces.frontend = {
-    # Namespace-level config (policies, quotas)
-    resourceQuota.hard."requests.cpu" = "10";
-
-    # Services in this namespace
-    services.web-app = {
-      image = "webapp:v2.1.0";
-      replicas = 3;
-    };
-  };
-
-  namespaces.backend = {
-    services.api = {
-      image = "api:v1.5.0";
-      replicas = 3;
-    };
-
-    services.valkey = {
-      # namespace-local cache, only reachable from backend
-      package = "valkey";
-    };
-  };
-
+  namespaces.frontend = {};
+  namespaces.backend = {};
   namespaces.data = {
     resourceQuota.hard."requests.storage" = "500Gi";
+  };
 
-    services.postgres = { storage = "100Gi"; };
-    services.valkey = { sentinel.enabled = true; };
+  services.web-app = {
+    namespace = "frontend";
+    image = "webapp:v2.1.0";
+    replicas = 3;
+  };
+
+  services.api = {
+    namespace = "backend";
+    image = "api:v1.5.0";
+    replicas = 3;
+  };
+
+  services.backend-cache = {
+    package = "valkey";
+    namespace = "backend";
+    # namespace-local cache, only reachable from backend
+  };
+
+  services.postgres = {
+    namespace = "data";
+    storage = "100Gi";
+  };
+
+  services.session-valkey = {
+    package = "valkey";
+    namespace = "data";
+    aliases = [ "sessionStore" ];
+    sentinel.enabled = true;
   };
 }
 ```
 
-Note: two `valkey` instances — one in `backend` (local cache), one in `data` (shared). DNS-like resolution means:
+Two valkey instances with different instance names (`backend-cache`, `session-valkey`) but same package type. DNS-like resolution means:
 
-- `api` (in `backend`) requesting `valkey` → finds `valkey.backend` (same namespace)
-- `web-app` (in `frontend`) requesting `valkey` → ambiguous (two exist), must specify or rely on reachability to filter
+- `api` (in `backend`) requesting `valkey` → finds `backend-cache` (same namespace, package type matches)
+- `api` requesting `sessionStore` → finds `session-valkey` (via alias, cluster-wide)
+- `web-app` (in `frontend`) requesting `valkey` → ambiguous (two valkey-type instances, neither in same namespace), must specify explicitly or rely on reachability filtering
+
+If a namespace is referenced by a service but has no `namespaces.*` entry, a bare namespace (no policies) is created automatically.
 
 ### 4.3 Environment Variants
 
@@ -191,22 +215,39 @@ An environment is a function from a base service set to a modified one. Like ove
 ```nix
 # clusters/base.nix — shared structure
 {
-  namespaces.frontend.services.web-app = {
+  namespaces.frontend = {};
+  namespaces.backend = {};
+  namespaces.data = {
+    resourceQuota.hard."requests.storage" = "500Gi";
+  };
+
+  services.web-app = {
+    namespace = "frontend";
     image = "webapp:v2.1.0";
   };
 
-  namespaces.backend = {
-    services.api = {
-      image = "api:v1.5.0";
-    };
-    services.valkey = {
-      package = "valkey";
-    };
+  services.api = {
+    namespace = "backend";
+    image = "api:v1.5.0";
   };
 
-  namespaces.data = {
-    services.postgres = { storage = "100Gi"; };
-    services.valkey = { sentinel.enabled = true; };
+  services.backend-cache = {
+    package = "valkey";
+    namespace = "backend";
+    persistence.enabled = false;
+  };
+
+  services.postgres = {
+    namespace = "data";
+    storage = "100Gi";
+    version = "16";
+  };
+
+  services.session-valkey = {
+    package = "valkey";
+    namespace = "data";
+    aliases = [ "sessionStore" ];
+    sentinel.enabled = true;
   };
 }
 ```
@@ -219,20 +260,16 @@ base.withEnvironment {
 
   cluster.labels."env" = "production";
 
-  # Per-namespace overrides
-  namespaces.frontend = {
-    networkPolicies = [{ /* lock down ingress */ }];
-    services.web-app.replicas = 5;
-  };
-
-  namespaces.backend = {
-    services.api.replicas = 5;
-  };
-
+  namespaces.frontend.networkPolicies = [{ /* lock down ingress */ }];
+  namespaces.backend.networkPolicies = [{ /* allow from frontend + monitoring */ }];
   namespaces.data = {
     resourceQuota.hard."requests.storage" = "1Ti";
-    services.postgres.storage = "500Gi";
+    networkPolicies = [{ /* allow from backend only */ }];
   };
+
+  services.web-app.replicas = 5;
+  services.api.replicas = 5;
+  services.postgres.storage = "500Gi";
 }
 ```
 
@@ -244,12 +281,13 @@ base.withEnvironment {
 
   cluster.labels."env" = "dev";
 
-  # Global default: 1 replica unless overridden
+  # Global default: 1 replica for everything
   defaults.replicas = 1;
 
-  namespaces.data = {
-    services.postgres.storage = "10Gi";
-  };
+  services.postgres.storage = "10Gi";
+
+  # No network policies in dev — everything can talk to everything
+  # No resource quotas — dev clusters are small anyway
 }
 ```
 
@@ -266,27 +304,7 @@ withEnvironment = envConfig:
   in buildCluster withDefaults;
 ```
 
-The key property: `base.nix` is the single source of truth for *what services exist and how they're connected*. Environment files only say *how this environment differs*. Add a new service to base → it appears in all environments.
-
-### 4.5 Flat Services Alongside Namespace Blocks
-
-Sometimes you want to reference a service that lives in a namespace you don't "own" (e.g., kube-system). Top-level `services` still work and require an explicit namespace:
-
-```nix
-{
-  # Namespace block — owns the namespace, defines policies
-  namespaces.backend = {
-    services.api = { /* ... */ };
-  };
-
-  # Top-level service — lives in a namespace defined elsewhere
-  services.coredns = {
-    namespace = "kube-system";
-  };
-}
-```
-
-The evaluator merges both forms. If a namespace is referenced by a service but has no namespace block, a bare namespace (no policies) is created.
+The key property: `base.nix` is the single source of truth for *what services exist*. Environment files only say *how this environment differs*. Add a new service to base → it appears in all environments.
 
 ---
 
@@ -339,11 +357,14 @@ in self: {
 
 ```nix
 # kixpkgs/api.nix
-# Depends on postgres (DB) and valkey (cache).
+# Depends on postgres (DB), valkey (cache), and sessionStore (sessions).
 # Resolution:
-#   valkey → finds valkey.backend (same namespace, local cache)
-#   postgres → finds postgres.data (only postgres in cluster)
-{ scope, config, postgres, valkey }:
+#   valkey       → finds valkey.backend (same namespace, local cache)
+#   postgres     → finds postgres.data (only postgres in cluster)
+#   sessionStore → defaults to valkey if not resolved separately.
+#                  The cluster can alias a different instance as "sessionStore"
+#                  to override this.
+{ scope, config, postgres, valkey, sessionStore ? valkey }:
 
 in self: {
   deployment = scope.mkResource {
@@ -364,16 +385,19 @@ in self: {
           }
           {
             name = "CACHE_URL";
-            # valkey.backend — same namespace, no fqdn needed, but fqdn works too
+            # valkey.backend — same namespace, local cache
             value = scope.str [
               "redis://" valkey.fqdn ":" valkey.out.port
             ];
           }
           {
-            # Hypothetical: also talk to the shared session valkey.
-            # This CAN'T be auto-resolved (two valkeys reachable),
-            # so it must be explicit in the cluster config if needed.
-            # See section 5.2 for how this is handled.
+            name = "SESSION_URL";
+            # sessionStore defaults to valkey (same instance as cache)
+            # but when data/valkey has aliases = ["sessionStore"],
+            # resolution finds that instead → separate session backend
+            value = scope.str [
+              "redis://" sessionStore.fqdn ":" sessionStore.out.port
+            ];
           }
         ];
       }];
@@ -402,45 +426,50 @@ in self: {
 ```nix
 # clusters/base.nix
 {
-  namespaces.frontend = {
-    services.web-app = {
-      image = "webapp:v2.1.0";
-      # "api" dep resolved automatically:
-      #   1. api in frontend? No.
-      #   2. api cluster-wide unique? Yes → api.backend
-    };
+  namespaces.frontend = {};
+  namespaces.backend = {};
+  namespaces.data = {};
+
+  services.web-app = {
+    namespace = "frontend";
+    image = "webapp:v2.1.0";
+    # "api" dep resolved automatically:
+    #   1. api in frontend? No.
+    #   2. api cluster-wide unique? Yes (package type "api") → api
   };
 
-  namespaces.backend = {
-    services.api = {
-      image = "api:v1.5.0";
-      # "postgres" dep → postgres.data (only one in cluster)
-      # "valkey" dep → valkey.backend (same namespace wins)
-    };
-
-    services.valkey = {
-      # This IS the namespace-local cache.
-      # No sentinel, no persistence — ephemeral response cache.
-      package = "valkey";
-      persistence.enabled = false;
-      maxmemory = "256Mi";
-      eviction = "allkeys-lru";
-    };
+  services.api = {
+    namespace = "backend";
+    image = "api:v1.5.0";
+    # "postgres" dep → postgres (only one in cluster, unique)
+    # "valkey" dep → backend-cache (same namespace, package type "valkey")
+    # "sessionStore" dep → session-valkey (via alias, cluster-wide)
   };
 
-  namespaces.data = {
-    services.postgres = {
-      storage = "100Gi";
-      version = "16";
-    };
+  services.backend-cache = {
+    # This IS the namespace-local cache.
+    # No sentinel, no persistence — ephemeral response cache.
+    package = "valkey";
+    namespace = "backend";
+    persistence.enabled = false;
+    maxmemory = "256Mi";
+    eviction = "allkeys-lru";
+  };
 
-    services.valkey = {
-      # Shared session/queue store.
-      # Sentinel for HA, persistence on.
-      package = "valkey";
-      sentinel.enabled = true;
-      persistence.enabled = true;
-    };
+  services.postgres = {
+    namespace = "data";
+    storage = "100Gi";
+    version = "16";
+  };
+
+  services.session-valkey = {
+    # Shared session/queue store.
+    # Sentinel for HA, persistence on.
+    package = "valkey";
+    namespace = "data";
+    aliases = [ "sessionStore" ];   # discoverable as "sessionStore" by other packages
+    sentinel.enabled = true;
+    persistence.enabled = true;
   };
 }
 ```
@@ -451,19 +480,30 @@ What the evaluator does with `api` in namespace `backend`:
 
 ```
 api needs "postgres":
-  1. postgres in backend?  → no
-  2. postgres cluster-wide → postgres.data (unique) ✓
-  Resolved: postgres.data
+  1. postgres (type) in backend?  → no
+  2. postgres cluster-wide        → services.postgres (unique) ✓
+  Resolved: services.postgres (ns: data)
 
 api needs "valkey":
-  1. valkey in backend?    → yes: valkey.backend ✓
-  Resolved: valkey.backend
-  (valkey.data also exists but same-namespace wins — never even considered)
+  1. valkey (type) in backend?    → yes: services.backend-cache ✓
+  Resolved: services.backend-cache (ns: backend)
+  (session-valkey is also type "valkey" but same-namespace wins)
+
+api needs "sessionStore":
+  Arg has default (? valkey), so resolution is optional.
+  1. sessionStore (type+alias) in backend?  → no
+  2. sessionStore cluster-wide              → session-valkey has aliases = ["sessionStore"] ✓
+  Resolved: services.session-valkey (ns: data, via alias)
+  (Default `? valkey` is NOT used — an alias match was found)
+
+  If session-valkey had NO alias:
+  → no "sessionStore" found → fall back to Nix default → uses resolved `valkey` arg
+  → api.CACHE_URL and api.SESSION_URL both point to backend-cache
 
 web-app needs "api":
-  1. api in frontend?      → no
-  2. api cluster-wide      → api.backend (unique) ✓
-  Resolved: api.backend
+  1. api (type) in frontend?  → no
+  2. api cluster-wide          → services.api (unique) ✓
+  Resolved: services.api (ns: backend)
 ```
 
 ### 5.4 Production Environment
@@ -481,47 +521,39 @@ base.withEnvironment {
       "limits.memory" = "32Gi";
     };
     networkPolicies = [{
-      # Only allow ingress from ingress controller namespace
       podSelector = {};
       policyTypes = [ "Ingress" ];
       ingress = [{
         from = [{ namespaceSelector.matchLabels."app" = "ingress"; }];
       }];
     }];
-
-    services.web-app.replicas = 5;
   };
 
-  namespaces.backend = {
-    networkPolicies = [{
-      # Allow ingress from frontend and monitoring only
-      podSelector = {};
-      policyTypes = [ "Ingress" ];
-      ingress = [{
-        from = [
-          { namespaceSelector.matchLabels."env/ns" = "frontend"; }
-          { namespaceSelector.matchLabels."app" = "monitoring"; }
-        ];
-      }];
+  namespaces.backend.networkPolicies = [{
+    podSelector = {};
+    policyTypes = [ "Ingress" ];
+    ingress = [{
+      from = [
+        { namespaceSelector.matchLabels."env/ns" = "frontend"; }
+        { namespaceSelector.matchLabels."app" = "monitoring"; }
+      ];
     }];
-
-    services.api.replicas = 5;
-    # valkey.backend inherits base config, 1 replica is fine for cache
-  };
+  }];
 
   namespaces.data = {
     resourceQuota.hard."requests.storage" = "1Ti";
     networkPolicies = [{
-      # Allow ingress from backend only
       podSelector = {};
       policyTypes = [ "Ingress" ];
       ingress = [{
         from = [{ namespaceSelector.matchLabels."env/ns" = "backend"; }];
       }];
     }];
-
-    services.postgres.storage = "500Gi";
   };
+
+  services.web-app.replicas = 5;
+  services.api.replicas = 5;
+  services.postgres.storage = "500Gi";
 
   monitoring.enabled = true;
 }
@@ -539,10 +571,7 @@ base.withEnvironment {
   # Global: 1 replica for everything
   defaults.replicas = 1;
 
-  namespaces.data = {
-    # Small storage for dev
-    services.postgres.storage = "10Gi";
-  };
+  services.postgres.storage = "10Gi";
 
   # No network policies in dev — everything can talk to everything
   # No resource quotas — dev clusters are small anyway
@@ -560,19 +589,22 @@ Service/web-app (ns: frontend)
 │         └─ req → NetworkPolicy/frontend-netpol-0
 │
 └─ req → Deployment/web-app (ns: frontend)
-          └─ dep → Service/api (ns: backend)          ← cross-namespace via fqdn
+          └─ dep → Service/api (ns: backend)              ← cross-namespace via fqdn
                     ├─ dep → Namespace/backend
                     │         └─ req → NetworkPolicy/backend-netpol-0
                     │
                     └─ req → Deployment/api (ns: backend)
-                              ├─ dep → Service/postgres (ns: data)    ← cross-ns
+                              ├─ dep → Service/postgres (ns: data)      ← "postgres" arg
                               │         ├─ dep → Namespace/data
                               │         │         ├─ req → ResourceQuota/data-quota
                               │         │         └─ req → NetworkPolicy/data-netpol-0
                               │         └─ req → StatefulSet/postgres
                               │
-                              └─ dep → Service/valkey (ns: backend)   ← same-ns
-                                        └─ req → Deployment/valkey
+                              ├─ dep → Service/backend-cache (ns: backend) ← "valkey" arg (same-ns)
+                              │         └─ req → Deployment/backend-cache
+                              │
+                              └─ dep → Service/session-valkey (ns: data)   ← "sessionStore" arg (alias)
+                                        └─ req → StatefulSet/session-valkey
 ```
 
 **Reachability check catches:**
@@ -595,14 +627,14 @@ error: api (ns: backend) needs 'postgres', found but unreachable:
 **kixpkgs (base.nix — the part that matters):**
 
 ```nix
-namespaces.frontend.services.web-app.image = "webapp:v2.1.0";
-namespaces.backend.services.api.image = "api:v1.5.0";
-namespaces.backend.services.valkey = { package = "valkey"; persistence.enabled = false; };
-namespaces.data.services.postgres = { storage = "100Gi"; };
-namespaces.data.services.valkey = { package = "valkey"; sentinel.enabled = true; };
+services.web-app        = { namespace = "frontend"; image = "webapp:v2.1.0"; };
+services.api            = { namespace = "backend";  image = "api:v1.5.0"; };
+services.backend-cache  = { namespace = "backend";  package = "valkey"; };
+services.postgres       = { namespace = "data";     storage = "100Gi"; };
+services.session-valkey = { namespace = "data";     package = "valkey"; aliases = ["sessionStore"]; };
 ```
 
-5 lines. All wiring is automatic. Add `replicas = 5` in the prod overlay and you're done.
+5 lines. All wiring is automatic — api gets a local cache valkey (same namespace) AND a separate session store from data (via alias). Add `services.api.replicas = 5` in the prod environment and you're done.
 
 **Helm equivalent** for the same setup: 5 charts, 5 values files (minimum), manual namespace creation, no cross-chart dependency tracking, no deploy ordering, no reachability checking, and a bash script to apply them in the right order.
 
@@ -616,34 +648,56 @@ kixCallPackage = packageFn: instanceConfig: explicitDeps:
     fnArgs = builtins.functionArgs packageFn;
     depArgNames = attrNames (removeAttrs fnArgs [ "scope" "config" "lib" ]);
 
+    # Which args have Nix-level defaults (e.g., sessionStore ? valkey)
+    hasDefault = filterAttrs (_: hasDefault: hasDefault) fnArgs;
+
     myNs = instanceConfig.namespace;
 
-    # All instances indexed by package type
-    byType = groupBy (inst: inst.package or inst.name) allInstances;
+    # Index instances by package type AND all their aliases
+    # An instance with package="valkey" aliases=["sessionStore"]
+    # appears under both "valkey" and "sessionStore"
+    byKey = let
+      pairs = concatMap (inst:
+        let
+          type = inst.package or inst.name;
+          keys = [ type ] ++ (inst.aliases or []);
+        in map (k: { name = k; value = inst; }) keys
+      ) allInstances;
+    in groupBy (p: p.name) pairs |> mapAttrs (_: map (p: p.value));
 
     resolve = argName:
       let
-        candidates = byType.${argName} or [];
+        candidates = byKey.${argName} or [];
         sameNs = filter (c: c.namespace == myNs) candidates;
         reachable = filter (c: isReachable myNs c.namespace) candidates;
         sameNsReachable = filter (c: c.namespace == myNs) reachable;
       in
-        if length sameNsReachable == 1 then head sameNsReachable
+        if length sameNsReachable == 1 then { found = true; value = head sameNsReachable; }
         else if length sameNs > 1 then
           throw "${instanceConfig.name}: multiple '${argName}' in namespace ${myNs} — specify explicitly"
-        else if length reachable == 1 then head reachable
+        else if length reachable == 1 then { found = true; value = head reachable; }
         else if candidates != [] && reachable == [] then
           throw "${instanceConfig.name}: '${argName}' exists but unreachable (NetworkPolicy)"
         else if length reachable > 1 then
           throw "${instanceConfig.name}: multiple reachable '${argName}' — specify explicitly"
+        # No match: if the arg has a Nix default, let it fall through.
+        # If it doesn't, that's an error.
+        else if hasDefault ? ${argName} then { found = false; }
         else throw "${instanceConfig.name}: no '${argName}' in cluster";
 
     autoResolved =
-      if instanceConfig.autoResolve or clusterConfig.autoResolve or true
-      then genAttrs depArgNames resolve
-      else {};  # all deps must come from explicitDeps
+      if !(instanceConfig.autoResolve or clusterConfig.autoResolve or true)
+      then {}  # all deps must come from explicitDeps
+      else let
+        results = genAttrs depArgNames resolve;
+        # Only inject args where resolution found something.
+        # Args with found=false have Nix defaults — don't inject, let Nix use the default.
+        resolved = filterAttrs (_: r: r.found) results;
+      in mapAttrs (_: r: r.value) resolved;
 
-    unresolved = subtractLists (attrNames (autoResolved // explicitDeps)) depArgNames;
+    # Check for unresolved args that have no default
+    requiredArgs = filter (name: !(hasDefault ? ${name})) depArgNames;
+    unresolved = subtractLists (attrNames (autoResolved // explicitDeps)) requiredArgs;
     _ = assert unresolved == [] ||
       throw "${instanceConfig.name}: unresolved deps: ${toString unresolved}";
 
@@ -655,39 +709,37 @@ kixCallPackage = packageFn: instanceConfig: explicitDeps:
 
 ---
 
-## 7. The `buildCluster` Evaluator with Namespace Blocks
+## 7. The `buildCluster` Evaluator
 
 ```nix
 buildCluster = clusterConfig:
   let
-    # 1. Collect all services from namespace blocks + top-level
-    allServices = collectServices clusterConfig;
-    # Result: { "frontend/web-app" = { package="web-app"; namespace="frontend"; ... }; ... }
-
-    # 2. Build namespace resources with policies
+    # 1. Build namespace resources with policies
+    #    Any namespace referenced by a service but not declared gets a bare entry.
+    allNamespaces = collectNamespaces clusterConfig;  # from namespaces.* + services.*.namespace
     namespaceResources = mapAttrs (name: nsCfg:
       k8s.mkNamespace {
         inherit name;
         inherit (nsCfg) resourceQuota limitRange networkPolicies;
         labels = clusterConfig.cluster.labels // { "env/ns" = name; };
       }
-    ) clusterConfig.namespaces;
+    ) allNamespaces;
 
-    # 3. Outer fixpoint: all instances see each other
+    # 2. Outer fixpoint: all instances see each other
     instances = lib.fix (self:
-      mapAttrs (qualifiedName: svcCfg:
+      mapAttrs (instanceName: svcCfg:
         let
-          pkg = loadPackage svcCfg.package or svcCfg.name;
+          pkg = loadPackage (svcCfg.package or instanceName);
           scope = mkScope svcCfg namespaceResources.${svcCfg.namespace};
           explicitDeps = getExplicitDeps svcCfg;
         in kixCallPackage pkg svcCfg explicitDeps
-      ) allServices
+      ) clusterConfig.services
     );
 
-    # 4. Apply cross-cutting modules
+    # 3. Apply cross-cutting modules
     moduleOutputs = applyModules { inherit instances clusterConfig; };
 
-    # 5. Merge module outputs back into instances
+    # 4. Merge module outputs back into instances
     finalInstances = mergeModuleOutputs instances moduleOutputs;
 
   in {
@@ -703,25 +755,35 @@ buildCluster = clusterConfig:
                                                
 ## 8. Open Design Questions
 
-### 8.1 Namespace-qualified argument names
+### 8.1 Multiple same-type dependencies and role aliases
 
-What if a package needs to explicitly request a dep from a specific namespace? Possible syntax:
+**Decided:** Packages use Nix default arguments to express role deps with fallbacks.
+Instances use `aliases` to advertise roles they can fill.
 
 ```nix
-# Option A: qualified argument name (ugly but explicit)
-{ scope, config, "data/valkey" as sessionStore, valkey }:
-
-# Option B: config-level override only (current design)
-# No special syntax — just override in cluster config
-services.api.sessionStore = instances."data/valkey";
-
-# Option C: package declares with default resolution hint
-{ scope, config, valkey }:
-let sessionStore = config.sessionStore or valkey; in ...
-# Cluster config: services.api.sessionStore = instances."data/valkey";
+# Package side: default arguments with fallback to a resolved dep
+{ scope, config, postgres, valkey, sessionStore ? valkey }:
+# sessionStore falls back to whatever valkey resolved to,
+# unless an instance with alias "sessionStore" is found.
 ```
 
-Option B is simplest. Option C is most Nix-idiomatic.
+```nix
+# Cluster side: aliases make an instance discoverable under additional names
+namespaces.data.services.valkey = {
+  package = "valkey";
+  aliases = [ "sessionStore" ];   # resolvable as "valkey" OR "sessionStore"
+};
+```
+
+Resolution order for a defaulted argument like `sessionStore ? valkey`:
+
+1. Try normal resolution (package type + aliases, namespace-first)
+2. If a match is found → use it (alias or type match wins over default)
+3. If no match → use the default value (the already-resolved `valkey`)
+
+This keeps packages pure Nix (no custom syntax), lets the cluster operator control
+which instance fills which role, and degrades gracefully — if nobody declares a
+`sessionStore` alias, the package just uses its local valkey for everything.
 
 ### 8.2 Interface matching
 
