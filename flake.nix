@@ -41,10 +41,55 @@
 
           kixlib = import ./lib { inherit pkgs lib; };
 
-          # Fixpoint library — new resource model (Level 1-3).
+          # Fixpoint library — v1 resource model (Level 1-3).
           # Sits on top of kixlib builders, adds ref tracking, closure computation,
           # and self-referential package composition.
           k8s = import ./lib/fixpoint { inherit lib; };
+
+          # --- v2 library ---
+          # New resource model using builtins.toFile + builtins.getContext.
+          # No tree walker, no custom refs. Resources are store paths.
+          kixv2 = import ./lib/v2 { inherit lib; };
+
+          # v2 package registry
+          v2Packages = {
+            coredns = import ./packages/coredns;
+            reloader = import ./packages/reloader;
+            descheduler = import ./packages/descheduler;
+            event-logger = import ./packages/event-logger;
+            cluster-issuers = import ./packages/cluster-issuers;
+            external-dns = import ./packages/external-dns;
+            ingress-nginx = import ./packages/ingress-nginx;
+            network-policies = import ./packages/network-policies;
+            velero = import ./packages/velero;
+            arc = import ./packages/arc;
+            valkey = import ./packages/valkey;
+            cert-manager = import ./packages/cert-manager;
+          };
+
+          # v2 cluster evaluations
+          v2ClusterMinimal = import ./clusters/v2/test-minimal.nix { inherit kixv2; packages = v2Packages; };
+          v2ClusterExample = import ./clusters/v2/example.nix { inherit kixv2; packages = v2Packages; };
+          v2ClusterFull = import ./clusters/v2/test-full.nix { inherit kixv2; packages = v2Packages; };
+          v2ClusterJa1 = import ./clusters/v2/nw1.nix { inherit kixv2; packages = v2Packages; };
+
+          # Serializes v2 manifests (already post-processed) into YAML directory.
+          mkV2Manifests = manifests:
+            let
+              fileEntries = map (m:
+                let
+                  kindLower = lib.toLower m.kind;
+                  name = m.metadata.name;
+                in {
+                  fileName = "${name}-${kindLower}";
+                  drv = kixlib.mkManifest m;
+                }
+              ) manifests;
+            in
+            pkgs.runCommand "k8s-v2-manifests" { } ''
+              mkdir -p $out
+              ${lib.concatStringsSep "\n" (map (e: "cp ${e.drv} $out/${e.fileName}.yaml") fileEntries)}
+            '';
 
           # --- Fixpoint cluster evaluations ---
           # Cluster definitions now live in clusters/ as fixpoint-pattern files.
@@ -688,6 +733,10 @@
               fpClusterExample
               fpClusterJa1
               ;
+
+            # v2 exports
+            inherit kixv2 v2Packages;
+            inherit v2ClusterMinimal v2ClusterExample v2ClusterFull v2ClusterJa1;
           };
 
           # Per-chart build targets plus cluster definitions.
@@ -697,6 +746,12 @@
             cluster-full = fpClusterFullPkg;
             cluster-minimal = fpClusterMinimalPkg;
             cluster-nw1 = fpClusterJa1Pkg;
+
+            # v2 cluster build targets
+            v2-cluster-minimal = mkV2Manifests v2ClusterMinimal.manifests;
+            v2-cluster-example = mkV2Manifests v2ClusterExample.manifests;
+            v2-cluster-full = mkV2Manifests v2ClusterFull.manifests;
+            v2-cluster-nw1 = mkV2Manifests v2ClusterJa1.manifests;
 
             # --- Fixpoint DAG visualization ---
             # Renders the example cluster's full resource DAG as SVG.

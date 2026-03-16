@@ -1,30 +1,24 @@
-# CoreDNS package-specific helpers.
+# CoreDNS package-specific helpers (fixpoint version).
 #
-# Contains: Corefile builder, port derivation, label construction, FQDN helpers.
-# These are domain-specific utilities that don't belong in kixlib but are too
-# large to inline in resources.nix.
+# Pure functions for Corefile generation and port derivation. These are
+# unchanged from the module-system version — they have no dependency on
+# the composition mechanism.
 
-{
-  lib,
-  config,
-  kixlib,
-  cfg,
-  labels,
-  ...
-}:
+{ lib }:
 
-let
+rec {
+
   # --- Plugin DSL ---
-  # Pipe-composable constructors for CoreDNS server plugins. Eliminates the
-  # verbose `{ name = "foo"; parameters = null; configBlock = null; }` pattern.
+  # Pipe-composable constructors for CoreDNS server plugins. Without the
+  # module system there are no submodule defaults, so every plugin would
+  # need explicit `parameters = null; configBlock = null;`. These helpers
+  # eliminate that boilerplate:
   #
   #   plugin "errors"
-  #   plugin "health" |> withBlock "lameduck 10s"
+  #   plugin "health"     |> withBlock "lameduck 10s"
   #   plugin "kubernetes" |> withParams "cluster.local" |> withBlock "pods insecure"
   #   plugin "prometheus" |> withParams "0.0.0.0:9153"
   #
-  # Each returns the same attrset shape that the servers[].plugins submodule
-  # expects, so these work both in option defaults and in user config.
   plugin = name: {
     inherit name;
     parameters = null;
@@ -33,13 +27,11 @@ let
   withParams = parameters: p: p // { inherit parameters; };
   withBlock = configBlock: p: p // { inherit configBlock; };
 
-  # Extracted: used in registry, monitoring target, and potentially elsewhere.
-  hasPrometheus = builtins.any (s: builtins.any (p: p.name == "prometheus") s.plugins) cfg.servers;
-
   # --- Corefile builder ---
   # Generates the CoreDNS configuration file from the servers option.
   # Mirrors the Helm chart's configmap.yaml template logic.
   buildCorefile =
+    servers:
     let
       inherit (lib)
         concatStringsSep
@@ -69,18 +61,17 @@ let
           zones = renderZones server.zones;
           port = optionalString (server.port != null) (":" + toString server.port);
           plugins = concatStringsSep "" (map renderPlugin server.plugins);
-          # No trailing newline — concatStringsSep handles separation between servers,
-          # and we don't want an extra newline at the end (Helm doesn't produce one).
         in
         zones + port + " {\n" + plugins + "}";
 
     in
-    concatStringsSep "\n" (map renderServer cfg.servers);
+    concatStringsSep "\n" (map renderServer servers);
 
   # --- Port derivation ---
   # Derives service/container ports from server blocks, matching the Helm
   # chart's _helpers.tpl coredns.servicePorts / coredns.containerPorts logic.
-  ports =
+  derivePorts =
+    servers:
     let
       inherit (lib)
         flatten
@@ -127,9 +118,9 @@ let
         else
           [ ];
 
-      zoneReqs = concatMap (server: map (zoneToProtocol server) server.zones) cfg.servers;
+      zoneReqs = concatMap (server: map (zoneToProtocol server) server.zones) servers;
       zoneGrouped = groupBy (r: r.port) zoneReqs;
-      allReqs = zoneReqs ++ concatMap (server: concatMap pluginToProtocol server.plugins) cfg.servers;
+      allReqs = zoneReqs ++ concatMap (server: concatMap pluginToProtocol server.plugins) servers;
       allGrouped = groupBy (r: r.port) allReqs;
 
       mergeProtocols = port: reqs: {
@@ -175,69 +166,4 @@ let
       containerPorts = flatten (map toContainerPorts (builtins.attrValues allMerged));
     };
 
-  # --- Labels ---
-  # CoreDNS adds cluster-service labels as extras and a coredns-specific
-  # "k8s-app" selector label when isClusterService is true.
-  # We extend the labels provided by mkChartModule.
-  selectorLabels =
-    labels.selector
-    // lib.optionalAttrs cfg.isClusterService {
-      "k8s-app" = "coredns";
-    };
-
-  allLabels =
-    labels.all
-    // lib.optionalAttrs cfg.isClusterService {
-      "kubernetes.io/cluster-service" = "true";
-      "kubernetes.io/name" = "CoreDNS";
-      "k8s-app" = "coredns";
-    };
-
-  # Override kixlib' to use coredns-specific labels (with cluster-service extras).
-  kixlibCoredns = kixlib.withMetadata {
-    namespace = cfg.namespace;
-    labels = allLabels;
-    name = "coredns";
-  };
-
-  # FQDN used in registry endpoints.
-  corednsFqdn = kixlib.mkFqdn {
-    name = "coredns";
-    namespace = cfg.namespace;
-    clusterDomain = cfg.clusterDomain;
-  };
-
-  # Capability output labels for the metrics Service.
-  # Guard MUST match the mkIf on capabilities.monitoring.coredns declaration
-  # in resources.nix. If the guard drifts from the target declaration, the chart
-  # crashes when monitoring is disabled (attribute-missing on a non-existent
-  # target). See doc 12 rule #10.
-  monitoringGuard = hasPrometheus && cfg.prometheus.service.enabled && cfg.prometheus.monitor.enabled;
-
-  monitoringLabels =
-    if monitoringGuard then config.capabilities.monitoring.coredns.output.labels else { };
-  monitoringAnnotations =
-    if monitoringGuard then config.capabilities.monitoring.coredns.output.annotations else { };
-
-  pdbEnabled =
-    cfg.podDisruptionBudget.minAvailable != null || cfg.podDisruptionBudget.maxUnavailable != null;
-
-in
-{
-  inherit
-    plugin
-    withParams
-    withBlock
-    hasPrometheus
-    buildCorefile
-    ports
-    selectorLabels
-    allLabels
-    kixlibCoredns
-    corednsFqdn
-    monitoringGuard
-    monitoringLabels
-    monitoringAnnotations
-    pdbEnabled
-    ;
 }
