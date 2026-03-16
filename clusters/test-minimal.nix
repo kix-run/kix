@@ -1,12 +1,21 @@
-# clusters/test-minimal.nix — Minimal cluster: only coredns with defaults.
+# clusters/v2/test-minimal.nix — Minimal v2 cluster: only coredns with defaults.
 #
-# Tests that a minimal configuration produces no extra resources.
+# Tests that a minimal configuration produces the expected resources.
 # Used for negative assertions (disabled features absent).
 
-{ k8s, lib }:
+{ kixv2, packages }:
 
-k8s.mkCluster {
-  basePackages = self: {
-    coredns = import ../pkgs-fp/coredns { inherit k8s lib; };
-  };
+kixv2.buildCluster {
+  namespaces.kube-system = { };
+
+  instances =
+    { ref, ... }:
+    {
+      kube-system = {
+        coredns = {
+          package = packages.coredns;
+          packageType = "coredns";
+        };
+      };
+    };
 }

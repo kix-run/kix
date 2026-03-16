@@ -11,7 +11,15 @@ let
   kixv2 = import ../../lib/v2 { inherit lib; };
   k8s = import ../../lib/v2/k8s.nix { inherit lib; };
 
-  inherit (kixv2) clusterScoped mkResource postProcessManifest computeClosure buildRegistry mkScope buildCluster;
+  inherit (kixv2)
+    clusterScoped
+    mkResource
+    postProcessManifest
+    computeClosure
+    buildRegistry
+    mkScope
+    buildCluster
+    ;
 
   # ===== Test 1: Two resources where one references the other via "${}" =====
   test1 =
@@ -29,17 +37,20 @@ let
         kind = "Deployment";
         name = "my-app";
         namespace = "default";
-        spec.template.spec.volumes = [{
-          name = "config";
-          configMap.name = "${configmap}";  # <-- embeds store path
-        }];
+        spec.template.spec.volumes = [
+          {
+            name = "config";
+            configMap.name = "${configmap}"; # <-- embeds store path
+          }
+        ];
       };
 
       # Verify getContext finds the dep
       deploymentJson = builtins.toJSON deployment.rawManifest;
       ctx = builtins.getContext deploymentJson;
       configmapPath = builtins.unsafeDiscardStringContext configmap.outPath;
-    in {
+    in
+    {
       name = "store-path-deps";
       # The configmap's store path should appear in deployment's context
       assertion = builtins.hasAttr configmapPath ctx;
@@ -62,21 +73,30 @@ let
         kind = "Deployment";
         name = "my-app";
         namespace = "default";
-        spec.template.spec.volumes = [{
-          name = "config";
-          configMap.name = "${configmap}";
-        }];
+        spec.template.spec.volumes = [
+          {
+            name = "config";
+            configMap.name = "${configmap}";
+          }
+        ];
       };
 
-      registry = buildRegistry [ configmap deployment ];
+      registry = buildRegistry [
+        configmap
+        deployment
+      ];
       processed = postProcessManifest registry deployment.manifest;
-    in {
+    in
+    {
       name = "post-process";
       # After post-processing, the configMap.name should be the K8s name, not store path
-      assertion = processed.spec.template.spec.volumes == [{
-        name = "config";
-        configMap.name = "my-config";
-      }];
+      assertion =
+        processed.spec.template.spec.volumes == [
+          {
+            name = "config";
+            configMap.name = "my-config";
+          }
+        ];
       message = "post-processing should replace store path with K8s name 'my-config', got: ${builtins.toJSON processed.spec.template.spec.volumes}";
     };
 
@@ -96,19 +116,26 @@ let
         kind = "Deployment";
         name = "my-app";
         namespace = "default";
-        spec.template.spec.volumes = [{
-          name = "config";
-          configMap.name = "${configmap}";
-        }];
+        spec.template.spec.volumes = [
+          {
+            name = "config";
+            configMap.name = "${configmap}";
+          }
+        ];
         requires = [ ];
       };
 
-      registry = buildRegistry [ configmap deployment ];
+      registry = buildRegistry [
+        configmap
+        deployment
+      ];
       closure = computeClosure registry deployment;
       closureNames = map (r: r.name) closure;
-    in {
+    in
+    {
       name = "closure-computation";
-      assertion = builtins.length closure == 2
+      assertion =
+        builtins.length closure == 2
         && builtins.elem "my-app" closureNames
         && builtins.elem "my-config" closureNames;
       message = "closure should contain both my-app and my-config, got: ${builtins.toJSON closureNames}";
@@ -128,7 +155,9 @@ let
         instanceName = "my-instance";
         namespaceName = "test-ns";
         namespaceResource = nsResource;
-        clusterLabels = { "cluster" = "test"; };
+        clusterLabels = {
+          "cluster" = "test";
+        };
       };
 
       svcAccount = scope.mkResource {
@@ -141,9 +170,10 @@ let
         apiVersion = "rbac.authorization.k8s.io/v1";
         kind = "ClusterRole";
         name = "my-role";
-        extra.rules = [];
+        extra.rules = [ ];
       };
-    in {
+    in
+    {
       name = "scope-api";
       assertion =
         # Namespaced resource should have namespace in manifest
@@ -166,9 +196,10 @@ let
         kind = "ClusterRole";
         name = "my-role";
         namespace = clusterScoped;
-        extra.rules = [];
+        extra.rules = [ ];
       };
-    in {
+    in
+    {
       name = "cluster-scoped";
       assertion = !(clusterRole.manifest.metadata ? namespace);
       message = "cluster-scoped resources should not have metadata.namespace";
@@ -178,62 +209,85 @@ let
   test6 =
     let
       # Define two simple packages
-      dbPackage = { scope, config, lib ? null }:
+      dbPackage =
+        {
+          scope,
+          config,
+          lib ? null,
+        }:
         self: {
           service = scope.mkResource {
             apiVersion = "v1";
             kind = "Service";
             name = "${scope.instanceName}-db";
-            outputs = { port = "5432"; host = "${scope.instanceName}-db"; };
-            spec.ports = [{ port = 5432; }];
+            outputs = {
+              port = "5432";
+              host = "${scope.instanceName}-db";
+            };
+            spec.ports = [ { port = 5432; } ];
           };
           main = self.service;
         };
 
-      appPackage = { scope, config, lib ? null, db }:
+      appPackage =
+        {
+          scope,
+          config,
+          lib ? null,
+          db,
+        }:
         self: {
           deployment = scope.mkResource {
             apiVersion = "apps/v1";
             kind = "Deployment";
             name = "${scope.instanceName}-app";
-            spec.template.spec.containers = [{
-              name = "app";
-              env = [{
-                name = "DB_HOST";
-                value = "${db.fqdn}";
-              }];
-            }];
+            spec.template.spec.containers = [
+              {
+                name = "app";
+                env = [
+                  {
+                    name = "DB_HOST";
+                    value = "${db.fqdn}";
+                  }
+                ];
+              }
+            ];
           };
           service = scope.mkResource {
             apiVersion = "v1";
             kind = "Service";
             name = "${scope.instanceName}-app";
-            spec.ports = [{ port = 8080; }];
+            spec.ports = [ { port = 8080; } ];
           };
-          main = self.service // { requires = [ self.deployment ]; };
+          main = self.service // {
+            requires = [ self.deployment ];
+          };
         };
 
       cluster = buildCluster {
         namespaces.default = { };
-        instances = { ref, ... }: {
-          default = {
-            db = {
-              package = dbPackage;
-              packageType = "db";
-            };
-            app = {
-              package = appPackage;
-              packageType = "app";
-              # db should auto-resolve to default/db
+        instances =
+          { ref, ... }:
+          {
+            default = {
+              db = {
+                package = dbPackage;
+                packageType = "db";
+              };
+              app = {
+                package = appPackage;
+                packageType = "app";
+                # db should auto-resolve to default/db
+              };
             };
           };
-        };
       };
 
       # Verify the cluster built successfully
       appInstance = cluster.instances.default.app;
       dbInstance = cluster.instances.default.db;
-    in {
+    in
+    {
       name = "full-mini-cluster";
       assertion =
         # Both instances exist
@@ -252,7 +306,13 @@ let
         kind = "ClusterRole";
         name = "my-role";
         namespace = clusterScoped;
-        extra.rules = [{ apiGroups = [""]; resources = ["pods"]; verbs = ["get"]; }];
+        extra.rules = [
+          {
+            apiGroups = [ "" ];
+            resources = [ "pods" ];
+            verbs = [ "get" ];
+          }
+        ];
       };
 
       binding = mkResource {
@@ -264,9 +324,15 @@ let
           roleRef = {
             apiGroup = "rbac.authorization.k8s.io";
             kind = "ClusterRole";
-            name = "${role}";  # auto-dep on role
+            name = "${role}"; # auto-dep on role
           };
-          subjects = [{ kind = "ServiceAccount"; name = "my-sa"; namespace = "default"; }];
+          subjects = [
+            {
+              kind = "ServiceAccount";
+              name = "my-sa";
+              namespace = "default";
+            }
+          ];
         };
       };
 
@@ -275,15 +341,21 @@ let
         kind = "ServiceAccount";
         name = "my-sa";
         namespace = "default";
-        requires = [ binding ];  # inverted dep
+        requires = [ binding ]; # inverted dep
       };
 
-      registry = buildRegistry [ role binding sa ];
+      registry = buildRegistry [
+        role
+        binding
+        sa
+      ];
       closure = computeClosure registry sa;
       closureNames = map (r: r.name) closure;
-    in {
+    in
+    {
       name = "requires-chain";
-      assertion = builtins.length closure == 3
+      assertion =
+        builtins.length closure == 3
         && builtins.elem "my-sa" closureNames
         && builtins.elem "my-binding" closureNames
         && builtins.elem "my-role" closureNames;
@@ -298,8 +370,10 @@ let
         kind = "Service";
         name = "my-svc";
         namespace = "default";
-        outputs = { port = "8080"; };
-        spec.ports = [{ port = 8080; }];
+        outputs = {
+          port = "8080";
+        };
+        spec.ports = [ { port = 8080; } ];
       };
 
       consumer = mkResource {
@@ -307,24 +381,43 @@ let
         kind = "Deployment";
         name = "consumer";
         namespace = "default";
-        spec.template.spec.containers = [{
-          name = "app";
-          env = [{ name = "PORT"; value = service.out.port; }];
-        }];
+        spec.template.spec.containers = [
+          {
+            name = "app";
+            env = [
+              {
+                name = "PORT";
+                value = service.out.port;
+              }
+            ];
+          }
+        ];
       };
 
-      registry = buildRegistry [ service consumer ];
+      registry = buildRegistry [
+        service
+        consumer
+      ];
       closure = computeClosure registry consumer;
       closureNames = map (r: r.name) closure;
-    in {
+    in
+    {
       name = "output-context";
-      assertion = builtins.length closure == 2
-        && builtins.elem "my-svc" closureNames;
+      assertion = builtins.length closure == 2 && builtins.elem "my-svc" closureNames;
       message = "using service.out.port should create a dep on the service, got: ${builtins.toJSON closureNames}";
     };
 
   # ===== Run all tests =====
-  allTests = [ test1 test2 test3 test4 test5 test6 test7 test8 ];
+  allTests = [
+    test1
+    test2
+    test3
+    test4
+    test5
+    test6
+    test7
+    test8
+  ];
 
   failures = builtins.filter (t: !t.assertion) allTests;
 
@@ -332,9 +425,9 @@ let
     if failures == [ ] then
       "All ${toString (builtins.length allTests)} tests passed."
     else
-      throw (builtins.concatStringsSep "\n" (
-        [ "FAILURES:" ]
-        ++ map (t: "  ${t.name}: ${t.message}") failures
-      ));
+      throw (
+        builtins.concatStringsSep "\n" ([ "FAILURES:" ] ++ map (t: "  ${t.name}: ${t.message}") failures)
+      );
 
-in result
+in
+result

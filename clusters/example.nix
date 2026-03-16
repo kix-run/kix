@@ -1,102 +1,116 @@
-# clusters/example.nix — Example cluster: coredns + valkey + cert-manager.
+# clusters/v2/example.nix — Example v2 cluster: coredns + valkey + cert-manager.
 #
-# This is what "declarative cluster state" looks like in the fixpoint pattern.
-# One file declares what runs in your cluster. Package closures handle
-# dependency tracking — you don't list resources, you list packages.
+# This is what "declarative cluster state" looks like in the v2 pattern.
+# Namespace-scoped instances with DI resolution.
 #
-# Build:  nix build .#cluster-example
-# DAG:    nix eval --raw .#legacyPackages.<system>.fpClusterExample.dagTree
+# Build:  nix eval .#v2-cluster-example (once flake integration is done)
 
-{ k8s, lib }:
+{ kixv2, packages }:
 
-let
+kixv2.buildCluster {
   clusterLabels = {
     "app.kubernetes.io/part-of" = "kix-example";
     "team" = "platform";
   };
-in
 
-k8s.mkCluster {
-  basePackages = self: {
-    coredns = (import ../pkgs-fp/coredns { inherit k8s lib; }).override {
-      namespace = "kube-system";
-      replicaCount = 2;
-      prometheus = {
-        service = {
-          enabled = true;
-          annotations = {
-            "prometheus.io/scrape" = "true";
-            "prometheus.io/port" = "9153";
-          };
-        };
-        monitor = {
-          enabled = true;
-          interval = null;
-        };
-      };
-      inherit clusterLabels;
-    };
-
-    valkey = (import ../pkgs-fp/valkey { inherit k8s lib; }).override {
-      namespace = "cache";
-      sentinel = {
-        enabled = true;
-        quorum = 2;
-        primarySet = "myprimary";
-        downAfterMilliseconds = 60000;
-        failoverTimeout = 180000;
-        parallelSyncs = 1;
-        configuration = "";
-        image = {
-          repository = "docker.io/bitnami/valkey-sentinel";
-          tag = "8.1.1-debian-12-r0";
-          pullPolicy = "IfNotPresent";
-        };
-        resources = {
-          requests = {
-            cpu = "100m";
-            memory = "128Mi";
-            ephemeral-storage = "50Mi";
-          };
-          limits = {
-            cpu = "150m";
-            memory = "192Mi";
-            ephemeral-storage = "2Gi";
-          };
-        };
-      };
-      metrics = {
-        enabled = true;
-        image = {
-          repository = "docker.io/bitnami/redis-exporter";
-          tag = "1.70.0-debian-12-r2";
-          pullPolicy = "IfNotPresent";
-        };
-        resources = {
-          requests = {
-            cpu = "100m";
-            memory = "128Mi";
-            ephemeral-storage = "50Mi";
-          };
-          limits = {
-            cpu = "150m";
-            memory = "192Mi";
-            ephemeral-storage = "2Gi";
-          };
-        };
-      };
-      auth = {
-        enabled = true;
-        existingSecret = "valkey-auth";
-        existingSecretPasswordKey = "valkey-password";
-        sentinel = true;
-      };
-      inherit clusterLabels;
-    };
-
-    cert-manager = (import ../pkgs-fp/cert-manager { inherit k8s lib; }).override {
-      namespace = "cert-manager";
-      inherit clusterLabels;
-    };
+  namespaces = {
+    kube-system = { };
+    cache = { };
+    cert-manager = { };
   };
+
+  instances =
+    { ref, ... }:
+    {
+      kube-system = {
+        coredns = {
+          package = packages.coredns;
+          packageType = "coredns";
+          config = {
+            replicaCount = 2;
+            prometheus = {
+              service = {
+                enabled = true;
+                annotations = {
+                  "prometheus.io/scrape" = "true";
+                  "prometheus.io/port" = "9153";
+                };
+              };
+              monitor = {
+                enabled = true;
+                interval = null;
+              };
+            };
+          };
+        };
+      };
+
+      cache = {
+        valkey = {
+          package = packages.valkey;
+          packageType = "valkey";
+          config = {
+            sentinel = {
+              enabled = true;
+              quorum = 2;
+              primarySet = "myprimary";
+              downAfterMilliseconds = 60000;
+              failoverTimeout = 180000;
+              parallelSyncs = 1;
+              configuration = "";
+              image = {
+                repository = "docker.io/bitnami/valkey-sentinel";
+                tag = "8.1.1-debian-12-r0";
+                pullPolicy = "IfNotPresent";
+              };
+              resources = {
+                requests = {
+                  cpu = "100m";
+                  memory = "128Mi";
+                  ephemeral-storage = "50Mi";
+                };
+                limits = {
+                  cpu = "150m";
+                  memory = "192Mi";
+                  ephemeral-storage = "2Gi";
+                };
+              };
+            };
+            metrics = {
+              enabled = true;
+              image = {
+                repository = "docker.io/bitnami/redis-exporter";
+                tag = "1.70.0-debian-12-r2";
+                pullPolicy = "IfNotPresent";
+              };
+              resources = {
+                requests = {
+                  cpu = "100m";
+                  memory = "128Mi";
+                  ephemeral-storage = "50Mi";
+                };
+                limits = {
+                  cpu = "150m";
+                  memory = "192Mi";
+                  ephemeral-storage = "2Gi";
+                };
+              };
+            };
+            auth = {
+              enabled = true;
+              existingSecret = "valkey-auth";
+              existingSecretPasswordKey = "valkey-password";
+              sentinel = true;
+            };
+          };
+        };
+      };
+
+      cert-manager = {
+        cert-manager = {
+          package = packages.cert-manager;
+          packageType = "cert-manager";
+        };
+      };
+    };
 }
