@@ -33,3 +33,5 @@ flow? Not all of it has to be present at this stage, but this is the ideal:
 - `kix apply [--dry-run]` - Apply it all, option to dry run against api server
 - `kix apply --wait` - Wait for each Package Set to become ready before deploying 
   (or something smarter, only deploy a think when its dependencies are ready)
+- Some way of importing Helm resources into Kix (i.e. a Helm -> Kix migration path for existing Clusters)
+
