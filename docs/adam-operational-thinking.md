@@ -18,6 +18,8 @@ flow? Not all of it has to be present at this stage, but this is the ideal:
 
 - Integration with Nix (i.e. can configure system and deploy k8s with one command)
 - Integrated cli (`kix diff`, to diff against a running cluster)
+  - Package-level diff (high-level version changes, etc)
+  - Lower-level resource-level diff (helm-style, yaml diff)
 - Diff against a local dump of the cluster
 
 # The flow
