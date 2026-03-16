@@ -191,10 +191,11 @@ The Merkle DAG is a **complete, content-addressed description of intended cluste
 state and its causal structure.** Communication topology is one projection of
 this. Ordering is another. Change detection is another. Any K8s concept that asks
 "what should exist, what depends on what, and what changed?" is structurally
-derivable. Concepts that require runtime observation (load, latency, actual pod
-status) or encode intent not captured in resource references (how many replicas
-are acceptable to lose, whether storage is precious) are not — those are
-capabilities (Part 3).
+derivable. The graph has no access to runtime state (load, latency, pod status) —
+Kix is purely eval-time. And some intent simply isn't captured in resource
+references (how many replicas are acceptable to lose, whether storage is
+precious). That's what capabilities (Part 3) are for: explicit declarations of
+facts the graph can't infer.
 
 Beyond the 7 derivations above, the DAG also enables:
 
