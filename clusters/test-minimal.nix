@@ -1,11 +1,11 @@
-# clusters/v2/test-minimal.nix — Minimal v2 cluster: only coredns with defaults.
+# clusters/test-minimal.nix — Minimal cluster: only coredns with defaults.
 #
 # Tests that a minimal configuration produces the expected resources.
 # Used for negative assertions (disabled features absent).
 
-{ kixv2, packages }:
+{ kix, packages }:
 
-kixv2.buildCluster {
+kix.buildCluster {
   namespaces.kube-system = { };
 
   instances =

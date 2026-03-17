@@ -1,16 +1,16 @@
-# clusters/test-helm.nix — Tests the kixHelm bridge with a local test chart.
+# clusters/test-helm.nix — Tests the helm bridge with a local test chart.
 #
-# Verifies that fromHelmChart produces valid v2 resources that pass
+# Verifies that fromHelmChart produces valid resources that pass
 # through buildCluster, dependency tracking, and validation.
 
-{ kixv2, kixHelm }:
+{ kix }:
 
 let
   # Local test chart (no network fetch needed).
   testChartPath = ../tests/helm-test-chart;
 
   # Create a helm-bridge package from the local chart.
-  testChartPackage = kixHelm.fromHelmChart {
+  testChartPackage = kix.fromHelmChart {
     chart = testChartPath;
     values = {
       replicaCount = 2;
@@ -20,7 +20,7 @@ let
   };
 in
 
-kixv2.buildCluster {
+kix.buildCluster {
   namespaces.test-helm = { };
 
   instances =

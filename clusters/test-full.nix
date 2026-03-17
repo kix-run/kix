@@ -1,10 +1,10 @@
-# clusters/v2/test-full.nix — Full v2 cluster: all charts with most features enabled.
+# clusters/test-full.nix — Full cluster: all charts with most features enabled.
 #
 # Stress test for package configs and optional resource gating.
 
-{ kixv2, packages }:
+{ kix, packages }:
 
-kixv2.buildCluster {
+kix.buildCluster {
   clusterLabels = {
     "app.kubernetes.io/part-of" = "kix-full-test";
     "team" = "platform";

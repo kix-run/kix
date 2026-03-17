@@ -1,13 +1,12 @@
-# clusters/v2/example.nix — Example v2 cluster: coredns + valkey + cert-manager.
+# clusters/example.nix — Example cluster: coredns + valkey + cert-manager.
 #
-# This is what "declarative cluster state" looks like in the v2 pattern.
 # Namespace-scoped instances with DI resolution.
 #
-# Build:  nix eval .#v2-cluster-example (once flake integration is done)
+# Build:  nix build .#cluster-example
 
-{ kixv2, packages }:
+{ kix, packages }:
 
-kixv2.buildCluster {
+kix.buildCluster {
   clusterLabels = {
     "app.kubernetes.io/part-of" = "kix-example";
     "team" = "platform";
