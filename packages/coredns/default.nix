@@ -233,7 +233,6 @@ in self: {
     kind = "ServiceAccount";
     name = "${scope.instanceName}-coredns";
     inherit labels;
-    requires = [ self.clusterRoleBinding ];
   };
 
   # ── Workload ───────────────────────────────────────────────────
@@ -446,7 +445,6 @@ in self: {
     kind = "ServiceAccount";
     name = "${scope.instanceName}-coredns-autoscaler";
     labels = self.autoscalerLabels;
-    requires = [ self.autoscalerBinding ];
   };
 
   autoscalerRole = scope.mkClusterResource {
@@ -583,7 +581,8 @@ in self: {
 
   # ── Main: the public interface ─────────────────────────────────
 
-  main = self.service // {
+  main = {
+    resource = self.service;
     requires = [ self.workload ]
       ++ lib.optional (hasPrometheus && cfg.prometheus.service.enabled) self.metricsService
       ++ lib.optional cfg.autoscaler.enabled self.autoscalerWorkload

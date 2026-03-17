@@ -1195,23 +1195,6 @@ in {
     kind = "ServiceAccount";
     name = "${scope.instanceName}-cert-manager";
     labels = controllerLabels;
-    requires = [
-      self.controllerBindingIssuers
-      self.controllerBindingClusterissuers
-      self.controllerBindingCertificates
-      self.controllerBindingOrders
-      self.controllerBindingChallenges
-      self.controllerBindingIngressShim
-      self.controllerBindingApprove
-      self.controllerBindingCertificatesigningrequests
-      self.controllerRoleBindingLeaderelection
-      self.controllerRoleBindingTokenrequest
-    ]
-    ++ lib.optionals cfg.rbac.aggregateClusterRoles [
-      self.aggregatedClusterRoleClusterView
-      self.aggregatedClusterRoleView
-      self.aggregatedClusterRoleEdit
-    ];
     extra = lib.optionalAttrs cfg.serviceAccount.automountServiceAccountToken {
       automountServiceAccountToken = true;
     };
@@ -1362,10 +1345,6 @@ in {
     kind = "ServiceAccount";
     name = "${scope.instanceName}-cert-manager-webhook";
     labels = webhookLabels;
-    requires = [
-      self.webhookBindingSubjectaccessreviews
-      self.webhookRoleBindingDynamicServing
-    ];
     extra = lib.optionalAttrs cfg.serviceAccount.automountServiceAccountToken {
       automountServiceAccountToken = true;
     };
@@ -1666,10 +1645,6 @@ in {
     kind = "ServiceAccount";
     name = "${scope.instanceName}-cert-manager-cainjector";
     labels = cainjectorLabels;
-    requires = [
-      self.cainjectorBinding
-      self.cainjectorRoleBindingLeaderelection
-    ];
     extra = lib.optionalAttrs cfg.serviceAccount.automountServiceAccountToken {
       automountServiceAccountToken = true;
     };
@@ -1771,7 +1746,6 @@ in {
     kind = "ServiceAccount";
     name = "${scope.instanceName}-cert-manager-startupapicheck";
     labels = startupapicheckLabels;
-    requires = [ self.startupapicheckRoleBindingCreateCert ];
     extra = lib.optionalAttrs cfg.serviceAccount.automountServiceAccountToken {
       automountServiceAccountToken = true;
     };
@@ -1811,7 +1785,8 @@ in {
   # requires the webhook (needed for CRD validation), optionally the
   # cainjector and startupapicheck.
 
-  main = self.controllerService // {
+  main = {
+    resource = self.controllerService;
     requires =
       [
         self.controllerDeployment

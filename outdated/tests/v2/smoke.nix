@@ -8,8 +8,8 @@ let
   pkgs = import <nixpkgs> { };
   lib = pkgs.lib;
 
-  kixv2 = import ../../lib/v2 { inherit lib; };
-  k8s = import ../../lib/v2/k8s.nix { inherit lib; };
+  kixv2 = import ../../../lib/v2 { inherit lib; };
+  k8s = import ../../../lib/v2/k8s.nix { inherit lib; };
 
   inherit (kixv2)
     clusterScoped
@@ -226,7 +226,7 @@ let
             };
             spec.ports = [ { port = 5432; } ];
           };
-          main = self.service;
+          main = { resource = self.service; };
         };
 
       appPackage =
@@ -259,7 +259,8 @@ let
             name = "${scope.instanceName}-app";
             spec.ports = [ { port = 8080; } ];
           };
-          main = self.service // {
+          main = {
+            resource = self.service;
             requires = [ self.deployment ];
           };
         };
@@ -315,6 +316,13 @@ let
         ];
       };
 
+      sa = mkResource {
+        apiVersion = "v1";
+        kind = "ServiceAccount";
+        name = "my-sa";
+        namespace = "default";
+      };
+
       binding = mkResource {
         apiVersion = "rbac.authorization.k8s.io/v1";
         kind = "ClusterRoleBinding";
@@ -329,37 +337,31 @@ let
           subjects = [
             {
               kind = "ServiceAccount";
-              name = "my-sa";
+              name = "${sa}"; # auto-dep on SA via interpolation
               namespace = "default";
             }
           ];
         };
       };
 
-      sa = mkResource {
-        apiVersion = "v1";
-        kind = "ServiceAccount";
-        name = "my-sa";
-        namespace = "default";
-        requires = [ binding ]; # inverted dep
-      };
-
+      # The binding references both role and SA via ${} interpolation.
+      # Starting from the binding, getContext finds both forward deps.
       registry = buildRegistry [
         role
         binding
         sa
       ];
-      closure = computeClosure registry sa;
+      closure = computeClosure registry binding;
       closureNames = map (r: r.name) closure;
     in
     {
-      name = "requires-chain";
+      name = "forward-dep-chain";
       assertion =
         builtins.length closure == 3
         && builtins.elem "my-sa" closureNames
         && builtins.elem "my-binding" closureNames
         && builtins.elem "my-role" closureNames;
-      message = "SA → binding → role requires chain should produce full closure, got: ${builtins.toJSON closureNames}";
+      message = "binding → role + SA forward dep chain should produce full closure, got: ${builtins.toJSON closureNames}";
     };
 
   # ===== Test 8: outputs carry context =====

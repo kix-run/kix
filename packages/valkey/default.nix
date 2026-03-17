@@ -1232,7 +1232,8 @@ in self: {
   # the StatefulSets behind it, plus optionally the metrics service,
   # network policy, etc.
 
-  main = (if cfg.sentinel.enabled then self.sentinelSvc else self.primarySvc) // {
+  main = {
+    resource = if cfg.sentinel.enabled then self.sentinelSvc else self.primarySvc;
     requires =
       if cfg.sentinel.enabled then
         [ self.sentinelSs ]

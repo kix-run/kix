@@ -137,10 +137,6 @@ in self: {
     kind = "ServiceAccount";
     name = "${scope.instanceName}-event-logger";
     labels = allLabels;
-    # Inverted dep: the SA is useless without its binding granting
-    # permissions. The binding references the SA (auto-tracked), but
-    # the SA must explicitly declare it needs the binding.
-    requires = [ self.clusterRoleBinding ];
   };
 
   # -- Workload ------------------------------------------------------------
@@ -216,5 +212,5 @@ in self: {
   # Unlike most packages, the event logger has no Service — it's a pure
   # log-producing workload. The main resource IS the Deployment.
 
-  main = self.deployment;
+  main = { resource = self.deployment; };
 }

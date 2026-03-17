@@ -263,10 +263,6 @@ in self: {
     kind = "ServiceAccount";
     name = fullname;
     labels = allLabels;
-    # Inverted dep: deploying the SA alone is useless without the RBAC
-    # chain granting it permissions. The binding references the SA (not
-    # the other way around), so we need this manual requires.
-    requires = [ self.clusterRoleBinding ];
   };
 
   # ── Workload ─────────────────────────────────────────────────────
@@ -378,7 +374,8 @@ in self: {
   # ServiceMonitors, network policies) reference. The Deployment and
   # full RBAC chain are pulled in via requires.
 
-  main = self.service // {
+  main = {
+    resource = self.service;
     requires = [
       self.deployment
     ];

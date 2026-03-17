@@ -18,6 +18,7 @@ in
   inherit (k8s)
     clusterScoped
     mkResource
+    mkPackageInstance
     postProcessManifest
     computeClosure
     closureToDot

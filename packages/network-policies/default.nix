@@ -518,7 +518,8 @@ in self: {
   # fixpoint using map over internalNamespaces to look up each
   # "internal-traffic-<ns>" attribute from self.
 
-  main = self.global-dns // {
+  main = {
+    resource = self.global-dns;
     requires =
       [
         self.kubernetes-api-access

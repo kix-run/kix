@@ -290,8 +290,6 @@ in self: {
     kind = "ServiceAccount";
     name = "${scope.instanceName}-velero";
     labels = allLabels;
-    # Inverted dep: SA is useless without its RBAC chain.
-    requires = [ self.clusterRoleBinding ];
   };
 
   # ── BackupStorageLocation ─────────────────────────────────────────
@@ -678,7 +676,8 @@ in self: {
   # deployNodeAgent — when false, only CSI snapshot-based backups
   # are available (no filesystem backups).
 
-  main = self.deployment // {
+  main = {
+    resource = self.deployment;
     requires =
       [
         self.serviceAccount

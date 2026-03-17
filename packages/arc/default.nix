@@ -127,7 +127,6 @@ in self: {
     kind = "ServiceAccount";
     name = "${scope.instanceName}-actions-listener-restart-sa";
     labels = allLabelsWithComponent "listener-restart";
-    requires = [ self.listenerRestartRoleBinding ];
   };
 
   listenerRestartRole = scope.mkResource {
@@ -319,7 +318,6 @@ in self: {
     name = "${scope.instanceName}-kubevirt-actions-runner";
     labels = allLabelsWithComponent "kubevirt";
     extra.metadata.namespace = ns;
-    requires = [ self.kubevirtRoleBinding ];
   };
 
   kubevirtRoleBinding = scope.mkClusterResource {
@@ -354,7 +352,6 @@ in self: {
     name = "${scope.instanceName}-vmi-cleanup-sa";
     labels = allLabelsWithComponent "vmi-cleanup";
     extra.metadata.namespace = ns;
-    requires = [ self.vmiCleanupRoleBinding ];
   };
 
   vmiCleanupRoleBinding = scope.mkClusterResource {
@@ -489,7 +486,8 @@ in self: {
   # gated by the enableKubevirtSupport flag. When disabled, they exist
   # in the package but aren't part of the closure (won't be rendered).
 
-  main = self.priorityClass // {
+  main = {
+    resource = self.priorityClass;
     requires =
       [
         # Controller-namespace resources

@@ -383,12 +383,6 @@ in self: {
     kind = "ServiceAccount";
     name = saName;
     labels = allLabels;
-    # Inverted deps: bindings reference the SA (not vice versa), but
-    # deploying a SA without its bindings is useless.
-    requires = [
-      self.clusterRoleBinding
-      self.roleBinding
-    ];
   };
 
   # ── ConfigMap ──────────────────────────────────────────────────
@@ -582,7 +576,8 @@ in self: {
   # the Deployment (which pulls in RBAC + ConfigMap via auto-tracking
   # and requires), the IngressClass, and the Service itself.
 
-  main = self.service // {
+  main = {
+    resource = self.service;
     requires = [
       self.deployment
       self.ingressClass

@@ -52,6 +52,11 @@ rec {
         else if isNsResource then namespace.name or "ns"
         else namespace;
 
+      # Note: requires are NOT encoded as annotations on individual resources
+      # because it can create circular dependencies (e.g., SS requires HPA,
+      # HPA references SS via ${} → cycle if both affect store paths).
+      # Instead, all requires are collected and placed on the PackageInstance CRD.
+
       # Build the K8s manifest attrset
       manifest = lib.recursiveUpdate (
         {
@@ -70,10 +75,14 @@ rec {
 
       manifestJson = builtins.toJSON manifest;
 
+      # Sanitize the name for use in store paths (colons and other special
+      # characters are not allowed in Nix store path names).
+      sanitizedName = builtins.replaceStrings [ ":" ] [ "_" ] name;
+
       # Content-addressed store path. Hash depends on this resource's content
       # and all referenced resources (their store paths in manifestJson).
       _identityPath = builtins.toFile
-        "k8s-${kind}-${nsKey}-${name}"
+        "k8s-${kind}-${nsKey}-${sanitizedName}"
         manifestJson;
 
       # Plain path string without context (for use as attr keys, comparisons)
@@ -111,6 +120,7 @@ rec {
     self;
 
   # Post-process a manifest: replace store paths with K8s names using the registry.
+  # This handles ALL string values including kix.dev/* annotations.
   postProcessManifest = registry: manifest:
     let
       json = builtins.toJSON manifest;
@@ -122,6 +132,29 @@ rec {
         json;
     in
     builtins.fromJSON (builtins.unsafeDiscardStringContext replaced);
+
+  # Creates a PackageInstance CRD — root of each package's DAG subgraph.
+  # Holds references to the main resource, inverse deps, and package-level requires.
+  # All references use "${resource}" interpolation → store paths tracked → full DAG edges.
+  mkPackageInstance = { instanceName, namespaceName, namespace, mainResource, inverseDeps ? [], packageRequires ? [], version ? null, labels ? {} }:
+    mkResource {
+      apiVersion = "kix.dev/v1alpha1";
+      kind = "PackageInstance";
+      name = instanceName;
+      inherit namespace labels;
+      annotations = {
+        "kix.dev/main" = "${mainResource}";
+      }
+      // lib.optionalAttrs (inverseDeps != []) {
+        "kix.dev/inverse-deps" = builtins.concatStringsSep "," (map (r: "${r}") inverseDeps);
+      }
+      // lib.optionalAttrs (packageRequires != []) {
+        "kix.dev/package-requires" = builtins.concatStringsSep "," (map (r: "${r}") packageRequires);
+      };
+      extra.spec = {
+        inherit instanceName namespaceName;
+      } // lib.optionalAttrs (version != null) { inherit version; };
+    };
 
   # Compute the transitive closure of a resource using the registry.
   #
@@ -166,7 +199,7 @@ rec {
                 ${id} = true;
               };
               order = order ++ [ head ];
-              queue = rest ++ (getDeps head) ++ (head.requires or [ ]);
+              queue = rest ++ (getDeps head);
             };
     in
     go {
@@ -193,9 +226,18 @@ rec {
       edgeLines = lib.concatMap (r:
         let
           deps = getDepsForViz registry r;
+          # Parse kix.dev/requires annotation to show different edge styles
+          reqAnnotation = r.manifest.metadata.annotations."kix.dev/requires" or null;
+          reqPaths = if reqAnnotation != null then
+            let ctx = builtins.getContext reqAnnotation;
+            in builtins.filter (p: builtins.hasAttr p registry) (builtins.attrNames ctx)
+          else [];
+          reqResources = map (p: registry.${p}.resource) reqPaths;
+          # Forward deps from manifest (excluding requires annotation paths)
+          forwardDeps = builtins.filter (d: !(builtins.elem d reqResources)) deps;
         in
-        (map (d: "${dotId r} -> ${dotId d} [style=solid, color=blue];") deps)
-        ++ (map (d: "${dotId r} -> ${dotId d} [style=dashed, color=red];") (r.requires or [ ]))
+        (map (d: "${dotId r} -> ${dotId d} [style=solid, color=blue];") forwardDeps)
+        ++ (map (d: "${dotId r} -> ${dotId d} [style=dashed, color=red, label=\"requires\"];") reqResources)
       ) closure';
     in
     ''
@@ -232,8 +274,7 @@ rec {
         let
           deps = getDepsForViz registry r;
           depLines = map (d: "  dep-> ${resourceId d}") deps;
-          reqLines = map (d: "  req-> ${resourceId d}") (r.requires or [ ]);
-          lines = [ (resourceId r) ] ++ depLines ++ reqLines;
+          lines = [ (resourceId r) ] ++ depLines;
         in
         builtins.concatStringsSep "\n" lines;
     in

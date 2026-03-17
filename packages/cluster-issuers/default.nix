@@ -150,7 +150,8 @@ in self: {
   # that — but the package still evaluates cleanly, main just has no
   # requires.
 
-  main = self.productionIssuer // {
+  main = {
+    resource = self.productionIssuer;
     requires = lib.optional cfg.enableStaging self.stagingIssuer;
   };
 }

@@ -243,10 +243,6 @@ in self: {
     kind = "ServiceAccount";
     name = "${scope.instanceName}-reloader";
     labels = allLabels;
-    # Inverted dep: the SA is useless without its binding granting
-    # the cluster role permissions. Without this, deploying just the
-    # SA wouldn't pull in the RBAC chain.
-    requires = [ self.clusterRoleBinding ];
   };
 
   # -- Workload ─────────────────────────────────────────────────────
@@ -315,7 +311,8 @@ in self: {
   # controller that talks to the K8s API server. The "main" resource
   # is therefore the Deployment itself.
 
-  main = self.deployment // {
+  main = {
+    resource = self.deployment;
     requires = [
       self.serviceAccount
       self.priorityClassRes

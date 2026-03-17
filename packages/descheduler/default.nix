@@ -290,10 +290,6 @@ in self: {
     kind = "ServiceAccount";
     name = "${scope.instanceName}-descheduler";
     inherit labels;
-    # Inverted dep: the SA is useless without its RBAC binding.
-    # The binding references the SA (auto-tracked), but the SA needs
-    # the binding to actually have permissions — hence manual requires.
-    requires = [ self.clusterRoleBinding ];
   };
 
   # ── Workload ───────────────────────────────────────────────────
@@ -401,7 +397,5 @@ in self: {
   # the binding, which refs the role — so the entire RBAC chain is
   # pulled in transitively.
 
-  main = self.deployment // {
-    requires = [ ];
-  };
+  main = { resource = self.deployment; };
 }
