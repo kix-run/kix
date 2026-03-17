@@ -20,6 +20,7 @@
   scope,
   config,
   lib,
+  postgres,
 }:
 
 let
@@ -83,10 +84,7 @@ let
     };
 
     database = {
-      type = "external";
       external = {
-        host = "";
-        port = "5432";
         username = "harbor";
         existingSecret = null;
         sslmode = "disable";
@@ -174,8 +172,8 @@ self: {
 
       # Database
       DATABASE_TYPE = "postgresql";
-      POSTGRESQL_HOST = cfg.database.external.host;
-      POSTGRESQL_PORT = cfg.database.external.port;
+      POSTGRESQL_HOST = postgres.fqdn;
+      POSTGRESQL_PORT = postgres.out.port;
       POSTGRESQL_USERNAME = cfg.database.external.username;
       POSTGRESQL_SSLMODE = cfg.database.external.sslmode;
       POSTGRESQL_DATABASE = "registry";
