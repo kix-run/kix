@@ -647,7 +647,9 @@ rec {
             "out"
             "overrideParts"
           ];
-          resources = lib.filterAttrs (_: v: builtins.isAttrs v && (v._type or "") == "k8s-resource") parts;
+          resources = lib.filterAttrs (
+            _: v: v != null && builtins.isAttrs v && (v._type or "") == "k8s-resource"
+          ) parts;
         in
         builtins.attrValues resources
         # Include the PackageInstance resource itself
