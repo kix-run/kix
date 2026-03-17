@@ -58,6 +58,10 @@
             packages = packages';
           };
           clusterHelm = import ./clusters/test-helm.nix { inherit kix; };
+          clusterJa1 = import ./clusters/nw1.nix {
+            inherit kix;
+            packages = packages';
+          };
 
           # Serializes manifests (already post-processed) into a YAML directory.
           mkManifests =
@@ -68,9 +72,10 @@
                 let
                   kindLower = lib.toLower m.kind;
                   name = m.metadata.name;
+                  ns = m.metadata.namespace or "_cluster";
                 in
                 {
-                  fileName = "${name}-${kindLower}";
+                  fileName = "${ns}--${name}-${kindLower}";
                   drv = kix.mkManifest m;
                 }
               ) manifests;
@@ -110,11 +115,13 @@
             cluster-example = mkManifests clusterExample.manifests;
             cluster-full = mkManifests clusterFull.manifests;
             cluster-helm = mkManifests clusterHelm.manifests;
+            cluster-nw1 = mkManifests clusterJa1.manifests;
 
             cluster-minimal-raw = mkManifestsRaw clusterMinimal.rawManifests;
             cluster-example-raw = mkManifestsRaw clusterExample.rawManifests;
             cluster-full-raw = mkManifestsRaw clusterFull.rawManifests;
             cluster-helm-raw = mkManifestsRaw clusterHelm.rawManifests;
+            cluster-nw1-raw = mkManifestsRaw clusterJa1.rawManifests;
           };
 
           checks =
@@ -126,9 +133,13 @@
             in
             {
               # --- Schema validation ---
-              schema-cluster-example = kixChecks.schemaCheck "cluster-example" (mkManifests clusterExample.manifests);
+              schema-cluster-example = kixChecks.schemaCheck "cluster-example" (
+                mkManifests clusterExample.manifests
+              );
               schema-cluster-full = kixChecks.schemaCheck "cluster-full" (mkManifests clusterFull.manifests);
-              schema-cluster-minimal = kixChecks.schemaCheck "cluster-minimal" (mkManifests clusterMinimal.manifests);
+              schema-cluster-minimal = kixChecks.schemaCheck "cluster-minimal" (
+                mkManifests clusterMinimal.manifests
+              );
               schema-cluster-helm = kixChecks.schemaCheck "cluster-helm" (mkManifests clusterHelm.manifests);
 
               # --- Cross-resource validation ---
