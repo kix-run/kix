@@ -43,6 +43,10 @@
           # Resources are store paths. No tree walker, no custom refs.
           kixv2 = import ./lib/v2 { inherit lib; };
 
+          # Helm chart bridge — IFD-based import of Helm charts as v2 packages.
+          # Separate from pure v2 lib because it requires pkgs for derivations.
+          kixHelm = import ./lib/v2/helm.nix { inherit pkgs lib; };
+
           # v2 package registry
           v2Packages = {
             coredns = import ./packages/coredns;
@@ -75,6 +79,9 @@
           v2ClusterJa1 = import ./clusters/nw1.nix {
             inherit kixv2;
             packages = v2Packages;
+          };
+          v2ClusterHelm = import ./clusters/test-helm.nix {
+            inherit kixv2 kixHelm;
           };
 
           # Serializes v2 manifests (already post-processed) into YAML directory.
@@ -337,12 +344,13 @@
         in
         {
           legacyPackages = {
-            inherit kixlib kixv2 v2Packages;
+            inherit kixlib kixv2 kixHelm v2Packages;
             inherit
               v2ClusterMinimal
               v2ClusterExample
               v2ClusterFull
               v2ClusterJa1
+              v2ClusterHelm
               ;
           };
 
@@ -353,6 +361,7 @@
             cluster-example = mkV2Manifests v2ClusterExample.manifests;
             cluster-full = mkV2Manifests v2ClusterFull.manifests;
             cluster-nw1 = mkV2Manifests v2ClusterJa1.manifests;
+            cluster-helm = mkV2Manifests v2ClusterHelm.manifests;
           };
 
           devShells.default = pkgs.mkShell {
@@ -365,6 +374,7 @@
               fullManifests = v2ManifestMap v2ClusterFull.manifests;
               minimalManifests = v2ManifestMap v2ClusterMinimal.manifests;
               ja1Manifests = v2ManifestMap v2ClusterJa1.manifests;
+              helmManifests = v2ManifestMap v2ClusterHelm.manifests;
             in
             {
               # --- Schema validation ---
@@ -372,6 +382,7 @@
               schema-cluster-full = schemaCheck "cluster-full" (mkV2Manifests v2ClusterFull.manifests);
               schema-cluster-minimal = schemaCheck "cluster-minimal" (mkV2Manifests v2ClusterMinimal.manifests);
               schema-cluster-nw1 = schemaCheck "cluster-nw1" (mkV2Manifests v2ClusterJa1.manifests);
+              schema-cluster-helm = schemaCheck "cluster-helm" (mkV2Manifests v2ClusterHelm.manifests);
 
               # --- Cross-resource validation ---
               validate-cluster-example =
@@ -399,6 +410,13 @@
                 assert validateManifestSet "cluster-nw1" ja1Manifests;
                 pkgs.runCommand "validate-cluster-nw1" { } ''
                   echo "Cross-resource validation passed for cluster-nw1."
+                  touch $out
+                '';
+
+              validate-cluster-helm =
+                assert validateManifestSet "cluster-helm" helmManifests;
+                pkgs.runCommand "validate-cluster-helm" { } ''
+                  echo "Cross-resource validation passed for cluster-helm."
                   touch $out
                 '';
             };
