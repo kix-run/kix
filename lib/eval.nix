@@ -237,14 +237,19 @@ rec {
         if rawMain ? resource then rawMain.requires or []
         else [];
 
-      # --- Inverse dependency auto-detection (Phase 3) ---
-      # Collect all resources from parts, skip nulls
+      # --- Forward closure computation ---
+      # Follows both store-path references in manifests AND explicit `requires`.
+      # `requires` are structural forward deps (SA needed by Deployment, etc.).
+
+      # Collect all resources from parts (for the local registry).
+      # Filters out null values so disabled/modal parts are excluded.
       allPartResources =
         let
           partNames = builtins.attrNames (removeAttrs parts [ "main" ]);
           vals = map (n: { name = n; value = parts.${n}; }) partNames;
           resourceVals = builtins.filter (v:
-            builtins.isAttrs v.value
+            v.value != null
+            && builtins.isAttrs v.value
             && (v.value._type or "") == "k8s-resource"
           ) vals;
         in
@@ -253,16 +258,21 @@ rec {
       # Build a local mini-registry for this instance's resources
       localRegistry = buildRegistry allPartResources;
 
-      # Get forward deps of a resource via getContext
+      # Get forward deps: store-path refs in manifest + explicit requires
       getForwardDeps = resource:
         let
           ctx = builtins.getContext (builtins.toJSON resource.rawManifest);
           k8sPaths = builtins.filter (p: builtins.hasAttr p localRegistry) (builtins.attrNames ctx);
+          manifestDeps = map (p: localRegistry.${p}.resource) k8sPaths;
+          requiresDeps = builtins.filter (r:
+            builtins.isAttrs r && (r._type or "") == "k8s-resource"
+          ) (resource.requires or []);
         in
-        map (p: localRegistry.${p}.resource) k8sPaths;
+        manifestDeps ++ requiresDeps;
 
-      # Compute the forward closure from mainRes using getContext only
-      computeForwardClosure = root:
+      # Compute the forward closure from mainRes + packageRequires
+      forwardRoots = [ mainRes ] ++ packageRequires;
+      forwardClosure =
         let
           go = { seen, result, queue }:
             if queue == [] then result
@@ -281,83 +291,33 @@ rec {
                   queue = rest ++ (getForwardDeps head);
                 };
         in
-        go { seen = {}; result = []; queue = [ root ]; };
+        go { seen = {}; result = []; queue = forwardRoots; };
 
-      # Also include packageRequires in the initial forward closure
-      initialForwardRoots = [ mainRes ] ++ packageRequires;
-      initialForwardClosure =
-        let
-          closures = map computeForwardClosure initialForwardRoots;
-          allResources = builtins.concatLists closures;
-          # Deduplicate
-          dedup = resources:
-            let
-              go = { seen, result, queue }:
-                if queue == [] then result
-                else
-                  let
-                    head = builtins.head queue;
-                    rest = builtins.tail queue;
-                    headPath = builtins.unsafeDiscardStringContext head.outPath;
-                  in
-                  if builtins.hasAttr headPath seen then
-                    go { inherit seen result; queue = rest; }
-                  else
-                    go {
-                      seen = seen // { ${headPath} = true; };
-                      result = result ++ [ head ];
-                      queue = rest;
-                    };
-            in
-            go { seen = {}; result = []; queue = resources; };
-        in
-        dedup allResources;
-
-      initialForwardPaths = builtins.listToAttrs (map (r: {
+      forwardPaths = builtins.listToAttrs (map (r: {
         name = builtins.unsafeDiscardStringContext r.outPath;
         value = true;
-      }) initialForwardClosure);
+      }) forwardClosure);
 
-      # Iterate to fixpoint: find non-forward resources whose manifest references
-      # any resource in the forward set. Add them + their forward deps, repeat.
-      detectInverseDeps =
+      # --- Inverse dependency detection ---
+      # Find resources NOT in the forward closure whose manifest references
+      # a resource that IS in the forward closure. Only tracks the actual
+      # inverse deps — not their forward expansions (e.g. a ClusterRoleBinding
+      # that references a SA is an inverse dep, but the ClusterRole it binds is
+      # just a forward dep of the binding, not an inverse dep itself).
+      inverseDeps =
         let
-          go = { forwardSet, forwardPaths }:
+          nonForward = builtins.filter (r:
+            !(builtins.hasAttr (builtins.unsafeDiscardStringContext r.outPath) forwardPaths)
+          ) allPartResources;
+
+          referencesForward = r:
             let
-              # Resources NOT in the forward set
-              nonForward = builtins.filter (r:
-                !(builtins.hasAttr (builtins.unsafeDiscardStringContext r.outPath) forwardPaths)
-              ) allPartResources;
-
-              # Find non-forward resources that reference any forward resource
-              referencesForward = r:
-                let
-                  ctx = builtins.getContext (builtins.toJSON r.rawManifest);
-                  ctxPaths = builtins.attrNames ctx;
-                in
-                builtins.any (p: builtins.hasAttr p forwardPaths) ctxPaths;
-
-              newInverse = builtins.filter referencesForward nonForward;
+              ctx = builtins.getContext (builtins.toJSON r.rawManifest);
+              ctxPaths = builtins.attrNames ctx;
             in
-            if newInverse == [] then
-              { inherit forwardSet forwardPaths; }
-            else
-              let
-                # Add new inverse deps and their forward closures
-                newClosures = builtins.concatMap (r: computeForwardClosure r) newInverse;
-                newForwardSet = forwardSet ++ newInverse ++ newClosures;
-                newPaths = builtins.foldl' (acc: r:
-                  acc // { ${builtins.unsafeDiscardStringContext r.outPath} = true; }
-                ) forwardPaths (newInverse ++ newClosures);
-              in
-              go { forwardSet = newForwardSet; forwardPaths = newPaths; };
+            builtins.any (p: builtins.hasAttr p forwardPaths) ctxPaths;
         in
-        go { forwardSet = initialForwardClosure; forwardPaths = initialForwardPaths; };
-
-      # Inverse deps = resources in final forward set that were NOT in the initial forward set
-      detectedInverseDeps = builtins.filter (r:
-        !(builtins.hasAttr (builtins.unsafeDiscardStringContext r.outPath) initialForwardPaths)
-      ) detectInverseDeps.forwardSet;
+        builtins.filter referencesForward nonForward;
 
       # Deduplicate inverse deps
       uniqueInverseDeps =
@@ -379,52 +339,18 @@ rec {
                   queue = rest;
                 };
         in
-        go { seen = {}; result = []; queue = detectedInverseDeps; };
-
-      # --- Collect all resource-level requires ---
-      # Since requires are NOT encoded as annotations on individual resources
-      # (to avoid cycles), we collect them all and place them on the PackageInstance.
-      allResourceRequires =
-        let
-          # Collect requires from all resources in the forward closure + inverse deps
-          allClosureResources = detectInverseDeps.forwardSet;
-          reqLists = map (r: r.requires or []) allClosureResources;
-          allReqs = builtins.concatLists reqLists;
-          # Filter to only actual k8s resources and deduplicate
-          validReqs = builtins.filter (r:
-            builtins.isAttrs r && (r._type or "") == "k8s-resource"
-          ) allReqs;
-          # Deduplicate
-          dedup = resources:
-            let
-              go = { seen, result, queue }:
-                if queue == [] then result
-                else
-                  let
-                    head = builtins.head queue;
-                    rest = builtins.tail queue;
-                    headPath = builtins.unsafeDiscardStringContext head.outPath;
-                  in
-                  if builtins.hasAttr headPath seen then
-                    go { inherit seen result; queue = rest; }
-                  else
-                    go {
-                      seen = seen // { ${headPath} = true; };
-                      result = result ++ [ head ];
-                      queue = rest;
-                    };
-            in
-            go { seen = {}; result = []; queue = resources; };
-        in
-        dedup validReqs;
+        go { seen = {}; result = []; queue = inverseDeps; };
 
       # --- Create PackageInstance CRD (Phase 5) ---
+      # Lists main.requires as package-requires and true inverse deps.
+      # Structural deps (via `requires`) are tracked by the cluster-level
+      # closure which also follows `requires`.
       packageInstance = mkPackageInstance {
         inherit instanceName namespaceName;
         namespace = namespaceResource;
         mainResource = mainRes;
-        inverseDeps = uniqueInverseDeps;
-        packageRequires = packageRequires ++ allResourceRequires;
+        inherit packageRequires;
+        inherit inverseDeps;
         version = instanceConfig.version or null;
         labels = clusterLabels // {
           "app.kubernetes.io/instance" = instanceName;

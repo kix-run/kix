@@ -136,7 +136,7 @@ rec {
   # Creates a PackageInstance CRD — root of each package's DAG subgraph.
   # Holds references to the main resource, inverse deps, and package-level requires.
   # All references use "${resource}" interpolation → store paths tracked → full DAG edges.
-  mkPackageInstance = { instanceName, namespaceName, namespace, mainResource, inverseDeps ? [], packageRequires ? [], version ? null, labels ? {} }:
+  mkPackageInstance = { instanceName, namespaceName, namespace, mainResource, packageRequires ? [], inverseDeps ? [], version ? null, labels ? {} }:
     mkResource {
       apiVersion = "kix.dev/v1alpha1";
       kind = "PackageInstance";
@@ -166,8 +166,12 @@ rec {
         let
           ctx = builtins.getContext (builtins.toJSON resource.rawManifest);
           k8sPaths = builtins.filter (p: builtins.hasAttr p registry) (builtins.attrNames ctx);
+          manifestDeps = map (p: registry.${p}.resource) k8sPaths;
+          requiresDeps = builtins.filter (r:
+            builtins.isAttrs r && (r._type or "") == "k8s-resource"
+          ) (resource.requires or []);
         in
-        map (p: registry.${p}.resource) k8sPaths;
+        manifestDeps ++ requiresDeps;
 
       go =
         {

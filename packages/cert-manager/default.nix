@@ -1209,7 +1209,9 @@ in {
     labels = controllerLabels // {
       "app.kubernetes.io/version" = cfg.image.tag;
     };
-    requires = lib.optional cfg.serviceAccount.create self.controllerSa;
+    requires = lib.optional cfg.serviceAccount.create self.controllerSa
+      ++ [ self.webhookService ]
+      ++ lib.optional cfg.startupapicheck.enabled self.startupapicheckJob;
     spec = {
       replicas = cfg.replicaCount;
       selector.matchLabels = controllerSelectorLabels;
@@ -1359,7 +1361,8 @@ in {
     labels = webhookLabels // {
       "app.kubernetes.io/version" = cfg.webhook.image.tag;
     };
-    requires = lib.optional cfg.serviceAccount.create self.webhookSa;
+    requires = lib.optional cfg.serviceAccount.create self.webhookSa
+      ++ lib.optional cfg.cainjector.enabled self.cainjectorDeployment;
     spec = {
       replicas = cfg.webhook.replicaCount;
       selector.matchLabels = webhookSelectorLabels;
@@ -1787,14 +1790,6 @@ in {
 
   main = {
     resource = self.controllerService;
-    requires =
-      [
-        self.controllerDeployment
-        self.webhookService
-        self.mutatingWebhook
-        self.validatingWebhook
-      ]
-      ++ lib.optional cfg.cainjector.enabled self.cainjectorDeployment
-      ++ lib.optional cfg.startupapicheck.enabled self.startupapicheckJob;
+    requires = [ self.controllerDeployment ];
   };
 }

@@ -249,7 +249,9 @@ in self: {
     ]
     ++ lib.optional cfg.serviceAccount.create self.serviceAccount
     ++ lib.optional pdbEnabled self.pdb
-    ++ lib.optional cfg.hpa.enabled self.hpa;
+    ++ lib.optional cfg.hpa.enabled self.hpa
+    ++ lib.optional (hasPrometheus && cfg.prometheus.service.enabled) self.metricsService
+    ++ lib.optional cfg.autoscaler.enabled self.autoscalerWorkload;
     spec = {
       replicas = if cfg.hpa.enabled || cfg.autoscaler.enabled then null else cfg.replicaCount;
       selector.matchLabels = selectorLabels;
@@ -362,7 +364,7 @@ in self: {
 
   # ── HPA (conditional) ──────────────────────────────────────────
 
-  hpa = scope.mkResource {
+  hpa = if cfg.hpa.enabled then scope.mkResource {
     apiVersion = "autoscaling/v2";
     kind = "HorizontalPodAutoscaler";
     name = "${scope.instanceName}-coredns";
@@ -375,7 +377,7 @@ in self: {
       };
       inherit (cfg.hpa) minReplicas maxReplicas metrics;
     };
-  };
+  } else null;
 
   # ── Metrics Service (conditional) ──────────────────────────────
 
@@ -583,9 +585,6 @@ in self: {
 
   main = {
     resource = self.service;
-    requires = [ self.workload ]
-      ++ lib.optional (hasPrometheus && cfg.prometheus.service.enabled) self.metricsService
-      ++ lib.optional cfg.autoscaler.enabled self.autoscalerWorkload
-      ++ lib.optional cfg.autoscaler.enabled self.autoscalerConfigmap;
+    requires = [ self.workload ];
   };
 }

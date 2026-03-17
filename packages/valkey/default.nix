@@ -888,17 +888,17 @@ in self: {
     };
   };
 
-  # -- Sentinel mode resources ------------------------------------------
+  # -- Sentinel mode resources (null when not in sentinel mode) ----------
 
-  sentinelSa = scope.mkResource {
+  sentinelSa = if cfg.sentinel.enabled then scope.mkResource {
     apiVersion = "v1";
     kind = "ServiceAccount";
     name = fullname;
     labels = allLabels;
     extra.automountServiceAccountToken = false;
-  };
+  } else null;
 
-  sentinelSvc = scope.mkResource {
+  sentinelSvc = if cfg.sentinel.enabled then scope.mkResource {
     apiVersion = "v1";
     kind = "Service";
     name = fullname;
@@ -924,9 +924,9 @@ in self: {
         }
       ];
     };
-  };
+  } else null;
 
-  sentinelSs = scope.mkResource {
+  sentinelSs = if cfg.sentinel.enabled then scope.mkResource {
     apiVersion = "apps/v1";
     kind = "StatefulSet";
     name = "${fullname}-node";
@@ -939,7 +939,9 @@ in self: {
       self.headlessSvc
     ]
     ++ lib.optional (cfg.pdb.enabled && cfg.sentinel.enabled) self.pdb
-    ++ lib.optional cfg.replica.autoscaling.hpa.enabled self.hpa;
+    ++ lib.optional cfg.replica.autoscaling.hpa.enabled self.hpa
+    ++ lib.optional cfg.metrics.enabled self.metricsService
+    ++ lib.optional cfg.networkPolicy.enabled self.networkPolicyRes;
     spec = {
       replicas = if cfg.replica.autoscaling.hpa.enabled then null else totalReplicas;
       serviceName = "${self.headlessSvc}";
@@ -978,27 +980,27 @@ in self: {
     extra = {
       spec.volumeClaimTemplates = mkDataVolumeClaimTemplate (withComponent "node");
     };
-  };
+  } else null;
 
-  # -- Replication mode resources ---------------------------------------
+  # -- Replication mode resources (null when in sentinel mode) ----------
 
-  primarySa = scope.mkResource {
+  primarySa = if !cfg.sentinel.enabled then scope.mkResource {
     apiVersion = "v1";
     kind = "ServiceAccount";
     name = "${fullname}-primary";
     labels = allLabelsWithComponent "primary";
     extra.automountServiceAccountToken = false;
-  };
+  } else null;
 
-  replicaSa = scope.mkResource {
+  replicaSa = if !cfg.sentinel.enabled then scope.mkResource {
     apiVersion = "v1";
     kind = "ServiceAccount";
     name = "${fullname}-replica";
     labels = allLabelsWithComponent "replica";
     extra.automountServiceAccountToken = false;
-  };
+  } else null;
 
-  primarySvc = scope.mkResource {
+  primarySvc = if !cfg.sentinel.enabled then scope.mkResource {
     apiVersion = "v1";
     kind = "Service";
     name = "${fullname}-primary";
@@ -1019,9 +1021,9 @@ in self: {
         }
       ];
     };
-  };
+  } else null;
 
-  replicaSvc = scope.mkResource {
+  replicaSvc = if !cfg.sentinel.enabled then scope.mkResource {
     apiVersion = "v1";
     kind = "Service";
     name = "${fullname}-replicas";
@@ -1042,9 +1044,9 @@ in self: {
         }
       ];
     };
-  };
+  } else null;
 
-  primarySs = scope.mkResource {
+  primarySs = if !cfg.sentinel.enabled then scope.mkResource {
     apiVersion = "apps/v1";
     kind = "StatefulSet";
     name = "${fullname}-primary";
@@ -1055,7 +1057,10 @@ in self: {
       self.healthCm
       self.scriptsCm
       self.headlessSvc
-    ];
+      self.replicaSs
+    ]
+    ++ lib.optional cfg.metrics.enabled self.metricsService
+    ++ lib.optional cfg.networkPolicy.enabled self.networkPolicyRes;
     spec = {
       replicas = 1;
       serviceName = "${self.headlessSvc}";
@@ -1080,9 +1085,9 @@ in self: {
     extra = {
       spec.volumeClaimTemplates = mkDataVolumeClaimTemplate (withComponent "primary");
     };
-  };
+  } else null;
 
-  replicaSs = scope.mkResource {
+  replicaSs = if !cfg.sentinel.enabled then scope.mkResource {
     apiVersion = "apps/v1";
     kind = "StatefulSet";
     name = "${fullname}-replicas";
@@ -1120,7 +1125,7 @@ in self: {
     extra = {
       spec.volumeClaimTemplates = mkDataVolumeClaimTemplate (withComponent "replica");
     };
-  };
+  } else null;
 
   # -- Optional resources -----------------------------------------------
 
@@ -1190,7 +1195,7 @@ in self: {
   };
 
   # HPA — targets replica SS in replication mode, node SS in sentinel mode
-  hpa = scope.mkResource {
+  hpa = if cfg.replica.autoscaling.hpa.enabled then scope.mkResource {
     apiVersion = "autoscaling/v2";
     kind = "HorizontalPodAutoscaler";
     name = if cfg.sentinel.enabled then "${fullname}-node" else "${fullname}-replicas";
@@ -1224,7 +1229,7 @@ in self: {
           };
         };
     };
-  };
+  } else null;
 
   # -- Main: the public interface ----------------------------------------
   #
@@ -1235,16 +1240,7 @@ in self: {
   main = {
     resource = if cfg.sentinel.enabled then self.sentinelSvc else self.primarySvc;
     requires =
-      if cfg.sentinel.enabled then
-        [ self.sentinelSs ]
-        ++ lib.optional cfg.metrics.enabled self.metricsService
-        ++ lib.optional cfg.networkPolicy.enabled self.networkPolicyRes
-      else
-        [
-          self.primarySs
-          self.replicaSs
-        ]
-        ++ lib.optional cfg.metrics.enabled self.metricsService
-        ++ lib.optional cfg.networkPolicy.enabled self.networkPolicyRes;
+      if cfg.sentinel.enabled then [ self.sentinelSs ]
+      else [ self.primarySs ];
   };
 }

@@ -80,6 +80,29 @@
               ${lib.concatStringsSep "\n" (map (e: "cp ${e.drv} $out/${e.fileName}.yaml") fileEntries)}
             '';
 
+          # Serializes raw manifests (store paths intact) into a YAML directory.
+          # Each YAML derivation retains store-path references to its dependencies,
+          # so nix-store -q --tree / --requisites shows the actual resource DAG.
+          mkManifestsRaw =
+            rawManifests:
+            let
+              fileEntries = map (
+                m:
+                let
+                  kindLower = lib.toLower m.kind;
+                  name = m.metadata.name;
+                in
+                {
+                  fileName = "${name}-${kindLower}";
+                  drv = kix.mkManifest m;
+                }
+              ) rawManifests;
+            in
+            pkgs.runCommand "k8s-manifests-raw" { } ''
+              mkdir -p $out
+              ${lib.concatStringsSep "\n" (map (e: "ln -s ${e.drv} $out/${e.fileName}.yaml") fileEntries)}
+            '';
+
         in
         {
           packages = {
@@ -87,6 +110,11 @@
             cluster-example = mkManifests clusterExample.manifests;
             cluster-full = mkManifests clusterFull.manifests;
             cluster-helm = mkManifests clusterHelm.manifests;
+
+            cluster-minimal-raw = mkManifestsRaw clusterMinimal.rawManifests;
+            cluster-example-raw = mkManifestsRaw clusterExample.rawManifests;
+            cluster-full-raw = mkManifestsRaw clusterFull.rawManifests;
+            cluster-helm-raw = mkManifestsRaw clusterHelm.rawManifests;
           };
 
           checks =
