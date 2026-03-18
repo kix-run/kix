@@ -910,12 +910,12 @@ let
     };
   };
 
-  # Assemble the container list — metrics first, then sentinel, then valkey
+  # Assemble the container list — metrics first, then sentinel (if enabled), then valkey
   # (matches Bitnami ordering).
   containers =
     lib.optional cfg.metrics.enabled metricsContainer
+    ++ lib.optional cfg.sentinel.enabled sentinelContainer
     ++ [
-      sentinelContainer
       valkeyContainer
     ];
 
@@ -1143,13 +1143,13 @@ self: {
           targetPort = "redis";
           protocol = "TCP";
         }
-        {
-          name = "tcp-sentinel";
-          port = 26379;
-          targetPort = "valkey-sentinel";
-          protocol = "TCP";
-        }
-      ];
+      ]
+      ++ lib.optional cfg.sentinel.enabled {
+        name = "tcp-sentinel";
+        port = 26379;
+        targetPort = "valkey-sentinel";
+        protocol = "TCP";
+      };
     };
     requires = [ self.statefulSet ];
   };
@@ -1172,17 +1172,19 @@ self: {
           targetPort = 6379;
           protocol = "TCP";
         }
-        {
-          name = "tcp-sentinel";
-          port = 26379;
-          targetPort = 26379;
-          protocol = "TCP";
-        }
-      ];
+      ]
+      ++ lib.optional cfg.sentinel.enabled {
+        name = "tcp-sentinel";
+        port = 26379;
+        targetPort = 26379;
+        protocol = "TCP";
+      };
     };
     outputs = {
-      sentinelPort = "26379";
       port = "6379";
+    }
+    // lib.optionalAttrs cfg.sentinel.enabled {
+      sentinelPort = "26379";
       primarySet = cfg.sentinel.primarySet;
     };
     requires = [ self.statefulSet ];

@@ -105,6 +105,11 @@ let
         initialDelaySeconds = 5;
       };
       secrets = [ ];
+      strategy = {
+        maxSurge = null; # null means use top-level cfg.maxSurge
+        maxUnavailable = null; # null means omit
+      };
+      useConfigMap = true; # set to false to skip configmap envFrom for frontend
     };
 
     # Caddy (Load Balancer/WAF)
@@ -382,10 +387,9 @@ let
       name = "frontend";
       image = "${cfg.frontend.image.repository}:${cfg.frontend.image.tag}";
       imagePullPolicy = cfg.frontend.image.pullPolicy;
-      envFrom = [
-        { configMapRef.name = "${self.frontendConfigmap}"; }
-      ]
-      ++ map (s: { secretRef.name = s; }) cfg.frontend.secrets;
+      envFrom =
+        lib.optional cfg.frontend.useConfigMap { configMapRef.name = "${self.frontendConfigmap}"; }
+        ++ map (s: { secretRef.name = s; }) cfg.frontend.secrets;
       ports = [
         {
           name = "http";
@@ -432,17 +436,25 @@ let
       command,
       args ? null,
       resources ? { },
+      image ? null,
+      lifecycle ? null,
+      env ? null,
+      secrets ? null,
     }:
     {
       name = workerName;
-      image = "${cfg.backend.image.repository}:${cfg.backend.image.tag}";
+      image = if image != null then image else "${cfg.backend.image.repository}:${cfg.backend.image.tag}";
       imagePullPolicy = cfg.backend.image.pullPolicy;
       inherit command;
-      envFrom = mkEnvFrom self self.configmap cfg.backend.secrets;
+      envFrom = mkEnvFrom self self.configmap (if secrets != null then secrets else cfg.backend.secrets);
       volumeMounts = secretVolumeMounts;
       inherit resources;
     }
-    // lib.optionalAttrs (args != null) { inherit args; };
+    // lib.optionalAttrs (args != null) { inherit args; }
+    // lib.optionalAttrs (lifecycle != null) { inherit lifecycle; }
+    // lib.optionalAttrs (env != null) {
+      env = lib.mapAttrsToList (k: v: { name = k; value = v; }) env;
+    };
 
   # ── Worker Deployment builder ───────────────────────────────────
   mkWorkerDeployment =
@@ -453,7 +465,17 @@ let
       args ? null,
       replicas ? 1,
       resources ? { },
+      strategy ? null,
+      image ? null,
+      lifecycle ? null,
+      env ? null,
+      secrets ? null,
     }:
+    let
+      deployStrategy =
+        if strategy != null then strategy
+        else { rollingUpdate.maxSurge = "100%"; };
+    in
     scope.mkResource {
       apiVersion = "apps/v1";
       kind = "Deployment";
@@ -461,7 +483,7 @@ let
       labels = componentLabels workerName;
       spec = {
         inherit replicas;
-        strategy.rollingUpdate.maxSurge = "100%";
+        strategy = deployStrategy;
         selector.matchLabels = selectorLabels workerName;
         template = {
           metadata.labels = selectorLabels workerName;
@@ -473,6 +495,10 @@ let
                   command
                   args
                   resources
+                  image
+                  lifecycle
+                  env
+                  secrets
                   ;
               })
             ];
@@ -535,6 +561,11 @@ let
         args = wCfg.args or null;
         replicas = wCfg.replicas or 1;
         resources = wCfg.resources or { };
+        strategy = wCfg.strategy or null;
+        image = wCfg.image or null;
+        lifecycle = wCfg.lifecycle or null;
+        env = wCfg.env or null;
+        secrets = wCfg.secrets or null;
       };
       hpa = mkWorkerHpa {
         hpaName = "queue-${wName}";
@@ -553,6 +584,11 @@ let
       args = wCfg.args or null;
       replicas = wCfg.replicas or 1;
       resources = wCfg.resources or { };
+      strategy = wCfg.strategy or null;
+      image = wCfg.image or null;
+      lifecycle = wCfg.lifecycle or null;
+      env = wCfg.env or null;
+      secrets = wCfg.secrets or null;
     };
   }) cfg.cronWorkers;
 
@@ -564,6 +600,11 @@ let
       args = pCfg.args or null;
       replicas = pCfg.replicas or 1;
       resources = pCfg.resources or { };
+      strategy = pCfg.strategy or null;
+      image = pCfg.image or null;
+      lifecycle = pCfg.lifecycle or null;
+      env = pCfg.env or null;
+      secrets = pCfg.secrets or null;
     };
   }) cfg.customProcesses;
 
@@ -606,7 +647,7 @@ in
 
   # ── ConfigMap (frontend environment) ────────────────────────────
   frontendConfigmap =
-    if cfg.frontend.enabled then
+    if cfg.frontend.enabled && cfg.frontend.useConfigMap then
       scope.mkResource {
         apiVersion = "v1";
         kind = "ConfigMap";
@@ -777,11 +818,21 @@ in
         labels = componentLabels "frontend";
         spec = {
           replicas = cfg.frontend.replicaCount;
-          strategy.rollingUpdate.maxSurge = "100%";
+          strategy = {
+            rollingUpdate = {
+              maxSurge = if cfg.frontend.strategy.maxSurge != null then cfg.frontend.strategy.maxSurge else cfg.maxSurge;
+            }
+            // lib.optionalAttrs (cfg.frontend.strategy.maxUnavailable != null) {
+              maxUnavailable = cfg.frontend.strategy.maxUnavailable;
+            };
+            type = "RollingUpdate";
+          };
           selector.matchLabels = selectorLabels "frontend";
           template = {
             metadata = {
               labels = selectorLabels "frontend";
+            }
+            // lib.optionalAttrs cfg.frontend.useConfigMap {
               annotations = {
                 "checksum/config" = "\${${self.frontendConfigmap}}";
               };

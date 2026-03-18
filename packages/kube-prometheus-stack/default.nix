@@ -80,11 +80,11 @@
       };
       ingress = {
         enabled = true;
-        ingressClassName = "nginx";
+        ingressClassName = "private-v2";
         hosts = [ "grafana.nw1.example.net" ];
         tls = [
           {
-            secretName = "grafana-tls";
+            secretName = "grafana-ingress-tls";
             hosts = [ "grafana.nw1.example.net" ];
           }
         ];

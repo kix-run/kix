@@ -90,6 +90,7 @@ let
 
     database = {
       username = "harbor";
+      host = null; # if set, overrides postgres.fqdn for POSTGRESQL_HOST
       existingSecret = null;
       sslmode = "require";
       maxIdleConns = "100";
@@ -193,7 +194,7 @@ self: {
 
       # Database
       DATABASE_TYPE = "postgresql";
-      POSTGRESQL_HOST = postgres.fqdn;
+      POSTGRESQL_HOST = if cfg.database.host != null then cfg.database.host else postgres.fqdn;
       POSTGRESQL_PORT = postgres.out.port;
       POSTGRESQL_USERNAME = cfg.database.username;
       POSTGRESQL_SSLMODE = cfg.database.sslmode;

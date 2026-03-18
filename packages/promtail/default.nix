@@ -36,14 +36,16 @@
     # --- DaemonSet configuration ---
     resources = {
       requests = {
-        cpu = "50m";
-        memory = "64Mi";
-      };
-      limits = {
-        cpu = "500m";
+        cpu = "250m";
         memory = "256Mi";
       };
+      limits = {
+        cpu = "1";
+        memory = "1Gi";
+      };
     };
+
+    priorityClassName = "monitoring-loki";
 
     tolerations = [
       # Run on all nodes including control plane.
@@ -105,22 +107,8 @@
 
     # --- Volume mounts for log access ---
     # The chart handles /var/log and /var/lib/docker/containers by default.
-    # Add /run/log/journal for systemd journal if needed.
-    extraVolumes = [
-      {
-        name = "journal";
-        hostPath = {
-          path = "/run/log/journal";
-        };
-      }
-    ];
-    extraVolumeMounts = [
-      {
-        name = "journal";
-        mountPath = "/run/log/journal";
-        readOnly = true;
-      }
-    ];
+    extraVolumes = [ ];
+    extraVolumeMounts = [ ];
 
     # --- Disable components we don't need ---
     serviceMonitor = {

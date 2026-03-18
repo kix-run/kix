@@ -49,7 +49,7 @@
           object_store = "s3";
           schema = "v13";
           index = {
-            prefix = "loki_index_";
+            prefix = "index_";
             period = "24h";
           };
         }
@@ -85,13 +85,15 @@
       compactor = {
         retention_enabled = true;
         delete_request_store = "s3";
-        working_directory = "/var/loki/compactor";
+        working_directory = "/tmp/loki/compactor";
       };
 
-      # --- Common server settings ---
-      server = {
-        grpc_server_max_recv_msg_size = 104857600; # 100MB
-        grpc_server_max_send_msg_size = 104857600;
+      # --- Ruler ---
+      ruler = {
+        storage = {
+          type = "local";
+          local.directory = "/tmp/loki/rules";
+        };
       };
     };
 
@@ -151,17 +153,18 @@
     # --- Gateway (nginx reverse proxy) ---
     gateway = {
       enabled = true;
-      replicas = 2;
+      replicas = 1;
       resources = {
         requests = {
           cpu = "50m";
           memory = "64Mi";
         };
         limits = {
-          cpu = "500m";
-          memory = "256Mi";
+          cpu = "250m";
+          memory = "128Mi";
         };
       };
+      priorityClassName = "monitoring-loki";
     };
 
     # --- Disable components we don't use ---
