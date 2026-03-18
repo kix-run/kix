@@ -85,6 +85,37 @@
               ${lib.concatStringsSep "\n" (map (e: "cp ${e.drv} $out/${e.fileName}.yaml") fileEntries)}
             '';
 
+          # Serializes manifests into a directory tree sorted by namespace.
+          # Output structure: $out/<namespace>/<name>-<kind>.yaml
+          # Cluster-scoped resources go into $out/_cluster/
+          mkManifestsByNamespace =
+            manifests:
+            let
+              grouped = lib.groupBy (m: m.metadata.namespace or "_cluster") manifests;
+              nsDirs = lib.mapAttrs (
+                ns: nsManiests:
+                pkgs.runCommand "k8s-manifests-ns-${ns}" { } ''
+                  mkdir -p $out
+                  ${lib.concatStringsSep "\n" (
+                    map (
+                      m:
+                      let
+                        kindLower = lib.toLower m.kind;
+                        name = m.metadata.name;
+                      in
+                      "cp ${kix.mkManifest m} $out/${name}-${kindLower}.yaml"
+                    ) nsManiests
+                  )}
+                ''
+              ) grouped;
+            in
+            pkgs.runCommand "k8s-manifests-by-namespace" { } ''
+              mkdir -p $out
+              ${lib.concatStringsSep "\n" (
+                lib.mapAttrsToList (ns: drv: "ln -s ${drv} $out/${ns}") nsDirs
+              )}
+            '';
+
           # Serializes raw manifests (store paths intact) into a YAML directory.
           # Each YAML derivation retains store-path references to its dependencies,
           # so nix-store -q --tree / --requisites shows the actual resource DAG.
@@ -116,6 +147,12 @@
             cluster-full = mkManifests clusterFull.manifests;
             cluster-helm = mkManifests clusterHelm.manifests;
             cluster-nw1 = mkManifests clusterJa1.manifests;
+
+            cluster-minimal-by-ns = mkManifestsByNamespace clusterMinimal.manifests;
+            cluster-example-by-ns = mkManifestsByNamespace clusterExample.manifests;
+            cluster-full-by-ns = mkManifestsByNamespace clusterFull.manifests;
+            cluster-helm-by-ns = mkManifestsByNamespace clusterHelm.manifests;
+            cluster-nw1-by-ns = mkManifestsByNamespace clusterJa1.manifests;
 
             cluster-minimal-raw = mkManifestsRaw clusterMinimal.rawManifests;
             cluster-example-raw = mkManifestsRaw clusterExample.rawManifests;

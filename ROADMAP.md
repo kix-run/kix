@@ -13,8 +13,8 @@
 
 ## Warnings, Errors, Checks
 
-- [ ] misuse of requires
-- [ ] missing resources in graph
+- [x] misuse of requires
+- [x] missing resources in graph
 - [ ] run static analysis of kyverno, etc
 - [ ] checks on packages (incompatible k8s version, incompatible with prometheus < 4.5.23, etc
 - [ ] sanity checks on namespace resource quotas and similar
