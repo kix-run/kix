@@ -1141,9 +1141,6 @@ in
         // lib.optionalAttrs (tlsSpec != [ ]) {
           tls = tlsSpec;
         };
-        requires =
-          (if cfg.caddy.enabled then [ self.caddyService ] else [ self.backendService ])
-          ++ lib.optional cfg.frontend.enabled self.frontendService;
       }
     else
       null;

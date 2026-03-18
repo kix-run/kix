@@ -409,7 +409,6 @@ in
             }
           ];
         };
-        requires = [ self.service ];
       }
     else
       null;

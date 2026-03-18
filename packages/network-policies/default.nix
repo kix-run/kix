@@ -162,22 +162,26 @@ let
     };
   };
 
-  prometheusScrapingAccess = mkCiliumPolicy {
-    name = "allow-prometheus-scraping";
-    spec = {
-      ingress = [
-        {
-          fromEndpoints = [
+  prometheusScrapingAccess =
+    if cwp.prometheusScrapingAccess then
+      mkCiliumPolicy {
+        name = "allow-prometheus-scraping";
+        spec = {
+          ingress = [
             {
-              matchLabels = {
-                "app.kubernetes.io/name" = "prometheus";
-              };
+              fromEndpoints = [
+                {
+                  matchLabels = {
+                    "app.kubernetes.io/name" = "prometheus";
+                  };
+                }
+              ];
             }
           ];
-        }
-      ];
-    };
-  };
+        };
+      }
+    else
+      null;
 
   ciliumHealthChecks = mkCiliumPolicy {
     name = "cilium-health-checks";

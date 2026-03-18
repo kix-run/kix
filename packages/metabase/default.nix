@@ -233,7 +233,6 @@ self: {
             }
           ];
         };
-        requires = [ self.service ];
       }
     else
       null;

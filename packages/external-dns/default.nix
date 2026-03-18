@@ -436,7 +436,6 @@ self: {
     inherit name;
     labels = allLabels;
     requires = [
-      self.serviceAccount
       self.clusterRole
       self.clusterRoleBinding
       self.service

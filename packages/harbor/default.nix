@@ -443,11 +443,6 @@ self: {
         };
       };
     };
-    requires = [
-      self.coreConfigMap
-      self.coreSecret
-      self.jobserviceSecret
-    ];
   };
 
   # ============================================================
@@ -582,7 +577,6 @@ self: {
         };
       };
     };
-    requires = [ self.portalConfigMap ];
   };
 
   # ============================================================
@@ -901,16 +895,6 @@ self: {
         };
       };
     };
-    requires = [
-      self.registryConfigMap
-      self.registrySecret
-      self.registryHtpasswdSecret
-      self.registryCtlConfigMap
-      self.registryCtlSecret
-      self.registryPVC
-      self.coreSecret
-      self.jobserviceSecret
-    ];
   };
 
   registryCtlConfigMap = scope.mkResource {
@@ -1158,13 +1142,6 @@ self: {
         };
       };
     };
-    requires = [
-      self.jobserviceConfigMap
-      self.jobserviceEnvConfigMap
-      self.jobserviceSecret
-      self.jobservicePVC
-      self.coreSecret
-    ];
   };
 
   # ============================================================
