@@ -92,6 +92,32 @@ _LIST_KEY_EXTRACTORS: dict[str, Callable[[dict], str]] = {
 }
 
 
+def _normalize(value: Any) -> Any:
+    """Deep-sort all lists within a value so order doesn't affect comparison."""
+    if isinstance(value, dict):
+        return {k: _normalize(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return sorted((_normalize(v) for v in value), key=_sort_key)
+    return value
+
+
+def _sort_key(value: Any) -> tuple:
+    """Return a canonical sort key for any value, so lists can be sorted regardless of element type."""
+    if value is None:
+        return (0,)
+    if isinstance(value, bool):
+        return (1, value)
+    if isinstance(value, (int, float)):
+        return (2, value)
+    if isinstance(value, str):
+        return (3, value)
+    if isinstance(value, list):
+        return (4, tuple(_sort_key(v) for v in value))
+    if isinstance(value, dict):
+        return (5, tuple(sorted((k, _sort_key(v)) for k, v in value.items())))
+    return (6, str(value))
+
+
 def _path_leaf(path: str) -> str:
     """Extract the last field name from a JSON path, stripping array indices."""
     part = path.rsplit(".", 1)[-1]
@@ -204,20 +230,49 @@ def structural_diff(
                 diffs.extend(structural_diff(a[key], b[key], child_path, ignore_paths, a_label, b_label))
         return diffs
 
-    # Lists — try key-based matching first, fall back to index-based
+    # Lists — try key-based matching first, fall back to content-based matching
     if isinstance(a, list):
         parent_key = _path_leaf(path)
         key_fn = _get_list_key_fn(parent_key, a, b)
         if key_fn is not None:
             return diffs + _diff_keyed_list(a, b, path, key_fn, ignore_paths, a_label, b_label)
-        for i in range(max(len(a), len(b))):
-            child_path = f"{path}[{i}]"
-            if i >= len(b):
-                diffs.append(Difference(child_path, DiffKind.MISSING_IN_B, a[i], a_label=a_label, b_label=b_label))
-            elif i >= len(a):
-                diffs.append(Difference(child_path, DiffKind.EXTRA_IN_B, b_value=b[i], a_label=a_label, b_label=b_label))
-            else:
-                diffs.extend(structural_diff(a[i], b[i], child_path, ignore_paths, a_label, b_label))
+        # Normalize both lists (deep-sort inner lists) and match by content
+        a_normed = [_normalize(v) for v in a]
+        b_normed = [_normalize(v) for v in b]
+        # Build a canonical string key for each item to enable set-like matching
+        a_keyed = [(repr(_sort_key(v)), v) for v in a_normed]
+        b_keyed = [(repr(_sort_key(v)), v) for v in b_normed]
+        a_by_key: dict[str, list] = {}
+        for k, v in a_keyed:
+            a_by_key.setdefault(k, []).append(v)
+        b_by_key: dict[str, list] = {}
+        for k, v in b_keyed:
+            b_by_key.setdefault(k, []).append(v)
+        all_keys = list(dict.fromkeys(
+            [k for k, _ in sorted(a_keyed, key=lambda x: x[0])]
+            + [k for k, _ in sorted(b_keyed, key=lambda x: x[0])]
+        ))
+        idx = 0
+        for key in all_keys:
+            a_items = a_by_key.get(key, [])
+            b_items = b_by_key.get(key, [])
+            # Match items pairwise (handles duplicates)
+            paired = min(len(a_items), len(b_items))
+            for j in range(paired):
+                child_path = f"{path}[{idx}]"
+                if ignore_paths and _path_ignored(child_path, ignore_paths):
+                    idx += 1
+                    continue
+                diffs.extend(structural_diff(a_items[j], b_items[j], child_path, ignore_paths, a_label, b_label))
+                idx += 1
+            for j in range(paired, len(a_items)):
+                child_path = f"{path}[{idx}]"
+                diffs.append(Difference(child_path, DiffKind.MISSING_IN_B, a_items[j], a_label=a_label, b_label=b_label))
+                idx += 1
+            for j in range(paired, len(b_items)):
+                child_path = f"{path}[{idx}]"
+                diffs.append(Difference(child_path, DiffKind.EXTRA_IN_B, b_value=b_items[j], a_label=a_label, b_label=b_label))
+                idx += 1
         return diffs
 
     # Scalars

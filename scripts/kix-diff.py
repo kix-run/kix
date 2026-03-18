@@ -280,6 +280,16 @@ def generate_report(
     renamed_kix = {kix_key for kix_key, _, _, _ in rename_pairs}
     renamed_cluster = {cluster_key for _, cluster_key, _, _ in rename_pairs}
 
+    # Classify renames: those with only name/namespace diffs count as identical,
+    # the rest count as modified
+    _RENAME_ONLY_PATHS = {"$.metadata.name", "$.metadata.namespace"}
+    for kix_key, cluster_key, ratio, diffs in rename_pairs:
+        non_rename_diffs = [d for d in diffs if d.path not in _RENAME_ONLY_PATHS]
+        if non_rename_diffs:
+            modified.append((kix_key, non_rename_diffs))
+        else:
+            identical.append(kix_key)
+
     # Header
     if color:
         lines.append(f"{_BOLD}kix diff report{_RESET}")
@@ -295,13 +305,15 @@ def generate_report(
         lines.append(f"**cluster:** `{cluster_dir}` ({len(cluster_resources)} resources)")
     lines.append("")
 
-    # Summary
+    # Summary (exclude renames from kix-only / cluster-only counts)
+    n_kix_only = len(kix_only) - len(renamed_kix)
+    n_cluster_only = len(cluster_only) - len(renamed_cluster)
     if color:
         lines.append(f"{_BOLD}Summary{_RESET}")
         lines.append(f"  Identical:    {_DIM}{len(identical)}{_RESET}")
         lines.append(f"  Modified:     {_YELLOW}{len(modified)}{_RESET}")
-        lines.append(f"  kix-only:     {_RED}{len(kix_only)}{_RESET}")
-        lines.append(f"  Cluster-only: {_GREEN}{len(cluster_only)}{_RESET}")
+        lines.append(f"  kix-only:     {_RED}{n_kix_only}{_RESET}")
+        lines.append(f"  Cluster-only: {_GREEN}{n_cluster_only}{_RESET}")
     else:
         lines.append("## Summary")
         lines.append("")
@@ -309,8 +321,8 @@ def generate_report(
         lines.append("|----------|-------|")
         lines.append(f"| Identical | {len(identical)} |")
         lines.append(f"| Modified | {len(modified)} |")
-        lines.append(f"| kix-only | {len(kix_only)} |")
-        lines.append(f"| Cluster-only | {len(cluster_only)} |")
+        lines.append(f"| kix-only | {n_kix_only} |")
+        lines.append(f"| Cluster-only | {n_cluster_only} |")
     lines.append("")
 
     # Probable renames section (before kix-only/cluster-only so context is clear)
@@ -318,20 +330,24 @@ def generate_report(
         lines.append(f"{_BOLD}Probable renames / moves{_RESET}" if color else "## Probable renames / moves")
         lines.append("")
         for kix_key, cluster_key, ratio, diffs in rename_pairs:
+            non_rename_diffs = [d for d in diffs if d.path not in _RENAME_ONLY_PATHS]
             pct = int(ratio * 100)
             if color:
                 lines.append(f"  {_CYAN}{_BOLD}{format_resource(kix_key)}{_RESET} <-> {_CYAN}{_BOLD}{format_resource(cluster_key)}{_RESET} {_DIM}({pct}% match){_RESET}")
             else:
                 lines.append(f"### `{format_resource(kix_key)}` <-> `{format_resource(cluster_key)}` ({pct}% match)")
             lines.append("")
-            if diffs:
+            if non_rename_diffs:
                 if not color:
                     lines.append("```")
-                lines.append(format_diffs(diffs, color=color, full_diff=full_diff))
+                lines.append(format_diffs(non_rename_diffs, color=color, full_diff=full_diff))
                 if not color:
                     lines.append("```")
             else:
-                lines.append("*Structurally identical (only name/namespace differs)*")
+                if color:
+                    lines.append(f"  {_DIM}(identical apart from name/namespace){_RESET}")
+                else:
+                    lines.append("*Structurally identical (only name/namespace differs)*")
             lines.append("")
 
     # kix-only section (excluding resources that were matched as renames)
