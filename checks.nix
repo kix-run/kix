@@ -147,7 +147,7 @@ rec {
         r:
         let
           podSpec = getPodSpec r;
-          volumes = podSpec.volumes or [ ];
+          volumes = let v = podSpec.volumes or [ ]; in if v == null then [ ] else v;
         in
         builtins.concatMap (
           vol:
@@ -174,12 +174,45 @@ rec {
       selectorMatchesLabels =
         selector: labels: builtins.all (k: (labels.${k} or null) == selector.${k}) (lib.attrNames selector);
 
+      # Workaround: Prometheus Operator creates pods from Prometheus/Alertmanager
+      # CRDs at runtime, injecting its own labels. Since those labels don't exist
+      # at Nix evaluation time, we can't match Service selectors against them.
+      # We exempt services whose name matches a CRD resource name instead.
+      operatorWorkloadKinds = [
+        "Prometheus"
+        "Alertmanager"
+      ];
+
+      # Workaround: kube-prometheus-stack Helm chart creates headless Services
+      # that target Kubernetes control-plane and system pods (coredns, scheduler,
+      # etc.) for scraping metrics. These pods are managed by the cluster itself,
+      # not by kix, so they will never appear in the manifest set.
+      systemComponentSelectors = [
+        { "k8s-app" = "kube-dns"; }
+        { "component" = "kube-controller-manager"; }
+        { "component" = "kube-scheduler"; }
+        { "component" = "kube-apiserver"; }
+        { "k8s-app" = "kube-proxy"; }
+        { "component" = "etcd"; }
+      ];
+
       serviceValidation = builtins.all (
         svc:
         let
           selector = svc.spec.selector or { };
+          isSystemComponent = builtins.any (sc: selectorMatchesLabels sc selector) systemComponentSelectors;
+          targetsOperatorWorkload = builtins.any (
+            r: builtins.elem r.kind operatorWorkloadKinds
+          ) resources
+          && builtins.any (
+            r:
+            builtins.elem r.kind operatorWorkloadKinds
+            && lib.hasPrefix r.metadata.name svc.metadata.name
+          ) resources;
         in
         selector == { }
+        || isSystemComponent
+        || targetsOperatorWorkload
         || builtins.any (
           w:
           let
