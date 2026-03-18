@@ -55,8 +55,43 @@ let
     "app.kubernetes.io/version" = cfg.image.tag;
   };
 
+  # --- RBAC DSL ---
+  inherit (scope.rbac) group core grant full allow sub mkClusterRoleSet mkRoleSet;
+  actions   = group "actions.github.com" [ "autoscalingrunnersets" "autoscalinglisteners" "ephemeralrunnersets" "ephemeralrunners" ];
+  actionResources = [ actions.autoscalingrunnersets actions.autoscalinglisteners actions.ephemeralrunnersets actions.ephemeralrunners ];
+  rbacGroup = group "rbac.authorization.k8s.io" [ "rolebindings" "roles" ];
+
 in
-self: {
+self:
+let
+
+  clusterRoles = mkClusterRoleSet scope {
+    subjects = [{ kind = "ServiceAccount"; name = "${self.serviceAccount}"; namespace = scope.namespaceName; }];
+    roles = {
+      "${controllerName}" = grant [
+        ([core.pods core.serviceaccounts]          |> allow [ "list" "watch" ])
+        (actionResources                           |> full)
+        (map (sub "finalizers") actionResources    |> allow [ "patch" "update" ])
+        (map (sub "status") actionResources        |> allow [ "get" "patch" "update" ])
+        (rbacGroup.rolebindings                    |> allow [ "list" "watch" ])
+        (rbacGroup.roles                           |> allow [ "list" "watch" "patch" ])
+      ];
+    };
+  };
+
+  nsRoles = mkRoleSet scope {
+    subjects = [{ kind = "ServiceAccount"; name = "${self.serviceAccount}"; namespace = scope.namespaceName; }];
+    roles = {
+      "${controllerName}-listener" = grant [
+        (core.pods              |> allow [ "create" "delete" "get" ])
+        (core "pods/status"     |> allow [ "get" ])
+        (core.secrets           |> allow [ "create" "delete" "get" "patch" "update" ])
+        (core.serviceaccounts   |> allow [ "create" "delete" "get" "patch" "update" ])
+      ];
+    };
+  };
+
+in {
 
   # --- ServiceAccount ---
   serviceAccount = scope.mkResource {
@@ -66,255 +101,6 @@ self: {
     labels = selectorLabels // {
       "app.kubernetes.io/part-of" = "gha-rs-controller";
       "app.kubernetes.io/version" = cfg.image.tag;
-    };
-  };
-
-  # --- ClusterRole ---
-  clusterRole = scope.mkClusterResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "ClusterRole";
-    name = controllerName;
-    extra.rules = [
-      {
-        apiGroups = [ "" ];
-        resources = [ "pods" ];
-        verbs = [
-          "list"
-          "watch"
-        ];
-      }
-      {
-        apiGroups = [ "" ];
-        resources = [ "serviceaccounts" ];
-        verbs = [
-          "list"
-          "watch"
-        ];
-      }
-      {
-        apiGroups = [ "actions.github.com" ];
-        resources = [ "autoscalingrunnersets" ];
-        verbs = [
-          "create"
-          "delete"
-          "get"
-          "list"
-          "patch"
-          "update"
-          "watch"
-        ];
-      }
-      {
-        apiGroups = [ "actions.github.com" ];
-        resources = [ "autoscalingrunnersets/finalizers" ];
-        verbs = [
-          "patch"
-          "update"
-        ];
-      }
-      {
-        apiGroups = [ "actions.github.com" ];
-        resources = [ "autoscalingrunnersets/status" ];
-        verbs = [
-          "get"
-          "patch"
-          "update"
-        ];
-      }
-      {
-        apiGroups = [ "actions.github.com" ];
-        resources = [ "autoscalinglisteners" ];
-        verbs = [
-          "create"
-          "delete"
-          "get"
-          "list"
-          "patch"
-          "update"
-          "watch"
-        ];
-      }
-      {
-        apiGroups = [ "actions.github.com" ];
-        resources = [ "autoscalinglisteners/status" ];
-        verbs = [
-          "get"
-          "patch"
-          "update"
-        ];
-      }
-      {
-        apiGroups = [ "actions.github.com" ];
-        resources = [ "autoscalinglisteners/finalizers" ];
-        verbs = [
-          "patch"
-          "update"
-        ];
-      }
-      {
-        apiGroups = [ "actions.github.com" ];
-        resources = [ "ephemeralrunnersets" ];
-        verbs = [
-          "create"
-          "delete"
-          "get"
-          "list"
-          "patch"
-          "update"
-          "watch"
-        ];
-      }
-      {
-        apiGroups = [ "actions.github.com" ];
-        resources = [ "ephemeralrunnersets/status" ];
-        verbs = [
-          "get"
-          "patch"
-          "update"
-        ];
-      }
-      {
-        apiGroups = [ "actions.github.com" ];
-        resources = [ "ephemeralrunnersets/finalizers" ];
-        verbs = [
-          "patch"
-          "update"
-        ];
-      }
-      {
-        apiGroups = [ "actions.github.com" ];
-        resources = [ "ephemeralrunners" ];
-        verbs = [
-          "create"
-          "delete"
-          "get"
-          "list"
-          "patch"
-          "update"
-          "watch"
-        ];
-      }
-      {
-        apiGroups = [ "actions.github.com" ];
-        resources = [ "ephemeralrunners/finalizers" ];
-        verbs = [
-          "patch"
-          "update"
-        ];
-      }
-      {
-        apiGroups = [ "actions.github.com" ];
-        resources = [ "ephemeralrunners/status" ];
-        verbs = [
-          "get"
-          "patch"
-          "update"
-        ];
-      }
-      {
-        apiGroups = [ "rbac.authorization.k8s.io" ];
-        resources = [ "rolebindings" ];
-        verbs = [
-          "list"
-          "watch"
-        ];
-      }
-      {
-        apiGroups = [ "rbac.authorization.k8s.io" ];
-        resources = [ "roles" ];
-        verbs = [
-          "list"
-          "watch"
-          "patch"
-        ];
-      }
-    ];
-  };
-
-  # --- ClusterRoleBinding ---
-  clusterRoleBinding = scope.mkClusterResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "ClusterRoleBinding";
-    name = controllerName;
-    extra = {
-      roleRef = {
-        apiGroup = "rbac.authorization.k8s.io";
-        kind = "ClusterRole";
-        name = "${self.clusterRole}";
-      };
-      subjects = [
-        {
-          kind = "ServiceAccount";
-          name = "${self.serviceAccount}";
-          namespace = scope.namespaceName;
-        }
-      ];
-    };
-  };
-
-  # --- Role (listener, namespace-scoped) ---
-  listenerRole = scope.mkResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "Role";
-    name = "${controllerName}-listener";
-    extra.rules = [
-      {
-        apiGroups = [ "" ];
-        resources = [ "pods" ];
-        verbs = [
-          "create"
-          "delete"
-          "get"
-        ];
-      }
-      {
-        apiGroups = [ "" ];
-        resources = [ "pods/status" ];
-        verbs = [ "get" ];
-      }
-      {
-        apiGroups = [ "" ];
-        resources = [ "secrets" ];
-        verbs = [
-          "create"
-          "delete"
-          "get"
-          "patch"
-          "update"
-        ];
-      }
-      {
-        apiGroups = [ "" ];
-        resources = [ "serviceaccounts" ];
-        verbs = [
-          "create"
-          "delete"
-          "get"
-          "patch"
-          "update"
-        ];
-      }
-    ];
-  };
-
-  # --- RoleBinding ---
-  listenerRoleBinding = scope.mkResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "RoleBinding";
-    name = "${controllerName}-listener";
-    extra = {
-      roleRef = {
-        apiGroup = "rbac.authorization.k8s.io";
-        kind = "Role";
-        name = "${self.listenerRole}";
-      };
-      subjects = [
-        {
-          kind = "ServiceAccount";
-          name = "${self.serviceAccount}";
-          namespace = scope.namespaceName;
-        }
-      ];
     };
   };
 
@@ -385,14 +171,5 @@ self: {
   };
 
   # --- Entry point ---
-  main = {
-    resource = self.deployment;
-    requires = [
-      self.serviceAccount
-      self.clusterRole
-      self.clusterRoleBinding
-      self.listenerRole
-      self.listenerRoleBinding
-    ];
-  };
-}
+  main = self.deployment;
+} // clusterRoles // nsRoles

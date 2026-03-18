@@ -147,7 +147,7 @@ self: {
     labels = selectorLabels;
     spec = {
       type = "ClusterIP";
-      selector = selectorLabels;
+      selector = scope.selectWorkload self.deployment;
       ports = [
         {
           name = "http";

@@ -62,6 +62,7 @@ let
 
   prefix = cfg.namePrefix;
   name = scope.instanceName;
+  ns = scope.namespaceName;
 
   # Labels applied to the deployment, service, and pod selector.
   selectorLabels = {
@@ -217,8 +218,59 @@ let
     ];
   };
 
+  # --- RBAC DSL ---
+  inherit (scope.rbac) group core grant full readWrite watch allow mkClusterRoleSet mkRoleSet;
+  apps      = group "apps" [ "daemonsets" "deployments" "statefulsets" ];
+  authn     = group "authentication.k8s.io" [ "tokenreviews" ];
+  authz     = group "authorization.k8s.io" [ "subjectaccessreviews" ];
+  coord     = group "coordination.k8s.io" [ "leases" ];
+  infisical = group "secrets.infisical.com" allManagedCrds;
+  emit      = scope.rbac.emit;
+
 in
-self: {
+self:
+let
+
+  clusterRoles = mkClusterRoleSet scope {
+    subjects = [{ kind = "ServiceAccount"; name = "${self.serviceAccount}"; namespace = ns; }];
+    labels = rbacLabels;
+    roles = {
+      "${prefix}-manager-role" = grant ([
+        (core.configmaps              |> readWrite)
+        (core.pods                    |> allow [ "get" "list" ])
+        (core.secrets                 |> readWrite)
+        (core.serviceaccounts         |> watch)
+        (core "serviceaccounts/token" |> allow [ "create" ])
+        (apps.daemonsets              |> allow [ "get" "list" "update" "watch" ])
+        (apps.deployments             |> allow [ "get" "list" "update" "watch" ])
+        (apps.statefulsets            |> allow [ "get" "list" "update" "watch" ])
+        (authn.tokenreviews           |> allow [ "create" ])
+      ] ++ lib.concatMap (crd: [
+        (infisical crd               |> full)
+        (infisical crd               |> scope.rbac.finalize)
+        (infisical "${crd}/status"   |> allow [ "get" "patch" "update" ])
+      ]) allManagedCrds);
+
+      "${prefix}-proxy-role" = grant [
+        (authn.tokenreviews           |> allow [ "create" ])
+        (authz.subjectaccessreviews   |> allow [ "create" ])
+      ];
+    };
+  };
+
+  nsRoles = mkRoleSet scope {
+    subjects = [{ kind = "ServiceAccount"; name = "${self.serviceAccount}"; namespace = ns; }];
+    labels = rbacLabels;
+    roles = {
+      "${prefix}-leader-election-role" = grant [
+        (core.configmaps |> full)
+        (coord.leases    |> full)
+        (core.events     |> emit)
+      ];
+    };
+  };
+
+in {
 
   serviceAccount = scope.mkResource {
     apiVersion = "v1";
@@ -227,92 +279,7 @@ self: {
     labels = rbacLabels;
   };
 
-  # --- ClusterRoles ---
-
-  managerRole = scope.mkClusterResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "ClusterRole";
-    name = "${prefix}-manager-role";
-    labels = rbacLabels;
-    extra.rules = [
-      {
-        apiGroups = [ "" ];
-        resources = [ "configmaps" ];
-        verbs = [ "create" "delete" "get" "list" "update" "watch" ];
-      }
-      {
-        apiGroups = [ "" ];
-        resources = [ "pods" ];
-        verbs = [ "get" "list" ];
-      }
-      {
-        apiGroups = [ "" ];
-        resources = [ "secrets" ];
-        verbs = [ "create" "delete" "get" "list" "update" "watch" ];
-      }
-      {
-        apiGroups = [ "" ];
-        resources = [ "serviceaccounts" ];
-        verbs = [ "get" "list" "watch" ];
-      }
-      {
-        apiGroups = [ "" ];
-        resources = [ "serviceaccounts/token" ];
-        verbs = [ "create" ];
-      }
-      {
-        apiGroups = [ "apps" ];
-        resources = [ "daemonsets" "deployments" "statefulsets" ];
-        verbs = [ "get" "list" "update" "watch" ];
-      }
-      {
-        apiGroups = [ "apps" ];
-        resources = [ "deployments" ];
-        verbs = [ "get" "list" "update" "watch" ];
-      }
-      {
-        apiGroups = [ "authentication.k8s.io" ];
-        resources = [ "tokenreviews" ];
-        verbs = [ "create" ];
-      }
-    ]
-    ++ lib.concatMap (crd: [
-      {
-        apiGroups = [ "secrets.infisical.com" ];
-        resources = [ crd ];
-        verbs = [ "create" "delete" "get" "list" "patch" "update" "watch" ];
-      }
-      {
-        apiGroups = [ "secrets.infisical.com" ];
-        resources = [ "${crd}/finalizers" ];
-        verbs = [ "update" ];
-      }
-      {
-        apiGroups = [ "secrets.infisical.com" ];
-        resources = [ "${crd}/status" ];
-        verbs = [ "get" "patch" "update" ];
-      }
-    ]) allManagedCrds;
-  };
-
-  proxyRole = scope.mkClusterResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "ClusterRole";
-    name = "${prefix}-proxy-role";
-    labels = rbacLabels;
-    extra.rules = [
-      {
-        apiGroups = [ "authentication.k8s.io" ];
-        resources = [ "tokenreviews" ];
-        verbs = [ "create" ];
-      }
-      {
-        apiGroups = [ "authorization.k8s.io" ];
-        resources = [ "subjectaccessreviews" ];
-        verbs = [ "create" ];
-      }
-    ];
-  };
+  # --- Standalone ClusterRole (no binding — uses nonResourceURLs) ---
 
   metricsReaderRole = scope.mkClusterResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
@@ -327,116 +294,6 @@ self: {
     ];
   };
 
-  # --- ClusterRoleBindings ---
-
-  managerRoleBinding = scope.mkClusterResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "ClusterRoleBinding";
-    name = "${prefix}-manager-rolebinding";
-    labels = rbacLabels;
-    extra = {
-      roleRef = {
-        apiGroup = "rbac.authorization.k8s.io";
-        kind = "ClusterRole";
-        name = "${self.managerRole}";
-      };
-      subjects = [
-        {
-          kind = "ServiceAccount";
-          name = "${self.serviceAccount}";
-          namespace = scope.namespaceName;
-        }
-      ];
-    };
-  };
-
-  proxyRoleBinding = scope.mkClusterResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "ClusterRoleBinding";
-    name = "${prefix}-proxy-rolebinding";
-    labels = rbacLabels;
-    extra = {
-      roleRef = {
-        apiGroup = "rbac.authorization.k8s.io";
-        kind = "ClusterRole";
-        name = "${self.proxyRole}";
-      };
-      subjects = [
-        {
-          kind = "ServiceAccount";
-          name = "${self.serviceAccount}";
-          namespace = scope.namespaceName;
-        }
-      ];
-    };
-  };
-
-  # --- Role + RoleBinding (leader election, namespace-scoped) ---
-
-  leaderElectionRole = scope.mkResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "Role";
-    name = "${prefix}-leader-election-role";
-    labels = rbacLabels;
-    extra.rules = [
-      {
-        apiGroups = [ "" ];
-        resources = [ "configmaps" ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-          "create"
-          "update"
-          "patch"
-          "delete"
-        ];
-      }
-      {
-        apiGroups = [ "coordination.k8s.io" ];
-        resources = [ "leases" ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-          "create"
-          "update"
-          "patch"
-          "delete"
-        ];
-      }
-      {
-        apiGroups = [ "" ];
-        resources = [ "events" ];
-        verbs = [
-          "create"
-          "patch"
-        ];
-      }
-    ];
-  };
-
-  leaderElectionRoleBinding = scope.mkResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "RoleBinding";
-    name = "${prefix}-leader-election-rolebinding";
-    labels = rbacLabels;
-    extra = {
-      roleRef = {
-        apiGroup = "rbac.authorization.k8s.io";
-        kind = "Role";
-        name = "${self.leaderElectionRole}";
-      };
-      subjects = [
-        {
-          kind = "ServiceAccount";
-          name = "${self.serviceAccount}";
-          namespace = scope.namespaceName;
-        }
-      ];
-    };
-  };
-
   # --- Service (metrics) ---
 
   service = scope.mkResource {
@@ -446,7 +303,7 @@ self: {
     labels = selectorLabels;
     spec = {
       type = "ClusterIP";
-      selector = selectorLabels;
+      selector = scope.selectWorkload self.deployment;
       ports = [
         {
           name = "https";
@@ -499,14 +356,10 @@ self: {
     resource = self.deployment;
     requires = [
       self.serviceAccount
-      self.managerRole
-      self.proxyRole
       self.metricsReaderRole
-      self.managerRoleBinding
-      self.proxyRoleBinding
-      self.leaderElectionRole
-      self.leaderElectionRoleBinding
       self.service
     ];
   };
 }
+// clusterRoles
+// nsRoles

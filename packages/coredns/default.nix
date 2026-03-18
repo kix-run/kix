@@ -4,7 +4,7 @@
 # ClusterRole, ClusterRoleBinding, and optionally HPA, PDB, metrics
 # Service, and ServiceMonitor.
 #
-# main = Service (kube-dns), with requires pointing to the Deployment.
+# main = Service (kube-dns), selecting the Deployment via scope.selectWorkload.
 
 {
   scope,
@@ -71,24 +71,26 @@ let
   pdbEnabled =
     cfg.podDisruptionBudget.minAvailable != null || cfg.podDisruptionBudget.maxUnavailable != null;
 
-  # Common labels applied to all resources.
-  commonLabels = {
-    "k8s-app" = "coredns";
-    "app.kubernetes.io/name" = "coredns";
-  }
-  // lib.optionalAttrs cfg.isClusterService {
-    "kubernetes.io/cluster-service" = "true";
-    "kubernetes.io/name" = "CoreDNS";
-  };
-
-  # Selector labels (subset used in matchLabels and service selectors).
+  # Selector labels — used for Deployment matchLabels and template labels.
+  # Other resources derive selectors via scope.selectWorkload / scope.selectByLabels.
   selectorLabels = {
     "k8s-app" = "coredns";
     "app.kubernetes.io/name" = "coredns";
   };
 
+  # Common labels applied to all resources.
+  commonLabels = selectorLabels
+    // lib.optionalAttrs cfg.isClusterService {
+      "kubernetes.io/cluster-service" = "true";
+      "kubernetes.io/name" = "CoreDNS";
+    };
+
   # Build the Corefile string from server config.
   corefile = helpers.mkCorefile cfg.servers;
+
+  # RBAC DSL
+  inherit (scope.rbac) grant allow core;
+  discovery = scope.rbac.group "discovery.k8s.io" [ "endpointslices" ];
 
 in
 self: {
@@ -118,60 +120,19 @@ self: {
     };
   };
 
-  # --- ClusterRole ---
-  clusterRole = scope.mkClusterResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "ClusterRole";
-    name = "${scope.instanceName}";
-    labels = commonLabels;
-    extra = {
-      rules = [
-        {
-          apiGroups = [ "" ];
-          resources = [
-            "endpoints"
-            "services"
-            "pods"
-            "namespaces"
-          ];
-          verbs = [
-            "list"
-            "watch"
-          ];
-        }
-        {
-          apiGroups = [ "discovery.k8s.io" ];
-          resources = [ "endpointslices" ];
-          verbs = [
-            "list"
-            "watch"
-          ];
-        }
-      ];
-    };
+} // scope.rbac.mkClusterRoleSet scope {
+  subjects = [{
+    kind = "ServiceAccount";
+    name = "${self.serviceAccount}";
+    namespace = scope.namespaceName;
+  }];
+  labels = commonLabels;
+  roles = {
+    "${scope.instanceName}" = grant [
+      ([core.endpoints core.services core.pods core.namespaces discovery.endpointslices] |> allow [ "list" "watch" ])
+    ];
   };
-
-  # --- ClusterRoleBinding ---
-  clusterRoleBinding = scope.mkClusterResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "ClusterRoleBinding";
-    name = "${scope.instanceName}";
-    labels = commonLabels;
-    extra = {
-      roleRef = {
-        apiGroup = "rbac.authorization.k8s.io";
-        kind = "ClusterRole";
-        name = "${self.clusterRole}";
-      };
-      subjects = [
-        ({
-          kind = "ServiceAccount";
-          name = "${self.serviceAccount}";
-          namespace = scope.namespaceName;
-        })
-      ];
-    };
-  };
+} // {
 
   # --- Deployment ---
   deployment = scope.mkResource {
@@ -306,9 +267,7 @@ self: {
     name = "${scope.instanceName}";
     labels = commonLabels;
     spec = {
-      selector = selectorLabels // {
-        "app.kubernetes.io/instance" = scope.instanceName;
-      };
+      selector = scope.selectWorkload self.deployment;
       ports = [
         {
           name = "udp-53";
@@ -325,8 +284,8 @@ self: {
       };
       type = cfg.serviceType;
     };
-    requires = [ self.deployment ]
-      ++ lib.optional (self.metricsService != null) self.metricsService
+    requires =
+      lib.optional (self.metricsService != null) self.metricsService
       ++ lib.optional (self.serviceMonitor != null) self.serviceMonitor
       ++ lib.optional (self.hpa != null) self.hpa
       ++ lib.optional (self.pdb != null) self.pdb;
@@ -344,9 +303,7 @@ self: {
         };
         annotations = cfg.prometheus.service.annotations or { };
         spec = {
-          selector = selectorLabels // {
-            "app.kubernetes.io/instance" = scope.instanceName;
-          };
+          selector = scope.selectWorkload self.deployment;
           ports = [
             {
               name = "metrics";
@@ -357,7 +314,6 @@ self: {
           ];
           type = "ClusterIP";
         };
-        requires = [ self.deployment ];
       }
     else
       null;
@@ -372,10 +328,7 @@ self: {
         labels = commonLabels;
         spec = {
           namespaceSelector.matchNames = [ scope.namespaceName ];
-          selector.matchLabels = selectorLabels // {
-            "app.kubernetes.io/instance" = scope.instanceName;
-            "app.kubernetes.io/component" = "metrics";
-          };
+          selector.matchLabels = scope.selectByLabels self.metricsService;
           endpoints = [
             (
               {
@@ -422,9 +375,7 @@ self: {
         name = "${scope.instanceName}";
         labels = commonLabels;
         spec = {
-          selector.matchLabels = selectorLabels // {
-            "app.kubernetes.io/instance" = scope.instanceName;
-          };
+          selector.matchLabels = scope.selectWorkload self.deployment;
         }
         // lib.optionalAttrs (cfg.podDisruptionBudget.minAvailable != null) {
           minAvailable = cfg.podDisruptionBudget.minAvailable;
@@ -437,8 +388,8 @@ self: {
       null;
 
   # --- Entry point ---
-  # main is the Service. It `requires` the Deployment, which in turn
-  # references the ConfigMap and ServiceAccount via ${} interpolation.
-  # The ClusterRoleBinding references both ClusterRole and ServiceAccount.
+  # main is the Service. The Deployment is tracked via scope.selectWorkload,
+  # ConfigMap and ServiceAccount via ${} interpolation.
+  # RBAC is pulled in via inverse dependency detection.
   main = self.service;
 }

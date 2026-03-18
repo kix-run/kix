@@ -2,12 +2,13 @@
 #
 # Concepts:
 #   Ref    = { apiGroup; resource; resourceNames? }  — pointer to a K8s resource type
-#   Intent = Ref -> [Rule]                            — permission pattern
-#   grant  = [[Rule]] -> [Rule]                       — flatten intent results
+#   Intent = Ref | [Ref] -> [Rule]                    — permission pattern (single or list)
+#   grant  = [[Rule]] -> [Rule]                       — flatten + merge intent results
 #
 # Pipe idiom:
-#   cm.issuers |> reconcile            ref |> intent
+#   cm.issuers |> reconcile                          ref  |> intent
 #   cm.signers |> restrictTo [...] |> allow ["approve"]
+#   [cm.issuers cm.signers] |> watch                 list |> intent (rules merged by grant)
 
 { lib }:
 
@@ -21,8 +22,11 @@ let
     { apiGroups = [ ref.apiGroup ]; resources = [ ref.resource ]; inherit verbs; }
     // lib.optionalAttrs (ref.resourceNames != null) { inherit (ref) resourceNames; };
 
-  sub = suffix: ref:
-    ref // { resource = "${ref.resource}/${suffix}"; resourceNames = null; };
+  # Lifts a single-ref intent to accept Ref | [Ref].
+  mkIntent = f: refOrRefs:
+    if builtins.isList refOrRefs
+    then builtins.concatMap f refOrRefs
+    else f refOrRefs;
 
 in rec {
 
@@ -41,36 +45,63 @@ in rec {
     "pods" "secrets" "serviceaccounts" "services"
   ];
 
-  # ── Ref modifier ─────────────────────────────────────────────────────
+  # ── Ref modifiers ────────────────────────────────────────────────────
 
   # restrictTo names — scope to specific resourceNames, chain before intent.
   restrictTo = names: ref: ref // { resourceNames = names; };
 
-  # ── Intents: Ref -> [Rule] ──────────────────────────────────────────
+  # sub suffix — access a sub-resource (e.g., sub "status", sub "finalizers").
+  # Works with map for lists: map (sub "status") refs |> allow [...]
+  sub = suffix: ref:
+    ref // { resource = "${ref.resource}/${suffix}"; resourceNames = null; };
 
-  watch            = ref: [ (rule ref [ "get" "list" "watch" ]) ];
+  # ── Intents: Ref | [Ref] -> [Rule] ────────────────────────────────
 
-  reconcile        = ref: [ (rule ref                    [ "get" "list" "watch" ])
-                             (rule (sub "status" ref)    [ "update" "patch" ]) ];
+  watch            = mkIntent (ref: [ (rule ref [ "get" "list" "watch" ]) ]);
 
-  finalize         = ref: [ (rule (sub "finalizers" ref) [ "update" ]) ];
+  reconcile        = mkIntent (ref: [ (rule ref                    [ "get" "list" "watch" ])
+                                       (rule (sub "status" ref)    [ "update" "patch" ]) ]);
 
-  own              = ref: [ (rule ref [ "get" "list" "watch" "create" "delete" ]) ];
+  finalize         = mkIntent (ref: [ (rule (sub "finalizers" ref) [ "update" ]) ]);
 
-  readWrite        = ref: [ (rule ref [ "get" "list" "watch" "create" "update" "delete" ]) ];
+  own              = mkIntent (ref: [ (rule ref [ "get" "list" "watch" "create" "delete" ]) ]);
 
-  full             = ref: [ (rule ref [ "get" "list" "watch" "create" "update" "delete" "patch" ]) ];
+  readWrite        = mkIntent (ref: [ (rule ref [ "get" "list" "watch" "create" "update" "delete" ]) ]);
 
-  emit             = ref: [ (rule ref [ "create" "patch" ]) ];
+  full             = mkIntent (ref: [ (rule ref [ "get" "list" "watch" "create" "update" "delete" "patch" ]) ]);
 
-  watchAndFinalize = ref: [ (rule ref                        [ "get" "list" "watch" ])
-                             (rule (sub "finalizers" ref)    [ "update" ]) ];
+  emit             = mkIntent (ref: [ (rule ref [ "create" "patch" ]) ]);
 
-  allow            = verbs: ref: [ (rule ref verbs) ];
+  watchAndFinalize = mkIntent (ref: [ (rule ref                        [ "get" "list" "watch" ])
+                                       (rule (sub "finalizers" ref)    [ "update" ]) ]);
+
+  allow            = verbs: mkIntent (ref: [ (rule ref verbs) ]);
 
   # ── grant ────────────────────────────────────────────────────────────
 
-  grant = lib.concatLists;   # [[Rule]] -> [Rule]
+  # [[Rule]] -> [Rule], merging rules with identical apiGroups + verbs + resourceNames.
+  grant = intents:
+    let
+      flat = lib.concatLists intents;
+      # Build a merge key from the parts that must match to combine rules.
+      ruleKey = r:
+        builtins.unsafeDiscardStringContext (builtins.toJSON {
+          inherit (r) apiGroups verbs;
+          resourceNames = r.resourceNames or null;
+        });
+      # Group by key, merge resources lists.
+      grouped = builtins.foldl' (acc: r:
+        let key = ruleKey r;
+        in acc // {
+          ${key} = if acc ? ${key}
+            then acc.${key} // {
+              resources = acc.${key}.resources ++ r.resources;
+            }
+            else r;
+        }
+      ) {} flat;
+    in
+    builtins.attrValues grouped;
 
   # ── mkClusterRoleSet ─────────────────────────────────────────────────
 

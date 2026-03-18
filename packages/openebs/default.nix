@@ -161,8 +161,160 @@ let
     in
     builtins.concatStringsSep "," indices;
 
+  # --- RBAC DSL ---
+  inherit (scope.rbac) group core grant full watch emit allow mkClusterRoleSet;
+  openebsGrp = group "openebs.io" [ "mayastorpools" "diskpools" ];
+  storage    = group "storage.k8s.io" [ "storageclasses" "volumeattachments" "csinodes" ];
+  snap       = group "snapshot.storage.k8s.io" [ "volumesnapshotclasses" "volumesnapshotcontents" "volumesnapshots" ];
+  coord      = group "coordination.k8s.io" [ "leases" ];
+  apiext     = group "apiextensions.k8s.io" [ "customresourcedefinitions" ];
+  appsGrp    = group "apps" [ "deployments" ];
+  zfsAll     = group "zfs.openebs.io" [];
+  lvmAll     = group "local.openebs.io" [];
+
 in
-self: {
+self:
+let
+  # ── Mayastor RBAC ────────────────────────────────────────
+  mayastorClusterRoles =
+    if cfg.mayastor.enabled then
+      mkClusterRoleSet scope {
+        subjects = [{ kind = "ServiceAccount"; name = "${self.mayastorSa}"; namespace = ns; }];
+        labels = mayastorLabels;
+        roles = {
+          "${name}-cluster-role" = grant [
+            (apiext.customresourcedefinitions           |> allow [ "create" "get" "update" "list" "patch" "replace" ])
+            (apiext "customresourcedefinitions/status"  |> allow [ "get" "update" "patch" ])
+            (openebsGrp.mayastorpools                  |> allow [ "get" "list" "patch" "delete" "deletecollection" ])
+            (openebsGrp.diskpools                      |> allow [ "get" "list" "watch" "update" "replace" "patch" "create" ])
+            (openebsGrp "diskpools/status"             |> allow [ "update" "patch" ])
+            (core.configmaps                           |> allow [ "create" "get" "update" "patch" ])
+            (appsGrp.deployments                       |> allow [ "get" "list" ])
+            (core.persistentvolumes                    |> full)
+            (core.nodes                                |> allow [ "get" "list" "watch" "patch" ])
+            (core.persistentvolumeclaims               |> allow [ "get" "list" "watch" "update" ])
+            (storage.storageclasses                    |> watch)
+            (core.events                               |> allow [ "list" "watch" "create" "update" "patch" ])
+            (core.pods                                 |> watch)
+            (core "persistentvolumeclaims/status"      |> allow [ "patch" ])
+            (snap.volumesnapshotclasses                |> watch)
+            (snap.volumesnapshotcontents               |> full)
+            (snap "volumesnapshotcontents/status"      |> allow [ "update" "patch" ])
+            (snap.volumesnapshots                      |> allow [ "get" "list" "watch" "update" "patch" "delete" ])
+            (snap "volumesnapshots/status"             |> allow [ "update" "patch" ])
+            (storage.volumeattachments                 |> allow [ "get" "list" "watch" "update" "patch" ])
+            (storage "volumeattachments/status"        |> allow [ "patch" ])
+            (storage.csinodes                          |> watch)
+            (core.secrets                              |> watch)
+          ];
+        };
+      }
+    else {};
+
+  # ── ZFS LocalPV RBAC ────────────────────────────────────
+  zfsControllerRoles =
+    if cfg.zfsLocalPv.enabled then
+      mkClusterRoleSet scope {
+        subjects = [{ kind = "ServiceAccount"; name = "${self.zfsControllerSa}"; namespace = ns; }];
+        labels = zfsLabels;
+        roles = {
+          "${name}-zfs-provisioner-role" = grant [
+            (core.persistentvolumes                    |> full)
+            (core.persistentvolumeclaims               |> allow [ "get" "list" "watch" "update" ])
+            (core "persistentvolumeclaims/status"      |> allow [ "update" "patch" ])
+            (storage.storageclasses                    |> watch)
+            (storage.csinodes                          |> watch)
+            (core.events                               |> allow [ "list" "watch" "create" "update" "patch" ])
+            (core.nodes                                |> watch)
+            (coord.leases                              |> allow [ "get" "watch" "list" "delete" "update" "create" ])
+            (zfsAll "*"                                |> allow [ "*" ])
+          ];
+          "${name}-zfs-snapshotter-role" = grant [
+            (snap.volumesnapshotclasses                |> watch)
+            (snap.volumesnapshotcontents               |> full)
+            (snap "volumesnapshotcontents/status"      |> allow [ "update" "patch" ])
+            (snap.volumesnapshots                      |> allow [ "get" "list" "watch" "update" "patch" ])
+            (snap "volumesnapshots/status"             |> allow [ "update" "patch" ])
+          ];
+        };
+      }
+    else {};
+
+  zfsNodeRoles =
+    if cfg.zfsLocalPv.enabled then
+      mkClusterRoleSet scope {
+        subjects = [{ kind = "ServiceAccount"; name = "${self.zfsNodeSa}"; namespace = ns; }];
+        labels = zfsLabels;
+        roles = {
+          "${name}-zfs-driver-registrar-role" = grant [
+            (core.events                               |> allow [ "get" "list" "watch" "create" "update" "patch" ])
+            (zfsAll "*"                                |> allow [ "*" ])
+          ];
+        };
+      }
+    else {};
+
+  # ── LVM LocalPV RBAC ───────────────────────────────────
+  lvmControllerRoles =
+    if cfg.lvmLocalPv.enabled then
+      mkClusterRoleSet scope {
+        subjects = [{ kind = "ServiceAccount"; name = "${self.lvmControllerSa}"; namespace = ns; }];
+        labels = lvmLabels;
+        roles = {
+          "${name}-lvm-provisioner-role" = grant [
+            (core.persistentvolumes                    |> full)
+            (core.persistentvolumeclaims               |> allow [ "get" "list" "watch" "update" ])
+            (core "persistentvolumeclaims/status"      |> allow [ "update" "patch" ])
+            (storage.storageclasses                    |> watch)
+            (storage.csinodes                          |> watch)
+            (core.events                               |> allow [ "list" "watch" "create" "update" "patch" ])
+            (core.nodes                                |> watch)
+            (coord.leases                              |> allow [ "get" "watch" "list" "delete" "update" "create" ])
+            (lvmAll "*"                                |> allow [ "*" ])
+          ];
+          "${name}-lvm-snapshotter-role" = grant [
+            (snap.volumesnapshotclasses                |> watch)
+            (snap.volumesnapshotcontents               |> full)
+            (snap "volumesnapshotcontents/status"      |> allow [ "update" "patch" ])
+            (snap.volumesnapshots                      |> allow [ "get" "list" "watch" "update" "patch" ])
+            (snap "volumesnapshots/status"             |> allow [ "update" "patch" ])
+          ];
+        };
+      }
+    else {};
+
+  lvmNodeRoles =
+    if cfg.lvmLocalPv.enabled then
+      mkClusterRoleSet scope {
+        subjects = [{ kind = "ServiceAccount"; name = "${self.lvmNodeSa}"; namespace = ns; }];
+        labels = lvmLabels;
+        roles = {
+          "${name}-lvm-driver-registrar-role" = grant [
+            (core.events                               |> allow [ "get" "list" "watch" "create" "update" "patch" ])
+            (lvmAll "*"                                |> allow [ "*" ])
+          ];
+        };
+      }
+    else {};
+
+  # ── LocalPV Provisioner RBAC ────────────────────────────
+  localPvClusterRoles =
+    if cfg.localPvProvisioner.enabled then
+      mkClusterRoleSet scope {
+        subjects = [{ kind = "ServiceAccount"; name = "${self.localPvSa}"; namespace = ns; }];
+        labels = localPvLabels;
+        roles = {
+          "${name}-localpv-provisioner" = grant [
+            (core.nodes                                |> watch)
+            (core.persistentvolumes                    |> allow [ "get" "list" "watch" "create" "delete" ])
+            (core.persistentvolumeclaims               |> allow [ "get" "list" "watch" "update" ])
+            (storage.storageclasses                    |> watch)
+            (core.events                               |> emit)
+          ];
+        };
+      }
+    else {};
+in {
 
   # ==========================================================================
   #  MAYASTOR — Replicated Block Storage
@@ -176,268 +328,6 @@ self: {
         kind = "ServiceAccount";
         name = "${name}-service-account";
         labels = mayastorLabels;
-      })
-    else
-      null;
-
-  # --- ClusterRole (broad permissions for CSI + diskpool operator) ---
-  mayastorClusterRole =
-    if cfg.mayastor.enabled then
-      (scope.mkClusterResource {
-        apiVersion = "rbac.authorization.k8s.io/v1";
-        kind = "ClusterRole";
-        name = "${name}-cluster-role";
-        labels = mayastorLabels;
-        extra.rules = [
-          {
-            apiGroups = [ "apiextensions.k8s.io" ];
-            resources = [ "customresourcedefinitions" ];
-            verbs = [
-              "create"
-              "get"
-              "update"
-              "list"
-              "patch"
-              "replace"
-            ];
-          }
-          {
-            apiGroups = [ "apiextensions.k8s.io" ];
-            resources = [ "customresourcedefinitions/status" ];
-            verbs = [
-              "get"
-              "update"
-              "patch"
-            ];
-          }
-          {
-            apiGroups = [ "openebs.io" ];
-            resources = [ "mayastorpools" ];
-            verbs = [
-              "get"
-              "list"
-              "patch"
-              "delete"
-              "deletecollection"
-            ];
-          }
-          {
-            apiGroups = [ "openebs.io" ];
-            resources = [ "diskpools" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "update"
-              "replace"
-              "patch"
-              "create"
-            ];
-          }
-          {
-            apiGroups = [ "openebs.io" ];
-            resources = [ "diskpools/status" ];
-            verbs = [
-              "update"
-              "patch"
-            ];
-          }
-          {
-            apiGroups = [ "" ];
-            resources = [ "configmaps" ];
-            verbs = [
-              "create"
-              "get"
-              "update"
-              "patch"
-            ];
-          }
-          {
-            apiGroups = [ "apps" ];
-            resources = [ "deployments" ];
-            verbs = [
-              "get"
-              "list"
-            ];
-          }
-          {
-            apiGroups = [ "" ];
-            resources = [ "persistentvolumes" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "update"
-              "create"
-              "delete"
-              "patch"
-            ];
-          }
-          {
-            apiGroups = [ "" ];
-            resources = [ "nodes" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "patch"
-            ];
-          }
-          {
-            apiGroups = [ "" ];
-            resources = [ "persistentvolumeclaims" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "update"
-            ];
-          }
-          {
-            apiGroups = [ "storage.k8s.io" ];
-            resources = [ "storageclasses" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          {
-            apiGroups = [ "" ];
-            resources = [ "events" ];
-            verbs = [
-              "list"
-              "watch"
-              "create"
-              "update"
-              "patch"
-            ];
-          }
-          {
-            apiGroups = [ "" ];
-            resources = [ "pods" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          {
-            apiGroups = [ "" ];
-            resources = [ "persistentvolumeclaims/status" ];
-            verbs = [ "patch" ];
-          }
-          {
-            apiGroups = [ "snapshot.storage.k8s.io" ];
-            resources = [ "volumesnapshotclasses" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          {
-            apiGroups = [ "snapshot.storage.k8s.io" ];
-            resources = [ "volumesnapshotcontents" ];
-            verbs = [
-              "create"
-              "get"
-              "list"
-              "watch"
-              "update"
-              "patch"
-              "delete"
-            ];
-          }
-          {
-            apiGroups = [ "snapshot.storage.k8s.io" ];
-            resources = [ "volumesnapshotcontents/status" ];
-            verbs = [
-              "update"
-              "patch"
-            ];
-          }
-          {
-            apiGroups = [ "snapshot.storage.k8s.io" ];
-            resources = [ "volumesnapshots" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "update"
-              "patch"
-              "delete"
-            ];
-          }
-          {
-            apiGroups = [ "snapshot.storage.k8s.io" ];
-            resources = [ "volumesnapshots/status" ];
-            verbs = [
-              "update"
-              "patch"
-            ];
-          }
-          {
-            apiGroups = [ "storage.k8s.io" ];
-            resources = [ "volumeattachments" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "update"
-              "patch"
-            ];
-          }
-          {
-            apiGroups = [ "storage.k8s.io" ];
-            resources = [ "volumeattachments/status" ];
-            verbs = [ "patch" ];
-          }
-          {
-            apiGroups = [ "storage.k8s.io" ];
-            resources = [ "csinodes" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          {
-            apiGroups = [ "" ];
-            resources = [ "secrets" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-        ];
-      })
-    else
-      null;
-
-  # --- ClusterRoleBinding ---
-  mayastorClusterRoleBinding =
-    if cfg.mayastor.enabled then
-      (scope.mkClusterResource {
-        apiVersion = "rbac.authorization.k8s.io/v1";
-        kind = "ClusterRoleBinding";
-        name = "${name}-cluster-role-binding";
-        labels = mayastorLabels;
-        extra = {
-          roleRef = {
-            apiGroup = "rbac.authorization.k8s.io";
-            kind = "ClusterRole";
-            name = "${self.mayastorClusterRole}";
-          };
-          subjects = [
-            {
-              kind = "ServiceAccount";
-              name = "${self.mayastorSa}";
-              namespace = ns;
-            }
-          ];
-        };
       })
     else
       null;
@@ -508,10 +398,7 @@ self: {
         };
         spec = {
           type = "ClusterIP";
-          selector = {
-            "app.kubernetes.io/name" = "etcd";
-            "app.kubernetes.io/instance" = name;
-          };
+          selector = scope.selectWorkload self.etcdStatefulSet;
           ports = [
             {
               name = "client";
@@ -527,7 +414,6 @@ self: {
             }
           ];
         };
-        requires = [ self.etcdStatefulSet ];
       })
     else
       null;
@@ -835,10 +721,7 @@ self: {
           "app.kubernetes.io/component" = "nats";
         };
         spec = {
-          selector = {
-            "app.kubernetes.io/name" = "nats";
-            "app.kubernetes.io/instance" = name;
-          };
+          selector = scope.selectWorkload self.natsStatefulSet;
           ports = [
             {
               name = "client";
@@ -862,7 +745,6 @@ self: {
             }
           ];
         };
-        requires = [ self.natsStatefulSet ];
       })
     else
       null;
@@ -1055,7 +937,7 @@ self: {
           app = "agent-core";
         };
         spec = {
-          selector = mayastorSelector "agent-core";
+          selector = scope.selectWorkload self.agentCoreDeployment;
           ports = [
             {
               name = "grpc";
@@ -1069,7 +951,6 @@ self: {
             }
           ];
         };
-        requires = [ self.agentCoreDeployment ];
       })
     else
       null;
@@ -1218,7 +1099,7 @@ self: {
         };
         spec = {
           type = "ClusterIP";
-          selector = mayastorSelector "api-rest";
+          selector = scope.selectWorkload self.apiRestDeployment;
           ports = [
             {
               name = "https";
@@ -1234,7 +1115,6 @@ self: {
             }
           ];
         };
-        requires = [ self.apiRestDeployment ];
       })
     else
       null;
@@ -2064,7 +1944,7 @@ self: {
           app = "io-engine";
         };
         spec = {
-          selector = mayastorSelector "io-engine";
+          selector = scope.selectWorkload self.ioEngineDaemonSet;
           ports = [
             {
               name = "metrics";
@@ -2074,7 +1954,6 @@ self: {
             }
           ];
         };
-        requires = [ self.ioEngineDaemonSet ];
       })
     else
       null;
@@ -2274,268 +2153,6 @@ self: {
         kind = "ServiceAccount";
         name = "${name}-zfs-node-sa";
         labels = zfsLabels;
-      })
-    else
-      null;
-
-  # --- ClusterRoles ---
-  zfsProvisionerRole =
-    if cfg.zfsLocalPv.enabled then
-      (scope.mkClusterResource {
-        apiVersion = "rbac.authorization.k8s.io/v1";
-        kind = "ClusterRole";
-        name = "${name}-zfs-provisioner-role";
-        labels = zfsLabels;
-        extra.rules = [
-          {
-            apiGroups = [ "" ];
-            resources = [ "persistentvolumes" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "create"
-              "delete"
-              "update"
-              "patch"
-            ];
-          }
-          {
-            apiGroups = [ "" ];
-            resources = [ "persistentvolumeclaims" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "update"
-            ];
-          }
-          {
-            apiGroups = [ "" ];
-            resources = [ "persistentvolumeclaims/status" ];
-            verbs = [
-              "update"
-              "patch"
-            ];
-          }
-          {
-            apiGroups = [ "storage.k8s.io" ];
-            resources = [
-              "storageclasses"
-              "csinodes"
-            ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          {
-            apiGroups = [ "" ];
-            resources = [ "events" ];
-            verbs = [
-              "list"
-              "watch"
-              "create"
-              "update"
-              "patch"
-            ];
-          }
-          {
-            apiGroups = [ "" ];
-            resources = [ "nodes" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          {
-            apiGroups = [ "coordination.k8s.io" ];
-            resources = [ "leases" ];
-            verbs = [
-              "get"
-              "watch"
-              "list"
-              "delete"
-              "update"
-              "create"
-            ];
-          }
-          {
-            apiGroups = [ "zfs.openebs.io" ];
-            resources = [ "*" ];
-            verbs = [ "*" ];
-          }
-        ];
-      })
-    else
-      null;
-
-  zfsSnapshotterRole =
-    if cfg.zfsLocalPv.enabled then
-      (scope.mkClusterResource {
-        apiVersion = "rbac.authorization.k8s.io/v1";
-        kind = "ClusterRole";
-        name = "${name}-zfs-snapshotter-role";
-        labels = zfsLabels;
-        extra.rules = [
-          {
-            apiGroups = [ "snapshot.storage.k8s.io" ];
-            resources = [ "volumesnapshotclasses" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          {
-            apiGroups = [ "snapshot.storage.k8s.io" ];
-            resources = [ "volumesnapshotcontents" ];
-            verbs = [
-              "create"
-              "get"
-              "list"
-              "watch"
-              "update"
-              "delete"
-              "patch"
-            ];
-          }
-          {
-            apiGroups = [ "snapshot.storage.k8s.io" ];
-            resources = [ "volumesnapshotcontents/status" ];
-            verbs = [
-              "update"
-              "patch"
-            ];
-          }
-          {
-            apiGroups = [ "snapshot.storage.k8s.io" ];
-            resources = [ "volumesnapshots" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "update"
-              "patch"
-            ];
-          }
-          {
-            apiGroups = [ "snapshot.storage.k8s.io" ];
-            resources = [ "volumesnapshots/status" ];
-            verbs = [
-              "update"
-              "patch"
-            ];
-          }
-        ];
-      })
-    else
-      null;
-
-  zfsRegistrarRole =
-    if cfg.zfsLocalPv.enabled then
-      (scope.mkClusterResource {
-        apiVersion = "rbac.authorization.k8s.io/v1";
-        kind = "ClusterRole";
-        name = "${name}-zfs-driver-registrar-role";
-        labels = zfsLabels;
-        extra.rules = [
-          {
-            apiGroups = [ "" ];
-            resources = [ "events" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "create"
-              "update"
-              "patch"
-            ];
-          }
-          {
-            apiGroups = [ "zfs.openebs.io" ];
-            resources = [ "*" ];
-            verbs = [ "*" ];
-          }
-        ];
-      })
-    else
-      null;
-
-  # --- ClusterRoleBindings ---
-  zfsProvisionerBinding =
-    if cfg.zfsLocalPv.enabled then
-      (scope.mkClusterResource {
-        apiVersion = "rbac.authorization.k8s.io/v1";
-        kind = "ClusterRoleBinding";
-        name = "${name}-zfs-provisioner-binding";
-        labels = zfsLabels;
-        extra = {
-          roleRef = {
-            apiGroup = "rbac.authorization.k8s.io";
-            kind = "ClusterRole";
-            name = "${self.zfsProvisionerRole}";
-          };
-          subjects = [
-            {
-              kind = "ServiceAccount";
-              name = "${self.zfsControllerSa}";
-              namespace = ns;
-            }
-          ];
-        };
-      })
-    else
-      null;
-
-  zfsSnapshotterBinding =
-    if cfg.zfsLocalPv.enabled then
-      (scope.mkClusterResource {
-        apiVersion = "rbac.authorization.k8s.io/v1";
-        kind = "ClusterRoleBinding";
-        name = "${name}-zfs-snapshotter-binding";
-        labels = zfsLabels;
-        extra = {
-          roleRef = {
-            apiGroup = "rbac.authorization.k8s.io";
-            kind = "ClusterRole";
-            name = "${self.zfsSnapshotterRole}";
-          };
-          subjects = [
-            {
-              kind = "ServiceAccount";
-              name = "${self.zfsControllerSa}";
-              namespace = ns;
-            }
-          ];
-        };
-      })
-    else
-      null;
-
-  zfsRegistrarBinding =
-    if cfg.zfsLocalPv.enabled then
-      (scope.mkClusterResource {
-        apiVersion = "rbac.authorization.k8s.io/v1";
-        kind = "ClusterRoleBinding";
-        name = "${name}-zfs-driver-registrar-binding";
-        labels = zfsLabels;
-        extra = {
-          roleRef = {
-            apiGroup = "rbac.authorization.k8s.io";
-            kind = "ClusterRole";
-            name = "${self.zfsRegistrarRole}";
-          };
-          subjects = [
-            {
-              kind = "ServiceAccount";
-              name = "${self.zfsNodeSa}";
-              namespace = ns;
-            }
-          ];
-        };
       })
     else
       null;
@@ -2924,268 +2541,6 @@ self: {
     else
       null;
 
-  # --- ClusterRoles ---
-  lvmProvisionerRole =
-    if cfg.lvmLocalPv.enabled then
-      (scope.mkClusterResource {
-        apiVersion = "rbac.authorization.k8s.io/v1";
-        kind = "ClusterRole";
-        name = "${name}-lvm-provisioner-role";
-        labels = lvmLabels;
-        extra.rules = [
-          {
-            apiGroups = [ "" ];
-            resources = [ "persistentvolumes" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "create"
-              "delete"
-              "update"
-              "patch"
-            ];
-          }
-          {
-            apiGroups = [ "" ];
-            resources = [ "persistentvolumeclaims" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "update"
-            ];
-          }
-          {
-            apiGroups = [ "" ];
-            resources = [ "persistentvolumeclaims/status" ];
-            verbs = [
-              "update"
-              "patch"
-            ];
-          }
-          {
-            apiGroups = [ "storage.k8s.io" ];
-            resources = [
-              "storageclasses"
-              "csinodes"
-            ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          {
-            apiGroups = [ "" ];
-            resources = [ "events" ];
-            verbs = [
-              "list"
-              "watch"
-              "create"
-              "update"
-              "patch"
-            ];
-          }
-          {
-            apiGroups = [ "" ];
-            resources = [ "nodes" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          {
-            apiGroups = [ "coordination.k8s.io" ];
-            resources = [ "leases" ];
-            verbs = [
-              "get"
-              "watch"
-              "list"
-              "delete"
-              "update"
-              "create"
-            ];
-          }
-          {
-            apiGroups = [ "local.openebs.io" ];
-            resources = [ "*" ];
-            verbs = [ "*" ];
-          }
-        ];
-      })
-    else
-      null;
-
-  lvmSnapshotterRole =
-    if cfg.lvmLocalPv.enabled then
-      (scope.mkClusterResource {
-        apiVersion = "rbac.authorization.k8s.io/v1";
-        kind = "ClusterRole";
-        name = "${name}-lvm-snapshotter-role";
-        labels = lvmLabels;
-        extra.rules = [
-          {
-            apiGroups = [ "snapshot.storage.k8s.io" ];
-            resources = [ "volumesnapshotclasses" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          {
-            apiGroups = [ "snapshot.storage.k8s.io" ];
-            resources = [ "volumesnapshotcontents" ];
-            verbs = [
-              "create"
-              "get"
-              "list"
-              "watch"
-              "update"
-              "delete"
-              "patch"
-            ];
-          }
-          {
-            apiGroups = [ "snapshot.storage.k8s.io" ];
-            resources = [ "volumesnapshotcontents/status" ];
-            verbs = [
-              "update"
-              "patch"
-            ];
-          }
-          {
-            apiGroups = [ "snapshot.storage.k8s.io" ];
-            resources = [ "volumesnapshots" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "update"
-              "patch"
-            ];
-          }
-          {
-            apiGroups = [ "snapshot.storage.k8s.io" ];
-            resources = [ "volumesnapshots/status" ];
-            verbs = [
-              "update"
-              "patch"
-            ];
-          }
-        ];
-      })
-    else
-      null;
-
-  lvmRegistrarRole =
-    if cfg.lvmLocalPv.enabled then
-      (scope.mkClusterResource {
-        apiVersion = "rbac.authorization.k8s.io/v1";
-        kind = "ClusterRole";
-        name = "${name}-lvm-driver-registrar-role";
-        labels = lvmLabels;
-        extra.rules = [
-          {
-            apiGroups = [ "" ];
-            resources = [ "events" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "create"
-              "update"
-              "patch"
-            ];
-          }
-          {
-            apiGroups = [ "local.openebs.io" ];
-            resources = [ "*" ];
-            verbs = [ "*" ];
-          }
-        ];
-      })
-    else
-      null;
-
-  # --- ClusterRoleBindings ---
-  lvmProvisionerBinding =
-    if cfg.lvmLocalPv.enabled then
-      (scope.mkClusterResource {
-        apiVersion = "rbac.authorization.k8s.io/v1";
-        kind = "ClusterRoleBinding";
-        name = "${name}-lvm-provisioner-binding";
-        labels = lvmLabels;
-        extra = {
-          roleRef = {
-            apiGroup = "rbac.authorization.k8s.io";
-            kind = "ClusterRole";
-            name = "${self.lvmProvisionerRole}";
-          };
-          subjects = [
-            {
-              kind = "ServiceAccount";
-              name = "${self.lvmControllerSa}";
-              namespace = ns;
-            }
-          ];
-        };
-      })
-    else
-      null;
-
-  lvmSnapshotterBinding =
-    if cfg.lvmLocalPv.enabled then
-      (scope.mkClusterResource {
-        apiVersion = "rbac.authorization.k8s.io/v1";
-        kind = "ClusterRoleBinding";
-        name = "${name}-lvm-snapshotter-binding";
-        labels = lvmLabels;
-        extra = {
-          roleRef = {
-            apiGroup = "rbac.authorization.k8s.io";
-            kind = "ClusterRole";
-            name = "${self.lvmSnapshotterRole}";
-          };
-          subjects = [
-            {
-              kind = "ServiceAccount";
-              name = "${self.lvmControllerSa}";
-              namespace = ns;
-            }
-          ];
-        };
-      })
-    else
-      null;
-
-  lvmRegistrarBinding =
-    if cfg.lvmLocalPv.enabled then
-      (scope.mkClusterResource {
-        apiVersion = "rbac.authorization.k8s.io/v1";
-        kind = "ClusterRoleBinding";
-        name = "${name}-lvm-driver-registrar-binding";
-        labels = lvmLabels;
-        extra = {
-          roleRef = {
-            apiGroup = "rbac.authorization.k8s.io";
-            kind = "ClusterRole";
-            name = "${self.lvmRegistrarRole}";
-          };
-          subjects = [
-            {
-              kind = "ServiceAccount";
-              name = "${self.lvmNodeSa}";
-              namespace = ns;
-            }
-          ];
-        };
-      })
-    else
-      null;
-
   # --- CSIDriver ---
   lvmCsiDriver =
     if cfg.lvmLocalPv.enabled then
@@ -3503,9 +2858,7 @@ self: {
         name = "${name}-lvm-localpv-node-service";
         labels = lvmLabels;
         spec = {
-          selector = {
-            app = "openebs-lvm-node";
-          };
+          selector = scope.selectWorkload self.lvmNode;
           ports = [
             {
               name = "metrics";
@@ -3515,7 +2868,6 @@ self: {
             }
           ];
         };
-        requires = [ self.lvmNode ];
       })
     else
       null;
@@ -3531,91 +2883,6 @@ self: {
         kind = "ServiceAccount";
         name = "${name}-localpv-provisioner";
         labels = localPvLabels;
-      })
-    else
-      null;
-
-  localPvClusterRole =
-    if cfg.localPvProvisioner.enabled then
-      (scope.mkClusterResource {
-        apiVersion = "rbac.authorization.k8s.io/v1";
-        kind = "ClusterRole";
-        name = "${name}-localpv-provisioner";
-        labels = localPvLabels;
-        extra.rules = [
-          {
-            apiGroups = [ "" ];
-            resources = [ "nodes" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          {
-            apiGroups = [ "" ];
-            resources = [ "persistentvolumes" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "create"
-              "delete"
-            ];
-          }
-          {
-            apiGroups = [ "" ];
-            resources = [ "persistentvolumeclaims" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "update"
-            ];
-          }
-          {
-            apiGroups = [ "storage.k8s.io" ];
-            resources = [ "storageclasses" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          {
-            apiGroups = [ "" ];
-            resources = [ "events" ];
-            verbs = [
-              "create"
-              "patch"
-            ];
-          }
-        ];
-      })
-    else
-      null;
-
-  localPvClusterRoleBinding =
-    if cfg.localPvProvisioner.enabled then
-      (scope.mkClusterResource {
-        apiVersion = "rbac.authorization.k8s.io/v1";
-        kind = "ClusterRoleBinding";
-        name = "${name}-localpv-provisioner";
-        labels = localPvLabels;
-        extra = {
-          roleRef = {
-            apiGroup = "rbac.authorization.k8s.io";
-            kind = "ClusterRole";
-            name = "${self.localPvClusterRole}";
-          };
-          subjects = [
-            {
-              kind = "ServiceAccount";
-              name = "${self.localPvSa}";
-              namespace = ns;
-            }
-          ];
-        };
       })
     else
       null;
@@ -3723,8 +2990,6 @@ self: {
       # --- Mayastor components ---
       lib.optionals cfg.mayastor.enabled [
         self.mayastorSa
-        self.mayastorClusterRole
-        self.mayastorClusterRoleBinding
         self.priorityClass
         self.etcdStatefulSet
         self.etcdService
@@ -3749,12 +3014,6 @@ self: {
       ++ lib.optionals cfg.zfsLocalPv.enabled [
         self.zfsControllerSa
         self.zfsNodeSa
-        self.zfsProvisionerRole
-        self.zfsSnapshotterRole
-        self.zfsRegistrarRole
-        self.zfsProvisionerBinding
-        self.zfsSnapshotterBinding
-        self.zfsRegistrarBinding
         self.zfsCsiDriver
         self.zfsConfigMap
         self.zfsController
@@ -3764,12 +3023,6 @@ self: {
       ++ lib.optionals cfg.lvmLocalPv.enabled [
         self.lvmControllerSa
         self.lvmNodeSa
-        self.lvmProvisionerRole
-        self.lvmSnapshotterRole
-        self.lvmRegistrarRole
-        self.lvmProvisionerBinding
-        self.lvmSnapshotterBinding
-        self.lvmRegistrarBinding
         self.lvmCsiDriver
         self.lvmController
         self.lvmNode
@@ -3778,10 +3031,14 @@ self: {
       # --- LocalPV Provisioner (optional) ---
       ++ lib.optionals cfg.localPvProvisioner.enabled [
         self.localPvSa
-        self.localPvClusterRole
-        self.localPvClusterRoleBinding
         self.localPvDeployment
         self.localPvStorageClass
       ];
   };
 }
+// mayastorClusterRoles
+// zfsControllerRoles
+// zfsNodeRoles
+// lvmControllerRoles
+// lvmNodeRoles
+// localPvClusterRoles

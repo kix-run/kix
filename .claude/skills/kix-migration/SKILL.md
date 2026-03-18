@@ -109,7 +109,44 @@ Use `"${self.resourceName}"` to reference another resource's name. This creates 
 serviceAccountName = "${self.serviceAccount}";
 ```
 
-The `main.requires` list is for resources that are **not** referenced via string interpolation but still need to be included (e.g. a ClusterRoleBinding that nothing else names).
+### Label selectors with `scope.selectWorkload` and `scope.selectByLabels`
+
+For Services, PDBs, and other resources that select pods via labels, use
+`scope.selectWorkload` to derive the selector from the target workload:
+
+```nix
+service = scope.mkResource {
+  apiVersion = "v1";
+  kind = "Service";
+  name = "web";
+  spec.selector = scope.selectWorkload self.deployment;  # derives matchLabels + tracks dependency
+  spec.ports = [{ port = 80; }];
+};
+```
+
+`scope.selectWorkload target` reads `spec.selector.matchLabels` from the target and
+returns those labels with the target's store path attached as Nix string context.
+
+For selecting a resource by its package-provided labels (e.g., a ServiceMonitor
+matching a Service), use `scope.selectByLabels`:
+
+```nix
+serviceMonitor = scope.mkClusterResource {
+  apiVersion = "monitoring.coreos.com/v1";
+  kind = "ServiceMonitor";
+  name = "my-monitor";
+  spec.selector.matchLabels = scope.selectByLabels self.metricsService;
+  spec.endpoints = [{ port = "metrics"; }];
+};
+```
+
+Both functions:
+- Return correct labels by construction (no shared variable to desync)
+- Track dependencies automatically (no `requires` needed)
+
+### Explicit `requires`
+
+The `main.requires` list (or per-resource `requires`) is for resources that are **not** referenced via string interpolation or `selectWorkload`/`selectByLabels` but still need to be included. The most common case is HPA `scaleTargetRef` (a name-based reference, not a label selector).
 
 ### Warning system
 
@@ -128,6 +165,8 @@ Fix all warnings before committing.
 |-----|-------------|
 | `scope.mkResource { ... }` | Create a namespaced K8s resource |
 | `scope.mkClusterResource { ... }` | Create a cluster-scoped resource |
+| `scope.selectWorkload target` | Derive selector labels from target's `spec.selector.matchLabels` with automatic dependency tracking |
+| `scope.selectByLabels target` | Select a resource by its package-provided labels (before scope injection) with dependency tracking |
 | `scope.defaults config { defaults }` | Deep-merge user config over package defaults. Warns on unknown keys. |
 | `scope.instanceName` | The instance name from the cluster definition |
 | `scope.namespaceName` | The namespace this instance lives in |

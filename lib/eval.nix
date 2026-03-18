@@ -29,6 +29,13 @@ rec {
       namespaceResource,
       clusterLabels ? { },
     }:
+    let
+      # Attach a target's store path context to a set of labels for dependency tracking.
+      attachCtx = target: labels:
+        lib.mapAttrs (_: v:
+          builtins.appendContext (toString v) (builtins.getContext "${target}")
+        ) labels;
+    in
     {
       inherit instanceName namespaceName;
       namespace = namespaceResource;
@@ -50,7 +57,7 @@ rec {
               }
               // labels;
           }
-        );
+        ) // { packageLabels = labels; };
 
       mkClusterResource =
         {
@@ -69,7 +76,7 @@ rec {
               }
               // labels;
           }
-        );
+        ) // { packageLabels = labels; };
 
       # Merge user config with package defaults using deep merge.
       # lib.recursiveUpdate ensures nested attrsets (e.g., backend.hpa)
@@ -86,6 +93,28 @@ rec {
           result
         else
           builtins.trace "warning: unknown config keys for instance '${instanceName}': ${builtins.toJSON unknownKeys}" result;
+
+      # Select the same pods as a workload. Reads spec.selector.matchLabels from
+      # the target and attaches its store path for automatic dependency tracking.
+      # Usage: spec.selector = scope.selectWorkload self.deployment;
+      selectWorkload = target:
+        let
+          matchLabels = target.manifest.spec.selector.matchLabels
+            or (throw "selectWorkload: ${target.kind}/${target.name} has no spec.selector.matchLabels");
+        in
+        attachCtx target matchLabels;
+
+      # Select a resource by its package-provided labels (before scope injection).
+      # Usage: spec.selector.matchLabels = scope.selectByLabels self.metricsService;
+      selectByLabels = target:
+        let
+          labels = target.packageLabels
+            or (throw "selectByLabels: ${target.kind}/${target.name} has no packageLabels");
+        in
+        if labels == {} then
+          throw "selectByLabels: ${target.kind}/${target.name} has empty packageLabels"
+        else
+          attachCtx target labels;
 
       inherit rbac;
     };

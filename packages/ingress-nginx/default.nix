@@ -8,8 +8,8 @@
 # RoleBinding, ConfigMap (NGINX config), Deployment, Service
 # (LoadBalancer/ClusterIP), IngressClass.
 #
-# main = Service, with requires pointing to Deployment, IngressClass,
-# and ConfigMap.
+# main = Service, selecting the Deployment via scope.selectWorkload.
+# IngressClass and ConfigMap pulled in via requires.
 
 {
   scope,
@@ -83,8 +83,47 @@ let
     "app.kubernetes.io/part-of" = "ingress-nginx";
   };
 
+  # --- RBAC DSL ---
+  inherit (scope.rbac) group core grant watch emit allow restrictTo mkClusterRoleSet mkRoleSet;
+  net   = group "networking.k8s.io" [ "ingresses" "ingressclasses" ];
+  disco = group "discovery.k8s.io" [ "endpointslices" ];
+  coord = group "coordination.k8s.io" [ "leases" ];
+
 in
-self: {
+self:
+let
+
+  clusterRoles = mkClusterRoleSet scope {
+    subjects = [{ kind = "ServiceAccount"; name = "${self.serviceAccount}"; namespace = scope.namespaceName; }];
+    labels = clusterScopedLabels;
+    roles = {
+      "${name}" = grant [
+        ([core.configmaps core.endpoints core.nodes core.pods core.secrets core.namespaces core.services] |> watch)
+        (core.events                     |> emit)
+        ([net.ingresses net.ingressclasses disco.endpointslices] |> watch)
+        (net "ingresses/status"          |> allow [ "update" ])
+        (coord.leases                    |> allow [ "list" "watch" ])
+      ];
+    };
+  };
+
+  nsRoles = mkRoleSet scope {
+    subjects = [{ kind = "ServiceAccount"; name = "${self.serviceAccount}"; namespace = scope.namespaceName; }];
+    labels = commonLabels;
+    roles = {
+      "${name}" = grant [
+        (core.namespaces                 |> allow [ "get" ])
+        ([core.configmaps core.pods core.secrets core.endpoints core.services] |> watch)
+        (core.events                     |> emit)
+        (coord.leases                    |> restrictTo [ electionId ] |> allow [ "get" "update" ])
+        (coord.leases                    |> allow [ "create" ])
+        ([disco.endpointslices net.ingresses net.ingressclasses] |> watch)
+        (net "ingresses/status"          |> allow [ "update" ])
+      ];
+    };
+  };
+
+in {
 
   # --- ServiceAccount ---
   serviceAccount = scope.mkResource {
@@ -94,229 +133,6 @@ self: {
     labels = commonLabels;
     extra = {
       automountServiceAccountToken = true;
-    };
-  };
-
-  # --- ClusterRole ---
-  clusterRole = scope.mkClusterResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "ClusterRole";
-    name = name;
-    labels = clusterScopedLabels;
-    extra.rules = [
-      {
-        apiGroups = [ "" ];
-        resources = [
-          "configmaps"
-          "endpoints"
-          "nodes"
-          "pods"
-          "secrets"
-          "namespaces"
-        ];
-        verbs = [
-          "list"
-          "watch"
-        ];
-      }
-      {
-        apiGroups = [ "" ];
-        resources = [ "nodes" ];
-        verbs = [ "get" ];
-      }
-      {
-        apiGroups = [ "" ];
-        resources = [ "services" ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-        ];
-      }
-      {
-        apiGroups = [ "networking.k8s.io" ];
-        resources = [ "ingresses" ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-        ];
-      }
-      {
-        apiGroups = [ "" ];
-        resources = [ "events" ];
-        verbs = [
-          "create"
-          "patch"
-        ];
-      }
-      {
-        apiGroups = [ "networking.k8s.io" ];
-        resources = [ "ingresses/status" ];
-        verbs = [ "update" ];
-      }
-      {
-        apiGroups = [ "networking.k8s.io" ];
-        resources = [ "ingressclasses" ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-        ];
-      }
-      {
-        apiGroups = [ "discovery.k8s.io" ];
-        resources = [ "endpointslices" ];
-        verbs = [
-          "list"
-          "watch"
-          "get"
-        ];
-      }
-      {
-        apiGroups = [ "coordination.k8s.io" ];
-        resources = [ "leases" ];
-        verbs = [
-          "list"
-          "watch"
-        ];
-      }
-    ];
-  };
-
-  # --- ClusterRoleBinding ---
-  clusterRoleBinding = scope.mkClusterResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "ClusterRoleBinding";
-    name = name;
-    labels = clusterScopedLabels;
-    extra = {
-      roleRef = {
-        apiGroup = "rbac.authorization.k8s.io";
-        kind = "ClusterRole";
-        name = "${self.clusterRole}";
-      };
-      subjects = [
-        {
-          kind = "ServiceAccount";
-          name = "${self.serviceAccount}";
-          namespace = scope.namespaceName;
-        }
-      ];
-    };
-  };
-
-  # --- Role (namespace-scoped) ---
-  role = scope.mkResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "Role";
-    name = name;
-    labels = commonLabels;
-    extra.rules = [
-      {
-        apiGroups = [ "" ];
-        resources = [ "namespaces" ];
-        verbs = [ "get" ];
-      }
-      {
-        apiGroups = [ "" ];
-        resources = [
-          "configmaps"
-          "pods"
-          "secrets"
-          "endpoints"
-        ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-        ];
-      }
-      {
-        apiGroups = [ "" ];
-        resources = [ "services" ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-        ];
-      }
-      {
-        apiGroups = [ "" ];
-        resources = [ "events" ];
-        verbs = [
-          "create"
-          "patch"
-        ];
-      }
-      {
-        apiGroups = [ "coordination.k8s.io" ];
-        resourceNames = [ electionId ];
-        resources = [ "leases" ];
-        verbs = [
-          "get"
-          "update"
-        ];
-      }
-      {
-        apiGroups = [ "coordination.k8s.io" ];
-        resources = [ "leases" ];
-        verbs = [ "create" ];
-      }
-      {
-        apiGroups = [ "discovery.k8s.io" ];
-        resources = [ "endpointslices" ];
-        verbs = [
-          "list"
-          "watch"
-          "get"
-        ];
-      }
-      {
-        apiGroups = [ "networking.k8s.io" ];
-        resources = [ "ingresses" ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-        ];
-      }
-      {
-        apiGroups = [ "networking.k8s.io" ];
-        resources = [ "ingresses/status" ];
-        verbs = [ "update" ];
-      }
-      {
-        apiGroups = [ "networking.k8s.io" ];
-        resources = [ "ingressclasses" ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-        ];
-      }
-    ];
-  };
-
-  # --- RoleBinding ---
-  roleBinding = scope.mkResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "RoleBinding";
-    name = name;
-    labels = commonLabels;
-    extra = {
-      roleRef = {
-        apiGroup = "rbac.authorization.k8s.io";
-        kind = "Role";
-        name = "${self.role}";
-      };
-      subjects = [
-        {
-          kind = "ServiceAccount";
-          name = "${self.serviceAccount}";
-          namespace = scope.namespaceName;
-        }
-      ];
     };
   };
 
@@ -503,7 +319,7 @@ self: {
     labels = commonLabels;
     spec = {
       type = cfg.serviceType;
-      selector = selectorLabels;
+      selector = scope.selectWorkload self.deployment;
       ports = [
         {
           name = "http";
@@ -528,7 +344,6 @@ self: {
       clusterIP = cfg.clusterIP;
     };
     requires = [
-      self.deployment
       self.ingressClass
       self.configmap
     ];
@@ -550,4 +365,4 @@ self: {
 
   # --- Entry point ---
   main = self.service;
-}
+} // clusterRoles // nsRoles

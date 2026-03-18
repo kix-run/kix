@@ -179,7 +179,7 @@ self: {
     labels = commonLabels;
     spec = {
       type = "ClusterIP";
-      selector = selectorLabels;
+      selector = scope.selectWorkload self.deployment;
       ports = [
         {
           name = "metabase";
@@ -192,7 +192,6 @@ self: {
     outputs = {
       port = toString cfg.servicePort;
     };
-    requires = [ self.deployment ];
   };
 
   # --- Ingress (optional) ---

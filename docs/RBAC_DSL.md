@@ -156,15 +156,31 @@ core.persistentvolumes                  core.persistentvolumeclaims
 core "custom-thing" # callable fallback for anything not pre-declared
 ```
 
-### Intents — what a controller does with a resource
+### Ref modifiers
 
-An **intent** is a function `Ref -> [Rule]` that describes a permission
-pattern. Use with the pipe operator:
+`sub suffix` accesses a sub-resource. Useful with `map` for lists:
 
 ```nix
-cm.issuers |> reconcile     # watch issuers + update/patch issuers/status
-core.secrets |> readWrite   # get, list, watch, create, update, delete
-core.events |> emit         # create, patch
+core.pods |> sub "status"                    # single ref: pods/status
+map (sub "finalizers") actionResources       # list: [res1/finalizers, res2/finalizers, ...]
+```
+
+`restrictTo names` scopes to specific resourceNames:
+
+```nix
+core.serviceaccounts |> restrictTo [ "${self.sa}" ] |> allow [ "create" ]
+```
+
+### Intents — what a controller does with a resource
+
+An **intent** is a function `Ref | [Ref] -> [Rule]` that describes a permission
+pattern. Accepts a single Ref or a list of Refs. Use with the pipe operator:
+
+```nix
+cm.issuers |> reconcile                           # single ref
+core.events |> emit                               # single ref
+[core.pods core.services] |> watch                # list — rules merged by grant
+map (sub "status") actionResources |> allow [...]  # list of sub-resources
 ```
 
 | Intent | Verbs | Subresources |
@@ -448,12 +464,13 @@ inherit (scope.rbac)
   group            # apiGroup -> [resourceNames] -> Group (dot-able + callable)
   core             # pre-populated "" group
 
-  # Ref modifier
+  # Ref modifiers
   restrictTo       # [names] -> Ref -> Ref
+  sub              # suffix -> Ref -> Ref (e.g., sub "status", sub "finalizers")
 
-  # Intents: Ref -> [Rule]
+  # Intents: Ref | [Ref] -> [Rule]
   watch reconcile finalize own readWrite full emit watchAndFinalize
-  allow            # [verbs] -> Ref -> [Rule]
+  allow            # [verbs] -> Ref | [Ref] -> [Rule]
 
   # Flatten
   grant            # [[Rule]] -> [Rule]

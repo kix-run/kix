@@ -180,20 +180,64 @@ main = {
 };
 ```
 
-For the common case of a Service that selects a Deployment via labels, put the
-`requires` on the **Service resource itself**, not on `main`:
+For the common case of a Service that selects a Deployment via labels, use
+`scope.selectWorkload` to derive the selector labels from the target workload:
 
 ```nix
 service = scope.mkResource {
   apiVersion = "v1";
   kind = "Service";
   name = "${scope.instanceName}-myapp";
-  requires = [ self.deployment ];  # ← here, not in main.requires
-  spec.selector = selectorLabels;  # label-based, no ${} reference
+  spec.selector = scope.selectWorkload self.deployment;  # derives matchLabels + tracks dependency
   spec.ports = [{ port = 80; }];
 };
 
 main = self.service;
+```
+
+`scope.selectWorkload target` reads `spec.selector.matchLabels` from the target
+resource and returns the same labels with the target's store path attached as Nix
+string context. This means:
+- The selector labels are correct by construction (no shared variable to keep in sync)
+- The dependency is tracked automatically (no `requires` needed)
+
+It works with any resource that has `spec.selector.matchLabels` — Deployments,
+StatefulSets, DaemonSets. Use it for Services, PDBs, etc.:
+
+```nix
+pdb = scope.mkResource {
+  apiVersion = "policy/v1";
+  kind = "PodDisruptionBudget";
+  name = "${scope.instanceName}-myapp";
+  spec.selector.matchLabels = scope.selectWorkload self.deployment;
+  spec.minAvailable = 1;
+};
+```
+
+For selecting a resource by its package-provided labels (e.g., a ServiceMonitor
+matching a Service), use `scope.selectByLabels`:
+
+```nix
+serviceMonitor = scope.mkClusterResource {
+  apiVersion = "monitoring.coreos.com/v1";
+  kind = "ServiceMonitor";
+  name = "${scope.instanceName}";
+  spec.selector.matchLabels = scope.selectByLabels self.metricsService;
+  spec.endpoints = [{ port = "metrics"; }];
+};
+```
+
+If neither function applies (e.g., custom label subsets), fall back to explicit `requires`:
+
+```nix
+service = scope.mkResource {
+  apiVersion = "v1";
+  kind = "Service";
+  name = "${scope.instanceName}-myapp";
+  requires = [ self.deployment ];
+  spec.selector = selectorLabels;
+  spec.ports = [{ port = 80; }];
+};
 ```
 
 This is more precise. If one service depends on another within the same
@@ -264,12 +308,13 @@ through a `${}` interpolation in the manifest. The most common cases:
 |---|---|---|
 | Deployment → ServiceAccount (via `serviceAccountName`) | Yes, use `"${self.sa}"` | No |
 | Deployment → ConfigMap (via volume mount name) | Yes, use `"${self.cm}"` | No |
-| Service → Deployment (via label selector) | No, labels are plain strings | **Yes** |
+| Service → Deployment (via label selector) | Use `scope.selectWorkload self.deployment` | No |
+| PDB → Deployment (via label selector) | Use `scope.selectWorkload self.deployment` | No |
 | HPA → Deployment (via `scaleTargetRef`) | No, name is a plain string | **Yes** |
-| PDB → Deployment (via label selector) | No | **Yes** |
 
-The rule: **if the relationship is a string match (label selectors, name
-references in fields that don't support interpolation), add a `requires`.**
+The rule: **use `scope.selectWorkload` / `scope.selectByLabels` for label selector relationships. Use `requires`
+for name-based references that don't support `${}` interpolation (e.g., HPA
+`scaleTargetRef`).**
 
 Place the `requires` on the resource that *needs* the other:
 
@@ -346,8 +391,7 @@ self: {
     apiVersion = "v1";
     kind = "Service";
     name = "${scope.instanceName}-myapp";
-    requires = [ self.deployment ];
-    spec.selector = selectorLabels;
+    spec.selector = scope.selectWorkload self.deployment;
     spec.ports = [{ port = 80; }];
   };
 
@@ -557,7 +601,7 @@ service = scope.mkResource {
   };
   spec = {
     ports = [{ port = 5432; }];
-    selector = selectorLabels;
+    selector = scope.selectWorkload self.statefulSet;
   };
 };
 ```
@@ -917,16 +961,15 @@ in self: {
     name = "${scope.instanceName}-webapp";
     inherit labels;
     outputs = { port = toString cfg.port; };
-    requires = [ self.deployment ];  # label selector — needs explicit requires
     spec = {
-      selector = selectorLabels;
+      selector = scope.selectWorkload self.deployment;
       ports = [{ port = cfg.port; targetPort = cfg.port; }];
     };
   };
 
   # ── Main ───────────────────────────────────────────────────
   # Service is the public entry point. The deployment is pulled in
-  # via the service's requires. RBAC is pulled in via inverse deps.
+  # via scope.selectWorkload (context tracking). RBAC is pulled in via inverse deps.
 
   main = self.service;
 }
@@ -938,7 +981,7 @@ in self: {
                               main
                                 │
                             Service
-                          (requires)
+                        (scope.selectWorkload)
                                 │
                            Deployment
                         ┌───────┼──────────┐
@@ -955,7 +998,7 @@ in self: {
               ClusterRole
 ```
 
-The Service requires the Deployment (label selector). The Deployment
+The Service selects the Deployment via `scope.selectWorkload` (label selector + context tracking). The Deployment
 interpolates the ServiceAccount and ConfigMap. The ClusterRoleBinding
 references the ServiceAccount (which is in the forward closure) so it's
 detected as an inverse dep. The ClusterRoleBinding also interpolates the
