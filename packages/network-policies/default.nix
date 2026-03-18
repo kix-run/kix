@@ -82,7 +82,7 @@ let
             {
               matchLabels = {
                 "k8s:io.kubernetes.pod.namespace" = "kube-system";
-                "k8s-app" = "kube-dns";
+                "k8s:k8s-app" = "kube-dns";
               };
             }
           ];
