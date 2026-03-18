@@ -21,6 +21,10 @@ let
   name = scope.instanceName;
 
   cfg = scope.defaults config {
+    # Naming overrides
+    releaseName = null; # if set, used as prefix for resource names instead of instance name
+    componentName = "backend"; # component suffix for deployment/service names (e.g. "web" or "backend")
+
     # Backend (Django/Gunicorn)
     backend = {
       enabled = true;
@@ -32,6 +36,8 @@ let
       replicaCount = 1;
       gunicornWorkers = 4;
       port = 8080;
+      containerName = null; # if set, overrides the container name (default: componentName)
+      servicePort = null; # if set, the Service exposes this port (targetPort = backend.port); null means use backend.port
       command = null;
       args = null;
       resources = {
@@ -52,11 +58,22 @@ let
       };
       probes = {
         enabled = true;
+        type = "httpGet"; # "httpGet" or "exec"
         path = "/healthz";
+        port = null; # null means use backend.port; set to a different port for separate health endpoint
+        execCommand = null; # command list for exec probes
         timeoutSeconds = 20;
+        readinessTimeoutSeconds = null; # if set, overrides timeoutSeconds for readiness probe
         initialDelaySeconds = 5;
       };
+      extraPorts = [ ]; # additional container ports beyond the main http port
       secrets = [ ];
+      strategy = {
+        maxSurge = null; # null means use top-level cfg.maxSurge
+        maxUnavailable = null; # null means omit (k8s default: 25%)
+      };
+      initContainers = [ ]; # list of init container specs
+      topologySpreadConstraints = [ ]; # list of topology spread constraint specs
     };
 
     # Frontend (Next.js)
@@ -154,18 +171,49 @@ let
     # Environment
     environment = "production";
     env = { };
+    useConfigMap = true; # set to false to skip configmap in envFrom
     frontendEnv = { };
     secretEnv = { };
     secretFiles = { };
+
+    # ServiceAccount
+    serviceAccount = {
+      enabled = false;
+      name = null; # null means use releaseName or name
+    };
+
+    # PodDisruptionBudget
+    pdb = {
+      enabled = false;
+      minAvailable = null; # e.g. "50%" or 1
+      maxUnavailable = null;
+    };
+
+    # Label overrides
+    appName = null; # if set, used for app.kubernetes.io/name labels (defaults to instance name)
+    selectorLabels = null; # if set, used as selector matchLabels instead of default
+    extraServiceLabels = { }; # extra labels to add to services
+
+    # Deployment strategy shortcut
+    maxSurge = "100%"; # top-level shortcut applied to backend and worker strategies
 
     # Priority
     priorityClassName = null;
   };
 
+  # ── Derived naming ───────────────────────────────────────────
+  rName = if cfg.releaseName != null then cfg.releaseName else name;
+  compName = cfg.componentName;
+  containerName = if cfg.backend.containerName != null then cfg.backend.containerName else compName;
+  servicePort = if cfg.backend.servicePort != null then cfg.backend.servicePort else cfg.backend.port;
+  probePort =
+    if cfg.backend.probes.port != null then cfg.backend.probes.port else cfg.backend.port;
+  appLabel = if cfg.appName != null then cfg.appName else name;
+
   # ── Labels ──────────────────────────────────────────────────────
   commonLabels = {
-    "app.kubernetes.io/name" = name;
-    "app.kubernetes.io/part-of" = name;
+    "app.kubernetes.io/name" = appLabel;
+    "app.kubernetes.io/part-of" = appLabel;
   };
 
   componentLabels =
@@ -175,10 +223,15 @@ let
       "app.kubernetes.io/component" = component;
     };
 
-  selectorLabels = component: {
-    "app.kubernetes.io/name" = name;
-    "app.kubernetes.io/component" = component;
-  };
+  selectorLabels =
+    component:
+    if cfg.selectorLabels != null then
+      cfg.selectorLabels
+    else
+      {
+        "app.kubernetes.io/name" = appLabel;
+        "app.kubernetes.io/component" = component;
+      };
 
   # ── Dependency wiring ───────────────────────────────────────────
   depEnv =
@@ -216,27 +269,88 @@ let
   # ── Common pod spec fragments ───────────────────────────────────
   mkEnvFrom =
     self: configMapName: secretRefs:
-    [ { configMapRef.name = "${configMapName}"; } ] ++ map (s: { secretRef.name = s; }) secretRefs;
+    lib.optional cfg.useConfigMap { configMapRef.name = "${configMapName}"; }
+    ++ map (s: { secretRef.name = s; }) secretRefs;
 
   mkPodSpec =
     self:
     {
       containers,
+      initContainers ? [ ],
       volumes ? [ ],
     }:
     {
       inherit containers;
       volumes = volumes ++ secretVolumes;
     }
+    // lib.optionalAttrs (initContainers != [ ]) {
+      inherit initContainers;
+    }
     // lib.optionalAttrs (cfg.priorityClassName != null) {
       priorityClassName = cfg.priorityClassName;
+    }
+    // lib.optionalAttrs cfg.serviceAccount.enabled {
+      serviceAccountName =
+        if cfg.serviceAccount.name != null then cfg.serviceAccount.name else rName;
+    }
+    // lib.optionalAttrs (cfg.backend.topologySpreadConstraints != [ ]) {
+      topologySpreadConstraints = cfg.backend.topologySpreadConstraints;
     };
+
+  # ── Probe builders ────────────────────────────────────────────
+  mkLivenessProbe =
+    if cfg.backend.probes.type == "exec" then
+      {
+        exec.command = cfg.backend.probes.execCommand;
+        timeoutSeconds = cfg.backend.probes.timeoutSeconds;
+        initialDelaySeconds = cfg.backend.probes.initialDelaySeconds;
+        periodSeconds = 10;
+        failureThreshold = 3;
+      }
+    else
+      {
+        httpGet = {
+          path = cfg.backend.probes.path;
+          port = probePort;
+        };
+        timeoutSeconds = cfg.backend.probes.timeoutSeconds;
+        periodSeconds = 10;
+        failureThreshold = 3;
+      };
+
+  mkReadinessProbe =
+    let
+      readinessTimeout =
+        if cfg.backend.probes.readinessTimeoutSeconds != null then
+          cfg.backend.probes.readinessTimeoutSeconds
+        else
+          cfg.backend.probes.timeoutSeconds;
+    in
+    if cfg.backend.probes.type == "exec" then
+      {
+        exec.command = cfg.backend.probes.execCommand;
+        timeoutSeconds = readinessTimeout;
+        initialDelaySeconds = cfg.backend.probes.initialDelaySeconds;
+        periodSeconds = 10;
+        failureThreshold = 3;
+      }
+    else
+      {
+        httpGet = {
+          path = cfg.backend.probes.path;
+          port = probePort;
+        };
+        initialDelaySeconds = cfg.backend.probes.initialDelaySeconds;
+        timeoutSeconds = readinessTimeout;
+        periodSeconds = 10;
+        failureThreshold = 3;
+      };
 
   # ── Backend container ───────────────────────────────────────────
   mkBackendContainer =
     self:
     {
-      name = "backend";
+      name = containerName;
       image = "${cfg.backend.image.repository}:${cfg.backend.image.tag}";
       imagePullPolicy = cfg.backend.image.pullPolicy;
       envFrom = mkEnvFrom self self.configmap cfg.backend.secrets;
@@ -246,7 +360,7 @@ let
           containerPort = cfg.backend.port;
           protocol = "TCP";
         }
-      ];
+      ] ++ cfg.backend.extraPorts;
       volumeMounts = secretVolumeMounts;
       resources = cfg.backend.resources;
     }
@@ -257,25 +371,8 @@ let
       args = cfg.backend.args;
     }
     // lib.optionalAttrs cfg.backend.probes.enabled {
-      livenessProbe = {
-        httpGet = {
-          path = cfg.backend.probes.path;
-          port = cfg.backend.port;
-        };
-        timeoutSeconds = cfg.backend.probes.timeoutSeconds;
-        periodSeconds = 10;
-        failureThreshold = 3;
-      };
-      readinessProbe = {
-        httpGet = {
-          path = cfg.backend.probes.path;
-          port = cfg.backend.port;
-        };
-        initialDelaySeconds = cfg.backend.probes.initialDelaySeconds;
-        timeoutSeconds = cfg.backend.probes.timeoutSeconds;
-        periodSeconds = 10;
-        failureThreshold = 3;
-      };
+      livenessProbe = mkLivenessProbe;
+      readinessProbe = mkReadinessProbe;
     };
 
   # ── Frontend container ──────────────────────────────────────────
@@ -476,21 +573,36 @@ let
     ++ builtins.attrValues cronWorkerParts
     ++ builtins.attrValues customProcessParts;
 
+  # Strategy spec
+  strategySpec = {
+    rollingUpdate = {
+      maxSurge = if cfg.backend.strategy.maxSurge != null then cfg.backend.strategy.maxSurge else cfg.maxSurge;
+    }
+    // lib.optionalAttrs (cfg.backend.strategy.maxUnavailable != null) {
+      maxUnavailable = cfg.backend.strategy.maxUnavailable;
+    };
+    type = "RollingUpdate";
+  };
+
 in
 {
 
   # ── ConfigMap (backend environment) ─────────────────────────────
-  configmap = scope.mkResource {
-    apiVersion = "v1";
-    kind = "ConfigMap";
-    name = "${name}-environment";
-    labels = componentLabels "config";
-    data = {
-      ENVIRONMENT = cfg.environment;
-    }
-    // depEnv
-    // cfg.env;
-  };
+  configmap =
+    if cfg.useConfigMap then
+      scope.mkResource {
+        apiVersion = "v1";
+        kind = "ConfigMap";
+        name = "${name}-environment";
+        labels = componentLabels "config";
+        data = {
+          ENVIRONMENT = cfg.environment;
+        }
+        // depEnv
+        // cfg.env;
+      }
+    else
+      null;
 
   # ── ConfigMap (frontend environment) ────────────────────────────
   frontendConfigmap =
@@ -537,25 +649,40 @@ in
     else
       null;
 
+  # ── ServiceAccount ───────────────────────────────────────────────
+  serviceAccount =
+    if cfg.serviceAccount.enabled then
+      scope.mkResource {
+        apiVersion = "v1";
+        kind = "ServiceAccount";
+        name = if cfg.serviceAccount.name != null then cfg.serviceAccount.name else rName;
+        labels = componentLabels "serviceaccount";
+      }
+    else
+      null;
+
   # ── Backend Deployment ──────────────────────────────────────────
   backendDeployment = scope.mkResource {
     apiVersion = "apps/v1";
     kind = "Deployment";
-    name = "${name}-backend";
-    labels = componentLabels "backend";
+    name = "${rName}-${compName}";
+    labels = componentLabels compName;
     spec = {
       replicas = cfg.backend.replicaCount;
-      strategy.rollingUpdate.maxSurge = "100%";
-      selector.matchLabels = selectorLabels "backend";
+      strategy = strategySpec;
+      selector.matchLabels = selectorLabels compName;
       template = {
         metadata = {
-          labels = selectorLabels "backend";
+          labels = selectorLabels compName;
+        }
+        // lib.optionalAttrs cfg.useConfigMap {
           annotations = {
             "checksum/config" = "\${${self.configmap}}";
           };
         };
         spec = mkPodSpec self {
           containers = [ (mkBackendContainer self) ];
+          initContainers = cfg.backend.initContainers;
         };
       };
     };
@@ -565,24 +692,25 @@ in
   backendService = scope.mkResource {
     apiVersion = "v1";
     kind = "Service";
-    name = "${name}-backend";
-    labels = componentLabels "backend";
+    name = "${rName}-${compName}-internal";
+    labels = componentLabels compName // cfg.extraServiceLabels;
     spec = {
       type = "ClusterIP";
-      selector = selectorLabels "backend";
+      selector = selectorLabels compName;
       ports = [
         {
           name = "http";
-          port = cfg.backend.port;
-          targetPort = "http";
+          port = servicePort;
+          targetPort = cfg.backend.port;
           protocol = "TCP";
         }
       ];
     };
     outputs = {
-      port = toString cfg.backend.port;
+      port = toString servicePort;
     };
-    requires = [ self.backendDeployment ];
+    requires = [ self.backendDeployment ]
+      ++ lib.optional (self.serviceAccount != null) self.serviceAccount;
   };
 
   # ── Backend HPA ─────────────────────────────────────────────────
@@ -591,8 +719,8 @@ in
       scope.mkResource {
         apiVersion = "autoscaling/v2";
         kind = "HorizontalPodAutoscaler";
-        name = "${name}-backend";
-        labels = componentLabels "backend";
+        name = "${rName}-${compName}";
+        labels = componentLabels compName;
         spec = {
           scaleTargetRef = {
             apiVersion = "apps/v1";
@@ -613,6 +741,27 @@ in
               };
             }
           ];
+        };
+      }
+    else
+      null;
+
+  # ── PodDisruptionBudget ──────────────────────────────────────────
+  pdb =
+    if cfg.pdb.enabled then
+      scope.mkResource {
+        apiVersion = "policy/v1";
+        kind = "PodDisruptionBudget";
+        name = "${rName}-${compName}";
+        labels = componentLabels compName;
+        spec = {
+          selector.matchLabels = selectorLabels compName;
+        }
+        // lib.optionalAttrs (cfg.pdb.minAvailable != null) {
+          minAvailable = cfg.pdb.minAvailable;
+        }
+        // lib.optionalAttrs (cfg.pdb.maxUnavailable != null) {
+          maxUnavailable = cfg.pdb.maxUnavailable;
         };
       }
     else
@@ -888,7 +1037,7 @@ in
         resolveServicePort =
           svcName:
           if svcName == "backend" then
-            cfg.backend.port
+            servicePort
           else if svcName == "frontend" then
             cfg.frontend.port
           else if svcName == "caddy" then
@@ -918,7 +1067,7 @@ in
             if hosts != [ ] then
               [
                 {
-                  secretName = "${name}-tls";
+                  secretName = "${rName}-tls";
                   inherit hosts;
                 }
               ]
@@ -928,7 +1077,7 @@ in
       scope.mkResource {
         apiVersion = "networking.k8s.io/v1";
         kind = "Ingress";
-        name = "${name}-ingress";
+        name = "${rName}-${compName}";
         labels = componentLabels "ingress";
         annotations = {
           "cert-manager.io/cluster-issuer" = cfg.ingress.clusterIssuer;
@@ -998,7 +1147,8 @@ in
       ++ lib.optional (self.migrateJob != null) self.migrateJob
       ++ lib.optional (self.secret != null) self.secret
       ++ lib.optional (self.secretFilesResource != null) self.secretFilesResource
-      ++ lib.optional (self.frontendService != null) self.frontendService;
+      ++ lib.optional (self.frontendService != null) self.frontendService
+      ++ lib.optional (self.pdb != null) self.pdb;
   };
 }
 # Merge dynamic worker parts into the fixpoint so they appear in

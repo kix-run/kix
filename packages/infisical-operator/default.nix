@@ -4,8 +4,8 @@
 # watches for InfisicalSecret, InfisicalDynamicSecret, InfisicalPushSecret,
 # and ClusterGenerator custom resources.
 #
-# Resources: ServiceAccount, ClusterRole (manager + metrics-auth + metrics-reader),
-#            ClusterRoleBinding (manager + metrics-auth), Role (leader election),
+# Resources: ServiceAccount, ClusterRole (manager + proxy + metrics-reader),
+#            ClusterRoleBinding (manager + proxy), Role (leader election),
 #            RoleBinding (leader election), Service (metrics), Deployment.
 
 {
@@ -32,14 +32,189 @@ let
         memory = "128Mi";
       };
     };
+    # Override the resource name prefix (e.g. for Helm-truncated names).
+    # Defaults to the instance name.
+    namePrefix = scope.instanceName;
+    # kube-rbac-proxy sidecar for securing the metrics endpoint.
+    kubeRbacProxy = {
+      enabled = false;
+      image = {
+        repository = "gcr.io/kubebuilder/kube-rbac-proxy";
+        tag = "v0.15.0";
+        pullPolicy = "IfNotPresent";
+      };
+      resources = {
+        requests = {
+          cpu = "5m";
+          memory = "64Mi";
+        };
+        limits = {
+          cpu = "500m";
+          memory = "128Mi";
+        };
+      };
+    };
+    # Extra CRD resources managed by the manager ClusterRole beyond the
+    # base set (infisicalsecrets, infisicaldynamicsecrets, infisicalpushsecrets).
+    # Set to a list of resource names, e.g. [ "clustergenerators" ].
+    extraManagedCrds = [];
   };
 
+  prefix = cfg.namePrefix;
   name = scope.instanceName;
 
+  # Labels applied to the deployment, service, and pod selector.
   selectorLabels = {
-    "app.kubernetes.io/name" = "infisical-operator";
+    "app.kubernetes.io/name" = "secrets-operator";
     "app.kubernetes.io/instance" = name;
     "control-plane" = "controller-manager";
+  };
+
+  # Labels for RBAC and ServiceAccount resources (no control-plane label).
+  rbacLabels = {
+    "app.kubernetes.io/name" = "secrets-operator";
+    "app.kubernetes.io/instance" = name;
+  };
+
+  # Manager container args differ depending on whether kube-rbac-proxy is used.
+  managerArgs =
+    if cfg.kubeRbacProxy.enabled then [
+      "--health-probe-bind-address=:8081"
+      "--metrics-bind-address=127.0.0.1:8080"
+      "--leader-elect"
+    ] else [
+      "--metrics-bind-address=:8443"
+      "--leader-elect"
+      "--health-probe-bind-address=:8081"
+    ];
+
+  # Manager container definition (shared between proxy and non-proxy modes).
+  managerContainer = {
+    name = "manager";
+    image = "${cfg.image.repository}:${cfg.image.tag}";
+    imagePullPolicy = cfg.image.pullPolicy;
+    command = [ "/manager" ];
+    args = managerArgs;
+    env = [
+      {
+        name = "KUBERNETES_CLUSTER_DOMAIN";
+        value = "cluster.local";
+      }
+    ];
+    livenessProbe = {
+      httpGet = {
+        path = "/healthz";
+        port = 8081;
+      };
+      initialDelaySeconds = 15;
+      periodSeconds = 20;
+      failureThreshold = 3;
+      timeoutSeconds = 1;
+    };
+    readinessProbe = {
+      httpGet = {
+        path = "/readyz";
+        port = 8081;
+      };
+      initialDelaySeconds = 5;
+      periodSeconds = 10;
+      failureThreshold = 3;
+      timeoutSeconds = 1;
+    };
+    resources = cfg.resources;
+    securityContext = {
+      allowPrivilegeEscalation = false;
+      capabilities.drop = [ "ALL" ];
+    };
+  } // lib.optionalAttrs (!cfg.kubeRbacProxy.enabled) {
+    ports = [
+      {
+        name = "metrics";
+        containerPort = 8443;
+      }
+      {
+        name = "health";
+        containerPort = 8081;
+      }
+    ];
+    securityContext = {
+      allowPrivilegeEscalation = false;
+      capabilities.drop = [ "ALL" ];
+      readOnlyRootFilesystem = true;
+    };
+  };
+
+  # kube-rbac-proxy sidecar container.
+  proxyContainer = {
+    name = "kube-rbac-proxy";
+    image = "${cfg.kubeRbacProxy.image.repository}:${cfg.kubeRbacProxy.image.tag}";
+    imagePullPolicy = cfg.kubeRbacProxy.image.pullPolicy;
+    args = [
+      "--secure-listen-address=0.0.0.0:8443"
+      "--upstream=http://127.0.0.1:8080/"
+      "--logtostderr=true"
+      "--v=0"
+    ];
+    env = [
+      {
+        name = "KUBERNETES_CLUSTER_DOMAIN";
+        value = "cluster.local";
+      }
+    ];
+    ports = [
+      {
+        containerPort = 8443;
+        name = "https";
+        protocol = "TCP";
+      }
+    ];
+    resources = cfg.kubeRbacProxy.resources;
+    securityContext = {
+      allowPrivilegeEscalation = false;
+      capabilities.drop = [ "ALL" ];
+    };
+  };
+
+  containers =
+    if cfg.kubeRbacProxy.enabled then [ proxyContainer managerContainer ]
+    else [ managerContainer ];
+
+  # Base CRD resources always managed by the operator.
+  baseManagedCrds = [
+    "infisicaldynamicsecrets"
+    "infisicalpushsecrets"
+    "infisicalsecrets"
+  ];
+
+  allManagedCrds = cfg.extraManagedCrds ++ baseManagedCrds;
+
+  # Pod security context differs based on proxy mode.
+  podSecurityContext =
+    if cfg.kubeRbacProxy.enabled then {
+      runAsNonRoot = true;
+    } else {
+      runAsNonRoot = true;
+      seccompProfile.type = "RuntimeDefault";
+    };
+
+  # Node affinity for the deployment (matches Helm chart defaults).
+  nodeAffinity = lib.optionalAttrs cfg.kubeRbacProxy.enabled {
+    affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms = [
+      {
+        matchExpressions = [
+          {
+            key = "kubernetes.io/arch";
+            operator = "In";
+            values = [ "amd64" "arm64" "ppc64le" "s390x" ];
+          }
+          {
+            key = "kubernetes.io/os";
+            operator = "In";
+            values = [ "linux" ];
+          }
+        ];
+      }
+    ];
   };
 
 in
@@ -48,8 +223,8 @@ self: {
   serviceAccount = scope.mkResource {
     apiVersion = "v1";
     kind = "ServiceAccount";
-    name = "${name}-controller-manager";
-    labels = selectorLabels;
+    name = "${prefix}-controller-manager";
+    labels = rbacLabels;
   };
 
   # --- ClusterRoles ---
@@ -57,40 +232,28 @@ self: {
   managerRole = scope.mkClusterResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "ClusterRole";
-    name = "${name}-manager-role";
-    labels = selectorLabels;
+    name = "${prefix}-manager-role";
+    labels = rbacLabels;
     extra.rules = [
       {
         apiGroups = [ "" ];
-        resources = [
-          "configmaps"
-          "secrets"
-        ];
-        verbs = [
-          "create"
-          "delete"
-          "get"
-          "list"
-          "update"
-          "watch"
-        ];
+        resources = [ "configmaps" ];
+        verbs = [ "create" "delete" "get" "list" "update" "watch" ];
       }
       {
         apiGroups = [ "" ];
         resources = [ "pods" ];
-        verbs = [
-          "get"
-          "list"
-        ];
+        verbs = [ "get" "list" ];
+      }
+      {
+        apiGroups = [ "" ];
+        resources = [ "secrets" ];
+        verbs = [ "create" "delete" "get" "list" "update" "watch" ];
       }
       {
         apiGroups = [ "" ];
         resources = [ "serviceaccounts" ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-        ];
+        verbs = [ "get" "list" "watch" ];
       }
       {
         apiGroups = [ "" ];
@@ -99,71 +262,44 @@ self: {
       }
       {
         apiGroups = [ "apps" ];
-        resources = [
-          "daemonsets"
-          "deployments"
-          "statefulsets"
-        ];
-        verbs = [
-          "get"
-          "list"
-          "update"
-          "watch"
-        ];
+        resources = [ "daemonsets" "deployments" "statefulsets" ];
+        verbs = [ "get" "list" "update" "watch" ];
+      }
+      {
+        apiGroups = [ "apps" ];
+        resources = [ "deployments" ];
+        verbs = [ "get" "list" "update" "watch" ];
       }
       {
         apiGroups = [ "authentication.k8s.io" ];
         resources = [ "tokenreviews" ];
         verbs = [ "create" ];
       }
+    ]
+    ++ lib.concatMap (crd: [
       {
         apiGroups = [ "secrets.infisical.com" ];
-        resources = [
-          "clustergenerators"
-          "infisicaldynamicsecrets"
-          "infisicalpushsecrets"
-          "infisicalsecrets"
-        ];
-        verbs = [
-          "create"
-          "delete"
-          "get"
-          "list"
-          "patch"
-          "update"
-          "watch"
-        ];
+        resources = [ crd ];
+        verbs = [ "create" "delete" "get" "list" "patch" "update" "watch" ];
       }
       {
         apiGroups = [ "secrets.infisical.com" ];
-        resources = [
-          "infisicaldynamicsecrets/finalizers"
-          "infisicalpushsecrets/finalizers"
-          "infisicalsecrets/finalizers"
-        ];
+        resources = [ "${crd}/finalizers" ];
         verbs = [ "update" ];
       }
       {
         apiGroups = [ "secrets.infisical.com" ];
-        resources = [
-          "infisicaldynamicsecrets/status"
-          "infisicalpushsecrets/status"
-          "infisicalsecrets/status"
-        ];
-        verbs = [
-          "get"
-          "patch"
-          "update"
-        ];
+        resources = [ "${crd}/status" ];
+        verbs = [ "get" "patch" "update" ];
       }
-    ];
+    ]) allManagedCrds;
   };
 
-  metricsAuthRole = scope.mkClusterResource {
+  proxyRole = scope.mkClusterResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "ClusterRole";
-    name = "${name}-metrics-auth-role";
-    labels = selectorLabels;
+    name = "${prefix}-proxy-role";
+    labels = rbacLabels;
     extra.rules = [
       {
         apiGroups = [ "authentication.k8s.io" ];
@@ -181,8 +317,8 @@ self: {
   metricsReaderRole = scope.mkClusterResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "ClusterRole";
-    name = "${name}-metrics-reader";
-    labels = selectorLabels;
+    name = "${prefix}-metrics-reader";
+    labels = rbacLabels;
     extra.rules = [
       {
         nonResourceURLs = [ "/metrics" ];
@@ -196,8 +332,8 @@ self: {
   managerRoleBinding = scope.mkClusterResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "ClusterRoleBinding";
-    name = "${name}-manager-rolebinding";
-    labels = selectorLabels;
+    name = "${prefix}-manager-rolebinding";
+    labels = rbacLabels;
     extra = {
       roleRef = {
         apiGroup = "rbac.authorization.k8s.io";
@@ -214,16 +350,16 @@ self: {
     };
   };
 
-  metricsAuthRoleBinding = scope.mkClusterResource {
+  proxyRoleBinding = scope.mkClusterResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "ClusterRoleBinding";
-    name = "${name}-metrics-auth-rolebinding";
-    labels = selectorLabels;
+    name = "${prefix}-proxy-rolebinding";
+    labels = rbacLabels;
     extra = {
       roleRef = {
         apiGroup = "rbac.authorization.k8s.io";
         kind = "ClusterRole";
-        name = "${self.metricsAuthRole}";
+        name = "${self.proxyRole}";
       };
       subjects = [
         {
@@ -240,8 +376,8 @@ self: {
   leaderElectionRole = scope.mkResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "Role";
-    name = "${name}-leader-election-role";
-    labels = selectorLabels;
+    name = "${prefix}-leader-election-role";
+    labels = rbacLabels;
     extra.rules = [
       {
         apiGroups = [ "" ];
@@ -283,8 +419,8 @@ self: {
   leaderElectionRoleBinding = scope.mkResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "RoleBinding";
-    name = "${name}-leader-election-rolebinding";
-    labels = selectorLabels;
+    name = "${prefix}-leader-election-rolebinding";
+    labels = rbacLabels;
     extra = {
       roleRef = {
         apiGroup = "rbac.authorization.k8s.io";
@@ -306,7 +442,7 @@ self: {
   service = scope.mkResource {
     apiVersion = "v1";
     kind = "Service";
-    name = "${name}-metrics-service";
+    name = "${prefix}-controller-manager-metrics-service";
     labels = selectorLabels;
     spec = {
       type = "ClusterIP";
@@ -316,7 +452,7 @@ self: {
           name = "https";
           port = 8443;
           protocol = "TCP";
-          targetPort = 8443;
+          targetPort = "https";
         }
       ];
     };
@@ -330,11 +466,18 @@ self: {
   deployment = scope.mkResource {
     apiVersion = "apps/v1";
     kind = "Deployment";
-    name = "${name}-controller-manager";
+    name = "${prefix}-controller-manager";
     labels = selectorLabels;
     spec = {
       replicas = cfg.replicaCount;
       selector.matchLabels = selectorLabels;
+      strategy = {
+        type = "RollingUpdate";
+        rollingUpdate = {
+          maxSurge = "25%";
+          maxUnavailable = "25%";
+        };
+      };
       template = {
         metadata = {
           labels = selectorLabels;
@@ -345,62 +488,9 @@ self: {
         spec = {
           serviceAccountName = "${self.serviceAccount}";
           terminationGracePeriodSeconds = 10;
-          securityContext = {
-            runAsNonRoot = true;
-            seccompProfile.type = "RuntimeDefault";
-          };
-          containers = [
-            {
-              name = "manager";
-              image = "${cfg.image.repository}:${cfg.image.tag}";
-              imagePullPolicy = cfg.image.pullPolicy;
-              command = [ "/manager" ];
-              args = [
-                "--metrics-bind-address=:8443"
-                "--leader-elect"
-                "--health-probe-bind-address=:8081"
-              ];
-              env = [
-                {
-                  name = "KUBERNETES_CLUSTER_DOMAIN";
-                  value = "cluster.local";
-                }
-              ];
-              ports = [
-                {
-                  name = "metrics";
-                  containerPort = 8443;
-                }
-                {
-                  name = "health";
-                  containerPort = 8081;
-                }
-              ];
-              livenessProbe = {
-                httpGet = {
-                  path = "/healthz";
-                  port = 8081;
-                };
-                initialDelaySeconds = 15;
-                periodSeconds = 20;
-              };
-              readinessProbe = {
-                httpGet = {
-                  path = "/readyz";
-                  port = 8081;
-                };
-                initialDelaySeconds = 5;
-                periodSeconds = 10;
-              };
-              resources = cfg.resources;
-              securityContext = {
-                allowPrivilegeEscalation = false;
-                capabilities.drop = [ "ALL" ];
-                readOnlyRootFilesystem = true;
-              };
-            }
-          ];
-        };
+          securityContext = podSecurityContext;
+          inherit containers;
+        } // nodeAffinity;
       };
     };
   };
@@ -410,10 +500,10 @@ self: {
     requires = [
       self.serviceAccount
       self.managerRole
-      self.metricsAuthRole
+      self.proxyRole
       self.metricsReaderRole
       self.managerRoleBinding
-      self.metricsAuthRoleBinding
+      self.proxyRoleBinding
       self.leaderElectionRole
       self.leaderElectionRoleBinding
       self.service

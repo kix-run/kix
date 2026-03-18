@@ -5,9 +5,9 @@
 # self-hosted runners.
 #
 # Resources: ServiceAccount, ClusterRole, ClusterRoleBinding,
-#            Role (leader election), RoleBinding, Deployment.
+#            Role (listener), RoleBinding, Deployment.
 #
-# main = Deployment (controller-manager)
+# main = Deployment (gha-rs-controller)
 
 {
   scope,
@@ -21,10 +21,14 @@ let
   cfg = scope.defaults config {
     image = {
       repository = "ghcr.io/actions/gha-runner-scale-set-controller";
-      tag = "0.11.0";
+      tag = "0.13.1";
       pullPolicy = "IfNotPresent";
     };
     replicaCount = 1;
+    releaseName = "${name}-controller";
+    logLevel = "debug";
+    logFormat = "text";
+    updateStrategy = "immediate";
     resources = {
       requests = {
         cpu = "200m";
@@ -35,13 +39,20 @@ let
         memory = "512Mi";
       };
     };
-    leaderElection = true;
   };
 
+  controllerName = "${cfg.releaseName}-gha-rs-controller";
+
   selectorLabels = {
-    "app.kubernetes.io/name" = "arc";
-    "app.kubernetes.io/instance" = name;
+    "app.kubernetes.io/name" = "gha-rs-controller";
+    "app.kubernetes.io/instance" = cfg.releaseName;
+    "app.kubernetes.io/namespace" = scope.namespaceName;
+  };
+
+  templateLabels = selectorLabels // {
     "app.kubernetes.io/component" = "controller-manager";
+    "app.kubernetes.io/part-of" = "gha-rs-controller";
+    "app.kubernetes.io/version" = cfg.image.tag;
   };
 
 in
@@ -51,106 +62,170 @@ self: {
   serviceAccount = scope.mkResource {
     apiVersion = "v1";
     kind = "ServiceAccount";
-    name = "${name}-controller-manager";
-    labels = selectorLabels;
+    name = controllerName;
+    labels = selectorLabels // {
+      "app.kubernetes.io/part-of" = "gha-rs-controller";
+      "app.kubernetes.io/version" = cfg.image.tag;
+    };
   };
 
   # --- ClusterRole ---
   clusterRole = scope.mkClusterResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "ClusterRole";
-    name = "${name}-manager-role";
-    labels = selectorLabels;
+    name = controllerName;
     extra.rules = [
       {
         apiGroups = [ "" ];
-        resources = [
-          "pods"
-          "pods/status"
-        ];
+        resources = [ "pods" ];
         verbs = [
-          "get"
           "list"
           "watch"
-          "create"
-          "update"
-          "patch"
-          "delete"
         ];
       }
       {
         apiGroups = [ "" ];
-        resources = [
-          "secrets"
-          "serviceaccounts"
-        ];
+        resources = [ "serviceaccounts" ];
         verbs = [
-          "get"
-          "list"
-          "watch"
-          "create"
-          "update"
-          "patch"
-          "delete"
-        ];
-      }
-      {
-        apiGroups = [ "" ];
-        resources = [ "events" ];
-        verbs = [
-          "create"
-          "patch"
-        ];
-      }
-      {
-        apiGroups = [ "" ];
-        resources = [ "namespaces" ];
-        verbs = [
-          "get"
           "list"
           "watch"
         ];
       }
       {
         apiGroups = [ "actions.github.com" ];
-        resources = [
-          "autoscalingrunnersets"
-          "autoscalingrunnersets/status"
-          "autoscalingrunnersets/finalizers"
-          "autoscalinglisteners"
-          "autoscalinglisteners/status"
-          "autoscalinglisteners/finalizers"
-          "ephemeralrunners"
-          "ephemeralrunners/status"
-          "ephemeralrunners/finalizers"
-          "ephemeralrunnersets"
-          "ephemeralrunnersets/status"
-          "ephemeralrunnersets/finalizers"
-        ];
+        resources = [ "autoscalingrunnersets" ];
         verbs = [
+          "create"
+          "delete"
           "get"
           "list"
-          "watch"
-          "create"
-          "update"
           "patch"
+          "update"
+          "watch"
+        ];
+      }
+      {
+        apiGroups = [ "actions.github.com" ];
+        resources = [ "autoscalingrunnersets/finalizers" ];
+        verbs = [
+          "patch"
+          "update"
+        ];
+      }
+      {
+        apiGroups = [ "actions.github.com" ];
+        resources = [ "autoscalingrunnersets/status" ];
+        verbs = [
+          "get"
+          "patch"
+          "update"
+        ];
+      }
+      {
+        apiGroups = [ "actions.github.com" ];
+        resources = [ "autoscalinglisteners" ];
+        verbs = [
+          "create"
           "delete"
+          "get"
+          "list"
+          "patch"
+          "update"
+          "watch"
+        ];
+      }
+      {
+        apiGroups = [ "actions.github.com" ];
+        resources = [ "autoscalinglisteners/status" ];
+        verbs = [
+          "get"
+          "patch"
+          "update"
+        ];
+      }
+      {
+        apiGroups = [ "actions.github.com" ];
+        resources = [ "autoscalinglisteners/finalizers" ];
+        verbs = [
+          "patch"
+          "update"
+        ];
+      }
+      {
+        apiGroups = [ "actions.github.com" ];
+        resources = [ "ephemeralrunnersets" ];
+        verbs = [
+          "create"
+          "delete"
+          "get"
+          "list"
+          "patch"
+          "update"
+          "watch"
+        ];
+      }
+      {
+        apiGroups = [ "actions.github.com" ];
+        resources = [ "ephemeralrunnersets/status" ];
+        verbs = [
+          "get"
+          "patch"
+          "update"
+        ];
+      }
+      {
+        apiGroups = [ "actions.github.com" ];
+        resources = [ "ephemeralrunnersets/finalizers" ];
+        verbs = [
+          "patch"
+          "update"
+        ];
+      }
+      {
+        apiGroups = [ "actions.github.com" ];
+        resources = [ "ephemeralrunners" ];
+        verbs = [
+          "create"
+          "delete"
+          "get"
+          "list"
+          "patch"
+          "update"
+          "watch"
+        ];
+      }
+      {
+        apiGroups = [ "actions.github.com" ];
+        resources = [ "ephemeralrunners/finalizers" ];
+        verbs = [
+          "patch"
+          "update"
+        ];
+      }
+      {
+        apiGroups = [ "actions.github.com" ];
+        resources = [ "ephemeralrunners/status" ];
+        verbs = [
+          "get"
+          "patch"
+          "update"
         ];
       }
       {
         apiGroups = [ "rbac.authorization.k8s.io" ];
-        resources = [
-          "roles"
-          "rolebindings"
-        ];
+        resources = [ "rolebindings" ];
         verbs = [
-          "get"
           "list"
           "watch"
-          "create"
-          "update"
+        ];
+      }
+      {
+        apiGroups = [ "rbac.authorization.k8s.io" ];
+        resources = [ "roles" ];
+        verbs = [
+          "list"
+          "watch"
           "patch"
-          "delete"
         ];
       }
     ];
@@ -160,8 +235,7 @@ self: {
   clusterRoleBinding = scope.mkClusterResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "ClusterRoleBinding";
-    name = "${name}-manager-rolebinding";
-    labels = selectorLabels;
+    name = controllerName;
     extra = {
       roleRef = {
         apiGroup = "rbac.authorization.k8s.io";
@@ -178,61 +252,61 @@ self: {
     };
   };
 
-  # --- Role (leader election, namespace-scoped) ---
-  leaderElectionRole = scope.mkResource {
+  # --- Role (listener, namespace-scoped) ---
+  listenerRole = scope.mkResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "Role";
-    name = "${name}-leader-election-role";
-    labels = selectorLabels;
+    name = "${controllerName}-listener";
     extra.rules = [
       {
         apiGroups = [ "" ];
-        resources = [ "configmaps" ];
+        resources = [ "pods" ];
         verbs = [
-          "get"
-          "list"
-          "watch"
           "create"
-          "update"
-          "patch"
           "delete"
-        ];
-      }
-      {
-        apiGroups = [ "coordination.k8s.io" ];
-        resources = [ "leases" ];
-        verbs = [
           "get"
-          "list"
-          "watch"
-          "create"
-          "update"
-          "patch"
-          "delete"
         ];
       }
       {
         apiGroups = [ "" ];
-        resources = [ "events" ];
+        resources = [ "pods/status" ];
+        verbs = [ "get" ];
+      }
+      {
+        apiGroups = [ "" ];
+        resources = [ "secrets" ];
         verbs = [
           "create"
+          "delete"
+          "get"
           "patch"
+          "update"
+        ];
+      }
+      {
+        apiGroups = [ "" ];
+        resources = [ "serviceaccounts" ];
+        verbs = [
+          "create"
+          "delete"
+          "get"
+          "patch"
+          "update"
         ];
       }
     ];
   };
 
   # --- RoleBinding ---
-  leaderElectionRoleBinding = scope.mkResource {
+  listenerRoleBinding = scope.mkResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "RoleBinding";
-    name = "${name}-leader-election-rolebinding";
-    labels = selectorLabels;
+    name = "${controllerName}-listener";
     extra = {
       roleRef = {
         apiGroup = "rbac.authorization.k8s.io";
         kind = "Role";
-        name = "${self.leaderElectionRole}";
+        name = "${self.listenerRole}";
       };
       subjects = [
         {
@@ -244,24 +318,26 @@ self: {
     };
   };
 
-  # --- Deployment (controller-manager) ---
+  # --- Deployment (gha-rs-controller) ---
   deployment = scope.mkResource {
     apiVersion = "apps/v1";
     kind = "Deployment";
-    name = "${name}-controller-manager";
-    labels = selectorLabels;
+    name = controllerName;
+    labels = {
+      "actions.github.com/controller-service-account-name" = controllerName;
+      "actions.github.com/controller-service-account-namespace" = scope.namespaceName;
+    } // selectorLabels // {
+      "app.kubernetes.io/part-of" = "gha-rs-controller";
+      "app.kubernetes.io/version" = cfg.image.tag;
+    };
     spec = {
       replicas = cfg.replicaCount;
       selector.matchLabels = selectorLabels;
       template = {
-        metadata.labels = selectorLabels;
+        metadata.labels = templateLabels;
         spec = {
           serviceAccountName = "${self.serviceAccount}";
           terminationGracePeriodSeconds = 10;
-          securityContext = {
-            runAsNonRoot = true;
-            seccompProfile.type = "RuntimeDefault";
-          };
           containers = [
             {
               name = "manager";
@@ -270,13 +346,13 @@ self: {
               command = [ "/manager" ];
               args = [
                 "--auto-scaling-runner-set-only"
-                "--log-level=info"
-                "--log-format=text"
-                "--update-strategy=eventual"
-              ]
-              ++ lib.optionals cfg.leaderElection [
-                "--enable-leader-election"
-                "--leader-election-id=${name}-controller"
+                "--log-level=${cfg.logLevel}"
+                "--log-format=${cfg.logFormat}"
+                "--runner-max-concurrent-reconciles=2"
+                "--update-strategy=${cfg.updateStrategy}"
+                "--listener-metrics-addr=0"
+                "--listener-metrics-endpoint="
+                "--metrics-addr=0"
               ];
               env = [
                 {
@@ -285,50 +361,23 @@ self: {
                 }
                 {
                   name = "CONTROLLER_MANAGER_POD_NAMESPACE";
-                  valueFrom.fieldRef.fieldPath = "metadata.namespace";
+                  valueFrom.fieldRef = {
+                    apiVersion = "v1";
+                    fieldPath = "metadata.namespace";
+                  };
                 }
               ];
-              ports = [
-                {
-                  name = "metrics";
-                  containerPort = 8080;
-                  protocol = "TCP";
-                }
-                {
-                  name = "health";
-                  containerPort = 8081;
-                  protocol = "TCP";
-                }
-              ];
-              livenessProbe = {
-                httpGet = {
-                  path = "/healthz";
-                  port = "health";
-                };
-                initialDelaySeconds = 15;
-                periodSeconds = 20;
-                timeoutSeconds = 3;
-                failureThreshold = 3;
-                successThreshold = 1;
-              };
-              readinessProbe = {
-                httpGet = {
-                  path = "/readyz";
-                  port = "health";
-                };
-                initialDelaySeconds = 5;
-                periodSeconds = 10;
-                timeoutSeconds = 3;
-                failureThreshold = 3;
-                successThreshold = 1;
-              };
               resources = cfg.resources;
-              securityContext = {
-                allowPrivilegeEscalation = false;
-                capabilities.drop = [ "ALL" ];
-                readOnlyRootFilesystem = true;
-              };
+              volumeMounts = [
+                {
+                  name = "tmp";
+                  mountPath = "/tmp";
+                }
+              ];
             }
+          ];
+          volumes = [
+            { name = "tmp"; }
           ];
         };
       };
@@ -342,8 +391,8 @@ self: {
       self.serviceAccount
       self.clusterRole
       self.clusterRoleBinding
-      self.leaderElectionRole
-      self.leaderElectionRoleBinding
+      self.listenerRole
+      self.listenerRoleBinding
     ];
   };
 }

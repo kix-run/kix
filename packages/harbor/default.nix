@@ -1,18 +1,16 @@
 # Harbor container registry kix package.
 #
 # Multi-component OCI registry: Core (API/auth), Portal (web UI),
-# Registry (image storage), Jobservice (async tasks), Trivy (scanner),
+# Registry (image storage), Jobservice (async tasks),
 # Redis (internal cache), and Ingress.
 #
 # Resources per component:
-#   Core       — Deployment, Service, ConfigMap, Secret
-#   Portal     — Deployment, Service, ConfigMap
-#   Registry   — Deployment, Service, ConfigMap, Secret, PVC
-#   Jobservice — Deployment, Service, ConfigMap, Secret
-#   Trivy      — StatefulSet, Service, Secret
-#   Redis      — StatefulSet, Service, PVC (when type=internal)
-#   Ingress    — Ingress
-#   Shared     — ServiceAccount
+#   Core       -- Deployment, Service, ConfigMap, Secret
+#   Portal     -- Deployment, Service, ConfigMap
+#   Registry   -- Deployment, Service, ConfigMap, Secret, PVC
+#   Jobservice -- Deployment, Service, ConfigMap, Secret
+#   Redis      -- StatefulSet, Service, PVC (when type=internal)
+#   Ingress    -- Ingress
 #
 # main = Ingress (or core Service when ingress disabled)
 
@@ -46,10 +44,6 @@ let
       repository = "goharbor/harbor-jobservice";
       tag = "v2.12.2";
     };
-    trivy.image = {
-      repository = "goharbor/trivy-adapter";
-      tag = "v2.12.2";
-    };
     redis.image = {
       repository = "goharbor/redis-photon";
       tag = "v2.12.2";
@@ -60,6 +54,13 @@ let
     registry.replicas = 1;
     jobservice.replicas = 1;
 
+    trivy.enabled = false;
+
+    metrics = {
+      enabled = true;
+      port = 8001;
+    };
+
     persistence = {
       registry = {
         size = "200Gi";
@@ -67,6 +68,10 @@ let
       };
       redis = {
         size = "2Gi";
+        storageClass = null;
+      };
+      jobservice = {
+        size = "1Gi";
         storageClass = null;
       };
     };
@@ -79,16 +84,16 @@ let
       };
       tls = {
         enabled = true;
-        secretName = "harbor-tls";
+        secretName = "harbor-ingress";
       };
     };
 
     database = {
-      external = {
-        username = "harbor";
-        existingSecret = null;
-        sslmode = "disable";
-      };
+      username = "harbor";
+      existingSecret = null;
+      sslmode = "require";
+      maxIdleConns = "100";
+      maxOpenConns = "900";
     };
 
     redis = {
@@ -108,48 +113,60 @@ let
   useInternalRedis = cfg.redis.type == "internal";
 
   redisHost =
-    if useInternalRedis then "${name}-redis.${ns}.svc.cluster.local" else cfg.redis.external.host;
+    if useInternalRedis then "${name}-redis" else cfg.redis.external.host;
   redisPort = if useInternalRedis then "6379" else cfg.redis.external.port;
-  redisURL = "redis://${redisHost}:${redisPort}";
 
-  coreInternalURL = "http://${name}-core:8080";
+  coreServicePort = 80;
+  portalServicePort = 80;
+  jobserviceServicePort = 80;
+
+  coreInternalURL = "http://${name}-core:${toString coreServicePort}";
   registryInternalURL = "http://${name}-registry:5000";
-  portalInternalURL = "http://${name}-portal:8080";
-  jobserviceInternalURL = "http://${name}-jobservice:8080";
-  trivyInternalURL = "http://${name}-trivy:8080";
+  registryCtlInternalURL = "http://${name}-registry:8080";
+  portalInternalURL = "http://${name}-portal";
+  jobserviceInternalURL = "http://${name}-jobservice";
   tokenServiceURL = "${coreInternalURL}/service/token";
-  registryTokenServiceURL = "${cfg.externalURL}/service/token";
 
-  # Common labels for all resources.
+  # Common labels for all resources (metadata labels include both styles).
   commonLabels = {
     "app.kubernetes.io/name" = "harbor";
     "app.kubernetes.io/instance" = name;
   };
 
-  # Per-component selector labels.
-  componentLabels =
-    component:
-    commonLabels
-    // {
+  # Helm-style selector labels used by selectors/matchLabels.
+  helmSelectorLabels = {
+    app = "harbor";
+    release = name;
+  };
+
+  # Per-component selector labels (Helm-style for selectors).
+  componentSelectorLabels = component:
+    helmSelectorLabels // {
+      inherit component;
+    };
+
+  # Per-component metadata labels (both styles).
+  componentLabels = component:
+    commonLabels // {
       "app.kubernetes.io/component" = component;
     };
+
+  # Per-container security context matching the Helm chart pattern.
+  containerSecurityContext = {
+    allowPrivilegeEscalation = false;
+    capabilities.drop = [ "ALL" ];
+    privileged = false;
+    runAsNonRoot = true;
+    seccompProfile.type = "RuntimeDefault";
+  };
+
+  noProxy = "${name}-core,${name}-jobservice,${name}-database,${name}-registry,${name}-portal,${name}-trivy,${name}-exporter,127.0.0.1,localhost,.local,.internal";
 
 in
 self: {
 
   # ============================================================
-  # Shared ServiceAccount
-  # ============================================================
-
-  serviceAccount = scope.mkResource {
-    apiVersion = "v1";
-    kind = "ServiceAccount";
-    name = "${name}-harbor";
-    labels = commonLabels;
-  };
-
-  # ============================================================
-  # Core — API server, auth, project management
+  # Core -- API server, auth, project management
   # ============================================================
 
   coreConfigMap = scope.mkResource {
@@ -159,41 +176,57 @@ self: {
     labels = componentLabels "core";
     data = {
       EXT_ENDPOINT = cfg.externalURL;
+      CONFIG_PATH = "/etc/core/app.conf";
       CORE_URL = coreInternalURL;
+      CORE_LOCAL_URL = "http://127.0.0.1:8080";
       JOBSERVICE_URL = jobserviceInternalURL;
       REGISTRY_URL = registryInternalURL;
+      REGISTRY_CONTROLLER_URL = registryCtlInternalURL;
       TOKEN_SERVICE_URL = tokenServiceURL;
       PORTAL_URL = portalInternalURL;
-      TRIVY_ADAPTER_URL = trivyInternalURL;
+      TRIVY_ADAPTER_URL = "http://${name}-trivy:8080";
       REGISTRY_STORAGE_PROVIDER_NAME = "filesystem";
-      WITH_TRIVY = "true";
-      CORE_LOCAL_URL = "http://127.0.0.1:8080";
+      WITH_TRIVY = if cfg.trivy.enabled then "true" else "false";
       REGISTRY_CREDENTIAL_USERNAME = "harbor_registry_user";
+      PORT = "8080";
+      QUOTA_UPDATE_PROVIDER = "db";
 
       # Database
       DATABASE_TYPE = "postgresql";
       POSTGRESQL_HOST = postgres.fqdn;
       POSTGRESQL_PORT = postgres.out.port;
-      POSTGRESQL_USERNAME = cfg.database.external.username;
-      POSTGRESQL_SSLMODE = cfg.database.external.sslmode;
+      POSTGRESQL_USERNAME = cfg.database.username;
+      POSTGRESQL_SSLMODE = cfg.database.sslmode;
       POSTGRESQL_DATABASE = "registry";
+      POSTGRESQL_MAX_IDLE_CONNS = cfg.database.maxIdleConns;
+      POSTGRESQL_MAX_OPEN_CONNS = cfg.database.maxOpenConns;
 
       # Redis
-      _REDIS_URL_CORE = "${redisURL}/0";
-      _REDIS_URL_REG = "${redisURL}/1";
+      _REDIS_URL_CORE = "redis://${redisHost}:${redisPort}/0?idle_timeout_seconds=30";
+      _REDIS_URL_REG = "redis://${redisHost}:${redisPort}/2?idle_timeout_seconds=30";
 
-      # Auth
-      AUTH_MODE = "db_auth";
-      CFG_EXPIRATION = "5";
-      MAX_JOB_WORKERS = "10";
       PERMITTED_REGISTRY_TYPES_FOR_PROXY_CACHE = "docker-hub,harbor,azure-acr,aws-ecr,google-gcr,quay,docker-registry,github-ghcr,jfrog-artifactory";
 
       LOG_LEVEL = "info";
       HTTP_PROXY = "";
       HTTPS_PROXY = "";
-      NO_PROXY = "127.0.0.1,localhost,.local,.internal,${name}-core,${name}-jobservice,${name}-registry,${name}-portal,${name}-trivy,${name}-redis";
+      NO_PROXY = noProxy;
 
       CHART_CACHE_DRIVER = "redis";
+
+      "app.conf" = ''
+        appname = Harbor
+        runmode = prod
+        enablegzip = true
+        [prod]
+        httpport = 8080'';
+    }
+    // lib.optionalAttrs cfg.metrics.enabled {
+      METRIC_ENABLE = "true";
+      METRIC_NAMESPACE = "harbor";
+      METRIC_PATH = "/metrics";
+      METRIC_PORT = toString cfg.metrics.port;
+      METRIC_SUBSYSTEM = "core";
     };
   };
 
@@ -211,7 +244,7 @@ self: {
         CSRF_KEY = "not-a-secure-csrf-key-change-me!";
         REGISTRY_CREDENTIAL_PASSWORD = "harbor_registry_password";
       }
-      // lib.optionalAttrs (cfg.database.external.existingSecret == null) {
+      // lib.optionalAttrs (cfg.database.existingSecret == null) {
         POSTGRESQL_PASSWORD = "";
       };
     };
@@ -224,12 +257,20 @@ self: {
     labels = componentLabels "core";
     spec = {
       type = "ClusterIP";
-      selector = componentLabels "core";
+      selector = componentSelectorLabels "core";
       ports = [
         {
-          name = "http";
-          port = 8080;
+          name = "http-web";
+          port = coreServicePort;
           targetPort = 8080;
+          protocol = "TCP";
+        }
+      ]
+      ++ lib.optionals cfg.metrics.enabled [
+        {
+          name = "http-metrics";
+          port = cfg.metrics.port;
+          targetPort = cfg.metrics.port;
           protocol = "TCP";
         }
       ];
@@ -244,16 +285,13 @@ self: {
     spec = {
       replicas = cfg.core.replicas;
       revisionHistoryLimit = 5;
-      selector.matchLabels = componentLabels "core";
+      selector.matchLabels = componentSelectorLabels "core";
       template = {
         metadata.labels = componentLabels "core";
         spec = {
-          serviceAccountName = "${self.serviceAccount}";
           securityContext = {
             runAsUser = 10000;
             fsGroup = 10000;
-            runAsNonRoot = true;
-            seccompProfile.type = "RuntimeDefault";
           };
           automountServiceAccountToken = false;
           terminationGracePeriodSeconds = 120;
@@ -268,9 +306,8 @@ self: {
                   port = 8080;
                   scheme = "HTTP";
                 };
-                initialDelaySeconds = 20;
                 periodSeconds = 10;
-                failureThreshold = 10;
+                failureThreshold = 2;
               };
               readinessProbe = {
                 httpGet = {
@@ -278,19 +315,44 @@ self: {
                   port = 8080;
                   scheme = "HTTP";
                 };
-                initialDelaySeconds = 20;
                 periodSeconds = 10;
-                failureThreshold = 10;
+                failureThreshold = 2;
+              };
+              startupProbe = {
+                httpGet = {
+                  path = "/api/v2.0/ping";
+                  port = 8080;
+                  scheme = "HTTP";
+                };
+                initialDelaySeconds = 10;
+                periodSeconds = 10;
+                failureThreshold = 360;
               };
               envFrom = [
                 { configMapRef.name = "${self.coreConfigMap}"; }
                 { secretRef.name = "${self.coreSecret}"; }
               ];
-              env = lib.optionals (cfg.database.external.existingSecret != null) [
+              env = [
+                {
+                  name = "CORE_SECRET";
+                  valueFrom.secretKeyRef = {
+                    name = "${self.coreSecret}";
+                    key = "secret";
+                  };
+                }
+                {
+                  name = "JOBSERVICE_SECRET";
+                  valueFrom.secretKeyRef = {
+                    name = "${self.jobserviceSecret}";
+                    key = "JOBSERVICE_SECRET";
+                  };
+                }
+              ]
+              ++ lib.optionals (cfg.database.existingSecret != null) [
                 {
                   name = "POSTGRESQL_PASSWORD";
                   valueFrom.secretKeyRef = {
-                    name = cfg.database.external.existingSecret;
+                    name = cfg.database.existingSecret;
                     key = "password";
                   };
                 }
@@ -298,7 +360,7 @@ self: {
               ports = [
                 {
                   containerPort = 8080;
-                  name = "http";
+                  protocol = "TCP";
                 }
               ];
               volumeMounts = [
@@ -308,34 +370,48 @@ self: {
                   subPath = "app.conf";
                 }
                 {
+                  name = "ca-download";
+                  mountPath = "/etc/core/ca";
+                }
+                {
+                  name = "secret-key";
+                  mountPath = "/etc/core/key";
+                  subPath = "key";
+                }
+                {
+                  name = "token-service-private-key";
+                  mountPath = "/etc/core/private_key.pem";
+                  subPath = "tls.key";
+                }
+                {
                   name = "psc";
                   mountPath = "/etc/core/token";
                 }
               ];
               resources = {
                 requests = {
-                  cpu = "100m";
-                  memory = "256Mi";
+                  cpu = "20m";
+                  memory = "128Mi";
                 };
                 limits = {
-                  memory = "512Mi";
+                  cpu = "1";
+                  memory = "256Mi";
                 };
               };
-              securityContext = {
-                allowPrivilegeEscalation = false;
-                capabilities.drop = [ "ALL" ];
-                readOnlyRootFilesystem = true;
-              };
+              securityContext = containerSecurityContext;
             }
           ];
           volumes = [
+            {
+              name = "ca-download";
+            }
             {
               name = "config";
               configMap = {
                 name = "${self.coreConfigMap}";
                 items = [
                   {
-                    key = "EXT_ENDPOINT";
+                    key = "app.conf";
                     path = "app.conf";
                   }
                 ];
@@ -343,7 +419,24 @@ self: {
             }
             {
               name = "psc";
-              emptyDir = { };
+            }
+            {
+              name = "secret-key";
+              secret = {
+                secretName = "${self.coreSecret}";
+                items = [
+                  {
+                    key = "secretKey";
+                    path = "key";
+                  }
+                ];
+              };
+            }
+            {
+              name = "token-service-private-key";
+              secret = {
+                secretName = cfg.ingress.tls.secretName;
+              };
             }
           ];
         };
@@ -352,12 +445,12 @@ self: {
     requires = [
       self.coreConfigMap
       self.coreSecret
-      self.serviceAccount
+      self.jobserviceSecret
     ];
   };
 
   # ============================================================
-  # Portal — Web UI (nginx)
+  # Portal -- Web UI (nginx)
   # ============================================================
 
   portalConfigMap = scope.mkResource {
@@ -369,54 +462,37 @@ self: {
       "nginx.conf" = ''
         worker_processes auto;
         pid /tmp/nginx.pid;
-
         events {
-          worker_connections 1024;
+            worker_connections  1024;
         }
-
         http {
-          client_body_temp_path /tmp/client_body_temp;
-          proxy_temp_path /tmp/proxy_temp;
-          fastcgi_temp_path /tmp/fastcgi_temp;
-          uwsgi_temp_path /tmp/uwsgi_temp;
-          scgi_temp_path /tmp/scgi_temp;
-          server {
-            listen 8080;
-            server_name localhost;
-            root /usr/share/nginx/html;
-            index index.html index.htm;
-            include /etc/nginx/mime.types;
-
-            # Disable caching by default
-            add_header Cache-Control "no-store";
-            add_header Pragma "no-cache";
-
-            location / {
-              try_files $uri /index.html;
+            client_body_temp_path /tmp/client_body_temp;
+            proxy_temp_path /tmp/proxy_temp;
+            fastcgi_temp_path /tmp/fastcgi_temp;
+            uwsgi_temp_path /tmp/uwsgi_temp;
+            scgi_temp_path /tmp/scgi_temp;
+            server {
+                listen 8080;
+                listen [::]:8080;
+                server_name  localhost;
+                root   /usr/share/nginx/html;
+                index  index.html index.htm;
+                include /etc/nginx/mime.types;
+                gzip on;
+                gzip_min_length 1000;
+                gzip_proxied expired no-cache no-store private auth;
+                gzip_types text/plain text/css application/json application/javascript application/x-javascript text/xml application/xml application/xml+rss text/javascript;
+                location /devcenter-api-2.0 {
+                    try_files $uri $uri/ /swagger-ui-index.html;
+                }
+                location / {
+                    try_files $uri $uri/ /index.html;
+                }
+                location = /index.html {
+                    add_header Cache-Control "no-store, no-cache, must-revalidate";
+                }
             }
-
-            location /c/ {
-              proxy_pass ${coreInternalURL}/c/;
-              proxy_set_header Host $host;
-              proxy_set_header X-Real-IP $remote_addr;
-              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-              proxy_set_header X-Forwarded-Proto $scheme;
-              proxy_buffering off;
-              proxy_request_buffering off;
-            }
-
-            location /api/ {
-              proxy_pass ${coreInternalURL}/api/;
-              proxy_set_header Host $host;
-              proxy_set_header X-Real-IP $remote_addr;
-              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-              proxy_set_header X-Forwarded-Proto $scheme;
-              proxy_buffering off;
-              proxy_request_buffering off;
-            }
-          }
-        }
-      '';
+        }'';
     };
   };
 
@@ -427,11 +503,10 @@ self: {
     labels = componentLabels "portal";
     spec = {
       type = "ClusterIP";
-      selector = componentLabels "portal";
+      selector = componentSelectorLabels "portal";
       ports = [
         {
-          name = "http";
-          port = 8080;
+          port = portalServicePort;
           targetPort = 8080;
           protocol = "TCP";
         }
@@ -447,15 +522,13 @@ self: {
     spec = {
       replicas = cfg.portal.replicas;
       revisionHistoryLimit = 5;
-      selector.matchLabels = componentLabels "portal";
+      selector.matchLabels = componentSelectorLabels "portal";
       template = {
         metadata.labels = componentLabels "portal";
         spec = {
           securityContext = {
             runAsUser = 10000;
             fsGroup = 10000;
-            runAsNonRoot = true;
-            seccompProfile.type = "RuntimeDefault";
           };
           automountServiceAccountToken = false;
           containers = [
@@ -466,7 +539,7 @@ self: {
               ports = [
                 {
                   containerPort = 8080;
-                  name = "http";
+                  protocol = "TCP";
                 }
               ];
               livenessProbe = {
@@ -475,8 +548,9 @@ self: {
                   port = 8080;
                   scheme = "HTTP";
                 };
-                initialDelaySeconds = 1;
+                initialDelaySeconds = 300;
                 periodSeconds = 10;
+                failureThreshold = 3;
               };
               readinessProbe = {
                 httpGet = {
@@ -486,6 +560,7 @@ self: {
                 };
                 initialDelaySeconds = 1;
                 periodSeconds = 10;
+                failureThreshold = 3;
               };
               volumeMounts = [
                 {
@@ -494,19 +569,7 @@ self: {
                   subPath = "nginx.conf";
                 }
               ];
-              resources = {
-                requests = {
-                  cpu = "10m";
-                  memory = "64Mi";
-                };
-                limits = {
-                  memory = "128Mi";
-                };
-              };
-              securityContext = {
-                allowPrivilegeEscalation = false;
-                capabilities.drop = [ "ALL" ];
-              };
+              securityContext = containerSecurityContext;
             }
           ];
           volumes = [
@@ -522,7 +585,7 @@ self: {
   };
 
   # ============================================================
-  # Registry — OCI image storage
+  # Registry -- OCI image storage
   # ============================================================
 
   registryPVC = scope.mkResource {
@@ -548,10 +611,9 @@ self: {
       "config.yml" = ''
         version: 0.1
         log:
-          accesslog:
-            disabled: false
           level: info
-          formatter: text
+          fields:
+            service: registry
         storage:
           filesystem:
             rootdirectory: /storage
@@ -569,29 +631,30 @@ self: {
             disable: false
         redis:
           addr: ${redisHost}:${redisPort}
-          db: 1
+          db: 2
+          readtimeout: 10s
+          writetimeout: 10s
+          dialtimeout: 10s
+          pool:
+            maxidle: 100
+            maxactive: 500
+            idletimeout: 60s
         http:
           addr: :5000
           relativeurls: false
+          # set via environment variable
+          # secret: placeholder
           debug:
-            addr: :5001
+            addr: :${toString cfg.metrics.port}
             prometheus:
               enabled: true
               path: /metrics
         auth:
-          token:
-            issuer: harbor-token-issuer
-            realm: ${registryTokenServiceURL}
-            rootcertbundle: /etc/registry/root.crt
-            service: harbor-registry
-        notifications:
-          endpoints:
-            - name: harbor
-              disabled: false
-              url: ${coreInternalURL}/service/notifications
-              timeout: 3000ms
-              threshold: 5
-              backoff: 1s
+          htpasswd:
+            realm: harbor-registry-basic-realm
+            path: /etc/registry/passwd
+        validation:
+          disabled: true
         compatibility:
           schema1:
             enabled: true
@@ -601,6 +664,7 @@ self: {
         protocol: "http"
         port: 8080
         log_level: info
+        registry_config: "/etc/registry/config.yml"
       '';
     };
   };
@@ -619,6 +683,19 @@ self: {
     };
   };
 
+  registryHtpasswdSecret = scope.mkResource {
+    apiVersion = "v1";
+    kind = "Secret";
+    name = "${name}-registry-htpasswd";
+    labels = componentLabels "registry";
+    extra = {
+      type = "Opaque";
+      stringData = {
+        REGISTRY_HTPASSWD = "harbor_registry_user:$2y$10$placeholder_bcrypt_hash";
+      };
+    };
+  };
+
   registryService = scope.mkResource {
     apiVersion = "v1";
     kind = "Service";
@@ -626,7 +703,7 @@ self: {
     labels = componentLabels "registry";
     spec = {
       type = "ClusterIP";
-      selector = componentLabels "registry";
+      selector = componentSelectorLabels "registry";
       ports = [
         {
           name = "http-registry";
@@ -638,6 +715,14 @@ self: {
           name = "http-controller";
           port = 8080;
           targetPort = 8080;
+          protocol = "TCP";
+        }
+      ]
+      ++ lib.optionals cfg.metrics.enabled [
+        {
+          name = "http-metrics";
+          port = cfg.metrics.port;
+          targetPort = cfg.metrics.port;
           protocol = "TCP";
         }
       ];
@@ -652,18 +737,16 @@ self: {
     spec = {
       replicas = cfg.registry.replicas;
       revisionHistoryLimit = 5;
-      strategy.type = "RollingUpdate";
-      selector.matchLabels = componentLabels "registry";
+      strategy.type = "Recreate";
+      selector.matchLabels = componentSelectorLabels "registry";
       template = {
         metadata.labels = componentLabels "registry";
         spec = {
           securityContext = {
             runAsUser = 10000;
             fsGroup = 10000;
-            runAsNonRoot = true;
-            seccompProfile.type = "RuntimeDefault";
+            fsGroupChangePolicy = "OnRootMismatch";
           };
-          serviceAccountName = "${self.serviceAccount}";
           automountServiceAccountToken = false;
           terminationGracePeriodSeconds = 120;
           containers = [
@@ -674,11 +757,11 @@ self: {
               ports = [
                 {
                   containerPort = 5000;
-                  name = "http";
+                  protocol = "TCP";
                 }
                 {
-                  containerPort = 5001;
-                  name = "debug";
+                  containerPort = cfg.metrics.port;
+                  protocol = "TCP";
                 }
               ];
               livenessProbe = {
@@ -687,8 +770,9 @@ self: {
                   port = 5000;
                   scheme = "HTTP";
                 };
-                initialDelaySeconds = 10;
+                initialDelaySeconds = 300;
                 periodSeconds = 10;
+                failureThreshold = 3;
               };
               readinessProbe = {
                 httpGet = {
@@ -696,24 +780,14 @@ self: {
                   port = 5000;
                   scheme = "HTTP";
                 };
-                initialDelaySeconds = 10;
+                initialDelaySeconds = 1;
                 periodSeconds = 10;
+                failureThreshold = 3;
               };
-              env = [
-                {
-                  name = "REGISTRY_HTTP_SECRET";
-                  valueFrom.secretKeyRef = {
-                    name = "${self.registrySecret}";
-                    key = "REGISTRY_HTTP_SECRET";
-                  };
-                }
+              envFrom = [
+                { secretRef.name = "${self.registrySecret}"; }
               ];
               volumeMounts = [
-                {
-                  name = "registry-data";
-                  mountPath = "/storage";
-                  subPath = "";
-                }
                 {
                   name = "registry-config";
                   mountPath = "/etc/registry/config.yml";
@@ -722,22 +796,14 @@ self: {
                 {
                   name = "registry-htpasswd";
                   mountPath = "/etc/registry/passwd";
-                  subPath = "REGISTRY_HTPASSWD";
+                  subPath = "passwd";
+                }
+                {
+                  name = "registry-data";
+                  mountPath = "/storage";
                 }
               ];
-              resources = {
-                requests = {
-                  cpu = "100m";
-                  memory = "256Mi";
-                };
-                limits = {
-                  memory = "512Mi";
-                };
-              };
-              securityContext = {
-                allowPrivilegeEscalation = false;
-                capabilities.drop = [ "ALL" ];
-              };
+              securityContext = containerSecurityContext;
             }
             {
               name = "registryctl";
@@ -746,7 +812,7 @@ self: {
               ports = [
                 {
                   containerPort = 8080;
-                  name = "http-ctl";
+                  protocol = "TCP";
                 }
               ];
               livenessProbe = {
@@ -755,8 +821,9 @@ self: {
                   port = 8080;
                   scheme = "HTTP";
                 };
-                initialDelaySeconds = 10;
+                initialDelaySeconds = 300;
                 periodSeconds = 10;
+                failureThreshold = 3;
               };
               readinessProbe = {
                 httpGet = {
@@ -764,66 +831,70 @@ self: {
                   port = 8080;
                   scheme = "HTTP";
                 };
-                initialDelaySeconds = 10;
+                initialDelaySeconds = 1;
                 periodSeconds = 10;
+                failureThreshold = 3;
               };
               env = [
                 {
-                  name = "REGISTRY_HTTP_SECRET";
+                  name = "CORE_SECRET";
                   valueFrom.secretKeyRef = {
-                    name = "${self.registrySecret}";
-                    key = "REGISTRY_HTTP_SECRET";
+                    name = "${self.coreSecret}";
+                    key = "secret";
+                  };
+                }
+                {
+                  name = "JOBSERVICE_SECRET";
+                  valueFrom.secretKeyRef = {
+                    name = "${self.jobserviceSecret}";
+                    key = "JOBSERVICE_SECRET";
                   };
                 }
               ];
+              envFrom = [
+                { configMapRef.name = "${self.registryCtlConfigMap}"; }
+                { secretRef.name = "${self.registrySecret}"; }
+                { secretRef.name = "${self.registryCtlSecret}"; }
+              ];
               volumeMounts = [
-                {
-                  name = "registry-data";
-                  mountPath = "/storage";
-                  subPath = "";
-                }
                 {
                   name = "registry-config";
                   mountPath = "/etc/registry/config.yml";
                   subPath = "config.yml";
                 }
                 {
-                  name = "registryctl-config";
+                  name = "registry-config";
                   mountPath = "/etc/registryctl/config.yml";
                   subPath = "ctl-config.yml";
                 }
+                {
+                  name = "registry-data";
+                  mountPath = "/storage";
+                }
               ];
-              resources = {
-                requests = {
-                  cpu = "10m";
-                  memory = "64Mi";
-                };
-                limits = {
-                  memory = "128Mi";
-                };
-              };
-              securityContext = {
-                allowPrivilegeEscalation = false;
-                capabilities.drop = [ "ALL" ];
-              };
+              securityContext = containerSecurityContext;
             }
           ];
           volumes = [
-            {
-              name = "registry-data";
-              persistentVolumeClaim.claimName = "${self.registryPVC}";
-            }
             {
               name = "registry-config";
               configMap.name = "${self.registryConfigMap}";
             }
             {
-              name = "registryctl-config";
-              configMap.name = "${self.registryConfigMap}";
+              name = "registry-data";
+              persistentVolumeClaim.claimName = "${self.registryPVC}";
             }
             {
               name = "registry-htpasswd";
-              secret.secretName = "${self.registrySecret}";
+              secret = {
+                secretName = "${self.registryHtpasswdSecret}";
+                items = [
+                  {
+                    key = "REGISTRY_HTPASSWD";
+                    path = "passwd";
+                  }
+                ];
+              };
             }
           ];
         };
@@ -832,13 +903,35 @@ self: {
     requires = [
       self.registryConfigMap
       self.registrySecret
+      self.registryHtpasswdSecret
+      self.registryCtlConfigMap
+      self.registryCtlSecret
       self.registryPVC
-      self.serviceAccount
+      self.coreSecret
+      self.jobserviceSecret
     ];
   };
 
+  registryCtlConfigMap = scope.mkResource {
+    apiVersion = "v1";
+    kind = "ConfigMap";
+    name = "${name}-registryctl";
+    labels = componentLabels "registry";
+  };
+
+  registryCtlSecret = scope.mkResource {
+    apiVersion = "v1";
+    kind = "Secret";
+    name = "${name}-registryctl";
+    labels = componentLabels "registry";
+    extra = {
+      type = "Opaque";
+      stringData = { };
+    };
+  };
+
   # ============================================================
-  # Jobservice — Async jobs (replication, GC, scan)
+  # Jobservice -- Async jobs (replication, GC, scan)
   # ============================================================
 
   jobserviceConfigMap = scope.mkResource {
@@ -848,23 +941,61 @@ self: {
     labels = componentLabels "jobservice";
     data = {
       "config.yml" = ''
-        ---
+        #Server listening port
         protocol: "http"
         port: 8080
         worker_pool:
           workers: 10
           backend: "redis"
           redis_pool:
-            redis_url: ${redisURL}/2
+            redis_url: "redis://${redisHost}:${redisPort}/1"
             namespace: "harbor_job_service_namespace"
             idle_timeout_second: 3600
         job_loggers:
-          - name: "STD_OUTPUT"
+          - name: "FILE"
             level: INFO
+            settings: # Customized settings of logger
+              base_dir: "/var/log/jobs"
+            sweeper:
+              duration: 14 #days
+              settings: # Customized settings of sweeper
+                work_dir: "/var/log/jobs"
+        metric:
+          enabled: true
+          path: /metrics
+          port: ${toString cfg.metrics.port}
+        #Loggers for the job service
         loggers:
           - name: "STD_OUTPUT"
             level: INFO
-      '';
+        reaper:
+          # the max time to wait for a task to finish, if unfinished after max_update_hours, the task will be mark as error, but the task will continue to run, default value is 24
+          max_update_hours: 24
+          # the max time for execution in running state without new task created
+          max_dangling_hours: 168'';
+    };
+  };
+
+  jobserviceEnvConfigMap = scope.mkResource {
+    apiVersion = "v1";
+    kind = "ConfigMap";
+    name = "${name}-jobservice-env";
+    labels = componentLabels "jobservice";
+    data = {
+      CORE_URL = coreInternalURL;
+      TOKEN_SERVICE_URL = tokenServiceURL;
+      REGISTRY_URL = registryInternalURL;
+      REGISTRY_CONTROLLER_URL = registryCtlInternalURL;
+      REGISTRY_CREDENTIAL_USERNAME = "harbor_registry_user";
+      HTTP_PROXY = "";
+      HTTPS_PROXY = "";
+      NO_PROXY = noProxy;
+      JOBSERVICE_WEBHOOK_JOB_MAX_RETRY = "3";
+      JOBSERVICE_WEBHOOK_JOB_HTTP_CLIENT_TIMEOUT = "3";
+    }
+    // lib.optionalAttrs cfg.metrics.enabled {
+      METRIC_NAMESPACE = "harbor";
+      METRIC_SUBSYSTEM = "jobservice";
     };
   };
 
@@ -890,15 +1021,37 @@ self: {
     labels = componentLabels "jobservice";
     spec = {
       type = "ClusterIP";
-      selector = componentLabels "jobservice";
+      selector = componentSelectorLabels "jobservice";
       ports = [
         {
-          name = "http";
-          port = 8080;
+          name = "http-jobservice";
+          port = jobserviceServicePort;
           targetPort = 8080;
           protocol = "TCP";
         }
+      ]
+      ++ lib.optionals cfg.metrics.enabled [
+        {
+          name = "http-metrics";
+          port = cfg.metrics.port;
+          targetPort = cfg.metrics.port;
+          protocol = "TCP";
+        }
       ];
+    };
+  };
+
+  jobservicePVC = scope.mkResource {
+    apiVersion = "v1";
+    kind = "PersistentVolumeClaim";
+    name = "${name}-jobservice";
+    labels = componentLabels "jobservice";
+    spec = {
+      accessModes = [ "ReadWriteOnce" ];
+      resources.requests.storage = cfg.persistence.jobservice.size;
+    }
+    // lib.optionalAttrs (cfg.persistence.jobservice.storageClass != null) {
+      storageClassName = cfg.persistence.jobservice.storageClass;
     };
   };
 
@@ -911,19 +1064,16 @@ self: {
       replicas = cfg.jobservice.replicas;
       revisionHistoryLimit = 5;
       strategy = {
-        type = "RollingUpdate";
+        type = "Recreate";
       };
-      selector.matchLabels = componentLabels "jobservice";
+      selector.matchLabels = componentSelectorLabels "jobservice";
       template = {
         metadata.labels = componentLabels "jobservice";
         spec = {
           securityContext = {
             runAsUser = 10000;
             fsGroup = 10000;
-            runAsNonRoot = true;
-            seccompProfile.type = "RuntimeDefault";
           };
-          serviceAccountName = "${self.serviceAccount}";
           automountServiceAccountToken = false;
           terminationGracePeriodSeconds = 120;
           containers = [
@@ -934,7 +1084,7 @@ self: {
               ports = [
                 {
                   containerPort = 8080;
-                  name = "http";
+                  protocol = "TCP";
                 }
               ];
               livenessProbe = {
@@ -943,9 +1093,9 @@ self: {
                   port = 8080;
                   scheme = "HTTP";
                 };
-                initialDelaySeconds = 20;
+                initialDelaySeconds = 300;
                 periodSeconds = 10;
-                failureThreshold = 10;
+                failureThreshold = 3;
               };
               readinessProbe = {
                 httpGet = {
@@ -955,32 +1105,20 @@ self: {
                 };
                 initialDelaySeconds = 20;
                 periodSeconds = 10;
-                failureThreshold = 10;
+                failureThreshold = 3;
               };
-              envFrom = [
-                { secretRef.name = "${self.jobserviceSecret}"; }
-              ];
               env = [
                 {
-                  name = "CORE_URL";
-                  value = coreInternalURL;
+                  name = "CORE_SECRET";
+                  valueFrom.secretKeyRef = {
+                    name = "${self.coreSecret}";
+                    key = "secret";
+                  };
                 }
-                {
-                  name = "TOKEN_SERVICE_URL";
-                  value = tokenServiceURL;
-                }
-                {
-                  name = "REGISTRY_URL";
-                  value = registryInternalURL;
-                }
-                {
-                  name = "REGISTRY_CONTROLLER_URL";
-                  value = "http://${name}-registry:8080";
-                }
-                {
-                  name = "REGISTRY_CREDENTIAL_USERNAME";
-                  value = "harbor_registry_user";
-                }
+              ];
+              envFrom = [
+                { configMapRef.name = "${self.jobserviceEnvConfigMap}"; }
+                { secretRef.name = "${self.jobserviceSecret}"; }
               ];
               volumeMounts = [
                 {
@@ -995,17 +1133,15 @@ self: {
               ];
               resources = {
                 requests = {
-                  cpu = "50m";
+                  cpu = "20m";
                   memory = "128Mi";
                 };
                 limits = {
-                  memory = "256Mi";
+                  cpu = "2";
+                  memory = "1Gi";
                 };
               };
-              securityContext = {
-                allowPrivilegeEscalation = false;
-                capabilities.drop = [ "ALL" ];
-              };
+              securityContext = containerSecurityContext;
             }
           ];
           volumes = [
@@ -1015,7 +1151,7 @@ self: {
             }
             {
               name = "job-logs";
-              emptyDir = { };
+              persistentVolumeClaim.claimName = "${self.jobservicePVC}";
             }
           ];
         };
@@ -1023,181 +1159,30 @@ self: {
     };
     requires = [
       self.jobserviceConfigMap
+      self.jobserviceEnvConfigMap
       self.jobserviceSecret
-      self.serviceAccount
+      self.jobservicePVC
+      self.coreSecret
     ];
   };
 
   # ============================================================
-  # Trivy — Vulnerability scanner
+  # Exporter -- Prometheus metrics exporter
   # ============================================================
 
-  trivySecret = scope.mkResource {
+  exporterSecret = scope.mkResource {
     apiVersion = "v1";
     kind = "Secret";
-    name = "${name}-trivy";
-    labels = componentLabels "trivy";
+    name = "${name}-exporter";
+    labels = componentLabels "exporter";
     extra = {
       type = "Opaque";
-      stringData = {
-        SCANNER_STORE_REDIS_URL = "${redisURL}/5";
-        SCANNER_JOB_QUEUE_REDIS_URL = "${redisURL}/5";
-      };
+      stringData = { };
     };
-  };
-
-  trivyService = scope.mkResource {
-    apiVersion = "v1";
-    kind = "Service";
-    name = "${name}-trivy";
-    labels = componentLabels "trivy";
-    spec = {
-      type = "ClusterIP";
-      selector = componentLabels "trivy";
-      ports = [
-        {
-          name = "http";
-          port = 8080;
-          targetPort = 8080;
-          protocol = "TCP";
-        }
-      ];
-    };
-  };
-
-  trivyStatefulSet = scope.mkResource {
-    apiVersion = "apps/v1";
-    kind = "StatefulSet";
-    name = "${name}-trivy";
-    labels = componentLabels "trivy";
-    spec = {
-      replicas = 1;
-      serviceName = "${name}-trivy";
-      selector.matchLabels = componentLabels "trivy";
-      template = {
-        metadata.labels = componentLabels "trivy";
-        spec = {
-          securityContext = {
-            runAsUser = 10000;
-            fsGroup = 10000;
-            runAsNonRoot = true;
-            seccompProfile.type = "RuntimeDefault";
-          };
-          automountServiceAccountToken = false;
-          containers = [
-            {
-              name = "trivy";
-              image = "${cfg.trivy.image.repository}:${cfg.trivy.image.tag}";
-              imagePullPolicy = "IfNotPresent";
-              ports = [
-                {
-                  containerPort = 8080;
-                  name = "http";
-                }
-              ];
-              livenessProbe = {
-                httpGet = {
-                  path = "/probe/healthy";
-                  port = 8080;
-                  scheme = "HTTP";
-                };
-                initialDelaySeconds = 5;
-                periodSeconds = 10;
-                failureThreshold = 10;
-              };
-              readinessProbe = {
-                httpGet = {
-                  path = "/probe/ready";
-                  port = 8080;
-                  scheme = "HTTP";
-                };
-                initialDelaySeconds = 5;
-                periodSeconds = 10;
-                failureThreshold = 3;
-              };
-              envFrom = [
-                { secretRef.name = "${self.trivySecret}"; }
-              ];
-              env = [
-                {
-                  name = "HTTP_PROXY";
-                  value = "";
-                }
-                {
-                  name = "HTTPS_PROXY";
-                  value = "";
-                }
-                {
-                  name = "NO_PROXY";
-                  value = "127.0.0.1,localhost,.local,.internal";
-                }
-                {
-                  name = "SCANNER_LOG_LEVEL";
-                  value = "info";
-                }
-                {
-                  name = "SCANNER_TRIVY_CACHE_DIR";
-                  value = "/home/scanner/.cache/trivy";
-                }
-                {
-                  name = "SCANNER_TRIVY_REPORTS_DIR";
-                  value = "/home/scanner/.cache/reports";
-                }
-                {
-                  name = "SCANNER_TRIVY_VULN_TYPE";
-                  value = "os,library";
-                }
-                {
-                  name = "SCANNER_TRIVY_SEVERITY";
-                  value = "UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL";
-                }
-                {
-                  name = "SCANNER_TRIVY_TIMEOUT";
-                  value = "5m0s";
-                }
-              ];
-              volumeMounts = [
-                {
-                  name = "data";
-                  mountPath = "/home/scanner/.cache";
-                }
-              ];
-              resources = {
-                requests = {
-                  cpu = "50m";
-                  memory = "256Mi";
-                };
-                limits = {
-                  cpu = "1";
-                  memory = "1Gi";
-                };
-              };
-              securityContext = {
-                allowPrivilegeEscalation = false;
-                capabilities.drop = [ "ALL" ];
-              };
-            }
-          ];
-        };
-      };
-      volumeClaimTemplates = [
-        {
-          metadata = {
-            name = "data";
-            labels = componentLabels "trivy";
-          };
-          spec = {
-            accessModes = [ "ReadWriteOnce" ];
-            resources.requests.storage = "5Gi";
-          };
-        }
-      ];
-    };
-    requires = [ self.trivySecret ];
   };
 
   # ============================================================
-  # Redis — Internal cache (only when redis.type = "internal")
+  # Redis -- Internal cache (only when redis.type = "internal")
   # ============================================================
 
   redisService =
@@ -1209,10 +1194,9 @@ self: {
         labels = componentLabels "redis";
         spec = {
           type = "ClusterIP";
-          selector = componentLabels "redis";
+          selector = componentSelectorLabels "redis";
           ports = [
             {
-              name = "redis";
               port = 6379;
               targetPort = 6379;
               protocol = "TCP";
@@ -1233,43 +1217,30 @@ self: {
         spec = {
           replicas = 1;
           serviceName = "${name}-redis";
-          selector.matchLabels = componentLabels "redis";
+          selector.matchLabels = componentSelectorLabels "redis";
           template = {
             metadata.labels = componentLabels "redis";
             spec = {
               securityContext = {
                 runAsUser = 999;
                 fsGroup = 999;
-                runAsNonRoot = true;
-                seccompProfile.type = "RuntimeDefault";
               };
               automountServiceAccountToken = false;
+              terminationGracePeriodSeconds = 120;
               containers = [
                 {
                   name = "redis";
                   image = "${cfg.redis.image.repository}:${cfg.redis.image.tag}";
                   imagePullPolicy = "IfNotPresent";
-                  ports = [
-                    {
-                      containerPort = 6379;
-                      name = "redis";
-                    }
-                  ];
                   livenessProbe = {
-                    exec.command = [
-                      "redis-cli"
-                      "ping"
-                    ];
-                    initialDelaySeconds = 10;
+                    tcpSocket.port = 6379;
+                    initialDelaySeconds = 300;
                     periodSeconds = 10;
                     failureThreshold = 3;
                   };
                   readinessProbe = {
-                    exec.command = [
-                      "redis-cli"
-                      "ping"
-                    ];
-                    initialDelaySeconds = 10;
+                    tcpSocket.port = 6379;
+                    initialDelaySeconds = 1;
                     periodSeconds = 10;
                     failureThreshold = 3;
                   };
@@ -1281,17 +1252,15 @@ self: {
                   ];
                   resources = {
                     requests = {
-                      cpu = "50m";
+                      cpu = "20m";
                       memory = "64Mi";
                     };
                     limits = {
-                      memory = "256Mi";
+                      cpu = "1";
+                      memory = "1Gi";
                     };
                   };
-                  securityContext = {
-                    allowPrivilegeEscalation = false;
-                    capabilities.drop = [ "ALL" ];
-                  };
+                  securityContext = containerSecurityContext;
                 }
               ];
             };
@@ -1300,7 +1269,7 @@ self: {
             {
               metadata = {
                 name = "data";
-                labels = componentLabels "redis";
+                labels = helmSelectorLabels;
               };
               spec = {
                 accessModes = [ "ReadWriteOnce" ];
@@ -1317,7 +1286,7 @@ self: {
       null;
 
   # ============================================================
-  # Ingress — Route to core API and portal UI
+  # Ingress -- Route to core API and portal UI
   # ============================================================
 
   ingress =
@@ -1325,7 +1294,7 @@ self: {
       scope.mkResource {
         apiVersion = "networking.k8s.io/v1";
         kind = "Ingress";
-        name = "${name}-harbor";
+        name = "${name}-ingress";
         labels = commonLabels;
         annotations = {
           "nginx.ingress.kubernetes.io/proxy-body-size" = "0";
@@ -1342,7 +1311,7 @@ self: {
                   pathType = "Prefix";
                   backend.service = {
                     name = "${name}-core";
-                    port.number = 8080;
+                    port.number = coreServicePort;
                   };
                 }
                 {
@@ -1350,7 +1319,7 @@ self: {
                   pathType = "Prefix";
                   backend.service = {
                     name = "${name}-core";
-                    port.number = 8080;
+                    port.number = coreServicePort;
                   };
                 }
                 {
@@ -1358,15 +1327,7 @@ self: {
                   pathType = "Prefix";
                   backend.service = {
                     name = "${name}-core";
-                    port.number = 8080;
-                  };
-                }
-                {
-                  path = "/chartrepo/";
-                  pathType = "Prefix";
-                  backend.service = {
-                    name = "${name}-core";
-                    port.number = 8080;
+                    port.number = coreServicePort;
                   };
                 }
                 {
@@ -1374,7 +1335,7 @@ self: {
                   pathType = "Prefix";
                   backend.service = {
                     name = "${name}-core";
-                    port.number = 8080;
+                    port.number = coreServicePort;
                   };
                 }
                 {
@@ -1382,7 +1343,7 @@ self: {
                   pathType = "Prefix";
                   backend.service = {
                     name = "${name}-portal";
-                    port.number = 8080;
+                    port.number = portalServicePort;
                   };
                 }
               ];
@@ -1418,11 +1379,14 @@ self: {
       self.portalService
       self.registryDeployment
       self.registryService
+      self.registryHtpasswdSecret
+      self.registryCtlConfigMap
+      self.registryCtlSecret
       self.jobserviceDeployment
       self.jobserviceService
-      self.trivyStatefulSet
-      self.trivyService
-      self.serviceAccount
+      self.jobserviceEnvConfigMap
+      self.jobservicePVC
+      self.exporterSecret
     ]
     ++ lib.optionals useInternalRedis [
       self.redisStatefulSet

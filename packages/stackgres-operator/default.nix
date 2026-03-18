@@ -6,11 +6,13 @@
 # resources.
 #
 # Resources: ServiceAccount, ClusterRole (full CRD + core management),
-#            ClusterRoleBinding, ConfigMap (operator config),
-#            Deployment (operator), Deployment (restapi),
-#            Service (operator webhook), Service (restapi),
-#            CRDs (10x), ValidatingWebhookConfiguration,
+#            ClusterRoleBinding, Deployment (operator),
+#            Service (operator webhook), CRDs (10x),
+#            ValidatingWebhookConfiguration,
 #            MutatingWebhookConfiguration.
+#
+# The REST API deployment, admin UI, and associated services are managed
+# by the operator itself at runtime via the SGConfig CR.
 #
 # CRDs include structural metadata only — full OpenAPI schemas are
 # omitted for brevity. The operator itself enforces validation at
@@ -68,12 +70,13 @@ let
     "app.kubernetes.io/instance" = name;
   };
 
-  operatorLabels = selectorLabels // {
-    "app.kubernetes.io/component" = "operator";
+  operatorSelectorLabels = {
+    app = name;
+    "group" = "stackgres.io";
   };
 
-  restapiLabels = selectorLabels // {
-    "app.kubernetes.io/component" = "restapi";
+  operatorLabels = operatorSelectorLabels // {
+    version = cfg.operator.image.tag;
   };
 
   # --- CRD helper ---
@@ -123,6 +126,70 @@ let
       };
     };
 
+  # All SG resource types that need webhooks
+  webhookResources = [
+    { singular = "sgcluster"; plural = "sgclusters"; }
+    { singular = "sgpgconfig"; plural = "sgpgconfigs"; }
+    { singular = "sgpoolconfig"; plural = "sgpoolconfigs"; }
+    { singular = "sginstanceprofile"; plural = "sginstanceprofiles"; }
+    { singular = "sgbackup"; plural = "sgbackups"; }
+    { singular = "sgdistributedlogs"; plural = "sgdistributedlogs"; }
+    { singular = "sgdbops"; plural = "sgdbops"; }
+    { singular = "sgobjectstorage"; plural = "sgobjectstorages"; }
+    { singular = "sgscript"; plural = "sgscripts"; }
+    { singular = "sgshardedcluster"; plural = "sgshardedclusters"; }
+    { singular = "sgshardedbackup"; plural = "sgshardedbackups"; }
+    { singular = "sgshardeddbops"; plural = "sgshardeddbops"; }
+    { singular = "sgstream"; plural = "sgstreams"; }
+  ];
+
+  mkValidatingWebhook = operatorServiceName: res: {
+    name = "${res.singular}.validating-webhook.stackgres.io";
+    admissionReviewVersions = [ "v1" ];
+    sideEffects = "None";
+    failurePolicy = "Fail";
+    matchPolicy = "Equivalent";
+    timeoutSeconds = 10;
+    clientConfig.service = {
+      name = operatorServiceName;
+      namespace = scope.namespaceName;
+      path = "/stackgres/validation/${res.singular}";
+    };
+    rules = [
+      {
+        apiGroups = [ "stackgres.io" ];
+        apiVersions = [ "*" ];
+        operations = [ "CREATE" "UPDATE" "DELETE" ];
+        resources = [ res.plural ];
+        scope = "*";
+      }
+    ];
+  };
+
+  mkMutatingWebhook = operatorServiceName: res: {
+    name = "${res.singular}.mutating-webhook.stackgres.io";
+    admissionReviewVersions = [ "v1" ];
+    sideEffects = "None";
+    failurePolicy = "Fail";
+    matchPolicy = "Equivalent";
+    reinvocationPolicy = "Never";
+    timeoutSeconds = 10;
+    clientConfig.service = {
+      name = operatorServiceName;
+      namespace = scope.namespaceName;
+      path = "/stackgres/mutation/${res.singular}";
+    };
+    rules = [
+      {
+        apiGroups = [ "stackgres.io" ];
+        apiVersions = [ "*" ];
+        operations = [ "CREATE" "UPDATE" ];
+        resources = [ res.plural ];
+        scope = "*";
+      }
+    ];
+  };
+
 in
 self: {
 
@@ -131,7 +198,7 @@ self: {
   serviceAccount = scope.mkResource {
     apiVersion = "v1";
     kind = "ServiceAccount";
-    name = "${name}-operator";
+    name = name;
     labels = selectorLabels;
   };
 
@@ -140,204 +207,211 @@ self: {
   clusterRole = scope.mkClusterResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "ClusterRole";
-    name = "${name}-operator";
+    name = name;
     labels = selectorLabels;
-    extra.rules = [
-      # StackGres CRDs — full control
-      {
-        apiGroups = [ "stackgres.io" ];
-        resources = [
-          "sgclusters"
-          "sgclusters/finalizers"
-          "sgclusters/status"
-          "sginstanceprofiles"
-          "sginstanceprofiles/status"
-          "sgpgconfigs"
-          "sgpgconfigs/status"
-          "sgpoolconfigs"
-          "sgpoolconfigs/status"
-          "sgbackupconfigs"
-          "sgbackupconfigs/status"
-          "sgbackups"
-          "sgbackups/status"
-          "sgobjectstorages"
-          "sgobjectstorages/status"
-          "sgdistributedlogs"
-          "sgdistributedlogs/finalizers"
-          "sgdistributedlogs/status"
-          "sgshardedclusters"
-          "sgshardedclusters/finalizers"
-          "sgshardedclusters/status"
-          "sgscripts"
-          "sgscripts/status"
-          "sgdbops"
-          "sgdbops/finalizers"
-          "sgdbops/status"
-          "sgconfigs"
-          "sgconfigs/status"
+    extra.rules =
+      let
+        sgCrdNames = [
+          "sgconfigs.stackgres.io"
+          "sgclusters.stackgres.io"
+          "sginstanceprofiles.stackgres.io"
+          "sgpgconfigs.stackgres.io"
+          "sgpoolconfigs.stackgres.io"
+          "sgbackups.stackgres.io"
+          "sgbackupconfigs.stackgres.io"
+          "sgobjectstorages.stackgres.io"
+          "sgdbops.stackgres.io"
+          "sgdistributedlogs.stackgres.io"
+          "sgshardedclusters.stackgres.io"
+          "sgshardedbackups.stackgres.io"
+          "sgshardeddbops.stackgres.io"
+          "sgscripts.stackgres.io"
+          "sgstreams.stackgres.io"
         ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-          "create"
-          "update"
-          "patch"
-          "delete"
-        ];
-      }
-      # Core resources the operator manages
-      {
-        apiGroups = [ "" ];
-        resources = [
-          "pods"
-          "pods/exec"
-          "pods/log"
-          "services"
-          "services/status"
-          "endpoints"
-          "persistentvolumeclaims"
-          "configmaps"
-          "secrets"
-          "events"
-          "serviceaccounts"
-          "namespaces"
-          "nodes"
-        ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-          "create"
-          "update"
-          "patch"
-          "delete"
-        ];
-      }
-      # Apps — StatefulSets, Deployments, etc.
-      {
-        apiGroups = [ "apps" ];
-        resources = [
-          "statefulsets"
-          "statefulsets/status"
-          "deployments"
-          "daemonsets"
-        ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-          "create"
-          "update"
-          "patch"
-          "delete"
-        ];
-      }
-      # Batch — Jobs for backups and dbops
-      {
-        apiGroups = [ "batch" ];
-        resources = [
-          "jobs"
-          "cronjobs"
-        ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-          "create"
-          "update"
-          "patch"
-          "delete"
-        ];
-      }
-      # RBAC
-      {
-        apiGroups = [ "rbac.authorization.k8s.io" ];
-        resources = [
-          "roles"
-          "rolebindings"
-          "clusterroles"
-          "clusterrolebindings"
-        ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-          "create"
-          "update"
-          "patch"
-          "delete"
-        ];
-      }
-      # Policy
-      {
-        apiGroups = [ "policy" ];
-        resources = [ "poddisruptionbudgets" ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-          "create"
-          "update"
-          "patch"
-          "delete"
-        ];
-      }
-      # Storage
-      {
-        apiGroups = [ "storage.k8s.io" ];
-        resources = [ "storageclasses" ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-        ];
-      }
-      # Admissionregistration — for managing its own webhooks
-      {
-        apiGroups = [ "admissionregistration.k8s.io" ];
-        resources = [
-          "validatingwebhookconfigurations"
-          "mutatingwebhookconfigurations"
-        ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-          "create"
-          "update"
-          "patch"
-          "delete"
-        ];
-      }
-      # CRD management
-      {
-        apiGroups = [ "apiextensions.k8s.io" ];
-        resources = [ "customresourcedefinitions" ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-          "create"
-          "update"
-          "patch"
-        ];
-      }
-      # Coordination for leader election
-      {
-        apiGroups = [ "coordination.k8s.io" ];
-        resources = [ "leases" ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-          "create"
-          "update"
-          "patch"
-          "delete"
-        ];
-      }
-    ];
+      in
+      [
+        # Core + apps + rbac + batch resources the operator manages
+        {
+          apiGroups = [ "" "apps" "extensions" "rbac.authorization.k8s.io" "batch" ];
+          resources = [
+            "pods"
+            "pods/exec"
+            "pods/log"
+            "services"
+            "endpoints"
+            "endpoints/restricted"
+            "persistentvolumeclaims"
+            "configmaps"
+            "secrets"
+            "deployments"
+            "statefulsets"
+            "serviceaccounts"
+            "namespaces"
+            "roles"
+            "rolebindings"
+            "events"
+            "cronjobs"
+            "jobs"
+          ];
+          verbs = [ "get" "list" "watch" "update" "create" "delete" "deletecollection" "patch" ];
+        }
+        # Finalizers
+        {
+          apiGroups = [ "" "apps" "batch" ];
+          resources = [
+            "statefulsets/finalizers"
+            "persistentvolumeclaims/finalizers"
+            "deployments/finalizers"
+            "services/finalizers"
+            "endpoints/finalizers"
+            "cronjobs/finalizers"
+            "jobs/finalizers"
+            "pods/finalizers"
+          ];
+          verbs = [ "update" ];
+        }
+        # Namespace read
+        {
+          apiGroups = [ "" ];
+          resources = [ "namespaces" ];
+          verbs = [ "get" "list" ];
+        }
+        # Admissionregistration — scoped to own resources
+        {
+          apiGroups = [ "admissionregistration.k8s.io" ];
+          resourceNames = [ name ];
+          resources = [ "mutatingwebhookconfigurations" "validatingwebhookconfigurations" ];
+          verbs = [ "get" "patch" ];
+        }
+        # CRD read — scoped to SG CRDs
+        {
+          apiGroups = [ "apiextensions.k8s.io" ];
+          resourceNames = sgCrdNames;
+          resources = [ "customresourcedefinitions" ];
+          verbs = [ "get" ];
+        }
+        # CRD list
+        {
+          apiGroups = [ "apiextensions.k8s.io" ];
+          resources = [ "customresourcedefinitions" ];
+          verbs = [ "list" ];
+        }
+        # CRD create
+        {
+          apiGroups = [ "apiextensions.k8s.io" ];
+          resources = [ "customresourcedefinitions" ];
+          verbs = [ "create" ];
+        }
+        # CRD update — scoped to SG CRDs
+        {
+          apiGroups = [ "apiextensions.k8s.io" ];
+          resourceNames = sgCrdNames;
+          resources = [ "customresourcedefinitions" ];
+          verbs = [ "patch" "update" ];
+        }
+        # Prometheus CRD read
+        {
+          apiGroups = [ "apiextensions.k8s.io" ];
+          resourceNames = [ "prometheuses.monitoring.coreos.com" ];
+          resources = [ "customresourcedefinitions" ];
+          verbs = [ "get" ];
+        }
+        # VPA
+        {
+          apiGroups = [ "autoscaling.k8s.io" ];
+          resources = [ "verticalpodautoscalers" ];
+          verbs = [ "get" "list" "watch" "update" "create" "delete" "patch" ];
+        }
+        # KEDA
+        {
+          apiGroups = [ "keda.sh" ];
+          resources = [ "scaledobjects" "triggerauthentications" ];
+          verbs = [ "get" "list" "watch" "update" "create" "delete" "patch" ];
+        }
+        # Prometheus Operator — servicemonitors and podmonitors management
+        {
+          apiGroups = [ "monitoring.coreos.com" ];
+          resources = [ "servicemonitors" "podmonitors" ];
+          verbs = [ "list" "get" "create" "delete" "update" "patch" ];
+        }
+        # Prometheus Operator — read access
+        {
+          apiGroups = [ "monitoring.coreos.com" ];
+          resources = [ "prometheus" "prometheuses" "podmonitors" ];
+          verbs = [ "list" "get" ];
+        }
+        # Knative
+        {
+          apiGroups = [ "serving.knative.dev" ];
+          resources = [ "services" ];
+          verbs = [ "get" "list" "watch" "update" "create" "delete" "patch" ];
+        }
+        # ShardingSphere
+        {
+          apiGroups = [ "shardingsphere.apache.org" ];
+          resources = [ "computenodes" ];
+          verbs = [ "get" "list" "watch" "update" "create" "delete" "patch" ];
+        }
+        # Volume Snapshots
+        {
+          apiGroups = [ "snapshot.storage.k8s.io" ];
+          resources = [ "volumesnapshots" ];
+          verbs = [ "list" "get" "watch" "create" ];
+        }
+        # StackGres CRDs — full control
+        {
+          apiGroups = [ "stackgres.io" ];
+          resources = [
+            "sgclusters"
+            "sgpgconfigs"
+            "sginstanceprofiles"
+            "sgpoolconfigs"
+            "sgbackupconfigs"
+            "sgbackups"
+            "sgdistributedlogs"
+            "sgdbops"
+            "sgobjectstorages"
+            "sgscripts"
+            "sgshardedclusters"
+            "sgshardedbackups"
+            "sgshardeddbops"
+            "sgstreams"
+            "sgconfigs"
+          ];
+          verbs = [ "create" "watch" "list" "get" "update" "patch" "delete" ];
+        }
+        # StackGres CRDs — status and finalizers
+        {
+          apiGroups = [ "stackgres.io" ];
+          resources = [
+            "sgconfigs/status"
+            "sgclusters/status"
+            "sgdistributedlogs/status"
+            "sgclusters/finalizers"
+            "sgpgconfigs/finalizers"
+            "sginstanceprofiles/finalizers"
+            "sgpoolconfigs/finalizers"
+            "sgbackupconfigs/finalizers"
+            "sgbackups/finalizers"
+            "sgdistributedlogs/finalizers"
+            "sgdbops/finalizers"
+            "sgobjectstorages/finalizers"
+            "sgscripts/finalizers"
+            "sgshardedclusters/finalizers"
+            "sgshardedbackups/finalizers"
+            "sgshardeddbops/finalizers"
+            "sgstreams/finalizers"
+            "sgconfigs/finalizers"
+          ];
+          verbs = [ "update" ];
+        }
+        # Storage
+        {
+          apiGroups = [ "storage.k8s.io" ];
+          resources = [ "storageclasses" ];
+          verbs = [ "get" "list" ];
+        }
+      ];
   };
 
   # ===== ClusterRoleBinding =====
@@ -345,7 +419,7 @@ self: {
   clusterRoleBinding = scope.mkClusterResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "ClusterRoleBinding";
-    name = "${name}-operator";
+    name = name;
     labels = selectorLabels;
     extra = {
       roleRef = {
@@ -363,38 +437,18 @@ self: {
     };
   };
 
-  # ===== ConfigMap (operator configuration) =====
-
-  operatorConfig = scope.mkResource {
-    apiVersion = "v1";
-    kind = "ConfigMap";
-    name = "${name}-operator-config";
-    labels = selectorLabels;
-    data = {
-      OPERATOR_NAME = "${name}-operator";
-      OPERATOR_NAMESPACE = scope.namespaceName;
-      OPERATOR_IP = "0.0.0.0";
-      OPERATOR_SERVICE_ACCOUNT = "${self.serviceAccount}";
-      SG_CONTAINER_REGISTRY = "quay.io";
-      SG_IMAGE_PULL_POLICY = "IfNotPresent";
-      AUTHENTICATION_SECRET_NAME = "${name}-restapi-admin";
-      GRAFANA_EMBEDDED = if cfg.grafana.enabled then "true" else "false";
-      COLLECTOR_ENABLED = if cfg.collector.enabled then "true" else "false";
-    };
-  };
-
   # ===== Deployment (operator) =====
 
   operatorDeployment = scope.mkResource {
     apiVersion = "apps/v1";
     kind = "Deployment";
-    name = "${name}-operator";
+    name = name;
     labels = operatorLabels;
     spec = {
       replicas = 1;
-      selector.matchLabels = operatorLabels;
+      selector.matchLabels = operatorSelectorLabels;
       template = {
-        metadata.labels = operatorLabels;
+        metadata.labels = operatorSelectorLabels;
         spec = {
           serviceAccountName = "${self.serviceAccount}";
           securityContext = {
@@ -402,17 +456,16 @@ self: {
             runAsUser = 1000;
             runAsGroup = 1000;
             fsGroup = 1000;
-            seccompProfile.type = "RuntimeDefault";
           };
           containers = [
             {
-              name = "operator";
+              name = name;
               image = "${cfg.operator.image.repository}:${cfg.operator.image.tag}";
               imagePullPolicy = "IfNotPresent";
               env = [
                 {
                   name = "OPERATOR_NAME";
-                  value = "${name}-operator";
+                  value = name;
                 }
                 {
                   name = "OPERATOR_NAMESPACE";
@@ -420,7 +473,7 @@ self: {
                 }
                 {
                   name = "OPERATOR_SERVICE_ACCOUNT";
-                  value = "${self.serviceAccount}";
+                  valueFrom.fieldRef.fieldPath = "spec.serviceAccountName";
                 }
                 {
                   name = "OPERATOR_POD_NAME";
@@ -428,7 +481,19 @@ self: {
                 }
                 {
                   name = "OPERATOR_IP";
-                  value = "0.0.0.0";
+                  valueFrom.fieldRef.fieldPath = "status.podIP";
+                }
+                {
+                  name = "OPERATOR_IMAGE_VERSION";
+                  value = cfg.operator.image.tag;
+                }
+                {
+                  name = "OPERATOR_NATIVE_IMAGE_VERSION";
+                  value = cfg.operator.image.tag;
+                }
+                {
+                  name = "OPERATOR_JVM_IMAGE_VERSION";
+                  value = "${cfg.operator.image.tag}-jvm";
                 }
                 {
                   name = "SG_CONTAINER_REGISTRY";
@@ -439,11 +504,60 @@ self: {
                   value = "IfNotPresent";
                 }
                 {
-                  name = "AUTHENTICATION_SECRET_NAME";
-                  value = "${name}-restapi-admin";
+                  name = "INSTALL_CRDS";
+                  value = "true";
+                }
+                {
+                  name = "INSTALL_WEBHOOKS";
+                  value = "true";
+                }
+                {
+                  name = "INSTALL_CONVERSION_WEBHOOKS";
+                  value = "true";
+                }
+                {
+                  name = "INSTALL_CERTS";
+                  value = "true";
+                }
+                {
+                  name = "INSTALL_CONFIG";
+                  value = "true";
+                }
+                {
+                  name = "CLUSTER_ROLE_DISABLED";
+                  value = "false";
+                }
+                {
+                  name = "DISABLE_RECONCILIATION";
+                  value = "false";
+                }
+                {
+                  name = "WAIT_CRDS_UPGRADE";
+                  value = "false";
+                }
+                {
+                  name = "EXTENSIONS_REPOSITORY_URLS";
+                  value = "https://extensions.stackgres.io/postgres/repository";
+                }
+                {
+                  name = "PROMETHEUS_AUTOBIND";
+                  value = "true";
+                }
+                {
+                  name = "GRAFANA_EMBEDDED";
+                  value = if cfg.grafana.enabled then "true" else "false";
+                }
+                {
+                  name = "SGCONFIG_NAMESPACE";
+                  value = scope.namespaceName;
                 }
               ];
               ports = [
+                {
+                  name = "http";
+                  containerPort = 8080;
+                  protocol = "TCP";
+                }
                 {
                   name = "https";
                   containerPort = 8443;
@@ -457,7 +571,8 @@ self: {
                   scheme = "HTTP";
                 };
                 initialDelaySeconds = 10;
-                periodSeconds = 10;
+                periodSeconds = 60;
+                timeoutSeconds = 10;
                 failureThreshold = 3;
               };
               readinessProbe = {
@@ -466,25 +581,16 @@ self: {
                   port = 8080;
                   scheme = "HTTP";
                 };
-                initialDelaySeconds = 5;
-                periodSeconds = 5;
+                periodSeconds = 2;
+                timeoutSeconds = 1;
                 failureThreshold = 3;
               };
               resources = cfg.operator.resources;
-              securityContext = {
-                allowPrivilegeEscalation = false;
-                capabilities.drop = [ "ALL" ];
-                readOnlyRootFilesystem = true;
-              };
               volumeMounts = [
                 {
                   name = "operator-certs";
                   mountPath = "/etc/operator/certs";
                   readOnly = true;
-                }
-                {
-                  name = "tmp";
-                  mountPath = "/tmp";
                 }
               ];
             }
@@ -493,114 +599,9 @@ self: {
             {
               name = "operator-certs";
               secret = {
-                secretName = "${name}-operator-certs";
+                secretName = "${name}-certs";
                 optional = true;
               };
-            }
-            {
-              name = "tmp";
-              emptyDir = { };
-            }
-          ];
-        };
-      };
-    };
-  };
-
-  # ===== Deployment (REST API + Admin UI) =====
-
-  restapiDeployment = scope.mkResource {
-    apiVersion = "apps/v1";
-    kind = "Deployment";
-    name = "${name}-restapi";
-    labels = restapiLabels;
-    spec = {
-      replicas = 1;
-      selector.matchLabels = restapiLabels;
-      template = {
-        metadata.labels = restapiLabels;
-        spec = {
-          serviceAccountName = "${self.serviceAccount}";
-          securityContext = {
-            runAsNonRoot = true;
-            runAsUser = 1000;
-            runAsGroup = 1000;
-            fsGroup = 1000;
-            seccompProfile.type = "RuntimeDefault";
-          };
-          containers = [
-            {
-              name = "restapi";
-              image = "${cfg.restapi.image.repository}:${cfg.restapi.image.tag}";
-              imagePullPolicy = "IfNotPresent";
-              env = [
-                {
-                  name = "OPERATOR_NAME";
-                  value = "${name}-operator";
-                }
-                {
-                  name = "OPERATOR_NAMESPACE";
-                  valueFrom.fieldRef.fieldPath = "metadata.namespace";
-                }
-                {
-                  name = "AUTHENTICATION_SECRET_NAME";
-                  value = "${name}-restapi-admin";
-                }
-                {
-                  name = "STACKGRES_AUTH_TYPE";
-                  value = "jwt";
-                }
-              ];
-              ports = [
-                {
-                  name = "https";
-                  containerPort = 9443;
-                  protocol = "TCP";
-                }
-                {
-                  name = "http";
-                  containerPort = 8080;
-                  protocol = "TCP";
-                }
-              ];
-              livenessProbe = {
-                httpGet = {
-                  path = "/q/health/live";
-                  port = 8080;
-                  scheme = "HTTP";
-                };
-                initialDelaySeconds = 10;
-                periodSeconds = 10;
-                failureThreshold = 3;
-              };
-              readinessProbe = {
-                httpGet = {
-                  path = "/q/health/ready";
-                  port = 8080;
-                  scheme = "HTTP";
-                };
-                initialDelaySeconds = 5;
-                periodSeconds = 5;
-                failureThreshold = 3;
-              };
-              resources = cfg.restapi.resources;
-              securityContext = {
-                allowPrivilegeEscalation = false;
-                capabilities.drop = [ "ALL" ];
-                readOnlyRootFilesystem = true;
-              };
-              volumeMounts = [
-                {
-                  name = "tmp";
-                  mountPath = "/tmp";
-                }
-              ];
-            }
-          ];
-          volumes = [
-            {
-              name = "tmp";
-              emptyDir = { };
             }
           ];
         };
@@ -613,49 +614,20 @@ self: {
   operatorService = scope.mkResource {
     apiVersion = "v1";
     kind = "Service";
-    name = "${name}-operator";
-    labels = operatorLabels;
+    name = name;
     spec = {
       type = "ClusterIP";
-      selector = operatorLabels;
+      selector = {
+        app = name;
+      };
       ports = [
         {
           name = "https";
           port = 443;
-          targetPort = 8443;
+          targetPort = "https";
           protocol = "TCP";
         }
       ];
-    };
-  };
-
-  # ===== Service (REST API) =====
-
-  restapiService = scope.mkResource {
-    apiVersion = "v1";
-    kind = "Service";
-    name = "${name}-restapi";
-    labels = restapiLabels;
-    spec = {
-      type = "ClusterIP";
-      selector = restapiLabels;
-      ports = [
-        {
-          name = "https";
-          port = 443;
-          targetPort = 9443;
-          protocol = "TCP";
-        }
-        {
-          name = "http";
-          port = 80;
-          targetPort = 8080;
-          protocol = "TCP";
-        }
-      ];
-    };
-    outputs = {
-      restapiUrl = "https://${name}-restapi.${scope.namespaceName}.svc";
     };
   };
 
@@ -748,189 +720,12 @@ self: {
   validatingWebhook = scope.mkClusterResource {
     apiVersion = "admissionregistration.k8s.io/v1";
     kind = "ValidatingWebhookConfiguration";
-    name = "${name}-operator";
-    labels = selectorLabels;
+    name = name;
     annotations = {
       # The operator will inject the caBundle at startup.
       "stackgres.io/operator-version" = cfg.operator.image.tag;
     };
-    extra.webhooks = [
-      {
-        name = "sgcluster.stackgres.io";
-        admissionReviewVersions = [ "v1" ];
-        sideEffects = "None";
-        failurePolicy = "Fail";
-        clientConfig = {
-          service = {
-            name = "${self.operatorService}";
-            namespace = scope.namespaceName;
-            path = "/stackgres/validation/sgcluster";
-          };
-        };
-        rules = [
-          {
-            apiGroups = [ "stackgres.io" ];
-            apiVersions = [ "v1" ];
-            operations = [
-              "CREATE"
-              "UPDATE"
-              "DELETE"
-            ];
-            resources = [ "sgclusters" ];
-          }
-        ];
-      }
-      {
-        name = "sginstanceprofile.stackgres.io";
-        admissionReviewVersions = [ "v1" ];
-        sideEffects = "None";
-        failurePolicy = "Fail";
-        clientConfig = {
-          service = {
-            name = "${self.operatorService}";
-            namespace = scope.namespaceName;
-            path = "/stackgres/validation/sginstanceprofile";
-          };
-        };
-        rules = [
-          {
-            apiGroups = [ "stackgres.io" ];
-            apiVersions = [ "v1" ];
-            operations = [
-              "CREATE"
-              "UPDATE"
-              "DELETE"
-            ];
-            resources = [ "sginstanceprofiles" ];
-          }
-        ];
-      }
-      {
-        name = "sgpgconfig.stackgres.io";
-        admissionReviewVersions = [ "v1" ];
-        sideEffects = "None";
-        failurePolicy = "Fail";
-        clientConfig = {
-          service = {
-            name = "${self.operatorService}";
-            namespace = scope.namespaceName;
-            path = "/stackgres/validation/sgpgconfig";
-          };
-        };
-        rules = [
-          {
-            apiGroups = [ "stackgres.io" ];
-            apiVersions = [ "v1" ];
-            operations = [
-              "CREATE"
-              "UPDATE"
-              "DELETE"
-            ];
-            resources = [ "sgpgconfigs" ];
-          }
-        ];
-      }
-      {
-        name = "sgpoolconfig.stackgres.io";
-        admissionReviewVersions = [ "v1" ];
-        sideEffects = "None";
-        failurePolicy = "Fail";
-        clientConfig = {
-          service = {
-            name = "${self.operatorService}";
-            namespace = scope.namespaceName;
-            path = "/stackgres/validation/sgpoolconfig";
-          };
-        };
-        rules = [
-          {
-            apiGroups = [ "stackgres.io" ];
-            apiVersions = [ "v1" ];
-            operations = [
-              "CREATE"
-              "UPDATE"
-              "DELETE"
-            ];
-            resources = [ "sgpoolconfigs" ];
-          }
-        ];
-      }
-      {
-        name = "sgobjectstorage.stackgres.io";
-        admissionReviewVersions = [ "v1" ];
-        sideEffects = "None";
-        failurePolicy = "Fail";
-        clientConfig = {
-          service = {
-            name = "${self.operatorService}";
-            namespace = scope.namespaceName;
-            path = "/stackgres/validation/sgobjectstorage";
-          };
-        };
-        rules = [
-          {
-            apiGroups = [ "stackgres.io" ];
-            apiVersions = [ "v1" ];
-            operations = [
-              "CREATE"
-              "UPDATE"
-              "DELETE"
-            ];
-            resources = [ "sgobjectstorages" ];
-          }
-        ];
-      }
-      {
-        name = "sgscript.stackgres.io";
-        admissionReviewVersions = [ "v1" ];
-        sideEffects = "None";
-        failurePolicy = "Fail";
-        clientConfig = {
-          service = {
-            name = "${self.operatorService}";
-            namespace = scope.namespaceName;
-            path = "/stackgres/validation/sgscript";
-          };
-        };
-        rules = [
-          {
-            apiGroups = [ "stackgres.io" ];
-            apiVersions = [ "v1" ];
-            operations = [
-              "CREATE"
-              "UPDATE"
-              "DELETE"
-            ];
-            resources = [ "sgscripts" ];
-          }
-        ];
-      }
-      {
-        name = "sgdbops.stackgres.io";
-        admissionReviewVersions = [ "v1" ];
-        sideEffects = "None";
-        failurePolicy = "Fail";
-        clientConfig = {
-          service = {
-            name = "${self.operatorService}";
-            namespace = scope.namespaceName;
-            path = "/stackgres/validation/sgdbops";
-          };
-        };
-        rules = [
-          {
-            apiGroups = [ "stackgres.io" ];
-            apiVersions = [ "v1" ];
-            operations = [
-              "CREATE"
-              "UPDATE"
-              "DELETE"
-            ];
-            resources = [ "sgdbops" ];
-          }
-        ];
-      }
-    ];
+    extra.webhooks = map (mkValidatingWebhook "${self.operatorService}") webhookResources;
   };
 
   # ===== MutatingWebhookConfiguration =====
@@ -938,85 +733,11 @@ self: {
   mutatingWebhook = scope.mkClusterResource {
     apiVersion = "admissionregistration.k8s.io/v1";
     kind = "MutatingWebhookConfiguration";
-    name = "${name}-operator";
-    labels = selectorLabels;
+    name = name;
     annotations = {
       "stackgres.io/operator-version" = cfg.operator.image.tag;
     };
-    extra.webhooks = [
-      {
-        name = "sgcluster.mutating.stackgres.io";
-        admissionReviewVersions = [ "v1" ];
-        sideEffects = "None";
-        failurePolicy = "Fail";
-        clientConfig = {
-          service = {
-            name = "${self.operatorService}";
-            namespace = scope.namespaceName;
-            path = "/stackgres/mutation/sgcluster";
-          };
-        };
-        rules = [
-          {
-            apiGroups = [ "stackgres.io" ];
-            apiVersions = [ "v1" ];
-            operations = [
-              "CREATE"
-              "UPDATE"
-            ];
-            resources = [ "sgclusters" ];
-          }
-        ];
-      }
-      {
-        name = "sginstanceprofile.mutating.stackgres.io";
-        admissionReviewVersions = [ "v1" ];
-        sideEffects = "None";
-        failurePolicy = "Fail";
-        clientConfig = {
-          service = {
-            name = "${self.operatorService}";
-            namespace = scope.namespaceName;
-            path = "/stackgres/mutation/sginstanceprofile";
-          };
-        };
-        rules = [
-          {
-            apiGroups = [ "stackgres.io" ];
-            apiVersions = [ "v1" ];
-            operations = [
-              "CREATE"
-              "UPDATE"
-            ];
-            resources = [ "sginstanceprofiles" ];
-          }
-        ];
-      }
-      {
-        name = "sgpgconfig.mutating.stackgres.io";
-        admissionReviewVersions = [ "v1" ];
-        sideEffects = "None";
-        failurePolicy = "Fail";
-        clientConfig = {
-          service = {
-            name = "${self.operatorService}";
-            namespace = scope.namespaceName;
-            path = "/stackgres/mutation/sgpgconfig";
-          };
-        };
-        rules = [
-          {
-            apiGroups = [ "stackgres.io" ];
-            apiVersions = [ "v1" ];
-            operations = [
-              "CREATE"
-              "UPDATE"
-            ];
-            resources = [ "sgpgconfigs" ];
-          }
-        ];
-      }
-    ];
+    extra.webhooks = map (mkMutatingWebhook "${self.operatorService}") webhookResources;
   };
 
   # ===== Entry point =====
@@ -1027,10 +748,7 @@ self: {
       self.serviceAccount
       self.clusterRole
       self.clusterRoleBinding
-      self.operatorConfig
-      self.restapiDeployment
       self.operatorService
-      self.restapiService
       self.crdSGCluster
       self.crdSGInstanceProfile
       self.crdSGPostgresConfig

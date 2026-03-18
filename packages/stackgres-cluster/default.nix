@@ -20,7 +20,12 @@
 let
   cfg = scope.defaults config {
     instances = 2;
-    postgres.version = "16";
+    postgres = {
+      version = "16";
+      extensions = [ ];
+      flavor = "vanilla";
+      ssl.enabled = true;
+    };
     storage = {
       size = "20Gi";
       storageClass = "localzfs-retain";
@@ -32,21 +37,41 @@ let
     pgConfig = {
       maxConnections = "200";
       sharedBuffers = null;
+      postgresqlConf = { };
     };
     backup = {
       enabled = true;
       retention = 5;
       cronSchedule = "30 04 * * *";
+      compression = "lz4";
       s3 = {
         bucket = null;
         endpoint = null;
         region = "gra";
+        credentialsSecret = null;
+        accessKeyField = "accesskey";
+        secretKeyField = "secretkey";
       };
     };
     pooling = {
       enabled = false;
-      mode = "transaction";
-      maxClientConnections = "200";
+      pgbouncerConf = { };
+    };
+    prometheusAutobind = true;
+    profile = "production";
+    replication = {
+      mode = "async";
+      role = "ha-read";
+    };
+    postgresServices = {
+      primary = {
+        enabled = true;
+        type = "ClusterIP";
+      };
+      replicas = {
+        enabled = true;
+        type = "ClusterIP";
+      };
     };
     scripts = [ ];
   };
@@ -58,21 +83,84 @@ let
     "app.kubernetes.io/instance" = name;
   };
 
+  # Parse memory to MB for calculations.
+  memoryMB =
+    let
+      mem = cfg.instanceProfile.memory;
+      numericGi = lib.removeSuffix "Gi" mem;
+    in
+    if lib.hasSuffix "Gi" mem then lib.toInt numericGi * 1024 else 2048;
+
   # Calculate shared_buffers from memory if not explicitly set.
   # Convention: ~25% of instance memory.
   sharedBuffers =
     if cfg.pgConfig.sharedBuffers != null then
       cfg.pgConfig.sharedBuffers
     else
-      let
-        # FIXME: this can crash if Mi is ending - toInt is applied to all
-        # Parse memory string (e.g., "2Gi" -> 512MB for shared_buffers)
-        mem = cfg.instanceProfile.memory;
-        # Convert Gi to MB, take 25%.  "2Gi" -> 2*1024/4 = 512MB.
-        numericGi = lib.removeSuffix "Gi" mem;
-        mbValue = lib.toInt numericGi * 1024 / 4;
-      in
-      if lib.hasSuffix "Gi" mem then "${toString mbValue}MB" else "512MB";
+      "${toString (memoryMB / 4)}MB";
+
+  # effective_cache_size: ~75% of instance memory.
+  effectiveCacheSize = "${toString (memoryMB * 3 / 4)}MB";
+
+  # Default postgresql.conf — sensible baseline for a managed PostgreSQL cluster.
+  defaultPostgresqlConf = {
+    max_connections = cfg.pgConfig.maxConnections;
+    shared_buffers = sharedBuffers;
+    effective_cache_size = effectiveCacheSize;
+    maintenance_work_mem = "128MB";
+    checkpoint_completion_target = "0.9";
+    checkpoint_timeout = "15min";
+    wal_buffers = "16MB";
+    default_statistics_target = "100";
+    random_page_cost = "1.1";
+    effective_io_concurrency = "200";
+    work_mem = "100MB";
+    huge_pages = "off";
+    max_wal_senders = "20";
+    max_replication_slots = "20";
+    max_wal_size = "4GB";
+    min_wal_size = "1GB";
+    wal_keep_size = "1536MB";
+    log_min_duration_statement = "1s";
+    log_checkpoints = "on";
+    log_connections = "on";
+    log_disconnections = "on";
+    log_lock_waits = "on";
+    log_temp_files = "0kB";
+    log_statement = "none";
+    log_line_prefix = "%t [%p]: db=%d,user=%u,app=%a,client=%h ";
+    log_autovacuum_min_duration = "0ms";
+    autovacuum_max_workers = "3";
+    autovacuum_vacuum_cost_delay = "2ms";
+    autovacuum_vacuum_scale_factor = "0.04";
+    autovacuum_work_mem = "512MB";
+    default_toast_compression = "lz4";
+    max_locks_per_transaction = "128";
+    max_pred_locks_per_transaction = "128";
+    max_prepared_transactions = "32";
+    max_parallel_workers_per_gather = "1";
+    max_parallel_maintenance_workers = "1";
+    max_parallel_workers = "2";
+    max_worker_processes = "2";
+    superuser_reserved_connections = "8";
+    vacuum_cost_limit = "400";
+    track_activity_query_size = "4kB";
+    track_commit_timestamp = "on";
+    track_functions = "pl";
+    track_io_timing = "on";
+    shared_preload_libraries = "pg_stat_statements, auto_explain";
+    "pg_stat_statements.track_utility" = "off";
+    "timescaledb.license" = "timescale";
+    jit_inline_above_cost = "-1";
+    enable_partitionwise_join = "on";
+    enable_partitionwise_aggregate = "on";
+    lc_monetary = "C.UTF-8";
+    lc_numeric = "C.UTF-8";
+    lc_time = "C.UTF-8";
+  };
+
+  # Merge user overrides on top of defaults.
+  postgresqlConf = defaultPostgresqlConf // cfg.pgConfig.postgresqlConf;
 
 in
 self: {
@@ -99,30 +187,7 @@ self: {
     labels = selectorLabels;
     spec = {
       postgresVersion = cfg.postgres.version;
-      postgresql.conf = {
-        max_connections = cfg.pgConfig.maxConnections;
-        shared_buffers = sharedBuffers;
-        # Sensible defaults for a managed PostgreSQL cluster.
-        wal_level = "replica";
-        max_wal_senders = "10";
-        max_replication_slots = "10";
-        hot_standby = "on";
-        effective_cache_size = sharedBuffers;
-        maintenance_work_mem = "128MB";
-        checkpoint_completion_target = "0.9";
-        wal_buffers = "16MB";
-        default_statistics_target = "100";
-        random_page_cost = "1.1";
-        effective_io_concurrency = "200";
-        work_mem = "4MB";
-        huge_pages = "try";
-        log_min_duration_statement = "1000";
-        log_checkpoints = "on";
-        log_connections = "on";
-        log_disconnections = "on";
-        log_lock_waits = "on";
-        log_temp_files = "0";
-      };
+      "postgresql.conf" = postgresqlConf;
     };
   };
 
@@ -142,6 +207,20 @@ self: {
       }
       // lib.optionalAttrs (cfg.backup.s3.endpoint != null) {
         endpoint = cfg.backup.s3.endpoint;
+      }
+      // lib.optionalAttrs (cfg.backup.s3.credentialsSecret != null) {
+        awsCredentials = {
+          secretKeySelectors = {
+            accessKeyId = {
+              name = cfg.backup.s3.credentialsSecret;
+              key = cfg.backup.s3.accessKeyField;
+            };
+            secretAccessKey = {
+              name = cfg.backup.s3.credentialsSecret;
+              key = cfg.backup.s3.secretKeyField;
+            };
+          };
+        };
       };
     };
   });
@@ -156,17 +235,15 @@ self: {
       labels = selectorLabels;
       spec = {
         pgBouncer = {
-          pgbouncer.ini = {
+          "pgbouncer.ini" = {
             pgbouncer = {
-              pool_mode = cfg.pooling.mode;
-              max_client_conn = cfg.pooling.maxClientConnections;
-              default_pool_size = "25";
-              min_pool_size = "5";
-              reserve_pool_size = "5";
-              reserve_pool_timeout = "3";
-              server_round_robin = "1";
-              stats_period = "60";
-            };
+              pool_mode = "session";
+              max_client_conn = "200";
+              default_pool_size = "180";
+              ignore_startup_parameters = "extra_float_digits";
+              max_db_connections = "0";
+              max_user_connections = "0";
+            } // cfg.pooling.pgbouncerConf;
           };
         };
       };
@@ -202,8 +279,22 @@ self: {
       instances = cfg.instances;
       postgres = {
         version = cfg.postgres.version;
+        flavor = cfg.postgres.flavor;
+        ssl = {
+          enabled = cfg.postgres.ssl.enabled;
+        };
+      }
+      // lib.optionalAttrs (cfg.postgres.extensions != [ ]) {
+        extensions = cfg.postgres.extensions;
       };
       sgInstanceProfile = "${self.instanceProfile}";
+      profile = cfg.profile;
+      prometheusAutobind = cfg.prometheusAutobind;
+      replication = {
+        mode = cfg.replication.mode;
+        role = cfg.replication.role;
+      };
+      postgresServices = cfg.postgresServices;
       configurations = {
         sgPostgresConfig = "${self.pgConfig}";
       }
@@ -214,6 +305,7 @@ self: {
             sgObjectStorage = "${self.objectStorage}";
             cronSchedule = cfg.backup.cronSchedule;
             retention = cfg.backup.retention;
+            compression = cfg.backup.compression;
           }
         ];
       }

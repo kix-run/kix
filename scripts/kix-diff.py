@@ -26,6 +26,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from parity.normalize import normalize_kix, normalize_cluster, resource_key
 from parity.structural_diff import structural_diff, format_diffs, DiffKind
 
+# Fields that Kubernetes auto-assigns at runtime — never present in kix output.
+CLUSTER_DEFAULT_PATHS = {
+    "$.spec.clusterIP",
+    "$.spec.clusterIPs",
+    "$.spec.internalTrafficPolicy",
+    "$.spec.ipFamilies",
+    "$.spec.ipFamilyPolicy",
+    "$.spec.sessionAffinity",
+    "*.configMap.defaultMode",
+}
+
 # ANSI helpers (duplicated here for section-level coloring)
 _BOLD = "\033[1m"
 _DIM = "\033[2m"
@@ -230,6 +241,7 @@ def generate_report(
     cluster_resources: dict[str, dict],
     ignore_paths: set[str] | None,
     color: bool = False,
+    full_diff: bool = False,
 ) -> str:
     """Generate a structured markdown diff report."""
     lines: list[str] = []
@@ -315,7 +327,7 @@ def generate_report(
             if diffs:
                 if not color:
                     lines.append("```")
-                lines.append(format_diffs(diffs, color=color))
+                lines.append(format_diffs(diffs, color=color, full_diff=full_diff))
                 if not color:
                     lines.append("```")
             else:
@@ -376,7 +388,7 @@ def generate_report(
 
             if not color:
                 lines.append("```")
-            lines.append(format_diffs(diffs, color=color))
+            lines.append(format_diffs(diffs, color=color, full_diff=full_diff))
             if not color:
                 lines.append("```")
             lines.append("")
@@ -417,7 +429,12 @@ def generate_report(
               help="Only compare resources whose name matches this service (e.g. 'coredns')")
 @click.option("--color/--no-color", default=None,
               help="Colorize diff output (default: auto-detect TTY)")
-def main(kix_dir: str, cluster_dir: str, ignore_path: tuple[str, ...], service: str | None, color: bool | None):
+@click.option("--ignore-cluster-defaults", is_flag=True, default=False,
+              help="Ignore fields that K8s auto-assigns (clusterIP, ipFamilies, sessionAffinity, etc.)")
+@click.option("--full-diff", is_flag=True, default=False,
+              help="Show full unified diffs for multi-line string values (e.g. ConfigMaps)")
+def main(kix_dir: str, cluster_dir: str, ignore_path: tuple[str, ...], service: str | None,
+         color: bool | None, ignore_cluster_defaults: bool, full_diff: bool):
     """Compare kix manifests against a cluster dump.
 
     KIX_DIR is the kix output directory (e.g. ./result from nix build).
@@ -428,7 +445,10 @@ def main(kix_dir: str, cluster_dir: str, ignore_path: tuple[str, ...], service: 
     kix_path = Path(kix_dir)
     cluster_path = Path(cluster_dir)
 
-    ignore_paths = set(ignore_path) if ignore_path else None
+    ignore_paths = set(ignore_path) if ignore_path else set()
+    if ignore_cluster_defaults:
+        ignore_paths |= CLUSTER_DEFAULT_PATHS
+    ignore_paths = ignore_paths or None
 
     if service:
         click.echo(f"Filtering for service: {service}", err=True)
@@ -449,6 +469,7 @@ def main(kix_dir: str, cluster_dir: str, ignore_path: tuple[str, ...], service: 
         kix_resources, cluster_resources,
         ignore_paths,
         color=use_color,
+        full_diff=full_diff,
     )
 
     # Write report to stdout (progress messages go to stderr)

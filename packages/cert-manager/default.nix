@@ -50,12 +50,7 @@ let
     };
     replicaCount = 1;
     installCRDs = true;
-    resources = {
-      requests = {
-        cpu = "10m";
-        memory = "32Mi";
-      };
-    };
+    resources = null;
     dns01RecursiveNameservers = "";
     dns01RecursiveNameserversOnly = false;
     prometheus = {
@@ -435,7 +430,7 @@ self: {
   controllerServiceAccount = scope.mkResource {
     apiVersion = "v1";
     kind = "ServiceAccount";
-    name = "${name}-controller";
+    name = "${name}";
     labels = controllerLabels;
     extra.automountServiceAccountToken = true;
   };
@@ -697,38 +692,6 @@ self: {
     labels = controllerLabels;
     extra.rules = [
       {
-        apiGroups = [ "acme.cert-manager.io" ];
-        resources = [
-          "challenges"
-          "challenges/status"
-        ];
-        verbs = [
-          "update"
-          "patch"
-        ];
-      }
-      {
-        apiGroups = [ "acme.cert-manager.io" ];
-        resources = [ "challenges" ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-        ];
-      }
-      {
-        apiGroups = [ "cert-manager.io" ];
-        resources = [
-          "issuers"
-          "clusterissuers"
-        ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-        ];
-      }
-      {
         apiGroups = [ "" ];
         resources = [ "secrets" ];
         verbs = [
@@ -760,15 +723,49 @@ self: {
         ];
       }
       {
-        apiGroups = [ "networking.k8s.io" ];
-        resources = [ "ingresses" ];
+        apiGroups = [ "" ];
+        resources = [ "secrets" ];
         verbs = [
           "get"
           "list"
           "watch"
-          "create"
-          "delete"
+        ];
+      }
+      {
+        apiGroups = [ "acme.cert-manager.io" ];
+        resources = [
+          "challenges"
+          "challenges/status"
+        ];
+        verbs = [
           "update"
+          "patch"
+        ];
+      }
+      {
+        apiGroups = [ "acme.cert-manager.io" ];
+        resources = [ "challenges" ];
+        verbs = [
+          "get"
+          "list"
+          "watch"
+        ];
+      }
+      {
+        apiGroups = [ "acme.cert-manager.io" ];
+        resources = [ "challenges/finalizers" ];
+        verbs = [ "update" ];
+      }
+      {
+        apiGroups = [ "cert-manager.io" ];
+        resources = [
+          "issuers"
+          "clusterissuers"
+        ];
+        verbs = [
+          "get"
+          "list"
+          "watch"
         ];
       }
       {
@@ -784,14 +781,21 @@ self: {
         ];
       }
       {
+        apiGroups = [ "networking.k8s.io" ];
+        resources = [ "ingresses" ];
+        verbs = [
+          "get"
+          "list"
+          "watch"
+          "create"
+          "delete"
+          "update"
+        ];
+      }
+      {
         apiGroups = [ "route.openshift.io" ];
         resources = [ "routes/custom-host" ];
         verbs = [ "create" ];
-      }
-      {
-        apiGroups = [ "acme.cert-manager.io" ];
-        resources = [ "challenges/finalizers" ];
-        verbs = [ "update" ];
       }
     ];
   };
@@ -1165,7 +1169,7 @@ self: {
   controllerLeaderElectionRole = scope.mkResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "Role";
-    name = "${name}-controller:leaderelection";
+    name = "${name}:leaderelection";
     labels = controllerLabels;
     extra.rules = [
       {
@@ -1189,7 +1193,7 @@ self: {
   controllerLeaderElectionRoleBinding = scope.mkResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "RoleBinding";
-    name = "${name}-controller:leaderelection";
+    name = "${name}:leaderelection";
     labels = controllerLabels;
     extra = {
       roleRef = {
@@ -1221,7 +1225,7 @@ self: {
   controllerTokenRequestRoleBinding = scope.mkResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "RoleBinding";
-    name = "${name}-tokenrequest";
+    name = "${name}-${name}-tokenrequest";
     labels = controllerLabels;
     extra = {
       roleRef = {
@@ -1238,7 +1242,7 @@ self: {
   controllerService = scope.mkResource {
     apiVersion = "v1";
     kind = "Service";
-    name = "${name}-controller";
+    name = "${name}";
     labels = controllerLabels;
     spec = {
       type = "ClusterIP";
@@ -1262,7 +1266,7 @@ self: {
   controllerDeployment = scope.mkResource {
     apiVersion = "apps/v1";
     kind = "Deployment";
-    name = "${name}-controller";
+    name = "${name}";
     labels = controllerLabels;
     spec = {
       replicas = cfg.replicaCount;
@@ -1281,7 +1285,7 @@ self: {
           enableServiceLinks = false;
           securityContext = podSecurityContext;
           containers = [
-            {
+            ({
               name = "cert-manager-controller";
               image = "${cfg.image.repository}:${cfg.image.tag}";
               imagePullPolicy = cfg.image.pullPolicy;
@@ -1290,12 +1294,12 @@ self: {
                 "--cluster-resource-namespace=$(POD_NAMESPACE)"
                 "--leader-election-namespace=$(POD_NAMESPACE)"
                 "--acme-http01-solver-image=${cfg.acmesolver.image.repository}:${cfg.acmesolver.image.tag}"
-                "--max-concurrent-challenges=60"
               ]
+              ++ lib.optional cfg.dns01RecursiveNameserversOnly "--dns01-recursive-nameservers-only"
               ++ lib.optional (
                 cfg.dns01RecursiveNameservers != ""
               ) "--dns01-recursive-nameservers=${cfg.dns01RecursiveNameservers}"
-              ++ lib.optional cfg.dns01RecursiveNameserversOnly "--dns01-recursive-nameservers-only";
+              ++ [ "--max-concurrent-challenges=60" ];
               ports = [
                 {
                   name = "http-metrics";
@@ -1327,8 +1331,8 @@ self: {
                 successThreshold = 1;
                 failureThreshold = 8;
               };
-              resources = cfg.resources;
             }
+            // lib.optionalAttrs (cfg.resources != null) { resources = cfg.resources; })
           ];
           nodeSelector = {
             "kubernetes.io/os" = "linux";
@@ -1813,6 +1817,7 @@ self: {
           name = "http-metrics";
           port = 9402;
           protocol = "TCP";
+          targetPort = 9402;
         }
       ];
     };

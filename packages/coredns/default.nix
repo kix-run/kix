@@ -38,6 +38,12 @@ let
         memory = "128Mi";
       };
     };
+    rollingUpdate = {
+      maxSurge = "25%";
+      maxUnavailable = 1;
+    };
+    affinity = null;
+    enableTcpPort = true;
     hpa = {
       enabled = false;
       minReplicas = 1;
@@ -104,7 +110,9 @@ self: {
     apiVersion = "v1";
     kind = "ConfigMap";
     name = "${scope.instanceName}";
-    labels = commonLabels;
+    labels = {
+      "app.kubernetes.io/name" = "coredns";
+    };
     data = {
       Corefile = corefile;
     };
@@ -178,8 +186,7 @@ self: {
       strategy = {
         type = "RollingUpdate";
         rollingUpdate = {
-          maxUnavailable = 1;
-          maxSurge = "25%";
+          inherit (cfg.rollingUpdate) maxUnavailable maxSurge;
         };
       };
       selector.matchLabels = selectorLabels // {
@@ -199,6 +206,11 @@ self: {
           terminationGracePeriodSeconds = 30;
           serviceAccountName = "${self.serviceAccount}";
           dnsPolicy = "Default";
+        }
+        // lib.optionalAttrs (cfg.affinity != null) {
+          inherit (cfg) affinity;
+        }
+        // {
           containers = [
             {
               name = "coredns";
@@ -221,11 +233,13 @@ self: {
                   name = "udp-53";
                   protocol = "UDP";
                 }
-                {
-                  containerPort = 53;
-                  name = "tcp-53";
-                  protocol = "TCP";
-                }
+              ]
+              ++ lib.optional cfg.enableTcpPort {
+                containerPort = 53;
+                name = "tcp-53";
+                protocol = "TCP";
+              }
+              ++ [
                 {
                   containerPort = 9153;
                   name = "tcp-9153";
@@ -302,16 +316,20 @@ self: {
           protocol = "UDP";
           targetPort = 53;
         }
-        {
-          name = "tcp-53";
-          port = 53;
-          protocol = "TCP";
-          targetPort = 53;
-        }
-      ];
+      ]
+      ++ lib.optional cfg.enableTcpPort {
+        name = "tcp-53";
+        port = 53;
+        protocol = "TCP";
+        targetPort = 53;
+      };
       type = cfg.serviceType;
     };
-    requires = [ self.deployment ];
+    requires = [ self.deployment ]
+      ++ lib.optional (self.metricsService != null) self.metricsService
+      ++ lib.optional (self.serviceMonitor != null) self.serviceMonitor
+      ++ lib.optional (self.hpa != null) self.hpa
+      ++ lib.optional (self.pdb != null) self.pdb;
   };
 
   # --- Optional: Metrics Service ---
@@ -333,9 +351,11 @@ self: {
             {
               name = "metrics";
               port = 9153;
+              protocol = "TCP";
               targetPort = 9153;
             }
           ];
+          type = "ClusterIP";
         };
         requires = [ self.deployment ];
       }

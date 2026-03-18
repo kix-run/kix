@@ -3,7 +3,7 @@
 # Deploys the cdi-operator which manages CDI components (cdi-apiserver,
 # cdi-controller/uploadcontroller, cdi-uploadproxy) via the CDI custom resource.
 #
-# Resources: ServiceAccount, ClusterRole, ClusterRoleBinding, Service (metrics),
+# Resources: ServiceAccount, ClusterRole, ClusterRoleBinding,
 #            Deployment (cdi-operator), CDI CR, CRDs.
 #
 # main = Deployment (cdi-operator)
@@ -29,17 +29,25 @@ let
         cpu = "100m";
         memory = "150Mi";
       };
-      limits = {
-        cpu = "500m";
-        memory = "512Mi";
-      };
     };
+    # CDI CR configuration
+    cloneStrategyOverride = null;
+    featureGates = [ ];
+    infra = { };
+    workload = { };
+  };
+
+  # Labels matching the upstream CDI operator manifest
+  operatorLabels = {
+    "name" = "cdi-operator";
+    "operator.cdi.kubevirt.io" = "";
+    "cdi.kubevirt.io" = "cdi-operator";
+    "prometheus.cdi.kubevirt.io" = "true";
   };
 
   selectorLabels = {
-    "app.kubernetes.io/name" = "cdi";
-    "app.kubernetes.io/instance" = name;
-    "app.kubernetes.io/component" = "cdi-operator";
+    "name" = "cdi-operator";
+    "operator.cdi.kubevirt.io" = "";
   };
 
 in
@@ -50,144 +58,177 @@ self: {
     apiVersion = "v1";
     kind = "ServiceAccount";
     name = "${name}-operator";
-    labels = selectorLabels;
+    labels = {
+      "operator.cdi.kubevirt.io" = "";
+    };
   };
 
   # --- ClusterRole ---
   clusterRole = scope.mkClusterResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "ClusterRole";
-    name = "${name}-operator";
-    labels = selectorLabels;
+    name = "${name}-operator-cluster";
+    labels = {
+      "operator.cdi.kubevirt.io" = "";
+    };
     extra.rules = [
-      # CDI resources
+      # Core resources - configmaps (read)
       {
-        apiGroups = [ "cdi.kubevirt.io" ];
-        resources = [
-          "cdis"
-          "cdis/status"
-          "cdis/finalizers"
-          "datavolumes"
-          "datavolumes/status"
-          "datavolumes/finalizers"
-          "datasources"
-          "datasources/status"
-          "dataimportcrons"
-          "dataimportcrons/status"
-          "dataimportcrons/finalizers"
-          "objecttransfers"
-          "objecttransfers/status"
-          "objecttransfers/finalizers"
-          "storageprofiles"
-          "storageprofiles/status"
-          "volumeclonesources"
-          "volumeimportsources"
-          "volumeimportsources/status"
-          "volumeuploadsources"
-          "volumeuploadsources/status"
+        apiGroups = [ "" ];
+        resources = [ "configmaps" ];
+        verbs = [
+          "get"
+          "list"
+          "watch"
         ];
+      }
+      # Core resources - PVCs (read)
+      {
+        apiGroups = [ "" ];
+        resources = [ "persistentvolumeclaims" ];
+        verbs = [
+          "get"
+          "list"
+          "watch"
+        ];
+      }
+      # Core resources - PVs (read)
+      {
+        apiGroups = [ "" ];
+        resources = [ "persistentvolumes" ];
+        verbs = [
+          "get"
+          "list"
+          "watch"
+        ];
+      }
+      # Core resources - namespaces (read)
+      {
+        apiGroups = [ "" ];
+        resources = [ "namespaces" ];
+        verbs = [ "get" ];
+      }
+      # Core resources - events
+      {
+        apiGroups = [ "" ];
+        resources = [ "events" ];
+        verbs = [
+          "create"
+          "patch"
+        ];
+      }
+      # Core resources - PVCs (full)
+      {
+        apiGroups = [ "" ];
+        resources = [ "persistentvolumeclaims" ];
         verbs = [
           "get"
           "list"
           "watch"
           "create"
           "update"
-          "patch"
           "delete"
           "deletecollection"
+          "patch"
         ];
       }
-      # Upload resources
+      # Core resources - PVs (update)
       {
-        apiGroups = [ "upload.cdi.kubevirt.io" ];
-        resources = [ "uploadtokenrequests" ];
+        apiGroups = [ "" ];
+        resources = [ "persistentvolumes" ];
         verbs = [
           "get"
           "list"
           "watch"
-          "create"
+          "update"
         ];
       }
-      # Core resources
+      # Core resources - finalizers
+      {
+        apiGroups = [ "" ];
+        resources = [
+          "persistentvolumeclaims/finalizers"
+          "pods/finalizers"
+        ];
+        verbs = [ "update" ];
+      }
+      # Core resources - pods, services
       {
         apiGroups = [ "" ];
         resources = [
           "pods"
-          "pods/log"
           "services"
-          "endpoints"
-          "persistentvolumeclaims"
-          "events"
-          "configmaps"
-          "secrets"
-          "nodes"
-          "serviceaccounts"
-          "namespaces"
-          "resourcequotas"
-          "persistentvolumes"
         ];
         verbs = [
           "get"
           "list"
           "watch"
           "create"
-          "update"
-          "patch"
           "delete"
         ];
       }
-      # Apps
+      # Core resources - configmaps (get/create)
       {
-        apiGroups = [ "apps" ];
-        resources = [
-          "deployments"
-          "daemonsets"
-          "replicasets"
-          "statefulsets"
-        ];
+        apiGroups = [ "" ];
+        resources = [ "configmaps" ];
         verbs = [
           "get"
+          "create"
+        ];
+      }
+      # Core resources - secrets (create)
+      {
+        apiGroups = [ "" ];
+        resources = [ "secrets" ];
+        verbs = [ "create" ];
+      }
+      # Core resources - PVCs (get only)
+      {
+        apiGroups = [ "" ];
+        resources = [ "persistentvolumeclaims" ];
+        verbs = [ "get" ];
+      }
+      # Admission webhooks - create/list/watch
+      {
+        apiGroups = [ "admissionregistration.k8s.io" ];
+        resources = [
+          "validatingwebhookconfigurations"
+          "mutatingwebhookconfigurations"
+        ];
+        verbs = [
+          "create"
           "list"
           "watch"
-          "create"
+        ];
+      }
+      # Admission webhooks - named validating
+      {
+        apiGroups = [ "admissionregistration.k8s.io" ];
+        resourceNames = [
+          "cdi-api-dataimportcron-validate"
+          "cdi-api-populator-validate"
+          "cdi-api-datavolume-validate"
+          "cdi-api-validate"
+          "objecttransfer-api-validate"
+        ];
+        resources = [ "validatingwebhookconfigurations" ];
+        verbs = [
+          "get"
           "update"
-          "patch"
           "delete"
         ];
       }
-      # Batch
+      # Admission webhooks - named mutating
       {
-        apiGroups = [ "batch" ];
-        resources = [
-          "jobs"
-          "cronjobs"
+        apiGroups = [ "admissionregistration.k8s.io" ];
+        resourceNames = [
+          "cdi-api-datavolume-mutate"
+          "cdi-api-pvc-mutate"
         ];
+        resources = [ "mutatingwebhookconfigurations" ];
         verbs = [
           "get"
-          "list"
-          "watch"
-          "create"
           "update"
-          "patch"
-          "delete"
-        ];
-      }
-      # RBAC
-      {
-        apiGroups = [ "rbac.authorization.k8s.io" ];
-        resources = [
-          "clusterroles"
-          "clusterrolebindings"
-          "roles"
-          "rolebindings"
-        ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-          "create"
-          "update"
-          "patch"
           "delete"
         ];
       }
@@ -204,8 +245,17 @@ self: {
           "watch"
           "create"
           "update"
-          "patch"
           "delete"
+        ];
+      }
+      # CRDs (read)
+      {
+        apiGroups = [ "apiextensions.k8s.io" ];
+        resources = [ "customresourcedefinitions" ];
+        verbs = [
+          "get"
+          "list"
+          "watch"
         ];
       }
       # API services
@@ -218,16 +268,155 @@ self: {
           "watch"
           "create"
           "update"
-          "patch"
           "delete"
         ];
       }
-      # Admission webhooks
+      # Authorization
       {
-        apiGroups = [ "admissionregistration.k8s.io" ];
+        apiGroups = [ "authorization.k8s.io" ];
+        resources = [ "subjectaccessreviews" ];
+        verbs = [ "create" ];
+      }
+      # CDI + upload resources (full)
+      {
+        apiGroups = [
+          "cdi.kubevirt.io"
+          "upload.cdi.kubevirt.io"
+        ];
+        resources = [ "*" ];
+        verbs = [ "*" ];
+      }
+      # CDI datavolumes (read)
+      {
+        apiGroups = [ "cdi.kubevirt.io" ];
+        resources = [ "datavolumes" ];
+        verbs = [
+          "list"
+          "get"
+        ];
+      }
+      # CDI datasources (read)
+      {
+        apiGroups = [ "cdi.kubevirt.io" ];
+        resources = [ "datasources" ];
+        verbs = [ "get" ];
+      }
+      # CDI volumeclonesources (read)
+      {
+        apiGroups = [ "cdi.kubevirt.io" ];
+        resources = [ "volumeclonesources" ];
+        verbs = [
+          "get"
+          "list"
+          "watch"
+        ];
+      }
+      # CDI storageprofiles (read)
+      {
+        apiGroups = [ "cdi.kubevirt.io" ];
+        resources = [ "storageprofiles" ];
+        verbs = [
+          "get"
+          "list"
+          "watch"
+        ];
+      }
+      # CDI cdis (read)
+      {
+        apiGroups = [ "cdi.kubevirt.io" ];
+        resources = [ "cdis" ];
+        verbs = [
+          "get"
+          "list"
+          "watch"
+        ];
+      }
+      # CDI cdiconfigs (read)
+      {
+        apiGroups = [ "cdi.kubevirt.io" ];
+        resources = [ "cdiconfigs" ];
+        verbs = [
+          "get"
+          "list"
+          "watch"
+        ];
+      }
+      # CDI cdis/finalizers
+      {
+        apiGroups = [ "cdi.kubevirt.io" ];
+        resources = [ "cdis/finalizers" ];
+        verbs = [ "update" ];
+      }
+      # CDI all (full)
+      {
+        apiGroups = [ "cdi.kubevirt.io" ];
+        resources = [ "*" ];
+        verbs = [ "*" ];
+      }
+      # CDI dataimportcrons
+      {
+        apiGroups = [ "cdi.kubevirt.io" ];
+        resources = [ "dataimportcrons" ];
+        verbs = [
+          "get"
+          "list"
+          "update"
+        ];
+      }
+      # OpenShift config - proxies/infrastructures
+      {
+        apiGroups = [ "config.openshift.io" ];
         resources = [
-          "validatingwebhookconfigurations"
-          "mutatingwebhookconfigurations"
+          "proxies"
+          "infrastructures"
+        ];
+        verbs = [
+          "get"
+          "list"
+          "watch"
+        ];
+      }
+      # OpenShift config - clusterversions
+      {
+        apiGroups = [ "config.openshift.io" ];
+        resources = [ "clusterversions" ];
+        verbs = [ "get" ];
+      }
+      # Forklift CDI populators
+      {
+        apiGroups = [ "forklift.cdi.kubevirt.io" ];
+        resources = [
+          "ovirtvolumepopulators"
+          "openstackvolumepopulators"
+        ];
+        verbs = [
+          "get"
+          "list"
+          "watch"
+        ];
+      }
+      # OpenShift imagestreams
+      {
+        apiGroups = [ "image.openshift.io" ];
+        resources = [ "imagestreams" ];
+        verbs = [
+          "get"
+          "list"
+          "watch"
+        ];
+      }
+      # KubeVirt VM finalizers
+      {
+        apiGroups = [ "kubevirt.io" ];
+        resources = [ "virtualmachines/finalizers" ];
+        verbs = [ "update" ];
+      }
+      # RBAC
+      {
+        apiGroups = [ "rbac.authorization.k8s.io" ];
+        resources = [
+          "clusterrolebindings"
+          "clusterroles"
         ];
         verbs = [
           "get"
@@ -235,11 +424,77 @@ self: {
           "watch"
           "create"
           "update"
-          "patch"
           "delete"
         ];
       }
-      # Storage
+      # Scheduling
+      {
+        apiGroups = [ "scheduling.k8s.io" ];
+        resources = [ "priorityclasses" ];
+        verbs = [
+          "get"
+          "list"
+          "watch"
+        ];
+      }
+      # OpenShift security
+      {
+        apiGroups = [ "security.openshift.io" ];
+        resources = [ "securitycontextconstraints" ];
+        verbs = [
+          "get"
+          "list"
+          "watch"
+          "update"
+          "create"
+        ];
+      }
+      # Snapshot support (read)
+      {
+        apiGroups = [ "snapshot.storage.k8s.io" ];
+        resources = [ "volumesnapshots" ];
+        verbs = [
+          "get"
+          "list"
+          "watch"
+        ];
+      }
+      # Snapshot support (full)
+      {
+        apiGroups = [ "snapshot.storage.k8s.io" ];
+        resources = [
+          "volumesnapshots"
+          "volumesnapshotclasses"
+          "volumesnapshotcontents"
+        ];
+        verbs = [
+          "get"
+          "list"
+          "watch"
+          "create"
+          "delete"
+        ];
+      }
+      # Snapshot support (update/deletecollection)
+      {
+        apiGroups = [ "snapshot.storage.k8s.io" ];
+        resources = [ "volumesnapshots" ];
+        verbs = [
+          "update"
+          "deletecollection"
+        ];
+      }
+      # Storage classes (read)
+      {
+        apiGroups = [ "storage.k8s.io" ];
+        resources = [ "storageclasses" ];
+        verbs = [
+          "get"
+          "list"
+          "watch"
+        ];
+      }
+      # Storage classes + CSI drivers (read)
       {
         apiGroups = [ "storage.k8s.io" ];
         resources = [
@@ -252,61 +507,6 @@ self: {
           "watch"
         ];
       }
-      # Coordination (leader election)
-      {
-        apiGroups = [ "coordination.k8s.io" ];
-        resources = [ "leases" ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-          "create"
-          "update"
-          "patch"
-          "delete"
-        ];
-      }
-      # Snapshot support
-      {
-        apiGroups = [ "snapshot.storage.k8s.io" ];
-        resources = [
-          "volumesnapshots"
-          "volumesnapshotcontents"
-          "volumesnapshotclasses"
-        ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-          "create"
-          "update"
-          "patch"
-          "delete"
-        ];
-      }
-      # Networking (for uploadproxy ingress)
-      {
-        apiGroups = [ "networking.k8s.io" ];
-        resources = [ "ingresses" ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-        ];
-      }
-      # Route (OpenShift compat)
-      {
-        apiGroups = [ "route.openshift.io" ];
-        resources = [ "routes" ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-          "create"
-          "update"
-          "patch"
-        ];
-      }
     ];
   };
 
@@ -315,7 +515,9 @@ self: {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "ClusterRoleBinding";
     name = "${name}-operator";
-    labels = selectorLabels;
+    labels = {
+      "operator.cdi.kubevirt.io" = "";
+    };
     extra = {
       roleRef = {
         apiGroup = "rbac.authorization.k8s.io";
@@ -332,58 +534,57 @@ self: {
     };
   };
 
-  # --- Service (operator metrics) ---
-  metricsService = scope.mkResource {
-    apiVersion = "v1";
-    kind = "Service";
-    name = "${name}-operator-metrics";
-    labels = selectorLabels;
-    spec = {
-      type = "ClusterIP";
-      selector = selectorLabels;
-      ports = [
-        {
-          name = "metrics";
-          port = 8080;
-          protocol = "TCP";
-          targetPort = 8080;
-        }
-      ];
-    };
-    outputs = {
-      metricsPort = "8080";
-    };
-  };
-
   # --- Deployment (cdi-operator) ---
   deployment = scope.mkResource {
     apiVersion = "apps/v1";
     kind = "Deployment";
     name = "${name}-operator";
-    labels = selectorLabels;
+    labels = operatorLabels;
     spec = {
       replicas = cfg.replicaCount;
       selector.matchLabels = selectorLabels;
       strategy = {
         type = "RollingUpdate";
-        rollingUpdate = {
-          maxSurge = 1;
-          maxUnavailable = 0;
-        };
       };
       template = {
         metadata = {
-          labels = selectorLabels;
-          annotations = {
-            "kubectl.kubernetes.io/default-container" = "cdi-operator";
-          };
+          labels = operatorLabels;
         };
         spec = {
           serviceAccountName = "${self.serviceAccount}";
           terminationGracePeriodSeconds = 30;
           securityContext = {
             runAsNonRoot = true;
-            seccompProfile.type = "RuntimeDefault";
+          };
+          nodeSelector = {
+            "kubernetes.io/os" = "linux";
+          };
+          tolerations = [
+            {
+              key = "CriticalAddonsOnly";
+              operator = "Exists";
+            }
+          ];
+          affinity = {
+            podAffinity = {
+              preferredDuringSchedulingIgnoredDuringExecution = [
+                {
+                  podAffinityTerm = {
+                    labelSelector = {
+                      matchExpressions = [
+                        {
+                          key = "cdi.kubevirt.io";
+                          operator = "In";
+                          values = [ "cdi-operator" ];
+                        }
+                      ];
+                    };
+                    topologyKey = "kubernetes.io/hostname";
+                  };
+                  weight = 1;
+                }
+              ];
+            };
           };
           containers = [
             {
@@ -392,44 +593,51 @@ self: {
               imagePullPolicy = cfg.image.pullPolicy;
               env = [
                 {
-                  name = "DEPLOY_CLUSTER_RESOURCES";
-                  value = "true";
-                }
-                {
-                  name = "OPERATOR_VERSION";
-                  value = cfg.image.tag;
-                }
-                {
-                  name = "CONTROLLER_IMAGE";
-                  value = "quay.io/kubevirt/cdi-controller:${cfg.image.tag}";
-                }
-                {
-                  name = "IMPORTER_IMAGE";
-                  value = "quay.io/kubevirt/cdi-importer:${cfg.image.tag}";
+                  name = "APISERVER_IMAGE";
+                  value = "quay.io/kubevirt/cdi-apiserver:${cfg.image.tag}";
                 }
                 {
                   name = "CLONER_IMAGE";
                   value = "quay.io/kubevirt/cdi-cloner:${cfg.image.tag}";
                 }
                 {
-                  name = "APISERVER_IMAGE";
-                  value = "quay.io/kubevirt/cdi-apiserver:${cfg.image.tag}";
+                  name = "CONTROLLER_IMAGE";
+                  value = "quay.io/kubevirt/cdi-controller:${cfg.image.tag}";
                 }
                 {
-                  name = "UPLOAD_SERVER_IMAGE";
-                  value = "quay.io/kubevirt/cdi-uploadserver:${cfg.image.tag}";
+                  name = "DEPLOY_CLUSTER_RESOURCES";
+                  value = "true";
+                }
+                {
+                  name = "IMPORTER_IMAGE";
+                  value = "quay.io/kubevirt/cdi-importer:${cfg.image.tag}";
+                }
+                {
+                  name = "MONITORING_NAMESPACE";
+                }
+                {
+                  name = "OPERATOR_VERSION";
+                  value = cfg.image.tag;
+                }
+                {
+                  name = "OVIRT_POPULATOR_IMAGE";
+                  value = "quay.io/kubevirt/cdi-importer:${cfg.image.tag}";
+                }
+                {
+                  name = "PULL_POLICY";
+                  value = cfg.image.pullPolicy;
                 }
                 {
                   name = "UPLOAD_PROXY_IMAGE";
                   value = "quay.io/kubevirt/cdi-uploadproxy:${cfg.image.tag}";
                 }
                 {
-                  name = "VERBOSITY";
-                  value = "1";
+                  name = "UPLOAD_SERVER_IMAGE";
+                  value = "quay.io/kubevirt/cdi-uploadserver:${cfg.image.tag}";
                 }
                 {
-                  name = "PULL_POLICY";
-                  value = cfg.image.pullPolicy;
+                  name = "VERBOSITY";
+                  value = "1";
                 }
               ];
               ports = [
@@ -439,29 +647,12 @@ self: {
                   protocol = "TCP";
                 }
               ];
-              livenessProbe = {
-                httpGet = {
-                  path = "/healthz";
-                  port = 8080;
-                };
-                initialDelaySeconds = 15;
-                periodSeconds = 20;
-                timeoutSeconds = 5;
-              };
-              readinessProbe = {
-                httpGet = {
-                  path = "/healthz";
-                  port = 8080;
-                };
-                initialDelaySeconds = 5;
-                periodSeconds = 10;
-                timeoutSeconds = 5;
-              };
               resources = cfg.resources;
               securityContext = {
                 allowPrivilegeEscalation = false;
                 capabilities.drop = [ "ALL" ];
-                readOnlyRootFilesystem = true;
+                runAsNonRoot = true;
+                seccompProfile.type = "RuntimeDefault";
               };
             }
           ];
@@ -473,15 +664,30 @@ self: {
   # --- CDI CR ---
   # This custom resource tells the cdi-operator to deploy cdi-apiserver,
   # cdi-controller (uploadcontroller), and cdi-uploadproxy.
-  cdiCR = scope.mkResource {
+  cdiCR = scope.mkClusterResource {
     apiVersion = "cdi.kubevirt.io/v1beta1";
     kind = "CDI";
     name = name;
-    labels = selectorLabels;
-    spec = {
-      config = { };
-      imagePullPolicy = cfg.image.pullPolicy;
-    };
+    spec =
+      {
+        imagePullPolicy = cfg.image.pullPolicy;
+        config =
+          { }
+          // (
+            if cfg.featureGates != [ ] then
+              { featureGates = cfg.featureGates; }
+            else
+              { }
+          );
+      }
+      // (
+        if cfg.cloneStrategyOverride != null then
+          { cloneStrategyOverride = cfg.cloneStrategyOverride; }
+        else
+          { }
+      )
+      // (if cfg.infra != { } then { infra = cfg.infra; } else { })
+      // (if cfg.workload != { } then { workload = cfg.workload; } else { });
     requires = [ self.deployment ];
   };
 
@@ -735,7 +941,6 @@ self: {
       self.serviceAccount
       self.clusterRole
       self.clusterRoleBinding
-      self.metricsService
       self.cdiCR
       # CRDs
       self.crdCDI

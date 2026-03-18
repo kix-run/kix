@@ -3,11 +3,11 @@
 # Deploys Metabase backed by PostgreSQL (via StackGres). Simple
 # single-deployment architecture with optional Ingress.
 #
-# Resources: Deployment, Service (port 3000), ConfigMap (env),
-# Ingress (optional).
+# Resources: Deployment (web), Service (web, port 80 -> 3000),
+# Ingress (frontend, optional).
 #
-# main = Service (port 3000).
-# External secret (DB password) expected to be managed externally.
+# main = Service (port 80).
+# External secret expected to contain DB connection env vars.
 
 {
   scope,
@@ -21,158 +21,149 @@ let
 
   cfg = scope.defaults config {
     image = {
-      repository = "metabase/metabase";
-      tag = "v0.52.4";
+      repository = "docker.io/metabase/metabase";
+      tag = "v0.50.34";
       pullPolicy = "IfNotPresent";
     };
     replicaCount = 2;
     port = 3000;
+    servicePort = 80;
     resources = {
-      requests = {
-        cpu = "100m";
-        memory = "512Mi";
-      };
       limits = {
         cpu = "2";
-        memory = "2Gi";
+        memory = "4Gi";
       };
     };
     ingress = {
       enabled = false;
-      className = "public-v2";
+      className = "public";
       host = "";
       tls = {
         enabled = false;
-        secretName = "";
+        secretName = "tls";
         issuer = "";
       };
+      annotations = { };
     };
+    existingSecret = null;
     database = {
       type = "postgres";
-      host = null;
-      port = "5432";
-      name = "metabase";
-      user = "metabase";
-      existingSecret = null;
     };
-    javaOpts = "-Xmx1g";
+    siteUrl = "";
+    timezone = "America/Toronto";
+    emojiInLogs = "1";
+    jettyHost = "0.0.0.0";
+    env = { };
+    livenessProbe = {
+      path = "/";
+      initialDelaySeconds = 120;
+      periodSeconds = 10;
+      timeoutSeconds = 30;
+      failureThreshold = 6;
+    };
+    readinessProbe = {
+      path = "/";
+      initialDelaySeconds = 30;
+      periodSeconds = 5;
+      timeoutSeconds = 3;
+      failureThreshold = 3;
+    };
   };
 
-  # Resolve database host: explicit config > postgres dependency fqdn > error.
-  dbHost =
-    if cfg.database.host != null then
-      cfg.database.host
-    else if postgres != null then
-      postgres.fqdn
-    else
-      throw "metabase: database.host must be set or a postgres dependency must be available";
-
-  # Secret name for DB credentials.
+  # Secret name for credentials.
   secretName =
-    if cfg.database.existingSecret != null then cfg.database.existingSecret else "${name}-secrets";
+    if cfg.existingSecret != null then cfg.existingSecret else "${name}-secrets";
 
   selectorLabels = {
-    "app.kubernetes.io/name" = "metabase";
-    "app.kubernetes.io/instance" = name;
+    "app" = "metabase";
   };
 
   commonLabels = selectorLabels;
 
+  # Build env list from config.
+  envVars = [
+    {
+      name = "JAVA_TIMEZONE";
+      value = cfg.timezone;
+    }
+    {
+      name = "MB_DB_TYPE";
+      value = cfg.database.type;
+    }
+    {
+      name = "MB_EMOJI_IN_LOGS";
+      value = cfg.emojiInLogs;
+    }
+    {
+      name = "MB_JETTY_HOST";
+      value = cfg.jettyHost;
+    }
+    {
+      name = "MB_JETTY_PORT";
+      value = toString cfg.port;
+    }
+  ]
+  ++ lib.optional (cfg.siteUrl != "") {
+    name = "MB_SITE_URL";
+    value = cfg.siteUrl;
+  }
+  ++ lib.mapAttrsToList (k: v: { name = k; value = v; }) cfg.env;
+
 in
 self: {
-
-  # --- ConfigMap (environment variables) ---
-  configmap = scope.mkResource {
-    apiVersion = "v1";
-    kind = "ConfigMap";
-    name = "${name}-config";
-    labels = commonLabels;
-    data = {
-      MB_DB_TYPE = cfg.database.type;
-      MB_DB_HOST = dbHost;
-      MB_DB_PORT = cfg.database.port;
-      MB_DB_DBNAME = cfg.database.name;
-      MB_DB_USER = cfg.database.user;
-      MB_JETTY_PORT = toString cfg.port;
-      JAVA_OPTS = cfg.javaOpts;
-    };
-  };
 
   # --- Deployment ---
   deployment = scope.mkResource {
     apiVersion = "apps/v1";
     kind = "Deployment";
-    name = "${name}";
+    name = "web";
     labels = commonLabels;
     spec = {
       replicas = cfg.replicaCount;
-      revisionHistoryLimit = 3;
       selector.matchLabels = selectorLabels;
       template = {
         metadata = {
           labels = selectorLabels;
-          annotations = {
-            "checksum/configmap" = "\${${self.configmap}}";
-          };
         };
         spec = {
-          securityContext = {
-            fsGroup = 2000;
-            runAsNonRoot = true;
-            runAsUser = 2000;
-            runAsGroup = 2000;
-            seccompProfile.type = "RuntimeDefault";
-          };
           containers = [
             {
-              name = "metabase";
+              name = "web";
               image = "${cfg.image.repository}:${cfg.image.tag}";
               imagePullPolicy = cfg.image.pullPolicy;
+              env = envVars;
               envFrom = [
-                { configMapRef.name = "${self.configmap}"; }
-              ];
-              env = [
-                {
-                  name = "MB_DB_PASS";
-                  valueFrom.secretKeyRef = {
-                    name = secretName;
-                    key = "MB_DB_PASS";
-                  };
-                }
+                { secretRef.name = secretName; }
               ];
               ports = [
                 {
-                  name = "http";
                   containerPort = cfg.port;
                   protocol = "TCP";
                 }
               ];
               livenessProbe = {
                 httpGet = {
-                  path = "/api/health";
-                  port = "http";
+                  path = cfg.livenessProbe.path;
+                  port = cfg.port;
+                  scheme = "HTTP";
                 };
-                initialDelaySeconds = 120;
-                periodSeconds = 15;
-                timeoutSeconds = 5;
-                failureThreshold = 5;
+                initialDelaySeconds = cfg.livenessProbe.initialDelaySeconds;
+                periodSeconds = cfg.livenessProbe.periodSeconds;
+                timeoutSeconds = cfg.livenessProbe.timeoutSeconds;
+                failureThreshold = cfg.livenessProbe.failureThreshold;
               };
               readinessProbe = {
                 httpGet = {
-                  path = "/api/health";
-                  port = "http";
+                  path = cfg.readinessProbe.path;
+                  port = cfg.port;
+                  scheme = "HTTP";
                 };
-                initialDelaySeconds = 30;
-                periodSeconds = 10;
-                timeoutSeconds = 5;
-                failureThreshold = 3;
+                initialDelaySeconds = cfg.readinessProbe.initialDelaySeconds;
+                periodSeconds = cfg.readinessProbe.periodSeconds;
+                timeoutSeconds = cfg.readinessProbe.timeoutSeconds;
+                failureThreshold = cfg.readinessProbe.failureThreshold;
               };
               resources = cfg.resources;
-              securityContext = {
-                allowPrivilegeEscalation = false;
-                capabilities.drop = [ "ALL" ];
-                readOnlyRootFilesystem = false;
-              };
             }
           ];
         };
@@ -184,22 +175,22 @@ self: {
   service = scope.mkResource {
     apiVersion = "v1";
     kind = "Service";
-    name = "${name}";
+    name = "web";
     labels = commonLabels;
     spec = {
       type = "ClusterIP";
       selector = selectorLabels;
       ports = [
         {
-          name = "http";
-          port = cfg.port;
-          targetPort = "http";
+          name = "metabase";
+          port = cfg.servicePort;
+          targetPort = cfg.port;
           protocol = "TCP";
         }
       ];
     };
     outputs = {
-      port = toString cfg.port;
+      port = toString cfg.servicePort;
     };
     requires = [ self.deployment ];
   };
@@ -210,14 +201,12 @@ self: {
       scope.mkResource {
         apiVersion = "networking.k8s.io/v1";
         kind = "Ingress";
-        name = "${name}";
+        name = "frontend";
         labels = commonLabels;
         annotations = {
-          "kubernetes.io/ingress.class" = cfg.ingress.className;
-        }
-        // lib.optionalAttrs (cfg.ingress.tls.enabled && cfg.ingress.tls.issuer != "") {
           "cert-manager.io/cluster-issuer" = cfg.ingress.tls.issuer;
-        };
+        }
+        // cfg.ingress.annotations;
         spec = {
           ingressClassName = cfg.ingress.className;
           rules = [
@@ -229,7 +218,7 @@ self: {
                   pathType = "Prefix";
                   backend.service = {
                     name = "${self.service}";
-                    port.number = cfg.port;
+                    port.number = cfg.servicePort;
                   };
                 }
               ];

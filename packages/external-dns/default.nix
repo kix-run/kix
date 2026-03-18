@@ -4,11 +4,11 @@
 # Kubernetes Ingress and Service resources.
 #
 # Supports multi-instance deployment: each instance can manage different
-# DNS zones via domainFilters (e.g. external-dns-public for lithus.net,
+# DNS zones via domainFilters (e.g. external-dns-cluster-public for lithus.net,
 # external-dns-northwind for shopfront.example).
 #
 # Resources: ServiceAccount, ClusterRole, ClusterRoleBinding, Deployment,
-#            Service (metrics).
+#            Service (metrics), NetworkPolicy, PodDisruptionBudget, Secret.
 #
 # main = Deployment
 
@@ -21,16 +21,18 @@
 let
   cfg = scope.defaults config {
     image = {
-      repository = "registry.k8s.io/external-dns/external-dns";
-      tag = "v0.15.1";
+      repository = "docker.io/bitnami/external-dns";
+      tag = "0.16.1-debian-12-r1";
       pullPolicy = "IfNotPresent";
     };
     provider = "cloudflare";
     sources = [
-      "ingress"
       "service"
+      "ingress"
     ];
     domainFilters = [ ];
+    serviceTypeFilters = [ ];
+    annotationFilter = null;
     policy = "upsert-only";
     txtOwnerId = null;
     txtPrefix = "ext-dns-";
@@ -38,18 +40,48 @@ let
     logLevel = "info";
     logFormat = "text";
     interval = "1m";
+    metricsPort = 7979;
+    cloudflare = {
+      dnsRecordsPerPage = 100;
+    };
     triggerLoopOnEvent = false;
     env = [ ];
     secretName = null;
+    extraLabels = { };
     resources = {
       requests = {
-        cpu = "50m";
-        memory = "64Mi";
+        cpu = "100m";
+        memory = "128Mi";
+        ephemeral-storage = "50Mi";
       };
       limits = {
-        cpu = "200m";
-        memory = "256Mi";
+        cpu = "150m";
+        memory = "192Mi";
+        ephemeral-storage = "2Gi";
       };
+    };
+    affinity = {
+      podAntiAffinity = {
+        preferredDuringSchedulingIgnoredDuringExecution = [
+          {
+            podAffinityTerm = {
+              labelSelector.matchLabels = {
+                "app.kubernetes.io/name" = "external-dns";
+                "app.kubernetes.io/instance" = "PLACEHOLDER";
+              };
+              topologyKey = "kubernetes.io/hostname";
+            };
+            weight = 1;
+          }
+        ];
+      };
+    };
+    pdb = {
+      enabled = true;
+      maxUnavailable = 1;
+    };
+    networkPolicy = {
+      enabled = true;
     };
   };
 
@@ -62,30 +94,75 @@ let
     "app.kubernetes.io/instance" = name;
   };
 
-  # Build CLI args for the external-dns binary.
+  # Merge extra labels into all resource labels.
+  allLabels = selectorLabels // cfg.extraLabels;
+
+  # Resolve the affinity with actual instance name replacing PLACEHOLDER.
+  resolvedAffinity =
+    let
+      defaultAffinity = {
+        podAntiAffinity = {
+          preferredDuringSchedulingIgnoredDuringExecution = [
+            {
+              podAffinityTerm = {
+                labelSelector.matchLabels = selectorLabels;
+                topologyKey = "kubernetes.io/hostname";
+              };
+              weight = 1;
+            }
+          ];
+        };
+      };
+    in
+    if cfg.affinity == { } then
+      null
+    else if cfg.affinity ? podAntiAffinity then
+      # Replace PLACEHOLDER in the default affinity structure with actual selectorLabels
+      defaultAffinity
+    else
+      cfg.affinity;
+
+  # Build CLI args for the external-dns binary — ordered to match bitnami chart.
   args = [
+    "--metrics-address=:${toString cfg.metricsPort}"
     "--log-level=${cfg.logLevel}"
     "--log-format=${cfg.logFormat}"
-    "--interval=${cfg.interval}"
+  ]
+  ++ map (t: "--service-type-filter=${t}") cfg.serviceTypeFilters
+  ++ map (d: "--domain-filter=${d}") cfg.domainFilters
+  ++ [
     "--policy=${cfg.policy}"
-    "--registry=${cfg.registry}"
     "--provider=${cfg.provider}"
-    "--txt-owner-id=${ownerId}"
+    "--registry=${cfg.registry}"
+    "--interval=${cfg.interval}"
     "--txt-prefix=${cfg.txtPrefix}"
   ]
+  ++ lib.optional (cfg.annotationFilter != null) "--annotation-filter=${cfg.annotationFilter}"
   ++ map (s: "--source=${s}") cfg.sources
-  ++ map (d: "--domain-filter=${d}") cfg.domainFilters
+  ++ [ "--cloudflare-dns-records-per-page=${toString cfg.cloudflare.dnsRecordsPerPage}" ]
   ++ lib.optional cfg.triggerLoopOnEvent "--events";
 
-  # Container env: merge user-provided env with optional secretRef.
+  # Container env: Cloudflare credentials from a secret named after the instance.
   containerEnv =
     cfg.env
     ++ lib.optionals (cfg.secretName != null) [
       {
+        name = "CF_API_EMAIL";
+      }
+      {
+        name = "CF_API_KEY";
+        valueFrom.secretKeyRef = {
+          name = cfg.secretName;
+          key = "cloudflare_api_key";
+          optional = true;
+        };
+      }
+      {
         name = "CF_API_TOKEN";
         valueFrom.secretKeyRef = {
           name = cfg.secretName;
-          key = "CF_API_TOKEN";
+          key = "cloudflare_api_token";
+          optional = true;
         };
       }
     ];
@@ -98,23 +175,54 @@ self: {
     apiVersion = "v1";
     kind = "ServiceAccount";
     inherit name;
-    labels = selectorLabels;
+    labels = allLabels;
+    extra = {
+      automountServiceAccountToken = false;
+    };
   };
+
+  # --- Secret (Opaque, credentials managed externally) ---
+  secret =
+    if cfg.secretName != null then
+      scope.mkResource {
+        apiVersion = "v1";
+        kind = "Secret";
+        name = cfg.secretName;
+        labels = allLabels;
+        extra = {
+          type = "Opaque";
+        };
+      }
+    else
+      null;
 
   # --- ClusterRole ---
   clusterRole = scope.mkClusterResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "ClusterRole";
-    inherit name;
-    labels = selectorLabels;
+    name = "${name}-${scope.namespaceName}";
+    labels = allLabels;
     extra.rules = [
       {
         apiGroups = [ "" ];
         resources = [
           "services"
-          "endpoints"
           "pods"
           "nodes"
+          "endpoints"
+          "namespaces"
+        ];
+        verbs = [
+          "get"
+          "list"
+          "watch"
+        ];
+      }
+      {
+        apiGroups = [ "cis.f5.com" ];
+        resources = [
+          "virtualservers"
+          "transportservers"
         ];
         verbs = [
           "get"
@@ -123,15 +231,106 @@ self: {
         ];
       }
       {
+        apiGroups = [ "configuration.konghq.com" ];
+        resources = [ "tcpingresses" ];
+        verbs = [
+          "get"
+          "list"
+          "watch"
+        ];
+      }
+      {
         apiGroups = [
           "extensions"
           "networking.k8s.io"
+          "getambassador.io"
         ];
-        resources = [ "ingresses" ];
+        resources = [
+          "ingresses"
+          "hosts"
+        ];
+        verbs = [
+          "get"
+          "list"
+          "watch"
+        ];
+      }
+      {
+        apiGroups = [ "gateway.networking.k8s.io" ];
+        resources = [
+          "gateways"
+          "httproutes"
+          "tlsroutes"
+          "tcproutes"
+          "udproutes"
+          "grpcroutes"
+        ];
+        verbs = [
+          "get"
+          "list"
+          "watch"
+        ];
+      }
+      {
+        apiGroups = [
+          "gloo.solo.io"
+          "gateway.solo.io"
+        ];
+        resources = [
+          "proxies"
+          "virtualservices"
+        ];
+        verbs = [
+          "get"
+          "list"
+          "watch"
+        ];
+      }
+      {
+        apiGroups = [ "networking.istio.io" ];
+        resources = [
+          "gateways"
+          "virtualservices"
+        ];
+        verbs = [
+          "get"
+          "list"
+          "watch"
+        ];
+      }
+      {
+        apiGroups = [ "projectcontour.io" ];
+        resources = [ "httpproxies" ];
         verbs = [
           "get"
           "watch"
           "list"
+        ];
+      }
+      {
+        apiGroups = [ "route.openshift.io" ];
+        resources = [ "routes" ];
+        verbs = [
+          "get"
+          "list"
+          "watch"
+        ];
+      }
+      {
+        apiGroups = [ "zalando.org" ];
+        resources = [ "routegroups" ];
+        verbs = [
+          "get"
+          "list"
+          "watch"
+        ];
+      }
+      {
+        apiGroups = [ "zalando.org" ];
+        resources = [ "routegroups/status" ];
+        verbs = [
+          "patch"
+          "update"
         ];
       }
     ];
@@ -141,8 +340,8 @@ self: {
   clusterRoleBinding = scope.mkClusterResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "ClusterRoleBinding";
-    name = "${name}-viewer";
-    labels = selectorLabels;
+    name = "${name}-${scope.namespaceName}";
+    labels = allLabels;
     extra = {
       roleRef = {
         apiGroup = "rbac.authorization.k8s.io";
@@ -164,42 +363,106 @@ self: {
     apiVersion = "v1";
     kind = "Service";
     inherit name;
-    labels = selectorLabels;
+    labels = allLabels // { "k8s-app" = "external-dns"; };
     spec = {
       type = "ClusterIP";
       selector = selectorLabels;
       ports = [
         {
           name = "http";
-          port = 7979;
+          port = cfg.metricsPort;
           targetPort = "http";
           protocol = "TCP";
         }
       ];
     };
     outputs = {
-      metricsPort = "7979";
+      metricsPort = toString cfg.metricsPort;
     };
   };
+
+  # --- NetworkPolicy ---
+  networkPolicy =
+    if cfg.networkPolicy.enabled then
+      scope.mkResource {
+        apiVersion = "networking.k8s.io/v1";
+        kind = "NetworkPolicy";
+        inherit name;
+        labels = allLabels // {
+          "app.kubernetes.io/component" = "controller";
+        };
+        spec = {
+          podSelector.matchLabels = selectorLabels;
+          policyTypes = [
+            "Ingress"
+            "Egress"
+          ];
+          ingress = [
+            {
+              ports = [
+                {
+                  port = cfg.metricsPort;
+                  protocol = "TCP";
+                }
+              ];
+            }
+          ];
+          egress = [ { } ];
+        };
+      }
+    else
+      null;
+
+  # --- PodDisruptionBudget ---
+  podDisruptionBudget =
+    if cfg.pdb.enabled then
+      scope.mkResource {
+        apiVersion = "policy/v1";
+        kind = "PodDisruptionBudget";
+        inherit name;
+        labels = allLabels;
+        spec = {
+          maxUnavailable = cfg.pdb.maxUnavailable;
+          selector.matchLabels = selectorLabels;
+        };
+      }
+    else
+      null;
 
   # --- Deployment ---
   deployment = scope.mkResource {
     apiVersion = "apps/v1";
     kind = "Deployment";
     inherit name;
-    labels = selectorLabels;
+    labels = allLabels;
+    requires = [
+      self.serviceAccount
+      self.clusterRole
+      self.clusterRoleBinding
+      self.service
+    ]
+    ++ lib.optional (self.secret != null) self.secret
+    ++ lib.optional (self.networkPolicy != null) self.networkPolicy
+    ++ lib.optional (self.podDisruptionBudget != null) self.podDisruptionBudget;
     spec = {
       replicas = 1;
       selector.matchLabels = selectorLabels;
-      strategy.type = "Recreate";
+      strategy = {
+        type = "RollingUpdate";
+        rollingUpdate = {
+          maxSurge = "25%";
+          maxUnavailable = "25%";
+        };
+      };
       template = {
         metadata.labels = selectorLabels;
         spec = {
           serviceAccountName = "${self.serviceAccount}";
+          automountServiceAccountToken = true;
+          affinity = resolvedAffinity;
           securityContext = {
-            fsGroup = 65534;
-            runAsNonRoot = true;
-            seccompProfile.type = "RuntimeDefault";
+            fsGroup = 1001;
+            fsGroupChangePolicy = "Always";
           };
           containers = [
             (
@@ -211,13 +474,12 @@ self: {
                 ports = [
                   {
                     name = "http";
-                    containerPort = 7979;
+                    containerPort = cfg.metricsPort;
                     protocol = "TCP";
                   }
                 ];
                 livenessProbe = {
-                  httpGet = {
-                    path = "/healthz";
+                  tcpSocket = {
                     port = "http";
                   };
                   initialDelaySeconds = 10;
@@ -243,15 +505,28 @@ self: {
                   capabilities.drop = [ "ALL" ];
                   privileged = false;
                   readOnlyRootFilesystem = true;
-                  runAsGroup = 65532;
+                  runAsGroup = 1001;
                   runAsNonRoot = true;
-                  runAsUser = 65532;
+                  runAsUser = 1001;
+                  seccompProfile.type = "RuntimeDefault";
                 };
+                volumeMounts = [
+                  {
+                    name = "empty-dir";
+                    mountPath = "/tmp";
+                    subPath = "tmp-dir";
+                  }
+                ];
               }
               // lib.optionalAttrs (containerEnv != [ ]) {
                 env = containerEnv;
               }
             )
+          ];
+          volumes = [
+            {
+              name = "empty-dir";
+            }
           ];
         };
       };

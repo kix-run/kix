@@ -5,7 +5,7 @@
 # reference them.
 #
 # Resources: ServiceAccount, ClusterRole, ClusterRoleBinding,
-#            Deployment, Service (metrics).
+#            Deployment, Service (metrics, optional).
 
 {
   scope,
@@ -22,6 +22,8 @@ let
     };
     replicaCount = 1;
     logFormat = "json";
+    logLevel = "info";
+    priorityClassName = null;
     resources = {
       requests = {
         cpu = "10m";
@@ -32,13 +34,18 @@ let
         memory = "128Mi";
       };
     };
+    service = {
+      enabled = false;
+    };
   };
 
   name = scope.instanceName;
 
+  containerName = "${name}-reloader";
+
   selectorLabels = {
-    "app.kubernetes.io/name" = "reloader";
-    "app.kubernetes.io/instance" = name;
+    "app" = containerName;
+    "release" = name;
   };
 
 in
@@ -133,7 +140,7 @@ self: {
     };
   };
 
-  service = scope.mkResource {
+  service = if cfg.service.enabled then scope.mkResource {
     apiVersion = "v1";
     kind = "Service";
     name = "${name}-reloader";
@@ -153,7 +160,7 @@ self: {
     outputs = {
       metricsPort = "9090";
     };
-  };
+  } else null;
 
   deployment = scope.mkResource {
     apiVersion = "apps/v1";
@@ -177,10 +184,11 @@ self: {
           };
           containers = [
             {
-              name = "reloader";
+              name = containerName;
               image = "${cfg.image.repository}:${cfg.image.tag}";
               imagePullPolicy = cfg.image.pullPolicy;
-              args = lib.optional (cfg.logFormat != "") "--log-format=${cfg.logFormat}";
+              args = lib.optional (cfg.logFormat != "") "--log-format=${cfg.logFormat}"
+                ++ lib.optional (cfg.logLevel != "") "--log-level=${cfg.logLevel}";
               env = [
                 {
                   name = "GOMAXPROCS";
@@ -201,6 +209,7 @@ self: {
                 {
                   name = "http";
                   containerPort = 9090;
+                  protocol = "TCP";
                 }
               ];
               livenessProbe = {
@@ -229,6 +238,8 @@ self: {
               securityContext = { };
             }
           ];
+        } // lib.optionalAttrs (cfg.priorityClassName != null) {
+          priorityClassName = cfg.priorityClassName;
         };
       };
     };
@@ -240,7 +251,6 @@ self: {
       self.serviceAccount
       self.clusterRole
       self.clusterRoleBinding
-      self.service
-    ];
+    ] ++ lib.optional (self.service != null) self.service;
   };
 }

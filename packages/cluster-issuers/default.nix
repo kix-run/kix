@@ -1,12 +1,11 @@
-# ClusterIssuer package — NW1 cert-manager issuers.
+# ClusterIssuer package — cert-manager ACME issuers.
 #
-# Creates Let's Encrypt ClusterIssuers for production and staging using
-# Cloudflare DNS01 challenge validation. ClusterIssuers are cluster-scoped
-# cert-manager CRDs — certificates in any namespace can reference them.
+# Creates Let's Encrypt ClusterIssuers using Cloudflare DNS01 challenge
+# validation.  ClusterIssuers are cluster-scoped cert-manager CRDs —
+# certificates in any namespace can reference them.
 #
-# The `northwind` issuer is the primary production issuer for the northwind.net
-# domain. `letsencrypt-production` and `letsencrypt-staging` are
-# general-purpose issuers.
+# Each issuer is independently configurable (email, secret refs, DNS
+# zones, etc.) via the `issuers` attrset in `config`.
 
 {
   scope,
@@ -16,69 +15,71 @@
 
 let
   cfg = scope.defaults config {
-    email = "adam@adamcharnock.com";
-    cloudflareSecret = {
-      name = "cloudflare-api-token-secret";
-      key = "api-token";
+    issuers = {
+      letsencrypt-production = {
+        server = "https://acme-v02.api.letsencrypt.org/directory";
+        email = "admin@example.com";
+        privateKeySecretName = "tls-production";
+        cloudflareSecret = {
+          name = "cloudflare-api-token-secret";
+          key = "api-token";
+        };
+        dnsZones = [ ];
+      };
+      letsencrypt-staging = {
+        server = "https://acme-staging-v02.api.letsencrypt.org/directory";
+        email = "admin@example.com";
+        privateKeySecretName = "tls-staging";
+        cloudflareSecret = {
+          name = "cloudflare-api-token-secret";
+          key = "api-token";
+        };
+        dnsZones = [ ];
+      };
     };
-  };
-
-  cloudflareRef = {
-    apiTokenSecretRef = {
-      name = cfg.cloudflareSecret.name;
-      key = cfg.cloudflareSecret.key;
-    };
+    mainIssuer = "letsencrypt-production";
   };
 
   mkIssuer =
-    {
-      name,
-      server,
-      privateKeySecretName,
-    }:
+    name: issuerCfg:
+    let
+      solver = {
+        dns01.cloudflare = {
+          apiTokenSecretRef = {
+            name = issuerCfg.cloudflareSecret.name;
+            key = issuerCfg.cloudflareSecret.key;
+          };
+        };
+      } // (
+        if issuerCfg.dnsZones != [ ] then {
+          selector.dnsZones = issuerCfg.dnsZones;
+        } else
+          { }
+      );
+    in
     scope.mkClusterResource {
       apiVersion = "cert-manager.io/v1";
       kind = "ClusterIssuer";
       inherit name;
       spec = {
         acme = {
-          inherit server;
-          email = cfg.email;
-          privateKeySecretRef.name = privateKeySecretName;
-          solvers = [
-            {
-              dns01.cloudflare = cloudflareRef;
-            }
-          ];
+          server = issuerCfg.server;
+          email = issuerCfg.email;
+          privateKeySecretRef.name = issuerCfg.privateKeySecretName;
+          solvers = [ solver ];
         };
       };
     };
 
+  issuerResources = lib.mapAttrs mkIssuer cfg.issuers;
+  mainResource = issuerResources.${cfg.mainIssuer};
+  otherResources = lib.filterAttrs (n: _: n != cfg.mainIssuer) issuerResources;
 in
-self: {
-  northwind = mkIssuer {
-    name = "northwind";
-    server = "https://acme-v02.api.letsencrypt.org/directory";
-    privateKeySecretName = "letsencrypt-northwind";
-  };
-
-  letsencrypt-production = mkIssuer {
-    name = "letsencrypt-production";
-    server = "https://acme-v02.api.letsencrypt.org/directory";
-    privateKeySecretName = "letsencrypt-production";
-  };
-
-  letsencrypt-staging = mkIssuer {
-    name = "letsencrypt-staging";
-    server = "https://acme-staging-v02.api.letsencrypt.org/directory";
-    privateKeySecretName = "letsencrypt-staging";
-  };
-
+self:
+issuerResources
+// {
   main = {
-    resource = self.northwind;
-    requires = [
-      self.letsencrypt-production
-      self.letsencrypt-staging
-    ];
+    resource = mainResource;
+    requires = lib.attrValues otherResources;
   };
 }

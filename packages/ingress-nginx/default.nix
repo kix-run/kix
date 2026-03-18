@@ -4,9 +4,9 @@
 # in the same namespace — all resource names are prefixed with
 # scope.instanceName to avoid collisions.
 #
-# Resources: ServiceAccount, ClusterRole, ClusterRoleBinding, Role
-# (leader election), RoleBinding, ConfigMap (NGINX config), Deployment,
-# Service (LoadBalancer/ClusterIP), IngressClass.
+# Resources: ServiceAccount, ClusterRole, ClusterRoleBinding, Role,
+# RoleBinding, ConfigMap (NGINX config), Deployment, Service
+# (LoadBalancer/ClusterIP), IngressClass.
 #
 # main = Service, with requires pointing to Deployment, IngressClass,
 # and ConfigMap.
@@ -18,16 +18,17 @@
 }:
 
 let
-  name = scope.instanceName;
-
   cfg = scope.defaults config {
+    # Override the resource name prefix. Defaults to the instance name.
+    namePrefix = null;
     image = {
       repository = "registry.k8s.io/ingress-nginx/controller";
-      tag = "v1.12.1";
+      tag = "v1.13.2";
       pullPolicy = "IfNotPresent";
     };
     replicaCount = 3;
     serviceType = "LoadBalancer";
+    externalTrafficPolicy = "Cluster";
     clusterIP = null;
     ingressClassName = null;
     isDefaultClass = false;
@@ -40,26 +41,30 @@ let
     allowSnippetAnnotations = true;
     maxmindLicenseKey = null;
     enableAntiAffinity = true;
+    antiAffinityTopologyKeys = [
+      "kubernetes.io/hostname"
+      "topology.kubernetes.io/zone"
+    ];
+    # Extra labels added to pod templates (e.g. tenant labels).
+    podLabels = { };
     resources = {
       requests = {
         cpu = "100m";
         memory = "90Mi";
       };
-      limits = {
-        cpu = "1";
-        memory = "256Mi";
-      };
     };
   };
+
+  name = if cfg.namePrefix != null then cfg.namePrefix else scope.instanceName;
 
   # Derived values — ingressClassName and controllerValue default to
   # instance-name-based values when not overridden.
   ingressClassName = if cfg.ingressClassName != null then cfg.ingressClassName else name;
 
   controllerValue =
-    if cfg.controllerValue != null then cfg.controllerValue else "k8s.io/ingress-nginx-${name}";
+    if cfg.controllerValue != null then cfg.controllerValue else "k8s.io/${name}";
 
-  electionId = "ingress-nginx-${name}-leader";
+  electionId = "${name}-leader";
 
   selectorLabels = {
     "app.kubernetes.io/name" = "ingress-nginx";
@@ -71,6 +76,13 @@ let
     "app.kubernetes.io/part-of" = "ingress-nginx";
   };
 
+  # ClusterRole/ClusterRoleBinding don't carry the component label.
+  clusterScopedLabels = {
+    "app.kubernetes.io/name" = "ingress-nginx";
+    "app.kubernetes.io/instance" = name;
+    "app.kubernetes.io/part-of" = "ingress-nginx";
+  };
+
 in
 self: {
 
@@ -78,16 +90,19 @@ self: {
   serviceAccount = scope.mkResource {
     apiVersion = "v1";
     kind = "ServiceAccount";
-    name = "${name}-ingress-nginx";
+    name = name;
     labels = commonLabels;
+    extra = {
+      automountServiceAccountToken = true;
+    };
   };
 
   # --- ClusterRole ---
   clusterRole = scope.mkClusterResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "ClusterRole";
-    name = "${name}-ingress-nginx";
-    labels = commonLabels;
+    name = name;
+    labels = clusterScopedLabels;
     extra.rules = [
       {
         apiGroups = [ "" ];
@@ -173,8 +188,8 @@ self: {
   clusterRoleBinding = scope.mkClusterResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "ClusterRoleBinding";
-    name = "${name}-ingress-nginx";
-    labels = commonLabels;
+    name = name;
+    labels = clusterScopedLabels;
     extra = {
       roleRef = {
         apiGroup = "rbac.authorization.k8s.io";
@@ -191,33 +206,39 @@ self: {
     };
   };
 
-  # --- Role (leader election, namespace-scoped) ---
+  # --- Role (namespace-scoped) ---
   role = scope.mkResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "Role";
-    name = "${name}-ingress-nginx";
+    name = name;
     labels = commonLabels;
     extra.rules = [
       {
         apiGroups = [ "" ];
-        resources = [ "configmaps" ];
+        resources = [ "namespaces" ];
+        verbs = [ "get" ];
+      }
+      {
+        apiGroups = [ "" ];
+        resources = [
+          "configmaps"
+          "pods"
+          "secrets"
+          "endpoints"
+        ];
         verbs = [
           "get"
           "list"
           "watch"
-          "create"
-          "update"
         ];
       }
       {
-        apiGroups = [ "coordination.k8s.io" ];
-        resources = [ "leases" ];
+        apiGroups = [ "" ];
+        resources = [ "services" ];
         verbs = [
           "get"
           "list"
           "watch"
-          "create"
-          "update"
         ];
       }
       {
@@ -229,9 +250,50 @@ self: {
         ];
       }
       {
-        apiGroups = [ "" ];
-        resources = [ "pods" ];
-        verbs = [ "get" ];
+        apiGroups = [ "coordination.k8s.io" ];
+        resourceNames = [ electionId ];
+        resources = [ "leases" ];
+        verbs = [
+          "get"
+          "update"
+        ];
+      }
+      {
+        apiGroups = [ "coordination.k8s.io" ];
+        resources = [ "leases" ];
+        verbs = [ "create" ];
+      }
+      {
+        apiGroups = [ "discovery.k8s.io" ];
+        resources = [ "endpointslices" ];
+        verbs = [
+          "list"
+          "watch"
+          "get"
+        ];
+      }
+      {
+        apiGroups = [ "networking.k8s.io" ];
+        resources = [ "ingresses" ];
+        verbs = [
+          "get"
+          "list"
+          "watch"
+        ];
+      }
+      {
+        apiGroups = [ "networking.k8s.io" ];
+        resources = [ "ingresses/status" ];
+        verbs = [ "update" ];
+      }
+      {
+        apiGroups = [ "networking.k8s.io" ];
+        resources = [ "ingressclasses" ];
+        verbs = [
+          "get"
+          "list"
+          "watch"
+        ];
       }
     ];
   };
@@ -240,7 +302,7 @@ self: {
   roleBinding = scope.mkResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "RoleBinding";
-    name = "${name}-ingress-nginx";
+    name = name;
     labels = commonLabels;
     extra = {
       roleRef = {
@@ -262,15 +324,12 @@ self: {
   configmap = scope.mkResource {
     apiVersion = "v1";
     kind = "ConfigMap";
-    name = "${name}-ingress-nginx-controller";
+    name = "${name}-controller";
     labels = commonLabels;
     data =
       cfg.config
       // lib.optionalAttrs cfg.allowSnippetAnnotations {
         allow-snippet-annotations = "true";
-      }
-      // lib.optionalAttrs (cfg.maxmindLicenseKey != null) {
-        maxmind-license-key = cfg.maxmindLicenseKey;
       };
   };
 
@@ -278,18 +337,25 @@ self: {
   deployment = scope.mkResource {
     apiVersion = "apps/v1";
     kind = "Deployment";
-    name = "${name}-ingress-nginx-controller";
+    name = "${name}-controller";
     labels = commonLabels;
     spec = {
       replicas = cfg.replicaCount;
       revisionHistoryLimit = 10;
-      minReadySeconds = 0;
       selector.matchLabels = selectorLabels;
+      strategy = {
+        type = "RollingUpdate";
+        rollingUpdate = {
+          maxSurge = "25%";
+          maxUnavailable = "25%";
+        };
+      };
       template = {
         metadata = {
-          labels = selectorLabels;
+          labels = selectorLabels // cfg.podLabels;
         };
         spec = {
+          automountServiceAccountToken = true;
           serviceAccountName = "${self.serviceAccount}";
           terminationGracePeriodSeconds = 300;
           dnsPolicy = "ClusterFirst";
@@ -300,7 +366,7 @@ self: {
               imagePullPolicy = cfg.image.pullPolicy;
               args = [
                 "/nginx-ingress-controller"
-                "--publish-service=$(POD_NAMESPACE)/${name}-ingress-nginx-controller"
+                "--publish-service=$(POD_NAMESPACE)/${name}-controller"
                 "--election-id=${electionId}"
                 "--controller-class=${controllerValue}"
                 "--ingress-class=${ingressClassName}"
@@ -309,19 +375,25 @@ self: {
                 "--validating-webhook-certificate=/usr/local/certificates/cert"
                 "--validating-webhook-key=/usr/local/certificates/key"
               ]
-              ++ lib.optional cfg.allowSnippetAnnotations "--enable-annotation-validation=true";
+              ++ lib.optional (cfg.maxmindLicenseKey != null) "--maxmind-license-key=${cfg.maxmindLicenseKey}";
               env = [
-                {
-                  name = "POD_NAME";
-                  valueFrom.fieldRef.fieldPath = "metadata.name";
-                }
-                {
-                  name = "POD_NAMESPACE";
-                  valueFrom.fieldRef.fieldPath = "metadata.namespace";
-                }
                 {
                   name = "LD_PRELOAD";
                   value = "/usr/local/lib/libmimalloc.so";
+                }
+                {
+                  name = "POD_NAME";
+                  valueFrom.fieldRef = {
+                    apiVersion = "v1";
+                    fieldPath = "metadata.name";
+                  };
+                }
+                {
+                  name = "POD_NAMESPACE";
+                  valueFrom.fieldRef = {
+                    apiVersion = "v1";
+                    fieldPath = "metadata.namespace";
+                  };
                 }
               ];
               ports = [
@@ -338,11 +410,6 @@ self: {
                 {
                   name = "webhook";
                   containerPort = 8443;
-                  protocol = "TCP";
-                }
-                {
-                  name = "metrics";
-                  containerPort = 10254;
                   protocol = "TCP";
                 }
               ];
@@ -376,6 +443,7 @@ self: {
               resources = cfg.resources;
               securityContext = {
                 runAsUser = 101;
+                runAsGroup = 82;
                 runAsNonRoot = true;
                 allowPrivilegeEscalation = false;
                 readOnlyRootFilesystem = false;
@@ -388,7 +456,7 @@ self: {
               volumeMounts = [
                 {
                   name = "webhook-cert";
-                  mountPath = "/usr/local/certificates/";
+                  mountPath = "/usr/local/certificates";
                   readOnly = true;
                 }
               ];
@@ -401,60 +469,27 @@ self: {
             {
               name = "webhook-cert";
               secret = {
-                secretName = "${name}-ingress-nginx-admission";
+                secretName = "${name}-admission";
+                defaultMode = 420;
               };
             }
           ];
         }
         // lib.optionalAttrs cfg.enableAntiAffinity {
-          affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution = [
-            {
+          affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution =
+            lib.imap0 (i: topologyKey: {
               weight = 100;
               podAffinityTerm = {
                 labelSelector.matchExpressions = [
                   {
-                    key = "app.kubernetes.io/instance";
-                    operator = "In";
-                    values = [ name ];
-                  }
-                  {
                     key = "app.kubernetes.io/name";
                     operator = "In";
                     values = [ "ingress-nginx" ];
                   }
-                  {
-                    key = "app.kubernetes.io/component";
-                    operator = "In";
-                    values = [ "controller" ];
-                  }
                 ];
-                topologyKey = "kubernetes.io/hostname";
+                inherit topologyKey;
               };
-            }
-            {
-              weight = 50;
-              podAffinityTerm = {
-                labelSelector.matchExpressions = [
-                  {
-                    key = "app.kubernetes.io/instance";
-                    operator = "In";
-                    values = [ name ];
-                  }
-                  {
-                    key = "app.kubernetes.io/name";
-                    operator = "In";
-                    values = [ "ingress-nginx" ];
-                  }
-                  {
-                    key = "app.kubernetes.io/component";
-                    operator = "In";
-                    values = [ "controller" ];
-                  }
-                ];
-                topologyKey = "topology.kubernetes.io/zone";
-              };
-            }
-          ];
+            }) cfg.antiAffinityTopologyKeys;
         };
       };
     };
@@ -464,11 +499,8 @@ self: {
   service = scope.mkResource {
     apiVersion = "v1";
     kind = "Service";
-    name = "${name}-ingress-nginx-controller";
+    name = "${name}-controller";
     labels = commonLabels;
-    annotations = {
-      # Preserve source IP for external traffic.
-    };
     spec = {
       type = cfg.serviceType;
       selector = selectorLabels;
@@ -478,17 +510,19 @@ self: {
           port = 80;
           protocol = "TCP";
           targetPort = "http";
+          appProtocol = "http";
         }
         {
           name = "https";
           port = 443;
           protocol = "TCP";
           targetPort = "https";
+          appProtocol = "https";
         }
       ];
     }
     // lib.optionalAttrs (cfg.serviceType == "LoadBalancer") {
-      externalTrafficPolicy = "Local";
+      externalTrafficPolicy = cfg.externalTrafficPolicy;
     }
     // lib.optionalAttrs (cfg.clusterIP != null) {
       clusterIP = cfg.clusterIP;

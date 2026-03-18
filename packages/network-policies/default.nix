@@ -1,4 +1,4 @@
-# NetworkPolicy package — NW1 cluster network policies.
+# NetworkPolicy package — Cilium cluster-wide network policies.
 #
 # Defines Cilium cluster-wide network policies for baseline connectivity
 # (DNS, API server, internet egress, ingress-nginx, Prometheus scraping,
@@ -20,32 +20,19 @@ let
       globalDns = true;
       kubernetesApiAccess = true;
       ingressNginxAccess = true;
-      prometheusScrapingAccess = true;
+      prometheusScrapingAccess = false;
       ciliumHealthChecks = true;
+      fullAccessCidrs = {
+        enable = false;
+        cidrs = [ ];
+      };
+      stackgresPrometheusAccess = false;
+      stackgresKubeApiAccess = false;
     };
-    tenants = {
-      acme = {
-        namespaces = [
-          "shopfront-prod"
-          "shopfront-stage"
-          "shopfront-demo"
-        ];
-      };
-      tidewater = {
-        namespaces = [ "ledgerly-prod" ];
-      };
-      system = {
-        namespaces = [
-          "kube-system"
-          "monitoring-system"
-          "nginx-system"
-          "cert-manager"
-          "cilium-system"
-          "openebs"
-          "velero"
-        ];
-      };
-    };
+    # DNS target label used in the global-dns policy.
+    # Clusters running CoreDNS use "coredns"; those using kube-dns use "kube-dns".
+    dnsAppLabel = "kube-dns";
+    tenants = { };
     namespacePolicies = { };
   };
 
@@ -65,7 +52,6 @@ let
   globalInternetAccess = mkCiliumPolicy {
     name = "allow-global-internet-access";
     spec = {
-      endpointSelector = { };
       egress = [
         { toEntities = [ "world" ]; }
       ];
@@ -75,14 +61,13 @@ let
   globalDns = mkCiliumPolicy {
     name = "global-dns";
     spec = {
-      endpointSelector = { };
       egress = [
         {
           toEndpoints = [
             {
               matchLabels = {
-                "k8s:io.kubernetes.pod.namespace" = "kube-system";
-                "k8s:k8s-app" = "kube-dns";
+                "io.kubernetes.pod.namespace" = "kube-system";
+                "k8s-app" = cfg.dnsAppLabel;
               };
             }
           ];
@@ -91,9 +76,21 @@ let
               ports = [
                 {
                   port = "53";
-                  protocol = "ANY";
+                  protocol = "UDP";
                 }
               ];
+            }
+          ];
+        }
+      ];
+      ingress = [
+        {
+          fromEndpoints = [
+            {
+              matchLabels = {
+                "io.kubernetes.pod.namespace" = "kube-system";
+                "k8s-app" = cfg.dnsAppLabel;
+              };
             }
           ];
         }
@@ -104,23 +101,58 @@ let
   kubernetesApiAccess = mkCiliumPolicy {
     name = "kubernetes-api-access";
     spec = {
-      endpointSelector = { };
-      egress = [
-        { toEntities = [ "kube-apiserver" ]; }
+      nodeSelector = {
+        matchLabels = {
+          "node-role.kubernetes.io/master" = "true";
+        };
+      };
+      ingress = [
+        {
+          fromEntities = [
+            "remote-node"
+            "health"
+            "host"
+          ];
+        }
+        {
+          toPorts = [
+            {
+              ports = [
+                {
+                  port = "443";
+                  protocol = "TCP";
+                }
+                {
+                  port = "6443";
+                  protocol = "TCP";
+                }
+              ];
+            }
+          ];
+        }
       ];
     };
   };
 
   ingressNginxAccess = mkCiliumPolicy {
-    name = "allow-access-to-ingress-nginx";
+    name = "global-access-to-ingress-nginx";
     spec = {
-      endpointSelector = { };
       egress = [
         {
           toEndpoints = [
             {
               matchLabels = {
-                "k8s:io.kubernetes.pod.namespace" = "nginx-system";
+                "app.kubernetes.io/name" = "ingress-nginx";
+              };
+            }
+          ];
+        }
+      ];
+      ingress = [
+        {
+          fromEndpoints = [
+            {
+              matchLabels = {
                 "app.kubernetes.io/name" = "ingress-nginx";
               };
             }
@@ -133,13 +165,11 @@ let
   prometheusScrapingAccess = mkCiliumPolicy {
     name = "allow-prometheus-scraping";
     spec = {
-      endpointSelector = { };
       ingress = [
         {
           fromEndpoints = [
             {
               matchLabels = {
-                "k8s:io.kubernetes.pod.namespace" = "monitoring-system";
                 "app.kubernetes.io/name" = "prometheus";
               };
             }
@@ -152,48 +182,79 @@ let
   ciliumHealthChecks = mkCiliumPolicy {
     name = "cilium-health-checks";
     spec = {
-      endpointSelector = { };
+      endpointSelector = {
+        matchLabels = {
+          "reserved:health" = "";
+        };
+      };
+      ingress = [
+        {
+          fromEntities = [ "all" ];
+        }
+      ];
+    };
+  };
+
+  # --- Optional: Full-access CIDRs ---
+
+  fullAccessCidrs = mkCiliumPolicy {
+    name = "allow-access-to-full-access-cidrs";
+    spec = {
+      ingress = [
+        {
+          fromCIDR = cfg.clusterwidePolicies.fullAccessCidrs.cidrs;
+        }
+      ];
+    };
+  };
+
+  # --- Optional: StackGres Prometheus scraping ---
+
+  stackgresPrometheusAccess = mkCiliumPolicy {
+    name = "allow-prometheus-scraping-of-stackgres-clusters";
+    spec = {
+      endpointSelector = {
+        matchLabels = {
+          app = "StackGresCluster";
+        };
+      };
       ingress = [
         {
           fromEndpoints = [
             {
               matchLabels = {
-                "reserved:init" = "";
+                "app.kubernetes.io/name" = "prometheus";
               };
-            }
-            { matchLabels = { }; }
-          ];
-          toPorts = [
-            {
-              ports = [
-                {
-                  port = "4240";
-                  protocol = "TCP";
-                }
-              ];
             }
           ];
         }
       ];
+    };
+  };
+
+  # --- Optional: StackGres kube-api access ---
+
+  stackgresKubeApiAccess = mkCiliumPolicy {
+    name = "stackgres-clusters-to-kube-api";
+    spec = {
+      endpointSelector = {
+        matchLabels = {
+          app = "StackGresCluster";
+        };
+      };
       egress = [
         {
-          toEndpoints = [
-            {
-              matchLabels = {
-                "reserved:init" = "";
-              };
-            }
-            { matchLabels = { }; }
+          toEntities = [
+            "host"
+            "kube-apiserver"
           ];
-          toPorts = [
-            {
-              ports = [
-                {
-                  port = "4240";
-                  protocol = "TCP";
-                }
-              ];
-            }
+        }
+      ];
+      ingress = [
+        {
+          fromEntities = [
+            "host"
+            "kube-apiserver"
           ];
         }
       ];
@@ -243,7 +304,10 @@ let
     ++ lib.optional cwp.kubernetesApiAccess kubernetesApiAccess
     ++ lib.optional cwp.ingressNginxAccess ingressNginxAccess
     ++ lib.optional cwp.prometheusScrapingAccess prometheusScrapingAccess
-    ++ lib.optional cwp.ciliumHealthChecks ciliumHealthChecks;
+    ++ lib.optional cwp.ciliumHealthChecks ciliumHealthChecks
+    ++ lib.optional cwp.fullAccessCidrs.enable fullAccessCidrs
+    ++ lib.optional cwp.stackgresPrometheusAccess stackgresPrometheusAccess
+    ++ lib.optional cwp.stackgresKubeApiAccess stackgresKubeApiAccess;
 
   tenantPoliciesList = builtins.attrValues tenantPolicies;
 
@@ -256,9 +320,12 @@ self:
   allow-global-internet-access = globalInternetAccess;
   global-dns = globalDns;
   kubernetes-api-access = kubernetesApiAccess;
-  allow-access-to-ingress-nginx = ingressNginxAccess;
+  global-access-to-ingress-nginx = ingressNginxAccess;
   allow-prometheus-scraping = prometheusScrapingAccess;
   cilium-health-checks = ciliumHealthChecks;
+  allow-access-to-full-access-cidrs = fullAccessCidrs;
+  allow-prometheus-scraping-of-stackgres-clusters = stackgresPrometheusAccess;
+  stackgres-clusters-to-kube-api = stackgresKubeApiAccess;
 }
 // builtins.listToAttrs (
   lib.mapAttrsToList (

@@ -3,7 +3,7 @@
 # Deploys the virt-operator which manages KubeVirt components (virt-api,
 # virt-controller, virt-handler) via the KubeVirt custom resource.
 #
-# Resources: ServiceAccount, ClusterRole, ClusterRoleBinding, Service (metrics),
+# Resources: ServiceAccount, ClusterRole, ClusterRoleBinding,
 #            Deployment (virt-operator), KubeVirt CR, CRDs.
 #
 # main = Deployment (virt-operator)
@@ -26,22 +26,28 @@ let
     replicaCount = 2;
     resources = {
       requests = {
-        cpu = "100m";
-        memory = "150Mi";
-      };
-      limits = {
-        cpu = "500m";
-        memory = "512Mi";
+        cpu = "10m";
+        memory = "450Mi";
       };
     };
     featureGates = [ "ExperimentalVirtiofsSupport" ];
     configuration = { }; # KubeVirt CR spec.configuration overrides
   };
 
-  selectorLabels = {
-    "app.kubernetes.io/name" = "kubevirt";
-    "app.kubernetes.io/instance" = name;
-    "app.kubernetes.io/component" = "virt-operator";
+  # Common label for all kubevirt resources
+  kubevirtLabels = {
+    "kubevirt.io" = "";
+  };
+
+  # Labels for operator deployment selector
+  operatorLabels = {
+    "kubevirt.io" = "virt-operator";
+  };
+
+  # Labels used for the operator's pod template
+  podLabels = operatorLabels // {
+    "name" = "virt-operator";
+    "prometheus.kubevirt.io" = "true";
   };
 
 in
@@ -52,7 +58,7 @@ self: {
     apiVersion = "v1";
     kind = "ServiceAccount";
     name = "${name}-operator";
-    labels = selectorLabels;
+    labels = kubevirtLabels;
   };
 
   # --- ClusterRole ---
@@ -60,7 +66,7 @@ self: {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "ClusterRole";
     name = "${name}-operator";
-    labels = selectorLabels;
+    labels = kubevirtLabels;
     extra.rules = [
       # KubeVirt resources
       {
@@ -347,7 +353,7 @@ self: {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "ClusterRoleBinding";
     name = "${name}-operator";
-    labels = selectorLabels;
+    labels = kubevirtLabels;
     extra = {
       roleRef = {
         apiGroup = "rbac.authorization.k8s.io";
@@ -364,51 +370,21 @@ self: {
     };
   };
 
-  # --- Service (operator metrics) ---
-  metricsService = scope.mkResource {
-    apiVersion = "v1";
-    kind = "Service";
-    name = "${name}-operator-metrics";
-    labels = selectorLabels;
-    spec = {
-      type = "ClusterIP";
-      selector = selectorLabels;
-      ports = [
-        {
-          name = "metrics";
-          port = 8443;
-          protocol = "TCP";
-          targetPort = 8443;
-        }
-      ];
-    };
-    outputs = {
-      metricsPort = "8443";
-    };
-  };
-
   # --- Deployment (virt-operator) ---
   deployment = scope.mkResource {
     apiVersion = "apps/v1";
     kind = "Deployment";
-    name = "${name}-operator";
-    labels = selectorLabels;
+    name = "virt-operator";
+    labels = operatorLabels;
     spec = {
       replicas = cfg.replicaCount;
-      selector.matchLabels = selectorLabels;
+      selector.matchLabels = operatorLabels;
       strategy = {
         type = "RollingUpdate";
-        rollingUpdate = {
-          maxSurge = 1;
-          maxUnavailable = 1;
-        };
       };
       template = {
         metadata = {
-          labels = selectorLabels;
-          annotations = {
-            "kubectl.kubernetes.io/default-container" = "virt-operator";
-          };
+          labels = podLabels;
         };
         spec = {
           serviceAccountName = "${self.serviceAccount}";
@@ -417,6 +393,9 @@ self: {
             runAsNonRoot = true;
             seccompProfile.type = "RuntimeDefault";
           };
+          nodeSelector = {
+            "kubernetes.io/os" = "linux";
+          };
           priorityClassName = "kubevirt-cluster-critical";
           tolerations = [
             {
@@ -424,6 +403,27 @@ self: {
               operator = "Exists";
             }
           ];
+          affinity = {
+            podAntiAffinity = {
+              preferredDuringSchedulingIgnoredDuringExecution = [
+                {
+                  weight = 1;
+                  podAffinityTerm = {
+                    labelSelector = {
+                      matchExpressions = [
+                        {
+                          key = "kubevirt.io";
+                          operator = "In";
+                          values = [ "virt-operator" ];
+                        }
+                      ];
+                    };
+                    topologyKey = "kubernetes.io/hostname";
+                  };
+                }
+              ];
+            };
+          };
           containers = [
             {
               name = "virt-operator";
@@ -431,17 +431,23 @@ self: {
               imagePullPolicy = cfg.image.pullPolicy;
               command = [ "virt-operator" ];
               args = [
-                "--port=8443"
-                "--v=2"
+                "--port"
+                "8443"
+                "-v"
+                "2"
               ];
               env = [
                 {
-                  name = "OPERATOR_IMAGE";
+                  name = "KUBEVIRT_VERSION";
+                  value = cfg.image.tag;
+                }
+                {
+                  name = "VIRT_OPERATOR_IMAGE";
                   value = "${cfg.image.repository}:${cfg.image.tag}";
                 }
                 {
                   name = "WATCH_NAMESPACE";
-                  valueFrom.fieldRef.fieldPath = "metadata.namespace";
+                  valueFrom.fieldRef.fieldPath = "metadata.annotations['olm.targetNamespaces']";
                 }
               ];
               ports = [
@@ -456,16 +462,6 @@ self: {
                   protocol = "TCP";
                 }
               ];
-              livenessProbe = {
-                httpGet = {
-                  path = "/metrics";
-                  port = 8443;
-                  scheme = "HTTPS";
-                };
-                initialDelaySeconds = 15;
-                periodSeconds = 20;
-                timeoutSeconds = 10;
-              };
               readinessProbe = {
                 httpGet = {
                   path = "/metrics";
@@ -480,8 +476,31 @@ self: {
               securityContext = {
                 allowPrivilegeEscalation = false;
                 capabilities.drop = [ "ALL" ];
-                readOnlyRootFilesystem = true;
+                seccompProfile.type = "RuntimeDefault";
               };
+              volumeMounts = [
+                {
+                  name = "kubevirt-operator-certs";
+                  mountPath = "/etc/virt-operator/certificates";
+                  readOnly = true;
+                }
+                {
+                  name = "profile-data";
+                  mountPath = "/profile-data";
+                }
+              ];
+            }
+          ];
+          volumes = [
+            {
+              name = "kubevirt-operator-certs";
+              secret = {
+                secretName = "kubevirt-operator-certs";
+                optional = true;
+              };
+            }
+            {
+              name = "profile-data";
             }
           ];
         };
@@ -496,14 +515,8 @@ self: {
     apiVersion = "kubevirt.io/v1";
     kind = "KubeVirt";
     name = name;
-    labels = selectorLabels;
     spec = {
-      certificateRotateStrategy = { };
-      customizeComponents = { };
       imagePullPolicy = cfg.image.pullPolicy;
-      infra = {
-        replicas = cfg.replicaCount;
-      };
       configuration = {
         developerConfiguration = {
           featureGates = cfg.featureGates;
@@ -848,7 +861,6 @@ self: {
       self.serviceAccount
       self.clusterRole
       self.clusterRoleBinding
-      self.metricsService
       self.kubevirtCR
       # CRDs
       self.crdKubeVirt

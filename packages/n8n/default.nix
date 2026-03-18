@@ -7,9 +7,10 @@
 # Resources: ServiceAccount, ConfigMap (env), Deployment (main),
 # Deployment (worker), Service (web UI), Ingress (optional).
 #
-# main = Service (port 5678).
+# main = Service (port 80 by default, proxied to container port 5678).
 # External secrets (DB password, encryption key, Redis password)
-# are expected to be managed externally (e.g. via Infisical).
+# are expected to be managed externally (e.g. via Infisical) and
+# injected via existingSecret as a secretRef on envFrom.
 
 {
   scope,
@@ -32,18 +33,11 @@ let
     worker = {
       enabled = true;
       replicaCount = 3;
-      resources = {
-        requests = {
-          cpu = "100m";
-          memory = "256Mi";
-        };
-        limits = {
-          cpu = "1";
-          memory = "1Gi";
-        };
-      };
+      port = 5679;
+      concurrency = 10;
     };
     port = 5678;
+    servicePort = 80;
     resources = {
       requests = {
         cpu = "100m";
@@ -56,7 +50,7 @@ let
     };
     ingress = {
       enabled = false;
-      className = "public-v2";
+      className = "public";
       host = "";
       tls = {
         enabled = false;
@@ -70,16 +64,12 @@ let
     database = {
       type = "postgresdb";
       host = null;
-      port = "5432";
       name = "n8n";
       user = "n8n";
     };
     redis = {
       host = null;
       port = "6379";
-    };
-    encryption = {
-      existingSecret = null;
     };
   };
 
@@ -109,54 +99,30 @@ let
   commonLabels = selectorLabels;
 
   mainSelectorLabels = selectorLabels // {
-    "app.kubernetes.io/component" = "main";
+    "app.kubernetes.io/type" = "master";
   };
 
   workerSelectorLabels = selectorLabels // {
-    "app.kubernetes.io/component" = "worker";
+    "app.kubernetes.io/type" = "worker";
   };
 
-  # Secret name for credentials.
-  secretName = if cfg.existingSecret != null then cfg.existingSecret else "${name}-secrets";
-
-  # Environment variables shared between main and worker containers.
-  commonEnvFrom = [
-    { configMapRef.name = "\${${placeholder "configmap"}}"; }
-  ];
-
-  commonEnv = [
-    {
-      name = "DB_POSTGRESDB_PASSWORD";
-      valueFrom.secretKeyRef = {
-        name = secretName;
-        key = "DB_POSTGRESDB_PASSWORD";
-      };
-    }
-    {
-      name = "N8N_ENCRYPTION_KEY";
-      valueFrom.secretKeyRef = {
-        name = if cfg.encryption.existingSecret != null then cfg.encryption.existingSecret else secretName;
-        key = "N8N_ENCRYPTION_KEY";
-      };
-    }
-    {
-      name = "QUEUE_BULL_REDIS_PASSWORD";
-      valueFrom.secretKeyRef = {
-        name = secretName;
-        key = "QUEUE_BULL_REDIS_PASSWORD";
-      };
-    }
-  ];
-
-  # Placeholder replaced in self: block with actual configmap ref.
-  placeholder = _: "will-be-replaced";
+  # Secret name for credentials (used as secretRef on envFrom).
+  secretName = if cfg.existingSecret != null then cfg.existingSecret else "${name}-app-secret";
 
 in
 self:
 let
-  # Rebuild envFrom with the actual configmap reference.
-  envFrom = [
+  # envFrom for main deployment: app configmap + secret.
+  mainEnvFrom = [
     { configMapRef.name = "${self.configmap}"; }
+    { secretRef.name = secretName; }
+  ];
+
+  # envFrom for worker deployment: app configmap + worker configmap + secret.
+  workerEnvFrom = [
+    { configMapRef.name = "${self.configmap}"; }
+    { configMapRef.name = "${self.workerConfigmap}"; }
+    { secretRef.name = secretName; }
   ];
 in
 {
@@ -173,27 +139,32 @@ in
   configmap = scope.mkResource {
     apiVersion = "v1";
     kind = "ConfigMap";
-    name = "${name}-config";
+    name = "${name}-app-config";
     labels = commonLabels;
     data = {
-      N8N_PORT = toString cfg.port;
-      N8N_PROTOCOL = "http";
-      NODE_ENV = "production";
-      GENERIC_TIMEZONE = "UTC";
       # Database
       DB_TYPE = cfg.database.type;
       DB_POSTGRESDB_HOST = dbHost;
-      DB_POSTGRESDB_PORT = cfg.database.port;
       DB_POSTGRESDB_DATABASE = cfg.database.name;
       DB_POSTGRESDB_USER = cfg.database.user;
       # Redis / Queue
       QUEUE_BULL_REDIS_HOST = redisHost;
       QUEUE_BULL_REDIS_PORT = cfg.redis.port;
-      QUEUE_HEALTH_CHECK_ACTIVE = "true";
       # Execution mode — queue mode for workers
       EXECUTIONS_MODE = "queue";
     }
     // cfg.env;
+  };
+
+  # --- Worker ConfigMap (worker-specific overrides) ---
+  workerConfigmap = scope.mkResource {
+    apiVersion = "v1";
+    kind = "ConfigMap";
+    name = "${name}-worker-config";
+    labels = commonLabels;
+    data = {
+      PORT = toString cfg.worker.port;
+    };
   };
 
   # --- Deployment (main — UI + API) ---
@@ -201,13 +172,12 @@ in
     apiVersion = "apps/v1";
     kind = "Deployment";
     name = "${name}";
-    labels = commonLabels // {
-      "app.kubernetes.io/component" = "main";
-    };
+    labels = commonLabels;
     spec = {
       replicas = cfg.replicaCount;
       revisionHistoryLimit = 3;
       selector.matchLabels = mainSelectorLabels;
+      strategy.type = "Recreate";
       template = {
         metadata = {
           labels = mainSelectorLabels;
@@ -222,15 +192,34 @@ in
             runAsNonRoot = true;
             runAsUser = 1000;
             runAsGroup = 1000;
-            seccompProfile.type = "RuntimeDefault";
+          };
+          affinity = {
+            podAntiAffinity = {
+              preferredDuringSchedulingIgnoredDuringExecution = [
+                {
+                  weight = 100;
+                  podAffinityTerm = {
+                    labelSelector = {
+                      matchExpressions = [
+                        {
+                          key = "app.kubernetes.io/name";
+                          operator = "In";
+                          values = [ "n8n" ];
+                        }
+                      ];
+                    };
+                    topologyKey = "kubernetes.io/hostname";
+                  };
+                }
+              ];
+            };
           };
           containers = [
             {
               name = "n8n";
               image = "${cfg.image.repository}:${cfg.image.tag}";
               imagePullPolicy = cfg.image.pullPolicy;
-              inherit envFrom;
-              env = commonEnv;
+              envFrom = mainEnvFrom;
               ports = [
                 {
                   name = "http";
@@ -243,28 +232,30 @@ in
                   path = "/healthz";
                   port = "http";
                 };
-                initialDelaySeconds = 30;
                 periodSeconds = 10;
-                timeoutSeconds = 5;
-                failureThreshold = 5;
+                timeoutSeconds = 1;
+                failureThreshold = 3;
               };
               readinessProbe = {
                 httpGet = {
                   path = "/healthz";
                   port = "http";
                 };
-                initialDelaySeconds = 15;
                 periodSeconds = 10;
-                timeoutSeconds = 5;
+                timeoutSeconds = 1;
                 failureThreshold = 3;
               };
               resources = cfg.resources;
-              securityContext = {
-                allowPrivilegeEscalation = false;
-                capabilities.drop = [ "ALL" ];
-                readOnlyRootFilesystem = false;
-              };
+              volumeMounts = [
+                {
+                  name = "data";
+                  mountPath = "/home/node/.n8n";
+                }
+              ];
             }
+          ];
+          volumes = [
+            { name = "data"; }
           ];
         };
       };
@@ -278,13 +269,12 @@ in
         apiVersion = "apps/v1";
         kind = "Deployment";
         name = "${name}-worker";
-        labels = commonLabels // {
-          "app.kubernetes.io/component" = "worker";
-        };
+        labels = commonLabels;
         spec = {
           replicas = cfg.worker.replicaCount;
           revisionHistoryLimit = 3;
           selector.matchLabels = workerSelectorLabels;
+          strategy.type = "Recreate";
           template = {
             metadata = {
               labels = workerSelectorLabels;
@@ -299,46 +289,53 @@ in
                 runAsNonRoot = true;
                 runAsUser = 1000;
                 runAsGroup = 1000;
-                seccompProfile.type = "RuntimeDefault";
               };
               containers = [
                 {
                   name = "n8n-worker";
                   image = "${cfg.image.repository}:${cfg.image.tag}";
                   imagePullPolicy = cfg.image.pullPolicy;
-                  command = [
-                    "n8n"
+                  command = [ "n8n" ];
+                  args = [
                     "worker"
+                    "--concurrency=${toString cfg.worker.concurrency}"
                   ];
-                  inherit envFrom;
-                  env = commonEnv;
+                  envFrom = workerEnvFrom;
+                  ports = [
+                    {
+                      name = "http";
+                      containerPort = cfg.worker.port;
+                      protocol = "TCP";
+                    }
+                  ];
                   livenessProbe = {
                     httpGet = {
                       path = "/healthz";
-                      port = 5678;
+                      port = "http";
                     };
-                    initialDelaySeconds = 30;
                     periodSeconds = 10;
-                    timeoutSeconds = 5;
-                    failureThreshold = 5;
+                    timeoutSeconds = 1;
+                    failureThreshold = 3;
                   };
                   readinessProbe = {
                     httpGet = {
                       path = "/healthz";
-                      port = 5678;
+                      port = "http";
                     };
-                    initialDelaySeconds = 15;
                     periodSeconds = 10;
-                    timeoutSeconds = 5;
+                    timeoutSeconds = 1;
                     failureThreshold = 3;
                   };
-                  resources = cfg.worker.resources;
-                  securityContext = {
-                    allowPrivilegeEscalation = false;
-                    capabilities.drop = [ "ALL" ];
-                    readOnlyRootFilesystem = false;
-                  };
+                  volumeMounts = [
+                    {
+                      name = "data";
+                      mountPath = "/home/node/.n8n";
+                    }
+                  ];
                 }
+              ];
+              volumes = [
+                { name = "data"; }
               ];
             };
           };
@@ -359,14 +356,14 @@ in
       ports = [
         {
           name = "http";
-          port = cfg.port;
+          port = cfg.servicePort;
           targetPort = "http";
           protocol = "TCP";
         }
       ];
     };
     outputs = {
-      port = toString cfg.port;
+      port = toString cfg.servicePort;
     };
     requires = [ self.deployment ] ++ lib.optional (self.worker != null) self.worker;
   };
@@ -397,7 +394,7 @@ in
                   pathType = "Prefix";
                   backend.service = {
                     name = "${self.service}";
-                    port.number = cfg.port;
+                    port.number = cfg.servicePort;
                   };
                 }
               ];
