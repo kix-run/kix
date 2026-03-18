@@ -37,4 +37,12 @@
     ./scripts/kix-dump.py --match-kix ./result ''${context:+--context "$context"} "$dump_dir"
     ./scripts/kix-diff.py ./result "$dump_dir"
   '';
+
+  languages = {
+    python = {
+      enable = true;
+      uv.enable = true;
+      uv.sync.enable = true;
+    };
+  };
 }

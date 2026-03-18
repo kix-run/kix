@@ -26,20 +26,39 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from parity.normalize import normalize_kix, normalize_cluster, resource_key
 from parity.structural_diff import structural_diff, format_diffs, DiffKind
 
+# ANSI helpers (duplicated here for section-level coloring)
+_BOLD = "\033[1m"
+_DIM = "\033[2m"
+_RED = "\033[31m"
+_GREEN = "\033[32m"
+_YELLOW = "\033[33m"
+_CYAN = "\033[36m"
+_RESET = "\033[0m"
+
 
 # --- Resource loading ---
 
 
-def load_resources(directory: Path, normalizer) -> dict[str, dict]:
+def load_resources(directory: Path, normalizer, service: str | None = None) -> dict[str, dict]:
     """Load and normalize all YAML files from a directory.
 
     Supports both layouts:
     - Nested: {namespace}/{name}-{kind}.yaml  (dump output)
     - Flat:   {namespace}--{name}-{kind}.yaml  (kix nix build output)
 
+    If *service* is given, only files whose stem starts with that name
+    (before the first ``-``) are included.
+
     Returns dict mapping "{namespace}/{name}-{kind}" -> normalized doc.
     """
     resources = {}
+
+    def _matches_service(stem: str) -> bool:
+        if service is None:
+            return True
+        # stem is e.g. "coredns-deployment"; extract the name part before the kind suffix
+        name_part = stem.rsplit("-", 1)[0] if "-" in stem else stem
+        return name_part == service or name_part.startswith(service + "-")
 
     # Try nested layout first (subdirectories = namespaces)
     subdirs = [d for d in sorted(directory.iterdir()) if d.is_dir()]
@@ -50,6 +69,8 @@ def load_resources(directory: Path, normalizer) -> dict[str, dict]:
                 if f.name == "_meta.yaml" or f.name == "README.md":
                     continue
                 if "-packageinstance.yaml" in f.name:
+                    continue
+                if not _matches_service(f.stem):
                     continue
                 with open(f) as fh:
                     doc = yaml.safe_load(fh)
@@ -68,6 +89,8 @@ def load_resources(directory: Path, normalizer) -> dict[str, dict]:
             if "--" not in stem:
                 continue
             ns, rest = stem.split("--", 1)
+            if not _matches_service(rest):
+                continue
             with open(f) as fh:
                 doc = yaml.safe_load(fh)
             if doc is None:
@@ -206,6 +229,7 @@ def generate_report(
     kix_resources: dict[str, dict],
     cluster_resources: dict[str, dict],
     ignore_paths: set[str] | None,
+    color: bool = False,
 ) -> str:
     """Generate a structured markdown diff report."""
     lines: list[str] = []
@@ -245,36 +269,55 @@ def generate_report(
     renamed_cluster = {cluster_key for _, cluster_key, _, _ in rename_pairs}
 
     # Header
-    lines.append("# kix diff report")
-    lines.append("")
-    lines.append(f"**Generated:** {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}")
-    lines.append(f"**kix:** `{kix_dir}` ({len(kix_resources)} resources)")
-    lines.append(f"**cluster:** `{cluster_dir}` ({len(cluster_resources)} resources)")
+    if color:
+        lines.append(f"{_BOLD}kix diff report{_RESET}")
+        lines.append("")
+        lines.append(f"Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}")
+        lines.append(f"kix:     {kix_dir} ({len(kix_resources)} resources)")
+        lines.append(f"cluster: {cluster_dir} ({len(cluster_resources)} resources)")
+    else:
+        lines.append("# kix diff report")
+        lines.append("")
+        lines.append(f"**Generated:** {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}")
+        lines.append(f"**kix:** `{kix_dir}` ({len(kix_resources)} resources)")
+        lines.append(f"**cluster:** `{cluster_dir}` ({len(cluster_resources)} resources)")
     lines.append("")
 
-    # Summary table
-    lines.append("## Summary")
-    lines.append("")
-    lines.append("| Category | Count |")
-    lines.append("|----------|-------|")
-    lines.append(f"| Identical | {len(identical)} |")
-    lines.append(f"| Modified | {len(modified)} |")
-    lines.append(f"| kix-only | {len(kix_only)} |")
-    lines.append(f"| Cluster-only | {len(cluster_only)} |")
+    # Summary
+    if color:
+        lines.append(f"{_BOLD}Summary{_RESET}")
+        lines.append(f"  Identical:    {_DIM}{len(identical)}{_RESET}")
+        lines.append(f"  Modified:     {_YELLOW}{len(modified)}{_RESET}")
+        lines.append(f"  kix-only:     {_RED}{len(kix_only)}{_RESET}")
+        lines.append(f"  Cluster-only: {_GREEN}{len(cluster_only)}{_RESET}")
+    else:
+        lines.append("## Summary")
+        lines.append("")
+        lines.append("| Category | Count |")
+        lines.append("|----------|-------|")
+        lines.append(f"| Identical | {len(identical)} |")
+        lines.append(f"| Modified | {len(modified)} |")
+        lines.append(f"| kix-only | {len(kix_only)} |")
+        lines.append(f"| Cluster-only | {len(cluster_only)} |")
     lines.append("")
 
     # Probable renames section (before kix-only/cluster-only so context is clear)
     if rename_pairs:
-        lines.append("## Probable renames / moves")
+        lines.append(f"{_BOLD}Probable renames / moves{_RESET}" if color else "## Probable renames / moves")
         lines.append("")
         for kix_key, cluster_key, ratio, diffs in rename_pairs:
             pct = int(ratio * 100)
-            lines.append(f"### `{format_resource(kix_key)}` <-> `{format_resource(cluster_key)}` ({pct}% match)")
+            if color:
+                lines.append(f"  {_CYAN}{_BOLD}{format_resource(kix_key)}{_RESET} <-> {_CYAN}{_BOLD}{format_resource(cluster_key)}{_RESET} {_DIM}({pct}% match){_RESET}")
+            else:
+                lines.append(f"### `{format_resource(kix_key)}` <-> `{format_resource(cluster_key)}` ({pct}% match)")
             lines.append("")
             if diffs:
-                lines.append("```")
-                lines.append(format_diffs(diffs))
-                lines.append("```")
+                if not color:
+                    lines.append("```")
+                lines.append(format_diffs(diffs, color=color))
+                if not color:
+                    lines.append("```")
             else:
                 lines.append("*Structurally identical (only name/namespace differs)*")
             lines.append("")
@@ -282,31 +325,35 @@ def generate_report(
     # kix-only section (excluding resources that were matched as renames)
     unmatched_kix = [k for k in kix_only if k not in renamed_kix]
     if unmatched_kix:
-        lines.append("## kix-only (not in cluster)")
+        lines.append(f"{_BOLD}{_RED}kix-only (not in cluster){_RESET}" if color else "## kix-only (not in cluster)")
         lines.append("")
         for key in unmatched_kix:
-            lines.append(f"- `{format_resource(key)}`")
+            lines.append(f"  {_RED}- {format_resource(key)}{_RESET}" if color else f"- `{format_resource(key)}`")
         lines.append("")
 
     # Cluster-only section (excluding resources that were matched as renames)
     unmatched_cluster = [k for k in cluster_only if k not in renamed_cluster]
     if unmatched_cluster:
-        lines.append("## Cluster-only (not in kix)")
+        lines.append(f"{_BOLD}{_GREEN}Cluster-only (not in kix){_RESET}" if color else "## Cluster-only (not in kix)")
         lines.append("")
         for key in unmatched_cluster:
-            lines.append(f"- `{format_resource(key)}`")
+            lines.append(f"  {_GREEN}+ {format_resource(key)}{_RESET}" if color else f"- `{format_resource(key)}`")
         lines.append("")
 
     # Modified section
     if modified:
-        lines.append("## Modified")
+        lines.append(f"{_BOLD}{_YELLOW}Modified{_RESET}" if color else "## Modified")
         lines.append("")
         for key, diffs in modified:
             kind, ns, name = parse_resource_id(key)
-            if ns == "_cluster":
-                lines.append(f"### {kind} {name}")
+            if color:
+                label = f"{name}" if ns == "_cluster" else f"{ns}/{name}"
+                lines.append(f"  {_BOLD}{kind} {label}{_RESET}")
             else:
-                lines.append(f"### {kind} {ns}/{name}")
+                if ns == "_cluster":
+                    lines.append(f"### {kind} {name}")
+                else:
+                    lines.append(f"### {kind} {ns}/{name}")
             lines.append("")
 
             # Diff summary
@@ -321,27 +368,38 @@ def generate_report(
                 summary_parts.append(f"{n_extra} in cluster only")
             if n_changed:
                 summary_parts.append(f"{n_changed} changed")
-            lines.append(f"_{', '.join(summary_parts)}_")
+            if color:
+                lines.append(f"  {_DIM}{', '.join(summary_parts)}{_RESET}")
+            else:
+                lines.append(f"_{', '.join(summary_parts)}_")
             lines.append("")
 
-            lines.append("```")
-            lines.append(format_diffs(diffs))
-            lines.append("```")
+            if not color:
+                lines.append("```")
+            lines.append(format_diffs(diffs, color=color))
+            if not color:
+                lines.append("```")
             lines.append("")
 
-    # Identical list (collapsed)
+    # Identical list (collapsed in markdown, dim in color mode)
     if identical:
-        lines.append("## Identical")
-        lines.append("")
-        lines.append(f"{len(identical)} resources match exactly.")
-        lines.append("")
-        lines.append("<details>")
-        lines.append("<summary>Show all identical resources</summary>")
-        lines.append("")
-        for key in identical:
-            lines.append(f"- `{format_resource(key)}`")
-        lines.append("")
-        lines.append("</details>")
+        if color:
+            lines.append(f"{_BOLD}Identical{_RESET} {_DIM}({len(identical)} resources match exactly){_RESET}")
+            lines.append("")
+            for key in identical:
+                lines.append(f"  {_DIM}{format_resource(key)}{_RESET}")
+        else:
+            lines.append("## Identical")
+            lines.append("")
+            lines.append(f"{len(identical)} resources match exactly.")
+            lines.append("")
+            lines.append("<details>")
+            lines.append("<summary>Show all identical resources</summary>")
+            lines.append("")
+            for key in identical:
+                lines.append(f"- `{format_resource(key)}`")
+            lines.append("")
+            lines.append("</details>")
         lines.append("")
 
     return "\n".join(lines)
@@ -355,7 +413,11 @@ def generate_report(
 @click.argument("cluster_dir", type=click.Path(exists=True, file_okay=False))
 @click.option("--ignore-path", multiple=True,
               help="JSON paths to ignore (e.g. '*.annotations', '$.spec.strategy')")
-def main(kix_dir: str, cluster_dir: str, ignore_path: tuple[str, ...]):
+@click.option("--service", default=None,
+              help="Only compare resources whose name matches this service (e.g. 'coredns')")
+@click.option("--color/--no-color", default=None,
+              help="Colorize diff output (default: auto-detect TTY)")
+def main(kix_dir: str, cluster_dir: str, ignore_path: tuple[str, ...], service: str | None, color: bool | None):
     """Compare kix manifests against a cluster dump.
 
     KIX_DIR is the kix output directory (e.g. ./result from nix build).
@@ -368,18 +430,25 @@ def main(kix_dir: str, cluster_dir: str, ignore_path: tuple[str, ...]):
 
     ignore_paths = set(ignore_path) if ignore_path else None
 
+    if service:
+        click.echo(f"Filtering for service: {service}", err=True)
+
     click.echo("Loading kix manifests...", err=True)
-    kix_resources = load_resources(kix_path, normalize_kix)
+    kix_resources = load_resources(kix_path, normalize_kix, service)
     click.echo(f"  {len(kix_resources)} resources", err=True)
 
     click.echo("Loading cluster dump...", err=True)
-    cluster_resources = load_resources(cluster_path, normalize_cluster)
+    cluster_resources = load_resources(cluster_path, normalize_cluster, service)
     click.echo(f"  {len(cluster_resources)} resources", err=True)
+
+    # Resolve color: explicit flag wins, otherwise auto-detect TTY on stdout
+    use_color = color if color is not None else sys.stdout.isatty()
 
     report = generate_report(
         kix_path, cluster_path,
         kix_resources, cluster_resources,
         ignore_paths,
+        color=use_color,
     )
 
     # Write report to stdout (progress messages go to stderr)

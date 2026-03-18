@@ -161,8 +161,47 @@ def _path_ignored(path: str, ignore_paths: set[str]) -> bool:
     return False
 
 
-def format_diffs(diffs: list[Difference]) -> str:
-    """Format a list of differences for terminal output."""
+def format_diffs(diffs: list[Difference], color: bool = False) -> str:
+    """Format a list of differences for terminal output.
+
+    If *color* is True, ANSI escape codes are used to highlight lines:
+    - Red for missing-in-B (only in kix)
+    - Green for extra-in-B (only in cluster)
+    - Yellow for value/type mismatches
+    """
     if not diffs:
         return ""
-    return "\n".join(str(d) for d in diffs)
+    if not color:
+        return "\n".join(str(d) for d in diffs)
+    return "\n".join(_colorize_diff(d) for d in diffs)
+
+
+# ANSI helpers
+_RED = "\033[31m"
+_GREEN = "\033[32m"
+_YELLOW = "\033[33m"
+_CYAN = "\033[36m"
+_DIM = "\033[2m"
+_BOLD = "\033[1m"
+_RESET = "\033[0m"
+
+
+def _colorize_diff(d: Difference) -> str:
+    """Render a single Difference with ANSI colour codes."""
+    match d.kind:
+        case DiffKind.MISSING_IN_B:
+            return f"  {_RED}{_BOLD}-{_RESET} {_DIM}{d.path}:{_RESET} {_RED}{_compact(d.a_value)}{_RESET}"
+        case DiffKind.EXTRA_IN_B:
+            return f"  {_GREEN}{_BOLD}+{_RESET} {_DIM}{d.path}:{_RESET} {_GREEN}{_compact(d.b_value)}{_RESET}"
+        case DiffKind.VALUE_MISMATCH:
+            return (
+                f"  {_YELLOW}{_BOLD}~{_RESET} {_DIM}{d.path}:{_RESET}\n"
+                f"      {_RED}{d.a_label}: {_compact(d.a_value)}{_RESET}\n"
+                f"      {_GREEN}{d.b_label}: {_compact(d.b_value)}{_RESET}"
+            )
+        case DiffKind.TYPE_MISMATCH:
+            return (
+                f"  {_CYAN}{_BOLD}!{_RESET} {_DIM}{d.path}:{_RESET} type mismatch\n"
+                f"      {_RED}{d.a_label}: {type(d.a_value).__name__} = {_compact(d.a_value)}{_RESET}\n"
+                f"      {_GREEN}{d.b_label}: {type(d.b_value).__name__} = {_compact(d.b_value)}{_RESET}"
+            )
