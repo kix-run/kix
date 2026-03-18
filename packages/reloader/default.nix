@@ -180,9 +180,7 @@ self: {
               name = "reloader";
               image = "${cfg.image.repository}:${cfg.image.tag}";
               imagePullPolicy = cfg.image.pullPolicy;
-              args = [
-                "--log-format=${cfg.logFormat}"
-              ];
+              args = lib.optional (cfg.logFormat != "") "--log-format=${cfg.logFormat}";
               env = [
                 {
                   name = "GOMAXPROCS";
