@@ -1,336 +1,451 @@
-# cert-manager package — v2.
+# cert-manager package — jetstack/cert-manager v1.17.1.
 #
-# Migrated from pkgs-fp/cert-manager/ (v1 fixpoint pattern).
-# Source Helm chart: jetstack/cert-manager (v1.19.4)
+# X.509 certificate management for Kubernetes. Automates issuance and
+# renewal of TLS certificates from various sources (Let's Encrypt, Vault,
+# Venafi, self-signed, etc.).
 #
-# cert-manager has 4 components:
-#   - controller  — the core certificate lifecycle manager
-#   - webhook     — admission webhooks for CRD validation/mutation
-#   - cainjector  — injects CA bundles into webhook/apiservice/CRD annotations
-#   - startupapicheck — post-install Job verifying the API is healthy
+# Three components:
+#   controller  — main cert-manager, reconciles Certificate/Issuer CRDs
+#   webhook     — validates and mutates cert-manager resources via admission webhooks
+#   cainjector  — injects CA bundles into webhooks, API services, and CRDs
 #
-# The `main` resource is the controller Service. Deploying the closure
-# includes all 4 components' Deployments, RBAC, webhook configs, and
-# everything else needed to make cert-manager work.
-#
-# RBAC is extensive: 8 ClusterRoles for the controller alone, plus aggregated
-# roles, webhook RBAC, cainjector RBAC, and startupapicheck RBAC. Each role
-# is modeled as a separate resource so overrideParts can swap individual roles.
+# Resources: 3 ServiceAccounts, 3 Deployments, 3 Services,
+#   11 ClusterRoles, 9 ClusterRoleBindings, 4 Roles, 4 RoleBindings,
+#   MutatingWebhookConfiguration, ValidatingWebhookConfiguration,
+#   6 CRDs (certificates, certificaterequests, issuers, clusterissuers,
+#   orders, challenges).
 
-{ scope, config, lib }:
+{
+  scope,
+  config,
+  lib,
+}:
 
 let
   cfg = scope.defaults config {
-    clusterDomain = "cluster.local";
-
-    # Controller
     image = {
       repository = "quay.io/jetstack/cert-manager-controller";
-      tag = "v1.19.4";
+      tag = "v1.17.1";
       pullPolicy = "IfNotPresent";
     };
-    replicaCount = 1;
-    logLevel = 2;
-    maxConcurrentChallenges = 60;
-    acmeSolverImage = {
-      repository = "quay.io/jetstack/cert-manager-acmesolver";
-      tag = "v1.19.4";
-      pullPolicy = "IfNotPresent";
-    };
-    resources = { };
-    leaderElection = {
-      namespace = "kube-system";
-    };
-
-    # Service account
-    serviceAccount = {
-      create = true;
-      automountServiceAccountToken = true;
-    };
-
-    # RBAC
-    rbac = {
-      create = true;
-      aggregateClusterRoles = true;
-    };
-
-    # Security contexts
-    securityContext = {
-      runAsNonRoot = true;
-      seccompProfile.type = "RuntimeDefault";
-    };
-    containerSecurityContext = {
-      allowPrivilegeEscalation = false;
-      capabilities = {
-        drop = [ "ALL" ];
-      };
-      readOnlyRootFilesystem = true;
-    };
-
-    # Prometheus
-    prometheus = {
-      enabled = true;
-    };
-
-    # Webhook
     webhook = {
       image = {
         repository = "quay.io/jetstack/cert-manager-webhook";
-        tag = "v1.19.4";
-        pullPolicy = "IfNotPresent";
+        tag = "v1.17.1";
       };
       replicaCount = 1;
-      resources = { };
-      securePort = 10250;
-      timeoutSeconds = 30;
     };
-
-    # CA Injector
     cainjector = {
-      enabled = true;
       image = {
         repository = "quay.io/jetstack/cert-manager-cainjector";
-        tag = "v1.19.4";
-        pullPolicy = "IfNotPresent";
+        tag = "v1.17.1";
       };
       replicaCount = 1;
-      resources = { };
     };
-
-    # Startup API Check
-    startupapicheck = {
-      enabled = true;
+    acmesolver = {
       image = {
-        repository = "quay.io/jetstack/cert-manager-startupapicheck";
-        tag = "v1.19.4";
-        pullPolicy = "IfNotPresent";
+        repository = "quay.io/jetstack/cert-manager-acmesolver";
+        tag = "v1.17.1";
       };
-      resources = { };
+    };
+    replicaCount = 1;
+    installCRDs = true;
+    resources = {
+      requests = {
+        cpu = "10m";
+        memory = "32Mi";
+      };
+    };
+    dns01RecursiveNameservers = "";
+    dns01RecursiveNameserversOnly = false;
+    prometheus = {
+      enabled = false;
     };
   };
 
-  # --- Derived values ---
-
-  controllerImageRef = "${cfg.image.repository}:${cfg.image.tag}";
-  webhookImageRef = "${cfg.webhook.image.repository}:${cfg.webhook.image.tag}";
-  cainjectorImageRef = "${cfg.cainjector.image.repository}:${cfg.cainjector.image.tag}";
-  startupapicheckImageRef = "${cfg.startupapicheck.image.repository}:${cfg.startupapicheck.image.tag}";
-  acmeSolverImageRef = "${cfg.acmeSolverImage.repository}:${cfg.acmeSolverImage.tag}";
+  name = scope.instanceName;
+  ns = scope.namespaceName;
 
   # --- Labels ---
-  # Per-component labels following cert-manager Helm chart conventions.
-  # The controller uses "cert-manager" as app name; all others use
-  # "cert-manager-<component>".
 
-  mkComponentLabels = component: {
-    "app.kubernetes.io/name" =
-      if component == "controller" then "cert-manager" else "cert-manager-${component}";
-    "app.kubernetes.io/instance" = scope.instanceName;
-    "app.kubernetes.io/component" = component;
-    "app.kubernetes.io/managed-by" = "kix";
+  controllerLabels = {
+    "app.kubernetes.io/name" = "cert-manager";
+    "app.kubernetes.io/instance" = name;
+    "app.kubernetes.io/component" = "controller";
   };
 
-  controllerLabels = mkComponentLabels "controller";
-  webhookLabels = mkComponentLabels "webhook";
-  cainjectorLabels = mkComponentLabels "cainjector";
-  startupapicheckLabels = mkComponentLabels "startupapicheck";
-
-  # Selector labels (subset used for matchLabels)
-  mkSelectorLabels = component: {
-    "app.kubernetes.io/name" =
-      if component == "controller" then "cert-manager" else "cert-manager-${component}";
-    "app.kubernetes.io/instance" = scope.instanceName;
-    "app.kubernetes.io/component" = component;
+  webhookLabels = {
+    "app.kubernetes.io/name" = "webhook";
+    "app.kubernetes.io/instance" = name;
+    "app.kubernetes.io/component" = "webhook";
   };
 
-  controllerSelectorLabels = mkSelectorLabels "controller";
-  webhookSelectorLabels = mkSelectorLabels "webhook";
-  cainjectorSelectorLabels = mkSelectorLabels "cainjector";
-
-  # --- Security contexts ---
-
-  podSecurityContext = cfg.securityContext;
-  containerSecCtx = cfg.containerSecurityContext;
-
-  # --- Shared values ---
-
-  podNamespaceEnv = {
-    name = "POD_NAMESPACE";
-    valueFrom.fieldRef.fieldPath = "metadata.namespace";
+  cainjectorLabels = {
+    "app.kubernetes.io/name" = "cainjector";
+    "app.kubernetes.io/instance" = name;
+    "app.kubernetes.io/component" = "cainjector";
   };
 
-  nodeSelector = {
-    "kubernetes.io/os" = "linux";
+  controllerSelector = {
+    "app.kubernetes.io/name" = "cert-manager";
+    "app.kubernetes.io/instance" = name;
+    "app.kubernetes.io/component" = "controller";
   };
 
-  prometheusAnnotations = lib.optionalAttrs cfg.prometheus.enabled {
-    "prometheus.io/path" = "/metrics";
-    "prometheus.io/scrape" = "true";
-    "prometheus.io/port" = "9402";
+  webhookSelector = {
+    "app.kubernetes.io/name" = "webhook";
+    "app.kubernetes.io/instance" = name;
+    "app.kubernetes.io/component" = "webhook";
   };
 
-  # --- Container specs ---
+  cainjectorSelector = {
+    "app.kubernetes.io/name" = "cainjector";
+    "app.kubernetes.io/instance" = name;
+    "app.kubernetes.io/component" = "cainjector";
+  };
 
-  controllerContainer = {
-    name = "cert-manager-controller";
-    image = controllerImageRef;
-    imagePullPolicy = cfg.image.pullPolicy;
-    args = [
-      "--v=${toString cfg.logLevel}"
-      "--cluster-resource-namespace=$(POD_NAMESPACE)"
-      "--leader-election-namespace=${cfg.leaderElection.namespace}"
-      "--acme-http01-solver-image=${acmeSolverImageRef}"
-      "--max-concurrent-challenges=${toString cfg.maxConcurrentChallenges}"
-    ];
-    ports = [
-      {
-        containerPort = 9402;
-        protocol = "TCP";
-        name = "http-metrics";
-      }
-      {
-        containerPort = 9403;
-        protocol = "TCP";
-        name = "http-healthz";
-      }
-    ];
-    securityContext = containerSecCtx;
-    env = [ podNamespaceEnv ];
-    livenessProbe = {
-      httpGet = {
-        path = "/livez";
-        port = "http-healthz";
-        scheme = "HTTP";
+  # --- Helpers ---
+
+  mkControllerSubject = sa: [
+    {
+      kind = "ServiceAccount";
+      name = "${sa}";
+      namespace = ns;
+    }
+  ];
+
+  # Pod security context shared by all three components.
+  podSecurityContext = {
+    runAsNonRoot = true;
+    seccompProfile.type = "RuntimeDefault";
+  };
+
+  containerSecurityContext = {
+    allowPrivilegeEscalation = false;
+    capabilities.drop = [ "ALL" ];
+    readOnlyRootFilesystem = true;
+  };
+
+  # --- CRD helper ---
+
+  mkCRD =
+    {
+      crdName,
+      group,
+      kind,
+      listKind,
+      plural,
+      singular,
+      crdScope ? "Namespaced",
+      shortNames ? [ ],
+      categories ? [ "cert-manager" ],
+      printerColumns ? [ ],
+    }:
+    scope.mkClusterResource {
+      apiVersion = "apiextensions.k8s.io/v1";
+      kind = "CustomResourceDefinition";
+      name = crdName;
+      labels = controllerLabels;
+      extra = {
+        spec = {
+          inherit group;
+          scope = crdScope;
+          names = {
+            inherit
+              kind
+              listKind
+              plural
+              singular
+              ;
+          }
+          // lib.optionalAttrs (shortNames != [ ]) { inherit shortNames; }
+          // lib.optionalAttrs (categories != [ ]) { inherit categories; };
+          versions = [
+            (
+              {
+                name = "v1";
+                served = true;
+                storage = true;
+                subresources.status = { };
+                schema.openAPIV3Schema = {
+                  type = "object";
+                  # Note: Full OpenAPI validation schema omitted for brevity.
+                  # In production, apply the complete CRD YAML from the upstream
+                  # cert-manager release to get full validation.
+                  properties = {
+                    apiVersion = {
+                      type = "string";
+                    };
+                    kind = {
+                      type = "string";
+                    };
+                    metadata = {
+                      type = "object";
+                    };
+                    spec = {
+                      type = "object";
+                      "x-kubernetes-preserve-unknown-fields" = true;
+                    };
+                    status = {
+                      type = "object";
+                      "x-kubernetes-preserve-unknown-fields" = true;
+                    };
+                  };
+                };
+              }
+              // lib.optionalAttrs (printerColumns != [ ]) {
+                additionalPrinterColumns = printerColumns;
+              }
+            )
+          ];
+        };
       };
-      initialDelaySeconds = 10;
-      periodSeconds = 10;
-      timeoutSeconds = 15;
-      failureThreshold = 8;
-      successThreshold = 1;
     };
-  }
-  // lib.optionalAttrs (cfg.resources != { }) { inherit (cfg) resources; };
 
-  webhookContainer = {
-    name = "cert-manager-webhook";
-    image = webhookImageRef;
-    imagePullPolicy = cfg.webhook.image.pullPolicy;
-    args = [
-      "--v=${toString cfg.logLevel}"
-      "--secure-port=${toString cfg.webhook.securePort}"
-      "--dynamic-serving-ca-secret-namespace=$(POD_NAMESPACE)"
-      "--dynamic-serving-ca-secret-name=cert-manager-webhook-ca"
-      "--dynamic-serving-dns-names=cert-manager-webhook"
-      "--dynamic-serving-dns-names=cert-manager-webhook.$(POD_NAMESPACE)"
-      "--dynamic-serving-dns-names=cert-manager-webhook.$(POD_NAMESPACE).svc"
+in
+self: {
+
+  # ============================================================
+  # CRDs
+  # ============================================================
+
+  crdCertificates = mkCRD {
+    crdName = "certificates.cert-manager.io";
+    group = "cert-manager.io";
+    kind = "Certificate";
+    listKind = "CertificateList";
+    plural = "certificates";
+    singular = "certificate";
+    shortNames = [
+      "cert"
+      "certs"
     ];
-    ports = [
+    printerColumns = [
       {
-        containerPort = cfg.webhook.securePort;
-        protocol = "TCP";
-        name = "https";
+        jsonPath = ".status.conditions[?(@.type==\"Ready\")].status";
+        name = "Ready";
+        type = "string";
       }
       {
-        containerPort = 6080;
-        protocol = "TCP";
-        name = "healthcheck";
+        jsonPath = ".spec.secretName";
+        name = "Secret";
+        type = "string";
       }
       {
-        containerPort = 9402;
-        protocol = "TCP";
-        name = "http-metrics";
+        jsonPath = ".spec.issuerRef.name";
+        name = "Issuer";
+        type = "string";
+      }
+      {
+        jsonPath = ".status.conditions[?(@.type==\"Ready\")].message";
+        name = "Status";
+        priority = 1;
+        type = "string";
+      }
+      {
+        jsonPath = ".metadata.creationTimestamp";
+        name = "Age";
+        type = "date";
       }
     ];
-    securityContext = containerSecCtx;
-    env = [ podNamespaceEnv ];
-    livenessProbe = {
-      httpGet = {
-        path = "/livez";
-        port = "healthcheck";
-        scheme = "HTTP";
-      };
-      initialDelaySeconds = 60;
-      periodSeconds = 10;
-      timeoutSeconds = 1;
-      failureThreshold = 3;
-      successThreshold = 1;
-    };
-    readinessProbe = {
-      httpGet = {
-        path = "/healthz";
-        port = "healthcheck";
-        scheme = "HTTP";
-      };
-      initialDelaySeconds = 5;
-      periodSeconds = 5;
-      timeoutSeconds = 1;
-      failureThreshold = 3;
-      successThreshold = 1;
-    };
-  }
-  // lib.optionalAttrs (cfg.webhook.resources != { }) {
-    resources = cfg.webhook.resources;
   };
 
-  cainjectorContainer = {
-    name = "cert-manager-cainjector";
-    image = cainjectorImageRef;
-    imagePullPolicy = cfg.cainjector.image.pullPolicy;
-    args = [
-      "--v=${toString cfg.logLevel}"
-      "--leader-election-namespace=${cfg.leaderElection.namespace}"
+  crdCertificateRequests = mkCRD {
+    crdName = "certificaterequests.cert-manager.io";
+    group = "cert-manager.io";
+    kind = "CertificateRequest";
+    listKind = "CertificateRequestList";
+    plural = "certificaterequests";
+    singular = "certificaterequest";
+    shortNames = [
+      "cr"
+      "crs"
     ];
-    ports = [
+    printerColumns = [
       {
-        containerPort = 9402;
-        protocol = "TCP";
-        name = "http-metrics";
+        jsonPath = ".status.conditions[?(@.type==\"Approved\")].status";
+        name = "Approved";
+        type = "string";
+      }
+      {
+        jsonPath = ".status.conditions[?(@.type==\"Denied\")].status";
+        name = "Denied";
+        type = "string";
+      }
+      {
+        jsonPath = ".status.conditions[?(@.type==\"Ready\")].status";
+        name = "Ready";
+        type = "string";
+      }
+      {
+        jsonPath = ".spec.issuerRef.name";
+        name = "Issuer";
+        type = "string";
+      }
+      {
+        jsonPath = ".spec.username";
+        name = "Requester";
+        type = "string";
+      }
+      {
+        jsonPath = ".status.conditions[?(@.type==\"Ready\")].message";
+        name = "Status";
+        priority = 1;
+        type = "string";
+      }
+      {
+        jsonPath = ".metadata.creationTimestamp";
+        name = "Age";
+        type = "date";
       }
     ];
-    securityContext = containerSecCtx;
-    env = [ podNamespaceEnv ];
-  }
-  // lib.optionalAttrs (cfg.cainjector.resources != { }) {
-    resources = cfg.cainjector.resources;
   };
 
-  startupapicheckContainer = {
-    name = "cert-manager-startupapicheck";
-    image = startupapicheckImageRef;
-    imagePullPolicy = cfg.startupapicheck.image.pullPolicy;
-    args = [
-      "check"
-      "api"
-      "--wait=1m"
-      "-v"
+  crdChallenges = mkCRD {
+    crdName = "challenges.acme.cert-manager.io";
+    group = "acme.cert-manager.io";
+    kind = "Challenge";
+    listKind = "ChallengeList";
+    plural = "challenges";
+    singular = "challenge";
+    categories = [
+      "cert-manager"
+      "cert-manager-acme"
     ];
-    securityContext = containerSecCtx;
-    env = [ podNamespaceEnv ];
-  }
-  // lib.optionalAttrs (cfg.startupapicheck.resources != { }) {
-    resources = cfg.startupapicheck.resources;
+    printerColumns = [
+      {
+        jsonPath = ".status.state";
+        name = "State";
+        type = "string";
+      }
+      {
+        jsonPath = ".spec.dnsName";
+        name = "Domain";
+        type = "string";
+      }
+      {
+        jsonPath = ".status.reason";
+        name = "Reason";
+        priority = 1;
+        type = "string";
+      }
+      {
+        jsonPath = ".metadata.creationTimestamp";
+        name = "Age";
+        type = "date";
+      }
+    ];
   };
 
-in self:
-let
-  # SA name helpers — must be inside the `self:` scope since they
-  # reference self.controllerSa etc. via interpolation.
-  controllerSaName = if cfg.serviceAccount.create then "${self.controllerSa}" else "default";
-  webhookSaName = if cfg.serviceAccount.create then "${self.webhookSa}" else "default";
-  cainjectorSaName = if cfg.serviceAccount.create then "${self.cainjectorSa}" else "default";
-  startupapicheckSaName = if cfg.serviceAccount.create then "${self.startupapicheckSa}" else "default";
-in {
+  crdClusterIssuers = mkCRD {
+    crdName = "clusterissuers.cert-manager.io";
+    group = "cert-manager.io";
+    kind = "ClusterIssuer";
+    listKind = "ClusterIssuerList";
+    plural = "clusterissuers";
+    singular = "clusterissuer";
+    crdScope = "Cluster";
+    printerColumns = [
+      {
+        jsonPath = ".status.conditions[?(@.type==\"Ready\")].status";
+        name = "Ready";
+        type = "string";
+      }
+      {
+        jsonPath = ".status.conditions[?(@.type==\"Ready\")].message";
+        name = "Status";
+        priority = 1;
+        type = "string";
+      }
+      {
+        jsonPath = ".metadata.creationTimestamp";
+        name = "Age";
+        type = "date";
+      }
+    ];
+  };
 
-  # ====================================================================
-  # CONTROLLER RBAC
-  # ====================================================================
+  crdIssuers = mkCRD {
+    crdName = "issuers.cert-manager.io";
+    group = "cert-manager.io";
+    kind = "Issuer";
+    listKind = "IssuerList";
+    plural = "issuers";
+    singular = "issuer";
+    printerColumns = [
+      {
+        jsonPath = ".status.conditions[?(@.type==\"Ready\")].status";
+        name = "Ready";
+        type = "string";
+      }
+      {
+        jsonPath = ".status.conditions[?(@.type==\"Ready\")].message";
+        name = "Status";
+        priority = 1;
+        type = "string";
+      }
+      {
+        jsonPath = ".metadata.creationTimestamp";
+        name = "Age";
+        type = "date";
+      }
+    ];
+  };
 
-  # --- ClusterRoles ---
+  crdOrders = mkCRD {
+    crdName = "orders.acme.cert-manager.io";
+    group = "acme.cert-manager.io";
+    kind = "Order";
+    listKind = "OrderList";
+    plural = "orders";
+    singular = "order";
+    categories = [
+      "cert-manager"
+      "cert-manager-acme"
+    ];
+    printerColumns = [
+      {
+        jsonPath = ".status.state";
+        name = "State";
+        type = "string";
+      }
+      {
+        jsonPath = ".spec.issuerRef.name";
+        name = "Issuer";
+        type = "string";
+      }
+      {
+        jsonPath = ".status.reason";
+        name = "Reason";
+        priority = 1;
+        type = "string";
+      }
+      {
+        jsonPath = ".metadata.creationTimestamp";
+        name = "Age";
+        type = "date";
+      }
+    ];
+  };
 
-  controllerClusterRoleIssuers = scope.mkClusterResource {
+  # ============================================================
+  # Controller — ServiceAccount, RBAC, Service, Deployment
+  # ============================================================
+
+  controllerServiceAccount = scope.mkResource {
+    apiVersion = "v1";
+    kind = "ServiceAccount";
+    name = "${name}-controller";
+    labels = controllerLabels;
+    extra.automountServiceAccountToken = true;
+  };
+
+  # -- Controller ClusterRoles --
+
+  controllerRoleIssuers = scope.mkClusterResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "ClusterRole";
-    name = "${scope.instanceName}-cert-manager-controller-issuers";
+    name = "${name}-controller-issuers";
     labels = controllerLabels;
     extra.rules = [
       {
@@ -376,10 +491,10 @@ in {
     ];
   };
 
-  controllerClusterRoleClusterissuers = scope.mkClusterResource {
+  controllerRoleClusterIssuers = scope.mkClusterResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "ClusterRole";
-    name = "${scope.instanceName}-cert-manager-controller-clusterissuers";
+    name = "${name}-controller-clusterissuers";
     labels = controllerLabels;
     extra.rules = [
       {
@@ -425,10 +540,10 @@ in {
     ];
   };
 
-  controllerClusterRoleCertificates = scope.mkClusterResource {
+  controllerRoleCertificates = scope.mkClusterResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "ClusterRole";
-    name = "${scope.instanceName}-cert-manager-controller-certificates";
+    name = "${name}-controller-certificates";
     labels = controllerLabels;
     extra.rules = [
       {
@@ -501,10 +616,10 @@ in {
     ];
   };
 
-  controllerClusterRoleOrders = scope.mkClusterResource {
+  controllerRoleOrders = scope.mkClusterResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "ClusterRole";
-    name = "${scope.instanceName}-cert-manager-controller-orders";
+    name = "${name}-controller-orders";
     labels = controllerLabels;
     extra.rules = [
       {
@@ -575,10 +690,10 @@ in {
     ];
   };
 
-  controllerClusterRoleChallenges = scope.mkClusterResource {
+  controllerRoleChallenges = scope.mkClusterResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "ClusterRole";
-    name = "${scope.instanceName}-cert-manager-controller-challenges";
+    name = "${name}-controller-challenges";
     labels = controllerLabels;
     extra.rules = [
       {
@@ -678,22 +793,13 @@ in {
         resources = [ "challenges/finalizers" ];
         verbs = [ "update" ];
       }
-      {
-        apiGroups = [ "" ];
-        resources = [ "secrets" ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-        ];
-      }
     ];
   };
 
-  controllerClusterRoleIngressShim = scope.mkClusterResource {
+  controllerRoleIngressShim = scope.mkClusterResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "ClusterRole";
-    name = "${scope.instanceName}-cert-manager-controller-ingress-shim";
+    name = "${name}-controller-ingress-shim";
     labels = controllerLabels;
     extra.rules = [
       {
@@ -767,10 +873,10 @@ in {
     ];
   };
 
-  controllerClusterRoleApprove = scope.mkClusterResource {
+  controllerRoleApprove = scope.mkClusterResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "ClusterRole";
-    name = "${scope.instanceName}-cert-manager-controller-approve:cert-manager-io";
+    name = "${name}-controller-approve:cert-manager-io";
     labels = controllerLabels;
     extra.rules = [
       {
@@ -785,10 +891,10 @@ in {
     ];
   };
 
-  controllerClusterRoleCertificatesigningrequests = scope.mkClusterResource {
+  controllerRoleCSR = scope.mkClusterResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "ClusterRole";
-    name = "${scope.instanceName}-cert-manager-controller-certificatesigningrequests";
+    name = "${name}-controller-certificatesigningrequests";
     labels = controllerLabels;
     extra.rules = [
       {
@@ -812,11 +918,11 @@ in {
       {
         apiGroups = [ "certificates.k8s.io" ];
         resources = [ "signers" ];
-        verbs = [ "sign" ];
         resourceNames = [
           "issuers.cert-manager.io/*"
           "clusterissuers.cert-manager.io/*"
         ];
+        verbs = [ "sign" ];
       }
       {
         apiGroups = [ "authorization.k8s.io" ];
@@ -826,182 +932,11 @@ in {
     ];
   };
 
-  # --- Controller ClusterRoleBindings (one per ClusterRole) ---
-
-  controllerBindingIssuers = scope.mkClusterResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "ClusterRoleBinding";
-    name = "${scope.instanceName}-cert-manager-controller-issuers";
-    labels = controllerLabels;
-    extra = {
-      roleRef = {
-        apiGroup = "rbac.authorization.k8s.io";
-        kind = "ClusterRole";
-        name = "${self.controllerClusterRoleIssuers}";
-      };
-      subjects = [
-        {
-          kind = "ServiceAccount";
-          name = controllerSaName;
-          namespace = scope.namespaceName;
-        }
-      ];
-    };
-  };
-
-  controllerBindingClusterissuers = scope.mkClusterResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "ClusterRoleBinding";
-    name = "${scope.instanceName}-cert-manager-controller-clusterissuers";
-    labels = controllerLabels;
-    extra = {
-      roleRef = {
-        apiGroup = "rbac.authorization.k8s.io";
-        kind = "ClusterRole";
-        name = "${self.controllerClusterRoleClusterissuers}";
-      };
-      subjects = [
-        {
-          kind = "ServiceAccount";
-          name = controllerSaName;
-          namespace = scope.namespaceName;
-        }
-      ];
-    };
-  };
-
-  controllerBindingCertificates = scope.mkClusterResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "ClusterRoleBinding";
-    name = "${scope.instanceName}-cert-manager-controller-certificates";
-    labels = controllerLabels;
-    extra = {
-      roleRef = {
-        apiGroup = "rbac.authorization.k8s.io";
-        kind = "ClusterRole";
-        name = "${self.controllerClusterRoleCertificates}";
-      };
-      subjects = [
-        {
-          kind = "ServiceAccount";
-          name = controllerSaName;
-          namespace = scope.namespaceName;
-        }
-      ];
-    };
-  };
-
-  controllerBindingOrders = scope.mkClusterResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "ClusterRoleBinding";
-    name = "${scope.instanceName}-cert-manager-controller-orders";
-    labels = controllerLabels;
-    extra = {
-      roleRef = {
-        apiGroup = "rbac.authorization.k8s.io";
-        kind = "ClusterRole";
-        name = "${self.controllerClusterRoleOrders}";
-      };
-      subjects = [
-        {
-          kind = "ServiceAccount";
-          name = controllerSaName;
-          namespace = scope.namespaceName;
-        }
-      ];
-    };
-  };
-
-  controllerBindingChallenges = scope.mkClusterResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "ClusterRoleBinding";
-    name = "${scope.instanceName}-cert-manager-controller-challenges";
-    labels = controllerLabels;
-    extra = {
-      roleRef = {
-        apiGroup = "rbac.authorization.k8s.io";
-        kind = "ClusterRole";
-        name = "${self.controllerClusterRoleChallenges}";
-      };
-      subjects = [
-        {
-          kind = "ServiceAccount";
-          name = controllerSaName;
-          namespace = scope.namespaceName;
-        }
-      ];
-    };
-  };
-
-  controllerBindingIngressShim = scope.mkClusterResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "ClusterRoleBinding";
-    name = "${scope.instanceName}-cert-manager-controller-ingress-shim";
-    labels = controllerLabels;
-    extra = {
-      roleRef = {
-        apiGroup = "rbac.authorization.k8s.io";
-        kind = "ClusterRole";
-        name = "${self.controllerClusterRoleIngressShim}";
-      };
-      subjects = [
-        {
-          kind = "ServiceAccount";
-          name = controllerSaName;
-          namespace = scope.namespaceName;
-        }
-      ];
-    };
-  };
-
-  controllerBindingApprove = scope.mkClusterResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "ClusterRoleBinding";
-    name = "${scope.instanceName}-cert-manager-controller-approve:cert-manager-io";
-    labels = controllerLabels;
-    extra = {
-      roleRef = {
-        apiGroup = "rbac.authorization.k8s.io";
-        kind = "ClusterRole";
-        name = "${self.controllerClusterRoleApprove}";
-      };
-      subjects = [
-        {
-          kind = "ServiceAccount";
-          name = controllerSaName;
-          namespace = scope.namespaceName;
-        }
-      ];
-    };
-  };
-
-  controllerBindingCertificatesigningrequests = scope.mkClusterResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "ClusterRoleBinding";
-    name = "${scope.instanceName}-cert-manager-controller-certificatesigningrequests";
-    labels = controllerLabels;
-    extra = {
-      roleRef = {
-        apiGroup = "rbac.authorization.k8s.io";
-        kind = "ClusterRole";
-        name = "${self.controllerClusterRoleCertificatesigningrequests}";
-      };
-      subjects = [
-        {
-          kind = "ServiceAccount";
-          name = controllerSaName;
-          namespace = scope.namespaceName;
-        }
-      ];
-    };
-  };
-
-  # --- Aggregated ClusterRoles (no bindings, just roles with aggregation labels) ---
-
-  aggregatedClusterRoleClusterView = scope.mkClusterResource {
+  # Aggregate roles for kubectl users.
+  clusterViewRole = scope.mkClusterResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "ClusterRole";
-    name = "${scope.instanceName}-cert-manager-cluster-view";
+    name = "${name}-cluster-view";
     labels = controllerLabels // {
       "rbac.authorization.k8s.io/aggregate-to-cluster-reader" = "true";
     };
@@ -1018,10 +953,10 @@ in {
     ];
   };
 
-  aggregatedClusterRoleView = scope.mkClusterResource {
+  viewRole = scope.mkClusterResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "ClusterRole";
-    name = "${scope.instanceName}-cert-manager-view";
+    name = "${name}-view";
     labels = controllerLabels // {
       "rbac.authorization.k8s.io/aggregate-to-view" = "true";
       "rbac.authorization.k8s.io/aggregate-to-edit" = "true";
@@ -1057,10 +992,10 @@ in {
     ];
   };
 
-  aggregatedClusterRoleEdit = scope.mkClusterResource {
+  editRole = scope.mkClusterResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "ClusterRole";
-    name = "${scope.instanceName}-cert-manager-edit";
+    name = "${name}-edit";
     labels = controllerLabels // {
       "rbac.authorization.k8s.io/aggregate-to-edit" = "true";
       "rbac.authorization.k8s.io/aggregate-to-admin" = "true";
@@ -1103,25 +1038,145 @@ in {
     ];
   };
 
-  # --- Controller namespaced Roles + RoleBindings ---
-  # Note: In v1 these were in leaderElection.namespace (kube-system).
-  # In v2, scope.mkResource auto-injects the package namespace.
+  # -- Controller ClusterRoleBindings --
 
-  controllerRoleLeaderelection = scope.mkResource {
+  controllerBindingIssuers = scope.mkClusterResource {
+    apiVersion = "rbac.authorization.k8s.io/v1";
+    kind = "ClusterRoleBinding";
+    name = "${name}-controller-issuers";
+    labels = controllerLabels;
+    extra = {
+      roleRef = {
+        apiGroup = "rbac.authorization.k8s.io";
+        kind = "ClusterRole";
+        name = "${self.controllerRoleIssuers}";
+      };
+      subjects = mkControllerSubject self.controllerServiceAccount;
+    };
+  };
+
+  controllerBindingClusterIssuers = scope.mkClusterResource {
+    apiVersion = "rbac.authorization.k8s.io/v1";
+    kind = "ClusterRoleBinding";
+    name = "${name}-controller-clusterissuers";
+    labels = controllerLabels;
+    extra = {
+      roleRef = {
+        apiGroup = "rbac.authorization.k8s.io";
+        kind = "ClusterRole";
+        name = "${self.controllerRoleClusterIssuers}";
+      };
+      subjects = mkControllerSubject self.controllerServiceAccount;
+    };
+  };
+
+  controllerBindingCertificates = scope.mkClusterResource {
+    apiVersion = "rbac.authorization.k8s.io/v1";
+    kind = "ClusterRoleBinding";
+    name = "${name}-controller-certificates";
+    labels = controllerLabels;
+    extra = {
+      roleRef = {
+        apiGroup = "rbac.authorization.k8s.io";
+        kind = "ClusterRole";
+        name = "${self.controllerRoleCertificates}";
+      };
+      subjects = mkControllerSubject self.controllerServiceAccount;
+    };
+  };
+
+  controllerBindingOrders = scope.mkClusterResource {
+    apiVersion = "rbac.authorization.k8s.io/v1";
+    kind = "ClusterRoleBinding";
+    name = "${name}-controller-orders";
+    labels = controllerLabels;
+    extra = {
+      roleRef = {
+        apiGroup = "rbac.authorization.k8s.io";
+        kind = "ClusterRole";
+        name = "${self.controllerRoleOrders}";
+      };
+      subjects = mkControllerSubject self.controllerServiceAccount;
+    };
+  };
+
+  controllerBindingChallenges = scope.mkClusterResource {
+    apiVersion = "rbac.authorization.k8s.io/v1";
+    kind = "ClusterRoleBinding";
+    name = "${name}-controller-challenges";
+    labels = controllerLabels;
+    extra = {
+      roleRef = {
+        apiGroup = "rbac.authorization.k8s.io";
+        kind = "ClusterRole";
+        name = "${self.controllerRoleChallenges}";
+      };
+      subjects = mkControllerSubject self.controllerServiceAccount;
+    };
+  };
+
+  controllerBindingIngressShim = scope.mkClusterResource {
+    apiVersion = "rbac.authorization.k8s.io/v1";
+    kind = "ClusterRoleBinding";
+    name = "${name}-controller-ingress-shim";
+    labels = controllerLabels;
+    extra = {
+      roleRef = {
+        apiGroup = "rbac.authorization.k8s.io";
+        kind = "ClusterRole";
+        name = "${self.controllerRoleIngressShim}";
+      };
+      subjects = mkControllerSubject self.controllerServiceAccount;
+    };
+  };
+
+  controllerBindingApprove = scope.mkClusterResource {
+    apiVersion = "rbac.authorization.k8s.io/v1";
+    kind = "ClusterRoleBinding";
+    name = "${name}-controller-approve:cert-manager-io";
+    labels = controllerLabels;
+    extra = {
+      roleRef = {
+        apiGroup = "rbac.authorization.k8s.io";
+        kind = "ClusterRole";
+        name = "${self.controllerRoleApprove}";
+      };
+      subjects = mkControllerSubject self.controllerServiceAccount;
+    };
+  };
+
+  controllerBindingCSR = scope.mkClusterResource {
+    apiVersion = "rbac.authorization.k8s.io/v1";
+    kind = "ClusterRoleBinding";
+    name = "${name}-controller-certificatesigningrequests";
+    labels = controllerLabels;
+    extra = {
+      roleRef = {
+        apiGroup = "rbac.authorization.k8s.io";
+        kind = "ClusterRole";
+        name = "${self.controllerRoleCSR}";
+      };
+      subjects = mkControllerSubject self.controllerServiceAccount;
+    };
+  };
+
+  # -- Controller leader election (namespace-scoped) --
+
+  controllerLeaderElectionRole = scope.mkResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "Role";
-    name = "${scope.instanceName}-cert-manager:leaderelection";
+    name = "${name}-controller:leaderelection";
     labels = controllerLabels;
     extra.rules = [
       {
         apiGroups = [ "coordination.k8s.io" ];
         resources = [ "leases" ];
+        resourceNames = [ "cert-manager-controller" ];
         verbs = [
           "get"
           "update"
           "patch"
         ];
-        resourceNames = [ "cert-manager-controller" ];
       }
       {
         apiGroups = [ "coordination.k8s.io" ];
@@ -1131,138 +1186,176 @@ in {
     ];
   };
 
-  controllerRoleBindingLeaderelection = scope.mkResource {
+  controllerLeaderElectionRoleBinding = scope.mkResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "RoleBinding";
-    name = "${scope.instanceName}-cert-manager:leaderelection";
+    name = "${name}-controller:leaderelection";
     labels = controllerLabels;
     extra = {
       roleRef = {
         apiGroup = "rbac.authorization.k8s.io";
         kind = "Role";
-        name = "${self.controllerRoleLeaderelection}";
+        name = "${self.controllerLeaderElectionRole}";
       };
-      subjects = [
-        {
-          kind = "ServiceAccount";
-          name = controllerSaName;
-          namespace = scope.namespaceName;
-        }
-      ];
+      subjects = mkControllerSubject self.controllerServiceAccount;
     };
   };
 
-  controllerRoleTokenrequest = scope.mkResource {
+  # -- Controller token request role (namespace-scoped) --
+
+  controllerTokenRequestRole = scope.mkResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "Role";
-    name = "${scope.instanceName}-cert-manager-tokenrequest";
+    name = "${name}-tokenrequest";
     labels = controllerLabels;
     extra.rules = [
       {
         apiGroups = [ "" ];
         resources = [ "serviceaccounts/token" ];
+        resourceNames = [ "${self.controllerServiceAccount}" ];
         verbs = [ "create" ];
-        resourceNames = [ "cert-manager" ];
       }
     ];
   };
 
-  controllerRoleBindingTokenrequest = scope.mkResource {
+  controllerTokenRequestRoleBinding = scope.mkResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "RoleBinding";
-    name = "${scope.instanceName}-cert-manager-tokenrequest";
+    name = "${name}-tokenrequest";
     labels = controllerLabels;
     extra = {
       roleRef = {
         apiGroup = "rbac.authorization.k8s.io";
         kind = "Role";
-        name = "${self.controllerRoleTokenrequest}";
+        name = "${self.controllerTokenRequestRole}";
       };
-      subjects = [
-        {
-          kind = "ServiceAccount";
-          name = controllerSaName;
-          namespace = scope.namespaceName;
-        }
-      ];
+      subjects = mkControllerSubject self.controllerServiceAccount;
     };
   };
 
-  # ── Controller ServiceAccount ─────────────────────────────────────
-
-  controllerSa = scope.mkResource {
-    apiVersion = "v1";
-    kind = "ServiceAccount";
-    name = "${scope.instanceName}-cert-manager";
-    labels = controllerLabels;
-    extra = lib.optionalAttrs cfg.serviceAccount.automountServiceAccountToken {
-      automountServiceAccountToken = true;
-    };
-  };
-
-  # ── Controller Deployment ──────────────────────────────────────────
-
-  controllerDeployment = scope.mkResource {
-    apiVersion = "apps/v1";
-    kind = "Deployment";
-    name = "${scope.instanceName}-cert-manager";
-    labels = controllerLabels // {
-      "app.kubernetes.io/version" = cfg.image.tag;
-    };
-    requires = lib.optional cfg.serviceAccount.create self.controllerSa
-      ++ [ self.webhookService ]
-      ++ lib.optional cfg.startupapicheck.enabled self.startupapicheckJob;
-    spec = {
-      replicas = cfg.replicaCount;
-      selector.matchLabels = controllerSelectorLabels;
-      template = {
-        metadata = {
-          labels = controllerLabels;
-          annotations = prometheusAnnotations;
-        };
-        spec = {
-          serviceAccountName = controllerSaName;
-          enableServiceLinks = false;
-          securityContext = podSecurityContext;
-          inherit nodeSelector;
-          containers = [ controllerContainer ];
-        };
-      };
-    };
-  };
-
-  # ── Controller Service ─────────────────────────────────────────────
+  # -- Controller Service --
 
   controllerService = scope.mkResource {
     apiVersion = "v1";
     kind = "Service";
-    name = "${scope.instanceName}-cert-manager";
+    name = "${name}-controller";
     labels = controllerLabels;
-    annotations = prometheusAnnotations;
-    outputs = {
-      metricsPort = 9402;
-    };
     spec = {
-      selector = controllerSelectorLabels;
+      type = "ClusterIP";
+      selector = controllerSelector;
       ports = [
         {
+          name = "tcp-prometheus-servicemonitor";
           port = 9402;
           protocol = "TCP";
-          targetPort = "http-metrics";
-          name = "tcp-prometheus-servicemonitor";
+          targetPort = 9402;
         }
       ];
     };
+    outputs = {
+      metricsPort = "9402";
+    };
   };
 
-  # ====================================================================
-  # WEBHOOK RBAC
-  # ====================================================================
+  # -- Controller Deployment --
 
-  webhookClusterRoleSubjectaccessreviews = scope.mkClusterResource {
+  controllerDeployment = scope.mkResource {
+    apiVersion = "apps/v1";
+    kind = "Deployment";
+    name = "${name}-controller";
+    labels = controllerLabels;
+    spec = {
+      replicas = cfg.replicaCount;
+      selector.matchLabels = controllerSelector;
+      template = {
+        metadata = {
+          labels = controllerLabels;
+          annotations = {
+            "prometheus.io/path" = "/metrics";
+            "prometheus.io/scrape" = "true";
+            "prometheus.io/port" = "9402";
+          };
+        };
+        spec = {
+          serviceAccountName = "${self.controllerServiceAccount}";
+          enableServiceLinks = false;
+          securityContext = podSecurityContext;
+          containers = [
+            {
+              name = "cert-manager-controller";
+              image = "${cfg.image.repository}:${cfg.image.tag}";
+              imagePullPolicy = cfg.image.pullPolicy;
+              args = [
+                "--v=2"
+                "--cluster-resource-namespace=$(POD_NAMESPACE)"
+                "--leader-election-namespace=$(POD_NAMESPACE)"
+                "--acme-http01-solver-image=${cfg.acmesolver.image.repository}:${cfg.acmesolver.image.tag}"
+                "--max-concurrent-challenges=60"
+              ]
+              ++ lib.optional (
+                cfg.dns01RecursiveNameservers != ""
+              ) "--dns01-recursive-nameservers=${cfg.dns01RecursiveNameservers}"
+              ++ lib.optional cfg.dns01RecursiveNameserversOnly "--dns01-recursive-nameservers-only";
+              ports = [
+                {
+                  name = "http-metrics";
+                  containerPort = 9402;
+                  protocol = "TCP";
+                }
+                {
+                  name = "http-healthz";
+                  containerPort = 9403;
+                  protocol = "TCP";
+                }
+              ];
+              securityContext = containerSecurityContext;
+              env = [
+                {
+                  name = "POD_NAMESPACE";
+                  valueFrom.fieldRef.fieldPath = "metadata.namespace";
+                }
+              ];
+              livenessProbe = {
+                httpGet = {
+                  port = "http-healthz";
+                  path = "/livez";
+                  scheme = "HTTP";
+                };
+                initialDelaySeconds = 10;
+                periodSeconds = 10;
+                timeoutSeconds = 15;
+                successThreshold = 1;
+                failureThreshold = 8;
+              };
+              resources = cfg.resources;
+            }
+          ];
+          nodeSelector = {
+            "kubernetes.io/os" = "linux";
+          };
+        };
+      };
+    };
+  };
+
+  # ============================================================
+  # Webhook — ServiceAccount, RBAC, Service, Deployment, Configs
+  # ============================================================
+
+  webhookServiceAccount = scope.mkResource {
+    apiVersion = "v1";
+    kind = "ServiceAccount";
+    name = "${name}-webhook";
+    labels = webhookLabels;
+    extra.automountServiceAccountToken = true;
+  };
+
+  # -- Webhook ClusterRole + ClusterRoleBinding --
+
+  webhookClusterRole = scope.mkClusterResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "ClusterRole";
-    name = "${scope.instanceName}-cert-manager-webhook:subjectaccessreviews";
+    name = "${name}-webhook:subjectaccessreviews";
     labels = webhookLabels;
     extra.rules = [
       {
@@ -1273,43 +1366,45 @@ in {
     ];
   };
 
-  webhookBindingSubjectaccessreviews = scope.mkClusterResource {
+  webhookClusterRoleBinding = scope.mkClusterResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "ClusterRoleBinding";
-    name = "${scope.instanceName}-cert-manager-webhook:subjectaccessreviews";
+    name = "${name}-webhook:subjectaccessreviews";
     labels = webhookLabels;
     extra = {
       roleRef = {
         apiGroup = "rbac.authorization.k8s.io";
         kind = "ClusterRole";
-        name = "${self.webhookClusterRoleSubjectaccessreviews}";
+        name = "${self.webhookClusterRole}";
       };
       subjects = [
         {
           kind = "ServiceAccount";
-          name = webhookSaName;
-          namespace = scope.namespaceName;
+          name = "${self.webhookServiceAccount}";
+          namespace = ns;
         }
       ];
     };
   };
 
-  webhookRoleDynamicServing = scope.mkResource {
+  # -- Webhook dynamic serving role (namespace-scoped) --
+
+  webhookDynamicServingRole = scope.mkResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "Role";
-    name = "${scope.instanceName}-cert-manager-webhook:dynamic-serving";
+    name = "${name}-webhook:dynamic-serving";
     labels = webhookLabels;
     extra.rules = [
       {
         apiGroups = [ "" ];
         resources = [ "secrets" ];
+        resourceNames = [ "${name}-webhook-ca" ];
         verbs = [
           "get"
           "list"
           "watch"
           "update"
         ];
-        resourceNames = [ "cert-manager-webhook-ca" ];
       }
       {
         apiGroups = [ "" ];
@@ -1319,110 +1414,158 @@ in {
     ];
   };
 
-  webhookRoleBindingDynamicServing = scope.mkResource {
+  webhookDynamicServingRoleBinding = scope.mkResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "RoleBinding";
-    name = "${scope.instanceName}-cert-manager-webhook:dynamic-serving";
+    name = "${name}-webhook:dynamic-serving";
     labels = webhookLabels;
     extra = {
       roleRef = {
         apiGroup = "rbac.authorization.k8s.io";
         kind = "Role";
-        name = "${self.webhookRoleDynamicServing}";
+        name = "${self.webhookDynamicServingRole}";
       };
       subjects = [
         {
           kind = "ServiceAccount";
-          name = webhookSaName;
-          namespace = scope.namespaceName;
+          name = "${self.webhookServiceAccount}";
+          namespace = ns;
         }
       ];
     };
   };
 
-  # ── Webhook ServiceAccount ─────────────────────────────────────────
+  # -- Webhook Service --
 
-  webhookSa = scope.mkResource {
+  webhookService = scope.mkResource {
     apiVersion = "v1";
-    kind = "ServiceAccount";
-    name = "${scope.instanceName}-cert-manager-webhook";
+    kind = "Service";
+    name = "${name}-webhook";
     labels = webhookLabels;
-    extra = lib.optionalAttrs cfg.serviceAccount.automountServiceAccountToken {
-      automountServiceAccountToken = true;
+    spec = {
+      type = "ClusterIP";
+      selector = webhookSelector;
+      ports = [
+        {
+          name = "https";
+          port = 443;
+          protocol = "TCP";
+          targetPort = "https";
+        }
+        {
+          name = "metrics";
+          port = 9402;
+          protocol = "TCP";
+          targetPort = "http-metrics";
+        }
+      ];
     };
   };
 
-  # ── Webhook Deployment ─────────────────────────────────────────────
+  # -- Webhook Deployment --
 
   webhookDeployment = scope.mkResource {
     apiVersion = "apps/v1";
     kind = "Deployment";
-    name = "${scope.instanceName}-cert-manager-webhook";
-    labels = webhookLabels // {
-      "app.kubernetes.io/version" = cfg.webhook.image.tag;
-    };
-    requires = lib.optional cfg.serviceAccount.create self.webhookSa
-      ++ lib.optional cfg.cainjector.enabled self.cainjectorDeployment;
+    name = "${name}-webhook";
+    labels = webhookLabels;
     spec = {
       replicas = cfg.webhook.replicaCount;
-      selector.matchLabels = webhookSelectorLabels;
+      selector.matchLabels = webhookSelector;
       template = {
         metadata = {
           labels = webhookLabels;
-          annotations = prometheusAnnotations;
+          annotations = {
+            "prometheus.io/path" = "/metrics";
+            "prometheus.io/scrape" = "true";
+            "prometheus.io/port" = "9402";
+          };
         };
         spec = {
-          serviceAccountName = webhookSaName;
+          serviceAccountName = "${self.webhookServiceAccount}";
           enableServiceLinks = false;
           securityContext = podSecurityContext;
-          inherit nodeSelector;
-          containers = [ webhookContainer ];
+          containers = [
+            {
+              name = "cert-manager-webhook";
+              image = "${cfg.webhook.image.repository}:${cfg.webhook.image.tag}";
+              imagePullPolicy = cfg.image.pullPolicy;
+              args = [
+                "--v=2"
+                "--secure-port=10250"
+                "--dynamic-serving-ca-secret-namespace=$(POD_NAMESPACE)"
+                "--dynamic-serving-ca-secret-name=${name}-webhook-ca"
+                "--dynamic-serving-dns-names=${name}-webhook"
+                "--dynamic-serving-dns-names=${name}-webhook.$(POD_NAMESPACE)"
+                "--dynamic-serving-dns-names=${name}-webhook.$(POD_NAMESPACE).svc"
+              ];
+              ports = [
+                {
+                  name = "https";
+                  containerPort = 10250;
+                  protocol = "TCP";
+                }
+                {
+                  name = "healthcheck";
+                  containerPort = 6080;
+                  protocol = "TCP";
+                }
+                {
+                  name = "http-metrics";
+                  containerPort = 9402;
+                  protocol = "TCP";
+                }
+              ];
+              livenessProbe = {
+                httpGet = {
+                  path = "/livez";
+                  port = 6080;
+                  scheme = "HTTP";
+                };
+                initialDelaySeconds = 60;
+                periodSeconds = 10;
+                timeoutSeconds = 1;
+                successThreshold = 1;
+                failureThreshold = 3;
+              };
+              readinessProbe = {
+                httpGet = {
+                  path = "/healthz";
+                  port = 6080;
+                  scheme = "HTTP";
+                };
+                initialDelaySeconds = 5;
+                periodSeconds = 5;
+                timeoutSeconds = 1;
+                successThreshold = 1;
+                failureThreshold = 3;
+              };
+              securityContext = containerSecurityContext;
+              env = [
+                {
+                  name = "POD_NAMESPACE";
+                  valueFrom.fieldRef.fieldPath = "metadata.namespace";
+                }
+              ];
+            }
+          ];
+          nodeSelector = {
+            "kubernetes.io/os" = "linux";
+          };
         };
       };
     };
   };
 
-  # ── Webhook Service ────────────────────────────────────────────────
+  # -- Webhook configurations --
 
-  webhookService = scope.mkResource {
-    apiVersion = "v1";
-    kind = "Service";
-    name = "${scope.instanceName}-cert-manager-webhook";
-    labels = webhookLabels;
-    annotations = prometheusAnnotations;
-    outputs = {
-      httpsPort = 443;
-      metricsPort = 9402;
-    };
-    requires = [ self.webhookDeployment ];
-    spec = {
-      selector = webhookSelectorLabels;
-      ports = [
-        {
-          port = 443;
-          protocol = "TCP";
-          targetPort = "https";
-          name = "https";
-        }
-        {
-          port = 9402;
-          protocol = "TCP";
-          targetPort = "http-metrics";
-          name = "metrics";
-        }
-      ];
-    };
-  };
-
-  # ── Webhook Admission Configurations ───────────────────────────────
-
-  mutatingWebhook = scope.mkClusterResource {
+  mutatingWebhookConfiguration = scope.mkClusterResource {
     apiVersion = "admissionregistration.k8s.io/v1";
     kind = "MutatingWebhookConfiguration";
-    name = "${scope.instanceName}-cert-manager-webhook";
+    name = "${name}-webhook";
     labels = webhookLabels;
     annotations = {
-      "cert-manager.io/inject-ca-from-secret" = "${scope.namespaceName}/cert-manager-webhook-ca";
+      "cert-manager.io/inject-ca-from-secret" = "${ns}/${name}-webhook-ca";
     };
     extra.webhooks = [
       {
@@ -1437,36 +1580,38 @@ in {
         ];
         admissionReviewVersions = [ "v1" ];
         matchPolicy = "Equivalent";
-        timeoutSeconds = cfg.webhook.timeoutSeconds;
+        timeoutSeconds = 30;
         failurePolicy = "Fail";
         sideEffects = "None";
         clientConfig.service = {
           name = "${self.webhookService}";
-          namespace = scope.namespaceName;
+          namespace = ns;
           path = "/mutate";
         };
       }
     ];
   };
 
-  validatingWebhook = scope.mkClusterResource {
+  validatingWebhookConfiguration = scope.mkClusterResource {
     apiVersion = "admissionregistration.k8s.io/v1";
     kind = "ValidatingWebhookConfiguration";
-    name = "${scope.instanceName}-cert-manager-webhook";
+    name = "${name}-webhook";
     labels = webhookLabels;
     annotations = {
-      "cert-manager.io/inject-ca-from-secret" = "${scope.namespaceName}/cert-manager-webhook-ca";
+      "cert-manager.io/inject-ca-from-secret" = "${ns}/${name}-webhook-ca";
     };
     extra.webhooks = [
       {
         name = "webhook.cert-manager.io";
-        namespaceSelector.matchExpressions = [
-          {
-            key = "cert-manager.io/disable-validation";
-            operator = "NotIn";
-            values = [ "true" ];
-          }
-        ];
+        namespaceSelector = {
+          matchExpressions = [
+            {
+              key = "cert-manager.io/disable-validation";
+              operator = "NotIn";
+              values = [ "true" ];
+            }
+          ];
+        };
         rules = [
           {
             apiGroups = [
@@ -1483,26 +1628,36 @@ in {
         ];
         admissionReviewVersions = [ "v1" ];
         matchPolicy = "Equivalent";
-        timeoutSeconds = cfg.webhook.timeoutSeconds;
+        timeoutSeconds = 30;
         failurePolicy = "Fail";
         sideEffects = "None";
         clientConfig.service = {
           name = "${self.webhookService}";
-          namespace = scope.namespaceName;
+          namespace = ns;
           path = "/validate";
         };
       }
     ];
   };
 
-  # ====================================================================
-  # CA INJECTOR RBAC
-  # ====================================================================
+  # ============================================================
+  # CA Injector — ServiceAccount, RBAC, Service, Deployment
+  # ============================================================
+
+  cainjectorServiceAccount = scope.mkResource {
+    apiVersion = "v1";
+    kind = "ServiceAccount";
+    name = "${name}-cainjector";
+    labels = cainjectorLabels;
+    extra.automountServiceAccountToken = true;
+  };
+
+  # -- CA Injector ClusterRole --
 
   cainjectorClusterRole = scope.mkClusterResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "ClusterRole";
-    name = "${scope.instanceName}-cert-manager-cainjector";
+    name = "${name}-cainjector";
     labels = cainjectorLabels;
     extra.rules = [
       {
@@ -1572,10 +1727,10 @@ in {
     ];
   };
 
-  cainjectorBinding = scope.mkClusterResource {
+  cainjectorClusterRoleBinding = scope.mkClusterResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "ClusterRoleBinding";
-    name = "${scope.instanceName}-cert-manager-cainjector";
+    name = "${name}-cainjector";
     labels = cainjectorLabels;
     extra = {
       roleRef = {
@@ -1586,31 +1741,33 @@ in {
       subjects = [
         {
           kind = "ServiceAccount";
-          name = cainjectorSaName;
-          namespace = scope.namespaceName;
+          name = "${self.cainjectorServiceAccount}";
+          namespace = ns;
         }
       ];
     };
   };
 
-  cainjectorRoleLeaderelection = scope.mkResource {
+  # -- CA Injector leader election (namespace-scoped) --
+
+  cainjectorLeaderElectionRole = scope.mkResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "Role";
-    name = "${scope.instanceName}-cert-manager-cainjector:leaderelection";
+    name = "${name}-cainjector:leaderelection";
     labels = cainjectorLabels;
     extra.rules = [
       {
         apiGroups = [ "coordination.k8s.io" ];
         resources = [ "leases" ];
+        resourceNames = [
+          "cert-manager-cainjector-leader-election"
+          "cert-manager-cainjector-leader-election-core"
+        ];
         verbs = [
           "get"
           "update"
           "patch"
         ];
-        resourceNames = [
-          "cert-manager-cainjector-leader-election"
-          "cert-manager-cainjector-leader-election-core"
-        ];
       }
       {
         apiGroups = [ "coordination.k8s.io" ];
@@ -1620,176 +1777,168 @@ in {
     ];
   };
 
-  cainjectorRoleBindingLeaderelection = scope.mkResource {
+  cainjectorLeaderElectionRoleBinding = scope.mkResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "RoleBinding";
-    name = "${scope.instanceName}-cert-manager-cainjector:leaderelection";
+    name = "${name}-cainjector:leaderelection";
     labels = cainjectorLabels;
     extra = {
       roleRef = {
         apiGroup = "rbac.authorization.k8s.io";
         kind = "Role";
-        name = "${self.cainjectorRoleLeaderelection}";
+        name = "${self.cainjectorLeaderElectionRole}";
       };
       subjects = [
         {
           kind = "ServiceAccount";
-          name = cainjectorSaName;
-          namespace = scope.namespaceName;
+          name = "${self.cainjectorServiceAccount}";
+          namespace = ns;
         }
       ];
     };
   };
 
-  # ── CA Injector ServiceAccount ─────────────────────────────────────
-
-  cainjectorSa = scope.mkResource {
-    apiVersion = "v1";
-    kind = "ServiceAccount";
-    name = "${scope.instanceName}-cert-manager-cainjector";
-    labels = cainjectorLabels;
-    extra = lib.optionalAttrs cfg.serviceAccount.automountServiceAccountToken {
-      automountServiceAccountToken = true;
-    };
-  };
-
-  # ── CA Injector Deployment ─────────────────────────────────────────
-
-  cainjectorDeployment = scope.mkResource {
-    apiVersion = "apps/v1";
-    kind = "Deployment";
-    name = "${scope.instanceName}-cert-manager-cainjector";
-    labels = cainjectorLabels // {
-      "app.kubernetes.io/version" = cfg.cainjector.image.tag;
-    };
-    requires = lib.optional cfg.serviceAccount.create self.cainjectorSa;
-    spec = {
-      replicas = cfg.cainjector.replicaCount;
-      selector.matchLabels = cainjectorSelectorLabels;
-      template = {
-        metadata = {
-          labels = cainjectorLabels;
-          annotations = prometheusAnnotations;
-        };
-        spec = {
-          serviceAccountName = cainjectorSaName;
-          enableServiceLinks = false;
-          securityContext = podSecurityContext;
-          inherit nodeSelector;
-          containers = [ cainjectorContainer ];
-        };
-      };
-    };
-  };
-
-  # ── CA Injector Service ────────────────────────────────────────────
+  # -- CA Injector Service --
 
   cainjectorService = scope.mkResource {
     apiVersion = "v1";
     kind = "Service";
-    name = "${scope.instanceName}-cert-manager-cainjector";
+    name = "${name}-cainjector";
     labels = cainjectorLabels;
-    annotations = prometheusAnnotations;
-    requires = [ self.cainjectorDeployment ];
     spec = {
-      selector = cainjectorSelectorLabels;
+      type = "ClusterIP";
+      selector = cainjectorSelector;
       ports = [
         {
+          name = "http-metrics";
           port = 9402;
           protocol = "TCP";
-          name = "http-metrics";
         }
       ];
     };
   };
 
-  # ====================================================================
-  # STARTUP API CHECK RBAC
-  # ====================================================================
+  # -- CA Injector Deployment --
 
-  startupapicheckRoleCreateCert = scope.mkResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "Role";
-    name = "${scope.instanceName}-cert-manager-startupapicheck:create-cert";
-    labels = startupapicheckLabels;
-    extra.rules = [
-      {
-        apiGroups = [ "cert-manager.io" ];
-        resources = [ "certificaterequests" ];
-        verbs = [ "create" ];
-      }
-    ];
-  };
-
-  startupapicheckRoleBindingCreateCert = scope.mkResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "RoleBinding";
-    name = "${scope.instanceName}-cert-manager-startupapicheck:create-cert";
-    labels = startupapicheckLabels;
-    extra = {
-      roleRef = {
-        apiGroup = "rbac.authorization.k8s.io";
-        kind = "Role";
-        name = "${self.startupapicheckRoleCreateCert}";
-      };
-      subjects = [
-        {
-          kind = "ServiceAccount";
-          name = startupapicheckSaName;
-          namespace = scope.namespaceName;
-        }
-      ];
-    };
-  };
-
-  # ── Startup API Check ServiceAccount ───────────────────────────────
-
-  startupapicheckSa = scope.mkResource {
-    apiVersion = "v1";
-    kind = "ServiceAccount";
-    name = "${scope.instanceName}-cert-manager-startupapicheck";
-    labels = startupapicheckLabels;
-    extra = lib.optionalAttrs cfg.serviceAccount.automountServiceAccountToken {
-      automountServiceAccountToken = true;
-    };
-  };
-
-  # ── Startup API Check Job ──────────────────────────────────────────
-
-  startupapicheckJob = scope.mkResource {
-    apiVersion = "batch/v1";
-    kind = "Job";
-    name = "${scope.instanceName}-cert-manager-startupapicheck";
-    labels = startupapicheckLabels;
-    requires = lib.optional cfg.serviceAccount.create self.startupapicheckSa;
+  cainjectorDeployment = scope.mkResource {
+    apiVersion = "apps/v1";
+    kind = "Deployment";
+    name = "${name}-cainjector";
+    labels = cainjectorLabels;
     spec = {
-      backoffLimit = 4;
+      replicas = cfg.cainjector.replicaCount;
+      selector.matchLabels = cainjectorSelector;
       template = {
         metadata = {
-          labels = startupapicheckLabels;
+          labels = cainjectorLabels;
+          annotations = {
+            "prometheus.io/path" = "/metrics";
+            "prometheus.io/scrape" = "true";
+            "prometheus.io/port" = "9402";
+          };
         };
         spec = {
-          restartPolicy = "OnFailure";
-          serviceAccountName = startupapicheckSaName;
+          serviceAccountName = "${self.cainjectorServiceAccount}";
           enableServiceLinks = false;
           securityContext = podSecurityContext;
-          inherit nodeSelector;
-          containers = [ startupapicheckContainer ];
+          containers = [
+            {
+              name = "cert-manager-cainjector";
+              image = "${cfg.cainjector.image.repository}:${cfg.cainjector.image.tag}";
+              imagePullPolicy = cfg.image.pullPolicy;
+              args = [
+                "--v=2"
+                "--leader-election-namespace=$(POD_NAMESPACE)"
+              ];
+              ports = [
+                {
+                  name = "http-metrics";
+                  containerPort = 9402;
+                  protocol = "TCP";
+                }
+              ];
+              env = [
+                {
+                  name = "POD_NAMESPACE";
+                  valueFrom.fieldRef.fieldPath = "metadata.namespace";
+                }
+              ];
+              securityContext = containerSecurityContext;
+            }
+          ];
+          nodeSelector = {
+            "kubernetes.io/os" = "linux";
+          };
         };
       };
     };
   };
 
-  # ====================================================================
-  # MAIN — the public interface
-  # ====================================================================
-  #
-  # From outside, cert-manager IS the controller Service. But deploying it
-  # requires the webhook (needed for CRD validation), optionally the
-  # cainjector and startupapicheck.
+  # ============================================================
+  # Entry point
+  # ============================================================
 
   main = {
-    resource = self.controllerService;
-    requires = [ self.controllerDeployment ];
+    resource = self.controllerDeployment;
+    requires =
+      # CRDs
+      (lib.optionals cfg.installCRDs [
+        self.crdCertificates
+        self.crdCertificateRequests
+        self.crdChallenges
+        self.crdClusterIssuers
+        self.crdIssuers
+        self.crdOrders
+      ])
+      # Controller RBAC
+      ++ [
+        self.controllerServiceAccount
+        self.controllerRoleIssuers
+        self.controllerRoleClusterIssuers
+        self.controllerRoleCertificates
+        self.controllerRoleOrders
+        self.controllerRoleChallenges
+        self.controllerRoleIngressShim
+        self.controllerRoleApprove
+        self.controllerRoleCSR
+        self.clusterViewRole
+        self.viewRole
+        self.editRole
+        self.controllerBindingIssuers
+        self.controllerBindingClusterIssuers
+        self.controllerBindingCertificates
+        self.controllerBindingOrders
+        self.controllerBindingChallenges
+        self.controllerBindingIngressShim
+        self.controllerBindingApprove
+        self.controllerBindingCSR
+        self.controllerLeaderElectionRole
+        self.controllerLeaderElectionRoleBinding
+        self.controllerTokenRequestRole
+        self.controllerTokenRequestRoleBinding
+        self.controllerService
+      ]
+      # Webhook
+      ++ [
+        self.webhookServiceAccount
+        self.webhookClusterRole
+        self.webhookClusterRoleBinding
+        self.webhookDynamicServingRole
+        self.webhookDynamicServingRoleBinding
+        self.webhookService
+        self.webhookDeployment
+        self.mutatingWebhookConfiguration
+        self.validatingWebhookConfiguration
+      ]
+      # CA Injector
+      ++ [
+        self.cainjectorServiceAccount
+        self.cainjectorClusterRole
+        self.cainjectorClusterRoleBinding
+        self.cainjectorLeaderElectionRole
+        self.cainjectorLeaderElectionRoleBinding
+        self.cainjectorService
+        self.cainjectorDeployment
+      ];
   };
 }

@@ -1,145 +1,74 @@
-# Valkey package — v2.
+# Valkey (Redis-compatible) kix package with Sentinel support.
 #
-# Migrated from pkgs-fp/valkey/ (v1 fixpoint pattern).
-# Source Helm chart: oci://registry-1.docker.io/bitnamicharts/valkey (v3.0.2, appVersion 8.1.1)
+# Deploys a Valkey cluster using StatefulSet with sentinel sidecar for
+# automatic failover. Mirrors the Bitnami Valkey Helm chart topology.
 #
-# Two modes:
-#   REPLICATION (default): primary SS + replica SS + separate services/SAs
-#   SENTINEL (sentinel.enabled = true): single "node" SS with valkey + sentinel + metrics containers
+# Resources: ServiceAccount, ConfigMap (scripts + config), StatefulSet
+# (valkey + sentinel containers), Service (headless), Service (sentinel),
+# and optionally: Service (read replicas), Service (metrics), Secret (auth).
 #
-# The `main` resource is the primary Service (replication) or the sentinel Service.
-# Deploying `main.closure` includes all StatefulSets, ConfigMaps, ServiceAccounts,
-# and everything else needed to make that Service work.
+# main = sentinel Service (consumers connect to sentinel to discover primary).
 
-{ scope, config, lib }:
+{
+  scope,
+  config,
+  lib,
+}:
 
 let
+  name = scope.instanceName;
+
   cfg = scope.defaults config {
-    # --- Images ---
     image = {
       repository = "docker.io/bitnami/valkey";
       tag = "8.1.1-debian-12-r0";
       pullPolicy = "IfNotPresent";
     };
-
-    # --- Auth ---
+    replicaCount = 3;
     auth = {
       enabled = true;
-      existingSecret = "";
+      existingSecret = null;
       existingSecretPasswordKey = "valkey-password";
-      sentinel = true;
+      password = null;
     };
-
-    # --- Configuration ---
-    commonConfiguration = ''
-      # Enable AOF https://valkey.io/docs/topics/persistence.html
-      appendonly yes
-      # Disable RDB persistence, AOF persistence already enabled.
-      save ""'';
-
-    primary = {
-      configuration = "";
-      disableCommands = [
-        "FLUSHDB"
-        "FLUSHALL"
-      ];
-      resources = {
-        requests = {
-          cpu = "100m";
-          memory = "128Mi";
-          ephemeral-storage = "50Mi";
-        };
-        limits = {
-          cpu = "150m";
-          memory = "192Mi";
-          ephemeral-storage = "2Gi";
-        };
-      };
-    };
-
-    replica = {
-      replicaCount = 3;
-      configuration = "";
-      disableCommands = [
-        "FLUSHDB"
-        "FLUSHALL"
-      ];
-      resources = {
-        requests = {
-          cpu = "100m";
-          memory = "128Mi";
-          ephemeral-storage = "50Mi";
-        };
-        limits = {
-          cpu = "150m";
-          memory = "192Mi";
-          ephemeral-storage = "2Gi";
-        };
-      };
-      autoscaling = {
-        hpa = {
-          enabled = false;
-          minReplicas = 1;
-          maxReplicas = 11;
-          targetCPU = null;
-          targetMemory = null;
-        };
-      };
-    };
-
-    # --- Sentinel ---
     sentinel = {
-      enabled = false;
-      quorum = 2;
-      primarySet = "myprimary";
-      downAfterMilliseconds = 60000;
-      failoverTimeout = 180000;
-      parallelSyncs = 1;
-      configuration = "";
+      enabled = true;
       image = {
         repository = "docker.io/bitnami/valkey-sentinel";
         tag = "8.1.1-debian-12-r0";
         pullPolicy = "IfNotPresent";
       };
+      quorum = 2;
+      downAfterMilliseconds = 60000;
+      failoverTimeout = 180000;
+      parallelSyncs = 1;
+      primarySet = "mymaster";
       resources = {
         requests = {
           cpu = "100m";
           memory = "128Mi";
-          ephemeral-storage = "50Mi";
         };
         limits = {
           cpu = "150m";
           memory = "192Mi";
-          ephemeral-storage = "2Gi";
         };
       };
     };
-
-    # --- Persistence ---
     persistence = {
       enabled = true;
       size = "8Gi";
       storageClass = null;
-      accessModes = [ "ReadWriteOnce" ];
     };
-
-    # --- Security contexts ---
-    podSecurityContext = {
-      fsGroup = 1001;
-      fsGroupChangePolicy = "Always";
+    resources = {
+      requests = {
+        cpu = "100m";
+        memory = "128Mi";
+      };
+      limits = {
+        cpu = "250m";
+        memory = "256Mi";
+      };
     };
-
-    containerSecurityContext = {
-      allowPrivilegeEscalation = false;
-      capabilities.drop = [ "ALL" ];
-      readOnlyRootFilesystem = true;
-      runAsGroup = 1001;
-      runAsNonRoot = true;
-      runAsUser = 1001;
-      seccompProfile.type = "RuntimeDefault";
-    };
-
-    # --- Metrics ---
     metrics = {
       enabled = false;
       image = {
@@ -151,1096 +80,704 @@ let
         requests = {
           cpu = "100m";
           memory = "128Mi";
-          ephemeral-storage = "50Mi";
         };
         limits = {
           cpu = "150m";
           memory = "192Mi";
-          ephemeral-storage = "2Gi";
         };
       };
     };
-
-    # --- Network Policy ---
-    networkPolicy = {
-      enabled = true;
-    };
-
-    # --- PDB ---
-    pdb = {
-      enabled = true;
-      maxUnavailable = 1;
-      minAvailable = null;
-    };
-
-    clusterDomain = "cluster.local";
   };
 
-  # -- Derived values --------------------------------------------------
-
-  fullname = "${scope.instanceName}-valkey";
-  headlessSvcName = "${fullname}-headless";
-  imageRef = "${cfg.image.repository}:${cfg.image.tag}";
-  sentinelImageRef = "${cfg.sentinel.image.repository}:${cfg.sentinel.image.tag}";
-  metricsImageRef = "${cfg.metrics.image.repository}:${cfg.metrics.image.tag}";
-  totalReplicas = cfg.replica.replicaCount;
-
-  # FQDN helper
-  fqdn = name: "${name}.${scope.namespaceName}.svc.${cfg.clusterDomain}";
-  headlessSvcFqdn = fqdn headlessSvcName;
-  sentinelSvcFqdn = fqdn fullname;
-  primaryHostFqdn = "${fullname}-primary-0.${headlessSvcFqdn}";
-
-  # Secret name for password volume
-  secretName = if cfg.auth.existingSecret != "" then cfg.auth.existingSecret else fullname;
-
-  # -- Labels ----------------------------------------------------------
-
-  baseSelectorLabels = {
-    "app.kubernetes.io/instance" = scope.instanceName;
+  selectorLabels = {
     "app.kubernetes.io/name" = "valkey";
+    "app.kubernetes.io/instance" = name;
   };
 
-  selectorLabels = baseSelectorLabels;
+  commonLabels = selectorLabels // {
+    "app.kubernetes.io/component" = "node";
+  };
 
-  withComponent =
-    component:
-    selectorLabels
-    // {
-      "app.kubernetes.io/component" = component;
-    };
+  # Auth-related helpers.
+  authSecretName =
+    if cfg.auth.existingSecret != null then cfg.auth.existingSecret else "${name}-auth";
 
-  allLabels =
-    selectorLabels
-    // {
-      "app.kubernetes.io/managed-by" = "kix";
-      "app.kubernetes.io/part-of" = "valkey";
-    };
+  authPasswordKey = cfg.auth.existingSecretPasswordKey;
 
-  allLabelsWithComponent =
-    component:
-    allLabels
-    // {
-      "app.kubernetes.io/component" = component;
-    };
-
-  # -- Script templating -----------------------------------------------
-
-  readScript =
-    file:
-    builtins.replaceStrings
+  # Auth env vars shared by valkey, sentinel, and metrics containers.
+  authEnv =
+    if cfg.auth.enabled then
       [
-        "@HEADLESS_SERVICE_FQDN@"
-        "@SENTINEL_SERVICE_FQDN@"
-        "@FULLNAME@"
-        "@PRIMARY_SET@"
-        "@REPLICA_COUNT@"
-        "@SENTINEL_QUORUM@"
-      ]
-      [
-        headlessSvcFqdn
-        sentinelSvcFqdn
-        fullname
-        cfg.sentinel.primarySet
-        (toString totalReplicas)
-        (toString cfg.sentinel.quorum)
-      ]
-      (builtins.readFile (./scripts + "/${file}"));
-
-  renderDisableCommands = cmds: lib.concatMapStringsSep "\n" (cmd: ''rename-command ${cmd} ""'') cmds;
-
-  # -- Volume definitions -----------------------------------------------
-
-  passwordVolume = {
-    name = "valkey-password";
-    secret = {
-      secretName = secretName;
-      items = [
         {
-          key = cfg.auth.existingSecretPasswordKey;
-          path = "valkey-password";
+          name = "VALKEY_PASSWORD";
+          valueFrom.secretKeyRef = {
+            name = authSecretName;
+            key = authPasswordKey;
+          };
         }
-      ];
-    };
-  };
+      ]
+    else
+      [ ];
 
-  startScriptsVolume = scriptsCmName: {
-    name = "start-scripts";
-    configMap = {
-      name = scriptsCmName;
-      defaultMode = 493; # 0755
-    };
-  };
+  authCliFlag = if cfg.auth.enabled then ''-a "$VALKEY_PASSWORD"'' else "";
 
-  healthVolume = healthCmName: {
-    name = "health";
-    configMap = {
-      name = healthCmName;
-      defaultMode = 493;
-    };
-  };
+  # ── ConfigMap data ──────────────────────────────────────────────
 
-  configVolume = configCmName: {
-    name = "config";
-    configMap = {
-      name = configCmName;
-    };
-  };
+  defaultConf = ''
+    # Valkey default configuration
+    bind 0.0.0.0
+    port 6379
+    tcp-backlog 511
+    timeout 0
+    tcp-keepalive 300
+    daemonize no
+    loglevel notice
+    databases 16
+    save 900 1
+    save 300 10
+    save 60 10000
+    stop-writes-on-bgsave-error yes
+    rdbcompression yes
+    rdbchecksum yes
+    dbfilename dump.rdb
+    dir /data
+    maxmemory-policy noeviction
+    appendonly yes
+    appendfilename "appendonly.aof"
+    appendfsync everysec
+    no-appendfsync-on-rewrite no
+    auto-aof-rewrite-percentage 100
+    auto-aof-rewrite-min-size 64mb
+  ''
+  + lib.optionalString cfg.auth.enabled ''
+    masterauth VALKEY_PASSWORD_PLACEHOLDER
+    requirepass VALKEY_PASSWORD_PLACEHOLDER
+  '';
 
-  emptyDirVolume = {
-    name = "empty-dir";
-    emptyDir = { };
-  };
+  sentinelConf = ''
+    port 26379
+    dir /tmp
+    sentinel monitor ${cfg.sentinel.primarySet} ${name}-node-0.${name}-headless.${scope.namespaceName}.svc.cluster.local 6379 ${toString cfg.sentinel.quorum}
+    sentinel down-after-milliseconds ${cfg.sentinel.primarySet} ${toString cfg.sentinel.downAfterMilliseconds}
+    sentinel failover-timeout ${cfg.sentinel.primarySet} ${toString cfg.sentinel.failoverTimeout}
+    sentinel parallel-syncs ${cfg.sentinel.primarySet} ${toString cfg.sentinel.parallelSyncs}
+  ''
+  + lib.optionalString cfg.auth.enabled ''
+    sentinel auth-pass ${cfg.sentinel.primarySet} VALKEY_PASSWORD_PLACEHOLDER
+  '';
 
-  # -- Volume mounts ----------------------------------------------------
+  # Health check: valkey liveness (simple PING).
+  pingLivenessScript = ''
+    #!/bin/bash
+    set -e
+    response=$(timeout 5 valkey-cli \
+      -h localhost \
+      -p 6379 \
+      ${authCliFlag} \
+      ping)
+    if [ "$response" != "PONG" ]; then
+      echo "PING failed: $response"
+      exit 1
+    fi
+  '';
 
-  passwordVolumeMount = {
-    name = "valkey-password";
-    mountPath = "/opt/bitnami/valkey/secrets/";
-  };
+  # Health check: valkey readiness (PING + replication check).
+  pingReadinessScript = ''
+    #!/bin/bash
+    set -e
+    response=$(timeout 5 valkey-cli \
+      -h localhost \
+      -p 6379 \
+      ${authCliFlag} \
+      ping)
+    if [ "$response" != "PONG" ]; then
+      echo "PING failed: $response"
+      exit 1
+    fi
+    # Check replication link is up (for replicas)
+    role=$(valkey-cli -h localhost -p 6379 ${authCliFlag} info replication | grep role: | tr -d '\r')
+    if echo "$role" | grep -q "slave"; then
+      link=$(valkey-cli -h localhost -p 6379 ${authCliFlag} info replication | grep master_link_status: | tr -d '\r')
+      if ! echo "$link" | grep -q "up"; then
+        echo "Replication link is down"
+        exit 1
+      fi
+    fi
+  '';
 
-  commonVolumeMounts = [
-    {
-      name = "start-scripts";
-      mountPath = "/opt/bitnami/scripts/start-scripts";
-    }
-    {
-      name = "health";
-      mountPath = "/health";
-    }
-    passwordVolumeMount
-    {
-      name = "valkey-data";
-      mountPath = "/data";
-    }
-    {
-      name = "config";
-      mountPath = "/opt/bitnami/valkey/mounted-etc";
-    }
-    {
-      name = "empty-dir";
-      mountPath = "/opt/bitnami/valkey/etc";
-      subPath = "app-conf-dir";
-    }
-    {
-      name = "empty-dir";
-      mountPath = "/tmp";
-      subPath = "tmp-dir";
-    }
-  ];
+  # Health check: sentinel liveness (PING).
+  sentinelLivenessScript = ''
+    #!/bin/bash
+    set -e
+    response=$(timeout 5 valkey-cli \
+      -h localhost \
+      -p 26379 \
+      ping)
+    if [ "$response" != "PONG" ]; then
+      echo "Sentinel PING failed: $response"
+      exit 1
+    fi
+  '';
 
-  sentinelVolumeMounts =
-    builtins.filter (
-      m: m.name != "config" && !(m.name == "empty-dir" && m ? subPath && m.subPath == "app-conf-dir")
-    ) commonVolumeMounts
-    ++ [
-      {
-        name = "sentinel-data";
-        mountPath = "/opt/bitnami/valkey-sentinel/etc";
-      }
-      {
-        name = "config";
-        mountPath = "/opt/bitnami/valkey-sentinel/mounted-etc";
-      }
-    ];
+  # Health check: sentinel readiness (check master is known).
+  sentinelReadinessScript = ''
+    #!/bin/bash
+    set -e
+    response=$(timeout 5 valkey-cli \
+      -h localhost \
+      -p 26379 \
+      ping)
+    if [ "$response" != "PONG" ]; then
+      echo "Sentinel PING failed: $response"
+      exit 1
+    fi
+    # Verify sentinel knows about the master
+    master=$(timeout 5 valkey-cli \
+      -h localhost \
+      -p 26379 \
+      sentinel get-master-addr-by-name ${cfg.sentinel.primarySet} 2>/dev/null)
+    if [ -z "$master" ]; then
+      echo "Sentinel does not know master ${cfg.sentinel.primarySet}"
+      exit 1
+    fi
+  '';
 
-  # -- Environment variables --------------------------------------------
+  # Start script for Valkey nodes. Determines if this node is the initial
+  # primary (ordinal 0) or a replica, then configures replication accordingly.
+  startNodeScript = ''
+    #!/bin/bash
+    set -e
 
-  sharedEnv = [
-    {
-      name = "BITNAMI_DEBUG";
-      value = "false";
-    }
-    {
-      name = "VALKEY_PASSWORD_FILE";
-      value = "/opt/bitnami/valkey/secrets/valkey-password";
-    }
-  ];
+    HOSTNAME=$(hostname)
+    ORDINAL=''${HOSTNAME##*-}
 
-  valkeyServerEnv = sharedEnv ++ [
-    {
-      name = "ALLOW_EMPTY_PASSWORD";
-      value = "no";
-    }
-    {
-      name = "VALKEY_TLS_ENABLED";
-      value = "no";
-    }
-    {
-      name = "VALKEY_PORT";
-      value = "6379";
-    }
-  ];
+    # Copy config and replace password placeholder
+    cp /opt/bitnami/valkey/etc/valkey-default.conf /opt/bitnami/valkey/etc/valkey.conf
+  ''
+  + lib.optionalString cfg.auth.enabled ''
+    sed -i "s/VALKEY_PASSWORD_PLACEHOLDER/$VALKEY_PASSWORD/g" /opt/bitnami/valkey/etc/valkey.conf
+  ''
+  + ''
 
-  # -- Pod anti-affinity ------------------------------------------------
+    if [ "$ORDINAL" = "0" ]; then
+      echo "Starting as initial primary"
+    else
+      echo "Starting as replica of ${name}-node-0.${name}-headless.${scope.namespaceName}.svc.cluster.local"
+      echo "replicaof ${name}-node-0.${name}-headless.${scope.namespaceName}.svc.cluster.local 6379" >> /opt/bitnami/valkey/etc/valkey.conf
+    fi
 
-  mkAntiAffinity = componentLabels: {
-    podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution = [
-      {
-        podAffinityTerm = {
-          labelSelector.matchLabels = componentLabels;
-          topologyKey = "kubernetes.io/hostname";
-        };
-        weight = 1;
-      }
-    ];
-  };
+    exec valkey-server /opt/bitnami/valkey/etc/valkey.conf
+  '';
 
-  # -- VolumeClaimTemplate ----------------------------------------------
+  # Start script for sentinel sidecar.
+  startSentinelScript = ''
+    #!/bin/bash
+    set -e
 
-  mkDataVolumeClaimTemplate =
-    componentLabels:
-    lib.optionals cfg.persistence.enabled [
-      {
-        apiVersion = "v1";
-        kind = "PersistentVolumeClaim";
-        metadata = {
-          name = "valkey-data";
-          labels = componentLabels;
-        };
-        spec = {
-          accessModes = cfg.persistence.accessModes;
-          resources.requests.storage = cfg.persistence.size;
-        }
-        // lib.optionalAttrs (cfg.persistence.storageClass != null) {
-          storageClassName = cfg.persistence.storageClass;
-        };
-      }
-    ];
+    # Copy sentinel config and replace password placeholder
+    cp /opt/bitnami/valkey/etc/sentinel-default.conf /tmp/sentinel.conf
+  ''
+  + lib.optionalString cfg.auth.enabled ''
+    sed -i "s/VALKEY_PASSWORD_PLACEHOLDER/$VALKEY_PASSWORD/g" /tmp/sentinel.conf
+  ''
+  + ''
 
-  # -- Container definitions --------------------------------------------
+    # Wait for the valkey node to be ready before starting sentinel
+    until valkey-cli -h localhost -p 6379 ${authCliFlag} ping 2>/dev/null | grep -q PONG; do
+      echo "Waiting for valkey node..."
+      sleep 2
+    done
 
-  mkValkeyContainer =
-    {
-      startScript,
-      env ? [ ],
-      probes ? { },
-      resources,
-      portName ? "redis",
-      lifecycle ? { },
-      volumeMounts ? commonVolumeMounts,
-    }:
-    {
-      name = "valkey";
-      image = imageRef;
-      imagePullPolicy = cfg.image.pullPolicy;
-      securityContext = cfg.containerSecurityContext;
-      command = [ "/bin/bash" ];
-      args = [
-        "-c"
-        "/opt/bitnami/scripts/start-scripts/${startScript}"
-      ];
-      env = valkeyServerEnv ++ env;
-      ports = [
-        {
-          name = portName;
-          containerPort = 6379;
-        }
-      ];
-      inherit resources volumeMounts;
-    }
-    // probes
-    // lifecycle;
+    exec valkey-sentinel /tmp/sentinel.conf
+  '';
 
-  # Primary container (replication mode)
-  primaryContainer = mkValkeyContainer {
-    startScript = "start-primary.sh";
-    env = [
-      {
-        name = "VALKEY_REPLICATION_MODE";
-        value = "primary";
-      }
-    ];
-    probes = {
-      livenessProbe = {
-        initialDelaySeconds = 20;
-        periodSeconds = 5;
-        timeoutSeconds = 6;
-        successThreshold = 1;
-        failureThreshold = 5;
-        exec.command = [
-          "sh"
-          "-c"
-          "/health/ping_liveness_local.sh 5"
-        ];
-      };
-      readinessProbe = {
-        initialDelaySeconds = 20;
-        periodSeconds = 5;
-        timeoutSeconds = 2;
-        successThreshold = 1;
-        failureThreshold = 5;
-        exec.command = [
-          "sh"
-          "-c"
-          "/health/ping_readiness_local.sh 1"
-        ];
-      };
-    };
-    resources = cfg.primary.resources;
-  };
+  # ── Containers ──────────────────────────────────────────────────
 
-  # Replica container (replication mode)
-  replicaContainer = mkValkeyContainer {
-    startScript = "start-replica.sh";
-    env = [
-      {
-        name = "VALKEY_REPLICATION_MODE";
-        value = "replica";
-      }
-      {
-        name = "VALKEY_PRIMARY_HOST";
-        value = primaryHostFqdn;
-      }
-      {
-        name = "VALKEY_PRIMARY_PORT_NUMBER";
-        value = "6379";
-      }
-      {
-        name = "VALKEY_PRIMARY_PASSWORD_FILE";
-        value = "/opt/bitnami/valkey/secrets/valkey-password";
-      }
-    ];
-    probes = {
-      startupProbe = {
-        failureThreshold = 22;
-        initialDelaySeconds = 10;
-        periodSeconds = 10;
-        successThreshold = 1;
-        timeoutSeconds = 5;
-        tcpSocket.port = "redis";
-      };
-      livenessProbe = {
-        initialDelaySeconds = 20;
-        periodSeconds = 5;
-        timeoutSeconds = 6;
-        successThreshold = 1;
-        failureThreshold = 5;
-        exec.command = [
-          "sh"
-          "-c"
-          "/health/ping_liveness_local_and_primary.sh 5"
-        ];
-      };
-      readinessProbe = {
-        initialDelaySeconds = 20;
-        periodSeconds = 5;
-        timeoutSeconds = 2;
-        successThreshold = 1;
-        failureThreshold = 5;
-        exec.command = [
-          "sh"
-          "-c"
-          "/health/ping_readiness_local_and_primary.sh 1"
-        ];
-      };
-    };
-    resources = cfg.replica.resources;
-  };
-
-  # Sentinel-mode valkey container
-  sentinelValkeyContainer = mkValkeyContainer {
-    startScript = "start-node.sh";
-    portName = "valkey";
-    env = [
-      {
-        name = "VALKEY_PRIMARY_PORT_NUMBER";
-        value = "6379";
-      }
-      {
-        name = "VALKEY_PRIMARY_PASSWORD_FILE";
-        value = "/opt/bitnami/valkey/secrets/valkey-password";
-      }
-      {
-        name = "VALKEY_SENTINEL_TLS_ENABLED";
-        value = "no";
-      }
-      {
-        name = "VALKEY_SENTINEL_PORT";
-        value = "26379";
-      }
-      {
-        name = "VALKEY_DATA_DIR";
-        value = "/data";
-      }
-    ];
-    lifecycle = {
-      lifecycle.preStop.exec.command = [
-        "/bin/bash"
-        "-c"
-        "/opt/bitnami/scripts/start-scripts/prestop-valkey.sh"
-      ];
-    };
-    probes = {
-      startupProbe = {
-        failureThreshold = 22;
-        initialDelaySeconds = 10;
-        periodSeconds = 10;
-        successThreshold = 1;
-        timeoutSeconds = 5;
-        exec.command = [
-          "sh"
-          "-c"
-          "/health/ping_liveness_local.sh 5"
-        ];
-      };
-      livenessProbe = {
-        initialDelaySeconds = 20;
-        periodSeconds = 5;
-        timeoutSeconds = 5;
-        successThreshold = 1;
-        failureThreshold = 5;
-        exec.command = [
-          "sh"
-          "-c"
-          "/health/ping_liveness_local.sh 5"
-        ];
-      };
-      readinessProbe = {
-        initialDelaySeconds = 20;
-        periodSeconds = 5;
-        timeoutSeconds = 1;
-        successThreshold = 1;
-        failureThreshold = 5;
-        exec.command = [
-          "sh"
-          "-c"
-          "/health/ping_readiness_local.sh 1"
-        ];
-      };
-    };
-    resources = cfg.primary.resources;
-    volumeMounts = commonVolumeMounts ++ [
-      {
-        name = "sentinel-data";
-        mountPath = "/opt/bitnami/valkey-sentinel/etc";
-      }
-    ];
-  };
-
-  # Sentinel container
-  sentinelContainer = {
-    name = "sentinel";
-    image = sentinelImageRef;
-    imagePullPolicy = cfg.sentinel.image.pullPolicy;
-    securityContext = cfg.containerSecurityContext;
-    command = [ "/bin/bash" ];
-    args = [
-      "-c"
-      "/opt/bitnami/scripts/start-scripts/start-sentinel.sh"
-    ];
-    lifecycle.preStop.exec.command = [
-      "/bin/bash"
-      "-c"
-      "/opt/bitnami/scripts/start-scripts/prestop-sentinel.sh"
-    ];
-    env = sharedEnv ++ [
-      {
-        name = "VALKEY_SENTINEL_TLS_ENABLED";
-        value = "no";
-      }
-      {
-        name = "VALKEY_SENTINEL_PORT";
-        value = "26379";
-      }
-    ];
-    ports = [
-      {
-        name = "valkey-sentinel";
-        containerPort = 26379;
-      }
-    ];
-    resources = cfg.sentinel.resources;
-    volumeMounts = sentinelVolumeMounts;
-    startupProbe = {
-      failureThreshold = 22;
-      initialDelaySeconds = 10;
-      periodSeconds = 10;
-      successThreshold = 1;
-      timeoutSeconds = 5;
-      exec.command = [
-        "sh"
-        "-c"
-        "/health/ping_sentinel.sh 5"
-      ];
-    };
-    livenessProbe = {
-      initialDelaySeconds = 20;
-      periodSeconds = 10;
-      timeoutSeconds = 5;
-      successThreshold = 1;
-      failureThreshold = 6;
-      exec.command = [
-        "sh"
-        "-c"
-        "/health/ping_sentinel.sh 5"
-      ];
-    };
-    readinessProbe = {
-      initialDelaySeconds = 20;
-      periodSeconds = 5;
-      timeoutSeconds = 1;
-      successThreshold = 1;
-      failureThreshold = 6;
-      exec.command = [
-        "sh"
-        "-c"
-        "/health/ping_sentinel.sh 1"
-      ];
-    };
-  };
-
-  # Metrics exporter container
-  metricsContainer = {
-    name = "metrics";
-    image = metricsImageRef;
-    imagePullPolicy = cfg.metrics.image.pullPolicy;
-    securityContext = cfg.containerSecurityContext;
+  valkeyContainer = {
+    name = "valkey";
+    image = "${cfg.image.repository}:${cfg.image.tag}";
+    imagePullPolicy = cfg.image.pullPolicy;
     command = [
       "/bin/bash"
       "-c"
-      ''
-        export REDIS_PASSWORD="$(< $REDIS_PASSWORD_FILE)"
-        redis_exporter
-      ''
+      "/scripts/start-node.sh"
     ];
     env = [
       {
-        name = "REDIS_ALIAS";
-        value = "valkey";
+        name = "POD_NAME";
+        valueFrom.fieldRef.fieldPath = "metadata.name";
+      }
+    ]
+    ++ authEnv;
+    ports = [
+      {
+        name = "valkey";
+        containerPort = 6379;
+        protocol = "TCP";
+      }
+    ];
+    livenessProbe = {
+      exec.command = [
+        "/bin/bash"
+        "/scripts/ping-liveness.sh"
+      ];
+      initialDelaySeconds = 20;
+      periodSeconds = 10;
+      timeoutSeconds = 6;
+      successThreshold = 1;
+      failureThreshold = 5;
+    };
+    readinessProbe = {
+      exec.command = [
+        "/bin/bash"
+        "/scripts/ping-readiness.sh"
+      ];
+      initialDelaySeconds = 20;
+      periodSeconds = 5;
+      timeoutSeconds = 6;
+      successThreshold = 1;
+      failureThreshold = 5;
+    };
+    resources = cfg.resources;
+    volumeMounts = [
+      {
+        name = "scripts";
+        mountPath = "/scripts";
+        readOnly = true;
       }
       {
-        name = "REDIS_EXPORTER_WEB_LISTEN_ADDRESS";
-        value = ":9121";
+        name = "valkey-config";
+        mountPath = "/opt/bitnami/valkey/etc";
       }
       {
-        name = "REDIS_USER";
-        value = "default";
+        name = "data";
+        mountPath = "/data";
+      }
+    ];
+    securityContext = {
+      allowPrivilegeEscalation = false;
+      capabilities.drop = [ "ALL" ];
+      runAsNonRoot = true;
+      runAsUser = 1001;
+      runAsGroup = 1001;
+      seccompProfile.type = "RuntimeDefault";
+    };
+  };
+
+  sentinelContainer = {
+    name = "sentinel";
+    image = "${cfg.sentinel.image.repository}:${cfg.sentinel.image.tag}";
+    imagePullPolicy = cfg.sentinel.image.pullPolicy;
+    command = [
+      "/bin/bash"
+      "-c"
+      "/scripts/start-sentinel.sh"
+    ];
+    env = authEnv;
+    ports = [
+      {
+        name = "sentinel";
+        containerPort = 26379;
+        protocol = "TCP";
+      }
+    ];
+    livenessProbe = {
+      exec.command = [
+        "/bin/bash"
+        "/scripts/sentinel-liveness.sh"
+      ];
+      initialDelaySeconds = 30;
+      periodSeconds = 10;
+      timeoutSeconds = 6;
+      successThreshold = 1;
+      failureThreshold = 5;
+    };
+    readinessProbe = {
+      exec.command = [
+        "/bin/bash"
+        "/scripts/sentinel-readiness.sh"
+      ];
+      initialDelaySeconds = 30;
+      periodSeconds = 5;
+      timeoutSeconds = 6;
+      successThreshold = 1;
+      failureThreshold = 5;
+    };
+    resources = cfg.sentinel.resources;
+    volumeMounts = [
+      {
+        name = "scripts";
+        mountPath = "/scripts";
+        readOnly = true;
       }
       {
-        name = "REDIS_PASSWORD_FILE";
-        value = "/secrets/valkey-password";
+        name = "valkey-config";
+        mountPath = "/opt/bitnami/valkey/etc";
+        readOnly = true;
+      }
+    ];
+    securityContext = {
+      allowPrivilegeEscalation = false;
+      capabilities.drop = [ "ALL" ];
+      runAsNonRoot = true;
+      runAsUser = 1001;
+      runAsGroup = 1001;
+      seccompProfile.type = "RuntimeDefault";
+    };
+  };
+
+  metricsContainer = {
+    name = "metrics";
+    image = "${cfg.metrics.image.repository}:${cfg.metrics.image.tag}";
+    imagePullPolicy = cfg.metrics.image.pullPolicy;
+    env = [
+      {
+        name = "REDIS_ADDR";
+        value = "redis://localhost:6379";
+      }
+    ]
+    ++ lib.optionals cfg.auth.enabled [
+      {
+        name = "REDIS_PASSWORD";
+        valueFrom.secretKeyRef = {
+          name = authSecretName;
+          key = authPasswordKey;
+        };
       }
     ];
     ports = [
       {
         name = "metrics";
         containerPort = 9121;
-      }
-    ];
-    resources = cfg.metrics.resources;
-    volumeMounts = [
-      {
-        name = "empty-dir";
-        mountPath = "/tmp";
-        subPath = "tmp-dir";
-      }
-      {
-        name = "valkey-password";
-        mountPath = "/secrets/";
+        protocol = "TCP";
       }
     ];
     livenessProbe = {
-      failureThreshold = 5;
-      initialDelaySeconds = 10;
-      periodSeconds = 10;
-      successThreshold = 1;
+      httpGet = {
+        path = "/health";
+        port = 9121;
+      };
+      initialDelaySeconds = 15;
+      periodSeconds = 15;
       timeoutSeconds = 5;
-      tcpSocket.port = "metrics";
+      failureThreshold = 3;
     };
     readinessProbe = {
-      failureThreshold = 3;
-      initialDelaySeconds = 5;
-      periodSeconds = 10;
-      successThreshold = 1;
-      timeoutSeconds = 1;
       httpGet = {
-        path = "/";
-        port = "metrics";
+        path = "/health";
+        port = 9121;
       };
+      initialDelaySeconds = 15;
+      periodSeconds = 15;
+      timeoutSeconds = 5;
+      failureThreshold = 3;
+    };
+    resources = cfg.metrics.resources;
+    securityContext = {
+      allowPrivilegeEscalation = false;
+      capabilities.drop = [ "ALL" ];
+      runAsNonRoot = true;
+      runAsUser = 1001;
+      runAsGroup = 1001;
+      seccompProfile.type = "RuntimeDefault";
     };
   };
 
-  # -- Pod spec helper ---------------------------------------------------
+  # Assemble the container list.
+  containers = [
+    valkeyContainer
+    sentinelContainer
+  ]
+  ++ lib.optional cfg.metrics.enabled metricsContainer;
 
-  mkPodSpec =
-    {
-      serviceAccountName,
-      componentLabels,
-      containers,
-      volumes,
-    }:
-    {
-      automountServiceAccountToken = false;
-      securityContext = cfg.podSecurityContext;
-      affinity = mkAntiAffinity componentLabels;
-      enableServiceLinks = true;
-      terminationGracePeriodSeconds = 30;
-      inherit serviceAccountName containers volumes;
-    };
+in
+self: {
 
-in self: {
-
-  # -- Configuration ConfigMaps -----------------------------------------
-
-  configurationCm = scope.mkResource {
+  # --- ServiceAccount ---
+  serviceAccount = scope.mkResource {
     apiVersion = "v1";
-    kind = "ConfigMap";
-    name = "${fullname}-configuration";
-    labels = allLabels;
-    data = {
-      "valkey.conf" = ''
-        # User-supplied common configuration:
-        ${cfg.commonConfiguration}
-        # End of common configuration'';
-      "primary.conf" = ''
-        dir /data
-        # User-supplied primary configuration:
-        ${cfg.primary.configuration}${renderDisableCommands cfg.primary.disableCommands}
-        # End of primary configuration'';
-      "replica.conf" = ''
-        dir /data
-        # User-supplied replica configuration:
-        ${cfg.replica.configuration}${renderDisableCommands cfg.replica.disableCommands}
-        # End of replica configuration'';
-    }
-    // lib.optionalAttrs cfg.sentinel.enabled {
-      "sentinel.conf" = ''
-        dir "/tmp"
-        port 26379
-        sentinel monitor ${cfg.sentinel.primarySet} ${fullname}-node-0.${headlessSvcFqdn} 6379 ${toString cfg.sentinel.quorum}
-        sentinel down-after-milliseconds ${cfg.sentinel.primarySet} ${toString cfg.sentinel.downAfterMilliseconds}
-        sentinel failover-timeout ${cfg.sentinel.primarySet} ${toString cfg.sentinel.failoverTimeout}
-        sentinel parallel-syncs ${cfg.sentinel.primarySet} ${toString cfg.sentinel.parallelSyncs}
-        # User-supplied sentinel configuration:
-        ${cfg.sentinel.configuration}
-        # End of sentinel configuration'';
-    };
+    kind = "ServiceAccount";
+    name = "${name}";
+    labels = commonLabels;
   };
 
-  healthCm = scope.mkResource {
-    apiVersion = "v1";
-    kind = "ConfigMap";
-    name = "${fullname}-health";
-    labels = allLabels;
-    data = {
-      "ping_readiness_local.sh" = builtins.readFile ./scripts/ping_readiness_local.sh;
-      "ping_liveness_local.sh" = builtins.readFile ./scripts/ping_liveness_local.sh;
-      "ping_readiness_primary.sh" = builtins.readFile ./scripts/ping_readiness_primary.sh;
-      "ping_liveness_primary.sh" = builtins.readFile ./scripts/ping_liveness_primary.sh;
-      "ping_readiness_local_and_primary.sh" =
-        builtins.readFile ./scripts/ping_readiness_local_and_primary.sh;
-      "ping_liveness_local_and_primary.sh" =
-        builtins.readFile ./scripts/ping_liveness_local_and_primary.sh;
-    }
-    // lib.optionalAttrs cfg.sentinel.enabled {
-      "ping_sentinel.sh" = builtins.readFile ./scripts/ping_sentinel.sh;
-      "parse_sentinels.awk" = readScript "parse_sentinels.awk";
-    };
-  };
-
-  scriptsCm = scope.mkResource {
-    apiVersion = "v1";
-    kind = "ConfigMap";
-    name = "${fullname}-scripts";
-    labels = allLabels;
-    data =
-      if cfg.sentinel.enabled then
-        {
-          "start-node.sh" = readScript "start-node.sh";
-          "start-sentinel.sh" = readScript "start-sentinel.sh";
-          "prestop-sentinel.sh" = readScript "prestop-sentinel.sh";
-          "prestop-valkey.sh" = readScript "prestop-valkey.sh";
-        }
-      else
-        {
-          "start-primary.sh" = builtins.readFile ./scripts/start-primary.sh;
-          "start-replica.sh" = readScript "start-replica.sh";
+  # --- Secret (auth, only when no existingSecret) ---
+  secret =
+    if cfg.auth.enabled && cfg.auth.existingSecret == null then
+      scope.mkResource {
+        apiVersion = "v1";
+        kind = "Secret";
+        name = "${name}-auth";
+        labels = commonLabels;
+        extra = {
+          type = "Opaque";
+          stringData = lib.optionalAttrs (cfg.auth.password != null) {
+            ${authPasswordKey} = cfg.auth.password;
+          };
         };
+      }
+    else
+      null;
+
+  # --- ConfigMap (configuration + scripts) ---
+  configmap = scope.mkResource {
+    apiVersion = "v1";
+    kind = "ConfigMap";
+    name = "${name}-scripts";
+    labels = commonLabels;
+    data = {
+      "valkey-default.conf" = defaultConf;
+      "sentinel-default.conf" = sentinelConf;
+      "start-node.sh" = startNodeScript;
+      "start-sentinel.sh" = startSentinelScript;
+      "ping-liveness.sh" = pingLivenessScript;
+      "ping-readiness.sh" = pingReadinessScript;
+      "sentinel-liveness.sh" = sentinelLivenessScript;
+      "sentinel-readiness.sh" = sentinelReadinessScript;
+    };
   };
 
-  # -- Headless Service (shared across both modes) ----------------------
+  # --- StatefulSet (valkey-node) ---
+  statefulSet = scope.mkResource {
+    apiVersion = "apps/v1";
+    kind = "StatefulSet";
+    name = "${name}-node";
+    labels = commonLabels;
+    spec = {
+      serviceName = "${self.headlessService}";
+      replicas = cfg.replicaCount;
+      podManagementPolicy = "Parallel";
+      updateStrategy = {
+        type = "RollingUpdate";
+      };
+      selector.matchLabels = selectorLabels // {
+        "app.kubernetes.io/component" = "node";
+      };
+      template = {
+        metadata = {
+          labels = selectorLabels // {
+            "app.kubernetes.io/component" = "node";
+          };
+          annotations = {
+            "checksum/configmap" = "\${${self.configmap}}";
+          };
+        };
+        spec = {
+          serviceAccountName = "${self.serviceAccount}";
+          terminationGracePeriodSeconds = 30;
+          securityContext = {
+            fsGroup = 1001;
+            seccompProfile.type = "RuntimeDefault";
+          };
+          affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution = [
+            {
+              weight = 100;
+              podAffinityTerm = {
+                labelSelector.matchLabels = selectorLabels // {
+                  "app.kubernetes.io/component" = "node";
+                };
+                topologyKey = "kubernetes.io/hostname";
+              };
+            }
+          ];
+          initContainers = [
+            {
+              name = "init-config";
+              image = "${cfg.image.repository}:${cfg.image.tag}";
+              imagePullPolicy = cfg.image.pullPolicy;
+              command = [
+                "/bin/bash"
+                "-c"
+                ''
+                  cp /configmap/valkey-default.conf /config/valkey-default.conf
+                  cp /configmap/sentinel-default.conf /config/sentinel-default.conf
+                  chmod 0660 /config/*.conf
+                ''
+              ];
+              volumeMounts = [
+                {
+                  name = "scripts";
+                  mountPath = "/configmap";
+                  readOnly = true;
+                }
+                {
+                  name = "valkey-config";
+                  mountPath = "/config";
+                }
+              ];
+              securityContext = {
+                allowPrivilegeEscalation = false;
+                capabilities.drop = [ "ALL" ];
+                runAsNonRoot = true;
+                runAsUser = 1001;
+                runAsGroup = 1001;
+              };
+            }
+          ];
+          inherit containers;
+          volumes = [
+            {
+              name = "scripts";
+              configMap = {
+                name = "${self.configmap}";
+                defaultMode = 493; # 0755
+              };
+            }
+            {
+              name = "valkey-config";
+              emptyDir = { };
+            }
+          ]
+          ++ lib.optional (!cfg.persistence.enabled) {
+            name = "data";
+            emptyDir = { };
+          };
+        };
+      };
+    }
+    // lib.optionalAttrs cfg.persistence.enabled {
+      volumeClaimTemplates = [
+        {
+          metadata = {
+            name = "data";
+            labels = selectorLabels;
+          };
+          spec = {
+            accessModes = [ "ReadWriteOnce" ];
+            resources.requests.storage = cfg.persistence.size;
+          }
+          // lib.optionalAttrs (cfg.persistence.storageClass != null) {
+            storageClassName = cfg.persistence.storageClass;
+          };
+        }
+      ];
+    };
+  };
 
-  headlessSvc = scope.mkResource {
+  # --- Service (headless, for StatefulSet DNS) ---
+  headlessService = scope.mkResource {
     apiVersion = "v1";
     kind = "Service";
-    name = headlessSvcName;
-    labels = allLabels;
+    name = "${name}-headless";
+    labels = commonLabels;
     spec = {
       type = "ClusterIP";
       clusterIP = "None";
-      publishNotReadyAddresses = cfg.sentinel.enabled;
-      selector = selectorLabels;
-      ports = [
-        {
-          name = "tcp-redis";
-          port = 6379;
-          targetPort = "redis";
-        }
-      ]
-      ++ lib.optionals cfg.sentinel.enabled [
-        {
-          name = "tcp-sentinel";
-          port = 26379;
-          targetPort = "valkey-sentinel";
-        }
-      ];
-    };
-  };
-
-  # -- Sentinel mode resources (null when not in sentinel mode) ----------
-
-  sentinelSa = if cfg.sentinel.enabled then scope.mkResource {
-    apiVersion = "v1";
-    kind = "ServiceAccount";
-    name = fullname;
-    labels = allLabels;
-    extra.automountServiceAccountToken = false;
-  } else null;
-
-  sentinelSvc = if cfg.sentinel.enabled then scope.mkResource {
-    apiVersion = "v1";
-    kind = "Service";
-    name = fullname;
-    labels = allLabelsWithComponent "node";
-    outputs = {
-      redisPort = 6379;
-      sentinelPort = 26379;
-    };
-    spec = {
-      type = "ClusterIP";
-      sessionAffinity = "None";
-      selector = withComponent "node";
-      ports = [
-        {
-          name = "tcp-redis";
-          port = 6379;
-          targetPort = 6379;
-        }
-        {
-          name = "tcp-sentinel";
-          port = 26379;
-          targetPort = 26379;
-        }
-      ];
-    };
-  } else null;
-
-  sentinelSs = if cfg.sentinel.enabled then scope.mkResource {
-    apiVersion = "apps/v1";
-    kind = "StatefulSet";
-    name = "${fullname}-node";
-    labels = allLabelsWithComponent "node";
-    requires = [
-      self.sentinelSa
-      self.configurationCm
-      self.healthCm
-      self.scriptsCm
-      self.headlessSvc
-    ]
-    ++ lib.optional (cfg.pdb.enabled && cfg.sentinel.enabled) self.pdb
-    ++ lib.optional cfg.replica.autoscaling.hpa.enabled self.hpa
-    ++ lib.optional cfg.metrics.enabled self.metricsService
-    ++ lib.optional cfg.networkPolicy.enabled self.networkPolicyRes;
-    spec = {
-      replicas = if cfg.replica.autoscaling.hpa.enabled then null else totalReplicas;
-      serviceName = "${self.headlessSvc}";
-      selector.matchLabels = withComponent "node";
-      updateStrategy.type = "RollingUpdate";
-      template = {
-        metadata = {
-          labels = withComponent "node";
-          annotations = lib.optionalAttrs cfg.metrics.enabled {
-            "prometheus.io/port" = "9121";
-            "prometheus.io/scrape" = "true";
-          };
-        };
-        spec = mkPodSpec {
-          serviceAccountName = "${self.sentinelSa}";
-          componentLabels = withComponent "node";
-          containers = [
-            sentinelValkeyContainer
-            sentinelContainer
-          ]
-          ++ lib.optionals cfg.metrics.enabled [ metricsContainer ];
-          volumes = [
-            (startScriptsVolume "${self.scriptsCm}")
-            (healthVolume "${self.healthCm}")
-            passwordVolume
-            (configVolume "${self.configurationCm}")
-            {
-              name = "sentinel-data";
-              emptyDir = { };
-            }
-            emptyDirVolume
-          ];
-        };
+      publishNotReadyAddresses = true;
+      selector = selectorLabels // {
+        "app.kubernetes.io/component" = "node";
       };
-    };
-    extra = {
-      spec.volumeClaimTemplates = mkDataVolumeClaimTemplate (withComponent "node");
-    };
-  } else null;
-
-  # -- Replication mode resources (null when in sentinel mode) ----------
-
-  primarySa = if !cfg.sentinel.enabled then scope.mkResource {
-    apiVersion = "v1";
-    kind = "ServiceAccount";
-    name = "${fullname}-primary";
-    labels = allLabelsWithComponent "primary";
-    extra.automountServiceAccountToken = false;
-  } else null;
-
-  replicaSa = if !cfg.sentinel.enabled then scope.mkResource {
-    apiVersion = "v1";
-    kind = "ServiceAccount";
-    name = "${fullname}-replica";
-    labels = allLabelsWithComponent "replica";
-    extra.automountServiceAccountToken = false;
-  } else null;
-
-  primarySvc = if !cfg.sentinel.enabled then scope.mkResource {
-    apiVersion = "v1";
-    kind = "Service";
-    name = "${fullname}-primary";
-    labels = allLabelsWithComponent "primary";
-    outputs = {
-      redisPort = 6379;
-    };
-    spec = {
-      type = "ClusterIP";
-      internalTrafficPolicy = "Cluster";
-      sessionAffinity = "None";
-      selector = withComponent "primary";
       ports = [
         {
-          name = "tcp-redis";
+          name = "valkey";
           port = 6379;
-          targetPort = "redis";
-        }
-      ];
-    };
-  } else null;
-
-  replicaSvc = if !cfg.sentinel.enabled then scope.mkResource {
-    apiVersion = "v1";
-    kind = "Service";
-    name = "${fullname}-replicas";
-    labels = allLabelsWithComponent "replica";
-    outputs = {
-      redisPort = 6379;
-    };
-    spec = {
-      type = "ClusterIP";
-      internalTrafficPolicy = "Cluster";
-      sessionAffinity = "None";
-      selector = withComponent "replica";
-      ports = [
-        {
-          name = "tcp-redis";
-          port = 6379;
-          targetPort = "redis";
-        }
-      ];
-    };
-  } else null;
-
-  primarySs = if !cfg.sentinel.enabled then scope.mkResource {
-    apiVersion = "apps/v1";
-    kind = "StatefulSet";
-    name = "${fullname}-primary";
-    labels = allLabelsWithComponent "primary";
-    requires = [
-      self.primarySa
-      self.configurationCm
-      self.healthCm
-      self.scriptsCm
-      self.headlessSvc
-      self.replicaSs
-    ]
-    ++ lib.optional cfg.metrics.enabled self.metricsService
-    ++ lib.optional cfg.networkPolicy.enabled self.networkPolicyRes;
-    spec = {
-      replicas = 1;
-      serviceName = "${self.headlessSvc}";
-      selector.matchLabels = withComponent "primary";
-      updateStrategy.type = "RollingUpdate";
-      template = {
-        metadata.labels = withComponent "primary";
-        spec = mkPodSpec {
-          serviceAccountName = "${self.primarySa}";
-          componentLabels = withComponent "primary";
-          containers = [ primaryContainer ];
-          volumes = [
-            (startScriptsVolume "${self.scriptsCm}")
-            (healthVolume "${self.healthCm}")
-            passwordVolume
-            (configVolume "${self.configurationCm}")
-            emptyDirVolume
-          ];
-        };
-      };
-    };
-    extra = {
-      spec.volumeClaimTemplates = mkDataVolumeClaimTemplate (withComponent "primary");
-    };
-  } else null;
-
-  replicaSs = if !cfg.sentinel.enabled then scope.mkResource {
-    apiVersion = "apps/v1";
-    kind = "StatefulSet";
-    name = "${fullname}-replicas";
-    labels = allLabelsWithComponent "replica";
-    requires = [
-      self.replicaSa
-      self.configurationCm
-      self.healthCm
-      self.scriptsCm
-      self.headlessSvc
-    ]
-    ++ lib.optional (cfg.pdb.enabled && !cfg.sentinel.enabled) self.pdb
-    ++ lib.optional cfg.replica.autoscaling.hpa.enabled self.hpa;
-    spec = {
-      replicas = if cfg.replica.autoscaling.hpa.enabled then null else cfg.replica.replicaCount;
-      serviceName = "${self.headlessSvc}";
-      selector.matchLabels = withComponent "replica";
-      updateStrategy.type = "RollingUpdate";
-      template = {
-        metadata.labels = withComponent "replica";
-        spec = mkPodSpec {
-          serviceAccountName = "${self.replicaSa}";
-          componentLabels = withComponent "replica";
-          containers = [ replicaContainer ];
-          volumes = [
-            (startScriptsVolume "${self.scriptsCm}")
-            (healthVolume "${self.healthCm}")
-            passwordVolume
-            (configVolume "${self.configurationCm}")
-            emptyDirVolume
-          ];
-        };
-      };
-    };
-    extra = {
-      spec.volumeClaimTemplates = mkDataVolumeClaimTemplate (withComponent "replica");
-    };
-  } else null;
-
-  # -- Optional resources -----------------------------------------------
-
-  metricsService = scope.mkResource {
-    apiVersion = "v1";
-    kind = "Service";
-    name = "${fullname}-metrics";
-    labels = allLabels // {
-      "app.kubernetes.io/component" = "metrics";
-    };
-    outputs = {
-      port = 9121;
-    };
-    spec = {
-      type = "ClusterIP";
-      selector = selectorLabels;
-      ports = [
-        {
-          name = "http-metrics";
-          port = 9121;
+          targetPort = "valkey";
           protocol = "TCP";
-          targetPort = 9121;
         }
-      ];
-    };
-  };
-
-  networkPolicyRes = scope.mkResource {
-    apiVersion = "networking.k8s.io/v1";
-    kind = "NetworkPolicy";
-    name = fullname;
-    labels = allLabels;
-    spec = {
-      podSelector.matchLabels = selectorLabels;
-      policyTypes = [
-        "Ingress"
-        "Egress"
-      ];
-      egress = [ { } ];
-      ingress = [
         {
-          ports = [ { port = 6379; } ] ++ lib.optionals cfg.sentinel.enabled [ { port = 26379; } ];
+          name = "sentinel";
+          port = 26379;
+          targetPort = "sentinel";
+          protocol = "TCP";
         }
-      ]
-      ++ lib.optionals cfg.metrics.enabled [
-        { ports = [ { port = 9121; } ]; }
       ];
     };
+    requires = [ self.statefulSet ];
   };
 
-  # PDB — targets sentinel nodes or replicas depending on mode
-  pdb = scope.mkResource {
-    apiVersion = "policy/v1";
-    kind = "PodDisruptionBudget";
-    name = if cfg.sentinel.enabled then "${fullname}-node" else "${fullname}-replicas";
-    labels =
-      if cfg.sentinel.enabled then allLabelsWithComponent "node" else allLabelsWithComponent "replica";
-    spec = {
-      selector.matchLabels = if cfg.sentinel.enabled then withComponent "node" else withComponent "replica";
-    }
-    // lib.optionalAttrs (cfg.pdb.maxUnavailable != null) {
-      maxUnavailable = cfg.pdb.maxUnavailable;
-    }
-    // lib.optionalAttrs (cfg.pdb.minAvailable != null) {
-      minAvailable = cfg.pdb.minAvailable;
+  # --- Service (sentinel, main entry point for consumers) ---
+  sentinelService = scope.mkResource {
+    apiVersion = "v1";
+    kind = "Service";
+    name = "${name}-sentinel";
+    labels = commonLabels // {
+      "app.kubernetes.io/component" = "sentinel";
     };
-  };
-
-  # HPA — targets replica SS in replication mode, node SS in sentinel mode
-  hpa = if cfg.replica.autoscaling.hpa.enabled then scope.mkResource {
-    apiVersion = "autoscaling/v2";
-    kind = "HorizontalPodAutoscaler";
-    name = if cfg.sentinel.enabled then "${fullname}-node" else "${fullname}-replicas";
-    labels = allLabelsWithComponent "replica";
     spec = {
-      scaleTargetRef = {
-        apiVersion = "apps/v1";
-        kind = "StatefulSet";
-        name = if cfg.sentinel.enabled then "${self.sentinelSs}" else "${self.replicaSs}";
+      type = "ClusterIP";
+      selector = selectorLabels // {
+        "app.kubernetes.io/component" = "node";
       };
-      inherit (cfg.replica.autoscaling.hpa) minReplicas maxReplicas;
-      metrics =
-        lib.optional (cfg.replica.autoscaling.hpa.targetCPU != null) {
-          type = "Resource";
-          resource = {
-            name = "cpu";
-            target = {
-              type = "Utilization";
-              averageUtilization = cfg.replica.autoscaling.hpa.targetCPU;
-            };
-          };
+      ports = [
+        {
+          name = "sentinel";
+          port = 26379;
+          targetPort = "sentinel";
+          protocol = "TCP";
         }
-        ++ lib.optional (cfg.replica.autoscaling.hpa.targetMemory != null) {
-          type = "Resource";
-          resource = {
-            name = "memory";
-            target = {
-              type = "Utilization";
-              averageUtilization = cfg.replica.autoscaling.hpa.targetMemory;
-            };
-          };
-        };
+      ];
     };
-  } else null;
-
-  # -- Main: the public interface ----------------------------------------
-  #
-  # From outside, Valkey IS the Service. But deploying it requires
-  # the StatefulSets behind it, plus optionally the metrics service,
-  # network policy, etc.
-
-  main = {
-    resource = if cfg.sentinel.enabled then self.sentinelSvc else self.primarySvc;
-    requires =
-      if cfg.sentinel.enabled then [ self.sentinelSs ]
-      else [ self.primarySs ];
+    outputs = {
+      sentinelPort = "26379";
+      port = "6379";
+      primarySet = cfg.sentinel.primarySet;
+    };
+    requires = [ self.statefulSet ];
   };
+
+  # --- Service (read replicas, optional) ---
+  readService = scope.mkResource {
+    apiVersion = "v1";
+    kind = "Service";
+    name = "${name}-read";
+    labels = commonLabels // {
+      "app.kubernetes.io/component" = "read";
+    };
+    spec = {
+      type = "ClusterIP";
+      selector = selectorLabels // {
+        "app.kubernetes.io/component" = "node";
+      };
+      ports = [
+        {
+          name = "valkey";
+          port = 6379;
+          targetPort = "valkey";
+          protocol = "TCP";
+        }
+      ];
+    };
+    requires = [ self.statefulSet ];
+  };
+
+  # --- Service (metrics, optional) ---
+  metricsService =
+    if cfg.metrics.enabled then
+      scope.mkResource {
+        apiVersion = "v1";
+        kind = "Service";
+        name = "${name}-metrics";
+        labels = commonLabels // {
+          "app.kubernetes.io/component" = "metrics";
+        };
+        annotations = {
+          "prometheus.io/scrape" = "true";
+          "prometheus.io/port" = "9121";
+        };
+        spec = {
+          type = "ClusterIP";
+          selector = selectorLabels // {
+            "app.kubernetes.io/component" = "node";
+          };
+          ports = [
+            {
+              name = "metrics";
+              port = 9121;
+              targetPort = "metrics";
+              protocol = "TCP";
+            }
+          ];
+        };
+        outputs = {
+          metricsPort = "9121";
+        };
+        requires = [ self.statefulSet ];
+      }
+    else
+      null;
+
+  # --- Entry point ---
+  # main = sentinel Service. Consumers connect to sentinel to discover
+  # the current primary via SENTINEL get-master-addr-by-name.
+  main = self.sentinelService;
 }
