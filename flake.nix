@@ -130,6 +130,7 @@
               fullManifests = kixChecks.manifestMap clusterFull.manifests;
               minimalManifests = kixChecks.manifestMap clusterMinimal.manifests;
               helmManifests = kixChecks.manifestMap clusterHelm.manifests;
+              ja1Manifests = kixChecks.manifestMap clusterJa1.manifests;
             in
             {
               # --- Schema validation ---
@@ -141,6 +142,7 @@
                 mkManifests clusterMinimal.manifests
               );
               schema-cluster-helm = kixChecks.schemaCheck "cluster-helm" (mkManifests clusterHelm.manifests);
+              schema-cluster-nw1 = kixChecks.schemaCheck "cluster-nw1" (mkManifests clusterJa1.manifests);
 
               # --- Cross-resource validation ---
               validate-cluster-example =
@@ -168,6 +170,13 @@
                 assert kixChecks.validateManifestSet "cluster-helm" helmManifests;
                 pkgs.runCommand "validate-cluster-helm" { } ''
                   echo "Cross-resource validation passed for cluster-helm."
+                  touch $out
+                '';
+
+              validate-cluster-nw1 =
+                assert kixChecks.validateManifestSet "cluster-nw1" ja1Manifests;
+                pkgs.runCommand "validate-cluster-nw1" { } ''
+                  echo "Cross-resource validation passed for cluster-nw1."
                   touch $out
                 '';
             };

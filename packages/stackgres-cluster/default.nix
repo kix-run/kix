@@ -65,6 +65,7 @@ let
       cfg.pgConfig.sharedBuffers
     else
       let
+        # FIXME: this can crash if Mi is ending - toInt is applied to all
         # Parse memory string (e.g., "2Gi" -> 512MB for shared_buffers)
         mem = cfg.instanceProfile.memory;
         # Convert Gi to MB, take 25%.  "2Gi" -> 2*1024/4 = 512MB.

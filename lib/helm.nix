@@ -95,9 +95,6 @@ rec {
         fi
         cp *.tgz $out
       '';
-
-      # Needs network access for the fetch.
-      __noChroot = true;
     };
 
   # IFD derivation: runs `helm template` on a chart and produces a JSON array
