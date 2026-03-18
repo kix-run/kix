@@ -516,7 +516,126 @@ rec {
         };
       };
 
+      # --- Eval-time warnings ---
+
+      # 1. Redundant requires: resource has requires on something already in its manifest context
+      redundantRequiresWarnings = builtins.concatMap (
+        resource:
+        let
+          reqs = resource.requires or [ ];
+          ctx = builtins.getContext (builtins.toJSON resource.rawManifest);
+        in
+        builtins.concatMap (
+          req:
+          let
+            reqPath = builtins.unsafeDiscardStringContext req.outPath;
+          in
+          if builtins.hasAttr reqPath ctx then
+            [
+              {
+                inherit resource req;
+              }
+            ]
+          else
+            [ ]
+        ) (builtins.filter (r: builtins.isAttrs r && (r._type or "") == "k8s-resource") reqs)
+      ) allPartResources;
+
+      # 2. Duplicate requires: same resource required multiple times
+      duplicateRequiresWarnings = builtins.concatMap (
+        resource:
+        let
+          reqs = builtins.filter (r: builtins.isAttrs r && (r._type or "") == "k8s-resource") (
+            resource.requires or [ ]
+          );
+          reqPaths = map (r: {
+            path = builtins.unsafeDiscardStringContext r.outPath;
+            req = r;
+          }) reqs;
+          go =
+            {
+              seen,
+              dupes,
+              queue,
+            }:
+            if queue == [ ] then
+              dupes
+            else
+              let
+                head = builtins.head queue;
+                rest = builtins.tail queue;
+              in
+              if builtins.hasAttr head.path seen then
+                go {
+                  inherit seen;
+                  dupes = dupes ++ [
+                    {
+                      inherit resource;
+                      req = head.req;
+                    }
+                  ];
+                  queue = rest;
+                }
+              else
+                go {
+                  seen = seen // {
+                    ${head.path} = true;
+                  };
+                  inherit dupes;
+                  queue = rest;
+                };
+        in
+        go {
+          seen = { };
+          dupes = [ ];
+          queue = reqPaths;
+        }
+      ) allPartResources;
+
+      # 3. Orphaned resources: defined in parts but not reachable from main
+      reachablePaths =
+        let
+          inverseSet = builtins.listToAttrs (
+            map (r: {
+              name = builtins.unsafeDiscardStringContext r.outPath;
+              value = true;
+            }) uniqueInverseDeps
+          );
+          inverseFwdClosure = builtins.concatMap (r: getForwardDeps r) uniqueInverseDeps;
+          inverseFwdSet = builtins.listToAttrs (
+            map (r: {
+              name = builtins.unsafeDiscardStringContext r.outPath;
+              value = true;
+            }) inverseFwdClosure
+          );
+        in
+        forwardPaths // inverseSet // inverseFwdSet;
+
+      orphanedWarnings = builtins.filter (
+        r: !(builtins.hasAttr (builtins.unsafeDiscardStringContext r.outPath) reachablePaths)
+      ) allPartResources;
+
+      # Emit warnings via builtins.trace
+      _w1 = lib.foldl' (
+        acc: w:
+        builtins.trace "warning: resource '${w.resource.kind}/${w.resource.name}' has redundant requires on '${w.req.kind}/${w.req.name}' — already tracked via store path reference"
+          acc
+      ) null redundantRequiresWarnings;
+
+      _w2 = lib.foldl' (
+        acc: w:
+        builtins.trace "warning: resource '${w.resource.kind}/${w.resource.name}' requires '${w.req.kind}/${w.req.name}' multiple times"
+          acc
+      ) null duplicateRequiresWarnings;
+
+      _w3 = lib.foldl' (
+        acc: r:
+        builtins.trace "warning: resource '${r.kind}/${r.name}' in instance '${instanceName}' is defined but not reachable from main (orphaned)"
+          acc
+      ) null orphanedWarnings;
+
     in
+    builtins.seq _w1 (builtins.seq _w2 (builtins.seq _w3 (
     parts
     // {
       _type = "k8s-instance";
@@ -533,7 +652,7 @@ rec {
         namespace = namespaceName;
         aliases = instanceConfig.aliases or [ ];
       };
-    };
+    })));
 
   # The top-level cluster builder.
   buildCluster =
