@@ -109,6 +109,26 @@ let
     }
   ];
 
+  # --- RBAC DSL ---
+
+  inherit (scope.rbac)
+    group core grant
+    watch reconcile finalize own readWrite full emit watchAndFinalize
+    allow restrictTo
+    mkClusterRoleSet mkRoleSet;
+
+  cm     = group "cert-manager.io"      [ "issuers" "clusterissuers" "certificates" "certificaterequests" "signers" ];
+  acme   = group "acme.cert-manager.io" [ "orders" "challenges" ];
+  gw     = group "gateway.networking.k8s.io" [ "gateways" "httproutes" ];
+  net    = group "networking.k8s.io"    [ "ingresses" ];
+  certs  = group "certificates.k8s.io"  [ "certificatesigningrequests" "signers" ];
+  authz  = group "authorization.k8s.io" [ "subjectaccessreviews" ];
+  coord  = group "coordination.k8s.io"  [ "leases" ];
+  admreg = group "admissionregistration.k8s.io" [ "validatingwebhookconfigurations" "mutatingwebhookconfigurations" ];
+  apireg = group "apiregistration.k8s.io" [ "apiservices" ];
+  apiext = group "apiextensions.k8s.io"   [ "customresourcedefinitions" ];
+  ocp    = group "route.openshift.io"   [];
+
   # Pod security context shared by all three components.
   podSecurityContext = {
     runAsNonRoot = true;
@@ -198,7 +218,183 @@ let
     };
 
 in
-self: {
+self:
+let
+
+  # ── Controller cluster-scoped RBAC ─────────────────────────────────
+
+  controllerClusterRoles = mkClusterRoleSet scope {
+    subjects = mkControllerSubject self.controllerServiceAccount;
+    labels = controllerLabels;
+    roles = {
+
+      "${name}-controller-issuers" = grant [
+        (cm.issuers   |> reconcile)
+        (core.secrets |> readWrite)
+        (core.events  |> emit)
+      ];
+
+      "${name}-controller-clusterissuers" = grant [
+        (cm.clusterissuers |> reconcile)
+        (core.secrets      |> readWrite)
+        (core.events       |> emit)
+      ];
+
+      "${name}-controller-certificates" = grant [
+        (cm.certificates        |> reconcile)
+        (cm.certificaterequests |> reconcile)
+        (cm.certificates        |> finalize)
+        (cm.certificaterequests |> finalize)
+        (cm.clusterissuers      |> watch)
+        (cm.issuers             |> watch)
+        (acme.orders            |> own)
+        (core.secrets           |> full)
+        (core.events            |> emit)
+      ];
+
+      "${name}-controller-orders" = grant [
+        (acme.orders       |> reconcile)
+        (acme.orders       |> finalize)
+        (acme.challenges   |> own)
+        (cm.clusterissuers |> watch)
+        (cm.issuers        |> watch)
+        (core.secrets      |> watch)
+        (core.events       |> emit)
+      ];
+
+      "${name}-controller-challenges" = grant [
+        (acme.challenges           |> reconcile)
+        (acme.challenges           |> finalize)
+        (cm.issuers                |> watch)
+        (cm.clusterissuers         |> watch)
+        (core.secrets              |> watch)
+        (core.events               |> emit)
+        (core.pods                 |> own)
+        (core.services             |> own)
+        (net.ingresses             |> readWrite)
+        (gw.httproutes             |> readWrite)
+        (ocp "routes/custom-host"  |> allow [ "create" ])
+      ];
+
+      "${name}-controller-ingress-shim" = grant [
+        (cm.certificates        |> allow [ "create" "update" "delete" ])
+        (cm.certificaterequests |> allow [ "create" "update" "delete" ])
+        (cm.certificates        |> watch)
+        (cm.certificaterequests |> watch)
+        (cm.issuers             |> watch)
+        (cm.clusterissuers      |> watch)
+        (net.ingresses          |> watchAndFinalize)
+        (gw.gateways            |> watchAndFinalize)
+        (gw.httproutes          |> watchAndFinalize)
+        (core.events            |> emit)
+      ];
+
+      "${name}-controller-approve:cert-manager-io" = grant [
+        (cm.signers
+          |> restrictTo [ "issuers.cert-manager.io/*" "clusterissuers.cert-manager.io/*" ]
+          |> allow [ "approve" ])
+      ];
+
+      "${name}-controller-certificatesigningrequests" = grant [
+        (certs.certificatesigningrequests          |> allow [ "get" "list" "watch" "update" ])
+        (certs "certificatesigningrequests/status" |> allow [ "update" "patch" ])
+        (certs.signers
+          |> restrictTo [ "issuers.cert-manager.io/*" "clusterissuers.cert-manager.io/*" ]
+          |> allow [ "sign" ])
+        (authz.subjectaccessreviews |> allow [ "create" ])
+      ];
+    };
+  };
+
+  # ── Controller namespace-scoped RBAC ───────────────────────────────
+
+  controllerLeaderElection = mkRoleSet scope {
+    subjects = mkControllerSubject self.controllerServiceAccount;
+    labels = controllerLabels;
+    roles = {
+      "${name}:leaderelection" = grant [
+        (coord.leases |> restrictTo [ "cert-manager-controller" ] |> allow [ "get" "update" "patch" ])
+        (coord.leases |> allow [ "create" ])
+      ];
+    };
+  };
+
+  controllerTokenRequest = mkRoleSet scope {
+    subjects = mkControllerSubject self.controllerServiceAccount;
+    labels = controllerLabels;
+    roles = {
+      "${name}-tokenrequest" = grant [
+        (core "serviceaccounts/token"
+          |> restrictTo [ "${self.controllerServiceAccount}" ]
+          |> allow [ "create" ])
+      ];
+    };
+  };
+
+  # ── Webhook RBAC ───────────────────────────────────────────────────
+
+  mkWebhookSubject = [
+    { kind = "ServiceAccount"; name = "${self.webhookServiceAccount}"; namespace = ns; }
+  ];
+
+  webhookClusterRoles = mkClusterRoleSet scope {
+    subjects = mkWebhookSubject;
+    labels = webhookLabels;
+    roles = {
+      "${name}-webhook:subjectaccessreviews" = grant [
+        (authz.subjectaccessreviews |> allow [ "create" ])
+      ];
+    };
+  };
+
+  webhookRoles = mkRoleSet scope {
+    subjects = mkWebhookSubject;
+    labels = webhookLabels;
+    roles = {
+      "${name}-webhook:dynamic-serving" = grant [
+        (core.secrets |> restrictTo [ "${name}-webhook-ca" ] |> allow [ "get" "list" "watch" "update" ])
+        (core.secrets |> allow [ "create" ])
+      ];
+    };
+  };
+
+  # ── CA Injector RBAC ───────────────────────────────────────────────
+
+  mkCainjectorSubject = [
+    { kind = "ServiceAccount"; name = "${self.cainjectorServiceAccount}"; namespace = ns; }
+  ];
+
+  cainjectorClusterRoles = mkClusterRoleSet scope {
+    subjects = mkCainjectorSubject;
+    labels = cainjectorLabels;
+    roles = {
+      "${name}-cainjector" = grant [
+        (cm.certificates                        |> watch)
+        (core.secrets                           |> watch)
+        (core.events                            |> allow [ "get" "create" "update" "patch" ])
+        (admreg.validatingwebhookconfigurations |> allow [ "get" "list" "watch" "update" "patch" ])
+        (admreg.mutatingwebhookconfigurations   |> allow [ "get" "list" "watch" "update" "patch" ])
+        (apireg.apiservices                     |> allow [ "get" "list" "watch" "update" "patch" ])
+        (apiext.customresourcedefinitions       |> allow [ "get" "list" "watch" "update" "patch" ])
+      ];
+    };
+  };
+
+  cainjectorLeaderElection = mkRoleSet scope {
+    subjects = mkCainjectorSubject;
+    labels = cainjectorLabels;
+    roles = {
+      "${name}-cainjector:leaderelection" = grant [
+        (coord.leases
+          |> restrictTo [ "cert-manager-cainjector-leader-election"
+                          "cert-manager-cainjector-leader-election-core" ]
+          |> allow [ "get" "update" "patch" ])
+        (coord.leases |> allow [ "create" ])
+      ];
+    };
+  };
+
+in {
 
   # ============================================================
   # CRDs
@@ -435,508 +631,8 @@ self: {
     extra.automountServiceAccountToken = true;
   };
 
-  # -- Controller ClusterRoles --
+  # -- Controller RBAC (aggregate roles — no bindings, RBAC aggregation labels) --
 
-  controllerRoleIssuers = scope.mkClusterResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "ClusterRole";
-    name = "${name}-controller-issuers";
-    labels = controllerLabels;
-    extra.rules = [
-      {
-        apiGroups = [ "cert-manager.io" ];
-        resources = [
-          "issuers"
-          "issuers/status"
-        ];
-        verbs = [
-          "update"
-          "patch"
-        ];
-      }
-      {
-        apiGroups = [ "cert-manager.io" ];
-        resources = [ "issuers" ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-        ];
-      }
-      {
-        apiGroups = [ "" ];
-        resources = [ "secrets" ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-          "create"
-          "update"
-          "delete"
-        ];
-      }
-      {
-        apiGroups = [ "" ];
-        resources = [ "events" ];
-        verbs = [
-          "create"
-          "patch"
-        ];
-      }
-    ];
-  };
-
-  controllerRoleClusterIssuers = scope.mkClusterResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "ClusterRole";
-    name = "${name}-controller-clusterissuers";
-    labels = controllerLabels;
-    extra.rules = [
-      {
-        apiGroups = [ "cert-manager.io" ];
-        resources = [
-          "clusterissuers"
-          "clusterissuers/status"
-        ];
-        verbs = [
-          "update"
-          "patch"
-        ];
-      }
-      {
-        apiGroups = [ "cert-manager.io" ];
-        resources = [ "clusterissuers" ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-        ];
-      }
-      {
-        apiGroups = [ "" ];
-        resources = [ "secrets" ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-          "create"
-          "update"
-          "delete"
-        ];
-      }
-      {
-        apiGroups = [ "" ];
-        resources = [ "events" ];
-        verbs = [
-          "create"
-          "patch"
-        ];
-      }
-    ];
-  };
-
-  controllerRoleCertificates = scope.mkClusterResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "ClusterRole";
-    name = "${name}-controller-certificates";
-    labels = controllerLabels;
-    extra.rules = [
-      {
-        apiGroups = [ "cert-manager.io" ];
-        resources = [
-          "certificates"
-          "certificates/status"
-          "certificaterequests"
-          "certificaterequests/status"
-        ];
-        verbs = [
-          "update"
-          "patch"
-        ];
-      }
-      {
-        apiGroups = [ "cert-manager.io" ];
-        resources = [
-          "certificates"
-          "certificaterequests"
-          "clusterissuers"
-          "issuers"
-        ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-        ];
-      }
-      {
-        apiGroups = [ "cert-manager.io" ];
-        resources = [
-          "certificates/finalizers"
-          "certificaterequests/finalizers"
-        ];
-        verbs = [ "update" ];
-      }
-      {
-        apiGroups = [ "acme.cert-manager.io" ];
-        resources = [ "orders" ];
-        verbs = [
-          "create"
-          "delete"
-          "get"
-          "list"
-          "watch"
-        ];
-      }
-      {
-        apiGroups = [ "" ];
-        resources = [ "secrets" ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-          "create"
-          "update"
-          "delete"
-          "patch"
-        ];
-      }
-      {
-        apiGroups = [ "" ];
-        resources = [ "events" ];
-        verbs = [
-          "create"
-          "patch"
-        ];
-      }
-    ];
-  };
-
-  controllerRoleOrders = scope.mkClusterResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "ClusterRole";
-    name = "${name}-controller-orders";
-    labels = controllerLabels;
-    extra.rules = [
-      {
-        apiGroups = [ "acme.cert-manager.io" ];
-        resources = [
-          "orders"
-          "orders/status"
-        ];
-        verbs = [
-          "update"
-          "patch"
-        ];
-      }
-      {
-        apiGroups = [ "acme.cert-manager.io" ];
-        resources = [
-          "orders"
-          "challenges"
-        ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-        ];
-      }
-      {
-        apiGroups = [ "cert-manager.io" ];
-        resources = [
-          "clusterissuers"
-          "issuers"
-        ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-        ];
-      }
-      {
-        apiGroups = [ "acme.cert-manager.io" ];
-        resources = [ "challenges" ];
-        verbs = [
-          "create"
-          "delete"
-        ];
-      }
-      {
-        apiGroups = [ "acme.cert-manager.io" ];
-        resources = [ "orders/finalizers" ];
-        verbs = [ "update" ];
-      }
-      {
-        apiGroups = [ "" ];
-        resources = [ "secrets" ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-        ];
-      }
-      {
-        apiGroups = [ "" ];
-        resources = [ "events" ];
-        verbs = [
-          "create"
-          "patch"
-        ];
-      }
-    ];
-  };
-
-  controllerRoleChallenges = scope.mkClusterResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "ClusterRole";
-    name = "${name}-controller-challenges";
-    labels = controllerLabels;
-    extra.rules = [
-      {
-        apiGroups = [ "" ];
-        resources = [ "secrets" ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-        ];
-      }
-      {
-        apiGroups = [ "" ];
-        resources = [ "events" ];
-        verbs = [
-          "create"
-          "patch"
-        ];
-      }
-      {
-        apiGroups = [ "" ];
-        resources = [
-          "pods"
-          "services"
-        ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-          "create"
-          "delete"
-        ];
-      }
-      {
-        apiGroups = [ "" ];
-        resources = [ "secrets" ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-        ];
-      }
-      {
-        apiGroups = [ "acme.cert-manager.io" ];
-        resources = [
-          "challenges"
-          "challenges/status"
-        ];
-        verbs = [
-          "update"
-          "patch"
-        ];
-      }
-      {
-        apiGroups = [ "acme.cert-manager.io" ];
-        resources = [ "challenges" ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-        ];
-      }
-      {
-        apiGroups = [ "acme.cert-manager.io" ];
-        resources = [ "challenges/finalizers" ];
-        verbs = [ "update" ];
-      }
-      {
-        apiGroups = [ "cert-manager.io" ];
-        resources = [
-          "issuers"
-          "clusterissuers"
-        ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-        ];
-      }
-      {
-        apiGroups = [ "gateway.networking.k8s.io" ];
-        resources = [ "httproutes" ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-          "create"
-          "delete"
-          "update"
-        ];
-      }
-      {
-        apiGroups = [ "networking.k8s.io" ];
-        resources = [ "ingresses" ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-          "create"
-          "delete"
-          "update"
-        ];
-      }
-      {
-        apiGroups = [ "route.openshift.io" ];
-        resources = [ "routes/custom-host" ];
-        verbs = [ "create" ];
-      }
-    ];
-  };
-
-  controllerRoleIngressShim = scope.mkClusterResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "ClusterRole";
-    name = "${name}-controller-ingress-shim";
-    labels = controllerLabels;
-    extra.rules = [
-      {
-        apiGroups = [ "cert-manager.io" ];
-        resources = [
-          "certificates"
-          "certificaterequests"
-        ];
-        verbs = [
-          "create"
-          "update"
-          "delete"
-        ];
-      }
-      {
-        apiGroups = [ "cert-manager.io" ];
-        resources = [
-          "certificates"
-          "certificaterequests"
-          "issuers"
-          "clusterissuers"
-        ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-        ];
-      }
-      {
-        apiGroups = [ "networking.k8s.io" ];
-        resources = [ "ingresses" ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-        ];
-      }
-      {
-        apiGroups = [ "networking.k8s.io" ];
-        resources = [ "ingresses/finalizers" ];
-        verbs = [ "update" ];
-      }
-      {
-        apiGroups = [ "gateway.networking.k8s.io" ];
-        resources = [
-          "gateways"
-          "httproutes"
-        ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-        ];
-      }
-      {
-        apiGroups = [ "gateway.networking.k8s.io" ];
-        resources = [
-          "gateways/finalizers"
-          "httproutes/finalizers"
-        ];
-        verbs = [ "update" ];
-      }
-      {
-        apiGroups = [ "" ];
-        resources = [ "events" ];
-        verbs = [
-          "create"
-          "patch"
-        ];
-      }
-    ];
-  };
-
-  controllerRoleApprove = scope.mkClusterResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "ClusterRole";
-    name = "${name}-controller-approve:cert-manager-io";
-    labels = controllerLabels;
-    extra.rules = [
-      {
-        apiGroups = [ "cert-manager.io" ];
-        resources = [ "signers" ];
-        verbs = [ "approve" ];
-        resourceNames = [
-          "issuers.cert-manager.io/*"
-          "clusterissuers.cert-manager.io/*"
-        ];
-      }
-    ];
-  };
-
-  controllerRoleCSR = scope.mkClusterResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "ClusterRole";
-    name = "${name}-controller-certificatesigningrequests";
-    labels = controllerLabels;
-    extra.rules = [
-      {
-        apiGroups = [ "certificates.k8s.io" ];
-        resources = [ "certificatesigningrequests" ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-          "update"
-        ];
-      }
-      {
-        apiGroups = [ "certificates.k8s.io" ];
-        resources = [ "certificatesigningrequests/status" ];
-        verbs = [
-          "update"
-          "patch"
-        ];
-      }
-      {
-        apiGroups = [ "certificates.k8s.io" ];
-        resources = [ "signers" ];
-        resourceNames = [
-          "issuers.cert-manager.io/*"
-          "clusterissuers.cert-manager.io/*"
-        ];
-        verbs = [ "sign" ];
-      }
-      {
-        apiGroups = [ "authorization.k8s.io" ];
-        resources = [ "subjectaccessreviews" ];
-        verbs = [ "create" ];
-      }
-    ];
-  };
-
-  # Aggregate roles for kubectl users.
   clusterViewRole = scope.mkClusterResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "ClusterRole";
@@ -944,17 +640,7 @@ self: {
     labels = controllerLabels // {
       "rbac.authorization.k8s.io/aggregate-to-cluster-reader" = "true";
     };
-    extra.rules = [
-      {
-        apiGroups = [ "cert-manager.io" ];
-        resources = [ "clusterissuers" ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-        ];
-      }
-    ];
+    extra.rules = grant [ (cm.clusterissuers |> watch) ];
   };
 
   viewRole = scope.mkClusterResource {
@@ -967,32 +653,12 @@ self: {
       "rbac.authorization.k8s.io/aggregate-to-admin" = "true";
       "rbac.authorization.k8s.io/aggregate-to-cluster-reader" = "true";
     };
-    extra.rules = [
-      {
-        apiGroups = [ "cert-manager.io" ];
-        resources = [
-          "certificates"
-          "certificaterequests"
-          "issuers"
-        ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-        ];
-      }
-      {
-        apiGroups = [ "acme.cert-manager.io" ];
-        resources = [
-          "challenges"
-          "orders"
-        ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-        ];
-      }
+    extra.rules = grant [
+      (cm.certificates        |> watch)
+      (cm.certificaterequests |> watch)
+      (cm.issuers             |> watch)
+      (acme.challenges        |> watch)
+      (acme.orders            |> watch)
     ];
   };
 
@@ -1004,238 +670,19 @@ self: {
       "rbac.authorization.k8s.io/aggregate-to-edit" = "true";
       "rbac.authorization.k8s.io/aggregate-to-admin" = "true";
     };
-    extra.rules = [
-      {
-        apiGroups = [ "cert-manager.io" ];
-        resources = [
-          "certificates"
-          "certificaterequests"
-          "issuers"
-        ];
-        verbs = [
-          "create"
-          "delete"
-          "deletecollection"
-          "patch"
-          "update"
-        ];
-      }
-      {
-        apiGroups = [ "cert-manager.io" ];
-        resources = [ "certificates/status" ];
-        verbs = [ "update" ];
-      }
-      {
-        apiGroups = [ "acme.cert-manager.io" ];
-        resources = [
-          "challenges"
-          "orders"
-        ];
-        verbs = [
-          "create"
-          "delete"
-          "deletecollection"
-          "patch"
-          "update"
-        ];
-      }
+    extra.rules = grant [
+      (cm.certificates         |> allow [ "create" "delete" "deletecollection" "patch" "update" ])
+      (cm.certificaterequests  |> allow [ "create" "delete" "deletecollection" "patch" "update" ])
+      (cm.issuers              |> allow [ "create" "delete" "deletecollection" "patch" "update" ])
+      (cm "certificates/status" |> allow [ "update" ])
+      (acme.challenges         |> allow [ "create" "delete" "deletecollection" "patch" "update" ])
+      (acme.orders             |> allow [ "create" "delete" "deletecollection" "patch" "update" ])
     ];
   };
 
-  # -- Controller ClusterRoleBindings --
-
-  controllerBindingIssuers = scope.mkClusterResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "ClusterRoleBinding";
-    name = "${name}-controller-issuers";
-    labels = controllerLabels;
-    extra = {
-      roleRef = {
-        apiGroup = "rbac.authorization.k8s.io";
-        kind = "ClusterRole";
-        name = "${self.controllerRoleIssuers}";
-      };
-      subjects = mkControllerSubject self.controllerServiceAccount;
-    };
-  };
-
-  controllerBindingClusterIssuers = scope.mkClusterResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "ClusterRoleBinding";
-    name = "${name}-controller-clusterissuers";
-    labels = controllerLabels;
-    extra = {
-      roleRef = {
-        apiGroup = "rbac.authorization.k8s.io";
-        kind = "ClusterRole";
-        name = "${self.controllerRoleClusterIssuers}";
-      };
-      subjects = mkControllerSubject self.controllerServiceAccount;
-    };
-  };
-
-  controllerBindingCertificates = scope.mkClusterResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "ClusterRoleBinding";
-    name = "${name}-controller-certificates";
-    labels = controllerLabels;
-    extra = {
-      roleRef = {
-        apiGroup = "rbac.authorization.k8s.io";
-        kind = "ClusterRole";
-        name = "${self.controllerRoleCertificates}";
-      };
-      subjects = mkControllerSubject self.controllerServiceAccount;
-    };
-  };
-
-  controllerBindingOrders = scope.mkClusterResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "ClusterRoleBinding";
-    name = "${name}-controller-orders";
-    labels = controllerLabels;
-    extra = {
-      roleRef = {
-        apiGroup = "rbac.authorization.k8s.io";
-        kind = "ClusterRole";
-        name = "${self.controllerRoleOrders}";
-      };
-      subjects = mkControllerSubject self.controllerServiceAccount;
-    };
-  };
-
-  controllerBindingChallenges = scope.mkClusterResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "ClusterRoleBinding";
-    name = "${name}-controller-challenges";
-    labels = controllerLabels;
-    extra = {
-      roleRef = {
-        apiGroup = "rbac.authorization.k8s.io";
-        kind = "ClusterRole";
-        name = "${self.controllerRoleChallenges}";
-      };
-      subjects = mkControllerSubject self.controllerServiceAccount;
-    };
-  };
-
-  controllerBindingIngressShim = scope.mkClusterResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "ClusterRoleBinding";
-    name = "${name}-controller-ingress-shim";
-    labels = controllerLabels;
-    extra = {
-      roleRef = {
-        apiGroup = "rbac.authorization.k8s.io";
-        kind = "ClusterRole";
-        name = "${self.controllerRoleIngressShim}";
-      };
-      subjects = mkControllerSubject self.controllerServiceAccount;
-    };
-  };
-
-  controllerBindingApprove = scope.mkClusterResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "ClusterRoleBinding";
-    name = "${name}-controller-approve:cert-manager-io";
-    labels = controllerLabels;
-    extra = {
-      roleRef = {
-        apiGroup = "rbac.authorization.k8s.io";
-        kind = "ClusterRole";
-        name = "${self.controllerRoleApprove}";
-      };
-      subjects = mkControllerSubject self.controllerServiceAccount;
-    };
-  };
-
-  controllerBindingCSR = scope.mkClusterResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "ClusterRoleBinding";
-    name = "${name}-controller-certificatesigningrequests";
-    labels = controllerLabels;
-    extra = {
-      roleRef = {
-        apiGroup = "rbac.authorization.k8s.io";
-        kind = "ClusterRole";
-        name = "${self.controllerRoleCSR}";
-      };
-      subjects = mkControllerSubject self.controllerServiceAccount;
-    };
-  };
-
-  # -- Controller leader election (namespace-scoped) --
-
-  controllerLeaderElectionRole = scope.mkResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "Role";
-    name = "${name}:leaderelection";
-    labels = controllerLabels;
-    extra.rules = [
-      {
-        apiGroups = [ "coordination.k8s.io" ];
-        resources = [ "leases" ];
-        resourceNames = [ "cert-manager-controller" ];
-        verbs = [
-          "get"
-          "update"
-          "patch"
-        ];
-      }
-      {
-        apiGroups = [ "coordination.k8s.io" ];
-        resources = [ "leases" ];
-        verbs = [ "create" ];
-      }
-    ];
-  };
-
-  controllerLeaderElectionRoleBinding = scope.mkResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "RoleBinding";
-    name = "${name}:leaderelection";
-    labels = controllerLabels;
-    extra = {
-      roleRef = {
-        apiGroup = "rbac.authorization.k8s.io";
-        kind = "Role";
-        name = "${self.controllerLeaderElectionRole}";
-      };
-      subjects = mkControllerSubject self.controllerServiceAccount;
-    };
-  };
-
-  # -- Controller token request role (namespace-scoped) --
-
-  controllerTokenRequestRole = scope.mkResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "Role";
-    name = "${name}-tokenrequest";
-    labels = controllerLabels;
-    extra.rules = [
-      {
-        apiGroups = [ "" ];
-        resources = [ "serviceaccounts/token" ];
-        resourceNames = [ "${self.controllerServiceAccount}" ];
-        verbs = [ "create" ];
-      }
-    ];
-  };
-
-  controllerTokenRequestRoleBinding = scope.mkResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "RoleBinding";
-    name = "${name}-${name}-tokenrequest";
-    labels = controllerLabels;
-    extra = {
-      roleRef = {
-        apiGroup = "rbac.authorization.k8s.io";
-        kind = "Role";
-        name = "${self.controllerTokenRequestRole}";
-      };
-      subjects = mkControllerSubject self.controllerServiceAccount;
-    };
-  };
+  # Controller ClusterRoles, ClusterRoleBindings, Roles, RoleBindings are now
+  # generated by the RBAC DSL (controllerClusterRoles, controllerLeaderElection,
+  # controllerTokenRequest) in the inner `let` block above.
 
   # -- Controller Service --
 
@@ -1352,91 +799,6 @@ self: {
     name = "${name}-webhook";
     labels = webhookLabels;
     extra.automountServiceAccountToken = true;
-  };
-
-  # -- Webhook ClusterRole + ClusterRoleBinding --
-
-  webhookClusterRole = scope.mkClusterResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "ClusterRole";
-    name = "${name}-webhook:subjectaccessreviews";
-    labels = webhookLabels;
-    extra.rules = [
-      {
-        apiGroups = [ "authorization.k8s.io" ];
-        resources = [ "subjectaccessreviews" ];
-        verbs = [ "create" ];
-      }
-    ];
-  };
-
-  webhookClusterRoleBinding = scope.mkClusterResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "ClusterRoleBinding";
-    name = "${name}-webhook:subjectaccessreviews";
-    labels = webhookLabels;
-    extra = {
-      roleRef = {
-        apiGroup = "rbac.authorization.k8s.io";
-        kind = "ClusterRole";
-        name = "${self.webhookClusterRole}";
-      };
-      subjects = [
-        {
-          kind = "ServiceAccount";
-          name = "${self.webhookServiceAccount}";
-          namespace = ns;
-        }
-      ];
-    };
-  };
-
-  # -- Webhook dynamic serving role (namespace-scoped) --
-
-  webhookDynamicServingRole = scope.mkResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "Role";
-    name = "${name}-webhook:dynamic-serving";
-    labels = webhookLabels;
-    extra.rules = [
-      {
-        apiGroups = [ "" ];
-        resources = [ "secrets" ];
-        resourceNames = [ "${name}-webhook-ca" ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-          "update"
-        ];
-      }
-      {
-        apiGroups = [ "" ];
-        resources = [ "secrets" ];
-        verbs = [ "create" ];
-      }
-    ];
-  };
-
-  webhookDynamicServingRoleBinding = scope.mkResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "RoleBinding";
-    name = "${name}-webhook:dynamic-serving";
-    labels = webhookLabels;
-    extra = {
-      roleRef = {
-        apiGroup = "rbac.authorization.k8s.io";
-        kind = "Role";
-        name = "${self.webhookDynamicServingRole}";
-      };
-      subjects = [
-        {
-          kind = "ServiceAccount";
-          name = "${self.webhookServiceAccount}";
-          namespace = ns;
-        }
-      ];
-    };
   };
 
   # -- Webhook Service --
@@ -1656,152 +1018,6 @@ self: {
     extra.automountServiceAccountToken = true;
   };
 
-  # -- CA Injector ClusterRole --
-
-  cainjectorClusterRole = scope.mkClusterResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "ClusterRole";
-    name = "${name}-cainjector";
-    labels = cainjectorLabels;
-    extra.rules = [
-      {
-        apiGroups = [ "cert-manager.io" ];
-        resources = [ "certificates" ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-        ];
-      }
-      {
-        apiGroups = [ "" ];
-        resources = [ "secrets" ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-        ];
-      }
-      {
-        apiGroups = [ "" ];
-        resources = [ "events" ];
-        verbs = [
-          "get"
-          "create"
-          "update"
-          "patch"
-        ];
-      }
-      {
-        apiGroups = [ "admissionregistration.k8s.io" ];
-        resources = [
-          "validatingwebhookconfigurations"
-          "mutatingwebhookconfigurations"
-        ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-          "update"
-          "patch"
-        ];
-      }
-      {
-        apiGroups = [ "apiregistration.k8s.io" ];
-        resources = [ "apiservices" ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-          "update"
-          "patch"
-        ];
-      }
-      {
-        apiGroups = [ "apiextensions.k8s.io" ];
-        resources = [ "customresourcedefinitions" ];
-        verbs = [
-          "get"
-          "list"
-          "watch"
-          "update"
-          "patch"
-        ];
-      }
-    ];
-  };
-
-  cainjectorClusterRoleBinding = scope.mkClusterResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "ClusterRoleBinding";
-    name = "${name}-cainjector";
-    labels = cainjectorLabels;
-    extra = {
-      roleRef = {
-        apiGroup = "rbac.authorization.k8s.io";
-        kind = "ClusterRole";
-        name = "${self.cainjectorClusterRole}";
-      };
-      subjects = [
-        {
-          kind = "ServiceAccount";
-          name = "${self.cainjectorServiceAccount}";
-          namespace = ns;
-        }
-      ];
-    };
-  };
-
-  # -- CA Injector leader election (namespace-scoped) --
-
-  cainjectorLeaderElectionRole = scope.mkResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "Role";
-    name = "${name}-cainjector:leaderelection";
-    labels = cainjectorLabels;
-    extra.rules = [
-      {
-        apiGroups = [ "coordination.k8s.io" ];
-        resources = [ "leases" ];
-        resourceNames = [
-          "cert-manager-cainjector-leader-election"
-          "cert-manager-cainjector-leader-election-core"
-        ];
-        verbs = [
-          "get"
-          "update"
-          "patch"
-        ];
-      }
-      {
-        apiGroups = [ "coordination.k8s.io" ];
-        resources = [ "leases" ];
-        verbs = [ "create" ];
-      }
-    ];
-  };
-
-  cainjectorLeaderElectionRoleBinding = scope.mkResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "RoleBinding";
-    name = "${name}-cainjector:leaderelection";
-    labels = cainjectorLabels;
-    extra = {
-      roleRef = {
-        apiGroup = "rbac.authorization.k8s.io";
-        kind = "Role";
-        name = "${self.cainjectorLeaderElectionRole}";
-      };
-      subjects = [
-        {
-          kind = "ServiceAccount";
-          name = "${self.cainjectorServiceAccount}";
-          namespace = ns;
-        }
-      ];
-    };
-  };
-
   # -- CA Injector Service --
 
   cainjectorService = scope.mkResource {
@@ -1895,55 +1111,21 @@ self: {
         self.crdIssuers
         self.crdOrders
       ])
-      # Controller RBAC
-      ++ [
-        self.controllerServiceAccount
-        self.controllerRoleIssuers
-        self.controllerRoleClusterIssuers
-        self.controllerRoleCertificates
-        self.controllerRoleOrders
-        self.controllerRoleChallenges
-        self.controllerRoleIngressShim
-        self.controllerRoleApprove
-        self.controllerRoleCSR
-        self.clusterViewRole
-        self.viewRole
-        self.editRole
-        self.controllerBindingIssuers
-        self.controllerBindingClusterIssuers
-        self.controllerBindingCertificates
-        self.controllerBindingOrders
-        self.controllerBindingChallenges
-        self.controllerBindingIngressShim
-        self.controllerBindingApprove
-        self.controllerBindingCSR
-        self.controllerLeaderElectionRole
-        self.controllerLeaderElectionRoleBinding
-        self.controllerTokenRequestRole
-        self.controllerTokenRequestRoleBinding
-        self.controllerService
-      ]
+      # Controller
+      ++ [ self.controllerServiceAccount self.controllerService ]
+      # Aggregate roles (no binding — not auto-discovered via inverse deps)
+      ++ [ self.clusterViewRole self.viewRole self.editRole ]
       # Webhook
-      ++ [
-        self.webhookServiceAccount
-        self.webhookClusterRole
-        self.webhookClusterRoleBinding
-        self.webhookDynamicServingRole
-        self.webhookDynamicServingRoleBinding
-        self.webhookService
-        self.webhookDeployment
-        self.mutatingWebhookConfiguration
-        self.validatingWebhookConfiguration
-      ]
+      ++ [ self.webhookServiceAccount self.webhookService self.webhookDeployment
+           self.mutatingWebhookConfiguration self.validatingWebhookConfiguration ]
       # CA Injector
-      ++ [
-        self.cainjectorServiceAccount
-        self.cainjectorClusterRole
-        self.cainjectorClusterRoleBinding
-        self.cainjectorLeaderElectionRole
-        self.cainjectorLeaderElectionRoleBinding
-        self.cainjectorService
-        self.cainjectorDeployment
-      ];
+      ++ [ self.cainjectorServiceAccount self.cainjectorService self.cainjectorDeployment ];
   };
 }
+// controllerClusterRoles
+// controllerLeaderElection
+// controllerTokenRequest
+// webhookClusterRoles
+// webhookRoles
+// cainjectorClusterRoles
+// cainjectorLeaderElection

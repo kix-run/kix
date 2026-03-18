@@ -15,6 +15,8 @@ let
     computeClosure
     buildRegistry
     ;
+
+  rbac = import ./rbac.nix { inherit lib; };
 in
 
 rec {
@@ -84,6 +86,8 @@ rec {
           result
         else
           builtins.trace "warning: unknown config keys for instance '${instanceName}': ${builtins.toJSON unknownKeys}" result;
+
+      inherit rbac;
     };
 
   # Namespace as a small inner fixpoint — Namespace resource + policies.

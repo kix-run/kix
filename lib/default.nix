@@ -16,6 +16,7 @@ let
   env = import ./env.nix { inherit lib; };
   fragments = import ./fragments.nix { inherit lib; };
   helm = import ./helm.nix { inherit pkgs lib; };
+  rbac = import ./rbac.nix { inherit lib; };
 in
 
 {
@@ -47,6 +48,9 @@ in
 
   # --- Fragments (fragments.nix) ---
   inherit (fragments) mergeFragments;
+
+  # --- RBAC DSL (rbac.nix) ---
+  inherit rbac;
 
   # --- Helm bridge (helm.nix) ---
   inherit (helm)
