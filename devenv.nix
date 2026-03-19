@@ -38,6 +38,14 @@
     ./scripts/kix-diff.py ./result "$dump_dir"
   '';
 
+  # Documentation: build and serve mkdocs-material site.
+  scripts.docs-serve.exec = ''
+    uv run --group docs mkdocs serve "$@"
+  '';
+  scripts.docs-build.exec = ''
+    uv run --group docs mkdocs build "$@"
+  '';
+
   languages = {
     python = {
       enable = true;
