@@ -79,11 +79,12 @@
 
           mkDeployGraph =
             cluster:
-            pkgs.runCommand "k8s-deploy-graph-${cluster.name}" {
+            let manifests = mkAnnotatedManifests cluster;
+            in pkgs.runCommand "k8s-deploy-graph-${cluster.name}" {
               exportReferencesGraph = [ "closure" cluster.activation ];
               nativeBuildInputs = [ pkgs.python3 ];
             } ''
-              PYTHONPATH=${./pipeline} python3 ${./pipeline/graph.py} closure ${cluster.activation} $out
+              PYTHONPATH=${./pipeline} python3 ${./pipeline/graph.py} closure ${cluster.activation} ${manifests} $out
             '';
 
           # Auto-generate per-cluster outputs from the registry.
