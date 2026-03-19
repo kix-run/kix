@@ -116,6 +116,23 @@
               )}
             '';
 
+          # Serializes deployment graph and waves as JSON files.
+          mkDeployOutput =
+            cluster:
+            let
+              graphJson = builtins.toJSON cluster.deployGraph;
+              wavesJson = builtins.toJSON cluster.deployWaves;
+            in
+            pkgs.runCommand "k8s-deploy-graph" { } ''
+              mkdir -p $out
+              cat > $out/graph.json <<'GRAPH'
+              ${graphJson}
+              GRAPH
+              cat > $out/waves.json <<'WAVES'
+              ${wavesJson}
+              WAVES
+            '';
+
           # Serializes raw manifests (store paths intact) into a YAML directory.
           # Each YAML derivation retains store-path references to its dependencies,
           # so nix-store -q --tree / --requisites shows the actual resource DAG.
@@ -159,6 +176,12 @@
             cluster-full-raw = mkManifestsRaw clusterFull.rawManifests;
             cluster-helm-raw = mkManifestsRaw clusterHelm.rawManifests;
             cluster-nw1-raw = mkManifestsRaw clusterJa1.rawManifests;
+
+            cluster-minimal-deploy = mkDeployOutput clusterMinimal;
+            cluster-example-deploy = mkDeployOutput clusterExample;
+            cluster-full-deploy = mkDeployOutput clusterFull;
+            cluster-helm-deploy = mkDeployOutput clusterHelm;
+            cluster-nw1-deploy = mkDeployOutput clusterJa1;
           };
 
           checks =

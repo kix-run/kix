@@ -889,6 +889,10 @@ rec {
       dagDot = k8s.closureToDot registry (builtins.head allManifestsRaw);
       dagTree = k8s.closureToTree registry (builtins.head allManifestsRaw);
 
+      # Deployment graph (full DAG + waves)
+      deployGraph = k8s.buildDeployGraph registry allManifestsRaw;
+      deployWaves = k8s.computeDeployWaves (k8s.buildDeployGraph registry allManifestsRaw);
+
       # Deploy group: merge closures of listed instances, deduplicate
       deployGroup =
         instancePaths:

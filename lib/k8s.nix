@@ -354,4 +354,86 @@ rec {
   buildRegistry = resources:
     builtins.foldl' (acc: r: acc // r.registryEntry) { } resources;
 
+  # Resolve a resource's namespace to a string key.
+  nsOf = r:
+    if r.namespace or null == null then "_cluster_"
+    else if builtins.isAttrs r.namespace then
+      if (r.namespace._type or "") == "k8s-cluster-scoped" then "_cluster_"
+      else r.namespace.name or "_cluster_"
+    else r.namespace;
+
+  # Canonical ID for a resource (used in graph nodes and edges).
+  resourceId = r: "${r.kind}/${r.name}@${nsOf r}";
+
+  # Build a deployment graph from deduplicated resources and a registry.
+  # Returns { nodes, edges } suitable for JSON serialization.
+  buildDeployGraph = registry: resources:
+    let
+      getDeps = resource:
+        let
+          ctx = builtins.getContext (builtins.toJSON resource.rawManifest);
+          k8sPaths = builtins.filter (p: builtins.hasAttr p registry) (builtins.attrNames ctx);
+          manifestDeps = map (p: registry.${p}.resource) k8sPaths;
+          requiresDeps = builtins.filter (r:
+            builtins.isAttrs r && (r._type or "") == "k8s-resource"
+          ) (resource.requires or []);
+        in
+        manifestDeps ++ requiresDeps;
+
+      nodes = map (r: {
+        id = resourceId r;
+        apiVersion = r.apiVersion;
+        kind = r.kind;
+        name = r.name;
+        namespace = let ns = nsOf r; in if ns == "_cluster_" then null else ns;
+      }) resources;
+
+      edges = lib.concatMap (r:
+        let
+          deps = getDeps r;
+          srcId = resourceId r;
+        in
+        map (d: { from = srcId; to = resourceId d; }) deps
+      ) resources;
+    in
+    { inherit nodes edges; };
+
+  # Compute deployment waves from a deploy graph.
+  # Wave 0 = resources with no dependencies, wave N+1 = resources whose
+  # deps are all in waves 0..N. Cycles are dumped into the final wave.
+  computeDeployWaves = graph:
+    let
+      nodeIds = map (n: n.id) graph.nodes;
+      nodeMap = builtins.listToAttrs (map (n: { name = n.id; value = n; }) graph.nodes);
+
+      # Precompute deps per node
+      edgesByFrom = builtins.groupBy (e: e.from) graph.edges;
+      depsOf = builtins.listToAttrs (map (id: {
+        name = id;
+        value = map (e: e.to) (edgesByFrom.${id} or []);
+      }) nodeIds);
+
+      go = { placed, remaining, waveIdx }:
+        if remaining == [] then []
+        else
+          let
+            ready = builtins.filter (id:
+              builtins.all (dep: builtins.hasAttr dep placed) (depsOf.${id})
+            ) remaining;
+            readySet = builtins.listToAttrs (map (id: { name = id; value = true; }) ready);
+            notReady = builtins.filter (id: !(builtins.hasAttr id readySet)) remaining;
+          in
+          if ready == [] then
+            # Cycle — dump remaining into final wave
+            [{ wave = waveIdx; resources = map (id: nodeMap.${id}) remaining; }]
+          else
+            [{ wave = waveIdx; resources = map (id: nodeMap.${id}) ready; }]
+            ++ go {
+              placed = placed // readySet;
+              remaining = notReady;
+              waveIdx = waveIdx + 1;
+            };
+    in
+    go { placed = {}; remaining = nodeIds; waveIdx = 0; };
+
 }

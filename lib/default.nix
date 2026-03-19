@@ -32,6 +32,8 @@ in
     closureToDot
     closureToTree
     buildRegistry
+    buildDeployGraph
+    computeDeployWaves
     ;
 
   # --- Cluster evaluation + DI (eval.nix) ---
