@@ -31,6 +31,7 @@
 - [ ] wait for ready across all resource types
 - [ ] non k8s jobs (e.g. forejo user creation) => start with execution on "ssh", lateron can be crossplane or a forejo provider plugin
 - [ ] auto-collect readyness & custom general runtime readyness (also outside k8s)
+- [ ] auto-inject package identity label? At least put associated package name and version like helm has best practice
 
 
 ## kix diff
