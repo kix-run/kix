@@ -1,5 +1,8 @@
 # Module System: Personas, Use Cases, and Real Examples
 
+> If I seem hard to impress, it is only because I'm very tired and 
+> squished onto an accursed EasyJet flight. 🫠😭✈️🫠
+
 ## Working Document — March 2026
 
 **Status:** Design exploration — concrete scenarios from nw1 cluster
@@ -64,6 +67,7 @@ kix.buildCluster {
     team = "platform";
   };
   modules = [
+    ## Beautiful
     # Platform infra (Luca owns)
     (import ../fragments/nw1/infra.nix { inherit packages kix; })
     (import ../fragments/nw1/monitoring.nix { inherit packages kix; })
@@ -110,6 +114,11 @@ config.instances.kube-system.coredns = {
     dnsRewrites = [
       # The hostnames are config; the target instances are resolved via DI
       # The coredns package uses ingress-private.out.fqdn for "private" targets
+      ## These domains are going to have to be specified to the Ingress
+      ## that the package creates. So there is going to be some duplication there.
+      ## I wonder if there is some way of the package saying, "if anything has control 
+      ## of nw1.example.net, can you please point registry.nw1.example.net at this 
+      ## ingress we are using"
       { hostname = "registry.nw1.example.net"; target = "private"; }
       { hostname = "prometheus.nw1.example.net"; target = "private"; }
       { hostname = "grafana.nw1.example.net"; target = "private"; }
@@ -198,6 +207,12 @@ monitoring stack — they don't read a config option:
 
 ```nix
 # packages/valkey/default.nix — wiring, not config
+## I feel like `kube-prometheus-stack` is too specific (there are lots of ways 
+## to add monitoring to the cluster other than `kube-prometheus-stack`, even 
+## though it is popular). A ServiceMonitor resource isn't Prometheus specific
+## I think (I say this as I see the apiVersion is `monitoring.coreos.com/v1`, 
+## which seems pretty generic)
+## prometheus-specific, or 
 { scope, config, lib, kube-prometheus-stack ? null }:
 let
   hasMonitoring = kube-prometheus-stack != null;
@@ -268,6 +283,12 @@ namespace lists. Every time a namespace is added, Luca must update it manually.
 owns the namespace, not centrally hardcoded. The network-policies module
 aggregates automatically.
 
+> So this seems to be a simple way of doing it based somewhat on how we 
+> did this in NW1 (i.e. allowing entire namespaces to talk to each other).
+> I think the version of this we discussed was more fine-grained. I.e.
+> per service, or even per port. And doing this based on the references used 
+> in the nix code
+
 ### Use Case 2C: TLS Issuers as DI-Resolved Infrastructure
 
 **Today** — Every ingress hardcodes `clusterIssuer = "northwind"`. If the issuer
@@ -291,12 +312,16 @@ self: {
   ingress = if cfg.ingress.enabled then
     scope.mkResource {
       kind = "Ingress";
+      ## Not super-sexy, but I can live with it
       annotations = lib.optionalAttrs (cluster-issuer != null) {
         "cert-manager.io/cluster-issuer" = cluster-issuer.out.name;
       };
       spec.ingressClassName = cfg.ingress.className;
       # ...
     }
+    ## How about, instead:
+    } |> cluster-issuer.withCert
+    ## (or am I jumping the gun there?)
   else null;
 }
 ```
@@ -324,6 +349,8 @@ config.instances.cert-manager.cluster-issuers = {
 No `config.tls.defaultIssuer` module option. The issuer config lives in the
 cluster-issuers instance config (where it belongs). The wiring is DI.
 
+Looks good!
+
 ### Use Case 2D: Storage Classes as DI-Resolved Infrastructure
 
 **Today** — `storageClass = "localzfs-retain"` hardcoded in 6+ places.
@@ -340,6 +367,10 @@ declare a DI dependency on a storage provider:
 let
   cfg = config;
   # Storage class from DI, overridable via config
+  ## This feels like a lot of faff. Could the package instance 
+  ## being created just override the DI-ed storage-class, rather 
+  ## than having to go via `config.storage.storageClass = "localzfs-retain"` 
+  ## then doing the dance below?
   effectiveStorageClass =
     if cfg.storage.storageClass != null then cfg.storage.storageClass
     else if storage-class != null then storage-class.out.defaultClass
@@ -381,6 +412,8 @@ references to other instances:
 }
 
 # fragments/nw1/shopfront.nix — team declares their priorities
+## Note: These priority classes then need to be attached to workloads
+## somehow
 config.priorities = {
   shopfront-prod = { value = 1000; };
   shopfront-stage = { value = 500; };
@@ -436,6 +469,9 @@ self: {
         "cert-manager.io/cluster-issuer" = cluster-issuer.out.name;
       };
       # ingress class name could also come from DI:
+      ## There seems to be this tension where values can come from 
+      ## DI (as defaults) or from config (overrides). I feel like this 
+      ## could lead to a fair bit of error-prone boilerplate
       spec.ingressClassName =
         if ingress-nginx != null
         then ingress-nginx.out.ingressClassName
@@ -456,6 +492,8 @@ If the valkey maintainer wants typed config validation:
 # packages/valkey/_kixOptions.nix
 { lib, ... }: {
   options = {
+    ## Love typed options. I assume checks can go here too?
+    ## I.e. replicaCount must be zero or more (no -3 replicas).
     replicaCount = lib.mkOption { type = lib.types.int; default = 3; };
     sentinel.enabled = lib.mkEnableOption "sentinel mode";
     sentinel.quorum = lib.mkOption { type = lib.types.int; default = 2; };
@@ -525,6 +563,8 @@ in
         config = {
           appName = "shopfront";
           environment = "production";
+          ## Seems odd that this would be a string, and not a 
+          ## reference to a priority class
           priorityClassName = "shopfront-prod";
           backend.image = {
             repository = "ghcr.io/northwind/shopfront/web";
@@ -535,6 +575,13 @@ in
             enabled = true;
             # No clusterIssuer — DI wires it automatically!
             # No className — DI wires it from the ingress-nginx instance!
+            ## Ok, that is nice and cool. But I feel like we need some 
+            ## control of what gets DI-ed where. 
+            ## Also, what interface can a package developer rely on a DI-ed
+            ## thing to have? Is there a contract/interface that the DI-ed 
+            ## object must conform to? Can I pass a Redis in place of a 
+            ## Valkey (should work fine)? What happens if I pass in a Postgres 
+            ## (likely not fine). 
             hosts = [
               { host = "admin.packwise.example"; paths = [{ path = "/"; service = "backend"; }]; }
               { host = "packwise.example"; paths = [{ path = "/"; service = "backend"; }]; }
@@ -570,7 +617,8 @@ in
         };
       };
     };
-
+    
+    ## Presumably using mkEnv?
     # ── shopfront-stage (smaller, same shape) ───────────
     shopfront-stage = {
       # ... similar but with staging image tags, fewer replicas ...
@@ -597,6 +645,8 @@ in
 
 ### Use Case 4B: Overriding DI When Needed
 
+> Ahh, here we go
+
 Sometimes a team needs a specific ingress controller (not the default). The
 `deps` attribute handles this — like nixpkgs `.override { }`:
 
@@ -616,6 +666,8 @@ shopfront-stage-general = {
 `deps` is separate from `config` — wiring is never mixed with behavior.
 The DI system auto-resolves everything not in `deps`. Only specify `deps`
 when you need to override the default resolution.
+
+> Ok, cool
 
 ### Use Case 4C: Reducing Config Duplication Across Environments
 
@@ -644,6 +696,8 @@ mkShopfrontModule = envName: envConfig: { lib, config, ... }: {
 
 Or use `mkDefault` layers — the base module sets shared defaults, per-env
 modules override what differs.
+
+> Ok, cool
 
 ---
 
