@@ -287,7 +287,7 @@ self: {
       // lib.optionalAttrs (cfg.postgres.extensions != [ ]) {
         extensions = cfg.postgres.extensions;
       };
-      sgInstanceProfile = "${self.instanceProfile}";
+      sgInstanceProfile = self.instanceProfile.out.name;
       profile = cfg.profile;
       prometheusAutobind = cfg.prometheusAutobind;
       replication = {
@@ -296,13 +296,13 @@ self: {
       };
       postgresServices = cfg.postgresServices;
       configurations = {
-        sgPostgresConfig = "${self.pgConfig}";
+        sgPostgresConfig = self.pgConfig.out.name;
       }
       // lib.optionalAttrs cfg.backup.enabled {
-        sgObjectStorage = "${self.objectStorage}";
+        sgObjectStorage = self.objectStorage.out.name;
         backups = [
           {
-            sgObjectStorage = "${self.objectStorage}";
+            sgObjectStorage = self.objectStorage.out.name;
             cronSchedule = cfg.backup.cronSchedule;
             retention = cfg.backup.retention;
             compression = cfg.backup.compression;
@@ -310,7 +310,7 @@ self: {
         ];
       }
       // lib.optionalAttrs cfg.pooling.enabled {
-        sgPoolingConfig = "${self.poolingConfig}";
+        sgPoolingConfig = self.poolingConfig.out.name;
       };
       pods = {
         persistentVolume = {
@@ -323,7 +323,7 @@ self: {
       managedSql = {
         scripts = [
           {
-            sgScript = "${self.initScript}";
+            sgScript = self.initScript.out.name;
           }
         ];
       };

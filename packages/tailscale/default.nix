@@ -155,7 +155,7 @@ self:
       roleRef = {
         apiGroup = "rbac.authorization.k8s.io";
         kind = "ClusterRole";
-        name = "${self.clusterRole}";
+        name = self.clusterRole.out.name;
       };
       subjects = [
         {

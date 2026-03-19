@@ -999,7 +999,7 @@ self: {
     name = "${name}-node";
     labels = commonLabels;
     spec = {
-      serviceName = "${self.headlessService}";
+      serviceName = self.headlessService.out.name;
       replicas = cfg.replicaCount;
       podManagementPolicy = cfg.podManagementPolicy;
       updateStrategy = {
@@ -1014,9 +1014,9 @@ self: {
             "app.kubernetes.io/component" = "node";
           };
           annotations = {
-            "checksum/configmap" = "\${${self.configmap}}";
-            "checksum/health" = "\${${self.healthConfigmap}}";
-            "checksum/scripts" = "\${${self.configmap}}";
+            "checksum/configmap" = self.configmap.out.identityHash;
+            "checksum/health" = self.healthConfigmap.out.identityHash;
+            "checksum/scripts" = self.configmap.out.identityHash;
             "checksum/secret" = "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a";
           }
           // lib.optionalAttrs cfg.metrics.enabled {
@@ -1025,7 +1025,7 @@ self: {
           };
         };
         spec = {
-          serviceAccountName = "${self.serviceAccount}";
+          serviceAccountName = self.serviceAccount.out.name;
           automountServiceAccountToken = false;
           terminationGracePeriodSeconds = 30;
           securityContext = {
@@ -1048,7 +1048,7 @@ self: {
             {
               name = "config";
               configMap = {
-                name = "${self.configurationConfigmap}";
+                name = self.configurationConfigmap.out.name;
                 defaultMode = 420; # 0644
               };
             }
@@ -1059,7 +1059,7 @@ self: {
             {
               name = "health";
               configMap = {
-                name = "${self.healthConfigmap}";
+                name = self.healthConfigmap.out.name;
                 defaultMode = 493; # 0755
               };
             }
@@ -1070,7 +1070,7 @@ self: {
             {
               name = "start-scripts";
               configMap = {
-                name = "${self.configmap}";
+                name = self.configmap.out.name;
                 defaultMode = 493; # 0755
               };
             }
@@ -1083,7 +1083,7 @@ self: {
                   if cfg.auth.existingSecret != null then
                     cfg.auth.existingSecret
                   else
-                    "${self.secret}";
+                    self.secret.out.name;
                 defaultMode = 420; # 0644
                 items = [
                   {

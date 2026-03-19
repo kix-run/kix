@@ -179,7 +179,7 @@ self: {
     labels = commonLabels;
     spec = {
       type = "ClusterIP";
-      selector = scope.selectWorkload self.deployment;
+      selector = self.deployment.out.selector;
       ports = [
         {
           name = "metabase";
@@ -216,7 +216,7 @@ self: {
                   path = "/";
                   pathType = "Prefix";
                   backend.service = {
-                    name = "${self.service}";
+                    name = self.service.out.name;
                     port.number = cfg.servicePort;
                   };
                 }

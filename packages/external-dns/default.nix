@@ -346,12 +346,12 @@ self: {
       roleRef = {
         apiGroup = "rbac.authorization.k8s.io";
         kind = "ClusterRole";
-        name = "${self.clusterRole}";
+        name = self.clusterRole.out.name;
       };
       subjects = [
         {
           kind = "ServiceAccount";
-          name = "${self.serviceAccount}";
+          name = self.serviceAccount.out.name;
           namespace = scope.namespaceName;
         }
       ];
@@ -456,7 +456,7 @@ self: {
       template = {
         metadata.labels = selectorLabels;
         spec = {
-          serviceAccountName = "${self.serviceAccount}";
+          serviceAccountName = self.serviceAccount.out.name;
           automountServiceAccountToken = true;
           affinity = resolvedAffinity;
           securityContext = {

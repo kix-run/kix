@@ -104,7 +104,7 @@ let
   mkControllerSubject = sa: [
     {
       kind = "ServiceAccount";
-      name = "${sa}";
+      name = sa.out.name;
       namespace = ns;
     }
   ];
@@ -325,7 +325,7 @@ let
     roles = {
       "${name}-tokenrequest" = grant [
         (core "serviceaccounts/token"
-          |> restrictTo [ "${self.controllerServiceAccount}" ]
+          |> restrictTo [ self.controllerServiceAccount.out.name ]
           |> allow [ "create" ])
       ];
     };
@@ -334,7 +334,7 @@ let
   # ── Webhook RBAC ───────────────────────────────────────────────────
 
   mkWebhookSubject = [
-    { kind = "ServiceAccount"; name = "${self.webhookServiceAccount}"; namespace = ns; }
+    { kind = "ServiceAccount"; name = self.webhookServiceAccount.out.name; namespace = ns; }
   ];
 
   webhookClusterRoles = mkClusterRoleSet scope {
@@ -361,7 +361,7 @@ let
   # ── CA Injector RBAC ───────────────────────────────────────────────
 
   mkCainjectorSubject = [
-    { kind = "ServiceAccount"; name = "${self.cainjectorServiceAccount}"; namespace = ns; }
+    { kind = "ServiceAccount"; name = self.cainjectorServiceAccount.out.name; namespace = ns; }
   ];
 
   cainjectorClusterRoles = mkClusterRoleSet scope {
@@ -728,7 +728,7 @@ in {
           };
         };
         spec = {
-          serviceAccountName = "${self.controllerServiceAccount}";
+          serviceAccountName = self.controllerServiceAccount.out.name;
           enableServiceLinks = false;
           securityContext = podSecurityContext;
           containers = [
@@ -848,7 +848,7 @@ in {
           };
         };
         spec = {
-          serviceAccountName = "${self.webhookServiceAccount}";
+          serviceAccountName = self.webhookServiceAccount.out.name;
           enableServiceLinks = false;
           securityContext = podSecurityContext;
           containers = [
@@ -950,7 +950,7 @@ in {
         failurePolicy = "Fail";
         sideEffects = "None";
         clientConfig.service = {
-          name = "${self.webhookService}";
+          name = self.webhookService.out.name;
           namespace = ns;
           path = "/mutate";
         };
@@ -998,7 +998,7 @@ in {
         failurePolicy = "Fail";
         sideEffects = "None";
         clientConfig.service = {
-          name = "${self.webhookService}";
+          name = self.webhookService.out.name;
           namespace = ns;
           path = "/validate";
         };
@@ -1059,7 +1059,7 @@ in {
           };
         };
         spec = {
-          serviceAccountName = "${self.cainjectorServiceAccount}";
+          serviceAccountName = self.cainjectorServiceAccount.out.name;
           enableServiceLinks = false;
           securityContext = podSecurityContext;
           containers = [

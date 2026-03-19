@@ -8,7 +8,7 @@
 # RoleBinding, ConfigMap (NGINX config), Deployment, Service
 # (LoadBalancer/ClusterIP), IngressClass.
 #
-# main = Service, selecting the Deployment via scope.selectWorkload.
+# main = Service, selecting the Deployment via out.selector.
 # IngressClass and ConfigMap pulled in via requires.
 
 {
@@ -94,7 +94,7 @@ self:
 let
 
   clusterRoles = mkClusterRoleSet scope {
-    subjects = [{ kind = "ServiceAccount"; name = "${self.serviceAccount}"; namespace = scope.namespaceName; }];
+    subjects = [{ kind = "ServiceAccount"; name = self.serviceAccount.out.name; namespace = scope.namespaceName; }];
     labels = clusterScopedLabels;
     roles = {
       "${name}" = grant [
@@ -108,7 +108,7 @@ let
   };
 
   nsRoles = mkRoleSet scope {
-    subjects = [{ kind = "ServiceAccount"; name = "${self.serviceAccount}"; namespace = scope.namespaceName; }];
+    subjects = [{ kind = "ServiceAccount"; name = self.serviceAccount.out.name; namespace = scope.namespaceName; }];
     labels = commonLabels;
     roles = {
       "${name}" = grant [
@@ -172,7 +172,7 @@ in {
         };
         spec = {
           automountServiceAccountToken = true;
-          serviceAccountName = "${self.serviceAccount}";
+          serviceAccountName = self.serviceAccount.out.name;
           terminationGracePeriodSeconds = 300;
           dnsPolicy = "ClusterFirst";
           containers = [
@@ -186,7 +186,7 @@ in {
                 "--election-id=${electionId}"
                 "--controller-class=${controllerValue}"
                 "--ingress-class=${ingressClassName}"
-                "--configmap=$(POD_NAMESPACE)/${self.configmap}"
+                "--configmap=$(POD_NAMESPACE)/${self.configmap.out.name}"
                 "--validating-webhook=:8443"
                 "--validating-webhook-certificate=/usr/local/certificates/cert"
                 "--validating-webhook-key=/usr/local/certificates/key"
@@ -319,7 +319,7 @@ in {
     labels = commonLabels;
     spec = {
       type = cfg.serviceType;
-      selector = scope.selectWorkload self.deployment;
+      selector = self.deployment.out.selector;
       ports = [
         {
           name = "http";

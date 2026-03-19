@@ -90,7 +90,7 @@ let
 
     database = {
       username = "harbor";
-      host = null; # if set, overrides postgres.fqdn for POSTGRESQL_HOST
+      host = null; # if set, overrides postgres.out.fqdn for POSTGRESQL_HOST
       existingSecret = null;
       sslmode = "require";
       maxIdleConns = "100";
@@ -194,7 +194,7 @@ self: {
 
       # Database
       DATABASE_TYPE = "postgresql";
-      POSTGRESQL_HOST = if cfg.database.host != null then cfg.database.host else postgres.fqdn;
+      POSTGRESQL_HOST = if cfg.database.host != null then cfg.database.host else postgres.out.fqdn;
       POSTGRESQL_PORT = postgres.out.port;
       POSTGRESQL_USERNAME = cfg.database.username;
       POSTGRESQL_SSLMODE = cfg.database.sslmode;
@@ -330,21 +330,21 @@ self: {
                 failureThreshold = 360;
               };
               envFrom = [
-                { configMapRef.name = "${self.coreConfigMap}"; }
-                { secretRef.name = "${self.coreSecret}"; }
+                { configMapRef.name = self.coreConfigMap.out.name; }
+                { secretRef.name = self.coreSecret.out.name; }
               ];
               env = [
                 {
                   name = "CORE_SECRET";
                   valueFrom.secretKeyRef = {
-                    name = "${self.coreSecret}";
+                    name = self.coreSecret.out.name;
                     key = "secret";
                   };
                 }
                 {
                   name = "JOBSERVICE_SECRET";
                   valueFrom.secretKeyRef = {
-                    name = "${self.jobserviceSecret}";
+                    name = self.jobserviceSecret.out.name;
                     key = "JOBSERVICE_SECRET";
                   };
                 }
@@ -409,7 +409,7 @@ self: {
             {
               name = "config";
               configMap = {
-                name = "${self.coreConfigMap}";
+                name = self.coreConfigMap.out.name;
                 items = [
                   {
                     key = "app.conf";
@@ -424,7 +424,7 @@ self: {
             {
               name = "secret-key";
               secret = {
-                secretName = "${self.coreSecret}";
+                secretName = self.coreSecret.out.name;
                 items = [
                   {
                     key = "secretKey";
@@ -571,7 +571,7 @@ self: {
           volumes = [
             {
               name = "portal-config";
-              configMap.name = "${self.portalConfigMap}";
+              configMap.name = self.portalConfigMap.out.name;
             }
           ];
         };
@@ -780,7 +780,7 @@ self: {
                 failureThreshold = 3;
               };
               envFrom = [
-                { secretRef.name = "${self.registrySecret}"; }
+                { secretRef.name = self.registrySecret.out.name; }
               ];
               volumeMounts = [
                 {
@@ -834,22 +834,22 @@ self: {
                 {
                   name = "CORE_SECRET";
                   valueFrom.secretKeyRef = {
-                    name = "${self.coreSecret}";
+                    name = self.coreSecret.out.name;
                     key = "secret";
                   };
                 }
                 {
                   name = "JOBSERVICE_SECRET";
                   valueFrom.secretKeyRef = {
-                    name = "${self.jobserviceSecret}";
+                    name = self.jobserviceSecret.out.name;
                     key = "JOBSERVICE_SECRET";
                   };
                 }
               ];
               envFrom = [
-                { configMapRef.name = "${self.registryCtlConfigMap}"; }
-                { secretRef.name = "${self.registrySecret}"; }
-                { secretRef.name = "${self.registryCtlSecret}"; }
+                { configMapRef.name = self.registryCtlConfigMap.out.name; }
+                { secretRef.name = self.registrySecret.out.name; }
+                { secretRef.name = self.registryCtlSecret.out.name; }
               ];
               volumeMounts = [
                 {
@@ -873,16 +873,16 @@ self: {
           volumes = [
             {
               name = "registry-config";
-              configMap.name = "${self.registryConfigMap}";
+              configMap.name = self.registryConfigMap.out.name;
             }
             {
               name = "registry-data";
-              persistentVolumeClaim.claimName = "${self.registryPVC}";
+              persistentVolumeClaim.claimName = self.registryPVC.out.name;
             }
             {
               name = "registry-htpasswd";
               secret = {
-                secretName = "${self.registryHtpasswdSecret}";
+                secretName = self.registryHtpasswdSecret.out.name;
                 items = [
                   {
                     key = "REGISTRY_HTPASSWD";
@@ -1096,14 +1096,14 @@ self: {
                 {
                   name = "CORE_SECRET";
                   valueFrom.secretKeyRef = {
-                    name = "${self.coreSecret}";
+                    name = self.coreSecret.out.name;
                     key = "secret";
                   };
                 }
               ];
               envFrom = [
-                { configMapRef.name = "${self.jobserviceEnvConfigMap}"; }
-                { secretRef.name = "${self.jobserviceSecret}"; }
+                { configMapRef.name = self.jobserviceEnvConfigMap.out.name; }
+                { secretRef.name = self.jobserviceSecret.out.name; }
               ];
               volumeMounts = [
                 {
@@ -1132,11 +1132,11 @@ self: {
           volumes = [
             {
               name = "jobservice-config";
-              configMap.name = "${self.jobserviceConfigMap}";
+              configMap.name = self.jobserviceConfigMap.out.name;
             }
             {
               name = "job-logs";
-              persistentVolumeClaim.claimName = "${self.jobservicePVC}";
+              persistentVolumeClaim.claimName = self.jobservicePVC.out.name;
             }
           ];
         };

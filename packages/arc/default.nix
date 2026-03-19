@@ -66,7 +66,7 @@ self:
 let
 
   clusterRoles = mkClusterRoleSet scope {
-    subjects = [{ kind = "ServiceAccount"; name = "${self.serviceAccount}"; namespace = scope.namespaceName; }];
+    subjects = [{ kind = "ServiceAccount"; name = self.serviceAccount.out.name; namespace = scope.namespaceName; }];
     roles = {
       "${controllerName}" = grant [
         ([core.pods core.serviceaccounts]          |> allow [ "list" "watch" ])
@@ -80,7 +80,7 @@ let
   };
 
   nsRoles = mkRoleSet scope {
-    subjects = [{ kind = "ServiceAccount"; name = "${self.serviceAccount}"; namespace = scope.namespaceName; }];
+    subjects = [{ kind = "ServiceAccount"; name = self.serviceAccount.out.name; namespace = scope.namespaceName; }];
     roles = {
       "${controllerName}-listener" = grant [
         (core.pods              |> allow [ "create" "delete" "get" ])
@@ -122,7 +122,7 @@ in {
       template = {
         metadata.labels = templateLabels;
         spec = {
-          serviceAccountName = "${self.serviceAccount}";
+          serviceAccountName = self.serviceAccount.out.name;
           terminationGracePeriodSeconds = 10;
           containers = [
             {

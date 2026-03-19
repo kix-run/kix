@@ -25,7 +25,9 @@ in
     clusterScoped
     mkResource
     mkPackageInstance
-    postProcessManifest
+    addKixAnnotations
+    attachCtxDeep
+    extractStoreHash
     computeClosure
     closureToDot
     closureToTree

@@ -425,12 +425,12 @@ self: {
       roleRef = {
         apiGroup = "rbac.authorization.k8s.io";
         kind = "ClusterRole";
-        name = "${self.clusterRole}";
+        name = self.clusterRole.out.name;
       };
       subjects = [
         {
           kind = "ServiceAccount";
-          name = "${self.serviceAccount}";
+          name = self.serviceAccount.out.name;
           namespace = scope.namespaceName;
         }
       ];
@@ -450,7 +450,7 @@ self: {
       template = {
         metadata.labels = operatorSelectorLabels;
         spec = {
-          serviceAccountName = "${self.serviceAccount}";
+          serviceAccountName = self.serviceAccount.out.name;
           securityContext = {
             runAsNonRoot = true;
             runAsUser = 1000;
@@ -725,7 +725,7 @@ self: {
       # The operator will inject the caBundle at startup.
       "stackgres.io/operator-version" = cfg.operator.image.tag;
     };
-    extra.webhooks = map (mkValidatingWebhook "${self.operatorService}") webhookResources;
+    extra.webhooks = map (mkValidatingWebhook self.operatorService.out.name) webhookResources;
   };
 
   # ===== MutatingWebhookConfiguration =====
@@ -737,7 +737,7 @@ self: {
     annotations = {
       "stackgres.io/operator-version" = cfg.operator.image.tag;
     };
-    extra.webhooks = map (mkMutatingWebhook "${self.operatorService}") webhookResources;
+    extra.webhooks = map (mkMutatingWebhook self.operatorService.out.name) webhookResources;
   };
 
   # ===== Entry point =====

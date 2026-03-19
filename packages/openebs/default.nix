@@ -179,7 +179,7 @@ let
   mayastorClusterRoles =
     if cfg.mayastor.enabled then
       mkClusterRoleSet scope {
-        subjects = [{ kind = "ServiceAccount"; name = "${self.mayastorSa}"; namespace = ns; }];
+        subjects = [{ kind = "ServiceAccount"; name = self.mayastorSa.out.name; namespace = ns; }];
         labels = mayastorLabels;
         roles = {
           "${name}-cluster-role" = grant [
@@ -215,7 +215,7 @@ let
   zfsControllerRoles =
     if cfg.zfsLocalPv.enabled then
       mkClusterRoleSet scope {
-        subjects = [{ kind = "ServiceAccount"; name = "${self.zfsControllerSa}"; namespace = ns; }];
+        subjects = [{ kind = "ServiceAccount"; name = self.zfsControllerSa.out.name; namespace = ns; }];
         labels = zfsLabels;
         roles = {
           "${name}-zfs-provisioner-role" = grant [
@@ -243,7 +243,7 @@ let
   zfsNodeRoles =
     if cfg.zfsLocalPv.enabled then
       mkClusterRoleSet scope {
-        subjects = [{ kind = "ServiceAccount"; name = "${self.zfsNodeSa}"; namespace = ns; }];
+        subjects = [{ kind = "ServiceAccount"; name = self.zfsNodeSa.out.name; namespace = ns; }];
         labels = zfsLabels;
         roles = {
           "${name}-zfs-driver-registrar-role" = grant [
@@ -258,7 +258,7 @@ let
   lvmControllerRoles =
     if cfg.lvmLocalPv.enabled then
       mkClusterRoleSet scope {
-        subjects = [{ kind = "ServiceAccount"; name = "${self.lvmControllerSa}"; namespace = ns; }];
+        subjects = [{ kind = "ServiceAccount"; name = self.lvmControllerSa.out.name; namespace = ns; }];
         labels = lvmLabels;
         roles = {
           "${name}-lvm-provisioner-role" = grant [
@@ -286,7 +286,7 @@ let
   lvmNodeRoles =
     if cfg.lvmLocalPv.enabled then
       mkClusterRoleSet scope {
-        subjects = [{ kind = "ServiceAccount"; name = "${self.lvmNodeSa}"; namespace = ns; }];
+        subjects = [{ kind = "ServiceAccount"; name = self.lvmNodeSa.out.name; namespace = ns; }];
         labels = lvmLabels;
         roles = {
           "${name}-lvm-driver-registrar-role" = grant [
@@ -301,7 +301,7 @@ let
   localPvClusterRoles =
     if cfg.localPvProvisioner.enabled then
       mkClusterRoleSet scope {
-        subjects = [{ kind = "ServiceAccount"; name = "${self.localPvSa}"; namespace = ns; }];
+        subjects = [{ kind = "ServiceAccount"; name = self.localPvSa.out.name; namespace = ns; }];
         labels = localPvLabels;
         roles = {
           "${name}-localpv-provisioner" = grant [
@@ -398,7 +398,7 @@ in {
         };
         spec = {
           type = "ClusterIP";
-          selector = scope.selectWorkload self.etcdStatefulSet;
+          selector = self.etcdStatefulSet.out.selector;
           ports = [
             {
               name = "client";
@@ -721,7 +721,7 @@ in {
           "app.kubernetes.io/component" = "nats";
         };
         spec = {
-          selector = scope.selectWorkload self.natsStatefulSet;
+          selector = self.natsStatefulSet.out.selector;
           ports = [
             {
               name = "client";
@@ -773,14 +773,14 @@ in {
               app = "nats";
             };
             spec = {
-              serviceAccountName = "${self.natsSa}";
+              serviceAccountName = self.natsSa.out.name;
               dnsPolicy = "ClusterFirst";
               shareProcessNamespace = true;
               terminationGracePeriodSeconds = 60;
               volumes = [
                 {
                   name = "config-volume";
-                  configMap.name = "${self.natsConfigMap}";
+                  configMap.name = self.natsConfigMap.out.name;
                 }
                 {
                   name = "pid";
@@ -937,7 +937,7 @@ in {
           app = "agent-core";
         };
         spec = {
-          selector = scope.selectWorkload self.agentCoreDeployment;
+          selector = self.agentCoreDeployment.out.selector;
           ports = [
             {
               name = "grpc";
@@ -972,8 +972,8 @@ in {
               "openebs.io/version" = cfg.mayastor.version;
             };
             spec = {
-              serviceAccountName = "${self.mayastorSa}";
-              priorityClassName = "${self.priorityClass}";
+              serviceAccountName = self.mayastorSa.out.name;
+              priorityClassName = self.priorityClass.out.name;
               nodeSelector = {
                 "kubernetes.io/arch" = "amd64";
               };
@@ -1099,7 +1099,7 @@ in {
         };
         spec = {
           type = "ClusterIP";
-          selector = scope.selectWorkload self.apiRestDeployment;
+          selector = self.apiRestDeployment.out.selector;
           ports = [
             {
               name = "https";
@@ -1136,7 +1136,7 @@ in {
               "openebs.io/version" = cfg.mayastor.version;
             };
             spec = {
-              priorityClassName = "${self.priorityClass}";
+              priorityClassName = self.priorityClass.out.name;
               nodeSelector = {
                 "kubernetes.io/arch" = "amd64";
               };
@@ -1248,8 +1248,8 @@ in {
               "openebs.io/version" = cfg.mayastor.version;
             };
             spec = {
-              serviceAccountName = "${self.mayastorSa}";
-              priorityClassName = "${self.priorityClass}";
+              serviceAccountName = self.mayastorSa.out.name;
+              priorityClassName = self.priorityClass.out.name;
               nodeSelector = {
                 "kubernetes.io/arch" = "amd64";
               };
@@ -1344,9 +1344,9 @@ in {
             };
             spec = {
               hostNetwork = true;
-              serviceAccountName = "${self.mayastorSa}";
+              serviceAccountName = self.mayastorSa.out.name;
               dnsPolicy = "ClusterFirstWithHostNet";
-              priorityClassName = "${self.priorityClass}";
+              priorityClassName = self.priorityClass.out.name;
               nodeSelector = {
                 "kubernetes.io/arch" = "amd64";
               };
@@ -1544,7 +1544,7 @@ in {
               "openebs.io/version" = cfg.mayastor.version;
             };
             spec = {
-              serviceAccountName = "${self.mayastorSa}";
+              serviceAccountName = self.mayastorSa.out.name;
               hostNetwork = true;
               dnsPolicy = "ClusterFirstWithHostNet";
               nodeSelector = {
@@ -1944,7 +1944,7 @@ in {
           app = "io-engine";
         };
         spec = {
-          selector = scope.selectWorkload self.ioEngineDaemonSet;
+          selector = self.ioEngineDaemonSet.out.selector;
           ports = [
             {
               name = "metrics";
@@ -2218,7 +2218,7 @@ in {
               role = "openebs-zfs";
             };
             spec = {
-              serviceAccountName = "${self.zfsControllerSa}";
+              serviceAccountName = self.zfsControllerSa.out.name;
               containers = [
                 {
                   name = "csi-provisioner";
@@ -2371,7 +2371,7 @@ in {
               role = "openebs-zfs";
             };
             spec = {
-              serviceAccountName = "${self.zfsNodeSa}";
+              serviceAccountName = self.zfsNodeSa.out.name;
               containers = [
                 {
                   name = "csi-node-driver-registrar";
@@ -2497,7 +2497,7 @@ in {
                 {
                   name = "chroot-zfs";
                   configMap = {
-                    name = "${self.zfsConfigMap}";
+                    name = self.zfsConfigMap.out.name;
                     defaultMode = 365;
                   };
                 } # 0555
@@ -2580,7 +2580,7 @@ in {
               role = "openebs-lvm";
             };
             spec = {
-              serviceAccountName = "${self.lvmControllerSa}";
+              serviceAccountName = self.lvmControllerSa.out.name;
               containers = [
                 {
                   name = "csi-provisioner";
@@ -2731,7 +2731,7 @@ in {
               role = "openebs-lvm";
             };
             spec = {
-              serviceAccountName = "${self.lvmNodeSa}";
+              serviceAccountName = self.lvmNodeSa.out.name;
               containers = [
                 {
                   name = "csi-node-driver-registrar";
@@ -2858,7 +2858,7 @@ in {
         name = "${name}-lvm-localpv-node-service";
         labels = lvmLabels;
         spec = {
-          selector = scope.selectWorkload self.lvmNode;
+          selector = self.lvmNode.out.selector;
           ports = [
             {
               name = "metrics";
@@ -2904,7 +2904,7 @@ in {
               app = "localpv-provisioner";
             };
             spec = {
-              serviceAccountName = "${self.localPvSa}";
+              serviceAccountName = self.localPvSa.out.name;
               containers = [
                 {
                   name = "openebs-provisioner-hostpath";

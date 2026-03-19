@@ -242,10 +242,10 @@ let
   depEnv =
     { }
     // lib.optionalAttrs (postgres != null) {
-      DATABASE_HOST = postgres.fqdn;
+      DATABASE_HOST = postgres.out.fqdn;
     }
     // lib.optionalAttrs (valkey != null) {
-      VALKEY_HOST = valkey.fqdn;
+      VALKEY_HOST = valkey.out.fqdn;
     };
 
   # ── Secret file volumes + mounts ────────────────────────────────
@@ -274,7 +274,7 @@ let
   # ── Common pod spec fragments ───────────────────────────────────
   mkEnvFrom =
     self: configMapName: secretRefs:
-    lib.optional cfg.useConfigMap { configMapRef.name = "${configMapName}"; }
+    lib.optional cfg.useConfigMap { configMapRef.name = configMapName.out.name; }
     ++ map (s: { secretRef.name = s; }) secretRefs;
 
   mkPodSpec =
@@ -388,7 +388,7 @@ let
       image = "${cfg.frontend.image.repository}:${cfg.frontend.image.tag}";
       imagePullPolicy = cfg.frontend.image.pullPolicy;
       envFrom =
-        lib.optional cfg.frontend.useConfigMap { configMapRef.name = "${self.frontendConfigmap}"; }
+        lib.optional cfg.frontend.useConfigMap { configMapRef.name = self.frontendConfigmap.out.name; }
         ++ map (s: { secretRef.name = s; }) cfg.frontend.secrets;
       ports = [
         {
@@ -524,7 +524,7 @@ let
           scaleTargetRef = {
             apiVersion = "apps/v1";
             kind = "Deployment";
-            name = "${deployResource}";
+            name = deployResource.out.name;
           };
           minReplicas = hpaCfg.minReplicas or 1;
           maxReplicas = hpaCfg.maxReplicas or 10;
@@ -718,7 +718,7 @@ in
         }
         // lib.optionalAttrs cfg.useConfigMap {
           annotations = {
-            "checksum/config" = "\${${self.configmap}}";
+            "checksum/config" = self.configmap.out.identityHash;
           };
         };
         spec = mkPodSpec self {
@@ -766,7 +766,7 @@ in
           scaleTargetRef = {
             apiVersion = "apps/v1";
             kind = "Deployment";
-            name = "${self.backendDeployment}";
+            name = self.backendDeployment.out.name;
           };
           minReplicas = cfg.backend.hpa.minReplicas;
           maxReplicas = cfg.backend.hpa.maxReplicas;
@@ -834,7 +834,7 @@ in
             }
             // lib.optionalAttrs cfg.frontend.useConfigMap {
               annotations = {
-                "checksum/config" = "\${${self.frontendConfigmap}}";
+                "checksum/config" = self.frontendConfigmap.out.identityHash;
               };
             };
             spec = mkPodSpec self {
@@ -905,7 +905,7 @@ in
                   env = [
                     {
                       name = "BACKEND_HOST";
-                      value = "${self.backendService}";
+                      value = self.backendService.out.name;
                     }
                     {
                       name = "BACKEND_PORT";
@@ -915,7 +915,7 @@ in
                   ++ lib.optionals cfg.frontend.enabled [
                     {
                       name = "FRONTEND_HOST";
-                      value = "${self.frontendService}";
+                      value = self.frontendService.out.name;
                     }
                     {
                       name = "FRONTEND_PORT";
@@ -973,7 +973,7 @@ in
           scaleTargetRef = {
             apiVersion = "apps/v1";
             kind = "Deployment";
-            name = "${self.caddyDeployment}";
+            name = self.caddyDeployment.out.name;
           };
           minReplicas = cfg.caddy.hpa.minReplicas;
           maxReplicas = cfg.caddy.hpa.maxReplicas;
@@ -1077,11 +1077,11 @@ in
         resolveServiceName =
           svcName:
           if svcName == "backend" then
-            "${self.backendService}"
+            self.backendService.out.name
           else if svcName == "frontend" && cfg.frontend.enabled then
-            "${self.frontendService}"
+            self.frontendService.out.name
           else if svcName == "caddy" && cfg.caddy.enabled then
-            "${self.caddyService}"
+            self.caddyService.out.name
           else
             svcName;
 

@@ -11,7 +11,7 @@ let
     clusterScoped
     mkResource
     mkPackageInstance
-    postProcessManifest
+    addKixAnnotations
     computeClosure
     buildRegistry
     ;
@@ -29,13 +29,6 @@ rec {
       namespaceResource,
       clusterLabels ? { },
     }:
-    let
-      # Attach a target's store path context to a set of labels for dependency tracking.
-      attachCtx = target: labels:
-        lib.mapAttrs (_: v:
-          builtins.appendContext (toString v) (builtins.getContext "${target}")
-        ) labels;
-    in
     {
       inherit instanceName namespaceName;
       namespace = namespaceResource;
@@ -93,28 +86,6 @@ rec {
           result
         else
           builtins.trace "warning: unknown config keys for instance '${instanceName}': ${builtins.toJSON unknownKeys}" result;
-
-      # Select the same pods as a workload. Reads spec.selector.matchLabels from
-      # the target and attaches its store path for automatic dependency tracking.
-      # Usage: spec.selector = scope.selectWorkload self.deployment;
-      selectWorkload = target:
-        let
-          matchLabels = target.manifest.spec.selector.matchLabels
-            or (throw "selectWorkload: ${target.kind}/${target.name} has no spec.selector.matchLabels");
-        in
-        attachCtx target matchLabels;
-
-      # Select a resource by its package-provided labels (before scope injection).
-      # Usage: spec.selector.matchLabels = scope.selectByLabels self.metricsService;
-      selectByLabels = target:
-        let
-          labels = target.packageLabels
-            or (throw "selectByLabels: ${target.kind}/${target.name} has no packageLabels");
-        in
-        if labels == {} then
-          throw "selectByLabels: ${target.kind}/${target.name} has empty packageLabels"
-        else
-          attachCtx target labels;
 
       inherit rbac;
     };
@@ -675,9 +646,8 @@ rec {
       _packageInstance = packageInstance;
 
       # The PackageInstance is the new closure root — it references
-      # mainRes, inverse deps, and package requires via store path annotations.
+      # mainRes, inverse deps, and package requires via annotations.
       main = packageInstance;
-      fqdn = mainRes.fqdn or null;
       out = mainRes.out or { };
 
       _meta = {
@@ -903,11 +873,11 @@ rec {
       # Cluster-wide registry (store path → resource metadata)
       inherit registry;
 
-      # All manifests post-processed (store paths → K8s names)
-      manifests = map (r: postProcessManifest registry r.manifest) allManifestsRaw;
+      # All manifests with kix annotations (content-hash, identity-hash, depends-on)
+      manifests = map (r: addKixAnnotations registry r) allManifestsRaw;
 
-      # Raw manifests (with store paths, for debugging)
-      rawManifests = map (r: r.manifest) allManifestsRaw;
+      # Raw manifests (without kix annotations, for debugging)
+      rawManifests = map (r: r.rawManifest) allManifestsRaw;
 
       # All raw resources
       resources = allManifestsRaw;
@@ -926,7 +896,7 @@ rec {
           resources' = builtins.concatMap (path: instanceClosures.${path} or [ ]) instancePaths;
           dedupResources = dedup resources';
         in
-        map (r: postProcessManifest registry r.manifest) dedupResources;
+        map (r: addKixAnnotations registry r) dedupResources;
 
       # Package-level access (for compatibility)
       packages = lib.mapAttrs (

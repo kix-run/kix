@@ -134,7 +134,7 @@ in rec {
             roleRef = {
               apiGroup = "rbac.authorization.k8s.io";
               kind = "ClusterRole";
-              name = "${role}";
+              name = role.out.name;
             };
             inherit subjects;
           };
@@ -167,7 +167,7 @@ in rec {
             roleRef = {
               apiGroup = "rbac.authorization.k8s.io";
               kind = "Role";
-              name = "${role}";
+              name = role.out.name;
             };
             inherit subjects;
           };

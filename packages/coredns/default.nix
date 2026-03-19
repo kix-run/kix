@@ -4,7 +4,7 @@
 # ClusterRole, ClusterRoleBinding, and optionally HPA, PDB, metrics
 # Service, and ServiceMonitor.
 #
-# main = Service (kube-dns), selecting the Deployment via scope.selectWorkload.
+# main = Service (kube-dns), selecting the Deployment via .out.selector.
 
 {
   scope,
@@ -72,7 +72,7 @@ let
     cfg.podDisruptionBudget.minAvailable != null || cfg.podDisruptionBudget.maxUnavailable != null;
 
   # Selector labels — used for Deployment matchLabels and template labels.
-  # Other resources derive selectors via scope.selectWorkload / scope.selectByLabels.
+  # Other resources derive selectors via .out.selector.
   selectorLabels = {
     "k8s-app" = "coredns";
     "app.kubernetes.io/name" = "coredns";
@@ -123,7 +123,7 @@ self: {
 } // scope.rbac.mkClusterRoleSet scope {
   subjects = [{
     kind = "ServiceAccount";
-    name = "${self.serviceAccount}";
+    name = self.serviceAccount.out.name;
     namespace = scope.namespaceName;
   }];
   labels = commonLabels;
@@ -165,7 +165,7 @@ self: {
         };
         spec = {
           terminationGracePeriodSeconds = 30;
-          serviceAccountName = "${self.serviceAccount}";
+          serviceAccountName = self.serviceAccount.out.name;
           dnsPolicy = "Default";
         }
         // lib.optionalAttrs (cfg.affinity != null) {
@@ -245,7 +245,7 @@ self: {
             {
               name = "config-volume";
               configMap = {
-                name = "${self.configmap}";
+                name = self.configmap.out.name;
                 items = [
                   {
                     key = "Corefile";
@@ -267,7 +267,7 @@ self: {
     name = "${scope.instanceName}";
     labels = commonLabels;
     spec = {
-      selector = scope.selectWorkload self.deployment;
+      selector = self.deployment.out.selector;
       ports = [
         {
           name = "udp-53";
@@ -303,7 +303,7 @@ self: {
         };
         annotations = cfg.prometheus.service.annotations or { };
         spec = {
-          selector = scope.selectWorkload self.deployment;
+          selector = self.deployment.out.selector;
           ports = [
             {
               name = "metrics";
@@ -328,7 +328,7 @@ self: {
         labels = commonLabels;
         spec = {
           namespaceSelector.matchNames = [ scope.namespaceName ];
-          selector.matchLabels = scope.selectByLabels self.metricsService;
+          selector.matchLabels = self.metricsService.out.selector;
           endpoints = [
             (
               {
@@ -356,7 +356,7 @@ self: {
           scaleTargetRef = {
             apiVersion = "apps/v1";
             kind = "Deployment";
-            name = "${self.deployment}";
+            name = self.deployment.out.name;
           };
           minReplicas = cfg.hpa.minReplicas;
           maxReplicas = cfg.hpa.maxReplicas;
@@ -375,7 +375,7 @@ self: {
         name = "${scope.instanceName}";
         labels = commonLabels;
         spec = {
-          selector.matchLabels = scope.selectWorkload self.deployment;
+          selector.matchLabels = self.deployment.out.selector;
         }
         // lib.optionalAttrs (cfg.podDisruptionBudget.minAvailable != null) {
           minAvailable = cfg.podDisruptionBudget.minAvailable;
@@ -388,8 +388,8 @@ self: {
       null;
 
   # --- Entry point ---
-  # main is the Service. The Deployment is tracked via scope.selectWorkload,
-  # ConfigMap and ServiceAccount via ${} interpolation.
+  # main is the Service. The Deployment is tracked via .out.selector,
+  # ConfigMap and ServiceAccount via .out.name.
   # RBAC is pulled in via inverse dependency detection.
   main = self.service;
 }

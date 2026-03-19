@@ -232,7 +232,7 @@ self:
 let
 
   clusterRoles = mkClusterRoleSet scope {
-    subjects = [{ kind = "ServiceAccount"; name = "${self.serviceAccount}"; namespace = ns; }];
+    subjects = [{ kind = "ServiceAccount"; name = self.serviceAccount.out.name; namespace = ns; }];
     labels = rbacLabels;
     roles = {
       "${prefix}-manager-role" = grant ([
@@ -259,7 +259,7 @@ let
   };
 
   nsRoles = mkRoleSet scope {
-    subjects = [{ kind = "ServiceAccount"; name = "${self.serviceAccount}"; namespace = ns; }];
+    subjects = [{ kind = "ServiceAccount"; name = self.serviceAccount.out.name; namespace = ns; }];
     labels = rbacLabels;
     roles = {
       "${prefix}-leader-election-role" = grant [
@@ -303,7 +303,7 @@ in {
     labels = selectorLabels;
     spec = {
       type = "ClusterIP";
-      selector = scope.selectWorkload self.deployment;
+      selector = self.deployment.out.selector;
       ports = [
         {
           name = "https";
@@ -343,7 +343,7 @@ in {
           };
         };
         spec = {
-          serviceAccountName = "${self.serviceAccount}";
+          serviceAccountName = self.serviceAccount.out.name;
           terminationGracePeriodSeconds = 10;
           securityContext = podSecurityContext;
           inherit containers;

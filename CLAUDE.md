@@ -10,7 +10,7 @@ When modifying kix APIs, package conventions, or the diff tooling, keep the `kix
 
 - **Don't invent new fields.** The DSL should work with standard K8s manifest fields, not introduce custom spec keys that could confuse users or diverge from K8s semantics.
 - **Automation over brevity.** DSL features exist to prevent mistakes (mismatched selectors, forgotten dependencies), not to save lines of code.
-- **Read as actions.** DSL functions should read as verbs/actions describing intent (e.g., `scope.selectWorkload self.deployment`), not as data plumbing.
+- **Resources are rich objects.** Resources expose derived properties (name, selector, labels) through `out`, so consumers query the resource directly rather than calling helper functions or relying on string interpolation tricks. Prefer `self.sa.out.name` over `"${self.sa}"`.
 
 ## Build
 

@@ -78,7 +78,7 @@ let
     if cfg.database.host != null then
       cfg.database.host
     else if postgres != null then
-      postgres.fqdn
+      postgres.out.fqdn
     else
       throw "n8n: database.host must be set or a postgres dependency must be available";
 
@@ -87,7 +87,7 @@ let
     if cfg.redis.host != null then
       cfg.redis.host
     else if valkey != null then
-      valkey.fqdn
+      valkey.out.fqdn
     else
       throw "n8n: redis.host must be set or a valkey dependency must be available";
 
@@ -114,14 +114,14 @@ self:
 let
   # envFrom for main deployment: app configmap + secret.
   mainEnvFrom = [
-    { configMapRef.name = "${self.configmap}"; }
+    { configMapRef.name = self.configmap.out.name; }
     { secretRef.name = secretName; }
   ];
 
   # envFrom for worker deployment: app configmap + worker configmap + secret.
   workerEnvFrom = [
-    { configMapRef.name = "${self.configmap}"; }
-    { configMapRef.name = "${self.workerConfigmap}"; }
+    { configMapRef.name = self.configmap.out.name; }
+    { configMapRef.name = self.workerConfigmap.out.name; }
     { secretRef.name = secretName; }
   ];
 in
@@ -182,11 +182,11 @@ in
         metadata = {
           labels = mainSelectorLabels;
           annotations = {
-            "checksum/configmap" = "\${${self.configmap}}";
+            "checksum/configmap" = self.configmap.out.identityHash;
           };
         };
         spec = {
-          serviceAccountName = "${self.serviceAccount}";
+          serviceAccountName = self.serviceAccount.out.name;
           securityContext = {
             fsGroup = 1000;
             runAsNonRoot = true;
@@ -279,11 +279,11 @@ in
             metadata = {
               labels = workerSelectorLabels;
               annotations = {
-                "checksum/configmap" = "\${${self.configmap}}";
+                "checksum/configmap" = self.configmap.out.identityHash;
               };
             };
             spec = {
-              serviceAccountName = "${self.serviceAccount}";
+              serviceAccountName = self.serviceAccount.out.name;
               securityContext = {
                 fsGroup = 1000;
                 runAsNonRoot = true;
@@ -393,7 +393,7 @@ in
                   path = "/";
                   pathType = "Prefix";
                   backend.service = {
-                    name = "${self.service}";
+                    name = self.service.out.name;
                     port.number = cfg.servicePort;
                   };
                 }
