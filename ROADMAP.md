@@ -10,6 +10,8 @@
 - [ ] post-eval validation 
 - [ ] secret handling and injection (agenix, etc) => hashes of encrypted secrets are beautiful (dont trigger change) + injection can happen in kix-deploy
 - [ ] autogenerating, checking, verifying, and abstracting network policies (cilium compatible)
+- [ ] migrations as k8s jobs to be defined for major version upgrades or similar (per package?)
+- [ ] use "already existing" cluster elements, like "this secret already exists in the cluster" -> kix deploy will complain
 
 ## Warnings, Errors, Checks
 
@@ -44,6 +46,7 @@
 
 ## Future work
 
+- [ ] AI Skills: recommended in-kix actions on warnings or errors; skill to read changelog and derive warnings and checks...
 - [ ] Multi-zone, multi-cluster management
     > However the orchestration of "oh this region is down, let me then adjust myself" is a runtime concern. We can also model this through a reeval (global variables based on global cluster state)
 - [ ] LSP or checks for code smells
