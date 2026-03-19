@@ -5,6 +5,7 @@
 { kix, packages }:
 
 kix.buildCluster {
+  name = "test-full";
   clusterLabels = {
     "app.kubernetes.io/part-of" = "kix-full-test";
     "team" = "platform";

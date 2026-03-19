@@ -11,8 +11,6 @@ let
     clusterScoped
     mkResource
     mkPackageInstance
-    addKixAnnotations
-    computeClosure
     buildRegistry
     ;
 
@@ -660,6 +658,7 @@ rec {
   # The top-level cluster builder.
   buildCluster =
     {
+      name ? "cluster",
       namespaces ? { },
       instances,
       clusterLabels ? { },
@@ -791,77 +790,20 @@ rec {
 
       registry = buildRegistry allResources;
 
-      # Compute closures per instance
-      instanceClosures = builtins.listToAttrs (
-        map (
-          inst:
-          let
-            main = inst.main;
-            closure = computeClosure registry main;
-          in
-          {
-            name = "${inst._meta.namespace}/${inst._meta.instanceName}";
-            value = closure;
-          }
-        ) allInstancesList
-      );
-
-      # All manifests (deduplicated)
-      allClosureResources = builtins.concatMap (k: instanceClosures.${k}) (
-        builtins.attrNames instanceClosures
-      );
-      dedup =
-        resources:
-        let
-          go =
-            {
-              seen,
-              order,
-              queue,
-            }:
-            if queue == [ ] then
-              order
-            else
-              let
-                head = builtins.head queue;
-                rest = builtins.tail queue;
-                ns =
-                  if head.namespace or null == null then
-                    "_cluster_"
-                  else if builtins.isAttrs head.namespace then
-                    if (head.namespace._type or "") == "k8s-cluster-scoped" then
-                      "_cluster_"
-                    else
-                      head.namespace.name or "_cluster_"
-                  else
-                    head.namespace;
-                id = "${head.kind}/${head.name}@${ns}";
-              in
-              if builtins.hasAttr id seen then
-                go {
-                  inherit seen order;
-                  queue = rest;
-                }
-              else
-                go {
-                  seen = seen // {
-                    ${id} = true;
-                  };
-                  order = order ++ [ head ];
-                  queue = rest;
-                };
-        in
-        go {
-          seen = { };
-          order = [ ];
-          queue = resources;
-        };
-
-      allManifestsRaw = dedup allClosureResources;
+      # Activation CRD — cluster-level root of the Nix store DAG.
+      # References all PackageInstance store paths via string context.
+      activation = k8s.mkActivation {
+        inherit name;
+        instances = lib.mapAttrs (
+          _nsName: nsInsts:
+          lib.mapAttrs (_: inst: inst._packageInstance.out.name) nsInsts
+        ) clusterInstances;
+      };
 
     in
     {
       _type = "k8s-cluster-v2";
+      inherit name;
 
       # The nested fixpoint of all instances
       inherit clusterInstances;
@@ -870,42 +812,15 @@ rec {
       # Namespace resources
       namespaces = nsResources;
 
-      # Cluster-wide registry (store path → resource metadata)
-      inherit registry;
+      # Activation CRD — the cluster root store path.
+      # `exportReferencesGraph` / `nix-store --tree` on this gives the full DAG.
+      inherit activation;
 
-      # All manifests with kix annotations (content-hash, identity-hash, depends-on)
-      manifests = map (r: addKixAnnotations registry r) allManifestsRaw;
-
-      # Raw manifests (without kix annotations, for debugging)
-      rawManifests = map (r: r.rawManifest) allManifestsRaw;
-
-      # All raw resources
-      resources = allManifestsRaw;
-
-      # Per-instance closures
-      closures = instanceClosures;
-
-      # DAG visualization
-      dagDot = k8s.closureToDot registry (builtins.head allManifestsRaw);
-      dagTree = k8s.closureToTree registry (builtins.head allManifestsRaw);
-
-      # Deployment graph (full DAG + waves)
-      deployGraph = k8s.buildDeployGraph registry allManifestsRaw;
-      deployWaves = k8s.computeDeployWaves (k8s.buildDeployGraph registry allManifestsRaw);
-
-      # Deploy group: merge closures of listed instances, deduplicate
-      deployGroup =
-        instancePaths:
-        let
-          resources' = builtins.concatMap (path: instanceClosures.${path} or [ ]) instancePaths;
-          dedupResources = dedup resources';
-        in
-        map (r: addKixAnnotations registry r) dedupResources;
-
-      # Package-level access (for compatibility)
-      packages = lib.mapAttrs (
-        _nsName: nsInsts: lib.mapAttrs (_instName: inst: inst) nsInsts
-      ) clusterInstances;
+      # Raw manifests for eval-time cross-resource validation.
+      # Strip string context so validation code can freely interpolate values.
+      rawManifests = map (r:
+        builtins.fromJSON (builtins.unsafeDiscardStringContext (builtins.toJSON r.rawManifest))
+      ) allResources;
     };
 
 }

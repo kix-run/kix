@@ -199,7 +199,7 @@ Every resource exposes:
 
 | Function | When to use | Description |
 |----------|-------------|-------------|
-| `kix.buildCluster { ... }` | **Always.** Every cluster definition uses this. | Takes `clusterLabels`, `namespaces`, and `instances` and produces the full manifest set. |
+| `kix.buildCluster { ... }` | **Always.** Every cluster definition uses this. | Takes `name`, `clusterLabels`, `namespaces`, and `instances`. Returns `{ activation, instances, namespaces, rawManifests }`. The `activation` is the cluster root store path — pipeline derivations in flake.nix use `exportReferencesGraph` on it to produce annotated manifests and deploy graphs. |
 | `kix.mkEnv envName envConfig instanceSets` | **When the same services run in multiple environments** (e.g. myapp-prod, myapp-stage, myapp-demo). Instead of duplicating instance blocks, define the service stack once and stamp it into env-prefixed namespaces with per-env config overrides. | Stamps instance sets into `{envName}-{setName}` namespaces. |
 | `kix.mergeFragments { fragments; namespacePolicies; }` | **When multiple teams own different parts of a cluster.** Each team produces a fragment `{ namespaces, instances }` and `mergeFragments` combines them with collision detection. Don't manually merge attrsets — use this. | Deep-merges namespaces, detects instance collisions across fragments. |
 | `kix.fromHelmChart { chart; values; releaseName; includeCrds; }` | **When migrating a Helm-managed service that you don't want to rewrite in pure kix yet.** Wraps a Helm chart so its output is tracked like any other kix package. Use this as a stepping stone — pure kix packages are preferred for full control. | Renders a Helm chart and wraps each resource as a kix resource. |
@@ -224,6 +224,7 @@ Every resource exposes:
 # clusters/<name>.nix
 { kix, packages }:
 kix.buildCluster {
+  name = "my-cluster";
   clusterLabels = { cluster = "my-cluster"; team = "platform"; };
   namespaces = {
     kube-system = { };

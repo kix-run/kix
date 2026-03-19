@@ -44,202 +44,80 @@
             in
             lib.mapAttrs (name: _: import ./packages/${name}) dirs;
 
-          # Cluster evaluations.
-          clusterMinimal = import ./clusters/test-minimal.nix {
-            inherit kix;
-            packages = packages';
-          };
-          clusterExample = import ./clusters/example.nix {
-            inherit kix;
-            packages = packages';
-          };
-          clusterFull = import ./clusters/test-full.nix {
-            inherit kix;
-            packages = packages';
-          };
-          clusterHelm = import ./clusters/test-helm.nix { inherit kix; };
-          clusterJa1 = import ./clusters/nw1.nix {
-            inherit kix;
-            packages = packages';
+          # Cluster registry — add new clusters here, outputs are auto-generated.
+          clusters = {
+            minimal = import ./clusters/test-minimal.nix { inherit kix; packages = packages'; };
+            example = import ./clusters/example.nix { inherit kix; packages = packages'; };
+            full = import ./clusters/test-full.nix { inherit kix; packages = packages'; };
+            helm = import ./clusters/test-helm.nix { inherit kix; };
+            nw1 = import ./clusters/nw1.nix { inherit kix; packages = packages'; };
           };
 
-          # Serializes manifests (already post-processed) into a YAML directory.
-          mkManifests =
-            manifests:
-            let
-              fileEntries = map (
-                m:
-                let
-                  kindLower = lib.toLower m.kind;
-                  name = m.metadata.name;
-                  ns = m.metadata.namespace or "_cluster";
-                in
-                {
-                  fileName = "${ns}--${name}-${kindLower}";
-                  drv = kix.mkManifest m;
-                }
-              ) manifests;
-            in
-            pkgs.runCommand "k8s-manifests" { } ''
-              mkdir -p $out
-              ${lib.concatStringsSep "\n" (map (e: "cp ${e.drv} $out/${e.fileName}.yaml") fileEntries)}
-            '';
+          # --- Pipeline derivation builders ---
+          # Each takes a cluster (with .activation) and uses exportReferencesGraph
+          # to read the Nix store DAG inside the build sandbox.
 
-          # Serializes manifests into a directory tree sorted by namespace.
-          # Output structure: $out/<namespace>/<name>-<kind>.yaml
-          # Cluster-scoped resources go into $out/_cluster/
-          mkManifestsByNamespace =
-            manifests:
-            let
-              grouped = lib.groupBy (m: m.metadata.namespace or "_cluster") manifests;
-              nsDirs = lib.mapAttrs (
-                ns: nsManiests:
-                pkgs.runCommand "k8s-manifests-ns-${ns}" { } ''
-                  mkdir -p $out
-                  ${lib.concatStringsSep "\n" (
-                    map (
-                      m:
-                      let
-                        kindLower = lib.toLower m.kind;
-                        name = m.metadata.name;
-                      in
-                      "cp ${kix.mkManifest m} $out/${name}-${kindLower}.yaml"
-                    ) nsManiests
-                  )}
-                ''
-              ) grouped;
-            in
-            pkgs.runCommand "k8s-manifests-by-namespace" { } ''
-              mkdir -p $out
-              ${lib.concatStringsSep "\n" (
-                lib.mapAttrsToList (ns: drv: "ln -s ${drv} $out/${ns}") nsDirs
-              )}
-            '';
+          python3 = pkgs.python3.withPackages (p: [ p.pyyaml ]);
 
-          # Serializes deployment graph and waves as JSON files.
-          mkDeployOutput =
+          mkAnnotatedManifests =
             cluster:
-            let
-              graphJson = builtins.toJSON cluster.deployGraph;
-              wavesJson = builtins.toJSON cluster.deployWaves;
-            in
-            pkgs.runCommand "k8s-deploy-graph" { } ''
-              mkdir -p $out
-              cat > $out/graph.json <<'GRAPH'
-              ${graphJson}
-              GRAPH
-              cat > $out/waves.json <<'WAVES'
-              ${wavesJson}
-              WAVES
+            pkgs.runCommand "k8s-manifests-${cluster.name}" {
+              exportReferencesGraph = [ "closure" cluster.activation ];
+              nativeBuildInputs = [ python3 ];
+            } ''
+              PYTHONPATH=${./pipeline} python3 ${./pipeline/annotate.py} closure ${cluster.activation} $out
             '';
 
-          # Serializes raw manifests (store paths intact) into a YAML directory.
-          # Each YAML derivation retains store-path references to its dependencies,
-          # so nix-store -q --tree / --requisites shows the actual resource DAG.
-          mkManifestsRaw =
-            rawManifests:
-            let
-              fileEntries = map (
-                m:
-                let
-                  kindLower = lib.toLower m.kind;
-                  name = m.metadata.name;
-                in
-                {
-                  fileName = "${name}-${kindLower}";
-                  drv = kix.mkManifest m;
-                }
-              ) rawManifests;
-            in
-            pkgs.runCommand "k8s-manifests-raw" { } ''
-              mkdir -p $out
-              ${lib.concatStringsSep "\n" (map (e: "ln -s ${e.drv} $out/${e.fileName}.yaml") fileEntries)}
+          mkAnnotatedManifestsByNs =
+            cluster:
+            pkgs.runCommand "k8s-manifests-by-ns-${cluster.name}" {
+              exportReferencesGraph = [ "closure" cluster.activation ];
+              nativeBuildInputs = [ python3 ];
+            } ''
+              PYTHONPATH=${./pipeline} python3 ${./pipeline/annotate.py} closure ${cluster.activation} $out --by-namespace
             '';
+
+          mkDeployGraph =
+            cluster:
+            pkgs.runCommand "k8s-deploy-graph-${cluster.name}" {
+              exportReferencesGraph = [ "closure" cluster.activation ];
+              nativeBuildInputs = [ pkgs.python3 ];
+            } ''
+              PYTHONPATH=${./pipeline} python3 ${./pipeline/graph.py} closure ${cluster.activation} $out
+            '';
+
+          # Auto-generate per-cluster outputs from the registry.
+          clusterPackages = lib.concatMapAttrs (cname: cluster: {
+            "cluster-${cname}" = mkAnnotatedManifests cluster;
+            "cluster-${cname}-by-ns" = mkAnnotatedManifestsByNs cluster;
+            "cluster-${cname}-graph" = mkDeployGraph cluster;
+            # Activation root — inspect the DAG with:
+            #   nix-store -q --tree $(readlink result/activation)
+            "cluster-${cname}-activation" = pkgs.runCommand "k8s-activation-${cluster.name}" { } ''
+              mkdir -p $out
+              ln -s ${cluster.activation} $out/activation
+            '';
+          }) clusters;
+
+          clusterChecks = lib.concatMapAttrs (cname: cluster:
+            let manifests = kixChecks.manifestMap cluster.rawManifests;
+            in {
+              "schema-cluster-${cname}" = kixChecks.schemaCheck "cluster-${cname}" (
+                mkAnnotatedManifests cluster
+              );
+              "validate-cluster-${cname}" =
+                assert kixChecks.validateManifestSet "cluster-${cname}" manifests;
+                pkgs.runCommand "validate-cluster-${cname}" { } ''
+                  echo "Cross-resource validation passed for cluster-${cname}."
+                  touch $out
+                '';
+            }
+          ) clusters;
 
         in
         {
-          packages = {
-            cluster-minimal = mkManifests clusterMinimal.manifests;
-            cluster-example = mkManifests clusterExample.manifests;
-            cluster-full = mkManifests clusterFull.manifests;
-            cluster-helm = mkManifests clusterHelm.manifests;
-            cluster-nw1 = mkManifests clusterJa1.manifests;
-
-            cluster-minimal-by-ns = mkManifestsByNamespace clusterMinimal.manifests;
-            cluster-example-by-ns = mkManifestsByNamespace clusterExample.manifests;
-            cluster-full-by-ns = mkManifestsByNamespace clusterFull.manifests;
-            cluster-helm-by-ns = mkManifestsByNamespace clusterHelm.manifests;
-            cluster-nw1-by-ns = mkManifestsByNamespace clusterJa1.manifests;
-
-            cluster-minimal-raw = mkManifestsRaw clusterMinimal.rawManifests;
-            cluster-example-raw = mkManifestsRaw clusterExample.rawManifests;
-            cluster-full-raw = mkManifestsRaw clusterFull.rawManifests;
-            cluster-helm-raw = mkManifestsRaw clusterHelm.rawManifests;
-            cluster-nw1-raw = mkManifestsRaw clusterJa1.rawManifests;
-
-            cluster-minimal-deploy = mkDeployOutput clusterMinimal;
-            cluster-example-deploy = mkDeployOutput clusterExample;
-            cluster-full-deploy = mkDeployOutput clusterFull;
-            cluster-helm-deploy = mkDeployOutput clusterHelm;
-            cluster-nw1-deploy = mkDeployOutput clusterJa1;
-          };
-
-          checks =
-            let
-              exampleManifests = kixChecks.manifestMap clusterExample.manifests;
-              fullManifests = kixChecks.manifestMap clusterFull.manifests;
-              minimalManifests = kixChecks.manifestMap clusterMinimal.manifests;
-              helmManifests = kixChecks.manifestMap clusterHelm.manifests;
-              ja1Manifests = kixChecks.manifestMap clusterJa1.manifests;
-            in
-            {
-              # --- Schema validation ---
-              schema-cluster-example = kixChecks.schemaCheck "cluster-example" (
-                mkManifests clusterExample.manifests
-              );
-              schema-cluster-full = kixChecks.schemaCheck "cluster-full" (mkManifests clusterFull.manifests);
-              schema-cluster-minimal = kixChecks.schemaCheck "cluster-minimal" (
-                mkManifests clusterMinimal.manifests
-              );
-              schema-cluster-helm = kixChecks.schemaCheck "cluster-helm" (mkManifests clusterHelm.manifests);
-              schema-cluster-nw1 = kixChecks.schemaCheck "cluster-nw1" (mkManifests clusterJa1.manifests);
-
-              # --- Cross-resource validation ---
-              validate-cluster-example =
-                assert kixChecks.validateManifestSet "cluster-example" exampleManifests;
-                pkgs.runCommand "validate-cluster-example" { } ''
-                  echo "Cross-resource validation passed for cluster-example."
-                  touch $out
-                '';
-
-              validate-cluster-full =
-                assert kixChecks.validateManifestSet "cluster-full" fullManifests;
-                pkgs.runCommand "validate-cluster-full" { } ''
-                  echo "Cross-resource validation passed for cluster-full."
-                  touch $out
-                '';
-
-              validate-cluster-minimal =
-                assert kixChecks.validateManifestSet "cluster-minimal" minimalManifests;
-                pkgs.runCommand "validate-cluster-minimal" { } ''
-                  echo "Cross-resource validation passed for cluster-minimal."
-                  touch $out
-                '';
-
-              validate-cluster-helm =
-                assert kixChecks.validateManifestSet "cluster-helm" helmManifests;
-                pkgs.runCommand "validate-cluster-helm" { } ''
-                  echo "Cross-resource validation passed for cluster-helm."
-                  touch $out
-                '';
-
-              validate-cluster-nw1 =
-                assert kixChecks.validateManifestSet "cluster-nw1" ja1Manifests;
-                pkgs.runCommand "validate-cluster-nw1" { } ''
-                  echo "Cross-resource validation passed for cluster-nw1."
-                  touch $out
-                '';
-            };
+          packages = clusterPackages;
+          checks = clusterChecks;
         };
     };
 }

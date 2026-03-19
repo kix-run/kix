@@ -25,15 +25,12 @@ in
     clusterScoped
     mkResource
     mkPackageInstance
-    addKixAnnotations
+    mkActivation
     attachCtxDeep
     extractStoreHash
-    computeClosure
-    closureToDot
-    closureToTree
     buildRegistry
-    buildDeployGraph
-    computeDeployWaves
+    nsOf
+    resourceId
     ;
 
   # --- Cluster evaluation + DI (eval.nix) ---

@@ -2,8 +2,10 @@
 #
 # Resources use real K8s names in manifests (not store paths).
 # Dependency tracking uses Nix string context on out.name/selector/fqdn values.
-# Post-processing adds kix annotations (content-hash, identity-hash, depends-on)
-# instead of replacing store paths with names.
+#
+# Post-processing (annotations, deploy graph, waves) is done in Phase 2
+# by pipeline scripts that read the store DAG via exportReferencesGraph.
+# See pipeline/ directory.
 
 { lib }:
 
@@ -170,36 +172,6 @@ rec {
     in
     self;
 
-  # Add kix annotations to a manifest for in-cluster observability.
-  # Replaces postProcessManifest — manifests already contain real K8s names.
-  # Strips all Nix string context from the output since dependency info
-  # is now captured in the kix annotations.
-  addKixAnnotations = registry: resource:
-    let
-      manifestJson = builtins.toJSON resource.rawManifest;
-      # Content hash: hash of manifest content only (no dep context).
-      # Recomputable from the live resource for drift detection.
-      contentHash = builtins.hashString "sha256"
-        (builtins.unsafeDiscardStringContext manifestJson);
-      # Identity hash: Nix store base32 hash (Merkle — includes dep tree).
-      identityHash = extractStoreHash resource.outPath;
-      # Direct dependencies: k8s resource store paths found in manifest context.
-      ctx = builtins.getContext manifestJson;
-      k8sPaths = builtins.filter (p: builtins.hasAttr p registry) (builtins.attrNames ctx);
-      depHashes = builtins.concatStringsSep "," (map extractStoreHash k8sPaths);
-
-      annotated = lib.recursiveUpdate resource.rawManifest {
-        metadata.annotations = (resource.rawManifest.metadata.annotations or {}) // {
-          "kix.dev/content-hash" = contentHash;
-          "kix.dev/identity-hash" = identityHash;
-        } // lib.optionalAttrs (k8sPaths != []) {
-          "kix.dev/depends-on" = depHashes;
-        };
-      };
-    in
-    # Strip all Nix string context — dep info is in the annotations now.
-    builtins.fromJSON (builtins.unsafeDiscardStringContext (builtins.toJSON annotated));
-
   # Creates a PackageInstance CRD — root of each package's DAG subgraph.
   # Holds references to the main resource, inverse deps, and package-level requires.
   mkPackageInstance = { instanceName, namespaceName, namespace, mainResource, packageRequires ? [], inverseDeps ? [], version ? null, labels ? {} }:
@@ -222,134 +194,6 @@ rec {
       } // lib.optionalAttrs (version != null) { inherit version; };
     };
 
-  # Compute the transitive closure of a resource using the registry.
-  #
-  # Uses builtins.getContext on rawManifest JSON to discover deps.
-  # BFS over deps + requires.
-  computeClosure = registry: root:
-    let
-      getDeps = resource:
-        let
-          ctx = builtins.getContext (builtins.toJSON resource.rawManifest);
-          k8sPaths = builtins.filter (p: builtins.hasAttr p registry) (builtins.attrNames ctx);
-          manifestDeps = map (p: registry.${p}.resource) k8sPaths;
-          requiresDeps = builtins.filter (r:
-            builtins.isAttrs r && (r._type or "") == "k8s-resource"
-          ) (resource.requires or []);
-        in
-        manifestDeps ++ requiresDeps;
-
-      go =
-        {
-          seen,
-          order,
-          queue,
-        }:
-        if queue == [ ] then
-          order
-        else
-          let
-            head = builtins.head queue;
-            rest = builtins.tail queue;
-            ns = if head.namespace or null == null then "_cluster_" else
-              if builtins.isAttrs head.namespace then
-                if (head.namespace._type or "") == "k8s-cluster-scoped" then "_cluster_"
-                else head.namespace.name or "_cluster_"
-              else head.namespace;
-            id = "${head.kind}/${head.name}@${ns}";
-          in
-          if builtins.hasAttr id seen then
-            go {
-              inherit seen order;
-              queue = rest;
-            }
-          else
-            go {
-              seen = seen // {
-                ${id} = true;
-              };
-              order = order ++ [ head ];
-              queue = rest ++ (getDeps head);
-            };
-    in
-    go {
-      seen = { };
-      order = [ ];
-      queue = [ root ];
-    };
-
-  # Renders a closure as a Graphviz DOT digraph.
-  closureToDot = registry: root:
-    let
-      closure' = computeClosure registry root;
-      resourceId = r:
-        let
-          ns = if r.namespace or null == null then "cluster"
-            else if builtins.isAttrs r.namespace then r.namespace.name or "cluster"
-            else r.namespace;
-        in
-        "${r.kind}/${r.name}@${ns}";
-      dotId = r: builtins.replaceStrings [ "/" "@" "-" ":" "." ] [ "_" "_" "_" "_" "_" ] (resourceId r);
-      dotLabel = r: "${r.kind}\\n${r.name}";
-
-      nodeLines = map (r: ''${dotId r} [label="${dotLabel r}"];'') closure';
-      edgeLines = lib.concatMap (r:
-        let
-          deps = getDepsForViz registry r;
-          # Parse kix.dev/requires annotation to show different edge styles
-          reqAnnotation = r.rawManifest.metadata.annotations."kix.dev/requires" or null;
-          reqPaths = if reqAnnotation != null then
-            let ctx = builtins.getContext reqAnnotation;
-            in builtins.filter (p: builtins.hasAttr p registry) (builtins.attrNames ctx)
-          else [];
-          reqResources = map (p: registry.${p}.resource) reqPaths;
-          # Forward deps from manifest (excluding requires annotation paths)
-          forwardDeps = builtins.filter (d: !(builtins.elem d reqResources)) deps;
-        in
-        (map (d: "${dotId r} -> ${dotId d} [style=solid, color=blue];") forwardDeps)
-        ++ (map (d: "${dotId r} -> ${dotId d} [style=dashed, color=red, label=\"requires\"];") reqResources)
-      ) closure';
-    in
-    ''
-      digraph resources {
-        rankdir=TB;
-        node [shape=box, style=rounded, fontname="monospace", fontsize=10];
-        edge [fontsize=8];
-      ${builtins.concatStringsSep "\n" nodeLines}
-      ${builtins.concatStringsSep "\n" edgeLines}
-      }
-    '';
-
-  # Helper for visualization — get deps from context
-  getDepsForViz = registry: resource:
-    let
-      ctx = builtins.getContext (builtins.toJSON resource.rawManifest);
-      k8sPaths = builtins.filter (p: builtins.hasAttr p registry) (builtins.attrNames ctx);
-    in
-    map (p: registry.${p}.resource) k8sPaths;
-
-  # Renders a closure as a human-readable tree string.
-  closureToTree = registry: root:
-    let
-      closure' = computeClosure registry root;
-      resourceId = r:
-        let
-          ns = if r.namespace or null == null then "cluster"
-            else if builtins.isAttrs r.namespace then r.namespace.name or "cluster"
-            else r.namespace;
-        in
-        "${r.kind}/${r.name}@${ns}";
-
-      renderResource = r:
-        let
-          deps = getDepsForViz registry r;
-          depLines = map (d: "  dep-> ${resourceId d}") deps;
-          lines = [ (resourceId r) ] ++ depLines;
-        in
-        builtins.concatStringsSep "\n" lines;
-    in
-    builtins.concatStringsSep "\n\n" (map renderResource closure') + "\n";
-
   # Build a cluster-wide registry from a list of resources.
   buildRegistry = resources:
     builtins.foldl' (acc: r: acc // r.registryEntry) { } resources;
@@ -365,75 +209,18 @@ rec {
   # Canonical ID for a resource (used in graph nodes and edges).
   resourceId = r: "${r.kind}/${r.name}@${nsOf r}";
 
-  # Build a deployment graph from deduplicated resources and a registry.
-  # Returns { nodes, edges } suitable for JSON serialization.
-  buildDeployGraph = registry: resources:
-    let
-      getDeps = resource:
-        let
-          ctx = builtins.getContext (builtins.toJSON resource.rawManifest);
-          k8sPaths = builtins.filter (p: builtins.hasAttr p registry) (builtins.attrNames ctx);
-          manifestDeps = map (p: registry.${p}.resource) k8sPaths;
-          requiresDeps = builtins.filter (r:
-            builtins.isAttrs r && (r._type or "") == "k8s-resource"
-          ) (resource.requires or []);
-        in
-        manifestDeps ++ requiresDeps;
-
-      nodes = map (r: {
-        id = resourceId r;
-        apiVersion = r.apiVersion;
-        kind = r.kind;
-        name = r.name;
-        namespace = let ns = nsOf r; in if ns == "_cluster_" then null else ns;
-      }) resources;
-
-      edges = lib.concatMap (r:
-        let
-          deps = getDeps r;
-          srcId = resourceId r;
-        in
-        map (d: { from = srcId; to = resourceId d; }) deps
-      ) resources;
-    in
-    { inherit nodes edges; };
-
-  # Compute deployment waves from a deploy graph.
-  # Wave 0 = resources with no dependencies, wave N+1 = resources whose
-  # deps are all in waves 0..N. Cycles are dumped into the final wave.
-  computeDeployWaves = graph:
-    let
-      nodeIds = map (n: n.id) graph.nodes;
-      nodeMap = builtins.listToAttrs (map (n: { name = n.id; value = n; }) graph.nodes);
-
-      # Precompute deps per node
-      edgesByFrom = builtins.groupBy (e: e.from) graph.edges;
-      depsOf = builtins.listToAttrs (map (id: {
-        name = id;
-        value = map (e: e.to) (edgesByFrom.${id} or []);
-      }) nodeIds);
-
-      go = { placed, remaining, waveIdx }:
-        if remaining == [] then []
-        else
-          let
-            ready = builtins.filter (id:
-              builtins.all (dep: builtins.hasAttr dep placed) (depsOf.${id})
-            ) remaining;
-            readySet = builtins.listToAttrs (map (id: { name = id; value = true; }) ready);
-            notReady = builtins.filter (id: !(builtins.hasAttr id readySet)) remaining;
-          in
-          if ready == [] then
-            # Cycle — dump remaining into final wave
-            [{ wave = waveIdx; resources = map (id: nodeMap.${id}) remaining; }]
-          else
-            [{ wave = waveIdx; resources = map (id: nodeMap.${id}) ready; }]
-            ++ go {
-              placed = placed // readySet;
-              remaining = notReady;
-              waveIdx = waveIdx + 1;
-            };
-    in
-    go { placed = {}; remaining = nodeIds; waveIdx = 0; };
+  # Creates an Activation CRD — the cluster-level root of the store DAG.
+  # References all PackageInstance store paths via string context in spec.instances.
+  # `nix-store --tree` / `exportReferencesGraph` on this path gives the full cluster DAG.
+  mkActivation = { name, instances }:
+    mkResource {
+      apiVersion = "kix.dev/v1alpha1";
+      kind = "Activation";
+      inherit name;
+      namespace = clusterScoped;
+      extra.spec = {
+        inherit instances;
+      };
+    };
 
 }

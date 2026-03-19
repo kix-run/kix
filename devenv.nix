@@ -20,11 +20,6 @@
   scripts.kix-dag-dot.exec = ''
     nix eval --raw ".#legacyPackages.$(nix eval --raw --impure --expr builtins.currentSystem).fpCluster.dagDot"
   '';
-  scripts.kix-dag-svg.exec = ''
-    out="''${1:-/tmp/kix-dag.svg}"
-    nix eval --raw ".#legacyPackages.$(nix eval --raw --impure --expr builtins.currentSystem).fpCluster.dagDot" | dot -Tsvg -o "$out"
-    echo "DAG written to $out"
-  '';
 
   # Cluster diff tooling: dump live cluster and compare against kix output.
   scripts.kix-check.exec = ''
@@ -44,6 +39,14 @@
   '';
   scripts.docs-build.exec = ''
     uv run --group docs mkdocs build "$@"
+  '';
+
+  scripts.kix-dag-svg.exec = ''
+    cluster="''${1:?Usage: kix-dag-svg <cluster-name> <output-path.svg>}"
+    out="''${2:?Usage: kix-dag-svg <cluster-name> <output-path.svg>}"
+    nix build ".#cluster-$cluster" --extra-experimental-features pipe-operators
+    nix-store --query --graph result | , dot -Tsvg -o "$out"
+    echo "DAG written to $out"
   '';
 
   languages = {

@@ -6,6 +6,7 @@
 { kix, packages }:
 
 kix.buildCluster {
+  name = "test-minimal";
   namespaces.kube-system = { };
 
   instances =

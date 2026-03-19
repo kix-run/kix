@@ -21,6 +21,7 @@ let
 in
 
 kix.buildCluster {
+  name = "test-helm";
   namespaces.test-helm = { };
 
   instances =

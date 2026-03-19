@@ -7,6 +7,7 @@
 { kix, packages }:
 
 kix.buildCluster {
+  name = "example";
   clusterLabels = {
     "app.kubernetes.io/part-of" = "kix-example";
     "team" = "platform";
