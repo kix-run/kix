@@ -713,6 +713,7 @@ rec {
     {
       name ? "cluster",
       modules,
+      specialArgs ? {},
     }:
     let
       # 1. Evaluate modules — produces merged config lazily.
@@ -722,7 +723,7 @@ rec {
         modules = [ (import ./modules.nix) ] ++ modules;
         specialArgs = {
           ref = clusterInstances; # lazy — resolved during fixpoint
-        };
+        } // specialArgs;
       };
 
       cfg = evaluated.config;
