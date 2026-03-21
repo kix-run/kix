@@ -7,16 +7,16 @@
 
 kix.buildCluster {
   name = "test-minimal";
-  namespaces.kube-system = { };
-
-  instances =
-    { ref, ... }:
+  modules = [
     {
-      kube-system = {
+      namespaces.kube-system = { };
+
+      instances.kube-system = {
         coredns = {
           package = packages.coredns;
           packageType = "coredns";
         };
       };
-    };
+    }
+  ];
 }

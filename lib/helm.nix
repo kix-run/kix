@@ -180,9 +180,7 @@ rec {
 
   # Main entry point: import a Helm chart as a v2 package function.
   #
-  # Returns a package function with the standard signature:
-  #   { scope, config, lib }: self: { main = ...; }
-  #
+  # Returns a package function with the standard { options, build } signature.
   # `config.values` at the cluster level deep-merges with package-level `values`.
   fromHelmChart =
     {
@@ -196,13 +194,21 @@ rec {
     }:
     {
       scope,
-      config,
       lib,
     }:
-    _self:
-    let
-      # Deep-merge package-level values with cluster-level config.values.
-      mergedValues = lib.recursiveUpdate values (config.values or { });
+    {
+      options = {
+        values = lib.mkOption {
+          type = lib.types.attrsOf lib.types.anything;
+          default = {};
+          description = "Helm values to deep-merge with the chart's package-level values.";
+        };
+      };
+
+      build = { self, config, clusterConfig }:
+      let
+        # Deep-merge package-level values with cluster-level config.values.
+        mergedValues = lib.recursiveUpdate values (config.values or { });
 
       # IFD: build the helm template derivation and import the JSON result.
       templateDrv = helmTemplateDerivation {
@@ -312,5 +318,6 @@ rec {
         resource = mainResource;
         requires = nonMainResources;
       };
+    };
     };
 }

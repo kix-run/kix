@@ -8,68 +8,11 @@
 
 {
   scope,
-  config,
   lib,
 }:
 
 let
   helpers = import ./helpers.nix { inherit lib; };
-
-  cfg = scope.defaults config {
-    image = {
-      repository = "coredns/coredns";
-      tag = "1.13.1";
-      pullPolicy = "IfNotPresent";
-    };
-    replicaCount = 1;
-    isClusterService = true;
-    serviceType = "ClusterIP";
-    serviceAccount = {
-      create = true;
-    };
-    servers = [ helpers.defaultServer ];
-    resources = {
-      requests = {
-        cpu = "100m";
-        memory = "128Mi";
-      };
-      limits = {
-        cpu = "100m";
-        memory = "128Mi";
-      };
-    };
-    rollingUpdate = {
-      maxSurge = "25%";
-      maxUnavailable = 1;
-    };
-    affinity = null;
-    enableTcpPort = true;
-    hpa = {
-      enabled = false;
-      minReplicas = 1;
-      maxReplicas = 5;
-      metrics = [ ];
-    };
-    podDisruptionBudget = {
-      minAvailable = null;
-      maxUnavailable = null;
-    };
-    prometheus = {
-      enabled = false;
-      service = {
-        enabled = false;
-        annotations = { };
-      };
-      monitor = {
-        enabled = false;
-        interval = null;
-      };
-    };
-  };
-
-  # Whether PDB is enabled: at least one of minAvailable/maxUnavailable is set.
-  pdbEnabled =
-    cfg.podDisruptionBudget.minAvailable != null || cfg.podDisruptionBudget.maxUnavailable != null;
 
   # Selector labels — used for Deployment matchLabels and template labels.
   # Other resources derive selectors via .out.selector.
@@ -78,318 +21,418 @@ let
     "app.kubernetes.io/name" = "coredns";
   };
 
-  # Common labels applied to all resources.
-  commonLabels = selectorLabels
-    // lib.optionalAttrs cfg.isClusterService {
-      "kubernetes.io/cluster-service" = "true";
-      "kubernetes.io/name" = "CoreDNS";
-    };
-
-  # Build the Corefile string from server config.
-  corefile = helpers.mkCorefile cfg.servers;
-
   # RBAC DSL
   inherit (scope.rbac) grant allow core;
   discovery = scope.rbac.group "discovery.k8s.io" [ "endpointslices" ];
 
 in
-self: {
-
-  # --- ServiceAccount ---
-  serviceAccount =
-    if cfg.serviceAccount.create then
-      scope.mkResource {
-        apiVersion = "v1";
-        kind = "ServiceAccount";
-        name = "${scope.instanceName}";
-        labels = commonLabels;
-      }
-    else
-      null;
-
-  # --- ConfigMap (Corefile) ---
-  configmap = scope.mkResource {
-    apiVersion = "v1";
-    kind = "ConfigMap";
-    name = "${scope.instanceName}";
-    labels = {
-      "app.kubernetes.io/name" = "coredns";
+{
+  options = {
+    image = lib.mkOption {
+      type = lib.types.attrsOf lib.types.str;
+      default = {
+        repository = "coredns/coredns";
+        tag = "1.13.1";
+        pullPolicy = "IfNotPresent";
+      };
     };
-    data = {
-      Corefile = corefile;
+    replicaCount = lib.mkOption {
+      type = lib.types.int;
+      default = 1;
+    };
+    isClusterService = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+    };
+    serviceType = lib.mkOption {
+      type = lib.types.str;
+      default = "ClusterIP";
+    };
+    serviceAccount = lib.mkOption {
+      type = lib.types.attrsOf lib.types.anything;
+      default = {
+        create = true;
+      };
+    };
+    servers = lib.mkOption {
+      type = lib.types.listOf lib.types.anything;
+      default = [ helpers.defaultServer ];
+    };
+    resources = lib.mkOption {
+      type = lib.types.anything;
+      default = {
+        requests = {
+          cpu = "100m";
+          memory = "128Mi";
+        };
+        limits = {
+          cpu = "100m";
+          memory = "128Mi";
+        };
+      };
+    };
+    rollingUpdate = lib.mkOption {
+      type = lib.types.anything;
+      default = {
+        maxSurge = "25%";
+        maxUnavailable = 1;
+      };
+    };
+    affinity = lib.mkOption {
+      type = lib.types.nullOr lib.types.anything;
+      default = null;
+    };
+    enableTcpPort = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+    };
+    hpa = lib.mkOption {
+      type = lib.types.anything;
+      default = {
+        enabled = false;
+        minReplicas = 1;
+        maxReplicas = 5;
+        metrics = [ ];
+      };
+    };
+    podDisruptionBudget = lib.mkOption {
+      type = lib.types.anything;
+      default = {
+        minAvailable = null;
+        maxUnavailable = null;
+      };
+    };
+    prometheus = lib.mkOption {
+      type = lib.types.anything;
+      default = {
+        enabled = false;
+        service = {
+          enabled = false;
+          annotations = { };
+        };
+        monitor = {
+          enabled = false;
+          interval = null;
+        };
+      };
     };
   };
 
-} // scope.rbac.mkClusterRoleSet scope {
-  subjects = [{
-    kind = "ServiceAccount";
-    name = self.serviceAccount.out.name;
-    namespace = scope.namespaceName;
-  }];
-  labels = commonLabels;
-  roles = {
-    "${scope.instanceName}" = grant [
-      ([core.endpoints core.services core.pods core.namespaces discovery.endpointslices] |> allow [ "list" "watch" ])
-    ];
-  };
-} // {
+  build = { self, config, clusterConfig }:
+  let
+    # Whether PDB is enabled: at least one of minAvailable/maxUnavailable is set.
+    pdbEnabled =
+      config.podDisruptionBudget.minAvailable != null || config.podDisruptionBudget.maxUnavailable != null;
 
-  # --- Deployment ---
-  deployment = scope.mkResource {
-    apiVersion = "apps/v1";
-    kind = "Deployment";
-    name = "${scope.instanceName}";
-    labels = commonLabels // {
-      "app.kubernetes.io/version" = cfg.image.tag;
+    # Common labels applied to all resources.
+    commonLabels = selectorLabels
+      // lib.optionalAttrs config.isClusterService {
+        "kubernetes.io/cluster-service" = "true";
+        "kubernetes.io/name" = "CoreDNS";
+      };
+
+    # Build the Corefile string from server config.
+    corefile = helpers.mkCorefile config.servers;
+
+  in
+  {
+
+    # --- ServiceAccount ---
+    serviceAccount =
+      if config.serviceAccount.create then
+        scope.mkResource {
+          apiVersion = "v1";
+          kind = "ServiceAccount";
+          name = "${scope.instanceName}";
+          labels = commonLabels;
+        }
+      else
+        null;
+
+    # --- ConfigMap (Corefile) ---
+    configmap = scope.mkResource {
+      apiVersion = "v1";
+      kind = "ConfigMap";
+      name = "${scope.instanceName}";
+      labels = {
+        "app.kubernetes.io/name" = "coredns";
+      };
+      data = {
+        Corefile = corefile;
+      };
     };
-    spec = {
-      replicas = cfg.replicaCount;
-      strategy = {
-        type = "RollingUpdate";
-        rollingUpdate = {
-          inherit (cfg.rollingUpdate) maxUnavailable maxSurge;
-        };
+
+  } // scope.rbac.mkClusterRoleSet scope {
+    subjects = [{
+      kind = "ServiceAccount";
+      name = self.serviceAccount.out.name;
+      namespace = scope.namespaceName;
+    }];
+    labels = commonLabels;
+    roles = {
+      "${scope.instanceName}" = grant [
+        ([core.endpoints core.services core.pods core.namespaces discovery.endpointslices] |> allow [ "list" "watch" ])
+      ];
+    };
+  } // {
+
+    # --- Deployment ---
+    deployment = scope.mkResource {
+      apiVersion = "apps/v1";
+      kind = "Deployment";
+      name = "${scope.instanceName}";
+      labels = commonLabels // {
+        "app.kubernetes.io/version" = config.image.tag;
       };
-      selector.matchLabels = selectorLabels // {
-        "app.kubernetes.io/instance" = scope.instanceName;
-      };
-      template = {
-        metadata = {
-          labels = selectorLabels // {
-            "app.kubernetes.io/instance" = scope.instanceName;
-          };
-          annotations = {
-            "scheduler.alpha.kubernetes.io/tolerations" =
-              ''[{"key":"CriticalAddonsOnly", "operator":"Exists"}]'';
+      spec = {
+        replicas = config.replicaCount;
+        strategy = {
+          type = "RollingUpdate";
+          rollingUpdate = {
+            inherit (config.rollingUpdate) maxUnavailable maxSurge;
           };
         };
-        spec = {
-          terminationGracePeriodSeconds = 30;
-          serviceAccountName = self.serviceAccount.out.name;
-          dnsPolicy = "Default";
-        }
-        // lib.optionalAttrs (cfg.affinity != null) {
-          inherit (cfg) affinity;
-        }
-        // {
-          containers = [
-            {
-              name = "coredns";
-              image = "${cfg.image.repository}:${cfg.image.tag}";
-              imagePullPolicy = cfg.image.pullPolicy;
-              args = [
-                "-conf"
-                "/etc/coredns/Corefile"
-              ];
-              volumeMounts = [
-                {
-                  name = "config-volume";
-                  mountPath = "/etc/coredns";
-                }
-              ];
-              inherit (cfg) resources;
-              ports = [
-                {
-                  containerPort = 53;
-                  name = "udp-53";
-                  protocol = "UDP";
-                }
-              ]
-              ++ lib.optional cfg.enableTcpPort {
-                containerPort = 53;
-                name = "tcp-53";
-                protocol = "TCP";
-              }
-              ++ [
-                {
-                  containerPort = 9153;
-                  name = "tcp-9153";
-                  protocol = "TCP";
-                }
-              ];
-              livenessProbe = {
-                httpGet = {
-                  path = "/health";
-                  port = 8080;
-                  scheme = "HTTP";
-                };
-                initialDelaySeconds = 60;
-                periodSeconds = 10;
-                timeoutSeconds = 5;
-                successThreshold = 1;
-                failureThreshold = 5;
-              };
-              readinessProbe = {
-                httpGet = {
-                  path = "/ready";
-                  port = 8181;
-                  scheme = "HTTP";
-                };
-                initialDelaySeconds = 30;
-                periodSeconds = 5;
-                timeoutSeconds = 5;
-                successThreshold = 1;
-                failureThreshold = 1;
-              };
-              securityContext = {
-                allowPrivilegeEscalation = false;
-                capabilities = {
-                  add = [ "NET_BIND_SERVICE" ];
-                  drop = [ "ALL" ];
-                };
-                readOnlyRootFilesystem = true;
-              };
-            }
-          ];
-          volumes = [
-            {
-              name = "config-volume";
-              configMap = {
-                name = self.configmap.out.name;
-                items = [
+        selector.matchLabels = selectorLabels // {
+          "app.kubernetes.io/instance" = scope.instanceName;
+        };
+        template = {
+          metadata = {
+            labels = selectorLabels // {
+              "app.kubernetes.io/instance" = scope.instanceName;
+            };
+            annotations = {
+              "scheduler.alpha.kubernetes.io/tolerations" =
+                ''[{"key":"CriticalAddonsOnly", "operator":"Exists"}]'';
+            };
+          };
+          spec = {
+            terminationGracePeriodSeconds = 30;
+            serviceAccountName = self.serviceAccount.out.name;
+            dnsPolicy = "Default";
+          }
+          // lib.optionalAttrs (config.affinity != null) {
+            inherit (config) affinity;
+          }
+          // {
+            containers = [
+              {
+                name = "coredns";
+                image = "${config.image.repository}:${config.image.tag}";
+                imagePullPolicy = config.image.pullPolicy;
+                args = [
+                  "-conf"
+                  "/etc/coredns/Corefile"
+                ];
+                volumeMounts = [
                   {
-                    key = "Corefile";
-                    path = "Corefile";
+                    name = "config-volume";
+                    mountPath = "/etc/coredns";
                   }
                 ];
-              };
-            }
-          ];
-        };
-      };
-    };
-  };
-
-  # --- Service (kube-dns) ---
-  service = scope.mkResource {
-    apiVersion = "v1";
-    kind = "Service";
-    name = "${scope.instanceName}";
-    labels = commonLabels;
-    spec = {
-      selector = self.deployment.out.selector;
-      ports = [
-        {
-          name = "udp-53";
-          port = 53;
-          protocol = "UDP";
-          targetPort = 53;
-        }
-      ]
-      ++ lib.optional cfg.enableTcpPort {
-        name = "tcp-53";
-        port = 53;
-        protocol = "TCP";
-        targetPort = 53;
-      };
-      type = cfg.serviceType;
-    };
-    requires =
-      lib.optional (self.metricsService != null) self.metricsService
-      ++ lib.optional (self.serviceMonitor != null) self.serviceMonitor
-      ++ lib.optional (self.hpa != null) self.hpa
-      ++ lib.optional (self.pdb != null) self.pdb;
-  };
-
-  # --- Optional: Metrics Service ---
-  metricsService =
-    if cfg.prometheus.service.enabled or false then
-      scope.mkResource {
-        apiVersion = "v1";
-        kind = "Service";
-        name = "${scope.instanceName}-metrics";
-        labels = commonLabels // {
-          "app.kubernetes.io/component" = "metrics";
-        };
-        annotations = cfg.prometheus.service.annotations or { };
-        spec = {
-          selector = self.deployment.out.selector;
-          ports = [
-            {
-              name = "metrics";
-              port = 9153;
-              protocol = "TCP";
-              targetPort = 9153;
-            }
-          ];
-          type = "ClusterIP";
-        };
-      }
-    else
-      null;
-
-  # --- Optional: ServiceMonitor ---
-  serviceMonitor =
-    if cfg.prometheus.monitor.enabled or false then
-      scope.mkClusterResource {
-        apiVersion = "monitoring.coreos.com/v1";
-        kind = "ServiceMonitor";
-        name = "${scope.instanceName}";
-        labels = commonLabels;
-        spec = {
-          namespaceSelector.matchNames = [ scope.namespaceName ];
-          selector.matchLabels = self.metricsService.out.selector;
-          endpoints = [
-            (
+                inherit (config) resources;
+                ports = [
+                  {
+                    containerPort = 53;
+                    name = "udp-53";
+                    protocol = "UDP";
+                  }
+                ]
+                ++ lib.optional config.enableTcpPort {
+                  containerPort = 53;
+                  name = "tcp-53";
+                  protocol = "TCP";
+                }
+                ++ [
+                  {
+                    containerPort = 9153;
+                    name = "tcp-9153";
+                    protocol = "TCP";
+                  }
+                ];
+                livenessProbe = {
+                  httpGet = {
+                    path = "/health";
+                    port = 8080;
+                    scheme = "HTTP";
+                  };
+                  initialDelaySeconds = 60;
+                  periodSeconds = 10;
+                  timeoutSeconds = 5;
+                  successThreshold = 1;
+                  failureThreshold = 5;
+                };
+                readinessProbe = {
+                  httpGet = {
+                    path = "/ready";
+                    port = 8181;
+                    scheme = "HTTP";
+                  };
+                  initialDelaySeconds = 30;
+                  periodSeconds = 5;
+                  timeoutSeconds = 5;
+                  successThreshold = 1;
+                  failureThreshold = 1;
+                };
+                securityContext = {
+                  allowPrivilegeEscalation = false;
+                  capabilities = {
+                    add = [ "NET_BIND_SERVICE" ];
+                    drop = [ "ALL" ];
+                  };
+                  readOnlyRootFilesystem = true;
+                };
+              }
+            ];
+            volumes = [
               {
-                port = "metrics";
+                name = "config-volume";
+                configMap = {
+                  name = self.configmap.out.name;
+                  items = [
+                    {
+                      key = "Corefile";
+                      path = "Corefile";
+                    }
+                  ];
+                };
               }
-              // lib.optionalAttrs (cfg.prometheus.monitor.interval != null) {
-                interval = cfg.prometheus.monitor.interval;
-              }
-            )
-          ];
-        };
-      }
-    else
-      null;
-
-  # --- Optional: HPA ---
-  hpa =
-    if cfg.hpa.enabled then
-      scope.mkResource {
-        apiVersion = "autoscaling/v2";
-        kind = "HorizontalPodAutoscaler";
-        name = "${scope.instanceName}";
-        labels = commonLabels;
-        spec = {
-          scaleTargetRef = {
-            apiVersion = "apps/v1";
-            kind = "Deployment";
-            name = self.deployment.out.name;
+            ];
           };
-          minReplicas = cfg.hpa.minReplicas;
-          maxReplicas = cfg.hpa.maxReplicas;
-          metrics = cfg.hpa.metrics;
         };
-      }
-    else
-      null;
+      };
+    };
 
-  # --- Optional: PDB ---
-  pdb =
-    if pdbEnabled then
-      scope.mkResource {
-        apiVersion = "policy/v1";
-        kind = "PodDisruptionBudget";
-        name = "${scope.instanceName}";
-        labels = commonLabels;
-        spec = {
-          selector.matchLabels = self.deployment.out.selector;
-        }
-        // lib.optionalAttrs (cfg.podDisruptionBudget.minAvailable != null) {
-          minAvailable = cfg.podDisruptionBudget.minAvailable;
-        }
-        // lib.optionalAttrs (cfg.podDisruptionBudget.maxUnavailable != null) {
-          maxUnavailable = cfg.podDisruptionBudget.maxUnavailable;
+    # --- Service (kube-dns) ---
+    service = scope.mkResource {
+      apiVersion = "v1";
+      kind = "Service";
+      name = "${scope.instanceName}";
+      labels = commonLabels;
+      spec = {
+        selector = self.deployment.out.selector;
+        ports = [
+          {
+            name = "udp-53";
+            port = 53;
+            protocol = "UDP";
+            targetPort = 53;
+          }
+        ]
+        ++ lib.optional config.enableTcpPort {
+          name = "tcp-53";
+          port = 53;
+          protocol = "TCP";
+          targetPort = 53;
         };
-      }
-    else
-      null;
+        type = config.serviceType;
+      };
+      requires =
+        lib.optional (self.metricsService != null) self.metricsService
+        ++ lib.optional (self.serviceMonitor != null) self.serviceMonitor
+        ++ lib.optional (self.hpa != null) self.hpa
+        ++ lib.optional (self.pdb != null) self.pdb;
+    };
 
-  # --- Entry point ---
-  # main is the Service. The Deployment is tracked via .out.selector,
-  # ConfigMap and ServiceAccount via .out.name.
-  # RBAC is pulled in via inverse dependency detection.
-  main = self.service;
+    # --- Optional: Metrics Service ---
+    metricsService =
+      if config.prometheus.service.enabled or false then
+        scope.mkResource {
+          apiVersion = "v1";
+          kind = "Service";
+          name = "${scope.instanceName}-metrics";
+          labels = commonLabels // {
+            "app.kubernetes.io/component" = "metrics";
+          };
+          annotations = config.prometheus.service.annotations or { };
+          spec = {
+            selector = self.deployment.out.selector;
+            ports = [
+              {
+                name = "metrics";
+                port = 9153;
+                protocol = "TCP";
+                targetPort = 9153;
+              }
+            ];
+            type = "ClusterIP";
+          };
+        }
+      else
+        null;
+
+    # --- Optional: ServiceMonitor ---
+    serviceMonitor =
+      if config.prometheus.monitor.enabled or false then
+        scope.mkClusterResource {
+          apiVersion = "monitoring.coreos.com/v1";
+          kind = "ServiceMonitor";
+          name = "${scope.instanceName}";
+          labels = commonLabels;
+          spec = {
+            namespaceSelector.matchNames = [ scope.namespaceName ];
+            selector.matchLabels = self.metricsService.out.selector;
+            endpoints = [
+              (
+                {
+                  port = "metrics";
+                }
+                // lib.optionalAttrs (config.prometheus.monitor.interval != null) {
+                  interval = config.prometheus.monitor.interval;
+                }
+              )
+            ];
+          };
+        }
+      else
+        null;
+
+    # --- Optional: HPA ---
+    hpa =
+      if config.hpa.enabled then
+        scope.mkResource {
+          apiVersion = "autoscaling/v2";
+          kind = "HorizontalPodAutoscaler";
+          name = "${scope.instanceName}";
+          labels = commonLabels;
+          spec = {
+            scaleTargetRef = {
+              apiVersion = "apps/v1";
+              kind = "Deployment";
+              name = self.deployment.out.name;
+            };
+            minReplicas = config.hpa.minReplicas;
+            maxReplicas = config.hpa.maxReplicas;
+            metrics = config.hpa.metrics;
+          };
+        }
+      else
+        null;
+
+    # --- Optional: PDB ---
+    pdb =
+      if pdbEnabled then
+        scope.mkResource {
+          apiVersion = "policy/v1";
+          kind = "PodDisruptionBudget";
+          name = "${scope.instanceName}";
+          labels = commonLabels;
+          spec = {
+            selector.matchLabels = self.deployment.out.selector;
+          }
+          // lib.optionalAttrs (config.podDisruptionBudget.minAvailable != null) {
+            minAvailable = config.podDisruptionBudget.minAvailable;
+          }
+          // lib.optionalAttrs (config.podDisruptionBudget.maxUnavailable != null) {
+            maxUnavailable = config.podDisruptionBudget.maxUnavailable;
+          };
+        }
+      else
+        null;
+
+    # --- Entry point ---
+    # main is the Service. The Deployment is tracked via .out.selector,
+    # ConfigMap and ServiceAccount via .out.name.
+    # RBAC is pulled in via inverse dependency detection.
+    main = self.service;
+  };
 }

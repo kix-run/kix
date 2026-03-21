@@ -17,9 +17,9 @@
 
 5. **`ref` via `specialArgs`.** The outer fixpoint is passed to all modules as `ref`. Nix laziness ensures no cycles — `ref` thunks resolve during instance evaluation, not during module merge.
 
-6. **Typed package options** via `_kixOptions.nix` + `deferredModule`. Each instance's config goes through a per-instance `evalModules` with the package's option declarations. Global config is injected as lowest-priority defaults.
+6. **Typed package options** via `{ options, build }`. Each package returns an attrset with `options` (NixOS-style option declarations) and `build` (a function receiving `{ self, config, clusterConfig }` that returns parts). The evaluator splits these: it runs `evalModules` with the package's options + instance config, then passes the evaluated config to `build`. No sidecar files.
 
-7. **`scope.defaults` is removed.** Defaults live in `_kixOptions.nix` option declarations. Packages that don't have `_kixOptions` use their existing `scope.defaults` pattern unchanged (gradual adoption).
+7. **`scope.defaults` is removed.** Defaults live in package `options` declarations. This is a breaking change — all packages must adopt the `{ options, build }` pattern.
 
 ---
 
@@ -249,9 +249,10 @@ This is the same laziness pattern NixOS uses for modules referencing each other'
 
 ## evaluateInstance — Updated
 
-Two changes from current:
-1. Read explicit DI overrides from `instanceConfig.deps` (not top-level keys)
-2. Apply `globalPartsOverlays ++ instanceConfig.partsOverlays`
+Three changes from current:
+1. Package returns `{ options, build }` — evaluator splits them
+2. Read explicit DI overrides from `instanceConfig.deps` (not top-level keys)
+3. Apply `globalPartsOverlays ++ instanceConfig.partsOverlays`
 
 ```nix
 evaluateInstance = {
@@ -267,33 +268,36 @@ evaluateInstance = {
       inherit clusterConfig;  # available as scope.clusterConfig
     };
 
-    packageFn = instanceConfig.package;
-
-    innerFn = kixCallPackage {
-      inherit packageFn scope resolutionIndex allInstances;
-      instanceConfig = instanceConfig // {
-        # Per-instance config evaluation with typed options
-        config = evaluateInstanceConfig {
-          inherit instanceConfig clusterConfig;
-        };
-      };
+    # 1. Call the package function with DI deps — returns { options, build }
+    raw = kixCallPackage {
+      packageFn = instanceConfig.package;
+      inherit scope resolutionIndex allInstances;
+      deps = instanceConfig.deps or {};
     };
 
-    # Combine global + instance overlays
+    # 2. Evaluate typed config: package options + instance config
+    evaluatedConfig = evaluateInstanceConfig {
+      packageOptions = raw.options;
+      inherit instanceConfig clusterConfig;
+    };
+
+    # 3. Combine global + instance overlays
     allOverlays = globalPartsOverlays ++ (instanceConfig.partsOverlays or []);
 
-    # Build inner fixpoint with overlays
+    # 4. Build inner fixpoint — build receives { self, config, clusterConfig }
     parts =
       if allOverlays != [] then
         lib.fix (self:
-          let base = innerFn self;
+          let base = raw.build { inherit self clusterConfig; config = evaluatedConfig; };
           in builtins.foldl'
             (acc: overlay: acc // (overlay self acc))
             base
             allOverlays
         )
       else
-        lib.fix innerFn;
+        lib.fix (self:
+          raw.build { inherit self clusterConfig; config = evaluatedConfig; }
+        );
 
     # ... rest unchanged (closure, inverse deps, PackageInstance) ...
   in ...;
@@ -306,18 +310,20 @@ evaluateInstance = {
 explicitOverride = instanceConfig.${argName} or null;
 
 # After:
-explicitOverride = (instanceConfig.deps or {}).${argName} or null;
+explicitOverride = (deps).${argName} or null;
 ```
+
+`kixCallPackage` now returns the `{ options, build }` attrset from the package function, with DI deps resolved and injected into the function args.
 
 ---
 
-## Typed Package Options
+## Typed Package Options — `{ options, build }`
 
-Packages can optionally declare typed options in `_kixOptions.nix`:
+Every package returns `{ options, build }`. The evaluator splits the two concerns:
 
 ```nix
-# packages/valkey/_kixOptions.nix
-{ lib, ... }: {
+# packages/valkey/default.nix
+{ lib, scope, ... }: {
   options = {
     replicaCount = lib.mkOption {
       type = lib.types.int;
@@ -342,30 +348,35 @@ Packages can optionally declare typed options in `_kixOptions.nix`:
       default = "8Gi";
     };
   };
+
+  build = { self, config, clusterConfig }: {
+    statefulSet = scope.mkResource {
+      kind = "StatefulSet";
+      name = "${scope.instanceName}";
+      spec.replicas = config.replicaCount;
+      # ...
+    };
+  };
 }
 ```
 
+The outer function receives DI deps (`scope`, other packages). It returns:
+- **`options`**: NixOS-style option declarations. The evaluator runs `evalModules` with these + instance config.
+- **`build`**: A function receiving `{ self, config, clusterConfig }` that returns the parts attrset. `self` is the fixpoint, `config` is the evaluated instance config, `clusterConfig` is the full cluster-level config.
+
 ### Per-instance config evaluation
 
-Each instance's `config` (a `deferredModule`) is evaluated with the package's `_kixOptions`:
+The evaluator extracts `options` from the package, runs `evalModules` to validate and merge config, then passes the result to `build`:
 
 ```nix
-evaluateInstanceConfig = { instanceConfig, clusterConfig }:
-  let
-    package = instanceConfig.package;
-    hasKixOptions = package ? _kixOptions;
-  in
-  if hasKixOptions then
-    (lib.evalModules {
-      modules = [
-        package._kixOptions                            # package option declarations
-        { config = clusterConfig.global or {}; }       # global defaults (lowest priority)
-        instanceConfig.config                          # instance config (deferredModule, higher priority)
-      ];
-    }).config
-  else
-    # No _kixOptions — pass config through as-is (backward compat)
-    instanceConfig.config or {};
+evaluateInstanceConfig = { packageOptions, instanceConfig, clusterConfig }:
+  (lib.evalModules {
+    modules = [
+      { options = packageOptions; }                    # package option declarations
+      { config = clusterConfig.global or {}; }         # global defaults (lowest priority)
+      instanceConfig.config                            # instance config (deferredModule, higher priority)
+    ];
+  }).config;
 ```
 
 **Priority stack** (lowest → highest):
@@ -375,10 +386,6 @@ evaluateInstanceConfig = { instanceConfig, clusterConfig }:
 4. `mkForce` in platform fragments (priority 50)
 
 A package just reads `config.monitoring.enabled` — it doesn't need to know whether the value came from its own default, the global config, or an instance-level override.
-
-### Gradual adoption
-
-Packages without `_kixOptions.nix` continue to work. Their config is passed through as a plain attrset, and `scope.defaults` handles merging as today. No big-bang migration required — packages can adopt typed options one at a time.
 
 ---
 
@@ -430,15 +437,21 @@ Packages know nothing about monitoring. They just expose `metricsPort` on their 
 
 ```nix
 # packages/acme-api/default.nix
-{ scope, config, lib }: self: {
-  service = scope.mkResource {
-    kind = "Service";
-    name = "${scope.instanceName}-api";
-    spec.ports = [{ name = "http"; port = 8080; }];
-    outputs = { metricsPort = "9090"; metricsPath = "/metrics"; };
+{ lib, scope, ... }: {
+  options = {
+    port = lib.mkOption { type = lib.types.int; default = 8080; };
   };
-  # No monitoring awareness. The overlay adds serviceMonitor if metrics exist.
-  main = self.service;
+
+  build = { self, config, clusterConfig }: {
+    service = scope.mkResource {
+      kind = "Service";
+      name = "${scope.instanceName}-api";
+      spec.ports = [{ name = "http"; port = config.port; }];
+      outputs = { metricsPort = "9090"; metricsPath = "/metrics"; };
+    };
+    # No monitoring awareness. The overlay adds serviceMonitor if metrics exist.
+    main = self.service;
+  };
 }
 ```
 
@@ -794,15 +807,18 @@ kix.buildCluster {
 ├──────────────────────────────────────────────────────────┤
 │ 4. Nested fixpoint (lib.fix)                             │
 │    For each instance:                                    │
-│    a. Evaluate typed config (deferredModule + _kixOptions)│
-│    b. kixCallPackage — resolve DI deps from fixpoint     │
-│       - Explicit: inst.deps.argName                      │
+│    a. kixCallPackage — resolve DI deps, call packageFn   │
+│       - Returns { options, build }                       │
+│       - Explicit deps: inst.deps.argName                 │
 │       - Auto: resolutionIndex → same-ns → cluster-wide   │
-│    c. Apply overlays: globalPartsOverlays ++ partsOverlays│
+│    b. evaluateInstanceConfig — evalModules with:         │
+│       - Package options + global defaults + instance cfg │
+│    c. Call build with { self, config, clusterConfig }    │
+│    d. Apply overlays: globalPartsOverlays ++ partsOverlays│
 │       - Each overlay: (scope → self → base → attrset)    │
 │       - Overlays inspect base to decide whether to act   │
-│    d. Build instance fixpoint (lib.fix)                  │
-│    e. Compute closure, inverse deps, PackageInstance     │
+│    e. Build instance fixpoint (lib.fix)                  │
+│    f. Compute closure, inverse deps, PackageInstance     │
 ├──────────────────────────────────────────────────────────┤
 │ 5. Output                                                │
 │    - clusterInstances (nested fixpoint)                  │
@@ -839,7 +855,7 @@ parts = lib.fix (self:
 );
 ```
 
-Per-instance `partsOverlays` can use the same signature. For backward compat, the current `parts = self: base: ...` syntax works as a single overlay (it just doesn't receive `scope`, which the instance can close over anyway since it's in the same file).
+Per-instance `partsOverlays` use the same signature. Since the instance's package can close over `scope` anyway, per-instance overlays that don't need `scope` can ignore it.
 
 ---
 
@@ -850,8 +866,9 @@ Per-instance `partsOverlays` can use the same signature. For backward compat, th
 | Function | Change |
 |----------|--------|
 | `buildCluster` | New signature `{ name, modules }`. Uses `evalModules` + `specialArgs`. Passes `globalPartsOverlays` and `clusterConfig` to `evaluateInstance`. |
-| `evaluateInstance` | Takes `globalPartsOverlays` and `clusterConfig`. Applies `globalPartsOverlays ++ inst.partsOverlays` (3-arg overlays). Calls `evaluateInstanceConfig`. |
-| `kixCallPackage` | Reads overrides from `inst.deps` instead of top-level keys. |
+| `evaluateInstance` | Splits package return into `{ options, build }`. Evaluates typed config via `evaluateInstanceConfig`. Calls `build` with `{ self, config, clusterConfig }`. Applies `globalPartsOverlays ++ inst.partsOverlays` (3-arg overlays). |
+| `evaluateInstanceConfig` | New. Runs `evalModules` with package `options` + instance config + global defaults. |
+| `kixCallPackage` | Returns the `{ options, build }` attrset. Reads dep overrides from `deps` arg instead of top-level keys. |
 | `mkScope` | Adds `clusterConfig` to scope object. |
 
 ### lib/modules.nix (new)
@@ -860,11 +877,11 @@ Core module options: `clusterLabels`, `instances`, `namespaces`, `globalPartsOve
 
 ### lib/default.nix
 
-Export new `buildCluster`. `mergeFragments` kept for backward compat but deprecated.
+Export new `buildCluster`. Remove `mergeFragments`.
 
-### Packages
+### Packages (breaking change)
 
-No changes required. Packages that want typed options add `_kixOptions.nix`. Existing packages continue to use `scope.defaults`.
+All packages must return `{ options, build }`. The `build` function receives `{ self, config, clusterConfig }` as a single attrset argument. `scope.defaults` is removed — use `options` with `lib.mkOption` defaults instead.
 
 ---
 

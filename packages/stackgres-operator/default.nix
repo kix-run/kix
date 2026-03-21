@@ -20,49 +20,10 @@
 
 {
   scope,
-  config,
   lib,
 }:
 
 let
-  cfg = scope.defaults config {
-    operator.image = {
-      repository = "quay.io/stackgres/operator";
-      tag = "1.16.3";
-    };
-    restapi.image = {
-      repository = "quay.io/stackgres/restapi";
-      tag = "1.16.3";
-    };
-    adminui.image = {
-      repository = "quay.io/stackgres/admin-ui";
-      tag = "1.16.3";
-    };
-    operator.resources = {
-      requests = {
-        cpu = "100m";
-        memory = "512Mi";
-      };
-      limits = {
-        cpu = "2";
-        memory = "4Gi";
-      };
-    };
-    restapi.resources = {
-      requests = {
-        cpu = "100m";
-        memory = "256Mi";
-      };
-      limits = {
-        cpu = "1";
-        memory = "512Mi";
-      };
-    };
-    authentication.user = "admin";
-    grafana.enabled = false;
-    collector.enabled = false;
-  };
-
   name = scope.instanceName;
 
   selectorLabels = {
@@ -73,10 +34,6 @@ let
   operatorSelectorLabels = {
     app = name;
     "group" = "stackgres.io";
-  };
-
-  operatorLabels = operatorSelectorLabels // {
-    version = cfg.operator.image.tag;
   };
 
   # --- CRD helper ---
@@ -191,576 +148,649 @@ let
   };
 
 in
-self: {
-
-  # ===== ServiceAccount =====
-
-  serviceAccount = scope.mkResource {
-    apiVersion = "v1";
-    kind = "ServiceAccount";
-    name = name;
-    labels = selectorLabels;
-  };
-
-  # ===== ClusterRole =====
-
-  clusterRole = scope.mkClusterResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "ClusterRole";
-    name = name;
-    labels = selectorLabels;
-    extra.rules =
-      let
-        sgCrdNames = [
-          "sgconfigs.stackgres.io"
-          "sgclusters.stackgres.io"
-          "sginstanceprofiles.stackgres.io"
-          "sgpgconfigs.stackgres.io"
-          "sgpoolconfigs.stackgres.io"
-          "sgbackups.stackgres.io"
-          "sgbackupconfigs.stackgres.io"
-          "sgobjectstorages.stackgres.io"
-          "sgdbops.stackgres.io"
-          "sgdistributedlogs.stackgres.io"
-          "sgshardedclusters.stackgres.io"
-          "sgshardedbackups.stackgres.io"
-          "sgshardeddbops.stackgres.io"
-          "sgscripts.stackgres.io"
-          "sgstreams.stackgres.io"
-        ];
-      in
-      [
-        # Core + apps + rbac + batch resources the operator manages
-        {
-          apiGroups = [ "" "apps" "extensions" "rbac.authorization.k8s.io" "batch" ];
-          resources = [
-            "pods"
-            "pods/exec"
-            "pods/log"
-            "services"
-            "endpoints"
-            "endpoints/restricted"
-            "persistentvolumeclaims"
-            "configmaps"
-            "secrets"
-            "deployments"
-            "statefulsets"
-            "serviceaccounts"
-            "namespaces"
-            "roles"
-            "rolebindings"
-            "events"
-            "cronjobs"
-            "jobs"
-          ];
-          verbs = [ "get" "list" "watch" "update" "create" "delete" "deletecollection" "patch" ];
-        }
-        # Finalizers
-        {
-          apiGroups = [ "" "apps" "batch" ];
-          resources = [
-            "statefulsets/finalizers"
-            "persistentvolumeclaims/finalizers"
-            "deployments/finalizers"
-            "services/finalizers"
-            "endpoints/finalizers"
-            "cronjobs/finalizers"
-            "jobs/finalizers"
-            "pods/finalizers"
-          ];
-          verbs = [ "update" ];
-        }
-        # Namespace read
-        {
-          apiGroups = [ "" ];
-          resources = [ "namespaces" ];
-          verbs = [ "get" "list" ];
-        }
-        # Admissionregistration — scoped to own resources
-        {
-          apiGroups = [ "admissionregistration.k8s.io" ];
-          resourceNames = [ name ];
-          resources = [ "mutatingwebhookconfigurations" "validatingwebhookconfigurations" ];
-          verbs = [ "get" "patch" ];
-        }
-        # CRD read — scoped to SG CRDs
-        {
-          apiGroups = [ "apiextensions.k8s.io" ];
-          resourceNames = sgCrdNames;
-          resources = [ "customresourcedefinitions" ];
-          verbs = [ "get" ];
-        }
-        # CRD list
-        {
-          apiGroups = [ "apiextensions.k8s.io" ];
-          resources = [ "customresourcedefinitions" ];
-          verbs = [ "list" ];
-        }
-        # CRD create
-        {
-          apiGroups = [ "apiextensions.k8s.io" ];
-          resources = [ "customresourcedefinitions" ];
-          verbs = [ "create" ];
-        }
-        # CRD update — scoped to SG CRDs
-        {
-          apiGroups = [ "apiextensions.k8s.io" ];
-          resourceNames = sgCrdNames;
-          resources = [ "customresourcedefinitions" ];
-          verbs = [ "patch" "update" ];
-        }
-        # Prometheus CRD read
-        {
-          apiGroups = [ "apiextensions.k8s.io" ];
-          resourceNames = [ "prometheuses.monitoring.coreos.com" ];
-          resources = [ "customresourcedefinitions" ];
-          verbs = [ "get" ];
-        }
-        # VPA
-        {
-          apiGroups = [ "autoscaling.k8s.io" ];
-          resources = [ "verticalpodautoscalers" ];
-          verbs = [ "get" "list" "watch" "update" "create" "delete" "patch" ];
-        }
-        # KEDA
-        {
-          apiGroups = [ "keda.sh" ];
-          resources = [ "scaledobjects" "triggerauthentications" ];
-          verbs = [ "get" "list" "watch" "update" "create" "delete" "patch" ];
-        }
-        # Prometheus Operator — servicemonitors and podmonitors management
-        {
-          apiGroups = [ "monitoring.coreos.com" ];
-          resources = [ "servicemonitors" "podmonitors" ];
-          verbs = [ "list" "get" "create" "delete" "update" "patch" ];
-        }
-        # Prometheus Operator — read access
-        {
-          apiGroups = [ "monitoring.coreos.com" ];
-          resources = [ "prometheus" "prometheuses" "podmonitors" ];
-          verbs = [ "list" "get" ];
-        }
-        # Knative
-        {
-          apiGroups = [ "serving.knative.dev" ];
-          resources = [ "services" ];
-          verbs = [ "get" "list" "watch" "update" "create" "delete" "patch" ];
-        }
-        # ShardingSphere
-        {
-          apiGroups = [ "shardingsphere.apache.org" ];
-          resources = [ "computenodes" ];
-          verbs = [ "get" "list" "watch" "update" "create" "delete" "patch" ];
-        }
-        # Volume Snapshots
-        {
-          apiGroups = [ "snapshot.storage.k8s.io" ];
-          resources = [ "volumesnapshots" ];
-          verbs = [ "list" "get" "watch" "create" ];
-        }
-        # StackGres CRDs — full control
-        {
-          apiGroups = [ "stackgres.io" ];
-          resources = [
-            "sgclusters"
-            "sgpgconfigs"
-            "sginstanceprofiles"
-            "sgpoolconfigs"
-            "sgbackupconfigs"
-            "sgbackups"
-            "sgdistributedlogs"
-            "sgdbops"
-            "sgobjectstorages"
-            "sgscripts"
-            "sgshardedclusters"
-            "sgshardedbackups"
-            "sgshardeddbops"
-            "sgstreams"
-            "sgconfigs"
-          ];
-          verbs = [ "create" "watch" "list" "get" "update" "patch" "delete" ];
-        }
-        # StackGres CRDs — status and finalizers
-        {
-          apiGroups = [ "stackgres.io" ];
-          resources = [
-            "sgconfigs/status"
-            "sgclusters/status"
-            "sgdistributedlogs/status"
-            "sgclusters/finalizers"
-            "sgpgconfigs/finalizers"
-            "sginstanceprofiles/finalizers"
-            "sgpoolconfigs/finalizers"
-            "sgbackupconfigs/finalizers"
-            "sgbackups/finalizers"
-            "sgdistributedlogs/finalizers"
-            "sgdbops/finalizers"
-            "sgobjectstorages/finalizers"
-            "sgscripts/finalizers"
-            "sgshardedclusters/finalizers"
-            "sgshardedbackups/finalizers"
-            "sgshardeddbops/finalizers"
-            "sgstreams/finalizers"
-            "sgconfigs/finalizers"
-          ];
-          verbs = [ "update" ];
-        }
-        # Storage
-        {
-          apiGroups = [ "storage.k8s.io" ];
-          resources = [ "storageclasses" ];
-          verbs = [ "get" "list" ];
-        }
-      ];
-  };
-
-  # ===== ClusterRoleBinding =====
-
-  clusterRoleBinding = scope.mkClusterResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "ClusterRoleBinding";
-    name = name;
-    labels = selectorLabels;
-    extra = {
-      roleRef = {
-        apiGroup = "rbac.authorization.k8s.io";
-        kind = "ClusterRole";
-        name = self.clusterRole.out.name;
-      };
-      subjects = [
-        {
-          kind = "ServiceAccount";
-          name = self.serviceAccount.out.name;
-          namespace = scope.namespaceName;
-        }
-      ];
+{
+  options = {
+    operator.image.repository = lib.mkOption {
+      type = lib.types.str;
+      default = "quay.io/stackgres/operator";
     };
-  };
-
-  # ===== Deployment (operator) =====
-
-  operatorDeployment = scope.mkResource {
-    apiVersion = "apps/v1";
-    kind = "Deployment";
-    name = name;
-    labels = operatorLabels;
-    spec = {
-      replicas = 1;
-      selector.matchLabels = operatorSelectorLabels;
-      template = {
-        metadata.labels = operatorSelectorLabels;
-        spec = {
-          serviceAccountName = self.serviceAccount.out.name;
-          securityContext = {
-            runAsNonRoot = true;
-            runAsUser = 1000;
-            runAsGroup = 1000;
-            fsGroup = 1000;
-          };
-          containers = [
-            {
-              name = name;
-              image = "${cfg.operator.image.repository}:${cfg.operator.image.tag}";
-              imagePullPolicy = "IfNotPresent";
-              env = [
-                {
-                  name = "OPERATOR_NAME";
-                  value = name;
-                }
-                {
-                  name = "OPERATOR_NAMESPACE";
-                  valueFrom.fieldRef.fieldPath = "metadata.namespace";
-                }
-                {
-                  name = "OPERATOR_SERVICE_ACCOUNT";
-                  valueFrom.fieldRef.fieldPath = "spec.serviceAccountName";
-                }
-                {
-                  name = "OPERATOR_POD_NAME";
-                  valueFrom.fieldRef.fieldPath = "metadata.name";
-                }
-                {
-                  name = "OPERATOR_IP";
-                  valueFrom.fieldRef.fieldPath = "status.podIP";
-                }
-                {
-                  name = "OPERATOR_IMAGE_VERSION";
-                  value = cfg.operator.image.tag;
-                }
-                {
-                  name = "OPERATOR_NATIVE_IMAGE_VERSION";
-                  value = cfg.operator.image.tag;
-                }
-                {
-                  name = "OPERATOR_JVM_IMAGE_VERSION";
-                  value = "${cfg.operator.image.tag}-jvm";
-                }
-                {
-                  name = "SG_CONTAINER_REGISTRY";
-                  value = "quay.io";
-                }
-                {
-                  name = "SG_IMAGE_PULL_POLICY";
-                  value = "IfNotPresent";
-                }
-                {
-                  name = "INSTALL_CRDS";
-                  value = "true";
-                }
-                {
-                  name = "INSTALL_WEBHOOKS";
-                  value = "true";
-                }
-                {
-                  name = "INSTALL_CONVERSION_WEBHOOKS";
-                  value = "true";
-                }
-                {
-                  name = "INSTALL_CERTS";
-                  value = "true";
-                }
-                {
-                  name = "INSTALL_CONFIG";
-                  value = "true";
-                }
-                {
-                  name = "CLUSTER_ROLE_DISABLED";
-                  value = "false";
-                }
-                {
-                  name = "DISABLE_RECONCILIATION";
-                  value = "false";
-                }
-                {
-                  name = "WAIT_CRDS_UPGRADE";
-                  value = "false";
-                }
-                {
-                  name = "EXTENSIONS_REPOSITORY_URLS";
-                  value = "https://extensions.stackgres.io/postgres/repository";
-                }
-                {
-                  name = "PROMETHEUS_AUTOBIND";
-                  value = "true";
-                }
-                {
-                  name = "GRAFANA_EMBEDDED";
-                  value = if cfg.grafana.enabled then "true" else "false";
-                }
-                {
-                  name = "SGCONFIG_NAMESPACE";
-                  value = scope.namespaceName;
-                }
-              ];
-              ports = [
-                {
-                  name = "http";
-                  containerPort = 8080;
-                  protocol = "TCP";
-                }
-                {
-                  name = "https";
-                  containerPort = 8443;
-                  protocol = "TCP";
-                }
-              ];
-              livenessProbe = {
-                httpGet = {
-                  path = "/q/health/live";
-                  port = 8080;
-                  scheme = "HTTP";
-                };
-                initialDelaySeconds = 10;
-                periodSeconds = 60;
-                timeoutSeconds = 10;
-                failureThreshold = 3;
-              };
-              readinessProbe = {
-                httpGet = {
-                  path = "/q/health/ready";
-                  port = 8080;
-                  scheme = "HTTP";
-                };
-                periodSeconds = 2;
-                timeoutSeconds = 1;
-                failureThreshold = 3;
-              };
-              resources = cfg.operator.resources;
-              volumeMounts = [
-                {
-                  name = "operator-certs";
-                  mountPath = "/etc/operator/certs";
-                  readOnly = true;
-                }
-              ];
-            }
-          ];
-          volumes = [
-            {
-              name = "operator-certs";
-              secret = {
-                secretName = "${name}-certs";
-                optional = true;
-              };
-            }
-          ];
+    operator.image.tag = lib.mkOption {
+      type = lib.types.str;
+      default = "1.16.3";
+    };
+    restapi.image.repository = lib.mkOption {
+      type = lib.types.str;
+      default = "quay.io/stackgres/restapi";
+    };
+    restapi.image.tag = lib.mkOption {
+      type = lib.types.str;
+      default = "1.16.3";
+    };
+    adminui.image.repository = lib.mkOption {
+      type = lib.types.str;
+      default = "quay.io/stackgres/admin-ui";
+    };
+    adminui.image.tag = lib.mkOption {
+      type = lib.types.str;
+      default = "1.16.3";
+    };
+    operator.resources = lib.mkOption {
+      type = lib.types.anything;
+      default = {
+        requests = {
+          cpu = "100m";
+          memory = "512Mi";
+        };
+        limits = {
+          cpu = "2";
+          memory = "4Gi";
         };
       };
     };
+    restapi.resources = lib.mkOption {
+      type = lib.types.anything;
+      default = {
+        requests = {
+          cpu = "100m";
+          memory = "256Mi";
+        };
+        limits = {
+          cpu = "1";
+          memory = "512Mi";
+        };
+      };
+    };
+    authentication.user = lib.mkOption {
+      type = lib.types.str;
+      default = "admin";
+    };
+    grafana.enabled = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+    };
+    collector.enabled = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+    };
   };
 
-  # ===== Service (operator — webhook endpoint on 443) =====
+  build = { self, config, clusterConfig }:
+  let
+    operatorLabels = operatorSelectorLabels // {
+      version = config.operator.image.tag;
+    };
+  in
+  {
 
-  operatorService = scope.mkResource {
-    apiVersion = "v1";
-    kind = "Service";
-    name = name;
-    spec = {
-      type = "ClusterIP";
-      selector = {
-        app = name;
+    # ===== ServiceAccount =====
+
+    serviceAccount = scope.mkResource {
+      apiVersion = "v1";
+      kind = "ServiceAccount";
+      name = name;
+      labels = selectorLabels;
+    };
+
+    # ===== ClusterRole =====
+
+    clusterRole = scope.mkClusterResource {
+      apiVersion = "rbac.authorization.k8s.io/v1";
+      kind = "ClusterRole";
+      name = name;
+      labels = selectorLabels;
+      extra.rules =
+        let
+          sgCrdNames = [
+            "sgconfigs.stackgres.io"
+            "sgclusters.stackgres.io"
+            "sginstanceprofiles.stackgres.io"
+            "sgpgconfigs.stackgres.io"
+            "sgpoolconfigs.stackgres.io"
+            "sgbackups.stackgres.io"
+            "sgbackupconfigs.stackgres.io"
+            "sgobjectstorages.stackgres.io"
+            "sgdbops.stackgres.io"
+            "sgdistributedlogs.stackgres.io"
+            "sgshardedclusters.stackgres.io"
+            "sgshardedbackups.stackgres.io"
+            "sgshardeddbops.stackgres.io"
+            "sgscripts.stackgres.io"
+            "sgstreams.stackgres.io"
+          ];
+        in
+        [
+          # Core + apps + rbac + batch resources the operator manages
+          {
+            apiGroups = [ "" "apps" "extensions" "rbac.authorization.k8s.io" "batch" ];
+            resources = [
+              "pods"
+              "pods/exec"
+              "pods/log"
+              "services"
+              "endpoints"
+              "endpoints/restricted"
+              "persistentvolumeclaims"
+              "configmaps"
+              "secrets"
+              "deployments"
+              "statefulsets"
+              "serviceaccounts"
+              "namespaces"
+              "roles"
+              "rolebindings"
+              "events"
+              "cronjobs"
+              "jobs"
+            ];
+            verbs = [ "get" "list" "watch" "update" "create" "delete" "deletecollection" "patch" ];
+          }
+          # Finalizers
+          {
+            apiGroups = [ "" "apps" "batch" ];
+            resources = [
+              "statefulsets/finalizers"
+              "persistentvolumeclaims/finalizers"
+              "deployments/finalizers"
+              "services/finalizers"
+              "endpoints/finalizers"
+              "cronjobs/finalizers"
+              "jobs/finalizers"
+              "pods/finalizers"
+            ];
+            verbs = [ "update" ];
+          }
+          # Namespace read
+          {
+            apiGroups = [ "" ];
+            resources = [ "namespaces" ];
+            verbs = [ "get" "list" ];
+          }
+          # Admissionregistration — scoped to own resources
+          {
+            apiGroups = [ "admissionregistration.k8s.io" ];
+            resourceNames = [ name ];
+            resources = [ "mutatingwebhookconfigurations" "validatingwebhookconfigurations" ];
+            verbs = [ "get" "patch" ];
+          }
+          # CRD read — scoped to SG CRDs
+          {
+            apiGroups = [ "apiextensions.k8s.io" ];
+            resourceNames = sgCrdNames;
+            resources = [ "customresourcedefinitions" ];
+            verbs = [ "get" ];
+          }
+          # CRD list
+          {
+            apiGroups = [ "apiextensions.k8s.io" ];
+            resources = [ "customresourcedefinitions" ];
+            verbs = [ "list" ];
+          }
+          # CRD create
+          {
+            apiGroups = [ "apiextensions.k8s.io" ];
+            resources = [ "customresourcedefinitions" ];
+            verbs = [ "create" ];
+          }
+          # CRD update — scoped to SG CRDs
+          {
+            apiGroups = [ "apiextensions.k8s.io" ];
+            resourceNames = sgCrdNames;
+            resources = [ "customresourcedefinitions" ];
+            verbs = [ "patch" "update" ];
+          }
+          # Prometheus CRD read
+          {
+            apiGroups = [ "apiextensions.k8s.io" ];
+            resourceNames = [ "prometheuses.monitoring.coreos.com" ];
+            resources = [ "customresourcedefinitions" ];
+            verbs = [ "get" ];
+          }
+          # VPA
+          {
+            apiGroups = [ "autoscaling.k8s.io" ];
+            resources = [ "verticalpodautoscalers" ];
+            verbs = [ "get" "list" "watch" "update" "create" "delete" "patch" ];
+          }
+          # KEDA
+          {
+            apiGroups = [ "keda.sh" ];
+            resources = [ "scaledobjects" "triggerauthentications" ];
+            verbs = [ "get" "list" "watch" "update" "create" "delete" "patch" ];
+          }
+          # Prometheus Operator — servicemonitors and podmonitors management
+          {
+            apiGroups = [ "monitoring.coreos.com" ];
+            resources = [ "servicemonitors" "podmonitors" ];
+            verbs = [ "list" "get" "create" "delete" "update" "patch" ];
+          }
+          # Prometheus Operator — read access
+          {
+            apiGroups = [ "monitoring.coreos.com" ];
+            resources = [ "prometheus" "prometheuses" "podmonitors" ];
+            verbs = [ "list" "get" ];
+          }
+          # Knative
+          {
+            apiGroups = [ "serving.knative.dev" ];
+            resources = [ "services" ];
+            verbs = [ "get" "list" "watch" "update" "create" "delete" "patch" ];
+          }
+          # ShardingSphere
+          {
+            apiGroups = [ "shardingsphere.apache.org" ];
+            resources = [ "computenodes" ];
+            verbs = [ "get" "list" "watch" "update" "create" "delete" "patch" ];
+          }
+          # Volume Snapshots
+          {
+            apiGroups = [ "snapshot.storage.k8s.io" ];
+            resources = [ "volumesnapshots" ];
+            verbs = [ "list" "get" "watch" "create" ];
+          }
+          # StackGres CRDs — full control
+          {
+            apiGroups = [ "stackgres.io" ];
+            resources = [
+              "sgclusters"
+              "sgpgconfigs"
+              "sginstanceprofiles"
+              "sgpoolconfigs"
+              "sgbackupconfigs"
+              "sgbackups"
+              "sgdistributedlogs"
+              "sgdbops"
+              "sgobjectstorages"
+              "sgscripts"
+              "sgshardedclusters"
+              "sgshardedbackups"
+              "sgshardeddbops"
+              "sgstreams"
+              "sgconfigs"
+            ];
+            verbs = [ "create" "watch" "list" "get" "update" "patch" "delete" ];
+          }
+          # StackGres CRDs — status and finalizers
+          {
+            apiGroups = [ "stackgres.io" ];
+            resources = [
+              "sgconfigs/status"
+              "sgclusters/status"
+              "sgdistributedlogs/status"
+              "sgclusters/finalizers"
+              "sgpgconfigs/finalizers"
+              "sginstanceprofiles/finalizers"
+              "sgpoolconfigs/finalizers"
+              "sgbackupconfigs/finalizers"
+              "sgbackups/finalizers"
+              "sgdistributedlogs/finalizers"
+              "sgdbops/finalizers"
+              "sgobjectstorages/finalizers"
+              "sgscripts/finalizers"
+              "sgshardedclusters/finalizers"
+              "sgshardedbackups/finalizers"
+              "sgshardeddbops/finalizers"
+              "sgstreams/finalizers"
+              "sgconfigs/finalizers"
+            ];
+            verbs = [ "update" ];
+          }
+          # Storage
+          {
+            apiGroups = [ "storage.k8s.io" ];
+            resources = [ "storageclasses" ];
+            verbs = [ "get" "list" ];
+          }
+        ];
+    };
+
+    # ===== ClusterRoleBinding =====
+
+    clusterRoleBinding = scope.mkClusterResource {
+      apiVersion = "rbac.authorization.k8s.io/v1";
+      kind = "ClusterRoleBinding";
+      name = name;
+      labels = selectorLabels;
+      extra = {
+        roleRef = {
+          apiGroup = "rbac.authorization.k8s.io";
+          kind = "ClusterRole";
+          name = self.clusterRole.out.name;
+        };
+        subjects = [
+          {
+            kind = "ServiceAccount";
+            name = self.serviceAccount.out.name;
+            namespace = scope.namespaceName;
+          }
+        ];
       };
-      ports = [
-        {
-          name = "https";
-          port = 443;
-          targetPort = "https";
-          protocol = "TCP";
-        }
+    };
+
+    # ===== Deployment (operator) =====
+
+    operatorDeployment = scope.mkResource {
+      apiVersion = "apps/v1";
+      kind = "Deployment";
+      name = name;
+      labels = operatorLabels;
+      spec = {
+        replicas = 1;
+        selector.matchLabels = operatorSelectorLabels;
+        template = {
+          metadata.labels = operatorSelectorLabels;
+          spec = {
+            serviceAccountName = self.serviceAccount.out.name;
+            securityContext = {
+              runAsNonRoot = true;
+              runAsUser = 1000;
+              runAsGroup = 1000;
+              fsGroup = 1000;
+            };
+            containers = [
+              {
+                name = name;
+                image = "${config.operator.image.repository}:${config.operator.image.tag}";
+                imagePullPolicy = "IfNotPresent";
+                env = [
+                  {
+                    name = "OPERATOR_NAME";
+                    value = name;
+                  }
+                  {
+                    name = "OPERATOR_NAMESPACE";
+                    valueFrom.fieldRef.fieldPath = "metadata.namespace";
+                  }
+                  {
+                    name = "OPERATOR_SERVICE_ACCOUNT";
+                    valueFrom.fieldRef.fieldPath = "spec.serviceAccountName";
+                  }
+                  {
+                    name = "OPERATOR_POD_NAME";
+                    valueFrom.fieldRef.fieldPath = "metadata.name";
+                  }
+                  {
+                    name = "OPERATOR_IP";
+                    valueFrom.fieldRef.fieldPath = "status.podIP";
+                  }
+                  {
+                    name = "OPERATOR_IMAGE_VERSION";
+                    value = config.operator.image.tag;
+                  }
+                  {
+                    name = "OPERATOR_NATIVE_IMAGE_VERSION";
+                    value = config.operator.image.tag;
+                  }
+                  {
+                    name = "OPERATOR_JVM_IMAGE_VERSION";
+                    value = "${config.operator.image.tag}-jvm";
+                  }
+                  {
+                    name = "SG_CONTAINER_REGISTRY";
+                    value = "quay.io";
+                  }
+                  {
+                    name = "SG_IMAGE_PULL_POLICY";
+                    value = "IfNotPresent";
+                  }
+                  {
+                    name = "INSTALL_CRDS";
+                    value = "true";
+                  }
+                  {
+                    name = "INSTALL_WEBHOOKS";
+                    value = "true";
+                  }
+                  {
+                    name = "INSTALL_CONVERSION_WEBHOOKS";
+                    value = "true";
+                  }
+                  {
+                    name = "INSTALL_CERTS";
+                    value = "true";
+                  }
+                  {
+                    name = "INSTALL_CONFIG";
+                    value = "true";
+                  }
+                  {
+                    name = "CLUSTER_ROLE_DISABLED";
+                    value = "false";
+                  }
+                  {
+                    name = "DISABLE_RECONCILIATION";
+                    value = "false";
+                  }
+                  {
+                    name = "WAIT_CRDS_UPGRADE";
+                    value = "false";
+                  }
+                  {
+                    name = "EXTENSIONS_REPOSITORY_URLS";
+                    value = "https://extensions.stackgres.io/postgres/repository";
+                  }
+                  {
+                    name = "PROMETHEUS_AUTOBIND";
+                    value = "true";
+                  }
+                  {
+                    name = "GRAFANA_EMBEDDED";
+                    value = if config.grafana.enabled then "true" else "false";
+                  }
+                  {
+                    name = "SGCONFIG_NAMESPACE";
+                    value = scope.namespaceName;
+                  }
+                ];
+                ports = [
+                  {
+                    name = "http";
+                    containerPort = 8080;
+                    protocol = "TCP";
+                  }
+                  {
+                    name = "https";
+                    containerPort = 8443;
+                    protocol = "TCP";
+                  }
+                ];
+                livenessProbe = {
+                  httpGet = {
+                    path = "/q/health/live";
+                    port = 8080;
+                    scheme = "HTTP";
+                  };
+                  initialDelaySeconds = 10;
+                  periodSeconds = 60;
+                  timeoutSeconds = 10;
+                  failureThreshold = 3;
+                };
+                readinessProbe = {
+                  httpGet = {
+                    path = "/q/health/ready";
+                    port = 8080;
+                    scheme = "HTTP";
+                  };
+                  periodSeconds = 2;
+                  timeoutSeconds = 1;
+                  failureThreshold = 3;
+                };
+                resources = config.operator.resources;
+                volumeMounts = [
+                  {
+                    name = "operator-certs";
+                    mountPath = "/etc/operator/certs";
+                    readOnly = true;
+                  }
+                ];
+              }
+            ];
+            volumes = [
+              {
+                name = "operator-certs";
+                secret = {
+                  secretName = "${name}-certs";
+                  optional = true;
+                };
+              }
+            ];
+          };
+        };
+      };
+    };
+
+    # ===== Service (operator — webhook endpoint on 443) =====
+
+    operatorService = scope.mkResource {
+      apiVersion = "v1";
+      kind = "Service";
+      name = name;
+      spec = {
+        type = "ClusterIP";
+        selector = {
+          app = name;
+        };
+        ports = [
+          {
+            name = "https";
+            port = 443;
+            targetPort = "https";
+            protocol = "TCP";
+          }
+        ];
+      };
+    };
+
+    # ===== CRDs =====
+    # Structural minimum only — full OpenAPI schemas are enforced by
+    # the operator webhook at admission time.
+
+    crdSGCluster = mkCrd {
+      crdName = "sgclusters";
+      singular = "sgcluster";
+      plural = "sgclusters";
+      kind = "SGCluster";
+      shortNames = [ "sgclu" ];
+    };
+
+    crdSGInstanceProfile = mkCrd {
+      crdName = "sginstanceprofiles";
+      singular = "sginstanceprofile";
+      plural = "sginstanceprofiles";
+      kind = "SGInstanceProfile";
+      shortNames = [ "sginp" ];
+    };
+
+    crdSGPostgresConfig = mkCrd {
+      crdName = "sgpgconfigs";
+      singular = "sgpgconfig";
+      plural = "sgpgconfigs";
+      kind = "SGPostgresConfig";
+      shortNames = [ "sgpgc" ];
+    };
+
+    crdSGPoolingConfig = mkCrd {
+      crdName = "sgpoolconfigs";
+      singular = "sgpoolconfig";
+      plural = "sgpoolconfigs";
+      kind = "SGPoolingConfig";
+      shortNames = [ "sgpoc" ];
+    };
+
+    crdSGBackupConfig = mkCrd {
+      crdName = "sgbackupconfigs";
+      singular = "sgbackupconfig";
+      plural = "sgbackupconfigs";
+      kind = "SGBackupConfig";
+      shortNames = [ "sgbac" ];
+    };
+
+    crdSGObjectStorage = mkCrd {
+      crdName = "sgobjectstorages";
+      singular = "sgobjectstorage";
+      plural = "sgobjectstorages";
+      kind = "SGObjectStorage";
+      shortNames = [ "sgobs" ];
+    };
+
+    crdSGDistributedLogs = mkCrd {
+      crdName = "sgdistributedlogs";
+      singular = "sgdistributedlogs";
+      plural = "sgdistributedlogs";
+      kind = "SGDistributedLogs";
+      shortNames = [ "sgdil" ];
+    };
+
+    crdSGShardedCluster = mkCrd {
+      crdName = "sgshardedclusters";
+      singular = "sgshardedcluster";
+      plural = "sgshardedclusters";
+      kind = "SGShardedCluster";
+      shortNames = [ "sgshr" ];
+    };
+
+    crdSGScript = mkCrd {
+      crdName = "sgscripts";
+      singular = "sgscript";
+      plural = "sgscripts";
+      kind = "SGScript";
+      shortNames = [ "sgscr" ];
+    };
+
+    crdSGDbOps = mkCrd {
+      crdName = "sgdbops";
+      singular = "sgdbops";
+      plural = "sgdbops";
+      kind = "SGDbOps";
+      shortNames = [ "sgdbo" ];
+    };
+
+    # ===== ValidatingWebhookConfiguration =====
+
+    validatingWebhook = scope.mkClusterResource {
+      apiVersion = "admissionregistration.k8s.io/v1";
+      kind = "ValidatingWebhookConfiguration";
+      name = name;
+      annotations = {
+        # The operator will inject the caBundle at startup.
+        "stackgres.io/operator-version" = config.operator.image.tag;
+      };
+      extra.webhooks = map (mkValidatingWebhook self.operatorService.out.name) webhookResources;
+    };
+
+    # ===== MutatingWebhookConfiguration =====
+
+    mutatingWebhook = scope.mkClusterResource {
+      apiVersion = "admissionregistration.k8s.io/v1";
+      kind = "MutatingWebhookConfiguration";
+      name = name;
+      annotations = {
+        "stackgres.io/operator-version" = config.operator.image.tag;
+      };
+      extra.webhooks = map (mkMutatingWebhook self.operatorService.out.name) webhookResources;
+    };
+
+    # ===== Entry point =====
+
+    main = {
+      resource = self.operatorDeployment;
+      requires = [
+        self.serviceAccount
+        self.clusterRole
+        self.clusterRoleBinding
+        self.operatorService
+        self.crdSGCluster
+        self.crdSGInstanceProfile
+        self.crdSGPostgresConfig
+        self.crdSGPoolingConfig
+        self.crdSGBackupConfig
+        self.crdSGObjectStorage
+        self.crdSGDistributedLogs
+        self.crdSGShardedCluster
+        self.crdSGScript
+        self.crdSGDbOps
+        self.validatingWebhook
+        self.mutatingWebhook
       ];
     };
-  };
-
-  # ===== CRDs =====
-  # Structural minimum only — full OpenAPI schemas are enforced by
-  # the operator webhook at admission time.
-
-  crdSGCluster = mkCrd {
-    crdName = "sgclusters";
-    singular = "sgcluster";
-    plural = "sgclusters";
-    kind = "SGCluster";
-    shortNames = [ "sgclu" ];
-  };
-
-  crdSGInstanceProfile = mkCrd {
-    crdName = "sginstanceprofiles";
-    singular = "sginstanceprofile";
-    plural = "sginstanceprofiles";
-    kind = "SGInstanceProfile";
-    shortNames = [ "sginp" ];
-  };
-
-  crdSGPostgresConfig = mkCrd {
-    crdName = "sgpgconfigs";
-    singular = "sgpgconfig";
-    plural = "sgpgconfigs";
-    kind = "SGPostgresConfig";
-    shortNames = [ "sgpgc" ];
-  };
-
-  crdSGPoolingConfig = mkCrd {
-    crdName = "sgpoolconfigs";
-    singular = "sgpoolconfig";
-    plural = "sgpoolconfigs";
-    kind = "SGPoolingConfig";
-    shortNames = [ "sgpoc" ];
-  };
-
-  crdSGBackupConfig = mkCrd {
-    crdName = "sgbackupconfigs";
-    singular = "sgbackupconfig";
-    plural = "sgbackupconfigs";
-    kind = "SGBackupConfig";
-    shortNames = [ "sgbac" ];
-  };
-
-  crdSGObjectStorage = mkCrd {
-    crdName = "sgobjectstorages";
-    singular = "sgobjectstorage";
-    plural = "sgobjectstorages";
-    kind = "SGObjectStorage";
-    shortNames = [ "sgobs" ];
-  };
-
-  crdSGDistributedLogs = mkCrd {
-    crdName = "sgdistributedlogs";
-    singular = "sgdistributedlogs";
-    plural = "sgdistributedlogs";
-    kind = "SGDistributedLogs";
-    shortNames = [ "sgdil" ];
-  };
-
-  crdSGShardedCluster = mkCrd {
-    crdName = "sgshardedclusters";
-    singular = "sgshardedcluster";
-    plural = "sgshardedclusters";
-    kind = "SGShardedCluster";
-    shortNames = [ "sgshr" ];
-  };
-
-  crdSGScript = mkCrd {
-    crdName = "sgscripts";
-    singular = "sgscript";
-    plural = "sgscripts";
-    kind = "SGScript";
-    shortNames = [ "sgscr" ];
-  };
-
-  crdSGDbOps = mkCrd {
-    crdName = "sgdbops";
-    singular = "sgdbops";
-    plural = "sgdbops";
-    kind = "SGDbOps";
-    shortNames = [ "sgdbo" ];
-  };
-
-  # ===== ValidatingWebhookConfiguration =====
-
-  validatingWebhook = scope.mkClusterResource {
-    apiVersion = "admissionregistration.k8s.io/v1";
-    kind = "ValidatingWebhookConfiguration";
-    name = name;
-    annotations = {
-      # The operator will inject the caBundle at startup.
-      "stackgres.io/operator-version" = cfg.operator.image.tag;
-    };
-    extra.webhooks = map (mkValidatingWebhook self.operatorService.out.name) webhookResources;
-  };
-
-  # ===== MutatingWebhookConfiguration =====
-
-  mutatingWebhook = scope.mkClusterResource {
-    apiVersion = "admissionregistration.k8s.io/v1";
-    kind = "MutatingWebhookConfiguration";
-    name = name;
-    annotations = {
-      "stackgres.io/operator-version" = cfg.operator.image.tag;
-    };
-    extra.webhooks = map (mkMutatingWebhook self.operatorService.out.name) webhookResources;
-  };
-
-  # ===== Entry point =====
-
-  main = {
-    resource = self.operatorDeployment;
-    requires = [
-      self.serviceAccount
-      self.clusterRole
-      self.clusterRoleBinding
-      self.operatorService
-      self.crdSGCluster
-      self.crdSGInstanceProfile
-      self.crdSGPostgresConfig
-      self.crdSGPoolingConfig
-      self.crdSGBackupConfig
-      self.crdSGObjectStorage
-      self.crdSGDistributedLogs
-      self.crdSGShardedCluster
-      self.crdSGScript
-      self.crdSGDbOps
-      self.validatingWebhook
-      self.mutatingWebhook
-    ];
   };
 }

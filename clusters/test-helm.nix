@@ -22,12 +22,11 @@ in
 
 kix.buildCluster {
   name = "test-helm";
-  namespaces.test-helm = { };
-
-  instances =
-    { ref, ... }:
+  modules = [
     {
-      test-helm = {
+      namespaces.test-helm = { };
+
+      instances.test-helm = {
         test-app = {
           package = testChartPackage;
           packageType = "test-chart";
@@ -38,5 +37,6 @@ kix.buildCluster {
           };
         };
       };
-    };
+    }
+  ];
 }

@@ -1,8 +1,9 @@
-# v2 cluster evaluation — buildCluster, dependency injection, scopes.
+# Cluster evaluation — buildCluster, dependency injection, scopes.
 #
-# Replaces v1's cluster.nix (169 lines) + package.nix (87 lines) with
-# namespace-scoped instances, DNS-like dependency injection, and a nested
+# Uses the NixOS module system (lib/modules.nix) for cluster composition.
+# Namespace-scoped instances, DNS-like dependency injection, and a nested
 # fixpoint that ties everything together.
+# See v2_discussions/20_module_system_design.md for design rationale.
 
 { lib, k8s }:
 
@@ -68,22 +69,6 @@ rec {
               // labels;
           }
         ) // { packageLabels = labels; };
-
-      # Merge user config with package defaults using deep merge.
-      # lib.recursiveUpdate ensures nested attrsets (e.g., backend.hpa)
-      # are merged rather than replaced wholesale.
-      defaults =
-        config: defs:
-        let
-          knownKeys = builtins.attrNames defs;
-          configKeys = builtins.attrNames config;
-          unknownKeys = builtins.filter (k: !(builtins.elem k knownKeys)) configKeys;
-          result = lib.recursiveUpdate defs config;
-        in
-        if unknownKeys == [ ] then
-          result
-        else
-          builtins.trace "warning: unknown config keys for instance '${instanceName}': ${builtins.toJSON unknownKeys}" result;
 
       inherit rbac;
     };
@@ -241,21 +226,81 @@ rec {
       else
         throw "no '${argName}' found in cluster for namespace '${requesterNamespace}'";
 
+  # Extract raw config attrsets from a deferredModule value.
+  # deferredModuleWith wraps each definition as { _file = "..."; imports = [ actualValue ]; }.
+  # This unwraps that structure to get the actual config values.
+  extractDeferredValues =
+    deferredConfig:
+    let
+      modules = deferredConfig.imports or [];
+      extractOne = m:
+        if builtins.isAttrs m && m ? _file && m ? imports then
+          # deferredModuleWith wrapper — unwrap
+          builtins.concatMap extractOne m.imports
+        else if builtins.isAttrs m then
+          [ m ]
+        else if builtins.isFunction m then
+          [ m ]
+        else
+          [];
+    in
+    builtins.concatMap extractOne modules;
+
+  # Evaluate instance config using the package's typed options.
+  # Runs evalModules with the package's option declarations, global defaults,
+  # and instance config (a deferredModule from the cluster module system).
+  #
+  # After evaluation, deep-merges the option defaults onto the result.
+  # This preserves nested defaults for `lib.types.anything` options, which
+  # don't deep-merge user values with defaults (a user setting `backend.image`
+  # would otherwise drop `backend.hpa` from the default).  This matches the
+  # deep-merge semantics of the old `scope.defaults` pattern.
+  evaluateInstanceConfig =
+    {
+      packageOptions,
+      instCfg,
+      clusterConfig ? {},
+    }:
+    let
+      deferredConfig = instCfg.config;
+      configValues = extractDeferredValues deferredConfig;
+      wrappedModules = map (v:
+        if builtins.isFunction v then v
+        else { config = v; }
+      ) configValues;
+
+      evaluated = removeAttrs (lib.evalModules {
+        modules = [
+          { options = packageOptions; }
+          { config = clusterConfig.global or {}; }
+        ] ++ wrappedModules;
+      }).config [ "_module" ];
+
+      # Collect option defaults for deep merge.
+      optionDefaults = lib.filterAttrs (_: v: v != null) (
+        lib.mapAttrs (_: opt:
+          if opt ? default then opt.default else null
+        ) packageOptions
+      );
+    in
+    lib.recursiveUpdate optionDefaults evaluated;
+
   # Introspect package function args, resolve deps, call function.
+  # Returns { options, build } — the package's typed options and build function.
   # allInstances is the outer fixpoint — used to look up resolved deps.
   kixCallPackage =
     {
       packageFn,
-      instanceConfig,
       scope,
       resolutionIndex,
       allInstances,
+      deps ? {},
+      namespace,
     }:
     let
       fnArgs = builtins.functionArgs packageFn;
       systemArgNames = [
         "scope"
-        "config"
         "lib"
       ];
       depArgNames = builtins.attrNames (removeAttrs fnArgs systemArgNames);
@@ -264,10 +309,10 @@ rec {
       resolvedDeps = builtins.foldl' (
         acc: argName:
         let
-          explicitOverride = instanceConfig.${argName} or null;
+          explicitOverride = deps.${argName} or null;
           resolution = resolveArg {
             inherit argName resolutionIndex explicitOverride;
-            requesterNamespace = instanceConfig._namespace;
+            requesterNamespace = namespace;
             hasDefault = fnArgs.${argName} or false;
           };
         in
@@ -288,7 +333,6 @@ rec {
     packageFn (
       {
         inherit scope lib;
-        config = instanceConfig.config or { };
       }
       // resolvedDeps
     );
@@ -298,11 +342,13 @@ rec {
     {
       instanceName,
       namespaceName,
-      instanceConfig,
+      instCfg,
       namespaceResource,
       clusterLabels,
       resolutionIndex,
       allInstances,
+      globalPartsOverlays ? [],
+      clusterConfig ? {},
     }:
     let
       scope = mkScope {
@@ -314,37 +360,41 @@ rec {
           ;
       };
 
-      packageFn = instanceConfig.package;
-
-      # Get the inner fixpoint function from kixCallPackage
-      innerFn = kixCallPackage {
-        inherit
-          packageFn
-          instanceConfig
-          scope
-          resolutionIndex
-          allInstances
-          ;
+      # 1. Call the package function with DI deps — returns { options, build }
+      raw = kixCallPackage {
+        packageFn = instCfg.package;
+        inherit scope resolutionIndex allInstances;
+        deps = instCfg.deps;
+        namespace = namespaceName;
       };
 
-      # Apply parts override if present
-      partsOverride = instanceConfig.parts or null;
+      # 2. Evaluate typed config: package options + instance config
+      evaluatedConfig = evaluateInstanceConfig {
+        packageOptions = raw.options or {};
+        inherit instCfg clusterConfig;
+      };
 
-      # Build the inner fixpoint
+      # 3. Combine global + instance overlays (signature: scope → self → base → attrset)
+      allOverlays = globalPartsOverlays ++ (instCfg.partsOverlays or []);
+      boundOverlays = map (o: o scope) allOverlays;
+
+      # 4. Build the inner fixpoint — build receives { self, config, clusterConfig }
       parts =
-        if partsOverride != null then
+        if boundOverlays != [] then
           lib.fix (
             self:
-            let
-              base = innerFn self;
-            in
-            base // (partsOverride self base)
+            builtins.foldl'
+              (acc: overlay: acc // (overlay self acc))
+              (raw.build { inherit self clusterConfig; config = evaluatedConfig; })
+              boundOverlays
           )
         else
-          lib.fix innerFn;
+          lib.fix (self:
+            raw.build { inherit self clusterConfig; config = evaluatedConfig; }
+          );
 
       # Derive packageType from function name or instance name
-      packageType = instanceConfig.packageType or instanceName;
+      packageType = instCfg.packageType or instanceName;
 
       # --- Resolve main resource and package-level requires ---
       rawMain =
@@ -511,7 +561,7 @@ rec {
         mainResource = mainRes;
         inherit packageRequires;
         inherit inverseDeps;
-        version = instanceConfig.version or null;
+        version = instCfg.version or null;
         labels = clusterLabels // {
           "app.kubernetes.io/instance" = instanceName;
           "app.kubernetes.io/managed-by" = "kix";
@@ -651,28 +701,39 @@ rec {
       _meta = {
         inherit instanceName namespaceName packageType;
         namespace = namespaceName;
-        aliases = instanceConfig.aliases or [ ];
+        aliases = instCfg.aliases or [ ];
       };
     })));
 
   # The top-level cluster builder.
+  # Uses lib.evalModules to compose cluster definitions from modules.
+  # Each module can declare options and set instances, namespaces, etc.
+  # `ref` (the lazy fixpoint of all instances) is available via specialArgs.
   buildCluster =
     {
       name ? "cluster",
-      namespaces ? { },
-      instances,
-      clusterLabels ? { },
+      modules,
     }:
     let
-      # Collect all namespace names from both explicit namespaces and instances
-      instancesFn = if builtins.isFunction instances then instances else (_: instances);
-      # We need to peek at namespace names from instances — call with a stub ref
-      # that returns a lazy error if actually accessed for values.
-      stubRef = lib.fix (_: { });
-      rawInstances = instancesFn { ref = stubRef; };
-      allNsNames = lib.unique (builtins.attrNames namespaces ++ builtins.attrNames rawInstances);
+      # 1. Evaluate modules — produces merged config lazily.
+      #    ref thunks in config values are NOT forced during merge
+      #    (config fields are deferredModule — stored as-is).
+      evaluated = lib.evalModules {
+        modules = [ (import ./modules.nix) ] ++ modules;
+        specialArgs = {
+          ref = clusterInstances; # lazy — resolved during fixpoint
+        };
+      };
 
-      # Create namespace resources
+      cfg = evaluated.config;
+
+      # 2. Derive namespace list from instances keys ∪ explicit namespaces
+      allNsNames = lib.unique (
+        builtins.attrNames cfg.namespaces
+        ++ builtins.attrNames cfg.instances
+      );
+
+      # 3. Create namespace resources
       nsResources = builtins.listToAttrs (
         map (nsName: {
           name = nsName;
@@ -680,73 +741,47 @@ rec {
             {
               name = nsName;
             }
-            // (namespaces.${nsName} or { })
+            // (cfg.namespaces.${nsName} or { })
           );
         }) allNsNames
       );
 
-      # Build the resolution index from STATIC instance config (no inner fixpoint eval).
-      # This avoids infinite recursion: _meta is computed from instance config, not
-      # from the evaluated package.
-      staticMeta = builtins.listToAttrs (
-        map (nsName: {
-          name = nsName;
-          value =
-            let
-              nsInstances = rawInstances.${nsName} or { };
-            in
-            builtins.listToAttrs (
-              map (instName: {
-                name = instName;
-                value = {
-                  _meta = {
-                    instanceName = instName;
-                    namespaceName = nsName;
-                    namespace = nsName;
-                    packageType = nsInstances.${instName}.packageType or instName;
-                    aliases = nsInstances.${instName}.aliases or [ ];
-                  };
-                };
-              }) (builtins.attrNames nsInstances)
-            );
-        }) allNsNames
-      );
+      # 4. Build static metadata for DI resolution (reads only packageType/aliases)
+      staticMeta = lib.mapAttrs (nsName: nsInsts:
+        lib.mapAttrs (instName: instCfg: {
+          _meta = {
+            instanceName = instName;
+            namespaceName = nsName;
+            namespace = nsName;
+            packageType = if instCfg.packageType != null then instCfg.packageType else instName;
+            aliases = instCfg.aliases;
+          };
+        }) nsInsts
+      ) cfg.instances;
 
       resolutionIndex = buildResolutionIndex staticMeta;
 
-      # Build the nested fixpoint (uses pre-computed resolutionIndex)
-      clusterInstances = lib.fix (
-        self:
-        let
-          instanceDefs = instancesFn { ref = self; };
-        in
-        builtins.listToAttrs (
-          map (nsName: {
-            name = nsName;
-            value =
-              let
-                nsInstances = instanceDefs.${nsName} or { };
-              in
-              builtins.listToAttrs (
-                map (instName: {
-                  name = instName;
-                  value = evaluateInstance {
-                    instanceName = instName;
-                    namespaceName = nsName;
-                    instanceConfig = nsInstances.${instName} // {
-                      _namespace = nsName;
-                    };
-                    namespaceResource = nsResources.${nsName};
-                    allInstances = self;
-                    inherit clusterLabels resolutionIndex;
-                  };
-                }) (builtins.attrNames nsInstances)
-              );
-          }) allNsNames
-        )
+      # 5. Build nested fixpoint
+      clusterInstances = lib.fix (self:
+        lib.mapAttrs (nsName: nsInsts:
+          lib.mapAttrs (instName: instCfg:
+            evaluateInstance {
+              instanceName = instName;
+              namespaceName = nsName;
+              inherit instCfg;
+              namespaceResource = nsResources.${nsName};
+              allInstances = self;
+              clusterLabels = cfg.clusterLabels;
+              clusterConfig = cfg;
+              inherit resolutionIndex;
+              globalPartsOverlays = cfg.globalPartsOverlays;
+            }
+          ) nsInsts
+        ) cfg.instances
       );
 
-      # Collect all resources across all instances for the registry
+      # --- Resource collection (unchanged from pre-module system) ---
+
       allInstancesList = builtins.concatMap (
         nsName:
         map (instName: clusterInstances.${nsName}.${instName}) (
@@ -754,8 +789,6 @@ rec {
         )
       ) (builtins.attrNames clusterInstances);
 
-      # Build registry from all resources we can find
-      # We need to collect ALL resources, not just mains + PackageInstance resources
       collectResources =
         inst:
         let
@@ -773,7 +806,6 @@ rec {
           ) parts;
         in
         builtins.attrValues resources
-        # Include the PackageInstance resource itself
         ++ (if inst ? _packageInstance then [ inst._packageInstance ] else [ ]);
 
       allResources =
@@ -791,7 +823,6 @@ rec {
       registry = buildRegistry allResources;
 
       # Activation CRD — cluster-level root of the Nix store DAG.
-      # References all PackageInstance store paths via string context.
       activation = k8s.mkActivation {
         inherit name;
         instances = lib.mapAttrs (
@@ -805,19 +836,13 @@ rec {
       _type = "k8s-cluster-v2";
       inherit name;
 
-      # The nested fixpoint of all instances
       inherit clusterInstances;
       instances = clusterInstances;
 
-      # Namespace resources
       namespaces = nsResources;
 
-      # Activation CRD — the cluster root store path.
-      # `exportReferencesGraph` / `nix-store --tree` on this gives the full DAG.
       inherit activation;
 
-      # Raw manifests for eval-time cross-resource validation.
-      # Strip string context so validation code can freely interpolate values.
       rawManifests = map (r:
         builtins.fromJSON (builtins.unsafeDiscardStringContext (builtins.toJSON r.rawManifest))
       ) allResources;

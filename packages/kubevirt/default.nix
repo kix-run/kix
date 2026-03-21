@@ -10,29 +10,11 @@
 
 {
   scope,
-  config,
   lib,
 }:
 
 let
   name = scope.instanceName;
-
-  cfg = scope.defaults config {
-    image = {
-      repository = "quay.io/kubevirt/virt-operator";
-      tag = "v1.5.0";
-      pullPolicy = "IfNotPresent";
-    };
-    replicaCount = 2;
-    resources = {
-      requests = {
-        cpu = "10m";
-        memory = "450Mi";
-      };
-    };
-    featureGates = [ "ExperimentalVirtiofsSupport" ];
-    configuration = { }; # KubeVirt CR spec.configuration overrides
-  };
 
   # Common label for all kubevirt resources
   kubevirtLabels = {
@@ -51,7 +33,40 @@ let
   };
 
 in
-self: {
+{
+  options = {
+    image = lib.mkOption {
+      type = lib.types.anything;
+      default = {
+        repository = "quay.io/kubevirt/virt-operator";
+        tag = "v1.5.0";
+        pullPolicy = "IfNotPresent";
+      };
+    };
+    replicaCount = lib.mkOption {
+      type = lib.types.int;
+      default = 2;
+    };
+    resources = lib.mkOption {
+      type = lib.types.anything;
+      default = {
+        requests = {
+          cpu = "10m";
+          memory = "450Mi";
+        };
+      };
+    };
+    featureGates = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ "ExperimentalVirtiofsSupport" ];
+    };
+    configuration = lib.mkOption {
+      type = lib.types.attrsOf lib.types.anything;
+      default = { }; # KubeVirt CR spec.configuration overrides
+    };
+  };
+
+  build = { self, config, clusterConfig }: {
 
   # --- ServiceAccount ---
   serviceAccount = scope.mkResource {
@@ -377,7 +392,7 @@ self: {
     name = "virt-operator";
     labels = operatorLabels;
     spec = {
-      replicas = cfg.replicaCount;
+      replicas = config.replicaCount;
       selector.matchLabels = operatorLabels;
       strategy = {
         type = "RollingUpdate";
@@ -427,8 +442,8 @@ self: {
           containers = [
             {
               name = "virt-operator";
-              image = "${cfg.image.repository}:${cfg.image.tag}";
-              imagePullPolicy = cfg.image.pullPolicy;
+              image = "${config.image.repository}:${config.image.tag}";
+              imagePullPolicy = config.image.pullPolicy;
               command = [ "virt-operator" ];
               args = [
                 "--port"
@@ -439,11 +454,11 @@ self: {
               env = [
                 {
                   name = "KUBEVIRT_VERSION";
-                  value = cfg.image.tag;
+                  value = config.image.tag;
                 }
                 {
                   name = "VIRT_OPERATOR_IMAGE";
-                  value = "${cfg.image.repository}:${cfg.image.tag}";
+                  value = "${config.image.repository}:${config.image.tag}";
                 }
                 {
                   name = "WATCH_NAMESPACE";
@@ -472,7 +487,7 @@ self: {
                 periodSeconds = 10;
                 timeoutSeconds = 10;
               };
-              resources = cfg.resources;
+              resources = config.resources;
               securityContext = {
                 allowPrivilegeEscalation = false;
                 capabilities.drop = [ "ALL" ];
@@ -516,13 +531,13 @@ self: {
     kind = "KubeVirt";
     name = name;
     spec = {
-      imagePullPolicy = cfg.image.pullPolicy;
+      imagePullPolicy = config.image.pullPolicy;
       configuration = {
         developerConfiguration = {
-          featureGates = cfg.featureGates;
+          featureGates = config.featureGates;
         };
       }
-      // cfg.configuration;
+      // config.configuration;
     };
     requires = [ self.deployment ];
   };
@@ -875,5 +890,6 @@ self: {
       self.crdVirtualMachineSnapshotContent
       self.crdVirtualMachineRestore
     ];
+  };
   };
 }

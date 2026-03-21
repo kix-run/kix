@@ -47,9 +47,6 @@ in
   # --- Environments (env.nix) ---
   inherit (env) mkEnv;
 
-  # --- Fragments (fragments.nix) ---
-  inherit (fragments) mergeFragments;
-
   # --- RBAC DSL (rbac.nix) ---
   inherit rbac;
 

@@ -8,15 +8,10 @@
 
 {
   scope,
-  config,
   lib,
 }:
 
 let
-  cfg = scope.defaults config {
-    classes = { };
-  };
-
   mkPriorityClass =
     name: spec:
     scope.mkClusterResource {
@@ -30,24 +25,35 @@ let
         // (if spec ? preemptionPolicy then { preemptionPolicy = spec.preemptionPolicy; } else { });
     };
 
-  classResources = lib.mapAttrs mkPriorityClass cfg.classes;
-  classList = builtins.attrValues classResources;
-
-  # Pick a main resource: first globalDefault, or first class alphabetically
-  mainName =
-    let
-      globalDefaults = lib.filterAttrs (_: spec: spec ? globalDefault && spec.globalDefault) cfg.classes;
-      globalNames = builtins.attrNames globalDefaults;
-    in
-    if globalNames != [ ] then builtins.head globalNames
-    else builtins.head (builtins.attrNames cfg.classes);
-
 in
-self:
-classResources
-// {
-  main = {
-    resource = self.${mainName};
-    requires = classList;
+{
+  options = {
+    classes = lib.mkOption {
+      type = lib.types.attrsOf lib.types.anything;
+      default = { };
+    };
   };
+  build =
+    { self, config, clusterConfig }:
+    let
+      classResources = lib.mapAttrs mkPriorityClass config.classes;
+      classList = builtins.attrValues classResources;
+
+      # Pick a main resource: first globalDefault, or first class alphabetically
+      mainName =
+        let
+          globalDefaults = lib.filterAttrs (_: spec: spec ? globalDefault && spec.globalDefault) config.classes;
+          globalNames = builtins.attrNames globalDefaults;
+        in
+        if globalNames != [ ] then builtins.head globalNames
+        else builtins.head (builtins.attrNames config.classes);
+
+    in
+    classResources
+    // {
+      main = {
+        resource = self.${mainName};
+        requires = classList;
+      };
+    };
 }

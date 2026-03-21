@@ -10,32 +10,11 @@
 
 {
   scope,
-  config,
   lib,
 }:
 
 let
   name = scope.instanceName;
-
-  cfg = scope.defaults config {
-    image = {
-      repository = "quay.io/kubevirt/cdi-operator";
-      tag = "v1.62.0";
-      pullPolicy = "IfNotPresent";
-    };
-    replicaCount = 1;
-    resources = {
-      requests = {
-        cpu = "100m";
-        memory = "150Mi";
-      };
-    };
-    # CDI CR configuration
-    cloneStrategyOverride = null;
-    featureGates = [ ];
-    infra = { };
-    workload = { };
-  };
 
   # Labels matching the upstream CDI operator manifest
   operatorLabels = {
@@ -51,7 +30,48 @@ let
   };
 
 in
-self: {
+{
+  options = {
+    image = lib.mkOption {
+      type = lib.types.anything;
+      default = {
+        repository = "quay.io/kubevirt/cdi-operator";
+        tag = "v1.62.0";
+        pullPolicy = "IfNotPresent";
+      };
+    };
+    replicaCount = lib.mkOption {
+      type = lib.types.int;
+      default = 1;
+    };
+    resources = lib.mkOption {
+      type = lib.types.anything;
+      default = {
+        requests = {
+          cpu = "100m";
+          memory = "150Mi";
+        };
+      };
+    };
+    # CDI CR configuration
+    cloneStrategyOverride = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+    };
+    featureGates = lib.mkOption {
+      type = lib.types.listOf lib.types.anything;
+      default = [ ];
+    };
+    infra = lib.mkOption {
+      type = lib.types.attrsOf lib.types.anything;
+      default = { };
+    };
+    workload = lib.mkOption {
+      type = lib.types.attrsOf lib.types.anything;
+      default = { };
+    };
+  };
+  build = { self, config, clusterConfig }: {
 
   # --- ServiceAccount ---
   serviceAccount = scope.mkResource {
@@ -541,7 +561,7 @@ self: {
     name = "${name}-operator";
     labels = operatorLabels;
     spec = {
-      replicas = cfg.replicaCount;
+      replicas = config.replicaCount;
       selector.matchLabels = selectorLabels;
       strategy = {
         type = "RollingUpdate";
@@ -589,20 +609,20 @@ self: {
           containers = [
             {
               name = "cdi-operator";
-              image = "${cfg.image.repository}:${cfg.image.tag}";
-              imagePullPolicy = cfg.image.pullPolicy;
+              image = "${config.image.repository}:${config.image.tag}";
+              imagePullPolicy = config.image.pullPolicy;
               env = [
                 {
                   name = "APISERVER_IMAGE";
-                  value = "quay.io/kubevirt/cdi-apiserver:${cfg.image.tag}";
+                  value = "quay.io/kubevirt/cdi-apiserver:${config.image.tag}";
                 }
                 {
                   name = "CLONER_IMAGE";
-                  value = "quay.io/kubevirt/cdi-cloner:${cfg.image.tag}";
+                  value = "quay.io/kubevirt/cdi-cloner:${config.image.tag}";
                 }
                 {
                   name = "CONTROLLER_IMAGE";
-                  value = "quay.io/kubevirt/cdi-controller:${cfg.image.tag}";
+                  value = "quay.io/kubevirt/cdi-controller:${config.image.tag}";
                 }
                 {
                   name = "DEPLOY_CLUSTER_RESOURCES";
@@ -610,30 +630,30 @@ self: {
                 }
                 {
                   name = "IMPORTER_IMAGE";
-                  value = "quay.io/kubevirt/cdi-importer:${cfg.image.tag}";
+                  value = "quay.io/kubevirt/cdi-importer:${config.image.tag}";
                 }
                 {
                   name = "MONITORING_NAMESPACE";
                 }
                 {
                   name = "OPERATOR_VERSION";
-                  value = cfg.image.tag;
+                  value = config.image.tag;
                 }
                 {
                   name = "OVIRT_POPULATOR_IMAGE";
-                  value = "quay.io/kubevirt/cdi-importer:${cfg.image.tag}";
+                  value = "quay.io/kubevirt/cdi-importer:${config.image.tag}";
                 }
                 {
                   name = "PULL_POLICY";
-                  value = cfg.image.pullPolicy;
+                  value = config.image.pullPolicy;
                 }
                 {
                   name = "UPLOAD_PROXY_IMAGE";
-                  value = "quay.io/kubevirt/cdi-uploadproxy:${cfg.image.tag}";
+                  value = "quay.io/kubevirt/cdi-uploadproxy:${config.image.tag}";
                 }
                 {
                   name = "UPLOAD_SERVER_IMAGE";
-                  value = "quay.io/kubevirt/cdi-uploadserver:${cfg.image.tag}";
+                  value = "quay.io/kubevirt/cdi-uploadserver:${config.image.tag}";
                 }
                 {
                   name = "VERBOSITY";
@@ -647,7 +667,7 @@ self: {
                   protocol = "TCP";
                 }
               ];
-              resources = cfg.resources;
+              resources = config.resources;
               securityContext = {
                 allowPrivilegeEscalation = false;
                 capabilities.drop = [ "ALL" ];
@@ -670,24 +690,24 @@ self: {
     name = name;
     spec =
       {
-        imagePullPolicy = cfg.image.pullPolicy;
+        imagePullPolicy = config.image.pullPolicy;
         config =
           { }
           // (
-            if cfg.featureGates != [ ] then
-              { featureGates = cfg.featureGates; }
+            if config.featureGates != [ ] then
+              { featureGates = config.featureGates; }
             else
               { }
           );
       }
       // (
-        if cfg.cloneStrategyOverride != null then
-          { cloneStrategyOverride = cfg.cloneStrategyOverride; }
+        if config.cloneStrategyOverride != null then
+          { cloneStrategyOverride = config.cloneStrategyOverride; }
         else
           { }
       )
-      // (if cfg.infra != { } then { infra = cfg.infra; } else { })
-      // (if cfg.workload != { } then { workload = cfg.workload; } else { });
+      // (if config.infra != { } then { infra = config.infra; } else { })
+      // (if config.workload != { } then { workload = config.workload; } else { });
     requires = [ self.deployment ];
   };
 
@@ -953,5 +973,6 @@ self: {
       self.crdVolumeImportSource
       self.crdVolumeUploadSource
     ];
+  };
   };
 }

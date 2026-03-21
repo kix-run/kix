@@ -11,7 +11,6 @@
 
 {
   scope,
-  config,
   lib,
   postgres ? null,
   valkey ? null,
@@ -19,1188 +18,1214 @@
 
 let
   name = scope.instanceName;
-
-  cfg = scope.defaults config {
+in
+{
+  options = {
     # Naming overrides
-    releaseName = null; # if set, used as prefix for resource names instead of instance name
-    componentName = "backend"; # component suffix for deployment/service names (e.g. "web" or "backend")
+    releaseName = lib.mkOption { type = lib.types.nullOr lib.types.str; default = null; }; # if set, used as prefix for resource names instead of instance name
+    componentName = lib.mkOption { type = lib.types.str; default = "backend"; }; # component suffix for deployment/service names (e.g. "web" or "backend")
 
     # Backend (Django/Gunicorn)
-    backend = {
-      enabled = true;
-      image = {
-        repository = "";
-        tag = "latest";
-        pullPolicy = "IfNotPresent";
-      };
-      replicaCount = 1;
-      gunicornWorkers = 4;
-      port = 8080;
-      containerName = null; # if set, overrides the container name (default: componentName)
-      servicePort = null; # if set, the Service exposes this port (targetPort = backend.port); null means use backend.port
-      command = null;
-      args = null;
-      resources = {
-        requests = {
-          cpu = "100m";
-          memory = "256Mi";
-        };
-        limits = {
-          cpu = "1";
-          memory = "1Gi";
-        };
-      };
-      hpa = {
-        enabled = false;
-        minReplicas = 1;
-        maxReplicas = 10;
-        targetCPU = 80;
-      };
-      probes = {
+    backend = lib.mkOption {
+      type = lib.types.anything;
+      default = {
         enabled = true;
-        type = "httpGet"; # "httpGet" or "exec"
-        path = "/healthz";
-        port = null; # null means use backend.port; set to a different port for separate health endpoint
-        execCommand = null; # command list for exec probes
-        timeoutSeconds = 20;
-        readinessTimeoutSeconds = null; # if set, overrides timeoutSeconds for readiness probe
-        initialDelaySeconds = 5;
+        image = {
+          repository = "";
+          tag = "latest";
+          pullPolicy = "IfNotPresent";
+        };
+        replicaCount = 1;
+        gunicornWorkers = 4;
+        port = 8080;
+        containerName = null; # if set, overrides the container name (default: componentName)
+        servicePort = null; # if set, the Service exposes this port (targetPort = backend.port); null means use backend.port
+        command = null;
+        args = null;
+        resources = {
+          requests = {
+            cpu = "100m";
+            memory = "256Mi";
+          };
+          limits = {
+            cpu = "1";
+            memory = "1Gi";
+          };
+        };
+        hpa = {
+          enabled = false;
+          minReplicas = 1;
+          maxReplicas = 10;
+          targetCPU = 80;
+        };
+        probes = {
+          enabled = true;
+          type = "httpGet"; # "httpGet" or "exec"
+          path = "/healthz";
+          port = null; # null means use backend.port; set to a different port for separate health endpoint
+          execCommand = null; # command list for exec probes
+          timeoutSeconds = 20;
+          readinessTimeoutSeconds = null; # if set, overrides timeoutSeconds for readiness probe
+          initialDelaySeconds = 5;
+        };
+        extraPorts = [ ]; # additional container ports beyond the main http port
+        secrets = [ ];
+        strategy = {
+          maxSurge = null; # null means use top-level config.maxSurge
+          maxUnavailable = null; # null means omit (k8s default: 25%)
+        };
+        initContainers = [ ]; # list of init container specs
+        topologySpreadConstraints = [ ]; # list of topology spread constraint specs
       };
-      extraPorts = [ ]; # additional container ports beyond the main http port
-      secrets = [ ];
-      strategy = {
-        maxSurge = null; # null means use top-level cfg.maxSurge
-        maxUnavailable = null; # null means omit (k8s default: 25%)
-      };
-      initContainers = [ ]; # list of init container specs
-      topologySpreadConstraints = [ ]; # list of topology spread constraint specs
     };
 
     # Frontend (Next.js)
-    frontend = {
-      enabled = false;
-      image = {
-        repository = "";
-        tag = "latest";
-        pullPolicy = "IfNotPresent";
-      };
-      replicaCount = 1;
-      port = 3000;
-      command = null;
-      args = null;
-      resources = {
-        requests = {
-          cpu = "10m";
-          memory = "128Mi";
+    frontend = lib.mkOption {
+      type = lib.types.anything;
+      default = {
+        enabled = false;
+        image = {
+          repository = "";
+          tag = "latest";
+          pullPolicy = "IfNotPresent";
         };
-        limits = {
-          cpu = "500m";
-          memory = "512Mi";
+        replicaCount = 1;
+        port = 3000;
+        command = null;
+        args = null;
+        resources = {
+          requests = {
+            cpu = "10m";
+            memory = "128Mi";
+          };
+          limits = {
+            cpu = "500m";
+            memory = "512Mi";
+          };
         };
+        probes = {
+          enabled = true;
+          path = "/";
+          timeoutSeconds = 5;
+          initialDelaySeconds = 5;
+        };
+        secrets = [ ];
+        strategy = {
+          maxSurge = null; # null means use top-level config.maxSurge
+          maxUnavailable = null; # null means omit
+        };
+        useConfigMap = true; # set to false to skip configmap envFrom for frontend
       };
-      probes = {
-        enabled = true;
-        path = "/";
-        timeoutSeconds = 5;
-        initialDelaySeconds = 5;
-      };
-      secrets = [ ];
-      strategy = {
-        maxSurge = null; # null means use top-level cfg.maxSurge
-        maxUnavailable = null; # null means omit
-      };
-      useConfigMap = true; # set to false to skip configmap envFrom for frontend
     };
 
     # Caddy (Load Balancer/WAF)
-    caddy = {
-      enabled = false;
-      image = {
-        repository = "";
-        tag = "latest";
-        pullPolicy = "IfNotPresent";
-      };
-      replicaCount = 1;
-      port = 8080;
-      resources = { };
-      hpa = {
+    caddy = lib.mkOption {
+      type = lib.types.anything;
+      default = {
         enabled = false;
-        minReplicas = 1;
-        maxReplicas = 10;
-        targetCPU = 80;
+        image = {
+          repository = "";
+          tag = "latest";
+          pullPolicy = "IfNotPresent";
+        };
+        replicaCount = 1;
+        port = 8080;
+        resources = { };
+        hpa = {
+          enabled = false;
+          minReplicas = 1;
+          maxReplicas = 10;
+          targetCPU = 80;
+        };
       };
     };
 
     # Workers
-    cronWorkers = { };
-    queueWorkers = { };
-    customProcesses = { };
+    cronWorkers = lib.mkOption { type = lib.types.attrsOf lib.types.anything; default = { }; };
+    queueWorkers = lib.mkOption { type = lib.types.attrsOf lib.types.anything; default = { }; };
+    customProcesses = lib.mkOption { type = lib.types.attrsOf lib.types.anything; default = { }; };
 
     # Redis
-    redis = {
-      enabled = false;
-      image = {
-        repository = "redis";
-        tag = "7";
-      };
-      resources = {
-        requests = {
-          cpu = "10m";
-          memory = "50Mi";
+    redis = lib.mkOption {
+      type = lib.types.anything;
+      default = {
+        enabled = false;
+        image = {
+          repository = "redis";
+          tag = "7";
         };
-        limits = {
-          cpu = "1";
-          memory = "256Mi";
+        resources = {
+          requests = {
+            cpu = "10m";
+            memory = "50Mi";
+          };
+          limits = {
+            cpu = "1";
+            memory = "256Mi";
+          };
         };
       };
     };
 
     # Ingress
-    ingress = {
-      enabled = false;
-      className = "public-v2";
-      hosts = [ ];
-      tls = [ ];
-      annotations = { };
-      clusterIssuer = "letsencrypt-lithus-production";
+    ingress = lib.mkOption {
+      type = lib.types.anything;
+      default = {
+        enabled = false;
+        className = "public-v2";
+        hosts = [ ];
+        tls = [ ];
+        annotations = { };
+        clusterIssuer = "letsencrypt-lithus-production";
+      };
     };
 
     # Hooks
-    hooks = {
-      migrate = {
-        enabled = false;
-        command = [ ];
+    hooks = lib.mkOption {
+      type = lib.types.anything;
+      default = {
+        migrate = {
+          enabled = false;
+          command = [ ];
+        };
       };
     };
 
     # Environment
-    environment = "production";
-    env = { };
-    useConfigMap = true; # set to false to skip configmap in envFrom
-    frontendEnv = { };
-    secretEnv = { };
-    secretFiles = { };
+    environment = lib.mkOption { type = lib.types.str; default = "production"; };
+    env = lib.mkOption { type = lib.types.attrsOf lib.types.anything; default = { }; };
+    useConfigMap = lib.mkOption { type = lib.types.bool; default = true; }; # set to false to skip configmap in envFrom
+    frontendEnv = lib.mkOption { type = lib.types.attrsOf lib.types.anything; default = { }; };
+    secretEnv = lib.mkOption { type = lib.types.attrsOf lib.types.anything; default = { }; };
+    secretFiles = lib.mkOption { type = lib.types.attrsOf lib.types.anything; default = { }; };
 
     # ServiceAccount
-    serviceAccount = {
-      enabled = false;
-      name = null; # null means use releaseName or name
+    serviceAccount = lib.mkOption {
+      type = lib.types.anything;
+      default = {
+        enabled = false;
+        name = null; # null means use releaseName or name
+      };
     };
 
     # PodDisruptionBudget
-    pdb = {
-      enabled = false;
-      minAvailable = null; # e.g. "50%" or 1
-      maxUnavailable = null;
+    pdb = lib.mkOption {
+      type = lib.types.anything;
+      default = {
+        enabled = false;
+        minAvailable = null; # e.g. "50%" or 1
+        maxUnavailable = null;
+      };
     };
 
     # Label overrides
-    appName = null; # if set, used for app.kubernetes.io/name labels (defaults to instance name)
-    selectorLabels = null; # if set, used as selector matchLabels instead of default
-    extraServiceLabels = { }; # extra labels to add to services
+    appName = lib.mkOption { type = lib.types.nullOr lib.types.str; default = null; }; # if set, used for app.kubernetes.io/name labels (defaults to instance name)
+    selectorLabels = lib.mkOption { type = lib.types.nullOr lib.types.anything; default = null; }; # if set, used as selector matchLabels instead of default
+    extraServiceLabels = lib.mkOption { type = lib.types.attrsOf lib.types.str; default = { }; }; # extra labels to add to services
 
     # Deployment strategy shortcut
-    maxSurge = "100%"; # top-level shortcut applied to backend and worker strategies
+    maxSurge = lib.mkOption { type = lib.types.str; default = "100%"; }; # top-level shortcut applied to backend and worker strategies
 
     # Priority
-    priorityClassName = null;
+    priorityClassName = lib.mkOption { type = lib.types.nullOr lib.types.str; default = null; };
   };
 
-  # ── Derived naming ───────────────────────────────────────────
-  rName = if cfg.releaseName != null then cfg.releaseName else name;
-  compName = cfg.componentName;
-  containerName = if cfg.backend.containerName != null then cfg.backend.containerName else compName;
-  servicePort = if cfg.backend.servicePort != null then cfg.backend.servicePort else cfg.backend.port;
-  probePort =
-    if cfg.backend.probes.port != null then cfg.backend.probes.port else cfg.backend.port;
-  appLabel = if cfg.appName != null then cfg.appName else name;
+  build =
+    { self, config, clusterConfig }:
+    let
 
-  # ── Labels ──────────────────────────────────────────────────────
-  commonLabels = {
-    "app.kubernetes.io/name" = appLabel;
-    "app.kubernetes.io/part-of" = appLabel;
-  };
+      # ── Derived naming ───────────────────────────────────────────
+      rName = if config.releaseName != null then config.releaseName else name;
+      compName = config.componentName;
+      containerName = if config.backend.containerName != null then config.backend.containerName else compName;
+      servicePort = if config.backend.servicePort != null then config.backend.servicePort else config.backend.port;
+      probePort =
+        if config.backend.probes.port != null then config.backend.probes.port else config.backend.port;
+      appLabel = if config.appName != null then config.appName else name;
 
-  componentLabels =
-    component:
-    commonLabels
-    // {
-      "app.kubernetes.io/component" = component;
-    };
-
-  selectorLabels =
-    component:
-    if cfg.selectorLabels != null then
-      cfg.selectorLabels
-    else
-      {
+      # ── Labels ──────────────────────────────────────────────────────
+      commonLabels = {
         "app.kubernetes.io/name" = appLabel;
-        "app.kubernetes.io/component" = component;
+        "app.kubernetes.io/part-of" = appLabel;
       };
 
-  # ── Dependency wiring ───────────────────────────────────────────
-  depEnv =
-    { }
-    // lib.optionalAttrs (postgres != null) {
-      DATABASE_HOST = postgres.out.fqdn;
-    }
-    // lib.optionalAttrs (valkey != null) {
-      VALKEY_HOST = valkey.out.fqdn;
-    };
-
-  # ── Secret file volumes + mounts ────────────────────────────────
-  secretFileNames = builtins.attrNames cfg.secretFiles;
-
-  secretVolumes = map (n: {
-    name = "secret-${n}";
-    secret = {
-      secretName = "${name}-secret-files";
-      items = [
-        {
-          key = n;
-          path = n;
-        }
-      ];
-    };
-  }) secretFileNames;
-
-  secretVolumeMounts = map (n: {
-    name = "secret-${n}";
-    mountPath = "/secrets/${n}";
-    subPath = n;
-    readOnly = true;
-  }) secretFileNames;
-
-  # ── Common pod spec fragments ───────────────────────────────────
-  mkEnvFrom =
-    self: configMapName: secretRefs:
-    lib.optional cfg.useConfigMap { configMapRef.name = configMapName.out.name; }
-    ++ map (s: { secretRef.name = s; }) secretRefs;
-
-  mkPodSpec =
-    self:
-    {
-      containers,
-      initContainers ? [ ],
-      volumes ? [ ],
-    }:
-    {
-      inherit containers;
-      volumes = volumes ++ secretVolumes;
-    }
-    // lib.optionalAttrs (initContainers != [ ]) {
-      inherit initContainers;
-    }
-    // lib.optionalAttrs (cfg.priorityClassName != null) {
-      priorityClassName = cfg.priorityClassName;
-    }
-    // lib.optionalAttrs cfg.serviceAccount.enabled {
-      serviceAccountName =
-        if cfg.serviceAccount.name != null then cfg.serviceAccount.name else rName;
-    }
-    // lib.optionalAttrs (cfg.backend.topologySpreadConstraints != [ ]) {
-      topologySpreadConstraints = cfg.backend.topologySpreadConstraints;
-    };
-
-  # ── Probe builders ────────────────────────────────────────────
-  mkLivenessProbe =
-    if cfg.backend.probes.type == "exec" then
-      {
-        exec.command = cfg.backend.probes.execCommand;
-        timeoutSeconds = cfg.backend.probes.timeoutSeconds;
-        initialDelaySeconds = cfg.backend.probes.initialDelaySeconds;
-        periodSeconds = 10;
-        failureThreshold = 3;
-      }
-    else
-      {
-        httpGet = {
-          path = cfg.backend.probes.path;
-          port = probePort;
+      componentLabels =
+        component:
+        commonLabels
+        // {
+          "app.kubernetes.io/component" = component;
         };
-        timeoutSeconds = cfg.backend.probes.timeoutSeconds;
-        periodSeconds = 10;
-        failureThreshold = 3;
-      };
 
-  mkReadinessProbe =
-    let
-      readinessTimeout =
-        if cfg.backend.probes.readinessTimeoutSeconds != null then
-          cfg.backend.probes.readinessTimeoutSeconds
+      selectorLabels =
+        component:
+        if config.selectorLabels != null then
+          config.selectorLabels
         else
-          cfg.backend.probes.timeoutSeconds;
-    in
-    if cfg.backend.probes.type == "exec" then
-      {
-        exec.command = cfg.backend.probes.execCommand;
-        timeoutSeconds = readinessTimeout;
-        initialDelaySeconds = cfg.backend.probes.initialDelaySeconds;
-        periodSeconds = 10;
-        failureThreshold = 3;
-      }
-    else
-      {
-        httpGet = {
-          path = cfg.backend.probes.path;
-          port = probePort;
-        };
-        initialDelaySeconds = cfg.backend.probes.initialDelaySeconds;
-        timeoutSeconds = readinessTimeout;
-        periodSeconds = 10;
-        failureThreshold = 3;
-      };
-
-  # ── Backend container ───────────────────────────────────────────
-  mkBackendContainer =
-    self:
-    {
-      name = containerName;
-      image = "${cfg.backend.image.repository}:${cfg.backend.image.tag}";
-      imagePullPolicy = cfg.backend.image.pullPolicy;
-      envFrom = mkEnvFrom self self.configmap cfg.backend.secrets;
-      ports = [
-        {
-          name = "http";
-          containerPort = cfg.backend.port;
-          protocol = "TCP";
-        }
-      ] ++ cfg.backend.extraPorts;
-      volumeMounts = secretVolumeMounts;
-      resources = cfg.backend.resources;
-    }
-    // lib.optionalAttrs (cfg.backend.command != null) {
-      command = cfg.backend.command;
-    }
-    // lib.optionalAttrs (cfg.backend.args != null) {
-      args = cfg.backend.args;
-    }
-    // lib.optionalAttrs cfg.backend.probes.enabled {
-      livenessProbe = mkLivenessProbe;
-      readinessProbe = mkReadinessProbe;
-    };
-
-  # ── Frontend container ──────────────────────────────────────────
-  mkFrontendContainer =
-    self:
-    {
-      name = "frontend";
-      image = "${cfg.frontend.image.repository}:${cfg.frontend.image.tag}";
-      imagePullPolicy = cfg.frontend.image.pullPolicy;
-      envFrom =
-        lib.optional cfg.frontend.useConfigMap { configMapRef.name = self.frontendConfigmap.out.name; }
-        ++ map (s: { secretRef.name = s; }) cfg.frontend.secrets;
-      ports = [
-        {
-          name = "http";
-          containerPort = cfg.frontend.port;
-          protocol = "TCP";
-        }
-      ];
-      resources = cfg.frontend.resources;
-    }
-    // lib.optionalAttrs (cfg.frontend.command != null) {
-      command = cfg.frontend.command;
-    }
-    // lib.optionalAttrs (cfg.frontend.args != null) {
-      args = cfg.frontend.args;
-    }
-    // lib.optionalAttrs cfg.frontend.probes.enabled {
-      livenessProbe = {
-        httpGet = {
-          path = cfg.frontend.probes.path;
-          port = cfg.frontend.port;
-        };
-        timeoutSeconds = cfg.frontend.probes.timeoutSeconds;
-        initialDelaySeconds = cfg.frontend.probes.initialDelaySeconds;
-        periodSeconds = 10;
-        failureThreshold = 3;
-      };
-      readinessProbe = {
-        httpGet = {
-          path = cfg.frontend.probes.path;
-          port = cfg.frontend.port;
-        };
-        timeoutSeconds = cfg.frontend.probes.timeoutSeconds;
-        initialDelaySeconds = cfg.frontend.probes.initialDelaySeconds;
-        periodSeconds = 10;
-        failureThreshold = 3;
-      };
-    };
-
-  # ── Worker container builder ────────────────────────────────────
-  mkWorkerContainer =
-    self:
-    {
-      workerName,
-      command,
-      args ? null,
-      resources ? { },
-      image ? null,
-      lifecycle ? null,
-      env ? null,
-      secrets ? null,
-    }:
-    {
-      name = workerName;
-      image = if image != null then image else "${cfg.backend.image.repository}:${cfg.backend.image.tag}";
-      imagePullPolicy = cfg.backend.image.pullPolicy;
-      inherit command;
-      envFrom = mkEnvFrom self self.configmap (if secrets != null then secrets else cfg.backend.secrets);
-      volumeMounts = secretVolumeMounts;
-      inherit resources;
-    }
-    // lib.optionalAttrs (args != null) { inherit args; }
-    // lib.optionalAttrs (lifecycle != null) { inherit lifecycle; }
-    // lib.optionalAttrs (env != null) {
-      env = lib.mapAttrsToList (k: v: { name = k; value = v; }) env;
-    };
-
-  # ── Worker Deployment builder ───────────────────────────────────
-  mkWorkerDeployment =
-    self:
-    {
-      workerName,
-      command,
-      args ? null,
-      replicas ? 1,
-      resources ? { },
-      strategy ? null,
-      image ? null,
-      lifecycle ? null,
-      env ? null,
-      secrets ? null,
-    }:
-    let
-      deployStrategy =
-        if strategy != null then strategy
-        else { rollingUpdate.maxSurge = "100%"; };
-    in
-    scope.mkResource {
-      apiVersion = "apps/v1";
-      kind = "Deployment";
-      name = "${name}-${workerName}";
-      labels = componentLabels workerName;
-      spec = {
-        inherit replicas;
-        strategy = deployStrategy;
-        selector.matchLabels = selectorLabels workerName;
-        template = {
-          metadata.labels = selectorLabels workerName;
-          spec = mkPodSpec self {
-            containers = [
-              (mkWorkerContainer self {
-                inherit
-                  workerName
-                  command
-                  args
-                  resources
-                  image
-                  lifecycle
-                  env
-                  secrets
-                  ;
-              })
-            ];
+          {
+            "app.kubernetes.io/name" = appLabel;
+            "app.kubernetes.io/component" = component;
           };
-        };
-      };
-    };
 
-  # ── Worker HPA builder ──────────────────────────────────────────
-  mkWorkerHpa =
-    {
-      hpaName,
-      deployResource,
-      hpaCfg,
-    }:
-    if hpaCfg.enabled or false then
-      scope.mkResource {
-        apiVersion = "autoscaling/v2";
-        kind = "HorizontalPodAutoscaler";
-        name = "${name}-${hpaName}";
-        labels = componentLabels hpaName;
-        spec = {
-          scaleTargetRef = {
-            apiVersion = "apps/v1";
-            kind = "Deployment";
-            name = deployResource.out.name;
-          };
-          minReplicas = hpaCfg.minReplicas or 1;
-          maxReplicas = hpaCfg.maxReplicas or 10;
-          metrics = [
+      # ── Dependency wiring ───────────────────────────────────────────
+      depEnv =
+        { }
+        // lib.optionalAttrs (postgres != null) {
+          DATABASE_HOST = postgres.out.fqdn;
+        }
+        // lib.optionalAttrs (valkey != null) {
+          VALKEY_HOST = valkey.out.fqdn;
+        };
+
+      # ── Secret file volumes + mounts ────────────────────────────────
+      secretFileNames = builtins.attrNames config.secretFiles;
+
+      secretVolumes = map (n: {
+        name = "secret-${n}";
+        secret = {
+          secretName = "${name}-secret-files";
+          items = [
             {
-              type = "Resource";
-              resource = {
-                name = "cpu";
-                target = {
-                  type = "Utilization";
-                  averageUtilization = hpaCfg.targetCPU or 80;
-                };
-              };
+              key = n;
+              path = n;
             }
           ];
         };
-      }
-    else
-      null;
+      }) secretFileNames;
 
-in
-self:
-let
+      secretVolumeMounts = map (n: {
+        name = "secret-${n}";
+        mountPath = "/secrets/${n}";
+        subPath = n;
+        readOnly = true;
+      }) secretFileNames;
 
-  # ── Queue worker resources ──────────────────────────────────────
-  queueWorkerParts = lib.concatMapAttrs (
-    wName: wCfg:
-    let
-      deployKey = "queueWorker-${wName}";
-      hpaKey = "queueWorkerHpa-${wName}";
-      deploy = mkWorkerDeployment self {
-        workerName = "queue-${wName}";
-        command = wCfg.command;
-        args = wCfg.args or null;
-        replicas = wCfg.replicas or 1;
-        resources = wCfg.resources or { };
-        strategy = wCfg.strategy or null;
-        image = wCfg.image or null;
-        lifecycle = wCfg.lifecycle or null;
-        env = wCfg.env or null;
-        secrets = wCfg.secrets or null;
-      };
-      hpa = mkWorkerHpa {
-        hpaName = "queue-${wName}";
-        deployResource = deploy;
-        hpaCfg = wCfg.hpa or { enabled = false; };
-      };
-    in
-    { ${deployKey} = deploy; } // lib.optionalAttrs (hpa != null) { ${hpaKey} = hpa; }
-  ) cfg.queueWorkers;
+      # ── Common pod spec fragments ───────────────────────────────────
+      mkEnvFrom =
+        self: configMapName: secretRefs:
+        lib.optional config.useConfigMap { configMapRef.name = configMapName.out.name; }
+        ++ map (s: { secretRef.name = s; }) secretRefs;
 
-  # ── Cron worker resources ───────────────────────────────────────
-  cronWorkerParts = lib.concatMapAttrs (wName: wCfg: {
-    "cronWorker-${wName}" = mkWorkerDeployment self {
-      workerName = "cron-${wName}";
-      command = wCfg.command;
-      args = wCfg.args or null;
-      replicas = wCfg.replicas or 1;
-      resources = wCfg.resources or { };
-      strategy = wCfg.strategy or null;
-      image = wCfg.image or null;
-      lifecycle = wCfg.lifecycle or null;
-      env = wCfg.env or null;
-      secrets = wCfg.secrets or null;
-    };
-  }) cfg.cronWorkers;
-
-  # ── Custom process resources ────────────────────────────────────
-  customProcessParts = lib.concatMapAttrs (pName: pCfg: {
-    "customProcess-${pName}" = mkWorkerDeployment self {
-      workerName = "custom-${pName}";
-      command = pCfg.command;
-      args = pCfg.args or null;
-      replicas = pCfg.replicas or 1;
-      resources = pCfg.resources or { };
-      strategy = pCfg.strategy or null;
-      image = pCfg.image or null;
-      lifecycle = pCfg.lifecycle or null;
-      env = pCfg.env or null;
-      secrets = pCfg.secrets or null;
-    };
-  }) cfg.customProcesses;
-
-  # All worker-related resources for main.requires
-  allWorkerResources =
-    builtins.attrValues queueWorkerParts
-    ++ builtins.attrValues cronWorkerParts
-    ++ builtins.attrValues customProcessParts;
-
-  # Strategy spec
-  strategySpec = {
-    rollingUpdate = {
-      maxSurge = if cfg.backend.strategy.maxSurge != null then cfg.backend.strategy.maxSurge else cfg.maxSurge;
-    }
-    // lib.optionalAttrs (cfg.backend.strategy.maxUnavailable != null) {
-      maxUnavailable = cfg.backend.strategy.maxUnavailable;
-    };
-    type = "RollingUpdate";
-  };
-
-in
-{
-
-  # ── ConfigMap (backend environment) ─────────────────────────────
-  configmap =
-    if cfg.useConfigMap then
-      scope.mkResource {
-        apiVersion = "v1";
-        kind = "ConfigMap";
-        name = "${name}-environment";
-        labels = componentLabels "config";
-        data = {
-          ENVIRONMENT = cfg.environment;
-        }
-        // depEnv
-        // cfg.env;
-      }
-    else
-      null;
-
-  # ── ConfigMap (frontend environment) ────────────────────────────
-  frontendConfigmap =
-    if cfg.frontend.enabled && cfg.frontend.useConfigMap then
-      scope.mkResource {
-        apiVersion = "v1";
-        kind = "ConfigMap";
-        name = "${name}-environment-frontend";
-        labels = componentLabels "config-frontend";
-        data = cfg.frontendEnv;
-      }
-    else
-      null;
-
-  # ── Secret (env vars) ──────────────────────────────────────────
-  secret =
-    if cfg.secretEnv != { } then
-      scope.mkResource {
-        apiVersion = "v1";
-        kind = "Secret";
-        name = "${name}-secrets";
-        labels = componentLabels "secrets";
-        extra = {
-          type = "Opaque";
-          stringData = cfg.secretEnv;
-        };
-      }
-    else
-      null;
-
-  # ── Secret (file mounts) ───────────────────────────────────────
-  secretFilesResource =
-    if cfg.secretFiles != { } then
-      scope.mkResource {
-        apiVersion = "v1";
-        kind = "Secret";
-        name = "${name}-secret-files";
-        labels = componentLabels "secret-files";
-        extra = {
-          type = "Opaque";
-          stringData = cfg.secretFiles;
-        };
-      }
-    else
-      null;
-
-  # ── ServiceAccount ───────────────────────────────────────────────
-  serviceAccount =
-    if cfg.serviceAccount.enabled then
-      scope.mkResource {
-        apiVersion = "v1";
-        kind = "ServiceAccount";
-        name = if cfg.serviceAccount.name != null then cfg.serviceAccount.name else rName;
-        labels = componentLabels "serviceaccount";
-      }
-    else
-      null;
-
-  # ── Backend Deployment ──────────────────────────────────────────
-  backendDeployment = scope.mkResource {
-    apiVersion = "apps/v1";
-    kind = "Deployment";
-    name = "${rName}-${compName}";
-    labels = componentLabels compName;
-    spec = {
-      replicas = cfg.backend.replicaCount;
-      strategy = strategySpec;
-      selector.matchLabels = selectorLabels compName;
-      template = {
-        metadata = {
-          labels = selectorLabels compName;
-        }
-        // lib.optionalAttrs cfg.useConfigMap {
-          annotations = {
-            "checksum/config" = self.configmap.out.identityHash;
-          };
-        };
-        spec = mkPodSpec self {
-          containers = [ (mkBackendContainer self) ];
-          initContainers = cfg.backend.initContainers;
-        };
-      };
-    };
-  };
-
-  # ── Backend Service ─────────────────────────────────────────────
-  backendService = scope.mkResource {
-    apiVersion = "v1";
-    kind = "Service";
-    name = "${rName}-${compName}-internal";
-    labels = componentLabels compName // cfg.extraServiceLabels;
-    spec = {
-      type = "ClusterIP";
-      selector = selectorLabels compName;
-      ports = [
+      mkPodSpec =
+        self:
         {
-          name = "http";
-          port = servicePort;
-          targetPort = cfg.backend.port;
-          protocol = "TCP";
+          containers,
+          initContainers ? [ ],
+          volumes ? [ ],
+        }:
+        {
+          inherit containers;
+          volumes = volumes ++ secretVolumes;
         }
-      ];
-    };
-    outputs = {
-      port = toString servicePort;
-    };
-    requires = [ self.backendDeployment ]
-      ++ lib.optional (self.serviceAccount != null) self.serviceAccount;
-  };
+        // lib.optionalAttrs (initContainers != [ ]) {
+          inherit initContainers;
+        }
+        // lib.optionalAttrs (config.priorityClassName != null) {
+          priorityClassName = config.priorityClassName;
+        }
+        // lib.optionalAttrs config.serviceAccount.enabled {
+          serviceAccountName =
+            if config.serviceAccount.name != null then config.serviceAccount.name else rName;
+        }
+        // lib.optionalAttrs (config.backend.topologySpreadConstraints != [ ]) {
+          topologySpreadConstraints = config.backend.topologySpreadConstraints;
+        };
 
-  # ── Backend HPA ─────────────────────────────────────────────────
-  backendHpa =
-    if cfg.backend.hpa.enabled then
-      scope.mkResource {
-        apiVersion = "autoscaling/v2";
-        kind = "HorizontalPodAutoscaler";
-        name = "${rName}-${compName}";
-        labels = componentLabels compName;
-        spec = {
-          scaleTargetRef = {
-            apiVersion = "apps/v1";
-            kind = "Deployment";
-            name = self.backendDeployment.out.name;
+      # ── Probe builders ────────────────────────────────────────────
+      mkLivenessProbe =
+        if config.backend.probes.type == "exec" then
+          {
+            exec.command = config.backend.probes.execCommand;
+            timeoutSeconds = config.backend.probes.timeoutSeconds;
+            initialDelaySeconds = config.backend.probes.initialDelaySeconds;
+            periodSeconds = 10;
+            failureThreshold = 3;
+          }
+        else
+          {
+            httpGet = {
+              path = config.backend.probes.path;
+              port = probePort;
+            };
+            timeoutSeconds = config.backend.probes.timeoutSeconds;
+            periodSeconds = 10;
+            failureThreshold = 3;
           };
-          minReplicas = cfg.backend.hpa.minReplicas;
-          maxReplicas = cfg.backend.hpa.maxReplicas;
-          metrics = [
+
+      mkReadinessProbe =
+        let
+          readinessTimeout =
+            if config.backend.probes.readinessTimeoutSeconds != null then
+              config.backend.probes.readinessTimeoutSeconds
+            else
+              config.backend.probes.timeoutSeconds;
+        in
+        if config.backend.probes.type == "exec" then
+          {
+            exec.command = config.backend.probes.execCommand;
+            timeoutSeconds = readinessTimeout;
+            initialDelaySeconds = config.backend.probes.initialDelaySeconds;
+            periodSeconds = 10;
+            failureThreshold = 3;
+          }
+        else
+          {
+            httpGet = {
+              path = config.backend.probes.path;
+              port = probePort;
+            };
+            initialDelaySeconds = config.backend.probes.initialDelaySeconds;
+            timeoutSeconds = readinessTimeout;
+            periodSeconds = 10;
+            failureThreshold = 3;
+          };
+
+      # ── Backend container ───────────────────────────────────────────
+      mkBackendContainer =
+        self:
+        {
+          name = containerName;
+          image = "${config.backend.image.repository}:${config.backend.image.tag}";
+          imagePullPolicy = config.backend.image.pullPolicy;
+          envFrom = mkEnvFrom self self.configmap config.backend.secrets;
+          ports = [
             {
-              type = "Resource";
-              resource = {
-                name = "cpu";
-                target = {
-                  type = "Utilization";
-                  averageUtilization = cfg.backend.hpa.targetCPU;
-                };
-              };
+              name = "http";
+              containerPort = config.backend.port;
+              protocol = "TCP";
+            }
+          ] ++ config.backend.extraPorts;
+          volumeMounts = secretVolumeMounts;
+          resources = config.backend.resources;
+        }
+        // lib.optionalAttrs (config.backend.command != null) {
+          command = config.backend.command;
+        }
+        // lib.optionalAttrs (config.backend.args != null) {
+          args = config.backend.args;
+        }
+        // lib.optionalAttrs config.backend.probes.enabled {
+          livenessProbe = mkLivenessProbe;
+          readinessProbe = mkReadinessProbe;
+        };
+
+      # ── Frontend container ──────────────────────────────────────────
+      mkFrontendContainer =
+        self:
+        {
+          name = "frontend";
+          image = "${config.frontend.image.repository}:${config.frontend.image.tag}";
+          imagePullPolicy = config.frontend.image.pullPolicy;
+          envFrom =
+            lib.optional config.frontend.useConfigMap { configMapRef.name = self.frontendConfigmap.out.name; }
+            ++ map (s: { secretRef.name = s; }) config.frontend.secrets;
+          ports = [
+            {
+              name = "http";
+              containerPort = config.frontend.port;
+              protocol = "TCP";
             }
           ];
-        };
-      }
-    else
-      null;
-
-  # ── PodDisruptionBudget ──────────────────────────────────────────
-  pdb =
-    if cfg.pdb.enabled then
-      scope.mkResource {
-        apiVersion = "policy/v1";
-        kind = "PodDisruptionBudget";
-        name = "${rName}-${compName}";
-        labels = componentLabels compName;
-        spec = {
-          selector.matchLabels = selectorLabels compName;
+          resources = config.frontend.resources;
         }
-        // lib.optionalAttrs (cfg.pdb.minAvailable != null) {
-          minAvailable = cfg.pdb.minAvailable;
+        // lib.optionalAttrs (config.frontend.command != null) {
+          command = config.frontend.command;
         }
-        // lib.optionalAttrs (cfg.pdb.maxUnavailable != null) {
-          maxUnavailable = cfg.pdb.maxUnavailable;
+        // lib.optionalAttrs (config.frontend.args != null) {
+          args = config.frontend.args;
+        }
+        // lib.optionalAttrs config.frontend.probes.enabled {
+          livenessProbe = {
+            httpGet = {
+              path = config.frontend.probes.path;
+              port = config.frontend.port;
+            };
+            timeoutSeconds = config.frontend.probes.timeoutSeconds;
+            initialDelaySeconds = config.frontend.probes.initialDelaySeconds;
+            periodSeconds = 10;
+            failureThreshold = 3;
+          };
+          readinessProbe = {
+            httpGet = {
+              path = config.frontend.probes.path;
+              port = config.frontend.port;
+            };
+            timeoutSeconds = config.frontend.probes.timeoutSeconds;
+            initialDelaySeconds = config.frontend.probes.initialDelaySeconds;
+            periodSeconds = 10;
+            failureThreshold = 3;
+          };
         };
-      }
-    else
-      null;
 
-  # ── Frontend Deployment ─────────────────────────────────────────
-  frontendDeployment =
-    if cfg.frontend.enabled then
-      scope.mkResource {
+      # ── Worker container builder ────────────────────────────────────
+      mkWorkerContainer =
+        self:
+        {
+          workerName,
+          command,
+          args ? null,
+          resources ? { },
+          image ? null,
+          lifecycle ? null,
+          env ? null,
+          secrets ? null,
+        }:
+        {
+          name = workerName;
+          image = if image != null then image else "${config.backend.image.repository}:${config.backend.image.tag}";
+          imagePullPolicy = config.backend.image.pullPolicy;
+          inherit command;
+          envFrom = mkEnvFrom self self.configmap (if secrets != null then secrets else config.backend.secrets);
+          volumeMounts = secretVolumeMounts;
+          inherit resources;
+        }
+        // lib.optionalAttrs (args != null) { inherit args; }
+        // lib.optionalAttrs (lifecycle != null) { inherit lifecycle; }
+        // lib.optionalAttrs (env != null) {
+          env = lib.mapAttrsToList (k: v: { name = k; value = v; }) env;
+        };
+
+      # ── Worker Deployment builder ───────────────────────────────────
+      mkWorkerDeployment =
+        self:
+        {
+          workerName,
+          command,
+          args ? null,
+          replicas ? 1,
+          resources ? { },
+          strategy ? null,
+          image ? null,
+          lifecycle ? null,
+          env ? null,
+          secrets ? null,
+        }:
+        let
+          deployStrategy =
+            if strategy != null then strategy
+            else { rollingUpdate.maxSurge = "100%"; };
+        in
+        scope.mkResource {
+          apiVersion = "apps/v1";
+          kind = "Deployment";
+          name = "${name}-${workerName}";
+          labels = componentLabels workerName;
+          spec = {
+            inherit replicas;
+            strategy = deployStrategy;
+            selector.matchLabels = selectorLabels workerName;
+            template = {
+              metadata.labels = selectorLabels workerName;
+              spec = mkPodSpec self {
+                containers = [
+                  (mkWorkerContainer self {
+                    inherit
+                      workerName
+                      command
+                      args
+                      resources
+                      image
+                      lifecycle
+                      env
+                      secrets
+                      ;
+                  })
+                ];
+              };
+            };
+          };
+        };
+
+      # ── Worker HPA builder ──────────────────────────────────────────
+      mkWorkerHpa =
+        {
+          hpaName,
+          deployResource,
+          hpaCfg,
+        }:
+        if hpaCfg.enabled or false then
+          scope.mkResource {
+            apiVersion = "autoscaling/v2";
+            kind = "HorizontalPodAutoscaler";
+            name = "${name}-${hpaName}";
+            labels = componentLabels hpaName;
+            spec = {
+              scaleTargetRef = {
+                apiVersion = "apps/v1";
+                kind = "Deployment";
+                name = deployResource.out.name;
+              };
+              minReplicas = hpaCfg.minReplicas or 1;
+              maxReplicas = hpaCfg.maxReplicas or 10;
+              metrics = [
+                {
+                  type = "Resource";
+                  resource = {
+                    name = "cpu";
+                    target = {
+                      type = "Utilization";
+                      averageUtilization = hpaCfg.targetCPU or 80;
+                    };
+                  };
+                }
+              ];
+            };
+          }
+        else
+          null;
+
+      # ── Queue worker resources ──────────────────────────────────────
+      queueWorkerParts = lib.concatMapAttrs (
+        wName: wCfg:
+        let
+          deployKey = "queueWorker-${wName}";
+          hpaKey = "queueWorkerHpa-${wName}";
+          deploy = mkWorkerDeployment self {
+            workerName = "queue-${wName}";
+            command = wCfg.command;
+            args = wCfg.args or null;
+            replicas = wCfg.replicas or 1;
+            resources = wCfg.resources or { };
+            strategy = wCfg.strategy or null;
+            image = wCfg.image or null;
+            lifecycle = wCfg.lifecycle or null;
+            env = wCfg.env or null;
+            secrets = wCfg.secrets or null;
+          };
+          hpa = mkWorkerHpa {
+            hpaName = "queue-${wName}";
+            deployResource = deploy;
+            hpaCfg = wCfg.hpa or { enabled = false; };
+          };
+        in
+        { ${deployKey} = deploy; } // lib.optionalAttrs (hpa != null) { ${hpaKey} = hpa; }
+      ) config.queueWorkers;
+
+      # ── Cron worker resources ───────────────────────────────────────
+      cronWorkerParts = lib.concatMapAttrs (wName: wCfg: {
+        "cronWorker-${wName}" = mkWorkerDeployment self {
+          workerName = "cron-${wName}";
+          command = wCfg.command;
+          args = wCfg.args or null;
+          replicas = wCfg.replicas or 1;
+          resources = wCfg.resources or { };
+          strategy = wCfg.strategy or null;
+          image = wCfg.image or null;
+          lifecycle = wCfg.lifecycle or null;
+          env = wCfg.env or null;
+          secrets = wCfg.secrets or null;
+        };
+      }) config.cronWorkers;
+
+      # ── Custom process resources ────────────────────────────────────
+      customProcessParts = lib.concatMapAttrs (pName: pCfg: {
+        "customProcess-${pName}" = mkWorkerDeployment self {
+          workerName = "custom-${pName}";
+          command = pCfg.command;
+          args = pCfg.args or null;
+          replicas = pCfg.replicas or 1;
+          resources = pCfg.resources or { };
+          strategy = pCfg.strategy or null;
+          image = pCfg.image or null;
+          lifecycle = pCfg.lifecycle or null;
+          env = pCfg.env or null;
+          secrets = pCfg.secrets or null;
+        };
+      }) config.customProcesses;
+
+      # All worker-related resources for main.requires
+      allWorkerResources =
+        builtins.attrValues queueWorkerParts
+        ++ builtins.attrValues cronWorkerParts
+        ++ builtins.attrValues customProcessParts;
+
+      # Strategy spec
+      strategySpec = {
+        rollingUpdate = {
+          maxSurge = if config.backend.strategy.maxSurge != null then config.backend.strategy.maxSurge else config.maxSurge;
+        }
+        // lib.optionalAttrs (config.backend.strategy.maxUnavailable != null) {
+          maxUnavailable = config.backend.strategy.maxUnavailable;
+        };
+        type = "RollingUpdate";
+      };
+
+    in
+    {
+
+      # ── ConfigMap (backend environment) ─────────────────────────────
+      configmap =
+        if config.useConfigMap then
+          scope.mkResource {
+            apiVersion = "v1";
+            kind = "ConfigMap";
+            name = "${name}-environment";
+            labels = componentLabels "config";
+            data = {
+              ENVIRONMENT = config.environment;
+            }
+            // depEnv
+            // config.env;
+          }
+        else
+          null;
+
+      # ── ConfigMap (frontend environment) ────────────────────────────
+      frontendConfigmap =
+        if config.frontend.enabled && config.frontend.useConfigMap then
+          scope.mkResource {
+            apiVersion = "v1";
+            kind = "ConfigMap";
+            name = "${name}-environment-frontend";
+            labels = componentLabels "config-frontend";
+            data = config.frontendEnv;
+          }
+        else
+          null;
+
+      # ── Secret (env vars) ──────────────────────────────────────────
+      secret =
+        if config.secretEnv != { } then
+          scope.mkResource {
+            apiVersion = "v1";
+            kind = "Secret";
+            name = "${name}-secrets";
+            labels = componentLabels "secrets";
+            extra = {
+              type = "Opaque";
+              stringData = config.secretEnv;
+            };
+          }
+        else
+          null;
+
+      # ── Secret (file mounts) ───────────────────────────────────────
+      secretFilesResource =
+        if config.secretFiles != { } then
+          scope.mkResource {
+            apiVersion = "v1";
+            kind = "Secret";
+            name = "${name}-secret-files";
+            labels = componentLabels "secret-files";
+            extra = {
+              type = "Opaque";
+              stringData = config.secretFiles;
+            };
+          }
+        else
+          null;
+
+      # ── ServiceAccount ───────────────────────────────────────────────
+      serviceAccount =
+        if config.serviceAccount.enabled then
+          scope.mkResource {
+            apiVersion = "v1";
+            kind = "ServiceAccount";
+            name = if config.serviceAccount.name != null then config.serviceAccount.name else rName;
+            labels = componentLabels "serviceaccount";
+          }
+        else
+          null;
+
+      # ── Backend Deployment ──────────────────────────────────────────
+      backendDeployment = scope.mkResource {
         apiVersion = "apps/v1";
         kind = "Deployment";
-        name = "${name}-frontend";
-        labels = componentLabels "frontend";
+        name = "${rName}-${compName}";
+        labels = componentLabels compName;
         spec = {
-          replicas = cfg.frontend.replicaCount;
-          strategy = {
-            rollingUpdate = {
-              maxSurge = if cfg.frontend.strategy.maxSurge != null then cfg.frontend.strategy.maxSurge else cfg.maxSurge;
-            }
-            // lib.optionalAttrs (cfg.frontend.strategy.maxUnavailable != null) {
-              maxUnavailable = cfg.frontend.strategy.maxUnavailable;
-            };
-            type = "RollingUpdate";
-          };
-          selector.matchLabels = selectorLabels "frontend";
+          replicas = config.backend.replicaCount;
+          strategy = strategySpec;
+          selector.matchLabels = selectorLabels compName;
           template = {
             metadata = {
-              labels = selectorLabels "frontend";
+              labels = selectorLabels compName;
             }
-            // lib.optionalAttrs cfg.frontend.useConfigMap {
+            // lib.optionalAttrs config.useConfigMap {
               annotations = {
-                "checksum/config" = self.frontendConfigmap.out.identityHash;
+                "checksum/config" = self.configmap.out.identityHash;
               };
             };
             spec = mkPodSpec self {
-              containers = [ (mkFrontendContainer self) ];
-              volumes = [ ];
+              containers = [ (mkBackendContainer self) ];
+              initContainers = config.backend.initContainers;
             };
           };
         };
-      }
-    else
-      null;
+      };
 
-  # ── Frontend Service ────────────────────────────────────────────
-  frontendService =
-    if cfg.frontend.enabled then
-      scope.mkResource {
+      # ── Backend Service ─────────────────────────────────────────────
+      backendService = scope.mkResource {
         apiVersion = "v1";
         kind = "Service";
-        name = "${name}-frontend";
-        labels = componentLabels "frontend";
+        name = "${rName}-${compName}-internal";
+        labels = componentLabels compName // config.extraServiceLabels;
         spec = {
           type = "ClusterIP";
-          selector = selectorLabels "frontend";
+          selector = selectorLabels compName;
           ports = [
             {
               name = "http";
-              port = cfg.frontend.port;
-              targetPort = "http";
+              port = servicePort;
+              targetPort = config.backend.port;
               protocol = "TCP";
             }
           ];
         };
         outputs = {
-          port = toString cfg.frontend.port;
+          port = toString servicePort;
         };
-        requires = [ self.frontendDeployment ];
-      }
-    else
-      null;
+        requires = [ self.backendDeployment ]
+          ++ lib.optional (self.serviceAccount != null) self.serviceAccount;
+      };
 
-  # ── Caddy Deployment ────────────────────────────────────────────
-  caddyDeployment =
-    if cfg.caddy.enabled then
-      scope.mkResource {
-        apiVersion = "apps/v1";
-        kind = "Deployment";
-        name = "${name}-caddy";
-        labels = componentLabels "caddy";
-        spec = {
-          replicas = cfg.caddy.replicaCount;
-          strategy.rollingUpdate.maxSurge = "100%";
-          selector.matchLabels = selectorLabels "caddy";
-          template = {
-            metadata.labels = selectorLabels "caddy";
-            spec = mkPodSpec self {
-              containers = [
+      # ── Backend HPA ─────────────────────────────────────────────────
+      backendHpa =
+        if config.backend.hpa.enabled then
+          scope.mkResource {
+            apiVersion = "autoscaling/v2";
+            kind = "HorizontalPodAutoscaler";
+            name = "${rName}-${compName}";
+            labels = componentLabels compName;
+            spec = {
+              scaleTargetRef = {
+                apiVersion = "apps/v1";
+                kind = "Deployment";
+                name = self.backendDeployment.out.name;
+              };
+              minReplicas = config.backend.hpa.minReplicas;
+              maxReplicas = config.backend.hpa.maxReplicas;
+              metrics = [
                 {
-                  name = "caddy";
-                  image = "${cfg.caddy.image.repository}:${cfg.caddy.image.tag}";
-                  imagePullPolicy = cfg.caddy.image.pullPolicy;
-                  ports = [
-                    {
-                      name = "http";
-                      containerPort = cfg.caddy.port;
-                      protocol = "TCP";
-                    }
-                  ];
-                  env = [
-                    {
-                      name = "BACKEND_HOST";
-                      value = self.backendService.out.name;
-                    }
-                    {
-                      name = "BACKEND_PORT";
-                      value = toString cfg.backend.port;
-                    }
-                  ]
-                  ++ lib.optionals cfg.frontend.enabled [
-                    {
-                      name = "FRONTEND_HOST";
-                      value = self.frontendService.out.name;
-                    }
-                    {
-                      name = "FRONTEND_PORT";
-                      value = toString cfg.frontend.port;
-                    }
-                  ];
-                  resources = cfg.caddy.resources;
+                  type = "Resource";
+                  resource = {
+                    name = "cpu";
+                    target = {
+                      type = "Utilization";
+                      averageUtilization = config.backend.hpa.targetCPU;
+                    };
+                  };
                 }
               ];
-              volumes = [ ];
             };
-          };
-        };
-      }
-    else
-      null;
+          }
+        else
+          null;
 
-  # ── Caddy Service ───────────────────────────────────────────────
-  caddyService =
-    if cfg.caddy.enabled then
-      scope.mkResource {
-        apiVersion = "v1";
-        kind = "Service";
-        name = "${name}-caddy";
-        labels = componentLabels "caddy";
-        spec = {
-          type = "ClusterIP";
-          selector = selectorLabels "caddy";
-          ports = [
-            {
-              name = "http";
-              port = cfg.caddy.port;
-              targetPort = "http";
-              protocol = "TCP";
+      # ── PodDisruptionBudget ──────────────────────────────────────────
+      pdb =
+        if config.pdb.enabled then
+          scope.mkResource {
+            apiVersion = "policy/v1";
+            kind = "PodDisruptionBudget";
+            name = "${rName}-${compName}";
+            labels = componentLabels compName;
+            spec = {
+              selector.matchLabels = selectorLabels compName;
             }
-          ];
-        };
-        outputs = {
-          port = toString cfg.caddy.port;
-        };
-        requires = [ self.caddyDeployment ];
-      }
-    else
-      null;
+            // lib.optionalAttrs (config.pdb.minAvailable != null) {
+              minAvailable = config.pdb.minAvailable;
+            }
+            // lib.optionalAttrs (config.pdb.maxUnavailable != null) {
+              maxUnavailable = config.pdb.maxUnavailable;
+            };
+          }
+        else
+          null;
 
-  # ── Caddy HPA ──────────────────────────────────────────────────
-  caddyHpa =
-    if cfg.caddy.enabled && cfg.caddy.hpa.enabled then
-      scope.mkResource {
-        apiVersion = "autoscaling/v2";
-        kind = "HorizontalPodAutoscaler";
-        name = "${name}-caddy";
-        labels = componentLabels "caddy";
-        spec = {
-          scaleTargetRef = {
+      # ── Frontend Deployment ─────────────────────────────────────────
+      frontendDeployment =
+        if config.frontend.enabled then
+          scope.mkResource {
             apiVersion = "apps/v1";
             kind = "Deployment";
-            name = self.caddyDeployment.out.name;
-          };
-          minReplicas = cfg.caddy.hpa.minReplicas;
-          maxReplicas = cfg.caddy.hpa.maxReplicas;
-          metrics = [
-            {
-              type = "Resource";
-              resource = {
-                name = "cpu";
-                target = {
-                  type = "Utilization";
-                  averageUtilization = cfg.caddy.hpa.targetCPU;
+            name = "${name}-frontend";
+            labels = componentLabels "frontend";
+            spec = {
+              replicas = config.frontend.replicaCount;
+              strategy = {
+                rollingUpdate = {
+                  maxSurge = if config.frontend.strategy.maxSurge != null then config.frontend.strategy.maxSurge else config.maxSurge;
+                }
+                // lib.optionalAttrs (config.frontend.strategy.maxUnavailable != null) {
+                  maxUnavailable = config.frontend.strategy.maxUnavailable;
+                };
+                type = "RollingUpdate";
+              };
+              selector.matchLabels = selectorLabels "frontend";
+              template = {
+                metadata = {
+                  labels = selectorLabels "frontend";
+                }
+                // lib.optionalAttrs config.frontend.useConfigMap {
+                  annotations = {
+                    "checksum/config" = self.frontendConfigmap.out.identityHash;
+                  };
+                };
+                spec = mkPodSpec self {
+                  containers = [ (mkFrontendContainer self) ];
+                  volumes = [ ];
                 };
               };
-            }
-          ];
-        };
-      }
-    else
-      null;
+            };
+          }
+        else
+          null;
 
-  # ── Redis Deployment ────────────────────────────────────────────
-  redisDeployment =
-    if cfg.redis.enabled then
-      scope.mkResource {
-        apiVersion = "apps/v1";
-        kind = "Deployment";
-        name = "${name}-redis";
-        labels = componentLabels "redis";
-        spec = {
-          replicas = 1;
-          strategy.type = "Recreate";
-          selector.matchLabels = selectorLabels "redis";
-          template = {
-            metadata.labels = selectorLabels "redis";
+      # ── Frontend Service ────────────────────────────────────────────
+      frontendService =
+        if config.frontend.enabled then
+          scope.mkResource {
+            apiVersion = "v1";
+            kind = "Service";
+            name = "${name}-frontend";
+            labels = componentLabels "frontend";
             spec = {
-              containers = [
+              type = "ClusterIP";
+              selector = selectorLabels "frontend";
+              ports = [
                 {
-                  name = "redis";
-                  image = "${cfg.redis.image.repository}:${cfg.redis.image.tag}";
-                  ports = [
+                  name = "http";
+                  port = config.frontend.port;
+                  targetPort = "http";
+                  protocol = "TCP";
+                }
+              ];
+            };
+            outputs = {
+              port = toString config.frontend.port;
+            };
+            requires = [ self.frontendDeployment ];
+          }
+        else
+          null;
+
+      # ── Caddy Deployment ────────────────────────────────────────────
+      caddyDeployment =
+        if config.caddy.enabled then
+          scope.mkResource {
+            apiVersion = "apps/v1";
+            kind = "Deployment";
+            name = "${name}-caddy";
+            labels = componentLabels "caddy";
+            spec = {
+              replicas = config.caddy.replicaCount;
+              strategy.rollingUpdate.maxSurge = "100%";
+              selector.matchLabels = selectorLabels "caddy";
+              template = {
+                metadata.labels = selectorLabels "caddy";
+                spec = mkPodSpec self {
+                  containers = [
+                    {
+                      name = "caddy";
+                      image = "${config.caddy.image.repository}:${config.caddy.image.tag}";
+                      imagePullPolicy = config.caddy.image.pullPolicy;
+                      ports = [
+                        {
+                          name = "http";
+                          containerPort = config.caddy.port;
+                          protocol = "TCP";
+                        }
+                      ];
+                      env = [
+                        {
+                          name = "BACKEND_HOST";
+                          value = self.backendService.out.name;
+                        }
+                        {
+                          name = "BACKEND_PORT";
+                          value = toString config.backend.port;
+                        }
+                      ]
+                      ++ lib.optionals config.frontend.enabled [
+                        {
+                          name = "FRONTEND_HOST";
+                          value = self.frontendService.out.name;
+                        }
+                        {
+                          name = "FRONTEND_PORT";
+                          value = toString config.frontend.port;
+                        }
+                      ];
+                      resources = config.caddy.resources;
+                    }
+                  ];
+                  volumes = [ ];
+                };
+              };
+            };
+          }
+        else
+          null;
+
+      # ── Caddy Service ───────────────────────────────────────────────
+      caddyService =
+        if config.caddy.enabled then
+          scope.mkResource {
+            apiVersion = "v1";
+            kind = "Service";
+            name = "${name}-caddy";
+            labels = componentLabels "caddy";
+            spec = {
+              type = "ClusterIP";
+              selector = selectorLabels "caddy";
+              ports = [
+                {
+                  name = "http";
+                  port = config.caddy.port;
+                  targetPort = "http";
+                  protocol = "TCP";
+                }
+              ];
+            };
+            outputs = {
+              port = toString config.caddy.port;
+            };
+            requires = [ self.caddyDeployment ];
+          }
+        else
+          null;
+
+      # ── Caddy HPA ──────────────────────────────────────────────────
+      caddyHpa =
+        if config.caddy.enabled && config.caddy.hpa.enabled then
+          scope.mkResource {
+            apiVersion = "autoscaling/v2";
+            kind = "HorizontalPodAutoscaler";
+            name = "${name}-caddy";
+            labels = componentLabels "caddy";
+            spec = {
+              scaleTargetRef = {
+                apiVersion = "apps/v1";
+                kind = "Deployment";
+                name = self.caddyDeployment.out.name;
+              };
+              minReplicas = config.caddy.hpa.minReplicas;
+              maxReplicas = config.caddy.hpa.maxReplicas;
+              metrics = [
+                {
+                  type = "Resource";
+                  resource = {
+                    name = "cpu";
+                    target = {
+                      type = "Utilization";
+                      averageUtilization = config.caddy.hpa.targetCPU;
+                    };
+                  };
+                }
+              ];
+            };
+          }
+        else
+          null;
+
+      # ── Redis Deployment ────────────────────────────────────────────
+      redisDeployment =
+        if config.redis.enabled then
+          scope.mkResource {
+            apiVersion = "apps/v1";
+            kind = "Deployment";
+            name = "${name}-redis";
+            labels = componentLabels "redis";
+            spec = {
+              replicas = 1;
+              strategy.type = "Recreate";
+              selector.matchLabels = selectorLabels "redis";
+              template = {
+                metadata.labels = selectorLabels "redis";
+                spec = {
+                  containers = [
                     {
                       name = "redis";
-                      containerPort = 6379;
-                      protocol = "TCP";
+                      image = "${config.redis.image.repository}:${config.redis.image.tag}";
+                      ports = [
+                        {
+                          name = "redis";
+                          containerPort = 6379;
+                          protocol = "TCP";
+                        }
+                      ];
+                      resources = config.redis.resources;
+                      volumeMounts = [
+                        {
+                          name = "data";
+                          mountPath = "/data";
+                        }
+                      ];
                     }
                   ];
-                  resources = cfg.redis.resources;
-                  volumeMounts = [
+                  volumes = [
                     {
                       name = "data";
-                      mountPath = "/data";
+                      emptyDir = { };
                     }
                   ];
-                }
-              ];
-              volumes = [
-                {
-                  name = "data";
-                  emptyDir = { };
-                }
-              ];
+                };
+              };
             };
-          };
-        };
-      }
-    else
-      null;
+          }
+        else
+          null;
 
-  # ── Redis Service ───────────────────────────────────────────────
-  redisService =
-    if cfg.redis.enabled then
-      scope.mkResource {
-        apiVersion = "v1";
-        kind = "Service";
-        name = "${name}-redis";
-        labels = componentLabels "redis";
-        spec = {
-          type = "ClusterIP";
-          selector = selectorLabels "redis";
-          ports = [
-            {
-              name = "redis";
-              port = 6379;
-              targetPort = "redis";
-              protocol = "TCP";
-            }
-          ];
-        };
-        outputs = {
-          port = "6379";
-        };
-        requires = [ self.redisDeployment ];
-      }
-    else
-      null;
-
-  # ── Ingress ─────────────────────────────────────────────────────
-  ingress =
-    if cfg.ingress.enabled then
-      let
-        resolveServiceName =
-          svcName:
-          if svcName == "backend" then
-            self.backendService.out.name
-          else if svcName == "frontend" && cfg.frontend.enabled then
-            self.frontendService.out.name
-          else if svcName == "caddy" && cfg.caddy.enabled then
-            self.caddyService.out.name
-          else
-            svcName;
-
-        resolveServicePort =
-          svcName:
-          if svcName == "backend" then
-            servicePort
-          else if svcName == "frontend" then
-            cfg.frontend.port
-          else if svcName == "caddy" then
-            cfg.caddy.port
-          else
-            80;
-
-        rules = map (host: {
-          host = host.host;
-          http.paths = map (pathCfg: {
-            path = pathCfg.path;
-            pathType = pathCfg.pathType or "Prefix";
-            backend.service = {
-              name = resolveServiceName pathCfg.service;
-              port.number = pathCfg.port or (resolveServicePort pathCfg.service);
-            };
-          }) host.paths;
-        }) cfg.ingress.hosts;
-
-        tlsSpec =
-          if cfg.ingress.tls != [ ] then
-            cfg.ingress.tls
-          else
-            let
-              hosts = map (h: h.host) cfg.ingress.hosts;
-            in
-            if hosts != [ ] then
-              [
-                {
-                  secretName = "${rName}-tls";
-                  inherit hosts;
-                }
-              ]
-            else
-              [ ];
-      in
-      scope.mkResource {
-        apiVersion = "networking.k8s.io/v1";
-        kind = "Ingress";
-        name = "${rName}-${compName}";
-        labels = componentLabels "ingress";
-        annotations = {
-          "cert-manager.io/cluster-issuer" = cfg.ingress.clusterIssuer;
-        }
-        // cfg.ingress.annotations;
-        spec = {
-          ingressClassName = cfg.ingress.className;
-          inherit rules;
-        }
-        // lib.optionalAttrs (tlsSpec != [ ]) {
-          tls = tlsSpec;
-        };
-      }
-    else
-      null;
-
-  # ── Migration Hook (Job) ────────────────────────────────────────
-  migrateJob =
-    if cfg.hooks.migrate.enabled then
-      scope.mkResource {
-        apiVersion = "batch/v1";
-        kind = "Job";
-        name = "${name}-migrate";
-        labels = componentLabels "migrate";
-        annotations = {
-          "kix.dev/hook" = "pre-deploy";
-          "kix.dev/hook-delete-policy" = "before-hook-creation,hook-succeeded";
-        };
-        spec = {
-          activeDeadlineSeconds = 3600;
-          backoffLimit = 0;
-          ttlSecondsAfterFinished = 28800;
-          template = {
-            metadata.labels = selectorLabels "migrate";
+      # ── Redis Service ───────────────────────────────────────────────
+      redisService =
+        if config.redis.enabled then
+          scope.mkResource {
+            apiVersion = "v1";
+            kind = "Service";
+            name = "${name}-redis";
+            labels = componentLabels "redis";
             spec = {
-              restartPolicy = "Never";
-              containers = [
+              type = "ClusterIP";
+              selector = selectorLabels "redis";
+              ports = [
                 {
-                  name = "migrate";
-                  image = "${cfg.backend.image.repository}:${cfg.backend.image.tag}";
-                  imagePullPolicy = cfg.backend.image.pullPolicy;
-                  command = cfg.hooks.migrate.command;
-                  envFrom = mkEnvFrom self self.configmap cfg.backend.secrets;
-                  volumeMounts = secretVolumeMounts;
+                  name = "redis";
+                  port = 6379;
+                  targetPort = "redis";
+                  protocol = "TCP";
                 }
               ];
-              volumes = secretVolumes;
             };
-          };
-        };
-      }
-    else
-      null;
+            outputs = {
+              port = "6379";
+            };
+            requires = [ self.redisDeployment ];
+          }
+        else
+          null;
 
-  # ── Entry point ─────────────────────────────────────────────────
-  main = {
-    resource = if cfg.caddy.enabled then self.caddyService else self.backendService;
-    requires =
-      allWorkerResources
-      ++ lib.optional (self.backendHpa != null) self.backendHpa
-      ++ lib.optional (self.caddyHpa != null) self.caddyHpa
-      ++ lib.optional (self.redisService != null) self.redisService
-      ++ lib.optional (self.ingress != null) self.ingress
-      ++ lib.optional (self.migrateJob != null) self.migrateJob
-      ++ lib.optional (self.secret != null) self.secret
-      ++ lib.optional (self.secretFilesResource != null) self.secretFilesResource
-      ++ lib.optional (self.frontendService != null) self.frontendService
-      ++ lib.optional (self.pdb != null) self.pdb;
-  };
+      # ── Ingress ─────────────────────────────────────────────────────
+      ingress =
+        if config.ingress.enabled then
+          let
+            resolveServiceName =
+              svcName:
+              if svcName == "backend" then
+                self.backendService.out.name
+              else if svcName == "frontend" && config.frontend.enabled then
+                self.frontendService.out.name
+              else if svcName == "caddy" && config.caddy.enabled then
+                self.caddyService.out.name
+              else
+                svcName;
+
+            resolveServicePort =
+              svcName:
+              if svcName == "backend" then
+                servicePort
+              else if svcName == "frontend" then
+                config.frontend.port
+              else if svcName == "caddy" then
+                config.caddy.port
+              else
+                80;
+
+            rules = map (host: {
+              host = host.host;
+              http.paths = map (pathCfg: {
+                path = pathCfg.path;
+                pathType = pathCfg.pathType or "Prefix";
+                backend.service = {
+                  name = resolveServiceName pathCfg.service;
+                  port.number = pathCfg.port or (resolveServicePort pathCfg.service);
+                };
+              }) host.paths;
+            }) config.ingress.hosts;
+
+            tlsSpec =
+              if config.ingress.tls != [ ] then
+                config.ingress.tls
+              else
+                let
+                  hosts = map (h: h.host) config.ingress.hosts;
+                in
+                if hosts != [ ] then
+                  [
+                    {
+                      secretName = "${rName}-tls";
+                      inherit hosts;
+                    }
+                  ]
+                else
+                  [ ];
+          in
+          scope.mkResource {
+            apiVersion = "networking.k8s.io/v1";
+            kind = "Ingress";
+            name = "${rName}-${compName}";
+            labels = componentLabels "ingress";
+            annotations = {
+              "cert-manager.io/cluster-issuer" = config.ingress.clusterIssuer;
+            }
+            // config.ingress.annotations;
+            spec = {
+              ingressClassName = config.ingress.className;
+              inherit rules;
+            }
+            // lib.optionalAttrs (tlsSpec != [ ]) {
+              tls = tlsSpec;
+            };
+          }
+        else
+          null;
+
+      # ── Migration Hook (Job) ────────────────────────────────────────
+      migrateJob =
+        if config.hooks.migrate.enabled then
+          scope.mkResource {
+            apiVersion = "batch/v1";
+            kind = "Job";
+            name = "${name}-migrate";
+            labels = componentLabels "migrate";
+            annotations = {
+              "kix.dev/hook" = "pre-deploy";
+              "kix.dev/hook-delete-policy" = "before-hook-creation,hook-succeeded";
+            };
+            spec = {
+              activeDeadlineSeconds = 3600;
+              backoffLimit = 0;
+              ttlSecondsAfterFinished = 28800;
+              template = {
+                metadata.labels = selectorLabels "migrate";
+                spec = {
+                  restartPolicy = "Never";
+                  containers = [
+                    {
+                      name = "migrate";
+                      image = "${config.backend.image.repository}:${config.backend.image.tag}";
+                      imagePullPolicy = config.backend.image.pullPolicy;
+                      command = config.hooks.migrate.command;
+                      envFrom = mkEnvFrom self self.configmap config.backend.secrets;
+                      volumeMounts = secretVolumeMounts;
+                    }
+                  ];
+                  volumes = secretVolumes;
+                };
+              };
+            };
+          }
+        else
+          null;
+
+      # ── Entry point ─────────────────────────────────────────────────
+      main = {
+        resource = if config.caddy.enabled then self.caddyService else self.backendService;
+        requires =
+          allWorkerResources
+          ++ lib.optional (self.backendHpa != null) self.backendHpa
+          ++ lib.optional (self.caddyHpa != null) self.caddyHpa
+          ++ lib.optional (self.redisService != null) self.redisService
+          ++ lib.optional (self.ingress != null) self.ingress
+          ++ lib.optional (self.migrateJob != null) self.migrateJob
+          ++ lib.optional (self.secret != null) self.secret
+          ++ lib.optional (self.secretFilesResource != null) self.secretFilesResource
+          ++ lib.optional (self.frontendService != null) self.frontendService
+          ++ lib.optional (self.pdb != null) self.pdb;
+      };
+    }
+    # Merge dynamic worker parts into the fixpoint so they appear in
+    # allPartResources (needed for closure computation + registry).
+    // queueWorkerParts
+    // cronWorkerParts
+    // customProcessParts;
 }
-# Merge dynamic worker parts into the fixpoint so they appear in
-# allPartResources (needed for closure computation + registry).
-// queueWorkerParts
-// cronWorkerParts
-// customProcessParts

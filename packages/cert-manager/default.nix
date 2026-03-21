@@ -17,46 +17,78 @@
 
 {
   scope,
-  config,
   lib,
 }:
 
-let
-  cfg = scope.defaults config {
-    image = {
-      repository = "quay.io/jetstack/cert-manager-controller";
-      tag = "v1.17.1";
-      pullPolicy = "IfNotPresent";
-    };
-    webhook = {
-      image = {
-        repository = "quay.io/jetstack/cert-manager-webhook";
+{
+  options = {
+    image = lib.mkOption {
+      type = lib.types.anything;
+      default = {
+        repository = "quay.io/jetstack/cert-manager-controller";
         tag = "v1.17.1";
-      };
-      replicaCount = 1;
-    };
-    cainjector = {
-      image = {
-        repository = "quay.io/jetstack/cert-manager-cainjector";
-        tag = "v1.17.1";
-      };
-      replicaCount = 1;
-    };
-    acmesolver = {
-      image = {
-        repository = "quay.io/jetstack/cert-manager-acmesolver";
-        tag = "v1.17.1";
+        pullPolicy = "IfNotPresent";
       };
     };
-    replicaCount = 1;
-    installCRDs = true;
-    resources = null;
-    dns01RecursiveNameservers = "";
-    dns01RecursiveNameserversOnly = false;
-    prometheus = {
-      enabled = false;
+    webhook = lib.mkOption {
+      type = lib.types.anything;
+      default = {
+        image = {
+          repository = "quay.io/jetstack/cert-manager-webhook";
+          tag = "v1.17.1";
+        };
+        replicaCount = 1;
+      };
+    };
+    cainjector = lib.mkOption {
+      type = lib.types.anything;
+      default = {
+        image = {
+          repository = "quay.io/jetstack/cert-manager-cainjector";
+          tag = "v1.17.1";
+        };
+        replicaCount = 1;
+      };
+    };
+    acmesolver = lib.mkOption {
+      type = lib.types.anything;
+      default = {
+        image = {
+          repository = "quay.io/jetstack/cert-manager-acmesolver";
+          tag = "v1.17.1";
+        };
+      };
+    };
+    replicaCount = lib.mkOption {
+      type = lib.types.int;
+      default = 1;
+    };
+    installCRDs = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+    };
+    resources = lib.mkOption {
+      type = lib.types.nullOr lib.types.anything;
+      default = null;
+    };
+    dns01RecursiveNameservers = lib.mkOption {
+      type = lib.types.str;
+      default = "";
+    };
+    dns01RecursiveNameserversOnly = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+    };
+    prometheus = lib.mkOption {
+      type = lib.types.anything;
+      default = {
+        enabled = false;
+      };
     };
   };
+
+  build = { self, config, clusterConfig }:
+let
 
   name = scope.instanceName;
   ns = scope.namespaceName;
@@ -218,7 +250,6 @@ let
     };
 
 in
-self:
 let
 
   # ── Controller cluster-scoped RBAC ─────────────────────────────────
@@ -716,7 +747,7 @@ in {
     name = "${name}";
     labels = controllerLabels;
     spec = {
-      replicas = cfg.replicaCount;
+      replicas = config.replicaCount;
       selector.matchLabels = controllerSelector;
       template = {
         metadata = {
@@ -734,18 +765,18 @@ in {
           containers = [
             ({
               name = "cert-manager-controller";
-              image = "${cfg.image.repository}:${cfg.image.tag}";
-              imagePullPolicy = cfg.image.pullPolicy;
+              image = "${config.image.repository}:${config.image.tag}";
+              imagePullPolicy = config.image.pullPolicy;
               args = [
                 "--v=2"
                 "--cluster-resource-namespace=$(POD_NAMESPACE)"
                 "--leader-election-namespace=$(POD_NAMESPACE)"
-                "--acme-http01-solver-image=${cfg.acmesolver.image.repository}:${cfg.acmesolver.image.tag}"
+                "--acme-http01-solver-image=${config.acmesolver.image.repository}:${config.acmesolver.image.tag}"
               ]
-              ++ lib.optional cfg.dns01RecursiveNameserversOnly "--dns01-recursive-nameservers-only"
+              ++ lib.optional config.dns01RecursiveNameserversOnly "--dns01-recursive-nameservers-only"
               ++ lib.optional (
-                cfg.dns01RecursiveNameservers != ""
-              ) "--dns01-recursive-nameservers=${cfg.dns01RecursiveNameservers}"
+                config.dns01RecursiveNameservers != ""
+              ) "--dns01-recursive-nameservers=${config.dns01RecursiveNameservers}"
               ++ [ "--max-concurrent-challenges=60" ];
               ports = [
                 {
@@ -779,7 +810,7 @@ in {
                 failureThreshold = 8;
               };
             }
-            // lib.optionalAttrs (cfg.resources != null) { resources = cfg.resources; })
+            // lib.optionalAttrs (config.resources != null) { resources = config.resources; })
           ];
           nodeSelector = {
             "kubernetes.io/os" = "linux";
@@ -836,7 +867,7 @@ in {
     name = "${name}-webhook";
     labels = webhookLabels;
     spec = {
-      replicas = cfg.webhook.replicaCount;
+      replicas = config.webhook.replicaCount;
       selector.matchLabels = webhookSelector;
       template = {
         metadata = {
@@ -854,8 +885,8 @@ in {
           containers = [
             {
               name = "cert-manager-webhook";
-              image = "${cfg.webhook.image.repository}:${cfg.webhook.image.tag}";
-              imagePullPolicy = cfg.image.pullPolicy;
+              image = "${config.webhook.image.repository}:${config.webhook.image.tag}";
+              imagePullPolicy = config.image.pullPolicy;
               args = [
                 "--v=2"
                 "--secure-port=10250"
@@ -1047,7 +1078,7 @@ in {
     name = "${name}-cainjector";
     labels = cainjectorLabels;
     spec = {
-      replicas = cfg.cainjector.replicaCount;
+      replicas = config.cainjector.replicaCount;
       selector.matchLabels = cainjectorSelector;
       template = {
         metadata = {
@@ -1065,8 +1096,8 @@ in {
           containers = [
             {
               name = "cert-manager-cainjector";
-              image = "${cfg.cainjector.image.repository}:${cfg.cainjector.image.tag}";
-              imagePullPolicy = cfg.image.pullPolicy;
+              image = "${config.cainjector.image.repository}:${config.cainjector.image.tag}";
+              imagePullPolicy = config.image.pullPolicy;
               args = [
                 "--v=2"
                 "--leader-election-namespace=$(POD_NAMESPACE)"
@@ -1103,7 +1134,7 @@ in {
     resource = self.controllerDeployment;
     requires =
       # CRDs
-      (lib.optionals cfg.installCRDs [
+      (lib.optionals config.installCRDs [
         self.crdCertificates
         self.crdCertificateRequests
         self.crdChallenges
@@ -1128,4 +1159,5 @@ in {
 // webhookClusterRoles
 // webhookRoles
 // cainjectorClusterRoles
-// cainjectorLeaderElection
+// cainjectorLeaderElection;
+}
