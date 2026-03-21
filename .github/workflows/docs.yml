@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'docs/**'
+      - 'demo/**'
       - 'mkdocs.yml'
       - '.github/workflows/docs.yml'
   workflow_dispatch:
@@ -27,6 +28,14 @@ jobs:
           fetch-depth: 0  # full history for git-revision-date plugin
 
       - uses: astral-sh/setup-uv@v6
+
+      - name: Copy demo into docs
+        run: |
+          mkdir -p docs/demo
+          cp demo/demo2.html docs/demo/index.html
+          cp demo/features.html demo/deploy.html docs/demo/
+          # Fix local file links for GitHub Pages (demo2.html → ./ or index.html)
+          sed -i 's|href="demo2.html"|href="./"|g' docs/demo/features.html docs/demo/deploy.html
 
       - name: Build docs
         run: uv run --group docs mkdocs build --strict
