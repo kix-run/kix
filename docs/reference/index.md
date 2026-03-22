@@ -5,3 +5,4 @@ Technical reference for kixpkgs APIs, contracts, and configuration. These pages 
 | Reference | Covers |
 |-----------|--------|
 | [Package Contract](package-contract.md) | `mkChartModule` interface and package structure |
+| [mkImport API](mkimport-api.md) | `mkImport`, `mkImportResource`, and import evaluation |

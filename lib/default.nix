@@ -24,6 +24,7 @@ in
   inherit (k8s)
     clusterScoped
     mkResource
+    mkImportResource
     mkPackageInstance
     mkActivation
     attachCtxDeep
@@ -35,12 +36,15 @@ in
 
   # --- Cluster evaluation + DI (eval.nix) ---
   inherit (eval)
+    mkImport
+    mkImportScope
     mkScope
     mkNamespace
     buildResolutionIndex
     resolveArg
     kixCallPackage
     evaluateInstance
+    evaluateImportInstance
     buildCluster
     ;
 

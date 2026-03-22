@@ -69,6 +69,7 @@
             example = import ./clusters/example.nix { inherit kix; packages = packages'; };
             full = import ./clusters/test-full.nix { inherit kix; packages = packages'; };
             helm = import ./clusters/test-helm.nix { inherit kix; };
+            example-import = import ./clusters/example-import.nix { inherit kix; packages = packages'; };
             nw1 = import ./clusters/nw1.nix { inherit kix; packages = packages'; };
           };
 

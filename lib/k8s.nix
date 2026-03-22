@@ -37,6 +37,59 @@ rec {
   extractStoreHash = path:
     builtins.substring 11 32 (builtins.unsafeDiscardStringContext (toString path));
 
+  # Lightweight resource reference for import mode.
+  # Computes out (name, fqdn, selector, outputs) without creating store paths
+  # or manifests. Used as a drop-in replacement for mkResource when evaluating
+  # imported packages — the package code is identical, only scope.mkResource differs.
+  mkImportResource =
+    {
+      name,
+      namespace,
+      apiVersion ? "",
+      kind ? "",
+      spec ? { },
+      data ? { },
+      stringData ? { },
+      labels ? { },
+      annotations ? { },
+      outputs ? { },
+      requires ? [ ],
+      extraDeps ? [ ],
+      extra ? { },
+    }:
+    let
+      isClusterScoped = builtins.isAttrs namespace && (namespace._type or "") == "k8s-cluster-scoped";
+      isNsResource = builtins.isAttrs namespace && namespace ? outPath;
+      nsKey =
+        if isClusterScoped then "_cluster_"
+        else if isNsResource then namespace.name or "ns"
+        else namespace;
+
+      autoSelector =
+        if spec ? selector.matchLabels then
+          spec.selector.matchLabels
+        else if labels != { } then
+          labels
+        else null;
+
+      autoOut = {
+        inherit name;
+        fqdn =
+          if isClusterScoped then name
+          else "${name}.${nsKey}.svc.cluster.local";
+      } // lib.optionalAttrs (autoSelector != null) {
+        selector = autoSelector;
+      };
+
+      userOut = lib.mapAttrs (_: v: toString v) outputs;
+    in
+    {
+      _type = "k8s-resource-ref";
+      inherit name namespace kind apiVersion;
+      out = autoOut // userOut;
+      requires = [ ];
+    };
+
   # Creates a K8s resource as a content-addressed store path.
   #
   # namespace can be:

@@ -16,3 +16,7 @@ devenv.local.yaml
 
 # mkdocs
 site/
+
+videos/
+charts-to-migrate/
+__pycache__/
