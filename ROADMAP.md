@@ -163,6 +163,7 @@
 - [ ] Local dev loop — Tilt-inspired watch + rebuild + deploy cycle for fast inner-loop iteration, distinct from GitOps
 - [ ] Potentially trivial air-gapped environments
 - [ ] Replacing etcd with a nix store (very speculative)
+- [ ] hardware.nix type file to describe what is raw available and derive helpers, storage, etc etc
 
 ### AI & developer experience
 - [ ] AI skills: recommended in-kix actions on warnings/errors; skill to read changelogs and derive warnings and checks
