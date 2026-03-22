@@ -263,7 +263,8 @@ in
 
   in
   {
-    helmChartConfig = scope.mkClusterResource {
+    # HelmChartConfig is a namespaced resource (must be in kube-system).
+    helmChartConfig = scope.mkResource {
       apiVersion = "helm.cattle.io/v1";
       kind = "HelmChartConfig";
       name = "rke2-cilium";
