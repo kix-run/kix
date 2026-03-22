@@ -14,7 +14,6 @@
 - [ ] @luca Post-eval validation — catch errors at build time, not deploy time
 - [ ] @luca Auto-inject dependencies (e.g. valkey for immich) — the "just make it run" experience where pulling in an app auto-enables what it needs
   - (pot nonsense:) Two-tier model: auto-enable if a dependency exists in the cluster; explicit enable triggers full transitive pull-in of everything needed
-- [ ] OpenAPI schema validation at build time — K8s resources have a known openAPI spec, verify against it during eval
 - [ ] v2_discussions/11 → injecting storage, certs, and other infra items from the cluster graph (different package types?)
 - [ ] Use "already existing" cluster elements (e.g. "this secret already exists in the cluster") — kix deploy should verify
 - [ ] Default metadata scoping — which resources should global metadata apply to? Not higher-order resources like Deployments/Services, but what about CRDs?
@@ -23,6 +22,7 @@
 - [ ] Higher-level abstractions must "imprint" on resources — all relevant information from higher-level logic should be visible on the underlying K8s resource for auditability and tooling
 - [ ] Dynamic duplicate dependencies — the same resource (e.g. a second CoreDNS) can be pulled in twice; deduplication is the consumer's responsibility, not the creator's
 - [ ] mkManifest pre-creation hook as escape hatch — global function hook for raw access to any resource before it becomes a manifest
+- [ ] CRDs, creation, management, verification, import
 
 ### Validation
 
@@ -89,6 +89,21 @@
 - [ ] Full CoreDNS binary building
 - [ ] selector based on "identity" to say "i want this and exactly this resource"
 
+## Post eval validation (kix validate)
+
+- [ ] OpenAPI schema validation at build time — K8s resources have a known openAPI spec, verify against it during eval
+
+
+## Drift detection & diffing (kix diff)
+
+- [x] kix-dump — normalize and dump live cluster state
+- [x] kix-diff — compare kix output against dump (summary, renames, modified, identical)
+- [ ] Diff on instance level (grouped by package instance)
+- [ ] Diff on resource level (individual resource changes)
+- [ ] Warnings when PVCs change or major versions change — hint on the package definition
+- [ ] Live-cluster sanity checks (resource limits, etc.)
+- [ ] Content-hash-based drift detection — recompute hash and compare against live state, contrast with nix store evaluation
+
 ## Deployment & reconciliation (kix deploy)
 
 - [ ] Wave rollouts — dependency graph fully describes deployment order; deploy in correct waves. Note: dependencies describe *order* but NOT readiness/liveness — these are separate concerns
@@ -102,16 +117,6 @@
 - [ ] Rollout pattern as a developer choice — no magical "always works" pattern due to state; stateless deps can duplicate, stateful deps need careful management
   - The system should ideally auto-classify dependencies by statefulness, not just surface the choice
 - [ ] Consistent cluster state guarantee — a fully-evaluated, locked cluster state means the entire set of resources is known to be self-consistent. No "helm installed something with a different env var" surprises
-
-## Drift detection & diffing (kix diff)
-
-- [x] kix-dump — normalize and dump live cluster state
-- [x] kix-diff — compare kix output against dump (summary, renames, modified, identical)
-- [ ] Diff on instance level (grouped by package instance)
-- [ ] Diff on resource level (individual resource changes)
-- [ ] Warnings when PVCs change or major versions change — hint on the package definition
-- [ ] Live-cluster sanity checks (resource limits, etc.)
-- [ ] Content-hash-based drift detection — recompute hash and compare against live state, contrast with nix store evaluation
 
 ## Graph & observability
 
