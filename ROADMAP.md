@@ -14,6 +14,9 @@
 - [ ] @luca Post-eval validation — catch errors at build time, not deploy time
 - [ ] @luca Auto-inject dependencies (e.g. valkey for immich) — the "just make it run" experience where pulling in an app auto-enables what it needs
   - (pot nonsense:) Two-tier model: auto-enable if a dependency exists in the cluster; explicit enable triggers full transitive pull-in of everything needed
+  - Packages can declare **default aliases** alongside their options and builders (e.g. cert-manager aliases `clusterissuer`), so dependencies can resolve against general capabilities, not just package names
+  - The available package list for auto-resolution must live under a **dedicated config path** to control what the resolver can pull from
+  - **Resolution order** (fixpoint): (1) match concrete instance already defined in the cluster, (2) if not found, pull in the package by name, (3) only then fall back to alias lookup — explicit always beats alias
 - [ ] v2_discussions/11 → injecting storage, certs, and other infra items from the cluster graph (different package types?)
 - [ ] Use "already existing" cluster elements (e.g. "this secret already exists in the cluster") — kix deploy should verify
 - [ ] Default metadata scoping — which resources should global metadata apply to? Not higher-order resources like Deployments/Services, but what about CRDs?
