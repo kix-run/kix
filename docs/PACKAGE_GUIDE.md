@@ -589,7 +589,7 @@ tracks your package as depending on postgres — no manual wiring needed.
 If the service your package depends on already exists in the cluster but isn't
 managed by kix, it can be **imported** using `mkImport`. The imported instance
 participates in DI resolution like any other instance — your package code
-doesn't change at all. See the [Import Existing Resources](../how-to/import-existing-resources.md)
+doesn't change at all. See the [Import Existing Resources](how-to/import-existing-resources.md)
 guide for details.
 
 ---
