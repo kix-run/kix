@@ -117,7 +117,7 @@ in
         throw "immich: redis.hostname must be set or a valkey dependency must be available";
 
     # ML service URL (internal reference via service FQDN).
-    mlUrl = "http://${self.mlService.fqdn}:3003";
+    mlUrl = "http://${self.mlService.out.fqdn}:3003";
 
     hasConfig = config.configuration != null;
 
@@ -223,7 +223,7 @@ in
       name = "${name}-server";
       spec = {
         type = "ClusterIP";
-        selector = scope.selectWorkload self.serverDeployment;
+        selector = self.serverDeployment.out.selector;
         ports = [
           { name = "http"; port = 2283; targetPort = "http"; protocol = "TCP"; }
         ]
@@ -235,6 +235,10 @@ in
       outputs = {
         port = "2283";
       };
+      requires =
+        lib.optional (self.ingress != null) self.ingress
+        ++ lib.optional (self.serviceMonitor != null) self.serviceMonitor
+        ++ lib.optional (self.mlCachePvc != null) self.mlCachePvc;
     };
 
     # --- Machine Learning Deployment ---
@@ -290,7 +294,7 @@ in
                 volumes = [
                   (if config.machineLearning.persistence.enabled then {
                     name = "cache";
-                    persistentVolumeClaim.claimName = "${name}-ml-cache";
+                    persistentVolumeClaim.claimName = self.mlCachePvc.out.name;
                   } else {
                     name = "cache";
                     emptyDir = { };
@@ -329,7 +333,7 @@ in
           name = "${name}-machine-learning";
           spec = {
             type = "ClusterIP";
-            selector = scope.selectWorkload self.mlDeployment;
+            selector = self.mlDeployment.out.selector;
             ports = [
               { name = "http"; port = 3003; targetPort = "http"; protocol = "TCP"; }
             ];
@@ -391,7 +395,7 @@ in
           name = "${name}";
           spec = {
             namespaceSelector.matchNames = [ scope.namespaceName ];
-            selector.matchLabels = scope.selectByLabels self.serverService;
+            selector.matchLabels = self.serverService.out.selector;
             endpoints = [
               { port = "metrics-api"; scheme = "http"; }
               { port = "metrics-ms"; scheme = "http"; }
@@ -402,24 +406,6 @@ in
         null;
 
     # --- Entry point ---
-    main = scope.mkResource {
-      apiVersion = "v1";
-      kind = "Service";
-      name = "${name}";
-      spec = {
-        type = "ClusterIP";
-        selector = scope.selectWorkload self.serverDeployment;
-        ports = [
-          { name = "http"; port = 2283; targetPort = "http"; protocol = "TCP"; }
-        ];
-      };
-      outputs = {
-        port = "2283";
-      };
-      requires =
-        lib.optional (self.ingress != null) self.ingress
-        ++ lib.optional (self.serviceMonitor != null) self.serviceMonitor
-        ++ lib.optional (self.mlCachePvc != null) self.mlCachePvc;
-    };
+    main = self.serverService;
   };
 }

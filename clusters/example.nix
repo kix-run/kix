@@ -19,6 +19,7 @@ kix.buildCluster {
         kube-system = { };
         cache = { };
         cert-manager = { };
+        immich = { };
       };
 
       instances = {
@@ -110,6 +111,17 @@ kix.buildCluster {
           cert-manager = {
             package = packages.cert-manager;
             packageType = "cert-manager";
+          };
+        };
+
+        immich = {
+          immich = {
+            package = packages.immich;
+            packageType = "immich";
+            config = {
+              redis.hostname = "valkey.cache.svc.cluster.local";
+              library.existingClaim = "immich-library";
+            };
           };
         };
       };
