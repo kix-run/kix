@@ -48,6 +48,11 @@ in
       type = lib.types.str;
       default = "ClusterIP";
     };
+    clusterIP = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = "Explicit ClusterIP for the kube-dns service";
+    };
     serviceAccount = lib.mkOption {
       type = lib.types.attrsOf lib.types.anything;
       default = {
@@ -325,6 +330,8 @@ in
           targetPort = 53;
         };
         type = config.serviceType;
+      } // lib.optionalAttrs (config.clusterIP != null) {
+        clusterIP = config.clusterIP;
       };
       requires =
         lib.optional (self.metricsService != null) self.metricsService

@@ -25,6 +25,25 @@
         "aarch64-darwin"
       ];
 
+      # Expose kix library + packages for external flake consumers.
+      # Usage: kixpkgs.lib.forPkgs { inherit pkgs lib; }
+      #   => { kix, packages, mkAnnotatedManifests }
+      flake.lib.forPkgs = { pkgs, lib }:
+        let
+          kix = import ./lib { inherit pkgs lib; };
+          entries = builtins.readDir ./packages;
+          dirs = lib.filterAttrs (_: type: type == "directory") entries;
+          packages = lib.mapAttrs (name: _: import ./packages/${name}) dirs;
+          python3 = pkgs.python3.withPackages (p: [ p.pyyaml ]);
+          mkAnnotatedManifests = cluster:
+            pkgs.runCommand "k8s-manifests-${cluster.name}" {
+              exportReferencesGraph = [ "closure" cluster.activation ];
+              nativeBuildInputs = [ python3 ];
+            } ''
+              PYTHONPATH=${./pipeline} python3 ${./pipeline/annotate.py} closure ${cluster.activation} $out
+            '';
+        in { inherit kix packages mkAnnotatedManifests; };
+
       perSystem =
         { pkgs, ... }:
         let
