@@ -93,6 +93,9 @@
     main = {
       resource = self.lbs1-pool1-2x;
       requires = classList;
+      out = {
+        storageClassName = self.lbs1-pool1-2x.out.name;
+      };
     };
   };
 }

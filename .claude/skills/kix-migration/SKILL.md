@@ -76,27 +76,36 @@ Focus on the **Modified** section. Each entry shows exactly which fields differ 
 
 ## Package Anatomy
 
-Every package is a function `{ scope, config, lib }: ...` that returns a self-referential attrset.
+Every package is a function `{ scope, lib, ...deps }: ...` that returns `{ meta?, options, build }`.
 
 ```nix
-{ scope, config, lib }:
-let
-  cfg = scope.defaults config {
-    # Default config — overridable from cluster definition
-    image.tag = "v1.0.0";
-    replicaCount = 1;
+{ scope, lib }:
+{
+  # Optional: package metadata for lifecycle and scoping rules
+  meta = {
+    lifecycle = "stateless";  # "stateless" (default) | "stateful"
+    scope = "cluster";        # "cluster" (default) | "namespace"
+    description = "My package";
+    maintainer = "team-name";
   };
-in
-self: {
-  # Resources as attrs — names become the keys used for `self.` references
-  serviceAccount = scope.mkResource { ... };
-  deployment = scope.mkResource { ... };
-  clusterRole = scope.mkClusterResource { ... };
 
-  # main defines the entry point and dependency graph
-  main = {
-    resource = self.deployment;
-    requires = [ self.serviceAccount self.clusterRole ];
+  options = {
+    image = lib.mkOption { ... };
+    replicaCount = lib.mkOption { type = lib.types.int; default = 1; };
+  };
+
+  build = { self, config, clusterConfig }:
+  {
+    # Resources as attrs — names become the keys used for `self.` references
+    serviceAccount = scope.mkResource { ... };
+    deployment = scope.mkResource { ... };
+    clusterRole = scope.mkClusterResource { ... };
+
+    # main defines the entry point and dependency graph
+    main = {
+      resource = self.deployment;
+      requires = [ self.serviceAccount self.clusterRole ];
+    };
   };
 }
 ```
@@ -267,6 +276,108 @@ my-helm-app = {
   };
 };
 ```
+
+### Dependency Injection (DI)
+
+Packages declare dependencies as function args. Hard deps are required args, optional features get `? null`:
+
+```nix
+{ scope, lib, valkey, postgres, storage, machineLearning ? null, ingressNginx ? null }:
+```
+
+DI resolution finds instances by matching arg names to instance names or `aliases` in the cluster definition. Same-namespace matches first, then cluster-wide (must be unambiguous).
+
+**Infrastructure DI patterns:**
+
+| Pattern | Example | When to use |
+|---------|---------|-------------|
+| Plain value on `out` | `storageClasses.out.storageClassName`, `ingressNginx.out.ingressClassName` | Single field the consumer needs |
+| Transformer on `main.out` | `clusterIssuer.out.withCert` — modifies mkResource args | Adding annotations/fields the consumer would forget |
+| Builder on parts | `clusterIssuer.mkCertificate { name, hosts, secretName }` | Creating CRD instances for the consumer |
+
+### Storage DI
+
+Persistent storage uses first-class PVC instances, not config-based `existingClaim` strings.
+
+**The dependency chain:** `app → PVC → StorageClass`
+
+```nix
+# Cluster definition:
+instances = {
+  kube-system = {
+    storage-classes = {
+      package = packages.storage-classes;
+      aliases = [ "storageClasses" ];
+    };
+  };
+  my-app = {
+    storage = {
+      package = packages."persistent-volume-claim";
+      config = {
+        size = "500Gi";
+        accessModes = [ "ReadWriteOnce" ];
+      };
+    };
+    app = {
+      package = packages.my-app;
+      # storage resolves via DI to the PVC instance above
+    };
+  };
+};
+```
+
+**In the consuming package:**
+
+```nix
+{ scope, lib, storage }:  # storage is a hard dep
+# ...
+deployment = scope.mkResource {
+  # ...
+  spec.template.spec = {
+    volumes = [{
+      name = "data";
+      persistentVolumeClaim.claimName = storage.out.name;
+    }];
+    containers = [{
+      # ...
+      volumeMounts = [{ name = "data"; mountPath = "/data"; }];
+    }];
+  };
+};
+```
+
+**Why PVCs are instances, not internal resources:**
+- The cluster operator owns storage (size, class, backup) — not the app
+- PVCs outlive apps — removing/upgrading the app doesn't touch storage
+- Cross-namespace safety: `meta.scope = "namespace"` prevents mounting PVCs across namespaces (build-time error)
+- Visible in the cluster definition — no hidden state
+
+**Consumer-side validation:** Packages can validate their DI deps using `builtins.trace` warnings:
+
+```nix
+_storageWarning =
+  if storageSizeGi < 50 then
+    builtins.trace "warning: recommended minimum is 50Gi"
+      null
+  else null;
+```
+
+### Package Meta
+
+Packages can declare a `meta` attrset for lifecycle and scoping rules:
+
+```nix
+meta = {
+  lifecycle = "stateful";   # "stateful" triggers kix-diff protection rules
+  scope = "namespace";      # "namespace" prevents cross-namespace DI references
+  description = "...";
+  maintainer = "team-name";
+};
+```
+
+- `lifecycle = "stateful"` — flags the package for special kix-diff treatment (PVC deletion = error, not just warning)
+- `scope = "namespace"` — DI resolution errors if a consumer in a different namespace depends on this package
+- Both are enforced by `lib/eval.nix` at build time
 
 ## Migration Tips
 

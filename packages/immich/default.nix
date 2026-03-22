@@ -7,6 +7,7 @@
 # Dependencies:
 #   valkey              — required, job queue backend
 #   postgres            — required, database (needs pgvecto.rs extension)
+#   storage             — required, persistent volume for photo library
 #   machineLearning     — optional, ML inference service
 #   ingressNginx        — optional, provides IngressClass for ingress
 #   clusterIssuer       — optional, provides withCert transformer for TLS
@@ -21,6 +22,7 @@
   lib,
   valkey,
   postgres,
+  storage,
   machineLearning ? null,
   ingressNginx ? null,
   clusterIssuer ? null,
@@ -47,12 +49,6 @@ in
       type = lib.types.attrsOf lib.types.str;
       default = { };
       description = "Extra environment variables for the server container";
-    };
-    library = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        existingClaim = null;
-      };
     };
     configuration = lib.mkOption {
       type = lib.types.nullOr lib.types.anything;
@@ -88,7 +84,28 @@ in
         "http://${machineLearning.out.fqdn}:${machineLearning.out.port}"
       else
         null;
+
+    # Storage validation — warn if PVC is undersized for a photo library
+    parseSizeGi = s:
+      let
+        str = builtins.unsafeDiscardStringContext s;
+        matchTi = builtins.match "([0-9]+)Ti" str;
+        matchGi = builtins.match "([0-9]+)Gi" str;
+        matchMi = builtins.match "([0-9]+)Mi" str;
+      in
+      if matchTi != null then (builtins.fromJSON (builtins.head matchTi)) * 1024
+      else if matchGi != null then builtins.fromJSON (builtins.head matchGi)
+      else if matchMi != null then (builtins.fromJSON (builtins.head matchMi)) / 1024
+      else null;
+
+    storageSizeGi = parseSizeGi storage.out.size;
+    _storageWarning =
+      if storageSizeGi != null && storageSizeGi < 50 then
+        builtins.trace "warning: immich '${name}' library storage is ${builtins.unsafeDiscardStringContext storage.out.size} — recommended minimum is 50Gi for photo libraries"
+          null
+      else null;
   in
+  builtins.seq _storageWarning
   {
 
     # --- Optional: Immich configuration ConfigMap ---
@@ -165,20 +182,24 @@ in
                   timeoutSeconds = 1;
                   failureThreshold = 30;
                 };
-                volumeMounts = lib.optional (config.library.existingClaim != null) {
-                  name = "library";
-                  mountPath = "/usr/src/app/upload";
-                }
+                volumeMounts = [
+                  {
+                    name = "library";
+                    mountPath = "/usr/src/app/upload";
+                  }
+                ]
                 ++ lib.optional hasConfig {
                   name = "config";
                   mountPath = "/config";
                 };
               })
             ];
-            volumes = lib.optional (config.library.existingClaim != null) {
-              name = "library";
-              persistentVolumeClaim.claimName = config.library.existingClaim;
-            }
+            volumes = [
+              {
+                name = "library";
+                persistentVolumeClaim.claimName = storage.out.name;
+              }
+            ]
             ++ lib.optional hasConfig {
               name = "config";
               configMap.name = self.configMap.out.name;

@@ -17,6 +17,14 @@ kix.buildCluster {
       };
 
       instances = {
+        # Storage infrastructure — managed by kix even when other deps are imported.
+        kube-system = {
+          storage-classes = {
+            package = packages.storage-classes;
+            aliases = [ "storageClasses" ];
+          };
+        };
+
         # Valkey exists in the cluster but is managed externally.
         # mkImport with `from` runs the valkey package build in import mode
         # (lightweight mkResource) to derive out.name, out.fqdn, out.port.
@@ -39,12 +47,19 @@ kix.buildCluster {
         # Immich namespace: server + ML worker.
         # valkey resolves via DI from the cache namespace (cluster-wide).
         # postgres resolves via DI from the database namespace (cluster-wide).
+        # storage resolves via DI from the same namespace (PVC).
         # machineLearning resolves via DI from the same namespace.
         immich = {
+          storage = {
+            package = packages."persistent-volume-claim";
+            config = {
+              size = "500Gi";
+            };
+          };
+
           immich = {
             package = packages.immich;
             config = {
-              library.existingClaim = "immich-library";
               # DB auth provided via env (secrets):
               # env.DB_USERNAME = "immich";
               # env.DB_PASSWORD = "...";  # use external secret management

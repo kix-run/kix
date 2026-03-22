@@ -17,8 +17,8 @@
   - Packages can declare **default aliases** alongside their options and builders (e.g. cert-manager aliases `clusterissuer`), so dependencies can resolve against general capabilities, not just package names
   - The available package list for auto-resolution must live under a **dedicated config path** to control what the resolver can pull from
   - **Resolution order** (fixpoint): (1) match concrete instance already defined in the cluster, (2) if not found, pull in the package by name, (3) only then fall back to alias lookup — explicit always beats alias
-- [ ] v2_discussions/11 → injecting storage, certs, and other infra items from the cluster graph (different package types?)
-  - Storage DI: packages should declare persistent storage needs via DI rather than `existingClaim` config. Needs design: how does a storage provider expose PVC creation? Transformer pattern (`withStorage`) or builder (`mkPVC`)? How does the cluster operator control storage class, size limits, backup policy?
+- [x] v2_discussions/11 → injecting storage, certs, and other infra items from the cluster graph (different package types?)
+  - Storage DI: PVCs are first-class instances in the cluster definition (packages/persistent-volume-claim). storage-classes exposes `out.storageClassName`. Consuming packages (e.g. immich) take `storage` as a hard DI dep, mount via `storage.out.name`. Package `meta` (lifecycle, scope) enables cross-namespace validation and kix-diff protection.
 - [ ] Use "already existing" cluster elements (e.g. "this secret already exists in the cluster") — kix deploy should verify
 - [ ] Default metadata scoping — which resources should global metadata apply to? Not higher-order resources like Deployments/Services, but what about CRDs?
 - [ ] Non-manifest side effects — namespace creation, secrets, and images all require API calls outside pure manifest generation; needs a clear model
@@ -74,7 +74,7 @@
 - [ ] Build-time error on illegal configurations (demo: show an illegal action failing at eval time)
 - [ ] Compatibility checks on packages (incompatible k8s version, incompatible with prometheus < 4.5.23, etc.)
 - [ ] Sanity checks on namespace resource quotas and similar
-- [ ] Stateful resource discovery — flag when something "special" is touched (PVCs, databases); knowing this early is immensely valuable
+- [x] Stateful resource discovery — package `meta.lifecycle = "stateful"` flags stateful packages; `meta.scope = "namespace"` prevents cross-namespace DI for namespace-bound resources (PVCs). Consumer-side validation (e.g. immich warns if PVC < 50Gi) via `builtins.trace` in build.
 - [ ] Compatibility matrix — four distinct failure phases: build, deploy, health, application. Need to know *when* things will fail, not just *if*
 - [ ] Encodable "known issues" — broken side effects should be expressible in code so a problem can't recur; capturing institutional knowledge about failure modes directly in the DSL
 - [ ] Templating parity — ensure the DSL can express everything a Helm template can, as a migration enabler
@@ -87,7 +87,7 @@
 - [x] RBAC DSL with intent-based verbs
 - [ ] HPA as dependency / composition — auto-wires scaling to the right target
 - [ ] Pipe-friendly resource composition — `binary |> as deployment |> expose { port = 9090; }` — kix as *the* platform engineering language, replacing the wild west of ansible/helm/scripts
-- [ ] Builder/transformer placement — should package builders (`withCert`, `mkCertificate`, `withStorageClass`) live on `out` (via `main.out`) or on parts directly? Current: `main.out` for DI-visible transforms, parts for package-internal helpers like `mkCertificate`. Needs a clear convention as more infra packages expose builders
+- [ ] Builder/transformer placement — should package builders (`withCert`, `mkCertificate`) live on `out` (via `main.out`) or on parts directly? Current: `main.out` for DI-visible transforms, parts for package-internal helpers like `mkCertificate`. Storage uses plain values (`out.storageClassName`) rather than transformers. Needs a clear convention as more infra packages expose builders
 - [ ] Port wiring logic — carry port information up through container → pod → service → ingress; prevent wiring things that don't have a route
 - [ ] Functional composition as correctness — "this service wraps this app, this HPA wraps this app, you figure out the rest"; correct wiring emerges from composition, not from template deduplication
 - [ ] Better CoreDNS corefile handling

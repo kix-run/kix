@@ -535,13 +535,47 @@ rec {
           ;
       };
 
-      # 1. Call the package function with DI deps — returns { options, build }
+      # 1. Call the package function with DI deps — returns { meta?, options, build }
       raw = kixCallPackage {
         packageFn = instCfg.package;
         inherit scope resolutionIndex allInstances;
         deps = instCfg.deps;
         namespace = namespaceName;
       };
+
+      # Package-declared metadata (lifecycle, scope, etc.)
+      packageMeta = raw.meta or {};
+
+      # Cross-namespace scope validation: if a dependency declares
+      # meta.scope = "namespace", it cannot be referenced cross-namespace
+      # (e.g. PVCs must be in the same namespace as the consuming pod).
+      _crossNsCheck =
+        let
+          fnArgs = builtins.functionArgs instCfg.package;
+          depArgNames = builtins.attrNames (removeAttrs fnArgs [ "scope" "lib" ]);
+          deps = instCfg.deps or {};
+        in
+        builtins.foldl' (acc: argName:
+          let
+            resolution = resolveArg {
+              inherit argName resolutionIndex;
+              requesterNamespace = namespaceName;
+              hasDefault = fnArgs.${argName} or false;
+              explicitOverride = deps.${argName} or null;
+            };
+          in
+          if resolution.found
+             && !(resolution.direct or false)
+             && (resolution.namespace or namespaceName) != namespaceName then
+            let
+              dep = allInstances.${resolution.namespace}.${resolution.instanceName};
+              depScope = (dep._meta.packageMeta or {}).scope or "cluster";
+            in
+            if depScope == "namespace" then
+              throw "instance '${instanceName}' (namespace '${namespaceName}') depends on '${resolution.instanceName}' (namespace '${resolution.namespace}') which declares meta.scope = \"namespace\" — cross-namespace reference not allowed"
+            else acc
+          else acc
+        ) null depArgNames;
 
       # 2. Evaluate typed config: package options + instance config
       evaluatedConfig = evaluateInstanceConfig {
@@ -863,7 +897,7 @@ rec {
       ) null orphanedWarnings;
 
     in
-    builtins.seq _w1 (builtins.seq _w2 (builtins.seq _w3 (
+    builtins.seq _crossNsCheck (builtins.seq _w1 (builtins.seq _w2 (builtins.seq _w3 (
     parts
     // {
       _type = "k8s-instance";
@@ -878,8 +912,9 @@ rec {
         inherit instanceName namespaceName;
         namespace = namespaceName;
         aliases = instCfg.aliases or [ ];
+        inherit packageMeta;
       };
-    })));
+    }))));
 
   # The top-level cluster builder.
   # Uses lib.evalModules to compose cluster definitions from modules.

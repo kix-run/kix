@@ -24,6 +24,11 @@ kix.buildCluster {
 
       instances = {
         kube-system = {
+          storage-classes = {
+            package = packages.storage-classes;
+            aliases = [ "storageClasses" ];
+          };
+
           coredns = {
             package = packages.coredns;
 
@@ -125,12 +130,15 @@ kix.buildCluster {
             };
           };
 
+          storage = {
+            package = packages."persistent-volume-claim";
+            config = {
+              size = "500Gi";
+            };
+          };
+
           immich = {
             package = packages.immich;
-
-            config = {
-              library.existingClaim = "immich-library";
-            };
           };
 
           machineLearning = {
