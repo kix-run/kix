@@ -115,13 +115,27 @@ kix.buildCluster {
         };
 
         immich = {
+          postgres = {
+            package = packages."stackgres-cluster";
+            packageType = "postgres";
+            config = {
+              postgres.extensions = [
+                { name = "vectors"; publisher = "tensorchord"; version = "0.3.0"; }
+              ];
+            };
+          };
+
           immich = {
             package = packages.immich;
             packageType = "immich";
             config = {
-              redis.hostname = "valkey.cache.svc.cluster.local";
               library.existingClaim = "immich-library";
             };
+          };
+
+          machineLearning = {
+            package = packages."immich-machine-learning";
+            packageType = "machineLearning";
           };
         };
       };

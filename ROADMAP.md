@@ -18,6 +18,7 @@
   - The available package list for auto-resolution must live under a **dedicated config path** to control what the resolver can pull from
   - **Resolution order** (fixpoint): (1) match concrete instance already defined in the cluster, (2) if not found, pull in the package by name, (3) only then fall back to alias lookup — explicit always beats alias
 - [ ] v2_discussions/11 → injecting storage, certs, and other infra items from the cluster graph (different package types?)
+  - Storage DI: packages should declare persistent storage needs via DI rather than `existingClaim` config. Needs design: how does a storage provider expose PVC creation? Transformer pattern (`withStorage`) or builder (`mkPVC`)? How does the cluster operator control storage class, size limits, backup policy?
 - [ ] Use "already existing" cluster elements (e.g. "this secret already exists in the cluster") — kix deploy should verify
 - [ ] Default metadata scoping — which resources should global metadata apply to? Not higher-order resources like Deployments/Services, but what about CRDs?
 - [ ] Non-manifest side effects — namespace creation, secrets, and images all require API calls outside pure manifest generation; needs a clear model
@@ -86,6 +87,7 @@
 - [x] RBAC DSL with intent-based verbs
 - [ ] HPA as dependency / composition — auto-wires scaling to the right target
 - [ ] Pipe-friendly resource composition — `binary |> as deployment |> expose { port = 9090; }` — kix as *the* platform engineering language, replacing the wild west of ansible/helm/scripts
+- [ ] Builder/transformer placement — should package builders (`withCert`, `mkCertificate`, `withStorageClass`) live on `out` (via `main.out`) or on parts directly? Current: `main.out` for DI-visible transforms, parts for package-internal helpers like `mkCertificate`. Needs a clear convention as more infra packages expose builders
 - [ ] Port wiring logic — carry port information up through container → pod → service → ingress; prevent wiring things that don't have a route
 - [ ] Functional composition as correctness — "this service wraps this app, this HPA wraps this app, you figure out the rest"; correct wiring emerges from composition, not from template deduplication
 - [ ] Better CoreDNS corefile handling

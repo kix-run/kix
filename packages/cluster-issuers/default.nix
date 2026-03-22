@@ -85,9 +85,39 @@
     in
     issuerResources
     // {
+      # mkCertificate: creates a cert-manager Certificate CR.
+      # For non-Ingress TLS (gRPC, internal services, mTLS).
+      mkCertificate = { name, hosts, secretName, duration ? null, renewBefore ? null }:
+        scope.mkResource {
+          apiVersion = "cert-manager.io/v1";
+          kind = "Certificate";
+          inherit name;
+          spec = {
+            secretName = secretName;
+            issuerRef = {
+              name = mainResource.out.name;
+              kind = "ClusterIssuer";
+            };
+            dnsNames = if builtins.isList hosts then hosts else [ hosts ];
+          }
+          // lib.optionalAttrs (duration != null) { inherit duration; }
+          // lib.optionalAttrs (renewBefore != null) { inherit renewBefore; };
+        };
+
       main = {
         resource = mainResource;
         requires = lib.attrValues otherResources;
+
+        # Package-level out extensions — exposed via DI as cluster-issuer.out.*
+        out = {
+          # Args transformer: adds cert-manager annotation to mkResource input args.
+          # Pipe-friendly: `scope.mkResource ({ ... } |> clusterIssuer.out.withCert)`
+          withCert = args: args // {
+            annotations = (args.annotations or {}) // {
+              "cert-manager.io/cluster-issuer" = mainResource.out.name;
+            };
+          };
+        };
       };
     };
 }

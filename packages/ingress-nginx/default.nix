@@ -375,6 +375,11 @@ in
     };
 
     # --- Entry point ---
-    main = self.service;
+    main = {
+      resource = self.service;
+      out = {
+        ingressClassName = self.ingressClass.out.name;
+      };
+    };
   } // clusterRoles // nsRoles;
 }

@@ -33,6 +33,14 @@ rec {
       inherit instanceName namespaceName;
       namespace = namespaceResource;
 
+      # Standard selector labels for workload resources (Deployments, StatefulSets).
+      # Packages use this directly or extend it for multi-component cases:
+      #   scope.selectorLabels // { "app.kubernetes.io/component" = "worker"; }
+      selectorLabels = {
+        "app.kubernetes.io/name" = instanceName;
+        "app.kubernetes.io/instance" = instanceName;
+      };
+
       mkResource =
         {
           labels ? { },
@@ -580,6 +588,10 @@ rec {
 
       packageRequires = if rawMain ? resource then rawMain.requires or [ ] else [ ];
 
+      # Package-level out extensions (functions, complex types beyond string outputs).
+      # Merged on top of the main resource's auto-derived out.
+      packageOut = if rawMain ? resource then rawMain.out or { } else { };
+
       # --- Forward closure computation ---
       # Follows both store-path references in manifests AND explicit `requires`.
       # `requires` are structural forward deps (SA needed by Deployment, etc.).
@@ -864,7 +876,7 @@ rec {
       # The PackageInstance is the new closure root — it references
       # mainRes, inverse deps, and package requires via annotations.
       main = packageInstance;
-      out = mainRes.out or { };
+      out = (mainRes.out or { }) // packageOut;
 
       _meta = {
         inherit instanceName namespaceName packageType;

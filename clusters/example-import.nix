@@ -28,16 +28,33 @@ kix.buildCluster {
           };
         };
 
-        # Immich is fully managed by kix.
-        # Its `valkey` dependency resolves via DI to the import above,
-        # getting out.fqdn for REDIS_HOSTNAME automatically.
+        # Postgres managed externally (e.g. StackGres, CloudNativePG, RDS).
+        database = {
+          postgres = {
+            package = kix.mkImport { from = packages."stackgres-cluster"; };
+            packageType = "postgres";
+          };
+        };
+
+        # Immich namespace: server + ML worker.
+        # valkey resolves via DI from the cache namespace (cluster-wide).
+        # postgres resolves via DI from the database namespace (cluster-wide).
+        # machineLearning resolves via DI from the same namespace.
         immich = {
           immich = {
             package = packages.immich;
-            packageType = "immich";
             config = {
               library.existingClaim = "immich-library";
+              # DB auth provided via env (secrets):
+              # env.DB_USERNAME = "immich";
+              # env.DB_PASSWORD = "...";  # use external secret management
+              # env.DB_DATABASE_NAME = "immich";
             };
+          };
+
+          machineLearning = {
+            package = packages."immich-machine-learning";
+            packageType = "machineLearning";
           };
         };
       };
