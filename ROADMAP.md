@@ -2,16 +2,26 @@
 
 ## Internals
 
-- [ ] proper module system for config
-- [ ] no "defaults"
-- [ ] global config object that is passed around
-- [ ] fragments for separating concerns and teams
+- [x] proper module system for config
+- [x] no "defaults"
+- [x] global config object that is passed around
+- [x] fragments for separating concerns and teams
 - [ ] v2_discussions/11 -> injecting storage and other infra items like certs from the cluster graph => different package types?
 - [ ] post-eval validation 
 - [ ] secret handling and injection (agenix, etc) => hashes of encrypted secrets are beautiful (dont trigger change) + injection can happen in kix-deploy
 - [ ] autogenerating, checking, verifying, and abstracting network policies (cilium compatible)
 - [ ] migrations as k8s jobs to be defined for major version upgrades or similar (per package?)
 - [ ] use "already existing" cluster elements, like "this secret already exists in the cluster" -> kix deploy will complain
+- [ ] auto-inject dependencies (valkey @ immich) => keep the "ease of use" alive
+- [ ] deep check package level dependencies, if the package root crd is pulled in properly
+
+## Open design questions
+
+- [ ] package root as common leaf  dependency or root
+
+## Case Studies
+
+- [ ] immich
 
 ## Warnings, Errors, Checks
 
@@ -25,7 +35,7 @@
 
 - [ ] auto-selectors based on store path (instead of labels) -> auto-wires services
 - [ ] RBAC and its verbs, prior work exists in some doc somewhere
-
+                                                              w
 ## kix deploy
 
 - [ ] wait for ready across all resource types
