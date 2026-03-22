@@ -24,7 +24,7 @@ kix.buildCluster {
         cache = {
           valkey = {
             package = kix.mkImport { from = packages.valkey; };
-            packageType = "valkey";
+
           };
         };
 
@@ -32,7 +32,7 @@ kix.buildCluster {
         database = {
           postgres = {
             package = kix.mkImport { from = packages."stackgres-cluster"; };
-            packageType = "postgres";
+
           };
         };
 
@@ -54,7 +54,7 @@ kix.buildCluster {
 
           machineLearning = {
             package = packages."immich-machine-learning";
-            packageType = "machineLearning";
+
           };
         };
       };

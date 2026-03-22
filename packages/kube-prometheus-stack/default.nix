@@ -22,7 +22,7 @@
 #       releaseName = "kube-prometheus-stack";
 #       includeCrds = true;
 #     };
-#     packageType = "kube-prometheus-stack";
+
 #     config.values = { /* cluster-level overrides */ };
 #   };
 

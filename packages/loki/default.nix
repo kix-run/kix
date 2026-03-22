@@ -21,7 +21,7 @@
 #       releaseName = "loki";
 #       mainSelector = { kind = "Service"; name = "loki-gateway"; };
 #     };
-#     packageType = "loki";
+
 #     config.values = { /* cluster-level overrides */ };
 #   };
 

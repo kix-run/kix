@@ -161,7 +161,6 @@ rec {
     }:
     let
       importDef = instCfg.package; # { _type = "kix-import"; from, out }
-      packageType = instCfg.packageType or instanceName;
 
       # Derive out: from package build (lazy) + manual overrides
       derivedOut =
@@ -236,7 +235,7 @@ rec {
       main = markerResource;
       out = derivedOut;
       _meta = {
-        inherit instanceName namespaceName packageType;
+        inherit instanceName namespaceName;
         namespace = namespaceName;
         aliases = instCfg.aliases or [ ];
       };
@@ -306,7 +305,7 @@ rec {
           instName:
           let
             meta = staticMeta.${ns}.${instName}._meta;
-            keys = [ meta.packageType ] ++ (meta.aliases or [ ]);
+            keys = [ instName ] ++ (meta.aliases or [ ]);
           in
           map (key: {
             inherit key;
@@ -568,9 +567,6 @@ rec {
           lib.fix (self:
             raw.build { inherit self clusterConfig; config = evaluatedConfig; }
           );
-
-      # Derive packageType from function name or instance name
-      packageType = instCfg.packageType or instanceName;
 
       # --- Resolve main resource and package-level requires ---
       rawMain =
@@ -879,7 +875,7 @@ rec {
       out = (mainRes.out or { }) // packageOut;
 
       _meta = {
-        inherit instanceName namespaceName packageType;
+        inherit instanceName namespaceName;
         namespace = namespaceName;
         aliases = instCfg.aliases or [ ];
       };
@@ -927,14 +923,13 @@ rec {
         }) allNsNames
       );
 
-      # 4. Build static metadata for DI resolution (reads only packageType/aliases)
+      # 4. Build static metadata for DI resolution (instance name + aliases)
       staticMeta = lib.mapAttrs (nsName: nsInsts:
         lib.mapAttrs (instName: instCfg: {
           _meta = {
             instanceName = instName;
             namespaceName = nsName;
             namespace = nsName;
-            packageType = if instCfg.packageType != null then instCfg.packageType else instName;
             aliases = instCfg.aliases;
           };
         }) nsInsts

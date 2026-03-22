@@ -29,7 +29,7 @@ kix.buildCluster {
       instances.test-helm = {
         test-app = {
           package = testChartPackage;
-          packageType = "test-chart";
+          aliases = [ "test-chart" ];
           config = {
             values = {
               service.port = 8080;

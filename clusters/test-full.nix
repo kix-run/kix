@@ -23,7 +23,7 @@ kix.buildCluster {
         kube-system = {
           coredns = {
             package = packages.coredns;
-            packageType = "coredns";
+
             config = {
               replicaCount = 3;
               serviceAccount.create = true;
@@ -68,7 +68,7 @@ kix.buildCluster {
         cache = {
           valkey = {
             package = packages.valkey;
-            packageType = "valkey";
+
             config = {
               sentinel = {
                 enabled = true;
@@ -130,7 +130,7 @@ kix.buildCluster {
         cert-manager = {
           cert-manager = {
             package = packages.cert-manager;
-            packageType = "cert-manager";
+
           };
         };
       };

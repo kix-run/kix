@@ -21,7 +21,7 @@
 #       releaseName = "promtail";
 #       mainSelector = { kind = "DaemonSet"; name = "promtail"; };
 #     };
-#     packageType = "promtail";
+
 #     config.values = { /* cluster-level overrides */ };
 #   };
 

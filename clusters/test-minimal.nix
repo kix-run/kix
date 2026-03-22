@@ -14,7 +14,7 @@ kix.buildCluster {
       instances.kube-system = {
         coredns = {
           package = packages.coredns;
-          packageType = "coredns";
+
         };
       };
     }

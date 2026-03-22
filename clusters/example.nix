@@ -26,7 +26,7 @@ kix.buildCluster {
         kube-system = {
           coredns = {
             package = packages.coredns;
-            packageType = "coredns";
+
             config = {
               replicaCount = 2;
               prometheus = {
@@ -49,7 +49,7 @@ kix.buildCluster {
         cache = {
           valkey = {
             package = packages.valkey;
-            packageType = "valkey";
+
             config = {
               sentinel = {
                 enabled = true;
@@ -110,14 +110,14 @@ kix.buildCluster {
         cert-manager = {
           cert-manager = {
             package = packages.cert-manager;
-            packageType = "cert-manager";
+
           };
         };
 
         immich = {
           postgres = {
             package = packages."stackgres-cluster";
-            packageType = "postgres";
+
             config = {
               postgres.extensions = [
                 { name = "vectors"; publisher = "tensorchord"; version = "0.3.0"; }
@@ -127,7 +127,7 @@ kix.buildCluster {
 
           immich = {
             package = packages.immich;
-            packageType = "immich";
+
             config = {
               library.existingClaim = "immich-library";
             };
@@ -135,7 +135,7 @@ kix.buildCluster {
 
           machineLearning = {
             package = packages."immich-machine-learning";
-            packageType = "machineLearning";
+
           };
         };
       };

@@ -26,15 +26,10 @@
               by the submodule merge at the instance level.
             '';
           };
-          packageType = lib.mkOption {
-            type = lib.types.nullOr lib.types.str;
-            default = null;
-            description = "DI resolution key. Defaults to instance name.";
-          };
           aliases = lib.mkOption {
             type = lib.types.listOf lib.types.str;
             default = [];
-            description = "Additional DI resolution keys.";
+            description = "Additional DI resolution keys (beyond the instance name).";
           };
           config = lib.mkOption {
             type = lib.types.deferredModule;
