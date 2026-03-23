@@ -13,6 +13,7 @@
 - [x] depends-on annotation derived from context
 - [ ] @luca Post-eval validation — catch errors at build time, not deploy time
 - [ ] @luca Auto-inject dependencies (e.g. valkey for immich) — the "just make it run" experience where pulling in an app auto-enables what it needs
+  - **DI-driven defaults**: optional DI deps should drive behavior — if `ingressNginx` is injected, create an ingress (no `enabled` flag needed); if `clusterIssuer` is injected, auto-enable TLS; if prometheus exists, auto-enable metrics. Package options should NOT duplicate what DI already expresses (e.g. `ingress.className` is redundant with `ingressNginx.out.ingressClassName`). Cluster-level config like `cluster.domain` should provide sensible defaults (e.g. `host = "${instanceName}.${cluster.domain}"`), overridable per instance. Goal: a bare `immich = { package = packages.immich; }` with the right deps injected yields a fully working deployment with ingress + TLS — zero config.
   - (pot nonsense:) Two-tier model: auto-enable if a dependency exists in the cluster; explicit enable triggers full transitive pull-in of everything needed
   - Packages can declare **default aliases** alongside their options and builders (e.g. cert-manager aliases `clusterissuer`), so dependencies can resolve against general capabilities, not just package names
   - The available package list for auto-resolution must live under a **dedicated config path** to control what the resolver can pull from
@@ -91,6 +92,7 @@
 - [ ] Remove `outputs` design — custom `outputs` on `mkResource` is a bolted-on escape hatch; port, fqdn, and other DI-visible values should be auto-derived or come from a richer `out` model, not manual string declarations per resource
 - [ ] Port wiring logic — carry port information up through container → pod → service → ingress; prevent wiring things that don't have a route
 - [ ] Functional composition as correctness — "this service wraps this app, this HPA wraps this app, you figure out the rest"; correct wiring emerges from composition, not from template deduplication
+- [ ] Image convention — `"${config.image.repository}:${config.image.tag}"` + `imagePullPolicy` is repeated in every package. Standardize as a single option (full image string or structured with a helper) so packages don't each reinvent image construction
 - [ ] Better CoreDNS corefile handling
 - [ ] Full CoreDNS binary building
 - [ ] selector based on "identity" to say "i want this and exactly this resource"

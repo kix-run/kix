@@ -17,7 +17,7 @@ let
     ;
 
   rbac = import ./rbac.nix { inherit lib; };
-  compose = import ./compose.nix { inherit lib; };
+  kixlib = import ./compose.nix { inherit lib; };
 in
 
 rec {
@@ -30,19 +30,13 @@ rec {
       namespaceResource,
       clusterLabels ? { },
     }:
-    {
-      inherit instanceName namespaceName;
-      namespace = namespaceResource;
-
-      # Standard selector labels for workload resources (Deployments, StatefulSets).
-      # Packages use this directly or extend it for multi-component cases:
-      #   scope.selectorLabels // { "app.kubernetes.io/component" = "worker"; }
+    let
       selectorLabels = {
         "app.kubernetes.io/name" = instanceName;
         "app.kubernetes.io/instance" = instanceName;
       };
 
-      mkResource =
+      scopeMkResource =
         {
           labels ? { },
           ...
@@ -60,6 +54,33 @@ rec {
               // labels;
           }
         ) // { packageLabels = labels; };
+
+      mkWorkload = apiVersion: kind: attrs:
+        let
+          spec = attrs.spec or {};
+          selector = spec.selector.matchLabels
+            or (throw "mkWorkload (${kind}): spec.selector.matchLabels is required — use scope.selectorLabels");
+          templateMeta = spec.template.metadata or {};
+          templateSpec = spec.template.spec or {};
+        in
+        scopeMkResource (removeAttrs attrs [ "spec" ] // {
+          inherit apiVersion kind;
+          spec = removeAttrs spec [ "selector" "template" ] // {
+            selector.matchLabels = selector;
+            template = {
+              metadata = templateMeta // {
+                labels = templateMeta.labels or selector;
+              };
+              spec = templateSpec;
+            };
+          };
+        });
+    in
+    {
+      inherit instanceName namespaceName selectorLabels;
+      namespace = namespaceResource;
+
+      mkResource = scopeMkResource;
 
       mkClusterResource =
         {
@@ -82,8 +103,11 @@ rec {
 
       inherit rbac;
 
-      # Pipe-friendly composition helpers (pre-seal attrset builders).
-      inherit (compose) expose ingress;
+      # Workload resource constructors — thin wrappers around mkResource.
+      # Auto-set apiVersion/kind, auto-wire selector ↔ template labels from scope.selectorLabels.
+      mkDeployment = mkWorkload "apps/v1" "Deployment";
+      mkStatefulSet = mkWorkload "apps/v1" "StatefulSet";
+      mkDaemonSet = mkWorkload "apps/v1" "DaemonSet";
     };
 
   # Create an import marker — used as the `package` field for imported instances.
@@ -177,11 +201,13 @@ rec {
             # Call the package function with null for all dependency args.
             # Laziness ensures only out-relevant code paths are forced.
             fnArgs = builtins.functionArgs importDef.from;
-            depArgNames = builtins.attrNames (removeAttrs fnArgs [ "scope" "lib" ]);
+            depArgNames = builtins.attrNames (removeAttrs fnArgs [ "scope" "lib" "kix" ]);
             nullDeps = builtins.listToAttrs (
               map (name: { inherit name; value = null; }) depArgNames
             );
-            raw = importDef.from ({ scope = importScope; inherit lib; } // nullDeps);
+            raw = importDef.from ({ scope = importScope; inherit lib; }
+              // lib.optionalAttrs (fnArgs ? kix) { kix = kixlib; }
+              // nullDeps);
 
             # Evaluate typed config (same as normal path)
             evaluatedConfig = evaluateInstanceConfig {
@@ -474,6 +500,7 @@ rec {
       systemArgNames = [
         "scope"
         "lib"
+        "kix"
       ];
       depArgNames = builtins.attrNames (removeAttrs fnArgs systemArgNames);
 
@@ -506,6 +533,7 @@ rec {
       {
         inherit scope lib;
       }
+      // lib.optionalAttrs (fnArgs ? kix) { kix = kixlib; }
       // resolvedDeps
     );
 
@@ -556,7 +584,7 @@ rec {
       _crossNsCheck =
         let
           fnArgs = builtins.functionArgs instCfg.package;
-          depArgNames = builtins.attrNames (removeAttrs fnArgs [ "scope" "lib" ]);
+          depArgNames = builtins.attrNames (removeAttrs fnArgs [ "scope" "lib" "kix" ]);
           deps = instCfg.deps or {};
         in
         builtins.foldl' (acc: argName:

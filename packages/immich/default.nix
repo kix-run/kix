@@ -20,6 +20,7 @@
 {
   scope,
   lib,
+  kix,
   valkey,
   postgres,
   storage,
@@ -75,191 +76,176 @@ in
     };
   };
 
-  build = { self, config, clusterConfig }:
-  let
-    hasConfig = config.configuration != null;
-    hasMl = machineLearning != null;
-    mlUrl =
-      if hasMl then
-        "http://${machineLearning.out.fqdn}:${machineLearning.out.port}"
-      else
-        null;
+  build =
+    {
+      self,
+      config,
+      clusterConfig,
+    }:
+    let
+      hasConfig = config.configuration != null;
 
-    # Storage validation — warn if PVC is undersized for a photo library
-    parseSizeGi = s:
-      let
-        str = builtins.unsafeDiscardStringContext s;
-        matchTi = builtins.match "([0-9]+)Ti" str;
-        matchGi = builtins.match "([0-9]+)Gi" str;
-        matchMi = builtins.match "([0-9]+)Mi" str;
-      in
-      if matchTi != null then (builtins.fromJSON (builtins.head matchTi)) * 1024
-      else if matchGi != null then builtins.fromJSON (builtins.head matchGi)
-      else if matchMi != null then (builtins.fromJSON (builtins.head matchMi)) / 1024
-      else null;
+      healthCheck = {
+        httpGet = {
+          path = "/api/server/ping";
+          port = "http";
+        };
+        periodSeconds = 10;
+        timeoutSeconds = 1;
+        failureThreshold = 3;
+      };
+      hasMl = machineLearning != null;
+      mlUrl = if hasMl then "http://${machineLearning.out.fqdn}:${machineLearning.out.port}" else null;
 
-    storageSizeGi = parseSizeGi storage.out.size;
-    _storageWarning =
-      if storageSizeGi != null && storageSizeGi < 50 then
-        builtins.trace "warning: immich '${name}' library storage is ${builtins.unsafeDiscardStringContext storage.out.size} — recommended minimum is 50Gi for photo libraries"
-          null
-      else null;
-  in
-  builtins.seq _storageWarning
-  {
+      # Storage validation — warn if PVC is undersized for a photo library
+      storageSizeGi = kix.parseGi storage.out.size;
+      _storageWarning =
+        if storageSizeGi != null && storageSizeGi < 50 then
+          builtins.trace "warning: immich '${name}' library storage is ${builtins.unsafeDiscardStringContext storage.out.size} — recommended minimum is 50Gi for photo libraries" null
+        else
+          null;
+    in
+    builtins.seq _storageWarning {
 
-    # --- Optional: Immich configuration ConfigMap ---
-    configMap =
-      if hasConfig then
-        scope.mkResource {
-          apiVersion = "v1";
-          kind = "ConfigMap";
-          name = "${name}-config";
-          data = {
-            "immich-config.yaml" = builtins.toJSON config.configuration;
-          };
-        }
-      else
-        null;
+      # --- Optional: Immich configuration ConfigMap ---
+      configMap =
+        if hasConfig then
+          scope.mkResource {
+            apiVersion = "v1";
+            kind = "ConfigMap";
+            name = "${name}-config";
+            data = {
+              "immich-config.yaml" = builtins.toJSON config.configuration;
+            };
+          }
+        else
+          null;
 
-    # --- Server Deployment ---
-    deployment = scope.mkResource {
-      apiVersion = "apps/v1";
-      kind = "Deployment";
-      name = "${name}-server";
-      spec = {
-        replicas = config.replicaCount;
-        selector.matchLabels = scope.selectorLabels;
-        strategy.type = "RollingUpdate";
-        template = {
-          metadata.labels = scope.selectorLabels;
+      # --- Mounts ---
+      # kix.mount.* creates a { volume, volumeMount } pair from a resource.
+      # Returns null when the resource is null (configMap disabled → configMount = null).
+      # Volume name auto-derives from the resource's out.name.
+      libraryMount = kix.mount.pvc storage { mountPath = "/usr/src/app/upload"; };
+      configMount = kix.mount.configMap self.configMap { mountPath = "/config"; };
+
+      # --- Server Deployment ---
+      deployment =
+        {
+          name = "${name}-server";
           spec = {
-            containers = [
-              ({
+            replicas = config.replicaCount;
+            selector.matchLabels = scope.selectorLabels;
+            strategy.type = "RollingUpdate";
+            template.spec.containers = [
+              {
                 name = "immich-server";
                 image = "${config.image.repository}:${config.image.tag}";
                 imagePullPolicy = config.image.pullPolicy;
-                env = [
-                  { name = "DB_HOSTNAME"; value = postgres.out.fqdn; }
-                  { name = "DB_PORT"; value = postgres.out.port or "5432"; }
-                  { name = "REDIS_HOSTNAME"; value = valkey.out.fqdn; }
-                ]
-                ++ lib.optional hasMl {
-                  name = "IMMICH_MACHINE_LEARNING_URL";
-                  value = mlUrl;
-                }
-                ++ lib.optional hasConfig {
-                  name = "IMMICH_CONFIG_FILE";
-                  value = "/config/immich-config.yaml";
-                }
-                ++ lib.optional config.metrics.enabled {
-                  name = "IMMICH_TELEMETRY_INCLUDE";
-                  value = "all";
-                }
-                ++ lib.mapAttrsToList (k: v: { name = k; value = v; }) config.env;
+                # kix.mkEnvVars converts { KEY = "val"; } → [{ name = "KEY"; value = "val"; }].
+                # Null values are filtered — disabled features just set null.
+                env = kix.mkEnvVars (
+                  {
+                    DB_HOSTNAME = postgres.out.fqdn;
+                    DB_PORT = postgres.out.port;
+                    REDIS_HOSTNAME = valkey.out.fqdn;
+                    IMMICH_MACHINE_LEARNING_URL = mlUrl;
+                    IMMICH_CONFIG_FILE =
+                      if self.configMount != null then "${self.configMount.mountPath}/immich-config.yaml" else null;
+                    IMMICH_TELEMETRY_INCLUDE = if config.metrics.enabled then "all" else null;
+                  }
+                  // config.env
+                );
                 ports = [
-                  { name = "http"; containerPort = 2283; protocol = "TCP"; }
+                  (kix.port "http" 2283)
                 ]
                 ++ lib.optionals config.metrics.enabled [
-                  { name = "metrics-api"; containerPort = 8081; protocol = "TCP"; }
-                  { name = "metrics-ms"; containerPort = 8082; protocol = "TCP"; }
+                  (kix.port "metrics-api" 8081)
+                  (kix.port "metrics-ms" 8082)
                 ];
-                livenessProbe = {
-                  httpGet = { path = "/api/server/ping"; port = "http"; };
-                  periodSeconds = 10;
-                  timeoutSeconds = 1;
-                  failureThreshold = 3;
-                };
-                readinessProbe = {
-                  httpGet = { path = "/api/server/ping"; port = "http"; };
-                  periodSeconds = 10;
-                  timeoutSeconds = 1;
-                  failureThreshold = 3;
-                };
-                startupProbe = {
-                  httpGet = { path = "/api/server/ping"; port = "http"; };
-                  periodSeconds = 10;
-                  timeoutSeconds = 1;
+                livenessProbe = healthCheck;
+                readinessProbe = healthCheck;
+                startupProbe = healthCheck // {
                   failureThreshold = 30;
                 };
-                volumeMounts = [
-                  {
-                    name = "library";
-                    mountPath = "/usr/src/app/upload";
-                  }
-                ]
-                ++ lib.optional hasConfig {
-                  name = "config";
-                  mountPath = "/config";
-                };
-              })
-            ];
-            volumes = [
-              {
-                name = "library";
-                persistentVolumeClaim.claimName = storage.out.name;
               }
-            ]
-            ++ lib.optional hasConfig {
-              name = "config";
-              configMap.name = self.configMap.out.name;
-            };
+            ];
           };
-        };
-      };
-    };
+        }
+        # kix.withMounts injects volumes + volumeMounts into the pod spec.
+        # This will work if there is only one container, if multiple containers are in the deployment, the containerName must be passed as well otheriwse error.
+        # Nulls are filtered — disabled mounts are silently skipped.
+        # TODO: should trigger an error if the same volume name is used multiple times (which can happen with the auto-naming)
+        |> kix.withMounts [
+          self.libraryMount
+          self.configMount
+        ]
+        # scope.mkDeployment sets apiVersion/kind, auto-copies selector to
+        # template labels (preventing mismatch), then compiles to storepath via mkResource.
+        |> scope.mkDeployment;
 
-    # --- Server Service ---
-    service = self.deployment
-      |> scope.expose { name = "${name}-server"; }
-      |> scope.mkResource;
+      # --- Server Service ---
+      # kix.service.fromWorkload auto-derives selector and ports from the
+      # deployment's container spec. Returns a pre-seal attrset → mkResource seals it.
+      service =
+        self.deployment |> kix.service.fromWorkload { name = "${name}-server"; } |> scope.mkResource;
 
-    # --- Ingress (optional) ---
-    ingress =
-      if config.ingress.enabled then
-        self.service
-        |> scope.ingress {
-          inherit name;
-          host = config.ingress.host;
-          className =
-            if ingressNginx != null then
-              ingressNginx.out.ingressClassName
-            else
-              config.ingress.className or "public";
-          tls =
-            lib.optional (config.ingress.tls.enabled or false) {
+      # --- Ingress (optional) ---
+      # kix.ingress.fromService auto-derives backend name and port from the
+      # service's out. withCert is a pipe-friendly transformer from the
+      # clusterIssuer package that adds the cert-manager annotation.
+      # TODO: discussed multiple ways to make this cleaner, but not happy with any yet, so leaving it explicit.
+      ingress =
+        if config.ingress.enabled then
+          self.service
+          |> kix.ingress.fromService {
+            inherit name;
+            host = config.ingress.host;
+            className =
+              if ingressNginx != null then
+                ingressNginx.out.ingressClassName
+              else
+                config.ingress.className or "public";
+            tls = lib.optional (config.ingress.tls.enabled or false) {
               hosts = [ config.ingress.host ];
               secretName = config.ingress.tls.secretName;
             };
-          annotations = {
-            "nginx.ingress.kubernetes.io/proxy-body-size" = "0";
-          } // config.ingress.annotations;
-        }
-        |> (if clusterIssuer != null then clusterIssuer.out.withCert else lib.id)
-        |> scope.mkResource
-      else
-        null;
+            annotations = {
+              "nginx.ingress.kubernetes.io/proxy-body-size" = "0";
+            }
+            // config.ingress.annotations;
+          }
+          |> (if clusterIssuer != null then clusterIssuer.out.withCert else lib.id)
+          |> scope.mkResource
+        else
+          null;
 
-    # --- ServiceMonitor (optional) ---
-    serviceMonitor =
-      if config.metrics.enabled then
-        scope.mkClusterResource {
-          apiVersion = "monitoring.coreos.com/v1";
-          kind = "ServiceMonitor";
-          name = name;
-          spec = {
-            namespaceSelector.matchNames = [ scope.namespaceName ];
-            selector.matchLabels = self.service.out.selector;
-            endpoints = [
-              { port = "metrics-api"; scheme = "http"; }
-              { port = "metrics-ms"; scheme = "http"; }
-            ];
-          };
-        }
-      else
-        null;
+      # --- ServiceMonitor (optional) ---
+      # TODO: should get auto-generated by prometheus - either here with a builder, or from the outside with an override
+      serviceMonitor =
+        if config.metrics.enabled then
+          scope.mkClusterResource {
+            apiVersion = "monitoring.coreos.com/v1";
+            kind = "ServiceMonitor";
+            name = name;
+            spec = {
+              namespaceSelector.matchNames = [ scope.namespaceName ];
+              selector.matchLabels = self.service.out.selector;
+              endpoints = [
+                {
+                  port = "metrics-api";
+                  scheme = "http";
+                }
+                {
+                  port = "metrics-ms";
+                  scheme = "http";
+                }
+              ];
+            };
+          }
+        else
+          null;
 
-    # --- Entry point ---
-    main = self.service;
-  };
+      # --- Entry point ---
+      main = self.service;
+    };
 }

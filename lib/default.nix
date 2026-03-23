@@ -17,7 +17,7 @@ let
   fragments = import ./fragments.nix { inherit lib; };
   helm = import ./helm.nix { inherit pkgs lib; };
   rbac = import ./rbac.nix { inherit lib; };
-  compose = import ./compose.nix { inherit lib; };
+  kixlib = import ./compose.nix { inherit lib; };
 in
 
 {
@@ -55,12 +55,8 @@ in
   # --- RBAC DSL (rbac.nix) ---
   inherit rbac;
 
-  # --- Pipe-friendly composition (compose.nix) ---
-  inherit (compose)
-    expose
-    ingress
-    extractServicePorts
-    ;
+  # --- kixlib (compose.nix) — pure helpers passed to packages as `kix` arg ---
+  inherit kixlib;
 
   # --- Helm bridge (helm.nix) ---
   inherit (helm)
