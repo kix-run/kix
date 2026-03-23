@@ -1,0 +1,687 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kix — From YAML to Verified Cluster</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap');
+  :root {
+    --bg:#0c0c0f;--s:#141419;--s2:#1a1a22;--b:#2a2a35;--t:#e0ddd5;--d:#7a7872;
+    --a:#e8a04a;--ad:#e8a04a22;--g:#7ec87e;--gd:#7ec87e18;--r:#d47272;--rd:#d4727218;
+    --bl:#6ba3d6;--bld:#6ba3d618;--p:#b094d6;--pd:#b094d618;
+    --m:'JetBrains Mono','Fira Code',monospace;--f:'DM Sans',system-ui,sans-serif;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:var(--bg);color:var(--t);font-family:var(--f);line-height:1.65}
+  .wrap{max-width:960px;margin:0 auto;padding:0 28px}
+
+  /* Hero */
+  .hero{padding:72px 0 48px;text-align:center}
+  .hero h1{font-size:44px;font-weight:800;letter-spacing:-0.03em}
+  .hero h1 em{font-style:normal;color:var(--a)}
+  .hero .sub{font-size:18px;color:var(--d);max-width:640px;margin:16px auto 0;line-height:1.6}
+
+  /* Step */
+  .step{padding:56px 0 48px;border-top:1px solid var(--b)}
+  .step-num{font-family:var(--m);font-size:12px;color:var(--a);text-transform:uppercase;letter-spacing:0.12em;margin-bottom:8px;font-weight:700}
+  .step h2{font-size:26px;font-weight:700;letter-spacing:-0.02em;margin-bottom:6px}
+  .step h2 em{font-style:normal;color:var(--a)}
+  .step .lead{color:var(--d);font-size:15px;margin-bottom:24px;max-width:700px;line-height:1.6}
+
+  /* Code */
+  pre{background:var(--s);border:1px solid var(--b);border-radius:8px;padding:18px 20px;font-family:var(--m);font-size:12.5px;line-height:1.65;overflow-x:auto;white-space:pre;tab-size:2;margin:12px 0}
+  pre.sm{font-size:11.5px}
+  .code-label{font-size:11px;font-family:var(--m);text-transform:uppercase;letter-spacing:0.08em;font-weight:600;margin-bottom:6px;margin-top:16px}
+  .red{color:var(--r)}.green{color:var(--g)}.blue{color:var(--bl)}.purple{color:var(--p)}.accent{color:var(--a)}.dim{color:var(--d)}
+
+  /* Split */
+  .split{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
+  .split.narrow{grid-template-columns:1fr 1.2fr}
+  @media(max-width:700px){.split{grid-template-columns:1fr}}
+
+  /* Callout */
+  .call{padding:14px 18px;border-radius:6px;margin:16px 0;font-size:13.5px;line-height:1.65}
+  .call.a{background:var(--ad);border:1px solid #e8a04a30;color:var(--a)}
+  .call.g{background:var(--gd);border:1px solid #7ec87e30;color:var(--g)}
+  .call.r{background:var(--rd);border:1px solid #d4727230;color:var(--r)}
+  .call.bl{background:var(--bld);border:1px solid #6ba3d630;color:var(--bl)}
+  .call strong{font-weight:700}
+
+  /* Insight box */
+  .insight{background:var(--s2);border-left:3px solid var(--a);padding:16px 20px;margin:20px 0;border-radius:0 6px 6px 0;font-size:14px;line-height:1.7}
+  .insight strong{color:var(--a)}
+
+  /* Diagram */
+  .dia{background:var(--s);border:1px solid var(--b);border-radius:8px;padding:20px 24px;font-family:var(--m);font-size:12px;line-height:1.9;white-space:pre;overflow-x:auto;margin:16px 0}
+
+  /* Arrow between code blocks */
+  .arrow-down{text-align:center;font-size:28px;color:var(--a);padding:8px 0;font-weight:700}
+
+  /* Links */
+  .links{display:flex;gap:12px;justify-content:center;padding:48px 0}
+  .links a{padding:12px 24px;border-radius:8px;font-family:var(--m);font-size:13px;font-weight:600;border:1px solid var(--b);background:var(--s);color:var(--t);text-decoration:none;transition:all .2s}
+  .links a:hover{border-color:var(--a);color:var(--a)}
+  .links a.pri{background:var(--a);color:var(--bg);border-color:var(--a)}
+
+  .footer{text-align:center;padding:24px 0 48px;color:var(--d);font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- HERO                                                    -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="hero">
+  <h1>What if Kubernetes had <em>a compiler?</em></h1>
+  <p class="sub">
+	Platform teams want to give developers self-service. Developers want to ship
+    without waiting on tickets. AI can generate a hundred YAML files in seconds.
+    But who verifies them? Who checks that the Service selector matches the Deployment?
+    That the RBAC rule grants the right permissions? That everything in production actually has ready what it depends on?<br><br>
+    A compiler does. It catches mistakes <strong>before</strong> they reach your cluster.
+    Developers move fast. The compiler keeps them safe. This is kix.
+  </p>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- STEP 1: YAML → kix (one resource)                      -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="step">
+  <div class="step-num">Step 1</div>
+  <h2>Start with <em>a single resource</em></h2>
+  <p class="lead">
+    A Deployment in YAML. Then the same thing in kix.
+    Same fields, same structure. No new concepts to learn &mdash; just a different syntax.
+  </p>
+
+  <div class="split">
+    <div>
+      <div class="code-label red">YAML (25 lines)</div>
+      <pre>apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-server
+  labels:
+    app: api-server
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: api-server
+  template:
+    metadata:
+      labels:
+        app: api-server
+    spec:
+      containers:
+      - name: api-server
+        image: myregistry/api:1.4.2
+        ports:
+        - containerPort: 8080
+        resources:
+          requests:
+            memory: 256Mi
+            cpu: 250m</pre>
+    </div>
+    <div>
+      <div class="code-label green">kix (same thing)</div>
+      <pre>deployment = scope.mkResource {
+  apiVersion = "apps/v1";
+  kind = "Deployment";
+  name = "api-server";
+  labels = { app = "api-server"; };
+  spec = {
+    replicas = 3;
+    selector.matchLabels = { app = "api-server"; };
+    template = {
+      metadata.labels = { app = "api-server"; };
+      spec.containers = [{
+        name = "api-server";
+        image = "myregistry/api:1.4.2";
+        ports = [{ containerPort = 8080; }];
+        resources.requests = {
+          memory = "256Mi";
+          cpu = "250m";
+        };
+      }];
+    };
+  };
+};</pre>
+    </div>
+  </div>
+
+  <div class="call a">
+    <strong>Nothing magical yet.</strong> Same fields. Same structure. But now it's data inside a programming language &mdash; not a text template.
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- STEP 2: Two resources → auto dependency graph           -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="step">
+  <div class="step-num">Step 2</div>
+  <h2>Add a Service. Get a <em>dependency graph</em> for free.</h2>
+  <p class="lead">
+    In YAML, you repeat <code>app: api-server</code> in the Deployment's labels,
+    the selector, the template, and again in the Service. Get one wrong &rarr; silent failure at runtime.
+    In kix, you reference the Deployment directly.
+  </p>
+
+  <pre>deployment = scope.mkResource {
+  kind = "Deployment";
+  name = "api-server";
+  spec.selector.matchLabels = { app = "api-server"; };
+  <span class="dim"># ... template, containers, etc ...</span>
+};
+
+service = scope.mkResource {
+  kind = "Service";
+  name = "api-server";
+  spec = {
+    <span class="green">selector = self.deployment.out.selector;</span>   <span class="dim"># ← reference, not copy-paste</span>
+    ports = [{ port = 80; targetPort = 8080; }];
+  };
+};</pre>
+
+  <div class="call g">
+    <strong>self.deployment.out.selector</strong> gives you the Deployment's matchLabels &mdash; guaranteed to match.
+    And because you referenced the Deployment, the compiler now knows: <em>Service depends on Deployment.</em>
+    No annotations, no config files. Just a reference.
+  </div>
+
+  <div class="dia">The compiler builds a dependency graph automatically:
+
+  Service/api-server
+  └── Deployment/api-server    <span class="dim">via .out.selector</span>
+
+Every reference creates an edge. This graph is the foundation for
+everything that follows: diff, rollback, wave deployments.</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- STEP 3: ServiceAccount + ConfigMap → more references     -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="step">
+  <div class="step-num">Step 3</div>
+  <h2>Wire up a ServiceAccount and ConfigMap. <em>Still just references.</em></h2>
+  <p class="lead">
+    Every reference is tracked. The compiler knows exactly what depends on what.
+  </p>
+
+  <pre>serviceAccount = scope.mkResource {
+  kind = "ServiceAccount";
+  name = "api-server";
+};
+
+configmap = scope.mkResource {
+  kind = "ConfigMap";
+  name = "api-server";
+  data.DATABASE_HOST = "postgres.default.svc";
+};
+
+deployment = scope.mkResource {
+  kind = "Deployment";
+  name = "api-server";
+  spec.template.spec = {
+    <span class="green">serviceAccountName = self.serviceAccount.out.name;</span>   <span class="dim"># ← tracked</span>
+    containers = [{
+      image = "myregistry/api:1.4.2";
+      volumeMounts = [{ name = "config"; mountPath = "/etc/app"; }];
+    }];
+    volumes = [{
+      name = "config";
+      <span class="green">configMap.name = self.configmap.out.name;</span>             <span class="dim"># ← tracked</span>
+    }];
+  };
+};</pre>
+
+  <div class="dia">  Service/api-server
+  └── Deployment/api-server
+      ├── ServiceAccount/api-server    <span class="dim">via .out.name in serviceAccountName</span>
+      └── ConfigMap/api-server         <span class="dim">via .out.name in volumes</span></div>
+
+  <div class="insight">
+    <strong>Every .out.name carries a hidden fingerprint.</strong>
+    Under the hood, each resource is a content-addressed hash. When you write
+    <code>self.configmap.out.name</code>, the string "api-server" arrives with the
+    ConfigMap's hash attached. The compiler sees this and records the dependency.
+    Change the ConfigMap's content &rarr; its hash changes &rarr; the Deployment's
+    hash changes too. Same input, same output. Always.
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- STEP 4: DSL — reduce boilerplate, keep safety           -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="step">
+  <div class="step-num">Step 4</div>
+  <h2>Use the DSL <em>where it helps.</em> Skip it where it doesn't.</h2>
+  <p class="lead">
+    kix doesn't force a DSL on you. You can write raw K8s fields forever.
+    But when you want to, helpers remove boilerplate without hiding what's happening.
+  </p>
+
+  <h3 style="margin-top:24px;color:var(--bl);font-size:15px">Example: RBAC permissions</h3>
+  <div class="split">
+    <div>
+      <div class="code-label red">YAML — 24 lines for basic permissions</div>
+      <pre class="sm">apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: api-server
+rules:
+  - apiGroups: [""]
+    resources:
+      - configmaps
+      - endpoints
+      - pods
+      - secrets
+      - services
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [create, patch]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses]
+    verbs: [get, list, watch]
+---
+<span class="dim"># + another 15 lines for ClusterRoleBinding...</span></pre>
+    </div>
+    <div>
+      <div class="code-label green">kix RBAC DSL &mdash; same result</div>
+      <pre class="sm"><span class="dim"># Declare resource groups once</span>
+net = scope.rbac.group "networking.k8s.io" ["ingresses"];
+
+<span class="dim"># Pipe-friendly: resources |> intent</span>
+roles = {
+  "api-server" = grant [
+    ([core.configmaps core.endpoints
+      core.pods core.secrets
+      core.services]            <span class="green">|> watch</span>)
+    (core.events                <span class="green">|> emit</span>)
+    (net.ingresses              <span class="green">|> watch</span>)
+  ];
+};
+
+<span class="dim"># Generates ClusterRole + ClusterRoleBinding</span>
+<span class="dim"># with correct subjects, role refs, everything.</span></pre>
+    </div>
+  </div>
+
+  <div class="call bl">
+    <strong>watch</strong> = get + list + watch. <strong>emit</strong> = create + patch.
+    One word instead of a list of verbs you have to remember.
+    <code>grant</code> merges rules automatically &mdash; no duplicate entries.
+    But you can always drop down to raw fields when you need to.
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- STEP 5: Dependencies — DI enters                        -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="step">
+  <div class="step-num">Step 5</div>
+  <h2>Your app needs a database. <em>Ask for it.</em></h2>
+  <p class="lead">
+    In kix, a package declares what it needs as function arguments.
+    The cluster evaluator resolves them automatically. No hardcoded service names.
+    No values.yaml. Just say what you need.
+  </p>
+
+  <pre><span class="dim"># Package signature — these are the package's dependencies</span>
+<span class="accent">{ scope, lib, postgres, valkey }</span>:
+
+<span class="dim"># Inside the build function, use them naturally:</span>
+configmap = scope.mkResource {
+  kind = "ConfigMap";
+  data = {
+    DATABASE_HOST = <span class="green">postgres.out.fqdn</span>;      <span class="dim"># "postgres.myns.svc.cluster.local"</span>
+    CACHE_HOST    = <span class="green">valkey.out.fqdn</span>;        <span class="dim"># "valkey.myns.svc.cluster.local"</span>
+  };
+};</pre>
+
+  <div class="arrow-down">&darr;</div>
+
+  <pre><span class="dim"># In the cluster definition, just place them in the same namespace:</span>
+instances.my-app-namespace = {
+  my-app  = { package = packages.python-app; };
+  postgres = { package = packages.postgres;  };
+  valkey   = { package = packages.valkey;    };
+};
+
+<span class="dim"># The compiler sees that python-app needs "postgres" and "valkey".</span>
+<span class="dim"># It finds exactly one of each in the same namespace.</span>
+<span class="dim"># Injects them automatically. Done.</span></pre>
+
+  <div class="call g">
+    <strong>No wiring code.</strong> The app says "I need postgres." The cluster has a postgres in the same namespace. The compiler connects them. The dependency is tracked via the hash graph. Change the postgres config &rarr; the app's ConfigMap hash changes &rarr; the diff shows exactly what's affected.
+  </div>
+
+  <div class="insight">
+    <strong>What about a generic cache?</strong> A package can ask for a <em>concrete</em> dependency
+    with a <em>generic</em> fallback:
+    <br><br>
+    <code style="font-family:var(--m);color:var(--g)">{ scope, lib, valkey, cache ? valkey }:</code>
+    <br><br>
+    "I need a cache. I built it with valkey. But if the cluster provides
+    something called 'cache', I'll use that instead." If nothing called 'cache' exists,
+    it falls back to whatever valkey resolved to. The cluster operator can swap in redis
+    with an <strong>alias</strong> &mdash; no code change in the package.
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- STEP 6: Aliases, substitution, duck typing              -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="step">
+  <div class="step-num">Step 6</div>
+  <h2>Substitution is <em>explicit</em> and <em>compiler-checked</em></h2>
+  <p class="lead">
+    Your app depends on valkey. Your cluster runs redis instead. The cluster operator
+    declares the substitution explicitly &mdash; and the compiler verifies that the
+    substitute actually provides everything the app needs. If it doesn't, you get a
+    compile error. Not a 3am page.
+  </p>
+
+  <pre><span class="dim"># Cluster operator explicitly declares: "redis substitutes for valkey here"</span>
+instances.cache-namespace = {
+  my-redis = {
+    package = packages.redis;
+    <span class="green">aliases = [ "valkey" ];</span>           <span class="dim"># ← explicit opt-in by the operator</span>
+  };
+};
+
+<span class="dim"># OR: override just one specific instance's dependency</span>
+instances.app-namespace = {
+  my-app = {
+    package = packages.python-app;
+    <span class="green">deps.valkey = ref.cache-namespace.my-redis;</span>    <span class="dim"># ← explicit override</span>
+  };
+};</pre>
+
+  <div class="call a">
+    <strong>The compiler checks every field the app actually uses.</strong>
+    If the app accesses <code>valkey.out.fqdn</code>,
+    the substitute must expose <code>.out.fqdn</code>. If it accesses
+    <code>valkey.out.sentinelPort</code> and redis doesn't have that &rarr;
+    compile error. Substitution is never implicit. The operator opts in,
+    and the compiler verifies the contract.
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- STEP 7: Teams own their modules                         -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="step">
+  <div class="step-num">Step 7</div>
+  <h2>Teams write <em>independent modules.</em> The compiler merges them.</h2>
+  <p class="lead">
+    Each team owns a file. They declare what they need. The platform team sets defaults and policies.
+    Nobody coordinates manually. The compiler reconciles everything.
+  </p>
+
+  <div class="split">
+    <div>
+      <div class="code-label blue">Platform team (sets options &amp; defaults)</div>
+      <pre class="sm"><span class="dim"># platform.nix</span>
+options = {
+  cluster.domain = mkOption { type = str; };
+  tenants = mkOption { <span class="dim">...</span> };
+  monitoring.enabled = mkOption { <span class="dim">...</span> };
+};
+
+config = {
+  <span class="dim"># Provide infrastructure that apps auto-discover:</span>
+  instances.kube-system = {
+    coredns = { <span class="dim">...</span> };
+    cert-manager = { <span class="dim">...</span> };
+    network-policies = {
+      config.tenants = <span class="green">config.tenants</span>;
+      <span class="dim"># ^ aggregated from ALL modules</span>
+    };
+  };
+  instances.nginx-system = {
+    ingress-public = { <span class="dim">...</span> };
+    ingress-private = { <span class="dim">...</span> };
+  };
+};</pre>
+    </div>
+    <div>
+      <div class="code-label green">App team (declares what they need)</div>
+      <pre class="sm"><span class="dim"># shop.nix</span>
+config = {
+  <span class="dim"># Contribute to shared options:</span>
+  <span class="green">tenants.acme.namespaces</span> = [
+    "shop-prod"
+    "shop-stage"
+  ];
+
+  <span class="dim"># Declare instances — infra is auto-wired:</span>
+  instances.shop-prod = {
+    my-app = {
+      package = packages.python-app;
+      config = {
+        image.tag = "v2.8.1";
+        replicas = 16;
+        ingress.hosts = [
+          { host = "app.example.com"; }
+        ];
+        <span class="dim"># No clusterIssuer — DI wires it</span>
+        <span class="dim"># No storageClass — DI wires it</span>
+        <span class="dim"># No ingressClass — DI wires it</span>
+      };
+    };
+    postgres = { package = packages.postgres; };
+    valkey = { package = packages.valkey; };
+  };
+};</pre>
+    </div>
+  </div>
+
+  <div class="call g">
+    <strong>The app team never mentions</strong> issuer names, storage classes, or ingress controllers.
+    DI resolves them from whatever the platform team provides.
+    Change the TLS issuer cluster-wide? Edit one line in platform.nix. Every app updates.
+  </div>
+
+  <div class="insight">
+    <strong>Tenant isolation for free.</strong>
+    The app team writes <code>tenants.acme.namespaces = ["webshop-prod", "webshop-stage"]</code>.
+    Another team writes <code>tenants.acme.namespaces = ["dashboard-prod"]</code>.
+    The module system <em>merges the lists</em>. The network-policies package reads the merged
+    result and generates Cilium policies that allow traffic between all namespaces in the tenant.
+    No team coordinated. The compiler did it.
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- STEP 8: The cluster composition root                    -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="step">
+  <div class="step-num">Step 8</div>
+  <h2>The full cluster is <em>39 lines.</em></h2>
+  <p class="lead">
+    Each team owns their module. The cluster definition just imports them.
+  </p>
+
+  <pre>kix.buildCluster {
+  name = "prod-eu1";
+  modules = [
+    ./platform.nix          <span class="dim"># CoreDNS, ingress, cert-manager, storage, network policies</span>
+    ./operators.nix         <span class="dim"># Postgres operator, Cilium, OpenEBS</span>
+    ./backup.nix            <span class="dim"># Velero backup schedules</span>
+    ./monitoring.nix        <span class="dim"># Prometheus, Grafana, Loki</span>
+    ./registry.nix          <span class="dim"># Container registry</span>
+    ./webshop.nix           <span class="dim"># Webshop app: prod + stage + demo</span>
+    ./dashboard.nix         <span class="dim"># Dashboard: prod + stage</span>
+    ./services.nix          <span class="dim"># Internal services</span>
+    {
+      cluster.domain = "prod-eu1.example.com";
+      monitoring.enabled = true;
+    }
+  ];
+}</pre>
+
+  <div class="call a">
+    <strong>This is real.</strong> This cluster runs in production. 10 modules.
+    27 packages. 200+ Kubernetes resources. All type-checked, all dependency-tracked,
+    all diffable. From this 39-line root.
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- STEP 9: The output — hash-chained resource graph        -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="step">
+  <div class="step-num">Step 9</div>
+  <h2>The output: a <em>content-addressed resource graph</em></h2>
+  <p class="lead">
+    When you compile the cluster, every resource becomes a content-addressed hash.
+    Every reference between resources is a hash dependency. The entire cluster is
+    a single root hash that depends on everything.
+  </p>
+
+  <div class="dia"><span class="accent">Activation/prod-eu1</span>  ← root hash: <span class="dim">sha256:9f3a...c7e2</span>
+├── PackageInstance/coredns
+│   ├── Service/coredns
+│   │   └── Deployment/coredns
+│   │       ├── ConfigMap/coredns
+│   │       │   └── <span class="blue">Service/ingress-private</span>  <span class="dim">← cross-namespace dep (via DNS rewrite)</span>
+│   │       └── ServiceAccount/coredns
+│   ├── ClusterRole/coredns
+│   └── ClusterRoleBinding/coredns
+│
+├── PackageInstance/ingress-public
+│   ├── Service/ingress-public
+│   │   └── Deployment/ingress-public
+│   ├── IngressClass/public
+│   └── ClusterRole + ClusterRoleBinding
+│
+├── PackageInstance/webshop-prod
+│   ├── Service/webshop-backend  →  Deployment  →  ConfigMap
+│   │                                                ├── <span class="green">postgres.out.fqdn</span>
+│   │                                                └── <span class="green">valkey.out.fqdn</span>
+│   ├── HPA/webshop-backend
+│   ├── Ingress/webshop  → <span class="purple">clusterIssuer.out.withCert</span>
+│   └── ... (workers, cron, queue)
+│
+└── <span class="dim">... 200+ resources, all hash-linked</span></pre>
+
+  <div class="insight">
+    <strong>This graph is the key to everything.</strong> Because every resource is a hash
+    and every dependency is tracked:
+    <ul style="margin-top:8px;padding-left:20px;list-style:disc">
+      <li>Change one field &rarr; only affected hashes change</li>
+      <li>Compare two root hashes &rarr; see exactly what differs (deterministic diff)</li>
+      <li>Roll back &rarr; point to the previous root hash (everything it needs is still there)</li>
+      <li>Deploy in waves &rarr; the graph tells you the correct order</li>
+      <li>Detect drift &rarr; recompute hashes, compare with what's running</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- STEP 10: The workflow                                   -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="step">
+  <div class="step-num">Step 10</div>
+  <h2>The workflow: <em>compile, diff, apply</em></h2>
+  <p class="lead">
+    Three commands. No surprises.
+  </p>
+
+  <pre><span class="accent">$</span> kix build prod-eu1                  <span class="dim"># 1. Compile: merge modules, resolve DI,</span>
+                                      <span class="dim">#    type-check, validate cross-references,</span>
+                                      <span class="dim">#    generate manifests</span>
+
+<span class="accent">$</span> kix diff prod-eu1                   <span class="dim"># 2. Diff: compare against live cluster</span>
+                                      <span class="dim">#    Shows exactly what will change:</span>
+
+<span class="green">  identical: 187</span>
+<span class="blue">  modified:    4</span>      <span class="dim">← you review these</span>
+<span class="green">  kix-only:    2</span>      <span class="dim">← will be created</span>
+<span class="red">  cluster-only: 1</span>    <span class="dim">← not managed by kix (orphan)</span>
+
+  <span class="blue">~ Deployment/coredns</span>
+    image: coredns:1.12.3 <span class="green">→ coredns:1.13.1</span>
+  <span class="blue">~ Service/ingress-public</span>
+    externalTrafficPolicy: Local <span class="green">→ Cluster</span>
+
+<span class="accent">$</span> kix deploy prod-eu1                 <span class="dim"># 3. Deploy: applies verified changes,</span>
+                                      <span class="dim">#    ensures cluster health throughout</span></pre>
+
+  <div class="call g">
+    <strong>Review in CI. Approve in PR. Deploy with confidence.</strong>
+    The diff is deterministic &mdash; same code always produces the same diff.
+    AI generated the code? The compiler verified it. The diff shows exactly what changed.
+    The hash graph guarantees nothing else is affected.
+  </div>
+
+  <div class="call bl">
+    <strong>Rollback?</strong> Point to the previous root hash. Because the entire cluster state
+    is content-addressed, the old graph is still there &mdash; every resource, every dependency,
+    every version. Roll back the root hash and you roll back everything it depends on. Consistently.
+  </div>
+
+  <div class="call a">
+    <strong>Note:</strong> <code>kix diff</code> and <code>kix deploy</code> are under active development.
+    <code>kix deploy</code> goes beyond <code>kubectl apply</code> &mdash; it understands the dependency
+    graph, deploys in the correct wave order, monitors cluster health during rollout,
+    and can halt or roll back if something goes wrong mid-deploy.
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- THE CASE FOR AI                                         -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="step">
+  <div class="step-num">Towards AI</div>
+  <h2>Infrastructure that's <em>ready for AI</em></h2>
+  <p class="lead">
+    kix doesn't use AI. It doesn't require AI. It works perfectly fine with humans writing
+    every line. But it creates something that didn't exist before: a verification layer
+    for Kubernetes configuration.
+  </p>
+  <p class="lead">
+    Today, if an AI agent generates a hundred Kubernetes resources, there's nothing between
+    "looks plausible" and "hits your cluster." No tool checks that selectors match,
+    that RBAC rules are correct, that cross-references resolve. You review YAML by eye
+    and hope.
+  </p>
+  <p class="lead">
+    A compiler changes that equation. Whether a human writes the config or an AI does,
+    the compiler catches the same classes of errors. That's the path toward safely
+    using AI for infrastructure &mdash; not by trusting the AI, but by verifying its output
+    the same way you'd verify anyone's output.
+  </p>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- SUMMARY                                                 -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="step" style="border-top:2px solid var(--a)">
+  <h2>What you get</h2>
+
+  <div class="dia" style="line-height:2.2"><span class="accent">Write</span>       Standard K8s fields. No new concepts. DSL where it helps.
+<span class="accent">Reference</span>   .out.name, .out.selector, .out.fqdn — auto-tracked dependencies.
+<span class="accent">Inject</span>      Declare what you need. The compiler finds it. Aliases for substitution.
+<span class="accent">Compose</span>     Teams write independent modules. The compiler merges and type-checks.
+<span class="accent">Compile</span>     Type errors, missing deps, selector mismatches → caught at build time.
+<span class="accent">Diff</span>        Deterministic diff against live cluster. Review before deploy.
+<span class="accent">Deploy</span>      Wave ordering, health monitoring, automatic rollback. Not just "apply."
+<span class="accent">Trust AI</span>    The compiler is the verification layer. AI writes. Compiler checks. You review.</div>
+</div>
+
+<div class="links">
+  <a class="pri" href="features.html">Feature Showcase &rarr;</a>
+  <a href="deploy.html">Deployment Pipeline &rarr;</a>
+</div>
+
+<div class="footer">kix &mdash; a compiler for Kubernetes. Running in production.</div>
+
+</div>
+</body>
+</html>

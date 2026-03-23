@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kix — Deployment Pipeline</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap');
+  :root {
+    --bg:#0c0c0f;--s:#141419;--s2:#1a1a22;--b:#2a2a35;--t:#e0ddd5;--d:#7a7872;
+    --a:#e8a04a;--ad:#e8a04a22;--g:#7ec87e;--gd:#7ec87e18;--r:#d47272;--rd:#d4727218;
+    --bl:#6ba3d6;--bld:#6ba3d618;--p:#b094d6;--pd:#b094d618;
+    --m:'JetBrains Mono','Fira Code',monospace;--f:'DM Sans',system-ui,sans-serif;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:var(--bg);color:var(--t);font-family:var(--f);line-height:1.65}
+  .wrap{max-width:960px;margin:0 auto;padding:0 28px}
+
+  .header{padding:48px 0 8px}
+  .header h1{font-size:32px;font-weight:800;letter-spacing:-0.03em}
+  .header h1 em{font-style:normal;color:var(--a)}
+  .header p{color:var(--d);font-size:15px;margin-top:8px}
+  .nav{margin-top:10px}
+  .nav a{color:var(--d);font-family:var(--m);font-size:12px;margin-right:16px;text-decoration:none}
+  .nav a:hover{color:var(--a)}
+
+  .sect{padding:48px 0;border-top:1px solid var(--b)}
+  .sect h2{font-size:24px;font-weight:700;letter-spacing:-0.02em;margin-bottom:6px}
+  .sect h2 em{font-style:normal;color:var(--a)}
+  .sect .lead{color:var(--d);font-size:14px;margin-bottom:24px;line-height:1.6;max-width:700px}
+
+  pre{background:var(--s);border:1px solid var(--b);border-radius:8px;padding:16px 18px;font-family:var(--m);font-size:12px;line-height:1.7;overflow-x:auto;white-space:pre;tab-size:2;margin:12px 0}
+  .dia{background:var(--s);border:1px solid var(--b);border-radius:8px;padding:20px 24px;font-family:var(--m);font-size:12px;line-height:2;white-space:pre;overflow-x:auto;margin:16px 0}
+
+  .call{padding:14px 18px;border-radius:6px;margin:16px 0;font-size:13.5px;line-height:1.65}
+  .call.a{background:var(--ad);border:1px solid #e8a04a30;color:var(--a)}
+  .call.g{background:var(--gd);border:1px solid #7ec87e30;color:var(--g)}
+  .call.r{background:var(--rd);border:1px solid #d4727230;color:var(--r)}
+  .call.bl{background:var(--bld);border:1px solid #6ba3d630;color:var(--bl)}
+  .call strong{font-weight:700}
+
+  .insight{background:var(--s2);border-left:3px solid var(--a);padding:16px 20px;margin:20px 0;border-radius:0 6px 6px 0;font-size:14px;line-height:1.7}
+  .insight strong{color:var(--a)}
+
+  .red{color:var(--r)}.green{color:var(--g)}.blue{color:var(--bl)}.purple{color:var(--p)}.accent{color:var(--a)}.dim{color:var(--d)}
+
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:20px 0}
+  .card{background:var(--s);border:1px solid var(--b);border-radius:8px;padding:20px}
+  .card h3{font-size:15px;font-weight:700;color:var(--a);margin-bottom:8px}
+  .card p{font-size:13px;color:var(--d);line-height:1.65}
+  @media(max-width:700px){.grid{grid-template-columns:1fr}}
+
+  .footer{text-align:center;padding:48px 0;color:var(--d);font-size:13px;border-top:1px solid var(--b)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="header">
+  <h1>The <em>deployment pipeline</em></h1>
+  <p>From compiled cluster to deployed, verified, rollback-ready infrastructure.</p>
+  <div class="nav">
+    <a href="./">&larr; The Story</a>
+    <a href="features.html">&larr; Features</a>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<!-- 1. Content-addressing explained             -->
+<!-- ═══════════════════════════════════════════ -->
+<div class="sect">
+  <h2>Every resource is <em>a hash</em></h2>
+  <p class="lead">
+    When kix compiles your cluster, every K8s resource becomes a content-addressed
+    hash in the Nix store. The hash depends on the resource's content AND on every
+    resource it references. This is the same mechanism that makes Nix packages
+    reproducible.
+  </p>
+
+  <pre><span class="dim"># Each resource becomes a store path:</span>
+/nix/store/<span class="green">abc123</span>...-Deployment-kube-system-coredns
+/nix/store/<span class="blue">def456</span>...-Service-kube-system-coredns
+/nix/store/<span class="purple">ghi789</span>...-ConfigMap-kube-system-coredns
+
+<span class="dim"># The Service references the Deployment (via .out.selector).</span>
+<span class="dim"># So the Service's hash INCLUDES the Deployment's hash.</span>
+<span class="dim"># Change the Deployment → its hash changes → the Service's hash changes too.</span>
+
+<span class="dim"># The entire cluster is ONE root hash:</span>
+/nix/store/<span class="accent">fff000</span>...-Activation-prod-eu1
+<span class="dim"># This hash depends on every resource in the cluster.</span>
+<span class="dim"># Same code → same hash. Different code → different hash. Always.</span></pre>
+
+  <div class="call a">
+    <strong>The hash IS the version.</strong> No version numbers. No tags. No "latest."
+    The hash is a mathematical guarantee that this exact cluster state was produced
+    from this exact code. Bit-for-bit reproducible. Verifiable by anyone.
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<!-- 2. Deterministic diff                       -->
+<!-- ═══════════════════════════════════════════ -->
+<div class="sect">
+  <h2><em>Deterministic diff</em> against the live cluster</h2>
+  <p class="lead">
+    Before you apply anything, you can see exactly what will change.
+    The diff compares compiled manifests against what's actually running.
+    Same input code always produces the same diff.
+  </p>
+
+  <pre><span class="dim"># Diff compiled vs live</span>
+<span class="accent">$</span> kix diff prod-eu1
+
+<span class="dim">═══════════════════════════════════════════════════</span>
+<span class="dim"> kix-diff: ./result vs cluster-dump/</span>
+<span class="dim">═══════════════════════════════════════════════════</span>
+
+ Summary:
+   <span class="green">identical: 187</span>
+   <span class="blue">modified:    4</span>
+   <span class="green">kix-only:    2</span>      <span class="dim">(will be created)</span>
+   <span class="red">cluster-only: 1</span>    <span class="dim">(not managed by kix)</span>
+
+ <span class="blue">~ Deployment/coredns @ kube-system</span>
+   $.spec.replicas:
+     kix:     <span class="green">3</span>
+     cluster: <span class="red">2</span>
+   $.spec.template.spec.containers[0].image:
+     kix:     <span class="green">coredns/coredns:1.12.3</span>
+     cluster: <span class="red">coredns/coredns:1.11.1</span>
+
+ <span class="green">+ CiliumClusterwideNetworkPolicy/allow-within-tenant-acme</span>
+   <span class="dim">(new — will be created)</span>
+
+ <span class="red">- ConfigMap/legacy-override @ kube-system</span>
+   <span class="dim">(cluster-only — not managed by kix, possible manual leftover)</span></pre>
+
+  <div class="call g">
+    <strong>Post this diff as a PR comment.</strong> Every reviewer sees exactly what
+    will change. Not "here's the code diff" (which doesn't tell you what happens
+    to the cluster), but "here's the cluster diff" (which tells you everything).
+  </div>
+
+  <div class="call a">
+    <strong>This is why AI-generated infra becomes safe.</strong>
+    An AI agent writes 15 new resources? The diff shows exactly those 15 resources and
+    nothing else. No "I wonder what else it touched." No "did it change something in another
+    namespace?" The diff is complete and deterministic. Review it like you'd review a NixOS
+    config change &mdash; audit before apply, rollback if needed.
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<!-- 3. Drift detection                          -->
+<!-- ═══════════════════════════════════════════ -->
+<div class="sect">
+  <h2>Detect <em>drift</em> before it bites you</h2>
+  <p class="lead">
+    Someone ran <code>kubectl edit</code> at 2am. A Helm upgrade changed a value you
+    didn't expect. The cluster state has drifted from what your code says it should be.
+    kix-diff finds this automatically.
+  </p>
+
+  <pre><span class="dim"># Run kix diff on a schedule (CI cron, or even locally):</span>
+<span class="accent">$</span> kix diff prod-eu1
+
+ <span class="blue">~ Deployment/coredns</span>
+   $.spec.replicas:
+     kix:     3
+     cluster: <span class="red">2</span>    <span class="dim">← someone scaled it down manually</span>
+
+<span class="dim"># The compiled output says 3 replicas. The cluster has 2.</span>
+<span class="dim"># This is drift. You see it immediately.</span>
+<span class="dim"># Run kix deploy to fix it. Or update the code to match.</span></pre>
+
+  <div class="call bl">
+    <strong>Because the output is deterministic,</strong> drift detection is just
+    "compile, diff, alert if anything is modified." If the code hasn't changed
+    and the diff isn't empty, something mutated the cluster outside of kix.
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<!-- 4. Rollback                                 -->
+<!-- ═══════════════════════════════════════════ -->
+<div class="sect">
+  <h2>Perfect <em>rollbacks</em></h2>
+  <p class="lead">
+    Every compilation produces a root hash. The previous compilation's root hash
+    is still in the Nix store (or trivially reproducible from the git commit).
+    Rolling back means pointing to the old hash. Every resource it depends on is
+    still there.
+  </p>
+
+  <div class="dia"><span class="dim"># Current deployment:</span>
+<span class="accent">Activation/prod-eu1</span>  hash: <span class="green">sha256:9f3a...c7e2</span>
+├── Deployment/coredns     <span class="dim">(image: 1.12.3)</span>
+├── Deployment/webshop     <span class="dim">(image: v26.12.4)</span>
+└── <span class="dim">... 200+ resources</span>
+
+<span class="dim"># Previous deployment (still in Nix store or reproduced from git):</span>
+<span class="accent">Activation/prod-eu1</span>  hash: <span class="blue">sha256:4b1d...e8f0</span>
+├── Deployment/coredns     <span class="dim">(image: 1.11.1)</span>
+├── Deployment/webshop     <span class="dim">(image: v26.12.3)</span>
+└── <span class="dim">... 200+ resources</span>
+
+<span class="dim"># Rollback = apply the old hash's manifests.</span>
+<span class="dim"># The diff shows exactly what "rolling back" means:</span>
+<span class="dim">#   coredns: 1.12.3 → 1.11.1</span>
+<span class="dim">#   webshop: v26.12.4 → v26.12.3</span>
+<span class="dim"># No guessing. No "what state was production in last Tuesday?"</span></div>
+
+  <div class="call a">
+    <strong>Rollback is not an undo button.</strong> It's applying a known-good state.
+    The hash graph guarantees that every dependency of that state is present and correct.
+    You're not rolling back individual resources &mdash; you're applying a complete, verified
+    cluster state that already worked before.
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<!-- 5. Wave deployments                         -->
+<!-- ═══════════════════════════════════════════ -->
+<div class="sect">
+  <h2><em>Wave deployments</em> from the dependency graph</h2>
+  <p class="lead">
+    The dependency graph knows the correct order. Namespaces before instances.
+    CRDs before custom resources. Services before consumers. Deploy in waves
+    without manual ordering.
+  </p>
+
+  <div class="dia"><span class="accent">Wave 0:</span>  Namespaces, CRDs, PriorityClasses, StorageClasses
+          <span class="dim">(cluster-scoped foundations)</span>
+
+<span class="accent">Wave 1:</span>  ServiceAccounts, ConfigMaps, Secrets, ClusterRoles
+          <span class="dim">(no dependencies on other resources)</span>
+
+<span class="accent">Wave 2:</span>  Operators (StackGres, Cilium, cert-manager)
+          <span class="dim">(need ServiceAccounts, CRDs from Wave 0-1)</span>
+
+<span class="accent">Wave 3:</span>  Databases, caches (StatefulSets)
+          <span class="dim">(need operators from Wave 2)</span>
+
+<span class="accent">Wave 4:</span>  Applications (Deployments, Services, Ingresses)
+          <span class="dim">(need databases, caches from Wave 3)</span>
+
+<span class="accent">Wave 5:</span>  Monitoring (ServiceMonitors, PrometheusRules)
+          <span class="dim">(need services from Wave 4 to scrape)</span>
+
+<span class="dim">The graph computes this automatically from the hash dependencies.</span>
+<span class="dim">No manual wave annotations. No deploy order config files.</span></div>
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<!-- 6. Canary & PR deployments                  -->
+<!-- ═══════════════════════════════════════════ -->
+<div class="sect">
+  <h2><em>Canary rollouts</em> and PR-as-deployment</h2>
+  <p class="lead">
+    Because resources are content-addressed, two versions can coexist.
+    Resources that didn't change share the same hash &mdash; they're literally
+    the same resource, not a copy.
+  </p>
+
+  <div class="grid">
+    <div class="card">
+      <h3>Canary rollout</h3>
+      <p>
+        Update one service's image. Only that Deployment's hash changes.
+        Everything else (databases, caches, infrastructure) keeps the same hash.
+        Deploy the new version alongside the old. Route a fraction of traffic.
+        The unchanged resources are <em>shared</em> &mdash; not duplicated.
+      </p>
+    </div>
+    <div class="card">
+      <h3>PR as deployment</h3>
+      <p>
+        A PR changes the api-server image. Compile the PR's branch.
+        Compare hashes: only the api-server Deployment and its consumers changed.
+        Deploy those as a preview environment. Reuse all unchanged infrastructure
+        (same hashes = same resources). Review on real infrastructure, not a mock.
+      </p>
+    </div>
+  </div>
+
+  <div class="insight">
+    <strong>The key insight:</strong> same hash = same resource. If your PR doesn't
+    change the database config, the database hash is identical to production's.
+    You can safely point the PR environment at the production database (or a clone)
+    without deploying a separate one. The hash tells you what's shared and what's different.
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<!-- 7. GitOps                                   -->
+<!-- ═══════════════════════════════════════════ -->
+<div class="sect">
+  <h2>Trivial <em>GitOps</em></h2>
+  <p class="lead">
+    Git commit &rarr; CI compiles &rarr; new root hash &rarr; diff posted to PR &rarr;
+    merge &rarr; apply. That's the entire workflow.
+  </p>
+
+  <pre><span class="dim"># .github/workflows/kix.yml</span>
+on:
+  pull_request:
+    jobs:
+      diff:
+        steps:
+          - kix build prod-eu1
+          - kix diff prod-eu1 > diff.md
+          - gh pr comment --body "$(cat diff.md)"
+
+  push:
+    branches: [main]
+    jobs:
+      deploy:
+        steps:
+          - kix deploy prod-eu1
+
+<span class="dim"># That's it. The compiler does the verification.</span>
+<span class="dim"># The diff gives the review artifact.</span>
+<span class="dim"># The hash gives the audit trail.</span></pre>
+
+  <div class="call g">
+    <strong>No ArgoCD. No Flux. No sync controllers.</strong>
+    <code>kix deploy</code> understands the dependency graph, deploys in wave order,
+    monitors health during rollout, and halts if something goes wrong.
+    The verification happened at compile time. The deploy is an informed, safe operation.
+  </div>
+
+  <div class="call a">
+    <strong>Note:</strong> <code>kix diff</code> and <code>kix deploy</code> are under active development.
+    The compiler and resource graph are production-ready today. The CLI tooling for
+    diffing and deploying is being built to take full advantage of the graph &mdash;
+    wave ordering, health checks, automatic rollback, and more.
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<!-- 8. Supply chain                             -->
+<!-- ═══════════════════════════════════════════ -->
+<div class="sect">
+  <h2>Locked inputs. <em>Reproducible forever.</em></h2>
+  <p class="lead">
+    Every input &mdash; Helm charts, container image references, external configs,
+    even the kix library itself &mdash; is locked with a hash. The flake.lock file
+    pins everything. Rebuild the same commit in 6 months and get bit-for-bit
+    identical output.
+  </p>
+
+  <div class="grid">
+    <div class="card">
+      <h3>Locked Helm charts</h3>
+      <p>
+        <code>fetchHelmChart</code> requires a content hash. If the upstream
+        chart changes, the build fails until you explicitly update the hash.
+        No silent upgrades.
+      </p>
+    </div>
+    <div class="card">
+      <h3>Locked dependencies</h3>
+      <p>
+        Every flake input (kixpkgs, nixpkgs, external modules) is pinned by
+        commit hash in <code>flake.lock</code>. Update explicitly with
+        <code>nix flake update</code>. Review the diff.
+      </p>
+    </div>
+    <div class="card">
+      <h3>No hidden state</h3>
+      <p>
+        No Terraform state files. No Helm release secrets. No ArgoCD sync state.
+        The compiled output depends <em>only</em> on the code in the repo.
+        Clone, build, get the same result.
+      </p>
+    </div>
+    <div class="card">
+      <h3>Audit trail</h3>
+      <p>
+        git log + root hash = complete audit trail.
+        "What was deployed on March 15?" &rarr; check out that commit, build,
+        compare hashes. The hash either matches (same state) or doesn't (drifted).
+      </p>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<!-- Summary                                     -->
+<!-- ═══════════════════════════════════════════ -->
+<div class="sect" style="border-top:2px solid var(--a)">
+  <h2>The <em>full picture</em></h2>
+
+  <div class="dia" style="line-height:2"><span class="accent">Code</span>           Teams write independent modules with typed options.
+<span class="accent">Compile</span>        The compiler merges, type-checks, resolves dependencies, validates.
+<span class="accent">Hash</span>           Every resource is content-addressed. The entire cluster is one root hash.
+<span class="accent">Diff</span>           Compare compiled output against live cluster. Deterministic.
+<span class="accent">Review</span>         Post the diff to a PR. Approve with confidence.
+<span class="accent">Deploy</span>         kix deploy: wave-ordered, health-monitored, halt-on-failure.
+<span class="accent">Verify</span>         Re-diff to detect drift. Hashes prove the state matches the code.
+<span class="accent">Roll back</span>      Deploy the previous root hash. Every dependency is guaranteed present.
+<span class="accent">Reproduce</span>      Same commit → same hash → same cluster state. Always. Forever.</div>
+
+  <div class="call a" style="text-align:center;font-size:15px">
+    <strong>This is what a compiler for Kubernetes looks like.</strong><br>
+    Verified infrastructure. Not hoped-for infrastructure.<br><br>
+    Let the AI write the code. The compiler verifies it. The diff proves it.
+    The hash guarantees rollback. <strong>That's infrastructure you can trust.</strong>
+  </div>
+</div>
+
+<div class="footer">
+  <a href="./" style="color:var(--d);text-decoration:none;margin-right:20px">&larr; The Story</a>
+  <a href="features.html" style="color:var(--d);text-decoration:none">&larr; Features</a>
+  <br><br>
+  kix &mdash; a compiler for Kubernetes. Running in production.
+</div>
+
+</div>
+</body>
+</html>
