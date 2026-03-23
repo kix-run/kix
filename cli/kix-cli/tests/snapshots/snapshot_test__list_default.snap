@@ -1,0 +1,7 @@
+---
+source: kix-cli/tests/snapshot_test.rs
+expression: stdout
+---
+ NAME    
+ example 
+ nw1

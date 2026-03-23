@@ -1,0 +1,30 @@
+[package]
+name = "kix-eval"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Nix FFI wrapper for kix — store, evaluator, caching, error translation"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+rusqlite.workspace = true
+blake3.workspace = true
+directories.workspace = true
+tracing.workspace = true
+
+# Nix FFI bindings — added when flake packaging is set up (Step 9)
+# nix-bindings-expr = { ... }
+# nix-bindings-store = { ... }
+# nix-bindings-flake = { ... }
+# nix-bindings-util = { ... }
+# nix-bindings-fetchers = { ... }
+
+[features]
+nix-ffi = []  # Enable when nix-bindings-* crates are added as deps
+test-util = []  # Exposes mock backend for downstream testing
+
+[dev-dependencies]
+tempfile.workspace = true

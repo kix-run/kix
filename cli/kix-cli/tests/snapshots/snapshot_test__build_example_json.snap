@@ -1,0 +1,25 @@
+---
+source: kix-cli/tests/snapshot_test.rs
+assertion_line: 31
+expression: stable
+---
+[
+  {
+    "apiVersion": "v1",
+    "kind": "Namespace",
+    "metadata": {
+      "name": "example"
+    }
+  },
+  {
+    "apiVersion": "v1",
+    "data": {
+      "key": "value"
+    },
+    "kind": "ConfigMap",
+    "metadata": {
+      "name": "app-config",
+      "namespace": "example"
+    }
+  }
+]

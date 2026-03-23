@@ -10,6 +10,7 @@
   packages = [
     inputs.claude-code.packages.${pkgs.stdenv.hostPlatform.system}.default
     pkgs.graphviz
+    pkgs.lefthook
   ];
 
   # DAG visualization scripts for the fixpoint cluster.
@@ -55,5 +56,16 @@
       uv.enable = true;
       uv.sync.enable = true;
     };
+    rust.enable = true;
   };
+
+  # Install lefthook git hooks on shell entry
+  enterShell = ''
+    lefthook install 2>/dev/null || true
+  '';
+
+  # kix CLI (runs from cli/ workspace with mock backend)
+  scripts.kix.exec = ''
+    cargo run --quiet --manifest-path "$DEVENV_ROOT/cli/Cargo.toml" -- "$@"
+  '';
 }

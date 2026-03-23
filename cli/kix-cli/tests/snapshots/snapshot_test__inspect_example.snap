@@ -1,0 +1,21 @@
+---
+source: kix-cli/tests/snapshot_test.rs
+expression: stdout
+---
+Cluster: example
+Total resources: 2
+
+Namespaces (2):
+  (cluster-scoped) (1 resources)
+  example (1 resources)
+
+Resource kinds:
+ Kind       Count 
+ ConfigMap  1     
+ Namespace  1     
+
+Resources:
+  (cluster-scoped):
+    Namespace/example
+  example:
+    ConfigMap/app-config

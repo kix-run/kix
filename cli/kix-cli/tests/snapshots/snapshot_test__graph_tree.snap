@@ -1,0 +1,7 @@
+---
+source: kix-cli/tests/snapshot_test.rs
+assertion_line: 64
+expression: stdout
+---
+Namespace/example
+ConfigMap/app-config@example

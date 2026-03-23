@@ -1,0 +1,81 @@
+[workspace]
+resolver = "2"
+members = ["kix-cli", "kix-eval", "kix-manifest", "kix-cluster"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/kixpkgs/kixpkgs"
+
+[workspace.dependencies]
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yml = "0.0.12"
+
+# Error handling
+thiserror = "2"
+miette = { version = "7", features = ["fancy"] }
+anyhow = "1"
+
+# CLI
+clap = { version = "4.5", features = ["derive", "env"] }
+clap_complete = "4.5"
+
+# Output formatting
+comfy-table = "7"
+owo-colors = "4"
+indicatif = "0.17"
+
+# Diffing
+similar = "2"
+strsim = "0.11"
+rayon = "1"
+indexmap = { version = "2", features = ["serde"] }
+
+# K8s
+kube = { version = "0.98", features = ["runtime", "client"] }
+k8s-openapi = { version = "0.24" }
+
+# Async
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+
+# DAG
+petgraph = "0.7"
+
+# SQLite
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+# Hashing
+blake3 = "1"
+
+# Paths
+directories = "6"
+tempfile = "3"
+walkdir = "2"
+
+# Time
+chrono = "0.4"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Internal crates
+kix-eval = { path = "kix-eval" }
+kix-manifest = { path = "kix-manifest" }
+kix-cluster = { path = "kix-cluster" }
+
+# Test dependencies (used as dev-dependencies in member crates)
+# Listed here so members can inherit them with .workspace = true
+[workspace.dependencies.assert_cmd]
+version = "2"
+
+[workspace.dependencies.insta]
+version = "1"
+features = ["yaml"]
+
+[workspace.dependencies.predicates]
+version = "3"
