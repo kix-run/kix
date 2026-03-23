@@ -76,10 +76,13 @@ Focus on the **Modified** section. Each entry shows exactly which fields differ 
 
 ## Package Anatomy
 
-Every package is a function `{ scope, lib, ...deps }: ...` that returns `{ meta?, options, build }`.
+Every package is a function `{ scope, lib, kix, ...deps }: ...` that returns `{ meta?, options, build }`.
 
 ```nix
-{ scope, lib }:
+{ scope, lib, kix, postgres, storage, ingressNginx ? null, clusterIssuer ? null }:
+let
+  name = scope.instanceName;
+in
 {
   # Optional: package metadata for lifecycle and scoping rules
   meta = {
@@ -90,22 +93,70 @@ Every package is a function `{ scope, lib, ...deps }: ...` that returns `{ meta?
   };
 
   options = {
-    image = lib.mkOption { ... };
+    image = lib.mkOption {
+      type = lib.types.anything;
+      default = { repository = "myapp/server"; tag = "v1.0.0"; pullPolicy = "IfNotPresent"; };
+    };
     replicaCount = lib.mkOption { type = lib.types.int; default = 1; };
+    env = lib.mkOption { type = lib.types.attrsOf lib.types.str; default = { }; };
+    ingress = lib.mkOption {
+      type = lib.types.anything;
+      default = { enabled = false; host = ""; };
+    };
   };
 
   build = { self, config, clusterConfig }:
+  let
+    # Shared values in let block
+    healthCheck = { httpGet = { path = "/health"; port = "http"; }; periodSeconds = 10; };
+  in
   {
-    # Resources as attrs — names become the keys used for `self.` references
-    serviceAccount = scope.mkResource { ... };
-    deployment = scope.mkResource { ... };
-    clusterRole = scope.mkClusterResource { ... };
+    # --- Mounts (declare separately, inject via withMounts) ---
+    dataMount = kix.mount.pvc storage { mountPath = "/data"; };
 
-    # main defines the entry point and dependency graph
-    main = {
-      resource = self.deployment;
-      requires = [ self.serviceAccount self.clusterRole ];
-    };
+    # --- Workloads (pipe-friendly composition) ---
+    deployment =
+      {
+        name = "${name}-server";
+        spec = {
+          replicas = config.replicaCount;
+          selector.matchLabels = scope.selectorLabels;
+          template.spec.containers = [{
+            name = "server";
+            image = "${config.image.repository}:${config.image.tag}";
+            env = kix.mkEnvVars ({
+              DB_HOST = postgres.out.fqdn;
+              DB_PORT = postgres.out.port;
+            } // config.env);
+            ports = [ (kix.port "http" 8080) ];
+            livenessProbe = healthCheck;
+            readinessProbe = healthCheck;
+          }];
+        };
+      }
+      |> kix.withMounts [ self.dataMount ]
+      |> scope.mkDeployment;
+
+    # --- Services (auto-derive from workload) ---
+    service = self.deployment
+      |> kix.service.fromWorkload { name = "${name}-server"; }
+      |> scope.mkResource;
+
+    # --- Ingress (optional, pipe-friendly) ---
+    ingress =
+      if config.ingress.enabled then
+        self.service
+        |> kix.ingress.fromService {
+          inherit name;
+          host = config.ingress.host;
+          className = if ingressNginx != null then ingressNginx.out.ingressClassName else "public";
+        }
+        |> (if clusterIssuer != null then clusterIssuer.out.withCert else lib.id)
+        |> scope.mkResource
+      else null;
+
+    # main — entry point. Resources reachable via self.* refs are auto-tracked.
+    main = if config.ingress.enabled then self.ingress else self.service;
   };
 }
 ```
@@ -174,12 +225,36 @@ Fix all warnings before committing.
 |-----|-------------|
 | `scope.mkResource { ... }` | Create a namespaced K8s resource |
 | `scope.mkClusterResource { ... }` | Create a cluster-scoped resource |
+| `scope.mkDeployment` | Create a Deployment — auto-sets apiVersion/kind, copies `selector.matchLabels` to template labels |
+| `scope.mkStatefulSet` | Same as mkDeployment but for StatefulSets |
+| `scope.mkDaemonSet` | Same as mkDeployment but for DaemonSets |
 | `scope.selectWorkload target` | Derive selector labels from target's `spec.selector.matchLabels` with automatic dependency tracking |
 | `scope.selectByLabels target` | Select a resource by its package-provided labels (before scope injection) with dependency tracking |
+| `scope.selectorLabels` | Default selector labels for this instance (used as `selector.matchLabels`) |
 | `scope.defaults config { defaults }` | Deep-merge user config over package defaults. Warns on unknown keys. |
 | `scope.instanceName` | The instance name from the cluster definition |
 | `scope.namespaceName` | The namespace this instance lives in |
 | `scope.namespace` | The Namespace resource itself (for deps) |
+
+### Workload constructors (scope.mkDeployment etc.)
+
+These are pipe-friendly — use them at the end of a `|>` chain:
+
+```nix
+deployment =
+  {
+    name = "${name}-server";
+    spec = {
+      replicas = config.replicaCount;
+      selector.matchLabels = scope.selectorLabels;
+      template.spec.containers = [ { ... } ];
+    };
+  }
+  |> kix.withMounts [ self.dataMount self.configMount ]
+  |> scope.mkDeployment;
+```
+
+They auto-set `apiVersion`/`kind` and copy `spec.selector.matchLabels` to `spec.template.metadata.labels` (preventing selector mismatch). The `name` field is required in the input attrset.
 
 ### mkResource / mkClusterResource fields
 
@@ -193,7 +268,7 @@ Fix all warnings before committing.
 | `stringData` | For Secrets |
 | `labels` | Merged into `metadata.labels` (cluster labels + managed-by added automatically) |
 | `annotations` | Merged into `metadata.annotations` |
-| `extra` | Top-level fields merged outside metadata (e.g. `rules` for ClusterRole, `provisioner` for StorageClass, `webhooks` for webhook configs) |
+| `extra` | Top-level fields merged outside metadata (e.g. `rules` for ClusterRole, `type` for Secrets, `webhooks` for webhook configs) |
 | `outputs` | Named values that carry this resource's dependency context (e.g. `{ metricsPort = "9090"; }` → accessible via `resource.out.metricsPort`) |
 | `requires` | Resources that must exist but aren't referenced via `"${self.x}"` |
 
@@ -201,8 +276,136 @@ Fix all warnings before committing.
 
 Every resource exposes:
 - `"${resource}"` — the resource name (string interpolation creates a dependency edge)
+- `resource.out.name` — the resource name as a string (use in `envFrom`, `secretKeyRef`, etc.)
+- `resource.out.selector` — the resource's labels (for ServiceMonitor selectors etc.)
 - `resource.fqdn` — full DNS name (e.g. `my-svc.my-ns.svc.cluster.local`) with dependency context
 - `resource.out.<key>` — named outputs from the `outputs` field, with dependency context
+
+### Composition helpers (kix.*)
+
+#### Mount helpers
+
+Create `{ volume, volumeMount }` pairs from resources. Returns null when resource is null (disabled features silently skip).
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `kix.mount.pvc` | `resource: { mountPath, name?, readOnly?, subPath? }` | PVC mount |
+| `kix.mount.configMap` | `resource: { mountPath, name?, subPath?, items?, defaultMode? }` | ConfigMap mount. `items` selects specific keys: `[{ key = "app.conf"; path = "app.conf"; }]` |
+| `kix.mount.secret` | `resource: { mountPath, name?, subPath?, items?, defaultMode? }` | Secret mount (same options as configMap) |
+| `kix.mount.emptyDir` | `{ mountPath, name, medium?, sizeLimit?, subPath? }` | Ephemeral mount (no resource arg) |
+
+Names auto-derive from `resource.out.name` when not specified.
+
+```nix
+# Examples from immich:
+libraryMount = kix.mount.pvc storage { mountPath = "/usr/src/app/upload"; };
+configMount = kix.mount.configMap self.configMap { mountPath = "/config"; };
+
+# Examples from harbor — subPath + items for selective key mounting:
+coreConfigMount = kix.mount.configMap self.coreConfigMap {
+  name = "config"; mountPath = "/etc/core/app.conf"; subPath = "app.conf";
+  items = [{ key = "app.conf"; path = "app.conf"; }];
+};
+coreSecretKeyMount = kix.mount.secret self.coreSecret {
+  name = "secret-key"; mountPath = "/etc/core/key"; subPath = "key";
+  items = [{ key = "secretKey"; path = "key"; }]; defaultMode = 420;
+};
+```
+
+#### Mount injection
+
+| Function | Description |
+|----------|-------------|
+| `kix.withMounts [ mount1 mount2 ... ]` | Inject mounts into a single-container pod spec (pre-seal). Nulls filtered automatically. Errors if multiple containers. |
+| `kix.withMountsOn "containerName" [ ... ]` | Inject mounts into a specific container by name (multi-container pods). |
+
+```nix
+deployment =
+  { name = "my-app"; spec = { ... }; }
+  |> kix.withMounts [
+    self.libraryMount
+    self.configMount            # null if config disabled → silently skipped
+    (kix.mount.emptyDir { name = "tmp"; mountPath = "/tmp"; })
+  ]
+  |> scope.mkDeployment;
+```
+
+For multi-container pods where `kix.withMounts` can't auto-target, either use `kix.withMountsOn` or wire volumes/volumeMounts manually (as harbor's registry does for its 2-container pod).
+
+#### Service helpers
+
+| Function | Description |
+|----------|-------------|
+| `kix.service.fromWorkload { name, type?, ports?, outputs?, ... } workload` | Auto-derive Service from a workload. Reads selector and ports from the workload's container spec. Pipe to `scope.mkResource`. |
+
+```nix
+# Simple — auto-derive everything:
+service = self.deployment |> kix.service.fromWorkload { name = "my-svc"; } |> scope.mkResource;
+
+# Override ports (harbor pattern — remap container port 8080 → service port 80):
+coreService = self.coreDeployment
+  |> kix.service.fromWorkload {
+    name = "${name}-core";
+    ports = [
+      { name = "http-web"; port = 80; targetPort = 8080; protocol = "TCP"; }
+    ] ++ lib.optionals config.metrics.enabled [
+      { name = "http-metrics"; port = config.metrics.port; targetPort = config.metrics.port; protocol = "TCP"; }
+    ];
+    outputs.port = "80";
+  }
+  |> scope.mkResource;
+```
+
+#### Ingress helpers
+
+| Function | Description |
+|----------|-------------|
+| `kix.ingress.fromService { name, host, path?, pathType?, port?, className?, tls?, annotations?, ... } service` | Auto-derive Ingress from a Service. Reads backend name and port from `service.out`. |
+
+```nix
+# Simple ingress (from immich):
+ingress = self.service
+  |> kix.ingress.fromService {
+    inherit name;
+    host = config.ingress.host;
+    className = if ingressNginx != null then ingressNginx.out.ingressClassName else "public";
+    tls = lib.optional (config.ingress.tls.enabled or false) {
+      hosts = [ config.ingress.host ];
+      secretName = config.ingress.tls.secretName;
+    };
+    annotations = { "nginx.ingress.kubernetes.io/proxy-body-size" = "0"; };
+  }
+  |> (if clusterIssuer != null then clusterIssuer.out.withCert else lib.id)
+  |> scope.mkResource;
+```
+
+For complex ingresses with multiple backends/paths (like harbor), build the Ingress manually with `scope.mkResource` and reference services via `self.coreService.out.name`.
+
+#### Utility helpers
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `kix.port` | `name: containerPort → { name, containerPort, protocol = "TCP" }` | Container port shorthand. Override protocol with `// { protocol = "UDP"; }` |
+| `kix.mkEnvVars` | `{ KEY = "val"; OPT = null; } → [{ name = "KEY"; value = "val"; }]` | Env attrset → K8s env list. Nulls filtered — use for conditional features. |
+| `kix.parseGi` | `"50Gi" → 50` | Parse K8s quantity to GiB number. Supports Ti/Gi/Mi. Returns null for unknown. |
+
+```nix
+# kix.port — container port declarations:
+ports = [ (kix.port "http" 8080) (kix.port "metrics" 9090) ];
+
+# kix.mkEnvVars — null-safe env var conversion:
+env = kix.mkEnvVars ({
+  DB_HOSTNAME = postgres.out.fqdn;
+  REDIS_HOSTNAME = valkey.out.fqdn;
+  ML_URL = if hasMl then "http://${machineLearning.out.fqdn}:${machineLearning.out.port}" else null;
+} // config.env);
+
+# kix.parseGi — storage validation:
+storageSizeGi = kix.parseGi storage.out.size;
+_warn = if storageSizeGi != null && storageSizeGi < 50 then
+  builtins.trace "warning: storage undersized" null
+else null;
+```
 
 ### Top-level kix functions
 
@@ -226,8 +429,14 @@ Every resource exposes:
 | `lib.concatStringsSep sep list` | Join strings |
 | `lib.mapAttrsToList fn attrset` | Convert attrset to list |
 | `lib.attrValues attrset` | Get all values from an attrset |
+| `lib.recursiveUpdate base overlay` | Deep-merge two attrsets (useful for probe/config variants) |
+| `lib.id` | Identity function — useful as no-op in conditional pipes: `\|> (if cond then transform else lib.id)` |
 
 ## Cluster Definition
+
+Cluster definitions can be **single-file** or **module-based**.
+
+### Single-file (simple clusters)
 
 ```nix
 # clusters/<name>.nix
@@ -256,6 +465,57 @@ kix.buildCluster {
   };
 }
 ```
+
+### Module-based (production clusters)
+
+For larger clusters, split into NixOS-style modules in `clusters/<name>/`. Each module file receives `{ config, lib, ref, packages, ... }` and can declare `options` and set `config.instances`.
+
+```nix
+# clusters/nw1/platform.nix — declares cluster-wide options
+{ config, lib, ref, packages, ... }:
+{
+  options = {
+    cluster.domain = lib.mkOption { type = lib.types.str; };
+    # ... other cluster-wide config
+  };
+  config.instances.kube-system = {
+    ingress-nginx = { package = packages.ingress-nginx; };
+  };
+}
+```
+
+```nix
+# clusters/nw1/harbor.nix — uses cluster options, defines instances
+{ config, lib, packages, ... }:
+{
+  config.instances.harbor-system = {
+    harbor = {
+      package = packages.harbor;
+      config = {
+        externalURL = "https://harbor.${config.cluster.domain}";
+        ingress.host = "harbor.${config.cluster.domain}";
+        # ...
+      };
+    };
+    harbor-redis = {
+      package = packages.valkey;
+      aliases = [ "redis" ];        # DI: harbor depends on "redis" → resolves here
+      labelStyle = "helm";
+      config = { ... };
+    };
+    system-harbor-db-1 = {
+      package = packages.stackgres-cluster;
+      aliases = [ "postgres" ];     # DI: harbor depends on "postgres" → resolves here
+      config = { ... };
+    };
+  };
+}
+```
+
+Key patterns in module-based clusters:
+- **`aliases`** — DI resolution matches arg names to instance names *or* aliases. Harbor's package takes `redis` and `postgres` as args; the cluster wires them via aliases.
+- **`labelStyle = "helm"`** — tells kix to emit Helm-compatible labels (for packages that need to match Helm-deployed resources during migration).
+- **Cluster-wide options** — declared in one module (e.g., `platform.nix`), consumed by others via `config.cluster.domain` etc.
 
 ### Helm charts in cluster definitions
 
@@ -326,24 +586,29 @@ instances = {
 };
 ```
 
-**In the consuming package:**
+**In the consuming package (modern — kix.mount.pvc):**
 
 ```nix
-{ scope, lib, storage }:  # storage is a hard dep
+{ scope, lib, kix, storage }:  # storage is a hard dep
 # ...
-deployment = scope.mkResource {
-  # ...
-  spec.template.spec = {
-    volumes = [{
-      name = "data";
-      persistentVolumeClaim.claimName = storage.out.name;
-    }];
-    containers = [{
-      # ...
-      volumeMounts = [{ name = "data"; mountPath = "/data"; }];
-    }];
-  };
+build = { self, config, clusterConfig }: {
+  dataMount = kix.mount.pvc storage { mountPath = "/data"; };
+
+  deployment =
+    { name = "my-app"; spec = { ... }; }
+    |> kix.withMounts [ self.dataMount ]
+    |> scope.mkDeployment;
 };
+```
+
+`kix.mount.pvc` + `kix.withMounts` is preferred over manual volume/volumeMount wiring. It auto-derives the volume name, handles null resources, and keeps mount logic separate from the deployment spec.
+
+**Manual approach (for complex cases):**
+
+```nix
+# When you need custom volume options or multi-container pods:
+volumes = [{ name = "data"; persistentVolumeClaim.claimName = storage.out.name; }];
+containers = [{ volumeMounts = [{ name = "data"; mountPath = "/data"; }]; }];
 ```
 
 **Why PVCs are instances, not internal resources:**
@@ -379,6 +644,67 @@ meta = {
 - `scope = "namespace"` — DI resolution errors if a consumer in a different namespace depends on this package
 - Both are enforced by `lib/eval.nix` at build time
 
+## Multi-Component Packages
+
+Complex applications like Harbor have multiple sub-services (core, portal, registry, jobservice, exporter). These are all defined in **one package** — not split into separate packages — because they share config, secrets, and internal URLs.
+
+**Key patterns from `packages/harbor/`:**
+
+1. **Shared let bindings** — define common values (selector labels, security contexts, probe bases, internal URLs) once in the `let` block:
+   ```nix
+   let
+     selectorLabels = { app = "harbor"; release = name; };
+     harborPodDefaults = { securityContext = { runAsUser = 10000; ... }; ... };
+     probeBase = { httpGet = { scheme = "HTTP"; port = 8080; }; ... };
+     coreProbe = lib.recursiveUpdate probeBase { httpGet.path = "/api/v2.0/ping"; };
+   ```
+
+2. **Per-component selectors** — add a `component` label to distinguish pods:
+   ```nix
+   selector.matchLabels = selectorLabels // { component = "core"; };
+   ```
+
+3. **Cross-resource references via `self.*.out.name`** — use for envFrom, secretKeyRef, etc.:
+   ```nix
+   envFrom = [
+     { configMapRef.name = self.coreConfigMap.out.name; }
+     { secretRef.name = self.coreSecret.out.name; }
+   ];
+   env = [
+     { name = "CORE_SECRET"; valueFrom.secretKeyRef = { name = self.coreSecret.out.name; key = "secret"; }; }
+   ];
+   ```
+
+4. **Inline PVCs** — when storage is owned by the package (not the cluster operator), define PVCs as resources within the package rather than using DI:
+   ```nix
+   registryPVC = scope.mkResource {
+     apiVersion = "v1"; kind = "PersistentVolumeClaim";
+     name = "${name}-registry";
+     spec = {
+       accessModes = [ "ReadWriteOnce" ];
+       resources.requests.storage = config.persistence.registry.size;
+     } // lib.optionalAttrs (config.persistence.registry.storageClass != null) {
+       storageClassName = config.persistence.registry.storageClass;
+     };
+   };
+   ```
+   Use DI PVCs (via `storage` arg) when the cluster operator should own storage lifecycle. Use inline PVCs when the package owns them.
+
+5. **Manual volumes for multi-container pods** — when two containers share volumes (harbor's registry + registryctl), wire volumes manually instead of using `kix.withMounts` (which only works for single-container pods unless you use `kix.withMountsOn`).
+
+6. **`main` with explicit `requires`** — in multi-component packages, many resources aren't reachable via transitive `self.*` references from the entry point. List them in `main.requires`:
+   ```nix
+   main = {
+     resource = if config.ingress.enabled then self.ingress else self.coreService;
+     requires = [
+       self.coreDeployment self.coreService
+       self.portalDeployment self.portalService
+       self.registryDeployment self.registryService
+       # ... all resources that must exist
+     ];
+   };
+   ```
+
 ## Migration Tips
 
 - **Read the Ansible role first.** Understand what the role creates — which Deployments, Services, ConfigMaps, RBAC, etc. This tells you what your package needs. Don't reverse-engineer from the cluster dump alone.
@@ -389,4 +715,9 @@ meta = {
 - **Don't over-specify.** If a field is a K8s default (e.g. `strategy: RollingUpdate`, `dnsPolicy: ClusterFirst`), don't include it — the diff tool strips these automatically.
 - **Cluster-only resources are fine.** Many cluster resources (operator CRDs, auto-generated secrets, controller resources) are not kix-managed. Focus on the **Modified** section.
 - **Pipe the diff to an LLM.** The JSON-path format is designed for LLM consumption: `./scripts/kix-diff.py ./result cluster-dump/ | pbcopy`
-- **Look at existing packages for patterns.** `packages/reloader/` is a clean simple example. `packages/valkey/` shows a complex multi-resource package. `packages/storage-classes/` shows `lib.mapAttrs` to generate resources from config.
+- **Look at existing packages for patterns:**
+  - `packages/reloader/` — clean simple package (single Deployment + Service)
+  - `packages/immich/` — mid-complexity with DI storage, optional ML, conditional ingress, `kix.mount.*` + `kix.withMounts` + `kix.mkEnvVars` + `kix.service.fromWorkload` + `kix.ingress.fromService` patterns
+  - `packages/harbor/` — complex multi-component package (core, portal, registry, jobservice, exporter) with shared let bindings, per-component selectors, inline PVCs, manual multi-container volumes
+  - `packages/valkey/` — complex multi-resource package
+  - `packages/storage-classes/` — `lib.mapAttrs` to generate resources from config

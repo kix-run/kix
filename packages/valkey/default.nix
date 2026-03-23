@@ -962,9 +962,11 @@
         };
       };
 
-      # --- StatefulSet (valkey-node) ---
-      statefulSet = {
-        name = "${name}";
+      # --- StatefulSet (valkey-node or valkey-primary) ---
+      statefulSet = let
+        topologySuffix = if config.sentinel.enabled then "node" else "primary";
+      in {
+        name = "${name}-${topologySuffix}";
         labels = commonLabels;
         spec = {
           serviceName = self.headlessService.out.name;

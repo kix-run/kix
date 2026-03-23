@@ -146,6 +146,7 @@ rec {
       apiVersion = resource.apiVersion or (throw "helm resource missing 'apiVersion'");
       meta = resource.metadata or { };
       name = meta.name or (throw "helm resource missing 'metadata.name'");
+      resourceNs = meta.namespace or null;
 
       rawAnnotations =
         let
@@ -164,7 +165,16 @@ rec {
       # Everything outside standard fields goes into `extra`.
       extra = lib.filterAttrs (k: _: !(builtins.elem k standardFields)) resource;
 
-      mkFn = if isClusterScopedKind kind then scope.mkClusterResource else scope.mkResource;
+      # Respect the resource's original namespace when it differs from the
+      # scope's namespace (e.g. kube-system services for control-plane
+      # monitoring).  Cluster-scoped kinds always use scope.mkClusterResource.
+      hasForeignNs = resourceNs != null && resourceNs != scope.namespaceName;
+      effectiveScope =
+        if hasForeignNs then scope.forNamespace resourceNs
+        else scope;
+      mkFn =
+        if isClusterScopedKind kind then scope.mkClusterResource
+        else effectiveScope.mkResource;
     in
     mkFn (
       {

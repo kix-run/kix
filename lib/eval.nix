@@ -28,6 +28,7 @@ rec {
       instanceName,
       namespaceName,
       namespaceResource,
+      namespaces ? { },
       clusterLabels ? { },
       labelStyle ? "kix",
     }:
@@ -89,10 +90,23 @@ rec {
         });
     in
     {
-      inherit instanceName namespaceName selectorLabels labelStyle;
+      inherit instanceName namespaceName selectorLabels labelStyle namespaces;
       namespace = namespaceResource;
 
       mkResource = scopeMkResource;
+
+      # Return a new scope targeting a different namespace.
+      # Errors if the namespace doesn't exist in the cluster.
+      forNamespace = nsName:
+        let
+          nsRes = namespaces.${nsName}
+            or (throw "scope.forNamespace: namespace '${nsName}' does not exist in the cluster");
+        in
+        mkScope {
+          inherit instanceName namespaces clusterLabels labelStyle;
+          namespaceName = nsName;
+          namespaceResource = nsRes;
+        };
 
       mkClusterResource =
         {
@@ -553,6 +567,7 @@ rec {
       namespaceName,
       instCfg,
       namespaceResource,
+      nsResources ? {},
       clusterLabels,
       resolutionIndex,
       allInstances,
@@ -574,6 +589,7 @@ rec {
           namespaceResource
           clusterLabels
           ;
+        namespaces = nsResources;
         labelStyle = instCfg.labelStyle;
       };
 
@@ -1021,7 +1037,7 @@ rec {
             evaluateInstance {
               instanceName = instName;
               namespaceName = nsName;
-              inherit instCfg;
+              inherit instCfg nsResources;
               namespaceResource = nsResources.${nsName};
               allInstances = self;
               clusterLabels = cfg.clusterLabels;

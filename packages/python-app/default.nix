@@ -24,7 +24,7 @@ in
   options = {
     # Naming overrides
     releaseName = lib.mkOption { type = lib.types.nullOr lib.types.str; default = null; }; # if set, used as prefix for resource names instead of instance name
-    componentName = lib.mkOption { type = lib.types.str; default = "backend"; }; # component suffix for deployment/service names (e.g. "web" or "backend")
+    componentName = lib.mkOption { type = lib.types.str; default = "web"; }; # component suffix for deployment/service names (e.g. "web" or "backend")
 
     # Backend (Django/Gunicorn)
     backend = lib.mkOption {
@@ -569,10 +569,11 @@ in
       queueWorkerParts = lib.concatMapAttrs (
         wName: wCfg:
         let
+          wn = wCfg.workerName or "queue-${wName}";
           deployKey = "queueWorker-${wName}";
           hpaKey = "queueWorkerHpa-${wName}";
           deploy = mkWorkerDeployment self {
-            workerName = "queue-${wName}";
+            workerName = wn;
             command = wCfg.command;
             args = wCfg.args or null;
             replicas = wCfg.replicas or 1;
@@ -584,7 +585,7 @@ in
             secrets = wCfg.secrets or null;
           };
           hpa = mkWorkerHpa {
-            hpaName = "queue-${wName}";
+            hpaName = wn;
             deployResource = deploy;
             hpaCfg = wCfg.hpa or { enabled = false; };
           };
@@ -595,7 +596,7 @@ in
       # ── Cron worker resources ───────────────────────────────────────
       cronWorkerParts = lib.concatMapAttrs (wName: wCfg: {
         "cronWorker-${wName}" = mkWorkerDeployment self {
-          workerName = "cron-${wName}";
+          workerName = wCfg.workerName or "cron-${wName}";
           command = wCfg.command;
           args = wCfg.args or null;
           replicas = wCfg.replicas or 1;
@@ -611,7 +612,7 @@ in
       # ── Custom process resources ────────────────────────────────────
       customProcessParts = lib.concatMapAttrs (pName: pCfg: {
         "customProcess-${pName}" = mkWorkerDeployment self {
-          workerName = "custom-${pName}";
+          workerName = pCfg.workerName or "custom-${pName}";
           command = pCfg.command;
           args = pCfg.args or null;
           replicas = pCfg.replicas or 1;

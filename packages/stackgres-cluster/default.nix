@@ -222,7 +222,7 @@ in
       pgConfig = scope.mkResource {
         apiVersion = "stackgres.io/v1";
         kind = "SGPostgresConfig";
-        name = "${name}-pgconfig";
+        name = "${name}-config";
         labels = selectorLabels;
         spec = {
           postgresVersion = config.postgres.version;
@@ -235,7 +235,7 @@ in
       objectStorage = scope.mkResource ({
         apiVersion = "stackgres.io/v1beta1";
         kind = "SGObjectStorage";
-        name = "${name}-backup-storage";
+        name = config.backup.s3.bucket;
         labels = selectorLabels;
         spec = {
           type = "s3Compatible";
@@ -270,7 +270,7 @@ in
         scope.mkResource {
           apiVersion = "stackgres.io/v1";
           kind = "SGPoolingConfig";
-          name = "${name}-pooling";
+          name = "${name}-pooling-config";
           labels = selectorLabels;
           spec = {
             pgBouncer = {

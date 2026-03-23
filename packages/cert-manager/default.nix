@@ -354,7 +354,7 @@ let
     subjects = mkControllerSubject self.controllerServiceAccount;
     labels = controllerLabels;
     roles = {
-      "${name}-tokenrequest" = grant [
+      "cert-manager-${name}-tokenrequest" = grant [
         (core "serviceaccounts/token"
           |> restrictTo [ self.controllerServiceAccount.out.name ]
           |> allow [ "create" ])

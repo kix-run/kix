@@ -34,7 +34,7 @@
 
   defaultValues = {
     # --- Deployment mode ---
-    deploymentMode = "Distributed";
+    deploymentMode = "SimpleScalable";
 
     # --- Multi-tenancy ---
     loki = {

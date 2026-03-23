@@ -77,13 +77,16 @@ in
     clusterRoles = mkClusterRoleSet scope {
       subjects = [{ kind = "ServiceAccount"; name = self.serviceAccount.out.name; namespace = scope.namespaceName; }];
       roles = {
-        "${name}-reloader-role" = grant [
-          ([core.secrets core.configmaps]                          |> watch)
-          ([apps.deployments apps.daemonsets apps.statefulsets]     |> allow [ "list" "get" "update" "patch" ])
-          (batch.cronjobs                                          |> allow [ "list" "get" ])
-          (batch.jobs                                              |> allow [ "create" "delete" "list" "get" ])
-          (core.events                                             |> emit)
-        ];
+        "${name}-reloader-role" = {
+          bindingName = "${name}-reloader-role-binding";
+          rules = grant [
+            ([core.secrets core.configmaps]                          |> watch)
+            ([apps.deployments apps.daemonsets apps.statefulsets]     |> allow [ "list" "get" "update" "patch" ])
+            (batch.cronjobs                                          |> allow [ "list" "get" ])
+            (batch.jobs                                              |> allow [ "create" "delete" "list" "get" ])
+            (core.events                                             |> emit)
+          ];
+        };
       };
     };
 

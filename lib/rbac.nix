@@ -117,7 +117,10 @@ in rec {
   mkClusterRoleSet = scope: { subjects, labels ? {}, roles }:
     builtins.listToAttrs (lib.concatMap (roleName:
       let
-        rules = roles.${roleName};
+        entry = roles.${roleName};
+        # Accept either plain rules list or { rules, bindingName? }.
+        rules       = if builtins.isList entry then entry else entry.rules;
+        bindingName = if builtins.isList entry then "${roleName}binding" else entry.bindingName or "${roleName}binding";
         role = scope.mkClusterResource {
           apiVersion = "rbac.authorization.k8s.io/v1";
           kind = "ClusterRole";
@@ -128,7 +131,7 @@ in rec {
         binding = scope.mkClusterResource {
           apiVersion = "rbac.authorization.k8s.io/v1";
           kind = "ClusterRoleBinding";
-          name = roleName;
+          name = bindingName;
           inherit labels;
           extra = {
             roleRef = {
@@ -150,7 +153,10 @@ in rec {
   mkRoleSet = scope: { subjects, labels ? {}, roles }:
     builtins.listToAttrs (lib.concatMap (roleName:
       let
-        rules = roles.${roleName};
+        entry = roles.${roleName};
+        # Accept either plain rules list or { rules, bindingName? }.
+        rules       = if builtins.isList entry then entry else entry.rules;
+        bindingName = if builtins.isList entry then "${roleName}binding" else entry.bindingName or "${roleName}binding";
         role = scope.mkResource {
           apiVersion = "rbac.authorization.k8s.io/v1";
           kind = "Role";
@@ -161,7 +167,7 @@ in rec {
         binding = scope.mkResource {
           apiVersion = "rbac.authorization.k8s.io/v1";
           kind = "RoleBinding";
-          name = roleName;
+          name = bindingName;
           inherit labels;
           extra = {
             roleRef = {
