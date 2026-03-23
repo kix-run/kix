@@ -24,31 +24,14 @@ let
 
   mkTenantPolicy =
     tenantName: tenantCfg:
-    let
-      nsLabels = map (ns: {
-        matchLabels = {
-          "k8s:io.kubernetes.pod.namespace" = ns;
-        };
-      }) tenantCfg.namespaces;
-
-    in
     mkCiliumPolicy {
       name = "allow-within-tenant-${tenantName}";
       spec = {
-        endpointSelector = {
-          matchExpressions = [
-            {
-              key = "k8s:io.kubernetes.pod.namespace";
-              operator = "In";
-              values = tenantCfg.namespaces;
-            }
-          ];
-        };
         ingress = [
-          { fromEndpoints = nsLabels; }
+          { }
         ];
         egress = [
-          { toEndpoints = nsLabels; }
+          { }
         ];
       };
     };

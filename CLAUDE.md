@@ -28,3 +28,12 @@ nix build .#cluster-nw1 --extra-experimental-features pipe-operators
 ./scripts/kix-dump.py --all [--context <ctx>] cluster-dump/
 ./scripts/kix-diff.py ./result cluster-dump/
 ```
+
+## Subagent guidelines
+
+- **Define what "done" looks like** — give a concrete check command and expected outcome.
+- **Constrain the workflow** — specify the edit/verify loop. No git commands, no unnecessary builds, no broad exploration.
+- **Fail fast** — if they break things badly, return immediately instead of trying to recover.
+- **Include known context in the prompt** rather than having agents rediscover it. If it is in files, tell them which files to read.
+- **Keep verification with the parent** — agents edit, parent builds/integrates.
+- **Reference skill files directly** but never say "understand X" — that triggers expensive exploration.

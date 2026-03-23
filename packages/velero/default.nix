@@ -200,6 +200,7 @@ in
       kind = "ServiceAccount";
       name = "${name}-server";
       labels = selectorLabels;
+      extra.automountServiceAccountToken = true;
     };
 
     # --- ClusterRoleBinding ---
@@ -306,7 +307,7 @@ in
             targetPort = "http-monitoring";
           }
         ];
-        selector = selectorLabels;
+        selector = selectorLabels // { name = "velero"; };
       };
     };
 
@@ -323,9 +324,17 @@ in
         strategy.type = "Recreate";
         selector.matchLabels = selectorLabels;
         template = {
-          metadata.labels = selectorLabels;
+          metadata = {
+            labels = selectorLabels // { name = "velero"; };
+            annotations = {
+              "prometheus.io/path" = "/metrics";
+              "prometheus.io/port" = "8085";
+              "prometheus.io/scrape" = "true";
+            };
+          };
           spec = {
             serviceAccountName = "${name}-server";
+            automountServiceAccountToken = true;
             terminationGracePeriodSeconds = 3600;
             initContainers = map (ic: {
               inherit (ic) name image volumeMounts;
@@ -347,7 +356,10 @@ in
                     }
                     {
                       name = "VELERO_NAMESPACE";
-                      valueFrom.fieldRef.fieldPath = "metadata.namespace";
+                      valueFrom.fieldRef = {
+                        apiVersion = "v1";
+                        fieldPath = "metadata.namespace";
+                      };
                     }
                     {
                       name = "VELERO_SCRATCH_DIR";
@@ -409,7 +421,10 @@ in
               lib.optionals hasCredentials [
                 {
                   name = "cloud-credentials";
-                  secret.secretName = credentialSecretName;
+                  secret = {
+                    secretName = credentialSecretName;
+                    defaultMode = 420;
+                  };
                 }
               ]
               ++ [

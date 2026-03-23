@@ -19,10 +19,9 @@ let
       kind = "PriorityClass";
       inherit name;
       extra =
-        { value = spec.value; }
+        { value = spec.value; preemptionPolicy = spec.preemptionPolicy or "PreemptLowerPriority"; }
         // (if spec ? description && spec.description != "" then { description = spec.description; } else { })
-        // (if spec ? globalDefault && spec.globalDefault then { globalDefault = true; } else { })
-        // (if spec ? preemptionPolicy then { preemptionPolicy = spec.preemptionPolicy; } else { });
+        // (if spec ? globalDefault && spec.globalDefault then { globalDefault = true; } else { });
     };
 
 in

@@ -1,14 +1,16 @@
-# Valkey (Redis-compatible) kix package with Sentinel support.
+# Valkey (Redis-compatible) kix package.
 #
-# Deploys a Valkey cluster using StatefulSet with sentinel sidecar for
-# automatic failover. Mirrors the Bitnami Valkey Helm chart topology.
+# Supports two topologies (controlled by sentinel.enabled):
+#   sentinel=true  — Node StatefulSet with sentinel sidecar for HA failover.
+#   sentinel=false — Primary/replica StatefulSet (Bitnami primary/replica mode).
+#
+# Mirrors the Bitnami Valkey Helm chart topology.
 #
 # Resources: ServiceAccount, ConfigMap (scripts + health + configuration),
-# StatefulSet (valkey + sentinel + optional metrics containers),
-# Service (main), Service (headless), and optionally: Service (metrics),
-# Secret (credentials).
+# StatefulSet, Service (main), Service (headless), and optionally:
+# Service (metrics), Secret (credentials).
 #
-# main = main Service (exposes both redis and sentinel ports).
+# main = main Service.
 
 {
   scope,
@@ -139,9 +141,12 @@
 
       selectorLabels = scope.selectorLabels;
 
+      # When sentinel is disabled, use "primary" component label to match Bitnami's primary/replica topology.
+      componentName = if config.sentinel.enabled then "node" else "primary";
+
       componentLabel =
-        if scope.labelStyle == "helm" then { component = "node"; }
-        else { "app.kubernetes.io/component" = "node"; };
+        if scope.labelStyle == "helm" then { component = componentName; }
+        else { "app.kubernetes.io/component" = componentName; };
 
       commonLabels = selectorLabels // componentLabel;
 
@@ -561,6 +566,131 @@
         fi
       '';
 
+      # ── Primary/Replica scripts (non-sentinel mode) ─────────────
+      startPrimaryScript = ''
+        #!/bin/bash
+        [[ -f $VALKEY_PASSWORD_FILE ]] && export VALKEY_PASSWORD="$(< "''${VALKEY_PASSWORD_FILE}")"
+        if [[ -f /opt/bitnami/valkey/mounted-etc/primary.conf ]];then
+            cp /opt/bitnami/valkey/mounted-etc/primary.conf /opt/bitnami/valkey/etc/primary.conf
+        fi
+        if [[ -f /opt/bitnami/valkey/mounted-etc/valkey.conf ]];then
+            cp /opt/bitnami/valkey/mounted-etc/valkey.conf /opt/bitnami/valkey/etc/valkey.conf
+        fi
+        ARGS=("--port" "''${VALKEY_PORT}")
+        ARGS+=("--requirepass" "''${VALKEY_PASSWORD}")
+        ARGS+=("--primaryauth" "''${VALKEY_PASSWORD}")
+        ARGS+=("--include" "/opt/bitnami/valkey/etc/valkey.conf")
+        ARGS+=("--include" "/opt/bitnami/valkey/etc/primary.conf")
+        exec valkey-server "''${ARGS[@]}"
+      '';
+
+      startReplicaScript = ''
+        #!/bin/bash
+        get_port() {
+            hostname="$1"
+            type="$2"
+            port_var=$(echo "''${hostname^^}_SERVICE_PORT_$type" | sed "s/-/_/g")
+            port=''${!port_var}
+            if [ -z "$port" ]; then
+                case $type in
+                    "SENTINEL")
+                        echo 26379
+                        ;;
+                    "VALKEY")
+                        echo 6379
+                        ;;
+                esac
+            else
+                echo $port
+            fi
+        }
+        get_full_hostname() {
+            hostname="$1"
+            full_hostname="''${hostname}.''${HEADLESS_SERVICE}"
+            echo "''${full_hostname}"
+        }
+        VALKEYPORT=$(get_port "$HOSTNAME" "VALKEY")
+        HEADLESS_SERVICE="${headlessServiceFqdn}"
+        [[ -f $VALKEY_PASSWORD_FILE ]] && export VALKEY_PASSWORD="$(< "''${VALKEY_PASSWORD_FILE}")"
+        [[ -f $VALKEY_PRIMARY_PASSWORD_FILE ]] && export VALKEY_PRIMARY_PASSWORD="$(< "''${VALKEY_PRIMARY_PASSWORD_FILE}")"
+        if [[ -f /opt/bitnami/valkey/mounted-etc/replica.conf ]];then
+            cp /opt/bitnami/valkey/mounted-etc/replica.conf /opt/bitnami/valkey/etc/replica.conf
+        fi
+        if [[ -f /opt/bitnami/valkey/mounted-etc/valkey.conf ]];then
+            cp /opt/bitnami/valkey/mounted-etc/valkey.conf /opt/bitnami/valkey/etc/valkey.conf
+        fi
+        echo "" >> /opt/bitnami/valkey/etc/replica.conf
+        echo "replica-announce-port $VALKEYPORT" >> /opt/bitnami/valkey/etc/replica.conf
+        echo "replica-announce-ip $(get_full_hostname "$HOSTNAME")" >> /opt/bitnami/valkey/etc/replica.conf
+        ARGS=("--port" "''${VALKEY_PORT}")
+        ARGS+=("--replicaof" "''${VALKEY_PRIMARY_HOST}" "''${VALKEY_PRIMARY_PORT_NUMBER}")
+        ARGS+=("--requirepass" "''${VALKEY_PASSWORD}")
+        ARGS+=("--primaryauth" "''${VALKEY_PRIMARY_PASSWORD}")
+        ARGS+=("--include" "/opt/bitnami/valkey/etc/valkey.conf")
+        ARGS+=("--include" "/opt/bitnami/valkey/etc/replica.conf")
+        exec valkey-server "''${ARGS[@]}"
+      '';
+
+      # ── Health check scripts for primary/replica mode ────────────
+      pingLivenessPrimaryScript = ''
+        #!/bin/bash
+        [[ -f $VALKEY_PRIMARY_PASSWORD_FILE ]] && export VALKEY_PRIMARY_PASSWORD="$(< "''${VALKEY_PRIMARY_PASSWORD_FILE}")"
+        [[ -n "$VALKEY_PRIMARY_PASSWORD" ]] && export REDISCLI_AUTH="$VALKEY_PRIMARY_PASSWORD"
+        response=$(
+          timeout -s 15 $1 \
+          valkey-cli \
+            -h $VALKEY_PRIMARY_HOST \
+            -p $VALKEY_PRIMARY_PORT_NUMBER \
+            ping
+        )
+        if [ "$?" -eq "124" ]; then
+          echo "Timed out"
+          exit 1
+        fi
+        responseFirstWord=$(echo $response | head -n1 | awk '{print $1;}')
+        if [ "$response" != "PONG" ] && [ "$responseFirstWord" != "LOADING" ]; then
+          echo "$response"
+          exit 1
+        fi
+      '';
+
+      pingReadinessPrimaryScript = ''
+        #!/bin/bash
+        [[ -f $VALKEY_PRIMARY_PASSWORD_FILE ]] && export VALKEY_PRIMARY_PASSWORD="$(< "''${VALKEY_PRIMARY_PASSWORD_FILE}")"
+        [[ -n "$VALKEY_PRIMARY_PASSWORD" ]] && export REDISCLI_AUTH="$VALKEY_PRIMARY_PASSWORD"
+        response=$(
+          timeout -s 15 $1 \
+          valkey-cli \
+            -h $VALKEY_PRIMARY_HOST \
+            -p $VALKEY_PRIMARY_PORT_NUMBER \
+            ping
+        )
+        if [ "$?" -eq "124" ]; then
+          echo "Timed out"
+          exit 1
+        fi
+        if [ "$response" != "PONG" ]; then
+          echo "$response"
+          exit 1
+        fi
+      '';
+
+      pingLivenessLocalAndPrimaryScript = ''
+        script_dir="$(dirname "$0")"
+        exit_status=0
+        "$script_dir/ping_liveness_local.sh" $1 || exit_status=$?
+        "$script_dir/ping_liveness_primary.sh" $1 || exit_status=$?
+        exit $exit_status
+      '';
+
+      pingReadinessLocalAndPrimaryScript = ''
+        script_dir="$(dirname "$0")"
+        exit_status=0
+        "$script_dir/ping_readiness_local.sh" $1 || exit_status=$?
+        "$script_dir/ping_readiness_primary.sh" $1 || exit_status=$?
+        exit $exit_status
+      '';
+
       # ── Configuration ConfigMap ─────────────────────────────────
       sentinelConf = ''
         dir "/tmp"
@@ -599,24 +729,32 @@
         command = [ "/bin/bash" ];
         args = [
           "-c"
-          "/opt/bitnami/scripts/start-scripts/start-node.sh"
+          "/opt/bitnami/scripts/start-scripts/start-${if config.sentinel.enabled then "node" else "primary"}.sh"
         ];
-        env = kix.mkEnvVars {
-          ALLOW_EMPTY_PASSWORD = "no";
-          BITNAMI_DEBUG = "false";
-          VALKEY_DATA_DIR = "/data";
-          VALKEY_PORT = "6379";
-          VALKEY_SENTINEL_PORT = "26379";
-          VALKEY_SENTINEL_TLS_ENABLED = "no";
-          VALKEY_TLS_ENABLED = "no";
-          VALKEY_PRIMARY_PORT_NUMBER = "6379";
-          VALKEY_PASSWORD_FILE =
-            if config.auth.enabled then "/opt/bitnami/valkey/secrets/${authPasswordKey}" else null;
-          VALKEY_PRIMARY_PASSWORD_FILE =
-            if config.auth.enabled then "/opt/bitnami/valkey/secrets/${authPasswordKey}" else null;
-        };
+        env = kix.mkEnvVars (
+          {
+            ALLOW_EMPTY_PASSWORD = "no";
+            BITNAMI_DEBUG = "false";
+            VALKEY_PORT = "6379";
+            VALKEY_TLS_ENABLED = "no";
+            VALKEY_PASSWORD_FILE =
+              if config.auth.enabled then "/opt/bitnami/valkey/secrets/${authPasswordKey}" else null;
+          }
+          // (if config.sentinel.enabled then {
+            # Sentinel mode env vars
+            VALKEY_DATA_DIR = "/data";
+            VALKEY_SENTINEL_PORT = "26379";
+            VALKEY_SENTINEL_TLS_ENABLED = "no";
+            VALKEY_PRIMARY_PORT_NUMBER = "6379";
+            VALKEY_PRIMARY_PASSWORD_FILE =
+              if config.auth.enabled then "/opt/bitnami/valkey/secrets/${authPasswordKey}" else null;
+          } else {
+            # Primary/replica mode env vars
+            VALKEY_REPLICATION_MODE = "primary";
+          })
+        );
         ports = [
-          (kix.port "valkey" 6379)
+          (kix.port (if config.sentinel.enabled then "valkey" else "redis") 6379)
         ];
         livenessProbe = {
           exec.command = [
@@ -626,7 +764,7 @@
           ];
           initialDelaySeconds = 20;
           periodSeconds = 5;
-          timeoutSeconds = 5;
+          timeoutSeconds = if config.sentinel.enabled then 5 else 6;
           successThreshold = 1;
           failureThreshold = 5;
         };
@@ -638,28 +776,9 @@
           ];
           initialDelaySeconds = 20;
           periodSeconds = 5;
-          timeoutSeconds = 1;
+          timeoutSeconds = if config.sentinel.enabled then 1 else 2;
           successThreshold = 1;
           failureThreshold = 5;
-        };
-        startupProbe = {
-          exec.command = [
-            "sh"
-            "-c"
-            "/health/ping_liveness_local.sh 5"
-          ];
-          initialDelaySeconds = 10;
-          periodSeconds = 10;
-          timeoutSeconds = 5;
-          successThreshold = 1;
-          failureThreshold = 22;
-        };
-        lifecycle = {
-          preStop.exec.command = [
-            "/bin/bash"
-            "-c"
-            "/opt/bitnami/scripts/start-scripts/prestop-valkey.sh"
-          ];
         };
         resources = config.resources;
         volumeMounts = [
@@ -675,10 +794,12 @@
             name = "start-scripts";
             mountPath = "/opt/bitnami/scripts/start-scripts";
           }
-          {
-            name = "sentinel-data";
-            mountPath = "/opt/bitnami/valkey-sentinel/etc";
-          }
+        ]
+        ++ lib.optional config.sentinel.enabled {
+          name = "sentinel-data";
+          mountPath = "/opt/bitnami/valkey-sentinel/etc";
+        }
+        ++ [
           {
             name = "empty-dir";
             mountPath = "/opt/bitnami/valkey/etc";
@@ -706,6 +827,27 @@
           runAsUser = 1001;
           runAsGroup = 1001;
           seccompProfile.type = "RuntimeDefault";
+        };
+      }
+      // lib.optionalAttrs config.sentinel.enabled {
+        startupProbe = {
+          exec.command = [
+            "sh"
+            "-c"
+            "/health/ping_liveness_local.sh 5"
+          ];
+          initialDelaySeconds = 10;
+          periodSeconds = 10;
+          timeoutSeconds = 5;
+          successThreshold = 1;
+          failureThreshold = 22;
+        };
+        lifecycle = {
+          preStop.exec.command = [
+            "/bin/bash"
+            "-c"
+            "/opt/bitnami/scripts/start-scripts/prestop-valkey.sh"
+          ];
         };
       };
 
@@ -893,10 +1035,11 @@
     {
 
       # --- ServiceAccount ---
+      # In primary/replica mode, the SA is named {name}-primary to match Bitnami's pattern.
       serviceAccount = scope.mkResource {
         apiVersion = "v1";
         kind = "ServiceAccount";
-        name = "${name}";
+        name = if config.sentinel.enabled then "${name}" else "${name}-primary";
         labels = selectorLabels;
         extra = {
           automountServiceAccountToken = false;
@@ -904,12 +1047,13 @@
       };
 
       # --- Secret (credentials, only when no existingSecret) ---
+      # In primary/replica mode, the secret is named {name} (not {name}-credentials).
       secret =
         if config.auth.enabled && config.auth.existingSecret == null then
           scope.mkResource {
             apiVersion = "v1";
             kind = "Secret";
-            name = "${name}-credentials";
+            name = if config.sentinel.enabled then "${name}-credentials" else "${name}";
             labels = selectorLabels;
             extra = {
               type = "Opaque";
@@ -927,11 +1071,14 @@
         kind = "ConfigMap";
         name = "${name}-scripts";
         labels = selectorLabels;
-        data = {
+        data = if config.sentinel.enabled then {
           "start-node.sh" = startNodeScript;
           "start-sentinel.sh" = startSentinelScript;
           "prestop-sentinel.sh" = prestopSentinelScript;
           "prestop-valkey.sh" = prestopValkeyScript;
+        } else {
+          "start-primary.sh" = startPrimaryScript;
+          "start-replica.sh" = startReplicaScript;
         };
       };
 
@@ -944,8 +1091,15 @@
         data = {
           "ping_liveness_local.sh" = pingLivenessLocalScript;
           "ping_readiness_local.sh" = pingReadinessLocalScript;
+        }
+        // (if config.sentinel.enabled then {
           "ping_sentinel.sh" = pingSentinelScript;
-        };
+        } else {
+          "ping_liveness_primary.sh" = pingLivenessPrimaryScript;
+          "ping_readiness_primary.sh" = pingReadinessPrimaryScript;
+          "ping_liveness_local_and_primary.sh" = pingLivenessLocalAndPrimaryScript;
+          "ping_readiness_local_and_primary.sh" = pingReadinessLocalAndPrimaryScript;
+        });
       };
 
       # --- ConfigMap (configuration — sentinel.conf + valkey.conf) ---
@@ -957,8 +1111,10 @@
         data = {
           "primary.conf" = primaryConf;
           "replica.conf" = replicaConf;
-          "sentinel.conf" = sentinelConf;
           "valkey.conf" = valkeyConf;
+        }
+        // lib.optionalAttrs config.sentinel.enabled {
+          "sentinel.conf" = sentinelConf;
         };
       };
 
@@ -975,14 +1131,10 @@
           updateStrategy = {
             type = "RollingUpdate";
           };
-          selector.matchLabels = selectorLabels // {
-            "app.kubernetes.io/component" = "node";
-          };
+          selector.matchLabels = selectorLabels // componentLabel;
           template = {
             metadata = {
-              labels = selectorLabels // {
-                "app.kubernetes.io/component" = "node";
-              };
+              labels = selectorLabels // componentLabel;
               annotations = {
                 "checksum/configmap" = self.configmap.out.identityHash;
                 "checksum/health" = self.healthConfigmap.out.identityHash;
@@ -1006,9 +1158,7 @@
                 {
                   weight = 1;
                   podAffinityTerm = {
-                    labelSelector.matchLabels = selectorLabels // {
-                      "app.kubernetes.io/component" = "node";
-                    };
+                    labelSelector.matchLabels = selectorLabels // componentLabel;
                     topologyKey = "kubernetes.io/hostname";
                   };
                 }
@@ -1033,10 +1183,12 @@
                     defaultMode = 493; # 0755
                   };
                 }
-                {
-                  name = "sentinel-data";
-                  emptyDir = { };
-                }
+              ]
+              ++ lib.optional config.sentinel.enabled {
+                name = "sentinel-data";
+                emptyDir = { };
+              }
+              ++ [
                 {
                   name = "start-scripts";
                   configMap = {
@@ -1079,9 +1231,7 @@
             {
               metadata = {
                 name = "valkey-data";
-                labels = selectorLabels // {
-                  "app.kubernetes.io/component" = "node";
-                };
+                labels = selectorLabels // componentLabel;
               };
               spec = {
                 accessModes = [ "ReadWriteOnce" ];
@@ -1105,7 +1255,6 @@
         spec = {
           type = "ClusterIP";
           clusterIP = "None";
-          publishNotReadyAddresses = true;
           selector = selectorLabels;
           ports = [
             {
@@ -1133,9 +1282,7 @@
         labels = commonLabels;
         spec = {
           type = "ClusterIP";
-          selector = selectorLabels // {
-            "app.kubernetes.io/component" = "node";
-          };
+          selector = selectorLabels // componentLabel;
           ports = [
             {
               name = "tcp-redis";

@@ -563,9 +563,7 @@ in
     spec = {
       replicas = config.replicaCount;
       selector.matchLabels = selectorLabels;
-      strategy = {
-        type = "RollingUpdate";
-      };
+      # strategy omitted — K8s defaults to RollingUpdate
       template = {
         metadata = {
           labels = operatorLabels;

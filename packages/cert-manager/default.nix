@@ -354,11 +354,14 @@ let
     subjects = mkControllerSubject self.controllerServiceAccount;
     labels = controllerLabels;
     roles = {
-      "cert-manager-${name}-tokenrequest" = grant [
-        (core "serviceaccounts/token"
-          |> restrictTo [ self.controllerServiceAccount.out.name ]
-          |> allow [ "create" ])
-      ];
+      "${name}-tokenrequest" = {
+        bindingName = "cert-manager-${name}-tokenrequest";
+        rules = grant [
+          (core "serviceaccounts/token"
+            |> restrictTo [ self.controllerServiceAccount.out.name ]
+            |> allow [ "create" ])
+        ];
+      };
     };
   };
 
@@ -770,8 +773,8 @@ in {
               args = [
                 "--v=2"
                 "--cluster-resource-namespace=$(POD_NAMESPACE)"
-                "--leader-election-namespace=$(POD_NAMESPACE)"
                 "--acme-http01-solver-image=${config.acmesolver.image.repository}:${config.acmesolver.image.tag}"
+                "--leader-election-namespace=${ns}"
               ]
               ++ lib.optional config.dns01RecursiveNameserversOnly "--dns01-recursive-nameservers-only"
               ++ lib.optional (
@@ -794,7 +797,10 @@ in {
               env = [
                 {
                   name = "POD_NAMESPACE";
-                  valueFrom.fieldRef.fieldPath = "metadata.namespace";
+                  valueFrom.fieldRef = {
+                    apiVersion = "v1";
+                    fieldPath = "metadata.namespace";
+                  };
                 }
               ];
               livenessProbe = {
@@ -941,7 +947,10 @@ in {
               env = [
                 {
                   name = "POD_NAMESPACE";
-                  valueFrom.fieldRef.fieldPath = "metadata.namespace";
+                  valueFrom.fieldRef = {
+                    apiVersion = "v1";
+                    fieldPath = "metadata.namespace";
+                  };
                 }
               ];
             }
@@ -1100,7 +1109,7 @@ in {
               imagePullPolicy = config.image.pullPolicy;
               args = [
                 "--v=2"
-                "--leader-election-namespace=$(POD_NAMESPACE)"
+                "--leader-election-namespace=${ns}"
               ];
               ports = [
                 {
@@ -1112,7 +1121,10 @@ in {
               env = [
                 {
                   name = "POD_NAMESPACE";
-                  valueFrom.fieldRef.fieldPath = "metadata.namespace";
+                  valueFrom.fieldRef = {
+                    apiVersion = "v1";
+                    fieldPath = "metadata.namespace";
+                  };
                 }
               ];
               securityContext = containerSecurityContext;

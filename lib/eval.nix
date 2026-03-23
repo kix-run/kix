@@ -46,6 +46,7 @@ rec {
       instanceLabels =
         if labelStyle == "helm" then {
           release = instanceName;
+          "app.kubernetes.io/managed-by" = "kix";
         }
         else {
           "app.kubernetes.io/instance" = instanceName;
@@ -151,8 +152,15 @@ rec {
       namespaceResource,
       clusterLabels ? { },
     }:
+    let
+      selectorLabels = {
+        "app.kubernetes.io/name" = instanceName;
+        "app.kubernetes.io/instance" = instanceName;
+      };
+    in
     {
-      inherit instanceName namespaceName;
+      inherit instanceName namespaceName selectorLabels;
+      labelStyle = "kix";
       namespace = namespaceResource;
 
       mkResource =

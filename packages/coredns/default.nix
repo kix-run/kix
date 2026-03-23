@@ -57,6 +57,7 @@ in
       type = lib.types.attrsOf lib.types.anything;
       default = {
         create = true;
+        name = null;
       };
     };
     servers = lib.mkOption {
@@ -139,6 +140,8 @@ in
     # Build the Corefile string from server config.
     corefile = helpers.mkCorefile config.servers;
 
+    saName = if config.serviceAccount.name != null then config.serviceAccount.name else scope.instanceName;
+
   in
   {
 
@@ -148,7 +151,7 @@ in
         scope.mkResource {
           apiVersion = "v1";
           kind = "ServiceAccount";
-          name = "${scope.instanceName}";
+          name = saName;
           labels = commonLabels;
         }
       else
@@ -293,6 +296,7 @@ in
                 name = "config-volume";
                 configMap = {
                   name = self.configmap.out.name;
+                  defaultMode = 420;
                   items = [
                     {
                       key = "Corefile";

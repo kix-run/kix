@@ -498,19 +498,19 @@ in
                   }
                   {
                     name = "OPERATOR_NAMESPACE";
-                    valueFrom.fieldRef.fieldPath = "metadata.namespace";
+                    valueFrom.fieldRef = { apiVersion = "v1"; fieldPath = "metadata.namespace"; };
                   }
                   {
                     name = "OPERATOR_SERVICE_ACCOUNT";
-                    valueFrom.fieldRef.fieldPath = "spec.serviceAccountName";
+                    valueFrom.fieldRef = { apiVersion = "v1"; fieldPath = "spec.serviceAccountName"; };
                   }
                   {
                     name = "OPERATOR_POD_NAME";
-                    valueFrom.fieldRef.fieldPath = "metadata.name";
+                    valueFrom.fieldRef = { apiVersion = "v1"; fieldPath = "metadata.name"; };
                   }
                   {
                     name = "OPERATOR_IP";
-                    valueFrom.fieldRef.fieldPath = "status.podIP";
+                    valueFrom.fieldRef = { apiVersion = "v1"; fieldPath = "status.podIP"; };
                   }
                   {
                     name = "OPERATOR_IMAGE_VERSION";
@@ -630,6 +630,7 @@ in
                 secret = {
                   secretName = "${name}-certs";
                   optional = true;
+                  defaultMode = 420;
                 };
               }
             ];

@@ -5,7 +5,7 @@
 #
 # Chart:   https://grafana.github.io/helm-charts
 # Name:    promtail
-# Version: 6.16.6
+# Version: 6.17.1
 #
 # Usage in cluster definition:
 #
@@ -14,7 +14,7 @@
 #       chart = kix.fetchHelmChart {
 #         repo = "https://grafana.github.io/helm-charts";
 #         name = "promtail";
-#         version = "6.16.6";
+#         version = "6.17.1";
 #         hash = "sha256-FIXME";
 #       };
 #       values = (import ./packages/promtail).defaultValues;
@@ -29,7 +29,7 @@
   chart = {
     repo = "https://grafana.github.io/helm-charts";
     name = "promtail";
-    version = "6.16.6";
+    version = "6.17.1";
   };
 
   defaultValues = {

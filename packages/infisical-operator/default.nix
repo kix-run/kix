@@ -254,26 +254,32 @@ in
       subjects = [{ kind = "ServiceAccount"; name = self.serviceAccount.out.name; namespace = ns; }];
       labels = rbacLabels;
       roles = {
-        "${prefix}-manager-role" = grant ([
-          (core.configmaps              |> readWrite)
-          (core.pods                    |> allow [ "get" "list" ])
-          (core.secrets                 |> readWrite)
-          (core.serviceaccounts         |> watch)
-          (core "serviceaccounts/token" |> allow [ "create" ])
-          (apps.daemonsets              |> allow [ "get" "list" "update" "watch" ])
-          (apps.deployments             |> allow [ "get" "list" "update" "watch" ])
-          (apps.statefulsets            |> allow [ "get" "list" "update" "watch" ])
-          (authn.tokenreviews           |> allow [ "create" ])
-        ] ++ lib.concatMap (crd: [
-          (infisical crd               |> full)
-          (infisical crd               |> scope.rbac.finalize)
-          (infisical "${crd}/status"   |> allow [ "get" "patch" "update" ])
-        ]) allManagedCrds);
+        "${prefix}-manager-role" = {
+          bindingName = "${prefix}-manager-rolebinding";
+          rules = grant ([
+            (core.configmaps              |> readWrite)
+            (core.pods                    |> allow [ "get" "list" ])
+            (core.secrets                 |> readWrite)
+            (core.serviceaccounts         |> watch)
+            (core "serviceaccounts/token" |> allow [ "create" ])
+            (apps.daemonsets              |> allow [ "get" "list" "update" "watch" ])
+            (apps.deployments             |> allow [ "get" "list" "update" "watch" ])
+            (apps.statefulsets            |> allow [ "get" "list" "update" "watch" ])
+            (authn.tokenreviews           |> allow [ "create" ])
+          ] ++ lib.concatMap (crd: [
+            (infisical crd               |> full)
+            (infisical crd               |> scope.rbac.finalize)
+            (infisical "${crd}/status"   |> allow [ "get" "patch" "update" ])
+          ]) allManagedCrds);
+        };
 
-        "${prefix}-proxy-role" = grant [
-          (authn.tokenreviews           |> allow [ "create" ])
-          (authz.subjectaccessreviews   |> allow [ "create" ])
-        ];
+        "${prefix}-proxy-role" = {
+          bindingName = "${prefix}-proxy-rolebinding";
+          rules = grant [
+            (authn.tokenreviews           |> allow [ "create" ])
+            (authz.subjectaccessreviews   |> allow [ "create" ])
+          ];
+        };
       };
     };
 
@@ -281,11 +287,14 @@ in
       subjects = [{ kind = "ServiceAccount"; name = self.serviceAccount.out.name; namespace = ns; }];
       labels = rbacLabels;
       roles = {
-        "${prefix}-leader-election-role" = grant [
-          (core.configmaps |> full)
-          (coord.leases    |> full)
-          (core.events     |> emit)
-        ];
+        "${prefix}-leader-election-role" = {
+          bindingName = "${prefix}-leader-election-rolebinding";
+          rules = grant [
+            (core.configmaps |> full)
+            (coord.leases    |> full)
+            (core.events     |> emit)
+          ];
+        };
       };
     };
 

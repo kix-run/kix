@@ -70,6 +70,7 @@ in
           initialDelaySeconds = 5;
         };
         extraPorts = [ ]; # additional container ports beyond the main http port
+        env = { }; # direct env vars on the backend container (not via ConfigMap)
         secrets = [ ];
         strategy = {
           maxSurge = null; # null means use top-level config.maxSurge
@@ -176,6 +177,7 @@ in
         className = "public-v2";
         hosts = [ ];
         tls = [ ];
+        autoTls = true; # when true and tls=[], auto-generate TLS from host names; set false to disable
         annotations = { };
         clusterIssuer = "letsencrypt-lithus-production";
       };
@@ -263,8 +265,9 @@ in
           config.selectorLabels
         else
           {
+            app = component;
+            "app.kubernetes.io/instance" = name;
             "app.kubernetes.io/name" = appLabel;
-            "app.kubernetes.io/component" = component;
           };
 
       # ── Dependency wiring ───────────────────────────────────────────
@@ -326,9 +329,6 @@ in
         // lib.optionalAttrs config.serviceAccount.enabled {
           serviceAccountName =
             if config.serviceAccount.name != null then config.serviceAccount.name else rName;
-        }
-        // lib.optionalAttrs (config.backend.topologySpreadConstraints != [ ]) {
-          topologySpreadConstraints = config.backend.topologySpreadConstraints;
         };
 
       # ── Probe builders ────────────────────────────────────────────
@@ -347,6 +347,7 @@ in
               path = config.backend.probes.path;
               port = probePort;
             };
+            initialDelaySeconds = config.backend.probes.initialDelaySeconds;
             timeoutSeconds = config.backend.probes.timeoutSeconds;
             periodSeconds = 10;
             failureThreshold = 3;
@@ -403,6 +404,9 @@ in
         // lib.optionalAttrs config.backend.probes.enabled {
           livenessProbe = mkLivenessProbe;
           readinessProbe = mkReadinessProbe;
+        }
+        // lib.optionalAttrs (config.backend.env != { }) {
+          env = kix.mkEnvVars config.backend.env;
         };
 
       # ── Frontend container ──────────────────────────────────────────
@@ -461,20 +465,41 @@ in
           lifecycle ? null,
           env ? null,
           secrets ? null,
+          ports ? null,
+          probes ? null,
         }:
         {
           name = workerName;
           image = if image != null then image else "${config.backend.image.repository}:${config.backend.image.tag}";
           imagePullPolicy = config.backend.image.pullPolicy;
-          inherit command;
           envFrom = mkEnvFrom self self.configmap (if secrets != null then secrets else config.backend.secrets);
           volumeMounts = secretVolumeMounts;
           inherit resources;
         }
+        // lib.optionalAttrs (command != null) { inherit command; }
         // lib.optionalAttrs (args != null) { inherit args; }
         // lib.optionalAttrs (lifecycle != null) { inherit lifecycle; }
         // lib.optionalAttrs (env != null) {
           env = kix.mkEnvVars env;
+        }
+        // lib.optionalAttrs (ports != null) {
+          ports = map (p: kix.port p.name p.containerPort) ports;
+        }
+        // lib.optionalAttrs (probes != null) {
+          livenessProbe = probes.livenessProbe or {
+            httpGet = { path = probes.path; port = probes.port or (builtins.head ports).containerPort; };
+            initialDelaySeconds = probes.initialDelaySeconds or 5;
+            periodSeconds = probes.periodSeconds or 10;
+            failureThreshold = probes.failureThreshold or 3;
+            timeoutSeconds = probes.timeoutSeconds or 1;
+          };
+          readinessProbe = probes.readinessProbe or {
+            httpGet = { path = probes.path; port = probes.port or (builtins.head ports).containerPort; };
+            initialDelaySeconds = probes.initialDelaySeconds or 5;
+            periodSeconds = probes.periodSeconds or 10;
+            failureThreshold = probes.failureThreshold or 3;
+            timeoutSeconds = probes.timeoutSeconds or 1;
+          };
         };
 
       # ── Worker Deployment builder ───────────────────────────────────
@@ -491,6 +516,8 @@ in
           lifecycle ? null,
           env ? null,
           secrets ? null,
+          ports ? null,
+          probes ? null,
         }:
         let
           deployStrategy =
@@ -518,6 +545,8 @@ in
                       lifecycle
                       env
                       secrets
+                      ports
+                      probes
                       ;
                   })
                 ];
@@ -560,6 +589,9 @@ in
                   };
                 }
               ];
+            }
+            // lib.optionalAttrs (hpaCfg ? behavior) {
+              behavior = hpaCfg.behavior;
             };
           }
         else
@@ -583,6 +615,8 @@ in
             lifecycle = wCfg.lifecycle or null;
             env = wCfg.env or null;
             secrets = wCfg.secrets or null;
+            ports = wCfg.ports or null;
+            probes = wCfg.probes or null;
           };
           hpa = mkWorkerHpa {
             hpaName = wn;
@@ -606,24 +640,71 @@ in
           lifecycle = wCfg.lifecycle or null;
           env = wCfg.env or null;
           secrets = wCfg.secrets or null;
+          ports = wCfg.ports or null;
+          probes = wCfg.probes or null;
         };
       }) config.cronWorkers;
 
       # ── Custom process resources ────────────────────────────────────
-      customProcessParts = lib.concatMapAttrs (pName: pCfg: {
-        "customProcess-${pName}" = mkWorkerDeployment self {
-          workerName = pCfg.workerName or "custom-${pName}";
-          command = pCfg.command;
-          args = pCfg.args or null;
-          replicas = pCfg.replicas or 1;
-          resources = pCfg.resources or { };
-          strategy = pCfg.strategy or null;
-          image = pCfg.image or null;
-          lifecycle = pCfg.lifecycle or null;
-          env = pCfg.env or null;
-          secrets = pCfg.secrets or null;
-        };
-      }) config.customProcesses;
+      customProcessParts = lib.concatMapAttrs (pName: pCfg:
+        let
+          wn = pCfg.workerName or "custom-${pName}";
+          deployKey = "customProcess-${pName}";
+          deploy = mkWorkerDeployment self {
+            workerName = wn;
+            command = pCfg.command;
+            args = pCfg.args or null;
+            replicas = pCfg.replicas or 1;
+            resources = pCfg.resources or { };
+            strategy = pCfg.strategy or null;
+            image = pCfg.image or null;
+            lifecycle = pCfg.lifecycle or null;
+            env = pCfg.env or null;
+            secrets = pCfg.secrets or null;
+            ports = pCfg.ports or null;
+            probes = pCfg.probes or null;
+          };
+          serviceKey = "customProcessService-${pName}";
+          containerPort = if pCfg ? ports then (builtins.head pCfg.ports).containerPort else null;
+          hasService = (pCfg ? servicePort) || containerPort != null;
+          svcPort = pCfg.servicePort or 80;
+          svcTargetPort = if containerPort != null then containerPort else svcPort;
+          service =
+            if hasService then
+              scope.mkResource {
+                apiVersion = "v1";
+                kind = "Service";
+                name = "${name}-${wn}-internal";
+                labels = componentLabels wn;
+                spec = {
+                  type = "ClusterIP";
+                  selector = selectorLabels wn;
+                  ports = [
+                    {
+                      name = "http";
+                      port = svcPort;
+                      targetPort = svcTargetPort;
+                      protocol = "TCP";
+                    }
+                  ];
+                };
+                outputs = {
+                  port = toString svcPort;
+                };
+                requires = [ deploy ];
+              }
+            else null;
+          hpaKey = "customProcessHpa-${pName}";
+          hpa = mkWorkerHpa {
+            hpaName = wn;
+            deployResource = deploy;
+            hpaCfg = pCfg.hpa or { enabled = false; };
+          };
+        in
+        { ${deployKey} = deploy; }
+        // lib.optionalAttrs (service != null) { ${serviceKey} = service; }
+        // lib.optionalAttrs (hpa != null) { ${hpaKey} = hpa; }
+      ) config.customProcesses;
 
       # All worker-related resources for main.requires
       allWorkerResources =
@@ -740,6 +821,9 @@ in
               spec = mkPodSpec self {
                 containers = [ (mkBackendContainer self) ];
                 initContainers = config.backend.initContainers;
+              }
+              // lib.optionalAttrs (config.backend.topologySpreadConstraints != [ ]) {
+                topologySpreadConstraints = config.backend.topologySpreadConstraints;
               };
             };
           };
@@ -799,6 +883,9 @@ in
                   };
                 }
               ];
+            }
+            // lib.optionalAttrs (config.backend.hpa ? behavior) {
+              behavior = config.backend.hpa.behavior;
             };
           }
         else
@@ -869,7 +956,7 @@ in
           scope.mkResource {
             apiVersion = "v1";
             kind = "Service";
-            name = "${name}-frontend";
+            name = "${name}-frontend-internal";
             labels = componentLabels "frontend";
             spec = {
               type = "ClusterIP";
@@ -877,14 +964,14 @@ in
               ports = [
                 {
                   name = "http";
-                  port = config.frontend.port;
-                  targetPort = "http";
+                  port = if config.frontend.servicePort or null != null then config.frontend.servicePort else config.frontend.port;
+                  targetPort = config.frontend.port;
                   protocol = "TCP";
                 }
               ];
             };
             outputs = {
-              port = toString config.frontend.port;
+              port = toString (if config.frontend.servicePort or null != null then config.frontend.servicePort else config.frontend.port);
             };
             requires = [ self.frontendDeployment ];
           }
@@ -1100,10 +1187,11 @@ in
               }) host.paths;
             }) config.ingress.hosts;
 
+            autoTls = config.ingress.autoTls or true;
             tlsSpec =
               if config.ingress.tls != [ ] then
                 config.ingress.tls
-              else
+              else if autoTls then
                 let
                   hosts = map (h: h.host) config.ingress.hosts;
                 in
@@ -1115,7 +1203,9 @@ in
                     }
                   ]
                 else
-                  [ ];
+                  [ ]
+              else
+                [ ];
           in
           scope.mkResource {
             apiVersion = "networking.k8s.io/v1";

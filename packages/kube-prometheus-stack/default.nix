@@ -39,7 +39,7 @@
       enabled = true;
       prometheusSpec = {
         retention = "90d";
-        retentionSize = "95GB";
+        retentionSize = "320GiB";
         replicas = 1;
         resources = {
           requests = {
@@ -51,21 +51,37 @@
             memory = "16Gi";
           };
         };
-        storageSpec.volumeClaimTemplate.spec = {
-          accessModes = [ "ReadWriteOnce" ];
-          resources.requests.storage = "100Gi";
+        storageSpec.volumeClaimTemplate = {
+          metadata = {
+            name = "data";
+            labels = {
+              "velero.io/exclude-from-backup" = "false";
+            };
+          };
+          spec = {
+            resources.requests.storage = "400Gi";
+          };
         };
         # Scrape all ServiceMonitors across all namespaces.
         serviceMonitorSelectorNilUsesHelmValues = false;
         podMonitorSelectorNilUsesHelmValues = false;
         ruleSelectorNilUsesHelmValues = false;
         probeSelectorNilUsesHelmValues = false;
+        scrapeConfigSelectorNilUsesHelmValues = false;
         # Security context.
         securityContext = {
           runAsNonRoot = true;
           runAsUser = 1000;
-          runAsGroup = 1000;
+          runAsGroup = 2000;
           fsGroup = 2000;
+        };
+        priorityClassName = "monitoring-prometheus";
+        scrapeInterval = "30s";
+        evaluationInterval = "30s";
+        externalUrl = "https://prometheus.nw1.example.net";
+        additionalAlertRelabelConfigsSecret = {
+          name = "prometheus-alert-relabel-config";
+          key = "config.yaml";
         };
       };
     };
@@ -74,9 +90,13 @@
     grafana = {
       enabled = true;
       replicas = 1;
+      deploymentStrategy = {
+        type = "Recreate";
+      };
       persistence = {
         enabled = true;
         size = "10Gi";
+        storageClassName = "lbs1-pool1-2x";
       };
       ingress = {
         enabled = true;
@@ -92,13 +112,14 @@
       resources = {
         requests = {
           cpu = "100m";
-          memory = "256Mi";
+          memory = "128Mi";
         };
         limits = {
           cpu = "1";
           memory = "1Gi";
         };
       };
+      priorityClassName = "monitoring-prometheus";
       sidecar = {
         dashboards = {
           enabled = true;
@@ -109,8 +130,7 @@
           searchNamespace = "ALL";
         };
       };
-      # Default admin credentials are managed via external secret.
-      admin.existingSecret = "grafana-admin-credentials";
+      # Admin credentials use the chart-generated secret (prometheus-grafana).
     };
 
     # --- Alertmanager ---
@@ -120,18 +140,15 @@
         replicas = 1;
         resources = {
           requests = {
-            cpu = "50m";
-            memory = "64Mi";
-          };
-          limits = {
-            cpu = "500m";
+            cpu = "0.01";
             memory = "256Mi";
           };
+          limits = {
+            cpu = "1";
+            memory = "1Gi";
+          };
         };
-        storage.volumeClaimTemplate.spec = {
-          accessModes = [ "ReadWriteOnce" ];
-          resources.requests.storage = "5Gi";
-        };
+        priorityClassName = "monitoring-prometheus";
       };
       config = {
         global = {
@@ -183,14 +200,25 @@
     prometheus-node-exporter = {
       resources = {
         requests = {
-          cpu = "50m";
+          cpu = "10m";
           memory = "32Mi";
         };
         limits = {
-          cpu = "250m";
+          cpu = "1";
           memory = "128Mi";
         };
       };
+      extraArgs = [
+        "--collector.textfile.directory=/var/lib/node_exporter/textfile_collector"
+      ];
+      extraHostVolumeMounts = [
+        {
+          name = "textfile-collector";
+          hostPath = "/var/lib/node_exporter/textfile_collector";
+          mountPath = "/var/lib/node_exporter/textfile_collector";
+          readOnly = true;
+        }
+      ];
     };
 
     # --- Kube State Metrics ---
@@ -200,12 +228,23 @@
     kube-state-metrics = {
       resources = {
         requests = {
-          cpu = "50m";
+          cpu = "10m";
           memory = "64Mi";
         };
         limits = {
-          cpu = "500m";
+          cpu = "1";
           memory = "256Mi";
+        };
+      };
+    };
+
+    # --- CoreDNS ---
+    # Match actual selector label used in the cluster (coredns, not kube-dns).
+    coreDns = {
+      enabled = true;
+      service = {
+        selector = {
+          k8s-app = "coredns";
         };
       };
     };

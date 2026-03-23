@@ -65,7 +65,7 @@ in
     backup = lib.mkOption {
       type = lib.types.anything;
       default = {
-        enabled = true;
+        enabled = false;
         retention = 5;
         cronSchedule = "30 04 * * *";
         compression = "lz4";
@@ -232,7 +232,7 @@ in
 
       # ===== SGObjectStorage (S3 backup destination) =====
 
-      objectStorage = scope.mkResource ({
+      objectStorage = lib.optionalAttrs config.backup.enabled (scope.mkResource ({
         apiVersion = "stackgres.io/v1beta1";
         kind = "SGObjectStorage";
         name = config.backup.s3.bucket;
@@ -262,7 +262,7 @@ in
             };
           };
         };
-      });
+      }));
 
       # ===== SGPoolingConfig (optional connection pooling) =====
 
@@ -278,7 +278,7 @@ in
                 pgbouncer = {
                   pool_mode = "session";
                   max_client_conn = "200";
-                  default_pool_size = "180";
+                  default_pool_size = 180;
                   ignore_startup_parameters = "extra_float_digits";
                   max_db_connections = "0";
                   max_user_connections = "0";

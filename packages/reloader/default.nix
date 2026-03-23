@@ -18,6 +18,19 @@ let
 
   containerName = "${name}-reloader";
 
+  # Selector labels match the Helm chart convention (app + release).
+  reloaderSelectorLabels = {
+    app = "${name}-reloader";
+    release = name;
+  };
+
+  # Extra metadata labels from the Helm chart.
+  reloaderExtraLabels = {
+    group = "com.stakater.platform";
+    provider = "stakater";
+    version = "v1.3.0";
+  };
+
   # --- RBAC DSL ---
   inherit (scope.rbac) core group grant watch allow emit mkClusterRoleSet;
   apps  = group "apps"  [ "deployments" "daemonsets" "statefulsets" ];
@@ -90,9 +103,6 @@ in
       };
     };
 
-    # --- Mounts ---
-    tmpMount = kix.mount.emptyDir { name = "tmp"; mountPath = "/tmp"; };
-
   in {
 
     serviceAccount = scope.mkResource {
@@ -105,10 +115,12 @@ in
     deployment =
       {
         name = "${name}-reloader";
+        labels = reloaderExtraLabels;
         spec = {
           replicas = config.replicaCount;
           revisionHistoryLimit = 2;
-          selector.matchLabels = scope.selectorLabels;
+          selector.matchLabels = reloaderSelectorLabels;
+          template.metadata.labels = reloaderExtraLabels;
           template.spec = {
             serviceAccountName = self.serviceAccount.out.name;
             securityContext = {
@@ -173,7 +185,6 @@ in
           };
         };
       }
-      |> kix.withMounts [ tmpMount ]
       |> scope.mkDeployment;
 
     # --- Service (optional, metrics) ---

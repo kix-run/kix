@@ -60,7 +60,8 @@ in rec {
   watch            = mkIntent (ref: [ (rule ref [ "get" "list" "watch" ]) ]);
 
   reconcile        = mkIntent (ref: [ (rule ref                    [ "get" "list" "watch" ])
-                                       (rule (sub "status" ref)    [ "update" "patch" ]) ]);
+                                       (rule ref                   [ "patch" "update" ])
+                                       (rule (sub "status" ref)    [ "patch" "update" ]) ]);
 
   finalize         = mkIntent (ref: [ (rule (sub "finalizers" ref) [ "update" ]) ]);
 
@@ -120,7 +121,7 @@ in rec {
         entry = roles.${roleName};
         # Accept either plain rules list or { rules, bindingName? }.
         rules       = if builtins.isList entry then entry else entry.rules;
-        bindingName = if builtins.isList entry then "${roleName}binding" else entry.bindingName or "${roleName}binding";
+        bindingName = if builtins.isList entry then roleName else entry.bindingName or roleName;
         role = scope.mkClusterResource {
           apiVersion = "rbac.authorization.k8s.io/v1";
           kind = "ClusterRole";
@@ -156,7 +157,7 @@ in rec {
         entry = roles.${roleName};
         # Accept either plain rules list or { rules, bindingName? }.
         rules       = if builtins.isList entry then entry else entry.rules;
-        bindingName = if builtins.isList entry then "${roleName}binding" else entry.bindingName or "${roleName}binding";
+        bindingName = if builtins.isList entry then roleName else entry.bindingName or roleName;
         role = scope.mkResource {
           apiVersion = "rbac.authorization.k8s.io/v1";
           kind = "Role";

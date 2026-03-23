@@ -5,7 +5,7 @@
 #
 # Chart:   https://grafana.github.io/helm-charts
 # Name:    loki
-# Version: 6.24.0
+# Version: 6.46.0
 #
 # Usage in cluster definition:
 #
@@ -14,7 +14,7 @@
 #       chart = kix.fetchHelmChart {
 #         repo = "https://grafana.github.io/helm-charts";
 #         name = "loki";
-#         version = "6.24.0";
+#         version = "6.46.0";
 #         hash = "sha256-FIXME";
 #       };
 #       values = (import ./packages/loki).defaultValues;
@@ -29,7 +29,7 @@
   chart = {
     repo = "https://grafana.github.io/helm-charts";
     name = "loki";
-    version = "6.24.0";
+    version = "6.46.0";
   };
 
   defaultValues = {
@@ -39,7 +39,6 @@
     # --- Multi-tenancy ---
     loki = {
       auth_enabled = true;
-      tenants = [ "system" ];
 
       # --- Schema / Storage ---
       schemaConfig.configs = [
@@ -73,26 +72,50 @@
       # --- Limits ---
       limits_config = {
         retention_period = "4320h"; # 180 days
-        max_query_series = 5000;
-        max_query_parallelism = 32;
-        ingestion_rate_mb = 16;
-        ingestion_burst_size_mb = 32;
-        per_stream_rate_limit = "5MB";
-        per_stream_rate_limit_burst = "15MB";
+        max_query_parallelism = 64;
+        ingestion_rate_mb = 50;
+        ingestion_burst_size_mb = 100;
+        ingestion_rate_strategy = "global";
+        per_stream_rate_limit = "10MB";
+        per_stream_rate_limit_burst = "20MB";
+        max_cache_freshness_per_query = "10m";
+        max_chunks_per_query = 10000000;
+        max_global_streams_per_user = 50000;
+        max_line_size = "256kb";
+        query_timeout = "600s";
+        reject_old_samples = true;
+        reject_old_samples_max_age = "168h";
+        split_queries_by_interval = "12h";
+        volume_enabled = true;
+      };
+
+      # --- Querier ---
+      querier = {
+        max_concurrent = 16;
+      };
+
+      # --- Query scheduler ---
+      query_scheduler = {
+        max_outstanding_requests_per_tenant = 2048;
       };
 
       # --- Compactor (retention enforcement) ---
       compactor = {
         retention_enabled = true;
         delete_request_store = "s3";
-        working_directory = "/tmp/loki/compactor";
+        working_directory = "/var/loki/retention";
       };
 
       # --- Ruler ---
-      ruler = {
+      rulerConfig = {
+        enable_api = true;
+        remote_write = {
+          enabled = false;
+          clients.prometheus.url = "http://prometheus-kube-prometheus-prometheus:9090/api/v1/write";
+        };
         storage = {
           type = "local";
-          local.directory = "/tmp/loki/rules";
+          local.directory = "/rules";
         };
       };
     };
@@ -102,8 +125,8 @@
       replicas = 3;
       resources = {
         requests = {
-          cpu = "500m";
-          memory = "1Gi";
+          cpu = "100m";
+          memory = "512Mi";
         };
         limits = {
           cpu = "2";
@@ -112,7 +135,8 @@
       };
       persistence = {
         enabled = true;
-        size = "50Gi";
+        size = "10Gi";
+        storageClass = "localzfs";
       };
     };
 
@@ -121,8 +145,8 @@
       replicas = 3;
       resources = {
         requests = {
-          cpu = "500m";
-          memory = "1Gi";
+          cpu = "100m";
+          memory = "512Mi";
         };
         limits = {
           cpu = "2";
@@ -136,17 +160,18 @@
       replicas = 3;
       resources = {
         requests = {
-          cpu = "250m";
+          cpu = "100m";
           memory = "512Mi";
         };
         limits = {
-          cpu = "1";
-          memory = "2Gi";
+          cpu = "2";
+          memory = "4Gi";
         };
       };
       persistence = {
         enabled = true;
-        size = "50Gi";
+        size = "10Gi";
+        storageClass = "localzfs";
       };
     };
 
@@ -154,24 +179,49 @@
     gateway = {
       enabled = true;
       replicas = 1;
+      basicAuth.enabled = false;
       resources = {
         requests = {
-          cpu = "50m";
-          memory = "64Mi";
+          cpu = "100m";
+          memory = "512Mi";
         };
+        limits = {
+          cpu = "2";
+          memory = "4Gi";
+        };
+      };
+    };
+
+    # --- Canary ---
+    lokiCanary = {
+      enabled = true;
+      resources = {
         limits = {
           cpu = "250m";
           memory = "128Mi";
         };
       };
-      priorityClassName = "monitoring-loki";
+    };
+
+    # --- Memcached caches ---
+    chunksCache = {
+      enabled = true;
+    };
+    resultsCache = {
+      enabled = true;
+    };
+
+    # --- Sidecar (rules loader for backend) ---
+    sidecar = {
+      rules = {
+        folderAnnotation = "k8s-sidecar-target-directory";
+      };
     };
 
     # --- Disable components we don't use ---
     singleBinary.enabled = false;
     monitoring = {
       selfMonitoring.enabled = false;
-      lokiCanary.enabled = false;
     };
     test.enabled = false;
   };

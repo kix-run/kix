@@ -1,19 +1,23 @@
 # Harbor container registry kix package.
 #
 # Multi-component OCI registry: Core (API/auth), Portal (web UI),
-# Registry (image storage), Jobservice (async tasks), and Ingress.
+# Registry (image storage), Jobservice (async tasks), Redis (cache),
+# Exporter (metrics), and Ingress.
 #
 # Dependencies:
 #   postgres       — required, database
-#   redis          — required, cache (valkey or redis instance via DI)
 #   ingressNginx   — optional, provides IngressClass for ingress
 #   clusterIssuer  — optional, provides withCert transformer for TLS
+#
+# Redis is built-in (uses goharbor/redis-photon, Harbor's own image).
 #
 # Resources per component:
 #   Core       -- Deployment, Service, ConfigMap, Secret
 #   Portal     -- Deployment, Service, ConfigMap
 #   Registry   -- Deployment, Service, ConfigMap, Secret, PVC
 #   Jobservice -- Deployment, Service, ConfigMap, Secret, PVC
+#   Redis      -- StatefulSet, Service
+#   Exporter   -- Deployment, Service, ConfigMap, Secret
 #   Ingress    -- Ingress (optional)
 #
 # main = Ingress (or core Service when ingress disabled)
@@ -23,7 +27,6 @@
   lib,
   kix,
   postgres,
-  redis,
   ingressNginx ? null,
   clusterIssuer ? null,
 }:
@@ -111,6 +114,18 @@ in
       };
     };
 
+    redis = lib.mkOption {
+      type = lib.types.anything;
+      default = {
+        image = { repository = "goharbor/redis-photon"; tag = "v2.12.2"; };
+        persistence = { size = "2Gi"; storageClass = null; };
+        resources = {
+          requests = { cpu = "20m"; memory = "64Mi"; };
+          limits = { cpu = "1"; memory = "1Gi"; };
+        };
+      };
+    };
+
     secretKey = lib.mkOption { type = lib.types.nullOr lib.types.str; default = null; };
     adminPassword = lib.mkOption { type = lib.types.nullOr lib.types.str; default = null; };
   };
@@ -119,8 +134,8 @@ in
   let
     # --- Derived values ---
 
-    redisHost = redis.out.fqdn;
-    redisPort = redis.out.port;
+    redisHost = "${name}-redis";
+    redisPort = "6379";
     dbHost = if config.database.host != null then config.database.host else postgres.out.fqdn;
     noProxy = "${name}-core,${name}-jobservice,${name}-database,${name}-registry,${name}-portal,${name}-trivy,${name}-exporter,127.0.0.1,localhost,.local,.internal";
 
@@ -287,7 +302,7 @@ in
                   { name = "CORE_SECRET"; valueFrom.secretKeyRef = { name = self.coreSecret.out.name; key = "secret"; }; }
                   { name = "JOBSERVICE_SECRET"; valueFrom.secretKeyRef = { name = self.jobserviceSecret.out.name; key = "JOBSERVICE_SECRET"; }; }
                 ];
-                ports = [ (kix.port "http" 8080) ];
+                ports = [ { containerPort = 8080; protocol = "TCP"; } ];
                 resources = { requests = { cpu = "20m"; memory = "128Mi"; }; limits = { cpu = "1"; memory = "256Mi"; }; };
                 securityContext = containerSecurityContext;
                 volumeMounts = [
@@ -376,7 +391,7 @@ in
                 name = "portal";
                 image = "${config.portal.image.repository}:${config.portal.image.tag}";
                 imagePullPolicy = "IfNotPresent";
-                ports = [ (kix.port "http" 8080) ];
+                ports = [ { containerPort = 8080; protocol = "TCP"; } ];
                 livenessProbe = portalProbe // { initialDelaySeconds = 300; };
                 readinessProbe = portalProbe // { initialDelaySeconds = 1; };
                 securityContext = containerSecurityContext;
@@ -528,7 +543,7 @@ in
                 name = "registry";
                 image = "goharbor/registry-photon:${config.registry.image.tag}";
                 imagePullPolicy = "IfNotPresent";
-                ports = [ (kix.port "http-registry" 5000) (kix.port "http-metrics" config.metrics.port) ];
+                ports = [ { containerPort = 5000; protocol = "TCP"; } { containerPort = config.metrics.port; protocol = "TCP"; } ];
                 livenessProbe = registryProbe // { initialDelaySeconds = 300; };
                 readinessProbe = registryProbe // { initialDelaySeconds = 1; };
                 envFrom = [ { secretRef.name = self.registrySecret.out.name; } ];
@@ -543,7 +558,7 @@ in
                 name = "registryctl";
                 image = "${config.registry.image.repository}:${config.registry.image.tag}";
                 imagePullPolicy = "IfNotPresent";
-                ports = [ (kix.port "http-controller" 8080) ];
+                ports = [ { containerPort = 8080; protocol = "TCP"; } ];
                 livenessProbe = registryCtlProbe // { initialDelaySeconds = 300; };
                 readinessProbe = registryCtlProbe // { initialDelaySeconds = 1; };
                 env = [
@@ -706,7 +721,7 @@ in
                 name = "jobservice";
                 image = "${config.jobservice.image.repository}:${config.jobservice.image.tag}";
                 imagePullPolicy = "IfNotPresent";
-                ports = [ (kix.port "http" 8080) ];
+                ports = [ { containerPort = 8080; protocol = "TCP"; } ];
                 livenessProbe = jobserviceProbe // { initialDelaySeconds = 300; };
                 readinessProbe = jobserviceProbe // { initialDelaySeconds = 20; };
                 env = [
@@ -796,7 +811,7 @@ in
                 image = "goharbor/harbor-exporter:${config.core.image.tag}";
                 imagePullPolicy = "IfNotPresent";
                 args = [ "-log-level" "info" ];
-                ports = [ (kix.port "http-metrics" config.metrics.port) ];
+                ports = [ { containerPort = config.metrics.port; protocol = "TCP"; } ];
                 livenessProbe = {
                   httpGet = { path = "/"; port = config.metrics.port; scheme = "HTTP"; };
                   initialDelaySeconds = 300; periodSeconds = 10; failureThreshold = 3; timeoutSeconds = 1;
@@ -877,6 +892,87 @@ in
         null;
 
     # ============================================================
+    # Redis (built-in, part of Harbor)
+    # ============================================================
+
+    redisStatefulSet = {
+      name = "${name}-redis";
+      labels = selectorLabels // { component = "redis"; };
+      spec = {
+        serviceName = "${name}-redis";
+        replicas = 1;
+        selector.matchLabels = selectorLabels // { component = "redis"; };
+        template.spec = {
+          securityContext = { runAsUser = 999; fsGroup = 999; };
+          automountServiceAccountToken = false;
+          terminationGracePeriodSeconds = 120;
+          containers = [
+            {
+              name = "redis";
+              image = "${config.redis.image.repository}:${config.redis.image.tag}";
+              imagePullPolicy = "IfNotPresent";
+              livenessProbe = {
+                tcpSocket.port = 6379;
+                initialDelaySeconds = 300;
+                periodSeconds = 10;
+                timeoutSeconds = 1;
+                failureThreshold = 3;
+                successThreshold = 1;
+              };
+              readinessProbe = {
+                tcpSocket.port = 6379;
+                initialDelaySeconds = 1;
+                periodSeconds = 10;
+                timeoutSeconds = 1;
+                failureThreshold = 3;
+                successThreshold = 1;
+              };
+              resources = config.redis.resources;
+              securityContext = containerSecurityContext;
+              volumeMounts = [
+                { name = "data"; mountPath = "/var/lib/redis"; }
+              ];
+            }
+          ];
+        };
+        volumeClaimTemplates = [
+          {
+            metadata = {
+              name = "data";
+              labels = selectorLabels;
+            };
+            spec = {
+              accessModes = [ "ReadWriteOnce" ];
+              resources.requests.storage = config.redis.persistence.size;
+            }
+            // lib.optionalAttrs (config.redis.persistence.storageClass != null) {
+              storageClassName = config.redis.persistence.storageClass;
+            };
+          }
+        ];
+      };
+    }
+    |> scope.mkStatefulSet;
+
+    redisService = scope.mkResource {
+      apiVersion = "v1";
+      kind = "Service";
+      name = "${name}-redis";
+      labels = selectorLabels;
+      spec = {
+        type = "ClusterIP";
+        selector = selectorLabels // { component = "redis"; };
+        ports = [
+          { port = 6379; targetPort = 6379; protocol = "TCP"; }
+        ];
+      };
+      outputs = {
+        port = "6379";
+      };
+      requires = [ self.redisStatefulSet ];
+    };
+
+    # ============================================================
     # Entry point
     # ============================================================
 
@@ -900,6 +996,8 @@ in
         self.exporterEnvConfigMap
         self.exporterDeployment
         self.exporterService
+        self.redisStatefulSet
+        self.redisService
       ]
       ++ lib.optional config.ingress.enabled self.ingress
       ++ lib.optional config.metrics.enabled self.serviceMonitor;

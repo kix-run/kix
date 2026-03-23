@@ -158,6 +158,14 @@
   let
     name = scope.instanceName;
 
+    # Selector labels — use static app name (external-dns) not instance name.
+    # This matches the Helm chart convention where all external-dns instances
+    # share the same app.kubernetes.io/name.
+    edSelectorLabels = {
+      "app.kubernetes.io/instance" = name;
+      "app.kubernetes.io/name" = "external-dns";
+    };
+
     # --- RBAC DSL ---
     inherit (scope.rbac) core group grant watch allow mkClusterRoleSet;
 
@@ -209,7 +217,7 @@
     ownerId = if config.txtOwnerId != null then config.txtOwnerId else name;
 
     # Merge extra labels into all resource labels.
-    allLabels = scope.selectorLabels // config.extraLabels;
+    allLabels = edSelectorLabels // config.extraLabels;
 
     # Resolve the affinity with actual instance name replacing PLACEHOLDER.
     resolvedAffinity =
@@ -219,7 +227,7 @@
             preferredDuringSchedulingIgnoredDuringExecution = [
               {
                 podAffinityTerm = {
-                  labelSelector.matchLabels = scope.selectorLabels;
+                  labelSelector.matchLabels = edSelectorLabels;
                   topologyKey = "kubernetes.io/hostname";
                 };
                 weight = 1;
@@ -282,7 +290,7 @@
       ];
 
     # --- Mounts ---
-    tmpMount = kix.mount.emptyDir { name = "empty-dir"; mountPath = "/tmp"; };
+    tmpMount = kix.mount.emptyDir { name = "empty-dir"; mountPath = "/tmp"; subPath = "tmp-dir"; };
 
   in
   {
@@ -321,7 +329,7 @@
       labels = allLabels // { "k8s-app" = "external-dns"; };
       spec = {
         type = "ClusterIP";
-        selector = scope.selectorLabels;
+        selector = edSelectorLabels;
         ports = [
           {
             name = "http";
@@ -347,7 +355,7 @@
             "app.kubernetes.io/component" = "controller";
           };
           spec = {
-            podSelector.matchLabels = scope.selectorLabels;
+            podSelector.matchLabels = edSelectorLabels;
             policyTypes = [
               "Ingress"
               "Egress"
@@ -378,7 +386,7 @@
           labels = allLabels;
           spec = {
             maxUnavailable = config.pdb.maxUnavailable;
-            selector.matchLabels = scope.selectorLabels;
+            selector.matchLabels = edSelectorLabels;
           };
         }
       else
@@ -396,7 +404,7 @@
           ++ lib.optional (self.podDisruptionBudget != null) self.podDisruptionBudget;
         spec = {
           replicas = 1;
-          selector.matchLabels = scope.selectorLabels;
+          selector.matchLabels = edSelectorLabels;
           strategy = {
             type = "RollingUpdate";
             rollingUpdate = {
@@ -404,6 +412,9 @@
               maxUnavailable = "25%";
             };
           };
+          template.metadata.labels = {
+            "k8s-app" = "external-dns";
+          } // config.extraLabels;
           template.spec = {
             serviceAccountName = self.serviceAccount.out.name;
             automountServiceAccountToken = true;

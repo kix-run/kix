@@ -265,6 +265,8 @@ def generate_report(
     ignore_paths: set[str] | None,
     color: bool = False,
     full_diff: bool = False,
+    files_only: bool = False,
+    only_broken: bool = False,
 ) -> str:
     """Generate a structured markdown diff report."""
     lines: list[str] = []
@@ -360,17 +362,18 @@ def generate_report(
             else:
                 lines.append(f"### `{format_resource(kix_key)}` <-> `{format_resource(cluster_key)}` ({pct}% match)")
             lines.append("")
-            if non_rename_diffs:
-                if not color:
-                    lines.append("```")
-                lines.append(format_diffs(non_rename_diffs, color=color, full_diff=full_diff))
-                if not color:
-                    lines.append("```")
-            else:
-                if color:
-                    lines.append(f"  {_DIM}(identical apart from name/namespace){_RESET}")
+            if not files_only:
+                if non_rename_diffs:
+                    if not color:
+                        lines.append("```")
+                    lines.append(format_diffs(non_rename_diffs, color=color, full_diff=full_diff))
+                    if not color:
+                        lines.append("```")
                 else:
-                    lines.append("*Structurally identical (only name/namespace differs)*")
+                    if color:
+                        lines.append(f"  {_DIM}(identical apart from name/namespace){_RESET}")
+                    else:
+                        lines.append("*Structurally identical (only name/namespace differs)*")
             lines.append("")
 
     # kix-only section (excluding resources that were matched as renames)
@@ -425,15 +428,16 @@ def generate_report(
                 lines.append(f"_{', '.join(summary_parts)}_")
             lines.append("")
 
-            if not color:
-                lines.append("```")
-            lines.append(format_diffs(diffs, color=color, full_diff=full_diff))
-            if not color:
-                lines.append("```")
-            lines.append("")
+            if not files_only:
+                if not color:
+                    lines.append("```")
+                lines.append(format_diffs(diffs, color=color, full_diff=full_diff))
+                if not color:
+                    lines.append("```")
+                lines.append("")
 
     # Identical list (collapsed in markdown, dim in color mode)
-    if identical:
+    if identical and not only_broken:
         if color:
             lines.append(f"{_BOLD}Identical{_RESET} {_DIM}({len(identical)} resources match exactly){_RESET}")
             lines.append("")
@@ -478,9 +482,16 @@ def generate_report(
               help="Treat FQDN service DNS names (x.ns.svc.cluster.local) as equivalent to short names (x)")
 @click.option("--skip-controller-owned", is_flag=True, default=False,
               help="Skip cluster resources with ownerReferences[controller=true] (auto-created by controllers)")
+@click.option("--skip-all", is_flag=True, default=False,
+              help="Enable all skip/ignore flags (cluster-defaults, port-names, dns-suffix, controller-owned)")
+@click.option("--files-only", is_flag=True, default=False,
+              help="Only show file-level info, skip detailed line-by-line diffs")
+@click.option("--only-broken", is_flag=True, default=False,
+              help="Hide identical resources from the output")
 def main(kix_dir: str, cluster_dir: str, ignore_path: tuple[str, ...], service: str | None,
          color: bool | None, ignore_cluster_defaults: bool, full_diff: bool,
-         ignore_port_names: bool, ignore_dns_suffix: bool, skip_controller_owned: bool):
+         ignore_port_names: bool, ignore_dns_suffix: bool, skip_controller_owned: bool,
+         skip_all: bool, files_only: bool, only_broken: bool):
     """Compare kix manifests against a cluster dump.
 
     KIX_DIR is the kix output directory (e.g. ./result from nix build).
@@ -490,6 +501,13 @@ def main(kix_dir: str, cluster_dir: str, ignore_path: tuple[str, ...], service: 
     """
     kix_path = Path(kix_dir)
     cluster_path = Path(cluster_dir)
+
+    # --skip-all expands to all skip/ignore flags
+    if skip_all:
+        ignore_cluster_defaults = True
+        ignore_port_names = True
+        ignore_dns_suffix = True
+        skip_controller_owned = True
 
     ignore_paths = set(ignore_path) if ignore_path else set()
     if ignore_cluster_defaults:
@@ -532,6 +550,8 @@ def main(kix_dir: str, cluster_dir: str, ignore_path: tuple[str, ...], service: 
         ignore_paths,
         color=use_color,
         full_diff=full_diff,
+        files_only=files_only,
+        only_broken=only_broken,
     )
 
     # Write report to stdout (progress messages go to stderr)
