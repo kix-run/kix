@@ -13,6 +13,7 @@
 {
   scope,
   lib,
+  kix,
 }:
 
 {
@@ -601,56 +602,22 @@
           "-c"
           "/opt/bitnami/scripts/start-scripts/start-node.sh"
         ];
-        env = [
-          {
-            name = "ALLOW_EMPTY_PASSWORD";
-            value = "no";
-          }
-          {
-            name = "BITNAMI_DEBUG";
-            value = "false";
-          }
-          {
-            name = "VALKEY_DATA_DIR";
-            value = "/data";
-          }
-          {
-            name = "VALKEY_PORT";
-            value = "6379";
-          }
-          {
-            name = "VALKEY_SENTINEL_PORT";
-            value = "26379";
-          }
-          {
-            name = "VALKEY_SENTINEL_TLS_ENABLED";
-            value = "no";
-          }
-          {
-            name = "VALKEY_TLS_ENABLED";
-            value = "no";
-          }
-          {
-            name = "VALKEY_PRIMARY_PORT_NUMBER";
-            value = "6379";
-          }
-        ]
-        ++ lib.optionals config.auth.enabled [
-          {
-            name = "VALKEY_PASSWORD_FILE";
-            value = "/opt/bitnami/valkey/secrets/${authPasswordKey}";
-          }
-          {
-            name = "VALKEY_PRIMARY_PASSWORD_FILE";
-            value = "/opt/bitnami/valkey/secrets/${authPasswordKey}";
-          }
-        ];
+        env = kix.mkEnvVars {
+          ALLOW_EMPTY_PASSWORD = "no";
+          BITNAMI_DEBUG = "false";
+          VALKEY_DATA_DIR = "/data";
+          VALKEY_PORT = "6379";
+          VALKEY_SENTINEL_PORT = "26379";
+          VALKEY_SENTINEL_TLS_ENABLED = "no";
+          VALKEY_TLS_ENABLED = "no";
+          VALKEY_PRIMARY_PORT_NUMBER = "6379";
+          VALKEY_PASSWORD_FILE =
+            if config.auth.enabled then "/opt/bitnami/valkey/secrets/${authPasswordKey}" else null;
+          VALKEY_PRIMARY_PASSWORD_FILE =
+            if config.auth.enabled then "/opt/bitnami/valkey/secrets/${authPasswordKey}" else null;
+        };
         ports = [
-          {
-            name = "valkey";
-            containerPort = 6379;
-            protocol = "TCP";
-          }
+          (kix.port "valkey" 6379)
         ];
         livenessProbe = {
           exec.command = [
@@ -752,32 +719,15 @@
           "-c"
           "/opt/bitnami/scripts/start-scripts/start-sentinel.sh"
         ];
-        env = [
-          {
-            name = "BITNAMI_DEBUG";
-            value = "false";
-          }
-          {
-            name = "VALKEY_SENTINEL_PORT";
-            value = "26379";
-          }
-          {
-            name = "VALKEY_SENTINEL_TLS_ENABLED";
-            value = "no";
-          }
-        ]
-        ++ lib.optionals config.auth.enabled [
-          {
-            name = "VALKEY_PASSWORD_FILE";
-            value = "/opt/bitnami/valkey/secrets/${authPasswordKey}";
-          }
-        ];
+        env = kix.mkEnvVars {
+          BITNAMI_DEBUG = "false";
+          VALKEY_SENTINEL_PORT = "26379";
+          VALKEY_SENTINEL_TLS_ENABLED = "no";
+          VALKEY_PASSWORD_FILE =
+            if config.auth.enabled then "/opt/bitnami/valkey/secrets/${authPasswordKey}" else null;
+        };
         ports = [
-          {
-            name = "valkey-sentinel";
-            containerPort = 26379;
-            protocol = "TCP";
-          }
+          (kix.port "valkey-sentinel" 26379)
         ];
         livenessProbe = {
           exec.command = [
@@ -877,32 +827,15 @@
             redis_exporter
           ''
         ];
-        env = [
-          {
-            name = "REDIS_ALIAS";
-            value = name;
-          }
-          {
-            name = "REDIS_EXPORTER_WEB_LISTEN_ADDRESS";
-            value = ":9121";
-          }
-          {
-            name = "REDIS_USER";
-            value = "default";
-          }
-        ]
-        ++ lib.optionals config.auth.enabled [
-          {
-            name = "REDIS_PASSWORD_FILE";
-            value = "/secrets/${authPasswordKey}";
-          }
-        ];
+        env = kix.mkEnvVars {
+          REDIS_ALIAS = name;
+          REDIS_EXPORTER_WEB_LISTEN_ADDRESS = ":9121";
+          REDIS_USER = "default";
+          REDIS_PASSWORD_FILE =
+            if config.auth.enabled then "/secrets/${authPasswordKey}" else null;
+        };
         ports = [
-          {
-            name = "metrics";
-            containerPort = 9121;
-            protocol = "TCP";
-          }
+          (kix.port "metrics" 9121)
         ];
         livenessProbe = {
           tcpSocket.port = "metrics";
@@ -1031,9 +964,7 @@
       };
 
       # --- StatefulSet (valkey-node) ---
-      statefulSet = scope.mkResource {
-        apiVersion = "apps/v1";
-        kind = "StatefulSet";
+      statefulSet = {
         name = "${name}-node";
         labels = commonLabels;
         spec = {
@@ -1161,7 +1092,8 @@
             }
           ];
         };
-      };
+      }
+      |> scope.mkStatefulSet;
 
       # --- Service (headless, for StatefulSet DNS) ---
       headlessService = scope.mkResource {

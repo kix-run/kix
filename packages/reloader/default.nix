@@ -10,6 +10,7 @@
 {
   scope,
   lib,
+  kix,
 }:
 
 let
@@ -17,10 +18,10 @@ let
 
   containerName = "${name}-reloader";
 
-  selectorLabels = {
-    "app" = containerName;
-    "release" = name;
-  };
+  # --- RBAC DSL ---
+  inherit (scope.rbac) core group grant watch allow emit mkClusterRoleSet;
+  apps  = group "apps"  [ "deployments" "daemonsets" "statefulsets" ];
+  batch = group "batch" [ "cronjobs" "jobs" ];
 
 in
 {
@@ -71,133 +72,41 @@ in
   };
 
   build = { self, config, clusterConfig }:
-  {
+  let
+    # --- RBAC ---
+    clusterRoles = mkClusterRoleSet scope {
+      subjects = [{ kind = "ServiceAccount"; name = self.serviceAccount.out.name; namespace = scope.namespaceName; }];
+      roles = {
+        "${name}-reloader-role" = grant [
+          ([core.secrets core.configmaps]                          |> watch)
+          ([apps.deployments apps.daemonsets apps.statefulsets]     |> allow [ "list" "get" "update" "patch" ])
+          (batch.cronjobs                                          |> allow [ "list" "get" ])
+          (batch.jobs                                              |> allow [ "create" "delete" "list" "get" ])
+          (core.events                                             |> emit)
+        ];
+      };
+    };
+
+    # --- Mounts ---
+    tmpMount = kix.mount.emptyDir { name = "tmp"; mountPath = "/tmp"; };
+
+  in {
 
     serviceAccount = scope.mkResource {
       apiVersion = "v1";
       kind = "ServiceAccount";
       name = "${name}-reloader";
-      labels = selectorLabels;
     };
 
-    clusterRole = scope.mkClusterResource {
-      apiVersion = "rbac.authorization.k8s.io/v1";
-      kind = "ClusterRole";
-      name = "${name}-reloader-role";
-      labels = selectorLabels;
-      extra.rules = [
-        {
-          apiGroups = [ "" ];
-          resources = [
-            "secrets"
-            "configmaps"
-          ];
-          verbs = [
-            "list"
-            "get"
-            "watch"
-          ];
-        }
-        {
-          apiGroups = [ "apps" ];
-          resources = [
-            "deployments"
-            "daemonsets"
-            "statefulsets"
-          ];
-          verbs = [
-            "list"
-            "get"
-            "update"
-            "patch"
-          ];
-        }
-        {
-          apiGroups = [ "batch" ];
-          resources = [ "cronjobs" ];
-          verbs = [
-            "list"
-            "get"
-          ];
-        }
-        {
-          apiGroups = [ "batch" ];
-          resources = [ "jobs" ];
-          verbs = [
-            "create"
-            "delete"
-            "list"
-            "get"
-          ];
-        }
-        {
-          apiGroups = [ "" ];
-          resources = [ "events" ];
-          verbs = [
-            "create"
-            "patch"
-          ];
-        }
-      ];
-    };
-
-    clusterRoleBinding = scope.mkClusterResource {
-      apiVersion = "rbac.authorization.k8s.io/v1";
-      kind = "ClusterRoleBinding";
-      name = "${name}-reloader-role-binding";
-      labels = selectorLabels;
-      extra = {
-        roleRef = {
-          apiGroup = "rbac.authorization.k8s.io";
-          kind = "ClusterRole";
-          name = self.clusterRole.out.name;
-        };
-        subjects = [
-          {
-            kind = "ServiceAccount";
-            name = self.serviceAccount.out.name;
-            namespace = scope.namespaceName;
-          }
-        ];
-      };
-    };
-
-    service = if config.service.enabled then scope.mkResource {
-      apiVersion = "v1";
-      kind = "Service";
-      name = "${name}-reloader";
-      labels = selectorLabels;
-      spec = {
-        type = "ClusterIP";
-        selector = self.deployment.out.selector;
-        ports = [
-          {
-            name = "http";
-            port = 9090;
-            protocol = "TCP";
-            targetPort = "http";
-          }
-        ];
-      };
-      outputs = {
-        metricsPort = "9090";
-      };
-    } else null;
-
-    deployment = scope.mkResource {
-      apiVersion = "apps/v1";
-      kind = "Deployment";
-      name = "${name}-reloader";
-      labels = selectorLabels;
-      spec = {
-        replicas = config.replicaCount;
-        revisionHistoryLimit = 2;
-        selector.matchLabels = selectorLabels;
-        template = {
-          metadata = {
-            labels = selectorLabels;
-          };
-          spec = {
+    # --- Deployment ---
+    deployment =
+      {
+        name = "${name}-reloader";
+        spec = {
+          replicas = config.replicaCount;
+          revisionHistoryLimit = 2;
+          selector.matchLabels = scope.selectorLabels;
+          template.spec = {
             serviceAccountName = self.serviceAccount.out.name;
             securityContext = {
               runAsNonRoot = true;
@@ -228,11 +137,7 @@ in
                   }
                 ];
                 ports = [
-                  {
-                    name = "http";
-                    containerPort = 9090;
-                    protocol = "TCP";
-                  }
+                  (kix.port "http" 9090)
                 ];
                 livenessProbe = {
                   httpGet = {
@@ -264,16 +169,18 @@ in
             priorityClassName = config.priorityClassName;
           };
         };
-      };
-    };
+      }
+      |> kix.withMounts [ tmpMount ]
+      |> scope.mkDeployment;
 
-    main = {
-      resource = self.deployment;
-      requires = [
-        self.serviceAccount
-        self.clusterRole
-        self.clusterRoleBinding
-      ] ++ lib.optional (self.service != null) self.service;
-    };
-  };
+    # --- Service (optional, metrics) ---
+    service =
+      if config.service.enabled then
+        self.deployment |> kix.service.fromWorkload { name = "${name}-reloader"; } |> scope.mkResource
+      else
+        null;
+
+    # --- Entry point ---
+    main = self.deployment;
+  } // clusterRoles;
 }

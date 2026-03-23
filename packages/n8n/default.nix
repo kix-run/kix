@@ -15,6 +15,7 @@
 {
   scope,
   lib,
+  kix,
   postgres ? null,
   valkey ? null,
 }:
@@ -22,18 +23,11 @@
 let
   name = scope.instanceName;
 
-  selectorLabels = {
-    "app.kubernetes.io/name" = "n8n";
-    "app.kubernetes.io/instance" = name;
-  };
-
-  commonLabels = selectorLabels;
-
-  mainSelectorLabels = selectorLabels // {
+  mainSelectorLabels = scope.selectorLabels // {
     "app.kubernetes.io/type" = "master";
   };
 
-  workerSelectorLabels = selectorLabels // {
+  workerSelectorLabels = scope.selectorLabels // {
     "app.kubernetes.io/type" = "worker";
   };
 
@@ -165,7 +159,6 @@ in
       apiVersion = "v1";
       kind = "ServiceAccount";
       name = "${name}";
-      labels = commonLabels;
     };
 
     # --- ConfigMap (environment variables) ---
@@ -173,7 +166,6 @@ in
       apiVersion = "v1";
       kind = "ConfigMap";
       name = "${name}-app-config";
-      labels = commonLabels;
       data = {
         # Database
         DB_TYPE = config.database.type;
@@ -194,126 +186,111 @@ in
       apiVersion = "v1";
       kind = "ConfigMap";
       name = "${name}-worker-config";
-      labels = commonLabels;
       data = {
         PORT = toString config.worker.port;
       };
     };
 
     # --- Deployment (main — UI + API) ---
-    deployment = scope.mkResource {
-      apiVersion = "apps/v1";
-      kind = "Deployment";
-      name = "${name}";
-      labels = commonLabels;
-      spec = {
-        replicas = config.replicaCount;
-        revisionHistoryLimit = 3;
-        selector.matchLabels = mainSelectorLabels;
-        strategy.type = "Recreate";
-        template = {
-          metadata = {
-            labels = mainSelectorLabels;
-            annotations = {
+    deployment =
+      {
+        name = "${name}";
+        spec = {
+          replicas = config.replicaCount;
+          revisionHistoryLimit = 3;
+          selector.matchLabels = mainSelectorLabels;
+          strategy.type = "Recreate";
+          template = {
+            metadata.annotations = {
               "checksum/configmap" = self.configmap.out.identityHash;
             };
-          };
-          spec = {
-            serviceAccountName = self.serviceAccount.out.name;
-            securityContext = {
-              fsGroup = 1000;
-              runAsNonRoot = true;
-              runAsUser = 1000;
-              runAsGroup = 1000;
-            };
-            affinity = {
-              podAntiAffinity = {
-                preferredDuringSchedulingIgnoredDuringExecution = [
-                  {
-                    weight = 100;
-                    podAffinityTerm = {
-                      labelSelector = {
-                        matchExpressions = [
-                          {
-                            key = "app.kubernetes.io/name";
-                            operator = "In";
-                            values = [ "n8n" ];
-                          }
-                        ];
-                      };
-                      topologyKey = "kubernetes.io/hostname";
-                    };
-                  }
-                ];
+            spec = {
+              serviceAccountName = self.serviceAccount.out.name;
+              securityContext = {
+                fsGroup = 1000;
+                runAsNonRoot = true;
+                runAsUser = 1000;
+                runAsGroup = 1000;
               };
+              affinity = {
+                podAntiAffinity = {
+                  preferredDuringSchedulingIgnoredDuringExecution = [
+                    {
+                      weight = 100;
+                      podAffinityTerm = {
+                        labelSelector = {
+                          matchExpressions = [
+                            {
+                              key = "app.kubernetes.io/name";
+                              operator = "In";
+                              values = [ "n8n" ];
+                            }
+                          ];
+                        };
+                        topologyKey = "kubernetes.io/hostname";
+                      };
+                    }
+                  ];
+                };
+              };
+              containers = [
+                {
+                  name = "n8n";
+                  image = "${config.image.repository}:${config.image.tag}";
+                  imagePullPolicy = config.image.pullPolicy;
+                  envFrom = mainEnvFrom;
+                  ports = [
+                    (kix.port "http" config.port)
+                  ];
+                  livenessProbe = {
+                    httpGet = {
+                      path = "/healthz";
+                      port = "http";
+                    };
+                    periodSeconds = 10;
+                    timeoutSeconds = 1;
+                    failureThreshold = 3;
+                  };
+                  readinessProbe = {
+                    httpGet = {
+                      path = "/healthz";
+                      port = "http";
+                    };
+                    periodSeconds = 10;
+                    timeoutSeconds = 1;
+                    failureThreshold = 3;
+                  };
+                  resources = config.resources;
+                  volumeMounts = [
+                    {
+                      name = "data";
+                      mountPath = "/home/node/.n8n";
+                    }
+                  ];
+                }
+              ];
+              volumes = [
+                { name = "data"; }
+              ];
             };
-            containers = [
-              {
-                name = "n8n";
-                image = "${config.image.repository}:${config.image.tag}";
-                imagePullPolicy = config.image.pullPolicy;
-                envFrom = mainEnvFrom;
-                ports = [
-                  {
-                    name = "http";
-                    containerPort = config.port;
-                    protocol = "TCP";
-                  }
-                ];
-                livenessProbe = {
-                  httpGet = {
-                    path = "/healthz";
-                    port = "http";
-                  };
-                  periodSeconds = 10;
-                  timeoutSeconds = 1;
-                  failureThreshold = 3;
-                };
-                readinessProbe = {
-                  httpGet = {
-                    path = "/healthz";
-                    port = "http";
-                  };
-                  periodSeconds = 10;
-                  timeoutSeconds = 1;
-                  failureThreshold = 3;
-                };
-                resources = config.resources;
-                volumeMounts = [
-                  {
-                    name = "data";
-                    mountPath = "/home/node/.n8n";
-                  }
-                ];
-              }
-            ];
-            volumes = [
-              { name = "data"; }
-            ];
           };
         };
-      };
-    };
+      }
+      |> scope.mkDeployment;
 
     # --- Deployment (worker — queue workers) ---
     worker =
       if config.worker.enabled then
-        scope.mkResource {
-          apiVersion = "apps/v1";
-          kind = "Deployment";
+        {
           name = "${name}-worker";
-          labels = commonLabels;
           spec = {
             replicas = config.worker.replicaCount;
             revisionHistoryLimit = 3;
             selector.matchLabels = workerSelectorLabels;
             strategy.type = "Recreate";
             template = {
-              metadata = {
-                labels = workerSelectorLabels;
-                annotations = {
-                  "checksum/configmap" = self.configmap.out.identityHash;
-                };
+              metadata.annotations = {
+                "checksum/configmap" = self.configmap.out.identityHash;
               };
               spec = {
                 serviceAccountName = self.serviceAccount.out.name;
@@ -335,11 +312,7 @@ in
                     ];
                     envFrom = workerEnvFrom;
                     ports = [
-                      {
-                        name = "http";
-                        containerPort = config.worker.port;
-                        protocol = "TCP";
-                      }
+                      (kix.port "http" config.worker.port)
                     ];
                     livenessProbe = {
                       httpGet = {
@@ -374,75 +347,45 @@ in
             };
           };
         }
+        |> scope.mkDeployment
       else
         null;
 
     # --- Service ---
-    service = scope.mkResource {
-      apiVersion = "v1";
-      kind = "Service";
-      name = "${name}";
-      labels = commonLabels;
-      spec = {
-        type = "ClusterIP";
-        selector = mainSelectorLabels;
+    # kix.service.fromWorkload auto-derives selector and ports from the
+    # deployment's container spec. Override ports to map servicePort -> container port.
+    service =
+      self.deployment
+      |> kix.service.fromWorkload {
+        name = "${name}";
         ports = [
-          {
-            name = "http";
-            port = config.servicePort;
-            targetPort = "http";
-            protocol = "TCP";
-          }
+          { name = "http"; port = config.servicePort; targetPort = "http"; protocol = "TCP"; }
         ];
-      };
-      outputs = {
-        port = toString config.servicePort;
-      };
-      requires = [ self.deployment ] ++ lib.optional (self.worker != null) self.worker;
-    };
+        outputs = {
+          port = toString config.servicePort;
+        };
+        requires = lib.optional (self.worker != null) self.worker;
+      }
+      |> scope.mkResource;
 
     # --- Ingress (optional) ---
     ingress =
       if config.ingress.enabled then
-        scope.mkResource {
-          apiVersion = "networking.k8s.io/v1";
-          kind = "Ingress";
-          name = "${name}";
-          labels = commonLabels;
-          annotations = {
-            "kubernetes.io/ingress.class" = config.ingress.className;
-          }
-          // lib.optionalAttrs (config.ingress.tls.enabled && config.ingress.tls.issuer != "") {
+        self.service
+        |> kix.ingress.fromService {
+          inherit name;
+          host = config.ingress.host;
+          className = config.ingress.className;
+          tls = lib.optional config.ingress.tls.enabled {
+            hosts = [ config.ingress.host ];
+            secretName = config.ingress.tls.secretName;
+          };
+          annotations = lib.optionalAttrs (config.ingress.tls.enabled && config.ingress.tls.issuer != "") {
             "cert-manager.io/cluster-issuer" = config.ingress.tls.issuer;
           }
           // config.ingress.annotations;
-          spec = {
-            ingressClassName = config.ingress.className;
-            rules = [
-              {
-                host = config.ingress.host;
-                http.paths = [
-                  {
-                    path = "/";
-                    pathType = "Prefix";
-                    backend.service = {
-                      name = self.service.out.name;
-                      port.number = config.servicePort;
-                    };
-                  }
-                ];
-              }
-            ];
-          }
-          // lib.optionalAttrs config.ingress.tls.enabled {
-            tls = [
-              {
-                hosts = [ config.ingress.host ];
-                secretName = config.ingress.tls.secretName;
-              }
-            ];
-          };
         }
+        |> scope.mkResource
       else
         null;
 

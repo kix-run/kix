@@ -11,6 +11,7 @@
 {
   scope,
   lib,
+  kix,
 }:
 
 let
@@ -41,6 +42,14 @@ in
   };
 
   build = { self, config, clusterConfig }:
+  let
+    healthCheck = {
+      httpGet = { path = "/ping"; port = "http"; };
+      periodSeconds = 10;
+      timeoutSeconds = 1;
+      failureThreshold = 3;
+    };
+  in
   {
 
     # --- Model cache PVC (optional) ---
@@ -60,85 +69,53 @@ in
       else
         null;
 
+    # --- Mounts ---
+    cacheMount =
+      if config.persistence.enabled then
+        kix.mount.pvc self.cachePvc { mountPath = "/cache"; }
+      else
+        kix.mount.emptyDir { mountPath = "/cache"; name = "cache"; };
+
     # --- Deployment ---
-    deployment = scope.mkResource {
-      apiVersion = "apps/v1";
-      kind = "Deployment";
-      name = name;
-      spec = {
-        replicas = config.replicaCount;
-        selector.matchLabels = scope.selectorLabels;
-        strategy.type = "RollingUpdate";
-        template = {
-          metadata.labels = scope.selectorLabels;
-          spec = {
-            containers = [
-              {
-                name = "immich-machine-learning";
-                image = "${config.image.repository}:${config.image.tag}";
-                imagePullPolicy = config.image.pullPolicy;
-                env = [
-                  { name = "TRANSFORMERS_CACHE"; value = "/cache"; }
-                  { name = "HF_XET_CACHE"; value = "/cache/huggingface-xet"; }
-                  { name = "MPLCONFIGDIR"; value = "/cache/matplotlib-config"; }
-                ];
-                ports = [
-                  { name = "http"; containerPort = 3003; protocol = "TCP"; }
-                ];
-                livenessProbe = {
-                  httpGet = { path = "/ping"; port = "http"; };
-                  periodSeconds = 10;
-                  timeoutSeconds = 1;
-                  failureThreshold = 3;
-                };
-                readinessProbe = {
-                  httpGet = { path = "/ping"; port = "http"; };
-                  periodSeconds = 10;
-                  timeoutSeconds = 1;
-                  failureThreshold = 3;
-                };
-                startupProbe = {
-                  httpGet = { path = "/ping"; port = "http"; };
-                  periodSeconds = 10;
-                  timeoutSeconds = 1;
-                  failureThreshold = 60;
-                };
-                volumeMounts = [
-                  { name = "cache"; mountPath = "/cache"; }
-                ];
-              }
-            ];
-            volumes = [
-              (if config.persistence.enabled then {
-                name = "cache";
-                persistentVolumeClaim.claimName = self.cachePvc.out.name;
-              } else {
-                name = "cache";
-                emptyDir = { };
-              })
-            ];
-          };
+    deployment =
+      {
+        name = name;
+        spec = {
+          replicas = config.replicaCount;
+          selector.matchLabels = scope.selectorLabels;
+          strategy.type = "RollingUpdate";
+          template.spec.containers = [
+            {
+              name = "immich-machine-learning";
+              image = "${config.image.repository}:${config.image.tag}";
+              imagePullPolicy = config.image.pullPolicy;
+              env = kix.mkEnvVars {
+                TRANSFORMERS_CACHE = "/cache";
+                HF_XET_CACHE = "/cache/huggingface-xet";
+                MPLCONFIGDIR = "/cache/matplotlib-config";
+              };
+              ports = [
+                (kix.port "http" 3003)
+              ];
+              livenessProbe = healthCheck;
+              readinessProbe = healthCheck;
+              startupProbe = healthCheck // {
+                failureThreshold = 60;
+              };
+            }
+          ];
         };
-      };
-    };
+      }
+      |> kix.withMounts [
+        self.cacheMount
+      ]
+      |> scope.mkDeployment;
 
     # --- Service ---
-    service = scope.mkResource {
-      apiVersion = "v1";
-      kind = "Service";
-      name = name;
-      spec = {
-        type = "ClusterIP";
-        selector = self.deployment.out.selector;
-        ports = [
-          { name = "http"; port = 3003; targetPort = "http"; protocol = "TCP"; }
-        ];
-      };
-      outputs = {
-        port = "3003";
-      };
-      requires = lib.optional (self.cachePvc != null) self.cachePvc;
-    };
+    service =
+      self.deployment
+      |> kix.service.fromWorkload { inherit name; }
+      |> scope.mkResource;
 
     # --- Entry point ---
     main = self.service;

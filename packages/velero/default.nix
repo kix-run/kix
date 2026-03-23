@@ -306,9 +306,7 @@ in
             targetPort = "http-monitoring";
           }
         ];
-        selector = selectorLabels // {
-          name = "velero";
-        };
+        selector = selectorLabels;
       };
     };
 

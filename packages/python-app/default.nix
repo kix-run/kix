@@ -12,6 +12,7 @@
 {
   scope,
   lib,
+  kix,
   postgres ? null,
   valkey ? null,
 }:
@@ -388,11 +389,7 @@ in
           imagePullPolicy = config.backend.image.pullPolicy;
           envFrom = mkEnvFrom self self.configmap config.backend.secrets;
           ports = [
-            {
-              name = "http";
-              containerPort = config.backend.port;
-              protocol = "TCP";
-            }
+            (kix.port "http" config.backend.port)
           ] ++ config.backend.extraPorts;
           volumeMounts = secretVolumeMounts;
           resources = config.backend.resources;
@@ -419,11 +416,7 @@ in
             lib.optional config.frontend.useConfigMap { configMapRef.name = self.frontendConfigmap.out.name; }
             ++ map (s: { secretRef.name = s; }) config.frontend.secrets;
           ports = [
-            {
-              name = "http";
-              containerPort = config.frontend.port;
-              protocol = "TCP";
-            }
+            (kix.port "http" config.frontend.port)
           ];
           resources = config.frontend.resources;
         }
@@ -481,7 +474,7 @@ in
         // lib.optionalAttrs (args != null) { inherit args; }
         // lib.optionalAttrs (lifecycle != null) { inherit lifecycle; }
         // lib.optionalAttrs (env != null) {
-          env = lib.mapAttrsToList (k: v: { name = k; value = v; }) env;
+          env = kix.mkEnvVars env;
         };
 
       # ── Worker Deployment builder ───────────────────────────────────
@@ -504,9 +497,7 @@ in
             if strategy != null then strategy
             else { rollingUpdate.maxSurge = "100%"; };
         in
-        scope.mkResource {
-          apiVersion = "apps/v1";
-          kind = "Deployment";
+        {
           name = "${name}-${workerName}";
           labels = componentLabels workerName;
           spec = {
@@ -533,7 +524,8 @@ in
               };
             };
           };
-        };
+        }
+        |> scope.mkDeployment;
 
       # ── Worker HPA builder ──────────────────────────────────────────
       mkWorkerHpa =
@@ -727,31 +719,31 @@ in
           null;
 
       # ── Backend Deployment ──────────────────────────────────────────
-      backendDeployment = scope.mkResource {
-        apiVersion = "apps/v1";
-        kind = "Deployment";
-        name = "${rName}-${compName}";
-        labels = componentLabels compName;
-        spec = {
-          replicas = config.backend.replicaCount;
-          strategy = strategySpec;
-          selector.matchLabels = selectorLabels compName;
-          template = {
-            metadata = {
-              labels = selectorLabels compName;
-            }
-            // lib.optionalAttrs config.useConfigMap {
-              annotations = {
-                "checksum/config" = self.configmap.out.identityHash;
+      backendDeployment =
+        {
+          name = "${rName}-${compName}";
+          labels = componentLabels compName;
+          spec = {
+            replicas = config.backend.replicaCount;
+            strategy = strategySpec;
+            selector.matchLabels = selectorLabels compName;
+            template = {
+              metadata = {
+                labels = selectorLabels compName;
+              }
+              // lib.optionalAttrs config.useConfigMap {
+                annotations = {
+                  "checksum/config" = self.configmap.out.identityHash;
+                };
+              };
+              spec = mkPodSpec self {
+                containers = [ (mkBackendContainer self) ];
+                initContainers = config.backend.initContainers;
               };
             };
-            spec = mkPodSpec self {
-              containers = [ (mkBackendContainer self) ];
-              initContainers = config.backend.initContainers;
-            };
           };
-        };
-      };
+        }
+        |> scope.mkDeployment;
 
       # ── Backend Service ─────────────────────────────────────────────
       backendService = scope.mkResource {
@@ -835,9 +827,7 @@ in
       # ── Frontend Deployment ─────────────────────────────────────────
       frontendDeployment =
         if config.frontend.enabled then
-          scope.mkResource {
-            apiVersion = "apps/v1";
-            kind = "Deployment";
+          {
             name = "${name}-frontend";
             labels = componentLabels "frontend";
             spec = {
@@ -868,6 +858,7 @@ in
               };
             };
           }
+          |> scope.mkDeployment
         else
           null;
 
@@ -902,9 +893,7 @@ in
       # ── Caddy Deployment ────────────────────────────────────────────
       caddyDeployment =
         if config.caddy.enabled then
-          scope.mkResource {
-            apiVersion = "apps/v1";
-            kind = "Deployment";
+          {
             name = "${name}-caddy";
             labels = componentLabels "caddy";
             spec = {
@@ -920,32 +909,14 @@ in
                       image = "${config.caddy.image.repository}:${config.caddy.image.tag}";
                       imagePullPolicy = config.caddy.image.pullPolicy;
                       ports = [
-                        {
-                          name = "http";
-                          containerPort = config.caddy.port;
-                          protocol = "TCP";
-                        }
+                        (kix.port "http" config.caddy.port)
                       ];
-                      env = [
-                        {
-                          name = "BACKEND_HOST";
-                          value = self.backendService.out.name;
-                        }
-                        {
-                          name = "BACKEND_PORT";
-                          value = toString config.backend.port;
-                        }
-                      ]
-                      ++ lib.optionals config.frontend.enabled [
-                        {
-                          name = "FRONTEND_HOST";
-                          value = self.frontendService.out.name;
-                        }
-                        {
-                          name = "FRONTEND_PORT";
-                          value = toString config.frontend.port;
-                        }
-                      ];
+                      env = kix.mkEnvVars {
+                        BACKEND_HOST = self.backendService.out.name;
+                        BACKEND_PORT = toString config.backend.port;
+                        FRONTEND_HOST = if config.frontend.enabled then self.frontendService.out.name else null;
+                        FRONTEND_PORT = if config.frontend.enabled then toString config.frontend.port else null;
+                      };
                       resources = config.caddy.resources;
                     }
                   ];
@@ -954,6 +925,7 @@ in
               };
             };
           }
+          |> scope.mkDeployment
         else
           null;
 
@@ -1021,9 +993,7 @@ in
       # ── Redis Deployment ────────────────────────────────────────────
       redisDeployment =
         if config.redis.enabled then
-          scope.mkResource {
-            apiVersion = "apps/v1";
-            kind = "Deployment";
+          {
             name = "${name}-redis";
             labels = componentLabels "redis";
             spec = {
@@ -1038,11 +1008,7 @@ in
                       name = "redis";
                       image = "${config.redis.image.repository}:${config.redis.image.tag}";
                       ports = [
-                        {
-                          name = "redis";
-                          containerPort = 6379;
-                          protocol = "TCP";
-                        }
+                        (kix.port "redis" 6379)
                       ];
                       resources = config.redis.resources;
                       volumeMounts = [
@@ -1063,6 +1029,7 @@ in
               };
             };
           }
+          |> scope.mkDeployment
         else
           null;
 

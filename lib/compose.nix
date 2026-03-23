@@ -15,10 +15,17 @@
 #
 # Mount helpers:
 #   libraryMount = kix.mount.pvc storage { mountPath = "/data"; };
-#   configMount  = kix.mount.configMap self.configMap { mountPath = "/config"; };
+#   configMount  = kix.mount.configMap self.configMap { mountPath = "/config"; subPath = "app.conf"; };
+#   secretMount  = kix.mount.secret self.secret { mountPath = "/keys"; items = [{ key = "tls.key"; path = "key"; }]; };
 #
+#   # Single container — auto-inject:
 #   deployment = { ... }
 #     |> kix.withMounts [ self.libraryMount self.configMount ]
+#     |> scope.mkDeployment;
+#
+#   # Multi-container — target a specific container:
+#   deployment = { ... }
+#     |> kix.withMountsOn "registry" [ self.dataMount ]
 #     |> scope.mkDeployment;
 
 { lib }:
@@ -166,70 +173,83 @@ rec {
 
   mount = {
     # PersistentVolumeClaim mount.
-    pvc = resource: { mountPath, name ? null, readOnly ? false }:
+    pvc = resource: { mountPath, name ? null, readOnly ? false, subPath ? null }:
       if resource == null then null
       else {
         _type = "kix-mount";
         name = if name != null then name
                else builtins.unsafeDiscardStringContext resource.out.name;
         inherit mountPath readOnly;
+        ${if subPath != null then "subPath" else null} = subPath;
         source.persistentVolumeClaim.claimName = resource.out.name;
       };
 
     # ConfigMap mount.
-    configMap = resource: { mountPath, name ? null }:
+    # items: optional list of { key, path } to select specific keys.
+    # defaultMode: optional integer (e.g. 493 for 0755).
+    configMap = resource: { mountPath, name ? null, subPath ? null, items ? null, defaultMode ? null }:
       if resource == null then null
       else {
         _type = "kix-mount";
         name = if name != null then name
                else builtins.unsafeDiscardStringContext resource.out.name;
         inherit mountPath;
-        source.configMap.name = resource.out.name;
+        ${if subPath != null then "subPath" else null} = subPath;
+        source.configMap = { name = resource.out.name; }
+          // lib.optionalAttrs (items != null) { inherit items; }
+          // lib.optionalAttrs (defaultMode != null) { inherit defaultMode; };
       };
 
     # Secret mount.
-    secret = resource: { mountPath, name ? null }:
+    # items: optional list of { key, path } to select specific keys.
+    # defaultMode: optional integer.
+    secret = resource: { mountPath, name ? null, subPath ? null, items ? null, defaultMode ? null }:
       if resource == null then null
       else {
         _type = "kix-mount";
         name = if name != null then name
                else builtins.unsafeDiscardStringContext resource.out.name;
         inherit mountPath;
-        source.secret.secretName = resource.out.name;
+        ${if subPath != null then "subPath" else null} = subPath;
+        source.secret = { secretName = resource.out.name; }
+          // lib.optionalAttrs (items != null) { inherit items; }
+          // lib.optionalAttrs (defaultMode != null) { inherit defaultMode; };
       };
 
     # EmptyDir mount (no resource — name is required).
-    emptyDir = { mountPath, name, medium ? null, sizeLimit ? null }: {
+    emptyDir = { mountPath, name, medium ? null, sizeLimit ? null, subPath ? null }: {
       _type = "kix-mount";
       inherit name mountPath;
+      ${if subPath != null then "subPath" else null} = subPath;
       source.emptyDir = {}
         // lib.optionalAttrs (medium != null) { inherit medium; }
         // lib.optionalAttrs (sizeLimit != null) { inherit sizeLimit; };
     };
   };
 
-  # Inject mounts into a Deployment/StatefulSet/DaemonSet attrset (pre-seal).
-  # Adds volumes to spec.template.spec.volumes and volumeMounts to containers.
-  # Nulls in the list are filtered. Single container: auto-inject.
-  # Multiple containers: error (not yet supported).
-  withMounts = mounts: attrs:
+  # Shared implementation for mount injection.
+  _injectMounts = targetName: mounts: attrs:
     let
       validMounts = builtins.filter (m: m != null) mounts;
       volumes = map (m: { inherit (m) name; } // m.source) validMounts;
       volumeMounts = map (m:
         { inherit (m) name mountPath; }
+        // lib.optionalAttrs (m ? subPath && m.subPath != null) { inherit (m) subPath; }
         // lib.optionalAttrs (m.readOnly or false) { readOnly = true; }
       ) validMounts;
 
       templateSpec = attrs.spec.template.spec or {};
       containers = templateSpec.containers or [];
 
+      injectInto = c: c // { volumeMounts = (c.volumeMounts or []) ++ volumeMounts; };
+
       injectedContainers =
-        if builtins.length containers == 1 then
-          let c = builtins.head containers;
-          in [ (c // { volumeMounts = (c.volumeMounts or []) ++ volumeMounts; }) ]
+        if targetName != null then
+          map (c: if c.name == targetName then injectInto c else c) containers
+        else if builtins.length containers == 1 then
+          [ (injectInto (builtins.head containers)) ]
         else if containers == [] then containers
-        else throw "withMounts: multiple containers — mount targeting not yet supported";
+        else throw "withMounts: multiple containers — use withMountsOn to target a specific one";
     in
     attrs // {
       spec = attrs.spec // {
@@ -241,5 +261,13 @@ rec {
         };
       };
     };
+
+  # Inject mounts into a single-container pod (pre-seal).
+  # Nulls in the mount list are filtered. Errors on multi-container pods.
+  withMounts = _injectMounts null;
+
+  # Inject mounts into a specific container by name (pre-seal).
+  # Usage: { ... } |> kix.withMountsOn "registry" [ ... ] |> scope.mkDeployment;
+  withMountsOn = containerName: _injectMounts containerName;
 
 }

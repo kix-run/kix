@@ -137,6 +137,7 @@ rec {
         || lib.hasPrefix "system:" refName
         || builtins.elem refName [
           "admin"
+          "cluster-admin"
           "edit"
           "view"
         ]

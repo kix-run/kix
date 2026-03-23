@@ -3,6 +3,11 @@
 # Deploys Metabase backed by PostgreSQL (via StackGres). Simple
 # single-deployment architecture with optional Ingress.
 #
+# Dependencies:
+#   postgres            — optional, database (for DI tracking)
+#   ingressNginx        — optional, provides IngressClass for ingress
+#   clusterIssuer       — optional, provides withCert transformer for TLS
+#
 # Resources: Deployment (web), Service (web, port 80 -> 3000),
 # Ingress (frontend, optional).
 #
@@ -12,18 +17,14 @@
 {
   scope,
   lib,
+  kix,
   postgres ? null,
+  ingressNginx ? null,
+  clusterIssuer ? null,
 }:
 
 let
   name = scope.instanceName;
-
-  selectorLabels = {
-    "app" = "metabase";
-  };
-
-  commonLabels = selectorLabels;
-
 in
 {
   options = {
@@ -122,77 +123,52 @@ in
     };
   };
 
-  build = { self, config, clusterConfig }:
-  let
-    # Secret name for credentials.
-    secretName =
-      if config.existingSecret != null then config.existingSecret else "${name}-secrets";
+  build =
+    {
+      self,
+      config,
+      clusterConfig,
+    }:
+    let
+      # Secret name for credentials.
+      secretName =
+        if config.existingSecret != null then config.existingSecret else "${name}-secrets";
+    in
+    {
 
-    # Build env list from config.
-    envVars = [
-      {
-        name = "JAVA_TIMEZONE";
-        value = config.timezone;
-      }
-      {
-        name = "MB_DB_TYPE";
-        value = config.database.type;
-      }
-      {
-        name = "MB_EMOJI_IN_LOGS";
-        value = config.emojiInLogs;
-      }
-      {
-        name = "MB_JETTY_HOST";
-        value = config.jettyHost;
-      }
-      {
-        name = "MB_JETTY_PORT";
-        value = toString config.port;
-      }
-    ]
-    ++ lib.optional (config.siteUrl != "") {
-      name = "MB_SITE_URL";
-      value = config.siteUrl;
-    }
-    ++ lib.mapAttrsToList (k: v: { name = k; value = v; }) config.env;
-
-  in
-  {
-
-    # --- Deployment ---
-    deployment = scope.mkResource {
-      apiVersion = "apps/v1";
-      kind = "Deployment";
-      name = "web";
-      labels = commonLabels;
-      spec = {
-        replicas = config.replicaCount;
-        selector.matchLabels = selectorLabels;
-        template = {
-          metadata = {
-            labels = selectorLabels;
-          };
+      # --- Deployment ---
+      deployment =
+        {
+          name = "web";
           spec = {
-            containers = [
+            replicas = config.replicaCount;
+            selector.matchLabels = scope.selectorLabels;
+            template.spec.containers = [
               {
                 name = "web";
                 image = "${config.image.repository}:${config.image.tag}";
                 imagePullPolicy = config.image.pullPolicy;
-                env = envVars;
+                env = kix.mkEnvVars (
+                  {
+                    JAVA_TIMEZONE = config.timezone;
+                    MB_DB_TYPE = config.database.type;
+                    MB_EMOJI_IN_LOGS = config.emojiInLogs;
+                    MB_JETTY_HOST = config.jettyHost;
+                    MB_JETTY_PORT = toString config.port;
+                    MB_SITE_URL = if config.siteUrl != "" then config.siteUrl else null;
+                  }
+                  // config.env
+                );
                 envFrom = [
                   { secretRef.name = secretName; }
                 ];
                 ports = [
-                  {
-                    containerPort = config.port;
-                    protocol = "TCP";
-                  }
+                  (kix.port "http" config.port)
                 ];
                 livenessProbe = {
                   httpGet = {
                     path = config.livenessProbe.path;
-                    port = config.port;
+                    port = "http";
                     scheme = "HTTP";
                   };
                   initialDelaySeconds = config.livenessProbe.initialDelaySeconds;
@@ -203,7 +179,7 @@ in
                 readinessProbe = {
                   httpGet = {
                     path = config.readinessProbe.path;
-                    port = config.port;
+                    port = "http";
                     scheme = "HTTP";
                   };
                   initialDelaySeconds = config.readinessProbe.initialDelaySeconds;
@@ -215,76 +191,51 @@ in
               }
             ];
           };
-        };
-      };
-    };
-
-    # --- Service ---
-    service = scope.mkResource {
-      apiVersion = "v1";
-      kind = "Service";
-      name = "web";
-      labels = commonLabels;
-      spec = {
-        type = "ClusterIP";
-        selector = self.deployment.out.selector;
-        ports = [
-          {
-            name = "metabase";
-            port = config.servicePort;
-            targetPort = config.port;
-            protocol = "TCP";
-          }
-        ];
-      };
-      outputs = {
-        port = toString config.servicePort;
-      };
-    };
-
-    # --- Ingress (optional) ---
-    ingress =
-      if config.ingress.enabled then
-        scope.mkResource {
-          apiVersion = "networking.k8s.io/v1";
-          kind = "Ingress";
-          name = "frontend";
-          labels = commonLabels;
-          annotations = {
-            "cert-manager.io/cluster-issuer" = config.ingress.tls.issuer;
-          }
-          // config.ingress.annotations;
-          spec = {
-            ingressClassName = config.ingress.className;
-            rules = [
-              {
-                host = config.ingress.host;
-                http.paths = [
-                  {
-                    path = "/";
-                    pathType = "Prefix";
-                    backend.service = {
-                      name = self.service.out.name;
-                      port.number = config.servicePort;
-                    };
-                  }
-                ];
-              }
-            ];
-          }
-          // lib.optionalAttrs config.ingress.tls.enabled {
-            tls = [
-              {
-                hosts = [ config.ingress.host ];
-                secretName = config.ingress.tls.secretName;
-              }
-            ];
-          };
         }
-      else
-        null;
+        |> scope.mkDeployment;
 
-    # --- Entry point ---
-    main = self.service;
-  };
+      # --- Service ---
+      # Port 80 → targetPort 3000, so we pass explicit ports to override auto-derived ones.
+      service =
+        self.deployment
+        |> kix.service.fromWorkload {
+          name = "web";
+          ports = [
+            {
+              name = "metabase";
+              port = config.servicePort;
+              targetPort = "http";
+              protocol = "TCP";
+            }
+          ];
+        }
+        |> scope.mkResource;
+
+      # --- Ingress (optional) ---
+      ingress =
+        if config.ingress.enabled then
+          self.service
+          |> kix.ingress.fromService {
+            name = "frontend";
+            host = config.ingress.host;
+            port = config.servicePort;
+            className =
+              if ingressNginx != null then
+                ingressNginx.out.ingressClassName
+              else
+                config.ingress.className or "public";
+            tls = lib.optional (config.ingress.tls.enabled or false) {
+              hosts = [ config.ingress.host ];
+              secretName = config.ingress.tls.secretName;
+            };
+            annotations = config.ingress.annotations;
+          }
+          |> (if clusterIssuer != null then clusterIssuer.out.withCert else lib.id)
+          |> scope.mkResource
+        else
+          null;
+
+      # --- Entry point ---
+      main = self.service;
+    };
 }

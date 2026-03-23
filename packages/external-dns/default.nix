@@ -15,6 +15,7 @@
 {
   scope,
   lib,
+  kix,
 }:
 
 {
@@ -157,15 +158,58 @@
   let
     name = scope.instanceName;
 
-    selectorLabels = {
-      "app.kubernetes.io/name" = "external-dns";
-      "app.kubernetes.io/instance" = name;
+    # --- RBAC DSL ---
+    inherit (scope.rbac) core group grant watch allow mkClusterRoleSet;
+
+    f5          = group "cis.f5.com" [ "virtualservers" "transportservers" ];
+    kong        = group "configuration.konghq.com" [ "tcpingresses" ];
+    extensions  = group "extensions" [ "ingresses" "hosts" ];
+    networkingK8s = group "networking.k8s.io" [ "ingresses" "hosts" ];
+    ambassador  = group "getambassador.io" [ "ingresses" "hosts" ];
+    gateway     = group "gateway.networking.k8s.io" [ "gateways" "httproutes" "tlsroutes" "tcproutes" "udproutes" "grpcroutes" ];
+    gloo        = group "gloo.solo.io" [ "proxies" "virtualservices" ];
+    gatewaySolo = group "gateway.solo.io" [ "proxies" "virtualservices" ];
+    istio       = group "networking.istio.io" [ "gateways" "virtualservices" ];
+    contour     = group "projectcontour.io" [ "httpproxies" ];
+    openshift   = group "route.openshift.io" [ "routes" ];
+    zalando     = group "zalando.org" [ "routegroups" ];
+
+    clusterRoles = mkClusterRoleSet scope {
+      subjects = [{ kind = "ServiceAccount"; name = self.serviceAccount.out.name; namespace = scope.namespaceName; }];
+      roles = {
+        "${name}-${scope.namespaceName}" = grant [
+          # Core resources: services, pods, nodes, endpoints, namespaces
+          ([core.services core.pods core.nodes core.endpoints core.namespaces] |> watch)
+          # CIS F5
+          ([f5.virtualservers f5.transportservers] |> watch)
+          # Kong
+          (kong.tcpingresses |> watch)
+          # Extensions, networking.k8s.io, Ambassador — shared resources
+          ([extensions.ingresses extensions.hosts
+            networkingK8s.ingresses networkingK8s.hosts
+            ambassador.ingresses ambassador.hosts] |> watch)
+          # Gateway API
+          ([gateway.gateways gateway.httproutes gateway.tlsroutes gateway.tcproutes gateway.udproutes gateway.grpcroutes] |> watch)
+          # Gloo / Gateway Solo
+          ([gloo.proxies gloo.virtualservices gatewaySolo.proxies gatewaySolo.virtualservices] |> watch)
+          # Istio
+          ([istio.gateways istio.virtualservices] |> watch)
+          # Contour
+          (contour.httpproxies |> watch)
+          # OpenShift
+          (openshift.routes |> watch)
+          # Zalando routegroups — watch
+          (zalando.routegroups |> watch)
+          # Zalando routegroups/status — patch, update
+          (zalando "routegroups/status" |> allow [ "patch" "update" ])
+        ];
+      };
     };
 
     ownerId = if config.txtOwnerId != null then config.txtOwnerId else name;
 
     # Merge extra labels into all resource labels.
-    allLabels = selectorLabels // config.extraLabels;
+    allLabels = scope.selectorLabels // config.extraLabels;
 
     # Resolve the affinity with actual instance name replacing PLACEHOLDER.
     resolvedAffinity =
@@ -175,7 +219,7 @@
             preferredDuringSchedulingIgnoredDuringExecution = [
               {
                 podAffinityTerm = {
-                  labelSelector.matchLabels = selectorLabels;
+                  labelSelector.matchLabels = scope.selectorLabels;
                   topologyKey = "kubernetes.io/hostname";
                 };
                 weight = 1;
@@ -237,6 +281,9 @@
         }
       ];
 
+    # --- Mounts ---
+    tmpMount = kix.mount.emptyDir { name = "empty-dir"; mountPath = "/tmp"; };
+
   in
   {
 
@@ -266,168 +313,6 @@
       else
         null;
 
-    # --- ClusterRole ---
-    clusterRole = scope.mkClusterResource {
-      apiVersion = "rbac.authorization.k8s.io/v1";
-      kind = "ClusterRole";
-      name = "${name}-${scope.namespaceName}";
-      labels = allLabels;
-      extra.rules = [
-        {
-          apiGroups = [ "" ];
-          resources = [
-            "services"
-            "pods"
-            "nodes"
-            "endpoints"
-            "namespaces"
-          ];
-          verbs = [
-            "get"
-            "list"
-            "watch"
-          ];
-        }
-        {
-          apiGroups = [ "cis.f5.com" ];
-          resources = [
-            "virtualservers"
-            "transportservers"
-          ];
-          verbs = [
-            "get"
-            "watch"
-            "list"
-          ];
-        }
-        {
-          apiGroups = [ "configuration.konghq.com" ];
-          resources = [ "tcpingresses" ];
-          verbs = [
-            "get"
-            "list"
-            "watch"
-          ];
-        }
-        {
-          apiGroups = [
-            "extensions"
-            "networking.k8s.io"
-            "getambassador.io"
-          ];
-          resources = [
-            "ingresses"
-            "hosts"
-          ];
-          verbs = [
-            "get"
-            "list"
-            "watch"
-          ];
-        }
-        {
-          apiGroups = [ "gateway.networking.k8s.io" ];
-          resources = [
-            "gateways"
-            "httproutes"
-            "tlsroutes"
-            "tcproutes"
-            "udproutes"
-            "grpcroutes"
-          ];
-          verbs = [
-            "get"
-            "list"
-            "watch"
-          ];
-        }
-        {
-          apiGroups = [
-            "gloo.solo.io"
-            "gateway.solo.io"
-          ];
-          resources = [
-            "proxies"
-            "virtualservices"
-          ];
-          verbs = [
-            "get"
-            "list"
-            "watch"
-          ];
-        }
-        {
-          apiGroups = [ "networking.istio.io" ];
-          resources = [
-            "gateways"
-            "virtualservices"
-          ];
-          verbs = [
-            "get"
-            "list"
-            "watch"
-          ];
-        }
-        {
-          apiGroups = [ "projectcontour.io" ];
-          resources = [ "httpproxies" ];
-          verbs = [
-            "get"
-            "watch"
-            "list"
-          ];
-        }
-        {
-          apiGroups = [ "route.openshift.io" ];
-          resources = [ "routes" ];
-          verbs = [
-            "get"
-            "list"
-            "watch"
-          ];
-        }
-        {
-          apiGroups = [ "zalando.org" ];
-          resources = [ "routegroups" ];
-          verbs = [
-            "get"
-            "list"
-            "watch"
-          ];
-        }
-        {
-          apiGroups = [ "zalando.org" ];
-          resources = [ "routegroups/status" ];
-          verbs = [
-            "patch"
-            "update"
-          ];
-        }
-      ];
-    };
-
-    # --- ClusterRoleBinding ---
-    clusterRoleBinding = scope.mkClusterResource {
-      apiVersion = "rbac.authorization.k8s.io/v1";
-      kind = "ClusterRoleBinding";
-      name = "${name}-${scope.namespaceName}";
-      labels = allLabels;
-      extra = {
-        roleRef = {
-          apiGroup = "rbac.authorization.k8s.io";
-          kind = "ClusterRole";
-          name = self.clusterRole.out.name;
-        };
-        subjects = [
-          {
-            kind = "ServiceAccount";
-            name = self.serviceAccount.out.name;
-            namespace = scope.namespaceName;
-          }
-        ];
-      };
-    };
-
     # --- Service (metrics) ---
     service = scope.mkResource {
       apiVersion = "v1";
@@ -436,7 +321,7 @@
       labels = allLabels // { "k8s-app" = "external-dns"; };
       spec = {
         type = "ClusterIP";
-        selector = selectorLabels;
+        selector = scope.selectorLabels;
         ports = [
           {
             name = "http";
@@ -462,7 +347,7 @@
             "app.kubernetes.io/component" = "controller";
           };
           spec = {
-            podSelector.matchLabels = selectorLabels;
+            podSelector.matchLabels = scope.selectorLabels;
             policyTypes = [
               "Ingress"
               "Egress"
@@ -493,39 +378,33 @@
           labels = allLabels;
           spec = {
             maxUnavailable = config.pdb.maxUnavailable;
-            selector.matchLabels = selectorLabels;
+            selector.matchLabels = scope.selectorLabels;
           };
         }
       else
         null;
 
     # --- Deployment ---
-    deployment = scope.mkResource {
-      apiVersion = "apps/v1";
-      kind = "Deployment";
-      inherit name;
-      labels = allLabels;
-      requires = [
-        self.clusterRole
-        self.clusterRoleBinding
-        self.service
-      ]
-      ++ lib.optional (self.secret != null) self.secret
-      ++ lib.optional (self.networkPolicy != null) self.networkPolicy
-      ++ lib.optional (self.podDisruptionBudget != null) self.podDisruptionBudget;
-      spec = {
-        replicas = 1;
-        selector.matchLabels = selectorLabels;
-        strategy = {
-          type = "RollingUpdate";
-          rollingUpdate = {
-            maxSurge = "25%";
-            maxUnavailable = "25%";
+    deployment =
+      {
+        inherit name;
+        labels = allLabels;
+        requires = builtins.attrValues clusterRoles
+          ++ [ self.service ]
+          ++ lib.optional (self.secret != null) self.secret
+          ++ lib.optional (self.networkPolicy != null) self.networkPolicy
+          ++ lib.optional (self.podDisruptionBudget != null) self.podDisruptionBudget;
+        spec = {
+          replicas = 1;
+          selector.matchLabels = scope.selectorLabels;
+          strategy = {
+            type = "RollingUpdate";
+            rollingUpdate = {
+              maxSurge = "25%";
+              maxUnavailable = "25%";
+            };
           };
-        };
-        template = {
-          metadata.labels = selectorLabels;
-          spec = {
+          template.spec = {
             serviceAccountName = self.serviceAccount.out.name;
             automountServiceAccountToken = true;
             affinity = resolvedAffinity;
@@ -541,11 +420,7 @@
                   imagePullPolicy = config.image.pullPolicy;
                   inherit args;
                   ports = [
-                    {
-                      name = "http";
-                      containerPort = config.metricsPort;
-                      protocol = "TCP";
-                    }
+                    (kix.port "http" config.metricsPort)
                   ];
                   livenessProbe = {
                     tcpSocket = {
@@ -579,30 +454,19 @@
                     runAsUser = 1001;
                     seccompProfile.type = "RuntimeDefault";
                   };
-                  volumeMounts = [
-                    {
-                      name = "empty-dir";
-                      mountPath = "/tmp";
-                      subPath = "tmp-dir";
-                    }
-                  ];
                 }
                 // lib.optionalAttrs (containerEnv != [ ]) {
                   env = containerEnv;
                 }
               )
             ];
-            volumes = [
-              {
-                name = "empty-dir";
-              }
-            ];
           };
         };
-      };
-    };
+      }
+      |> kix.withMounts [ tmpMount ]
+      |> scope.mkDeployment;
 
     # --- Entry point ---
     main = self.deployment;
-  };
+  } // clusterRoles;
 }
