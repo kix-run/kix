@@ -210,74 +210,33 @@ in
     };
 
     # --- Server Service ---
-    service = scope.mkResource {
-      apiVersion = "v1";
-      kind = "Service";
-      name = "${name}-server";
-      spec = {
-        type = "ClusterIP";
-        selector = self.deployment.out.selector;
-        ports = [
-          { name = "http"; port = 2283; targetPort = "http"; protocol = "TCP"; }
-        ]
-        ++ lib.optionals config.metrics.enabled [
-          { name = "metrics-api"; port = 8081; targetPort = "metrics-api"; protocol = "TCP"; }
-          { name = "metrics-ms"; port = 8082; targetPort = "metrics-ms"; protocol = "TCP"; }
-        ];
-      };
-      outputs = {
-        port = "2283";
-      };
-      requires =
-        lib.optional (self.ingress != null) self.ingress
-        ++ lib.optional (self.serviceMonitor != null) self.serviceMonitor;
-    };
+    service = self.deployment
+      |> scope.expose { name = "${name}-server"; }
+      |> scope.mkResource;
 
     # --- Ingress (optional) ---
     ingress =
       if config.ingress.enabled then
-        scope.mkResource (
-          {
-            apiVersion = "networking.k8s.io/v1";
-            kind = "Ingress";
-            name = name;
-            annotations = {
-              "nginx.ingress.kubernetes.io/proxy-body-size" = "0";
-            }
-            // config.ingress.annotations;
-            spec = {
-              ingressClassName =
-                if ingressNginx != null then
-                  ingressNginx.out.ingressClassName
-                else
-                  config.ingress.className or "public";
-              rules = [
-                {
-                  host = config.ingress.host;
-                  http.paths = [
-                    {
-                      path = "/";
-                      pathType = "Prefix";
-                      backend.service = {
-                        name = self.service.out.name;
-                        port.number = 2283;
-                      };
-                    }
-                  ];
-                }
-              ];
-            }
-            // lib.optionalAttrs (config.ingress.tls.enabled or false) {
-              tls = [
-                {
-                  hosts = [ config.ingress.host ];
-                  secretName = config.ingress.tls.secretName;
-                }
-              ];
+        self.service
+        |> scope.ingress {
+          inherit name;
+          host = config.ingress.host;
+          className =
+            if ingressNginx != null then
+              ingressNginx.out.ingressClassName
+            else
+              config.ingress.className or "public";
+          tls =
+            lib.optional (config.ingress.tls.enabled or false) {
+              hosts = [ config.ingress.host ];
+              secretName = config.ingress.tls.secretName;
             };
-          }
-          |> (if clusterIssuer != null then clusterIssuer.out.withCert else lib.id)
-        )
+          annotations = {
+            "nginx.ingress.kubernetes.io/proxy-body-size" = "0";
+          } // config.ingress.annotations;
+        }
+        |> (if clusterIssuer != null then clusterIssuer.out.withCert else lib.id)
+        |> scope.mkResource
       else
         null;
 

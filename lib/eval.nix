@@ -17,6 +17,7 @@ let
     ;
 
   rbac = import ./rbac.nix { inherit lib; };
+  compose = import ./compose.nix { inherit lib; };
 in
 
 rec {
@@ -80,6 +81,9 @@ rec {
         ) // { packageLabels = labels; };
 
       inherit rbac;
+
+      # Pipe-friendly composition helpers (pre-seal attrset builders).
+      inherit (compose) expose ingress;
     };
 
   # Create an import marker — used as the `package` field for imported instances.
