@@ -230,7 +230,7 @@ Fix all warnings before committing.
 | `scope.mkDaemonSet` | Same as mkDeployment but for DaemonSets |
 | `scope.selectWorkload target` | Derive selector labels from target's `spec.selector.matchLabels` with automatic dependency tracking |
 | `scope.selectByLabels target` | Select a resource by its package-provided labels (before scope injection) with dependency tracking |
-| `scope.selectorLabels` | Default selector labels for this instance (used as `selector.matchLabels`) |
+| `scope.selectorLabels` | Default selector labels for this instance (used as `selector.matchLabels`). Overridable per-instance via `selectorLabels` in cluster config. |
 | `scope.defaults config { defaults }` | Deep-merge user config over package defaults. Warns on unknown keys. |
 | `scope.instanceName` | The instance name from the cluster definition |
 | `scope.namespaceName` | The namespace this instance lives in |
@@ -278,7 +278,7 @@ Every resource exposes:
 - `"${resource}"` — the resource name (string interpolation creates a dependency edge)
 - `resource.out.name` — the resource name as a string (use in `envFrom`, `secretKeyRef`, etc.)
 - `resource.out.selector` — the resource's labels (for ServiceMonitor selectors etc.)
-- `resource.fqdn` — full DNS name (e.g. `my-svc.my-ns.svc.cluster.local`) with dependency context
+- `resource.out.fqdn` — full DNS name (e.g. `my-svc.my-ns.svc.cluster.local`) with dependency context. Domain suffix configurable via `clusterDomain` cluster option.
 - `resource.out.<key>` — named outputs from the `outputs` field, with dependency context
 
 ### Composition helpers (kix.*)
@@ -387,6 +387,7 @@ For complex ingresses with multiple backends/paths (like harbor), build the Ingr
 |----------|-----------|-------------|
 | `kix.port` | `name: containerPort → { name, containerPort, protocol = "TCP" }` | Container port shorthand. Override protocol with `// { protocol = "UDP"; }` |
 | `kix.mkEnvVars` | `{ KEY = "val"; OPT = null; } → [{ name = "KEY"; value = "val"; }]` | Env attrset → K8s env list. Nulls filtered — use for conditional features. |
+| `kix.mkEnv` | `{ KEY = "val"; } → [rawEntry ...] → [{ name, value }, rawEntry ...]` | Combine named env vars with raw K8s env entries (e.g. `valueFrom.secretKeyRef`). |
 | `kix.parseGi` | `"50Gi" → 50` | Parse K8s quantity to GiB number. Supports Ti/Gi/Mi. Returns null for unknown. |
 
 ```nix
@@ -399,6 +400,14 @@ env = kix.mkEnvVars ({
   REDIS_HOSTNAME = valkey.out.fqdn;
   ML_URL = if hasMl then "http://${machineLearning.out.fqdn}:${machineLearning.out.port}" else null;
 } // config.env);
+
+# kix.mkEnv — combine plain vars with secret refs:
+env = kix.mkEnv {
+  DB_HOSTNAME = postgres.out.fqdn;
+  APP_NAME = "myapp";
+} [
+  { name = "DB_PASSWORD"; valueFrom.secretKeyRef = { name = "db-creds"; key = "password"; }; }
+];
 
 # kix.parseGi — storage validation:
 storageSizeGi = kix.parseGi storage.out.size;
@@ -515,6 +524,8 @@ For larger clusters, split into NixOS-style modules in `clusters/<name>/`. Each 
 Key patterns in module-based clusters:
 - **`aliases`** — DI resolution matches arg names to instance names *or* aliases. Harbor's package takes `redis` and `postgres` as args; the cluster wires them via aliases.
 - **`labelStyle = "helm"`** — tells kix to emit Helm-compatible labels (for packages that need to match Helm-deployed resources during migration).
+- **`selectorLabels`** — override auto-generated selector labels per-instance. Use when the cluster has immutable selectors (e.g. StatefulSet) that don't match the kix/Helm naming convention: `selectorLabels = { "app.kubernetes.io/instance" = "n8n"; "app.kubernetes.io/name" = "valkey"; };`
+- **`clusterDomain`** — set the cluster DNS domain (default `"cluster.local"`). Affects all `resource.out.fqdn` values: `clusterDomain = "nw1.example.net";`
 - **Cluster-wide options** — declared in one module (e.g., `platform.nix`), consumed by others via `config.cluster.domain` etc.
 
 ### Helm charts in cluster definitions

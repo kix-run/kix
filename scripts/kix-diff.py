@@ -27,6 +27,8 @@ from parity.normalize import normalize_kix, normalize_cluster, resource_key, str
 from parity.structural_diff import structural_diff, format_diffs, DiffKind
 
 # Fields that Kubernetes auto-assigns at runtime — never present in kix output.
+# These are skipped entirely during comparison (any value is ignored).
+# For fields with known default *values*, use _strip_k8s_defaults in normalize.py instead.
 CLUSTER_DEFAULT_PATHS = {
     "$.spec.clusterIP",
     "$.spec.clusterIPs",
@@ -50,6 +52,79 @@ _RESET = "\033[0m"
 # --- Resource loading ---
 
 
+# Kinds that are always created by operators/controllers at runtime, never declarative.
+_RUNTIME_KINDS = {
+    "volumesnapshot",
+    "virtualmachineclusterinstancetype",
+    "virtualmachineclusterpreference",
+}
+
+# Namespaces that are entirely K8s internal plumbing.
+_RUNTIME_NAMESPACES = {
+    "kube-public",
+    "kube-node-lease",
+}
+
+
+def _is_runtime_resource(doc: dict) -> bool:
+    """Check if a resource is auto-generated at runtime and should be skipped.
+
+    Detects:
+    - metadata.generateName (controller-generated random name)
+    - Known runtime-only kinds (VolumeSnapshot, KubeVirt instance types/prefs)
+    - Built-in K8s RBAC (kubernetes.io/bootstrapping: rbac-defaults label)
+    - Default ServiceAccount per namespace
+    - kube-root-ca.crt ConfigMap per namespace
+    - Helm release secrets (sh.helm.release.v1.*)
+    - Velero backup artifacts (velero.io/backup-name annotation)
+    - Resources in kube-public / kube-node-lease namespaces
+    """
+    metadata = doc.get("metadata", {})
+    kind = doc.get("kind", "").lower()
+    name = metadata.get("name", "")
+    labels = metadata.get("labels", {}) or {}
+    annotations = metadata.get("annotations", {}) or {}
+
+    # generateName means a controller created this with a random suffix
+    if metadata.get("generateName"):
+        return True
+
+    # Entire kinds that are always operator-generated
+    if kind in _RUNTIME_KINDS:
+        return True
+
+    # Built-in K8s RBAC resources
+    if labels.get("kubernetes.io/bootstrapping") == "rbac-defaults":
+        return True
+
+    # Auto-created per namespace
+    if kind == "serviceaccount" and name == "default":
+        return True
+    if kind == "configmap" and name == "kube-root-ca.crt":
+        return True
+
+    # Bare ServiceAccounts in kube-system (no labels, no annotations) are
+    # auto-created by kube-controller-manager for built-in controllers.
+    ns = metadata.get("namespace", "")
+    if (kind == "serviceaccount" and ns == "kube-system"
+            and not labels and not annotations):
+        return True
+
+    # Helm internal bookkeeping
+    if kind == "secret" and name.startswith("sh.helm.release.v1."):
+        return True
+
+    # Velero backup artifacts
+    if "velero.io/backup-name" in annotations:
+        return True
+
+    # K8s internal namespaces
+    if ns in _RUNTIME_NAMESPACES:
+        return True
+
+    return False
+
+
 def _is_controller_owned(doc: dict) -> bool:
     """Check if a resource is owned by a controller (auto-created, not user-deployed).
 
@@ -69,7 +144,8 @@ def _is_controller_owned(doc: dict) -> bool:
 
 
 def load_resources(directory: Path, normalizer, service: str | None = None,
-                   skip_controller_owned: bool = False) -> dict[str, dict]:
+                   skip_controller_owned: bool = False,
+                   skip_runtime: bool = False) -> dict[str, dict]:
     """Load and normalize all YAML files from a directory.
 
     Supports both layouts:
@@ -82,6 +158,9 @@ def load_resources(directory: Path, normalizer, service: str | None = None,
     If *skip_controller_owned* is True, resources with ownerReferences
     where controller=true are excluded (they are managed by a controller,
     not deployed directly).
+
+    If *skip_runtime* is True, resources that are auto-generated at runtime
+    are excluded (generateName, built-in RBAC, default SAs, helm secrets, etc.).
 
     Returns dict mapping "{namespace}/{name}-{kind}" -> normalized doc.
     """
@@ -100,6 +179,8 @@ def load_resources(directory: Path, normalizer, service: str | None = None,
         if doc is None:
             return
         if skip_controller_owned and _is_controller_owned(doc):
+            return
+        if skip_runtime and _is_runtime_resource(doc):
             return
         doc = normalizer(doc)
         resources[key] = doc
@@ -333,10 +414,26 @@ def generate_report(
     # Summary (exclude renames from kix-only / cluster-only counts)
     n_kix_only = len(kix_only) - len(renamed_kix)
     n_cluster_only = len(cluster_only) - len(renamed_cluster)
+    n_total = len(identical) + len(modified) + n_kix_only + n_cluster_only
+
+    # Aggregate diff counts across all modified resources
+    total_extra = sum(
+        sum(1 for d in diffs if d.kind == DiffKind.EXTRA_IN_B)
+        for _, diffs in modified
+    )
+    total_missing = sum(
+        sum(1 for d in diffs if d.kind == DiffKind.MISSING_IN_B)
+        for _, diffs in modified
+    )
+    total_changed = sum(
+        sum(1 for d in diffs if d.kind in (DiffKind.VALUE_MISMATCH, DiffKind.TYPE_MISMATCH))
+        for _, diffs in modified
+    )
+
     if color:
-        lines.append(f"{_BOLD}Summary{_RESET}")
+        lines.append(f"{_BOLD}Summary{_RESET}  {_DIM}({n_total} resources){_RESET}")
         lines.append(f"  Identical:    {_DIM}{len(identical)}{_RESET}")
-        lines.append(f"  Modified:     {_YELLOW}{len(modified)}{_RESET}")
+        lines.append(f"  Modified:     {_YELLOW}{len(modified)}{_RESET}  {_GREEN}+{total_extra}{_RESET} {_RED}-{total_missing}{_RESET} {_YELLOW}~{total_changed}{_RESET}")
         lines.append(f"  kix-only:     {_RED}{n_kix_only}{_RESET}")
         lines.append(f"  Cluster-only: {_GREEN}{n_cluster_only}{_RESET}")
     else:
@@ -345,9 +442,10 @@ def generate_report(
         lines.append("| Category | Count |")
         lines.append("|----------|-------|")
         lines.append(f"| Identical | {len(identical)} |")
-        lines.append(f"| Modified | {len(modified)} |")
+        lines.append(f"| Modified | {len(modified)}  (+{total_extra} -{total_missing} ~{total_changed}) |")
         lines.append(f"| kix-only | {n_kix_only} |")
         lines.append(f"| Cluster-only | {n_cluster_only} |")
+        lines.append(f"| **Total** | **{n_total}** |")
     lines.append("")
 
     # Probable renames section (before kix-only/cluster-only so context is clear)
@@ -400,32 +498,19 @@ def generate_report(
         lines.append("")
         for key, diffs in modified:
             kind, ns, name = parse_resource_id(key)
-            if color:
-                label = f"{name}" if ns == "_cluster" else f"{ns}/{name}"
-                lines.append(f"  {_BOLD}{kind} {label}{_RESET}")
-            else:
-                if ns == "_cluster":
-                    lines.append(f"### {kind} {name}")
-                else:
-                    lines.append(f"### {kind} {ns}/{name}")
-            lines.append("")
-
-            # Diff summary
+            # Diff counts for the header
             n_missing = sum(1 for d in diffs if d.kind == DiffKind.MISSING_IN_B)
             n_extra = sum(1 for d in diffs if d.kind == DiffKind.EXTRA_IN_B)
             n_changed = sum(1 for d in diffs
                             if d.kind in (DiffKind.VALUE_MISMATCH, DiffKind.TYPE_MISMATCH))
-            summary_parts = []
-            if n_missing:
-                summary_parts.append(f"{n_missing} in kix only")
-            if n_extra:
-                summary_parts.append(f"{n_extra} in cluster only")
-            if n_changed:
-                summary_parts.append(f"{n_changed} changed")
+
             if color:
-                lines.append(f"  {_DIM}{', '.join(summary_parts)}{_RESET}")
+                label = f"{name}" if ns == "_cluster" else f"{ns}/{name}"
+                counts = f"{_GREEN}+{n_extra}{_RESET} {_RED}-{n_missing}{_RESET} {_YELLOW}~{n_changed}{_RESET}"
+                lines.append(f"  {_BOLD}{kind} {label}{_RESET}  {counts}")
             else:
-                lines.append(f"_{', '.join(summary_parts)}_")
+                label = name if ns == "_cluster" else f"{ns}/{name}"
+                lines.append(f"### {kind} {label}  (+{n_extra} -{n_missing} ~{n_changed})")
             lines.append("")
 
             if not files_only:
@@ -472,18 +557,20 @@ def generate_report(
               help="Only compare resources whose name matches this service (e.g. 'coredns')")
 @click.option("--color/--no-color", default=None,
               help="Colorize diff output (default: auto-detect TTY)")
-@click.option("--ignore-cluster-defaults", is_flag=True, default=False,
-              help="Ignore fields that K8s auto-assigns (clusterIP, ipFamilies, sessionAffinity, etc.)")
+@click.option("--ignore-cluster-defaults/--no-ignore-cluster-defaults", default=True,
+              help="Ignore fields that K8s auto-assigns (clusterIP, ipFamilies, sessionAffinity, etc.). On by default.")
 @click.option("--full-diff", is_flag=True, default=False,
               help="Show full unified diffs for multi-line string values (e.g. ConfigMaps)")
-@click.option("--ignore-port-names", is_flag=True, default=False,
-              help="Ignore port name differences in container ports")
-@click.option("--ignore-dns-suffix", is_flag=True, default=False,
-              help="Treat FQDN service DNS names (x.ns.svc.cluster.local) as equivalent to short names (x)")
-@click.option("--skip-controller-owned", is_flag=True, default=False,
+@click.option("--ignore-port-names/--no-ignore-port-names", default=True,
+              help="Ignore port name differences in container ports (default: enabled)")
+@click.option("--ignore-dns-suffix/--no-ignore-dns-suffix", default=True,
+              help="Treat FQDN service DNS names (x.ns.svc.cluster.local) as equivalent to short names (default: enabled)")
+@click.option("--skip-controller-owned/--no-skip-controller-owned", default=True,
               help="Skip cluster resources with ownerReferences[controller=true] (auto-created by controllers)")
+@click.option("--skip-runtime/--no-skip-runtime", default=True,
+              help="Skip runtime-generated cluster resources (built-in RBAC, default SAs, helm secrets, velero snapshots, etc.)")
 @click.option("--skip-all", is_flag=True, default=False,
-              help="Enable all skip/ignore flags (cluster-defaults, port-names, dns-suffix, controller-owned)")
+              help="Enable all skip/ignore flags (cluster-defaults, port-names, dns-suffix, controller-owned, runtime)")
 @click.option("--files-only", is_flag=True, default=False,
               help="Only show file-level info, skip detailed line-by-line diffs")
 @click.option("--only-broken", is_flag=True, default=False,
@@ -491,7 +578,7 @@ def generate_report(
 def main(kix_dir: str, cluster_dir: str, ignore_path: tuple[str, ...], service: str | None,
          color: bool | None, ignore_cluster_defaults: bool, full_diff: bool,
          ignore_port_names: bool, ignore_dns_suffix: bool, skip_controller_owned: bool,
-         skip_all: bool, files_only: bool, only_broken: bool):
+         skip_runtime: bool, skip_all: bool, files_only: bool, only_broken: bool):
     """Compare kix manifests against a cluster dump.
 
     KIX_DIR is the kix output directory (e.g. ./result from nix build).
@@ -508,6 +595,7 @@ def main(kix_dir: str, cluster_dir: str, ignore_path: tuple[str, ...], service: 
         ignore_port_names = True
         ignore_dns_suffix = True
         skip_controller_owned = True
+        skip_runtime = True
 
     ignore_paths = set(ignore_path) if ignore_path else set()
     if ignore_cluster_defaults:
@@ -538,7 +626,8 @@ def main(kix_dir: str, cluster_dir: str, ignore_path: tuple[str, ...], service: 
 
     click.echo("Loading cluster dump...", err=True)
     cluster_resources = load_resources(cluster_path, _with_post(normalize_cluster), service,
-                                       skip_controller_owned=skip_controller_owned)
+                                       skip_controller_owned=skip_controller_owned,
+                                       skip_runtime=skip_runtime)
     click.echo(f"  {len(cluster_resources)} resources", err=True)
 
     # Resolve color: explicit flag wins, otherwise auto-detect TTY on stdout

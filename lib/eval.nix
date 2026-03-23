@@ -31,10 +31,13 @@ rec {
       namespaces ? { },
       clusterLabels ? { },
       labelStyle ? "kix",
+      selectorLabelsOverride ? null,
+      clusterDomain ? "cluster.local",
     }:
     let
       selectorLabels =
-        if labelStyle == "helm" then {
+        if selectorLabelsOverride != null then selectorLabelsOverride
+        else if labelStyle == "helm" then {
           app = instanceName;
           release = instanceName;
         }
@@ -62,6 +65,7 @@ rec {
           removeAttrs args [ "labels" ]
           // {
             namespace = namespaceResource;
+            inherit clusterDomain;
             labels =
               clusterLabels
               // instanceLabels
@@ -118,6 +122,7 @@ rec {
           removeAttrs args [ "labels" ]
           // {
             namespace = clusterScoped;
+            inherit clusterDomain;
             labels =
               clusterLabels
               // instanceLabels
@@ -599,6 +604,8 @@ rec {
           ;
         namespaces = nsResources;
         labelStyle = instCfg.labelStyle;
+        selectorLabelsOverride = instCfg.selectorLabels;
+        clusterDomain = clusterConfig.clusterDomain or "cluster.local";
       };
 
       # 1. Call the package function with DI deps — returns { meta?, options, build }

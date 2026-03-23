@@ -57,6 +57,7 @@ in
     pgConfig = lib.mkOption {
       type = lib.types.anything;
       default = {
+        name = null;
         maxConnections = "200";
         sharedBuffers = null;
         postgresqlConf = { };
@@ -222,7 +223,7 @@ in
       pgConfig = scope.mkResource {
         apiVersion = "stackgres.io/v1";
         kind = "SGPostgresConfig";
-        name = "${name}-config";
+        name = if config.pgConfig.name != null then config.pgConfig.name else "${name}-config";
         labels = selectorLabels;
         spec = {
           postgresVersion = config.postgres.version;

@@ -26,6 +26,7 @@ STRIP_METADATA_KEYS = {
 # Annotations that K8s or controllers add at runtime
 STRIP_ANNOTATIONS = {
     "kubectl.kubernetes.io/last-applied-configuration",
+    "kubectl.kubernetes.io/restartedAt",
     "deployment.kubernetes.io/revision",
     "pv.kubernetes.io/bind-completed",
     "pv.kubernetes.io/bound-by-controller",
@@ -172,6 +173,27 @@ def _strip_k8s_defaults(doc: dict) -> dict:
         labels = meta.get("labels", {})
         labels.pop("name", None)
 
+    # Service: strip K8s-defaulted spec fields
+    if kind == "Service":
+        doc = dict(doc)
+        spec = doc.get("spec", {})
+        if isinstance(spec, dict):
+            spec = dict(spec)
+            # type defaults to ClusterIP
+            if spec.get("type") == "ClusterIP":
+                spec.pop("type")
+            # publishNotReadyAddresses defaults to false
+            if spec.get("publishNotReadyAddresses") is False:
+                spec.pop("publishNotReadyAddresses")
+            # protocol defaults to TCP on service ports
+            ports = spec.get("ports")
+            if isinstance(ports, list):
+                spec["ports"] = [
+                    _strip_port_protocol_default(p) if isinstance(p, dict) else p
+                    for p in ports
+                ]
+            doc["spec"] = spec
+
     # Deployments / StatefulSets / DaemonSets: strip K8s-defaulted spec fields
     if kind in ("Deployment", "StatefulSet", "DaemonSet"):
         doc = dict(doc)
@@ -180,12 +202,47 @@ def _strip_k8s_defaults(doc: dict) -> dict:
             spec = dict(spec)
             spec.pop("progressDeadlineSeconds", None)
             spec.pop("revisionHistoryLimit", None)
-            # Default RollingUpdate strategy with default values
+            # Default RollingUpdate strategy with default values (Deployment)
             strategy = spec.get("strategy", {})
             if isinstance(strategy, dict) and strategy.get("type") == "RollingUpdate":
                 rolling = strategy.get("rollingUpdate", {})
                 if rolling == {"maxSurge": "25%", "maxUnavailable": "25%"}:
                     spec.pop("strategy", None)
+            doc["spec"] = spec
+
+    # StatefulSet: additional defaults
+    if kind == "StatefulSet":
+        doc = dict(doc)
+        spec = doc.get("spec", {})
+        if isinstance(spec, dict):
+            spec = dict(spec)
+            # persistentVolumeClaimRetentionPolicy defaults to Retain/Retain
+            pvcrp = spec.get("persistentVolumeClaimRetentionPolicy")
+            if pvcrp == {"whenDeleted": "Retain", "whenScaled": "Retain"}:
+                spec.pop("persistentVolumeClaimRetentionPolicy")
+            # updateStrategy defaults to RollingUpdate
+            us = spec.get("updateStrategy", {})
+            if isinstance(us, dict) and us.get("type") == "RollingUpdate":
+                rolling = us.get("rollingUpdate", {})
+                if not rolling or rolling == {"partition": 0}:
+                    spec.pop("updateStrategy", None)
+            # Normalize VolumeClaimTemplates
+            vcts = spec.get("volumeClaimTemplates")
+            if isinstance(vcts, list):
+                spec["volumeClaimTemplates"] = [_strip_vct_defaults(v) for v in vcts]
+            doc["spec"] = spec
+
+    # DaemonSet: updateStrategy defaults
+    if kind == "DaemonSet":
+        doc = dict(doc)
+        spec = doc.get("spec", {})
+        if isinstance(spec, dict):
+            spec = dict(spec)
+            us = spec.get("updateStrategy", {})
+            if isinstance(us, dict) and us.get("type") == "RollingUpdate":
+                rolling = us.get("rollingUpdate", {})
+                if not rolling or rolling == {"maxSurge": 0, "maxUnavailable": 1} or rolling == {"maxUnavailable": 1}:
+                    spec.pop("updateStrategy", None)
             doc["spec"] = spec
 
     # PersistentVolumeClaim: strip runtime-assigned fields
@@ -200,6 +257,16 @@ def _strip_k8s_defaults(doc: dict) -> dict:
             # volumeName is assigned at bind time
             spec.pop("volumeName", None)
             doc["spec"] = spec
+
+    # PriorityClass: preemptionPolicy defaults to PreemptLowerPriority
+    if kind == "PriorityClass":
+        doc = dict(doc)
+        if doc.get("preemptionPolicy") == "PreemptLowerPriority":
+            doc.pop("preemptionPolicy")
+
+    # ClusterRole / Role: normalize RBAC rules for semantic comparison
+    if kind in ("ClusterRole", "Role"):
+        doc = _normalize_rbac_rules(doc)
 
     # Pod spec defaults (applies to any resource with a pod template)
     doc = _strip_pod_spec_defaults(doc)
@@ -255,6 +322,32 @@ def _strip_pod_spec_defaults(doc: dict) -> dict:
         pod_spec.pop("terminationGracePeriodSeconds", None)
         # serviceAccount is a deprecated alias for serviceAccountName
         pod_spec.pop("serviceAccount", None)
+        # Boolean pod-level defaults
+        if pod_spec.get("hostIPC") is False:
+            pod_spec.pop("hostIPC")
+        if pod_spec.get("hostNetwork") is False:
+            pod_spec.pop("hostNetwork")
+        if pod_spec.get("hostPID") is False:
+            pod_spec.pop("hostPID")
+        if pod_spec.get("enableServiceLinks") is True:
+            pod_spec.pop("enableServiceLinks")
+
+        # Volume defaults
+        for volume in (pod_spec.get("volumes") or []):
+            if not isinstance(volume, dict):
+                continue
+            # secret.defaultMode defaults to 420 (0644)
+            secret = volume.get("secret")
+            if isinstance(secret, dict) and secret.get("defaultMode") == 420:
+                secret.pop("defaultMode")
+            # projected.defaultMode defaults to 420
+            projected = volume.get("projected")
+            if isinstance(projected, dict) and projected.get("defaultMode") == 420:
+                projected.pop("defaultMode")
+            # hostPath.type defaults to empty string
+            host_path = volume.get("hostPath")
+            if isinstance(host_path, dict) and host_path.get("type") == "":
+                host_path.pop("type")
 
         # Container-level defaults
         for container in pod_spec.get("containers", []) + pod_spec.get("initContainers", []):
@@ -264,6 +357,26 @@ def _strip_pod_spec_defaults(doc: dict) -> dict:
             container.pop("terminationMessagePolicy", None)
             container.pop("imagePullPolicy", None)
 
+            # protocol defaults to TCP on container ports
+            ports = container.get("ports")
+            if isinstance(ports, list):
+                container["ports"] = [
+                    _strip_port_protocol_default(p) if isinstance(p, dict) else p
+                    for p in ports
+                ]
+
+            # fieldRef.apiVersion defaults to "v1" in env vars
+            env = container.get("env")
+            if isinstance(env, list):
+                for env_var in env:
+                    if not isinstance(env_var, dict):
+                        continue
+                    vf = env_var.get("valueFrom")
+                    if isinstance(vf, dict):
+                        fr = vf.get("fieldRef")
+                        if isinstance(fr, dict) and fr.get("apiVersion") == "v1":
+                            fr.pop("apiVersion")
+
             # Probe defaults
             for probe_key in ("livenessProbe", "readinessProbe", "startupProbe"):
                 probe = container.get(probe_key)
@@ -272,6 +385,18 @@ def _strip_pod_spec_defaults(doc: dict) -> dict:
                 # successThreshold defaults to 1
                 if probe.get("successThreshold") == 1:
                     probe.pop("successThreshold")
+                # failureThreshold defaults to 3
+                if probe.get("failureThreshold") == 3:
+                    probe.pop("failureThreshold")
+                # periodSeconds defaults to 10
+                if probe.get("periodSeconds") == 10:
+                    probe.pop("periodSeconds")
+                # timeoutSeconds defaults to 1
+                if probe.get("timeoutSeconds") == 1:
+                    probe.pop("timeoutSeconds")
+                # initialDelaySeconds defaults to 0
+                if probe.get("initialDelaySeconds") == 0:
+                    probe.pop("initialDelaySeconds")
                 # httpGet.scheme defaults to HTTP
                 http_get = probe.get("httpGet")
                 if isinstance(http_get, dict) and http_get.get("scheme") == "HTTP":
@@ -303,6 +428,91 @@ def _find_pod_specs(doc: dict) -> list[dict]:
         if isinstance(spec, dict):
             specs.append(spec)
     return specs
+
+
+def _strip_port_protocol_default(port: dict) -> dict:
+    """Strip protocol: TCP from a port dict (it's the K8s default)."""
+    if port.get("protocol") == "TCP":
+        port = dict(port)
+        port.pop("protocol")
+    return port
+
+
+def _strip_vct_defaults(vct: Any) -> Any:
+    """Strip server-side defaults from a VolumeClaimTemplate."""
+    if not isinstance(vct, dict):
+        return vct
+    vct = dict(vct)
+    # K8s adds apiVersion and kind to VCTs in responses
+    vct.pop("apiVersion", None)
+    vct.pop("kind", None)
+    # status is server-side
+    vct.pop("status", None)
+    # volumeMode defaults to Filesystem
+    spec = vct.get("spec")
+    if isinstance(spec, dict):
+        spec = dict(spec)
+        if spec.get("volumeMode") == "Filesystem":
+            spec.pop("volumeMode")
+        vct["spec"] = spec
+    return vct
+
+
+def _normalize_rbac_rules(doc: dict) -> dict:
+    """Normalize RBAC rules for semantic comparison.
+
+    The kix `grant` function merges rules that share apiGroups+verbs into
+    one rule with combined resources. Helm keeps them separate. Both are
+    semantically equivalent. This normalizes to a canonical merged form.
+    """
+    rules = doc.get("rules")
+    if not isinstance(rules, list) or not rules:
+        return doc
+
+    # Expand all rules into atomic (apiGroups, resources, verbs, resourceNames) and re-merge
+    # Group key: (sorted apiGroups, sorted verbs, sorted resourceNames)
+    merged: dict[tuple, set] = {}
+    for rule in rules:
+        if not isinstance(rule, dict):
+            continue
+        api_groups = tuple(sorted(rule.get("apiGroups", [])))
+        verbs = tuple(sorted(rule.get("verbs", [])))
+        resource_names = tuple(sorted(rule.get("resourceNames", [])))
+        non_resource_urls = tuple(sorted(rule.get("nonResourceURLs", [])))
+        resources = rule.get("resources", [])
+
+        # Non-resource URL rules don't have resources/apiGroups
+        if non_resource_urls:
+            key = ("nonres", non_resource_urls, verbs)
+            merged.setdefault(key, set())
+            # nothing to merge for nonResourceURL rules
+        else:
+            key = ("res", api_groups, verbs, resource_names)
+            merged.setdefault(key, set()).update(resources)
+
+    # Rebuild rules in canonical order
+    canonical = []
+    for key, resources in sorted(merged.items()):
+        if key[0] == "nonres":
+            _, urls, verbs = key
+            canonical.append({
+                "nonResourceURLs": list(urls),
+                "verbs": list(verbs),
+            })
+        else:
+            _, api_groups, verbs, resource_names = key
+            rule = {
+                "apiGroups": list(api_groups),
+                "resources": sorted(resources),
+                "verbs": list(verbs),
+            }
+            if resource_names:
+                rule["resourceNames"] = list(resource_names)
+            canonical.append(rule)
+
+    doc = dict(doc)
+    doc["rules"] = canonical
+    return doc
 
 
 def _strip_labels_and_annotations(doc: dict, cluster: bool) -> dict:
@@ -432,57 +642,49 @@ def _normalize_paths(obj: Any) -> Any:
     return obj
 
 
+# Sort key functions for dict arrays where ordering is not semantically significant.
+_SORT_DICT_ARRAYS: dict[str, Any] = {
+    "ports": lambda p: (p.get("name", ""), p.get("containerPort", 0), p.get("port", 0)),
+    "env": lambda e: e.get("name", ""),
+    "envFrom": lambda e: str(e),
+    "volumeMounts": lambda vm: vm.get("mountPath", ""),
+    "volumes": lambda vol: vol.get("name", ""),
+    "containers": lambda c: c.get("name", ""),
+    "initContainers": lambda c: c.get("name", ""),
+    # RBAC rules by apiGroups, Ingress rules by host — both work via the tuple fallback
+    "rules": lambda r: (str(sorted(r.get("apiGroups", []))), r.get("host", "")),
+    "hostAliases": lambda h: h.get("ip", ""),
+    "webhooks": lambda w: w.get("name", ""),
+    "topologySpreadConstraints": lambda t: t.get("topologyKey", ""),
+    "tolerations": lambda t: (t.get("key", ""), t.get("operator", ""), t.get("effect", "")),
+    "imagePullSecrets": lambda s: s.get("name", ""),
+    "groups": lambda g: g.get("name", ""),
+    "volumeClaimTemplates": lambda v: v.get("metadata", {}).get("name", ""),
+    "subjects": lambda s: (s.get("kind", ""), s.get("name", "")),
+    "ownerReferences": lambda o: (o.get("kind", ""), o.get("name", "")),
+}
+
+# String/scalar array fields where ordering is not semantically significant.
+_SORT_SCALAR_ARRAYS = {
+    "accessModes",
+}
+
+
 def _sort_arrays(obj: Any) -> Any:
     """Sort arrays where ordering is not semantically significant."""
     if isinstance(obj, dict):
         result = {}
         for k, v in obj.items():
-            if k == "ports" and isinstance(v, list) and v and isinstance(v[0], dict):
-                result[k] = sorted(
-                    (_sort_arrays(p) for p in v),
-                    key=lambda p: (p.get("name", ""), p.get("containerPort", 0), p.get("port", 0)),
-                )
-            elif k == "env" and isinstance(v, list) and v and isinstance(v[0], dict):
-                result[k] = sorted(
-                    (_sort_arrays(e) for e in v),
-                    key=lambda e: e.get("name", ""),
-                )
-            elif k == "envFrom" and isinstance(v, list) and v and isinstance(v[0], dict):
-                result[k] = sorted(
-                    (_sort_arrays(e) for e in v),
-                    key=lambda e: str(e),
-                )
-            elif k == "volumeMounts" and isinstance(v, list) and v and isinstance(v[0], dict):
-                result[k] = sorted(
-                    (_sort_arrays(vm) for vm in v),
-                    key=lambda vm: vm.get("mountPath", ""),
-                )
-            elif k == "volumes" and isinstance(v, list) and v and isinstance(v[0], dict):
-                result[k] = sorted(
-                    (_sort_arrays(vol) for vol in v),
-                    key=lambda vol: vol.get("name", ""),
-                )
-            elif k == "containers" and isinstance(v, list) and v and isinstance(v[0], dict):
-                result[k] = sorted(
-                    (_sort_arrays(c) for c in v),
-                    key=lambda c: c.get("name", ""),
-                )
-            elif k == "initContainers" and isinstance(v, list) and v and isinstance(v[0], dict):
-                result[k] = sorted(
-                    (_sort_arrays(c) for c in v),
-                    key=lambda c: c.get("name", ""),
-                )
-            elif k == "rules" and isinstance(v, list) and v and isinstance(v[0], dict):
-                # RBAC rules — sort by apiGroups for stability
-                result[k] = sorted(
-                    (_sort_arrays(r) for r in v),
-                    key=lambda r: str(sorted(r.get("apiGroups", []))),
-                )
-            elif k == "hostAliases" and isinstance(v, list) and v and isinstance(v[0], dict):
-                result[k] = sorted(
-                    (_sort_arrays(h) for h in v),
-                    key=lambda h: h.get("ip", ""),
-                )
+            if isinstance(v, list) and v:
+                if isinstance(v[0], dict) and k in _SORT_DICT_ARRAYS:
+                    result[k] = sorted(
+                        (_sort_arrays(item) for item in v),
+                        key=_SORT_DICT_ARRAYS[k],
+                    )
+                elif k in _SORT_SCALAR_ARRAYS and all(isinstance(x, str) for x in v):
+                    result[k] = sorted(v)
+                else:
+                    result[k] = _sort_arrays(v)
             else:
                 result[k] = _sort_arrays(v)
         return result

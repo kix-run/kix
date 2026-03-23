@@ -14,6 +14,7 @@ needing to match the cluster's exact formatting, field ordering, or whitespace.
 from __future__ import annotations
 
 import difflib
+import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable
@@ -89,6 +90,13 @@ _LIST_KEY_EXTRACTORS: dict[str, Callable[[dict], str]] = {
     "env": lambda item: item.get("name", ""),
     "hostAliases": lambda item: item.get("ip", ""),
     "subjects": lambda item: f"{item.get('kind', '')}:{item.get('name', '')}",
+    "groups": lambda item: item.get("name", ""),
+    "volumeClaimTemplates": lambda item: item.get("metadata", {}).get("name", ""),
+    "webhooks": lambda item: item.get("name", ""),
+    "topologySpreadConstraints": lambda item: item.get("topologyKey", ""),
+    "tolerations": lambda item: f"{item.get('key', '')}:{item.get('operator', '')}:{item.get('effect', '')}",
+    "imagePullSecrets": lambda item: item.get("name", ""),
+    "ownerReferences": lambda item: f"{item.get('kind', '')}:{item.get('name', '')}",
 }
 
 
@@ -277,9 +285,52 @@ def structural_diff(
 
     # Scalars
     if a != b:
-        diffs.append(Difference(path, DiffKind.VALUE_MISMATCH, a, b, a_label, b_label))
+        # Check if both are equivalent K8s quantities (e.g. "1" vs "1000m", "2Gi" vs "2048Mi")
+        if isinstance(a, str) and isinstance(b, str) and _quantities_equal(a, b):
+            pass  # semantically equal quantities
+        else:
+            diffs.append(Difference(path, DiffKind.VALUE_MISMATCH, a, b, a_label, b_label))
 
     return diffs
+
+
+# --- K8s quantity comparison ---
+
+# Matches K8s resource quantities like "500m", "1.5Gi", "100", "2e3"
+_QUANTITY_RE = re.compile(
+    r'^([+-]?(?:\d+\.?\d*|\d*\.?\d+)(?:e[+-]?\d+)?)\s*'
+    r'(n|u|m|k|Ki|Mi|Gi|Ti|Pi|Ei|M|G|T|P|E)?$'
+)
+
+_QUANTITY_MULTIPLIERS = {
+    "n": 1e-9, "u": 1e-6, "m": 1e-3,
+    "k": 1e3, "M": 1e6, "G": 1e9, "T": 1e12, "P": 1e15, "E": 1e18,
+    "Ki": 2**10, "Mi": 2**20, "Gi": 2**30, "Ti": 2**40, "Pi": 2**50, "Ei": 2**60,
+}
+
+
+def _parse_quantity(s: str) -> float | None:
+    """Parse a K8s resource quantity string to its base numeric value, or None if not a quantity."""
+    m = _QUANTITY_RE.match(s)
+    if not m:
+        return None
+    value = float(m.group(1))
+    suffix = m.group(2)
+    if suffix:
+        value *= _QUANTITY_MULTIPLIERS[suffix]
+    return value
+
+
+def _quantities_equal(a: str, b: str) -> bool:
+    """Check if two strings represent the same K8s resource quantity."""
+    qa = _parse_quantity(a)
+    qb = _parse_quantity(b)
+    if qa is None or qb is None:
+        return False
+    # Use relative tolerance for floating point
+    if qa == qb == 0:
+        return True
+    return abs(qa - qb) / max(abs(qa), abs(qb)) < 1e-9
 
 
 def _path_ignored(path: str, ignore_paths: set[str]) -> bool:

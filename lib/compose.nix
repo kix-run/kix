@@ -43,6 +43,11 @@ rec {
     lib.mapAttrsToList (name: value: { inherit name value; })
       (lib.filterAttrs (_: v: v != null) attrs);
 
+  # Combine named env vars with raw K8s env entries (e.g. valueFrom.secretKeyRef).
+  # Usage: mkEnv { KEY = "value"; } [ { name = "SECRET"; valueFrom.secretKeyRef = { name = "my-secret"; key = "password"; }; } ]
+  mkEnv = attrs: raw:
+    (mkEnvVars attrs) ++ raw;
+
   # Parse a K8s resource quantity string to GiB (as a number).
   # Supports Ti, Gi, Mi suffixes. Returns null for unrecognized formats.
   # Strips Nix string context so it works on out.* values.

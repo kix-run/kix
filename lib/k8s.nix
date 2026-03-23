@@ -56,6 +56,7 @@ rec {
       requires ? [ ],
       extraDeps ? [ ],
       extra ? { },
+      clusterDomain ? "cluster.local",
     }:
     let
       isClusterScoped = builtins.isAttrs namespace && (namespace._type or "") == "k8s-cluster-scoped";
@@ -76,7 +77,7 @@ rec {
         inherit name;
         fqdn =
           if isClusterScoped then name
-          else "${name}.${nsKey}.svc.cluster.local";
+          else "${name}.${nsKey}.svc.${clusterDomain}";
       } // lib.optionalAttrs (autoSelector != null) {
         selector = autoSelector;
       };
@@ -111,6 +112,7 @@ rec {
       requires ? [ ],
       extraDeps ? [ ],
       extra ? { },
+      clusterDomain ? "cluster.local",
     }:
     let
       # Determine namespace handling
@@ -181,7 +183,7 @@ rec {
         name = attachCtx name;
         fqdn =
           if isClusterScoped then attachCtx name
-          else attachCtx "${name}.${nsKey}.svc.cluster.local";
+          else attachCtx "${name}.${nsKey}.svc.${clusterDomain}";
         identityHash = attachCtx (extractStoreHash _identityPathPlain);
       } // lib.optionalAttrs (autoSelector != null) {
         selector = autoSelector;

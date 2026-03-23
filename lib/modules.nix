@@ -14,6 +14,12 @@
       description = "Labels injected into every resource.";
     };
 
+    clusterDomain = lib.mkOption {
+      type = lib.types.str;
+      default = "cluster.local";
+      description = "Kubernetes cluster DNS domain. Used to construct resource FQDNs (e.g. svc.cluster.local).";
+    };
+
     instances = lib.mkOption {
       type = lib.types.attrsOf (lib.types.attrsOf (lib.types.submodule {
         options = {
@@ -69,6 +75,15 @@
               Label convention for selectors and metadata.
               "kix" uses app.kubernetes.io/* keys.
               "helm" uses app/release keys for Helm compatibility.
+            '';
+          };
+          selectorLabels = lib.mkOption {
+            type = lib.types.nullOr (lib.types.attrsOf lib.types.str);
+            default = null;
+            description = ''
+              Override auto-generated selector labels. Use when the cluster has
+              immutable selectors (e.g. StatefulSet) that don't match the kix
+              or Helm naming convention.
             '';
           };
         };
