@@ -35,7 +35,7 @@ rec {
   # Shorthand for container port declaration.
   # Usage: port "http" 2283           → { name = "http"; containerPort = 2283; }
   #        port "dns" 53 // { protocol = "UDP"; }
-  port = name: containerPort: { inherit name containerPort; };
+  port = name: containerPort: { inherit name containerPort; protocol = "TCP"; };
 
   # Convert an attrset of env vars to the K8s [{ name, value }] list format.
   # Null values are filtered, so lib.optionalAttrs works naturally for conditionals.

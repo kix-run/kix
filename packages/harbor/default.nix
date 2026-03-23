@@ -124,12 +124,13 @@ in
     dbHost = if config.database.host != null then config.database.host else postgres.out.fqdn;
     noProxy = "${name}-core,${name}-jobservice,${name}-database,${name}-registry,${name}-portal,${name}-trivy,${name}-exporter,127.0.0.1,localhost,.local,.internal";
 
-    # Internal URLs derived from service resources for dependency tracking.
-    coreInternalURL = "http://${self.coreService.out.name}:80";
-    registryInternalURL = "http://${self.registryService.out.name}:5000";
-    registryCtlInternalURL = "http://${self.registryService.out.name}:8080";
-    portalInternalURL = "http://${self.portalService.out.name}";
-    jobserviceInternalURL = "http://${self.jobserviceService.out.name}";
+    # Internal URLs — plain strings matching the service names.
+    # No self-reference needed: these are deterministic from the instance name.
+    coreInternalURL = "http://${name}-core:80";
+    registryInternalURL = "http://${name}-registry:5000";
+    registryCtlInternalURL = "http://${name}-registry:8080";
+    portalInternalURL = "http://${name}-portal";
+    jobserviceInternalURL = "http://${name}-jobservice";
     tokenServiceURL = "${coreInternalURL}/service/token";
 
     # --- Shared let bindings ---
@@ -152,8 +153,8 @@ in
 
     # Per-component probes — base holds shared thresholds,
     # each component overrides httpGet. Sites add initialDelaySeconds via //.
-    probeBase = { httpGet = { scheme = "HTTP"; port = 8080; }; periodSeconds = 10; failureThreshold = 3; };
-    coreProbe = lib.recursiveUpdate probeBase { httpGet.path = "/api/v2.0/ping"; };
+    probeBase = { httpGet = { scheme = "HTTP"; port = 8080; }; periodSeconds = 10; failureThreshold = 3; timeoutSeconds = 1; };
+    coreProbe = lib.recursiveUpdate probeBase { httpGet.path = "/api/v2.0/ping"; failureThreshold = 2; };
     portalProbe = lib.recursiveUpdate probeBase { httpGet.path = "/"; };
     registryProbe = lib.recursiveUpdate probeBase { httpGet = { path = "/"; port = 5000; }; };
     registryCtlProbe = lib.recursiveUpdate probeBase { httpGet.path = "/api/health"; };
@@ -238,22 +239,18 @@ in
       };
     };
 
-    coreService = scope.mkResource {
-      apiVersion = "v1";
-      kind = "Service";
-      name = "${name}-core";
-      spec = {
-        type = "ClusterIP";
-        selector = selectorLabels // { component = "core"; };
+    coreService = self.coreDeployment
+      |> kix.service.fromWorkload {
+        name = "${name}-core";
         ports = [
           { name = "http-web"; port = 80; targetPort = 8080; protocol = "TCP"; }
         ]
         ++ lib.optionals config.metrics.enabled [
           { name = "http-metrics"; port = config.metrics.port; targetPort = config.metrics.port; protocol = "TCP"; }
         ];
-      };
-      outputs.port = "80";
-    };
+        outputs.port = "80";
+      }
+      |> scope.mkResource;
 
     # --- Core mounts ---
     coreConfigMount = kix.mount.configMap self.coreConfigMap {
@@ -263,6 +260,7 @@ in
     coreSecretKeyMount = kix.mount.secret self.coreSecret {
       name = "secret-key"; mountPath = "/etc/core/key"; subPath = "key";
       items = [{ key = "secretKey"; path = "key"; }];
+      defaultMode = 420;
     };
 
     coreDeployment =
@@ -288,14 +286,17 @@ in
                 env = [
                   { name = "CORE_SECRET"; valueFrom.secretKeyRef = { name = self.coreSecret.out.name; key = "secret"; }; }
                   { name = "JOBSERVICE_SECRET"; valueFrom.secretKeyRef = { name = self.jobserviceSecret.out.name; key = "JOBSERVICE_SECRET"; }; }
-                ]
-                ++ lib.optionals (config.database.existingSecret != null) [
-                  { name = "POSTGRESQL_PASSWORD"; valueFrom.secretKeyRef = { name = config.database.existingSecret; key = "password"; }; }
                 ];
                 ports = [ (kix.port "http" 8080) ];
                 resources = { requests = { cpu = "20m"; memory = "128Mi"; }; limits = { cpu = "1"; memory = "256Mi"; }; };
                 securityContext = containerSecurityContext;
+                volumeMounts = [
+                  { name = "token-service-private-key"; mountPath = "/etc/core/private_key.pem"; subPath = "tls.key"; }
+                ];
               }
+            ];
+            volumes = [
+              { name = "token-service-private-key"; secret = { secretName = config.ingress.tls.secretName; defaultMode = 420; }; }
             ];
           };
         };
@@ -304,7 +305,6 @@ in
         self.coreConfigMount
         (kix.mount.emptyDir { name = "ca-download"; mountPath = "/etc/core/ca"; })
         self.coreSecretKeyMount
-        (kix.mount.secret self.coreSecret { name = "token-service-private-key"; mountPath = "/etc/core/private_key.pem"; subPath = "tls.key"; })
         (kix.mount.emptyDir { name = "psc"; mountPath = "/etc/core/token"; })
       ]
       |> scope.mkDeployment;
@@ -355,17 +355,13 @@ in
       };
     };
 
-    portalService = scope.mkResource {
-      apiVersion = "v1";
-      kind = "Service";
-      name = "${name}-portal";
-      spec = {
-        type = "ClusterIP";
-        selector = selectorLabels // { component = "portal"; };
+    portalService = self.portalDeployment
+      |> kix.service.fromWorkload {
+        name = "${name}-portal";
         ports = [ { port = 80; targetPort = 8080; protocol = "TCP"; } ];
-      };
-      outputs.port = "80";
-    };
+        outputs.port = "80";
+      }
+      |> scope.mkResource;
 
     portalDeployment =
       {
@@ -450,6 +446,8 @@ in
           http:
             addr: :5000
             relativeurls: false
+            # set via environment variable
+            # secret: placeholder
             debug:
               addr: :${toString config.metrics.port}
               prometheus:
@@ -500,13 +498,9 @@ in
       };
     };
 
-    registryService = scope.mkResource {
-      apiVersion = "v1";
-      kind = "Service";
-      name = "${name}-registry";
-      spec = {
-        type = "ClusterIP";
-        selector = selectorLabels // { component = "registry"; };
+    registryService = self.registryDeployment
+      |> kix.service.fromWorkload {
+        name = "${name}-registry";
         ports = [
           { name = "http-registry"; port = 5000; targetPort = 5000; protocol = "TCP"; }
           { name = "http-controller"; port = 8080; targetPort = 8080; protocol = "TCP"; }
@@ -514,8 +508,8 @@ in
         ++ lib.optionals config.metrics.enabled [
           { name = "http-metrics"; port = config.metrics.port; targetPort = config.metrics.port; protocol = "TCP"; }
         ];
-      };
-    };
+      }
+      |> scope.mkResource;
 
     # Registry has 2 containers sharing volumes — manual volumeMounts,
     # but kix.withMounts for the shared volume list via targetContainer.
@@ -572,7 +566,7 @@ in
             volumes = [
               { name = "registry-config"; configMap.name = self.registryConfigMap.out.name; }
               { name = "registry-data"; persistentVolumeClaim.claimName = self.registryPVC.out.name; }
-              { name = "registry-htpasswd"; secret = { secretName = self.registryHtpasswdSecret.out.name; items = [{ key = "REGISTRY_HTPASSWD"; path = "passwd"; }]; }; }
+              { name = "registry-htpasswd"; secret = { secretName = self.registryHtpasswdSecret.out.name; defaultMode = 420; items = [{ key = "REGISTRY_HTPASSWD"; path = "passwd"; }]; }; }
             ];
           };
         };
@@ -630,7 +624,9 @@ in
             - name: "STD_OUTPUT"
               level: INFO
           reaper:
+            # the max time to wait for a task to finish, if unfinished after max_update_hours, the task will be mark as error, but the task will continue to run, default value is 24
             max_update_hours: 24
+            # the max time for execution in running state without new task created
             max_dangling_hours: 168'';
       };
     };
@@ -671,21 +667,17 @@ in
       };
     };
 
-    jobserviceService = scope.mkResource {
-      apiVersion = "v1";
-      kind = "Service";
-      name = "${name}-jobservice";
-      spec = {
-        type = "ClusterIP";
-        selector = selectorLabels // { component = "jobservice"; };
+    jobserviceService = self.jobserviceDeployment
+      |> kix.service.fromWorkload {
+        name = "${name}-jobservice";
         ports = [
           { name = "http-jobservice"; port = 80; targetPort = 8080; protocol = "TCP"; }
         ]
         ++ lib.optionals config.metrics.enabled [
           { name = "http-metrics"; port = config.metrics.port; targetPort = config.metrics.port; protocol = "TCP"; }
         ];
-      };
-    };
+      }
+      |> scope.mkResource;
 
     jobservicePVC = scope.mkResource {
       apiVersion = "v1";
@@ -747,6 +739,101 @@ in
       name = "${name}-exporter";
       extra = { type = "Opaque"; stringData = { }; };
     };
+
+    exporterEnvConfigMap = scope.mkResource {
+      apiVersion = "v1";
+      kind = "ConfigMap";
+      name = "${name}-exporter-env";
+      data = {
+        HARBOR_DATABASE_DBNAME = "registry";
+        HARBOR_DATABASE_HOST = dbHost;
+        HARBOR_DATABASE_MAX_IDLE_CONNS = config.database.maxIdleConns;
+        HARBOR_DATABASE_MAX_OPEN_CONNS = config.database.maxOpenConns;
+        HARBOR_DATABASE_PORT = toString postgres.out.port;
+        HARBOR_DATABASE_SSLMODE = config.database.sslmode;
+        HARBOR_DATABASE_USERNAME = config.database.username;
+        HARBOR_EXPORTER_CACHE_CLEAN_INTERVAL = "14400";
+        HARBOR_EXPORTER_CACHE_TIME = "23";
+        HARBOR_EXPORTER_METRICS_ENABLED = "true";
+        HARBOR_EXPORTER_METRICS_PATH = "/metrics";
+        HARBOR_EXPORTER_PORT = toString config.metrics.port;
+        HARBOR_METRIC_NAMESPACE = "harbor";
+        HARBOR_METRIC_SUBSYSTEM = "exporter";
+        HARBOR_REDIS_NAMESPACE = "harbor_job_service_namespace";
+        HARBOR_REDIS_TIMEOUT = "3600";
+        HARBOR_REDIS_URL = "redis://${redisHost}:${redisPort}/1";
+        HARBOR_SERVICE_HOST = "${name}-core";
+        HARBOR_SERVICE_PORT = "80";
+        HARBOR_SERVICE_SCHEME = "http";
+        HTTP_PROXY = "";
+        HTTPS_PROXY = "";
+        LOG_LEVEL = "info";
+        NO_PROXY = noProxy;
+      };
+    };
+
+    exporterService = self.exporterDeployment
+      |> kix.service.fromWorkload {
+        name = "${name}-exporter";
+        ports = [ { name = "http-metrics"; port = config.metrics.port; targetPort = config.metrics.port; protocol = "TCP"; } ];
+      }
+      |> scope.mkResource;
+
+    exporterDeployment =
+      {
+        name = "${name}-exporter";
+        spec = {
+          replicas = 1;
+          revisionHistoryLimit = 5;
+          selector.matchLabels = selectorLabels // { component = "exporter"; };
+          template.spec = {
+            automountServiceAccountToken = false;
+            terminationGracePeriodSeconds = 30;
+            securityContext = { runAsUser = 10000; fsGroup = 10000; };
+            containers = [
+              {
+                name = "exporter";
+                image = "goharbor/harbor-exporter:${config.core.image.tag}";
+                imagePullPolicy = "IfNotPresent";
+                args = [ "-log-level" "info" ];
+                ports = [ (kix.port "http-metrics" config.metrics.port) ];
+                livenessProbe = {
+                  httpGet = { path = "/"; port = config.metrics.port; scheme = "HTTP"; };
+                  initialDelaySeconds = 300; periodSeconds = 10; failureThreshold = 3; timeoutSeconds = 1;
+                };
+                readinessProbe = {
+                  httpGet = { path = "/"; port = config.metrics.port; scheme = "HTTP"; };
+                  initialDelaySeconds = 30; periodSeconds = 10; failureThreshold = 3; timeoutSeconds = 1;
+                };
+                envFrom = [
+                  { configMapRef.name = self.exporterEnvConfigMap.out.name; }
+                  { secretRef.name = self.exporterSecret.out.name; }
+                ];
+                securityContext = containerSecurityContext;
+              }
+            ];
+            volumes = [
+              { name = "config"; secret = { secretName = self.exporterSecret.out.name; defaultMode = 420; }; }
+            ];
+          };
+        };
+      }
+      |> scope.mkDeployment;
+
+    # ============================================================
+    # ServiceMonitor -- Prometheus scrape config
+    # ============================================================
+
+    serviceMonitor = if config.metrics.enabled then scope.mkResource {
+      apiVersion = "monitoring.coreos.com/v1";
+      kind = "ServiceMonitor";
+      name = name;
+      spec = {
+        endpoints = [ { honorLabels = true; port = "http-metrics"; } ];
+        jobLabel = "app.kubernetes.io/name";
+        selector.matchLabels = selectorLabels;
+      };
+    } else null;
 
     # ============================================================
     # Ingress
@@ -810,8 +897,12 @@ in
         self.jobserviceEnvConfigMap
         self.jobservicePVC
         self.exporterSecret
+        self.exporterEnvConfigMap
+        self.exporterDeployment
+        self.exporterService
       ]
-      ++ lib.optional config.ingress.enabled self.ingress;
+      ++ lib.optional config.ingress.enabled self.ingress
+      ++ lib.optional config.metrics.enabled self.serviceMonitor;
     };
   };
 }

@@ -29,12 +29,27 @@ rec {
       namespaceName,
       namespaceResource,
       clusterLabels ? { },
+      labelStyle ? "kix",
     }:
     let
-      selectorLabels = {
-        "app.kubernetes.io/name" = instanceName;
-        "app.kubernetes.io/instance" = instanceName;
-      };
+      selectorLabels =
+        if labelStyle == "helm" then {
+          app = instanceName;
+          release = instanceName;
+        }
+        else {
+          "app.kubernetes.io/name" = instanceName;
+          "app.kubernetes.io/instance" = instanceName;
+        };
+
+      instanceLabels =
+        if labelStyle == "helm" then {
+          release = instanceName;
+        }
+        else {
+          "app.kubernetes.io/instance" = instanceName;
+          "app.kubernetes.io/managed-by" = "kix";
+        };
 
       scopeMkResource =
         {
@@ -47,10 +62,7 @@ rec {
             namespace = namespaceResource;
             labels =
               clusterLabels
-              // {
-                "app.kubernetes.io/instance" = instanceName;
-                "app.kubernetes.io/managed-by" = "kix";
-              }
+              // instanceLabels
               // labels;
           }
         ) // { packageLabels = labels; };
@@ -77,7 +89,7 @@ rec {
         });
     in
     {
-      inherit instanceName namespaceName selectorLabels;
+      inherit instanceName namespaceName selectorLabels labelStyle;
       namespace = namespaceResource;
 
       mkResource = scopeMkResource;
@@ -93,10 +105,7 @@ rec {
             namespace = clusterScoped;
             labels =
               clusterLabels
-              // {
-                "app.kubernetes.io/instance" = instanceName;
-                "app.kubernetes.io/managed-by" = "kix";
-              }
+              // instanceLabels
               // labels;
           }
         ) // { packageLabels = labels; };
@@ -565,6 +574,7 @@ rec {
           namespaceResource
           clusterLabels
           ;
+        labelStyle = instCfg.labelStyle;
       };
 
       # 1. Call the package function with DI deps — returns { meta?, options, build }

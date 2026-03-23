@@ -137,14 +137,13 @@
     let
       name = scope.instanceName;
 
-      selectorLabels = {
-        "app.kubernetes.io/name" = "valkey";
-        "app.kubernetes.io/instance" = name;
-      };
+      selectorLabels = scope.selectorLabels;
 
-      commonLabels = selectorLabels // {
-        "app.kubernetes.io/component" = "node";
-      };
+      componentLabel =
+        if scope.labelStyle == "helm" then { component = "node"; }
+        else { "app.kubernetes.io/component" = "node"; };
+
+      commonLabels = selectorLabels // componentLabel;
 
       # Auth-related helpers.
       credentialsSecretName =
@@ -965,7 +964,7 @@
 
       # --- StatefulSet (valkey-node) ---
       statefulSet = {
-        name = "${name}-node";
+        name = "${name}";
         labels = commonLabels;
         spec = {
           serviceName = self.headlessService.out.name;
@@ -1200,7 +1199,16 @@
       # SENTINEL get-master-addr-by-name.
       main = {
         resource = self.mainService;
-        requires = lib.optional (self.metricsService != null) self.metricsService;
+        requires = [
+          self.serviceAccount
+          self.configmap
+          self.healthConfigmap
+          self.configurationConfigmap
+          self.statefulSet
+          self.headlessService
+        ]
+        ++ lib.optional (self.secret != null) self.secret
+        ++ lib.optional (self.metricsService != null) self.metricsService;
       };
     };
 }

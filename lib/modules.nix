@@ -62,6 +62,15 @@
             type = lib.types.nullOr lib.types.str;
             default = null;
           };
+          labelStyle = lib.mkOption {
+            type = lib.types.enum [ "kix" "helm" ];
+            default = "kix";
+            description = ''
+              Label convention for selectors and metadata.
+              "kix" uses app.kubernetes.io/* keys.
+              "helm" uses app/release keys for Helm compatibility.
+            '';
+          };
         };
       }));
       default = {};

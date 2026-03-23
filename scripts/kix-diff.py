@@ -23,7 +23,7 @@ import click
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from parity.normalize import normalize_kix, normalize_cluster, resource_key
+from parity.normalize import normalize_kix, normalize_cluster, resource_key, strip_port_names, normalize_dns_suffix
 from parity.structural_diff import structural_diff, format_diffs, DiffKind
 
 # Fields that Kubernetes auto-assigns at runtime — never present in kix output.
@@ -50,7 +50,26 @@ _RESET = "\033[0m"
 # --- Resource loading ---
 
 
-def load_resources(directory: Path, normalizer, service: str | None = None) -> dict[str, dict]:
+def _is_controller_owned(doc: dict) -> bool:
+    """Check if a resource is owned by a controller (auto-created, not user-deployed).
+
+    Detects two patterns:
+    - ownerReferences with controller=true (standard K8s ownership)
+    - cert-manager.io annotations indicating controller management
+    """
+    metadata = doc.get("metadata", {})
+    owner_refs = metadata.get("ownerReferences", [])
+    if any(ref.get("controller") is True for ref in owner_refs if isinstance(ref, dict)):
+        return True
+    for field in ("annotations", "labels"):
+        entries = metadata.get(field, {})
+        if any(k.startswith("controller.") and v == "true" for k, v in entries.items()):
+            return True
+    return False
+
+
+def load_resources(directory: Path, normalizer, service: str | None = None,
+                   skip_controller_owned: bool = False) -> dict[str, dict]:
     """Load and normalize all YAML files from a directory.
 
     Supports both layouts:
@@ -59,6 +78,10 @@ def load_resources(directory: Path, normalizer, service: str | None = None) -> d
 
     If *service* is given, only files whose stem starts with that name
     (before the first ``-``) are included.
+
+    If *skip_controller_owned* is True, resources with ownerReferences
+    where controller=true are excluded (they are managed by a controller,
+    not deployed directly).
 
     Returns dict mapping "{namespace}/{name}-{kind}" -> normalized doc.
     """
@@ -70,6 +93,16 @@ def load_resources(directory: Path, normalizer, service: str | None = None) -> d
         # stem is e.g. "coredns-deployment"; extract the name part before the kind suffix
         name_part = stem.rsplit("-", 1)[0] if "-" in stem else stem
         return name_part == service or name_part.startswith(service + "-")
+
+    def _load(f: Path, key: str):
+        with open(f) as fh:
+            doc = yaml.safe_load(fh)
+        if doc is None:
+            return
+        if skip_controller_owned and _is_controller_owned(doc):
+            return
+        doc = normalizer(doc)
+        resources[key] = doc
 
     # Try nested layout first (subdirectories = namespaces)
     subdirs = [d for d in sorted(directory.iterdir()) if d.is_dir()]
@@ -83,12 +116,7 @@ def load_resources(directory: Path, normalizer, service: str | None = None) -> d
                     continue
                 if not _matches_service(f.stem):
                     continue
-                with open(f) as fh:
-                    doc = yaml.safe_load(fh)
-                if doc is None:
-                    continue
-                doc = normalizer(doc)
-                resources[f"{ns}/{f.stem}"] = doc
+                _load(f, f"{ns}/{f.stem}")
     else:
         # Flat layout: {namespace}--{name}-{kind}.yaml
         for f in sorted(directory.glob("*.yaml")):
@@ -102,12 +130,7 @@ def load_resources(directory: Path, normalizer, service: str | None = None) -> d
             ns, rest = stem.split("--", 1)
             if not _matches_service(rest):
                 continue
-            with open(f) as fh:
-                doc = yaml.safe_load(fh)
-            if doc is None:
-                continue
-            doc = normalizer(doc)
-            resources[f"{ns}/{rest}"] = doc
+            _load(f, f"{ns}/{rest}")
 
     return resources
 
@@ -449,8 +472,15 @@ def generate_report(
               help="Ignore fields that K8s auto-assigns (clusterIP, ipFamilies, sessionAffinity, etc.)")
 @click.option("--full-diff", is_flag=True, default=False,
               help="Show full unified diffs for multi-line string values (e.g. ConfigMaps)")
+@click.option("--ignore-port-names", is_flag=True, default=False,
+              help="Ignore port name differences in container ports")
+@click.option("--ignore-dns-suffix", is_flag=True, default=False,
+              help="Treat FQDN service DNS names (x.ns.svc.cluster.local) as equivalent to short names (x)")
+@click.option("--skip-controller-owned", is_flag=True, default=False,
+              help="Skip cluster resources with ownerReferences[controller=true] (auto-created by controllers)")
 def main(kix_dir: str, cluster_dir: str, ignore_path: tuple[str, ...], service: str | None,
-         color: bool | None, ignore_cluster_defaults: bool, full_diff: bool):
+         color: bool | None, ignore_cluster_defaults: bool, full_diff: bool,
+         ignore_port_names: bool, ignore_dns_suffix: bool, skip_controller_owned: bool):
     """Compare kix manifests against a cluster dump.
 
     KIX_DIR is the kix output directory (e.g. ./result from nix build).
@@ -466,15 +496,31 @@ def main(kix_dir: str, cluster_dir: str, ignore_path: tuple[str, ...], service: 
         ignore_paths |= CLUSTER_DEFAULT_PATHS
     ignore_paths = ignore_paths or None
 
+    # Build post-normalization pipeline from flags
+    post_steps = []
+    if ignore_port_names:
+        post_steps.append(strip_port_names)
+    if ignore_dns_suffix:
+        post_steps.append(normalize_dns_suffix)
+
+    def _with_post(base_normalizer):
+        def wrapped(doc):
+            doc = base_normalizer(doc)
+            for step in post_steps:
+                doc = step(doc)
+            return doc
+        return wrapped
+
     if service:
         click.echo(f"Filtering for service: {service}", err=True)
 
     click.echo("Loading kix manifests...", err=True)
-    kix_resources = load_resources(kix_path, normalize_kix, service)
+    kix_resources = load_resources(kix_path, _with_post(normalize_kix), service)
     click.echo(f"  {len(kix_resources)} resources", err=True)
 
     click.echo("Loading cluster dump...", err=True)
-    cluster_resources = load_resources(cluster_path, normalize_cluster, service)
+    cluster_resources = load_resources(cluster_path, _with_post(normalize_cluster), service,
+                                       skip_controller_owned=skip_controller_owned)
     click.echo(f"  {len(cluster_resources)} resources", err=True)
 
     # Resolve color: explicit flag wins, otherwise auto-detect TTY on stdout

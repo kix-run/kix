@@ -38,6 +38,7 @@ STRIP_ANNOTATION_PREFIXES = [
     "autoscaling.alpha.kubernetes.io/",
     "endpoints.kubernetes.io/",
     "meta.helm.sh/",
+    "checksum/",
 ]
 
 # Labels stripped from both sides — either build metadata or organizational
@@ -59,6 +60,10 @@ STRIP_LABELS = {
     # Helm labels on existing cluster resources
     "app",
     "app.kubernetes.io/created-by",
+    "chart",
+    "heritage",
+    "release",
+    "component",
 }
 
 # Label prefixes stripped from both sides
@@ -175,6 +180,25 @@ def _strip_k8s_defaults(doc: dict) -> dict:
             spec = dict(spec)
             spec.pop("progressDeadlineSeconds", None)
             spec.pop("revisionHistoryLimit", None)
+            # Default RollingUpdate strategy with default values
+            strategy = spec.get("strategy", {})
+            if isinstance(strategy, dict) and strategy.get("type") == "RollingUpdate":
+                rolling = strategy.get("rollingUpdate", {})
+                if rolling == {"maxSurge": "25%", "maxUnavailable": "25%"}:
+                    spec.pop("strategy", None)
+            doc["spec"] = spec
+
+    # PersistentVolumeClaim: strip runtime-assigned fields
+    if kind == "PersistentVolumeClaim":
+        doc = dict(doc)
+        spec = doc.get("spec", {})
+        if isinstance(spec, dict):
+            spec = dict(spec)
+            # volumeMode defaults to Filesystem
+            if spec.get("volumeMode") == "Filesystem":
+                spec.pop("volumeMode")
+            # volumeName is assigned at bind time
+            spec.pop("volumeName", None)
             doc["spec"] = spec
 
     # Pod spec defaults (applies to any resource with a pod template)
@@ -296,7 +320,7 @@ def _strip_labels_and_annotations(doc: dict, cluster: bool) -> dict:
                     break
 
         # Strip annotations
-        annotations = metadata.get("annotations", {})
+        annotations = metadata.get("annotations") or {}
         for key in list(annotations.keys()):
             if key in STRIP_ANNOTATIONS:
                 del annotations[key]
@@ -464,6 +488,55 @@ def _sort_arrays(obj: Any) -> Any:
         return result
     elif isinstance(obj, list):
         return [_sort_arrays(item) for item in obj]
+    return obj
+
+
+def strip_port_names(doc: dict) -> dict:
+    """Strip 'name' field from container and service ports so named vs unnamed ports compare equal."""
+    # Container ports
+    pod_specs = _find_pod_specs(doc)
+    for pod_spec in pod_specs:
+        for container in pod_spec.get("containers", []) + pod_spec.get("initContainers", []):
+            if not isinstance(container, dict):
+                continue
+            ports = container.get("ports")
+            if isinstance(ports, list):
+                container["ports"] = [
+                    {k: v for k, v in p.items() if k != "name"}
+                    for p in ports if isinstance(p, dict)
+                ]
+    # Service ports
+    if doc.get("kind") == "Service":
+        spec = doc.get("spec", {})
+        ports = spec.get("ports")
+        if isinstance(ports, list):
+            spec["ports"] = [
+                {k: v for k, v in p.items() if k != "name"}
+                for p in ports if isinstance(p, dict)
+            ]
+    return doc
+
+
+def normalize_dns_suffix(doc: dict) -> dict:
+    """Replace FQDN service DNS names with short names in all string values."""
+    return _walk_strings(doc, _shorten_fqdn)
+
+
+_FQDN_RE = re.compile(r'([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)\.(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)\.svc\.[a-z0-9][\w.-]*')
+
+
+def _shorten_fqdn(s: str) -> str:
+    return _FQDN_RE.sub(r'\1', s)
+
+
+def _walk_strings(obj: Any, fn) -> Any:
+    """Apply fn to every string value in a nested dict/list structure."""
+    if isinstance(obj, str):
+        return fn(obj)
+    if isinstance(obj, dict):
+        return {k: _walk_strings(v, fn) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_walk_strings(item, fn) for item in obj]
     return obj
 
 
