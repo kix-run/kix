@@ -10,7 +10,7 @@ name = "kix"
 path = "src/main.rs"
 
 [dependencies]
-kix-eval.workspace = true
+kix-eval = { workspace = true, features = ["nix-ffi"] }
 kix-manifest.workspace = true
 kix-cluster.workspace = true
 serde.workspace = true

@@ -15,16 +15,22 @@ blake3.workspace = true
 directories.workspace = true
 tracing.workspace = true
 
-# Nix FFI bindings — added when flake packaging is set up (Step 9)
-# nix-bindings-expr = { ... }
-# nix-bindings-store = { ... }
-# nix-bindings-flake = { ... }
-# nix-bindings-util = { ... }
-# nix-bindings-fetchers = { ... }
+# Nix FFI bindings (optional, enabled via nix-ffi feature)
+nix-bindings-expr = { workspace = true, optional = true }
+nix-bindings-store = { workspace = true, optional = true }
+nix-bindings-flake = { workspace = true, optional = true }
+nix-bindings-util = { workspace = true, optional = true }
+nix-bindings-fetchers = { workspace = true, optional = true }
 
 [features]
-nix-ffi = []  # Enable when nix-bindings-* crates are added as deps
-test-util = []  # Exposes mock backend for downstream testing
+nix-ffi = [
+  "dep:nix-bindings-expr",
+  "dep:nix-bindings-store",
+  "dep:nix-bindings-flake",
+  "dep:nix-bindings-util",
+  "dep:nix-bindings-fetchers",
+]
+test-util = []
 
 [dev-dependencies]
 tempfile.workspace = true

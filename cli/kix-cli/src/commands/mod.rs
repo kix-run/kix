@@ -42,8 +42,6 @@ impl CommandContext {
 /// For local paths (relative or absolute), resolves to an absolute path.
 /// For remote references (e.g. "github:org/repo"), passes through as-is.
 fn resolve_flake_path(flake: &str) -> miette::Result<PathBuf> {
-    // Remote flake references contain ":" (e.g. github:, git+https:, path:)
-    // For now, treat everything without ":" as a local path
     if flake.contains(':') {
         Ok(PathBuf::from(flake))
     } else {
@@ -57,38 +55,9 @@ fn resolve_flake_path(flake: &str) -> miette::Result<PathBuf> {
     }
 }
 
-/// Create a KixEvaluator using the mock backend.
-///
-/// This will be replaced with a real FFI backend in Step 9.
-/// For now, it provides demo clusters for testing the CLI flow.
+/// Create a KixEvaluator with the real Nix FFI backend.
 fn create_evaluator(flake: &str) -> miette::Result<kix_eval::eval::KixEvaluator> {
-    let mut backend = kix_eval::mock::MockNixBackend::new();
-
-    // Register demo clusters so the CLI is exercisable
-    backend.add_cluster(
-        "example",
-        vec![
-            serde_json::json!({
-                "apiVersion": "v1",
-                "kind": "Namespace",
-                "metadata": { "name": "example" }
-            }),
-            serde_json::json!({
-                "apiVersion": "v1",
-                "kind": "ConfigMap",
-                "metadata": { "name": "app-config", "namespace": "example" },
-                "data": { "key": "value" }
-            }),
-        ],
-    );
-    backend.add_cluster(
-        "nw1",
-        vec![serde_json::json!({
-            "apiVersion": "v1",
-            "kind": "Namespace",
-            "metadata": { "name": "nw1" }
-        })],
-    );
+    let backend = kix_eval::ffi::FfiNixBackend::new().map_err(|e| miette::miette!("{:#}", e))?;
 
     let flake_path = resolve_flake_path(flake)?;
     let cache_dir = kix_eval::store::default_cache_dir();

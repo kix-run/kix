@@ -6,12 +6,29 @@
   ...
 }:
 
+let
+  # Nix C libraries for FFI bindings (nix-bindings-rust)
+  nixLibs = [
+    pkgs.nix.libs.nix-expr-c
+    pkgs.nix.libs.nix-store-c
+    pkgs.nix.libs.nix-util-c
+    pkgs.nix.libs.nix-flake-c
+    pkgs.nix.libs.nix-fetchers-c
+    pkgs.nix.libs.nix-main-c
+  ];
+in
 {
   packages = [
     inputs.claude-code.packages.${pkgs.stdenv.hostPlatform.system}.default
     pkgs.graphviz
     pkgs.lefthook
-  ];
+    pkgs.pkg-config
+  ]
+  ++ nixLibs;
+
+  # Bindgen needs libclang to generate FFI bindings
+  env.LIBCLANG_PATH = lib.makeLibraryPath [ pkgs.llvmPackages.clang-unwrapped ];
+  env.BINDGEN_EXTRA_CLANG_ARGS = "-x c++ -std=c++2a";
 
   # DAG visualization scripts for the fixpoint cluster.
   # These evaluate the fixpoint cluster's resource graph at eval time.
@@ -64,7 +81,7 @@
     lefthook install 2>/dev/null || true
   '';
 
-  # kix CLI (runs from cli/ workspace with mock backend)
+  # kix CLI
   scripts.kix.exec = ''
     cargo run --quiet --manifest-path "$DEVENV_ROOT/cli/Cargo.toml" -- "$@"
   '';

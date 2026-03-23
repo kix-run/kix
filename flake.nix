@@ -28,21 +28,31 @@
       # Expose kix library + packages for external flake consumers.
       # Usage: kixpkgs.lib.forPkgs { inherit pkgs lib; }
       #   => { kix, packages, mkAnnotatedManifests }
-      flake.lib.forPkgs = { pkgs, lib }:
+      flake.lib.forPkgs =
+        { pkgs, lib }:
         let
           kix = import ./lib { inherit pkgs lib; };
           entries = builtins.readDir ./packages;
           dirs = lib.filterAttrs (_: type: type == "directory") entries;
           packages = lib.mapAttrs (name: _: import ./packages/${name}) dirs;
           python3 = pkgs.python3.withPackages (p: [ p.pyyaml ]);
-          mkAnnotatedManifests = cluster:
-            pkgs.runCommand "k8s-manifests-${cluster.name}" {
-              exportReferencesGraph = [ "closure" cluster.activation ];
-              nativeBuildInputs = [ python3 ];
-            } ''
-              PYTHONPATH=${./pipeline} python3 ${./pipeline/annotate.py} closure ${cluster.activation} $out
-            '';
-        in { inherit kix packages mkAnnotatedManifests; };
+          mkAnnotatedManifests =
+            cluster:
+            pkgs.runCommand "k8s-manifests-${cluster.name}"
+              {
+                exportReferencesGraph = [
+                  "closure"
+                  cluster.activation
+                ];
+                nativeBuildInputs = [ python3 ];
+              }
+              ''
+                PYTHONPATH=${./pipeline} python3 ${./pipeline/annotate.py} closure ${cluster.activation} $out
+              '';
+        in
+        {
+          inherit kix packages mkAnnotatedManifests;
+        };
 
       perSystem =
         { pkgs, ... }:
@@ -65,12 +75,27 @@
 
           # Cluster registry — add new clusters here, outputs are auto-generated.
           clusters = {
-            minimal = import ./clusters/test-minimal.nix { inherit kix; packages = packages'; };
-            example = import ./clusters/example.nix { inherit kix; packages = packages'; };
-            full = import ./clusters/test-full.nix { inherit kix; packages = packages'; };
+            minimal = import ./clusters/test-minimal.nix {
+              inherit kix;
+              packages = packages';
+            };
+            example = import ./clusters/example.nix {
+              inherit kix;
+              packages = packages';
+            };
+            full = import ./clusters/test-full.nix {
+              inherit kix;
+              packages = packages';
+            };
             helm = import ./clusters/test-helm.nix { inherit kix; };
-            example-import = import ./clusters/example-import.nix { inherit kix; packages = packages'; };
-            nw1 = import ./clusters/nw1.nix { inherit kix; packages = packages'; };
+            example-import = import ./clusters/example-import.nix {
+              inherit kix;
+              packages = packages';
+            };
+            nw1 = import ./clusters/nw1.nix {
+              inherit kix;
+              packages = packages';
+            };
           };
 
           # --- Pipeline derivation builders ---
@@ -81,31 +106,48 @@
 
           mkAnnotatedManifests =
             cluster:
-            pkgs.runCommand "k8s-manifests-${cluster.name}" {
-              exportReferencesGraph = [ "closure" cluster.activation ];
-              nativeBuildInputs = [ python3 ];
-            } ''
-              PYTHONPATH=${./pipeline} python3 ${./pipeline/annotate.py} closure ${cluster.activation} $out
-            '';
+            pkgs.runCommand "k8s-manifests-${cluster.name}"
+              {
+                exportReferencesGraph = [
+                  "closure"
+                  cluster.activation
+                ];
+                nativeBuildInputs = [ python3 ];
+              }
+              ''
+                PYTHONPATH=${./pipeline} python3 ${./pipeline/annotate.py} closure ${cluster.activation} $out
+              '';
 
           mkAnnotatedManifestsByNs =
             cluster:
-            pkgs.runCommand "k8s-manifests-by-ns-${cluster.name}" {
-              exportReferencesGraph = [ "closure" cluster.activation ];
-              nativeBuildInputs = [ python3 ];
-            } ''
-              PYTHONPATH=${./pipeline} python3 ${./pipeline/annotate.py} closure ${cluster.activation} $out --by-namespace
-            '';
+            pkgs.runCommand "k8s-manifests-by-ns-${cluster.name}"
+              {
+                exportReferencesGraph = [
+                  "closure"
+                  cluster.activation
+                ];
+                nativeBuildInputs = [ python3 ];
+              }
+              ''
+                PYTHONPATH=${./pipeline} python3 ${./pipeline/annotate.py} closure ${cluster.activation} $out --by-namespace
+              '';
 
           mkDeployGraph =
             cluster:
-            let manifests = mkAnnotatedManifests cluster;
-            in pkgs.runCommand "k8s-deploy-graph-${cluster.name}" {
-              exportReferencesGraph = [ "closure" cluster.activation ];
-              nativeBuildInputs = [ pkgs.python3 ];
-            } ''
-              PYTHONPATH=${./pipeline} python3 ${./pipeline/graph.py} closure ${cluster.activation} ${manifests} $out
-            '';
+            let
+              manifests = mkAnnotatedManifests cluster;
+            in
+            pkgs.runCommand "k8s-deploy-graph-${cluster.name}"
+              {
+                exportReferencesGraph = [
+                  "closure"
+                  cluster.activation
+                ];
+                nativeBuildInputs = [ pkgs.python3 ];
+              }
+              ''
+                PYTHONPATH=${./pipeline} python3 ${./pipeline/graph.py} closure ${cluster.activation} ${manifests} $out
+              '';
 
           # Auto-generate per-cluster outputs from the registry.
           clusterPackages = lib.concatMapAttrs (cname: cluster: {
@@ -120,12 +162,13 @@
             '';
           }) clusters;
 
-          clusterChecks = lib.concatMapAttrs (cname: cluster:
-            let manifests = kixChecks.manifestMap cluster.rawManifests;
-            in {
-              "schema-cluster-${cname}" = kixChecks.schemaCheck "cluster-${cname}" (
-                mkAnnotatedManifests cluster
-              );
+          clusterChecks = lib.concatMapAttrs (
+            cname: cluster:
+            let
+              manifests = kixChecks.manifestMap cluster.rawManifests;
+            in
+            {
+              "schema-cluster-${cname}" = kixChecks.schemaCheck "cluster-${cname}" (mkAnnotatedManifests cluster);
               "validate-cluster-${cname}" =
                 assert kixChecks.validateManifestSet "cluster-${cname}" manifests;
                 pkgs.runCommand "validate-cluster-${cname}" { } ''
@@ -139,6 +182,10 @@
         {
           packages = clusterPackages;
           checks = clusterChecks;
+
+          # Expose cluster evaluation results for the kix CLI.
+          # kix accesses: legacyPackages.<system>.kixClusters.<name>.rawManifests
+          legacyPackages.kixClusters = clusters;
         };
     };
 }

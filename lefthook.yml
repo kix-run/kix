@@ -49,8 +49,7 @@ pre-commit:
 
     clippy-rust:
       glob: "cli/**/*.rs"
-      root: "cli/"
-      run: cargo clippy --workspace --all-targets -- -D warnings
+      run: devenv shell -- bash -c 'cd cli && cargo clippy --workspace --all-targets -- -D warnings'
 
     nixfmt:
       glob: "*.nix"

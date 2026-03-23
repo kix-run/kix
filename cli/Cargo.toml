@@ -63,6 +63,13 @@ chrono = "0.4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+# Nix FFI bindings
+nix-bindings-expr = { git = "https://github.com/nixops4/nix-bindings-rust.git" }
+nix-bindings-store = { git = "https://github.com/nixops4/nix-bindings-rust.git" }
+nix-bindings-flake = { git = "https://github.com/nixops4/nix-bindings-rust.git" }
+nix-bindings-util = { git = "https://github.com/nixops4/nix-bindings-rust.git" }
+nix-bindings-fetchers = { git = "https://github.com/nixops4/nix-bindings-rust.git" }
+
 # Internal crates
 kix-eval = { path = "kix-eval" }
 kix-manifest = { path = "kix-manifest" }
