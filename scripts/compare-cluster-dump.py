@@ -14,13 +14,18 @@ Produces a structured markdown report with:
 Output is designed for both human reading and LLM consumption.
 """
 
+import re
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from pathlib import Path
 
 import click
 import yaml
+
+# Use the C-accelerated YAML loader when available (~5-10x faster).
+_YAMLLoader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from parity.normalize import normalize_kix, normalize_cluster, resource_key, strip_port_names, normalize_dns_suffix
@@ -236,7 +241,6 @@ def _is_runtime_resource(doc: dict) -> bool:
     #   - loki PVCs:   app.kubernetes.io/component, app.kubernetes.io/name
     #   - StackGres PVCs: stackgres.io/cluster-name (+ ownerRefs, caught earlier)
     #   - prometheus PVCs: operator.prometheus.io/name
-    import re
     _STS_PVC_LABELS = {
         "app.kubernetes.io/name",           # Helm-standard: valkey, loki, etc.
         "app.kubernetes.io/instance",       # Helm-standard: instance name
@@ -307,8 +311,6 @@ def load_resources(directory: Path, normalizer, service: str | None = None,
 
     Returns dict mapping "{namespace}/{name}-{kind}" -> normalized doc.
     """
-    resources = {}
-
     def _matches_service(stem: str) -> bool:
         if service is None:
             return True
@@ -316,32 +318,36 @@ def load_resources(directory: Path, normalizer, service: str | None = None,
         name_part = stem.rsplit("-", 1)[0] if "-" in stem else stem
         return name_part == service or name_part.startswith(service + "-")
 
-    def _ingest(doc: dict, key: str):
-        """Add a single resource after filtering."""
-        if skip_controller_owned and _is_controller_owned(doc):
-            return
-        if skip_runtime and _is_runtime_resource(doc):
-            return
-        doc = normalizer(doc)
-        resources[key] = doc
-
-    def _load(f: Path, key: str):
+    def _process(f: Path, key: str) -> list[tuple[str, dict]]:
+        """Parse, filter, and normalize a single file. Returns [(key, doc), ...]."""
         with open(f) as fh:
-            doc = yaml.safe_load(fh)
+            doc = yaml.load(fh, Loader=_YAMLLoader)
         if doc is None:
-            return
+            return []
         # Unpack List resources (e.g. helm-generated bundled PrometheusRules)
         # into individual items so they match cluster dump entries one-to-one.
         if doc.get("kind") == "List" and isinstance(doc.get("items"), list):
+            items = []
             for item in doc["items"]:
                 item_kind = item.get("kind", "Unknown").lower()
                 item_meta = item.get("metadata", {})
                 item_ns = item_meta.get("namespace", "_cluster")
                 item_name = item_meta.get("name", "unknown")
                 item_key = f"{item_ns}/{item_name}-{item_kind}"
-                _ingest(item, item_key)
-            return
-        _ingest(doc, key)
+                if skip_controller_owned and _is_controller_owned(item):
+                    continue
+                if skip_runtime and _is_runtime_resource(item):
+                    continue
+                items.append((item_key, normalizer(item)))
+            return items
+        if skip_controller_owned and _is_controller_owned(doc):
+            return []
+        if skip_runtime and _is_runtime_resource(doc):
+            return []
+        return [(key, normalizer(doc))]
+
+    # Collect (file, key) pairs to process
+    file_list: list[tuple[Path, str]] = []
 
     # Try nested layout first (subdirectories = namespaces)
     subdirs = [d for d in sorted(directory.iterdir()) if d.is_dir()]
@@ -355,7 +361,7 @@ def load_resources(directory: Path, normalizer, service: str | None = None,
                     continue
                 if not _matches_service(f.stem):
                     continue
-                _load(f, f"{ns}/{f.stem}")
+                file_list.append((f, f"{ns}/{f.stem}"))
     else:
         # Flat layout: {namespace}--{name}-{kind}.yaml
         for f in sorted(directory.glob("*.yaml")):
@@ -369,7 +375,14 @@ def load_resources(directory: Path, normalizer, service: str | None = None,
             ns, rest = stem.split("--", 1)
             if not _matches_service(rest):
                 continue
-            _load(f, f"{ns}/{rest}")
+            file_list.append((f, f"{ns}/{rest}"))
+
+    # Process files in parallel (CSafeLoader releases the GIL during C parsing)
+    resources = {}
+    with ThreadPoolExecutor() as pool:
+        for results in pool.map(lambda args: _process(*args), file_list):
+            for key, doc in results:
+                resources[key] = doc
 
     return resources
 
