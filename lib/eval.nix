@@ -13,7 +13,6 @@ let
     mkResource
     mkImportResource
     mkPackageInstance
-    buildRegistry
     ;
 
   rbac = import ./rbac.nix { inherit lib; };
@@ -939,8 +938,17 @@ rec {
           in
           map (v: v.value) resourceVals;
 
-        # Build a local mini-registry for this instance's resources
-        localRegistry = buildRegistry allPartResources;
+        # Local store-path → resource lookup for forward closure walking.
+        # TODO: potentially move the PI collection to kix-cli for faster eval
+        localRegistry = builtins.foldl' (
+          acc: r:
+          acc
+          // {
+            ${builtins.unsafeDiscardStringContext r.outPath} = {
+              resource = r;
+            };
+          }
+        ) { } allPartResources;
 
         # Get forward deps: store-path refs in manifest + explicit requires
         getForwardDeps =
@@ -1335,8 +1343,6 @@ rec {
           ++ (if ns.quota != null then [ ns.quota ] else [ ])
           ++ builtins.attrValues ns.netpols
         ) allNsNames);
-
-      registry = buildRegistry allResources;
 
       # Activation CRD — cluster-level root of the Nix store DAG.
       activation = k8s.mkActivation {

@@ -246,15 +246,6 @@ rec {
         # Manifest re-export with this resource's own context on all strings.
         # Use for cross-resource field access: self.deployment.manifest.spec.X
         manifest = attachCtxDeep _identityCtx rawManifest;
-
-        # Registry entry: maps store path (plain, no context) → resource metadata.
-        registryEntry = {
-          ${_identityPathPlain} = {
-            inherit apiVersion kind name;
-            namespace = nsKey;
-            resource = self;
-          };
-        };
       };
     in
     self;
@@ -295,9 +286,6 @@ rec {
       }
       // lib.optionalAttrs (version != null) { inherit version; };
     };
-
-  # Build a cluster-wide registry from a list of resources.
-  buildRegistry = resources: builtins.foldl' (acc: r: acc // r.registryEntry) { } resources;
 
   # Resolve a resource's namespace to a string key.
   nsOf =

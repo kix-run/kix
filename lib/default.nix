@@ -30,7 +30,6 @@ in
     mkActivation
     attachCtxDeep
     extractStoreHash
-    buildRegistry
     nsOf
     resourceId
     ;
