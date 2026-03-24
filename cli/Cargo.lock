@@ -1638,7 +1638,7 @@ dependencies = [
 [[package]]
 name = "nix-bindings-bdwgc-sys"
 version = "0.2.1"
-source = "git+https://github.com/nixops4/nix-bindings-rust.git#7de15fa26057c8cf0b6178ff166e529c09ea89a7"
+source = "git+https://github.com/nixops4/nix-bindings-rust.git?rev=7de15fa26057c8cf0b6178ff166e529c09ea89a7#7de15fa26057c8cf0b6178ff166e529c09ea89a7"
 dependencies = [
  "bindgen",
  "pkg-config",
@@ -1647,7 +1647,7 @@ dependencies = [
 [[package]]
 name = "nix-bindings-expr"
 version = "0.2.1"
-source = "git+https://github.com/nixops4/nix-bindings-rust.git#7de15fa26057c8cf0b6178ff166e529c09ea89a7"
+source = "git+https://github.com/nixops4/nix-bindings-rust.git?rev=7de15fa26057c8cf0b6178ff166e529c09ea89a7#7de15fa26057c8cf0b6178ff166e529c09ea89a7"
 dependencies = [
  "anyhow",
  "cstr",
@@ -1665,7 +1665,7 @@ dependencies = [
 [[package]]
 name = "nix-bindings-expr-sys"
 version = "0.2.1"
-source = "git+https://github.com/nixops4/nix-bindings-rust.git#7de15fa26057c8cf0b6178ff166e529c09ea89a7"
+source = "git+https://github.com/nixops4/nix-bindings-rust.git?rev=7de15fa26057c8cf0b6178ff166e529c09ea89a7#7de15fa26057c8cf0b6178ff166e529c09ea89a7"
 dependencies = [
  "bindgen",
  "nix-bindings-store-sys",
@@ -1676,7 +1676,7 @@ dependencies = [
 [[package]]
 name = "nix-bindings-fetchers"
 version = "0.2.1"
-source = "git+https://github.com/nixops4/nix-bindings-rust.git#7de15fa26057c8cf0b6178ff166e529c09ea89a7"
+source = "git+https://github.com/nixops4/nix-bindings-rust.git?rev=7de15fa26057c8cf0b6178ff166e529c09ea89a7#7de15fa26057c8cf0b6178ff166e529c09ea89a7"
 dependencies = [
  "anyhow",
  "cstr",
@@ -1690,7 +1690,7 @@ dependencies = [
 [[package]]
 name = "nix-bindings-fetchers-sys"
 version = "0.2.1"
-source = "git+https://github.com/nixops4/nix-bindings-rust.git#7de15fa26057c8cf0b6178ff166e529c09ea89a7"
+source = "git+https://github.com/nixops4/nix-bindings-rust.git?rev=7de15fa26057c8cf0b6178ff166e529c09ea89a7#7de15fa26057c8cf0b6178ff166e529c09ea89a7"
 dependencies = [
  "bindgen",
  "nix-bindings-util-sys",
@@ -1700,7 +1700,7 @@ dependencies = [
 [[package]]
 name = "nix-bindings-flake"
 version = "0.2.1"
-source = "git+https://github.com/nixops4/nix-bindings-rust.git#7de15fa26057c8cf0b6178ff166e529c09ea89a7"
+source = "git+https://github.com/nixops4/nix-bindings-rust.git?rev=7de15fa26057c8cf0b6178ff166e529c09ea89a7#7de15fa26057c8cf0b6178ff166e529c09ea89a7"
 dependencies = [
  "anyhow",
  "cstr",
@@ -1716,7 +1716,7 @@ dependencies = [
 [[package]]
 name = "nix-bindings-flake-sys"
 version = "0.2.1"
-source = "git+https://github.com/nixops4/nix-bindings-rust.git#7de15fa26057c8cf0b6178ff166e529c09ea89a7"
+source = "git+https://github.com/nixops4/nix-bindings-rust.git?rev=7de15fa26057c8cf0b6178ff166e529c09ea89a7#7de15fa26057c8cf0b6178ff166e529c09ea89a7"
 dependencies = [
  "bindgen",
  "nix-bindings-bdwgc-sys",
@@ -1730,7 +1730,7 @@ dependencies = [
 [[package]]
 name = "nix-bindings-store"
 version = "0.2.1"
-source = "git+https://github.com/nixops4/nix-bindings-rust.git#7de15fa26057c8cf0b6178ff166e529c09ea89a7"
+source = "git+https://github.com/nixops4/nix-bindings-rust.git?rev=7de15fa26057c8cf0b6178ff166e529c09ea89a7#7de15fa26057c8cf0b6178ff166e529c09ea89a7"
 dependencies = [
  "anyhow",
  "nix-bindings-store-sys",
@@ -1743,7 +1743,7 @@ dependencies = [
 [[package]]
 name = "nix-bindings-store-sys"
 version = "0.2.1"
-source = "git+https://github.com/nixops4/nix-bindings-rust.git#7de15fa26057c8cf0b6178ff166e529c09ea89a7"
+source = "git+https://github.com/nixops4/nix-bindings-rust.git?rev=7de15fa26057c8cf0b6178ff166e529c09ea89a7#7de15fa26057c8cf0b6178ff166e529c09ea89a7"
 dependencies = [
  "bindgen",
  "nix-bindings-util-sys",
@@ -1754,7 +1754,7 @@ dependencies = [
 [[package]]
 name = "nix-bindings-util"
 version = "0.2.1"
-source = "git+https://github.com/nixops4/nix-bindings-rust.git#7de15fa26057c8cf0b6178ff166e529c09ea89a7"
+source = "git+https://github.com/nixops4/nix-bindings-rust.git?rev=7de15fa26057c8cf0b6178ff166e529c09ea89a7#7de15fa26057c8cf0b6178ff166e529c09ea89a7"
 dependencies = [
  "anyhow",
  "nix-bindings-util-sys",
@@ -1763,7 +1763,7 @@ dependencies = [
 [[package]]
 name = "nix-bindings-util-sys"
 version = "0.2.1"
-source = "git+https://github.com/nixops4/nix-bindings-rust.git#7de15fa26057c8cf0b6178ff166e529c09ea89a7"
+source = "git+https://github.com/nixops4/nix-bindings-rust.git?rev=7de15fa26057c8cf0b6178ff166e529c09ea89a7#7de15fa26057c8cf0b6178ff166e529c09ea89a7"
 dependencies = [
  "bindgen",
  "pkg-config",
