@@ -76,7 +76,7 @@ impl FfiNixBackend {
         gc_register_current_thread().map_err(KixEvalError::init)?;
 
         // Enable flakes
-        settings::set("experimental-features", "flakes nix-command").map_err(KixEvalError::init)?;
+        settings::set("experimental-features", "flakes nix-command pipe-operators").map_err(KixEvalError::init)?;
 
         let flake_settings = FlakeSettings::new().map_err(KixEvalError::init)?;
         let fetchers_settings = FetchersSettings::new().map_err(KixEvalError::init)?;

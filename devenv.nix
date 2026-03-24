@@ -28,7 +28,12 @@ in
 
   # Bindgen needs libclang to generate FFI bindings
   env.LIBCLANG_PATH = lib.makeLibraryPath [ pkgs.llvmPackages.clang-unwrapped ];
-  env.BINDGEN_EXTRA_CLANG_ARGS = "-x c++ -std=c++2a";
+  env.BINDGEN_EXTRA_CLANG_ARGS = builtins.concatStringsSep " " [
+    "-x" "c++" "-std=c++2a"
+    "-isystem" "${pkgs.stdenv.cc.cc}/include/c++/${lib.getVersion pkgs.stdenv.cc.cc}"
+    "-isystem" "${pkgs.stdenv.cc.cc}/include/c++/${lib.getVersion pkgs.stdenv.cc.cc}/x86_64-unknown-linux-gnu"
+    "-isystem" "${pkgs.glibc.dev}/include"
+  ];
 
   # DAG visualization scripts for the fixpoint cluster.
   # These evaluate the fixpoint cluster's resource graph at eval time.
