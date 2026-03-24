@@ -1,6 +1,6 @@
 use std::io::IsTerminal;
 
-use miette::{IntoDiagnostic, Result};
+use miette::Result;
 
 use crate::cli::{BuildArgs, OutputFormat};
 use crate::output::{self, CommandResponse};
@@ -37,24 +37,13 @@ pub fn run(args: &BuildArgs, ctx: &mut CommandContext) -> Result<()> {
         None
     };
 
-    let result = ctx.evaluator.eval_cluster(&args.cluster);
+    let cluster_output = ctx.eval_cluster_or_suggest(&args.cluster);
 
     if let Some(sp) = &spinner {
         sp.finish_and_clear();
     }
 
-    let cluster_output = match result {
-        Ok(o) => o,
-        Err(kix_eval::error::KixEvalError::ClusterNotFound { name }) => {
-            let clusters = ctx.evaluator.list_clusters().unwrap_or_default();
-            let mut msg = format!("cluster '{}' not found", name);
-            if !clusters.is_empty() {
-                msg.push_str(&format!(". Available clusters: {}", clusters.join(", ")));
-            }
-            return Err(miette::miette!("{}", msg));
-        }
-        Err(e) => return Err(e).into_diagnostic(),
-    };
+    let cluster_output = cluster_output?;
 
     let response = BuildResponse {
         manifests: cluster_output.raw_manifests,
@@ -66,7 +55,7 @@ pub fn run(args: &BuildArgs, ctx: &mut CommandContext) -> Result<()> {
             print!("{}", response.format_text());
         }
         OutputFormat::Json => {
-            println!("{}", output::render(&response, OutputFormat::Json));
+            println!("{}", output::render(&response, OutputFormat::Json)?);
         }
     }
 

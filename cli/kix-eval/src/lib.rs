@@ -20,6 +20,12 @@
 //!   nix-util-c, nix-flake-c) which are provided by the Nix flake
 //!   packaging (see `cli/flake-integration.nix`).
 //!
+//! The `ffi` module is only compiled when the `nix-ffi` feature flag is
+//! enabled; the `mock` module is always available and provides
+//! `MockNixBackend` for unit and integration tests. The binary crate
+//! (`kix-cli`) always enables `nix-ffi`, so production builds use the
+//! real FFI backend.
+//!
 //! To switch from mock to real FFI in production:
 //!
 //! ```rust,ignore
@@ -40,6 +46,9 @@ pub mod eval;
 pub mod mock;
 pub mod store;
 pub mod value;
+
+pub use error::KixEvalError;
+pub use eval::KixEvaluator;
 
 /// Real Nix FFI backend — available only when built with Nix C libraries.
 ///

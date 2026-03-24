@@ -1,6 +1,7 @@
 use std::fs;
 
 use assert_cmd::Command;
+use kix_manifest::types::CLUSTER_SCOPED;
 use predicates::prelude::*;
 
 fn kix() -> Command {
@@ -45,7 +46,7 @@ fn resource_filename(manifest: &serde_json::Value) -> String {
         .to_lowercase();
     let ns = manifest["metadata"]["namespace"]
         .as_str()
-        .unwrap_or("_cluster");
+        .unwrap_or(CLUSTER_SCOPED);
     let name = manifest["metadata"]["name"].as_str().unwrap_or("unknown");
     format!("{ns}--{name}-{kind}.yaml")
 }

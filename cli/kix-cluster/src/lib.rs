@@ -7,3 +7,5 @@ pub mod fetch;
 pub mod graph;
 pub mod readiness;
 pub mod waves;
+
+pub use graph::ResourceGraph;

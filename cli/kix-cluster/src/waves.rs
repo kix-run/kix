@@ -104,6 +104,7 @@ pub fn kind_priority(kind: &str) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kix_manifest::types::CLUSTER_SCOPED;
     use serde_json::json;
 
     fn manifest(kind: &str, name: &str, ns: &str, id_hash: &str, deps: &str) -> serde_json::Value {
@@ -168,7 +169,7 @@ mod tests {
     fn linear_chain_one_per_wave() {
         // ns → sa → deploy (each depends on the previous)
         let manifests = vec![
-            manifest("Namespace", "default", "_cluster", "h_ns", ""),
+            manifest("Namespace", "default", CLUSTER_SCOPED, "h_ns", ""),
             manifest("ServiceAccount", "my-sa", "default", "h_sa", "h_ns"),
             manifest("Deployment", "my-app", "default", "h_deploy", "h_sa"),
         ];
@@ -186,7 +187,7 @@ mod tests {
     fn diamond_dependency() {
         // ns → sa, ns → cm, sa+cm → deploy
         let manifests = vec![
-            manifest("Namespace", "default", "_cluster", "h_ns", ""),
+            manifest("Namespace", "default", CLUSTER_SCOPED, "h_ns", ""),
             manifest("ServiceAccount", "my-sa", "default", "h_sa", "h_ns"),
             manifest("ConfigMap", "my-cm", "default", "h_cm", "h_ns"),
             manifest("Deployment", "my-app", "default", "h_deploy", "h_sa,h_cm"),
@@ -225,7 +226,7 @@ mod tests {
         let manifests = vec![
             manifest("Deployment", "app", "default", "h1", ""),
             manifest("ServiceAccount", "sa", "default", "h2", ""),
-            manifest("Namespace", "ns", "_cluster", "h3", ""),
+            manifest("Namespace", "ns", CLUSTER_SCOPED, "h3", ""),
             manifest("ConfigMap", "cm", "default", "h4", ""),
             manifest("Service", "svc", "default", "h5", ""),
         ];
@@ -275,7 +276,7 @@ mod tests {
         // Wave 2: svc (depends on sa), deploy (depends on sa, cm)
         // Wave 3: ingress (depends on svc)
         let manifests = vec![
-            manifest("Namespace", "app", "_cluster", "h_ns", ""),
+            manifest("Namespace", "app", CLUSTER_SCOPED, "h_ns", ""),
             manifest("ServiceAccount", "sa", "app", "h_sa", "h_ns"),
             manifest("ConfigMap", "cm", "app", "h_cm", "h_ns"),
             manifest("Service", "svc", "app", "h_svc", "h_sa"),
@@ -297,7 +298,7 @@ mod tests {
     #[test]
     fn all_nodes_accounted_for() {
         let manifests = vec![
-            manifest("Namespace", "ns", "_cluster", "h1", ""),
+            manifest("Namespace", "ns", CLUSTER_SCOPED, "h1", ""),
             manifest("ServiceAccount", "sa", "ns", "h2", "h1"),
             manifest("ConfigMap", "cm", "ns", "h3", "h1"),
             manifest("Deployment", "app", "ns", "h4", "h2,h3"),

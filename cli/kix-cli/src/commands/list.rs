@@ -36,7 +36,7 @@ pub fn run(_args: &ListArgs, ctx: &mut CommandContext) -> Result<()> {
     let response = ListResponse { clusters };
     println!(
         "{}",
-        output::render(&response, ctx.output_format(OutputFormat::Text))
+        output::render(&response, ctx.output_format(OutputFormat::Text))?
     );
 
     Ok(())

@@ -2,6 +2,9 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Sentinel namespace value for cluster-scoped resources.
+pub const CLUSTER_SCOPED: &str = "_cluster";
+
 /// Unique identifier for a K8s resource.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ResourceId {
@@ -22,7 +25,7 @@ impl ResourceId {
             namespace: doc
                 .pointer("/metadata/namespace")
                 .and_then(|v| v.as_str())
-                .unwrap_or("_cluster")
+                .unwrap_or(CLUSTER_SCOPED)
                 .to_string(),
             name: doc
                 .pointer("/metadata/name")
@@ -70,7 +73,7 @@ impl ResourceId {
 
     /// Display as "Kind/name@namespace".
     pub fn display_id(&self) -> String {
-        if self.namespace == "_cluster" {
+        if self.namespace == CLUSTER_SCOPED {
             format!("{}/{}", self.kind, self.name)
         } else {
             format!("{}/{}@{}", self.kind, self.name, self.namespace)
@@ -99,7 +102,7 @@ mod tests {
     #[test]
     fn from_filename_cluster_scoped() {
         let rid = ResourceId::from_filename("_cluster--cert-manager-clusterrole.yaml").unwrap();
-        assert_eq!(rid.namespace, "_cluster");
+        assert_eq!(rid.namespace, CLUSTER_SCOPED);
         assert_eq!(rid.name, "cert-manager");
         assert_eq!(rid.kind, "clusterrole");
     }
@@ -186,7 +189,7 @@ mod tests {
     fn display_cluster_scoped() {
         let rid = ResourceId {
             kind: "clusterrole".into(),
-            namespace: "_cluster".into(),
+            namespace: CLUSTER_SCOPED.into(),
             name: "admin".into(),
         };
         assert_eq!(rid.to_string(), "clusterrole/admin");
@@ -214,6 +217,6 @@ mod tests {
             "metadata": { "name": "admin" }
         });
         let rid = ResourceId::from_value(&doc);
-        assert_eq!(rid.namespace, "_cluster");
+        assert_eq!(rid.namespace, CLUSTER_SCOPED);
     }
 }

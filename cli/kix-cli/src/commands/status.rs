@@ -1,7 +1,10 @@
+use std::io::IsTerminal;
+
 use miette::{IntoDiagnostic, Result};
 
 use crate::cli::{OutputFormat, StatusArgs};
 use crate::output::{self, CommandResponse};
+use kix_manifest::types::CLUSTER_SCOPED;
 
 use super::CommandContext;
 
@@ -37,16 +40,27 @@ impl CommandResponse for StatusResponse {
 
 pub fn run(args: &StatusArgs, ctx: &mut CommandContext) -> Result<()> {
     // Evaluate the cluster to know what resources we expect
-    let _cluster = ctx
-        .evaluator
-        .eval_cluster(&args.cluster)
-        .into_diagnostic()?;
+    let _cluster = ctx.eval_cluster_or_suggest(&args.cluster)?;
 
     let global = ctx.global.clone();
     ctx.runtime.block_on(run_async(args, &global))
 }
 
 async fn run_async(_args: &StatusArgs, global: &crate::cli::GlobalArgs) -> Result<()> {
+    let spinner = if std::io::stderr().is_terminal() && !global.quiet {
+        let sp = indicatif::ProgressBar::new_spinner();
+        sp.set_style(
+            indicatif::ProgressStyle::default_spinner()
+                .template("{spinner:.cyan} {msg}")
+                .expect("valid template"),
+        );
+        sp.set_message("Fetching cluster status...");
+        sp.enable_steady_tick(std::time::Duration::from_millis(80));
+        Some(sp)
+    } else {
+        None
+    };
+
     // Connect to cluster
     let client = kix_cluster::fetch::make_client(global.context.as_deref())
         .await
@@ -59,6 +73,10 @@ async fn run_async(_args: &StatusArgs, global: &crate::cli::GlobalArgs) -> Resul
     let resources = kix_cluster::fetch::fetch_managed_resources(&client, &discovery)
         .await
         .into_diagnostic()?;
+
+    if let Some(sp) = &spinner {
+        sp.finish_and_clear();
+    }
 
     if resources.is_empty() {
         eprintln!("No kix-managed resources found on the cluster.");
@@ -85,7 +103,7 @@ async fn run_async(_args: &StatusArgs, global: &crate::cli::GlobalArgs) -> Resul
                 .metadata
                 .namespace
                 .as_deref()
-                .unwrap_or("_cluster")
+                .unwrap_or(CLUSTER_SCOPED)
                 .to_string();
 
             let is_ready = kix_cluster::readiness::check_readiness(obj, &kind);
@@ -115,7 +133,7 @@ async fn run_async(_args: &StatusArgs, global: &crate::cli::GlobalArgs) -> Resul
 
     let response = StatusResponse { statuses };
     let format = global.output.unwrap_or(OutputFormat::Text);
-    println!("{}", output::render(&response, format));
+    println!("{}", output::render(&response, format)?);
 
     Ok(())
 }

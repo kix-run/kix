@@ -35,6 +35,26 @@ impl CommandContext {
     pub fn output_format(&self, default: OutputFormat) -> OutputFormat {
         self.global.output.unwrap_or(default)
     }
+
+    /// Evaluate a cluster, returning a helpful error with available cluster names if not found.
+    pub fn eval_cluster_or_suggest(
+        &mut self,
+        name: &str,
+    ) -> miette::Result<kix_eval::eval::ClusterOutput> {
+        use miette::IntoDiagnostic;
+        match self.evaluator.eval_cluster(name) {
+            Ok(o) => Ok(o),
+            Err(kix_eval::error::KixEvalError::ClusterNotFound { name }) => {
+                let clusters = self.evaluator.list_clusters().unwrap_or_default();
+                let mut msg = format!("cluster '{}' not found", name);
+                if !clusters.is_empty() {
+                    msg.push_str(&format!(". Available clusters: {}", clusters.join(", ")));
+                }
+                Err(miette::miette!("{}", msg))
+            }
+            Err(e) => Err(e).into_diagnostic(),
+        }
+    }
 }
 
 /// Resolve a flake reference to a path for evaluation.

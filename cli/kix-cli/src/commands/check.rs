@@ -116,7 +116,7 @@ pub fn run(args: &CheckArgs, ctx: &mut CommandContext) -> Result<()> {
     let response = CheckResponse { results };
     println!(
         "{}",
-        output::render(&response, ctx.output_format(OutputFormat::Text))
+        output::render(&response, ctx.output_format(OutputFormat::Text))?
     );
 
     if has_failure {

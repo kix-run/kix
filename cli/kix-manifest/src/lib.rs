@@ -7,3 +7,6 @@ pub mod normalize;
 pub mod serialize;
 pub mod types;
 pub mod validate;
+
+pub use types::CLUSTER_SCOPED;
+pub use types::ResourceId;

@@ -22,7 +22,10 @@ pub fn default_cache_db() -> PathBuf {
 /// Resolve symlinks in a path. Important on macOS where `/tmp` is a
 /// symlink to `/private/tmp` — Nix store paths must not traverse symlinks.
 pub fn resolve_symlinks(path: &Path) -> PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    std::fs::canonicalize(path).unwrap_or_else(|e| {
+        tracing::warn!(path = ?path, error = %e, "failed to canonicalize path, using as-is");
+        path.to_path_buf()
+    })
 }
 
 fn dirs_fallback_home() -> PathBuf {

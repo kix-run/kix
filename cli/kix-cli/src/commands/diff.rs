@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::io::IsTerminal;
 use std::path::Path;
 
 use miette::{IntoDiagnostic, Result, miette};
@@ -29,20 +30,60 @@ struct DiffResult {
 
 pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<()> {
     // Evaluate cluster manifests via mock/real backend
+    let spinner = if std::io::stderr().is_terminal() && !ctx.global.quiet {
+        let sp = indicatif::ProgressBar::new_spinner();
+        sp.set_style(
+            indicatif::ProgressStyle::default_spinner()
+                .template("{spinner:.cyan} {msg}")
+                .expect("valid template"),
+        );
+        sp.set_message(format!("Evaluating cluster '{}'...", args.cluster));
+        sp.enable_steady_tick(std::time::Duration::from_millis(80));
+        Some(sp)
+    } else {
+        None
+    };
+
     let kix_manifests = eval_cluster_manifests(&args.cluster)?;
+
+    if let Some(sp) = &spinner {
+        sp.finish_and_clear();
+    }
 
     // Load cluster-side manifests: from snapshot or live cluster
     let cluster_manifests = if let Some(snapshot_dir) = &args.snapshot {
         let snapshot_path = Path::new(snapshot_dir);
         if !snapshot_path.is_dir() {
-            return Err(miette!("snapshot directory does not exist: {snapshot_dir}"));
+            return Err(miette!(
+                "snapshot directory does not exist: {snapshot_dir}. Create one with: kix snapshot save {snapshot_dir}"
+            ));
         }
         load_manifests_from_dir(snapshot_path)
             .map_err(|e| miette!("failed to load snapshot directory: {e}"))?
     } else {
         // Live cluster fetch
+        let spinner = if std::io::stderr().is_terminal() && !ctx.global.quiet {
+            let sp = indicatif::ProgressBar::new_spinner();
+            sp.set_style(
+                indicatif::ProgressStyle::default_spinner()
+                    .template("{spinner:.cyan} {msg}")
+                    .expect("valid template"),
+            );
+            sp.set_message("Fetching live cluster state...");
+            sp.enable_steady_tick(std::time::Duration::from_millis(80));
+            Some(sp)
+        } else {
+            None
+        };
+
         let global = ctx.global.clone();
-        ctx.runtime.block_on(fetch_live_manifests(&global))?
+        let result = ctx.runtime.block_on(fetch_live_manifests(&global))?;
+
+        if let Some(sp) = &spinner {
+            sp.finish_and_clear();
+        }
+
+        result
     };
 
     let config = DiffConfig::new("kix", "cluster");

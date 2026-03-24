@@ -1,6 +1,9 @@
+use std::borrow::Cow;
 use std::sync::OnceLock;
 
 use owo_colors::OwoColorize;
+
+use miette::IntoDiagnostic;
 
 use crate::cli::{GlobalArgs, OutputFormat};
 
@@ -29,43 +32,43 @@ pub fn color_enabled() -> bool {
     *COLOR_ENABLED.get().unwrap_or(&false)
 }
 
-pub fn green(s: &str) -> String {
+pub fn green(s: &str) -> Cow<'_, str> {
     if color_enabled() {
-        format!("{}", s.green())
+        Cow::Owned(format!("{}", s.green()))
     } else {
-        s.to_string()
+        Cow::Borrowed(s)
     }
 }
 
-pub fn red(s: &str) -> String {
+pub fn red(s: &str) -> Cow<'_, str> {
     if color_enabled() {
-        format!("{}", s.red())
+        Cow::Owned(format!("{}", s.red()))
     } else {
-        s.to_string()
+        Cow::Borrowed(s)
     }
 }
 
-pub fn yellow(s: &str) -> String {
+pub fn yellow(s: &str) -> Cow<'_, str> {
     if color_enabled() {
-        format!("{}", s.yellow())
+        Cow::Owned(format!("{}", s.yellow()))
     } else {
-        s.to_string()
+        Cow::Borrowed(s)
     }
 }
 
-pub fn dim(s: &str) -> String {
+pub fn dim(s: &str) -> Cow<'_, str> {
     if color_enabled() {
-        format!("{}", s.dimmed())
+        Cow::Owned(format!("{}", s.dimmed()))
     } else {
-        s.to_string()
+        Cow::Borrowed(s)
     }
 }
 
-pub fn bold(s: &str) -> String {
+pub fn bold(s: &str) -> Cow<'_, str> {
     if color_enabled() {
-        format!("{}", s.bold())
+        Cow::Owned(format!("{}", s.bold()))
     } else {
-        s.to_string()
+        Cow::Borrowed(s)
     }
 }
 
@@ -86,10 +89,10 @@ pub trait CommandResponse {
 }
 
 /// Render a CommandResponse based on the output format.
-pub fn render(response: &dyn CommandResponse, format: OutputFormat) -> String {
+pub fn render(response: &dyn CommandResponse, format: OutputFormat) -> miette::Result<String> {
     match format {
-        OutputFormat::Text => response.format_text(),
-        OutputFormat::Json => serde_json::to_string_pretty(&response.as_json()).unwrap(),
-        OutputFormat::Yaml => serde_yml::to_string(&response.as_json()).unwrap(),
+        OutputFormat::Text => Ok(response.format_text()),
+        OutputFormat::Json => serde_json::to_string_pretty(&response.as_json()).into_diagnostic(),
+        OutputFormat::Yaml => serde_yml::to_string(&response.as_json()).into_diagnostic(),
     }
 }

@@ -11,7 +11,7 @@ use kix_manifest::diff::rename::find_renames;
 use kix_manifest::diff::{DiffConfig, Difference};
 use kix_manifest::normalize;
 use kix_manifest::serialize::load_manifests_from_dir;
-use kix_manifest::types::ResourceId;
+use kix_manifest::types::{CLUSTER_SCOPED, ResourceId};
 
 use crate::cli::{OutputFormat, SnapshotArgs, SnapshotCommand, SnapshotDiffArgs, SnapshotSaveArgs};
 use crate::output;
@@ -27,6 +27,16 @@ pub fn run(args: &SnapshotArgs, ctx: &mut CommandContext) -> Result<()> {
 
 fn run_save(args: &SnapshotSaveArgs, ctx: &mut CommandContext) -> Result<()> {
     let out_dir = Path::new(&args.dir);
+
+    // Reject path traversal
+    for component in out_dir.components() {
+        if matches!(component, std::path::Component::ParentDir) {
+            return Err(miette!(
+                "snapshot directory must not contain '..' components"
+            ));
+        }
+    }
+
     let global = ctx.global.clone();
 
     ctx.runtime.block_on(async {
@@ -77,8 +87,8 @@ fn run_save(args: &SnapshotSaveArgs, ctx: &mut CommandContext) -> Result<()> {
 
         let mut written = 0usize;
         for (id, value) in &resources {
-            let ns_dir = if id.namespace == "_cluster" {
-                "_cluster".to_string()
+            let ns_dir = if id.namespace == CLUSTER_SCOPED {
+                CLUSTER_SCOPED.to_string()
             } else {
                 id.namespace.clone()
             };

@@ -314,6 +314,7 @@ fn get_annotation(manifest: &serde_json::Value, key: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kix_manifest::types::CLUSTER_SCOPED;
     use serde_json::json;
 
     fn manifest(kind: &str, name: &str, ns: &str, id_hash: &str, deps: &str) -> serde_json::Value {
@@ -371,7 +372,7 @@ mod tests {
 
     #[test]
     fn multiple_dependencies() {
-        let ns = manifest("Namespace", "default", "_cluster", "hash_ns", "");
+        let ns = manifest("Namespace", "default", CLUSTER_SCOPED, "hash_ns", "");
         let sa = manifest("ServiceAccount", "my-sa", "default", "hash_sa", "hash_ns");
         let cm = manifest("ConfigMap", "my-config", "default", "hash_cm", "hash_ns");
         let deploy = manifest(
@@ -421,7 +422,7 @@ mod tests {
 
     #[test]
     fn topological_order() {
-        let ns = manifest("Namespace", "default", "_cluster", "hash_ns", "");
+        let ns = manifest("Namespace", "default", CLUSTER_SCOPED, "hash_ns", "");
         let sa = manifest("ServiceAccount", "my-sa", "default", "hash_sa", "hash_ns");
         let deploy = manifest("Deployment", "my-app", "default", "hash_deploy", "hash_sa");
 

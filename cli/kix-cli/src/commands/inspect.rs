@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 
-use miette::{IntoDiagnostic, Result};
+use miette::Result;
 
 use crate::cli::{InspectArgs, OutputFormat};
 use crate::output::{self, CommandResponse};
-use kix_manifest::types::ResourceId;
+use kix_manifest::types::{CLUSTER_SCOPED, ResourceId};
 
 use super::CommandContext;
 
@@ -24,7 +24,7 @@ impl CommandResponse for InspectResponse {
         // Namespaces
         out.push_str(&format!("Namespaces ({}):\n", self.by_namespace.len()));
         for (ns, resources) in &self.by_namespace {
-            let ns_display = if ns == "_cluster" {
+            let ns_display = if ns == CLUSTER_SCOPED {
                 "(cluster-scoped)"
             } else {
                 ns
@@ -53,7 +53,7 @@ impl CommandResponse for InspectResponse {
         // Resource listing by namespace
         out.push_str("Resources:\n");
         for (ns, resources) in &self.by_namespace {
-            let ns_display = if ns == "_cluster" {
+            let ns_display = if ns == CLUSTER_SCOPED {
                 "(cluster-scoped)"
             } else {
                 ns.as_str()
@@ -66,7 +66,7 @@ impl CommandResponse for InspectResponse {
             }
         }
 
-        out
+        out.trim_end().to_string()
     }
 
     fn as_json(&self) -> serde_json::Value {
@@ -90,10 +90,7 @@ impl CommandResponse for InspectResponse {
 }
 
 pub fn run(args: &InspectArgs, ctx: &mut CommandContext) -> Result<()> {
-    let cluster = ctx
-        .evaluator
-        .eval_cluster(&args.cluster)
-        .into_diagnostic()?;
+    let cluster = ctx.eval_cluster_or_suggest(&args.cluster)?;
 
     let manifests = &cluster.raw_manifests;
 
@@ -117,14 +114,9 @@ pub fn run(args: &InspectArgs, ctx: &mut CommandContext) -> Result<()> {
         kind_counts,
     };
 
-    // The original used print! (no trailing newline) for text, println! for json/yaml.
-    // format_text already ends with newlines from the resource listing.
     let format = ctx.output_format(OutputFormat::Text);
-    let rendered = output::render(&response, format);
-    match format {
-        OutputFormat::Text => print!("{rendered}"),
-        _ => println!("{rendered}"),
-    }
+    let rendered = output::render(&response, format)?;
+    println!("{rendered}");
 
     Ok(())
 }

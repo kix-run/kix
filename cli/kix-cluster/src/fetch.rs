@@ -5,7 +5,7 @@
 
 use std::collections::HashSet;
 
-use kix_manifest::types::ResourceId;
+use kix_manifest::types::{CLUSTER_SCOPED, ResourceId};
 use kube::{
     Config,
     api::{Api, DynamicObject, ListParams},
@@ -197,7 +197,7 @@ pub async fn fetch_matching_resources(
 
         let api: Api<DynamicObject> = match scope {
             Scope::Namespaced => {
-                let ns = if rid.namespace == "_cluster" {
+                let ns = if rid.namespace == CLUSTER_SCOPED {
                     "default"
                 } else {
                     &rid.namespace

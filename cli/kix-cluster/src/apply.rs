@@ -6,7 +6,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use kix_manifest::types::ResourceId;
+use kix_manifest::types::{CLUSTER_SCOPED, ResourceId};
 use kube::{
     api::{Api, DynamicObject, Patch, PatchParams},
     client::Client,
@@ -87,7 +87,7 @@ pub async fn apply_resource(
 
     let api: Api<DynamicObject> = match scope {
         Scope::Namespaced => {
-            let ns = if rid.namespace == "_cluster" {
+            let ns = if rid.namespace == CLUSTER_SCOPED {
                 "default"
             } else {
                 &rid.namespace

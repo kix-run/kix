@@ -158,14 +158,31 @@ impl FfiNixBackend {
     }
 }
 
+/// Validate that a string is safe for interpolation into a Nix string literal.
+/// Rejects characters that could break out of double-quoted Nix strings.
+fn validate_nix_string_safe(s: &str, context: &str) -> Result<(), KixEvalError> {
+    if s.contains('"') || s.contains('\\') || s.contains('$') {
+        return Err(KixEvalError::eval(
+            s.to_string(),
+            context,
+            anyhow::anyhow!(
+                "path contains characters unsafe for Nix string interpolation: {}",
+                s
+            ),
+        ));
+    }
+    Ok(())
+}
+
 impl NixBackend for FfiNixBackend {
     fn eval_cluster(
         &mut self,
         flake_path: &Path,
         cluster_name: &str,
     ) -> Result<ClusterOutput, KixEvalError> {
-        // Reject obviously invalid names before hitting Nix (which is slow).
-        // Cluster names are Nix attribute identifiers: alphanumeric, hyphens, underscores.
+        // SECURITY: This validation is critical — `cluster_name` is interpolated into a Nix
+        // expression string below. Only alphanumeric, hyphens, and underscores are safe.
+        // Relaxing this check without updating the interpolation could enable Nix injection.
         if !cluster_name
             .chars()
             .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
@@ -175,9 +192,16 @@ impl NixBackend for FfiNixBackend {
         tracing::info!(cluster = cluster_name, "evaluating cluster");
 
         let flake_str = flake_path.to_string_lossy();
+        validate_nix_string_safe(&flake_str, cluster_name)?;
 
         // Evaluate cluster rawManifests via the flake's legacyPackages output.
         // The flake exposes: legacyPackages.<system>.kixClusters.<name>
+        debug_assert!(
+            cluster_name
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '-' || c == '_'),
+            "cluster name must be pre-validated before Nix expression interpolation"
+        );
         let raw_manifests_expr = format!(
             r#"
             let
@@ -233,6 +257,7 @@ impl NixBackend for FfiNixBackend {
     fn list_clusters(&mut self, flake_path: &Path) -> Result<Vec<String>, KixEvalError> {
         tracing::debug!("listing available clusters");
         let flake_str = flake_path.to_string_lossy();
+        validate_nix_string_safe(&flake_str, "list_clusters")?;
 
         let expr = format!(
             r#"

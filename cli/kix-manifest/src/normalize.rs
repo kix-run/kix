@@ -125,8 +125,7 @@ pub fn strip_secret_data(doc: &mut Value) {
 
 /// Remove cosmetic labels and annotations from all metadata locations.
 pub fn strip_labels_and_annotations(doc: &mut Value, cluster: bool) {
-    let metadata_blocks = find_metadata_blocks(doc);
-    for meta in metadata_blocks {
+    for_each_metadata_block(doc, |meta| {
         // Strip labels
         if let Some(Value::Object(labels)) = meta.get_mut("labels") {
             labels.retain(|key, _| {
@@ -140,9 +139,6 @@ pub fn strip_labels_and_annotations(doc: &mut Value, cluster: bool) {
                 }
                 true
             });
-            if labels.is_empty() {
-                // Mark for removal
-            }
         }
         // Remove empty labels
         if meta
@@ -180,53 +176,37 @@ pub fn strip_labels_and_annotations(doc: &mut Value, cluster: bool) {
         {
             meta.remove("annotations");
         }
-    }
+    });
 }
 
-/// Find all metadata dicts (as mutable references). Returns them collected
-/// to avoid borrow issues — we collect pointers via indices.
-fn find_metadata_blocks(doc: &mut Value) -> Vec<&mut Map<String, Value>> {
-    // We need to collect metadata blocks from multiple locations.
-    // Due to borrow checker constraints, we use raw pointer tricks safely.
-    let mut ptrs: Vec<*mut Map<String, Value>> = Vec::new();
+/// Apply a callback to each metadata block in a document.
+///
+/// Processes metadata at all standard K8s locations: top-level, spec.template,
+/// spec.volumeClaimTemplates[], and spec.jobTemplate.spec.template.
+fn for_each_metadata_block(doc: &mut Value, mut f: impl FnMut(&mut Map<String, Value>)) {
+    // Process each metadata location independently using pointer_mut on the root
+    let paths: &[&str] = &[
+        "/metadata",
+        "/spec/template/metadata",
+        "/spec/jobTemplate/spec/template/metadata",
+    ];
 
-    if let Some(obj) = doc.as_object_mut() {
-        // Top-level metadata
-        if let Some(Value::Object(meta)) = obj.get_mut("metadata") {
-            ptrs.push(meta as *mut _);
-        }
-
-        // spec.template.metadata (Deployment/StatefulSet/DaemonSet/Job)
-        if let Some(Value::Object(spec)) = obj.get_mut("spec") {
-            if let Some(Value::Object(template)) = spec.get_mut("template")
-                && let Some(Value::Object(meta)) = template.get_mut("metadata")
-            {
-                ptrs.push(meta as *mut _);
-            }
-            // spec.volumeClaimTemplates[].metadata
-            if let Some(Value::Array(vcts)) = spec.get_mut("volumeClaimTemplates") {
-                for vct in vcts.iter_mut() {
-                    if let Some(vct_obj) = vct.as_object_mut()
-                        && let Some(Value::Object(meta)) = vct_obj.get_mut("metadata")
-                    {
-                        ptrs.push(meta as *mut _);
-                    }
-                }
-            }
-            // spec.jobTemplate.spec.template.metadata (CronJob)
-            if let Some(Value::Object(job_template)) = spec.get_mut("jobTemplate")
-                && let Some(Value::Object(jt_spec)) = job_template.get_mut("spec")
-                && let Some(Value::Object(template)) = jt_spec.get_mut("template")
-                && let Some(Value::Object(meta)) = template.get_mut("metadata")
-            {
-                ptrs.push(meta as *mut _);
-            }
+    for path in paths {
+        if let Some(Value::Object(meta)) = doc.pointer_mut(path) {
+            f(meta);
         }
     }
 
-    // SAFETY: All pointers are derived from non-overlapping sub-fields of `doc`,
-    // and `doc` is borrowed mutably for the entire duration.
-    ptrs.into_iter().map(|p| unsafe { &mut *p }).collect()
+    // volumeClaimTemplates needs special handling (array)
+    if let Some(Value::Array(vcts)) = doc.pointer_mut("/spec/volumeClaimTemplates") {
+        for vct in vcts.iter_mut() {
+            if let Some(vct_obj) = vct.as_object_mut()
+                && let Some(Value::Object(meta)) = vct_obj.get_mut("metadata")
+            {
+                f(meta);
+            }
+        }
+    }
 }
 
 /// Strip fields that K8s adds as defaults.
@@ -357,64 +337,56 @@ fn strip_pod_spec_defaults(obj: &mut Map<String, Value>) {
         .unwrap_or("")
         .to_string();
 
-    let mut pod_spec_ptrs: Vec<*mut Map<String, Value>> = Vec::new();
+    // Wrap the map as Value to use pointer_mut for safe navigation
+    let mut doc = Value::Object(std::mem::take(obj));
 
-    // Deployment/StatefulSet/DaemonSet/Job: spec.template.spec
-    if let Some(Value::Object(spec)) = obj.get_mut("spec") {
-        if let Some(Value::Object(template)) = spec.get_mut("template")
-            && let Some(Value::Object(pod_spec)) = template.get_mut("spec")
-        {
-            pod_spec_ptrs.push(pod_spec as *mut _);
-        }
-        // CronJob: spec.jobTemplate.spec.template.spec
-        if let Some(Value::Object(jt)) = spec.get_mut("jobTemplate")
-            && let Some(Value::Object(jt_spec)) = jt.get_mut("spec")
-            && let Some(Value::Object(template)) = jt_spec.get_mut("template")
-            && let Some(Value::Object(pod_spec)) = template.get_mut("spec")
-        {
-            pod_spec_ptrs.push(pod_spec as *mut _);
+    for path in &[
+        "/spec/template/spec",
+        "/spec/jobTemplate/spec/template/spec",
+    ] {
+        if let Some(Value::Object(pod_spec)) = doc.pointer_mut(path) {
+            strip_pod_spec_fields(pod_spec);
         }
     }
-
-    // Pod directly
     if kind == "Pod"
-        && let Some(Value::Object(spec)) = obj.get_mut("spec")
+        && let Some(Value::Object(pod_spec)) = doc.pointer_mut("/spec")
     {
-        pod_spec_ptrs.push(spec as *mut _);
+        strip_pod_spec_fields(pod_spec);
     }
 
-    for ptr in pod_spec_ptrs {
-        // SAFETY: Non-overlapping sub-fields of obj
-        let pod_spec = unsafe { &mut *ptr };
+    // Restore the map
+    if let Value::Object(map) = doc {
+        *obj = map;
+    }
+}
 
-        pod_spec.remove("dnsPolicy");
-        pod_spec.remove("restartPolicy");
-        pod_spec.remove("schedulerName");
-        pod_spec.remove("terminationGracePeriodSeconds");
-        pod_spec.remove("serviceAccount");
+/// Strip K8s-defaulted fields from a single pod spec.
+fn strip_pod_spec_fields(pod_spec: &mut Map<String, Value>) {
+    pod_spec.remove("dnsPolicy");
+    pod_spec.remove("restartPolicy");
+    pod_spec.remove("schedulerName");
+    pod_spec.remove("terminationGracePeriodSeconds");
+    pod_spec.remove("serviceAccount");
 
-        // Container-level defaults
-        for container_key in &["containers", "initContainers"] {
-            if let Some(Value::Array(containers)) = pod_spec.get_mut(*container_key) {
-                for container in containers.iter_mut() {
-                    if let Some(c) = container.as_object_mut() {
-                        c.remove("terminationMessagePath");
-                        c.remove("terminationMessagePolicy");
-                        c.remove("imagePullPolicy");
+    // Container-level defaults
+    for container_key in &["containers", "initContainers"] {
+        if let Some(Value::Array(containers)) = pod_spec.get_mut(*container_key) {
+            for container in containers.iter_mut() {
+                if let Some(c) = container.as_object_mut() {
+                    c.remove("terminationMessagePath");
+                    c.remove("terminationMessagePolicy");
+                    c.remove("imagePullPolicy");
 
-                        // Probe defaults
-                        for probe_key in &["livenessProbe", "readinessProbe", "startupProbe"] {
-                            if let Some(Value::Object(probe)) = c.get_mut(*probe_key) {
-                                if probe.get("successThreshold").and_then(|v| v.as_u64()) == Some(1)
-                                {
-                                    probe.remove("successThreshold");
-                                }
-                                if let Some(Value::Object(http_get)) = probe.get_mut("httpGet")
-                                    && http_get.get("scheme").and_then(|v| v.as_str())
-                                        == Some("HTTP")
-                                {
-                                    http_get.remove("scheme");
-                                }
+                    // Probe defaults
+                    for probe_key in &["livenessProbe", "readinessProbe", "startupProbe"] {
+                        if let Some(Value::Object(probe)) = c.get_mut(*probe_key) {
+                            if probe.get("successThreshold").and_then(|v| v.as_u64()) == Some(1) {
+                                probe.remove("successThreshold");
+                            }
+                            if let Some(Value::Object(http_get)) = probe.get_mut("httpGet")
+                                && http_get.get("scheme").and_then(|v| v.as_str()) == Some("HTTP")
+                            {
+                                http_get.remove("scheme");
                             }
                         }
                     }

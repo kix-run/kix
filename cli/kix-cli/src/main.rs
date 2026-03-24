@@ -5,8 +5,11 @@ mod output;
 use clap::Parser;
 use cli::{Cli, Command};
 
-/// Validate that a cluster name is a valid Nix attribute identifier.
-/// Rejects file paths, dots, slashes — anything that isn't alphanumeric/hyphens/underscores.
+/// Validate cluster name format.
+///
+/// SECURITY: This is the primary defense against Nix expression injection.
+/// The cluster name is interpolated into Nix eval strings in kix-eval's FFI layer.
+/// Only alphanumeric characters, hyphens, and underscores are safe.
 fn validate_cluster_name(name: &str) -> miette::Result<()> {
     if name.is_empty()
         || !name

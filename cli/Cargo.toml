@@ -64,11 +64,11 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Nix FFI bindings
-nix-bindings-expr = { git = "https://github.com/nixops4/nix-bindings-rust.git" }
-nix-bindings-store = { git = "https://github.com/nixops4/nix-bindings-rust.git" }
-nix-bindings-flake = { git = "https://github.com/nixops4/nix-bindings-rust.git" }
-nix-bindings-util = { git = "https://github.com/nixops4/nix-bindings-rust.git" }
-nix-bindings-fetchers = { git = "https://github.com/nixops4/nix-bindings-rust.git" }
+nix-bindings-expr = { git = "https://github.com/nixops4/nix-bindings-rust.git", rev = "7de15fa26057c8cf0b6178ff166e529c09ea89a7" }
+nix-bindings-store = { git = "https://github.com/nixops4/nix-bindings-rust.git", rev = "7de15fa26057c8cf0b6178ff166e529c09ea89a7" }
+nix-bindings-flake = { git = "https://github.com/nixops4/nix-bindings-rust.git", rev = "7de15fa26057c8cf0b6178ff166e529c09ea89a7" }
+nix-bindings-util = { git = "https://github.com/nixops4/nix-bindings-rust.git", rev = "7de15fa26057c8cf0b6178ff166e529c09ea89a7" }
+nix-bindings-fetchers = { git = "https://github.com/nixops4/nix-bindings-rust.git", rev = "7de15fa26057c8cf0b6178ff166e529c09ea89a7" }
 
 # Internal crates
 kix-eval = { path = "kix-eval" }

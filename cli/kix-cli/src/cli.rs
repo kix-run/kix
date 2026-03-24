@@ -113,7 +113,7 @@ pub struct DiffArgs {
 
 #[derive(clap::Args)]
 pub struct CheckArgs {
-    /// Cluster name
+    /// Cluster to validate
     pub cluster: String,
 }
 
@@ -134,8 +134,8 @@ pub struct DeployArgs {
     #[arg(long, default_value = "stop")]
     pub on_error: OnError,
 
-    /// Timeout for waiting on resource readiness (e.g. "5m", "300s")
-    #[arg(long)]
+    /// Readiness timeout (e.g. "5m", "300s", or bare seconds)
+    #[arg(long, value_parser = validate_timeout)]
     pub timeout: Option<String>,
 
     /// Delete resources on cluster that are not in the manifests
@@ -170,7 +170,7 @@ pub struct GraphArgs {
     /// Cluster name
     pub cluster: String,
 
-    /// Output format for the graph (tree, dot, json)
+    /// Graph output format (tree, dot, json)
     #[arg(long)]
     pub format: Option<GraphFormat>,
 }
@@ -198,17 +198,30 @@ pub enum SnapshotCommand {
 
 #[derive(clap::Args)]
 pub struct SnapshotSaveArgs {
-    /// Directory to save the snapshot
+    /// Directory to save the snapshot to
     pub dir: String,
 }
 
 #[derive(clap::Args)]
 pub struct SnapshotDiffArgs {
-    /// Cluster name to diff against
+    /// Cluster name to diff against the snapshot
     pub cluster: String,
 
-    /// Directory containing the snapshot
+    /// Path to an existing snapshot directory
     pub dir: String,
+}
+
+fn validate_timeout(s: &str) -> Result<String, String> {
+    let err = || format!("invalid timeout: '{s}'. Use '5m', '300s', or a number of seconds");
+    let s = s.trim();
+    if let Some(n) = s.strip_suffix('m') {
+        n.parse::<u64>().map_err(|_| err())?;
+    } else if let Some(n) = s.strip_suffix('s') {
+        n.parse::<u64>().map_err(|_| err())?;
+    } else {
+        s.parse::<u64>().map_err(|_| err())?;
+    }
+    Ok(s.to_string())
 }
 
 #[derive(clap::Args)]

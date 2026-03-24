@@ -10,7 +10,7 @@ use kix_cluster::fetch;
 use kix_cluster::graph::ResourceGraph;
 use kix_cluster::readiness::{self, ReadinessResult};
 use kix_cluster::waves::compute_waves;
-use kix_manifest::types::ResourceId;
+use kix_manifest::types::{CLUSTER_SCOPED, ResourceId};
 
 use crate::cli::{DeployArgs, OnError};
 use crate::output;
@@ -19,10 +19,7 @@ use super::CommandContext;
 
 pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     // 1. Eval cluster
-    let cluster = ctx
-        .evaluator
-        .eval_cluster(&args.cluster)
-        .into_diagnostic()?;
+    let cluster = ctx.eval_cluster_or_suggest(&args.cluster)?;
     let manifest_count = cluster.raw_manifests.len();
 
     if !ctx.global.quiet {
@@ -34,7 +31,9 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     }
 
     if manifest_count == 0 {
-        println!("Nothing to deploy.");
+        if !ctx.global.quiet {
+            println!("Nothing to deploy.");
+        }
         return Ok(());
     }
 
@@ -45,7 +44,9 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     let waves = compute_waves(&graph);
 
     if waves.is_empty() {
-        println!("No resources to deploy.");
+        if !ctx.global.quiet {
+            println!("No resources to deploy.");
+        }
         return Ok(());
     }
 
@@ -93,7 +94,7 @@ async fn run_deploy_async(
         }
         let client = fetch::make_client(global.context.as_deref())
             .await
-            .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
+            .map_err(|e| miette!("failed to connect to cluster: {e}. Check your kubeconfig or try --context <name>"))?;
         let discovery = fetch::discover_resources(&client)
             .await
             .map_err(|e| miette!("API discovery failed: {e}"))?;
@@ -137,27 +138,32 @@ async fn run_deploy_async(
 
     if !global.quiet {
         println!();
+        let prune_str = total_prune.to_string();
         println!(
             "Plan: {} to apply, {} unchanged, {} to prune",
             output::green(&total_apply.to_string()),
             output::dim(&total_skip.to_string()),
             if total_prune > 0 {
-                output::red(&total_prune.to_string())
+                output::red(&prune_str)
             } else {
-                output::dim(&total_prune.to_string())
+                output::dim(&prune_str)
             },
         );
     }
 
     if args.dry_run {
-        println!();
-        println!("{}", output::dim("Dry run — no changes applied."));
+        if !global.quiet {
+            println!();
+            println!("{}", output::dim("Dry run — no changes applied."));
+        }
         return Ok(());
     }
 
     if total_apply == 0 && total_prune == 0 {
-        println!();
-        println!("{}", output::green("Everything up to date."));
+        if !global.quiet {
+            println!();
+            println!("{}", output::green("Everything up to date."));
+        }
         return Ok(());
     }
 
@@ -314,7 +320,7 @@ async fn run_deploy_async(
                     let ar_scope = discovery.iter().find(|(ar, _)| ar.kind == rid.kind);
 
                     if let Some((ar, scope)) = ar_scope {
-                        let ns = if rid.namespace == "_cluster" {
+                        let ns = if rid.namespace == CLUSTER_SCOPED {
                             None
                         } else {
                             Some(rid.namespace.as_str())
@@ -432,7 +438,7 @@ async fn run_deploy_async(
 
                 let api: kube::api::Api<kube::api::DynamicObject> = match scope {
                     kube::discovery::Scope::Namespaced => {
-                        let ns = if rid.namespace == "_cluster" {
+                        let ns = if rid.namespace == CLUSTER_SCOPED {
                             "default"
                         } else {
                             &rid.namespace
@@ -552,13 +558,16 @@ fn print_plan(
         if apply > 0 || skip > 0 || prune > 0 {
             let mut parts = Vec::new();
             if apply > 0 {
-                parts.push(output::green(&format!("{apply} apply")));
+                let s = format!("{apply} apply");
+                parts.push(output::green(&s).into_owned());
             }
             if skip > 0 {
-                parts.push(output::dim(&format!("{skip} skip")));
+                let s = format!("{skip} skip");
+                parts.push(output::dim(&s).into_owned());
             }
             if prune > 0 {
-                parts.push(output::red(&format!("{prune} prune")));
+                let s = format!("{prune} prune");
+                parts.push(output::red(&s).into_owned());
             }
             println!("  {}", parts.join(", "));
         }
@@ -566,15 +575,16 @@ fn print_plan(
 }
 
 fn print_summary(created: usize, configured: usize, unchanged: usize, failed: usize) {
+    let failed_str = failed.to_string();
     println!(
         "Deploy complete: {} created, {} configured, {} unchanged, {} failed",
         output::green(&created.to_string()),
         output::yellow(&configured.to_string()),
         output::dim(&unchanged.to_string()),
         if failed > 0 {
-            output::red(&failed.to_string())
+            output::red(&failed_str)
         } else {
-            output::dim(&failed.to_string())
+            output::dim(&failed_str)
         },
     );
 }

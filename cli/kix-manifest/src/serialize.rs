@@ -4,6 +4,16 @@ use std::path::Path;
 
 use crate::types::ResourceId;
 
+#[derive(thiserror::Error, Debug)]
+pub enum ManifestLoadError {
+    #[error("failed to walk directory: {0}")]
+    WalkDir(#[from] walkdir::Error),
+    #[error("failed to read file: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("failed to parse YAML: {0}")]
+    Yaml(#[from] serde_yml::Error),
+}
+
 /// Recursively remove null values and empty objects from a JSON value (in-place).
 pub fn strip_nulls(value: &mut serde_json::Value) {
     match value {
@@ -80,7 +90,7 @@ pub fn manifests_to_json(manifests: &[serde_json::Value]) -> String {
 /// Skips packageinstance files and README.md.
 pub fn load_manifests_from_dir(
     dir: &Path,
-) -> Result<Vec<(ResourceId, serde_json::Value)>, Box<dyn std::error::Error>> {
+) -> Result<Vec<(ResourceId, serde_json::Value)>, ManifestLoadError> {
     let mut results = Vec::new();
 
     for entry in walkdir::WalkDir::new(dir)
@@ -126,6 +136,17 @@ pub fn load_manifests_from_dir(
             Some(r) => r,
             None => continue, // Skip unparseable filenames
         };
+
+        // Skip oversized files to prevent memory exhaustion
+        let file_meta = entry.metadata()?;
+        if file_meta.len() > 10 * 1024 * 1024 {
+            tracing::warn!(
+                "skipping oversized file ({} bytes): {:?}",
+                file_meta.len(),
+                entry.path()
+            );
+            continue;
+        }
 
         let contents = std::fs::read_to_string(entry.path())?;
         let value: serde_json::Value = serde_yml::from_str(&contents)?;

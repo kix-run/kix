@@ -25,10 +25,7 @@ impl CommandResponse for GraphResponse {
 }
 
 pub fn run(args: &GraphArgs, ctx: &mut CommandContext) -> Result<()> {
-    let cluster = ctx
-        .evaluator
-        .eval_cluster(&args.cluster)
-        .into_diagnostic()?;
+    let cluster = ctx.eval_cluster_or_suggest(&args.cluster)?;
 
     let graph = kix_cluster::graph::ResourceGraph::from_manifests(&cluster.raw_manifests)
         .into_diagnostic()?;
@@ -57,7 +54,7 @@ pub fn run(args: &GraphArgs, ctx: &mut CommandContext) -> Result<()> {
             };
             println!(
                 "{}",
-                output::render(&response, ctx.output_format(OutputFormat::Text))
+                output::render(&response, ctx.output_format(OutputFormat::Text))?
             );
         }
     }
