@@ -3,7 +3,7 @@
 # Jobs:
 # - cargo-test: fast unit tests + clippy + fmt (devenv provides Nix C libs)
 # - integration-test: full CLI tests with Nix FFI evaluation
-# - build: Nix package build + smoke test, Cachix push on main
+# - build: smoke test on Linux and macOS
 
 name: Kix CLI
 
@@ -43,7 +43,8 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes pipe-operators
 
-      - uses: cachix/install-devenv-action@v1
+      - name: Install devenv
+        run: nix profile install nixpkgs#devenv
 
       - name: Unit tests
         run: devenv shell -- bash -c 'cd cli && cargo test --workspace --lib'
@@ -65,7 +66,8 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes pipe-operators
 
-      - uses: cachix/install-devenv-action@v1
+      - name: Install devenv
+        run: nix profile install nixpkgs#devenv
 
       - name: Integration tests
         run: devenv shell -- bash -c "cd cli && cargo test --workspace --test '*'"
@@ -90,7 +92,8 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes pipe-operators
 
-      - uses: cachix/install-devenv-action@v1
+      - name: Install devenv
+        run: nix profile install nixpkgs#devenv
 
       - name: Smoke test
         run: |
