@@ -48,6 +48,22 @@
   build =
     { self, config, clusterConfig }:
     let
+      # CRD refs for cert-manager CRDs — auto-generate .cr/.mkCR builders.
+      # Uses mkCRDRef since the CRDs are managed by the cert-manager package, not us.
+      certificateCRDRef = scope.mkCRDRef {
+        group = "cert-manager.io";
+        kind = "Certificate";
+        plural = "certificates";
+      };
+      clusterIssuerCRDRef = scope.mkCRDRef {
+        group = "cert-manager.io";
+        kind = "ClusterIssuer";
+        plural = "clusterissuers";
+        crdScope = "Cluster";
+      };
+      mkCert = certificateCRDRef.out.mkCR scope;
+      mkIssuerCR = clusterIssuerCRDRef.out.mkCR scope;
+
       mkIssuer =
         name: issuerCfg:
         let
@@ -65,9 +81,7 @@
               { }
           );
         in
-        scope.mkClusterResource {
-          apiVersion = "cert-manager.io/v1";
-          kind = "ClusterIssuer";
+        mkIssuerCR {
           inherit name;
           spec = {
             acme = {
@@ -88,9 +102,7 @@
       # mkCertificate: creates a cert-manager Certificate CR.
       # For non-Ingress TLS (gRPC, internal services, mTLS).
       mkCertificate = { name, hosts, secretName, duration ? null, renewBefore ? null }:
-        scope.mkResource {
-          apiVersion = "cert-manager.io/v1";
-          kind = "Certificate";
+        mkCert {
           inherit name;
           spec = {
             secretName = secretName;

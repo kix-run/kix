@@ -245,6 +245,16 @@ rec {
         in
         lib.hasInfix "test" hookVal;
 
+      # Unpack List resources (helm templates can bundle multiple resources
+      # into a single kind:List document, e.g. additionalPrometheusRules,
+      # additionalServiceMonitors).
+      expandedResources = builtins.concatMap (
+        r:
+        if r != null && builtins.isAttrs r && (r.kind or "") == "List" && builtins.isList (r.items or null)
+        then r.items
+        else [ r ]
+      ) rawResources;
+
       # Filter out null/empty documents (helm template can emit empty YAML docs).
       # Also filter resources missing required fields (kind, metadata.name).
       filteredResources = builtins.filter (
@@ -257,7 +267,7 @@ rec {
         && builtins.isAttrs r.metadata
         && r.metadata ? name
         && !(isTestHook r)
-      ) rawResources;
+      ) expandedResources;
 
       # Wrap each resource into a v2 resource.
       wrappedResources = map (

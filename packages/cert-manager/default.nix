@@ -173,81 +173,12 @@ let
     readOnlyRootFilesystem = true;
   };
 
-  # --- CRD helper ---
-
-  mkCRD =
-    {
-      crdName,
-      group,
-      kind,
-      listKind,
-      plural,
-      singular,
-      crdScope ? "Namespaced",
-      shortNames ? [ ],
-      categories ? [ "cert-manager" ],
-      printerColumns ? [ ],
-    }:
-    scope.mkClusterResource {
-      apiVersion = "apiextensions.k8s.io/v1";
-      kind = "CustomResourceDefinition";
-      name = crdName;
+  # CRD helper — delegates to scope.mkCRD which auto-attaches CR builders on .out.
+  mkCRD = { categories ? [ "cert-manager" ], ... }@args:
+    scope.mkCRD (removeAttrs args [ "categories" ] // {
       labels = controllerLabels;
-      extra = {
-        spec = {
-          inherit group;
-          scope = crdScope;
-          names = {
-            inherit
-              kind
-              listKind
-              plural
-              singular
-              ;
-          }
-          // lib.optionalAttrs (shortNames != [ ]) { inherit shortNames; }
-          // lib.optionalAttrs (categories != [ ]) { inherit categories; };
-          versions = [
-            (
-              {
-                name = "v1";
-                served = true;
-                storage = true;
-                subresources.status = { };
-                schema.openAPIV3Schema = {
-                  type = "object";
-                  # Note: Full OpenAPI validation schema omitted for brevity.
-                  # In production, apply the complete CRD YAML from the upstream
-                  # cert-manager release to get full validation.
-                  properties = {
-                    apiVersion = {
-                      type = "string";
-                    };
-                    kind = {
-                      type = "string";
-                    };
-                    metadata = {
-                      type = "object";
-                    };
-                    spec = {
-                      type = "object";
-                      "x-kubernetes-preserve-unknown-fields" = true;
-                    };
-                    status = {
-                      type = "object";
-                      "x-kubernetes-preserve-unknown-fields" = true;
-                    };
-                  };
-                };
-              }
-              // lib.optionalAttrs (printerColumns != [ ]) {
-                additionalPrinterColumns = printerColumns;
-              }
-            )
-          ];
-        };
-      };
-    };
+      inherit categories;
+    });
 
 in
 let
@@ -435,7 +366,6 @@ in {
   # ============================================================
 
   crdCertificates = mkCRD {
-    crdName = "certificates.cert-manager.io";
     group = "cert-manager.io";
     kind = "Certificate";
     listKind = "CertificateList";
@@ -476,7 +406,6 @@ in {
   };
 
   crdCertificateRequests = mkCRD {
-    crdName = "certificaterequests.cert-manager.io";
     group = "cert-manager.io";
     kind = "CertificateRequest";
     listKind = "CertificateRequestList";
@@ -527,7 +456,6 @@ in {
   };
 
   crdChallenges = mkCRD {
-    crdName = "challenges.acme.cert-manager.io";
     group = "acme.cert-manager.io";
     kind = "Challenge";
     listKind = "ChallengeList";
@@ -563,7 +491,6 @@ in {
   };
 
   crdClusterIssuers = mkCRD {
-    crdName = "clusterissuers.cert-manager.io";
     group = "cert-manager.io";
     kind = "ClusterIssuer";
     listKind = "ClusterIssuerList";
@@ -591,7 +518,6 @@ in {
   };
 
   crdIssuers = mkCRD {
-    crdName = "issuers.cert-manager.io";
     group = "cert-manager.io";
     kind = "Issuer";
     listKind = "IssuerList";
@@ -618,7 +544,6 @@ in {
   };
 
   crdOrders = mkCRD {
-    crdName = "orders.acme.cert-manager.io";
     group = "acme.cert-manager.io";
     kind = "Order";
     listKind = "OrderList";

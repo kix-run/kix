@@ -175,6 +175,14 @@ in
     registryCtlProbe = lib.recursiveUpdate probeBase { httpGet.path = "/api/health"; };
     jobserviceProbe = lib.recursiveUpdate probeBase { httpGet.path = "/api/v1/stats"; };
 
+    # CRD references
+    serviceMonitorCRDRef = scope.mkCRDRef {
+      group = "monitoring.coreos.com";
+      kind = "ServiceMonitor";
+      plural = "servicemonitors";
+    };
+    mkServiceMonitor = serviceMonitorCRDRef.out.mkCR scope;
+
 
   in
   {
@@ -839,9 +847,7 @@ in
     # ServiceMonitor -- Prometheus scrape config
     # ============================================================
 
-    serviceMonitor = if config.metrics.enabled then scope.mkResource {
-      apiVersion = "monitoring.coreos.com/v1";
-      kind = "ServiceMonitor";
+    serviceMonitor = if config.metrics.enabled then mkServiceMonitor {
       name = name;
       spec = {
         endpoints = [ { honorLabels = true; port = "http-metrics"; } ];

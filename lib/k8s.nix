@@ -264,6 +264,39 @@ rec {
   # Canonical ID for a resource (used in graph nodes and edges).
   resourceId = r: "${r.kind}/${r.name}@${nsOf r}";
 
+  # Generate CR builders for a CRD. Used by scope.mkCRD and scope.mkCRDRef.
+  #
+  # Returns { cr, mkCR } — two builder styles for creating custom resources.
+  # Dependency tracking uses `requires` (the CRD/ref is added to the CR's requires list)
+  # rather than string context on apiVersion/kind.
+  #
+  # crdOrRef: the CRD resource or CRD ref (has outPath, used in requires for DAG tracking)
+  # group/kind/version: CRD metadata for constructing the CR's apiVersion + kind
+  # crdScope: "Namespaced" or "Cluster" — determines which scope method mkCR uses
+  mkCRDBuilders = { crdOrRef, group, kind, version, crdScope }:
+    let
+      crApiVersion = "${group}/${version}";
+      crKind = kind;
+
+      # Pipe-friendly transformer: stamps apiVersion + kind onto resource args
+      # and adds the CRD to requires for dependency tracking.
+      cr = args: args // {
+        apiVersion = crApiVersion;
+        kind = crKind;
+        requires = (args.requires or []) ++ [ crdOrRef ];
+      };
+
+      # Full builder: takes consumer scope, auto-routes by CRD scope.
+      # Internally: cr args |> scope.mkResource or scope.mkClusterResource
+      # Curried — `crd.out.mkCR scope` returns an args->resource function.
+      mkCR = consumerScope: args:
+        let enriched = cr args;
+        in if crdScope == "Cluster"
+           then consumerScope.mkClusterResource enriched
+           else consumerScope.mkResource enriched;
+    in
+    { inherit cr mkCR; };
+
   # Creates an Activation CRD — the cluster-level root of the store DAG.
   # References all PackageInstance store paths via string context in spec.instances.
   # `nix-store --tree` / `exportReferencesGraph` on this path gives the full cluster DAG.

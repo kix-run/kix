@@ -93,27 +93,8 @@ rec {
             };
           };
         });
-    in
-    {
-      inherit instanceName namespaceName selectorLabels labelStyle namespaces;
-      namespace = namespaceResource;
 
-      mkResource = scopeMkResource;
-
-      # Return a new scope targeting a different namespace.
-      # Errors if the namespace doesn't exist in the cluster.
-      forNamespace = nsName:
-        let
-          nsRes = namespaces.${nsName}
-            or (throw "scope.forNamespace: namespace '${nsName}' does not exist in the cluster");
-        in
-        mkScope {
-          inherit instanceName namespaces clusterLabels labelStyle;
-          namespaceName = nsName;
-          namespaceResource = nsRes;
-        };
-
-      mkClusterResource =
+      scopeMkClusterResource =
         {
           labels ? { },
           ...
@@ -130,14 +111,134 @@ rec {
           }
         ) // { packageLabels = labels; };
 
-      inherit rbac;
+      # ── CRD support ──────────────────────────────────────────────────
 
-      # Workload resource constructors — thin wrappers around mkResource.
-      # Auto-set apiVersion/kind, auto-wire selector ↔ template labels from scope.selectorLabels.
-      mkDeployment = mkWorkload "apps/v1" "Deployment";
-      mkStatefulSet = mkWorkload "apps/v1" "StatefulSet";
-      mkDaemonSet = mkWorkload "apps/v1" "DaemonSet";
-    };
+      # Create a CRD resource with auto-attached CR builders on .out.
+      # Returns a resource (usable in requires, etc.) with .out.{cr, mkCR}.
+      mkCRD =
+        {
+          group,
+          kind,
+          plural,
+          singular,
+          listKind,
+          version ? "v1",
+          crdScope ? "Namespaced",
+          labels ? { },
+          shortNames ? [ ],
+          categories ? [ ],
+          printerColumns ? [ ],
+          schema ? builtins.trace
+            "mkCRD: no schema provided for ${kind}, using permissive default — consider adding an OpenAPI schema"
+            { type = "object"; "x-kubernetes-preserve-unknown-fields" = true; },
+        }:
+        let
+          crdResource = scopeMkClusterResource {
+            apiVersion = "apiextensions.k8s.io/v1";
+            kind = "CustomResourceDefinition";
+            name = "${plural}.${group}";
+            inherit labels;
+            extra.spec = {
+              inherit group;
+              scope = crdScope;
+              names = {
+                inherit kind listKind plural singular;
+              }
+              // lib.optionalAttrs (shortNames != [ ]) { inherit shortNames; }
+              // lib.optionalAttrs (categories != [ ]) { inherit categories; };
+              versions = [
+                ({
+                  name = version;
+                  served = true;
+                  storage = true;
+                  subresources.status = { };
+                  schema.openAPIV3Schema = {
+                    type = "object";
+                    properties = {
+                      apiVersion = { type = "string"; };
+                      kind = { type = "string"; };
+                      metadata = { type = "object"; };
+                      spec = schema;
+                      status = { type = "object"; "x-kubernetes-preserve-unknown-fields" = true; };
+                    };
+                  };
+                }
+                // lib.optionalAttrs (printerColumns != [ ]) {
+                  additionalPrinterColumns = printerColumns;
+                })
+              ];
+            };
+          };
+
+          builders = k8s.mkCRDBuilders { crdOrRef = crdResource; inherit group kind version crdScope; };
+        in
+        crdResource // {
+          out = crdResource.out // builders;
+        };
+
+      # Create a CRD reference for externally-managed CRDs (Helm, pre-existing).
+      # Has its own store path for dependency tracking but produces no deployable manifest.
+      # Same .out.{cr, mkCR} interface as mkCRD.
+      mkCRDRef =
+        {
+          group,
+          kind,
+          plural,
+          version ? "v1",
+          crdScope ? "Namespaced",
+          requires ? [ ],
+        }:
+        let
+          refPath = builtins.toFile
+            "crd-ref-${kind}"
+            (builtins.toJSON { inherit group kind version crdScope; });
+          ref = {
+            _type = "crd-ref";
+            outPath = refPath;
+            inherit requires;
+            out = {
+              name = "${plural}.${group}";
+            } // builders;
+          };
+          builders = k8s.mkCRDBuilders { crdOrRef = ref; inherit group kind version crdScope; };
+        in
+        ref;
+
+      # Scope-side CRD builder: reads the CRD's scope and auto-routes.
+      # Uses scopeObj (lazy self-reference) so crd.out.mkCR gets the full scope.
+      mkCR = crd: args: crd.out.mkCR scopeObj args;
+
+      # The scope object — self-referencing via Nix laziness so mkCR can pass
+      # the full scope to crd.out.mkCR.
+      scopeObj = {
+        inherit instanceName namespaceName selectorLabels labelStyle namespaces;
+        namespace = namespaceResource;
+
+        mkResource = scopeMkResource;
+
+        forNamespace = nsName:
+          let
+            nsRes = namespaces.${nsName}
+              or (throw "scope.forNamespace: namespace '${nsName}' does not exist in the cluster");
+          in
+          mkScope {
+            inherit instanceName namespaces clusterLabels labelStyle;
+            namespaceName = nsName;
+            namespaceResource = nsRes;
+          };
+
+        mkClusterResource = scopeMkClusterResource;
+
+        inherit rbac;
+
+        mkDeployment = mkWorkload "apps/v1" "Deployment";
+        mkStatefulSet = mkWorkload "apps/v1" "StatefulSet";
+        mkDaemonSet = mkWorkload "apps/v1" "DaemonSet";
+
+        inherit mkCRD mkCRDRef mkCR;
+      };
+    in
+    scopeObj;
 
   # Create an import marker — used as the `package` field for imported instances.
   # `from`: optional package function to derive out from (via lazy eval).

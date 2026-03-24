@@ -37,51 +37,10 @@ let
   };
 
   # --- CRD helper ---
-  # Structural minimum: group, names, scope, versions with a served/storage
-  # marker and an empty openAPIV3Schema.  Full schemas are enforced by the
+  # Thin wrapper around scope.mkCRD.  Full schemas are enforced by the
   # operator's webhook; omitting them here keeps the package readable.
-  mkCrd =
-    {
-      crdName,
-      singular,
-      plural,
-      kind,
-      shortNames ? [ ],
-      crdScope ? "Namespaced",
-    }:
-    scope.mkClusterResource {
-      apiVersion = "apiextensions.k8s.io/v1";
-      kind = "CustomResourceDefinition";
-      name = "${plural}.stackgres.io";
-      spec = {
-        group = "stackgres.io";
-        names = {
-          inherit kind singular plural;
-        }
-        // lib.optionalAttrs (shortNames != [ ]) {
-          inherit shortNames;
-        };
-        scope = crdScope;
-        versions = [
-          {
-            name = "v1";
-            served = true;
-            storage = true;
-            schema.openAPIV3Schema = {
-              type = "object";
-              properties.spec = {
-                type = "object";
-                "x-kubernetes-preserve-unknown-fields" = true;
-              };
-              properties.status = {
-                type = "object";
-                "x-kubernetes-preserve-unknown-fields" = true;
-              };
-            };
-          }
-        ];
-      };
-    };
+  mkCrd = { crdName ? null, ... }@args:
+    scope.mkCRD (removeAttrs args [ "crdName" ]);
 
   # All SG resource types that need webhooks
   webhookResources = [
@@ -666,82 +625,92 @@ in
     # the operator webhook at admission time.
 
     crdSGCluster = mkCrd {
-      crdName = "sgclusters";
+      group = "stackgres.io";
       singular = "sgcluster";
       plural = "sgclusters";
       kind = "SGCluster";
+      listKind = "SGClusterList";
       shortNames = [ "sgclu" ];
     };
 
     crdSGInstanceProfile = mkCrd {
-      crdName = "sginstanceprofiles";
+      group = "stackgres.io";
       singular = "sginstanceprofile";
       plural = "sginstanceprofiles";
       kind = "SGInstanceProfile";
+      listKind = "SGInstanceProfileList";
       shortNames = [ "sginp" ];
     };
 
     crdSGPostgresConfig = mkCrd {
-      crdName = "sgpgconfigs";
+      group = "stackgres.io";
       singular = "sgpgconfig";
       plural = "sgpgconfigs";
       kind = "SGPostgresConfig";
+      listKind = "SGPostgresConfigList";
       shortNames = [ "sgpgc" ];
     };
 
     crdSGPoolingConfig = mkCrd {
-      crdName = "sgpoolconfigs";
+      group = "stackgres.io";
       singular = "sgpoolconfig";
       plural = "sgpoolconfigs";
       kind = "SGPoolingConfig";
+      listKind = "SGPoolingConfigList";
       shortNames = [ "sgpoc" ];
     };
 
     crdSGBackupConfig = mkCrd {
-      crdName = "sgbackupconfigs";
+      group = "stackgres.io";
       singular = "sgbackupconfig";
       plural = "sgbackupconfigs";
       kind = "SGBackupConfig";
+      listKind = "SGBackupConfigList";
       shortNames = [ "sgbac" ];
     };
 
     crdSGObjectStorage = mkCrd {
-      crdName = "sgobjectstorages";
+      group = "stackgres.io";
       singular = "sgobjectstorage";
       plural = "sgobjectstorages";
       kind = "SGObjectStorage";
+      listKind = "SGObjectStorageList";
       shortNames = [ "sgobs" ];
     };
 
     crdSGDistributedLogs = mkCrd {
-      crdName = "sgdistributedlogs";
+      group = "stackgres.io";
       singular = "sgdistributedlogs";
       plural = "sgdistributedlogs";
       kind = "SGDistributedLogs";
+      listKind = "SGDistributedLogsList";
       shortNames = [ "sgdil" ];
     };
 
     crdSGShardedCluster = mkCrd {
-      crdName = "sgshardedclusters";
+      group = "stackgres.io";
       singular = "sgshardedcluster";
       plural = "sgshardedclusters";
       kind = "SGShardedCluster";
+      listKind = "SGShardedClusterList";
       shortNames = [ "sgshr" ];
     };
 
     crdSGScript = mkCrd {
-      crdName = "sgscripts";
+      group = "stackgres.io";
       singular = "sgscript";
       plural = "sgscripts";
       kind = "SGScript";
+      listKind = "SGScriptList";
       shortNames = [ "sgscr" ];
     };
 
     crdSGDbOps = mkCrd {
-      crdName = "sgdbops";
+      group = "stackgres.io";
       singular = "sgdbops";
       plural = "sgdbops";
       kind = "SGDbOps";
+      listKind = "SGDbOpsList";
       shortNames = [ "sgdbo" ];
     };
 

@@ -32,6 +32,7 @@
 ### Validation
 
 - [ ] Deep-check package-level dependencies — verify the package root CRD is pulled in properly
+- [ ] Rethink package CR (PackageInstance) wiring and store path visibility — currently `mkCRDRef` creates standalone `crd-ref-*` store paths with no back-reference to the providing package's PackageInstance. Cross-package CRD dependencies don't show up in the Nix store DAG. Need to decide: should the providing package's store path be threaded through the CRD ref context, or should cross-package deps be tracked at a different level?
 
 ### Open design questions
 - [ ] Package root as common leaf dependency or root

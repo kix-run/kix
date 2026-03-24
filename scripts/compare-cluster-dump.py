@@ -78,12 +78,16 @@ def _is_runtime_resource(doc: dict) -> bool:
     - Helm release secrets (sh.helm.release.v1.*)
     - Velero backup artifacts (velero.io/backup-name annotation)
     - Resources in kube-public / kube-node-lease namespaces
+    - RKE2 distribution resources (metrics-server, snapshot-controller, cilium helm configs)
+    - StatefulSet-generated PVCs (named {template}-{sts}-{ordinal})
+    - K8s extension-apiserver-authentication ConfigMap
     """
     metadata = doc.get("metadata", {})
     kind = doc.get("kind", "").lower()
     name = metadata.get("name", "")
     labels = metadata.get("labels", {}) or {}
     annotations = metadata.get("annotations", {}) or {}
+    ns = metadata.get("namespace", "")
 
     # generateName means a controller created this with a random suffix
     if metadata.get("generateName"):
@@ -102,10 +106,12 @@ def _is_runtime_resource(doc: dict) -> bool:
         return True
     if kind == "configmap" and name == "kube-root-ca.crt":
         return True
+    # K8s auto-creates this in kube-system for webhook auth delegation.
+    if kind == "configmap" and name == "extension-apiserver-authentication":
+        return True
 
     # Bare ServiceAccounts in kube-system (no labels, no annotations) are
     # auto-created by kube-controller-manager for built-in controllers.
-    ns = metadata.get("namespace", "")
     if (kind == "serviceaccount" and ns == "kube-system"
             and not labels and not annotations):
         return True
@@ -113,6 +119,41 @@ def _is_runtime_resource(doc: dict) -> bool:
     # Helm internal bookkeeping
     if kind == "secret" and name.startswith("sh.helm.release.v1."):
         return True
+
+    # ---------------------------------------------------------------
+    # Operator-generated secrets
+    # ---------------------------------------------------------------
+    if kind == "secret":
+        # Legacy ServiceAccount token secrets (auto-created by K8s < 1.24,
+        # or by the token-controller for SAs that request them).
+        # Evidence: type field is kubernetes.io/service-account-token.
+        secret_type = doc.get("type", "")
+        if secret_type == "kubernetes.io/service-account-token":
+            return True
+
+        # cert-manager managed secrets (webhook CA, ACME account keys).
+        # Evidence: label app.kubernetes.io/managed-by: cert-manager.
+        if labels.get("app.kubernetes.io/managed-by") == "cert-manager":
+            return True
+
+        # Infisical operator output secrets. The operator creates two secrets
+        # per InfisicalSecret CR: "infisical-managed-secret" (raw sync output)
+        # and "managed-secret" (the final projected secret).
+        # Evidence: these secrets reference infisical in their annotations/data.
+        if name in ("infisical-managed-secret", "managed-secret"):
+            return True
+
+        # StackGres init-script secrets. The operator generates these from
+        # SGScript CRs — they contain the rendered SQL init scripts.
+        # Evidence: naming pattern {cluster}-init-script, always paired with
+        # an sgscript CR of the same name in the cluster dump.
+        if name.endswith("-init-script"):
+            return True
+
+        # nginx ingress admission webhook secrets (auto-generated TLS certs).
+        # Evidence: created by the ingress controller admission webhook setup.
+        if name.endswith("-admission") and ns in ("nginx-system", "nginx"):
+            return True
 
     # Velero backup artifacts
     if "velero.io/backup-name" in annotations:
@@ -122,17 +163,119 @@ def _is_runtime_resource(doc: dict) -> bool:
     if ns in _RUNTIME_NAMESPACES:
         return True
 
+    # ---------------------------------------------------------------
+    # RKE2 distribution resources
+    # ---------------------------------------------------------------
+    # RKE2 bundles metrics-server, snapshot-controller, cilium, and
+    # runtime classes as internal Helm charts. These resources are
+    # managed by RKE2, not by kix.
+    #
+    # Evidence: annotations like meta.helm.sh/release-name: rke2-*,
+    # names matching helm-rke2-*, chart-content-rke2-*, chart-values-rke2-*.
+    # Verified via cluster dump inspection.
+    release_name = annotations.get("meta.helm.sh/release-name", "")
+    if release_name.startswith("rke2-"):
+        return True
+    # RKE2 Helm controller creates ServiceAccounts, ConfigMaps, and Secrets
+    # for its internal charts with predictable name prefixes.
+    if ns == "kube-system" and (
+        name.startswith("helm-rke2-")
+        or name.startswith("chart-content-rke2-")
+        or name.startswith("chart-values-rke2-")
+        or name.startswith("rke2-")
+    ):
+        return True
+    # RKE2 Helm controller ClusterRoleBindings for its service accounts.
+    if kind == "clusterrolebinding" and name.startswith("helm-kube-system-rke2-"):
+        return True
+    # RKE2 node password secrets (created during node join).
+    if kind == "secret" and ns == "kube-system" and name.endswith(".node-password.rke2"):
+        return True
+    # objectset.rio.cattle.io labels indicate resources managed by RKE2's
+    # internal controller (cattle agent / fleet).
+    if annotations.get("objectset.rio.cattle.io/owner-name", "").startswith("rke2-"):
+        return True
+    # Cilium CRDs and cluster-scoped resources are deployed by RKE2's
+    # bundled cilium, not by kix.  The cilium-rke2 kix package only
+    # generates a HelmChartConfig (a configuration overlay), not the
+    # operator itself.
+    # Evidence: cilium CRDs have no helm annotations — they're created
+    # by the cilium agent DaemonSet at startup.
+    if kind == "customresourcedefinition" and name.endswith(".cilium.io"):
+        return True
+    # Hubble resources (UI, relay, metrics) are part of RKE2's cilium.
+    if ns == "kube-system" and name.startswith("hubble"):
+        return True
+    # RKE2 cattle.io CRDs (HelmChart, HelmChartConfig, EtcdSnapshotFile, Addon).
+    _RKE2_CRD_DOMAINS = {"k3s.cattle.io", "helm.cattle.io"}
+    if kind == "customresourcedefinition":
+        crd_domain = ".".join(name.split(".")[-2:]) if "." in name else ""
+        if crd_domain in _RKE2_CRD_DOMAINS:
+            return True
+    # Volume snapshot CRDs are deployed by RKE2's snapshot-controller.
+    _SNAPSHOT_CRD_DOMAINS = {"snapshot.storage.k8s.io", "groupsnapshot.storage.k8s.io"}
+    if kind == "customresourcedefinition":
+        crd_domain = ".".join(name.split(".")[-3:]) if name.count(".") >= 2 else ""
+        if crd_domain in _SNAPSHOT_CRD_DOMAINS:
+            return True
+
+    # ---------------------------------------------------------------
+    # StatefulSet-generated PVCs
+    # ---------------------------------------------------------------
+    # K8s creates PVCs from StatefulSet volumeClaimTemplates automatically.
+    # Their names follow the pattern: {vctName}-{stsName}-{ordinal}
+    # (e.g. data-loki-write-0, valkey-data-valkey-shopfront-prod-node-2).
+    #
+    # We require TWO conditions to avoid false positives:
+    # 1. Name ends with -{digit} (the StatefulSet ordinal suffix)
+    # 2. Has a label from a known workload label scheme, proving it was
+    #    created by a StatefulSet controller rather than manually.
+    #
+    # Evidence: cluster dump PVCs carry StatefulSet selector labels:
+    #   - valkey PVCs: app.kubernetes.io/instance, app.kubernetes.io/name
+    #   - loki PVCs:   app.kubernetes.io/component, app.kubernetes.io/name
+    #   - StackGres PVCs: stackgres.io/cluster-name (+ ownerRefs, caught earlier)
+    #   - prometheus PVCs: operator.prometheus.io/name
+    import re
+    _STS_PVC_LABELS = {
+        "app.kubernetes.io/name",           # Helm-standard: valkey, loki, etc.
+        "app.kubernetes.io/instance",       # Helm-standard: instance name
+        "stackgres.io/cluster-name",        # StackGres PVCs
+        "operator.prometheus.io/name",      # Prometheus operator PVCs
+        "app",                              # Legacy label used by some charts
+    }
+    if kind == "persistentvolumeclaim" and re.search(r"-\d+$", name):
+        if labels.keys() & _STS_PVC_LABELS:
+            return True
+
     return False
 
 
 def _is_controller_owned(doc: dict) -> bool:
     """Check if a resource is owned by a controller (auto-created, not user-deployed).
 
-    Detects two patterns:
+    Detects three patterns:
     - ownerReferences with controller=true (standard K8s ownership)
     - cert-manager.io annotations indicating controller management
+    - app.kubernetes.io/managed-by label indicating operator management
+      (e.g. virt-operator creates all kubevirt/* resources with this label
+      but does NOT set ownerReferences on them)
     """
     metadata = doc.get("metadata", {})
+    labels = metadata.get("labels", {}) or {}
+
+    # managed-by label: operators like virt-operator, cilium-operator set this
+    # to indicate they control the resource's lifecycle.
+    # Evidence: kubevirt/* resources all have managed-by: virt-operator with
+    # NO ownerReferences — verified via cluster dump inspection.
+    managed_by = labels.get("app.kubernetes.io/managed-by", "")
+    _OPERATOR_MANAGERS = {
+        "virt-operator",       # KubeVirt: creates virt-api, virt-controller, etc.
+        "cdi-operator",        # CDI: creates cdi-apiserver, cdi-uploadproxy, etc.
+    }
+    if managed_by in _OPERATOR_MANAGERS:
+        return True
+
     owner_refs = metadata.get("ownerReferences", [])
     if any(ref.get("controller") is True for ref in owner_refs if isinstance(ref, dict)):
         return True
@@ -173,17 +316,32 @@ def load_resources(directory: Path, normalizer, service: str | None = None,
         name_part = stem.rsplit("-", 1)[0] if "-" in stem else stem
         return name_part == service or name_part.startswith(service + "-")
 
-    def _load(f: Path, key: str):
-        with open(f) as fh:
-            doc = yaml.safe_load(fh)
-        if doc is None:
-            return
+    def _ingest(doc: dict, key: str):
+        """Add a single resource after filtering."""
         if skip_controller_owned and _is_controller_owned(doc):
             return
         if skip_runtime and _is_runtime_resource(doc):
             return
         doc = normalizer(doc)
         resources[key] = doc
+
+    def _load(f: Path, key: str):
+        with open(f) as fh:
+            doc = yaml.safe_load(fh)
+        if doc is None:
+            return
+        # Unpack List resources (e.g. helm-generated bundled PrometheusRules)
+        # into individual items so they match cluster dump entries one-to-one.
+        if doc.get("kind") == "List" and isinstance(doc.get("items"), list):
+            for item in doc["items"]:
+                item_kind = item.get("kind", "Unknown").lower()
+                item_meta = item.get("metadata", {})
+                item_ns = item_meta.get("namespace", "_cluster")
+                item_name = item_meta.get("name", "unknown")
+                item_key = f"{item_ns}/{item_name}-{item_kind}"
+                _ingest(item, item_key)
+            return
+        _ingest(doc, key)
 
     # Try nested layout first (subdirectories = namespaces)
     subdirs = [d for d in sorted(directory.iterdir()) if d.is_dir()]

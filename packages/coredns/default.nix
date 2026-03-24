@@ -142,6 +142,13 @@ in
 
     saName = if config.serviceAccount.name != null then config.serviceAccount.name else scope.instanceName;
 
+    serviceMonitorCRDRef = scope.mkCRDRef {
+      group = "monitoring.coreos.com";
+      kind = "ServiceMonitor";
+      plural = "servicemonitors";
+    };
+    mkServiceMonitor = serviceMonitorCRDRef.out.mkCR scope;
+
   in
   {
 
@@ -374,9 +381,7 @@ in
     # --- Optional: ServiceMonitor ---
     serviceMonitor =
       if config.prometheus.monitor.enabled or false then
-        scope.mkClusterResource {
-          apiVersion = "monitoring.coreos.com/v1";
-          kind = "ServiceMonitor";
+        mkServiceMonitor {
           name = "${scope.instanceName}";
           labels = commonLabels;
           spec = {
