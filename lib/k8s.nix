@@ -150,8 +150,32 @@ rec {
 
       manifestJson = builtins.toJSON rawManifest;
 
-      # Collect store contexts from requires and extraDeps so they influence
-      # the content-addressed store path (Nix store DAG edges).
+      # Sanitize the name for use in store paths (colons and other special
+      # characters are not allowed in Nix store path names).
+      sanitizedName = builtins.replaceStrings [ ":" ] [ "_" ] name;
+
+      # --- Two-phase identity ---
+      #
+      # Phase 1: _contentPath — determined by manifest content only.
+      # This is what `out` values carry. Consumers that reference out.name
+      # get a dependency on _contentPath, NOT on requires. This breaks
+      # eval-time cycles when requires edges oppose manifest-context edges
+      # in the same fixpoint (e.g. Service requires StatefulSet while
+      # StatefulSet's manifest refs Service.out.name).
+      #
+      # Phase 2: _identityPath — wraps _contentPath + requires/extraDeps.
+      # This is the resource's outPath. The Nix store DAG from _identityPath
+      # includes _contentPath (with manifest deps) AND all requires' store
+      # paths. `nix-store --tree` on _identityPath shows the full picture.
+      # The PI references _identityPath (via outPath) for complete closures.
+
+      _contentPath = builtins.toFile
+        "k8s-${kind}-${nsKey}-${sanitizedName}"
+        manifestJson;
+
+      _contentPathPlain = builtins.unsafeDiscardStringContext _contentPath;
+
+      # Collect store contexts from requires and extraDeps.
       allDeps = requires ++ extraDeps;
       depContexts = builtins.foldl' (acc: dep:
         if builtins.isAttrs dep && dep ? outPath then
@@ -159,28 +183,22 @@ rec {
         else acc
       ) {} allDeps;
 
-      # Append dep contexts to manifestJson
-      manifestJsonWithDeps = builtins.appendContext manifestJson depContexts;
+      # If no structural deps, identity = content (single store path).
+      # Otherwise, create a wrapper path that references content + deps.
+      _identityPath =
+        if allDeps == [] then _contentPath
+        else builtins.toFile
+          "k8s-dep-${kind}-${nsKey}-${sanitizedName}"
+          (builtins.appendContext "${_contentPath}" depContexts);
 
-      # Sanitize the name for use in store paths (colons and other special
-      # characters are not allowed in Nix store path names).
-      sanitizedName = builtins.replaceStrings [ ":" ] [ "_" ] name;
-
-      # Content-addressed store path. Hash depends on this resource's content
-      # and all referenced resources (their store paths via string context).
-      _identityPath = builtins.toFile
-        "k8s-${kind}-${nsKey}-${sanitizedName}"
-        manifestJsonWithDeps;
-
-      # Plain path string without context (for use as attr keys, comparisons)
       _identityPathPlain = builtins.unsafeDiscardStringContext _identityPath;
 
-      # Context containing this resource's store path
+      _contentCtx = builtins.getContext "${_contentPath}";
       _identityCtx = builtins.getContext "${_identityPath}";
 
-      # Attach this resource's store path context to a plain value
+      # out values carry content-only context (phase 1).
       attachCtx = value:
-        builtins.appendContext (toString value) _identityCtx;
+        builtins.appendContext (toString value) _contentCtx;
 
       # Auto-derive selector: spec.selector.matchLabels → metadata.labels → null
       autoSelector =
@@ -196,7 +214,7 @@ rec {
         fqdn =
           if isClusterScoped then attachCtx name
           else attachCtx "${name}.${nsKey}.svc.${clusterDomain}";
-        identityHash = attachCtx (extractStoreHash _identityPathPlain);
+        identityHash = attachCtx (extractStoreHash _contentPathPlain);
       } // lib.optionalAttrs (autoSelector != null) {
         selector = autoSelector;
       };
@@ -216,24 +234,28 @@ rec {
         _type = "k8s-resource";
         inherit apiVersion kind name namespace requires extraDeps;
 
-        # The store path. ${resource} still embeds this path for backward compat,
-        # but prefer out.name for manifest values.
+        # Content-only path (phase 1) — for matching manifest context references.
+        inherit _contentPathPlain;
+
+        # Full identity (phase 2) — includes manifest deps + requires.
         outPath = _identityPath;
 
-        # Named outputs — auto-derived + user-defined, all with context.
+        # Named outputs — carry content-only context (phase 1).
         out = mergedOut;
 
         # Raw manifest (real names, dep contexts on strings, no self-context).
-        # Used internally for serialization, hash computation, dep detection.
         inherit rawManifest;
 
-        # Manifest re-export with this resource's own context on all strings.
-        # Use for cross-resource field access: self.deployment.manifest.spec.X
-        manifest = attachCtxDeep _identityCtx rawManifest;
+        # Manifest re-export with content-only context on all strings.
+        manifest = attachCtxDeep _contentCtx rawManifest;
 
-        # Registry entry: maps store path (plain, no context) → resource metadata.
+        # Registry entries: map BOTH content path and identity path to self,
+        # so lookups work regardless of which path is used (manifest context
+        # references _contentPaths, while outPath/requires reference _identityPaths).
         registryEntry = {
           ${_identityPathPlain} = { inherit apiVersion kind name; namespace = nsKey; resource = self; };
+        } // lib.optionalAttrs (_contentPathPlain != _identityPathPlain) {
+          ${_contentPathPlain} = { inherit apiVersion kind name; namespace = nsKey; resource = self; };
         };
       };
     in
@@ -256,6 +278,11 @@ rec {
       // lib.optionalAttrs (packageRequires != []) {
         "kix.dev/package-requires" = builtins.concatStringsSep "," (map (r: "${r.kind}/${r.out.name}") packageRequires);
       };
+      # PI requires all referenced resources so its _identityPath (phase 2)
+      # transitively includes their full closures (content + requires chains).
+      # Annotations carry _contentPath context (phase 1) for readability;
+      # requires carries _identityPath context for the complete store DAG.
+      requires = [ mainResource ] ++ inverseDeps ++ packageRequires;
       extra.spec = {
         inherit instanceName namespaceName;
       } // lib.optionalAttrs (version != null) { inherit version; };

@@ -869,10 +869,14 @@ rec {
           queue = forwardRoots;
         };
 
+      # Include both _identityPath (outPath) and _contentPath for each resource,
+      # so manifest context lookups (_contentPaths) and outPath lookups (_identityPaths)
+      # both match. See two-phase identity in k8s.nix.
       forwardPaths = builtins.listToAttrs (
-        map (r: {
-          name = builtins.unsafeDiscardStringContext r.outPath;
-          value = true;
+        builtins.concatMap (r: [
+          { name = builtins.unsafeDiscardStringContext r.outPath; value = true; }
+        ] ++ lib.optional (r ? _contentPathPlain) {
+          name = r._contentPathPlain; value = true;
         }) forwardClosure
       );
 
@@ -1032,16 +1036,18 @@ rec {
       reachablePaths =
         let
           inverseSet = builtins.listToAttrs (
-            map (r: {
-              name = builtins.unsafeDiscardStringContext r.outPath;
-              value = true;
+            builtins.concatMap (r: [
+              { name = builtins.unsafeDiscardStringContext r.outPath; value = true; }
+            ] ++ lib.optional (r ? _contentPathPlain) {
+              name = r._contentPathPlain; value = true;
             }) uniqueInverseDeps
           );
           inverseFwdClosure = builtins.concatMap (r: getForwardDeps r) uniqueInverseDeps;
           inverseFwdSet = builtins.listToAttrs (
-            map (r: {
-              name = builtins.unsafeDiscardStringContext r.outPath;
-              value = true;
+            builtins.concatMap (r: [
+              { name = builtins.unsafeDiscardStringContext r.outPath; value = true; }
+            ] ++ lib.optional (r ? _contentPathPlain) {
+              name = r._contentPathPlain; value = true;
             }) inverseFwdClosure
           );
         in

@@ -28,6 +28,7 @@ in
     pkgs.graphviz
     pkgs.lefthook
     pkgs.pkg-config
+    pkgs.treefmt
   ]
   ++ nixLibs;
 

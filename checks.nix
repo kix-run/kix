@@ -271,7 +271,29 @@ rec {
           ]
       ) (builtins.filter (r: r.kind == "HorizontalPodAutoscaler") resources);
 
-      # --- 6. No duplicate (kind, namespace, name) tuples ---
+      # --- 6. StatefulSet serviceName → headless Service validation ---
+      # spec.serviceName must match a headless Service (clusterIP: None) in the
+      # same namespace. A mismatch silently breaks per-pod DNS identity.
+      serviceNameFailures =
+        let
+          headlessServiceNames = builtins.listToAttrs (
+            builtins.concatMap (r:
+              if r.kind == "Service" && (r.spec.clusterIP or "") == "None" then
+                [{ name = "${r.metadata.namespace or "cluster-scoped"}/${r.metadata.name}"; value = true; }]
+              else []
+            ) resources
+          );
+        in
+        builtins.concatMap (sts:
+          let
+            svcName = sts.spec.serviceName or null;
+            ns = sts.metadata.namespace or "cluster-scoped";
+          in
+          if svcName == null || headlessServiceNames ? "${ns}/${svcName}" then []
+          else [ "StatefulSet ${ns}/${sts.metadata.name} serviceName '${svcName}' does not match any headless Service (clusterIP: None) in the same namespace" ]
+        ) (builtins.filter (r: r.kind == "StatefulSet") resources);
+
+      # --- 7. No duplicate (kind, namespace, name) tuples ---
 
       resourceIds = map resourceId resources;
       uniqueIds = lib.unique resourceIds;
@@ -336,6 +358,7 @@ rec {
         ++ volumeRefFailures
         ++ serviceFailures
         ++ hpaFailures
+        ++ serviceNameFailures
         ++ duplicateFailures
         ++ managedByFailures
         ++ selectorConsistencyFailures;

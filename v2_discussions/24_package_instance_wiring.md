@@ -122,32 +122,38 @@ metadata:
 
 These annotations are purely cosmetic — they do not exist in the Nix store and do not affect any hash computation.
 
-## Bug fix: `requires` creates store DAG edges
+## Bug fix: `requires` creates store DAG edges (two-phase identity)
 
-Prior to this design, the `requires` field on resources did NOT create store DAG edges. It was stored on the Nix object but never entered `rawManifest` or the `builtins.toFile` call. This meant structural dependencies (e.g., CR → CRD via `requires`) were invisible to the Merkle DAG.
+The `requires` field creates real Nix store DAG edges at the individual resource level. Each resource has a **two-phase identity** to avoid infinite recursion when `requires` edges oppose manifest-context edges in the same fixpoint:
 
-**Fix (in `lib/k8s.nix`):** Before computing the content-addressed store path, collect store contexts from all `requires` and `extraDeps` entries and append them to the manifest JSON string:
+- **Phase 1 (`_contentPath`):** store path from manifest content only. `out` values carry this context. Consumers that use `dep.out.name` get a dependency on `_contentPath`.
+- **Phase 2 (`_identityPath`):** wraps `_contentPath` + store contexts from all `requires`/`extraDeps`. This is the resource's `outPath`. If no structural deps exist, `_identityPath = _contentPath` (zero overhead).
+
+The cycle breaks because manifest-direction dependencies resolve at phase 1, while requires-direction dependencies resolve at phase 2. Phase 1 never depends on phase 2.
 
 ```nix
-allDeps = requires ++ extraDeps;
+_contentPath = builtins.toFile "k8s-${kind}-${nsKey}-${sanitizedName}" manifestJson;
+
 depContexts = builtins.foldl' (acc: dep:
   if builtins.isAttrs dep && dep ? outPath then
     acc // builtins.getContext "${dep}"
   else acc
-) {} allDeps;
+) {} (requires ++ extraDeps);
 
-manifestJsonWithDeps = builtins.appendContext manifestJson depContexts;
-
-_identityPath = builtins.toFile
-  "k8s-${kind}-${nsKey}-${sanitizedName}"
-  manifestJsonWithDeps;
+_identityPath =
+  if allDeps == [] then _contentPath
+  else builtins.toFile "k8s-dep-${kind}-${nsKey}-${sanitizedName}"
+    (builtins.appendContext "${_contentPath}" depContexts);
 ```
 
-This ensures all `requires` edges are real Merkle DAG edges. Combined with the PI wiring, transitive dependency chains are complete:
+The registry maps both paths to the resource. `forwardPaths` and `reachablePaths` in `evaluateInstance` include both paths for correct inverse-dep detection.
+
+The PI's `requires` includes `[ mainResource ] ++ inverseDeps ++ packageRequires`, ensuring its `_identityPath` transitively covers the full package closure including all structural deps.
 
 ```
-Deployment(immich) → Service(valkey) → StatefulSet(valkey) → ValkeyCR → CRD(cert-manager)
-                                                                        [via requires, now a store edge]
+Deployment(immich) → Service(valkey)._contentPath [manifest context, phase 1]
+Service(valkey)._identityPath → StatefulSet(valkey)._identityPath [requires, phase 2]
+PI(valkey)._identityPath → Service(valkey)._identityPath [PI requires, phase 2]
 ```
 
 ## Rejected alternatives

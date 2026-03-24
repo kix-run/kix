@@ -1125,7 +1125,7 @@
         name = "${name}-${topologySuffix}";
         labels = commonLabels;
         spec = {
-          serviceName = self.headlessService.out.name;
+          serviceName = builtins.unsafeDiscardStringContext self.headlessService.out.name;
           replicas = config.replicaCount;
           podManagementPolicy = config.podManagementPolicy;
           updateStrategy = {

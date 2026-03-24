@@ -65,6 +65,9 @@
           # Checks library (schema + cross-resource validation).
           kixChecks = import ./checks.nix { inherit pkgs lib; };
 
+          # PI wiring invariant checks.
+          piChecks = import ./pi-checks.nix { inherit lib; };
+
           # Auto-discover packages from packages/ directory.
           packages' =
             let
@@ -168,6 +171,12 @@
               assert kixChecks.validateManifestSet "cluster-${cname}" cluster.rawManifests;
               pkgs.runCommand "validate-cluster-${cname}" { } ''
                 echo "Cross-resource validation passed for cluster-${cname}."
+                touch $out
+              '';
+            "pi-wiring-cluster-${cname}" =
+              assert piChecks.validatePIWiring "cluster-${cname}" cluster;
+              pkgs.runCommand "pi-wiring-cluster-${cname}" { } ''
+                echo "PI wiring validation passed for cluster-${cname}."
                 touch $out
               '';
           }) clusters;
