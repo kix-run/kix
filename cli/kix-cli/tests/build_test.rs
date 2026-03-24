@@ -79,9 +79,24 @@ fn build_quiet_no_spinner() {
         eprintln!("skipping: FFI not available");
         return;
     }
-    kix()
+    let output = kix()
         .args(["build", "example", "-q"])
         .assert()
         .success()
-        .stderr(predicate::str::is_empty());
+        .get_output()
+        .stderr
+        .clone();
+    // Nix builtins.trace writes directly to stderr via the C library,
+    // so we can't suppress it. Filter those out and verify kix itself
+    // produces no stderr output in quiet mode.
+    let stderr = String::from_utf8_lossy(&output);
+    let non_trace_lines: Vec<&str> = stderr
+        .lines()
+        .filter(|l| !l.starts_with("trace: "))
+        .collect();
+    assert!(
+        non_trace_lines.is_empty(),
+        "expected no non-trace stderr in quiet mode, got: {:?}",
+        non_trace_lines
+    );
 }
