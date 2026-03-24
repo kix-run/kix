@@ -4,6 +4,10 @@
 # - cargo-test: fast unit tests + clippy + fmt (devenv provides Nix C libs)
 # - integration-test: full CLI tests with Nix FFI evaluation
 # - build: smoke test on Linux and macOS
+#
+# Caching:
+# - magic-nix-cache: transparently caches /nix/store paths to GHA cache
+# - actions/cache: caches Cargo target dir and registry by Cargo.lock hash
 
 name: Kix CLI
 
@@ -43,6 +47,19 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes pipe-operators
 
+      - uses: DeterminateSystems/magic-nix-cache-action@v8
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            cli/target
+          key: cargo-test-${{ runner.os }}-${{ hashFiles('cli/Cargo.lock') }}
+          restore-keys: |
+            cargo-test-${{ runner.os }}-
+
       - name: Install devenv
         run: nix profile install nixpkgs#devenv
 
@@ -65,6 +82,27 @@ jobs:
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes pipe-operators
+
+      - uses: DeterminateSystems/magic-nix-cache-action@v8
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            cli/target
+          key: cargo-integ-${{ runner.os }}-${{ hashFiles('cli/Cargo.lock') }}
+          restore-keys: |
+            cargo-integ-${{ runner.os }}-
+
+      - name: Cache kix eval
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/kix
+          key: kix-eval-${{ runner.os }}-${{ hashFiles('flake.lock') }}
+          restore-keys: |
+            kix-eval-${{ runner.os }}-
 
       - name: Install devenv
         run: nix profile install nixpkgs#devenv
@@ -91,6 +129,27 @@ jobs:
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes pipe-operators
+
+      - uses: DeterminateSystems/magic-nix-cache-action@v8
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            cli/target
+          key: cargo-build-${{ matrix.system }}-${{ hashFiles('cli/Cargo.lock') }}
+          restore-keys: |
+            cargo-build-${{ matrix.system }}-
+
+      - name: Cache kix eval
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/kix
+          key: kix-eval-${{ matrix.system }}-${{ hashFiles('flake.lock') }}
+          restore-keys: |
+            kix-eval-${{ matrix.system }}-
 
       - name: Install devenv
         run: nix profile install nixpkgs#devenv

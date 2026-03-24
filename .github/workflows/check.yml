@@ -1,14 +1,9 @@
 # Hermetic CI — runs all flake checks on every push/PR.
 #
 # This covers:
-# - Schema validation (kubeconform) for all chart variants
-# - Golden-file snapshot tests for regression detection
-# - Cluster composition assertions (registry, monitoring, negative)
-# - Behavioral invariants (managed-by labels, etc.)
-# - Cross-resource validation (referential integrity)
-#
-# Additionally builds all cluster definitions and uploads the rendered
-# manifests as artifacts for inspection.
+# - Schema validation (kubeconform) for all cluster definitions
+# - Cross-resource integrity checks (checks.nix)
+# - PackageInstance wiring validation (pi-checks.nix)
 
 name: Check
 
@@ -28,6 +23,8 @@ jobs:
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes pipe-operators
+
+      - uses: DeterminateSystems/magic-nix-cache-action@v8
 
       - name: Run all flake checks
         run: nix flake check --print-build-logs

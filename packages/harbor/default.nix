@@ -1386,7 +1386,6 @@ in
         }
         |> scope.mkStatefulSet;
 
-<<<<<<< HEAD
       redisHeadlessService = scope.mkResource {
         apiVersion = "v1";
         kind = "Service";
@@ -1394,14 +1393,6 @@ in
         labels = selectorLabels // {
           component = "redis";
         };
-=======
-      # Headless Service for StatefulSet pod DNS identity.
-      redisHeadlessService = scope.mkResource {
-        apiVersion = "v1";
-        kind = "Service";
-        name = "${name}-redis";
-        labels = selectorLabels;
->>>>>>> 8868ffa (feat(checks): expand cross-resource validation to 13 checks)
         spec = {
           type = "ClusterIP";
           clusterIP = "None";
@@ -1410,17 +1401,13 @@ in
           };
           ports = [
             {
-<<<<<<< HEAD
               name = "tcp-redis";
-=======
->>>>>>> 8868ffa (feat(checks): expand cross-resource validation to 13 checks)
               port = 6379;
               targetPort = 6379;
               protocol = "TCP";
             }
           ];
         };
-<<<<<<< HEAD
         requires = [ self.redisStatefulSet ];
       };
 
@@ -1431,16 +1418,6 @@ in
         labels = selectorLabels // {
           component = "redis";
         };
-=======
-      };
-
-      # ClusterIP Service for other components to connect to redis.
-      redisService = scope.mkResource {
-        apiVersion = "v1";
-        kind = "Service";
-        name = "${name}-redis-svc";
-        labels = selectorLabels;
->>>>>>> 8868ffa (feat(checks): expand cross-resource validation to 13 checks)
         spec = {
           type = "ClusterIP";
           selector = selectorLabels // {
@@ -1484,13 +1461,8 @@ in
           self.exporterEnvConfigMap
           self.exporterDeployment
           self.exporterService
-<<<<<<< HEAD
-          self.redisStatefulSet
-          self.redisHeadlessService
-=======
           self.redisHeadlessService
           self.redisStatefulSet
->>>>>>> 8868ffa (feat(checks): expand cross-resource validation to 13 checks)
           self.redisService
         ]
         ++ lib.optional config.ingress.enabled self.ingress
