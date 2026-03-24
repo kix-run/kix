@@ -482,24 +482,54 @@ affecting the fundamental model.
 > section sketches how the build-time model connects to deployment, to validate
 > that the design doesn't paint us into a corner.
 
-### 9.1 Secret Population
+### 9.1 Hydration Model — Encrypted Secrets as Inputs
 
-`kix-deploy` reads the Secret manifest annotations and:
-1. For `generate` keys: generates values (random, derived, fixed)
-2. For keys without `generate`: looks up values from the configured secret
-   source (SOPS file, env vars, interactive prompt)
-3. Applies the complete Secret before deploying any dependent resources
+Secret **values** enter the build as encrypted blobs — either committed to the
+repo (SOPS, agenix) or imported via a data flake. The Nix evaluation sees the
+encrypted ciphertext, never plaintext. The **content hash of the ciphertext**
+determines the Secret resource's identity.
 
-### 9.2 Rotation
+This gives three key properties:
 
-A rotation is:
-1. Generate new values for specified keys
-2. Create a new Secret version (content-hash changes → new resource name)
-3. Dependent Deployments detect the name change → rolling restart
+1. **Content-addressed by ciphertext.** When a secret value changes, the
+   encrypted blob changes, the hash changes, the Secret resource identity
+   changes, and all referencing resources (Deployments, etc.) get updated
+   manifests → redeployment. Rotation is a natural consequence.
 
-Content-addressed naming makes rotation a natural consequence of value changes.
-The Secret's name changes, so all referencing resources get updated manifests,
-triggering redeployment.
+2. **Build without decryption keys.** The nix store only contains encrypted
+   references. Any machine can evaluate the build. Only `kix-deploy` needs
+   decryption keys, and only for secrets it's actually applying.
+
+3. **Partial deploy authorization.** `kix-deploy` skips re-applying secrets
+   whose manifests haven't changed. If a deploy only touches app resources and
+   no secret ciphertext changed, the deployer doesn't need decryption keys for
+   any secret. If a secret *did* change and the deployer lacks the key,
+   `kix-deploy` fails loudly — no silent partial deploys.
+
+The decryption backend is pluggable — SOPS, agenix, or a custom provider.
+`kix-deploy` reads the Secret manifest annotations to determine which backend
+to use and where to find the encrypted source.
+
+For secrets sourced from a **data flake** (e.g., credentials managed outside
+the repo, rotated by an external process), updating the flake input pins the
+new ciphertext. This is a manual `flake update` step — the external rotation
+process and the repo update are decoupled by design.
+
+### 9.2 The `generate` Question
+
+> **TBD:** The `generate` field (section 3) describes secrets that kix produces
+> on first deploy — random passwords, derived values. These don't have an
+> encrypted source in git at creation time. Open questions:
+>
+> - Where do generated values live after first creation? They'd need to be
+>   encrypted and committed back to git (or stored in the data flake) to become
+>   content-addressable and reproducible.
+> - Or is `generate` only for dev/ephemeral clusters where reproducibility
+>   across deploys isn't required?
+> - Or does `generate` produce a deterministic value from a seed secret that
+>   *is* in git?
+>
+> This needs a concrete design before `generate` can ship.
 
 ### 9.3 "Already Exists" Secrets
 
@@ -611,3 +641,16 @@ adds `sslmode`), what happens to existing secrets? Options:
 
 This is a general versioning question that applies to all DI contracts, not
 just secrets.
+
+### 11.7 Scope Function Overrides via Plugins
+
+A plugin or secret provider may need to override `scope.mkSecret` (and
+potentially other scope functions) to change how secrets are created cluster-
+wide — e.g., a plugin that wraps every `mkSecret` call to route through ESO
+instead of producing kix-native secrets.
+
+This implies that `scope` cannot be a fixed set of functions. The cluster
+definition (or a plugin system) must be able to replace or wrap scope functions
+so that packages calling `scope.mkSecret` transparently get different behavior
+without any code changes. This is a broader design question for the scope/plugin
+system, not specific to secrets, but secrets are the first concrete use case.
