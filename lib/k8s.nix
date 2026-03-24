@@ -150,6 +150,18 @@ rec {
 
       manifestJson = builtins.toJSON rawManifest;
 
+      # Collect store contexts from requires and extraDeps so they influence
+      # the content-addressed store path (Nix store DAG edges).
+      allDeps = requires ++ extraDeps;
+      depContexts = builtins.foldl' (acc: dep:
+        if builtins.isAttrs dep && dep ? outPath then
+          acc // builtins.getContext "${dep}"
+        else acc
+      ) {} allDeps;
+
+      # Append dep contexts to manifestJson
+      manifestJsonWithDeps = builtins.appendContext manifestJson depContexts;
+
       # Sanitize the name for use in store paths (colons and other special
       # characters are not allowed in Nix store path names).
       sanitizedName = builtins.replaceStrings [ ":" ] [ "_" ] name;
@@ -158,7 +170,7 @@ rec {
       # and all referenced resources (their store paths via string context).
       _identityPath = builtins.toFile
         "k8s-${kind}-${nsKey}-${sanitizedName}"
-        manifestJson;
+        manifestJsonWithDeps;
 
       # Plain path string without context (for use as attr keys, comparisons)
       _identityPathPlain = builtins.unsafeDiscardStringContext _identityPath;
