@@ -20,3 +20,6 @@ site/
 videos/
 charts-to-migrate/
 __pycache__/
+
+# insta snapshot pending review files
+*.snap.new
