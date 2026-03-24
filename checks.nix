@@ -135,6 +135,7 @@ rec {
         in
         hasResource refKind refName
         || lib.hasPrefix "system:" refName
+        || lib.hasSuffix "-psp" refName
         || builtins.elem refName [
           "admin"
           "cluster-admin"
@@ -148,7 +149,11 @@ rec {
         r:
         let
           podSpec = getPodSpec r;
-          volumes = let v = podSpec.volumes or [ ]; in if v == null then [ ] else v;
+          volumes =
+            let
+              v = podSpec.volumes or [ ];
+            in
+            if v == null then [ ] else v;
         in
         builtins.concatMap (
           vol:
@@ -202,14 +207,11 @@ rec {
         let
           selector = svc.spec.selector or { };
           isSystemComponent = builtins.any (sc: selectorMatchesLabels sc selector) systemComponentSelectors;
-          targetsOperatorWorkload = builtins.any (
-            r: builtins.elem r.kind operatorWorkloadKinds
-          ) resources
-          && builtins.any (
-            r:
-            builtins.elem r.kind operatorWorkloadKinds
-            && lib.hasPrefix r.metadata.name svc.metadata.name
-          ) resources;
+          targetsOperatorWorkload =
+            builtins.any (r: builtins.elem r.kind operatorWorkloadKinds) resources
+            && builtins.any (
+              r: builtins.elem r.kind operatorWorkloadKinds && lib.hasPrefix r.metadata.name svc.metadata.name
+            ) resources;
         in
         selector == { }
         || isSystemComponent
