@@ -49,9 +49,14 @@ rec {
   #   3. ConfigMap volume references
   #   4. Service selectors match workload pod template labels
   #   5. HPA scaleTargetRef points to existing workloads
-  #   6. No duplicate (kind, namespace, name) tuples
-  #   7. managed-by label present on all resources
-  #   8. Deployment/StatefulSet selector ⊆ pod template labels
+  #   6. StatefulSet serviceName → headless Service
+  #   7. No duplicate (kind, namespace, name) tuples
+  #   8. managed-by label present on all resources
+  #   9. Deployment/StatefulSet selector ⊆ pod template labels
+  #  10. Ingress backend Service references
+  #  11. Namespace existence for namespaced resources
+  #  12. NetworkPolicy podSelector matches workloads
+  #  13. Service named targetPort → container port name
   #
   # Only validates INTERNAL references (resources created by kix).
   # External references are exempted via documented allowlists.
@@ -319,7 +324,7 @@ rec {
           in
           map (id: "Duplicate resource: ${id}") (lib.attrNames dups);
 
-      # --- 7. managed-by label ---
+      # --- 8. managed-by label ---
 
       managedByFailures = builtins.concatMap (
         r:
@@ -329,7 +334,7 @@ rec {
           [ "${r.kind} ${resourceId r} is missing app.kubernetes.io/managed-by=kix label" ]
       ) resources;
 
-      # --- 8. Selector consistency ---
+      # --- 9. Selector consistency ---
       # A workload's spec.selector.matchLabels must be a subset of its
       # pod template labels, otherwise the workload will never match its pods.
 
@@ -362,6 +367,169 @@ rec {
             ) resources
           );
 
+      # --- 10. Ingress backend Service references ---
+      # Every Ingress backend must reference a Service that exists in the same namespace.
+
+      ingressFailures = builtins.concatMap (
+        ing:
+        let
+          ns = ing.metadata.namespace or "cluster-scoped";
+          # Collect all backend service names from rules and defaultBackend.
+          ruleBackends = builtins.concatMap (
+            rule:
+            builtins.concatMap (
+              path:
+              let
+                svcName = path.backend.service.name or null;
+              in
+              if svcName != null then [ svcName ] else [ ]
+            ) (rule.http.paths or [ ])
+          ) (ing.spec.rules or [ ]);
+          defaultBackend =
+            let
+              svcName = ing.spec.defaultBackend.service.name or null;
+            in
+            if svcName != null then [ svcName ] else [ ];
+          allBackends = lib.unique (ruleBackends ++ defaultBackend);
+        in
+        builtins.concatMap (
+          svcName:
+          if hasResource "Service" ns svcName then
+            [ ]
+          else
+            [ "Ingress ${ns}/${ing.metadata.name} references Service '${svcName}' which does not exist" ]
+        ) allBackends
+      ) (builtins.filter (r: r.kind == "Ingress") resources);
+
+      # --- 11. Namespace existence ---
+      # Every namespaced resource must have its Namespace in the manifest set.
+
+      namespaceNames = builtins.listToAttrs (
+        builtins.concatMap (
+          r:
+          if r.kind == "Namespace" then
+            [
+              {
+                name = r.metadata.name;
+                value = true;
+              }
+            ]
+          else
+            [ ]
+        ) resources
+      );
+
+      namespaceFailures = builtins.concatMap (
+        r:
+        let
+          ns = r.metadata.namespace or null;
+        in
+        if ns == null || namespaceNames ? ${ns} then
+          [ ]
+        else
+          [
+            "${r.kind} ${ns}/${r.metadata.name or "unnamed"} references namespace '${ns}' which has no Namespace resource"
+          ]
+      ) resources;
+
+      # Deduplicate namespace failures (many resources per missing namespace).
+      uniqueNamespaceFailures =
+        let
+          missingNs = lib.unique (
+            builtins.concatMap (
+              r:
+              let
+                ns = r.metadata.namespace or null;
+              in
+              if ns != null && !(namespaceNames ? ${ns}) then [ ns ] else [ ]
+            ) resources
+          );
+        in
+        map (
+          ns: "Namespace '${ns}' is referenced by resources but has no Namespace resource in the manifest set"
+        ) missingNs;
+
+      # --- 12. NetworkPolicy podSelector matching ---
+      # A NetworkPolicy's podSelector should match at least one workload's pod
+      # template labels. An unmatched NetworkPolicy is dead config.
+
+      networkPolicyFailures = builtins.concatMap (
+        np:
+        let
+          selector = np.spec.podSelector.matchLabels or { };
+          ns = np.metadata.namespace or "cluster-scoped";
+        in
+        # Empty selector matches all pods in the namespace — always valid.
+        if selector == { } then
+          [ ]
+        else if
+          builtins.any (
+            w:
+            let
+              templateLabels = w.spec.template.metadata.labels or { };
+            in
+            selectorMatchesLabels selector templateLabels
+          ) workloads
+        then
+          [ ]
+        else
+          [
+            "NetworkPolicy ${ns}/${np.metadata.name} podSelector ${builtins.toJSON selector} matches no workload pod template"
+          ]
+      ) (builtins.filter (r: r.kind == "NetworkPolicy") resources);
+
+      # --- 13. Service port name → container port name consistency ---
+      # When a Service uses a named targetPort, that port name must exist in
+      # at least one matched workload's container ports.
+
+      portNameFailures = builtins.concatMap (
+        svc:
+        let
+          selector = svc.spec.selector or { };
+          ns = svc.metadata.namespace or "cluster-scoped";
+          svcPorts = svc.spec.ports or [ ];
+          # Named targetPorts (skip numeric ones).
+          namedTargetPorts = builtins.filter (
+            p:
+            let
+              tp = p.targetPort or null;
+            in
+            tp != null && builtins.isString tp
+          ) svcPorts;
+          # Find all container port names in matched workloads.
+          matchedWorkloads = builtins.filter (
+            w: selectorMatchesLabels selector (w.spec.template.metadata.labels or { })
+          ) workloads;
+          containerPortNames = builtins.concatMap (
+            w:
+            builtins.concatMap (c: map (p: p.name or null) (c.ports or [ ])) (
+              (w.spec.template.spec or { }).containers or [ ]
+            )
+          ) matchedWorkloads;
+          portNameSet = builtins.listToAttrs (
+            map (n: {
+              name = n;
+              value = true;
+            }) (builtins.filter (n: n != null) containerPortNames)
+          );
+        in
+        if selector == { } || namedTargetPorts == [ ] || matchedWorkloads == [ ] then
+          [ ]
+        else
+          builtins.concatMap (
+            p:
+            let
+              tp = p.targetPort;
+            in
+            if portNameSet ? ${tp} then
+              [ ]
+            else
+              [
+                "Service ${ns}/${svc.metadata.name} targetPort '${tp}' does not match any container port name in matched workloads"
+              ]
+          ) namedTargetPorts
+      ) (builtins.filter (r: r.kind == "Service") resources);
+
       # --- Collect all failures ---
 
       allFailures =
@@ -373,7 +541,11 @@ rec {
         ++ serviceNameFailures
         ++ duplicateFailures
         ++ managedByFailures
-        ++ selectorConsistencyFailures;
+        ++ selectorConsistencyFailures
+        ++ ingressFailures
+        ++ uniqueNamespaceFailures
+        ++ networkPolicyFailures
+        ++ portNameFailures;
     in
     if allFailures == [ ] then
       true

@@ -1281,7 +1281,10 @@
             {
               name = "tcp-redis";
               port = 6379;
-              targetPort = "redis";
+              # The container port name changes based on mode: sentinel mode
+              # names it "valkey", primary/replica mode names it "redis" (legacy).
+              # See valkeyContainer.ports definition.
+              targetPort = if config.sentinel.enabled then "valkey" else "redis";
               protocol = "TCP";
             }
           ]
