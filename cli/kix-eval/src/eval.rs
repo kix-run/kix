@@ -35,9 +35,10 @@ pub trait NixBackend: Send {
     fn list_clusters(&mut self, flake_path: &Path) -> Result<Vec<String>, KixEvalError>;
 }
 
-/// Cached evaluator wrapping a `NixBackend`.
+/// Evaluator wrapping a `NixBackend`.
 pub struct KixEvaluator {
     backend: Box<dyn NixBackend>,
+    #[allow(dead_code)] // Cache disabled pending file-level invalidation
     cache: SqliteCache,
     /// The flake path to evaluate (resolved, no symlinks).
     flake_path: PathBuf,
@@ -61,31 +62,15 @@ impl KixEvaluator {
         })
     }
 
-    /// Evaluate a cluster, checking the cache first.
+    /// Evaluate a cluster.
+    ///
+    /// Caching is disabled: the cache key (flake_path + flake.lock + attr) doesn't
+    /// track individual .nix source files, so edits to cluster/package/lib files
+    /// returned stale results. Re-enable when we have file-level invalidation.
     pub fn eval_cluster(&mut self, cluster_name: &str) -> Result<ClusterOutput, KixEvalError> {
         let start = std::time::Instant::now();
-        let cache_key = SqliteCache::compute_key(&self.flake_path, cluster_name)?;
-
-        // Check cache
-        if let Some(cached) = self.cache.get(&cache_key)? {
-            if let Ok(output) = serde_json::from_str::<ClusterOutput>(&cached) {
-                tracing::debug!(cluster = cluster_name, "eval cache hit");
-                tracing::info!(cluster = cluster_name, elapsed = ?start.elapsed(), "evaluation complete");
-                return Ok(output);
-            }
-            // Corrupt cache entry — fall through to re-evaluate
-            tracing::warn!(cluster = cluster_name, "corrupt cache entry, re-evaluating");
-        }
-
-        // Cache miss — evaluate via backend
-        tracing::debug!(cluster = cluster_name, "eval cache miss, evaluating");
+        tracing::debug!(cluster = cluster_name, "evaluating");
         let output = self.backend.eval_cluster(&self.flake_path, cluster_name)?;
-
-        // Store in cache
-        let json = serde_json::to_string(&output)
-            .map_err(|e| KixEvalError::CacheError { source: e.into() })?;
-        self.cache.put(&cache_key, &json)?;
-
         tracing::info!(cluster = cluster_name, elapsed = ?start.elapsed(), "evaluation complete");
         Ok(output)
     }
@@ -126,15 +111,13 @@ mod tests {
     }
 
     #[test]
-    fn eval_caches_result() {
+    fn eval_returns_consistent_results() {
         let dir = tempfile::tempdir().unwrap();
         let cache_dir = dir.path().join("cache");
-        let mut backend = test_backend();
-        backend.set_call_limit(1); // Only allow one real eval call
-        let mut eval = KixEvaluator::new(backend, dir.path(), &cache_dir).unwrap();
+        let mut eval = KixEvaluator::new(test_backend(), dir.path(), &cache_dir).unwrap();
 
         let out1 = eval.eval_cluster("test-cluster").unwrap();
-        let out2 = eval.eval_cluster("test-cluster").unwrap(); // Should hit cache
+        let out2 = eval.eval_cluster("test-cluster").unwrap();
         assert_eq!(out1.name, out2.name);
         assert_eq!(out1.raw_manifests.len(), out2.raw_manifests.len());
     }
