@@ -47,6 +47,8 @@ pre-commit:
       root: "cli/"
       run: cargo fmt --check
 
+    # Clippy must run inside devenv shell because the FFI crates need
+    # Nix C libraries (nix-expr-c, etc.) available via PKG_CONFIG_PATH.
     clippy-rust:
       glob: "cli/**/*.rs"
       run: devenv shell -- bash -c 'cd cli && cargo clippy --workspace --all-targets -- -D warnings'

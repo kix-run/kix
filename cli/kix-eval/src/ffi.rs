@@ -2,6 +2,32 @@
 //!
 //! Evaluates flake attributes directly via the Nix C API.
 //! No subprocess, no shell-out — pure FFI.
+//!
+//! # Build requirements
+//!
+//! This module requires the Nix C libraries to be available via pkg-config.
+//! In development, `devenv shell` provides them automatically via `pkgs.nix.libs.*`.
+//! The nix-bindings-* crates are from the mainline `nixops4/nix-bindings-rust`
+//! repo (not the cachix fork) — the mainline has the flake API we need.
+//!
+//! # Key decisions
+//!
+//! - We use `eval_from_string` with `builtins.getFlake` rather than the
+//!   FlakeReference/LockedFlake API. This is simpler and correctly handles
+//!   flake-parts output structure (perSystem is a function, not a direct attrset).
+//!
+//! - Values are converted to JSON via `builtins.toJSON` in Nix, then parsed
+//!   with serde_json. This is simpler than walking the Nix value tree manually
+//!   and handles all edge cases (string contexts, thunks, etc.) correctly.
+//!   The `nix_value_to_json` function exists for future use if we need
+//!   fine-grained value access without full serialization.
+//!
+//! # Threading
+//!
+//! Nix uses Boehm GC. Every thread touching Nix values MUST register via
+//! `gc_register_my_thread()`. The RAII guard is stored in thread-local storage
+//! to keep the thread registered for its lifetime. Init MUST happen before
+//! registration (`nix_init()` is called first via `Once`).
 
 use std::cell::RefCell;
 use std::path::Path;

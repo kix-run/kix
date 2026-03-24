@@ -183,8 +183,11 @@
           packages = clusterPackages;
           checks = clusterChecks;
 
-          # Expose cluster evaluation results for the kix CLI.
-          # kix accesses: legacyPackages.<system>.kixClusters.<name>.rawManifests
+          # Expose cluster evaluation results for the kix CLI (FFI backend).
+          # The CLI evaluates: flake.legacyPackages.<system>.kixClusters.<name>.rawManifests
+          # This must be in legacyPackages (not packages) because cluster objects
+          # are attrsets, not derivations. The `clusters` let-binding is internal
+          # to perSystem, so we expose it here for the CLI to reach via builtins.getFlake.
           legacyPackages.kixClusters = clusters;
         };
     };

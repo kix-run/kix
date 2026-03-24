@@ -7,7 +7,12 @@
 }:
 
 let
-  # Nix C libraries for FFI bindings (nix-bindings-rust)
+  # Nix C libraries for FFI bindings (nix-bindings-rust).
+  # These come from nixpkgs' own `pkgs.nix.libs.*` — no cachix fork or
+  # separate nix flake input needed. The .dev outputs provide pkg-config
+  # .pc files and C headers that the nix-bindings-*-sys crates find via
+  # pkg-config at build time. Adding them to `packages` makes them
+  # available in PKG_CONFIG_PATH automatically.
   nixLibs = [
     pkgs.nix.libs.nix-expr-c
     pkgs.nix.libs.nix-store-c
@@ -26,7 +31,8 @@ in
   ]
   ++ nixLibs;
 
-  # Bindgen needs libclang to generate FFI bindings
+  # Bindgen needs libclang to generate FFI bindings from the Nix C headers.
+  # BINDGEN_EXTRA_CLANG_ARGS is required because the headers use C++20 features.
   env.LIBCLANG_PATH = lib.makeLibraryPath [ pkgs.llvmPackages.clang-unwrapped ];
   env.BINDGEN_EXTRA_CLANG_ARGS = builtins.concatStringsSep " " [
     "-x" "c++" "-std=c++2a"
