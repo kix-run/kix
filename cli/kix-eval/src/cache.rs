@@ -1,5 +1,6 @@
 //! SQLite-backed eval cache, keyed by BLAKE3 hash of flake path + lockfile + attribute.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use rusqlite::Connection;
@@ -25,6 +26,12 @@ impl SqliteCache {
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL,
                 created_at INTEGER NOT NULL DEFAULT (unixepoch())
+            );
+            CREATE TABLE IF NOT EXISTS source_snapshot (
+                flake_path TEXT PRIMARY KEY,
+                files_json TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                updated_at INTEGER NOT NULL DEFAULT (unixepoch())
             );",
         )
         .map_err(|e| KixEvalError::CacheError { source: e.into() })?;
@@ -40,6 +47,12 @@ impl SqliteCache {
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL,
                 created_at INTEGER NOT NULL DEFAULT (unixepoch())
+            );
+            CREATE TABLE IF NOT EXISTS source_snapshot (
+                flake_path TEXT PRIMARY KEY,
+                files_json TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                updated_at INTEGER NOT NULL DEFAULT (unixepoch())
             );",
         )
         .map_err(|e| KixEvalError::CacheError { source: e.into() })?;
@@ -90,6 +103,146 @@ impl SqliteCache {
         hasher.update(attr.as_bytes());
         Ok(hasher.finalize().to_hex().to_string())
     }
+
+    /// Compute a source fingerprint that changes when any `.nix` file is added, removed, or modified.
+    ///
+    /// Uses a two-level strategy:
+    /// 1. **mtime fast path**: collect file paths + mtimes; if they match the stored snapshot, return
+    ///    the stored content hash without reading file contents.
+    /// 2. **content hash**: read all `.nix` files, compute BLAKE3 over sorted (path, content) pairs,
+    ///    store the new snapshot.
+    pub fn compute_source_fingerprint(&self, flake_path: &Path) -> Result<String, KixEvalError> {
+        let canonical = crate::store::resolve_symlinks(flake_path);
+        let canonical_str = canonical.to_string_lossy().to_string();
+        let files = walk_nix_files(&canonical)?;
+
+        // Build current files_json
+        let file_map: BTreeMap<&str, u64> = files.iter().map(|(p, m)| (p.as_str(), *m)).collect();
+        let current_json = serde_json::to_string(&file_map)
+            .map_err(|e| KixEvalError::CacheError { source: e.into() })?;
+
+        // Check stored snapshot (mtime fast path)
+        let stored: Option<(String, String)> = {
+            let mut stmt = self
+                .conn
+                .prepare_cached(
+                    "SELECT files_json, content_hash FROM source_snapshot WHERE flake_path = ?1",
+                )
+                .map_err(|e| KixEvalError::CacheError { source: e.into() })?;
+            stmt.query_row([&canonical_str], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .optional()
+            .map_err(|e| KixEvalError::CacheError { source: e.into() })?
+        };
+
+        if let Some((stored_json, stored_hash)) = stored
+            && stored_json == current_json
+        {
+            tracing::debug!(flake = %canonical.display(), "source fingerprint: mtime fast path hit");
+            return Ok(stored_hash);
+        }
+
+        // Content hash: read all files
+        tracing::debug!(flake = %canonical.display(), file_count = files.len(), "source fingerprint: computing content hash");
+        let mut hasher = blake3::Hasher::new();
+        for (rel_path, _) in &files {
+            let full_path = canonical.join(rel_path);
+            let content = std::fs::read(&full_path)
+                .map_err(|e| KixEvalError::CacheError { source: e.into() })?;
+            hasher.update(rel_path.as_bytes());
+            hasher.update(&content);
+        }
+        let content_hash = hasher.finalize().to_hex().to_string();
+
+        // Store new snapshot
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO source_snapshot (flake_path, files_json, content_hash) VALUES (?1, ?2, ?3)",
+                [&canonical_str, &current_json, &content_hash],
+            )
+            .map_err(|e| KixEvalError::CacheError { source: e.into() })?;
+
+        Ok(content_hash)
+    }
+
+    /// Compute a cache key that includes the source fingerprint.
+    ///
+    /// Key = BLAKE3(canonical_path + flake.lock contents + source_fingerprint + attr).
+    pub fn compute_key_with_source(
+        flake_path: &Path,
+        attr: &str,
+        source_fingerprint: &str,
+    ) -> Result<String, KixEvalError> {
+        let canonical = crate::store::resolve_symlinks(flake_path);
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(canonical.to_string_lossy().as_bytes());
+
+        let lockfile = canonical.join("flake.lock");
+        if lockfile.exists() {
+            let lock_contents = std::fs::read(&lockfile)
+                .map_err(|e| KixEvalError::CacheError { source: e.into() })?;
+            hasher.update(&lock_contents);
+        }
+
+        hasher.update(source_fingerprint.as_bytes());
+        hasher.update(attr.as_bytes());
+        Ok(hasher.finalize().to_hex().to_string())
+    }
+}
+
+/// Recursively walk a directory collecting `*.nix` files as `(relative_path, mtime_secs)`.
+///
+/// Skips `.git`, `.direnv`, `result`, and `node_modules` directories.
+/// Results are sorted by relative path for deterministic ordering.
+pub fn walk_nix_files(flake_path: &Path) -> Result<Vec<(String, u64)>, KixEvalError> {
+    use std::time::UNIX_EPOCH;
+
+    const SKIP_DIRS: &[&str] = &[".git", ".direnv", "result", "node_modules"];
+    let mut results = Vec::new();
+    let mut stack = vec![flake_path.to_path_buf()];
+
+    while let Some(dir) = stack.pop() {
+        let entries =
+            std::fs::read_dir(&dir).map_err(|e| KixEvalError::CacheError { source: e.into() })?;
+
+        for entry in entries {
+            let entry = entry.map_err(|e| KixEvalError::CacheError { source: e.into() })?;
+            let file_type = entry
+                .file_type()
+                .map_err(|e| KixEvalError::CacheError { source: e.into() })?;
+            let path = entry.path();
+
+            if file_type.is_dir() {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str())
+                    && !SKIP_DIRS.contains(&name)
+                {
+                    stack.push(path);
+                }
+            } else if file_type.is_file()
+                && let Some(ext) = path.extension()
+                && ext == "nix"
+            {
+                let rel = path
+                    .strip_prefix(flake_path)
+                    .map_err(|e| KixEvalError::CacheError { source: e.into() })?
+                    .to_string_lossy()
+                    .to_string();
+                let metadata = std::fs::metadata(&path)
+                    .map_err(|e| KixEvalError::CacheError { source: e.into() })?;
+                let mtime = metadata
+                    .modified()
+                    .map_err(|e| KixEvalError::CacheError { source: e.into() })?
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                results.push((rel, mtime));
+            }
+        }
+    }
+
+    results.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(results)
 }
 
 /// Extension trait on `rusqlite::OptionalExtension` — re-export for internal use.
@@ -169,5 +322,89 @@ mod tests {
         let cache = SqliteCache::open(&db_path).unwrap();
         cache.put("test", "value").unwrap();
         assert_eq!(cache.get("test").unwrap(), Some("value".to_string()));
+    }
+
+    #[test]
+    fn fingerprint_stable_when_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("default.nix"), "{ }").unwrap();
+        std::fs::write(dir.path().join("lib.nix"), "x: x").unwrap();
+
+        let cache = SqliteCache::open_in_memory().unwrap();
+        let fp1 = cache.compute_source_fingerprint(dir.path()).unwrap();
+        let fp2 = cache.compute_source_fingerprint(dir.path()).unwrap();
+        assert_eq!(fp1, fp2);
+    }
+
+    #[test]
+    fn fingerprint_changes_on_content_edit() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("default.nix");
+        std::fs::write(&file, "{ }").unwrap();
+
+        let cache = SqliteCache::open_in_memory().unwrap();
+        let fp1 = cache.compute_source_fingerprint(dir.path()).unwrap();
+
+        // Modify file content — also bump mtime by 2 seconds to ensure mtime differs
+        std::fs::write(&file, "{ x = 1; }").unwrap();
+        let new_mtime = std::time::SystemTime::now() + std::time::Duration::from_secs(2);
+        let times = std::fs::FileTimes::new().set_modified(new_mtime);
+        std::fs::File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_times(times)
+            .unwrap();
+
+        let fp2 = cache.compute_source_fingerprint(dir.path()).unwrap();
+        assert_ne!(fp1, fp2);
+    }
+
+    #[test]
+    fn fingerprint_changes_on_file_add_remove() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.nix"), "1").unwrap();
+
+        let cache = SqliteCache::open_in_memory().unwrap();
+        let fp1 = cache.compute_source_fingerprint(dir.path()).unwrap();
+
+        // Add a file
+        std::fs::write(dir.path().join("b.nix"), "2").unwrap();
+        let fp2 = cache.compute_source_fingerprint(dir.path()).unwrap();
+        assert_ne!(fp1, fp2);
+
+        // Remove the added file
+        std::fs::remove_file(dir.path().join("b.nix")).unwrap();
+        let fp3 = cache.compute_source_fingerprint(dir.path()).unwrap();
+        assert_eq!(fp1, fp3);
+    }
+
+    #[test]
+    fn walk_nix_files_skips_dotgit() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("flake.nix"), "{}").unwrap();
+        let git_dir = dir.path().join(".git");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        std::fs::write(git_dir.join("config.nix"), "hidden").unwrap();
+
+        let files = walk_nix_files(dir.path()).unwrap();
+        let paths: Vec<&str> = files.iter().map(|(p, _)| p.as_str()).collect();
+        assert_eq!(paths, vec!["flake.nix"]);
+    }
+
+    #[test]
+    fn compute_key_with_source_deterministic() {
+        let dir = tempfile::tempdir().unwrap();
+        let k1 = SqliteCache::compute_key_with_source(dir.path(), "cluster-nw1", "abc123").unwrap();
+        let k2 = SqliteCache::compute_key_with_source(dir.path(), "cluster-nw1", "abc123").unwrap();
+        assert_eq!(k1, k2);
+    }
+
+    #[test]
+    fn compute_key_with_source_differs_by_fingerprint() {
+        let dir = tempfile::tempdir().unwrap();
+        let k1 = SqliteCache::compute_key_with_source(dir.path(), "test", "fp1").unwrap();
+        let k2 = SqliteCache::compute_key_with_source(dir.path(), "test", "fp2").unwrap();
+        assert_ne!(k1, k2);
     }
 }

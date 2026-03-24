@@ -38,7 +38,6 @@ pub trait NixBackend: Send {
 /// Evaluator wrapping a `NixBackend`.
 pub struct KixEvaluator {
     backend: Box<dyn NixBackend>,
-    #[allow(dead_code)] // Cache disabled pending file-level invalidation
     cache: SqliteCache,
     /// The flake path to evaluate (resolved, no symlinks).
     flake_path: PathBuf,
@@ -62,15 +61,43 @@ impl KixEvaluator {
         })
     }
 
-    /// Evaluate a cluster.
+    /// Evaluate a cluster, returning cached results when source files are unchanged.
     ///
-    /// Caching is disabled: the cache key (flake_path + flake.lock + attr) doesn't
-    /// track individual .nix source files, so edits to cluster/package/lib files
-    /// returned stale results. Re-enable when we have file-level invalidation.
+    /// Cache key includes a source fingerprint computed from all `.nix` files in the
+    /// flake directory tree. File additions, removals, or content changes invalidate
+    /// the cache automatically.
     pub fn eval_cluster(&mut self, cluster_name: &str) -> Result<ClusterOutput, KixEvalError> {
         let start = std::time::Instant::now();
         tracing::debug!(cluster = cluster_name, "evaluating");
+
+        // Compute cache key including source file fingerprint
+        let fingerprint = self.cache.compute_source_fingerprint(&self.flake_path)?;
+        let cache_key =
+            SqliteCache::compute_key_with_source(&self.flake_path, cluster_name, &fingerprint)?;
+
+        // Check cache
+        if let Some(cached_json) = self.cache.get(&cache_key)? {
+            if let Ok(output) = serde_json::from_str::<ClusterOutput>(&cached_json) {
+                tracing::info!(cluster = cluster_name, elapsed = ?start.elapsed(), "cache hit");
+                return Ok(output);
+            }
+            // Corrupted cache entry — fall through to re-evaluate
+            tracing::warn!(
+                cluster = cluster_name,
+                "corrupted cache entry, re-evaluating"
+            );
+        }
+
+        // Cache miss — evaluate
         let output = self.backend.eval_cluster(&self.flake_path, cluster_name)?;
+
+        // Store result
+        if let Ok(json) = serde_json::to_string(&output)
+            && let Err(e) = self.cache.put(&cache_key, &json)
+        {
+            tracing::warn!(cluster = cluster_name, error = %e, "failed to cache result");
+        }
+
         tracing::info!(cluster = cluster_name, elapsed = ?start.elapsed(), "evaluation complete");
         Ok(output)
     }
@@ -138,5 +165,51 @@ mod tests {
         let mut eval = KixEvaluator::new(test_backend(), dir.path(), &cache_dir).unwrap();
         let err = eval.eval_cluster("nonexistent").unwrap_err();
         assert!(matches!(err, KixEvalError::ClusterNotFound { .. }));
+    }
+
+    #[test]
+    fn eval_cluster_caches_result() {
+        let dir = tempfile::tempdir().unwrap();
+        // Create a .nix file so the fingerprint is meaningful
+        std::fs::write(dir.path().join("flake.nix"), "{ }").unwrap();
+
+        let cache_dir = dir.path().join("cache");
+        let mut backend = test_backend();
+        backend.set_call_limit(1); // panic if called more than once
+        let mut eval = KixEvaluator::new(backend, dir.path(), &cache_dir).unwrap();
+
+        let out1 = eval.eval_cluster("test-cluster").unwrap();
+        // Second call must hit cache (backend would panic if called again)
+        let out2 = eval.eval_cluster("test-cluster").unwrap();
+        assert_eq!(out1.name, out2.name);
+        assert_eq!(out1.raw_manifests.len(), out2.raw_manifests.len());
+    }
+
+    #[test]
+    fn eval_cluster_invalidates_on_file_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let nix_file = dir.path().join("flake.nix");
+        std::fs::write(&nix_file, "{ }").unwrap();
+
+        let cache_dir = dir.path().join("cache");
+        let mut eval = KixEvaluator::new(test_backend(), dir.path(), &cache_dir).unwrap();
+
+        let out1 = eval.eval_cluster("test-cluster").unwrap();
+
+        // Modify the .nix file to invalidate the cache
+        std::fs::write(&nix_file, "{ x = 1; }").unwrap();
+        // Bump mtime to ensure mtime difference is detected
+        let new_mtime = std::time::SystemTime::now() + std::time::Duration::from_secs(2);
+        let times = std::fs::FileTimes::new().set_modified(new_mtime);
+        std::fs::File::options()
+            .write(true)
+            .open(&nix_file)
+            .unwrap()
+            .set_times(times)
+            .unwrap();
+
+        // Backend will be called again because the cache is invalidated
+        let out2 = eval.eval_cluster("test-cluster").unwrap();
+        assert_eq!(out1.name, out2.name);
     }
 }
