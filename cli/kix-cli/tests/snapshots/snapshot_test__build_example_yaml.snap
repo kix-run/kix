@@ -3,14 +3,3571 @@ source: kix-cli/tests/snapshot_test.rs
 expression: stdout
 ---
 apiVersion: v1
-kind: Namespace
+data:
+  prestop-sentinel.sh: |
+    #!/bin/bash
+    . /opt/bitnami/scripts/libvalidations.sh
+    . /opt/bitnami/scripts/libos.sh
+    HEADLESS_SERVICE="valkey-headless.cache.svc.cluster.local"
+    get_full_hostname() {
+        hostname="$1"
+        full_hostname="${hostname}.${HEADLESS_SERVICE}"
+        echo "${full_hostname}"
+    }
+    run_sentinel_command() {
+        if is_boolean_yes "$VALKEY_SENTINEL_TLS_ENABLED"; then
+            valkey-cli -h "$VALKEY_SERVICE" -p "$VALKEY_SENTINEL_TLS_PORT_NUMBER" --tls --cert "$VALKEY_SENTINEL_TLS_CERT_FILE" --key "$VALKEY_SENTINEL_TLS_KEY_FILE" --cacert "$VALKEY_SENTINEL_TLS_CA_FILE" sentinel "$@"
+        else
+            valkey-cli -h "$VALKEY_SERVICE" -p "$VALKEY_SENTINEL_PORT" sentinel "$@"
+        fi
+    }
+    sentinel_failover_finished() {
+      VALKEY_SENTINEL_INFO=($(run_sentinel_command get-primary-addr-by-name "myprimary"))
+      VALKEY_PRIMARY_HOST="${VALKEY_SENTINEL_INFO[0]}"
+      [[ "$VALKEY_PRIMARY_HOST" != "$(get_full_hostname $HOSTNAME)" ]]
+    }
+    VALKEY_SERVICE="valkey.cache.svc.cluster.local"
+    if ! sentinel_failover_finished; then
+        echo "I am the primary pod and you are stopping me. Starting sentinel failover"
+        if retry_while "sentinel_failover_finished" "20" 1; then
+            echo "Primary has been successfuly failed over to a different pod."
+            exit 0
+        else
+            echo "Primary failover failed"
+            exit 1
+        fi
+    else
+        exit 0
+    fi
+  prestop-valkey.sh: |
+    #!/bin/bash
+    . /opt/bitnami/scripts/libvalidations.sh
+    . /opt/bitnami/scripts/libos.sh
+    run_valkey_command() {
+        if is_boolean_yes "$VALKEY_TLS_ENABLED"; then
+            valkey-cli -h 127.0.0.1 -p "$VALKEY_TLS_PORT" --tls --cert "$VALKEY_TLS_CERT_FILE" --key "$VALKEY_TLS_KEY_FILE" --cacert "$VALKEY_TLS_CA_FILE" "$@"
+        else
+            valkey-cli -h 127.0.0.1 -p "$VALKEY_PORT" "$@"
+        fi
+    }
+    is_primary() {
+        VALKEY_ROLE=$(run_valkey_command role | head -1)
+        [[ "$VALKEY_ROLE" == "master" ]]
+    }
+    HEADLESS_SERVICE="valkey-headless.cache.svc.cluster.local"
+    get_full_hostname() {
+        hostname="$1"
+        full_hostname="${hostname}.${HEADLESS_SERVICE}"
+        echo "${full_hostname}"
+    }
+    run_sentinel_command() {
+        if is_boolean_yes "$VALKEY_SENTINEL_TLS_ENABLED"; then
+            env -u REDISCLI_AUTH valkey-cli -h "$VALKEY_SERVICE" -p "$VALKEY_SENTINEL_TLS_PORT_NUMBER" --tls --cert "$VALKEY_SENTINEL_TLS_CERT_FILE" --key "$VALKEY_SENTINEL_TLS_KEY_FILE" --cacert "$VALKEY_SENTINEL_TLS_CA_FILE" sentinel "$@"
+        else
+            env -u REDISCLI_AUTH valkey-cli -h "$VALKEY_SERVICE" -p "$VALKEY_SENTINEL_PORT" sentinel "$@"
+        fi
+    }
+    sentinel_failover_finished() {
+        VALKEY_SENTINEL_INFO=($(run_sentinel_command get-primary-addr-by-name "myprimary"))
+        VALKEY_PRIMARY_HOST="${VALKEY_SENTINEL_INFO[0]}"
+        [[ "$VALKEY_PRIMARY_HOST" != "$(get_full_hostname $HOSTNAME)" ]]
+    }
+    VALKEY_SERVICE="valkey.cache.svc.cluster.local"
+    # valkey-cli automatically consumes credentials from the REDISCLI_AUTH variable
+    [[ -n "$VALKEY_PASSWORD" ]] && export REDISCLI_AUTH="$VALKEY_PASSWORD"
+    [[ -f "$VALKEY_PASSWORD_FILE" ]] && export REDISCLI_AUTH="$(< "${VALKEY_PASSWORD_FILE}")"
+    if is_primary && ! sentinel_failover_finished; then
+        echo "I am the primary pod and you are stopping me. Pausing client connections."
+        # Pausing client write connections to avoid data loss
+        run_valkey_command CLIENT PAUSE "22000" WRITE
+        echo "Issuing failover"
+        # if I am the primary, issue a command to failover once
+        run_sentinel_command failover "myprimary"
+        echo "Waiting for sentinel to complete failover for up to 20s"
+        retry_while "sentinel_failover_finished" "20" 1
+    else
+        exit 0
+    fi
+  start-node.sh: |
+    #!/bin/bash
+    . /opt/bitnami/scripts/libos.sh
+    . /opt/bitnami/scripts/liblog.sh
+    . /opt/bitnami/scripts/libvalidations.sh
+    get_port() {
+        hostname="$1"
+        type="$2"
+        port_var=$(echo "${hostname^^}_SERVICE_PORT_$type" | sed "s/-/_/g")
+        port=${!port_var}
+        if [ -z "$port" ]; then
+            case $type in
+                "SENTINEL")
+                    echo 26379
+                    ;;
+                "VALKEY")
+                    echo 6379
+                    ;;
+            esac
+        else
+            echo $port
+        fi
+    }
+    get_full_hostname() {
+        hostname="$1"
+        full_hostname="${hostname}.${HEADLESS_SERVICE}"
+        echo "${full_hostname}"
+    }
+    VALKEYPORT=$(get_port "$HOSTNAME" "VALKEY")
+    HEADLESS_SERVICE="valkey-headless.cache.svc.cluster.local"
+    if [ -n "$VALKEY_EXTERNAL_PRIMARY_HOST" ]; then
+        VALKEY_SERVICE="$VALKEY_EXTERNAL_PRIMARY_HOST"
+    else
+        VALKEY_SERVICE="valkey.cache.svc.cluster.local"
+    fi
+    SENTINEL_SERVICE_PORT=$(get_port "valkey" "SENTINEL")
+    validate_quorum() {
+        if is_boolean_yes "$VALKEY_TLS_ENABLED"; then
+            quorum_info_command="valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT --tls --cert ${VALKEY_TLS_CERT_FILE} --key ${VALKEY_TLS_KEY_FILE} --cacert ${VALKEY_TLS_CA_FILE} sentinel primary myprimary"
+        else
+            quorum_info_command="valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT sentinel primary myprimary"
+        fi
+        info "about to run the command: $quorum_info_command"
+        eval $quorum_info_command | grep -Fq "s_down"
+    }
+    trigger_manual_failover() {
+        if is_boolean_yes "$VALKEY_TLS_ENABLED"; then
+            failover_command="valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT --tls --cert ${VALKEY_TLS_CERT_FILE} --key ${VALKEY_TLS_KEY_FILE} --cacert ${VALKEY_TLS_CA_FILE} sentinel failover myprimary"
+        else
+            failover_command="valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT sentinel failover myprimary"
+        fi
+        info "about to run the command: $failover_command"
+        eval $failover_command
+    }
+    get_sentinel_primary_info() {
+        if is_boolean_yes "$VALKEY_TLS_ENABLED"; then
+            sentinel_info_command="timeout 90 valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT --tls --cert ${VALKEY_TLS_CERT_FILE} --key ${VALKEY_TLS_KEY_FILE} --cacert ${VALKEY_TLS_CA_FILE} sentinel get-primary-addr-by-name myprimary"
+        else
+            sentinel_info_command="timeout 90 valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT sentinel get-primary-addr-by-name myprimary"
+        fi
+        info "about to run the command: $sentinel_info_command"
+        retry_while "eval $sentinel_info_command" 2 5
+    }
+    [[ -f $VALKEY_PASSWORD_FILE ]] && export VALKEY_PASSWORD="$(< "${VALKEY_PASSWORD_FILE}")"
+    [[ -f $VALKEY_PRIMARY_PASSWORD_FILE ]] && export VALKEY_PRIMARY_PASSWORD="$(< "${VALKEY_PRIMARY_PASSWORD_FILE}")"
+    # check if there is a primary
+    primary_in_persisted_conf="$(get_full_hostname "$HOSTNAME")"
+    primary_port_in_persisted_conf="$VALKEY_PRIMARY_PORT_NUMBER"
+    primary_in_sentinel="$(get_sentinel_primary_info)"
+    valkeyRetVal=$?
+    if [[ -f /opt/bitnami/valkey-sentinel/etc/sentinel.conf ]]; then
+        primary_in_persisted_conf="$(awk '/monitor/ {print $4}' /opt/bitnami/valkey-sentinel/etc/sentinel.conf)"
+        primary_port_in_persisted_conf="$(awk '/monitor/ {print $5}' /opt/bitnami/valkey-sentinel/etc/sentinel.conf)"
+        info "Found previous primary ${primary_in_persisted_conf}:${primary_port_in_persisted_conf} in /opt/bitnami/valkey-sentinel/etc/sentinel.conf"
+        debug "$(cat /opt/bitnami/valkey-sentinel/etc/sentinel.conf | grep monitor)"
+    fi
+    if [[ $valkeyRetVal -ne 0 ]]; then
+        if [[ "$primary_in_persisted_conf" == "$(get_full_hostname "$HOSTNAME")" ]]; then
+            # Case 1: No active sentinel and in previous sentinel.conf we were the primary --> PRIMARY
+            info "Configuring the node as primary"
+            export VALKEY_REPLICATION_MODE="primary"
+        else
+            # Case 2: No active sentinel and in previous sentinel.conf we were not primary --> REPLICA
+            info "Configuring the node as replica"
+            export VALKEY_REPLICATION_MODE="replica"
+            VALKEY_PRIMARY_HOST=${primary_in_persisted_conf}
+            VALKEY_PRIMARY_PORT_NUMBER=${primary_port_in_persisted_conf}
+        fi
+    else
+        # Fetches current primary's host and port
+        VALKEY_SENTINEL_INFO=($(get_sentinel_primary_info))
+        info "Current primary: VALKEY_SENTINEL_INFO=(${VALKEY_SENTINEL_INFO[0]},${VALKEY_SENTINEL_INFO[1]})"
+        VALKEY_PRIMARY_HOST=${VALKEY_SENTINEL_INFO[0]}
+        VALKEY_PRIMARY_PORT_NUMBER=${VALKEY_SENTINEL_INFO[1]}
+        if [[ "$VALKEY_PRIMARY_HOST" == "$(get_full_hostname "$HOSTNAME")" ]]; then
+            # Case 3: Active sentinel and primary it is this node --> PRIMARY
+            info "Configuring the node as primary"
+            export VALKEY_REPLICATION_MODE="primary"
+        else
+            # Case 4: Active sentinel and primary is not this node --> REPLICA
+            info "Configuring the node as replica"
+            export VALKEY_REPLICATION_MODE="replica"
+        fi
+    fi
+    if [[ -n "$VALKEY_EXTERNAL_PRIMARY_HOST" ]]; then
+      VALKEY_PRIMARY_HOST="$VALKEY_EXTERNAL_PRIMARY_HOST"
+      VALKEY_PRIMARY_PORT_NUMBER="${VALKEY_EXTERNAL_PRIMARY_PORT}"
+    fi
+    if [[ -f /opt/bitnami/valkey/mounted-etc/replica.conf ]];then
+        cp /opt/bitnami/valkey/mounted-etc/replica.conf /opt/bitnami/valkey/etc/replica.conf
+    fi
+    if [[ -f /opt/bitnami/valkey/mounted-etc/valkey.conf ]];then
+        cp /opt/bitnami/valkey/mounted-etc/valkey.conf /opt/bitnami/valkey/etc/valkey.conf
+    fi
+    echo "" >> /opt/bitnami/valkey/etc/replica.conf
+    echo "replica-announce-port $VALKEYPORT" >> /opt/bitnami/valkey/etc/replica.conf
+    echo "replica-announce-ip $(get_full_hostname "$HOSTNAME")" >> /opt/bitnami/valkey/etc/replica.conf
+    ARGS=("--port" "${VALKEY_PORT}")
+    if [[ "$VALKEY_REPLICATION_MODE" = "replica" ]]; then
+        ARGS+=("--replicaof" "${VALKEY_PRIMARY_HOST}" "${VALKEY_PRIMARY_PORT_NUMBER}")
+    fi
+    ARGS+=("--requirepass" "${VALKEY_PASSWORD}")
+    ARGS+=("--primaryauth" "${VALKEY_PRIMARY_PASSWORD}")
+    ARGS+=("--include" "/opt/bitnami/valkey/etc/replica.conf")
+    ARGS+=("--include" "/opt/bitnami/valkey/etc/valkey.conf")
+    exec valkey-server "${ARGS[@]}"
+  start-sentinel.sh: |
+    #!/bin/bash
+    . /opt/bitnami/scripts/libos.sh
+    . /opt/bitnami/scripts/libvalidations.sh
+    . /opt/bitnami/scripts/libfile.sh
+    HEADLESS_SERVICE="valkey-headless.cache.svc.cluster.local"
+    VALKEY_SERVICE="valkey.cache.svc.cluster.local"
+    get_port() {
+        hostname="$1"
+        type="$2"
+        port_var=$(echo "${hostname^^}_SERVICE_PORT_$type" | sed "s/-/_/g")
+        port=${!port_var}
+        if [ -z "$port" ]; then
+            case $type in
+                "SENTINEL")
+                    echo 26379
+                    ;;
+                "VALKEY")
+                    echo 6379
+                    ;;
+            esac
+        else
+            echo $port
+        fi
+    }
+    get_full_hostname() {
+        hostname="$1"
+        full_hostname="${hostname}.${HEADLESS_SERVICE}"
+        echo "${full_hostname}"
+    }
+    SERVPORT=$(get_port "$HOSTNAME" "SENTINEL")
+    VALKEYPORT=$(get_port "$HOSTNAME" "VALKEY")
+    SENTINEL_SERVICE_PORT=$(get_port "valkey" "SENTINEL")
+    sentinel_conf_set() {
+        local -r key="${1:?missing key}"
+        local value="${2:-}"
+        # Sanitize inputs
+        value="${value//\\/\\\\}"
+        value="${value//&/\\&}"
+        value="${value//\?/\\?}"
+        [[ "$value" = "" ]] && value="\"$value\""
+        replace_in_file "/opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf" "^#*\s*${key} .*" "${key} ${value}" false
+    }
+    sentinel_conf_add() {
+        echo $'\n'"$@" >> "/opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf"
+    }
+    host_id() {
+        echo "$1" | openssl sha1 | awk '{print $2}'
+    }
+    get_sentinel_primary_info() {
+        if is_boolean_yes "$VALKEY_SENTINEL_TLS_ENABLED"; then
+            sentinel_info_command="timeout 90 valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT --tls --cert ${VALKEY_SENTINEL_TLS_CERT_FILE} --key ${VALKEY_SENTINEL_TLS_KEY_FILE} --cacert ${VALKEY_SENTINEL_TLS_CA_FILE} sentinel get-primary-addr-by-name myprimary"
+        else
+            sentinel_info_command="timeout 90 valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT sentinel get-primary-addr-by-name myprimary"
+        fi
+        info "about to run the command: $sentinel_info_command"
+        retry_while "eval $sentinel_info_command" 2 5
+    }
+    [[ -f $VALKEY_PASSWORD_FILE ]] && export VALKEY_PASSWORD="$(< "${VALKEY_PASSWORD_FILE}")"
+    primary_in_persisted_conf="$(get_full_hostname "$HOSTNAME")"
+    if [[ -f /opt/bitnami/valkey-sentinel/etc/sentinel.conf ]]; then
+        primary_in_persisted_conf="$(awk '/monitor/ {print $4}' /opt/bitnami/valkey-sentinel/etc/sentinel.conf)"
+        info "Found previous primary $primary_in_persisted_conf in /opt/bitnami/valkey-sentinel/etc/sentinel.conf"
+        debug "$(cat /opt/bitnami/valkey-sentinel/etc/sentinel.conf | grep monitor)"
+    fi
+    VALKEY_SENTINEL_INFO=($(get_sentinel_primary_info))
+    if [ "$?" -eq "0" ]; then
+        # current primary's host and port obtained from other Sentinel
+        info "printing VALKEY_SENTINEL_INFO=(${VALKEY_SENTINEL_INFO[0]},${VALKEY_SENTINEL_INFO[1]})"
+        VALKEY_PRIMARY_HOST=${VALKEY_SENTINEL_INFO[0]}
+        VALKEY_PRIMARY_PORT_NUMBER=${VALKEY_SENTINEL_INFO[1]}
+    else
+        VALKEY_PRIMARY_HOST="$primary_in_persisted_conf"
+        VALKEY_PRIMARY_PORT_NUMBER="$VALKEYPORT"
+    fi
+    if [[ "$VALKEY_PRIMARY_HOST" == "$(get_full_hostname "$HOSTNAME")" ]]; then
+        export VALKEY_REPLICATION_MODE="primary"
+    else
+        export VALKEY_REPLICATION_MODE="replica"
+    fi
+    if [[ -n "$VALKEY_EXTERNAL_PRIMARY_HOST" ]]; then
+      VALKEY_PRIMARY_HOST="$VALKEY_EXTERNAL_PRIMARY_HOST"
+      VALKEY_PRIMARY_PORT_NUMBER="${VALKEY_EXTERNAL_PRIMARY_PORT}"
+    fi
+    # To prevent incomplete configuration and as the valkey container accesses /opt/bitnami/valkey-sentinel/etc/sentinel.conf
+    # as well, prepare the new config in `prepare-sentinel.conf` and move it atomically to the ultimate destination when it is complete.
+    cp /opt/bitnami/valkey-sentinel/mounted-etc/sentinel.conf /opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf
+    printf "\nsentinel auth-pass %s %s" "myprimary" "$VALKEY_PASSWORD" >> /opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf
+    printf "\nsentinel myid %s" "$(host_id "$HOSTNAME")" >> /opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf
+    if [[ -z "$VALKEY_PRIMARY_HOST" ]] || [[ -z "$VALKEY_PRIMARY_PORT_NUMBER" ]]
+    then
+        # Prevent incorrect configuration to be written to sentinel.conf
+        error "Valkey primary host is configured incorrectly (host: $VALKEY_PRIMARY_HOST, port: $VALKEY_PRIMARY_PORT_NUMBER)"
+        exit 1
+    fi
+    sentinel_conf_set "sentinel monitor" "myprimary "$VALKEY_PRIMARY_HOST" "$VALKEY_PRIMARY_PORT_NUMBER" 2"
+    add_known_sentinel() {
+        hostname="$1"
+        ip="$2"
+        if [[ -n "$hostname" && -n "$ip" && "$hostname" != "$HOSTNAME" ]]; then
+            sentinel_conf_add "sentinel known-sentinel myprimary $(get_full_hostname "$hostname") $(get_port "$hostname" "SENTINEL") $(host_id "$hostname")"
+        fi
+    }
+    add_known_replica() {
+        hostname="$1"
+        ip="$2"
+        if [[ -n "$ip" && "$(get_full_hostname "$hostname")" != "$VALKEY_PRIMARY_HOST" ]]; then
+            sentinel_conf_add "sentinel known-replica myprimary $(get_full_hostname "$hostname") $(get_port "$hostname" "VALKEY")"
+        fi
+    }
+    # Add available hosts on the network as known replicas & sentinels
+    for node in $(seq 0 $((3-1))); do
+        hostname="valkey-node-$node"
+        ip="$(getent hosts "$hostname.$HEADLESS_SERVICE" | awk '{ print $1 }')"
+        add_known_sentinel "$hostname" "$ip"
+        add_known_replica "$hostname" "$ip"
+    done
+    echo "" >> /opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf
+    echo "sentinel announce-hostnames yes" >> /opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf
+    echo "sentinel resolve-hostnames yes" >> /opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf
+    echo "sentinel announce-port $SERVPORT" >> /opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf
+    echo "sentinel announce-ip $(get_full_hostname "$HOSTNAME")" >> /opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf
+    mv /opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf /opt/bitnami/valkey-sentinel/etc/sentinel.conf
+    exec valkey-server /opt/bitnami/valkey-sentinel/etc/sentinel.conf --sentinel
+kind: ConfigMap
 metadata:
-  name: example
+  labels:
+    app.kubernetes.io/instance: valkey
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: valkey
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: valkey-scripts
+  namespace: cache
 ---
 apiVersion: v1
 data:
-  key: value
+  primary.conf: |
+    dir /data
+    # User-supplied primary configuration:
+    # End of primary configuration
+  replica.conf: |
+    dir /data
+    # User-supplied replica configuration:
+    # End of replica configuration
+  sentinel.conf: |
+    dir "/tmp"
+    port 26379
+    sentinel monitor myprimary valkey-node-0.valkey-headless.cache.svc.cluster.local 6379 2
+    sentinel down-after-milliseconds myprimary 60000
+    sentinel failover-timeout myprimary 180000
+    sentinel parallel-syncs myprimary 1
+    # User-supplied sentinel configuration:
+    # End of sentinel configuration
+  valkey.conf: |
+    # User-supplied common configuration:
+    # End of common configuration
 kind: ConfigMap
 metadata:
-  name: app-config
-  namespace: example
+  labels:
+    app.kubernetes.io/instance: valkey
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: valkey
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: valkey-configuration
+  namespace: cache
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/instance: valkey
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: valkey
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: valkey-headless
+  namespace: cache
+spec:
+  clusterIP: None
+  ports:
+  - name: tcp-redis
+    port: 6379
+    protocol: TCP
+    targetPort: redis
+  - name: tcp-sentinel
+    port: 26379
+    protocol: TCP
+    targetPort: valkey-sentinel
+  selector:
+    app.kubernetes.io/instance: valkey
+    app.kubernetes.io/name: valkey
+  type: ClusterIP
+---
+apiVersion: v1
+data:
+  ping_liveness_local.sh: |
+    #!/bin/bash
+    [[ -f $VALKEY_PASSWORD_FILE ]] && export VALKEY_PASSWORD="$(< "${VALKEY_PASSWORD_FILE}")"
+    [[ -n "$VALKEY_PASSWORD" ]] && export REDISCLI_AUTH="$VALKEY_PASSWORD"
+    response=$(
+      timeout -s 15 $1 \
+      valkey-cli \
+        -h localhost \
+        -p $VALKEY_PORT \
+        ping
+    )
+    if [ "$?" -eq "124" ]; then
+      echo "Timed out"
+      exit 1
+    fi
+    responseFirstWord=$(echo $response | head -n1 | awk '{print $1;}')
+    if [ "$response" != "PONG" ] && [ "$responseFirstWord" != "LOADING" ] && [ "$responseFirstWord" != "MASTERDOWN" ]; then
+      echo "$response"
+      exit 1
+    fi
+  ping_readiness_local.sh: |
+    #!/bin/bash
+    [[ -f $VALKEY_PASSWORD_FILE ]] && export VALKEY_PASSWORD="$(< "${VALKEY_PASSWORD_FILE}")"
+    [[ -n "$VALKEY_PASSWORD" ]] && export REDISCLI_AUTH="$VALKEY_PASSWORD"
+    response=$(
+      timeout -s 15 $1 \
+      valkey-cli \
+        -h localhost \
+        -p $VALKEY_PORT \
+        ping
+    )
+    if [ "$?" -eq "124" ]; then
+      echo "Timed out"
+      exit 1
+    fi
+    if [ "$response" != "PONG" ]; then
+      echo "$response"
+      exit 1
+    fi
+  ping_sentinel.sh: |
+    #!/bin/bash
+    response=$(
+      timeout -s 15 $1 \
+      valkey-cli \
+        -h localhost \
+        -p $VALKEY_SENTINEL_PORT \
+        ping
+    )
+    if [ "$?" -eq "124" ]; then
+      echo "Timed out"
+      exit 1
+    fi
+    if [ "$response" != "PONG" ]; then
+      echo "$response"
+      exit 1
+    fi
+kind: ConfigMap
+metadata:
+  labels:
+    app.kubernetes.io/instance: valkey
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: valkey
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: valkey-health
+  namespace: cache
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/component: node
+    app.kubernetes.io/instance: valkey
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: valkey
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: valkey
+  namespace: cache
+spec:
+  ports:
+  - name: tcp-redis
+    port: 6379
+    protocol: TCP
+    targetPort: 6379
+  - name: tcp-sentinel
+    port: 26379
+    protocol: TCP
+    targetPort: 26379
+  selector:
+    app.kubernetes.io/component: node
+    app.kubernetes.io/instance: valkey
+    app.kubernetes.io/name: valkey
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    prometheus.io/port: '9121'
+    prometheus.io/scrape: 'true'
+  labels:
+    app.kubernetes.io/component: metrics
+    app.kubernetes.io/instance: valkey
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: valkey
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: valkey-metrics
+  namespace: cache
+spec:
+  ports:
+  - name: http-metrics
+    port: 9121
+    protocol: TCP
+    targetPort: metrics
+  selector:
+    app.kubernetes.io/instance: valkey
+    app.kubernetes.io/name: valkey
+  type: ClusterIP
+---
+apiVersion: v1
+automountServiceAccountToken: false
+kind: ServiceAccount
+metadata:
+  labels:
+    app.kubernetes.io/instance: valkey
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: valkey
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: valkey
+  namespace: cache
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  labels:
+    app.kubernetes.io/component: node
+    app.kubernetes.io/instance: valkey
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: valkey
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: valkey-node
+  namespace: cache
+spec:
+  podManagementPolicy: OrderedReady
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: node
+      app.kubernetes.io/instance: valkey
+      app.kubernetes.io/name: valkey
+  serviceName: valkey-headless
+  template:
+    metadata:
+      annotations:
+        checksum/configmap: iy7713k9gfhpkymw9kl3hwvfmkzv3h5s
+        checksum/health: sg5vknz1d77938v6ifrphlc6b43dns45
+        checksum/scripts: iy7713k9gfhpkymw9kl3hwvfmkzv3h5s
+        checksum/secret: '44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a'
+        prometheus.io/port: '9121'
+        prometheus.io/scrape: 'true'
+      labels:
+        app.kubernetes.io/component: node
+        app.kubernetes.io/instance: valkey
+        app.kubernetes.io/name: valkey
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/component: node
+                  app.kubernetes.io/instance: valkey
+                  app.kubernetes.io/name: valkey
+              topologyKey: kubernetes.io/hostname
+            weight: 1
+      automountServiceAccountToken: false
+      containers:
+      - command:
+        - /bin/bash
+        - '-c'
+        - |
+          export REDIS_PASSWORD="$(< $REDIS_PASSWORD_FILE)"
+          redis_exporter
+        env:
+        - name: REDIS_ALIAS
+          value: valkey
+        - name: REDIS_EXPORTER_WEB_LISTEN_ADDRESS
+          value: :9121
+        - name: REDIS_PASSWORD_FILE
+          value: /secrets/valkey-password
+        - name: REDIS_USER
+          value: default
+        image: docker.io/bitnami/redis-exporter:1.70.0-debian-12-r2
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          failureThreshold: 5
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          successThreshold: 1
+          tcpSocket:
+            port: metrics
+          timeoutSeconds: 5
+        name: metrics
+        ports:
+        - containerPort: 9121
+          name: metrics
+          protocol: TCP
+        readinessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /
+            port: metrics
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 1
+        resources:
+          limits:
+            cpu: '150m'
+            ephemeral-storage: '2Gi'
+            memory: '192Mi'
+          requests:
+            cpu: '100m'
+            ephemeral-storage: '50Mi'
+            memory: '128Mi'
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+          runAsGroup: 1001
+          runAsNonRoot: true
+          runAsUser: 1001
+          seccompProfile:
+            type: RuntimeDefault
+        volumeMounts:
+        - mountPath: /secrets
+          name: valkey-password
+        - mountPath: /tmp
+          name: empty-dir
+          subPath: tmp-dir
+      - args:
+        - '-c'
+        - /opt/bitnami/scripts/start-scripts/start-sentinel.sh
+        command:
+        - /bin/bash
+        env:
+        - name: BITNAMI_DEBUG
+          value: 'false'
+        - name: VALKEY_PASSWORD_FILE
+          value: /opt/bitnami/valkey/secrets/valkey-password
+        - name: VALKEY_SENTINEL_PORT
+          value: '26379'
+        - name: VALKEY_SENTINEL_TLS_ENABLED
+          value: 'no'
+        image: docker.io/bitnami/valkey-sentinel:8.1.1-debian-12-r0
+        imagePullPolicy: IfNotPresent
+        lifecycle:
+          preStop:
+            exec:
+              command:
+              - /bin/bash
+              - '-c'
+              - /opt/bitnami/scripts/start-scripts/prestop-sentinel.sh
+        livenessProbe:
+          exec:
+            command:
+            - sh
+            - '-c'
+            - /health/ping_sentinel.sh 5
+          failureThreshold: 6
+          initialDelaySeconds: 20
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 5
+        name: sentinel
+        ports:
+        - containerPort: 26379
+          name: valkey-sentinel
+          protocol: TCP
+        readinessProbe:
+          exec:
+            command:
+            - sh
+            - '-c'
+            - /health/ping_sentinel.sh 1
+          failureThreshold: 6
+          initialDelaySeconds: 20
+          periodSeconds: 5
+          successThreshold: 1
+          timeoutSeconds: 1
+        resources:
+          limits:
+            cpu: '150m'
+            ephemeral-storage: '2Gi'
+            memory: '192Mi'
+          requests:
+            cpu: '100m'
+            ephemeral-storage: '50Mi'
+            memory: '128Mi'
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+          runAsGroup: 1001
+          runAsNonRoot: true
+          runAsUser: 1001
+          seccompProfile:
+            type: RuntimeDefault
+        startupProbe:
+          exec:
+            command:
+            - sh
+            - '-c'
+            - /health/ping_sentinel.sh 5
+          failureThreshold: 22
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 5
+        volumeMounts:
+        - mountPath: /data
+          name: valkey-data
+        - mountPath: /health
+          name: health
+        - mountPath: /opt/bitnami/scripts/start-scripts
+          name: start-scripts
+        - mountPath: /opt/bitnami/valkey-sentinel/etc
+          name: sentinel-data
+        - mountPath: /opt/bitnami/valkey-sentinel/mounted-etc
+          name: config
+        - mountPath: /opt/bitnami/valkey/secrets
+          name: valkey-password
+        - mountPath: /tmp
+          name: empty-dir
+          subPath: tmp-dir
+      - args:
+        - '-c'
+        - /opt/bitnami/scripts/start-scripts/start-node.sh
+        command:
+        - /bin/bash
+        env:
+        - name: ALLOW_EMPTY_PASSWORD
+          value: 'no'
+        - name: BITNAMI_DEBUG
+          value: 'false'
+        - name: VALKEY_DATA_DIR
+          value: /data
+        - name: VALKEY_PASSWORD_FILE
+          value: /opt/bitnami/valkey/secrets/valkey-password
+        - name: VALKEY_PORT
+          value: '6379'
+        - name: VALKEY_PRIMARY_PASSWORD_FILE
+          value: /opt/bitnami/valkey/secrets/valkey-password
+        - name: VALKEY_PRIMARY_PORT_NUMBER
+          value: '6379'
+        - name: VALKEY_SENTINEL_PORT
+          value: '26379'
+        - name: VALKEY_SENTINEL_TLS_ENABLED
+          value: 'no'
+        - name: VALKEY_TLS_ENABLED
+          value: 'no'
+        image: docker.io/bitnamilegacy/valkey:8.1.1-debian-12-r0
+        imagePullPolicy: IfNotPresent
+        lifecycle:
+          preStop:
+            exec:
+              command:
+              - /bin/bash
+              - '-c'
+              - /opt/bitnami/scripts/start-scripts/prestop-valkey.sh
+        livenessProbe:
+          exec:
+            command:
+            - sh
+            - '-c'
+            - /health/ping_liveness_local.sh 5
+          failureThreshold: 5
+          initialDelaySeconds: 20
+          periodSeconds: 5
+          successThreshold: 1
+          timeoutSeconds: 5
+        name: valkey
+        ports:
+        - containerPort: 6379
+          name: valkey
+          protocol: TCP
+        readinessProbe:
+          exec:
+            command:
+            - sh
+            - '-c'
+            - /health/ping_readiness_local.sh 1
+          failureThreshold: 5
+          initialDelaySeconds: 20
+          periodSeconds: 5
+          successThreshold: 1
+          timeoutSeconds: 1
+        resources:
+          limits:
+            cpu: '1'
+            memory: '512Mi'
+          requests:
+            cpu: '250m'
+            memory: '512Mi'
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+          runAsGroup: 1001
+          runAsNonRoot: true
+          runAsUser: 1001
+          seccompProfile:
+            type: RuntimeDefault
+        startupProbe:
+          exec:
+            command:
+            - sh
+            - '-c'
+            - /health/ping_liveness_local.sh 5
+          failureThreshold: 22
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 5
+        volumeMounts:
+        - mountPath: /data
+          name: valkey-data
+        - mountPath: /health
+          name: health
+        - mountPath: /opt/bitnami/scripts/start-scripts
+          name: start-scripts
+        - mountPath: /opt/bitnami/valkey-sentinel/etc
+          name: sentinel-data
+        - mountPath: /opt/bitnami/valkey/etc
+          name: empty-dir
+          subPath: app-conf-dir
+        - mountPath: /opt/bitnami/valkey/mounted-etc
+          name: config
+        - mountPath: /opt/bitnami/valkey/secrets
+          name: valkey-password
+        - mountPath: /tmp
+          name: empty-dir
+          subPath: tmp-dir
+      securityContext:
+        fsGroup: 1001
+        fsGroupChangePolicy: Always
+      serviceAccountName: valkey
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - configMap:
+          defaultMode: 420
+          name: valkey-configuration
+        name: config
+      - name: empty-dir
+      - configMap:
+          defaultMode: 493
+          name: valkey-health
+        name: health
+      - name: sentinel-data
+      - configMap:
+          defaultMode: 493
+          name: valkey-scripts
+        name: start-scripts
+      - name: valkey-password
+        secret:
+          defaultMode: 420
+          items:
+          - key: valkey-password
+            path: valkey-password
+          secretName: valkey-auth
+  updateStrategy:
+    type: RollingUpdate
+  volumeClaimTemplates:
+  - metadata:
+      labels:
+        app.kubernetes.io/component: node
+        app.kubernetes.io/instance: valkey
+        app.kubernetes.io/name: valkey
+      name: valkey-data
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      resources:
+        requests:
+          storage: '8Gi'
+---
+apiVersion: kix.dev/v1alpha1
+kind: PackageInstance
+metadata:
+  annotations:
+    kix.dev/main: valkey
+    kix.dev/package-requires: ServiceAccount/valkey,ConfigMap/valkey-scripts,ConfigMap/valkey-health,ConfigMap/valkey-configuration,StatefulSet/valkey-node,Service/valkey-headless,Service/valkey-metrics
+  labels:
+    app.kubernetes.io/instance: valkey
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: valkey
+  namespace: cache
+spec:
+  instanceName: valkey
+  namespaceName: cache
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/component: cainjector
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: cainjector
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: cert-manager-cainjector
+  namespace: cert-manager
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: cainjector
+      app.kubernetes.io/instance: cert-manager
+      app.kubernetes.io/name: cainjector
+  template:
+    metadata:
+      annotations:
+        prometheus.io/path: /metrics
+        prometheus.io/port: '9402'
+        prometheus.io/scrape: 'true'
+      labels:
+        app.kubernetes.io/component: cainjector
+        app.kubernetes.io/instance: cert-manager
+        app.kubernetes.io/name: cainjector
+    spec:
+      containers:
+      - args:
+        - '--v=2'
+        - '--leader-election-namespace=cert-manager'
+        env:
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.namespace
+        image: quay.io/jetstack/cert-manager-cainjector:v1.17.1
+        imagePullPolicy: IfNotPresent
+        name: cert-manager-cainjector
+        ports:
+        - containerPort: 9402
+          name: http-metrics
+          protocol: TCP
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+      enableServiceLinks: false
+      nodeSelector:
+        kubernetes.io/os: linux
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      serviceAccountName: cert-manager-cainjector
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/component: cainjector
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: cainjector
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: cert-manager-cainjector
+  namespace: cert-manager
+spec:
+  ports:
+  - name: http-metrics
+    port: 9402
+    protocol: TCP
+    targetPort: 9402
+  selector:
+    app.kubernetes.io/component: cainjector
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/name: cainjector
+  type: ClusterIP
+---
+apiVersion: v1
+automountServiceAccountToken: true
+kind: ServiceAccount
+metadata:
+  labels:
+    app.kubernetes.io/component: cainjector
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: cainjector
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: cert-manager-cainjector
+  namespace: cert-manager
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/component: cainjector
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: cainjector
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: cert-manager-cainjector
+rules:
+- apiGroups:
+  - ''
+  resources:
+  - events
+  verbs:
+  - get
+  - create
+  - update
+  - patch
+- apiGroups:
+  - ''
+  resources:
+  - secrets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - admissionregistration.k8s.io
+  resources:
+  - validatingwebhookconfigurations
+  - mutatingwebhookconfigurations
+  verbs:
+  - get
+  - list
+  - watch
+  - update
+  - patch
+- apiGroups:
+  - apiextensions.k8s.io
+  resources:
+  - customresourcedefinitions
+  verbs:
+  - get
+  - list
+  - watch
+  - update
+  - patch
+- apiGroups:
+  - apiregistration.k8s.io
+  resources:
+  - apiservices
+  verbs:
+  - get
+  - list
+  - watch
+  - update
+  - patch
+- apiGroups:
+  - cert-manager.io
+  resources:
+  - certificates
+  verbs:
+  - get
+  - list
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/component: cainjector
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: cainjector
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: cert-manager-cainjector
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cert-manager-cainjector
+subjects:
+- kind: ServiceAccount
+  name: cert-manager-cainjector
+  namespace: cert-manager
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  labels:
+    app.kubernetes.io/component: cainjector
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: cainjector
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: cert-manager-cainjector:leaderelection
+  namespace: cert-manager
+rules:
+- apiGroups:
+  - coordination.k8s.io
+  resourceNames:
+  - cert-manager-cainjector-leader-election
+  - cert-manager-cainjector-leader-election-core
+  resources:
+  - leases
+  verbs:
+  - get
+  - update
+  - patch
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/component: cainjector
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: cainjector
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: cert-manager-cainjector:leaderelection
+  namespace: cert-manager
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cert-manager-cainjector:leaderelection
+subjects:
+- kind: ServiceAccount
+  name: cert-manager-cainjector
+  namespace: cert-manager
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: cert-manager-controller-approve:cert-manager-io
+rules:
+- apiGroups:
+  - cert-manager.io
+  resourceNames:
+  - issuers.cert-manager.io/*
+  - clusterissuers.cert-manager.io/*
+  resources:
+  - signers
+  verbs:
+  - approve
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: cert-manager-controller-approve:cert-manager-io
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cert-manager-controller-approve:cert-manager-io
+subjects:
+- kind: ServiceAccount
+  name: cert-manager
+  namespace: cert-manager
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: cert-manager-controller-certificates
+rules:
+- apiGroups:
+  - ''
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - ''
+  resources:
+  - secrets
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - delete
+  - patch
+- apiGroups:
+  - acme.cert-manager.io
+  resources:
+  - orders
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - delete
+- apiGroups:
+  - cert-manager.io
+  resources:
+  - certificates
+  - certificaterequests
+  - clusterissuers
+  - issuers
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - cert-manager.io
+  resources:
+  - certificates
+  - certificates/status
+  - certificaterequests
+  - certificaterequests/status
+  verbs:
+  - patch
+  - update
+- apiGroups:
+  - cert-manager.io
+  resources:
+  - certificates/finalizers
+  - certificaterequests/finalizers
+  verbs:
+  - update
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: cert-manager-controller-certificates
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cert-manager-controller-certificates
+subjects:
+- kind: ServiceAccount
+  name: cert-manager
+  namespace: cert-manager
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: cert-manager-controller-certificatesigningrequests
+rules:
+- apiGroups:
+  - authorization.k8s.io
+  resources:
+  - subjectaccessreviews
+  verbs:
+  - create
+- apiGroups:
+  - certificates.k8s.io
+  resourceNames:
+  - issuers.cert-manager.io/*
+  - clusterissuers.cert-manager.io/*
+  resources:
+  - signers
+  verbs:
+  - sign
+- apiGroups:
+  - certificates.k8s.io
+  resources:
+  - certificatesigningrequests
+  verbs:
+  - get
+  - list
+  - watch
+  - update
+- apiGroups:
+  - certificates.k8s.io
+  resources:
+  - certificatesigningrequests/status
+  verbs:
+  - update
+  - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: cert-manager-controller-certificatesigningrequests
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cert-manager-controller-certificatesigningrequests
+subjects:
+- kind: ServiceAccount
+  name: cert-manager
+  namespace: cert-manager
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: cert-manager-controller-challenges
+rules:
+- apiGroups:
+  - ''
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - ''
+  resources:
+  - pods
+  - services
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - delete
+- apiGroups:
+  - ''
+  resources:
+  - secrets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - acme.cert-manager.io
+  resources:
+  - challenges
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - acme.cert-manager.io
+  resources:
+  - challenges
+  - challenges/status
+  verbs:
+  - patch
+  - update
+- apiGroups:
+  - acme.cert-manager.io
+  resources:
+  - challenges/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - cert-manager.io
+  resources:
+  - issuers
+  - clusterissuers
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - gateway.networking.k8s.io
+  resources:
+  - httproutes
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - delete
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - ingresses
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - delete
+- apiGroups:
+  - route.openshift.io
+  resources:
+  - routes/custom-host
+  verbs:
+  - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: cert-manager-controller-challenges
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cert-manager-controller-challenges
+subjects:
+- kind: ServiceAccount
+  name: cert-manager
+  namespace: cert-manager
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: cert-manager-controller-clusterissuers
+rules:
+- apiGroups:
+  - ''
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - ''
+  resources:
+  - secrets
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - delete
+- apiGroups:
+  - cert-manager.io
+  resources:
+  - clusterissuers
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - cert-manager.io
+  resources:
+  - clusterissuers
+  - clusterissuers/status
+  verbs:
+  - patch
+  - update
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: cert-manager-controller-clusterissuers
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cert-manager-controller-clusterissuers
+subjects:
+- kind: ServiceAccount
+  name: cert-manager
+  namespace: cert-manager
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: cert-manager-controller-ingress-shim
+rules:
+- apiGroups:
+  - ''
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - cert-manager.io
+  resources:
+  - certificates
+  - certificaterequests
+  verbs:
+  - create
+  - update
+  - delete
+- apiGroups:
+  - cert-manager.io
+  resources:
+  - certificates
+  - certificaterequests
+  - issuers
+  - clusterissuers
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - gateway.networking.k8s.io
+  resources:
+  - gateways
+  - httproutes
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - gateway.networking.k8s.io
+  resources:
+  - gateways/finalizers
+  - httproutes/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - ingresses
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - ingresses/finalizers
+  verbs:
+  - update
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: cert-manager-controller-ingress-shim
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cert-manager-controller-ingress-shim
+subjects:
+- kind: ServiceAccount
+  name: cert-manager
+  namespace: cert-manager
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: cert-manager-controller-issuers
+rules:
+- apiGroups:
+  - ''
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - ''
+  resources:
+  - secrets
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - delete
+- apiGroups:
+  - cert-manager.io
+  resources:
+  - issuers
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - cert-manager.io
+  resources:
+  - issuers
+  - issuers/status
+  verbs:
+  - patch
+  - update
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: cert-manager-controller-issuers
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cert-manager-controller-issuers
+subjects:
+- kind: ServiceAccount
+  name: cert-manager
+  namespace: cert-manager
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: cert-manager-controller-orders
+rules:
+- apiGroups:
+  - ''
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - ''
+  resources:
+  - secrets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - acme.cert-manager.io
+  resources:
+  - challenges
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - delete
+- apiGroups:
+  - acme.cert-manager.io
+  resources:
+  - orders
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - acme.cert-manager.io
+  resources:
+  - orders
+  - orders/status
+  verbs:
+  - patch
+  - update
+- apiGroups:
+  - acme.cert-manager.io
+  resources:
+  - orders/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - cert-manager.io
+  resources:
+  - clusterissuers
+  - issuers
+  verbs:
+  - get
+  - list
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: cert-manager-controller-orders
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cert-manager-controller-orders
+subjects:
+- kind: ServiceAccount
+  name: cert-manager
+  namespace: cert-manager
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: cert-manager-tokenrequest
+  namespace: cert-manager
+rules:
+- apiGroups:
+  - ''
+  resourceNames:
+  - cert-manager
+  resources:
+  - serviceaccounts/token
+  verbs:
+  - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: cert-manager-cert-manager-tokenrequest
+  namespace: cert-manager
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cert-manager-tokenrequest
+subjects:
+- kind: ServiceAccount
+  name: cert-manager
+  namespace: cert-manager
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  labels:
+    app.kubernetes.io/component: webhook
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: webhook
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: cert-manager-webhook:dynamic-serving
+  namespace: cert-manager
+rules:
+- apiGroups:
+  - ''
+  resourceNames:
+  - cert-manager-webhook-ca
+  resources:
+  - secrets
+  verbs:
+  - get
+  - list
+  - watch
+  - update
+- apiGroups:
+  - ''
+  resources:
+  - secrets
+  verbs:
+  - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/component: webhook
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: webhook
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: cert-manager-webhook:dynamic-serving
+  namespace: cert-manager
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cert-manager-webhook:dynamic-serving
+subjects:
+- kind: ServiceAccount
+  name: cert-manager-webhook
+  namespace: cert-manager
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/component: webhook
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: webhook
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: cert-manager-webhook:subjectaccessreviews
+rules:
+- apiGroups:
+  - authorization.k8s.io
+  resources:
+  - subjectaccessreviews
+  verbs:
+  - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/component: webhook
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: webhook
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: cert-manager-webhook:subjectaccessreviews
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cert-manager-webhook:subjectaccessreviews
+subjects:
+- kind: ServiceAccount
+  name: cert-manager-webhook
+  namespace: cert-manager
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: cert-manager:leaderelection
+  namespace: cert-manager
+rules:
+- apiGroups:
+  - coordination.k8s.io
+  resourceNames:
+  - cert-manager-controller
+  resources:
+  - leases
+  verbs:
+  - get
+  - update
+  - patch
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: cert-manager:leaderelection
+  namespace: cert-manager
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cert-manager:leaderelection
+subjects:
+- kind: ServiceAccount
+  name: cert-manager
+  namespace: cert-manager
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: kix-example
+    rbac.authorization.k8s.io/aggregate-to-cluster-reader: 'true'
+    team: platform
+  name: cert-manager-cluster-view
+rules:
+- apiGroups:
+  - cert-manager.io
+  resources:
+  - clusterissuers
+  verbs:
+  - get
+  - list
+  - watch
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: cert-manager
+  namespace: cert-manager
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: controller
+      app.kubernetes.io/instance: cert-manager
+      app.kubernetes.io/name: cert-manager
+  template:
+    metadata:
+      annotations:
+        prometheus.io/path: /metrics
+        prometheus.io/port: '9402'
+        prometheus.io/scrape: 'true'
+      labels:
+        app.kubernetes.io/component: controller
+        app.kubernetes.io/instance: cert-manager
+        app.kubernetes.io/name: cert-manager
+    spec:
+      containers:
+      - args:
+        - '--v=2'
+        - '--cluster-resource-namespace=$(POD_NAMESPACE)'
+        - '--acme-http01-solver-image=quay.io/jetstack/cert-manager-acmesolver:v1.17.1'
+        - '--leader-election-namespace=cert-manager'
+        - '--max-concurrent-challenges=60'
+        env:
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.namespace
+        image: quay.io/jetstack/cert-manager-controller:v1.17.1
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          failureThreshold: 8
+          httpGet:
+            path: /livez
+            port: http-healthz
+            scheme: HTTP
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 15
+        name: cert-manager-controller
+        ports:
+        - containerPort: 9402
+          name: http-metrics
+          protocol: TCP
+        - containerPort: 9403
+          name: http-healthz
+          protocol: TCP
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+      enableServiceLinks: false
+      nodeSelector:
+        kubernetes.io/os: linux
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      serviceAccountName: cert-manager
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: cert-manager
+  namespace: cert-manager
+spec:
+  ports:
+  - name: tcp-prometheus-servicemonitor
+    port: 9402
+    protocol: TCP
+    targetPort: 9402
+  selector:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/name: cert-manager
+  type: ClusterIP
+---
+apiVersion: v1
+automountServiceAccountToken: true
+kind: ServiceAccount
+metadata:
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: cert-manager
+  namespace: cert-manager
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: certificaterequests.cert-manager.io
+spec:
+  group: cert-manager.io
+  names:
+    categories:
+    - cert-manager
+    kind: CertificateRequest
+    listKind: CertificateRequestList
+    plural: certificaterequests
+    shortNames:
+    - cr
+    - crs
+    singular: certificaterequest
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: '.status.conditions[?(@.type=="Approved")].status'
+      name: Approved
+      type: string
+    - jsonPath: '.status.conditions[?(@.type=="Denied")].status'
+      name: Denied
+      type: string
+    - jsonPath: '.status.conditions[?(@.type=="Ready")].status'
+      name: Ready
+      type: string
+    - jsonPath: '.spec.issuerRef.name'
+      name: Issuer
+      type: string
+    - jsonPath: '.spec.username'
+      name: Requester
+      type: string
+    - jsonPath: '.status.conditions[?(@.type=="Ready")].message'
+      name: Status
+      priority: 1
+      type: string
+    - jsonPath: '.metadata.creationTimestamp'
+      name: Age
+      type: date
+    name: v1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            type: string
+          kind:
+            type: string
+          metadata:
+            type: object
+          spec:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+          status:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+        type: object
+    served: true
+    storage: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: certificates.cert-manager.io
+spec:
+  group: cert-manager.io
+  names:
+    categories:
+    - cert-manager
+    kind: Certificate
+    listKind: CertificateList
+    plural: certificates
+    shortNames:
+    - cert
+    - certs
+    singular: certificate
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: '.status.conditions[?(@.type=="Ready")].status'
+      name: Ready
+      type: string
+    - jsonPath: '.spec.secretName'
+      name: Secret
+      type: string
+    - jsonPath: '.spec.issuerRef.name'
+      name: Issuer
+      type: string
+    - jsonPath: '.status.conditions[?(@.type=="Ready")].message'
+      name: Status
+      priority: 1
+      type: string
+    - jsonPath: '.metadata.creationTimestamp'
+      name: Age
+      type: date
+    name: v1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            type: string
+          kind:
+            type: string
+          metadata:
+            type: object
+          spec:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+          status:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+        type: object
+    served: true
+    storage: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: challenges.acme.cert-manager.io
+spec:
+  group: acme.cert-manager.io
+  names:
+    categories:
+    - cert-manager
+    - cert-manager-acme
+    kind: Challenge
+    listKind: ChallengeList
+    plural: challenges
+    singular: challenge
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: '.status.state'
+      name: State
+      type: string
+    - jsonPath: '.spec.dnsName'
+      name: Domain
+      type: string
+    - jsonPath: '.status.reason'
+      name: Reason
+      priority: 1
+      type: string
+    - jsonPath: '.metadata.creationTimestamp'
+      name: Age
+      type: date
+    name: v1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            type: string
+          kind:
+            type: string
+          metadata:
+            type: object
+          spec:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+          status:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+        type: object
+    served: true
+    storage: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: clusterissuers.cert-manager.io
+spec:
+  group: cert-manager.io
+  names:
+    categories:
+    - cert-manager
+    kind: ClusterIssuer
+    listKind: ClusterIssuerList
+    plural: clusterissuers
+    singular: clusterissuer
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: '.status.conditions[?(@.type=="Ready")].status'
+      name: Ready
+      type: string
+    - jsonPath: '.status.conditions[?(@.type=="Ready")].message'
+      name: Status
+      priority: 1
+      type: string
+    - jsonPath: '.metadata.creationTimestamp'
+      name: Age
+      type: date
+    name: v1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            type: string
+          kind:
+            type: string
+          metadata:
+            type: object
+          spec:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+          status:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+        type: object
+    served: true
+    storage: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: issuers.cert-manager.io
+spec:
+  group: cert-manager.io
+  names:
+    categories:
+    - cert-manager
+    kind: Issuer
+    listKind: IssuerList
+    plural: issuers
+    singular: issuer
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: '.status.conditions[?(@.type=="Ready")].status'
+      name: Ready
+      type: string
+    - jsonPath: '.status.conditions[?(@.type=="Ready")].message'
+      name: Status
+      priority: 1
+      type: string
+    - jsonPath: '.metadata.creationTimestamp'
+      name: Age
+      type: date
+    name: v1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            type: string
+          kind:
+            type: string
+          metadata:
+            type: object
+          spec:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+          status:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+        type: object
+    served: true
+    storage: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: orders.acme.cert-manager.io
+spec:
+  group: acme.cert-manager.io
+  names:
+    categories:
+    - cert-manager
+    - cert-manager-acme
+    kind: Order
+    listKind: OrderList
+    plural: orders
+    singular: order
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: '.status.state'
+      name: State
+      type: string
+    - jsonPath: '.spec.issuerRef.name'
+      name: Issuer
+      type: string
+    - jsonPath: '.status.reason'
+      name: Reason
+      priority: 1
+      type: string
+    - jsonPath: '.metadata.creationTimestamp'
+      name: Age
+      type: date
+    name: v1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            type: string
+          kind:
+            type: string
+          metadata:
+            type: object
+          spec:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+          status:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+        type: object
+    served: true
+    storage: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: kix-example
+    rbac.authorization.k8s.io/aggregate-to-admin: 'true'
+    rbac.authorization.k8s.io/aggregate-to-edit: 'true'
+    team: platform
+  name: cert-manager-edit
+rules:
+- apiGroups:
+  - acme.cert-manager.io
+  resources:
+  - challenges
+  - orders
+  verbs:
+  - create
+  - delete
+  - deletecollection
+  - patch
+  - update
+- apiGroups:
+  - cert-manager.io
+  resources:
+  - certificates
+  - certificaterequests
+  - issuers
+  verbs:
+  - create
+  - delete
+  - deletecollection
+  - patch
+  - update
+- apiGroups:
+  - cert-manager.io
+  resources:
+  - certificates/status
+  verbs:
+  - update
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  annotations:
+    cert-manager.io/inject-ca-from-secret: cert-manager/cert-manager-webhook-ca
+  labels:
+    app.kubernetes.io/component: webhook
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: webhook
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: cert-manager-webhook
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: cert-manager-webhook
+      namespace: cert-manager
+      path: /mutate
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: webhook.cert-manager.io
+  rules:
+  - apiGroups:
+    - cert-manager.io
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    resources:
+    - certificaterequests
+  sideEffects: None
+  timeoutSeconds: 30
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  annotations:
+    cert-manager.io/inject-ca-from-secret: cert-manager/cert-manager-webhook-ca
+  labels:
+    app.kubernetes.io/component: webhook
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: webhook
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: cert-manager-webhook
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: cert-manager-webhook
+      namespace: cert-manager
+      path: /validate
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: webhook.cert-manager.io
+  namespaceSelector:
+    matchExpressions:
+    - key: cert-manager.io/disable-validation
+      operator: NotIn
+      values:
+      - 'true'
+  rules:
+  - apiGroups:
+    - cert-manager.io
+    - acme.cert-manager.io
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - '*/*'
+  sideEffects: None
+  timeoutSeconds: 30
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: kix-example
+    rbac.authorization.k8s.io/aggregate-to-admin: 'true'
+    rbac.authorization.k8s.io/aggregate-to-cluster-reader: 'true'
+    rbac.authorization.k8s.io/aggregate-to-edit: 'true'
+    rbac.authorization.k8s.io/aggregate-to-view: 'true'
+    team: platform
+  name: cert-manager-view
+rules:
+- apiGroups:
+  - acme.cert-manager.io
+  resources:
+  - challenges
+  - orders
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - cert-manager.io
+  resources:
+  - certificates
+  - certificaterequests
+  - issuers
+  verbs:
+  - get
+  - list
+  - watch
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/component: webhook
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: webhook
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: cert-manager-webhook
+  namespace: cert-manager
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: webhook
+      app.kubernetes.io/instance: cert-manager
+      app.kubernetes.io/name: webhook
+  template:
+    metadata:
+      annotations:
+        prometheus.io/path: /metrics
+        prometheus.io/port: '9402'
+        prometheus.io/scrape: 'true'
+      labels:
+        app.kubernetes.io/component: webhook
+        app.kubernetes.io/instance: cert-manager
+        app.kubernetes.io/name: webhook
+    spec:
+      containers:
+      - args:
+        - '--v=2'
+        - '--secure-port=10250'
+        - '--dynamic-serving-ca-secret-namespace=$(POD_NAMESPACE)'
+        - '--dynamic-serving-ca-secret-name=cert-manager-webhook-ca'
+        - '--dynamic-serving-dns-names=cert-manager-webhook'
+        - '--dynamic-serving-dns-names=cert-manager-webhook.$(POD_NAMESPACE)'
+        - '--dynamic-serving-dns-names=cert-manager-webhook.$(POD_NAMESPACE).svc'
+        env:
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.namespace
+        image: quay.io/jetstack/cert-manager-webhook:v1.17.1
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /livez
+            port: 6080
+            scheme: HTTP
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 1
+        name: cert-manager-webhook
+        ports:
+        - containerPort: 10250
+          name: https
+          protocol: TCP
+        - containerPort: 6080
+          name: healthcheck
+          protocol: TCP
+        - containerPort: 9402
+          name: http-metrics
+          protocol: TCP
+        readinessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /healthz
+            port: 6080
+            scheme: HTTP
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          successThreshold: 1
+          timeoutSeconds: 1
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+      enableServiceLinks: false
+      nodeSelector:
+        kubernetes.io/os: linux
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      serviceAccountName: cert-manager-webhook
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/component: webhook
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: webhook
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: cert-manager-webhook
+  namespace: cert-manager
+spec:
+  ports:
+  - name: https
+    port: 443
+    protocol: TCP
+    targetPort: https
+  - name: metrics
+    port: 9402
+    protocol: TCP
+    targetPort: http-metrics
+  selector:
+    app.kubernetes.io/component: webhook
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/name: webhook
+  type: ClusterIP
+---
+apiVersion: v1
+automountServiceAccountToken: true
+kind: ServiceAccount
+metadata:
+  labels:
+    app.kubernetes.io/component: webhook
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: webhook
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: cert-manager-webhook
+  namespace: cert-manager
+---
+apiVersion: kix.dev/v1alpha1
+kind: PackageInstance
+metadata:
+  annotations:
+    kix.dev/inverse-deps: ClusterRoleBinding/cert-manager-cainjector,RoleBinding/cert-manager-cainjector:leaderelection,ClusterRoleBinding/cert-manager-controller-approve:cert-manager-io,ClusterRoleBinding/cert-manager-controller-certificates,ClusterRoleBinding/cert-manager-controller-certificatesigningrequests,ClusterRoleBinding/cert-manager-controller-challenges,ClusterRoleBinding/cert-manager-controller-clusterissuers,ClusterRoleBinding/cert-manager-controller-ingress-shim,ClusterRoleBinding/cert-manager-controller-issuers,ClusterRoleBinding/cert-manager-controller-orders,Role/cert-manager-tokenrequest,RoleBinding/cert-manager-cert-manager-tokenrequest,RoleBinding/cert-manager-webhook:dynamic-serving,ClusterRoleBinding/cert-manager-webhook:subjectaccessreviews,RoleBinding/cert-manager:leaderelection
+    kix.dev/main: cert-manager
+    kix.dev/package-requires: CustomResourceDefinition/certificates.cert-manager.io,CustomResourceDefinition/certificaterequests.cert-manager.io,CustomResourceDefinition/challenges.acme.cert-manager.io,CustomResourceDefinition/clusterissuers.cert-manager.io,CustomResourceDefinition/issuers.cert-manager.io,CustomResourceDefinition/orders.acme.cert-manager.io,ServiceAccount/cert-manager,Service/cert-manager,ClusterRole/cert-manager-cluster-view,ClusterRole/cert-manager-view,ClusterRole/cert-manager-edit,ServiceAccount/cert-manager-webhook,Service/cert-manager-webhook,Deployment/cert-manager-webhook,MutatingWebhookConfiguration/cert-manager-webhook,ValidatingWebhookConfiguration/cert-manager-webhook,ServiceAccount/cert-manager-cainjector,Service/cert-manager-cainjector,Deployment/cert-manager-cainjector
+  labels:
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: cert-manager
+  namespace: cert-manager
+spec:
+  instanceName: cert-manager
+  namespaceName: cert-manager
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/instance: immich
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: immich-server
+  namespace: immich
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: immich
+      app.kubernetes.io/name: immich
+  strategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: immich
+        app.kubernetes.io/name: immich
+    spec:
+      containers:
+      - env:
+        - name: DB_HOSTNAME
+          value: postgres.immich.svc.cluster.local
+        - name: DB_PORT
+          value: '5432'
+        - name: IMMICH_MACHINE_LEARNING_URL
+          value: http://machineLearning.immich.svc.cluster.local:3003
+        - name: REDIS_HOSTNAME
+          value: valkey.cache.svc.cluster.local
+        image: ghcr.io/immich-app/immich-server:v2.0.0
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /api/server/ping
+            port: http
+          periodSeconds: 10
+          timeoutSeconds: 1
+        name: immich-server
+        ports:
+        - containerPort: 2283
+          name: http
+          protocol: TCP
+        readinessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /api/server/ping
+            port: http
+          periodSeconds: 10
+          timeoutSeconds: 1
+        startupProbe:
+          failureThreshold: 30
+          httpGet:
+            path: /api/server/ping
+            port: http
+          periodSeconds: 10
+          timeoutSeconds: 1
+        volumeMounts:
+        - mountPath: /usr/src/app/upload
+          name: storage
+      volumes:
+      - name: storage
+        persistentVolumeClaim:
+          claimName: storage
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/instance: immich
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: immich-server
+  namespace: immich
+spec:
+  ports:
+  - name: http
+    port: 2283
+    protocol: TCP
+    targetPort: http
+  selector:
+    app.kubernetes.io/instance: immich
+    app.kubernetes.io/name: immich
+  type: ClusterIP
+---
+apiVersion: kix.dev/v1alpha1
+kind: PackageInstance
+metadata:
+  annotations:
+    kix.dev/main: immich-server
+  labels:
+    app.kubernetes.io/instance: immich
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: immich
+  namespace: immich
+spec:
+  instanceName: immich
+  namespaceName: immich
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/instance: machineLearning
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: machineLearning
+  namespace: immich
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: machineLearning
+      app.kubernetes.io/name: machineLearning
+  strategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: machineLearning
+        app.kubernetes.io/name: machineLearning
+    spec:
+      containers:
+      - env:
+        - name: HF_XET_CACHE
+          value: /cache/huggingface-xet
+        - name: MPLCONFIGDIR
+          value: /cache/matplotlib-config
+        - name: TRANSFORMERS_CACHE
+          value: /cache
+        image: ghcr.io/immich-app/immich-machine-learning:v2.0.0
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /ping
+            port: http
+          periodSeconds: 10
+          timeoutSeconds: 1
+        name: immich-machine-learning
+        ports:
+        - containerPort: 3003
+          name: http
+          protocol: TCP
+        readinessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /ping
+            port: http
+          periodSeconds: 10
+          timeoutSeconds: 1
+        startupProbe:
+          failureThreshold: 60
+          httpGet:
+            path: /ping
+            port: http
+          periodSeconds: 10
+          timeoutSeconds: 1
+        volumeMounts:
+        - mountPath: /cache
+          name: cache
+      volumes:
+      - name: cache
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/instance: machineLearning
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: machineLearning
+  namespace: immich
+spec:
+  ports:
+  - name: http
+    port: 3003
+    protocol: TCP
+    targetPort: http
+  selector:
+    app.kubernetes.io/instance: machineLearning
+    app.kubernetes.io/name: machineLearning
+  type: ClusterIP
+---
+apiVersion: kix.dev/v1alpha1
+kind: PackageInstance
+metadata:
+  annotations:
+    kix.dev/main: machineLearning
+  labels:
+    app.kubernetes.io/instance: machineLearning
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: machineLearning
+  namespace: immich
+spec:
+  instanceName: machineLearning
+  namespaceName: immich
+---
+apiVersion: stackgres.io/v1
+kind: SGCluster
+metadata:
+  labels:
+    app.kubernetes.io/instance: postgres
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: stackgres-cluster
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: postgres
+  namespace: immich
+spec:
+  configurations:
+    sgPostgresConfig: postgres-config
+  instances: 2
+  pods:
+    persistentVolume:
+      size: '20Gi'
+      storageClass: localzfs-retain
+  postgres:
+    extensions:
+    - name: vectors
+      publisher: tensorchord
+      version: '0.3.0'
+    flavor: vanilla
+    ssl:
+      enabled: true
+    version: '16'
+  postgresServices:
+    primary:
+      enabled: true
+      type: ClusterIP
+    replicas:
+      enabled: true
+      type: ClusterIP
+  profile: production
+  prometheusAutobind: true
+  replication:
+    mode: async
+    role: ha-read
+  sgInstanceProfile: postgres-profile
+---
+apiVersion: stackgres.io/v1
+kind: SGInstanceProfile
+metadata:
+  labels:
+    app.kubernetes.io/instance: postgres
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: stackgres-cluster
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: postgres-profile
+  namespace: immich
+spec:
+  cpu: '1'
+  memory: '2Gi'
+---
+apiVersion: stackgres.io/v1
+kind: SGPostgresConfig
+metadata:
+  labels:
+    app.kubernetes.io/instance: postgres
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: stackgres-cluster
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: postgres-config
+  namespace: immich
+spec:
+  postgresVersion: '16'
+  postgresql.conf:
+    autovacuum_max_workers: '3'
+    autovacuum_vacuum_cost_delay: '2ms'
+    autovacuum_vacuum_scale_factor: '0.04'
+    autovacuum_work_mem: '512MB'
+    checkpoint_completion_target: '0.9'
+    checkpoint_timeout: '15min'
+    default_statistics_target: '100'
+    default_toast_compression: lz4
+    effective_cache_size: '1536MB'
+    effective_io_concurrency: '200'
+    enable_partitionwise_aggregate: 'on'
+    enable_partitionwise_join: 'on'
+    huge_pages: 'off'
+    jit_inline_above_cost: '-1'
+    lc_monetary: C.UTF-8
+    lc_numeric: C.UTF-8
+    lc_time: C.UTF-8
+    log_autovacuum_min_duration: '0ms'
+    log_checkpoints: 'on'
+    log_connections: 'on'
+    log_disconnections: 'on'
+    log_line_prefix: '%t [%p]: db=%d,user=%u,app=%a,client=%h '
+    log_lock_waits: 'on'
+    log_min_duration_statement: '1s'
+    log_statement: none
+    log_temp_files: '0kB'
+    maintenance_work_mem: '128MB'
+    max_connections: '200'
+    max_locks_per_transaction: '128'
+    max_parallel_maintenance_workers: '1'
+    max_parallel_workers: '2'
+    max_parallel_workers_per_gather: '1'
+    max_pred_locks_per_transaction: '128'
+    max_prepared_transactions: '32'
+    max_replication_slots: '20'
+    max_wal_senders: '20'
+    max_wal_size: '4GB'
+    max_worker_processes: '2'
+    min_wal_size: '1GB'
+    pg_stat_statements.track_utility: 'off'
+    random_page_cost: '1.1'
+    shared_buffers: '512MB'
+    shared_preload_libraries: pg_stat_statements, auto_explain
+    superuser_reserved_connections: '8'
+    timescaledb.license: timescale
+    track_activity_query_size: '4kB'
+    track_commit_timestamp: 'on'
+    track_functions: pl
+    track_io_timing: 'on'
+    vacuum_cost_limit: '400'
+    wal_buffers: '16MB'
+    wal_keep_size: '1536MB'
+    work_mem: '100MB'
+---
+apiVersion: kix.dev/v1alpha1
+kind: PackageInstance
+metadata:
+  annotations:
+    kix.dev/main: postgres
+    kix.dev/package-requires: SGInstanceProfile/postgres-profile,SGPostgresConfig/postgres-config
+  labels:
+    app.kubernetes.io/instance: postgres
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: postgres
+  namespace: immich
+spec:
+  instanceName: postgres
+  namespaceName: immich
+---
+apiVersion: kix.dev/v1alpha1
+kind: PackageInstance
+metadata:
+  annotations:
+    kix.dev/main: storage
+  labels:
+    app.kubernetes.io/instance: storage
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: storage
+  namespace: immich
+spec:
+  instanceName: storage
+  namespaceName: immich
+---
+apiVersion: v1
+data:
+  Corefile: |-
+    .:53 {
+        errors
+        health {
+            lameduck 10s
+        }
+        ready
+        kubernetes cluster.local in-addr.arpa ip6.arpa {
+            pods insecure
+            fallthrough in-addr.arpa ip6.arpa
+            ttl 30
+        }
+        prometheus 0.0.0.0:9153
+        forward . /etc/resolv.conf
+        cache 30
+        loop
+        reload
+        loadbalance
+    }
+kind: ConfigMap
+metadata:
+  labels:
+    app.kubernetes.io/instance: coredns
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: coredns
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: coredns
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/instance: coredns
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: coredns
+    app.kubernetes.io/part-of: kix-example
+    k8s-app: coredns
+    kubernetes.io/cluster-service: 'true'
+    kubernetes.io/name: CoreDNS
+    team: platform
+  name: coredns
+rules:
+- apiGroups:
+  - ''
+  resources:
+  - endpoints
+  - services
+  - pods
+  - namespaces
+  verbs:
+  - list
+  - watch
+- apiGroups:
+  - discovery.k8s.io
+  resources:
+  - endpointslices
+  verbs:
+  - list
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/instance: coredns
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: coredns
+    app.kubernetes.io/part-of: kix-example
+    k8s-app: coredns
+    kubernetes.io/cluster-service: 'true'
+    kubernetes.io/name: CoreDNS
+    team: platform
+  name: coredns
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: coredns
+subjects:
+- kind: ServiceAccount
+  name: coredns
+  namespace: kube-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/instance: coredns
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: coredns
+    app.kubernetes.io/part-of: kix-example
+    app.kubernetes.io/version: '1.13.1'
+    k8s-app: coredns
+    kubernetes.io/cluster-service: 'true'
+    kubernetes.io/name: CoreDNS
+    team: platform
+  name: coredns
+  namespace: kube-system
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: coredns
+      app.kubernetes.io/name: coredns
+      k8s-app: coredns
+  strategy:
+    rollingUpdate:
+      maxSurge: '25%'
+      maxUnavailable: 1
+    type: RollingUpdate
+  template:
+    metadata:
+      annotations:
+        scheduler.alpha.kubernetes.io/tolerations: '[{"key":"CriticalAddonsOnly", "operator":"Exists"}]'
+      labels:
+        app.kubernetes.io/instance: coredns
+        app.kubernetes.io/name: coredns
+        k8s-app: coredns
+    spec:
+      containers:
+      - args:
+        - '-conf'
+        - /etc/coredns/Corefile
+        image: coredns/coredns:1.13.1
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          failureThreshold: 5
+          httpGet:
+            path: /health
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 5
+        name: coredns
+        ports:
+        - containerPort: 53
+          name: udp-53
+          protocol: UDP
+        - containerPort: 53
+          name: tcp-53
+          protocol: TCP
+        - containerPort: 9153
+          name: tcp-9153
+          protocol: TCP
+        readinessProbe:
+          failureThreshold: 1
+          httpGet:
+            path: /ready
+            port: 8181
+            scheme: HTTP
+          initialDelaySeconds: 30
+          periodSeconds: 5
+          successThreshold: 1
+          timeoutSeconds: 5
+        resources:
+          limits:
+            cpu: '100m'
+            memory: '128Mi'
+          requests:
+            cpu: '100m'
+            memory: '128Mi'
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            add:
+            - NET_BIND_SERVICE
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        volumeMounts:
+        - mountPath: /etc/coredns
+          name: config-volume
+      dnsPolicy: Default
+      serviceAccountName: coredns
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - configMap:
+          defaultMode: 420
+          items:
+          - key: Corefile
+            path: Corefile
+          name: coredns
+        name: config-volume
+---
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    prometheus.io/port: '9153'
+    prometheus.io/scrape: 'true'
+  labels:
+    app.kubernetes.io/component: metrics
+    app.kubernetes.io/instance: coredns
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: coredns
+    app.kubernetes.io/part-of: kix-example
+    k8s-app: coredns
+    kubernetes.io/cluster-service: 'true'
+    kubernetes.io/name: CoreDNS
+    team: platform
+  name: coredns-metrics
+  namespace: kube-system
+spec:
+  ports:
+  - name: metrics
+    port: 9153
+    protocol: TCP
+    targetPort: 9153
+  selector:
+    app.kubernetes.io/instance: coredns
+    app.kubernetes.io/name: coredns
+    k8s-app: coredns
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/instance: coredns
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: coredns
+    app.kubernetes.io/part-of: kix-example
+    k8s-app: coredns
+    kubernetes.io/cluster-service: 'true'
+    kubernetes.io/name: CoreDNS
+    team: platform
+  name: coredns
+  namespace: kube-system
+spec:
+  ports:
+  - name: udp-53
+    port: 53
+    protocol: UDP
+    targetPort: 53
+  - name: tcp-53
+    port: 53
+    protocol: TCP
+    targetPort: 53
+  selector:
+    app.kubernetes.io/instance: coredns
+    app.kubernetes.io/name: coredns
+    k8s-app: coredns
+  type: ClusterIP
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    app.kubernetes.io/instance: coredns
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: coredns
+    app.kubernetes.io/part-of: kix-example
+    k8s-app: coredns
+    kubernetes.io/cluster-service: 'true'
+    kubernetes.io/name: CoreDNS
+    team: platform
+  name: coredns
+  namespace: kube-system
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  labels:
+    app.kubernetes.io/instance: coredns
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: coredns
+    app.kubernetes.io/part-of: kix-example
+    k8s-app: coredns
+    kubernetes.io/cluster-service: 'true'
+    kubernetes.io/name: CoreDNS
+    team: platform
+  name: coredns
+  namespace: kube-system
+spec:
+  endpoints:
+  - port: metrics
+  namespaceSelector:
+    matchNames:
+    - kube-system
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: metrics
+      app.kubernetes.io/instance: coredns
+      app.kubernetes.io/managed-by: kix
+      app.kubernetes.io/name: coredns
+      app.kubernetes.io/part-of: kix-example
+      k8s-app: coredns
+      kubernetes.io/cluster-service: 'true'
+      kubernetes.io/name: CoreDNS
+      team: platform
+---
+apiVersion: kix.dev/v1alpha1
+kind: PackageInstance
+metadata:
+  annotations:
+    kix.dev/inverse-deps: ClusterRoleBinding/coredns
+    kix.dev/main: coredns
+  labels:
+    app.kubernetes.io/instance: coredns
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: coredns
+  namespace: kube-system
+spec:
+  instanceName: coredns
+  namespaceName: kube-system
+---
+allowVolumeExpansion: true
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  annotations:
+    storageclass.kubernetes.io/is-default-class: 'true'
+  labels:
+    app.kubernetes.io/instance: storage-classes
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: lbs1-pool1-2x
+parameters:
+  fsType: xfs
+  ioTimeout: '300'
+  local: 'true'
+  protocol: nvmf
+  repl: '2'
+  thin: 'true'
+provisioner: io.openebs.csi-mayastor
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+---
+allowVolumeExpansion: true
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  labels:
+    app.kubernetes.io/instance: storage-classes
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: localzfs
+parameters:
+  compression: 'on'
+  dedup: 'off'
+  fstype: zfs
+  poolname: zfspool0
+  recordsize: '128k'
+provisioner: zfs.csi.openebs.io
+reclaimPolicy: Delete
+volumeBindingMode: WaitForFirstConsumer
+---
+allowVolumeExpansion: true
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  labels:
+    app.kubernetes.io/instance: storage-classes
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: localzfs-retain
+parameters:
+  compression: 'on'
+  dedup: 'off'
+  fstype: zfs
+  poolname: zfspool0
+  recordsize: '128k'
+provisioner: zfs.csi.openebs.io
+reclaimPolicy: Retain
+volumeBindingMode: WaitForFirstConsumer
+---
+apiVersion: kix.dev/v1alpha1
+kind: PackageInstance
+metadata:
+  annotations:
+    kix.dev/main: lbs1-pool1-2x
+    kix.dev/package-requires: StorageClass/lbs1-pool1-2x,StorageClass/localzfs,StorageClass/localzfs-retain
+  labels:
+    app.kubernetes.io/instance: storage-classes
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: storage-classes
+  namespace: kube-system
+spec:
+  instanceName: storage-classes
+  namespaceName: kube-system
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kix
+    kubernetes.io/metadata.name: cache
+  name: cache
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kix
+    kubernetes.io/metadata.name: cert-manager
+  name: cert-manager
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kix
+    kubernetes.io/metadata.name: immich
+  name: immich
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kix
+    kubernetes.io/metadata.name: kube-system
+  name: kube-system

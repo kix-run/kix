@@ -1,0 +1,129 @@
+---
+source: kix-cli/tests/snapshot_test.rs
+assertion_line: 59
+expression: stdout
+---
+Cluster: example
+Total resources: 86
+
+Namespaces (5):
+  (cluster-scoped) (40 resources)
+  cache (9 resources)
+  cert-manager (18 resources)
+  immich (11 resources)
+  kube-system (8 resources)
+
+Resource kinds:
+ Kind                            Count 
+ ClusterRole                     14    
+ ClusterRoleBinding              11    
+ Service                         10    
+ PackageInstance                 8     
+ CustomResourceDefinition        6     
+ Deployment                      6     
+ ServiceAccount                  5     
+ ConfigMap                       4     
+ Namespace                       4     
+ Role                            4     
+ RoleBinding                     4     
+ StorageClass                    3     
+ MutatingWebhookConfiguration    1     
+ SGCluster                       1     
+ SGInstanceProfile               1     
+ SGPostgresConfig                1     
+ ServiceMonitor                  1     
+ StatefulSet                     1     
+ ValidatingWebhookConfiguration  1     
+
+Resources:
+  (cluster-scoped):
+    ClusterRole/cert-manager-cainjector
+    ClusterRole/cert-manager-cluster-view
+    ClusterRole/cert-manager-controller-approve:cert-manager-io
+    ClusterRole/cert-manager-controller-certificates
+    ClusterRole/cert-manager-controller-certificatesigningrequests
+    ClusterRole/cert-manager-controller-challenges
+    ClusterRole/cert-manager-controller-clusterissuers
+    ClusterRole/cert-manager-controller-ingress-shim
+    ClusterRole/cert-manager-controller-issuers
+    ClusterRole/cert-manager-controller-orders
+    ClusterRole/cert-manager-edit
+    ClusterRole/cert-manager-view
+    ClusterRole/cert-manager-webhook:subjectaccessreviews
+    ClusterRole/coredns
+    ClusterRoleBinding/cert-manager-cainjector
+    ClusterRoleBinding/cert-manager-controller-approve:cert-manager-io
+    ClusterRoleBinding/cert-manager-controller-certificates
+    ClusterRoleBinding/cert-manager-controller-certificatesigningrequests
+    ClusterRoleBinding/cert-manager-controller-challenges
+    ClusterRoleBinding/cert-manager-controller-clusterissuers
+    ClusterRoleBinding/cert-manager-controller-ingress-shim
+    ClusterRoleBinding/cert-manager-controller-issuers
+    ClusterRoleBinding/cert-manager-controller-orders
+    ClusterRoleBinding/cert-manager-webhook:subjectaccessreviews
+    ClusterRoleBinding/coredns
+    CustomResourceDefinition/certificaterequests.cert-manager.io
+    CustomResourceDefinition/certificates.cert-manager.io
+    CustomResourceDefinition/challenges.acme.cert-manager.io
+    CustomResourceDefinition/clusterissuers.cert-manager.io
+    CustomResourceDefinition/issuers.cert-manager.io
+    CustomResourceDefinition/orders.acme.cert-manager.io
+    MutatingWebhookConfiguration/cert-manager-webhook
+    Namespace/cache
+    Namespace/cert-manager
+    Namespace/immich
+    Namespace/kube-system
+    StorageClass/lbs1-pool1-2x
+    StorageClass/localzfs
+    StorageClass/localzfs-retain
+    ValidatingWebhookConfiguration/cert-manager-webhook
+  cache:
+    ConfigMap/valkey-configuration
+    ConfigMap/valkey-health
+    ConfigMap/valkey-scripts
+    PackageInstance/valkey
+    Service/valkey
+    Service/valkey-headless
+    Service/valkey-metrics
+    ServiceAccount/valkey
+    StatefulSet/valkey-node
+  cert-manager:
+    Deployment/cert-manager
+    Deployment/cert-manager-cainjector
+    Deployment/cert-manager-webhook
+    PackageInstance/cert-manager
+    Role/cert-manager-cainjector:leaderelection
+    Role/cert-manager-tokenrequest
+    Role/cert-manager-webhook:dynamic-serving
+    Role/cert-manager:leaderelection
+    RoleBinding/cert-manager-cainjector:leaderelection
+    RoleBinding/cert-manager-cert-manager-tokenrequest
+    RoleBinding/cert-manager-webhook:dynamic-serving
+    RoleBinding/cert-manager:leaderelection
+    Service/cert-manager
+    Service/cert-manager-cainjector
+    Service/cert-manager-webhook
+    ServiceAccount/cert-manager
+    ServiceAccount/cert-manager-cainjector
+    ServiceAccount/cert-manager-webhook
+  immich:
+    Deployment/immich-server
+    Deployment/machineLearning
+    PackageInstance/immich
+    PackageInstance/machineLearning
+    PackageInstance/postgres
+    PackageInstance/storage
+    SGCluster/postgres
+    SGInstanceProfile/postgres-profile
+    SGPostgresConfig/postgres-config
+    Service/immich-server
+    Service/machineLearning
+  kube-system:
+    ConfigMap/coredns
+    Deployment/coredns
+    PackageInstance/coredns
+    PackageInstance/storage-classes
+    Service/coredns
+    Service/coredns-metrics
+    ServiceAccount/coredns
+    ServiceMonitor/coredns

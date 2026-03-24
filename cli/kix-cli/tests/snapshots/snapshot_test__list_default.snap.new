@@ -1,0 +1,12 @@
+---
+source: kix-cli/tests/snapshot_test.rs
+assertion_line: 48
+expression: stdout
+---
+ NAME           
+ example        
+ example-import 
+ full           
+ helm           
+ nw1            
+ minimal
