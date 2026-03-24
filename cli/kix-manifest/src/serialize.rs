@@ -39,9 +39,9 @@ pub fn strip_nulls(value: &mut serde_json::Value) {
 ///
 /// serde_yml preserves insertion order, so we sort keys by converting to
 /// a BTreeMap-based structure first.
-fn to_sorted_yaml(value: &serde_json::Value) -> String {
+fn to_sorted_yaml(value: &serde_json::Value) -> Result<String, serde_yml::Error> {
     let sorted = sort_keys(value);
-    serde_yml::to_string(&sorted).unwrap_or_default()
+    serde_yml::to_string(&sorted)
 }
 
 /// Recursively sort object keys by converting to BTreeMap-based serde_json::Value.
@@ -66,7 +66,7 @@ fn sort_keys(value: &serde_json::Value) -> serde_json::Value {
 /// Serialize a list of manifest JSON values to multi-document YAML.
 ///
 /// Documents are separated by `---\n`. Null values are stripped and keys are sorted.
-pub fn manifests_to_yaml(manifests: &[serde_json::Value]) -> String {
+pub fn manifests_to_yaml(manifests: &[serde_json::Value]) -> Result<String, serde_yml::Error> {
     let mut output = String::new();
     for (i, manifest) in manifests.iter().enumerate() {
         let mut cleaned = manifest.clone();
@@ -74,9 +74,9 @@ pub fn manifests_to_yaml(manifests: &[serde_json::Value]) -> String {
         if i > 0 {
             output.push_str("---\n");
         }
-        output.push_str(&to_sorted_yaml(&cleaned));
+        output.push_str(&to_sorted_yaml(&cleaned)?);
     }
-    output
+    Ok(output)
 }
 
 /// Pretty-print manifests as a JSON array.
@@ -170,7 +170,8 @@ pub fn write_manifests_to_dir(
         let filename = rid.to_flat_filename();
         let mut cleaned = manifest.clone();
         strip_nulls(&mut cleaned);
-        let yaml = to_sorted_yaml(&cleaned);
+        let yaml = to_sorted_yaml(&cleaned)
+            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
         std::fs::write(dir.join(&filename), yaml)?;
         count += 1;
     }
@@ -237,7 +238,7 @@ mod tests {
             "apiVersion": "v1",
             "metadata": { "name": "my-svc" }
         })];
-        let yaml = manifests_to_yaml(&manifests);
+        let yaml = manifests_to_yaml(&manifests).unwrap();
         assert!(yaml.contains("apiVersion: v1"));
         assert!(yaml.contains("kind: Service"));
         // apiVersion should come before kind (sorted keys)
@@ -249,7 +250,7 @@ mod tests {
     #[test]
     fn manifests_to_yaml_multi_doc() {
         let manifests = vec![json!({"kind": "Service"}), json!({"kind": "Deployment"})];
-        let yaml = manifests_to_yaml(&manifests);
+        let yaml = manifests_to_yaml(&manifests).unwrap();
         assert!(
             yaml.contains("---\n"),
             "documents should be separated by ---"
@@ -264,14 +265,14 @@ mod tests {
             "kind": "Service",
             "spec": null
         })];
-        let yaml = manifests_to_yaml(&manifests);
+        let yaml = manifests_to_yaml(&manifests).unwrap();
         assert!(!yaml.contains("spec"), "null values should be stripped");
         assert!(!yaml.contains("null"));
     }
 
     #[test]
     fn manifests_to_yaml_empty() {
-        let yaml = manifests_to_yaml(&[]);
+        let yaml = manifests_to_yaml(&[]).unwrap();
         assert!(yaml.is_empty());
     }
 

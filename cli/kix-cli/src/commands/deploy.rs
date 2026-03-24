@@ -190,15 +190,13 @@ async fn run_deploy_async(
     }
 
     // 7. Apply waves
-    let client = if global.context.is_some() {
-        fetch::make_client(global.context.as_deref())
-            .await
-            .map_err(|e| miette!("failed to connect to cluster: {e}"))?
-    } else {
-        fetch::make_client(None)
-            .await
-            .map_err(|e| miette!("failed to connect to cluster: {e}"))?
-    };
+    let client = fetch::make_client(global.context.as_deref())
+        .await
+        .map_err(|e| {
+            miette!(
+                "failed to connect to cluster: {e}. Check your kubeconfig or try --context <name>"
+            )
+        })?;
 
     let discovery = fetch::discover_resources(&client)
         .await

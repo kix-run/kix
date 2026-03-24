@@ -91,7 +91,9 @@ impl KixEvaluator {
         // Cache miss — evaluate
         let output = self.backend.eval_cluster(&self.flake_path, cluster_name)?;
 
-        // Store result
+        // Store result in cache. Failure is intentionally non-fatal: the evaluation
+        // succeeded and we have the result — a cache write failure (e.g. disk full, permissions)
+        // just means the next invocation will re-evaluate instead of hitting cache.
         if let Ok(json) = serde_json::to_string(&output)
             && let Err(e) = self.cache.put(&cache_key, &json)
         {

@@ -282,6 +282,11 @@ pub async fn apply_wave(
         match join_result {
             Ok(pair) => results.push(pair),
             Err(e) => {
+                // JoinError means the task panicked or was cancelled. This shouldn't happen
+                // in normal operation (our tasks don't panic). We log and continue rather
+                // than failing the entire wave, since other resources may have applied
+                // successfully. The missing result will surface as a discrepancy in the
+                // deploy summary.
                 tracing::warn!(error = %e, "task join error during apply wave");
             }
         }

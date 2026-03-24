@@ -14,6 +14,7 @@ struct BuildResponse {
 impl CommandResponse for BuildResponse {
     fn format_text(&self) -> String {
         kix_manifest::serialize::manifests_to_yaml(&self.manifests)
+            .expect("YAML serialization of valid manifests should not fail")
     }
 
     fn as_json(&self) -> serde_json::Value {

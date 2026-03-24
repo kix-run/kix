@@ -89,15 +89,30 @@ pub struct FfiNixBackend {
     _fetchers_settings: FetchersSettings,
 }
 
-// SAFETY: FfiNixBackend is only used from a single thread (the main eval thread).
-// The NixBackend trait requires Send for boxing, but we never actually send it
-// across threads — KixEvaluator holds it as Box<dyn NixBackend> and uses &mut self.
+// SAFETY: FfiNixBackend wraps Nix C pointers (via EvalState) that are not Send.
+// We guarantee single-threaded access through these invariants:
+// 1. KixEvaluator holds this as Box<dyn NixBackend> behind &mut self — no shared access.
+// 2. eval_cluster() and list_clusters() are the only entry points; both take &mut self.
+// 3. _flake_settings and _fetchers_settings are kept alive for Nix's lifetime requirements
+//    but are never accessed after construction — they are purely RAII guards.
+// 4. The NixBackend trait requires Send for boxing, but the evaluator is never moved
+//    across threads — it lives on the main thread for its entire lifetime.
 unsafe impl Send for FfiNixBackend {}
 
 impl FfiNixBackend {
     /// Create a new FFI backend.
     ///
     /// Opens a store and creates an EvalState with flake support.
+    ///
+    /// # FFI safety
+    ///
+    /// All nix-bindings-rust APIs used here return `Result` and handle null/invalid
+    /// pointers internally — `Store::open`, `EvalStateBuilder::new`, and `.build()`
+    /// return errors rather than null pointers on failure. The `require_string` and
+    /// `eval_from_string` methods similarly return `Result` on invalid values.
+    /// Memory for Nix values is managed by the Boehm GC (registered via
+    /// `gc_register_current_thread`), and string results from `require_string`
+    /// are copied into owned Rust `String`s — no borrowed references to Nix memory.
     pub fn new() -> Result<Self, KixEvalError> {
         tracing::debug!("initializing Nix runtime");
         gc_register_current_thread().map_err(KixEvalError::init)?;

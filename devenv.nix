@@ -28,7 +28,7 @@ in
     pkgs.graphviz
     pkgs.lefthook
     pkgs.pkg-config
-    pkgs.nix-fmt
+    pkgs.nixfmt-rfc-style
   ]
   ++ nixLibs;
 

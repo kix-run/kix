@@ -121,7 +121,11 @@ pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<()> {
 async fn fetch_live_manifests(global: &crate::cli::GlobalArgs) -> Result<Vec<(ResourceId, Value)>> {
     let client = fetch::make_client(global.context.as_deref())
         .await
-        .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
+        .map_err(|e| {
+            miette!(
+                "failed to connect to cluster: {e}. Check your kubeconfig or try --context <name>"
+            )
+        })?;
 
     if !global.quiet {
         eprintln!("Discovering API resources...");

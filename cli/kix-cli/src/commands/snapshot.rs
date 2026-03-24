@@ -41,9 +41,11 @@ fn run_save(args: &SnapshotSaveArgs, ctx: &mut CommandContext) -> Result<()> {
 
     ctx.runtime.block_on(async {
         let context = global.context.as_deref();
-        let client = fetch::make_client(context)
-            .await
-            .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
+        let client = fetch::make_client(context).await.map_err(|e| {
+            miette!(
+                "failed to connect to cluster: {e}. Check your kubeconfig or try --context <name>"
+            )
+        })?;
 
         if !global.quiet {
             eprintln!("Discovering API resources...");

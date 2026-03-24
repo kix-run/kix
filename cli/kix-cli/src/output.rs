@@ -28,6 +28,10 @@ pub fn init_color(global: &GlobalArgs) {
 }
 
 /// Whether colored output is enabled.
+///
+/// Returns false if `init_color()` hasn't been called yet (e.g. during early
+/// startup errors). In normal operation, `main()` calls `init_color()` before
+/// any code path reaches here.
 pub fn color_enabled() -> bool {
     *COLOR_ENABLED.get().unwrap_or(&false)
 }
