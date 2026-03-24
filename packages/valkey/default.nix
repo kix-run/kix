@@ -135,7 +135,11 @@
   };
 
   build =
-    { self, config, clusterConfig }:
+    {
+      self,
+      config,
+      clusterConfig,
+    }:
     let
       name = scope.instanceName;
 
@@ -145,8 +149,10 @@
       componentName = if config.sentinel.enabled then "node" else "primary";
 
       componentLabel =
-        if scope.labelStyle == "helm" then { component = componentName; }
-        else { "app.kubernetes.io/component" = componentName; };
+        if scope.labelStyle == "helm" then
+          { component = componentName; }
+        else
+          { "app.kubernetes.io/component" = componentName; };
 
       commonLabels = selectorLabels // componentLabel;
 
@@ -729,7 +735,9 @@
         command = [ "/bin/bash" ];
         args = [
           "-c"
-          "/opt/bitnami/scripts/start-scripts/start-${if config.sentinel.enabled then "node" else "primary"}.sh"
+          "/opt/bitnami/scripts/start-scripts/start-${
+            if config.sentinel.enabled then "node" else "primary"
+          }.sh"
         ];
         env = kix.mkEnvVars (
           {
@@ -740,18 +748,23 @@
             VALKEY_PASSWORD_FILE =
               if config.auth.enabled then "/opt/bitnami/valkey/secrets/${authPasswordKey}" else null;
           }
-          // (if config.sentinel.enabled then {
-            # Sentinel mode env vars
-            VALKEY_DATA_DIR = "/data";
-            VALKEY_SENTINEL_PORT = "26379";
-            VALKEY_SENTINEL_TLS_ENABLED = "no";
-            VALKEY_PRIMARY_PORT_NUMBER = "6379";
-            VALKEY_PRIMARY_PASSWORD_FILE =
-              if config.auth.enabled then "/opt/bitnami/valkey/secrets/${authPasswordKey}" else null;
-          } else {
-            # Primary/replica mode env vars
-            VALKEY_REPLICATION_MODE = "primary";
-          })
+          // (
+            if config.sentinel.enabled then
+              {
+                # Sentinel mode env vars
+                VALKEY_DATA_DIR = "/data";
+                VALKEY_SENTINEL_PORT = "26379";
+                VALKEY_SENTINEL_TLS_ENABLED = "no";
+                VALKEY_PRIMARY_PORT_NUMBER = "6379";
+                VALKEY_PRIMARY_PASSWORD_FILE =
+                  if config.auth.enabled then "/opt/bitnami/valkey/secrets/${authPasswordKey}" else null;
+              }
+            else
+              {
+                # Primary/replica mode env vars
+                VALKEY_REPLICATION_MODE = "primary";
+              }
+          )
         );
         ports = [
           (kix.port (if config.sentinel.enabled then "valkey" else "redis") 6379)
@@ -972,8 +985,7 @@
           REDIS_ALIAS = name;
           REDIS_EXPORTER_WEB_LISTEN_ADDRESS = ":9121";
           REDIS_USER = "default";
-          REDIS_PASSWORD_FILE =
-            if config.auth.enabled then "/secrets/${authPasswordKey}" else null;
+          REDIS_PASSWORD_FILE = if config.auth.enabled then "/secrets/${authPasswordKey}" else null;
         };
         ports = [
           (kix.port "metrics" 9121)
@@ -998,19 +1010,20 @@
           failureThreshold = 3;
         };
         resources = config.metrics.resources;
-        volumeMounts = lib.optionals config.auth.enabled [
-          {
-            name = "valkey-password";
-            mountPath = "/secrets";
-          }
-        ]
-        ++ [
-          {
-            name = "empty-dir";
-            mountPath = "/tmp";
-            subPath = "tmp-dir";
-          }
-        ];
+        volumeMounts =
+          lib.optionals config.auth.enabled [
+            {
+              name = "valkey-password";
+              mountPath = "/secrets";
+            }
+          ]
+          ++ [
+            {
+              name = "empty-dir";
+              mountPath = "/tmp";
+              subPath = "tmp-dir";
+            }
+          ];
         securityContext = {
           allowPrivilegeEscalation = false;
           capabilities.drop = [ "ALL" ];
@@ -1071,15 +1084,19 @@
         kind = "ConfigMap";
         name = "${name}-scripts";
         labels = selectorLabels;
-        data = if config.sentinel.enabled then {
-          "start-node.sh" = startNodeScript;
-          "start-sentinel.sh" = startSentinelScript;
-          "prestop-sentinel.sh" = prestopSentinelScript;
-          "prestop-valkey.sh" = prestopValkeyScript;
-        } else {
-          "start-primary.sh" = startPrimaryScript;
-          "start-replica.sh" = startReplicaScript;
-        };
+        data =
+          if config.sentinel.enabled then
+            {
+              "start-node.sh" = startNodeScript;
+              "start-sentinel.sh" = startSentinelScript;
+              "prestop-sentinel.sh" = prestopSentinelScript;
+              "prestop-valkey.sh" = prestopValkeyScript;
+            }
+          else
+            {
+              "start-primary.sh" = startPrimaryScript;
+              "start-replica.sh" = startReplicaScript;
+            };
       };
 
       # --- ConfigMap (health check scripts) ---
@@ -1092,14 +1109,19 @@
           "ping_liveness_local.sh" = pingLivenessLocalScript;
           "ping_readiness_local.sh" = pingReadinessLocalScript;
         }
-        // (if config.sentinel.enabled then {
-          "ping_sentinel.sh" = pingSentinelScript;
-        } else {
-          "ping_liveness_primary.sh" = pingLivenessPrimaryScript;
-          "ping_readiness_primary.sh" = pingReadinessPrimaryScript;
-          "ping_liveness_local_and_primary.sh" = pingLivenessLocalAndPrimaryScript;
-          "ping_readiness_local_and_primary.sh" = pingReadinessLocalAndPrimaryScript;
-        });
+        // (
+          if config.sentinel.enabled then
+            {
+              "ping_sentinel.sh" = pingSentinelScript;
+            }
+          else
+            {
+              "ping_liveness_primary.sh" = pingLivenessPrimaryScript;
+              "ping_readiness_primary.sh" = pingReadinessPrimaryScript;
+              "ping_liveness_local_and_primary.sh" = pingLivenessLocalAndPrimaryScript;
+              "ping_readiness_local_and_primary.sh" = pingReadinessLocalAndPrimaryScript;
+            }
+        );
       };
 
       # --- ConfigMap (configuration — sentinel.conf + valkey.conf) ---
@@ -1119,132 +1141,131 @@
       };
 
       # --- StatefulSet (valkey-node or valkey-primary) ---
-      statefulSet = let
-        topologySuffix = if config.sentinel.enabled then "node" else "primary";
-      in {
-        name = "${name}-${topologySuffix}";
-        labels = commonLabels;
-        spec = {
-          serviceName = builtins.unsafeDiscardStringContext self.headlessService.out.name;
-          replicas = config.replicaCount;
-          podManagementPolicy = config.podManagementPolicy;
-          updateStrategy = {
-            type = "RollingUpdate";
-          };
-          selector.matchLabels = selectorLabels // componentLabel;
-          template = {
-            metadata = {
-              labels = selectorLabels // componentLabel;
-              annotations = {
-                "checksum/configmap" = self.configmap.out.identityHash;
-                "checksum/health" = self.healthConfigmap.out.identityHash;
-                "checksum/scripts" = self.configmap.out.identityHash;
-                "checksum/secret" = "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a";
-              }
-              // lib.optionalAttrs config.metrics.enabled {
-                "prometheus.io/port" = "9121";
-                "prometheus.io/scrape" = "true";
-              };
+      statefulSet =
+        let
+          topologySuffix = if config.sentinel.enabled then "node" else "primary";
+        in
+        {
+          name = "${name}-${topologySuffix}";
+          labels = commonLabels;
+          spec = {
+            serviceName = self.headlessService.name;
+            replicas = config.replicaCount;
+            podManagementPolicy = config.podManagementPolicy;
+            updateStrategy = {
+              type = "RollingUpdate";
             };
-            spec = {
-              serviceAccountName = self.serviceAccount.out.name;
-              automountServiceAccountToken = false;
-              terminationGracePeriodSeconds = 30;
-              securityContext = {
-                fsGroup = 1001;
-                fsGroupChangePolicy = "Always";
-              };
-              affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution = [
-                {
-                  weight = 1;
-                  podAffinityTerm = {
-                    labelSelector.matchLabels = selectorLabels // componentLabel;
-                    topologyKey = "kubernetes.io/hostname";
-                  };
-                }
-              ];
-              inherit containers;
-              volumes = [
-                {
-                  name = "config";
-                  configMap = {
-                    name = self.configurationConfigmap.out.name;
-                    defaultMode = 420; # 0644
-                  };
-                }
-                {
-                  name = "empty-dir";
-                  emptyDir = { };
-                }
-                {
-                  name = "health";
-                  configMap = {
-                    name = self.healthConfigmap.out.name;
-                    defaultMode = 493; # 0755
-                  };
-                }
-              ]
-              ++ lib.optional config.sentinel.enabled {
-                name = "sentinel-data";
-                emptyDir = { };
-              }
-              ++ [
-                {
-                  name = "start-scripts";
-                  configMap = {
-                    name = self.configmap.out.name;
-                    defaultMode = 493; # 0755
-                  };
-                }
-              ]
-              ++ lib.optionals config.auth.enabled [
-                {
-                  name = "valkey-password";
-                  secret = {
-                    secretName =
-                      if config.auth.existingSecret != null then
-                        config.auth.existingSecret
-                      else
-                        self.secret.out.name;
-                    defaultMode = 420; # 0644
-                    items = [
-                      {
-                        key = authPasswordKey;
-                        path = authPasswordKey;
-                      }
-                    ];
-                  };
-                }
-              ]
-              ++ lib.optional (!config.persistence.enabled) {
-                name = "valkey-data";
-                emptyDir = { };
-              };
-            }
-            // lib.optionalAttrs (config.priorityClassName != null) {
-              priorityClassName = config.priorityClassName;
-            };
-          };
-        }
-        // lib.optionalAttrs config.persistence.enabled {
-          volumeClaimTemplates = [
-            {
+            selector.matchLabels = selectorLabels // componentLabel;
+            template = {
               metadata = {
-                name = "valkey-data";
                 labels = selectorLabels // componentLabel;
+                annotations = {
+                  "checksum/configmap" = self.configmap.out.identityHash;
+                  "checksum/health" = self.healthConfigmap.out.identityHash;
+                  "checksum/scripts" = self.configmap.out.identityHash;
+                  "checksum/secret" = "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a";
+                }
+                // lib.optionalAttrs config.metrics.enabled {
+                  "prometheus.io/port" = "9121";
+                  "prometheus.io/scrape" = "true";
+                };
               };
               spec = {
-                accessModes = [ "ReadWriteOnce" ];
-                resources.requests.storage = config.persistence.size;
+                serviceAccountName = self.serviceAccount.out.name;
+                automountServiceAccountToken = false;
+                terminationGracePeriodSeconds = 30;
+                securityContext = {
+                  fsGroup = 1001;
+                  fsGroupChangePolicy = "Always";
+                };
+                affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution = [
+                  {
+                    weight = 1;
+                    podAffinityTerm = {
+                      labelSelector.matchLabels = selectorLabels // componentLabel;
+                      topologyKey = "kubernetes.io/hostname";
+                    };
+                  }
+                ];
+                inherit containers;
+                volumes = [
+                  {
+                    name = "config";
+                    configMap = {
+                      name = self.configurationConfigmap.out.name;
+                      defaultMode = 420; # 0644
+                    };
+                  }
+                  {
+                    name = "empty-dir";
+                    emptyDir = { };
+                  }
+                  {
+                    name = "health";
+                    configMap = {
+                      name = self.healthConfigmap.out.name;
+                      defaultMode = 493; # 0755
+                    };
+                  }
+                ]
+                ++ lib.optional config.sentinel.enabled {
+                  name = "sentinel-data";
+                  emptyDir = { };
+                }
+                ++ [
+                  {
+                    name = "start-scripts";
+                    configMap = {
+                      name = self.configmap.out.name;
+                      defaultMode = 493; # 0755
+                    };
+                  }
+                ]
+                ++ lib.optionals config.auth.enabled [
+                  {
+                    name = "valkey-password";
+                    secret = {
+                      secretName =
+                        if config.auth.existingSecret != null then config.auth.existingSecret else self.secret.out.name;
+                      defaultMode = 420; # 0644
+                      items = [
+                        {
+                          key = authPasswordKey;
+                          path = authPasswordKey;
+                        }
+                      ];
+                    };
+                  }
+                ]
+                ++ lib.optional (!config.persistence.enabled) {
+                  name = "valkey-data";
+                  emptyDir = { };
+                };
               }
-              // lib.optionalAttrs (config.persistence.storageClass != null) {
-                storageClassName = config.persistence.storageClass;
+              // lib.optionalAttrs (config.priorityClassName != null) {
+                priorityClassName = config.priorityClassName;
               };
-            }
-          ];
-        };
-      }
-      |> scope.mkStatefulSet;
+            };
+          }
+          // lib.optionalAttrs config.persistence.enabled {
+            volumeClaimTemplates = [
+              {
+                metadata = {
+                  name = "valkey-data";
+                  labels = selectorLabels // componentLabel;
+                };
+                spec = {
+                  accessModes = [ "ReadWriteOnce" ];
+                  resources.requests.storage = config.persistence.size;
+                }
+                // lib.optionalAttrs (config.persistence.storageClass != null) {
+                  storageClassName = config.persistence.storageClass;
+                };
+              }
+            ];
+          };
+        }
+        |> scope.mkStatefulSet;
 
       # --- Service (headless, for StatefulSet DNS) ---
       headlessService = scope.mkResource {

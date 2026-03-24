@@ -226,7 +226,9 @@ let
             };
             spec.ports = [ { port = 5432; } ];
           };
-          main = { resource = self.service; };
+          main = {
+            resource = self.service;
+          };
         };
 
       appPackage =

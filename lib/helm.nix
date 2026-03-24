@@ -169,12 +169,8 @@ rec {
       # scope's namespace (e.g. kube-system services for control-plane
       # monitoring).  Cluster-scoped kinds always use scope.mkClusterResource.
       hasForeignNs = resourceNs != null && resourceNs != scope.namespaceName;
-      effectiveScope =
-        if hasForeignNs then scope.forNamespace resourceNs
-        else scope;
-      mkFn =
-        if isClusterScopedKind kind then scope.mkClusterResource
-        else effectiveScope.mkResource;
+      effectiveScope = if hasForeignNs then scope.forNamespace resourceNs else scope;
+      mkFn = if isClusterScopedKind kind then scope.mkClusterResource else effectiveScope.mkResource;
     in
     mkFn (
       {
@@ -210,134 +206,142 @@ rec {
       options = {
         values = lib.mkOption {
           type = lib.types.attrsOf lib.types.anything;
-          default = {};
+          default = { };
           description = "Helm values to deep-merge with the chart's package-level values.";
         };
       };
 
-      build = { self, config, clusterConfig }:
-      let
-        # Deep-merge package-level values with cluster-level config.values.
-        mergedValues = lib.recursiveUpdate values (config.values or { });
-
-      # IFD: build the helm template derivation and import the JSON result.
-      templateDrv = helmTemplateDerivation {
-        inherit
-          chart
-          releaseName
-          includeCrds
-          includeHooks
-          extraFlags
-          ;
-        namespace = scope.namespaceName;
-        values = mergedValues;
-      };
-
-      # Import the JSON array of resources (this is the IFD step).
-      rawResources = builtins.fromJSON (builtins.readFile templateDrv);
-
-      # Filter out Helm test hooks.
-      isTestHook =
-        r:
+      build =
+        {
+          self,
+          config,
+          clusterConfig,
+        }:
         let
-          annotations = (r.metadata or { }).annotations or { };
-          hookVal = annotations."helm.sh/hook" or "";
-        in
-        lib.hasInfix "test" hookVal;
+          # Deep-merge package-level values with cluster-level config.values.
+          mergedValues = lib.recursiveUpdate values (config.values or { });
 
-      # Unpack List resources (helm templates can bundle multiple resources
-      # into a single kind:List document, e.g. additionalPrometheusRules,
-      # additionalServiceMonitors).
-      expandedResources = builtins.concatMap (
-        r:
-        if r != null && builtins.isAttrs r && (r.kind or "") == "List" && builtins.isList (r.items or null)
-        then r.items
-        else [ r ]
-      ) rawResources;
+          # IFD: build the helm template derivation and import the JSON result.
+          templateDrv = helmTemplateDerivation {
+            inherit
+              chart
+              releaseName
+              includeCrds
+              includeHooks
+              extraFlags
+              ;
+            namespace = scope.namespaceName;
+            values = mergedValues;
+          };
 
-      # Filter out null/empty documents (helm template can emit empty YAML docs).
-      # Also filter resources missing required fields (kind, metadata.name).
-      filteredResources = builtins.filter (
-        r:
-        r != null
-        && builtins.isAttrs r
-        && r != { }
-        && r ? kind
-        && r ? metadata
-        && builtins.isAttrs r.metadata
-        && r.metadata ? name
-        && !(isTestHook r)
-      ) expandedResources;
+          # Import the JSON array of resources (this is the IFD step).
+          rawResources = builtins.fromJSON (builtins.readFile templateDrv);
 
-      # Wrap each resource into a v2 resource.
-      wrappedResources = map (
-        r:
-        wrapHelmResource {
-          inherit scope;
-          resource = r;
-        }
-      ) filteredResources;
-
-      # Select the main resource.
-      findBySelector =
-        selector:
-        let
-          matches = builtins.filter (
+          # Filter out Helm test hooks.
+          isTestHook =
             r:
-            (!(selector ? kind) || r.kind == selector.kind) && (!(selector ? name) || r.name == selector.name)
-          ) wrappedResources;
+            let
+              annotations = (r.metadata or { }).annotations or { };
+              hookVal = annotations."helm.sh/hook" or "";
+            in
+            lib.hasInfix "test" hookVal;
+
+          # Unpack List resources (helm templates can bundle multiple resources
+          # into a single kind:List document, e.g. additionalPrometheusRules,
+          # additionalServiceMonitors).
+          expandedResources = builtins.concatMap (
+            r:
+            if
+              r != null && builtins.isAttrs r && (r.kind or "") == "List" && builtins.isList (r.items or null)
+            then
+              r.items
+            else
+              [ r ]
+          ) rawResources;
+
+          # Filter out null/empty documents (helm template can emit empty YAML docs).
+          # Also filter resources missing required fields (kind, metadata.name).
+          filteredResources = builtins.filter (
+            r:
+            r != null
+            && builtins.isAttrs r
+            && r != { }
+            && r ? kind
+            && r ? metadata
+            && builtins.isAttrs r.metadata
+            && r.metadata ? name
+            && !(isTestHook r)
+          ) expandedResources;
+
+          # Wrap each resource into a v2 resource.
+          wrappedResources = map (
+            r:
+            wrapHelmResource {
+              inherit scope;
+              resource = r;
+            }
+          ) filteredResources;
+
+          # Select the main resource.
+          findBySelector =
+            selector:
+            let
+              matches = builtins.filter (
+                r:
+                (!(selector ? kind) || r.kind == selector.kind) && (!(selector ? name) || r.name == selector.name)
+              ) wrappedResources;
+            in
+            if matches == [ ] then null else builtins.head matches;
+
+          # Auto-select: first Service, then first Deployment, then first resource.
+          autoSelectMain =
+            let
+              services = builtins.filter (r: r.kind == "Service") wrappedResources;
+              deployments = builtins.filter (r: r.kind == "Deployment") wrappedResources;
+              statefulsets = builtins.filter (r: r.kind == "StatefulSet") wrappedResources;
+            in
+            if services != [ ] then
+              builtins.head services
+            else if deployments != [ ] then
+              builtins.head deployments
+            else if statefulsets != [ ] then
+              builtins.head statefulsets
+            else if wrappedResources != [ ] then
+              builtins.head wrappedResources
+            else
+              throw "fromHelmChart: chart produced no resources";
+
+          mainResource =
+            if mainSelector != null then
+              let
+                selected = findBySelector mainSelector;
+              in
+              if selected != null then
+                selected
+              else
+                throw "fromHelmChart: mainSelector ${builtins.toJSON mainSelector} matched no resources"
+            else
+              autoSelectMain;
+
+          # All non-main resources become requires of main.
+          nonMainResources = builtins.filter (r: r.outPath != mainResource.outPath) wrappedResources;
+
+          # Expose each resource as a named attribute so buildCluster's
+          # collectResources can find them for the registry.
+          resourceAttrs = builtins.listToAttrs (
+            map (r: {
+              name = "${lib.toLower r.kind}-${r.name}";
+              value = r;
+            }) wrappedResources
+          );
+
         in
-        if matches == [ ] then null else builtins.head matches;
-
-      # Auto-select: first Service, then first Deployment, then first resource.
-      autoSelectMain =
-        let
-          services = builtins.filter (r: r.kind == "Service") wrappedResources;
-          deployments = builtins.filter (r: r.kind == "Deployment") wrappedResources;
-          statefulsets = builtins.filter (r: r.kind == "StatefulSet") wrappedResources;
-        in
-        if services != [ ] then
-          builtins.head services
-        else if deployments != [ ] then
-          builtins.head deployments
-        else if statefulsets != [ ] then
-          builtins.head statefulsets
-        else if wrappedResources != [ ] then
-          builtins.head wrappedResources
-        else
-          throw "fromHelmChart: chart produced no resources";
-
-      mainResource =
-        if mainSelector != null then
-          let
-            selected = findBySelector mainSelector;
-          in
-          if selected != null then
-            selected
-          else
-            throw "fromHelmChart: mainSelector ${builtins.toJSON mainSelector} matched no resources"
-        else
-          autoSelectMain;
-
-      # All non-main resources become requires of main.
-      nonMainResources = builtins.filter (r: r.outPath != mainResource.outPath) wrappedResources;
-
-      # Expose each resource as a named attribute so buildCluster's
-      # collectResources can find them for the registry.
-      resourceAttrs = builtins.listToAttrs (
-        map (r: {
-          name = "${lib.toLower r.kind}-${r.name}";
-          value = r;
-        }) wrappedResources
-      );
-
-    in
-    resourceAttrs
-    // {
-      main = {
-        resource = mainResource;
-        requires = nonMainResources;
-      };
-    };
+        resourceAttrs
+        // {
+          main = {
+            resource = mainResource;
+            requires = nonMainResources;
+          };
+        };
     };
 }

@@ -77,22 +77,24 @@ in
 
       removeNulls =
         attrs:
-        builtins.mapAttrs (
-          _: v:
-          if builtins.isAttrs v && !(lib.isDerivation v) && !(v ? type) then
-            removeNulls v
-          else if builtins.isList v then
-            builtins.map (x: if builtins.isAttrs x && !(lib.isDerivation x) then removeNulls x else x) v
-          else
-            v
-        ) (
-          lib.filterAttrs (
+        builtins.mapAttrs
+          (
             _: v:
-            v != null
-            && !(builtins.isAttrs v && !(lib.isDerivation v) && !(v ? type) && v == { })
-            && !(builtins.isList v && v == [ ])
-          ) attrs
-        );
+            if builtins.isAttrs v && !(lib.isDerivation v) && !(v ? type) then
+              removeNulls v
+            else if builtins.isList v then
+              builtins.map (x: if builtins.isAttrs x && !(lib.isDerivation x) then removeNulls x else x) v
+            else
+              v
+          )
+          (
+            lib.filterAttrs (
+              _: v:
+              v != null
+              && !(builtins.isAttrs v && !(lib.isDerivation v) && !(v ? type) && v == { })
+              && !(builtins.isList v && v == [ ])
+            ) attrs
+          );
 
       cleaned = removeNulls manifest;
       name = manifest.metadata.name or "unnamed";

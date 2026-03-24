@@ -14,7 +14,8 @@ rec {
   # Produces:
   #   { "dev-app" = { api = ...; worker = ...; };
   #     "dev-data" = { postgres = ...; }; }
-  mkEnv = envName: envConfig: instanceSets:
+  mkEnv =
+    envName: envConfig: instanceSets:
     let
       config = envConfig.config or { };
       overrides = envConfig.overrides or { };
@@ -24,15 +25,21 @@ rec {
         inherit config;
       };
 
-      processSet = setName: setFn:
+      processSet =
+        setName: setFn:
         let
           nsName = "${envName}-${setName}";
           # Call the instance set function
-          rawInstances = setFn { ref = { }; inherit env; };
+          rawInstances = setFn {
+            ref = { };
+            inherit env;
+          };
           setOverrides = overrides.${setName} or { };
-        in {
+        in
+        {
           name = nsName;
-          value = lib.mapAttrs (instName: instConfig:
+          value = lib.mapAttrs (
+            instName: instConfig:
             let
               instOverrides = setOverrides.${instName} or { };
               # Merge config overrides
@@ -42,11 +49,10 @@ rec {
                 else
                   instConfig.config or { };
               # Apply parts override if present
-              mergedParts =
-                if instOverrides ? parts then instOverrides.parts
-                else instConfig.parts or null;
+              mergedParts = if instOverrides ? parts then instOverrides.parts else instConfig.parts or null;
             in
-            instConfig // {
+            instConfig
+            // {
               config = mergedConfig;
               _envScope = envName;
             }
@@ -56,8 +62,7 @@ rec {
 
     in
     builtins.listToAttrs (
-      map (setName: processSet setName instanceSets.${setName})
-        (builtins.attrNames instanceSets)
+      map (setName: processSet setName instanceSets.${setName}) (builtins.attrNames instanceSets)
     );
 
 }

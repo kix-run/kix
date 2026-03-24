@@ -2,7 +2,13 @@
 # Lightweight config for a single-node home server.
 # Owned by: Luca (platform)
 
-{ config, lib, packages, kix, ... }:
+{
+  config,
+  lib,
+  packages,
+  kix,
+  ...
+}:
 {
   options.monitoring.enabled = lib.mkEnableOption "cluster monitoring stack";
 
@@ -27,14 +33,24 @@
           prometheus.prometheusSpec = {
             retention = "7d";
             resources = {
-              requests = { cpu = "100m"; memory = "512Mi"; };
-              limits = { memory = "1Gi"; };
+              requests = {
+                cpu = "100m";
+                memory = "512Mi";
+              };
+              limits = {
+                memory = "1Gi";
+              };
             };
           };
           grafana = {
             resources = {
-              requests = { cpu = "50m"; memory = "128Mi"; };
-              limits = { memory = "256Mi"; };
+              requests = {
+                cpu = "50m";
+                memory = "128Mi";
+              };
+              limits = {
+                memory = "256Mi";
+              };
             };
             "grafana.ini".server.root_url = "https://grafana.${config.cluster.domain}";
             additionalDataSources = [

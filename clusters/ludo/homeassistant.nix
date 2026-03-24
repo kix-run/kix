@@ -12,7 +12,12 @@
 # NOTE: HomeAssistant doesn't have a kix package yet.
 # This file is a draft — package needs to be created first.
 
-{ config, lib, packages, ... }:
+{
+  config,
+  lib,
+  packages,
+  ...
+}:
 {
   config.instances.homeassistant = {
 

@@ -36,25 +36,30 @@ rec {
     }:
     let
       selectorLabels =
-        if selectorLabelsOverride != null then selectorLabelsOverride
-        else if labelStyle == "helm" then {
-          app = instanceName;
-          release = instanceName;
-        }
-        else {
-          "app.kubernetes.io/name" = instanceName;
-          "app.kubernetes.io/instance" = instanceName;
-        };
+        if selectorLabelsOverride != null then
+          selectorLabelsOverride
+        else if labelStyle == "helm" then
+          {
+            app = instanceName;
+            release = instanceName;
+          }
+        else
+          {
+            "app.kubernetes.io/name" = instanceName;
+            "app.kubernetes.io/instance" = instanceName;
+          };
 
       instanceLabels =
-        if labelStyle == "helm" then {
-          release = instanceName;
-          "app.kubernetes.io/managed-by" = "kix";
-        }
-        else {
-          "app.kubernetes.io/instance" = instanceName;
-          "app.kubernetes.io/managed-by" = "kix";
-        };
+        if labelStyle == "helm" then
+          {
+            release = instanceName;
+            "app.kubernetes.io/managed-by" = "kix";
+          }
+        else
+          {
+            "app.kubernetes.io/instance" = instanceName;
+            "app.kubernetes.io/managed-by" = "kix";
+          };
 
       scopeMkResource =
         {
@@ -66,33 +71,48 @@ rec {
           // {
             namespace = namespaceResource;
             inherit clusterDomain;
-            labels =
-              clusterLabels
-              // instanceLabels
-              // labels;
+            labels = clusterLabels // instanceLabels // labels;
           }
-        ) // { packageLabels = labels; };
+        )
+        // {
+          packageLabels = labels;
+        };
 
-      mkWorkload = apiVersion: kind: attrs:
+      # WARNING: StatefulSet.spec.serviceName must use .name (plain string),
+      # NOT .out.name (context-carrying). Using .out.name creates a store DAG
+      # edge to the Service. If the Service also has `requires` pointing back
+      # to the StatefulSet, this causes infinite recursion during evaluation.
+      # The serviceName field is a plain K8s name match, not a dependency.
+      mkWorkload =
+        apiVersion: kind: attrs:
         let
-          spec = attrs.spec or {};
-          selector = spec.selector.matchLabels
-            or (throw "mkWorkload (${kind}): spec.selector.matchLabels is required — use scope.selectorLabels");
-          templateMeta = spec.template.metadata or {};
-          templateSpec = spec.template.spec or {};
+          spec = attrs.spec or { };
+          selector =
+            spec.selector.matchLabels
+              or (throw "mkWorkload (${kind}): spec.selector.matchLabels is required — use scope.selectorLabels");
+          templateMeta = spec.template.metadata or { };
+          templateSpec = spec.template.spec or { };
         in
-        scopeMkResource (removeAttrs attrs [ "spec" ] // {
-          inherit apiVersion kind;
-          spec = removeAttrs spec [ "selector" "template" ] // {
-            selector.matchLabels = selector;
-            template = {
-              metadata = templateMeta // {
-                labels = templateMeta.labels or selector;
+        scopeMkResource (
+          removeAttrs attrs [ "spec" ]
+          // {
+            inherit apiVersion kind;
+            spec =
+              removeAttrs spec [
+                "selector"
+                "template"
+              ]
+              // {
+                selector.matchLabels = selector;
+                template = {
+                  metadata = templateMeta // {
+                    labels = templateMeta.labels or selector;
+                  };
+                  spec = templateSpec;
+                };
               };
-              spec = templateSpec;
-            };
-          };
-        });
+          }
+        );
 
       scopeMkClusterResource =
         {
@@ -104,12 +124,12 @@ rec {
           // {
             namespace = clusterScoped;
             inherit clusterDomain;
-            labels =
-              clusterLabels
-              // instanceLabels
-              // labels;
+            labels = clusterLabels // instanceLabels // labels;
           }
-        ) // { packageLabels = labels; };
+        )
+        // {
+          packageLabels = labels;
+        };
 
       # ── CRD support ──────────────────────────────────────────────────
 
@@ -128,9 +148,13 @@ rec {
           shortNames ? [ ],
           categories ? [ ],
           printerColumns ? [ ],
-          schema ? builtins.trace
-            "mkCRD: no schema provided for ${kind}, using permissive default — consider adding an OpenAPI schema"
-            { type = "object"; "x-kubernetes-preserve-unknown-fields" = true; },
+          schema ?
+            builtins.trace
+              "mkCRD: no schema provided for ${kind}, using permissive default — consider adding an OpenAPI schema"
+              {
+                type = "object";
+                "x-kubernetes-preserve-unknown-fields" = true;
+              },
         }:
         let
           crdResource = scopeMkClusterResource {
@@ -142,37 +166,62 @@ rec {
               inherit group;
               scope = crdScope;
               names = {
-                inherit kind listKind plural singular;
+                inherit
+                  kind
+                  listKind
+                  plural
+                  singular
+                  ;
               }
               // lib.optionalAttrs (shortNames != [ ]) { inherit shortNames; }
               // lib.optionalAttrs (categories != [ ]) { inherit categories; };
               versions = [
-                ({
-                  name = version;
-                  served = true;
-                  storage = true;
-                  subresources.status = { };
-                  schema.openAPIV3Schema = {
-                    type = "object";
-                    properties = {
-                      apiVersion = { type = "string"; };
-                      kind = { type = "string"; };
-                      metadata = { type = "object"; };
-                      spec = schema;
-                      status = { type = "object"; "x-kubernetes-preserve-unknown-fields" = true; };
+                (
+                  {
+                    name = version;
+                    served = true;
+                    storage = true;
+                    subresources.status = { };
+                    schema.openAPIV3Schema = {
+                      type = "object";
+                      properties = {
+                        apiVersion = {
+                          type = "string";
+                        };
+                        kind = {
+                          type = "string";
+                        };
+                        metadata = {
+                          type = "object";
+                        };
+                        spec = schema;
+                        status = {
+                          type = "object";
+                          "x-kubernetes-preserve-unknown-fields" = true;
+                        };
+                      };
                     };
-                  };
-                }
-                // lib.optionalAttrs (printerColumns != [ ]) {
-                  additionalPrinterColumns = printerColumns;
-                })
+                  }
+                  // lib.optionalAttrs (printerColumns != [ ]) {
+                    additionalPrinterColumns = printerColumns;
+                  }
+                )
               ];
             };
           };
 
-          builders = k8s.mkCRDBuilders { crdOrRef = crdResource; inherit group kind version crdScope; };
+          builders = k8s.mkCRDBuilders {
+            crdOrRef = crdResource;
+            inherit
+              group
+              kind
+              version
+              crdScope
+              ;
+          };
         in
-        crdResource // {
+        crdResource
+        // {
           out = crdResource.out // builders;
         };
 
@@ -189,18 +238,34 @@ rec {
           requires ? [ ],
         }:
         let
-          refPath = builtins.toFile
-            "crd-ref-${kind}"
-            (builtins.toJSON { inherit group kind version crdScope; });
+          refPath = builtins.toFile "crd-ref-${kind}" (
+            builtins.toJSON {
+              inherit
+                group
+                kind
+                version
+                crdScope
+                ;
+            }
+          );
           ref = {
             _type = "crd-ref";
             outPath = refPath;
             inherit requires;
             out = {
               name = "${plural}.${group}";
-            } // builders;
+            }
+            // builders;
           };
-          builders = k8s.mkCRDBuilders { crdOrRef = ref; inherit group kind version crdScope; };
+          builders = k8s.mkCRDBuilders {
+            crdOrRef = ref;
+            inherit
+              group
+              kind
+              version
+              crdScope
+              ;
+          };
         in
         ref;
 
@@ -211,18 +276,31 @@ rec {
       # The scope object — self-referencing via Nix laziness so mkCR can pass
       # the full scope to crd.out.mkCR.
       scopeObj = {
-        inherit instanceName namespaceName selectorLabels labelStyle namespaces;
+        inherit
+          instanceName
+          namespaceName
+          selectorLabels
+          labelStyle
+          namespaces
+          ;
         namespace = namespaceResource;
 
         mkResource = scopeMkResource;
 
-        forNamespace = nsName:
+        forNamespace =
+          nsName:
           let
-            nsRes = namespaces.${nsName}
-              or (throw "scope.forNamespace: namespace '${nsName}' does not exist in the cluster");
+            nsRes =
+              namespaces.${nsName}
+                or (throw "scope.forNamespace: namespace '${nsName}' does not exist in the cluster");
           in
           mkScope {
-            inherit instanceName namespaces clusterLabels labelStyle;
+            inherit
+              instanceName
+              namespaces
+              clusterLabels
+              labelStyle
+              ;
             namespaceName = nsName;
             namespaceResource = nsRes;
           };
@@ -243,10 +321,15 @@ rec {
   # Create an import marker — used as the `package` field for imported instances.
   # `from`: optional package function to derive out from (via lazy eval).
   # `out`: manual out overrides, merged on top of derived values.
-  mkImport = { from ? null, out ? {} }: {
-    _type = "kix-import";
-    inherit from out;
-  };
+  mkImport =
+    {
+      from ? null,
+      out ? { },
+    }:
+    {
+      _type = "kix-import";
+      inherit from out;
+    };
 
   # Per-instance context for import mode.
   # Swaps mkResource/mkClusterResource for lightweight ref constructors
@@ -321,7 +404,7 @@ rec {
       instCfg,
       namespaceResource,
       clusterLabels,
-      clusterConfig ? {},
+      clusterConfig ? { },
       ...
     }:
     let
@@ -332,40 +415,66 @@ rec {
         if importDef.from != null then
           let
             importScope = mkImportScope {
-              inherit instanceName namespaceName namespaceResource clusterLabels;
+              inherit
+                instanceName
+                namespaceName
+                namespaceResource
+                clusterLabels
+                ;
             };
 
             # Call the package function with null for all dependency args.
             # Laziness ensures only out-relevant code paths are forced.
             fnArgs = builtins.functionArgs importDef.from;
-            depArgNames = builtins.attrNames (removeAttrs fnArgs [ "scope" "lib" "kix" ]);
-            nullDeps = builtins.listToAttrs (
-              map (name: { inherit name; value = null; }) depArgNames
+            depArgNames = builtins.attrNames (
+              removeAttrs fnArgs [
+                "scope"
+                "lib"
+                "kix"
+              ]
             );
-            raw = importDef.from ({ scope = importScope; inherit lib; }
+            nullDeps = builtins.listToAttrs (
+              map (name: {
+                inherit name;
+                value = null;
+              }) depArgNames
+            );
+            raw = importDef.from (
+              {
+                scope = importScope;
+                inherit lib;
+              }
               // lib.optionalAttrs (fnArgs ? kix) { kix = kixlib; }
-              // nullDeps);
+              // nullDeps
+            );
 
             # Evaluate typed config (same as normal path)
             evaluatedConfig = evaluateInstanceConfig {
-              packageOptions = raw.options or {};
+              packageOptions = raw.options or { };
               inherit instCfg clusterConfig;
             };
 
             # Run fixpoint — only out will be forced
-            parts = lib.fix (self:
-              raw.build { inherit self clusterConfig; config = evaluatedConfig; }
+            parts = lib.fix (
+              self:
+              raw.build {
+                inherit self clusterConfig;
+                config = evaluatedConfig;
+              }
             );
 
             # Extract main's out
-            rawMain = parts.main
-              or (throw "Import instance '${instanceName}': package build must define 'main'");
+            rawMain =
+              parts.main or (throw "Import instance '${instanceName}': package build must define 'main'");
             mainRes =
-              if rawMain ? resource then rawMain.resource
-              else if rawMain ? _type then rawMain
-              else throw "Import instance '${instanceName}': main must be a resource or { resource, requires }";
+              if rawMain ? resource then
+                rawMain.resource
+              else if rawMain ? _type then
+                rawMain
+              else
+                throw "Import instance '${instanceName}': main must be a resource or { resource, requires }";
           in
-          (mainRes.out or {}) // importDef.out
+          (mainRes.out or { }) // importDef.out
         else
           importDef.out;
 
@@ -567,8 +676,9 @@ rec {
   extractDeferredValues =
     deferredConfig:
     let
-      modules = deferredConfig.imports or [];
-      extractOne = m:
+      modules = deferredConfig.imports or [ ];
+      extractOne =
+        m:
         if builtins.isAttrs m && m ? _file && m ? imports then
           # deferredModuleWith wrapper — unwrap
           builtins.concatMap extractOne m.imports
@@ -577,7 +687,7 @@ rec {
         else if builtins.isFunction m then
           [ m ]
         else
-          [];
+          [ ];
     in
     builtins.concatMap extractOne modules;
 
@@ -594,28 +704,27 @@ rec {
     {
       packageOptions,
       instCfg,
-      clusterConfig ? {},
+      clusterConfig ? { },
     }:
     let
       deferredConfig = instCfg.config;
       configValues = extractDeferredValues deferredConfig;
-      wrappedModules = map (v:
-        if builtins.isFunction v then v
-        else { config = v; }
-      ) configValues;
+      wrappedModules = map (v: if builtins.isFunction v then v else { config = v; }) configValues;
 
-      evaluated = removeAttrs (lib.evalModules {
-        modules = [
-          { options = packageOptions; }
-          { config = clusterConfig.global or {}; }
-        ] ++ wrappedModules;
-      }).config [ "_module" ];
+      evaluated =
+        removeAttrs
+          (lib.evalModules {
+            modules = [
+              { options = packageOptions; }
+              { config = clusterConfig.global or { }; }
+            ]
+            ++ wrappedModules;
+          }).config
+          [ "_module" ];
 
       # Collect option defaults for deep merge.
       optionDefaults = lib.filterAttrs (_: v: v != null) (
-        lib.mapAttrs (_: opt:
-          if opt ? default then opt.default else null
-        ) packageOptions
+        lib.mapAttrs (_: opt: if opt ? default then opt.default else null) packageOptions
       );
     in
     lib.recursiveUpdate optionDefaults evaluated;
@@ -629,7 +738,7 @@ rec {
       scope,
       resolutionIndex,
       allInstances,
-      deps ? {},
+      deps ? { },
       namespace,
     }:
     let
@@ -681,12 +790,12 @@ rec {
       namespaceName,
       instCfg,
       namespaceResource,
-      nsResources ? {},
+      nsResources ? { },
       clusterLabels,
       resolutionIndex,
       allInstances,
-      globalPartsOverlays ? [],
-      clusterConfig ? {},
+      globalPartsOverlays ? [ ],
+      clusterConfig ? { },
     }@args:
 
     # Import instances take a separate evaluation path — no resource collection,
@@ -695,406 +804,419 @@ rec {
       evaluateImportInstance args
 
     else
-    let
-      scope = mkScope {
-        inherit
-          instanceName
-          namespaceName
-          namespaceResource
-          clusterLabels
-          ;
-        namespaces = nsResources;
-        labelStyle = instCfg.labelStyle;
-        selectorLabelsOverride = instCfg.selectorLabels;
-        clusterDomain = clusterConfig.clusterDomain or "cluster.local";
-      };
+      let
+        scope = mkScope {
+          inherit
+            instanceName
+            namespaceName
+            namespaceResource
+            clusterLabels
+            ;
+          namespaces = nsResources;
+          labelStyle = instCfg.labelStyle;
+          selectorLabelsOverride = instCfg.selectorLabels;
+          clusterDomain = clusterConfig.clusterDomain or "cluster.local";
+        };
 
-      # 1. Call the package function with DI deps — returns { meta?, options, build }
-      raw = kixCallPackage {
-        packageFn = instCfg.package;
-        inherit scope resolutionIndex allInstances;
-        deps = instCfg.deps;
-        namespace = namespaceName;
-      };
+        # 1. Call the package function with DI deps — returns { meta?, options, build }
+        raw = kixCallPackage {
+          packageFn = instCfg.package;
+          inherit scope resolutionIndex allInstances;
+          deps = instCfg.deps;
+          namespace = namespaceName;
+        };
 
-      # Package-declared metadata (lifecycle, scope, etc.)
-      packageMeta = raw.meta or {};
+        # Package-declared metadata (lifecycle, scope, etc.)
+        packageMeta = raw.meta or { };
 
-      # Cross-namespace scope validation: if a dependency declares
-      # meta.scope = "namespace", it cannot be referenced cross-namespace
-      # (e.g. PVCs must be in the same namespace as the consuming pod).
-      _crossNsCheck =
-        let
-          fnArgs = builtins.functionArgs instCfg.package;
-          depArgNames = builtins.attrNames (removeAttrs fnArgs [ "scope" "lib" "kix" ]);
-          deps = instCfg.deps or {};
-        in
-        builtins.foldl' (acc: argName:
+        # Cross-namespace scope validation: if a dependency declares
+        # meta.scope = "namespace", it cannot be referenced cross-namespace
+        # (e.g. PVCs must be in the same namespace as the consuming pod).
+        _crossNsCheck =
           let
-            resolution = resolveArg {
-              inherit argName resolutionIndex;
-              requesterNamespace = namespaceName;
-              hasDefault = fnArgs.${argName} or false;
-              explicitOverride = deps.${argName} or null;
-            };
+            fnArgs = builtins.functionArgs instCfg.package;
+            depArgNames = builtins.attrNames (
+              removeAttrs fnArgs [
+                "scope"
+                "lib"
+                "kix"
+              ]
+            );
+            deps = instCfg.deps or { };
           in
-          if resolution.found
-             && !(resolution.direct or false)
-             && (resolution.namespace or namespaceName) != namespaceName then
+          builtins.foldl' (
+            acc: argName:
             let
-              dep = allInstances.${resolution.namespace}.${resolution.instanceName};
-              depScope = (dep._meta.packageMeta or {}).scope or "cluster";
+              resolution = resolveArg {
+                inherit argName resolutionIndex;
+                requesterNamespace = namespaceName;
+                hasDefault = fnArgs.${argName} or false;
+                explicitOverride = deps.${argName} or null;
+              };
             in
-            if depScope == "namespace" then
-              throw "instance '${instanceName}' (namespace '${namespaceName}') depends on '${resolution.instanceName}' (namespace '${resolution.namespace}') which declares meta.scope = \"namespace\" — cross-namespace reference not allowed"
-            else acc
-          else acc
-        ) null depArgNames;
-
-      # 2. Evaluate typed config: package options + instance config
-      evaluatedConfig = evaluateInstanceConfig {
-        packageOptions = raw.options or {};
-        inherit instCfg clusterConfig;
-      };
-
-      # 3. Combine global + instance overlays (signature: scope → self → base → attrset)
-      allOverlays = globalPartsOverlays ++ (instCfg.partsOverlays or []);
-      boundOverlays = map (o: o scope) allOverlays;
-
-      # 4. Build the inner fixpoint — build receives { self, config, clusterConfig }
-      parts =
-        if boundOverlays != [] then
-          lib.fix (
-            self:
-            builtins.foldl'
-              (acc: overlay: acc // (overlay self acc))
-              (raw.build { inherit self clusterConfig; config = evaluatedConfig; })
-              boundOverlays
-          )
-        else
-          lib.fix (self:
-            raw.build { inherit self clusterConfig; config = evaluatedConfig; }
-          );
-
-      # --- Resolve main resource and package-level requires ---
-      rawMain =
-        parts.main
-          or (throw "Instance '${instanceName}' in namespace '${namespaceName}' must define 'main'");
-
-      # main can be either { resource = ...; requires = [...]; } or a resource directly
-      mainRes =
-        if rawMain ? resource then
-          rawMain.resource
-        else if rawMain ? _type && rawMain._type == "k8s-resource" then
-          rawMain
-        else
-          throw "Instance '${instanceName}': main must be a resource or { resource, requires }";
-
-      packageRequires = if rawMain ? resource then rawMain.requires or [ ] else [ ];
-
-      # Package-level out extensions (functions, complex types beyond string outputs).
-      # Merged on top of the main resource's auto-derived out.
-      packageOut = if rawMain ? resource then rawMain.out or { } else { };
-
-      # --- Forward closure computation ---
-      # Follows both store-path references in manifests AND explicit `requires`.
-      # `requires` are structural forward deps (SA needed by Deployment, etc.).
-
-      # Collect all resources from parts (for the local registry).
-      # Filters out null values so disabled/modal parts are excluded.
-      allPartResources =
-        let
-          partNames = builtins.attrNames (removeAttrs parts [ "main" ]);
-          vals = map (n: {
-            name = n;
-            value = parts.${n};
-          }) partNames;
-          resourceVals = builtins.filter (
-            v: v.value != null && builtins.isAttrs v.value && (v.value._type or "") == "k8s-resource"
-          ) vals;
-        in
-        map (v: v.value) resourceVals;
-
-      # Build a local mini-registry for this instance's resources
-      localRegistry = buildRegistry allPartResources;
-
-      # Get forward deps: store-path refs in manifest + explicit requires
-      getForwardDeps =
-        resource:
-        let
-          ctx = builtins.getContext (builtins.toJSON resource.rawManifest);
-          k8sPaths = builtins.filter (p: builtins.hasAttr p localRegistry) (builtins.attrNames ctx);
-          manifestDeps = map (p: localRegistry.${p}.resource) k8sPaths;
-          requiresDeps = builtins.filter (r: builtins.isAttrs r && (r._type or "") == "k8s-resource") (
-            resource.requires or [ ]
-          );
-        in
-        manifestDeps ++ requiresDeps;
-
-      # Compute the forward closure from mainRes + packageRequires
-      forwardRoots = [ mainRes ] ++ packageRequires;
-      forwardClosure =
-        let
-          go =
-            {
-              seen,
-              result,
-              queue,
-            }:
-            if queue == [ ] then
-              result
-            else
+            if
+              resolution.found
+              && !(resolution.direct or false)
+              && (resolution.namespace or namespaceName) != namespaceName
+            then
               let
-                head = builtins.head queue;
-                rest = builtins.tail queue;
-                headPath = builtins.unsafeDiscardStringContext head.outPath;
+                dep = allInstances.${resolution.namespace}.${resolution.instanceName};
+                depScope = (dep._meta.packageMeta or { }).scope or "cluster";
               in
-              if builtins.hasAttr headPath seen then
-                go {
-                  inherit seen result;
-                  queue = rest;
-                }
+              if depScope == "namespace" then
+                throw "instance '${instanceName}' (namespace '${namespaceName}') depends on '${resolution.instanceName}' (namespace '${resolution.namespace}') which declares meta.scope = \"namespace\" — cross-namespace reference not allowed"
               else
-                go {
-                  seen = seen // {
-                    ${headPath} = true;
-                  };
-                  result = result ++ [ head ];
-                  queue = rest ++ (getForwardDeps head);
-                };
-        in
-        go {
-          seen = { };
-          result = [ ];
-          queue = forwardRoots;
-        };
-
-      # Include both _identityPath (outPath) and _contentPath for each resource,
-      # so manifest context lookups (_contentPaths) and outPath lookups (_identityPaths)
-      # both match. See two-phase identity in k8s.nix.
-      forwardPaths = builtins.listToAttrs (
-        builtins.concatMap (r: [
-          { name = builtins.unsafeDiscardStringContext r.outPath; value = true; }
-        ] ++ lib.optional (r ? _contentPathPlain) {
-          name = r._contentPathPlain; value = true;
-        }) forwardClosure
-      );
-
-      # --- Inverse dependency detection ---
-      # Find resources NOT in the forward closure whose manifest references
-      # a resource that IS in the forward closure. Only tracks the actual
-      # inverse deps — not their forward expansions (e.g. a ClusterRoleBinding
-      # that references a SA is an inverse dep, but the ClusterRole it binds is
-      # just a forward dep of the binding, not an inverse dep itself).
-      inverseDeps =
-        let
-          nonForward = builtins.filter (
-            r: !(builtins.hasAttr (builtins.unsafeDiscardStringContext r.outPath) forwardPaths)
-          ) allPartResources;
-
-          referencesForward =
-            r:
-            let
-              ctx = builtins.getContext (builtins.toJSON r.rawManifest);
-              ctxPaths = builtins.attrNames ctx;
-            in
-            builtins.any (p: builtins.hasAttr p forwardPaths) ctxPaths;
-        in
-        builtins.filter referencesForward nonForward;
-
-      # Deduplicate inverse deps
-      uniqueInverseDeps =
-        let
-          go =
-            {
-              seen,
-              result,
-              queue,
-            }:
-            if queue == [ ] then
-              result
+                acc
             else
-              let
-                head = builtins.head queue;
-                rest = builtins.tail queue;
-                headPath = builtins.unsafeDiscardStringContext head.outPath;
-              in
-              if builtins.hasAttr headPath seen then
-                go {
-                  inherit seen result;
-                  queue = rest;
-                }
-              else
-                go {
-                  seen = seen // {
-                    ${headPath} = true;
-                  };
-                  result = result ++ [ head ];
-                  queue = rest;
-                };
-        in
-        go {
-          seen = { };
-          result = [ ];
-          queue = inverseDeps;
+              acc
+          ) null depArgNames;
+
+        # 2. Evaluate typed config: package options + instance config
+        evaluatedConfig = evaluateInstanceConfig {
+          packageOptions = raw.options or { };
+          inherit instCfg clusterConfig;
         };
 
-      # --- Create PackageInstance CRD (Phase 5) ---
-      # Lists main.requires as package-requires and true inverse deps.
-      # Structural deps (via `requires`) are tracked by the cluster-level
-      # closure which also follows `requires`.
-      packageInstance = mkPackageInstance {
-        inherit instanceName namespaceName;
-        namespace = namespaceResource;
-        mainResource = mainRes;
-        inherit packageRequires;
-        inherit inverseDeps;
-        version = instCfg.version or null;
-        labels = clusterLabels // {
-          "app.kubernetes.io/instance" = instanceName;
-          "app.kubernetes.io/managed-by" = "kix";
-        };
-      };
+        # 3. Combine global + instance overlays (signature: scope → self → base → attrset)
+        allOverlays = globalPartsOverlays ++ (instCfg.partsOverlays or [ ]);
+        boundOverlays = map (o: o scope) allOverlays;
 
-      # --- Eval-time warnings ---
-
-      # 1. Redundant requires: resource has requires on something already in its manifest context
-      redundantRequiresWarnings = builtins.concatMap (
-        resource:
-        let
-          reqs = resource.requires or [ ];
-          ctx = builtins.getContext (builtins.toJSON resource.rawManifest);
-        in
-        builtins.concatMap (
-          req:
-          let
-            reqPath = builtins.unsafeDiscardStringContext req.outPath;
-          in
-          if builtins.hasAttr reqPath ctx then
-            [
-              {
-                inherit resource req;
-              }
-            ]
+        # 4. Build the inner fixpoint — build receives { self, config, clusterConfig }
+        parts =
+          if boundOverlays != [ ] then
+            lib.fix (
+              self:
+              builtins.foldl' (acc: overlay: acc // (overlay self acc)) (raw.build {
+                inherit self clusterConfig;
+                config = evaluatedConfig;
+              }) boundOverlays
+            )
           else
-            [ ]
-        ) (builtins.filter (r: builtins.isAttrs r && (r._type or "") == "k8s-resource") reqs)
-      ) allPartResources;
+            lib.fix (
+              self:
+              raw.build {
+                inherit self clusterConfig;
+                config = evaluatedConfig;
+              }
+            );
 
-      # 2. Duplicate requires: same resource required multiple times
-      duplicateRequiresWarnings = builtins.concatMap (
-        resource:
-        let
-          reqs = builtins.filter (r: builtins.isAttrs r && (r._type or "") == "k8s-resource") (
-            resource.requires or [ ]
-          );
-          reqPaths = map (r: {
-            path = builtins.unsafeDiscardStringContext r.outPath;
-            req = r;
-          }) reqs;
-          go =
-            {
-              seen,
-              dupes,
-              queue,
-            }:
-            if queue == [ ] then
-              dupes
-            else
-              let
-                head = builtins.head queue;
-                rest = builtins.tail queue;
-              in
-              if builtins.hasAttr head.path seen then
-                go {
-                  inherit seen;
-                  dupes = dupes ++ [
-                    {
-                      inherit resource;
-                      req = head.req;
-                    }
-                  ];
-                  queue = rest;
-                }
+        # --- Resolve main resource and package-level requires ---
+        rawMain =
+          parts.main
+            or (throw "Instance '${instanceName}' in namespace '${namespaceName}' must define 'main'");
+
+        # main can be either { resource = ...; requires = [...]; } or a resource directly
+        mainRes =
+          if rawMain ? resource then
+            rawMain.resource
+          else if rawMain ? _type && rawMain._type == "k8s-resource" then
+            rawMain
+          else
+            throw "Instance '${instanceName}': main must be a resource or { resource, requires }";
+
+        packageRequires = if rawMain ? resource then rawMain.requires or [ ] else [ ];
+
+        # Package-level out extensions (functions, complex types beyond string outputs).
+        # Merged on top of the main resource's auto-derived out.
+        packageOut = if rawMain ? resource then rawMain.out or { } else { };
+
+        # --- Forward closure computation ---
+        # Follows both store-path references in manifests AND explicit `requires`.
+        # `requires` are structural forward deps (SA needed by Deployment, etc.).
+
+        # Collect all resources from parts (for the local registry).
+        # Filters out null values so disabled/modal parts are excluded.
+        allPartResources =
+          let
+            partNames = builtins.attrNames (removeAttrs parts [ "main" ]);
+            vals = map (n: {
+              name = n;
+              value = parts.${n};
+            }) partNames;
+            resourceVals = builtins.filter (
+              v: v.value != null && builtins.isAttrs v.value && (v.value._type or "") == "k8s-resource"
+            ) vals;
+          in
+          map (v: v.value) resourceVals;
+
+        # Build a local mini-registry for this instance's resources
+        localRegistry = buildRegistry allPartResources;
+
+        # Get forward deps: store-path refs in manifest + explicit requires
+        getForwardDeps =
+          resource:
+          let
+            ctx = builtins.getContext (builtins.toJSON resource.rawManifest);
+            k8sPaths = builtins.filter (p: builtins.hasAttr p localRegistry) (builtins.attrNames ctx);
+            manifestDeps = map (p: localRegistry.${p}.resource) k8sPaths;
+            requiresDeps = builtins.filter (r: builtins.isAttrs r && (r._type or "") == "k8s-resource") (
+              resource.requires or [ ]
+            );
+          in
+          manifestDeps ++ requiresDeps;
+
+        # Compute the forward closure from mainRes + packageRequires
+        forwardRoots = [ mainRes ] ++ packageRequires;
+        forwardClosure =
+          let
+            go =
+              {
+                seen,
+                result,
+                queue,
+              }:
+              if queue == [ ] then
+                result
               else
-                go {
-                  seen = seen // {
-                    ${head.path} = true;
+                let
+                  head = builtins.head queue;
+                  rest = builtins.tail queue;
+                  headPath = builtins.unsafeDiscardStringContext head.outPath;
+                in
+                if builtins.hasAttr headPath seen then
+                  go {
+                    inherit seen result;
+                    queue = rest;
+                  }
+                else
+                  go {
+                    seen = seen // {
+                      ${headPath} = true;
+                    };
+                    result = result ++ [ head ];
+                    queue = rest ++ (getForwardDeps head);
                   };
-                  inherit dupes;
-                  queue = rest;
+          in
+          go {
+            seen = { };
+            result = [ ];
+            queue = forwardRoots;
+          };
+
+        forwardPaths = builtins.listToAttrs (
+          map (r: {
+            name = builtins.unsafeDiscardStringContext r.outPath;
+            value = true;
+          }) forwardClosure
+        );
+
+        # --- Inverse dependency detection ---
+        # Find resources NOT in the forward closure whose manifest references
+        # a resource that IS in the forward closure. Only tracks the actual
+        # inverse deps — not their forward expansions (e.g. a ClusterRoleBinding
+        # that references a SA is an inverse dep, but the ClusterRole it binds is
+        # just a forward dep of the binding, not an inverse dep itself).
+        inverseDeps =
+          let
+            nonForward = builtins.filter (
+              r: !(builtins.hasAttr (builtins.unsafeDiscardStringContext r.outPath) forwardPaths)
+            ) allPartResources;
+
+            referencesForward =
+              r:
+              let
+                ctx = builtins.getContext (builtins.toJSON r.rawManifest);
+                ctxPaths = builtins.attrNames ctx;
+              in
+              builtins.any (p: builtins.hasAttr p forwardPaths) ctxPaths;
+          in
+          builtins.filter referencesForward nonForward;
+
+        # Deduplicate inverse deps
+        uniqueInverseDeps =
+          let
+            go =
+              {
+                seen,
+                result,
+                queue,
+              }:
+              if queue == [ ] then
+                result
+              else
+                let
+                  head = builtins.head queue;
+                  rest = builtins.tail queue;
+                  headPath = builtins.unsafeDiscardStringContext head.outPath;
+                in
+                if builtins.hasAttr headPath seen then
+                  go {
+                    inherit seen result;
+                    queue = rest;
+                  }
+                else
+                  go {
+                    seen = seen // {
+                      ${headPath} = true;
+                    };
+                    result = result ++ [ head ];
+                    queue = rest;
+                  };
+          in
+          go {
+            seen = { };
+            result = [ ];
+            queue = inverseDeps;
+          };
+
+        # --- Create PackageInstance CRD (Phase 5) ---
+        # Lists main.requires as package-requires and true inverse deps.
+        # Structural deps (via `requires`) are tracked by the cluster-level
+        # closure which also follows `requires`.
+        packageInstance = mkPackageInstance {
+          inherit instanceName namespaceName;
+          namespace = namespaceResource;
+          mainResource = mainRes;
+          inherit packageRequires;
+          inherit inverseDeps;
+          version = instCfg.version or null;
+          labels = clusterLabels // {
+            "app.kubernetes.io/instance" = instanceName;
+            "app.kubernetes.io/managed-by" = "kix";
+          };
+        };
+
+        # --- Eval-time warnings ---
+
+        # 1. Redundant requires: resource has requires on something already in its manifest context
+        redundantRequiresWarnings = builtins.concatMap (
+          resource:
+          let
+            reqs = resource.requires or [ ];
+            ctx = builtins.getContext (builtins.toJSON resource.rawManifest);
+          in
+          builtins.concatMap (
+            req:
+            let
+              reqPath = builtins.unsafeDiscardStringContext req.outPath;
+            in
+            if builtins.hasAttr reqPath ctx then
+              [
+                {
+                  inherit resource req;
+                }
+              ]
+            else
+              [ ]
+          ) (builtins.filter (r: builtins.isAttrs r && (r._type or "") == "k8s-resource") reqs)
+        ) allPartResources;
+
+        # 2. Duplicate requires: same resource required multiple times
+        duplicateRequiresWarnings = builtins.concatMap (
+          resource:
+          let
+            reqs = builtins.filter (r: builtins.isAttrs r && (r._type or "") == "k8s-resource") (
+              resource.requires or [ ]
+            );
+            reqPaths = map (r: {
+              path = builtins.unsafeDiscardStringContext r.outPath;
+              req = r;
+            }) reqs;
+            go =
+              {
+                seen,
+                dupes,
+                queue,
+              }:
+              if queue == [ ] then
+                dupes
+              else
+                let
+                  head = builtins.head queue;
+                  rest = builtins.tail queue;
+                in
+                if builtins.hasAttr head.path seen then
+                  go {
+                    inherit seen;
+                    dupes = dupes ++ [
+                      {
+                        inherit resource;
+                        req = head.req;
+                      }
+                    ];
+                    queue = rest;
+                  }
+                else
+                  go {
+                    seen = seen // {
+                      ${head.path} = true;
+                    };
+                    inherit dupes;
+                    queue = rest;
+                  };
+          in
+          go {
+            seen = { };
+            dupes = [ ];
+            queue = reqPaths;
+          }
+        ) allPartResources;
+
+        # 3. Orphaned resources: defined in parts but not reachable from main
+        reachablePaths =
+          let
+            inverseSet = builtins.listToAttrs (
+              map (r: {
+                name = builtins.unsafeDiscardStringContext r.outPath;
+                value = true;
+              }) uniqueInverseDeps
+            );
+            inverseFwdClosure = builtins.concatMap (r: getForwardDeps r) uniqueInverseDeps;
+            inverseFwdSet = builtins.listToAttrs (
+              map (r: {
+                name = builtins.unsafeDiscardStringContext r.outPath;
+                value = true;
+              }) inverseFwdClosure
+            );
+          in
+          forwardPaths // inverseSet // inverseFwdSet;
+
+        orphanedWarnings = builtins.filter (
+          r: !(builtins.hasAttr (builtins.unsafeDiscardStringContext r.outPath) reachablePaths)
+        ) allPartResources;
+
+        # Emit warnings via builtins.trace
+        _w1 = lib.foldl' (
+          acc: w:
+          builtins.trace "warning: resource '${w.resource.kind}/${w.resource.name}' has redundant requires on '${w.req.kind}/${w.req.name}' — already tracked via store path reference" acc
+        ) null redundantRequiresWarnings;
+
+        _w2 = lib.foldl' (
+          acc: w:
+          builtins.trace "warning: resource '${w.resource.kind}/${w.resource.name}' requires '${w.req.kind}/${w.req.name}' multiple times" acc
+        ) null duplicateRequiresWarnings;
+
+        _w3 = lib.foldl' (
+          acc: r:
+          builtins.trace "warning: resource '${r.kind}/${r.name}' in instance '${instanceName}' is defined but not reachable from main (orphaned)" acc
+        ) null orphanedWarnings;
+
+      in
+      builtins.seq _crossNsCheck (
+        builtins.seq _w1 (
+          builtins.seq _w2 (
+            builtins.seq _w3 (
+              parts
+              // {
+                _type = "k8s-instance";
+                _packageInstance = packageInstance;
+
+                # The PackageInstance is the new closure root — it references
+                # mainRes, inverse deps, and package requires via annotations.
+                main = packageInstance;
+                out = (mainRes.out or { }) // packageOut;
+
+                _meta = {
+                  inherit instanceName namespaceName;
+                  namespace = namespaceName;
+                  aliases = instCfg.aliases or [ ];
+                  inherit packageMeta;
                 };
-        in
-        go {
-          seen = { };
-          dupes = [ ];
-          queue = reqPaths;
-        }
-      ) allPartResources;
-
-      # 3. Orphaned resources: defined in parts but not reachable from main
-      reachablePaths =
-        let
-          inverseSet = builtins.listToAttrs (
-            builtins.concatMap (r: [
-              { name = builtins.unsafeDiscardStringContext r.outPath; value = true; }
-            ] ++ lib.optional (r ? _contentPathPlain) {
-              name = r._contentPathPlain; value = true;
-            }) uniqueInverseDeps
-          );
-          inverseFwdClosure = builtins.concatMap (r: getForwardDeps r) uniqueInverseDeps;
-          inverseFwdSet = builtins.listToAttrs (
-            builtins.concatMap (r: [
-              { name = builtins.unsafeDiscardStringContext r.outPath; value = true; }
-            ] ++ lib.optional (r ? _contentPathPlain) {
-              name = r._contentPathPlain; value = true;
-            }) inverseFwdClosure
-          );
-        in
-        forwardPaths // inverseSet // inverseFwdSet;
-
-      orphanedWarnings = builtins.filter (
-        r: !(builtins.hasAttr (builtins.unsafeDiscardStringContext r.outPath) reachablePaths)
-      ) allPartResources;
-
-      # Emit warnings via builtins.trace
-      _w1 = lib.foldl' (
-        acc: w:
-        builtins.trace "warning: resource '${w.resource.kind}/${w.resource.name}' has redundant requires on '${w.req.kind}/${w.req.name}' — already tracked via store path reference"
-          acc
-      ) null redundantRequiresWarnings;
-
-      _w2 = lib.foldl' (
-        acc: w:
-        builtins.trace "warning: resource '${w.resource.kind}/${w.resource.name}' requires '${w.req.kind}/${w.req.name}' multiple times"
-          acc
-      ) null duplicateRequiresWarnings;
-
-      _w3 = lib.foldl' (
-        acc: r:
-        builtins.trace "warning: resource '${r.kind}/${r.name}' in instance '${instanceName}' is defined but not reachable from main (orphaned)"
-          acc
-      ) null orphanedWarnings;
-
-    in
-    builtins.seq _crossNsCheck (builtins.seq _w1 (builtins.seq _w2 (builtins.seq _w3 (
-    parts
-    // {
-      _type = "k8s-instance";
-      _packageInstance = packageInstance;
-
-      # The PackageInstance is the new closure root — it references
-      # mainRes, inverse deps, and package requires via annotations.
-      main = packageInstance;
-      out = (mainRes.out or { }) // packageOut;
-
-      _meta = {
-        inherit instanceName namespaceName;
-        namespace = namespaceName;
-        aliases = instCfg.aliases or [ ];
-        inherit packageMeta;
-      };
-    }))));
+              }
+            )
+          )
+        )
+      );
 
   # The top-level cluster builder.
   # Uses lib.evalModules to compose cluster definitions from modules.
@@ -1104,7 +1226,7 @@ rec {
     {
       name ? "cluster",
       modules,
-      specialArgs ? {},
+      specialArgs ? { },
     }:
     let
       # 1. Evaluate modules — produces merged config lazily.
@@ -1114,16 +1236,14 @@ rec {
         modules = [ (import ./modules.nix) ] ++ modules;
         specialArgs = {
           ref = clusterInstances; # lazy — resolved during fixpoint
-        } // specialArgs;
+        }
+        // specialArgs;
       };
 
       cfg = evaluated.config;
 
       # 2. Derive namespace list from instances keys ∪ explicit namespaces
-      allNsNames = lib.unique (
-        builtins.attrNames cfg.namespaces
-        ++ builtins.attrNames cfg.instances
-      );
+      allNsNames = lib.unique (builtins.attrNames cfg.namespaces ++ builtins.attrNames cfg.instances);
 
       # 3. Create namespace resources
       nsResources = builtins.listToAttrs (
@@ -1139,7 +1259,8 @@ rec {
       );
 
       # 4. Build static metadata for DI resolution (instance name + aliases)
-      staticMeta = lib.mapAttrs (nsName: nsInsts:
+      staticMeta = lib.mapAttrs (
+        nsName: nsInsts:
         lib.mapAttrs (instName: instCfg: {
           _meta = {
             instanceName = instName;
@@ -1153,9 +1274,12 @@ rec {
       resolutionIndex = buildResolutionIndex staticMeta;
 
       # 5. Build nested fixpoint
-      clusterInstances = lib.fix (self:
-        lib.mapAttrs (nsName: nsInsts:
-          lib.mapAttrs (instName: instCfg:
+      clusterInstances = lib.fix (
+        self:
+        lib.mapAttrs (
+          nsName: nsInsts:
+          lib.mapAttrs (
+            instName: instCfg:
             evaluateInstance {
               instanceName = instName;
               namespaceName = nsName;
@@ -1218,8 +1342,7 @@ rec {
       activation = k8s.mkActivation {
         inherit name;
         instances = lib.mapAttrs (
-          _nsName: nsInsts:
-          lib.mapAttrs (_: inst: inst._packageInstance.out.name) nsInsts
+          _nsName: nsInsts: lib.mapAttrs (_: inst: inst._packageInstance.out.name) nsInsts
         ) clusterInstances;
       };
 
@@ -1235,8 +1358,8 @@ rec {
 
       inherit activation;
 
-      rawManifests = map (r:
-        builtins.fromJSON (builtins.unsafeDiscardStringContext (builtins.toJSON r.rawManifest))
+      rawManifests = map (
+        r: builtins.fromJSON (builtins.unsafeDiscardStringContext (builtins.toJSON r.rawManifest))
       ) allResources;
     };
 

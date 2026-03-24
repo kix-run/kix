@@ -11,7 +11,12 @@
 #   storage        → immich.storage (same namespace)
 # Owned by: Luca (application)
 
-{ config, lib, packages, ... }:
+{
+  config,
+  lib,
+  packages,
+  ...
+}:
 {
   config.instances.immich = {
 

@@ -20,8 +20,10 @@ rec {
 
   # Recursively attach Nix string context to all string leaves in a value.
   # Non-string, non-null leaves (int, bool) pass through with a trace warning.
-  attachCtxDeep = ctx: value:
-    if value == null then null
+  attachCtxDeep =
+    ctx: value:
+    if value == null then
+      null
     else if builtins.isString value then
       builtins.appendContext value ctx
     else if builtins.isAttrs value then
@@ -29,13 +31,12 @@ rec {
     else if builtins.isList value then
       map (attachCtxDeep ctx) value
     else
-      builtins.trace "warning: non-string leaf (${builtins.typeOf value}) in .manifest access — dependency not tracked"
-        value;
+      builtins.trace "warning: non-string leaf (${builtins.typeOf value}) in .manifest access — dependency not tracked" value;
 
   # Extract the 32-char base32 hash from a Nix store path.
   # /nix/store/<32-char-hash>-<name> → <32-char-hash>
-  extractStoreHash = path:
-    builtins.substring 11 32 (builtins.unsafeDiscardStringContext (toString path));
+  extractStoreHash =
+    path: builtins.substring 11 32 (builtins.unsafeDiscardStringContext (toString path));
 
   # Lightweight resource reference for import mode.
   # Computes out (name, fqdn, selector, outputs) without creating store paths
@@ -62,23 +63,26 @@ rec {
       isClusterScoped = builtins.isAttrs namespace && (namespace._type or "") == "k8s-cluster-scoped";
       isNsResource = builtins.isAttrs namespace && namespace ? outPath;
       nsKey =
-        if isClusterScoped then "_cluster_"
-        else if isNsResource then namespace.name or "ns"
-        else namespace;
+        if isClusterScoped then
+          "_cluster_"
+        else if isNsResource then
+          namespace.name or "ns"
+        else
+          namespace;
 
       autoSelector =
         if spec ? selector.matchLabels then
           spec.selector.matchLabels
         else if labels != { } then
           labels
-        else null;
+        else
+          null;
 
       autoOut = {
         inherit name;
-        fqdn =
-          if isClusterScoped then name
-          else "${name}.${nsKey}.svc.${clusterDomain}";
-      } // lib.optionalAttrs (autoSelector != null) {
+        fqdn = if isClusterScoped then name else "${name}.${nsKey}.svc.${clusterDomain}";
+      }
+      // lib.optionalAttrs (autoSelector != null) {
         selector = autoSelector;
       };
 
@@ -86,7 +90,12 @@ rec {
     in
     {
       _type = "k8s-resource-ref";
-      inherit name namespace kind apiVersion;
+      inherit
+        name
+        namespace
+        kind
+        apiVersion
+        ;
       out = autoOut // userOut;
       requires = [ ];
     };
@@ -121,14 +130,19 @@ rec {
 
       # Namespace name: real K8s name with context for dependency tracking
       nsName =
-        if isClusterScoped then null
+        if isClusterScoped then
+          null
         else if isNsResource then
           builtins.appendContext namespace.name (builtins.getContext "${namespace}")
-        else namespace;
+        else
+          namespace;
       nsKey =
-        if isClusterScoped then "_cluster_"
-        else if isNsResource then namespace.name or "ns"
-        else namespace;
+        if isClusterScoped then
+          "_cluster_"
+        else if isNsResource then
+          namespace.name or "ns"
+        else
+          namespace;
 
       # Build the K8s manifest attrset — contains real names, not store paths.
       # String values may carry Nix context from dependencies (via out.name etc.)
@@ -150,55 +164,32 @@ rec {
 
       manifestJson = builtins.toJSON rawManifest;
 
+      # Collect store contexts from requires and extraDeps so they influence
+      # the content-addressed store path (Nix store DAG edges).
+      allDeps = requires ++ extraDeps;
+      depContexts = builtins.foldl' (
+        acc: dep: if builtins.isAttrs dep && dep ? outPath then acc // builtins.getContext "${dep}" else acc
+      ) { } allDeps;
+
+      # Append dep contexts to manifestJson
+      manifestJsonWithDeps = builtins.appendContext manifestJson depContexts;
+
       # Sanitize the name for use in store paths (colons and other special
       # characters are not allowed in Nix store path names).
       sanitizedName = builtins.replaceStrings [ ":" ] [ "_" ] name;
 
-      # --- Two-phase identity ---
-      #
-      # Phase 1: _contentPath — determined by manifest content only.
-      # This is what `out` values carry. Consumers that reference out.name
-      # get a dependency on _contentPath, NOT on requires. This breaks
-      # eval-time cycles when requires edges oppose manifest-context edges
-      # in the same fixpoint (e.g. Service requires StatefulSet while
-      # StatefulSet's manifest refs Service.out.name).
-      #
-      # Phase 2: _identityPath — wraps _contentPath + requires/extraDeps.
-      # This is the resource's outPath. The Nix store DAG from _identityPath
-      # includes _contentPath (with manifest deps) AND all requires' store
-      # paths. `nix-store --tree` on _identityPath shows the full picture.
-      # The PI references _identityPath (via outPath) for complete closures.
+      # Content-addressed store path. Hash depends on this resource's content
+      # and all referenced resources (their store paths via string context).
+      _identityPath = builtins.toFile "k8s-${kind}-${nsKey}-${sanitizedName}" manifestJsonWithDeps;
 
-      _contentPath = builtins.toFile
-        "k8s-${kind}-${nsKey}-${sanitizedName}"
-        manifestJson;
-
-      _contentPathPlain = builtins.unsafeDiscardStringContext _contentPath;
-
-      # Collect store contexts from requires and extraDeps.
-      allDeps = requires ++ extraDeps;
-      depContexts = builtins.foldl' (acc: dep:
-        if builtins.isAttrs dep && dep ? outPath then
-          acc // builtins.getContext "${dep}"
-        else acc
-      ) {} allDeps;
-
-      # If no structural deps, identity = content (single store path).
-      # Otherwise, create a wrapper path that references content + deps.
-      _identityPath =
-        if allDeps == [] then _contentPath
-        else builtins.toFile
-          "k8s-dep-${kind}-${nsKey}-${sanitizedName}"
-          (builtins.appendContext "${_contentPath}" depContexts);
-
+      # Plain path string without context (for use as attr keys, comparisons)
       _identityPathPlain = builtins.unsafeDiscardStringContext _identityPath;
 
-      _contentCtx = builtins.getContext "${_contentPath}";
+      # Context containing this resource's store path
       _identityCtx = builtins.getContext "${_identityPath}";
 
-      # out values carry content-only context (phase 1).
-      attachCtx = value:
-        builtins.appendContext (toString value) _contentCtx;
+      # Attach this resource's store path context to a plain value
+      attachCtx = value: builtins.appendContext (toString value) _identityCtx;
 
       # Auto-derive selector: spec.selector.matchLabels → metadata.labels → null
       autoSelector =
@@ -206,56 +197,63 @@ rec {
           lib.mapAttrs (_: v: attachCtx (toString v)) rawManifest.spec.selector.matchLabels
         else if rawManifest ? metadata.labels then
           lib.mapAttrs (_: v: attachCtx (toString v)) rawManifest.metadata.labels
-        else null;
+        else
+          null;
 
       # Auto-derived outputs
       autoOut = {
         name = attachCtx name;
         fqdn =
-          if isClusterScoped then attachCtx name
-          else attachCtx "${name}.${nsKey}.svc.${clusterDomain}";
-        identityHash = attachCtx (extractStoreHash _contentPathPlain);
-      } // lib.optionalAttrs (autoSelector != null) {
+          if isClusterScoped then attachCtx name else attachCtx "${name}.${nsKey}.svc.${clusterDomain}";
+        identityHash = attachCtx (extractStoreHash _identityPathPlain);
+      }
+      // lib.optionalAttrs (autoSelector != null) {
         selector = autoSelector;
       };
 
       # User-defined outputs override auto-derived ones.
       # null values in outputs suppress auto-derived fields.
-      userOut = lib.mapAttrs (_: v:
-        if v == null then null
-        else attachCtx (toString v)
-      ) outputs;
+      userOut = lib.mapAttrs (_: v: if v == null then null else attachCtx (toString v)) outputs;
 
-      mergedOut = let
-        combined = autoOut // userOut;
-      in lib.filterAttrs (_: v: v != null) combined;
+      mergedOut =
+        let
+          combined = autoOut // userOut;
+        in
+        lib.filterAttrs (_: v: v != null) combined;
 
       self = {
         _type = "k8s-resource";
-        inherit apiVersion kind name namespace requires extraDeps;
+        inherit
+          apiVersion
+          kind
+          name
+          namespace
+          requires
+          extraDeps
+          ;
 
-        # Content-only path (phase 1) — for matching manifest context references.
-        inherit _contentPathPlain;
-
-        # Full identity (phase 2) — includes manifest deps + requires.
+        # The store path. ${resource} still embeds this path for backward compat,
+        # but prefer out.name for manifest values.
         outPath = _identityPath;
 
-        # Named outputs — carry content-only context (phase 1).
+        # Named outputs — auto-derived + user-defined, all with context.
         out = mergedOut;
 
         # Raw manifest (real names, dep contexts on strings, no self-context).
+        # Used internally for serialization, hash computation, dep detection.
         inherit rawManifest;
 
-        # Manifest re-export with content-only context on all strings.
-        manifest = attachCtxDeep _contentCtx rawManifest;
+        # Manifest re-export with this resource's own context on all strings.
+        # Use for cross-resource field access: self.deployment.manifest.spec.X
+        manifest = attachCtxDeep _identityCtx rawManifest;
 
-        # Registry entries: map BOTH content path and identity path to self,
-        # so lookups work regardless of which path is used (manifest context
-        # references _contentPaths, while outPath/requires reference _identityPaths).
+        # Registry entry: maps store path (plain, no context) → resource metadata.
         registryEntry = {
-          ${_identityPathPlain} = { inherit apiVersion kind name; namespace = nsKey; resource = self; };
-        } // lib.optionalAttrs (_contentPathPlain != _identityPathPlain) {
-          ${_contentPathPlain} = { inherit apiVersion kind name; namespace = nsKey; resource = self; };
+          ${_identityPathPlain} = {
+            inherit apiVersion kind name;
+            namespace = nsKey;
+            resource = self;
+          };
         };
       };
     in
@@ -263,7 +261,17 @@ rec {
 
   # Creates a PackageInstance CRD — root of each package's DAG subgraph.
   # Holds references to the main resource, inverse deps, and package-level requires.
-  mkPackageInstance = { instanceName, namespaceName, namespace, mainResource, packageRequires ? [], inverseDeps ? [], version ? null, labels ? {} }:
+  mkPackageInstance =
+    {
+      instanceName,
+      namespaceName,
+      namespace,
+      mainResource,
+      packageRequires ? [ ],
+      inverseDeps ? [ ],
+      version ? null,
+      labels ? { },
+    }:
     mkResource {
       apiVersion = "kix.dev/v1alpha1";
       kind = "PackageInstance";
@@ -272,33 +280,37 @@ rec {
       annotations = {
         "kix.dev/main" = mainResource.out.name;
       }
-      // lib.optionalAttrs (inverseDeps != []) {
-        "kix.dev/inverse-deps" = builtins.concatStringsSep "," (map (r: "${r.kind}/${r.out.name}") inverseDeps);
+      // lib.optionalAttrs (inverseDeps != [ ]) {
+        "kix.dev/inverse-deps" = builtins.concatStringsSep "," (
+          map (r: "${r.kind}/${r.out.name}") inverseDeps
+        );
       }
-      // lib.optionalAttrs (packageRequires != []) {
-        "kix.dev/package-requires" = builtins.concatStringsSep "," (map (r: "${r.kind}/${r.out.name}") packageRequires);
+      // lib.optionalAttrs (packageRequires != [ ]) {
+        "kix.dev/package-requires" = builtins.concatStringsSep "," (
+          map (r: "${r.kind}/${r.out.name}") packageRequires
+        );
       };
-      # PI requires all referenced resources so its _identityPath (phase 2)
-      # transitively includes their full closures (content + requires chains).
-      # Annotations carry _contentPath context (phase 1) for readability;
-      # requires carries _identityPath context for the complete store DAG.
-      requires = [ mainResource ] ++ inverseDeps ++ packageRequires;
       extra.spec = {
         inherit instanceName namespaceName;
-      } // lib.optionalAttrs (version != null) { inherit version; };
+      }
+      // lib.optionalAttrs (version != null) { inherit version; };
     };
 
   # Build a cluster-wide registry from a list of resources.
-  buildRegistry = resources:
-    builtins.foldl' (acc: r: acc // r.registryEntry) { } resources;
+  buildRegistry = resources: builtins.foldl' (acc: r: acc // r.registryEntry) { } resources;
 
   # Resolve a resource's namespace to a string key.
-  nsOf = r:
-    if r.namespace or null == null then "_cluster_"
+  nsOf =
+    r:
+    if r.namespace or null == null then
+      "_cluster_"
     else if builtins.isAttrs r.namespace then
-      if (r.namespace._type or "") == "k8s-cluster-scoped" then "_cluster_"
-      else r.namespace.name or "_cluster_"
-    else r.namespace;
+      if (r.namespace._type or "") == "k8s-cluster-scoped" then
+        "_cluster_"
+      else
+        r.namespace.name or "_cluster_"
+    else
+      r.namespace;
 
   # Canonical ID for a resource (used in graph nodes and edges).
   resourceId = r: "${r.kind}/${r.name}@${nsOf r}";
@@ -312,34 +324,51 @@ rec {
   # crdOrRef: the CRD resource or CRD ref (has outPath, used in requires for DAG tracking)
   # group/kind/version: CRD metadata for constructing the CR's apiVersion + kind
   # crdScope: "Namespaced" or "Cluster" — determines which scope method mkCR uses
-  mkCRDBuilders = { crdOrRef, group, kind, version, crdScope }:
+  mkCRDBuilders =
+    {
+      crdOrRef,
+      group,
+      kind,
+      version,
+      crdScope,
+    }:
     let
       crApiVersion = "${group}/${version}";
       crKind = kind;
 
       # Pipe-friendly transformer: stamps apiVersion + kind onto resource args
       # and adds the CRD to requires for dependency tracking.
-      cr = args: args // {
-        apiVersion = crApiVersion;
-        kind = crKind;
-        requires = (args.requires or []) ++ [ crdOrRef ];
-      };
+      cr =
+        args:
+        args
+        // {
+          apiVersion = crApiVersion;
+          kind = crKind;
+          requires = (args.requires or [ ]) ++ [ crdOrRef ];
+        };
 
       # Full builder: takes consumer scope, auto-routes by CRD scope.
       # Internally: cr args |> scope.mkResource or scope.mkClusterResource
       # Curried — `crd.out.mkCR scope` returns an args->resource function.
-      mkCR = consumerScope: args:
-        let enriched = cr args;
-        in if crdScope == "Cluster"
-           then consumerScope.mkClusterResource enriched
-           else consumerScope.mkResource enriched;
+      mkCR =
+        consumerScope: args:
+        let
+          enriched = cr args;
+        in
+        if crdScope == "Cluster" then
+          consumerScope.mkClusterResource enriched
+        else
+          consumerScope.mkResource enriched;
     in
-    { inherit cr mkCR; };
+    {
+      inherit cr mkCR;
+    };
 
   # Creates an Activation CRD — the cluster-level root of the store DAG.
   # References all PackageInstance store paths via string context in spec.instances.
   # `nix-store --tree` / `exportReferencesGraph` on this path gives the full cluster DAG.
-  mkActivation = { name, instances }:
+  mkActivation =
+    { name, instances }:
     mkResource {
       apiVersion = "kix.dev/v1alpha1";
       kind = "Activation";

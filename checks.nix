@@ -277,20 +277,32 @@ rec {
       serviceNameFailures =
         let
           headlessServiceNames = builtins.listToAttrs (
-            builtins.concatMap (r:
+            builtins.concatMap (
+              r:
               if r.kind == "Service" && (r.spec.clusterIP or "") == "None" then
-                [{ name = "${r.metadata.namespace or "cluster-scoped"}/${r.metadata.name}"; value = true; }]
-              else []
+                [
+                  {
+                    name = "${r.metadata.namespace or "cluster-scoped"}/${r.metadata.name}";
+                    value = true;
+                  }
+                ]
+              else
+                [ ]
             ) resources
           );
         in
-        builtins.concatMap (sts:
+        builtins.concatMap (
+          sts:
           let
             svcName = sts.spec.serviceName or null;
             ns = sts.metadata.namespace or "cluster-scoped";
           in
-          if svcName == null || headlessServiceNames ? "${ns}/${svcName}" then []
-          else [ "StatefulSet ${ns}/${sts.metadata.name} serviceName '${svcName}' does not match any headless Service (clusterIP: None) in the same namespace" ]
+          if svcName == null || headlessServiceNames ? "${ns}/${svcName}" then
+            [ ]
+          else
+            [
+              "StatefulSet ${ns}/${sts.metadata.name} serviceName '${svcName}' does not match any headless Service (clusterIP: None) in the same namespace"
+            ]
         ) (builtins.filter (r: r.kind == "StatefulSet") resources);
 
       # --- 7. No duplicate (kind, namespace, name) tuples ---

@@ -3,7 +3,14 @@
 # CoreDNS, Tailscale, shared Postgres.
 # Owned by: Luca (platform)
 
-{ config, lib, ref, packages, kix, ... }:
+{
+  config,
+  lib,
+  ref,
+  packages,
+  kix,
+  ...
+}:
 {
   options = {
     cluster.domain = lib.mkOption {
@@ -18,7 +25,10 @@
 
     dns.upstreamResolvers = lib.mkOption {
       type = lib.types.listOf lib.types.str;
-      default = [ "1.1.1.1" "8.8.8.8" ];
+      default = [
+        "1.1.1.1"
+        "8.8.8.8"
+      ];
     };
   };
 
@@ -43,8 +53,14 @@
             replicaCount = 1; # single node, one replica is fine
             image.tag = "1.12.3";
             resources = {
-              requests = { cpu = "50m"; memory = "64Mi"; };
-              limits = { cpu = "200m"; memory = "128Mi"; };
+              requests = {
+                cpu = "50m";
+                memory = "64Mi";
+              };
+              limits = {
+                cpu = "200m";
+                memory = "128Mi";
+              };
             };
             servers = [
               {
@@ -52,10 +68,17 @@
                 port = "53";
                 plugins = [
                   "errors"
-                  { name = "health"; parameters = ""; block = [ "lameduck 5s" ]; }
+                  {
+                    name = "health";
+                    parameters = "";
+                    block = [ "lameduck 5s" ];
+                  }
                   "ready"
                   # DNS rewrites for internal service access
-                  { name = "rewrite"; parameters = "name exact grafana.${config.cluster.domain} ${ref.ingress-system.ingress-nginx.out.fqdn} answer auto"; }
+                  {
+                    name = "rewrite";
+                    parameters = "name exact grafana.${config.cluster.domain} ${ref.ingress-system.ingress-nginx.out.fqdn} answer auto";
+                  }
                   {
                     name = "kubernetes";
                     parameters = "${config.cluster.domain} cluster.local in-addr.arpa ip6.arpa";
@@ -81,7 +104,10 @@
                   "prometheus.io/port" = "9153";
                 };
               };
-              monitor = { enabled = false; interval = null; };
+              monitor = {
+                enabled = false;
+                interval = null;
+              };
             };
           };
         };
@@ -132,14 +158,20 @@
                 server = "https://acme-v02.api.letsencrypt.org/directory";
                 email = "admin@example.com"; # TODO: set real email
                 privateKeySecretName = "tls-production";
-                cloudflareSecret = { name = "cloudflare-credentials"; key = "api-token"; };
+                cloudflareSecret = {
+                  name = "cloudflare-credentials";
+                  key = "api-token";
+                };
                 dnsZones = [ config.cluster.domain ];
               };
               letsencrypt-staging = {
                 server = "https://acme-staging-v02.api.letsencrypt.org/directory";
                 email = "admin@example.com"; # TODO: set real email
                 privateKeySecretName = "tls-staging";
-                cloudflareSecret = { name = "cloudflare-credentials"; key = "api-token"; };
+                cloudflareSecret = {
+                  name = "cloudflare-credentials";
+                  key = "api-token";
+                };
                 dnsZones = [ config.cluster.domain ];
               };
             };
@@ -161,7 +193,11 @@
               version = "16";
               extensions = [
                 # pgvecto.rs for Immich smart search
-                { name = "vectors"; publisher = "tensorchord"; version = "0.3.0"; }
+                {
+                  name = "vectors";
+                  publisher = "tensorchord";
+                  version = "0.3.0";
+                }
               ];
             };
             storage = {
@@ -196,8 +232,14 @@
               size = "2Gi";
             };
             resources = {
-              requests = { cpu = "50m"; memory = "64Mi"; };
-              limits = { cpu = "200m"; memory = "128Mi"; };
+              requests = {
+                cpu = "50m";
+                memory = "64Mi";
+              };
+              limits = {
+                cpu = "200m";
+                memory = "128Mi";
+              };
             };
           };
         };

@@ -125,7 +125,11 @@ kix.buildCluster {
 
             config = {
               postgres.extensions = [
-                { name = "vectors"; publisher = "tensorchord"; version = "0.3.0"; }
+                {
+                  name = "vectors";
+                  publisher = "tensorchord";
+                  version = "0.3.0";
+                }
               ];
             };
           };

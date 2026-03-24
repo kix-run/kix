@@ -13,7 +13,12 @@
 # This file is a draft — packages need to be created first.
 # Leaving the structure here so the cluster composition is complete.
 
-{ config, lib, packages, ... }:
+{
+  config,
+  lib,
+  packages,
+  ...
+}:
 {
   config.instances.nas = {
 
