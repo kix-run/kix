@@ -6,11 +6,11 @@
 #
 # Dependencies:
 #   valkey              — required, job queue backend
-#   postgres            — required, database (needs pgvecto.rs extension)
+#   postgres            — required, database (needs pgvecto.rs / "vectors" extension)
 #   storage             — required, persistent volume for photo library
 #   machineLearning     — optional, ML inference service
-#   ingressNginx        — optional, provides IngressClass for ingress
-#   clusterIssuer       — optional, provides withCert transformer for TLS
+#   ingressNginx        — optional, auto-creates ingress when present (+ host is set)
+#   clusterIssuer       — optional, auto-enables TLS when present
 #
 # Resources: Deployment, Service, optional ConfigMap, optional Ingress,
 # optional ServiceMonitor.
@@ -65,13 +65,8 @@ in
     ingress = lib.mkOption {
       type = lib.types.anything;
       default = {
-        enabled = false;
-        host = "";
+        host = null;
         annotations = { };
-        tls = {
-          enabled = false;
-          secretName = "";
-        };
       };
     };
   };
@@ -104,15 +99,33 @@ in
       };
       mkServiceMonitor = serviceMonitorCRDRef.out.mkCR scope;
 
-      # Storage validation — warn if PVC is undersized for a photo library
+      # --- Validation ---
+
+      # Storage: warn if PVC is undersized for a photo library
       storageSizeGi = kix.parseGi storage.out.size;
       _storageWarning =
         if storageSizeGi != null && storageSizeGi < 50 then
           builtins.trace "warning: immich '${name}' library storage is ${builtins.unsafeDiscardStringContext storage.out.size} — recommended minimum is 50Gi for photo libraries" null
         else
           null;
+
+      # Postgres: verify pgvecto.rs extension is configured.
+      # postgres.out.extensionNames is exposed by stackgres-cluster; for imported
+      # instances it may not exist, so we skip the check gracefully.
+      _extensionCheck =
+        let
+          extNames = postgres.out.extensionNames or null;
+        in
+        if extNames != null && !(builtins.elem "vectors" extNames) then
+          throw "immich '${name}' requires the pgvecto.rs extension (\"vectors\") on its postgres instance '${postgres.out.name}', but it is not configured. Add { name = \"vectors\"; publisher = \"tensorchord\"; version = \"...\"; } to postgres.extensions."
+        else
+          null;
+
+      # DI-driven ingress: created when ingressNginx is injected AND host is set.
+      hasIngress = ingressNginx != null && config.ingress.host != null;
+      hasTls = hasIngress && clusterIssuer != null;
     in
-    builtins.seq _storageWarning {
+    builtins.seq _storageWarning (builtins.seq _extensionCheck {
 
       # --- Optional: Immich configuration ConfigMap ---
       configMap =
@@ -196,32 +209,26 @@ in
       service =
         self.deployment |> kix.service.fromWorkload { name = "${name}-server"; } |> scope.mkResource;
 
-      # --- Ingress (optional) ---
-      # kix.ingress.fromService auto-derives backend name and port from the
-      # service's out. withCert is a pipe-friendly transformer from the
-      # clusterIssuer package that adds the cert-manager annotation.
-      # TODO: discussed multiple ways to make this cleaner, but not happy with any yet, so leaving it explicit.
+      # --- Ingress (DI-driven) ---
+      # Created automatically when ingressNginx is injected and host is set.
+      # TLS is auto-enabled when clusterIssuer is injected.
       ingress =
-        if config.ingress.enabled then
+        if hasIngress then
           self.service
           |> kix.ingress.fromService {
             inherit name;
             host = config.ingress.host;
-            className =
-              if ingressNginx != null then
-                ingressNginx.out.ingressClassName
-              else
-                config.ingress.className or "public";
-            tls = lib.optional (config.ingress.tls.enabled or false) {
+            className = ingressNginx.out.ingressClassName;
+            tls = lib.optional hasTls {
               hosts = [ config.ingress.host ];
-              secretName = config.ingress.tls.secretName;
+              secretName = "${name}-tls";
             };
             annotations = {
               "nginx.ingress.kubernetes.io/proxy-body-size" = "0";
             }
             // config.ingress.annotations;
           }
-          |> (if clusterIssuer != null then clusterIssuer.out.withCert else lib.id)
+          |> (if hasTls then clusterIssuer.out.withCert else lib.id)
           |> scope.mkResource
         else
           null;
@@ -252,5 +259,5 @@ in
 
       # --- Entry point ---
       main = self.service;
-    };
+    });
 }

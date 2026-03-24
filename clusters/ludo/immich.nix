@@ -33,10 +33,7 @@
       config = {
         image.tag = "v2.0.0";
         replicaCount = 1;
-        ingress = {
-          enabled = true;
-          host = "photos.${config.cluster.domain}";
-        };
+        ingress.host = "photos.${config.cluster.domain}";
         metrics.enabled = true;
       };
     };

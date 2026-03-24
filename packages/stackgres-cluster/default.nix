@@ -387,6 +387,11 @@ in
         ++ lib.optional config.backup.enabled self.objectStorage
         ++ lib.optional config.pooling.enabled self.poolingConfig
         ++ lib.optional (config.scripts != [ ]) self.initScript;
+
+        # Package-level out: expose configured extension names for consumer validation.
+        out = {
+          extensionNames = map (e: e.name) config.postgres.extensions;
+        };
       };
     };
 }
