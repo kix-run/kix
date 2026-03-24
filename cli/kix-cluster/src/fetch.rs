@@ -155,6 +155,7 @@ pub async fn discover_resources(client: &Client) -> Result<Vec<(ApiResource, Sco
             resources.push((ar, caps.scope));
         }
     }
+    tracing::debug!(count = resources.len(), "API resources discovered");
     Ok(resources)
 }
 

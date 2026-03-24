@@ -53,6 +53,7 @@ impl KixEvaluator {
         let db_path = cache_dir.join("eval-cache.db");
         let cache = SqliteCache::open(&db_path)?;
         let flake_path = crate::store::resolve_symlinks(flake_path);
+        tracing::debug!(flake = %flake_path.display(), "evaluator created");
         Ok(Self {
             backend: Box::new(backend),
             cache,
@@ -62,12 +63,14 @@ impl KixEvaluator {
 
     /// Evaluate a cluster, checking the cache first.
     pub fn eval_cluster(&mut self, cluster_name: &str) -> Result<ClusterOutput, KixEvalError> {
+        let start = std::time::Instant::now();
         let cache_key = SqliteCache::compute_key(&self.flake_path, cluster_name)?;
 
         // Check cache
         if let Some(cached) = self.cache.get(&cache_key)? {
             if let Ok(output) = serde_json::from_str::<ClusterOutput>(&cached) {
                 tracing::debug!(cluster = cluster_name, "eval cache hit");
+                tracing::info!(cluster = cluster_name, elapsed = ?start.elapsed(), "evaluation complete");
                 return Ok(output);
             }
             // Corrupt cache entry — fall through to re-evaluate
@@ -83,6 +86,7 @@ impl KixEvaluator {
             .map_err(|e| KixEvalError::CacheError { source: e.into() })?;
         self.cache.put(&cache_key, &json)?;
 
+        tracing::info!(cluster = cluster_name, elapsed = ?start.elapsed(), "evaluation complete");
         Ok(output)
     }
 

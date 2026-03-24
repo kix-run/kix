@@ -101,6 +101,12 @@ impl ResourceGraph {
             return Err(GraphError::CycleDetected(cycle_node));
         }
 
+        tracing::debug!(
+            nodes = graph.node_count(),
+            edges = graph.edge_count(),
+            "dependency graph built"
+        );
+
         Ok(ResourceGraph {
             graph,
             id_to_node,

@@ -83,6 +83,8 @@ pub async fn apply_resource(
     let rid = ResourceId::from_value(manifest);
     let name = rid.name.clone();
 
+    tracing::info!(resource = %rid.display_id(), "applying resource");
+
     let api: Api<DynamicObject> = match scope {
         Scope::Namespaced => {
             let ns = if rid.namespace == "_cluster" {
@@ -115,6 +117,8 @@ pub async fn apply_resource(
     } else {
         ApplyAction::Created
     };
+
+    tracing::debug!(resource = %rid.display_id(), ?action, "server-side apply complete");
 
     Ok(ApplyResult {
         action,

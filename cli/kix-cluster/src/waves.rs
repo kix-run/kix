@@ -76,6 +76,8 @@ pub fn compute_waves(graph: &ResourceGraph) -> Vec<Vec<NodeIndex>> {
         current_wave = next_wave;
     }
 
+    tracing::debug!(waves = waves.len(), "computed deployment waves");
+
     waves
 }
 

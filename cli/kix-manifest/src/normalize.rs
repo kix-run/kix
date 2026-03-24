@@ -63,6 +63,7 @@ const STRIP_KIX_ANNOTATION_PREFIXES: &[&str] = &["build.kix.dev/"];
 
 /// Normalize a live cluster resource for behavioral comparison.
 pub fn normalize_cluster(mut doc: Value) -> Value {
+    tracing::debug!("normalizing cluster manifest");
     if !doc.is_object() {
         return doc;
     }
@@ -79,6 +80,7 @@ pub fn normalize_cluster(mut doc: Value) -> Value {
 
 /// Normalize a kix-built resource for behavioral comparison.
 pub fn normalize_kix(mut doc: Value) -> Value {
+    tracing::debug!("normalizing kix manifest");
     if !doc.is_object() {
         return doc;
     }

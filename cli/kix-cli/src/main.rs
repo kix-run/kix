@@ -21,12 +21,39 @@ fn validate_cluster_name(name: &str) -> miette::Result<()> {
     Ok(())
 }
 
+/// Initialize tracing subscriber based on verbosity flags.
+///
+/// KIX_LOG env var overrides the verbose-derived filter (like RUST_LOG).
+fn init_tracing(verbose: u8, quiet: bool) {
+    use tracing_subscriber::EnvFilter;
+
+    let filter = if let Ok(env_filter) = std::env::var("KIX_LOG") {
+        EnvFilter::new(env_filter)
+    } else if quiet {
+        EnvFilter::new("error")
+    } else {
+        match verbose {
+            0 => EnvFilter::new("warn"),
+            1 => EnvFilter::new("kix=info"),
+            2 => EnvFilter::new("kix=debug"),
+            _ => EnvFilter::new("debug"),
+        }
+    };
+
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .without_time()
+        .init();
+}
+
 fn main() -> miette::Result<()> {
     miette::set_hook(Box::new(|_| {
         Box::new(miette::MietteHandlerOpts::new().build())
     }))?;
 
     let cli = Cli::parse();
+    init_tracing(cli.global.verbose, cli.global.quiet);
     output::init_color(&cli.global);
 
     // Completions doesn't need a CommandContext (no evaluator, no runtime)

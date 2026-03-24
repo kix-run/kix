@@ -99,17 +99,21 @@ impl FfiNixBackend {
     ///
     /// Opens a store and creates an EvalState with flake support.
     pub fn new() -> Result<Self, KixEvalError> {
+        tracing::debug!("initializing Nix runtime");
         gc_register_current_thread().map_err(KixEvalError::init)?;
+        tracing::debug!("GC thread registered");
 
         // Enable flakes
         settings::set("experimental-features", "flakes nix-command pipe-operators")
             .map_err(KixEvalError::init)?;
+        tracing::debug!("experimental features enabled");
 
         let flake_settings = FlakeSettings::new().map_err(KixEvalError::init)?;
         let fetchers_settings = FetchersSettings::new().map_err(KixEvalError::init)?;
 
         // Open default store
         let store = Store::open(None, []).map_err(|e| KixEvalError::store("default", e))?;
+        tracing::debug!("Nix store opened");
 
         // Build eval state with flake support
         let eval_state = EvalStateBuilder::new(store)
@@ -118,6 +122,7 @@ impl FfiNixBackend {
             .map_err(KixEvalError::init)?
             .build()
             .map_err(KixEvalError::init)?;
+        tracing::debug!("eval state ready");
 
         Ok(Self {
             eval_state,
@@ -165,6 +170,7 @@ impl NixBackend for FfiNixBackend {
         {
             return Err(KixEvalError::not_found(cluster_name));
         }
+        tracing::info!(cluster = cluster_name, "evaluating cluster");
 
         let flake_str = flake_path.to_string_lossy();
 
@@ -187,12 +193,14 @@ impl NixBackend for FfiNixBackend {
             .eval_state
             .eval_from_string(&raw_manifests_expr, ".")
             .map_err(|e| Self::classify_eval_error(e, &flake_str, cluster_name))?;
+        tracing::debug!(cluster = cluster_name, "expression parsed");
 
         // Force evaluation — attribute errors often surface here rather than
         // during initial parse.
         self.eval_state
             .force(&json_value)
             .map_err(|e| Self::classify_eval_error(e, &flake_str, cluster_name))?;
+        tracing::debug!(cluster = cluster_name, "evaluation forced");
 
         // Get the JSON string
         let json_str = self
@@ -208,6 +216,11 @@ impl NixBackend for FfiNixBackend {
                 anyhow::anyhow!("failed to parse manifest JSON: {}", e),
             )
         })?;
+        tracing::debug!(
+            cluster = cluster_name,
+            manifests = raw_manifests.len(),
+            "manifests parsed"
+        );
 
         Ok(ClusterOutput {
             name: cluster_name.to_string(),
@@ -216,6 +229,7 @@ impl NixBackend for FfiNixBackend {
     }
 
     fn list_clusters(&mut self, flake_path: &Path) -> Result<Vec<String>, KixEvalError> {
+        tracing::debug!("listing available clusters");
         let flake_str = flake_path.to_string_lossy();
 
         let expr = format!(
@@ -249,6 +263,7 @@ impl NixBackend for FfiNixBackend {
                 anyhow::anyhow!("failed to parse cluster names: {}", e),
             )
         })?;
+        tracing::debug!(count = names.len(), "clusters found");
 
         Ok(names)
     }
