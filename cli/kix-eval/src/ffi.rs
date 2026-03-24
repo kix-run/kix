@@ -143,9 +143,11 @@ impl FfiNixBackend {
     ) -> KixEvalError {
         let err = e.into();
         let msg = format!("{}", err);
-        // Nix attribute-missing errors contain "missing" or the attribute name
-        // with "does not exist" / "not found" depending on the Nix version.
-        if msg.contains("missing attribute")
+        // Nix attribute errors vary by version:
+        //   "attribute 'foo' missing" (Nix 2.28+)
+        //   "missing attribute 'foo'" (older)
+        //   "does not exist" (some contexts)
+        if (msg.contains("attribute") && msg.contains("missing"))
             || msg.contains("does not exist")
             || (msg.contains(cluster_name) && msg.contains("not found"))
         {
