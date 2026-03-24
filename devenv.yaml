@@ -2,7 +2,7 @@ inputs:
   claude-code:
     url: github:sadjow/claude-code-nix
   nixpkgs:
-    url: github:NixOS/nixpkgs/master
+    url: github:NixOS/nixpkgs/nixpkgs-unstable
   rust-overlay:
     url: github:oxalica/rust-overlay
     inputs:
