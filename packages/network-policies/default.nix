@@ -73,7 +73,11 @@ in
   };
 
   build =
-    { self, config, clusterConfig }:
+    {
+      self,
+      config,
+      clusterConfig,
+    }:
     let
       cwp = config.clusterwidePolicies;
 

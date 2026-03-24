@@ -131,8 +131,7 @@ in
     }:
     let
       # Secret name for credentials.
-      secretName =
-        if config.existingSecret != null then config.existingSecret else "${name}-secrets";
+      secretName = if config.existingSecret != null then config.existingSecret else "${name}-secrets";
     in
     {
 

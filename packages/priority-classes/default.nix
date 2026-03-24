@@ -18,10 +18,14 @@ let
       apiVersion = "scheduling.k8s.io/v1";
       kind = "PriorityClass";
       inherit name;
-      extra =
-        { value = spec.value; preemptionPolicy = spec.preemptionPolicy or "PreemptLowerPriority"; }
-        // (if spec ? description && spec.description != "" then { description = spec.description; } else { })
-        // (if spec ? globalDefault && spec.globalDefault then { globalDefault = true; } else { });
+      extra = {
+        value = spec.value;
+        preemptionPolicy = spec.preemptionPolicy or "PreemptLowerPriority";
+      }
+      // (
+        if spec ? description && spec.description != "" then { description = spec.description; } else { }
+      )
+      // (if spec ? globalDefault && spec.globalDefault then { globalDefault = true; } else { });
     };
 
 in
@@ -33,7 +37,11 @@ in
     };
   };
   build =
-    { self, config, clusterConfig }:
+    {
+      self,
+      config,
+      clusterConfig,
+    }:
     let
       classResources = lib.mapAttrs mkPriorityClass config.classes;
       classList = builtins.attrValues classResources;
@@ -41,11 +49,15 @@ in
       # Pick a main resource: first globalDefault, or first class alphabetically
       mainName =
         let
-          globalDefaults = lib.filterAttrs (_: spec: spec ? globalDefault && spec.globalDefault) config.classes;
+          globalDefaults = lib.filterAttrs (
+            _: spec: spec ? globalDefault && spec.globalDefault
+          ) config.classes;
           globalNames = builtins.attrNames globalDefaults;
         in
-        if globalNames != [ ] then builtins.head globalNames
-        else builtins.head (builtins.attrNames config.classes);
+        if globalNames != [ ] then
+          builtins.head globalNames
+        else
+          builtins.head (builtins.attrNames config.classes);
 
     in
     classResources

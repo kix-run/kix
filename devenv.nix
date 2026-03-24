@@ -29,6 +29,7 @@ in
     pkgs.lefthook
     pkgs.pkg-config
     pkgs.nixfmt-rfc-style
+    pkgs.treefmt
   ]
   ++ nixLibs;
 
@@ -95,6 +96,14 @@ in
       uv.sync.enable = true;
     };
     rust.enable = true;
+  };
+
+  treefmt = {
+    enable = true;
+    config.programs = {
+      nixfmt.enable = true;
+      rustfmt.enable = true;
+    };
   };
 
   # Install lefthook git hooks on shell entry

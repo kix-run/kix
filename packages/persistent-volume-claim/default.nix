@@ -10,7 +10,11 @@
 #
 # main = PersistentVolumeClaim.
 
-{ scope, lib, storageClasses }:
+{
+  scope,
+  lib,
+  storageClasses,
+}:
 
 {
   meta = {
@@ -32,20 +36,25 @@
     };
   };
 
-  build = { self, config, clusterConfig }:
-  {
-    main = scope.mkResource {
-      apiVersion = "v1";
-      kind = "PersistentVolumeClaim";
-      name = scope.instanceName;
-      spec = {
-        storageClassName = storageClasses.out.storageClassName;
-        accessModes = config.accessModes;
-        resources.requests.storage = config.size;
-      };
-      outputs = {
-        size = config.size;
+  build =
+    {
+      self,
+      config,
+      clusterConfig,
+    }:
+    {
+      main = scope.mkResource {
+        apiVersion = "v1";
+        kind = "PersistentVolumeClaim";
+        name = scope.instanceName;
+        spec = {
+          storageClassName = storageClasses.out.storageClassName;
+          accessModes = config.accessModes;
+          resources.requests.storage = config.size;
+        };
+        outputs = {
+          size = config.size;
+        };
       };
     };
-  };
 }

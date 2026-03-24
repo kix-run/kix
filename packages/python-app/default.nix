@@ -23,8 +23,14 @@ in
 {
   options = {
     # Naming overrides
-    releaseName = lib.mkOption { type = lib.types.nullOr lib.types.str; default = null; }; # if set, used as prefix for resource names instead of instance name
-    componentName = lib.mkOption { type = lib.types.str; default = "web"; }; # component suffix for deployment/service names (e.g. "web" or "backend")
+    releaseName = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+    }; # if set, used as prefix for resource names instead of instance name
+    componentName = lib.mkOption {
+      type = lib.types.str;
+      default = "web";
+    }; # component suffix for deployment/service names (e.g. "web" or "backend")
 
     # Backend (Django/Gunicorn)
     backend = lib.mkOption {
@@ -143,9 +149,18 @@ in
     };
 
     # Workers
-    cronWorkers = lib.mkOption { type = lib.types.attrsOf lib.types.anything; default = { }; };
-    queueWorkers = lib.mkOption { type = lib.types.attrsOf lib.types.anything; default = { }; };
-    customProcesses = lib.mkOption { type = lib.types.attrsOf lib.types.anything; default = { }; };
+    cronWorkers = lib.mkOption {
+      type = lib.types.attrsOf lib.types.anything;
+      default = { };
+    };
+    queueWorkers = lib.mkOption {
+      type = lib.types.attrsOf lib.types.anything;
+      default = { };
+    };
+    customProcesses = lib.mkOption {
+      type = lib.types.attrsOf lib.types.anything;
+      default = { };
+    };
 
     # Redis
     redis = lib.mkOption {
@@ -195,12 +210,30 @@ in
     };
 
     # Environment
-    environment = lib.mkOption { type = lib.types.str; default = "production"; };
-    env = lib.mkOption { type = lib.types.attrsOf lib.types.anything; default = { }; };
-    useConfigMap = lib.mkOption { type = lib.types.bool; default = true; }; # set to false to skip configmap in envFrom
-    frontendEnv = lib.mkOption { type = lib.types.attrsOf lib.types.anything; default = { }; };
-    secretEnv = lib.mkOption { type = lib.types.attrsOf lib.types.anything; default = { }; };
-    secretFiles = lib.mkOption { type = lib.types.attrsOf lib.types.anything; default = { }; };
+    environment = lib.mkOption {
+      type = lib.types.str;
+      default = "production";
+    };
+    env = lib.mkOption {
+      type = lib.types.attrsOf lib.types.anything;
+      default = { };
+    };
+    useConfigMap = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+    }; # set to false to skip configmap in envFrom
+    frontendEnv = lib.mkOption {
+      type = lib.types.attrsOf lib.types.anything;
+      default = { };
+    };
+    secretEnv = lib.mkOption {
+      type = lib.types.attrsOf lib.types.anything;
+      default = { };
+    };
+    secretFiles = lib.mkOption {
+      type = lib.types.attrsOf lib.types.anything;
+      default = { };
+    };
 
     # ServiceAccount
     serviceAccount = lib.mkOption {
@@ -222,26 +255,47 @@ in
     };
 
     # Label overrides
-    appName = lib.mkOption { type = lib.types.nullOr lib.types.str; default = null; }; # if set, used for app.kubernetes.io/name labels (defaults to instance name)
-    selectorLabels = lib.mkOption { type = lib.types.nullOr lib.types.anything; default = null; }; # if set, used as selector matchLabels instead of default
-    extraServiceLabels = lib.mkOption { type = lib.types.attrsOf lib.types.str; default = { }; }; # extra labels to add to services
+    appName = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+    }; # if set, used for app.kubernetes.io/name labels (defaults to instance name)
+    selectorLabels = lib.mkOption {
+      type = lib.types.nullOr lib.types.anything;
+      default = null;
+    }; # if set, used as selector matchLabels instead of default
+    extraServiceLabels = lib.mkOption {
+      type = lib.types.attrsOf lib.types.str;
+      default = { };
+    }; # extra labels to add to services
 
     # Deployment strategy shortcut
-    maxSurge = lib.mkOption { type = lib.types.str; default = "100%"; }; # top-level shortcut applied to backend and worker strategies
+    maxSurge = lib.mkOption {
+      type = lib.types.str;
+      default = "100%";
+    }; # top-level shortcut applied to backend and worker strategies
 
     # Priority
-    priorityClassName = lib.mkOption { type = lib.types.nullOr lib.types.str; default = null; };
+    priorityClassName = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+    };
   };
 
   build =
-    { self, config, clusterConfig }:
+    {
+      self,
+      config,
+      clusterConfig,
+    }:
     let
 
       # ── Derived naming ───────────────────────────────────────────
       rName = if config.releaseName != null then config.releaseName else name;
       compName = config.componentName;
-      containerName = if config.backend.containerName != null then config.backend.containerName else compName;
-      servicePort = if config.backend.servicePort != null then config.backend.servicePort else config.backend.port;
+      containerName =
+        if config.backend.containerName != null then config.backend.containerName else compName;
+      servicePort =
+        if config.backend.servicePort != null then config.backend.servicePort else config.backend.port;
       probePort =
         if config.backend.probes.port != null then config.backend.probes.port else config.backend.port;
       appLabel = if config.appName != null then config.appName else name;
@@ -391,7 +445,8 @@ in
           envFrom = mkEnvFrom self self.configmap config.backend.secrets;
           ports = [
             (kix.port "http" config.backend.port)
-          ] ++ config.backend.extraPorts;
+          ]
+          ++ config.backend.extraPorts;
           volumeMounts = secretVolumeMounts;
           resources = config.backend.resources;
         }
@@ -470,9 +525,12 @@ in
         }:
         {
           name = workerName;
-          image = if image != null then image else "${config.backend.image.repository}:${config.backend.image.tag}";
+          image =
+            if image != null then image else "${config.backend.image.repository}:${config.backend.image.tag}";
           imagePullPolicy = config.backend.image.pullPolicy;
-          envFrom = mkEnvFrom self self.configmap (if secrets != null then secrets else config.backend.secrets);
+          envFrom = mkEnvFrom self self.configmap (
+            if secrets != null then secrets else config.backend.secrets
+          );
           volumeMounts = secretVolumeMounts;
           inherit resources;
         }
@@ -486,20 +544,28 @@ in
           ports = map (p: kix.port p.name p.containerPort) ports;
         }
         // lib.optionalAttrs (probes != null) {
-          livenessProbe = probes.livenessProbe or {
-            httpGet = { path = probes.path; port = probes.port or (builtins.head ports).containerPort; };
-            initialDelaySeconds = probes.initialDelaySeconds or 5;
-            periodSeconds = probes.periodSeconds or 10;
-            failureThreshold = probes.failureThreshold or 3;
-            timeoutSeconds = probes.timeoutSeconds or 1;
-          };
-          readinessProbe = probes.readinessProbe or {
-            httpGet = { path = probes.path; port = probes.port or (builtins.head ports).containerPort; };
-            initialDelaySeconds = probes.initialDelaySeconds or 5;
-            periodSeconds = probes.periodSeconds or 10;
-            failureThreshold = probes.failureThreshold or 3;
-            timeoutSeconds = probes.timeoutSeconds or 1;
-          };
+          livenessProbe =
+            probes.livenessProbe or {
+              httpGet = {
+                path = probes.path;
+                port = probes.port or (builtins.head ports).containerPort;
+              };
+              initialDelaySeconds = probes.initialDelaySeconds or 5;
+              periodSeconds = probes.periodSeconds or 10;
+              failureThreshold = probes.failureThreshold or 3;
+              timeoutSeconds = probes.timeoutSeconds or 1;
+            };
+          readinessProbe =
+            probes.readinessProbe or {
+              httpGet = {
+                path = probes.path;
+                port = probes.port or (builtins.head ports).containerPort;
+              };
+              initialDelaySeconds = probes.initialDelaySeconds or 5;
+              periodSeconds = probes.periodSeconds or 10;
+              failureThreshold = probes.failureThreshold or 3;
+              timeoutSeconds = probes.timeoutSeconds or 1;
+            };
         };
 
       # ── Worker Deployment builder ───────────────────────────────────
@@ -520,9 +586,7 @@ in
           probes ? null,
         }:
         let
-          deployStrategy =
-            if strategy != null then strategy
-            else { rollingUpdate.maxSurge = "100%"; };
+          deployStrategy = if strategy != null then strategy else { rollingUpdate.maxSurge = "100%"; };
         in
         {
           name = "${name}-${workerName}";
@@ -646,7 +710,8 @@ in
       }) config.cronWorkers;
 
       # ── Custom process resources ────────────────────────────────────
-      customProcessParts = lib.concatMapAttrs (pName: pCfg:
+      customProcessParts = lib.concatMapAttrs (
+        pName: pCfg:
         let
           wn = pCfg.workerName or "custom-${pName}";
           deployKey = "customProcess-${pName}";
@@ -693,7 +758,8 @@ in
                 };
                 requires = [ deploy ];
               }
-            else null;
+            else
+              null;
           hpaKey = "customProcessHpa-${pName}";
           hpa = mkWorkerHpa {
             hpaName = wn;
@@ -701,7 +767,9 @@ in
             hpaCfg = pCfg.hpa or { enabled = false; };
           };
         in
-        { ${deployKey} = deploy; }
+        {
+          ${deployKey} = deploy;
+        }
         // lib.optionalAttrs (service != null) { ${serviceKey} = service; }
         // lib.optionalAttrs (hpa != null) { ${hpaKey} = hpa; }
       ) config.customProcesses;
@@ -715,7 +783,11 @@ in
       # Strategy spec
       strategySpec = {
         rollingUpdate = {
-          maxSurge = if config.backend.strategy.maxSurge != null then config.backend.strategy.maxSurge else config.maxSurge;
+          maxSurge =
+            if config.backend.strategy.maxSurge != null then
+              config.backend.strategy.maxSurge
+            else
+              config.maxSurge;
         }
         // lib.optionalAttrs (config.backend.strategy.maxUnavailable != null) {
           maxUnavailable = config.backend.strategy.maxUnavailable;
@@ -818,13 +890,14 @@ in
                   "checksum/config" = self.configmap.out.identityHash;
                 };
               };
-              spec = mkPodSpec self {
-                containers = [ (mkBackendContainer self) ];
-                initContainers = config.backend.initContainers;
-              }
-              // lib.optionalAttrs (config.backend.topologySpreadConstraints != [ ]) {
-                topologySpreadConstraints = config.backend.topologySpreadConstraints;
-              };
+              spec =
+                mkPodSpec self {
+                  containers = [ (mkBackendContainer self) ];
+                  initContainers = config.backend.initContainers;
+                }
+                // lib.optionalAttrs (config.backend.topologySpreadConstraints != [ ]) {
+                  topologySpreadConstraints = config.backend.topologySpreadConstraints;
+                };
             };
           };
         }
@@ -851,8 +924,10 @@ in
         outputs = {
           port = toString servicePort;
         };
-        requires = [ self.backendDeployment ]
-          ++ lib.optional (self.serviceAccount != null) self.serviceAccount;
+        requires = [
+          self.backendDeployment
+        ]
+        ++ lib.optional (self.serviceAccount != null) self.serviceAccount;
       };
 
       # ── Backend HPA ─────────────────────────────────────────────────
@@ -922,7 +997,11 @@ in
               replicas = config.frontend.replicaCount;
               strategy = {
                 rollingUpdate = {
-                  maxSurge = if config.frontend.strategy.maxSurge != null then config.frontend.strategy.maxSurge else config.maxSurge;
+                  maxSurge =
+                    if config.frontend.strategy.maxSurge != null then
+                      config.frontend.strategy.maxSurge
+                    else
+                      config.maxSurge;
                 }
                 // lib.optionalAttrs (config.frontend.strategy.maxUnavailable != null) {
                   maxUnavailable = config.frontend.strategy.maxUnavailable;
@@ -964,14 +1043,23 @@ in
               ports = [
                 {
                   name = "http";
-                  port = if config.frontend.servicePort or null != null then config.frontend.servicePort else config.frontend.port;
+                  port =
+                    if config.frontend.servicePort or null != null then
+                      config.frontend.servicePort
+                    else
+                      config.frontend.port;
                   targetPort = config.frontend.port;
                   protocol = "TCP";
                 }
               ];
             };
             outputs = {
-              port = toString (if config.frontend.servicePort or null != null then config.frontend.servicePort else config.frontend.port);
+              port = toString (
+                if config.frontend.servicePort or null != null then
+                  config.frontend.servicePort
+                else
+                  config.frontend.port
+              );
             };
             requires = [ self.frontendDeployment ];
           }

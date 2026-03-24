@@ -121,7 +121,12 @@ in
     };
   };
 
-  build = { self, config, clusterConfig }:
+  build =
+    {
+      self,
+      config,
+      clusterConfig,
+    }:
     let
       # Parse memory to MB for calculations.
       memoryMB =
@@ -233,37 +238,39 @@ in
 
       # ===== SGObjectStorage (S3 backup destination) =====
 
-      objectStorage = lib.optionalAttrs config.backup.enabled (scope.mkResource ({
-        apiVersion = "stackgres.io/v1beta1";
-        kind = "SGObjectStorage";
-        name = config.backup.s3.bucket;
-        labels = selectorLabels;
-        spec = {
-          type = "s3Compatible";
-          s3Compatible = {
-            bucket = config.backup.s3.bucket;
-            region = config.backup.s3.region;
-            enablePathStyleAddressing = true;
-          }
-          // lib.optionalAttrs (config.backup.s3.endpoint != null) {
-            endpoint = config.backup.s3.endpoint;
-          }
-          // lib.optionalAttrs (config.backup.s3.credentialsSecret != null) {
-            awsCredentials = {
-              secretKeySelectors = {
-                accessKeyId = {
-                  name = config.backup.s3.credentialsSecret;
-                  key = config.backup.s3.accessKeyField;
-                };
-                secretAccessKey = {
-                  name = config.backup.s3.credentialsSecret;
-                  key = config.backup.s3.secretKeyField;
+      objectStorage = lib.optionalAttrs config.backup.enabled (
+        scope.mkResource ({
+          apiVersion = "stackgres.io/v1beta1";
+          kind = "SGObjectStorage";
+          name = config.backup.s3.bucket;
+          labels = selectorLabels;
+          spec = {
+            type = "s3Compatible";
+            s3Compatible = {
+              bucket = config.backup.s3.bucket;
+              region = config.backup.s3.region;
+              enablePathStyleAddressing = true;
+            }
+            // lib.optionalAttrs (config.backup.s3.endpoint != null) {
+              endpoint = config.backup.s3.endpoint;
+            }
+            // lib.optionalAttrs (config.backup.s3.credentialsSecret != null) {
+              awsCredentials = {
+                secretKeySelectors = {
+                  accessKeyId = {
+                    name = config.backup.s3.credentialsSecret;
+                    key = config.backup.s3.accessKeyField;
+                  };
+                  secretAccessKey = {
+                    name = config.backup.s3.credentialsSecret;
+                    key = config.backup.s3.secretKeyField;
+                  };
                 };
               };
             };
           };
-        };
-      }));
+        })
+      );
 
       # ===== SGPoolingConfig (optional connection pooling) =====
 
@@ -283,7 +290,8 @@ in
                   ignore_startup_parameters = "extra_float_digits";
                   max_db_connections = "0";
                   max_user_connections = "0";
-                } // config.pooling.pgbouncerConf;
+                }
+                // config.pooling.pgbouncerConf;
               };
             };
           };

@@ -62,40 +62,45 @@
     };
   };
 
-  build = { self, config, clusterConfig }:
-  let
-    mkStorageClass =
-      name: spec:
-      scope.mkClusterResource {
-        apiVersion = "storage.k8s.io/v1";
-        kind = "StorageClass";
-        inherit name;
-        annotations = lib.optionalAttrs (spec.isDefault or false) {
-          "storageclass.kubernetes.io/is-default-class" = "true";
+  build =
+    {
+      self,
+      config,
+      clusterConfig,
+    }:
+    let
+      mkStorageClass =
+        name: spec:
+        scope.mkClusterResource {
+          apiVersion = "storage.k8s.io/v1";
+          kind = "StorageClass";
+          inherit name;
+          annotations = lib.optionalAttrs (spec.isDefault or false) {
+            "storageclass.kubernetes.io/is-default-class" = "true";
+          };
+          extra = {
+            provisioner = spec.provisioner;
+            parameters = spec.parameters;
+            reclaimPolicy = spec.reclaimPolicy;
+            volumeBindingMode = spec.volumeBindingMode;
+          }
+          // lib.optionalAttrs (spec.allowVolumeExpansion or false) {
+            allowVolumeExpansion = true;
+          };
         };
-        extra = {
-          provisioner = spec.provisioner;
-          parameters = spec.parameters;
-          reclaimPolicy = spec.reclaimPolicy;
-          volumeBindingMode = spec.volumeBindingMode;
-        }
-        // lib.optionalAttrs (spec.allowVolumeExpansion or false) {
-          allowVolumeExpansion = true;
+
+      classResources = lib.mapAttrs mkStorageClass config.classes;
+      classList = builtins.attrValues classResources;
+
+    in
+    classResources
+    // {
+      main = {
+        resource = self.lbs1-pool1-2x;
+        requires = classList;
+        out = {
+          storageClassName = self.lbs1-pool1-2x.out.name;
         };
-      };
-
-    classResources = lib.mapAttrs mkStorageClass config.classes;
-    classList = builtins.attrValues classResources;
-
-  in
-  classResources
-  // {
-    main = {
-      resource = self.lbs1-pool1-2x;
-      requires = classList;
-      out = {
-        storageClassName = self.lbs1-pool1-2x.out.name;
       };
     };
-  };
 }

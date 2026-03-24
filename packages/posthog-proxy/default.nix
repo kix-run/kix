@@ -38,78 +38,101 @@ in
     };
   };
 
-  build = { self, config, clusterConfig }:
-  {
-    # --- ExternalName Service: PostHog ingestion ---
-    posthogService = scope.mkResource {
-      apiVersion = "v1";
-      kind = "Service";
-      name = "posthog-proxy";
-      spec = {
-        type = "ExternalName";
-        externalName = config.posthogHost;
-        ports = [{ name = "https"; port = 443; protocol = "TCP"; targetPort = 443; }];
-      };
-    };
-
-    # --- ExternalName Service: PostHog assets ---
-    posthogAssetsService = scope.mkResource {
-      apiVersion = "v1";
-      kind = "Service";
-      name = "posthog-assets-proxy";
-      spec = {
-        type = "ExternalName";
-        externalName = config.posthogAssetsHost;
-        ports = [{ name = "https"; port = 443; protocol = "TCP"; targetPort = 443; }];
-      };
-    };
-
-    # --- Ingress ---
-    ingress = scope.mkResource {
-      apiVersion = "networking.k8s.io/v1";
-      kind = "Ingress";
-      name = "posthog-proxy";
-      annotations = {
-        "nginx.ingress.kubernetes.io/backend-protocol" = "HTTPS";
-        "nginx.ingress.kubernetes.io/configuration-snippet" = ''
-          proxy_ssl_name ${config.posthogHost};
-          proxy_ssl_server_name on;
-        '';
-        "nginx.ingress.kubernetes.io/proxy-body-size" = "10m";
-        "nginx.ingress.kubernetes.io/ssl-redirect" = "false";
-        "nginx.ingress.kubernetes.io/upstream-vhost" = config.posthogHost;
-      };
-      spec = {
-        ingressClassName = config.ingressClassName;
-        tls = [{
-          hosts = [ config.host ];
-          secretName = "tls";
-        }];
-        rules = [{
-          host = config.host;
-          http.paths = [
+  build =
+    {
+      self,
+      config,
+      clusterConfig,
+    }:
+    {
+      # --- ExternalName Service: PostHog ingestion ---
+      posthogService = scope.mkResource {
+        apiVersion = "v1";
+        kind = "Service";
+        name = "posthog-proxy";
+        spec = {
+          type = "ExternalName";
+          externalName = config.posthogHost;
+          ports = [
             {
-              path = "/";
-              pathType = "Prefix";
-              backend.service = {
-                name = self.posthogService.out.name;
-                port.name = "https";
-              };
-            }
-            {
-              path = "/static";
-              pathType = "Prefix";
-              backend.service = {
-                name = self.posthogAssetsService.out.name;
-                port.name = "https";
-              };
+              name = "https";
+              port = 443;
+              protocol = "TCP";
+              targetPort = 443;
             }
           ];
-        }];
+        };
       };
-    };
 
-    # --- Entry point ---
-    main = self.ingress;
-  };
+      # --- ExternalName Service: PostHog assets ---
+      posthogAssetsService = scope.mkResource {
+        apiVersion = "v1";
+        kind = "Service";
+        name = "posthog-assets-proxy";
+        spec = {
+          type = "ExternalName";
+          externalName = config.posthogAssetsHost;
+          ports = [
+            {
+              name = "https";
+              port = 443;
+              protocol = "TCP";
+              targetPort = 443;
+            }
+          ];
+        };
+      };
+
+      # --- Ingress ---
+      ingress = scope.mkResource {
+        apiVersion = "networking.k8s.io/v1";
+        kind = "Ingress";
+        name = "posthog-proxy";
+        annotations = {
+          "nginx.ingress.kubernetes.io/backend-protocol" = "HTTPS";
+          "nginx.ingress.kubernetes.io/configuration-snippet" = ''
+            proxy_ssl_name ${config.posthogHost};
+            proxy_ssl_server_name on;
+          '';
+          "nginx.ingress.kubernetes.io/proxy-body-size" = "10m";
+          "nginx.ingress.kubernetes.io/ssl-redirect" = "false";
+          "nginx.ingress.kubernetes.io/upstream-vhost" = config.posthogHost;
+        };
+        spec = {
+          ingressClassName = config.ingressClassName;
+          tls = [
+            {
+              hosts = [ config.host ];
+              secretName = "tls";
+            }
+          ];
+          rules = [
+            {
+              host = config.host;
+              http.paths = [
+                {
+                  path = "/";
+                  pathType = "Prefix";
+                  backend.service = {
+                    name = self.posthogService.out.name;
+                    port.name = "https";
+                  };
+                }
+                {
+                  path = "/static";
+                  pathType = "Prefix";
+                  backend.service = {
+                    name = self.posthogAssetsService.out.name;
+                    port.name = "https";
+                  };
+                }
+              ];
+            }
+          ];
+        };
+      };
+
+      # --- Entry point ---
+      main = self.ingress;
+    };
 }

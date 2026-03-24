@@ -142,58 +142,63 @@ in
     };
   };
 
-  build = { self, config, clusterConfig }:
-  {
+  build =
+    {
+      self,
+      config,
+      clusterConfig,
+    }:
+    {
 
-    # --- ClusterRole (operator-wide permissions) ---
-    clusterRole = scope.mkClusterResource {
-      apiVersion = "rbac.authorization.k8s.io/v1";
-      kind = "ClusterRole";
-      name = "${name}-operator";
-      labels = selectorLabels;
-      extra.rules = config.clusterRoleRules;
-    };
+      # --- ClusterRole (operator-wide permissions) ---
+      clusterRole = scope.mkClusterResource {
+        apiVersion = "rbac.authorization.k8s.io/v1";
+        kind = "ClusterRole";
+        name = "${name}-operator";
+        labels = selectorLabels;
+        extra.rules = config.clusterRoleRules;
+      };
 
-    # --- ClusterRoleBinding ---
-    clusterRoleBinding = scope.mkClusterResource {
-      apiVersion = "rbac.authorization.k8s.io/v1";
-      kind = "ClusterRoleBinding";
-      name = "${name}-operator";
-      labels = selectorLabels;
-      extra = {
-        roleRef = {
-          apiGroup = "rbac.authorization.k8s.io";
-          kind = "ClusterRole";
-          name = self.clusterRole.out.name;
+      # --- ClusterRoleBinding ---
+      clusterRoleBinding = scope.mkClusterResource {
+        apiVersion = "rbac.authorization.k8s.io/v1";
+        kind = "ClusterRoleBinding";
+        name = "${name}-operator";
+        labels = selectorLabels;
+        extra = {
+          roleRef = {
+            apiGroup = "rbac.authorization.k8s.io";
+            kind = "ClusterRole";
+            name = self.clusterRole.out.name;
+          };
+          subjects = [
+            {
+              kind = "ServiceAccount";
+              name = config.operatorServiceAccountName;
+              namespace = scope.namespaceName;
+            }
+          ];
         };
-        subjects = [
-          {
-            kind = "ServiceAccount";
-            name = config.operatorServiceAccountName;
-            namespace = scope.namespaceName;
-          }
+      };
+
+      # --- IngressClass (cluster-scoped) ---
+      ingressClass = scope.mkClusterResource {
+        apiVersion = "networking.k8s.io/v1";
+        kind = "IngressClass";
+        name = name;
+        labels = selectorLabels;
+        spec = {
+          controller = config.ingressClassController;
+        };
+      };
+
+      # --- Entry point ---
+      main = {
+        resource = self.ingressClass;
+        requires = [
+          self.clusterRole
+          self.clusterRoleBinding
         ];
       };
     };
-
-    # --- IngressClass (cluster-scoped) ---
-    ingressClass = scope.mkClusterResource {
-      apiVersion = "networking.k8s.io/v1";
-      kind = "IngressClass";
-      name = name;
-      labels = selectorLabels;
-      spec = {
-        controller = config.ingressClassController;
-      };
-    };
-
-    # --- Entry point ---
-    main = {
-      resource = self.ingressClass;
-      requires = [
-        self.clusterRole
-        self.clusterRoleBinding
-      ];
-    };
-  };
 }

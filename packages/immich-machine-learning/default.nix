@@ -41,83 +41,92 @@ in
     };
   };
 
-  build = { self, config, clusterConfig }:
-  let
-    healthCheck = {
-      httpGet = { path = "/ping"; port = "http"; };
-      periodSeconds = 10;
-      timeoutSeconds = 1;
-      failureThreshold = 3;
-    };
-  in
-  {
+  build =
+    {
+      self,
+      config,
+      clusterConfig,
+    }:
+    let
+      healthCheck = {
+        httpGet = {
+          path = "/ping";
+          port = "http";
+        };
+        periodSeconds = 10;
+        timeoutSeconds = 1;
+        failureThreshold = 3;
+      };
+    in
+    {
 
-    # --- Model cache PVC (optional) ---
-    cachePvc =
-      if config.persistence.enabled then
-        scope.mkResource {
-          apiVersion = "v1";
-          kind = "PersistentVolumeClaim";
-          name = "${name}-cache";
+      # --- Model cache PVC (optional) ---
+      cachePvc =
+        if config.persistence.enabled then
+          scope.mkResource {
+            apiVersion = "v1";
+            kind = "PersistentVolumeClaim";
+            name = "${name}-cache";
+            spec = {
+              accessModes = [ "ReadWriteOnce" ];
+              resources.requests.storage = config.persistence.size;
+            }
+            // lib.optionalAttrs (config.persistence.storageClass != null) {
+              storageClassName = config.persistence.storageClass;
+            };
+          }
+        else
+          null;
+
+      # --- Mounts ---
+      cacheMount =
+        if config.persistence.enabled then
+          kix.mount.pvc self.cachePvc { mountPath = "/cache"; }
+        else
+          kix.mount.emptyDir {
+            mountPath = "/cache";
+            name = "cache";
+          };
+
+      # --- Deployment ---
+      deployment =
+        {
+          name = name;
           spec = {
-            accessModes = [ "ReadWriteOnce" ];
-            resources.requests.storage = config.persistence.size;
-          } // lib.optionalAttrs (config.persistence.storageClass != null) {
-            storageClassName = config.persistence.storageClass;
+            replicas = config.replicaCount;
+            selector.matchLabels = scope.selectorLabels;
+            strategy.type = "RollingUpdate";
+            template.spec.containers = [
+              {
+                name = "immich-machine-learning";
+                image = "${config.image.repository}:${config.image.tag}";
+                imagePullPolicy = config.image.pullPolicy;
+                env = kix.mkEnvVars {
+                  TRANSFORMERS_CACHE = "/cache";
+                  HF_XET_CACHE = "/cache/huggingface-xet";
+                  MPLCONFIGDIR = "/cache/matplotlib-config";
+                };
+                ports = [
+                  (kix.port "http" 3003)
+                ];
+                livenessProbe = healthCheck;
+                readinessProbe = healthCheck;
+                startupProbe = healthCheck // {
+                  failureThreshold = 60;
+                };
+              }
+            ];
           };
         }
-      else
-        null;
+        |> kix.withMounts [
+          self.cacheMount
+        ]
+        |> scope.mkDeployment;
 
-    # --- Mounts ---
-    cacheMount =
-      if config.persistence.enabled then
-        kix.mount.pvc self.cachePvc { mountPath = "/cache"; }
-      else
-        kix.mount.emptyDir { mountPath = "/cache"; name = "cache"; };
+      # --- Service ---
+      service = self.deployment |> kix.service.fromWorkload { inherit name; } |> scope.mkResource;
 
-    # --- Deployment ---
-    deployment =
-      {
-        name = name;
-        spec = {
-          replicas = config.replicaCount;
-          selector.matchLabels = scope.selectorLabels;
-          strategy.type = "RollingUpdate";
-          template.spec.containers = [
-            {
-              name = "immich-machine-learning";
-              image = "${config.image.repository}:${config.image.tag}";
-              imagePullPolicy = config.image.pullPolicy;
-              env = kix.mkEnvVars {
-                TRANSFORMERS_CACHE = "/cache";
-                HF_XET_CACHE = "/cache/huggingface-xet";
-                MPLCONFIGDIR = "/cache/matplotlib-config";
-              };
-              ports = [
-                (kix.port "http" 3003)
-              ];
-              livenessProbe = healthCheck;
-              readinessProbe = healthCheck;
-              startupProbe = healthCheck // {
-                failureThreshold = 60;
-              };
-            }
-          ];
-        };
-      }
-      |> kix.withMounts [
-        self.cacheMount
-      ]
-      |> scope.mkDeployment;
-
-    # --- Service ---
-    service =
-      self.deployment
-      |> kix.service.fromWorkload { inherit name; }
-      |> scope.mkResource;
-
-    # --- Entry point ---
-    main = self.service;
-  };
+      # --- Entry point ---
+      main = self.service;
+    };
 }
