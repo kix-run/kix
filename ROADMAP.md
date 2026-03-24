@@ -153,6 +153,14 @@
 - [ ] Allow bringing a values.yaml for helm migration
 - [ ] Dry-run / planning mode — "do the builds without the servers"; evaluate what a cluster would look like before hardware exists, as a planning and risk assessment tool ("what would break?")
 
+### Break glass — emergency escape hatches
+- [ ] Strip dependency context — remove a resource from the DAG without deleting it (e.g. `builtins.unsafeDiscardStringContext` on a specific dep reference) to unlink a broken dependency and allow the rest of the graph to deploy
+- [ ] Force-override a single resource — bypass the content-addressed pipeline for one resource (pin its manifest directly) when the DSL can't express what you need right now
+- [ ] Skip a package from the cluster build — `exclude = [ "package-name" ];` at the cluster level to drop a package entirely without editing its definition
+- [ ] Partial deploy — deploy a subset of the graph (e.g. only one wave or one namespace) when a broken package blocks the full rollout
+- [ ] Escape-hatch annotations — mark resources with `kix.dev/unmanaged: "true"` so kix-diff ignores them, allowing manual hotfixes to coexist temporarily
+- [ ] Audit trail for escape hatches — any break-glass action should be visible in the build output / diff summary so it doesn't silently become permanent
+
 ### GitOps & operator
 - [ ] Trivial GitOps — evaluate nix recipe, when all is built, replace the current hash of the head node
 - [ ] kix operator — argo-like nix operator that re-evaluates from git; can reconcile with live cluster state as input variable
