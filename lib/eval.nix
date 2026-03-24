@@ -21,6 +21,147 @@ in
 
 rec {
 
+  # ---------------------------------------------------------------------------
+  # Helpers: merge-with-collision and recursive typed-attr walker
+  # ---------------------------------------------------------------------------
+
+  # Merge two attrsets, throwing on key collision.
+  mergeCollide =
+    context: a: b:
+    let
+      collisions = builtins.intersectAttrs a b;
+    in
+    if collisions == { } then
+      a // b
+    else
+      throw "${context}: key collision on ${builtins.concatStringsSep ", " (builtins.attrNames collisions)}";
+
+  # Collect all typed objects (anything with _type) from nested attrsets,
+  # up to maxDepth levels deep. Stops at _type boundaries — never descends
+  # into typed objects. Plain attrsets without _type are treated as folders.
+  collectTypedAttrs =
+    {
+      excludeKeys ? [ ],
+      maxDepth ? 3,
+    }:
+    attrs:
+    let
+      go =
+        depth: a:
+        builtins.concatMap (
+          n:
+          let
+            v = a.${n};
+          in
+          if v == null then
+            [ ]
+          else if !(builtins.isAttrs v) then
+            [ ]
+          else if v ? _type then
+            [ v ]
+          else if depth >= maxDepth then
+            [ ]
+          else
+            go (depth + 1) v
+        ) (builtins.attrNames (removeAttrs a excludeKeys));
+    in
+    go 0 attrs;
+
+  # Well-known folders that get content-type validation warnings.
+  knownFolders = {
+    secrets = {
+      expectedTypes = [ "k8s-resource" ];
+    };
+    crds = {
+      expectedTypes = [
+        "k8s-resource"
+        "crd-ref"
+      ];
+    };
+  };
+
+  # Build the consumer-facing view of a package instance.
+  #
+  # Three layers, all merged with collision detection:
+  #   1. folders  — plain attrsets from parts (no _type), excluding "main"
+  #   2. autoKeys — auto-copied from main.out (fqdn, name, selector, etc.)
+  #   3. system   — evaluator plumbing (_type, _meta, main, out, raw)
+  #
+  # Root-level resources (typed values) live only in raw, not on the surface.
+  mkPackageView =
+    {
+      parts,
+      mainOut,
+      instanceName,
+      packageInstance,
+      packageMeta,
+      namespaceName,
+      aliases,
+    }:
+    let
+      ctx = "instance '${instanceName}'";
+
+      # Layer 1: folders — only plain attrsets (no _type), excluding "main"
+      folders = lib.filterAttrs (
+        n: v: n != "main" && v != null && builtins.isAttrs v && !(v ? _type)
+      ) parts;
+
+      # Layer 2: auto-copied main.out (fqdn, name, selector, etc.)
+      autoKeys = mainOut;
+
+      # Layer 3: system/evaluator plumbing
+      system = {
+        _type = "k8s-instance";
+        _packageInstance = packageInstance;
+        main = packageInstance;
+        out = mainOut;
+        raw = parts;
+        _meta = {
+          inherit
+            instanceName
+            namespaceName
+            aliases
+            packageMeta
+            ;
+          namespace = namespaceName;
+        };
+      };
+
+      # Known-folder structure check: resource directly on a known folder key → error
+      _folderStructureChecks = builtins.foldl' (
+        acc: folderName:
+        let
+          v = parts.${folderName} or null;
+        in
+        if v != null && builtins.isAttrs v && v ? _type then
+          throw "${ctx}: '${folderName}' must be an attrset of resources, not a resource directly. Use '${folderName}.someName = ...' instead."
+        else
+          acc
+      ) null (builtins.attrNames knownFolders);
+
+      # Known-folder content warnings: wrong _type inside a known folder → trace warning
+      _folderContentChecks = builtins.foldl' (
+        acc: folderName:
+        let
+          spec = knownFolders.${folderName};
+          contents = parts.${folderName} or { };
+          typed = collectTypedAttrs { } contents;
+          bad = builtins.filter (r: !(builtins.elem (r._type or "") spec.expectedTypes)) typed;
+        in
+        lib.foldl' (
+          inner: r:
+          builtins.trace "warning: ${ctx}.${folderName} contains ${r.kind or "?"}/${r.name or "?"} — unexpected _type '${r._type or "unknown"}'" inner
+        ) acc bad
+      ) null (builtins.attrNames knownFolders);
+
+    in
+    builtins.seq _folderStructureChecks (
+      builtins.seq _folderContentChecks (
+        mergeCollide "${ctx}: folder key collides with main.out" folders autoKeys
+        |> mergeCollide "${ctx}: package key collides with system key" system
+      )
+    );
+
   # Per-instance context injected into packages.
   mkScope =
     {
@@ -925,18 +1066,14 @@ rec {
 
         # Collect all resources from parts (for the local registry).
         # Filters out null values so disabled/modal parts are excluded.
-        allPartResources =
-          let
-            partNames = builtins.attrNames (removeAttrs parts [ "main" ]);
-            vals = map (n: {
-              name = n;
-              value = parts.${n};
-            }) partNames;
-            resourceVals = builtins.filter (
-              v: v.value != null && builtins.isAttrs v.value && (v.value._type or "") == "k8s-resource"
-            ) vals;
-          in
-          map (v: v.value) resourceVals;
+        allPartResources = builtins.filter (v: (v._type or "") == "k8s-resource") (
+          collectTypedAttrs {
+            excludeKeys = [
+              "main"
+              "meta"
+            ];
+          } parts
+        );
 
         # Local store-path → resource lookup for forward closure walking.
         # TODO: potentially move the PI collection to kix-cli for faster eval
@@ -1203,25 +1340,17 @@ rec {
       builtins.seq _crossNsCheck (
         builtins.seq _w1 (
           builtins.seq _w2 (
-            builtins.seq _w3 (
-              parts
-              // {
-                _type = "k8s-instance";
-                _packageInstance = packageInstance;
-
-                # The PackageInstance is the new closure root — it references
-                # mainRes, inverse deps, and package requires via annotations.
-                main = packageInstance;
-                out = (mainRes.out or { }) // packageOut;
-
-                _meta = {
-                  inherit instanceName namespaceName;
-                  namespace = namespaceName;
-                  aliases = instCfg.aliases or [ ];
-                  inherit packageMeta;
-                };
-              }
-            )
+            builtins.seq _w3 (mkPackageView {
+              inherit
+                parts
+                instanceName
+                namespaceName
+                packageMeta
+                packageInstance
+                ;
+              mainOut = (mainRes.out or { }) // packageOut;
+              aliases = instCfg.aliases or [ ];
+            })
           )
         )
       );
@@ -1315,21 +1444,26 @@ rec {
       collectResources =
         inst:
         let
-          parts = removeAttrs inst [
-            "_type"
-            "_meta"
-            "_packageInstance"
-            "_isImport"
-            "main"
-            "fqdn"
-            "out"
-            "overrideParts"
-          ];
-          resources = lib.filterAttrs (
-            _: v: v != null && builtins.isAttrs v && (v._type or "") == "k8s-resource"
-          ) parts;
+          raw =
+            inst.raw or (removeAttrs inst [
+              "_type"
+              "_meta"
+              "_packageInstance"
+              "_isImport"
+              "main"
+              "fqdn"
+              "out"
+              "overrideParts"
+            ]);
         in
-        builtins.attrValues resources
+        builtins.filter (v: (v._type or "") == "k8s-resource") (
+          collectTypedAttrs {
+            excludeKeys = [
+              "main"
+              "meta"
+            ];
+          } raw
+        )
         ++ (if inst ? _packageInstance then [ inst._packageInstance ] else [ ]);
 
       allResources =

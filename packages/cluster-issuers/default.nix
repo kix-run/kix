@@ -10,6 +10,7 @@
 {
   scope,
   lib,
+  certManager,
 }:
 
 {
@@ -46,23 +47,15 @@
   };
 
   build =
-    { self, config, clusterConfig }:
+    {
+      self,
+      config,
+      clusterConfig,
+    }:
     let
-      # CRD refs for cert-manager CRDs — auto-generate .cr/.mkCR builders.
-      # Uses mkCRDRef since the CRDs are managed by the cert-manager package, not us.
-      certificateCRDRef = scope.mkCRDRef {
-        group = "cert-manager.io";
-        kind = "Certificate";
-        plural = "certificates";
-      };
-      clusterIssuerCRDRef = scope.mkCRDRef {
-        group = "cert-manager.io";
-        kind = "ClusterIssuer";
-        plural = "clusterissuers";
-        crdScope = "Cluster";
-      };
-      mkCert = certificateCRDRef.out.mkCR scope;
-      mkIssuerCR = clusterIssuerCRDRef.out.mkCR scope;
+      # Use CRD builders from cert-manager's crds folder (via DI).
+      mkCert = certManager.crds.certificates.out.mkCR scope;
+      mkIssuerCR = certManager.crds.clusterIssuers.out.mkCR scope;
 
       mkIssuer =
         name: issuerCfg:
@@ -74,10 +67,13 @@
                 key = issuerCfg.cloudflareSecret.key;
               };
             };
-          } // (
-            if issuerCfg.dnsZones != [ ] then {
-              selector.dnsZones = issuerCfg.dnsZones;
-            } else
+          }
+          // (
+            if issuerCfg.dnsZones != [ ] then
+              {
+                selector.dnsZones = issuerCfg.dnsZones;
+              }
+            else
               { }
           );
         in
@@ -101,7 +97,14 @@
     // {
       # mkCertificate: creates a cert-manager Certificate CR.
       # For non-Ingress TLS (gRPC, internal services, mTLS).
-      mkCertificate = { name, hosts, secretName, duration ? null, renewBefore ? null }:
+      mkCertificate =
+        {
+          name,
+          hosts,
+          secretName,
+          duration ? null,
+          renewBefore ? null,
+        }:
         mkCert {
           inherit name;
           spec = {
@@ -124,11 +127,14 @@
         out = {
           # Args transformer: adds cert-manager annotation to mkResource input args.
           # Pipe-friendly: `scope.mkResource ({ ... } |> clusterIssuer.out.withCert)`
-          withCert = args: args // {
-            annotations = (args.annotations or {}) // {
-              "cert-manager.io/cluster-issuer" = mainResource.out.name;
+          withCert =
+            args:
+            args
+            // {
+              annotations = (args.annotations or { }) // {
+                "cert-manager.io/cluster-issuer" = mainResource.out.name;
+              };
             };
-          };
         };
       };
     };
