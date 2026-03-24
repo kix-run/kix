@@ -43,7 +43,7 @@ fn init_tracing(verbose: u8, quiet: bool) {
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_writer(std::io::stderr)
-        .without_time()
+        .with_timer(tracing_subscriber::fmt::time::uptime())
         .init();
 }
 
