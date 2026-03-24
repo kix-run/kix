@@ -18,6 +18,7 @@ on:
       - 'flake.nix'
       - 'flake.lock'
       - 'devenv.nix'
+      - '.github/workflows/kix-build.yml'
   pull_request:
     branches: [main]
     paths:
@@ -28,6 +29,7 @@ on:
       - 'flake.nix'
       - 'flake.lock'
       - 'devenv.nix'
+      - '.github/workflows/kix-build.yml'
 
 jobs:
   cargo-test:
@@ -88,12 +90,6 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes pipe-operators
 
-      - uses: cachix/cachix-action@v15
-        with:
-          name: kixpkgs
-          authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-
       - uses: cachix/install-devenv-action@v1
 
       - name: Smoke test
@@ -101,8 +97,3 @@ jobs:
           devenv shell -- kix --version
           devenv shell -- kix list
           devenv shell -- kix build example
-
-      - name: Push to Cachix
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: |
-          nix build .#kix --json | jq -r '.[].outputs.out' | cachix push kixpkgs
