@@ -2,6 +2,12 @@
 #
 # Imported by flake.nix as:
 #   kixChecks = import ./checks.nix { inherit pkgs lib; };
+#
+# Design principles:
+#   - Every failure names the specific resource(s) involved.
+#   - External references (cluster-provided roles, system pods) are exempted
+#     via clear, documented allowlists — not naming-convention heuristics.
+#   - No dead code, no double-negatives, no silent data loss.
 
 { pkgs, lib }:
 
@@ -18,8 +24,6 @@ rec {
   };
 
   # Validate a manifest directory against K8s API schemas.
-  # Skips Prometheus Operator CRDs since kubeconform doesn't have
-  # their schemas built-in.
   schemaCheck =
     name: drv:
     pkgs.runCommand "schema-${name}"
@@ -35,166 +39,96 @@ rec {
         touch $out
       '';
 
-  # Convert manifest list to an attrset keyed by {name}-{kind},
-  # matching the shape expected by validateManifestSet.
-  manifestMap =
-    manifests:
-    builtins.listToAttrs (
-      map (m: {
-        name = "${m.metadata.name}-${lib.toLower m.kind}";
-        value = m;
-      }) manifests
-    );
-
   # --- Cross-resource validation ---
   #
-  # Validates referential integrity across the manifest set:
-  # - ServiceAccount references resolve to SAs in the set
-  # - RoleBinding/ClusterRoleBinding roleRefs resolve to Roles/ClusterRoles
-  # - ConfigMap volume refs resolve to ConfigMaps in the set
-  # - Service selectors match at least one workload's pod template labels
-  # - HPA scaleTargetRef points to existing workloads
-  # - No duplicate (kind, namespace, name) tuples
-  # - managed-by label on all resources
+  # Pure eval-time Nix checks. No IFD, no runtime.
+  #
+  # Validates:
+  #   1. ServiceAccount references from workloads
+  #   2. RoleBinding/ClusterRoleBinding roleRef targets
+  #   3. ConfigMap volume references
+  #   4. Service selectors match workload pod template labels
+  #   5. HPA scaleTargetRef points to existing workloads
+  #   6. No duplicate (kind, namespace, name) tuples
+  #   7. managed-by label present on all resources
+  #   8. Deployment/StatefulSet selector ⊆ pod template labels
   #
   # Only validates INTERNAL references (resources created by kix).
-  # External references (e.g., auth.existingSecret) are intentionally
-  # skipped — those are cluster-provided resources outside kix's scope.
-  #
-  # This is pure eval-time Nix — no IFD, no runtime check.
+  # External references are exempted via documented allowlists.
+
   validateManifestSet =
     clusterName: manifests:
     let
-      resources = lib.attrValues manifests;
+      resources = manifests;
 
-      # Index resources by (kind, name) for lookup.
-      byKindName = builtins.foldl' (
-        acc: r:
+      # --- Helpers ---
+
+      # Resource identity: kind/namespace/name (unique within a cluster).
+      resourceId =
+        r:
         let
-          name = r.metadata.name or "";
-          kind = r.kind;
+          ns = r.metadata.namespace or "cluster-scoped";
+          name = r.metadata.name or "unnamed";
         in
-        acc // { "${kind}:${name}" = r; }
-      ) { } resources;
+        "${r.kind}/${ns}/${name}";
 
-      hasResource = kind: name: byKindName ? "${kind}:${name}";
+      # Index by (kind, namespace, name) for namespace-aware lookup.
+      byId = builtins.foldl' (acc: r: acc // { "${resourceId r}" = r; }) { } resources;
 
-      # --- 1. ServiceAccount references ---
+      # Cluster-scoped resources (Namespace, ClusterRole, etc.) have no namespace.
+      # Namespace-scoped lookups need the referring resource's namespace.
+      hasResource =
+        kind: ns: name:
+        byId ? "${kind}/${ns}/${name}" || byId ? "${kind}/cluster-scoped/${name}";
+
       workloadKinds = [
         "Deployment"
         "StatefulSet"
         "DaemonSet"
         "Job"
+        "CronJob"
       ];
       workloads = builtins.filter (r: builtins.elem r.kind workloadKinds) resources;
 
       getPodSpec =
-        r: if r.kind == "Job" then r.spec.template.spec or { } else r.spec.template.spec or { };
-
-      saRefs = builtins.concatMap (
         r:
         let
-          podSpec = getPodSpec r;
-          saName = podSpec.serviceAccountName or null;
+          template =
+            if r.kind == "CronJob" then
+              r.spec.jobTemplate.spec.template.spec or { }
+            else
+              r.spec.template.spec or { };
         in
-        if saName != null then
-          [
-            {
-              workload = r.metadata.name;
-              inherit saName;
-              kind = r.kind;
-            }
-          ]
-        else
-          [ ]
-      ) workloads;
-
-      saValidation = builtins.all (
-        ref:
-        hasResource "ServiceAccount" ref.saName
-        || !(builtins.any (
-          r:
-          r.kind == "ServiceAccount" && lib.hasPrefix (lib.removeSuffix ref.saName ref.saName) r.metadata.name
-        ) resources)
-        || ref.saName == "default"
-      ) saRefs;
-
-      # --- 2. RoleBinding/ClusterRoleBinding roleRef validation ---
-      bindingKinds = [
-        "RoleBinding"
-        "ClusterRoleBinding"
-      ];
-      bindings = builtins.filter (r: builtins.elem r.kind bindingKinds) resources;
-
-      roleRefValidation = builtins.all (
-        binding:
-        let
-          ref = binding.roleRef or { };
-          refKind = ref.kind or "";
-          refName = ref.name or "";
-        in
-        hasResource refKind refName
-        || lib.hasPrefix "system:" refName
-        || lib.hasSuffix "-psp" refName
-        || builtins.elem refName [
-          "admin"
-          "cluster-admin"
-          "edit"
-          "view"
-        ]
-      ) bindings;
-
-      # --- 3. ConfigMap volume references ---
-      configMapVolRefs = builtins.concatMap (
-        r:
-        let
-          podSpec = getPodSpec r;
-          volumes =
-            let
-              v = podSpec.volumes or [ ];
-            in
-            if v == null then [ ] else v;
-        in
-        builtins.concatMap (
-          vol:
-          let
-            cmName = vol.configMap.name or null;
-          in
-          if cmName != null then
-            [
-              {
-                workload = r.metadata.name;
-                inherit cmName;
-              }
-            ]
-          else
-            [ ]
-        ) volumes
-      ) workloads;
-
-      configMapValidation = builtins.all (ref: hasResource "ConfigMap" ref.cmName) configMapVolRefs;
-
-      # --- 4. Service selector -> workload label matching ---
-      services = builtins.filter (r: r.kind == "Service") resources;
+        template;
 
       selectorMatchesLabels =
         selector: labels: builtins.all (k: (labels.${k} or null) == selector.${k}) (lib.attrNames selector);
 
-      # Workaround: Prometheus Operator creates pods from Prometheus/Alertmanager
-      # CRDs at runtime, injecting its own labels. Since those labels don't exist
-      # at Nix evaluation time, we can't match Service selectors against them.
-      # We exempt services whose name matches a CRD resource name instead.
-      operatorWorkloadKinds = [
+      # --- Allowlists for external references ---
+
+      # Roles provided by the cluster itself, not by kix.
+      externalRoleRef =
+        name:
+        lib.hasPrefix "system:" name
+        || lib.hasSuffix "-psp" name
+        || builtins.elem name [
+          "admin"
+          "cluster-admin"
+          "edit"
+          "view"
+        ];
+
+      # Services targeting pods managed by operators (Prometheus, Alertmanager)
+      # or Kubernetes system components. These pods don't appear in manifests.
+      operatorManagedKinds = [
         "Prometheus"
         "Alertmanager"
       ];
+      hasOperatorResource = kind: builtins.any (r: r.kind == kind) resources;
 
-      # Workaround: kube-prometheus-stack Helm chart creates headless Services
-      # that target Kubernetes control-plane and system pods (coredns, scheduler,
-      # etc.) for scraping metrics. These pods are managed by the cluster itself,
-      # not by kix, so they will never appear in the manifest set.
       systemComponentSelectors = [
         { "k8s-app" = "kube-dns"; }
+        { "k8s-app" = "coredns"; }
         { "component" = "kube-controller-manager"; }
         { "component" = "kube-scheduler"; }
         { "component" = "kube-apiserver"; }
@@ -202,81 +136,215 @@ rec {
         { "component" = "etcd"; }
       ];
 
-      serviceValidation = builtins.all (
+      isExemptService =
         svc:
         let
           selector = svc.spec.selector or { };
-          isSystemComponent = builtins.any (sc: selectorMatchesLabels sc selector) systemComponentSelectors;
-          targetsOperatorWorkload =
-            builtins.any (r: builtins.elem r.kind operatorWorkloadKinds) resources
-            && builtins.any (
-              r: builtins.elem r.kind operatorWorkloadKinds && lib.hasPrefix r.metadata.name svc.metadata.name
-            ) resources;
         in
+        # No selector — headless or external-name service.
         selector == { }
-        || isSystemComponent
-        || targetsOperatorWorkload
+        # Targets a K8s system component (metrics scraping).
+        || builtins.any (sc: selectorMatchesLabels sc selector) systemComponentSelectors
+        # Targets pods created by an operator CRD at runtime.
+        # Match: a CRD resource of the operator kind exists, and the Service
+        # name starts with that resource's name (operator naming convention).
         || builtins.any (
-          w:
+          r: builtins.elem r.kind operatorManagedKinds && lib.hasPrefix r.metadata.name svc.metadata.name
+        ) resources;
+
+      # --- 1. ServiceAccount references ---
+
+      saFailures = builtins.concatMap (
+        w:
+        let
+          podSpec = getPodSpec w;
+          saName = podSpec.serviceAccountName or null;
+          ns = w.metadata.namespace or "cluster-scoped";
+        in
+        if saName == null || saName == "default" then
+          [ ]
+        else if hasResource "ServiceAccount" ns saName then
+          [ ]
+        else
+          [ "${w.kind} ${ns}/${w.metadata.name} references ServiceAccount '${saName}' which does not exist" ]
+      ) workloads;
+
+      # --- 2. RoleBinding/ClusterRoleBinding roleRef ---
+
+      roleRefFailures =
+        builtins.concatMap
+          (
+            binding:
+            let
+              ref = binding.roleRef or { };
+              refKind = ref.kind or "";
+              refName = ref.name or "";
+              ns = binding.metadata.namespace or "cluster-scoped";
+            in
+            if hasResource refKind ns refName || externalRoleRef refName then
+              [ ]
+            else
+              [
+                "${binding.kind} ${ns}/${binding.metadata.name} references ${refKind} '${refName}' which does not exist"
+              ]
+          )
+          (
+            builtins.filter (
+              r:
+              builtins.elem r.kind [
+                "RoleBinding"
+                "ClusterRoleBinding"
+              ]
+            ) resources
+          );
+
+      # --- 3. ConfigMap volume references ---
+      # Secrets are intentionally not checked — they are commonly managed
+      # externally (Infisical, sealed-secrets, manual creation).
+
+      volumeRefFailures = builtins.concatMap (
+        w:
+        let
+          podSpec = getPodSpec w;
+          volumes =
+            let
+              v = podSpec.volumes or [ ];
+            in
+            if v == null then [ ] else v;
+          ns = w.metadata.namespace or "cluster-scoped";
+        in
+        builtins.concatMap (
+          vol:
           let
-            templateLabels = w.spec.template.metadata.labels or { };
+            cmName = vol.configMap.name or null;
           in
-          selectorMatchesLabels selector templateLabels
-        ) workloads
-      ) services;
+          if cmName != null && !(hasResource "ConfigMap" ns cmName) then
+            [
+              "${w.kind} ${ns}/${w.metadata.name} mounts ConfigMap '${cmName}' which does not exist"
+            ]
+          else
+            [ ]
+        ) volumes
+      ) workloads;
 
-      # --- 5. HPA scaleTargetRef validation ---
-      hpas = builtins.filter (r: r.kind == "HorizontalPodAutoscaler") resources;
+      # --- 4. Service selector -> workload label matching ---
 
-      hpaValidation = builtins.all (
+      serviceFailures = builtins.concatMap (
+        svc:
+        if isExemptService svc then
+          [ ]
+        else
+          let
+            selector = svc.spec.selector or { };
+            ns = svc.metadata.namespace or "cluster-scoped";
+            matchesAny = builtins.any (
+              w:
+              let
+                templateLabels = w.spec.template.metadata.labels or { };
+              in
+              selectorMatchesLabels selector templateLabels
+            ) workloads;
+          in
+          if matchesAny then
+            [ ]
+          else
+            [
+              "Service ${ns}/${svc.metadata.name} selector ${builtins.toJSON selector} matches no workload pod template"
+            ]
+      ) (builtins.filter (r: r.kind == "Service") resources);
+
+      # --- 5. HPA scaleTargetRef ---
+
+      hpaFailures = builtins.concatMap (
         hpa:
         let
           ref = hpa.spec.scaleTargetRef or { };
+          refKind = ref.kind or "";
+          refName = ref.name or "";
+          ns = hpa.metadata.namespace or "cluster-scoped";
         in
-        hasResource (ref.kind or "") (ref.name or "")
-      ) hpas;
+        if hasResource refKind ns refName then
+          [ ]
+        else
+          [
+            "HorizontalPodAutoscaler ${ns}/${hpa.metadata.name} targets ${refKind} '${refName}' which does not exist"
+          ]
+      ) (builtins.filter (r: r.kind == "HorizontalPodAutoscaler") resources);
 
       # --- 6. No duplicate (kind, namespace, name) tuples ---
-      resourceIds = map (
-        r:
-        let
-          ns = r.metadata.namespace or null;
-          nsStr = if ns == null then "cluster-scoped" else ns;
-          name = r.metadata.name or "unnamed";
-        in
-        "${r.kind}/${nsStr}/${name}"
-      ) resources;
+
+      resourceIds = map resourceId resources;
       uniqueIds = lib.unique resourceIds;
-      noDuplicateIds = builtins.length resourceIds == builtins.length uniqueIds;
+      duplicateFailures =
+        if builtins.length resourceIds == builtins.length uniqueIds then
+          [ ]
+        else
+          let
+            counts = builtins.foldl' (acc: id: acc // { ${id} = (acc.${id} or 0) + 1; }) { } resourceIds;
+            dups = lib.filterAttrs (_: c: c > 1) counts;
+          in
+          map (id: "Duplicate resource: ${id}") (lib.attrNames dups);
 
-      # --- 7. managed-by label on all resources ---
-      managedByValidation = builtins.all (
-        r: (r.metadata.labels."app.kubernetes.io/managed-by" or "") == "kix"
+      # --- 7. managed-by label ---
+
+      managedByFailures = builtins.concatMap (
+        r:
+        if (r.metadata.labels."app.kubernetes.io/managed-by" or "") == "kix" then
+          [ ]
+        else
+          [ "${r.kind} ${resourceId r} is missing app.kubernetes.io/managed-by=kix label" ]
       ) resources;
 
-      # --- Collect failures for clear error messages ---
-      failures =
-        (lib.optional (!saValidation) "ServiceAccount reference validation failed")
-        ++ (lib.optional (!roleRefValidation)
-          "RoleBinding roleRef validation failed — a binding references a Role/ClusterRole not in the manifest set"
-        )
-        ++ (lib.optional (!configMapValidation)
-          "ConfigMap volume reference validation failed — a workload references a ConfigMap not in the manifest set"
-        )
-        ++ (lib.optional (!serviceValidation)
-          "Service selector validation failed — a Service's selector doesn't match any workload's pod template labels"
-        )
-        ++ (lib.optional (
-          !hpaValidation
-        ) "HPA scaleTargetRef validation failed — an HPA targets a workload not in the manifest set")
-        ++ (lib.optional (!noDuplicateIds) "Duplicate resource identity (kind/namespace/name) detected")
-        ++ (lib.optional (
-          !managedByValidation
-        ) "managed-by label validation failed — a resource is missing app.kubernetes.io/managed-by=kix");
+      # --- 8. Selector consistency ---
+      # A workload's spec.selector.matchLabels must be a subset of its
+      # pod template labels, otherwise the workload will never match its pods.
+
+      selectorConsistencyFailures =
+        builtins.concatMap
+          (
+            w:
+            let
+              selectorLabels = w.spec.selector.matchLabels or { };
+              templateLabels = w.spec.template.metadata.labels or { };
+              ns = w.metadata.namespace or "cluster-scoped";
+            in
+            if selectorLabels == { } then
+              [ ]
+            else if selectorMatchesLabels selectorLabels templateLabels then
+              [ ]
+            else
+              [
+                "${w.kind} ${ns}/${w.metadata.name} selector ${builtins.toJSON selectorLabels} is not a subset of pod template labels ${builtins.toJSON templateLabels}"
+              ]
+          )
+          (
+            builtins.filter (
+              r:
+              builtins.elem r.kind [
+                "Deployment"
+                "StatefulSet"
+                "DaemonSet"
+              ]
+            ) resources
+          );
+
+      # --- Collect all failures ---
+
+      allFailures =
+        saFailures
+        ++ roleRefFailures
+        ++ volumeRefFailures
+        ++ serviceFailures
+        ++ hpaFailures
+        ++ duplicateFailures
+        ++ managedByFailures
+        ++ selectorConsistencyFailures;
     in
-    if failures == [ ] then
+    if allFailures == [ ] then
       true
     else
-      throw "validateManifestSet(${clusterName}): ${lib.concatStringsSep "; " failures}";
+      throw "validateManifestSet(${clusterName}):\n${
+        lib.concatMapStringsSep "\n" (f: "  - ${f}") allFailures
+      }";
 
 }

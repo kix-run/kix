@@ -162,21 +162,15 @@
             '';
           }) clusters;
 
-          clusterChecks = lib.concatMapAttrs (
-            cname: cluster:
-            let
-              manifests = kixChecks.manifestMap cluster.rawManifests;
-            in
-            {
-              "schema-cluster-${cname}" = kixChecks.schemaCheck "cluster-${cname}" (mkAnnotatedManifests cluster);
-              "validate-cluster-${cname}" =
-                assert kixChecks.validateManifestSet "cluster-${cname}" manifests;
-                pkgs.runCommand "validate-cluster-${cname}" { } ''
-                  echo "Cross-resource validation passed for cluster-${cname}."
-                  touch $out
-                '';
-            }
-          ) clusters;
+          clusterChecks = lib.concatMapAttrs (cname: cluster: {
+            "schema-cluster-${cname}" = kixChecks.schemaCheck "cluster-${cname}" (mkAnnotatedManifests cluster);
+            "validate-cluster-${cname}" =
+              assert kixChecks.validateManifestSet "cluster-${cname}" cluster.rawManifests;
+              pkgs.runCommand "validate-cluster-${cname}" { } ''
+                echo "Cross-resource validation passed for cluster-${cname}."
+                touch $out
+              '';
+          }) clusters;
 
         in
         {
