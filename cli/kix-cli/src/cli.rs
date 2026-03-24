@@ -79,6 +79,22 @@ pub enum Command {
     Completions(CompletionsArgs),
 }
 
+impl Command {
+    /// Extract the cluster name from commands that take one, for early validation.
+    pub fn cluster_name(&self) -> Option<&str> {
+        match self {
+            Command::Build(a) => Some(&a.cluster),
+            Command::Diff(a) => Some(&a.cluster),
+            Command::Check(a) => Some(&a.cluster),
+            Command::Deploy(a) => Some(&a.cluster),
+            Command::Status(a) => Some(&a.cluster),
+            Command::Graph(a) => Some(&a.cluster),
+            Command::Inspect(a) => Some(&a.cluster),
+            Command::Snapshot(_) | Command::List(_) | Command::Completions(_) => None,
+        }
+    }
+}
+
 #[derive(clap::Args)]
 pub struct BuildArgs {
     /// Cluster name

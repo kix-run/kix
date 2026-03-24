@@ -5,6 +5,22 @@ mod output;
 use clap::Parser;
 use cli::{Cli, Command};
 
+/// Validate that a cluster name is a valid Nix attribute identifier.
+/// Rejects file paths, dots, slashes — anything that isn't alphanumeric/hyphens/underscores.
+fn validate_cluster_name(name: &str) -> miette::Result<()> {
+    if name.is_empty()
+        || !name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(miette::miette!(
+            "'{}' is not a valid cluster name. Use a name like 'example' or 'nw1', not a file path.",
+            name
+        ));
+    }
+    Ok(())
+}
+
 fn main() -> miette::Result<()> {
     miette::set_hook(Box::new(|_| {
         Box::new(miette::MietteHandlerOpts::new().build())
@@ -16,6 +32,11 @@ fn main() -> miette::Result<()> {
     // Completions doesn't need a CommandContext (no evaluator, no runtime)
     if let Command::Completions(args) = &cli.command {
         return commands::completions::run(args, &cli.global);
+    }
+
+    // Validate cluster names before initializing the Nix backend (which is slow).
+    if let Some(name) = cli.command.cluster_name() {
+        validate_cluster_name(name)?;
     }
 
     let mut ctx = commands::CommandContext::new(&cli.global)?;

@@ -102,7 +102,8 @@ impl FfiNixBackend {
         gc_register_current_thread().map_err(KixEvalError::init)?;
 
         // Enable flakes
-        settings::set("experimental-features", "flakes nix-command pipe-operators").map_err(KixEvalError::init)?;
+        settings::set("experimental-features", "flakes nix-command pipe-operators")
+            .map_err(KixEvalError::init)?;
 
         let flake_settings = FlakeSettings::new().map_err(KixEvalError::init)?;
         let fetchers_settings = FetchersSettings::new().map_err(KixEvalError::init)?;
@@ -128,6 +129,26 @@ impl FfiNixBackend {
     // NOTE: eval_flake via FlakeReference API is available for future use
     // when we want to avoid eval_from_string. For now, eval_from_string with
     // builtins.getFlake is simpler and handles the flake-parts output structure.
+
+    /// Classify a Nix evaluation error as either ClusterNotFound or a generic eval error.
+    fn classify_eval_error(
+        e: impl Into<anyhow::Error>,
+        flake: &str,
+        cluster_name: &str,
+    ) -> KixEvalError {
+        let err = e.into();
+        let msg = format!("{}", err);
+        // Nix attribute-missing errors contain "missing" or the attribute name
+        // with "does not exist" / "not found" depending on the Nix version.
+        if msg.contains("missing attribute")
+            || msg.contains("does not exist")
+            || (msg.contains(cluster_name) && msg.contains("not found"))
+        {
+            KixEvalError::not_found(cluster_name)
+        } else {
+            KixEvalError::eval(flake.to_string(), cluster_name, err)
+        }
+    }
 }
 
 impl NixBackend for FfiNixBackend {
@@ -136,6 +157,15 @@ impl NixBackend for FfiNixBackend {
         flake_path: &Path,
         cluster_name: &str,
     ) -> Result<ClusterOutput, KixEvalError> {
+        // Reject obviously invalid names before hitting Nix (which is slow).
+        // Cluster names are Nix attribute identifiers: alphanumeric, hyphens, underscores.
+        if !cluster_name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+        {
+            return Err(KixEvalError::not_found(cluster_name));
+        }
+
         let flake_str = flake_path.to_string_lossy();
 
         // Evaluate cluster rawManifests via the flake's legacyPackages output.
@@ -150,23 +180,19 @@ impl NixBackend for FfiNixBackend {
             flake_str, cluster_name
         );
 
-        // Use eval_from_string for the expression
+        // Use eval_from_string for the expression.
+        // Attribute-missing errors surface either here or during force(),
+        // so we check both for "not found" patterns.
         let json_value = self
             .eval_state
             .eval_from_string(&raw_manifests_expr, ".")
-            .map_err(|e| {
-                let msg = format!("{}", e);
-                if msg.contains("attribute") && msg.contains("missing") {
-                    KixEvalError::not_found(cluster_name)
-                } else {
-                    KixEvalError::eval(flake_str.to_string(), cluster_name, e)
-                }
-            })?;
+            .map_err(|e| Self::classify_eval_error(e, &flake_str, cluster_name))?;
 
-        // Force evaluation
+        // Force evaluation — attribute errors often surface here rather than
+        // during initial parse.
         self.eval_state
             .force(&json_value)
-            .map_err(|e| KixEvalError::eval(flake_str.to_string(), cluster_name, e))?;
+            .map_err(|e| Self::classify_eval_error(e, &flake_str, cluster_name))?;
 
         // Get the JSON string
         let json_str = self
