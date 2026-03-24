@@ -32,9 +32,24 @@ let
   };
 
   # --- RBAC DSL ---
-  inherit (scope.rbac) core group grant watch allow emit mkClusterRoleSet;
-  apps  = group "apps"  [ "deployments" "daemonsets" "statefulsets" ];
-  batch = group "batch" [ "cronjobs" "jobs" ];
+  inherit (scope.rbac)
+    core
+    group
+    grant
+    watch
+    allow
+    emit
+    mkClusterRoleSet
+    ;
+  apps = group "apps" [
+    "deployments"
+    "daemonsets"
+    "statefulsets"
+  ];
+  batch = group "batch" [
+    "cronjobs"
+    "jobs"
+  ];
 
 in
 {
@@ -84,117 +99,164 @@ in
     };
   };
 
-  build = { self, config, clusterConfig }:
-  let
-    # --- RBAC ---
-    clusterRoles = mkClusterRoleSet scope {
-      subjects = [{ kind = "ServiceAccount"; name = self.serviceAccount.out.name; namespace = scope.namespaceName; }];
-      roles = {
-        "${name}-reloader-role" = {
-          bindingName = "${name}-reloader-role-binding";
-          rules = grant [
-            ([core.secrets core.configmaps]                          |> watch)
-            ([apps.deployments apps.daemonsets apps.statefulsets]     |> allow [ "list" "get" "update" "patch" ])
-            (batch.cronjobs                                          |> allow [ "list" "get" ])
-            (batch.jobs                                              |> allow [ "create" "delete" "list" "get" ])
-            (core.events                                             |> emit)
-          ];
-        };
-      };
-    };
-
-  in {
-
-    serviceAccount = scope.mkResource {
-      apiVersion = "v1";
-      kind = "ServiceAccount";
-      name = "${name}-reloader";
-    };
-
-    # --- Deployment ---
-    deployment =
-      {
-        name = "${name}-reloader";
-        labels = reloaderExtraLabels;
-        spec = {
-          replicas = config.replicaCount;
-          revisionHistoryLimit = 2;
-          selector.matchLabels = reloaderSelectorLabels;
-          template.metadata.labels = reloaderExtraLabels;
-          template.spec = {
-            serviceAccountName = self.serviceAccount.out.name;
-            securityContext = {
-              runAsNonRoot = true;
-              runAsUser = 65534;
-              seccompProfile.type = "RuntimeDefault";
-            };
-            containers = [
-              {
-                name = containerName;
-                image = "${config.image.repository}:${config.image.tag}";
-                imagePullPolicy = config.image.pullPolicy;
-                args = lib.optional (config.logFormat != "") "--log-format=${config.logFormat}"
-                  ++ lib.optional (config.logLevel != "") "--log-level=${config.logLevel}";
-                env = [
-                  {
-                    name = "GOMAXPROCS";
-                    valueFrom.resourceFieldRef = {
-                      resource = "limits.cpu";
-                      divisor = "1";
-                    };
-                  }
-                  {
-                    name = "GOMEMLIMIT";
-                    valueFrom.resourceFieldRef = {
-                      resource = "limits.memory";
-                      divisor = "1";
-                    };
-                  }
-                ];
-                ports = [
-                  (kix.port "http" 9090)
-                ];
-                livenessProbe = {
-                  httpGet = {
-                    path = "/live";
-                    port = "http";
-                  };
-                  initialDelaySeconds = 10;
-                  periodSeconds = 10;
-                  timeoutSeconds = 5;
-                  failureThreshold = 5;
-                  successThreshold = 1;
-                };
-                readinessProbe = {
-                  httpGet = {
-                    path = "/metrics";
-                    port = "http";
-                  };
-                  initialDelaySeconds = 10;
-                  periodSeconds = 10;
-                  timeoutSeconds = 5;
-                  failureThreshold = 5;
-                  successThreshold = 1;
-                };
-                resources = config.resources;
-                securityContext = { };
-              }
+  build =
+    {
+      self,
+      config,
+      clusterConfig,
+    }:
+    let
+      # --- RBAC ---
+      clusterRoles = mkClusterRoleSet scope {
+        subjects = [
+          {
+            kind = "ServiceAccount";
+            name = self.serviceAccount.out.name;
+            namespace = scope.namespaceName;
+          }
+        ];
+        roles = {
+          "${name}-reloader-role" = {
+            bindingName = "${name}-reloader-role-binding";
+            rules = grant [
+              (
+                [
+                  core.secrets
+                  core.configmaps
+                ]
+                |> watch
+              )
+              (
+                [
+                  apps.deployments
+                  apps.daemonsets
+                  apps.statefulsets
+                ]
+                |> allow [
+                  "list"
+                  "get"
+                  "update"
+                  "patch"
+                ]
+              )
+              (
+                batch.cronjobs
+                |> allow [
+                  "list"
+                  "get"
+                ]
+              )
+              (
+                batch.jobs
+                |> allow [
+                  "create"
+                  "delete"
+                  "list"
+                  "get"
+                ]
+              )
+              (core.events |> emit)
             ];
-          } // lib.optionalAttrs (config.priorityClassName != null) {
-            priorityClassName = config.priorityClassName;
           };
         };
-      }
-      |> scope.mkDeployment;
+      };
 
-    # --- Service (optional, metrics) ---
-    service =
-      if config.service.enabled then
-        self.deployment |> kix.service.fromWorkload { name = "${name}-reloader"; } |> scope.mkResource
-      else
-        null;
+    in
+    {
 
-    # --- Entry point ---
-    main = self.deployment;
-  } // clusterRoles;
+      serviceAccount = scope.mkResource {
+        apiVersion = "v1";
+        kind = "ServiceAccount";
+        name = "${name}-reloader";
+      };
+
+      # --- Deployment ---
+      deployment =
+        {
+          name = "${name}-reloader";
+          labels = reloaderExtraLabels;
+          spec = {
+            replicas = config.replicaCount;
+            revisionHistoryLimit = 2;
+            selector.matchLabels = reloaderSelectorLabels;
+            template.metadata.labels = reloaderSelectorLabels // reloaderExtraLabels;
+            template.spec = {
+              serviceAccountName = self.serviceAccount.out.name;
+              securityContext = {
+                runAsNonRoot = true;
+                runAsUser = 65534;
+                seccompProfile.type = "RuntimeDefault";
+              };
+              containers = [
+                {
+                  name = containerName;
+                  image = "${config.image.repository}:${config.image.tag}";
+                  imagePullPolicy = config.image.pullPolicy;
+                  args =
+                    lib.optional (config.logFormat != "") "--log-format=${config.logFormat}"
+                    ++ lib.optional (config.logLevel != "") "--log-level=${config.logLevel}";
+                  env = [
+                    {
+                      name = "GOMAXPROCS";
+                      valueFrom.resourceFieldRef = {
+                        resource = "limits.cpu";
+                        divisor = "1";
+                      };
+                    }
+                    {
+                      name = "GOMEMLIMIT";
+                      valueFrom.resourceFieldRef = {
+                        resource = "limits.memory";
+                        divisor = "1";
+                      };
+                    }
+                  ];
+                  ports = [
+                    (kix.port "http" 9090)
+                  ];
+                  livenessProbe = {
+                    httpGet = {
+                      path = "/live";
+                      port = "http";
+                    };
+                    initialDelaySeconds = 10;
+                    periodSeconds = 10;
+                    timeoutSeconds = 5;
+                    failureThreshold = 5;
+                    successThreshold = 1;
+                  };
+                  readinessProbe = {
+                    httpGet = {
+                      path = "/metrics";
+                      port = "http";
+                    };
+                    initialDelaySeconds = 10;
+                    periodSeconds = 10;
+                    timeoutSeconds = 5;
+                    failureThreshold = 5;
+                    successThreshold = 1;
+                  };
+                  resources = config.resources;
+                  securityContext = { };
+                }
+              ];
+            }
+            // lib.optionalAttrs (config.priorityClassName != null) {
+              priorityClassName = config.priorityClassName;
+            };
+          };
+        }
+        |> scope.mkDeployment;
+
+      # --- Service (optional, metrics) ---
+      service =
+        if config.service.enabled then
+          self.deployment |> kix.service.fromWorkload { name = "${name}-reloader"; } |> scope.mkResource
+        else
+          null;
+
+      # --- Entry point ---
+      main = self.deployment;
+    }
+    // clusterRoles;
 }
