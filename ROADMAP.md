@@ -11,23 +11,31 @@
 - [x] Helm integration (fetchHelmChart, fromHelmChart, wrapHelmResource)
 - [x] Content-hash and identity-hash annotations on resources
 - [x] depends-on annotation derived from context
-- [ ] @luca Post-eval validation — catch errors at build time, not deploy time
+- [x] @luca Post-eval validation — catch errors at build time, not deploy time
+  - Cross-namespace scope validation (`meta.scope = "namespace"` prevents cross-ns DI)
+  - Consumer-side dependency validation (immich validates postgres has pgvecto.rs extension via `postgres.out.extensionNames`, warns on undersized PVCs)
+  - Redundant/duplicate requires detection, orphaned resource detection
+  - [ ] General validation framework — package-declared requirements on dependencies (beyond ad-hoc checks)
 - [ ] @luca Auto-inject dependencies (e.g. valkey for immich) — the "just make it run" experience where pulling in an app auto-enables what it needs
-  - **DI-driven defaults**: optional DI deps should drive behavior — if `ingressNginx` is injected, create an ingress (no `enabled` flag needed); if `clusterIssuer` is injected, auto-enable TLS; if prometheus exists, auto-enable metrics. Package options should NOT duplicate what DI already expresses (e.g. `ingress.className` is redundant with `ingressNginx.out.ingressClassName`). Cluster-level config like `cluster.domain` should provide sensible defaults (e.g. `host = "${instanceName}.${cluster.domain}"`), overridable per instance. Goal: a bare `immich = { package = packages.immich; }` with the right deps injected yields a fully working deployment with ingress + TLS — zero config.
+  - [x] **DI resolution**: explicit override → same-namespace match → cluster-wide match → Nix default → error. Aliases supported. This resolves against *existing* instances in the cluster.
+  - [x] **DI-driven defaults** (immich): ingressNginx injected → auto-create ingress (no `enabled` flag); clusterIssuer injected → auto-enable TLS. className derived from `ingressNginx.out.ingressClassName`. TLS secret name auto-derived.
+  - [ ] **DI-driven defaults** (remaining): apply pattern to more packages. Prometheus auto-enable metrics when injected. Cluster-level `cluster.domain` should provide sensible host defaults (e.g. `host = "${instanceName}.${cluster.domain}"`), overridable per instance.
+  - [ ] **Auto-instantiation from default package set**: the core missing piece. A cluster-level registry of default packages (e.g. `defaults.valkey = packages.valkey;`) so that when a package declares `valkey` as a hard dep and no instance exists, the system auto-creates one from the default. This is what makes `immich = { package = packages.immich; }` fully zero-config — no one has to manually define a valkey instance. Resolution order: (1) match concrete instance in cluster, (2) fall back to alias, (3) auto-instantiate from default package set.
   - (pot nonsense:) Two-tier model: auto-enable if a dependency exists in the cluster; explicit enable triggers full transitive pull-in of everything needed
-  - Packages can declare **default aliases** alongside their options and builders (e.g. cert-manager aliases `clusterissuer`), so dependencies can resolve against general capabilities, not just package names
-  - The available package list for auto-resolution must live under a **dedicated config path** to control what the resolver can pull from
-  - **Resolution order** (fixpoint): (1) match concrete instance already defined in the cluster, (2) if not found, pull in the package by name, (3) only then fall back to alias lookup — explicit always beats alias
+  - [ ] Packages can declare **default aliases** alongside their options and builders (e.g. cert-manager aliases `clusterissuer`), so dependencies can resolve against general capabilities, not just package names — currently aliases are set in cluster definitions, not package definitions
+  - [ ] The available package list for auto-resolution must live under a **dedicated config path** to control what the resolver can pull from
 - [x] v2_discussions/11 → injecting storage, certs, and other infra items from the cluster graph (different package types?)
   - Storage DI: PVCs are first-class instances in the cluster definition (packages/persistent-volume-claim). storage-classes exposes `out.storageClassName`. Consuming packages (e.g. immich) take `storage` as a hard DI dep, mount via `storage.out.name`. Package `meta` (lifecycle, scope) enables cross-namespace validation and kix-diff protection.
-- [ ] Use "already existing" cluster elements (e.g. "this secret already exists in the cluster") — kix deploy should verify
+- [x] Use "already existing" cluster elements — `kix.mkImport { from = package; }` evaluates packages in import mode (lightweight `mkImportResource`, no store paths) to derive `out` properties for DI resolution. Deployed as a marker PackageInstance CR only.
+  - [ ] kix deploy should verify imported resources actually exist in the live cluster
 - [ ] Default metadata scoping — which resources should global metadata apply to? Not higher-order resources like Deployments/Services, but what about CRDs?
 - [ ] Non-manifest side effects — namespace creation, secrets, and images all require API calls outside pure manifest generation; needs a clear model
 - [ ] "Wire" vs "compose" coherence — sharing selectors by reference can copy wrong state if labels are accessed; post-processing breaks composition. Needs a principled solution
 - [ ] Higher-level abstractions must "imprint" on resources — all relevant information from higher-level logic should be visible on the underlying K8s resource for auditability and tooling
 - [ ] Dynamic duplicate dependencies — the same resource (e.g. a second CoreDNS) can be pulled in twice; deduplication is the consumer's responsibility, not the creator's
 - [ ] mkManifest pre-creation hook as escape hatch — global function hook for raw access to any resource before it becomes a manifest
-- [ ] CRDs, creation, management, verification, import
+- [x] CRDs, creation and basic usage — `mkCRDRef` creates CRD references with auto-generated `mkCR` builders; used by cert-manager, stackgres, monitoring packages
+  - [ ] CRD schema management, verification against live cluster, and import from existing CRD definitions
 
 ### Validation
 
@@ -73,7 +81,7 @@
 
 - [x] Misuse of `requires` detection
 - [x] Missing resources in graph detection
-- [ ] Build-time error on illegal configurations (demo: show an illegal action failing at eval time)
+- [x] Build-time error on illegal configurations — immich throws at eval time if postgres is missing required pgvecto.rs extension (`postgres.out.extensionNames`). Infra packages expose validated metadata via `main.out` for consumer-side checks.
 - [ ] Compatibility checks on packages (incompatible k8s version, incompatible with prometheus < 4.5.23, etc.)
 - [ ] Sanity checks on namespace resource quotas and similar
 - [x] Stateful resource discovery — package `meta.lifecycle = "stateful"` flags stateful packages; `meta.scope = "namespace"` prevents cross-namespace DI for namespace-bound resources (PVCs). Consumer-side validation (e.g. immich warns if PVC < 50Gi) via `builtins.trace` in build.
@@ -90,7 +98,7 @@
 - [ ] HPA as dependency / composition — auto-wires scaling to the right target
 - [ ] Pipe-friendly resource composition — `binary |> as deployment |> expose { port = 9090; }` — kix as *the* platform engineering language, replacing the wild west of ansible/helm/scripts
 - [ ] Builder/transformer placement — should package builders (`withCert`, `mkCertificate`) live on `out` (via `main.out`) or on parts directly? Current: `main.out` for DI-visible transforms, parts for package-internal helpers like `mkCertificate`. Storage uses plain values (`out.storageClassName`) rather than transformers. Needs a clear convention as more infra packages expose builders
-- [ ] Remove `outputs` design — custom `outputs` on `mkResource` is a bolted-on escape hatch; port, fqdn, and other DI-visible values should be auto-derived or come from a richer `out` model, not manual string declarations per resource
+- [ ] Remove `outputs` design — custom `outputs` on `mkResource` is a bolted-on escape hatch; port, fqdn, and other DI-visible values should be auto-derived or come from a richer `out` model, not manual string declarations per resource. `main.out` (package-level out) partially addresses this — it allows complex types (lists, functions) beyond stringified resource outputs (e.g. stackgres-cluster exposes `out.extensionNames` as a list, cluster-issuers exposes `out.withCert` as a function). But per-resource `outputs` still exists for simple string values like port.
 - [ ] Port wiring logic — carry port information up through container → pod → service → ingress; prevent wiring things that don't have a route
 - [ ] Functional composition as correctness — "this service wraps this app, this HPA wraps this app, you figure out the rest"; correct wiring emerges from composition, not from template deduplication
 - [ ] Image convention — `"${config.image.repository}:${config.image.tag}"` + `imagePullPolicy` is repeated in every package. Standardize as a single option (full image string or structured with a helper) so packages don't each reinvent image construction
@@ -186,7 +194,7 @@
 
 ## Case studies & documentation
 
-- [ ] @luca Immich (from simple to full)
+- [ ] @luca Immich (from simple to full) — package is functional with DI-driven ingress/TLS, extension validation, storage validation, ML worker, metrics. Cluster definitions exist for ludo (homelab) and example. Remaining: document the progression from bare minimum to full production config, auto-derive host from `cluster.domain`.
 - [ ] How-to case studies for simple cases
 - [ ] Create skill/guide for proper package creation
 - [ ] Naming conventions for packages, services, resources, etc.
