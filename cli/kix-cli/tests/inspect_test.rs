@@ -4,6 +4,12 @@ use predicates::prelude::*;
 fn kix() -> Command {
     let mut cmd = Command::cargo_bin("kix").unwrap();
     cmd.env("NO_COLOR", "true");
+    let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    cmd.current_dir(repo_root);
     cmd
 }
 
