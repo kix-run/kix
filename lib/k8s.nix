@@ -262,6 +262,7 @@ rec {
       inverseDeps ? [ ],
       version ? null,
       labels ? { },
+      extraAnnotations ? { },
     }:
     mkResource {
       apiVersion = "kix.dev/v1alpha1";
@@ -280,7 +281,8 @@ rec {
         "kix.dev/package-requires" = builtins.concatStringsSep "," (
           map (r: "${r.kind}/${r.out.name}") packageRequires
         );
-      };
+      }
+      // extraAnnotations;
       extra.spec = {
         inherit instanceName namespaceName;
       }

@@ -91,11 +91,43 @@
                   or Helm naming convention.
                 '';
               };
+              optional = lib.mkOption {
+                type = lib.types.bool;
+                default = false;
+                description = ''
+                  Dormant instance — included in DI resolution but only deployed
+                  if a non-optional instance transitively depends on it.
+                  Lets cluster operators pre-configure instances with full control.
+                '';
+              };
             };
           }
         )
       );
       default = { };
+    };
+
+    availablePackages = lib.mkOption {
+      type = lib.types.attrsOf lib.types.raw;
+      default = { };
+      description = ''
+        Package registry for auto-instantiation. Accepts either raw package
+        functions or attrsets { package, namespace?, aliases? }.
+        When DI resolution fails for a required dep, the system checks this
+        registry and auto-creates an instance with default config.
+        Nice DX: availablePackages = packages;
+      '';
+    };
+
+    autoNamespace = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        Default namespace for auto-instantiated packages.
+        null = co-locate with the requesting package's namespace.
+        A string = place all auto-instances in this namespace.
+        Per-package namespace overrides this.
+      '';
     };
 
     namespaces = lib.mkOption {

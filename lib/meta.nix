@@ -74,7 +74,7 @@ let
   };
 
 in
-{
+rec {
   inherit versionAtLeast versionAtMost compareVersions;
 
   # ---------------------------------------------------------------------------
@@ -120,6 +120,23 @@ in
   effectiveAliases =
     { instanceAliases, packageMeta }:
     if instanceAliases != [ ] then instanceAliases else packageMeta.defaultAliases or [ ];
+
+  # ---------------------------------------------------------------------------
+  # peekPackageAliases — extract resolution aliases from an available package
+  # entry, combining explicit aliases with peekPackageMeta-derived defaults.
+  # Works even for packages with required deps (falls back to explicit aliases).
+  # ---------------------------------------------------------------------------
+  peekPackageAliases =
+    { availEntry, kixlib }:
+    let
+      explicitAliases = availEntry.aliases or [ ];
+      metaAliases =
+        (peekPackageMeta {
+          package = availEntry.package;
+          inherit kixlib;
+        }).defaultAliases or [ ];
+    in
+    lib.unique (explicitAliases ++ metaAliases);
 
   # ---------------------------------------------------------------------------
   # checkMetaStatic — meta-derived assertions and warnings (before build).

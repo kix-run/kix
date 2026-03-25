@@ -99,6 +99,10 @@
               inherit kix;
               packages = packages';
             };
+            auto = import ./clusters/test-auto.nix {
+              inherit kix;
+              packages = packages';
+            };
           };
 
           # --- Pipeline derivation builders ---
