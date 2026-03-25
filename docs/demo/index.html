@@ -93,7 +93,10 @@
   <h2>Start with <em>a single resource</em></h2>
   <p class="lead">
     A Deployment in YAML. Then the same thing in kix.
-    Same fields, same structure. No new concepts to learn &mdash; just a different syntax.
+    Nix is just JSON with different punctuation: <code>=</code> instead of <code>:</code>,
+    <code>;</code> instead of <code>,</code>, unquoted keys. Same fields, same structure.
+    No new concepts to learn &mdash; just a slightly different syntax.
+    <a href="from-yaml-to-nix.html" style="color:var(--a)">Full syntax guide &rarr;</a>
   </p>
 
   <div class="split">
@@ -154,6 +157,10 @@ spec:
 
   <div class="call a">
     <strong>Nothing magical yet.</strong> Same fields. Same structure. But now it's data inside a programming language &mdash; not a text template.
+    <br><br>
+    <strong>Already have YAML/JSON files?</strong> Nix imports them natively with
+    <code>builtins.fromJSON</code> and <code>builtins.fromYAML</code>.
+    Migrate at your own pace. <a href="from-yaml-to-nix.html" style="color:var(--a)">See how &rarr;</a>
   </div>
 </div>
 
