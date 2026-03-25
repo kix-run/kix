@@ -26,6 +26,10 @@
 #   };
 
 {
+  meta = {
+    version = "6.46.0";
+  };
+
   chart = {
     repo = "https://grafana.github.io/helm-charts";
     name = "loki";

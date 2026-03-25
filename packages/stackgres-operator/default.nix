@@ -148,6 +148,10 @@ let
 
 in
 {
+  meta = {
+    version = "1.16.3";
+  };
+
   options = {
     operator.image.repository = lib.mkOption {
       type = lib.types.str;

@@ -34,6 +34,7 @@ let
 in
 {
   meta = {
+    version = "v2.0.0";
     description = "Immich — self-hosted photo management";
     provides = [
       "photo-management"

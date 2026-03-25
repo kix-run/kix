@@ -39,6 +39,7 @@ let
 in
 {
   meta = {
+    version = "v1.13.2";
     description = "NGINX Ingress Controller for Kubernetes";
     provides = [
       "ingress"

@@ -31,6 +31,7 @@
       "redis"
     ];
     k8s.minVersion = "1.25";
+    version = "8.1.1";
   };
 
   options = {

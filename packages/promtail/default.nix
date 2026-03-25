@@ -26,6 +26,10 @@
 #   };
 
 {
+  meta = {
+    version = "6.17.1";
+  };
+
   chart = {
     repo = "https://grafana.github.io/helm-charts";
     name = "promtail";

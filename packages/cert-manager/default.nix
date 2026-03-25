@@ -22,6 +22,7 @@
 
 {
   meta = {
+    version = "v1.17.1";
     description = "cert-manager — X.509 certificate management for Kubernetes";
     provides = [
       "certificates"

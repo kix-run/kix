@@ -25,6 +25,10 @@
 #   };
 
 {
+  meta = {
+    version = "0.32.2";
+  };
+
   chart = {
     repo = "https://kubernetes-sigs.github.io/descheduler";
     name = "descheduler";

@@ -27,6 +27,10 @@
 #   };
 
 {
+  meta = {
+    version = "71.2.0";
+  };
+
   chart = {
     repo = "https://prometheus-community.github.io/helm-charts";
     name = "kube-prometheus-stack";

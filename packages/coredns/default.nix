@@ -27,6 +27,10 @@ let
 
 in
 {
+  meta = {
+    version = "1.13.1";
+  };
+
   options = {
     image = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;

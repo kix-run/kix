@@ -26,6 +26,10 @@
 #   };
 
 {
+  meta = {
+    version = "0.16.0";
+  };
+
   chart = {
     repo = "https://prometheus-community.github.io/helm-charts";
     name = "prometheus-smartctl-exporter";

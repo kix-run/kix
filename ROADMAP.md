@@ -38,6 +38,7 @@
   - [ ] CRD schema management, verification against live cluster, and import from existing CRD definitions
 - [ ] auto-sealing of resources? => evaluator turns every attrset that has a "kind" attribute into a resource on first pass of the fixpoint
 - [ ] aliases and meta could be on the packages options maybe? => allows default aliases to just be a mkDefault
+- [ ] smarter store paths. Nixos puts the package version into the storepath hash-name-version. This helps a lot with diffing fast.
 
 ### Validation
 

@@ -31,6 +31,10 @@ let
 
 in
 {
+  meta = {
+    version = "v1.62.0";
+  };
+
   options = {
     image = lib.mkOption {
       type = lib.types.anything;

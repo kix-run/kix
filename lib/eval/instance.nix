@@ -334,7 +334,11 @@ in
           mainResource = mainRes;
           inherit packageRequires;
           inherit inverseDeps;
-          version = instCfg.version or null;
+          version =
+            let
+              v = instCfg.version or null;
+            in
+            if v != null then v else packageMeta.version or null;
           labels = clusterLabels // {
             "app.kubernetes.io/instance" = instanceName;
             "app.kubernetes.io/managed-by" = "kix";

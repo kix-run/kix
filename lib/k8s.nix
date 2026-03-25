@@ -264,6 +264,13 @@ rec {
       labels ? { },
       extraAnnotations ? { },
     }:
+    let
+      resolvedVersion =
+        if version == null then
+          builtins.trace "warning: package ${instanceName} has no version set" "<undefined>"
+        else
+          version;
+    in
     mkResource {
       apiVersion = "kix.dev/v1alpha1";
       kind = "PackageInstance";
@@ -285,8 +292,8 @@ rec {
       // extraAnnotations;
       extra.spec = {
         inherit instanceName namespaceName;
-      }
-      // lib.optionalAttrs (version != null) { inherit version; };
+        version = resolvedVersion;
+      };
     };
 
   # Resolve a resource's namespace to a string key.

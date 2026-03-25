@@ -103,6 +103,10 @@ let
 
 in
 {
+  meta = {
+    version = "v2.8.0";
+  };
+
   options = {
     mayastor = lib.mkOption {
       type = lib.types.anything;

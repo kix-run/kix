@@ -35,6 +35,10 @@ let
   name = scope.instanceName;
 in
 {
+  meta = {
+    version = "v2.12.2";
+  };
+
   options = {
     externalURL = lib.mkOption {
       type = lib.types.str;

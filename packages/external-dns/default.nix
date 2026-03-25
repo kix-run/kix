@@ -19,6 +19,10 @@
 }:
 
 {
+  meta = {
+    version = "0.16.1";
+  };
+
   options = {
     image = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;

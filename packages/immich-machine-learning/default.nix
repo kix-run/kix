@@ -18,6 +18,10 @@ let
   name = scope.instanceName;
 in
 {
+  meta = {
+    version = "v2.0.0";
+  };
+
   options = {
     image = lib.mkOption {
       type = lib.types.anything;
