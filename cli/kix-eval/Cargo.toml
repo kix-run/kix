@@ -14,6 +14,7 @@ rusqlite.workspace = true
 blake3.workspace = true
 directories.workspace = true
 tracing.workspace = true
+indexmap.workspace = true
 
 # Nix FFI bindings (optional, enabled via nix-ffi feature)
 nix-bindings-expr = { workspace = true, optional = true }

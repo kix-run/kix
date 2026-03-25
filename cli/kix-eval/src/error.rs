@@ -41,6 +41,9 @@ pub enum KixEvalError {
         #[source]
         source: anyhow::Error,
     },
+
+    #[error("store graph error: {message}")]
+    StoreGraphError { message: String },
 }
 
 impl KixEvalError {

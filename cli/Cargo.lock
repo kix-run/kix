@@ -1333,6 +1333,7 @@ dependencies = [
  "anyhow",
  "blake3",
  "directories",
+ "indexmap",
  "nix-bindings-expr",
  "nix-bindings-fetchers",
  "nix-bindings-flake",
@@ -1352,6 +1353,7 @@ version = "0.1.0"
 dependencies = [
  "indexmap",
  "insta",
+ "kix-eval",
  "owo-colors",
  "rayon",
  "serde",

@@ -9,7 +9,6 @@ use kix_manifest::diff::display::format_diffs;
 use kix_manifest::diff::engine::structural_diff;
 use kix_manifest::diff::rename::find_renames;
 use kix_manifest::diff::{DiffConfig, Difference};
-use kix_manifest::normalize;
 use kix_manifest::serialize::load_manifests_from_dir;
 use kix_manifest::types::{CLUSTER_SCOPED, ResourceId};
 
@@ -70,14 +69,13 @@ fn run_save(args: &SnapshotSaveArgs, ctx: &mut CommandContext) -> Result<()> {
             eprintln!("Fetched {} resources", objects.len());
         }
 
-        // Normalize and collect
+        // Collect resources (server-side fields already stripped by normalize_for_diff)
         let mut resources: Vec<(ResourceId, Value)> = Vec::new();
         for mut obj in objects {
             fetch::normalize_for_diff(&mut obj);
             let value = serde_json::to_value(&obj.data).into_diagnostic()?;
-            let normalized = normalize::normalize_cluster(value);
-            let id = ResourceId::from_value(&normalized);
-            resources.push((id, normalized));
+            let id = ResourceId::from_value(&value);
+            resources.push((id, value));
         }
 
         // Write to temp dir, then atomic swap
@@ -160,16 +158,8 @@ fn run_diff(args: &SnapshotDiffArgs, ctx: &mut CommandContext) -> Result<()> {
 
     let config = DiffConfig::new("kix", "cluster");
 
-    // Normalize both sides
-    let kix_map: BTreeMap<ResourceId, Value> = kix_manifests
-        .into_iter()
-        .map(|(id, v)| (id, normalize::normalize_kix(v)))
-        .collect();
-
-    let cluster_map: BTreeMap<ResourceId, Value> = cluster_manifests
-        .into_iter()
-        .map(|(id, v)| (id, normalize::normalize_cluster(v)))
-        .collect();
+    let kix_map: BTreeMap<ResourceId, Value> = kix_manifests.into_iter().collect();
+    let cluster_map: BTreeMap<ResourceId, Value> = cluster_manifests.into_iter().collect();
 
     // Diff
     let mut identical = Vec::new();

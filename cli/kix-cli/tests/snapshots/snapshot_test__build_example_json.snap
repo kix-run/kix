@@ -771,7 +771,8 @@ expression: stable
     },
     "spec": {
       "instanceName": "valkey",
-      "namespaceName": "cache"
+      "namespaceName": "cache",
+      "version": "8.1.1"
     }
   },
   {
@@ -3470,7 +3471,8 @@ expression: stable
     },
     "spec": {
       "instanceName": "cert-manager",
-      "namespaceName": "cert-manager"
+      "namespaceName": "cert-manager",
+      "version": "v1.17.1"
     }
   },
   {
@@ -3629,7 +3631,8 @@ expression: stable
     },
     "spec": {
       "instanceName": "immich",
-      "namespaceName": "immich"
+      "namespaceName": "immich",
+      "version": "v2.0.0"
     }
   },
   {
@@ -3782,7 +3785,8 @@ expression: stable
     },
     "spec": {
       "instanceName": "machineLearning",
-      "namespaceName": "immich"
+      "namespaceName": "immich",
+      "version": "v2.0.0"
     }
   },
   {
@@ -3954,7 +3958,8 @@ expression: stable
     },
     "spec": {
       "instanceName": "postgres",
-      "namespaceName": "immich"
+      "namespaceName": "immich",
+      "version": "<undefined>"
     }
   },
   {
@@ -3975,7 +3980,8 @@ expression: stable
     },
     "spec": {
       "instanceName": "storage",
-      "namespaceName": "immich"
+      "namespaceName": "immich",
+      "version": "<undefined>"
     }
   },
   {
@@ -4378,7 +4384,8 @@ expression: stable
     },
     "spec": {
       "instanceName": "coredns",
-      "namespaceName": "kube-system"
+      "namespaceName": "kube-system",
+      "version": "1.13.1"
     }
   },
   {
@@ -4476,7 +4483,8 @@ expression: stable
     },
     "spec": {
       "instanceName": "storage-classes",
-      "namespaceName": "kube-system"
+      "namespaceName": "kube-system",
+      "version": "<undefined>"
     }
   },
   {

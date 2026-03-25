@@ -193,6 +193,22 @@ in
         ) activeClusterInstances;
       };
 
+      # Package index — PI store path → owned resource store paths.
+      # Used by the Rust CLI to build the in-memory store graph.
+      # toString on store paths discards string context intentionally —
+      # we want stable path strings in the JSON, not context-carrying values.
+      packageIndex = builtins.toFile "kix-packages.json" (
+        builtins.toJSON {
+          cluster = name;
+          packages = builtins.listToAttrs (
+            map (inst: {
+              name = builtins.unsafeDiscardStringContext (toString inst._packageInstance.outPath);
+              value = map (r: builtins.unsafeDiscardStringContext (toString r.outPath)) (collectResources inst);
+            }) allInstancesList
+          );
+        }
+      );
+
       # --- Collect cluster-wide diagnostics ---
       clusterDiagnostics = meta.collectClusterDiagnostics {
         clusterName = name;
@@ -209,7 +225,7 @@ in
 
       namespaces = nsResources;
 
-      inherit activation;
+      inherit activation packageIndex;
 
       # Cluster-level diagnostics for tooling
       diagnostics = {

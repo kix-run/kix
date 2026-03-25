@@ -109,6 +109,10 @@ pub struct DiffArgs {
     /// Diff against a snapshot directory instead of the live cluster
     #[arg(long)]
     pub snapshot: Option<String>,
+
+    /// Build-to-build diff: compare against a previous activation result directory
+    #[arg(long)]
+    pub from: Option<String>,
 }
 
 #[derive(clap::Args)]

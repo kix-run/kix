@@ -38,6 +38,7 @@
 //! let evaluator = KixEvaluator::new(backend, flake_path, cache_dir)?;
 //! ```
 
+pub mod build;
 pub mod cache;
 pub mod error;
 pub mod eval;
@@ -45,10 +46,13 @@ pub mod eval;
 // NixFfiBackend exists and non-test code no longer needs the mock fallback.
 pub mod mock;
 pub mod store;
+pub mod store_graph;
 pub mod value;
 
+pub use build::{build_cluster_activation, build_cluster_activation_with_status};
 pub use error::KixEvalError;
 pub use eval::KixEvaluator;
+pub use store_graph::{CrossDep, KixPackageIndex, PackageNode, ResourceNode, StoreGraph};
 
 /// Real Nix FFI backend — available only when built with Nix C libraries.
 ///

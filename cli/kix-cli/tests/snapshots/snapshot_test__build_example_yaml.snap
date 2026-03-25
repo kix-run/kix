@@ -924,6 +924,7 @@ metadata:
 spec:
   instanceName: valkey
   namespaceName: cache
+  version: '8.1.1'
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -2778,6 +2779,7 @@ metadata:
 spec:
   instanceName: cert-manager
   namespaceName: cert-manager
+  version: v1.17.1
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -2885,6 +2887,7 @@ metadata:
 spec:
   instanceName: immich
   namespaceName: immich
+  version: v2.0.0
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -2988,6 +2991,7 @@ metadata:
 spec:
   instanceName: machineLearning
   namespaceName: immich
+  version: v2.0.0
 ---
 apiVersion: stackgres.io/v1
 kind: SGCluster
@@ -3130,6 +3134,7 @@ metadata:
 spec:
   instanceName: postgres
   namespaceName: immich
+  version: <undefined>
 ---
 apiVersion: kix.dev/v1alpha1
 kind: PackageInstance
@@ -3146,6 +3151,7 @@ metadata:
 spec:
   instanceName: storage
   namespaceName: immich
+  version: <undefined>
 ---
 apiVersion: v1
 data:
@@ -3459,6 +3465,7 @@ metadata:
 spec:
   instanceName: coredns
   namespaceName: kube-system
+  version: '1.13.1'
 ---
 allowVolumeExpansion: true
 apiVersion: storage.k8s.io/v1
@@ -3539,6 +3546,7 @@ metadata:
 spec:
   instanceName: storage-classes
   namespaceName: kube-system
+  version: <undefined>
 ---
 apiVersion: v1
 kind: Namespace

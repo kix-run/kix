@@ -170,6 +170,7 @@
             "cluster-${cname}-activation" = pkgs.runCommand "k8s-activation-${cluster.name}" { } ''
               mkdir -p $out
               ln -s ${cluster.activation} $out/activation
+              ln -s ${cluster.packageIndex} $out/kix-packages.json
             '';
           }) clusters;
 
