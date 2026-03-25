@@ -117,7 +117,10 @@ fn diff_json_output() {
         "should have resources field"
     );
     assert!(
-        !parsed["resources"]["kix_only"].as_array().unwrap().is_empty(),
+        !parsed["resources"]["kix_only"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
         "should report kix-only resources"
     );
 }
