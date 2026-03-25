@@ -21,6 +21,16 @@
 }:
 
 {
+  meta = {
+    description = "cert-manager — X.509 certificate management for Kubernetes";
+    provides = [
+      "certificates"
+      "tls"
+    ];
+    defaultAliases = [ "certManager" ];
+    k8s.minVersion = "1.25";
+  };
+
   options = {
     image = lib.mkOption {
       type = lib.types.anything;

@@ -38,6 +38,16 @@ let
 
 in
 {
+  meta = {
+    description = "NGINX Ingress Controller for Kubernetes";
+    provides = [
+      "ingress"
+      "ingress-controller"
+    ];
+    defaultAliases = [ "ingressNginx" ];
+    k8s.minVersion = "1.25";
+  };
+
   options = {
     # Override the resource name prefix. Defaults to the instance name.
     namePrefix = lib.mkOption {

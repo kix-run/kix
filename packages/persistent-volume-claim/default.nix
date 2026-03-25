@@ -18,9 +18,11 @@
 
 {
   meta = {
+    description = "Persistent Volume Claim — operator-managed storage";
     lifecycle = "stateful";
     scope = "namespace";
-    description = "Persistent Volume Claim — operator-managed storage";
+    provides = [ "storage" ];
+    defaultAliases = [ "storage" ];
   };
 
   options = {

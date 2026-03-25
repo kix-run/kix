@@ -36,6 +36,8 @@
 - [ ] mkManifest pre-creation hook as escape hatch — global function hook for raw access to any resource before it becomes a manifest
 - [x] CRDs, creation and basic usage — `mkCRDRef` creates CRD references with auto-generated `mkCR` builders; used by cert-manager, stackgres, monitoring packages
   - [ ] CRD schema management, verification against live cluster, and import from existing CRD definitions
+- [ ] auto-sealing of resources? => evaluator turns every attrset that has a "kind" attribute into a resource on first pass of the fixpoint
+- [ ] aliases and meta could be on the packages options maybe? => allows default aliases to just be a mkDefault
 
 ### Validation
 
@@ -88,6 +90,7 @@
 - [ ] Compatibility matrix — four distinct failure phases: build, deploy, health, application. Need to know *when* things will fail, not just *if*
 - [ ] Encodable "known issues" — broken side effects should be expressible in code so a problem can't recur; capturing institutional knowledge about failure modes directly in the DSL
 - [ ] Templating parity — ensure the DSL can express everything a Helm template can, as a migration enabler
+- [ ] allow a resource to be defined as `self.deployment = moved { new attr name, message }` to inform a consumer of changes. We could have more and more advanced of these.
 
 ## DSL improvements
 

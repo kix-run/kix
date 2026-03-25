@@ -19,6 +19,20 @@
 }:
 
 {
+  meta = {
+    description = "Valkey — Redis-compatible in-memory data store";
+    lifecycle = "stateful";
+    provides = [
+      "cache"
+      "key-value-store"
+    ];
+    defaultAliases = [
+      "valkey"
+      "redis"
+    ];
+    k8s.minVersion = "1.25";
+  };
+
   options = {
     image = lib.mkOption {
       type = lib.types.anything;

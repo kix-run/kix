@@ -142,5 +142,14 @@
         _kixOptions defaults that reference them.
       '';
     };
+
+    k8sVersion = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        Target Kubernetes version (e.g. "1.30"). Used by package meta
+        compatibility checks (meta.k8s.minVersion / maxVersion).
+      '';
+    };
   };
 }

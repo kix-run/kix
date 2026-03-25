@@ -17,6 +17,8 @@ let
 
   rbac = import ./rbac.nix { inherit lib; };
   kixlib = import ./compose.nix { inherit lib; };
+  meta = import ./meta.nix { inherit lib; };
+
 in
 
 rec {
@@ -721,7 +723,7 @@ rec {
           instName:
           let
             meta = staticMeta.${ns}.${instName}._meta;
-            keys = [ instName ] ++ (meta.aliases or [ ]);
+            keys = lib.unique ([ instName ] ++ (meta.aliases or [ ]));
           in
           map (key: {
             inherit key;
@@ -969,47 +971,67 @@ rec {
         # Package-declared metadata (lifecycle, scope, etc.)
         packageMeta = raw.meta or { };
 
-        # Cross-namespace scope validation: if a dependency declares
-        # meta.scope = "namespace", it cannot be referenced cross-namespace
-        # (e.g. PVCs must be in the same namespace as the consuming pod).
+        # --- Resolved dependency info (for validation) ---
+        fnArgs = builtins.functionArgs instCfg.package;
+        depArgNames = builtins.attrNames (
+          removeAttrs fnArgs [
+            "scope"
+            "lib"
+            "kix"
+          ]
+        );
+        deps = instCfg.deps or { };
+
+        # Resolve dep metadata for cross-checks
+        resolvedDepMeta = builtins.foldl' (
+          acc: argName:
+          let
+            resolution = resolveArg {
+              inherit argName resolutionIndex;
+              requesterNamespace = namespaceName;
+              hasDefault = fnArgs.${argName} or false;
+              explicitOverride = deps.${argName} or null;
+            };
+          in
+          if resolution.found && !(resolution.direct or false) then
+            acc
+            // {
+              ${argName} = {
+                inherit resolution;
+                instance = allInstances.${resolution.namespace}.${resolution.instanceName};
+              };
+            }
+          else
+            acc
+        ) { } depArgNames;
+
+        # --- Cross-namespace scope validation ---
         _crossNsCheck =
           let
-            fnArgs = builtins.functionArgs instCfg.package;
-            depArgNames = builtins.attrNames (
-              removeAttrs fnArgs [
-                "scope"
-                "lib"
-                "kix"
-              ]
-            );
-            deps = instCfg.deps or { };
-          in
-          builtins.foldl' (
-            acc: argName:
-            let
-              resolution = resolveArg {
-                inherit argName resolutionIndex;
-                requesterNamespace = namespaceName;
-                hasDefault = fnArgs.${argName} or false;
-                explicitOverride = deps.${argName} or null;
-              };
-            in
-            if
-              resolution.found
-              && !(resolution.direct or false)
-              && (resolution.namespace or namespaceName) != namespaceName
-            then
+            crossNsDeps = lib.filterAttrs (
+              _: depInfo:
               let
-                dep = allInstances.${resolution.namespace}.${resolution.instanceName};
-                depScope = (dep._meta.packageMeta or { }).scope or "cluster";
+                depScope = (depInfo.instance._meta.packageMeta or { }).scope or "cluster";
               in
-              if depScope == "namespace" then
-                throw "instance '${instanceName}' (namespace '${namespaceName}') depends on '${resolution.instanceName}' (namespace '${resolution.namespace}') which declares meta.scope = \"namespace\" — cross-namespace reference not allowed"
-              else
-                acc
-            else
-              acc
-          ) null depArgNames;
+              (depInfo.resolution.namespace or namespaceName) != namespaceName && depScope == "namespace"
+            ) resolvedDepMeta;
+          in
+          lib.foldlAttrs (
+            acc: argName: depInfo:
+            throw "instance '${instanceName}' (namespace '${namespaceName}') depends on '${depInfo.resolution.instanceName}' (namespace '${depInfo.resolution.namespace}') which declares meta.scope = \"namespace\" — cross-namespace reference not allowed"
+          ) null crossNsDeps;
+
+        # --- Meta-derived assertions and warnings (static, before build) ---
+        metaResult = meta.checkMetaStatic {
+          inherit
+            packageMeta
+            instanceName
+            namespaceName
+            clusterConfig
+            resolvedDepMeta
+            resolutionIndex
+            ;
+        };
 
         # 2. Evaluate typed config: package options + instance config
         evaluatedConfig = evaluateInstanceConfig {
@@ -1320,37 +1342,67 @@ rec {
           r: !(builtins.hasAttr (builtins.unsafeDiscardStringContext r.outPath) reachablePaths)
         ) allPartResources;
 
-        # Emit warnings via builtins.trace
-        _w1 = lib.foldl' (
-          acc: w:
-          builtins.trace "warning: resource '${w.resource.kind}/${w.resource.name}' has redundant requires on '${w.req.kind}/${w.req.name}' — already tracked via store path reference" acc
-        ) null redundantRequiresWarnings;
+        # --- Package-declared warnings and assertions (post-build) ---
+        packageResult = meta.evaluatePackageDiagnostics {
+          inherit
+            raw
+            evaluatedConfig
+            parts
+            resolvedDepMeta
+            ;
+        };
 
-        _w2 = lib.foldl' (
-          acc: w:
-          builtins.trace "warning: resource '${w.resource.kind}/${w.resource.name}' requires '${w.req.kind}/${w.req.name}' multiple times" acc
-        ) null duplicateRequiresWarnings;
+        # --- Combine all diagnostics ---
+        structuralWarnings =
+          let
+            res = r: "${r.kind}/${r.name}";
+            warn = msg: items: map (x: "[${instanceName}] ${msg x}") items;
+          in
+          lib.concatLists [
+            (warn (
+              w:
+              "resource '${res w.resource}' has redundant requires on '${res w.req}' — already tracked via store path reference"
+            ) redundantRequiresWarnings)
+            (warn (
+              w: "resource '${res w.resource}' requires '${res w.req}' multiple times"
+            ) duplicateRequiresWarnings)
+            (warn (r: "resource '${res r}' is defined but not reachable from main (orphaned)") orphanedWarnings)
+          ];
 
-        _w3 = lib.foldl' (
-          acc: r:
-          builtins.trace "warning: resource '${r.kind}/${r.name}' in instance '${instanceName}' is defined but not reachable from main (orphaned)" acc
-        ) null orphanedWarnings;
+        diagnostics = meta.combineDiagnostics {
+          inherit
+            instanceName
+            metaResult
+            packageResult
+            structuralWarnings
+            ;
+        };
 
       in
       builtins.seq _crossNsCheck (
-        builtins.seq _w1 (
-          builtins.seq _w2 (
-            builtins.seq _w3 (mkPackageView {
-              inherit
-                parts
-                instanceName
-                namespaceName
-                packageMeta
-                packageInstance
-                ;
-              mainOut = (mainRes.out or { }) // packageOut;
-              aliases = instCfg.aliases or [ ];
-            })
+        builtins.seq diagnostics.emitWarnings (
+          builtins.seq diagnostics.emitAssertionWarnings (
+            let
+              view = mkPackageView {
+                inherit
+                  parts
+                  instanceName
+                  namespaceName
+                  packageMeta
+                  packageInstance
+                  ;
+                mainOut = (mainRes.out or { }) // packageOut;
+                aliases = instCfg.aliases or [ ];
+              };
+            in
+            view
+            // {
+              _diagnostics = {
+                warnings = diagnostics.allWarnings;
+                assertions = diagnostics.allAssertions;
+                inherit (diagnostics) failedAssertions;
+              };
+            }
           )
         )
       );
@@ -1396,16 +1448,30 @@ rec {
       );
 
       # 4. Build static metadata for DI resolution (instance name + aliases)
+      #    defaultAliases from package meta are used when the cluster definition
+      #    doesn't set instance-level aliases.
       staticMeta = lib.mapAttrs (
         nsName: nsInsts:
-        lib.mapAttrs (instName: instCfg: {
-          _meta = {
-            instanceName = instName;
-            namespaceName = nsName;
-            namespace = nsName;
-            aliases = instCfg.aliases;
-          };
-        }) nsInsts
+        lib.mapAttrs (
+          instName: instCfg:
+          let
+            packageMeta = meta.peekPackageMeta {
+              package = instCfg.package;
+              inherit kixlib;
+            };
+          in
+          {
+            _meta = {
+              instanceName = instName;
+              namespaceName = nsName;
+              namespace = nsName;
+              aliases = meta.effectiveAliases {
+                instanceAliases = instCfg.aliases;
+                inherit packageMeta;
+              };
+            };
+          }
+        ) nsInsts
       ) cfg.instances;
 
       resolutionIndex = buildResolutionIndex staticMeta;
@@ -1449,6 +1515,7 @@ rec {
               "_type"
               "_meta"
               "_packageInstance"
+              "_diagnostics"
               "_isImport"
               "main"
               "fqdn"
@@ -1486,8 +1553,14 @@ rec {
         ) clusterInstances;
       };
 
+      # --- Collect cluster-wide diagnostics ---
+      clusterDiagnostics = meta.collectClusterDiagnostics {
+        clusterName = name;
+        inherit allInstancesList;
+      };
+
     in
-    {
+    builtins.seq clusterDiagnostics.assertionCheck {
       _type = "k8s-cluster-v2";
       inherit name;
 
@@ -1497,6 +1570,11 @@ rec {
       namespaces = nsResources;
 
       inherit activation;
+
+      # Cluster-level diagnostics for tooling
+      diagnostics = {
+        inherit (clusterDiagnostics) warnings assertions failedAssertions;
+      };
 
       rawManifests = map (
         r: builtins.fromJSON (builtins.unsafeDiscardStringContext (builtins.toJSON r.rawManifest))
