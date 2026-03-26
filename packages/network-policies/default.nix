@@ -12,9 +12,35 @@
 {
   scope,
   lib,
+  # Optional DI: other packages whose selectors we reference in policies.
+  # When present, we use their .out.selector instead of hardcoded labels.
+  ingress-nginx ? null,
+  kube-prometheus-stack ? null,
+  # stackgres-cluster pods get { app = "StackGresCluster"; } assigned by the
+  # operator at runtime — no kix package exposes that selector, so we accept
+  # an explicit selector override instead.
+  stackgres-cluster ? null,
 }:
 
 let
+  # Resolve selectors from DI dependencies, falling back to well-known labels.
+  ingressNginxSelector =
+    if ingress-nginx != null then
+      ingress-nginx.out.selector
+    else
+      { "app.kubernetes.io/name" = "ingress-nginx"; };
+
+  prometheusSelector =
+    if kube-prometheus-stack != null then
+      kube-prometheus-stack.out.selector
+    else
+      { "app.kubernetes.io/name" = "prometheus"; };
+
+  # The StackGres operator labels its managed pods with { app = "StackGresCluster"; }.
+  # This is an operator-assigned label, not a kix package selector.
+  stackgresClusterSelector =
+    if stackgres-cluster != null then stackgres-cluster.out.selector else { app = "StackGresCluster"; };
+
   mkCiliumPolicy =
     { name, spec }:
     scope.mkClusterResource {
@@ -230,22 +256,14 @@ in
           egress = [
             {
               toEndpoints = [
-                {
-                  matchLabels = {
-                    "app.kubernetes.io/name" = "ingress-nginx";
-                  };
-                }
+                { matchLabels = ingressNginxSelector; }
               ];
             }
           ];
           ingress = [
             {
               fromEndpoints = [
-                {
-                  matchLabels = {
-                    "app.kubernetes.io/name" = "ingress-nginx";
-                  };
-                }
+                { matchLabels = ingressNginxSelector; }
               ];
             }
           ];
@@ -260,11 +278,7 @@ in
               ingress = [
                 {
                   fromEndpoints = [
-                    {
-                      matchLabels = {
-                        "app.kubernetes.io/name" = "prometheus";
-                      };
-                    }
+                    { matchLabels = prometheusSelector; }
                   ];
                 }
               ];
@@ -308,18 +322,12 @@ in
         name = "allow-prometheus-scraping-of-stackgres-clusters";
         spec = {
           endpointSelector = {
-            matchLabels = {
-              app = "StackGresCluster";
-            };
+            matchLabels = stackgresClusterSelector;
           };
           ingress = [
             {
               fromEndpoints = [
-                {
-                  matchLabels = {
-                    "app.kubernetes.io/name" = "prometheus";
-                  };
-                }
+                { matchLabels = prometheusSelector; }
               ];
             }
           ];
@@ -332,9 +340,7 @@ in
         name = "stackgres-clusters-to-kube-api";
         spec = {
           endpointSelector = {
-            matchLabels = {
-              app = "StackGresCluster";
-            };
+            matchLabels = stackgresClusterSelector;
           };
           egress = [
             {

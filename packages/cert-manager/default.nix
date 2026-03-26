@@ -836,89 +836,86 @@
 
       # -- Controller Deployment --
 
-      controllerDeployment = scope.mkResource {
-        apiVersion = "apps/v1";
-        kind = "Deployment";
-        name = "${name}";
-        labels = controllerLabels;
-        spec = {
-          replicas = config.replicaCount;
-          selector.matchLabels = controllerLabels;
-          template = {
-            metadata = {
-              labels = controllerLabels;
-              annotations = {
+      controllerDeployment =
+        {
+          name = "${name}";
+          labels = controllerLabels;
+          spec = {
+            replicas = config.replicaCount;
+            selector.matchLabels = controllerLabels;
+            template = {
+              metadata.annotations = {
                 "prometheus.io/path" = "/metrics";
                 "prometheus.io/scrape" = "true";
                 "prometheus.io/port" = "9402";
               };
-            };
-            spec = {
-              serviceAccountName = self.controllerServiceAccount.out.name;
-              enableServiceLinks = false;
-              securityContext = podSecurityContext;
-              containers = [
-                (
-                  {
-                    name = "cert-manager-controller";
-                    image = "${config.image.repository}:${config.image.tag}";
-                    imagePullPolicy = config.image.pullPolicy;
-                    args = [
-                      "--v=2"
-                      "--cluster-resource-namespace=$(POD_NAMESPACE)"
-                      "--acme-http01-solver-image=${config.acmesolver.image.repository}:${config.acmesolver.image.tag}"
-                      "--leader-election-namespace=${ns}"
-                    ]
-                    ++ lib.optional config.dns01RecursiveNameserversOnly "--dns01-recursive-nameservers-only"
-                    ++ lib.optional (
-                      config.dns01RecursiveNameservers != ""
-                    ) "--dns01-recursive-nameservers=${config.dns01RecursiveNameservers}"
-                    ++ [ "--max-concurrent-challenges=60" ];
-                    ports = [
-                      {
-                        name = "http-metrics";
-                        containerPort = 9402;
-                        protocol = "TCP";
-                      }
-                      {
-                        name = "http-healthz";
-                        containerPort = 9403;
-                        protocol = "TCP";
-                      }
-                    ];
-                    securityContext = containerSecurityContext;
-                    env = [
-                      {
-                        name = "POD_NAMESPACE";
-                        valueFrom.fieldRef = {
-                          apiVersion = "v1";
-                          fieldPath = "metadata.namespace";
+              spec = {
+                serviceAccountName = self.controllerServiceAccount.out.name;
+                enableServiceLinks = false;
+                securityContext = podSecurityContext;
+                containers = [
+                  (
+                    {
+                      name = "cert-manager-controller";
+                      image = "${config.image.repository}:${config.image.tag}";
+                      imagePullPolicy = config.image.pullPolicy;
+                      args = [
+                        "--v=2"
+                        "--cluster-resource-namespace=$(POD_NAMESPACE)"
+                        "--acme-http01-solver-image=${config.acmesolver.image.repository}:${config.acmesolver.image.tag}"
+                        "--leader-election-namespace=${ns}"
+                      ]
+                      ++ lib.optional config.dns01RecursiveNameserversOnly "--dns01-recursive-nameservers-only"
+                      ++ lib.optional (
+                        config.dns01RecursiveNameservers != ""
+                      ) "--dns01-recursive-nameservers=${config.dns01RecursiveNameservers}"
+                      ++ [ "--max-concurrent-challenges=60" ];
+                      ports = [
+                        {
+                          name = "http-metrics";
+                          containerPort = 9402;
+                          protocol = "TCP";
+                        }
+                        {
+                          name = "http-healthz";
+                          containerPort = 9403;
+                          protocol = "TCP";
+                        }
+                      ];
+                      securityContext = containerSecurityContext;
+                      env = [
+                        {
+                          name = "POD_NAMESPACE";
+                          valueFrom.fieldRef = {
+                            apiVersion = "v1";
+                            fieldPath = "metadata.namespace";
+                          };
+                        }
+                      ];
+                      livenessProbe = {
+                        httpGet = {
+                          port = "http-healthz";
+                          path = "/livez";
+                          scheme = "HTTP";
                         };
-                      }
-                    ];
-                    livenessProbe = {
-                      httpGet = {
-                        port = "http-healthz";
-                        path = "/livez";
-                        scheme = "HTTP";
+                        initialDelaySeconds = 10;
+                        periodSeconds = 10;
+                        timeoutSeconds = 15;
+                        successThreshold = 1;
+                        failureThreshold = 8;
                       };
-                      initialDelaySeconds = 10;
-                      periodSeconds = 10;
-                      timeoutSeconds = 15;
-                      successThreshold = 1;
-                      failureThreshold = 8;
-                    };
-                  }
-                  // lib.optionalAttrs (config.resources != null) { resources = config.resources; }
-                )
-              ];
-              nodeSelector = {
-                "kubernetes.io/os" = "linux";
+                    }
+                    // lib.optionalAttrs (config.resources != null) { resources = config.resources; }
+                  )
+                ];
+                nodeSelector = {
+                  "kubernetes.io/os" = "linux";
+                };
               };
             };
           };
-        };
-      };
+        }
+        |> scope.mkDeployment;
 
       # ============================================================
       # Webhook — ServiceAccount, RBAC, Service, Deployment, Configs
@@ -961,101 +958,98 @@
 
       # -- Webhook Deployment --
 
-      webhookDeployment = scope.mkResource {
-        apiVersion = "apps/v1";
-        kind = "Deployment";
-        name = "${name}-webhook";
-        labels = webhookLabels;
-        spec = {
-          replicas = config.webhook.replicaCount;
-          selector.matchLabels = webhookLabels;
-          template = {
-            metadata = {
-              labels = webhookLabels;
-              annotations = {
+      webhookDeployment =
+        {
+          name = "${name}-webhook";
+          labels = webhookLabels;
+          spec = {
+            replicas = config.webhook.replicaCount;
+            selector.matchLabels = webhookLabels;
+            template = {
+              metadata.annotations = {
                 "prometheus.io/path" = "/metrics";
                 "prometheus.io/scrape" = "true";
                 "prometheus.io/port" = "9402";
               };
-            };
-            spec = {
-              serviceAccountName = self.webhookServiceAccount.out.name;
-              enableServiceLinks = false;
-              securityContext = podSecurityContext;
-              containers = [
-                {
-                  name = "cert-manager-webhook";
-                  image = "${config.webhook.image.repository}:${config.webhook.image.tag}";
-                  imagePullPolicy = config.image.pullPolicy;
-                  args = [
-                    "--v=2"
-                    "--secure-port=10250"
-                    "--dynamic-serving-ca-secret-namespace=$(POD_NAMESPACE)"
-                    "--dynamic-serving-ca-secret-name=${name}-webhook-ca"
-                    "--dynamic-serving-dns-names=${name}-webhook"
-                    "--dynamic-serving-dns-names=${name}-webhook.$(POD_NAMESPACE)"
-                    "--dynamic-serving-dns-names=${name}-webhook.$(POD_NAMESPACE).svc"
-                  ];
-                  ports = [
-                    {
-                      name = "https";
-                      containerPort = 10250;
-                      protocol = "TCP";
-                    }
-                    {
-                      name = "healthcheck";
-                      containerPort = 6080;
-                      protocol = "TCP";
-                    }
-                    {
-                      name = "http-metrics";
-                      containerPort = 9402;
-                      protocol = "TCP";
-                    }
-                  ];
-                  livenessProbe = {
-                    httpGet = {
-                      path = "/livez";
-                      port = 6080;
-                      scheme = "HTTP";
-                    };
-                    initialDelaySeconds = 60;
-                    periodSeconds = 10;
-                    timeoutSeconds = 1;
-                    successThreshold = 1;
-                    failureThreshold = 3;
-                  };
-                  readinessProbe = {
-                    httpGet = {
-                      path = "/healthz";
-                      port = 6080;
-                      scheme = "HTTP";
-                    };
-                    initialDelaySeconds = 5;
-                    periodSeconds = 5;
-                    timeoutSeconds = 1;
-                    successThreshold = 1;
-                    failureThreshold = 3;
-                  };
-                  securityContext = containerSecurityContext;
-                  env = [
-                    {
-                      name = "POD_NAMESPACE";
-                      valueFrom.fieldRef = {
-                        apiVersion = "v1";
-                        fieldPath = "metadata.namespace";
+              spec = {
+                serviceAccountName = self.webhookServiceAccount.out.name;
+                enableServiceLinks = false;
+                securityContext = podSecurityContext;
+                containers = [
+                  {
+                    name = "cert-manager-webhook";
+                    image = "${config.webhook.image.repository}:${config.webhook.image.tag}";
+                    imagePullPolicy = config.image.pullPolicy;
+                    args = [
+                      "--v=2"
+                      "--secure-port=10250"
+                      "--dynamic-serving-ca-secret-namespace=$(POD_NAMESPACE)"
+                      "--dynamic-serving-ca-secret-name=${name}-webhook-ca"
+                      "--dynamic-serving-dns-names=${name}-webhook"
+                      "--dynamic-serving-dns-names=${name}-webhook.$(POD_NAMESPACE)"
+                      "--dynamic-serving-dns-names=${name}-webhook.$(POD_NAMESPACE).svc"
+                    ];
+                    ports = [
+                      {
+                        name = "https";
+                        containerPort = 10250;
+                        protocol = "TCP";
+                      }
+                      {
+                        name = "healthcheck";
+                        containerPort = 6080;
+                        protocol = "TCP";
+                      }
+                      {
+                        name = "http-metrics";
+                        containerPort = 9402;
+                        protocol = "TCP";
+                      }
+                    ];
+                    livenessProbe = {
+                      httpGet = {
+                        path = "/livez";
+                        port = 6080;
+                        scheme = "HTTP";
                       };
-                    }
-                  ];
-                }
-              ];
-              nodeSelector = {
-                "kubernetes.io/os" = "linux";
+                      initialDelaySeconds = 60;
+                      periodSeconds = 10;
+                      timeoutSeconds = 1;
+                      successThreshold = 1;
+                      failureThreshold = 3;
+                    };
+                    readinessProbe = {
+                      httpGet = {
+                        path = "/healthz";
+                        port = 6080;
+                        scheme = "HTTP";
+                      };
+                      initialDelaySeconds = 5;
+                      periodSeconds = 5;
+                      timeoutSeconds = 1;
+                      successThreshold = 1;
+                      failureThreshold = 3;
+                    };
+                    securityContext = containerSecurityContext;
+                    env = [
+                      {
+                        name = "POD_NAMESPACE";
+                        valueFrom.fieldRef = {
+                          apiVersion = "v1";
+                          fieldPath = "metadata.namespace";
+                        };
+                      }
+                    ];
+                  }
+                ];
+                nodeSelector = {
+                  "kubernetes.io/os" = "linux";
+                };
               };
             };
           };
-        };
-      };
+        }
+        |> scope.mkDeployment;
 
       # -- Webhook configurations --
 
@@ -1175,62 +1169,59 @@
 
       # -- CA Injector Deployment --
 
-      cainjectorDeployment = scope.mkResource {
-        apiVersion = "apps/v1";
-        kind = "Deployment";
-        name = "${name}-cainjector";
-        labels = cainjectorLabels;
-        spec = {
-          replicas = config.cainjector.replicaCount;
-          selector.matchLabels = cainjectorLabels;
-          template = {
-            metadata = {
-              labels = cainjectorLabels;
-              annotations = {
+      cainjectorDeployment =
+        {
+          name = "${name}-cainjector";
+          labels = cainjectorLabels;
+          spec = {
+            replicas = config.cainjector.replicaCount;
+            selector.matchLabels = cainjectorLabels;
+            template = {
+              metadata.annotations = {
                 "prometheus.io/path" = "/metrics";
                 "prometheus.io/scrape" = "true";
                 "prometheus.io/port" = "9402";
               };
-            };
-            spec = {
-              serviceAccountName = self.cainjectorServiceAccount.out.name;
-              enableServiceLinks = false;
-              securityContext = podSecurityContext;
-              containers = [
-                {
-                  name = "cert-manager-cainjector";
-                  image = "${config.cainjector.image.repository}:${config.cainjector.image.tag}";
-                  imagePullPolicy = config.image.pullPolicy;
-                  args = [
-                    "--v=2"
-                    "--leader-election-namespace=${ns}"
-                  ];
-                  ports = [
-                    {
-                      name = "http-metrics";
-                      containerPort = 9402;
-                      protocol = "TCP";
-                    }
-                  ];
-                  env = [
-                    {
-                      name = "POD_NAMESPACE";
-                      valueFrom.fieldRef = {
-                        apiVersion = "v1";
-                        fieldPath = "metadata.namespace";
-                      };
-                    }
-                  ];
-                  securityContext = containerSecurityContext;
-                }
-              ];
-              nodeSelector = {
-                "kubernetes.io/os" = "linux";
+              spec = {
+                serviceAccountName = self.cainjectorServiceAccount.out.name;
+                enableServiceLinks = false;
+                securityContext = podSecurityContext;
+                containers = [
+                  {
+                    name = "cert-manager-cainjector";
+                    image = "${config.cainjector.image.repository}:${config.cainjector.image.tag}";
+                    imagePullPolicy = config.image.pullPolicy;
+                    args = [
+                      "--v=2"
+                      "--leader-election-namespace=${ns}"
+                    ];
+                    ports = [
+                      {
+                        name = "http-metrics";
+                        containerPort = 9402;
+                        protocol = "TCP";
+                      }
+                    ];
+                    env = [
+                      {
+                        name = "POD_NAMESPACE";
+                        valueFrom.fieldRef = {
+                          apiVersion = "v1";
+                          fieldPath = "metadata.namespace";
+                        };
+                      }
+                    ];
+                    securityContext = containerSecurityContext;
+                  }
+                ];
+                nodeSelector = {
+                  "kubernetes.io/os" = "linux";
+                };
               };
             };
           };
-        };
-      };
+        }
+        |> scope.mkDeployment;
 
       # ============================================================
       # Entry point

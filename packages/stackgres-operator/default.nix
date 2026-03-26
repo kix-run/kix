@@ -36,61 +36,119 @@ let
     "group" = "stackgres.io";
   };
 
-  # All SG resource types that need webhooks
-  webhookResources = [
-    {
-      singular = "sgcluster";
-      plural = "sgclusters";
-    }
-    {
-      singular = "sgpgconfig";
-      plural = "sgpgconfigs";
-    }
-    {
-      singular = "sgpoolconfig";
-      plural = "sgpoolconfigs";
-    }
-    {
-      singular = "sginstanceprofile";
-      plural = "sginstanceprofiles";
-    }
-    {
-      singular = "sgbackup";
-      plural = "sgbackups";
-    }
-    {
-      singular = "sgdistributedlogs";
-      plural = "sgdistributedlogs";
-    }
-    {
-      singular = "sgdbops";
-      plural = "sgdbops";
-    }
-    {
-      singular = "sgobjectstorage";
-      plural = "sgobjectstorages";
-    }
-    {
-      singular = "sgscript";
-      plural = "sgscripts";
-    }
-    {
-      singular = "sgshardedcluster";
-      plural = "sgshardedclusters";
-    }
-    {
-      singular = "sgshardedbackup";
-      plural = "sgshardedbackups";
-    }
-    {
-      singular = "sgshardeddbops";
-      plural = "sgshardeddbops";
-    }
-    {
-      singular = "sgstream";
-      plural = "sgstreams";
-    }
-  ];
+  sgGroup = "stackgres.io";
+
+  # Single source of truth for all StackGres CRD definitions.
+  # Each entry produces a CRD resource and feeds the webhook + RBAC lists.
+  #   webhook: whether to generate validating/mutating webhooks for this CRD.
+  #   shortNames: short aliases for kubectl.
+  #   specOverrides: deep-merged into crd.fromKind output (for irregular names).
+  crdDefs = {
+    sgCluster = {
+      kind = "SGCluster";
+      shortNames = [ "sgclu" ];
+      webhook = true;
+    };
+    sgInstanceProfile = {
+      kind = "SGInstanceProfile";
+      shortNames = [ "sginp" ];
+      webhook = true;
+    };
+    sgPostgresConfig = {
+      kind = "SGPostgresConfig";
+      shortNames = [ "sgpgc" ];
+      specOverrides.spec.names = {
+        singular = "sgpgconfig";
+        plural = "sgpgconfigs";
+      };
+      webhook = true;
+    };
+    sgPoolingConfig = {
+      kind = "SGPoolingConfig";
+      shortNames = [ "sgpoc" ];
+      specOverrides.spec.names = {
+        singular = "sgpoolconfig";
+        plural = "sgpoolconfigs";
+      };
+      webhook = true;
+    };
+    sgBackupConfig = {
+      kind = "SGBackupConfig";
+      shortNames = [ "sgbac" ];
+      webhook = false;
+    };
+    sgObjectStorage = {
+      kind = "SGObjectStorage";
+      shortNames = [ "sgobs" ];
+      webhook = true;
+    };
+    sgDistributedLogs = {
+      kind = "SGDistributedLogs";
+      shortNames = [ "sgdil" ];
+      specOverrides.spec.names.plural = "sgdistributedlogs";
+      webhook = true;
+    };
+    sgShardedCluster = {
+      kind = "SGShardedCluster";
+      shortNames = [ "sgshr" ];
+      webhook = true;
+    };
+    sgScript = {
+      kind = "SGScript";
+      shortNames = [ "sgscr" ];
+      webhook = true;
+    };
+    sgDbOps = {
+      kind = "SGDbOps";
+      shortNames = [ "sgdbo" ];
+      specOverrides.spec.names.plural = "sgdbops";
+      webhook = true;
+    };
+    sgBackup = {
+      kind = "SGBackup";
+      shortNames = [ "sgbkp" ];
+      webhook = true;
+    };
+    sgShardedBackup = {
+      kind = "SGShardedBackup";
+      shortNames = [ "sgsbk" ];
+      webhook = true;
+    };
+    sgShardedDbOps = {
+      kind = "SGShardedDbOps";
+      shortNames = [ "sgsdo" ];
+      specOverrides.spec.names.plural = "sgshardeddbops";
+      webhook = true;
+    };
+    sgStream = {
+      kind = "SGStream";
+      shortNames = [ "sgstr" ];
+      webhook = true;
+    };
+    sgConfig = {
+      kind = "SGConfig";
+      shortNames = [ "sgcfg" ];
+      webhook = false;
+    };
+  };
+
+  # Build the CRD spec input for a given crdDef entry.
+  mkCrdInput =
+    def:
+    scope.crd.fromKind def.kind ({ spec.group = sgGroup; } // (def.specOverrides or { }))
+    |> scope.crd.withShortNames def.shortNames;
+
+  # Extract resolved names (singular/plural) from each CRD definition.
+  # Used to derive webhook and RBAC lists.
+  resolvedNames = lib.mapAttrs (_: def: (mkCrdInput def).spec.names) crdDefs;
+
+  # Webhook resources — derived from CRD definitions that have webhook = true.
+  webhookResources = lib.mapAttrsToList (attr: def: {
+    inherit (resolvedNames.${attr}) singular plural;
+  }) (lib.filterAttrs (_: def: def.webhook) crdDefs);
+
+  # RBAC CRD names — "plural.group" for every CRD.
+  sgCrdNames = lib.mapAttrsToList (_: names: "${names.plural}.${sgGroup}") resolvedNames;
 
   mkValidatingWebhook = operatorServiceName: res: {
     name = "${res.singular}.validating-webhook.stackgres.io";
@@ -246,308 +304,255 @@ in
         kind = "ClusterRole";
         name = name;
         labels = selectorLabels;
-        extra.rules =
-          let
-            sgCrdNames = [
-              "sgconfigs.stackgres.io"
-              "sgclusters.stackgres.io"
-              "sginstanceprofiles.stackgres.io"
-              "sgpgconfigs.stackgres.io"
-              "sgpoolconfigs.stackgres.io"
-              "sgbackups.stackgres.io"
-              "sgbackupconfigs.stackgres.io"
-              "sgobjectstorages.stackgres.io"
-              "sgdbops.stackgres.io"
-              "sgdistributedlogs.stackgres.io"
-              "sgshardedclusters.stackgres.io"
-              "sgshardedbackups.stackgres.io"
-              "sgshardeddbops.stackgres.io"
-              "sgscripts.stackgres.io"
-              "sgstreams.stackgres.io"
+        extra.rules = [
+          # Core + apps + rbac + batch resources the operator manages
+          {
+            apiGroups = [
+              ""
+              "apps"
+              "extensions"
+              "rbac.authorization.k8s.io"
+              "batch"
             ];
-          in
-          [
-            # Core + apps + rbac + batch resources the operator manages
-            {
-              apiGroups = [
-                ""
-                "apps"
-                "extensions"
-                "rbac.authorization.k8s.io"
-                "batch"
-              ];
-              resources = [
-                "pods"
-                "pods/exec"
-                "pods/log"
-                "services"
-                "endpoints"
-                "endpoints/restricted"
-                "persistentvolumeclaims"
-                "configmaps"
-                "secrets"
-                "deployments"
-                "statefulsets"
-                "serviceaccounts"
-                "namespaces"
-                "roles"
-                "rolebindings"
-                "events"
-                "cronjobs"
-                "jobs"
-              ];
-              verbs = [
-                "get"
-                "list"
-                "watch"
-                "update"
-                "create"
-                "delete"
-                "deletecollection"
-                "patch"
-              ];
-            }
-            # Finalizers
-            {
-              apiGroups = [
-                ""
-                "apps"
-                "batch"
-              ];
-              resources = [
-                "statefulsets/finalizers"
-                "persistentvolumeclaims/finalizers"
-                "deployments/finalizers"
-                "services/finalizers"
-                "endpoints/finalizers"
-                "cronjobs/finalizers"
-                "jobs/finalizers"
-                "pods/finalizers"
-              ];
-              verbs = [ "update" ];
-            }
-            # Namespace read
-            {
-              apiGroups = [ "" ];
-              resources = [ "namespaces" ];
-              verbs = [
-                "get"
-                "list"
-              ];
-            }
-            # Admissionregistration — scoped to own resources
-            {
-              apiGroups = [ "admissionregistration.k8s.io" ];
-              resourceNames = [ name ];
-              resources = [
-                "mutatingwebhookconfigurations"
-                "validatingwebhookconfigurations"
-              ];
-              verbs = [
-                "get"
-                "patch"
-              ];
-            }
-            # CRD read — scoped to SG CRDs
-            {
-              apiGroups = [ "apiextensions.k8s.io" ];
-              resourceNames = sgCrdNames;
-              resources = [ "customresourcedefinitions" ];
-              verbs = [ "get" ];
-            }
-            # CRD list
-            {
-              apiGroups = [ "apiextensions.k8s.io" ];
-              resources = [ "customresourcedefinitions" ];
-              verbs = [ "list" ];
-            }
-            # CRD create
-            {
-              apiGroups = [ "apiextensions.k8s.io" ];
-              resources = [ "customresourcedefinitions" ];
-              verbs = [ "create" ];
-            }
-            # CRD update — scoped to SG CRDs
-            {
-              apiGroups = [ "apiextensions.k8s.io" ];
-              resourceNames = sgCrdNames;
-              resources = [ "customresourcedefinitions" ];
-              verbs = [
-                "patch"
-                "update"
-              ];
-            }
-            # Prometheus CRD read
-            {
-              apiGroups = [ "apiextensions.k8s.io" ];
-              resourceNames = [ "prometheuses.monitoring.coreos.com" ];
-              resources = [ "customresourcedefinitions" ];
-              verbs = [ "get" ];
-            }
-            # VPA
-            {
-              apiGroups = [ "autoscaling.k8s.io" ];
-              resources = [ "verticalpodautoscalers" ];
-              verbs = [
-                "get"
-                "list"
-                "watch"
-                "update"
-                "create"
-                "delete"
-                "patch"
-              ];
-            }
-            # KEDA
-            {
-              apiGroups = [ "keda.sh" ];
-              resources = [
-                "scaledobjects"
-                "triggerauthentications"
-              ];
-              verbs = [
-                "get"
-                "list"
-                "watch"
-                "update"
-                "create"
-                "delete"
-                "patch"
-              ];
-            }
-            # Prometheus Operator — servicemonitors and podmonitors management
-            {
-              apiGroups = [ "monitoring.coreos.com" ];
-              resources = [
-                "servicemonitors"
-                "podmonitors"
-              ];
-              verbs = [
-                "list"
-                "get"
-                "create"
-                "delete"
-                "update"
-                "patch"
-              ];
-            }
-            # Prometheus Operator — read access
-            {
-              apiGroups = [ "monitoring.coreos.com" ];
-              resources = [
-                "prometheus"
-                "prometheuses"
-                "podmonitors"
-              ];
-              verbs = [
-                "list"
-                "get"
-              ];
-            }
-            # Knative
-            {
-              apiGroups = [ "serving.knative.dev" ];
-              resources = [ "services" ];
-              verbs = [
-                "get"
-                "list"
-                "watch"
-                "update"
-                "create"
-                "delete"
-                "patch"
-              ];
-            }
-            # ShardingSphere
-            {
-              apiGroups = [ "shardingsphere.apache.org" ];
-              resources = [ "computenodes" ];
-              verbs = [
-                "get"
-                "list"
-                "watch"
-                "update"
-                "create"
-                "delete"
-                "patch"
-              ];
-            }
-            # Volume Snapshots
-            {
-              apiGroups = [ "snapshot.storage.k8s.io" ];
-              resources = [ "volumesnapshots" ];
-              verbs = [
-                "list"
-                "get"
-                "watch"
-                "create"
-              ];
-            }
-            # StackGres CRDs — full control
-            {
-              apiGroups = [ "stackgres.io" ];
-              resources = [
-                "sgclusters"
-                "sgpgconfigs"
-                "sginstanceprofiles"
-                "sgpoolconfigs"
-                "sgbackupconfigs"
-                "sgbackups"
-                "sgdistributedlogs"
-                "sgdbops"
-                "sgobjectstorages"
-                "sgscripts"
-                "sgshardedclusters"
-                "sgshardedbackups"
-                "sgshardeddbops"
-                "sgstreams"
-                "sgconfigs"
-              ];
-              verbs = [
-                "create"
-                "watch"
-                "list"
-                "get"
-                "update"
-                "patch"
-                "delete"
-              ];
-            }
-            # StackGres CRDs — status and finalizers
-            {
-              apiGroups = [ "stackgres.io" ];
-              resources = [
-                "sgconfigs/status"
-                "sgclusters/status"
-                "sgdistributedlogs/status"
-                "sgclusters/finalizers"
-                "sgpgconfigs/finalizers"
-                "sginstanceprofiles/finalizers"
-                "sgpoolconfigs/finalizers"
-                "sgbackupconfigs/finalizers"
-                "sgbackups/finalizers"
-                "sgdistributedlogs/finalizers"
-                "sgdbops/finalizers"
-                "sgobjectstorages/finalizers"
-                "sgscripts/finalizers"
-                "sgshardedclusters/finalizers"
-                "sgshardedbackups/finalizers"
-                "sgshardeddbops/finalizers"
-                "sgstreams/finalizers"
-                "sgconfigs/finalizers"
-              ];
-              verbs = [ "update" ];
-            }
-            # Storage
-            {
-              apiGroups = [ "storage.k8s.io" ];
-              resources = [ "storageclasses" ];
-              verbs = [
-                "get"
-                "list"
-              ];
-            }
-          ];
+            resources = [
+              "pods"
+              "pods/exec"
+              "pods/log"
+              "services"
+              "endpoints"
+              "endpoints/restricted"
+              "persistentvolumeclaims"
+              "configmaps"
+              "secrets"
+              "deployments"
+              "statefulsets"
+              "serviceaccounts"
+              "namespaces"
+              "roles"
+              "rolebindings"
+              "events"
+              "cronjobs"
+              "jobs"
+            ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "update"
+              "create"
+              "delete"
+              "deletecollection"
+              "patch"
+            ];
+          }
+          # Finalizers
+          {
+            apiGroups = [
+              ""
+              "apps"
+              "batch"
+            ];
+            resources = [
+              "statefulsets/finalizers"
+              "persistentvolumeclaims/finalizers"
+              "deployments/finalizers"
+              "services/finalizers"
+              "endpoints/finalizers"
+              "cronjobs/finalizers"
+              "jobs/finalizers"
+              "pods/finalizers"
+            ];
+            verbs = [ "update" ];
+          }
+          # Namespace read
+          {
+            apiGroups = [ "" ];
+            resources = [ "namespaces" ];
+            verbs = [
+              "get"
+              "list"
+            ];
+          }
+          # Admissionregistration — scoped to own resources
+          {
+            apiGroups = [ "admissionregistration.k8s.io" ];
+            resourceNames = [ name ];
+            resources = [
+              "mutatingwebhookconfigurations"
+              "validatingwebhookconfigurations"
+            ];
+            verbs = [
+              "get"
+              "patch"
+            ];
+          }
+          # CRD read — scoped to SG CRDs
+          {
+            apiGroups = [ "apiextensions.k8s.io" ];
+            resourceNames = sgCrdNames;
+            resources = [ "customresourcedefinitions" ];
+            verbs = [ "get" ];
+          }
+          # CRD list
+          {
+            apiGroups = [ "apiextensions.k8s.io" ];
+            resources = [ "customresourcedefinitions" ];
+            verbs = [ "list" ];
+          }
+          # CRD create
+          {
+            apiGroups = [ "apiextensions.k8s.io" ];
+            resources = [ "customresourcedefinitions" ];
+            verbs = [ "create" ];
+          }
+          # CRD update — scoped to SG CRDs
+          {
+            apiGroups = [ "apiextensions.k8s.io" ];
+            resourceNames = sgCrdNames;
+            resources = [ "customresourcedefinitions" ];
+            verbs = [
+              "patch"
+              "update"
+            ];
+          }
+          # Prometheus CRD read
+          {
+            apiGroups = [ "apiextensions.k8s.io" ];
+            resourceNames = [ "prometheuses.monitoring.coreos.com" ];
+            resources = [ "customresourcedefinitions" ];
+            verbs = [ "get" ];
+          }
+          # VPA
+          {
+            apiGroups = [ "autoscaling.k8s.io" ];
+            resources = [ "verticalpodautoscalers" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "update"
+              "create"
+              "delete"
+              "patch"
+            ];
+          }
+          # KEDA
+          {
+            apiGroups = [ "keda.sh" ];
+            resources = [
+              "scaledobjects"
+              "triggerauthentications"
+            ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "update"
+              "create"
+              "delete"
+              "patch"
+            ];
+          }
+          # Prometheus Operator — servicemonitors and podmonitors management
+          {
+            apiGroups = [ "monitoring.coreos.com" ];
+            resources = [
+              "servicemonitors"
+              "podmonitors"
+            ];
+            verbs = [
+              "list"
+              "get"
+              "create"
+              "delete"
+              "update"
+              "patch"
+            ];
+          }
+          # Prometheus Operator — read access
+          {
+            apiGroups = [ "monitoring.coreos.com" ];
+            resources = [
+              "prometheus"
+              "prometheuses"
+              "podmonitors"
+            ];
+            verbs = [
+              "list"
+              "get"
+            ];
+          }
+          # Knative
+          {
+            apiGroups = [ "serving.knative.dev" ];
+            resources = [ "services" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "update"
+              "create"
+              "delete"
+              "patch"
+            ];
+          }
+          # ShardingSphere
+          {
+            apiGroups = [ "shardingsphere.apache.org" ];
+            resources = [ "computenodes" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "update"
+              "create"
+              "delete"
+              "patch"
+            ];
+          }
+          # Volume Snapshots
+          {
+            apiGroups = [ "snapshot.storage.k8s.io" ];
+            resources = [ "volumesnapshots" ];
+            verbs = [
+              "list"
+              "get"
+              "watch"
+              "create"
+            ];
+          }
+          # StackGres CRDs — full control (derived from crdDefs)
+          {
+            apiGroups = [ "stackgres.io" ];
+            resources = lib.mapAttrsToList (_: names: names.plural) resolvedNames;
+            verbs = [
+              "create"
+              "watch"
+              "list"
+              "get"
+              "update"
+              "patch"
+              "delete"
+            ];
+          }
+          # StackGres CRDs — status and finalizers (derived from crdDefs)
+          {
+            apiGroups = [ "stackgres.io" ];
+            resources =
+              (map (p: "${p}/status") (lib.mapAttrsToList (_: names: names.plural) resolvedNames))
+              ++ (map (p: "${p}/finalizers") (lib.mapAttrsToList (_: names: names.plural) resolvedNames));
+            verbs = [ "update" ];
+          }
+          # Storage
+          {
+            apiGroups = [ "storage.k8s.io" ];
+            resources = [ "storageclasses" ];
+            verbs = [
+              "get"
+              "list"
+            ];
+          }
+        ];
       };
 
       # ===== ClusterRoleBinding =====
@@ -781,78 +786,10 @@ in
       };
 
       # ===== CRDs =====
-      # Structural minimum only — full OpenAPI schemas are enforced by
-      # the operator webhook at admission time.
+      # Built from crdDefs (single source of truth). Structural minimum
+      # only — full OpenAPI schemas are enforced by the operator webhook.
 
-      crds = {
-        sgCluster = scope.mkCRD (
-          scope.crd.fromKind "SGCluster" { spec.group = "stackgres.io"; }
-          |> scope.crd.withShortNames [ "sgclu" ]
-        );
-
-        sgInstanceProfile = scope.mkCRD (
-          scope.crd.fromKind "SGInstanceProfile" { spec.group = "stackgres.io"; }
-          |> scope.crd.withShortNames [ "sginp" ]
-        );
-
-        sgPostgresConfig = scope.mkCRD (
-          scope.crd.fromKind "SGPostgresConfig" {
-            spec.group = "stackgres.io";
-            spec.names = {
-              singular = "sgpgconfig";
-              plural = "sgpgconfigs";
-            };
-          }
-          |> scope.crd.withShortNames [ "sgpgc" ]
-        );
-
-        sgPoolingConfig = scope.mkCRD (
-          scope.crd.fromKind "SGPoolingConfig" {
-            spec.group = "stackgres.io";
-            spec.names = {
-              singular = "sgpoolconfig";
-              plural = "sgpoolconfigs";
-            };
-          }
-          |> scope.crd.withShortNames [ "sgpoc" ]
-        );
-
-        sgBackupConfig = scope.mkCRD (
-          scope.crd.fromKind "SGBackupConfig" { spec.group = "stackgres.io"; }
-          |> scope.crd.withShortNames [ "sgbac" ]
-        );
-
-        sgObjectStorage = scope.mkCRD (
-          scope.crd.fromKind "SGObjectStorage" { spec.group = "stackgres.io"; }
-          |> scope.crd.withShortNames [ "sgobs" ]
-        );
-
-        sgDistributedLogs = scope.mkCRD (
-          scope.crd.fromKind "SGDistributedLogs" {
-            spec.group = "stackgres.io";
-            spec.names.plural = "sgdistributedlogs";
-          }
-          |> scope.crd.withShortNames [ "sgdil" ]
-        );
-
-        sgShardedCluster = scope.mkCRD (
-          scope.crd.fromKind "SGShardedCluster" { spec.group = "stackgres.io"; }
-          |> scope.crd.withShortNames [ "sgshr" ]
-        );
-
-        sgScript = scope.mkCRD (
-          scope.crd.fromKind "SGScript" { spec.group = "stackgres.io"; }
-          |> scope.crd.withShortNames [ "sgscr" ]
-        );
-
-        sgDbOps = scope.mkCRD (
-          scope.crd.fromKind "SGDbOps" {
-            spec.group = "stackgres.io";
-            spec.names.plural = "sgdbops";
-          }
-          |> scope.crd.withShortNames [ "sgdbo" ]
-        );
-      };
+      crds = lib.mapAttrs (_: def: scope.mkCRD (mkCrdInput def)) crdDefs;
 
       # ===== ValidatingWebhookConfiguration =====
 
@@ -888,19 +825,10 @@ in
           self.clusterRole
           self.clusterRoleBinding
           self.operatorService
-          self.crds.sgCluster
-          self.crds.sgInstanceProfile
-          self.crds.sgPostgresConfig
-          self.crds.sgPoolingConfig
-          self.crds.sgBackupConfig
-          self.crds.sgObjectStorage
-          self.crds.sgDistributedLogs
-          self.crds.sgShardedCluster
-          self.crds.sgScript
-          self.crds.sgDbOps
           self.validatingWebhook
           self.mutatingWebhook
-        ];
+        ]
+        ++ lib.attrValues self.crds;
       };
     };
 }
