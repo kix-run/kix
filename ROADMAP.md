@@ -15,7 +15,7 @@
   - Cross-namespace scope validation (`meta.scope = "namespace"` prevents cross-ns DI)
   - Consumer-side dependency validation (immich validates postgres has pgvecto.rs extension via `postgres.out.extensionNames`, warns on undersized PVCs)
   - Redundant/duplicate requires detection, orphaned resource detection
-  - [ ] General validation framework — package-declared requirements on dependencies (beyond ad-hoc checks)
+  - [ ] General validation framework — package-declared requirements on dependencies (beyond ad-hoc checks). `meta.nix` already has `checkMetaStatic` (k8s version bounds, `compatibleWith`, `conflictsWith`, deprecated) and `evaluatePackageDiagnostics` (custom assertion functions). What's missing: declarative dep constraints (e.g. `deps.postgres.requires.extensions = ["pgvecto.rs"]`) so packages don't write imperative check functions for common patterns. Ties into the structured deps design — if deps become a returned attrset, validation constraints can live right on the dep declaration.
 - [ ] @luca Auto-inject dependencies (e.g. valkey for immich) — the "just make it run" experience where pulling in an app auto-enables what it needs
   - [x] **DI resolution**: explicit override → same-namespace match → cluster-wide match → Nix default → error. Aliases supported. This resolves against *existing* instances in the cluster.
   - [x] **DI-driven defaults** (immich): ingressNginx injected → auto-create ingress (no `enabled` flag); clusterIssuer injected → auto-enable TLS. className derived from `ingressNginx.out.ingressClassName`. TLS secret name auto-derived.
@@ -40,6 +40,7 @@
 - [ ] aliases and meta could be on the packages options maybe? => allows default aliases to just be a mkDefault
 - [ ] smarter store paths. Nixos puts the package version into the storepath hash-name-version. This helps a lot with diffing fast.
 - [ ] package definition from dependencies as top level closure input to an explicit dependencies attrset that can carry more information and value (only depend if config.X is set etc). Then pass deps to build closure. This likely makes the fixpoint simpler as well.
+  - **Design direction:** kix packages already return `{ meta, options, build }` — unlike nixpkgs (where the function IS the build), we have a natural place to declare deps as a returned attrset. Phase 1: call package with only `scope`/`lib`/`kix` → get `meta`, `options`, `deps` (no fixpoint needed). Phase 2: resolve deps per-instance from the resolution index. Phase 3: pass resolved deps into `build`. This eliminates `builtins.functionArgs` introspection and the `peekPackageMeta` tryEval hack. Multiple instances of the same package can share phase 1 (same meta/options/dep declarations), only diverging at resolution and build. Constraint: options/meta cannot depend on resolved deps (already true today — `peekPackageMeta` proves it).
 
 ### Validation
 
@@ -207,6 +208,7 @@
 
 ## Case studies & documentation
 
+- [ ] Demo index.html shows `name` and `labels` at top level of `mkResource` without explaining that the DSL auto-nests them under `metadata` — add a callout or insight box so readers understand this isn't standard K8s structure but a deliberate ergonomic shortcut
 - [ ] @luca Immich (from simple to full) — package is functional with DI-driven ingress/TLS, extension validation, storage validation, ML worker, metrics. Cluster definitions exist for ludo (homelab) and example. Remaining: document the progression from bare minimum to full production config, auto-derive host from `cluster.domain`.
 - [ ] How-to case studies for simple cases
 - [ ] Create skill/guide for proper package creation

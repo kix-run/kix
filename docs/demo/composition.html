@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kix — Self-Host Immich</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap');
+  :root {
+    --bg:#0c0c0f;--s:#141419;--s2:#1a1a22;--b:#2a2a35;--t:#e0ddd5;--d:#7a7872;
+    --a:#e8a04a;--ad:#e8a04a22;--g:#7ec87e;--gd:#7ec87e18;--r:#d47272;--rd:#d4727218;
+    --bl:#6ba3d6;--bld:#6ba3d618;--p:#b094d6;--pd:#b094d618;
+    --m:'JetBrains Mono','Fira Code',monospace;--f:'DM Sans',system-ui,sans-serif;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:var(--bg);color:var(--t);font-family:var(--f);line-height:1.65}
+  .wrap{max-width:960px;margin:0 auto;padding:0 28px}
+
+  /* Hero */
+  .hero{padding:72px 0 48px;text-align:center}
+  .hero h1{font-size:44px;font-weight:800;letter-spacing:-0.03em}
+  .hero h1 em{font-style:normal;color:var(--a)}
+  .hero .sub{font-size:18px;color:var(--d);max-width:680px;margin:16px auto 0;line-height:1.7}
+
+  /* Section */
+  .sect{padding:56px 0 48px;border-top:1px solid var(--b)}
+  .sect-label{font-family:var(--m);font-size:12px;color:var(--a);text-transform:uppercase;letter-spacing:0.12em;margin-bottom:8px;font-weight:700}
+  .sect h2{font-size:26px;font-weight:700;letter-spacing:-0.02em;margin-bottom:6px}
+  .sect h2 em{font-style:normal;color:var(--a)}
+  .sect .lead{color:var(--d);font-size:15px;margin-bottom:24px;max-width:700px;line-height:1.7}
+
+  /* Code */
+  pre{background:var(--s);border:1px solid var(--b);border-radius:8px;padding:18px 20px;font-family:var(--m);font-size:12.5px;line-height:1.65;overflow-x:auto;white-space:pre;tab-size:2;margin:12px 0}
+  pre.sm{font-size:11.5px}
+  .code-label{font-size:11px;font-family:var(--m);text-transform:uppercase;letter-spacing:0.08em;font-weight:600;margin-bottom:6px;margin-top:16px}
+  .red{color:var(--r)}.green{color:var(--g)}.blue{color:var(--bl)}.purple{color:var(--p)}.accent{color:var(--a)}.dim{color:var(--d)}
+
+  /* Split */
+  .split{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
+  @media(max-width:700px){.split{grid-template-columns:1fr}}
+
+  /* Callout */
+  .call{padding:14px 18px;border-radius:6px;margin:16px 0;font-size:13.5px;line-height:1.65}
+  .call.a{background:var(--ad);border:1px solid #e8a04a30;color:var(--a)}
+  .call.g{background:var(--gd);border:1px solid #7ec87e30;color:var(--g)}
+  .call.r{background:var(--rd);border:1px solid #d4727230;color:var(--r)}
+  .call.bl{background:var(--bld);border:1px solid #6ba3d630;color:var(--bl)}
+  .call strong{font-weight:700}
+
+  /* Insight box */
+  .insight{background:var(--s2);border-left:3px solid var(--a);padding:16px 20px;margin:20px 0;border-radius:0 6px 6px 0;font-size:14px;line-height:1.7}
+  .insight strong{color:var(--a)}
+
+  /* Diagram */
+  .dia{background:var(--s);border:1px solid var(--b);border-radius:8px;padding:20px 24px;font-family:var(--m);font-size:12px;line-height:1.9;white-space:pre;overflow-x:auto;margin:16px 0}
+
+  /* Arrow */
+  .arrow-down{text-align:center;font-size:28px;color:var(--a);padding:8px 0;font-weight:700}
+
+  /* Links */
+  .links{display:flex;gap:12px;justify-content:center;padding:48px 0;flex-wrap:wrap}
+  .links a{padding:12px 24px;border-radius:8px;font-family:var(--m);font-size:13px;font-weight:600;border:1px solid var(--b);background:var(--s);color:var(--t);text-decoration:none;transition:all .2s}
+  .links a:hover{border-color:var(--a);color:var(--a)}
+  .links a.pri{background:var(--a);color:var(--bg);border-color:var(--a)}
+
+  .footer{text-align:center;padding:24px 0 48px;color:var(--d);font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- HERO                                                    -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="hero">
+  <h1>Self-host Immich.<br><em>The compiler handles the rest.</em></h1>
+  <p class="sub">
+    Immich is a self-hosted Google Photos alternative. It needs a server, a database
+    with vector search, a cache, and persistent storage for your photos.
+    That's a lot of moving parts. Here's all of them:
+  </p>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- THE PUNCHLINE: 12 lines                                 -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="sect">
+  <div class="sect-label">The whole thing</div>
+  <h2>This is <em>everything</em> you write</h2>
+  <p class="lead">
+    This is a real cluster definition. It builds. It produces valid Kubernetes manifests
+    for every resource immich needs. Three explicit instances. Everything else is automatic.
+  </p>
+
+  <pre>instances.immich = {
+
+  <span class="green">immich</span> = {
+    package = packages.immich;
+  };
+
+  <span class="blue">immich-library</span> = {
+    package = packages.persistent-volume-claim;
+    aliases = [ "storage" ];
+    config.size = "200Gi";
+  };
+
+  <span class="purple">immich-db</span> = {
+    package = packages.stackgres-cluster;
+    aliases = [ "postgres" ];
+    config.postgres.extensions = [{
+      name = "vectors";
+      publisher = "tensorchord";
+      version = "0.4.0";
+    }];
+  };
+};</pre>
+
+  <div class="call a">
+    <strong>Where's the cache? The storage class? The service account?</strong>
+    The immich package declares what it needs. The compiler finds or auto-instantiates
+    the rest. You only write what's specific to <em>your</em> deployment.
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- WHAT THE COMPILER DOES                                  -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="sect">
+  <div class="sect-label">Under the hood</div>
+  <h2>What the compiler does <em>with those lines</em></h2>
+  <p class="lead">
+    The immich package has a signature &mdash; a list of things it needs.
+    The compiler reads it and resolves every dependency.
+  </p>
+
+  <div class="dia"><span class="dim">The immich package declares:</span>
+
+  <span class="green">{ scope, lib, kix, </span><span class="accent">postgres</span><span class="green">, </span><span class="accent">valkey</span><span class="green">, </span><span class="accent">storage</span><span class="green">, machineLearning ? null, ... }:</span>
+
+<span class="dim">The compiler resolves each dependency:</span>
+
+  <span class="accent">postgres</span>  &rarr;  <span class="purple">immich-db</span>         <span class="dim">found via alias "postgres" in same namespace</span>
+  <span class="accent">storage</span>   &rarr;  <span class="blue">immich-library</span>    <span class="dim">found via alias "storage" in same namespace</span>
+  <span class="accent">valkey</span>    &rarr;  <span class="green">(auto-instantiated)</span>  <span class="dim">no valkey in namespace &rarr; created from availablePackages</span></div>
+
+  <p class="lead" style="margin-top:24px">
+    You declared three instances. The compiler saw that immich also needs valkey,
+    found no match in the namespace, and auto-instantiated one from the available packages.
+    The result is a complete, working deployment:
+  </p>
+
+  <div class="dia"><span class="accent">Namespace: immich</span>
+
+  <span class="green">immich</span>                         <span class="dim">Deployment + Service + ConfigMap</span>
+  ├── depends on <span class="purple">immich-db</span>       <span class="dim">StackGres PostgreSQL cluster (with pgvecto.rs)</span>
+  ├── depends on <span class="blue">immich-library</span>  <span class="dim">200Gi PersistentVolumeClaim</span>
+  │   └── depends on storage-class  <span class="dim">(auto-resolved from cluster infrastructure)</span>
+  └── depends on <span class="green">valkey</span>          <span class="dim">(auto-created) Redis-compatible cache</span></div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- THE GUARDRAILS                                          -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="sect">
+  <div class="sect-label">The compiler catches mistakes</div>
+  <h2>Try to cut corners. <em>The compiler stops you.</em></h2>
+  <p class="lead">
+    Every one of these mistakes would silently deploy with Helm or plain YAML.
+    Immich would start, fail to connect, crash-loop, and you'd debug it at midnight.
+    With kix, you never get that far.
+  </p>
+
+  <div class="code-label red">Forget the storage</div>
+  <pre><span class="dim"># You deploy immich without any PVC</span>
+instances.immich = {
+  immich    = { package = packages.immich; };
+  immich-db = { package = packages.stackgres-cluster; aliases = ["postgres"]; };
+};
+
+<span class="red">error:</span> no 'storage' found in cluster for namespace 'immich'
+
+       The package 'immich' requires a dependency named 'storage'
+       but no instance with that name or alias exists in namespace 'immich'
+       and no matching package was found in availablePackages for auto-instantiation.
+
+<span class="dim"># The immich package declares storage as a required argument.</span>
+<span class="dim"># No default. No fallback. You must provide it.</span></pre>
+
+  <div class="call r">
+    <strong>Storage is data. It can't be optional.</strong>
+    Unlike valkey (which has a sensible default config), a photo library PVC
+    needs you to decide the size and storage class. The package author made this
+    a required dependency on purpose. You can't accidentally deploy immich
+    without somewhere to put the photos.
+  </div>
+
+  <div class="code-label red">Give it too little storage</div>
+  <pre><span class="dim"># You provide a PVC, but only 10Gi</span>
+instances.immich = {
+  immich         = { package = packages.immich; };
+  immich-library = { package = packages.persistent-volume-claim;
+                     aliases = ["storage"]; config.size = <span class="red">"10Gi"</span>; };
+  immich-db      = { <span class="dim">...</span> };
+};
+
+<span class="accent">warning:</span> immich 'immich' library storage is 10Gi
+         &mdash; recommended minimum is 50Gi for photo libraries
+
+<span class="dim"># The build succeeds &mdash; 10Gi is technically valid.</span>
+<span class="dim"># But the immich package reads storage.out.size and warns you.</span>
+<span class="dim"># A photo library fills up fast. You'll thank the warning later.</span></pre>
+
+  <div class="code-label red">Forget the postgres vector extension</div>
+  <pre><span class="dim"># You provide postgres, but without the vectors extension</span>
+instances.immich = {
+  immich    = { package = packages.immich; };
+  immich-db = { package = packages.stackgres-cluster;
+                aliases = ["postgres"]; };    <span class="dim"># &larr; no extensions configured</span>
+  immich-library = { <span class="dim">...</span> };
+};
+
+<span class="red">error:</span> immich requires the 'vectors' PostgreSQL extension (pgvecto.rs)
+       but the postgres instance 'immich-db' does not have it configured.
+
+       Add to your postgres config:
+         config.postgres.extensions = [{
+           name = "vectors";
+           publisher = "tensorchord";
+           version = "0.4.0";
+         }];
+
+<span class="dim"># The immich package checks postgres.out.extensionNames at build time.</span>
+<span class="dim"># No vectors extension &rarr; immich can't do similarity search &rarr; hard error.</span>
+<span class="dim"># With Helm, you'd discover this when immich tries to CREATE INDEX and crashes.</span></pre>
+
+  <div class="insight">
+    <strong>The package is the expert.</strong> The immich package knows it needs pgvecto.rs.
+    The immich package knows photos need space. These aren't cluster-level policies &mdash;
+    they're domain knowledge encoded by the package author. Every deployment of immich
+    gets the same guardrails automatically.
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- ZOOM IN: How does a resource become a package?          -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="sect">
+  <div class="sect-label">Composition</div>
+  <h2>From a single resource <em>to a full cluster</em></h2>
+  <p class="lead">
+    The cluster definition above didn't appear from nowhere. Here's the composition
+    at every level &mdash; from one Kubernetes resource all the way up.
+  </p>
+
+  <h3 style="margin-top:32px;color:var(--bl);font-size:16px">Level 1: A single resource</h3>
+  <p class="lead">
+    At the bottom, everything is a Kubernetes resource. Standard fields.
+    <code>mkResource</code> registers it in the dependency graph.
+  </p>
+
+  <pre><span class="dim"># Inside the immich package: one Deployment</span>
+server = scope.mkResource {
+  kind = "Deployment";
+  name = "immich-server";
+  spec.template.spec = {
+    containers = [{
+      image = "ghcr.io/immich-app/immich-server:v1.131.1";
+      env = [
+        { name = "DB_HOSTNAME"; value = <span class="green">postgres.out.fqdn</span>; }
+        { name = "REDIS_HOSTNAME"; value = <span class="green">valkey.out.fqdn</span>; }
+      ];
+      volumeMounts = [{
+        name = "library";
+        mountPath = "/usr/src/app/upload";
+      }];
+    }];
+    volumes = [{
+      name = "library";
+      persistentVolumeClaim.claimName = <span class="green">storage.out.name</span>;
+    }];
+  };
+};</pre>
+
+  <div class="call g">
+    <strong>Every green reference is a tracked dependency.</strong>
+    <code>postgres.out.fqdn</code>, <code>valkey.out.fqdn</code>, <code>storage.out.name</code>
+    &mdash; the compiler knows this Deployment depends on all three. Change the
+    database config, the Deployment's hash changes too.
+  </div>
+
+  <div class="arrow-down">&darr;</div>
+
+  <h3 style="color:var(--bl);font-size:16px">Level 2: A package (multiple resources that belong together)</h3>
+  <p class="lead">
+    A package bundles related resources: the Deployment, its Service, ConfigMap,
+    ServiceAccount. It declares what it needs as function arguments.
+  </p>
+
+  <pre><span class="dim"># packages/immich &mdash; the package signature IS the dependency contract</span>
+<span class="accent">{ scope, lib, kix, postgres, valkey, storage, machineLearning ? null, ... }:</span>
+
+<span class="dim"># Validation: check that postgres has the vectors extension</span>
+assert (builtins.elem "vectors" postgres.out.extensionNames)
+  || throw "immich requires the 'vectors' PostgreSQL extension";
+
+<span class="dim"># Build resources using the injected dependencies</span>
+{
+  server     = scope.mkResource { <span class="dim">/* Deployment using postgres, valkey, storage */</span> };
+  service    = scope.mkResource { <span class="dim">/* Service selecting server.out.selector */</span> };
+  configmap  = scope.mkResource { <span class="dim">/* ConfigMap with connection strings */</span> };
+}</pre>
+
+  <div class="call bl">
+    <strong>The package doesn't know where postgres lives.</strong>
+    It doesn't hardcode <code>postgres.immich.svc.cluster.local</code>.
+    It uses <code>postgres.out.fqdn</code> &mdash; whatever the injected instance resolves to.
+    Same package works whether postgres is in the same namespace, another namespace,
+    or an external managed database.
+  </div>
+
+  <div class="arrow-down">&darr;</div>
+
+  <h3 style="color:var(--bl);font-size:16px">Level 3: A namespace (instances wired together)</h3>
+  <p class="lead">
+    The cluster definition places package instances in namespaces.
+    The compiler resolves dependencies within each namespace.
+  </p>
+
+  <pre><span class="dim"># Cluster definition &mdash; this is what you actually write</span>
+instances.immich = {
+  <span class="green">immich</span>         = { package = packages.immich; };
+  <span class="blue">immich-library</span> = { package = packages.persistent-volume-claim;
+                     aliases = ["storage"]; config.size = "200Gi"; };
+  <span class="purple">immich-db</span>      = { package = packages.stackgres-cluster;
+                     aliases = ["postgres"];
+                     config.postgres.extensions = [<span class="dim">/* vectors */</span>]; };
+};</pre>
+
+  <div class="arrow-down">&darr;</div>
+
+  <h3 style="color:var(--bl);font-size:16px">Level 4: A cluster (namespaces + infrastructure)</h3>
+  <p class="lead">
+    The full cluster. Multiple namespaces. Shared infrastructure.
+    Independent modules merged by the compiler.
+  </p>
+
+  <pre>kix.buildCluster {
+  name = "my-homelab";
+  modules = [
+    ./infrastructure.nix    <span class="dim"># storage classes, cert-manager, ingress</span>
+    {
+      instances.immich = {
+        immich         = { package = packages.immich; };
+        immich-library = { <span class="dim">...</span> };
+        immich-db      = { <span class="dim">...</span> };
+      };
+
+      <span class="dim"># Same cluster, different namespace, different app</span>
+      instances.paperless = {
+        paperless      = { package = packages.paperless; };
+        paperless-data = { <span class="dim">...</span> };
+        paperless-db   = { <span class="dim">...</span> };
+      };
+    }
+  ];
+}</pre>
+
+  <div class="insight">
+    <strong>Each level composes into the next.</strong>
+    Resources compose into packages. Packages compose into namespaces.
+    Namespaces compose into clusters. At every level, the compiler tracks
+    dependencies and validates contracts. The person writing the cluster
+    definition doesn't need to know what's inside the immich package &mdash;
+    just that it needs postgres, storage, and valkey.
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- WHAT YOU DIDN'T WRITE                                   -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="sect">
+  <div class="sect-label">The invisible work</div>
+  <h2>Everything you <em>didn't</em> write</h2>
+  <p class="lead">
+    Those 12 lines produced a working deployment. Here's everything the compiler
+    figured out on its own:
+  </p>
+
+  <div class="dia"><span class="accent">You wrote:</span>                           <span class="green">The compiler produced:</span>
+
+3 instance declarations               Namespace/immich
+                                       Deployment/immich-server
+                                       Service/immich-server
+                                       ConfigMap/immich
+                                       ServiceAccount/immich
+                                       PersistentVolumeClaim/immich-library
+                                       StatefulSet/immich-db  (StackGres cluster)
+                                       StatefulSet/valkey     (auto-instantiated)
+                                       Service/valkey
+                                       <span class="dim">+ RBAC, secrets, operator configs...</span>
+
+<span class="accent">You configured:</span>                       <span class="green">The compiler wired:</span>
+
+config.size = "200Gi"                  PVC spec.resources.requests.storage
+aliases = ["postgres"]                 Immich's DB_HOSTNAME env var
+aliases = ["storage"]                  Immich's volume mount + claim name
+config.postgres.extensions             StackGres extension config + immich validation
+
+<span class="accent">You skipped:</span>                          <span class="green">The compiler auto-resolved:</span>
+
+valkey                                 Auto-instantiated from availablePackages
+storage class                          Resolved from cluster infrastructure via DI
+service selectors                      Derived from deployment labels (guaranteed match)
+connection strings                     Generated from .out.fqdn (tracked dependency)</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- THE POINT                                               -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="sect" style="border-top:2px solid var(--a)">
+  <h2>Trivial to deploy. <em>Impossible to misconfigure.</em></h2>
+  <p class="lead">
+    Self-hosting immich with Helm means reading a values.yaml with 200+ keys,
+    hoping you set the right postgres host, and discovering at runtime that you
+    forgot the vector extension. With kix:
+  </p>
+
+  <div class="dia" style="line-height:2.2"><span class="accent">Forget storage?</span>             Compile error. Storage is a required dependency.
+<span class="accent">Storage too small?</span>           Warning. The immich package checks and tells you.
+<span class="accent">No vector extension?</span>         Compile error. Immich validates postgres capabilities.
+<span class="accent">Selector mismatch?</span>           Impossible. Selectors are derived, not copy-pasted.
+<span class="accent">Wrong database hostname?</span>     Impossible. Connection strings come from .out.fqdn.
+<span class="accent">Forgot the cache?</span>            Auto-instantiated. Valkey is in the available packages.</div>
+
+  <p class="lead" style="margin-top:24px">
+    You declare what matters. The compiler handles what's mechanical.
+    And when you get something wrong, it tells you <em>before</em> anything
+    touches your cluster.
+  </p>
+</div>
+
+<div class="links">
+  <a class="pri" href="./">The Full Walkthrough &rarr;</a>
+  <a href="features.html">Feature Showcase &rarr;</a>
+  <a href="deploy.html">Deployment Pipeline &rarr;</a>
+</div>
+
+<div class="footer">kix &mdash; a compiler for Kubernetes</div>
+
+</div>
+</body>
+</html>
