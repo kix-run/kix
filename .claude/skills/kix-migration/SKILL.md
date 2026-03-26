@@ -27,7 +27,7 @@ When translating, read the source config first to understand intent, then check 
 
 - **Helm's release-name prefixing** — Helm prepends the release name to everything. kix uses `scope.instanceName` and explicit naming. Don't cargo-cult the prefix pattern.
 - **Ansible's imperative ordering** — Ansible tasks run in order. kix tracks dependencies via store-path references (`"${self.x}"`). You don't need to think about ordering — just reference what you depend on.
-- **Helm's values.yaml layering** — Helm has a complex values merge hierarchy. kix has `scope.defaults` (one level) with cluster definition overrides. Keep it flat.
+- **Helm's values.yaml layering** — Helm has a complex values merge hierarchy. kix uses typed `options` with `lib.mkOption` defaults, evaluated via the NixOS module system. Cluster-level `config` overrides are deep-merged on top of option defaults.
 - **Ansible's `when:` conditionals** — Use `lib.optionalAttrs` / `lib.optional` for conditional resources, or `if/then/else` with `null` for optional parts of the attrset.
 - **Helm's template helpers (`_helpers.tpl`)** — Use `let` bindings in Nix. Define shared values (labels, selectors, names) once in the `let` block and reference them.
 - **Multiple instances of the same service** — Don't duplicate package code. Write one package with config, instantiate it multiple times in the cluster definition with different configs. Use `kix.mkEnv` when the pattern is environment-based (prod/stage/demo).
@@ -69,7 +69,7 @@ The diff report shows: identical, modified (with JSON-path diffs), kix-only, clu
 
 Focus on the **Modified** section. Each entry shows exactly which fields differ and where. Common patterns:
 
-- **Config values differ** (image tags, replica counts, resource limits) → update `scope.defaults` or cluster config overrides
+- **Config values differ** (image tags, replica counts, resource limits) → update `options` defaults or cluster config overrides
 - **Naming mismatch** → adjust resource names in the package to match what's deployed
 - **Extra labels/annotations on cluster side** → usually harmless (operator-injected), ignore via `--ignore-path`
 - **Missing fields in kix** → add them to the package
@@ -169,44 +169,24 @@ Use `"${self.resourceName}"` to reference another resource's name. This creates 
 serviceAccountName = "${self.serviceAccount}";
 ```
 
-### Label selectors with `scope.selectWorkload` and `scope.selectByLabels`
+### Label selectors and `requires`
 
-For Services, PDBs, and other resources that select pods via labels, use
-`scope.selectWorkload` to derive the selector from the target workload:
+For Services, PDBs, and other resources that select pods via labels, use `scope.selectorLabels` (auto-derived per-instance) and `requires` to track the dependency:
 
 ```nix
 service = scope.mkResource {
   apiVersion = "v1";
   kind = "Service";
   name = "web";
-  spec.selector = scope.selectWorkload self.deployment;  # derives matchLabels + tracks dependency
+  requires = [ self.deployment ];  # explicit dependency tracking
+  spec.selector = scope.selectorLabels;
   spec.ports = [{ port = 80; }];
 };
 ```
 
-`scope.selectWorkload target` reads `spec.selector.matchLabels` from the target and
-returns those labels with the target's store path attached as Nix string context.
-
-For selecting a resource by its package-provided labels (e.g., a ServiceMonitor
-matching a Service), use `scope.selectByLabels`:
-
-```nix
-serviceMonitor = scope.mkClusterResource {
-  apiVersion = "monitoring.coreos.com/v1";
-  kind = "ServiceMonitor";
-  name = "my-monitor";
-  spec.selector.matchLabels = scope.selectByLabels self.metricsService;
-  spec.endpoints = [{ port = "metrics"; }];
-};
-```
-
-Both functions:
-- Return correct labels by construction (no shared variable to desync)
-- Track dependencies automatically (no `requires` needed)
-
 ### Explicit `requires`
 
-The `root.requires` list (or per-resource `requires`) is for resources that are **not** referenced via string interpolation or `selectWorkload`/`selectByLabels` but still need to be included. The most common case is HPA `scaleTargetRef` (a name-based reference, not a label selector).
+The `root.requires` list (or per-resource `requires`) is for resources that are **not** referenced via string interpolation but still need to be included. Common cases: Services selecting Deployments via labels, HPAs referencing Deployments by name.
 
 ### Warning system
 
@@ -228,10 +208,10 @@ Fix all warnings before committing.
 | `scope.mkDeployment` | Create a Deployment — auto-sets apiVersion/kind, copies `selector.matchLabels` to template labels |
 | `scope.mkStatefulSet` | Same as mkDeployment but for StatefulSets |
 | `scope.mkDaemonSet` | Same as mkDeployment but for DaemonSets |
-| `scope.selectWorkload target` | Derive selector labels from target's `spec.selector.matchLabels` with automatic dependency tracking |
-| `scope.selectByLabels target` | Select a resource by its package-provided labels (before scope injection) with dependency tracking |
 | `scope.selectorLabels` | Default selector labels for this instance (used as `selector.matchLabels`). Overridable per-instance via `selectorLabels` in cluster config. |
-| `scope.defaults config { defaults }` | Deep-merge user config over package defaults. Warns on unknown keys. |
+| `scope.forNamespace nsName` | Get a scope for a different namespace (cross-namespace resources) |
+| `scope.rbac` | RBAC DSL — see RBAC_DSL.md |
+| `scope.mkCRD`, `scope.mkCRDRef`, `scope.mkCR` | CRD resource builders and custom resource creators |
 | `scope.instanceName` | The instance name from the cluster definition |
 | `scope.namespaceName` | The namespace this instance lives in |
 | `scope.namespace` | The Namespace resource itself (for deps) |
@@ -420,7 +400,7 @@ else null;
 
 | Function | When to use | Description |
 |----------|-------------|-------------|
-| `kix.buildCluster { ... }` | **Always.** Every cluster definition uses this. | Takes `name`, `clusterLabels`, `namespaces`, and `instances`. Returns `{ activation, instances, namespaces, rawManifests }`. The `activation` is the cluster root store path — pipeline derivations in flake.nix use `exportReferencesGraph` on it to produce annotated manifests and deploy graphs. |
+| `kix.buildCluster { ... }` | **Always.** Every cluster definition uses this. | Takes `name`, `modules`, and optional `specialArgs`. Modules are NixOS-style: they set `instances`, `namespaces`, `clusterLabels`, etc. Returns `{ activation, instances, namespaces, rawManifests }`. The `activation` is the cluster root store path — pipeline derivations in flake.nix use `exportReferencesGraph` on it to produce annotated manifests and deploy graphs. |
 | `kix.mkEnv envName envConfig instanceSets` | **When the same services run in multiple environments** (e.g. myapp-prod, myapp-stage, myapp-demo). Instead of duplicating instance blocks, define the service stack once and stamp it into env-prefixed namespaces with per-env config overrides. | Stamps instance sets into `{envName}-{setName}` namespaces. |
 | `kix.mergeFragments { fragments; namespacePolicies; }` | **When multiple teams own different parts of a cluster.** Each team produces a fragment `{ namespaces, instances }` and `mergeFragments` combines them with collision detection. Don't manually merge attrsets — use this. | Deep-merges namespaces, detects instance collisions across fragments. |
 | `kix.fromHelmChart { chart; values; releaseName; includeCrds; }` | **When migrating a Helm-managed service that you don't want to rewrite in pure kix yet.** Wraps a Helm chart so its output is tracked like any other kix package. Use this as a stepping stone — pure kix packages are preferred for full control. | Renders a Helm chart and wraps each resource as a kix resource. |
@@ -452,26 +432,28 @@ Cluster definitions can be **single-file** or **module-based**.
 { kix, packages }:
 kix.buildCluster {
   name = "my-cluster";
-  clusterLabels = { cluster = "my-cluster"; team = "platform"; };
-  namespaces = {
-    kube-system = { };
-    my-namespace = { };
-  };
-  instances = { ref, ... }: {
-    kube-system = {
-      coredns = { package = packages.coredns; };
-      reloader = { package = packages.reloader; };
+  modules = [{
+    clusterLabels = { cluster = "my-cluster"; team = "platform"; };
+    namespaces = {
+      kube-system = { };
+      my-namespace = { };
     };
-    my-namespace = {
-      my-app = {
-        package = packages.my-app;
-        config = {
-          image.tag = "v2.0.0";  # override package defaults
-          replicaCount = 3;
+    instances = {
+      kube-system = {
+        coredns = { package = packages.coredns; };
+        reloader = { package = packages.reloader; };
+      };
+      my-namespace = {
+        my-app = {
+          package = packages.my-app;
+          config = {
+            image.tag = "v2.0.0";  # override package defaults
+            replicaCount = 3;
+          };
         };
       };
     };
-  };
+  }];
 }
 ```
 
@@ -719,7 +701,7 @@ Complex applications like Harbor have multiple sub-services (core, portal, regis
 ## Migration Tips
 
 - **Read the Ansible role first.** Understand what the role creates — which Deployments, Services, ConfigMaps, RBAC, etc. This tells you what your package needs. Don't reverse-engineer from the cluster dump alone.
-- **Ansible vars → `scope.defaults`.** Anything that's a variable in the Ansible role (image tags, replica counts, domain names) should be a config key in `scope.defaults`. Anything hardcoded in the Ansible templates can be hardcoded in the package.
+- **Ansible vars → `options`.** Anything that's a variable in the Ansible role (image tags, replica counts, domain names) should be an option in `options` with a `lib.mkOption` default. Anything hardcoded in the Ansible templates can be hardcoded in the package.
 - **Match the cluster, not the Ansible.** If the Ansible code says `replicas: 2` but the cluster has `replicas: 3`, use `3` as the cluster definition override. The cluster is the source of truth for current state.
 - **Start rough, diff, fix.** Write a first pass of the package from the Ansible role, build, diff against the cluster dump, and iterate. The diff tool tells you exactly what's wrong.
 - **Match names exactly.** If the diff shows a resource as kix-only with a fuzzy match to a cluster resource, rename it to match what's deployed.

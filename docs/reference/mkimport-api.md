@@ -2,7 +2,7 @@
 
 ## `kix.mkImport`
 
-**Defined in:** `lib/eval.nix`
+**Defined in:** `lib/eval/import.nix`
 **Exported via:** `lib/default.nix`
 
 Creates an import marker used as the `package` field for instances that represent external (non-kix-managed) resources.
@@ -32,8 +32,7 @@ Import instances support the same module fields as regular instances:
 | Field | Relevant for imports? | Notes |
 |-------|----------------------|-------|
 | `package` | Yes | Set to `kix.mkImport { ... }` |
-| `packageType` | Yes | Required for DI resolution |
-| `aliases` | Yes | Additional DI keys |
+| `aliases` | Yes | Additional DI names beyond the instance name |
 | `config` | Only with `from` | Evaluated against the package's options; only values affecting `out` matter |
 | `deps` | No | Ignored — import builds receive null for all dependency args |
 | `partsOverlays` | No | Ignored — no parts to overlay |
@@ -92,7 +91,7 @@ Unlike `mkResource`, output values carry **no Nix string context** — import re
 
 ## `mkImportScope`
 
-**Defined in:** `lib/eval.nix`
+**Defined in:** `lib/eval/import.nix`
 
 Creates a scope identical to `mkScope` but with `mkResource` and `mkClusterResource` replaced by `mkImportResource`-based versions. Injected into package functions during import evaluation.
 
@@ -118,7 +117,7 @@ The returned scope has the same shape as a regular scope:
 
 ## `evaluateImportInstance`
 
-**Defined in:** `lib/eval.nix`
+**Defined in:** `lib/eval/import.nix`
 
 Evaluation path for import instances. Called by `evaluateInstance` when the package is a `kix-import`.
 

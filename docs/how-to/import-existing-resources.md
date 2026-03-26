@@ -21,7 +21,7 @@ kix.buildCluster {
       cache = {
         valkey = {
           package = kix.mkImport { from = packages.valkey; };
-          packageType = "valkey";
+          aliases = [ "valkey" "redis" ];
         };
       };
 
@@ -91,7 +91,6 @@ When using `from`, the package's typed options are evaluated with defaults. If t
 cache = {
   valkey = {
     package = kix.mkImport { from = packages.valkey; };
-    packageType = "valkey";
     config = {
       sentinel.enabled = true;
       sentinel.primarySet = "myprimary";
@@ -141,7 +140,6 @@ The import instance participates fully in DI resolution — other packages recei
 
 ## Tips
 
-- **`packageType` matters** — set it so DI resolution finds the import. If your valkey instance should resolve when packages ask for `valkey`, set `packageType = "valkey"`.
-- **`aliases` work too** — an imported postgres could have `aliases = ["database"]` for packages that depend on `database`.
+- **Instance name and aliases matter** — DI resolution matches package argument names against instance names and aliases. If your instance is named `valkey`, packages with a `valkey` argument will find it automatically. Add `aliases = ["redis"]` if packages ask for `redis`.
 - **Adopting an import** — to take over management of an imported service, replace `kix.mkImport { ... }` with the real package. The `out` shape is identical, so downstream consumers don't change.
 - **No dependency args needed** — the import doesn't resolve its own dependencies (they're passed as null). This is fine because only `out` is evaluated.
