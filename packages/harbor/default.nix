@@ -8,6 +8,7 @@
 #   postgres       — required, database
 #   ingressNginx   — optional, provides IngressClass for ingress
 #   clusterIssuer  — optional, provides withCert transformer for TLS
+#   prometheus     — optional, gates ServiceMonitor creation and provides CRD ref
 #
 # Redis is built-in (uses goharbor/redis-photon, Harbor's own image).
 #
@@ -20,7 +21,7 @@
 #   Exporter   -- Deployment, Service, ConfigMap, Secret
 #   Ingress    -- Ingress (optional)
 #
-# root = Ingress (or core Service when ingress disabled)
+# root = Ingress (when DI provides ingressNginx + host) or core Service
 
 {
   scope,
@@ -29,6 +30,7 @@
   postgres,
   ingressNginx ? null,
   clusterIssuer ? null,
+  prometheus ? null,
 }:
 
 let
@@ -139,12 +141,8 @@ in
     ingress = lib.mkOption {
       type = lib.types.anything;
       default = {
-        enabled = true;
-        host = "harbor.example.com";
-        tls = {
-          enabled = true;
-          secretName = "harbor-ingress";
-        };
+        host = null;
+        annotations = { };
       };
     };
 
@@ -203,10 +201,25 @@ in
     let
       # --- Derived values ---
 
+      hasMetrics = config.metrics.enabled && prometheus != null;
+
       redisHost = "${name}-redis";
       redisPort = "6379";
       dbHost = if config.database.host != null then config.database.host else postgres.out.fqdn;
       noProxy = "${name}-core,${name}-jobservice,${name}-database,${name}-registry,${name}-portal,${name}-trivy,${name}-exporter,127.0.0.1,localhost,.local,.internal";
+
+      # DI-driven ingress gating
+      clusterDomain = clusterConfig.cluster.domain or null;
+      effectiveHost =
+        if config.ingress.host != null then
+          config.ingress.host
+        else if clusterDomain != null then
+          "${name}.${clusterDomain}"
+        else
+          null;
+      hasIngress = ingressNginx != null && effectiveHost != null;
+      hasTls = hasIngress && clusterIssuer != null;
+      tlsSecretName = "${name}-tls";
 
       # Internal URLs — plain strings matching the service names.
       # No self-reference needed: these are deterministic from the instance name.
@@ -266,13 +279,8 @@ in
       registryCtlProbe = lib.recursiveUpdate probeBase { httpGet.path = "/api/health"; };
       jobserviceProbe = lib.recursiveUpdate probeBase { httpGet.path = "/api/v1/stats"; };
 
-      # CRD references
-      serviceMonitorCRDRef = scope.mkCRDRef {
-        group = "monitoring.coreos.com";
-        kind = "ServiceMonitor";
-        plural = "servicemonitors";
-      };
-      mkServiceMonitor = serviceMonitorCRDRef.out.mkCR scope;
+      # ServiceMonitor builder from prometheus DI dep
+      mkServiceMonitor = if prometheus != null then prometheus.out.mkServiceMonitor scope else null;
 
     in
     {
@@ -473,7 +481,7 @@ in
                 {
                   name = "token-service-private-key";
                   secret = {
-                    secretName = config.ingress.tls.secretName;
+                    secretName = tlsSecretName;
                     defaultMode = 420;
                   };
                 }
@@ -1218,7 +1226,7 @@ in
       # ============================================================
 
       serviceMonitor =
-        if config.metrics.enabled then
+        if hasMetrics then
           mkServiceMonitor {
             name = name;
             spec = {
@@ -1240,24 +1248,21 @@ in
       # ============================================================
 
       ingress =
-        if config.ingress.enabled then
-          scope.mkResource {
+        if hasIngress then
+          {
             apiVersion = "networking.k8s.io/v1";
             kind = "Ingress";
             name = "${name}-ingress";
             annotations = {
               "nginx.ingress.kubernetes.io/proxy-body-size" = "0";
               "nginx.ingress.kubernetes.io/ssl-redirect" = "true";
-            };
+            }
+            // (config.ingress.annotations or { });
             spec = {
-              ingressClassName =
-                if ingressNginx != null then
-                  ingressNginx.out.ingressClassName
-                else
-                  config.ingress.className or "public-v2";
+              ingressClassName = ingressNginx.out.ingressClassName;
               rules = [
                 {
-                  host = config.ingress.host;
+                  host = effectiveHost;
                   http.paths = [
                     {
                       path = "/api/";
@@ -1303,16 +1308,17 @@ in
                 }
               ];
             }
-            // lib.optionalAttrs (config.ingress.tls.enabled or false) {
+            // lib.optionalAttrs hasTls {
               tls = [
                 {
-                  hosts = [ config.ingress.host ];
-                  secretName = config.ingress.tls.secretName;
+                  hosts = [ effectiveHost ];
+                  secretName = tlsSecretName;
                 }
               ];
             };
           }
-          |> (if clusterIssuer != null then clusterIssuer.out.withCert else lib.id)
+          |> (if hasTls then clusterIssuer.out.withCert else lib.id)
+          |> scope.mkResource
         else
           null;
 
@@ -1422,7 +1428,7 @@ in
       # ============================================================
 
       root = {
-        resource = if config.ingress.enabled then self.ingress else self.coreService;
+        resource = if hasIngress then self.ingress else self.coreService;
         requires = [
           self.coreDeployment
           self.coreService
@@ -1444,8 +1450,8 @@ in
           self.redisStatefulSet
           self.redisService
         ]
-        ++ lib.optional config.ingress.enabled self.ingress
-        ++ lib.optional config.metrics.enabled self.serviceMonitor;
+        ++ lib.optional hasIngress self.ingress
+        ++ lib.optional hasMetrics self.serviceMonitor;
       };
     };
 }

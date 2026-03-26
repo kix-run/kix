@@ -4,6 +4,12 @@
 # PostgreSQL (via StackGres) and Valkey (Redis-compatible) for Bull
 # queue processing.
 #
+# Dependencies:
+#   postgres            — required, database
+#   valkey              — required, Redis-compatible queue backend
+#   ingressNginx        — optional, auto-creates ingress when present (+ host is set)
+#   clusterIssuer       — optional, auto-enables TLS when present
+#
 # Resources: ServiceAccount, ConfigMap (env), Deployment (main),
 # Deployment (worker), Service (web UI), Ingress (optional).
 #
@@ -16,8 +22,10 @@
   scope,
   lib,
   kix,
-  postgres ? null,
-  valkey ? null,
+  postgres,
+  valkey,
+  ingressNginx ? null,
+  clusterIssuer ? null,
 }:
 
 let
@@ -83,14 +91,7 @@ in
     ingress = lib.mkOption {
       type = lib.types.anything;
       default = {
-        enabled = false;
-        className = "public";
-        host = "";
-        tls = {
-          enabled = false;
-          secretName = "";
-          issuer = "";
-        };
+        host = null;
         annotations = { };
       };
     };
@@ -106,16 +107,8 @@ in
       type = lib.types.anything;
       default = {
         type = "postgresdb";
-        host = null;
         name = "n8n";
         user = "n8n";
-      };
-    };
-    redis = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        host = null;
-        port = "6379";
       };
     };
   };
@@ -127,24 +120,6 @@ in
       clusterConfig,
     }:
     let
-      # Resolve database host: explicit config > postgres dependency fqdn > error.
-      dbHost =
-        if config.database.host != null then
-          config.database.host
-        else if postgres != null then
-          postgres.out.fqdn
-        else
-          throw "n8n: database.host must be set or a postgres dependency must be available";
-
-      # Resolve redis host: explicit config > valkey dependency fqdn > error.
-      redisHost =
-        if config.redis.host != null then
-          config.redis.host
-        else if valkey != null then
-          valkey.out.fqdn
-        else
-          throw "n8n: redis.host must be set or a valkey dependency must be available";
-
       # Secret name for credentials (used as secretRef on envFrom).
       secretName = if config.existingSecret != null then config.existingSecret else "${name}-app-secret";
 
@@ -160,6 +135,18 @@ in
         { configMapRef.name = self.workerConfigmap.out.name; }
         { secretRef.name = secretName; }
       ];
+
+      # DI-driven ingress: created when ingressNginx is injected AND host is set.
+      clusterDomain = clusterConfig.cluster.domain or null;
+      effectiveHost =
+        if config.ingress.host != null then
+          config.ingress.host
+        else if clusterDomain != null then
+          "${name}.${clusterDomain}"
+        else
+          null;
+      hasIngress = ingressNginx != null && effectiveHost != null;
+      hasTls = hasIngress && clusterIssuer != null;
     in
     {
 
@@ -176,14 +163,13 @@ in
         kind = "ConfigMap";
         name = "${name}-app-config";
         data = {
-          # Database
+          # Database — derived from postgres DI dep
           DB_TYPE = config.database.type;
-          DB_POSTGRESDB_HOST = dbHost;
+          DB_POSTGRESDB_HOST = postgres.out.fqdn;
           DB_POSTGRESDB_DATABASE = config.database.name;
           DB_POSTGRESDB_USER = config.database.user;
-          # Redis / Queue
-          QUEUE_BULL_REDIS_HOST = redisHost;
-          QUEUE_BULL_REDIS_PORT = config.redis.port;
+          # Redis / Queue — derived from valkey DI dep
+          QUEUE_BULL_REDIS_HOST = valkey.out.fqdn;
           # Execution mode — queue mode for workers
           EXECUTIONS_MODE = "queue";
         }
@@ -361,8 +347,6 @@ in
           null;
 
       # --- Service ---
-      # kix.service.fromWorkload auto-derives selector and ports from the
-      # deployment's container spec. Override ports to map servicePort -> container port.
       service =
         self.deployment
         |> kix.service.fromWorkload {
@@ -382,24 +366,23 @@ in
         }
         |> scope.mkResource;
 
-      # --- Ingress (optional) ---
+      # --- Ingress (DI-driven) ---
+      # Created automatically when ingressNginx is injected and host is set.
+      # TLS is auto-enabled when clusterIssuer is injected.
       ingress =
-        if config.ingress.enabled then
+        if hasIngress then
           self.service
           |> kix.ingress.fromService {
             inherit name;
-            host = config.ingress.host;
-            className = config.ingress.className;
-            tls = lib.optional config.ingress.tls.enabled {
-              hosts = [ config.ingress.host ];
-              secretName = config.ingress.tls.secretName;
+            host = effectiveHost;
+            className = ingressNginx.out.ingressClassName;
+            tls = lib.optional hasTls {
+              hosts = [ effectiveHost ];
+              secretName = "${name}-tls";
             };
-            annotations =
-              lib.optionalAttrs (config.ingress.tls.enabled && config.ingress.tls.issuer != "") {
-                "cert-manager.io/cluster-issuer" = config.ingress.tls.issuer;
-              }
-              // config.ingress.annotations;
+            annotations = config.ingress.annotations;
           }
+          |> (if hasTls then clusterIssuer.out.withCert else lib.id)
           |> scope.mkResource
         else
           null;

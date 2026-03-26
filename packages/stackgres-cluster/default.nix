@@ -14,6 +14,7 @@
 {
   scope,
   lib,
+  storageClasses ? null,
 }:
 
 let
@@ -49,7 +50,7 @@ in
       type = lib.types.anything;
       default = {
         size = "20Gi";
-        storageClass = "localzfs-retain";
+        storageClass = null;
       };
     };
     instanceProfile = lib.mkOption {
@@ -215,6 +216,15 @@ in
         defaultPostgresqlConf // config.pgConfig.postgresqlConf
       );
 
+      # Resolve effective storageClass: explicit config > DI > error.
+      effectiveStorageClass =
+        if config.storage.storageClass != null then
+          config.storage.storageClass
+        else if storageClasses != null then
+          storageClasses.out.storageClassName
+        else
+          throw "stackgres-cluster: config.storage.storageClass must be set or a storageClasses dependency must be available";
+
     in
     {
 
@@ -371,7 +381,7 @@ in
           pods = {
             persistentVolume = {
               size = config.storage.size;
-              storageClass = config.storage.storageClass;
+              storageClass = effectiveStorageClass;
             };
           };
         }

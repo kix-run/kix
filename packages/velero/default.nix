@@ -9,10 +9,15 @@
 #            BackupStorageLocation, VolumeSnapshotLocation, Schedule CRs.
 #
 # root = Deployment (velero server)
+#
+# Exposes via DI:
+#   velero.out.withBackup    — transformer: include resource in backups
+#   velero.out.withoutBackup — transformer: exclude resource from backups
 
 {
   scope,
   lib,
+  objectStorage ? null,
 }:
 
 let
@@ -146,6 +151,29 @@ in
       clusterConfig,
     }:
     let
+      # S3 endpoint: explicit config > objectStorage DI dep
+      effectiveS3Url =
+        if config.backupStorageLocation.config.s3Url or "" != "" then
+          config.backupStorageLocation.config.s3Url
+        else if objectStorage != null then
+          objectStorage.out.endpoint
+        else
+          "";
+
+      effectivePublicUrl =
+        if config.backupStorageLocation.config.publicUrl or "" != "" then
+          config.backupStorageLocation.config.publicUrl
+        else
+          effectiveS3Url;
+
+      effectiveS3ForcePathStyle =
+        if config.backupStorageLocation.config.s3ForcePathStyle or "" != "" then
+          config.backupStorageLocation.config.s3ForcePathStyle
+        else if objectStorage != null then
+          objectStorage.out.s3ForcePathStyle or "false"
+        else
+          "false";
+
       # Whether we create the credentials secret ourselves.
       createSecret = config.credentials.secretContents != null;
       credentialSecretName =
@@ -587,7 +615,14 @@ in
           objectStorage = {
             bucket = config.backupStorageLocation.bucket;
           };
-          config = lib.filterAttrs (_: v: v != "") config.backupStorageLocation.config;
+          config = lib.filterAttrs (_: v: v != "") (
+            config.backupStorageLocation.config
+            // {
+              s3Url = effectiveS3Url;
+              publicUrl = effectivePublicUrl;
+              s3ForcePathStyle = effectiveS3ForcePathStyle;
+            }
+          );
         }
         // lib.optionalAttrs hasCredentials {
           credential = {
@@ -637,6 +672,30 @@ in
         ++ lib.optional (self.secret != null) self.secret
         ++ lib.optional (self.volumeSnapshotLocation != null) self.volumeSnapshotLocation
         ++ (lib.attrValues scheduleResources);
+
+        # Package-level out extensions — exposed via DI as velero.out.*
+        out = {
+          # Transformer: include a resource in velero backups.
+          # Pipe-friendly: `scope.mkResource ({ ... } |> velero.out.withBackup)`
+          withBackup =
+            args:
+            args
+            // {
+              annotations = (args.annotations or { }) // {
+                "velero.io/exclude-from-backup" = "false";
+              };
+            };
+
+          # Transformer: exclude a resource from velero backups.
+          withoutBackup =
+            args:
+            args
+            // {
+              annotations = (args.annotations or { }) // {
+                "velero.io/exclude-from-backup" = "true";
+              };
+            };
+        };
       };
     };
 }

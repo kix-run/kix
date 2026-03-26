@@ -1,15 +1,15 @@
 # Metabase analytics/BI platform — kix package.
 #
 # Deploys Metabase backed by PostgreSQL (via StackGres). Simple
-# single-deployment architecture with optional Ingress.
+# single-deployment architecture with DI-driven Ingress/TLS.
 #
 # Dependencies:
-#   postgres            — optional, database (for DI tracking)
-#   ingressNginx        — optional, provides IngressClass for ingress
-#   clusterIssuer       — optional, provides withCert transformer for TLS
+#   postgres            — required, database
+#   ingressNginx        — optional, auto-creates ingress when present (+ host is set)
+#   clusterIssuer       — optional, auto-enables TLS when present
 #
 # Resources: Deployment (web), Service (web, port 80 -> 3000),
-# Ingress (frontend, optional).
+# Ingress (optional, DI-driven).
 #
 # root = Service (port 80).
 # External secret expected to contain DB connection env vars.
@@ -18,7 +18,7 @@
   scope,
   lib,
   kix,
-  postgres ? null,
+  postgres,
   ingressNginx ? null,
   clusterIssuer ? null,
 }:
@@ -64,14 +64,7 @@ in
     ingress = lib.mkOption {
       type = lib.types.anything;
       default = {
-        enabled = false;
-        className = "public";
-        host = "";
-        tls = {
-          enabled = false;
-          secretName = "tls";
-          issuer = "";
-        };
+        host = null;
         annotations = { };
       };
     };
@@ -136,6 +129,18 @@ in
     let
       # Secret name for credentials.
       secretName = if config.existingSecret != null then config.existingSecret else "${name}-secrets";
+
+      # DI-driven ingress: created when ingressNginx is injected AND host is set.
+      clusterDomain = clusterConfig.cluster.domain or null;
+      effectiveHost =
+        if config.ingress.host != null then
+          config.ingress.host
+        else if clusterDomain != null then
+          "${name}.${clusterDomain}"
+        else
+          null;
+      hasIngress = ingressNginx != null && effectiveHost != null;
+      hasTls = hasIngress && clusterIssuer != null;
     in
     {
 
@@ -198,7 +203,7 @@ in
         |> scope.mkDeployment;
 
       # --- Service ---
-      # Port 80 → targetPort 3000, so we pass explicit ports to override auto-derived ones.
+      # Port 80 -> targetPort 3000, so we pass explicit ports to override auto-derived ones.
       service =
         self.deployment
         |> kix.service.fromWorkload {
@@ -214,26 +219,23 @@ in
         }
         |> scope.mkResource;
 
-      # --- Ingress (optional) ---
+      # --- Ingress (DI-driven) ---
+      # Created automatically when ingressNginx is injected and host is set.
+      # TLS is auto-enabled when clusterIssuer is injected.
       ingress =
-        if config.ingress.enabled then
+        if hasIngress then
           self.service
           |> kix.ingress.fromService {
-            name = "frontend";
-            host = config.ingress.host;
-            port = config.servicePort;
-            className =
-              if ingressNginx != null then
-                ingressNginx.out.ingressClassName
-              else
-                config.ingress.className or "public";
-            tls = lib.optional (config.ingress.tls.enabled or false) {
-              hosts = [ config.ingress.host ];
-              secretName = config.ingress.tls.secretName;
+            inherit name;
+            host = effectiveHost;
+            className = ingressNginx.out.ingressClassName;
+            tls = lib.optional hasTls {
+              hosts = [ effectiveHost ];
+              secretName = "${name}-tls";
             };
             annotations = config.ingress.annotations;
           }
-          |> (if clusterIssuer != null then clusterIssuer.out.withCert else lib.id)
+          |> (if hasTls then clusterIssuer.out.withCert else lib.id)
           |> scope.mkResource
         else
           null;

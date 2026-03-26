@@ -5,7 +5,11 @@
 # cron workers, custom processes, in-cluster Redis, ingress with
 # cert-manager TLS, ConfigMap environment, secrets, and migration hooks.
 #
-# Dependencies (postgres, valkey) are optional — resolved via DNS-like DI.
+# Dependencies:
+#   postgres            — optional, database
+#   valkey              — optional, cache/queue backend
+#   ingressNginx        — optional, auto-creates ingress when present (+ hosts non-empty)
+#   clusterIssuer       — optional, auto-enables TLS when present
 #
 # root = backend Service (or caddy Service if caddy enabled).
 
@@ -15,6 +19,8 @@
   kix,
   postgres ? null,
   valkey ? null,
+  ingressNginx ? null,
+  clusterIssuer ? null,
 }:
 
 let
@@ -189,17 +195,15 @@ in
       };
     };
 
-    # Ingress
+    # Ingress — gated by ingressNginx DI dep + hosts being non-empty.
+    # TLS auto-enabled when clusterIssuer DI dep is present.
     ingress = lib.mkOption {
       type = lib.types.anything;
       default = {
-        enabled = false;
-        className = "public-v2";
         hosts = [ ];
         tls = [ ];
         autoTls = true; # when true and tls=[], auto-generate TLS from host names; set false to disable
         annotations = { };
-        clusterIssuer = "letsencrypt-lithus-production";
       };
     };
 
@@ -328,6 +332,10 @@ in
             "app.kubernetes.io/instance" = name;
             "app.kubernetes.io/name" = appLabel;
           };
+
+      # ── DI-driven ingress ──────────────────────────────────────────
+      hasIngress = ingressNginx != null && config.ingress.hosts != [ ];
+      hasTls = hasIngress && clusterIssuer != null;
 
       # ── Dependency wiring ───────────────────────────────────────────
       depEnv =
@@ -1248,9 +1256,11 @@ in
         else
           null;
 
-      # ── Ingress ─────────────────────────────────────────────────────
+      # ── Ingress (DI-driven) ────────────────────────────────────────
+      # Created automatically when ingressNginx is injected and hosts are set.
+      # TLS is auto-enabled when clusterIssuer is injected.
       ingress =
-        if config.ingress.enabled then
+        if hasIngress then
           let
             resolveServiceName =
               svcName:
@@ -1306,23 +1316,22 @@ in
               else
                 [ ];
           in
-          scope.mkResource {
+          {
             apiVersion = "networking.k8s.io/v1";
             kind = "Ingress";
             name = "${rName}-${compName}";
             labels = componentLabels "ingress";
-            annotations = {
-              "cert-manager.io/cluster-issuer" = config.ingress.clusterIssuer;
-            }
-            // config.ingress.annotations;
+            annotations = config.ingress.annotations;
             spec = {
-              ingressClassName = config.ingress.className;
+              ingressClassName = ingressNginx.out.ingressClassName;
               inherit rules;
             }
             // lib.optionalAttrs (tlsSpec != [ ]) {
               tls = tlsSpec;
             };
           }
+          |> (if hasTls then clusterIssuer.out.withCert else lib.id)
+          |> scope.mkResource
         else
           null;
 

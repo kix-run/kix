@@ -4,11 +4,15 @@
 # ClusterRole, ClusterRoleBinding, and optionally HPA, PDB, metrics
 # Service, and ServiceMonitor.
 #
+# Dependencies:
+#   prometheus — optional, gates ServiceMonitor creation and provides CRD ref
+#
 # root = Service (kube-dns), selecting the Deployment via .out.selector.
 
 {
   scope,
   lib,
+  prometheus ? null,
 }:
 
 let
@@ -154,12 +158,8 @@ in
       saName =
         if config.serviceAccount.name != null then config.serviceAccount.name else scope.instanceName;
 
-      serviceMonitorCRDRef = scope.mkCRDRef {
-        group = "monitoring.coreos.com";
-        kind = "ServiceMonitor";
-        plural = "servicemonitors";
-      };
-      mkServiceMonitor = serviceMonitorCRDRef.out.mkCR scope;
+      # ServiceMonitor builder from prometheus DI dep
+      mkServiceMonitor = if prometheus != null then prometheus.out.mkServiceMonitor scope else null;
 
     in
     {
@@ -409,7 +409,7 @@ in
 
       # --- Optional: ServiceMonitor ---
       serviceMonitor =
-        if config.prometheus.monitor.enabled or false then
+        if (config.prometheus.monitor.enabled or false) && prometheus != null then
           mkServiceMonitor {
             name = "${scope.instanceName}";
             labels = commonLabels;
