@@ -152,7 +152,7 @@ in
               "_packageInstance"
               "_diagnostics"
               "_isImport"
-              "main"
+              "root"
               "fqdn"
               "out"
               "overrideParts"
@@ -161,7 +161,7 @@ in
         builtins.filter (v: (v._type or "") == "k8s-resource") (
           collectTypedAttrs {
             excludeKeys = [
-              "main"
+              "root"
               "meta"
             ];
           } raw

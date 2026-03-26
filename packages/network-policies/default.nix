@@ -413,7 +413,7 @@ in
     )
     // internalSystemTrafficPolicies
     // {
-      main = {
+      root = {
         resource = self.global-dns;
         requires = allPolicies;
       };

@@ -155,8 +155,8 @@ in
         |> scope.mkResource
       else null;
 
-    # main — entry point. Resources reachable via self.* refs are auto-tracked.
-    main = if config.ingress.enabled then self.ingress else self.service;
+    # root — entry point. Resources reachable via self.* refs are auto-tracked.
+    root = if config.ingress.enabled then self.ingress else self.service;
   };
 }
 ```
@@ -206,14 +206,14 @@ Both functions:
 
 ### Explicit `requires`
 
-The `main.requires` list (or per-resource `requires`) is for resources that are **not** referenced via string interpolation or `selectWorkload`/`selectByLabels` but still need to be included. The most common case is HPA `scaleTargetRef` (a name-based reference, not a label selector).
+The `root.requires` list (or per-resource `requires`) is for resources that are **not** referenced via string interpolation or `selectWorkload`/`selectByLabels` but still need to be included. The most common case is HPA `scaleTargetRef` (a name-based reference, not a label selector).
 
 ### Warning system
 
 The build emits `builtins.trace` warnings for:
 - **Redundant requires** — resource already referenced via `"${self.x}"`, no need to also list in `requires`
 - **Duplicate requires** — same resource listed twice
-- **Orphaned resources** — defined in the package but unreachable from `main`
+- **Orphaned resources** — defined in the package but unreachable from `root`
 
 Fix all warnings before committing.
 
@@ -563,7 +563,7 @@ DI resolution finds instances by matching arg names to instance names or `aliase
 | Pattern | Example | When to use |
 |---------|---------|-------------|
 | Plain value on `out` | `storageClasses.out.storageClassName`, `ingressNginx.out.ingressClassName` | Single field the consumer needs |
-| Transformer on `main.out` | `clusterIssuer.out.withCert` — modifies mkResource args | Adding annotations/fields the consumer would forget |
+| Transformer on `root.out` | `clusterIssuer.out.withCert` — modifies mkResource args | Adding annotations/fields the consumer would forget |
 | Builder on parts | `clusterIssuer.mkCertificate { name, hosts, secretName }` | Creating CRD instances for the consumer |
 
 ### Storage DI
@@ -703,9 +703,9 @@ Complex applications like Harbor have multiple sub-services (core, portal, regis
 
 5. **Manual volumes for multi-container pods** — when two containers share volumes (harbor's registry + registryctl), wire volumes manually instead of using `kix.withMounts` (which only works for single-container pods unless you use `kix.withMountsOn`).
 
-6. **`main` with explicit `requires`** — in multi-component packages, many resources aren't reachable via transitive `self.*` references from the entry point. List them in `main.requires`:
+6. **`root` with explicit `requires`** — in multi-component packages, many resources aren't reachable via transitive `self.*` references from the entry point. List them in `root.requires`:
    ```nix
-   main = {
+   root = {
      resource = if config.ingress.enabled then self.ingress else self.coreService;
      requires = [
        self.coreDeployment self.coreService

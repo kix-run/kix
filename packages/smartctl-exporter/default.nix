@@ -19,7 +19,7 @@
 #       };
 #       values = (import ./packages/smartctl-exporter).defaultValues;
 #       releaseName = "smartctl-exporter";
-#       mainSelector = { kind = "DaemonSet"; };
+#       rootSelector = { kind = "DaemonSet"; };
 #     };
 #
 #     config.values = { /* cluster-level overrides */ };

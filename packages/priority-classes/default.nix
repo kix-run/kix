@@ -66,7 +66,7 @@ in
     in
     classResources
     // {
-      main = {
+      root = {
         resource = self.${mainName};
         requires = classList;
       };

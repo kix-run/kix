@@ -8,7 +8,7 @@
 # RoleBinding, ConfigMap (NGINX config), Deployment, Service
 # (LoadBalancer/ClusterIP), IngressClass.
 #
-# main = Service, selecting the Deployment via out.selector.
+# root = Service, selecting the Deployment via out.selector.
 # IngressClass and ConfigMap pulled in via requires.
 
 {
@@ -559,7 +559,7 @@ in
       };
 
       # --- Entry point ---
-      main = {
+      root = {
         resource = self.service;
         out = {
           ingressClassName = self.ingressClass.out.name;

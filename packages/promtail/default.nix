@@ -19,7 +19,7 @@
 #       };
 #       values = (import ./packages/promtail).defaultValues;
 #       releaseName = "promtail";
-#       mainSelector = { kind = "DaemonSet"; name = "promtail"; };
+#       rootSelector = { kind = "DaemonSet"; name = "promtail"; };
 #     };
 
 #     config.values = { /* cluster-level overrides */ };

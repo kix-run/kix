@@ -7,7 +7,7 @@
 # BPF masquerade + loopback IPs in nodePort.addresses) is known to cause
 # unreliable NodePort from pods to remote nodes.
 #
-# main = HelmChartConfig/rke2-cilium
+# root = HelmChartConfig/rke2-cilium
 
 {
   scope,
@@ -308,6 +308,6 @@ in
         };
       };
 
-      main = self.helmChartConfig;
+      root = self.helmChartConfig;
     };
 }

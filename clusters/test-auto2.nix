@@ -24,7 +24,7 @@ let
       build =
         { self, config, ... }:
         {
-          main = scope.mkResource {
+          root = scope.mkResource {
             apiVersion = "v1";
             kind = "ConfigMap";
             name = "test-app";
@@ -44,7 +44,7 @@ let
       build =
         { ... }:
         {
-          main = scope.mkResource {
+          root = scope.mkResource {
             apiVersion = "v1";
             kind = "ConfigMap";
             name = "unused";
@@ -65,7 +65,7 @@ let
       build =
         { ... }:
         {
-          main = scope.mkResource {
+          root = scope.mkResource {
             apiVersion = "v1";
             kind = "ConfigMap";
             name = "needs-coredns";

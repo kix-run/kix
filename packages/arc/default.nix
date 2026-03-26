@@ -7,7 +7,7 @@
 # Resources: ServiceAccount, ClusterRole, ClusterRoleBinding,
 #            Role (listener), RoleBinding, Deployment.
 #
-# main = Deployment (gha-rs-controller)
+# root = Deployment (gha-rs-controller)
 
 {
   scope,
@@ -297,7 +297,7 @@ in
       };
 
       # --- Entry point ---
-      main = self.deployment;
+      root = self.deployment;
     }
     // clusterRoles
     // nsRoles;

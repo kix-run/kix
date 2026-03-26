@@ -10,15 +10,15 @@ in
   # Build the consumer-facing view of a package instance.
   #
   # Three layers, all merged with collision detection:
-  #   1. folders  — plain attrsets from parts (no _type), excluding "main"
-  #   2. autoKeys — auto-copied from main.out (fqdn, name, selector, etc.)
-  #   3. system   — evaluator plumbing (_type, _meta, main, out, raw)
+  #   1. folders  — plain attrsets from parts (no _type), excluding "root"
+  #   2. autoKeys — auto-copied from root.out (fqdn, name, selector, etc.)
+  #   3. system   — evaluator plumbing (_type, _meta, root, out, raw)
   #
   # Root-level resources (typed values) live only in raw, not on the surface.
   mkPackageView =
     {
       parts,
-      mainOut,
+      rootOut,
       instanceName,
       packageInstance,
       packageMeta,
@@ -28,20 +28,20 @@ in
     let
       ctx = "instance '${instanceName}'";
 
-      # Layer 1: folders — only plain attrsets (no _type), excluding "main"
+      # Layer 1: folders — only plain attrsets (no _type), excluding "root"
       folders = lib.filterAttrs (
-        n: v: n != "main" && v != null && builtins.isAttrs v && !(v ? _type)
+        n: v: n != "root" && v != null && builtins.isAttrs v && !(v ? _type)
       ) parts;
 
-      # Layer 2: auto-copied main.out (fqdn, name, selector, etc.)
-      autoKeys = mainOut;
+      # Layer 2: auto-copied root.out (fqdn, name, selector, etc.)
+      autoKeys = rootOut;
 
       # Layer 3: system/evaluator plumbing
       system = {
         _type = "k8s-instance";
         _packageInstance = packageInstance;
-        main = packageInstance;
-        out = mainOut;
+        root = packageInstance;
+        out = rootOut;
         raw = parts;
         _meta = {
           inherit
@@ -84,7 +84,7 @@ in
     in
     builtins.seq _folderStructureChecks (
       builtins.seq _folderContentChecks (
-        mergeCollide "${ctx}: folder key collides with main.out" folders autoKeys
+        mergeCollide "${ctx}: folder key collides with root.out" folders autoKeys
         |> mergeCollide "${ctx}: package key collides with system key" system
       )
     );

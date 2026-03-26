@@ -7,7 +7,7 @@
 #
 # Dependencies (postgres, valkey) are optional — resolved via DNS-like DI.
 #
-# main = backend Service (or caddy Service if caddy enabled).
+# root = backend Service (or caddy Service if caddy enabled).
 
 {
   scope,
@@ -785,7 +785,7 @@ in
         // lib.optionalAttrs (hpa != null) { ${hpaKey} = hpa; }
       ) config.customProcesses;
 
-      # All worker-related resources for main.requires
+      # All worker-related resources for root.requires
       allWorkerResources =
         builtins.attrValues queueWorkerParts
         ++ builtins.attrValues cronWorkerParts
@@ -1365,7 +1365,7 @@ in
           null;
 
       # ── Entry point ─────────────────────────────────────────────────
-      main = {
+      root = {
         resource = if config.caddy.enabled then self.caddyService else self.backendService;
         requires =
           allWorkerResources

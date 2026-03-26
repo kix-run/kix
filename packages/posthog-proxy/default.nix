@@ -7,7 +7,7 @@
 #            Service (posthog-assets-proxy, ExternalName),
 #            Ingress (with dual-backend routing).
 #
-# main = Ingress.
+# root = Ingress.
 
 {
   scope,
@@ -137,6 +137,6 @@ in
       };
 
       # --- Entry point ---
-      main = self.ingress;
+      root = self.ingress;
     };
 }

@@ -19,7 +19,7 @@
 #       };
 #       values = (import ./packages/loki).defaultValues;
 #       releaseName = "loki";
-#       mainSelector = { kind = "Service"; name = "loki-gateway"; };
+#       rootSelector = { kind = "Service"; name = "loki-gateway"; };
 #     };
 
 #     config.values = { /* cluster-level overrides */ };

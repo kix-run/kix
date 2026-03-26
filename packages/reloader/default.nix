@@ -260,7 +260,7 @@ in
           null;
 
       # --- Entry point ---
-      main = self.deployment;
+      root = self.deployment;
     }
     // clusterRoles;
 }

@@ -7,7 +7,7 @@
 # Resources: ServiceAccount, ConfigMap (env), Deployment (main),
 # Deployment (worker), Service (web UI), Ingress (optional).
 #
-# main = Service (port 80 by default, proxied to container port 5678).
+# root = Service (port 80 by default, proxied to container port 5678).
 # External secrets (DB password, encryption key, Redis password)
 # are expected to be managed externally (e.g. via Infisical) and
 # injected via existingSecret as a secretRef on envFrom.
@@ -405,6 +405,6 @@ in
           null;
 
       # --- Entry point ---
-      main = self.service;
+      root = self.service;
     };
 }

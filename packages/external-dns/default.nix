@@ -10,7 +10,7 @@
 # Resources: ServiceAccount, ClusterRole, ClusterRoleBinding, Deployment,
 #            Service (metrics), NetworkPolicy, PodDisruptionBudget, Secret.
 #
-# main = Deployment
+# root = Deployment
 
 {
   scope,
@@ -592,7 +592,7 @@
         |> scope.mkDeployment;
 
       # --- Entry point ---
-      main = self.deployment;
+      root = self.deployment;
     }
     // clusterRoles;
 }

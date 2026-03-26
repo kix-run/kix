@@ -123,7 +123,7 @@
           // lib.optionalAttrs (renewBefore != null) { inherit renewBefore; };
         };
 
-      main = {
+      root = {
         resource = mainResource;
         requires = lib.attrValues otherResources;
 

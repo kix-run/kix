@@ -6,7 +6,7 @@
 # Resources: ServiceAccount, ClusterRole, ClusterRoleBinding,
 #            Deployment (cdi-operator), CDI CR, CRDs.
 #
-# main = Deployment (cdi-operator)
+# root = Deployment (cdi-operator)
 
 {
   scope,
@@ -768,7 +768,7 @@ in
       };
 
       # --- Entry point ---
-      main = {
+      root = {
         resource = self.deployment;
         requires = [
           self.serviceAccount

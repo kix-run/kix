@@ -9,7 +9,7 @@
 # Designed for NW1's 7 PostgreSQL clusters — each instance of this
 # package produces one complete PostgreSQL cluster.
 #
-# main = SGCluster, with outputs for port and service DNS name.
+# root = SGCluster, with outputs for port and service DNS name.
 
 {
   scope,
@@ -394,7 +394,7 @@ in
 
       # ===== Entry point =====
 
-      main = {
+      root = {
         resource = self.cluster;
         requires = [
           self.instanceProfile

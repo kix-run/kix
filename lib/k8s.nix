@@ -251,7 +251,7 @@ rec {
     self;
 
   # Creates a PackageInstance CRD — root of each package's DAG subgraph.
-  # Holds references to the main resource, inverse deps, and package-level requires.
+  # Holds references to the root resource, inverse deps, and package-level requires.
   mkPackageInstance =
     {
       instanceName,
@@ -277,7 +277,7 @@ rec {
       name = instanceName;
       inherit namespace labels;
       annotations = {
-        "kix.dev/main" = mainResource.out.name;
+        "kix.dev/root" = mainResource.out.name;
       }
       // lib.optionalAttrs (inverseDeps != [ ]) {
         "kix.dev/inverse-deps" = builtins.concatStringsSep "," (

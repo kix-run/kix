@@ -53,7 +53,7 @@ in
         }
       ) networkPolicies;
 
-      main = ns.resource;
+      root = ns.resource;
       inherit name;
       outPath = ns.resource.outPath;
     });

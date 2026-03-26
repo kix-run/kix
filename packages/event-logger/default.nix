@@ -219,6 +219,6 @@ in
         |> scope.mkDeployment;
 
       # --- Entry point ---
-      main = self.deployment;
+      root = self.deployment;
     };
 }

@@ -10,7 +10,7 @@
 # StatefulSet, Service (main), Service (headless), NetworkPolicy,
 # PodDisruptionBudget, and optionally: Service (metrics), Secret (credentials).
 #
-# main = main Service.
+# root = primary Service.
 
 {
   scope,
@@ -1445,10 +1445,10 @@
           null;
 
       # --- Entry point ---
-      # main = main Service. Exposes both redis (6379) and sentinel (26379) ports.
+      # root = primary Service. Exposes both redis (6379) and sentinel (26379) ports.
       # Consumers connect to sentinel to discover the current primary via
       # SENTINEL get-master-addr-by-name.
-      main = {
+      root = {
         resource = self.mainService;
         requires = [
           self.serviceAccount

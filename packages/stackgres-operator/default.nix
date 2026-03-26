@@ -820,7 +820,7 @@ in
 
       # ===== Entry point =====
 
-      main = {
+      root = {
         resource = self.operatorDeployment;
         requires = [
           self.serviceAccount

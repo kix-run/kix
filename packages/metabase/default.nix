@@ -11,7 +11,7 @@
 # Resources: Deployment (web), Service (web, port 80 -> 3000),
 # Ingress (frontend, optional).
 #
-# main = Service (port 80).
+# root = Service (port 80).
 # External secret expected to contain DB connection env vars.
 
 {
@@ -239,6 +239,6 @@ in
           null;
 
       # --- Entry point ---
-      main = self.service;
+      root = self.service;
     };
 }

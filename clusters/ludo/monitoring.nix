@@ -76,7 +76,7 @@
           };
           values = (import ../../packages/loki).defaultValues;
           releaseName = "loki";
-          mainSelector = {
+          rootSelector = {
             kind = "Service";
             name = "loki-gateway";
           };
@@ -93,7 +93,7 @@
           };
           values = (import ../../packages/promtail).defaultValues;
           releaseName = "promtail";
-          mainSelector = {
+          rootSelector = {
             kind = "DaemonSet";
             name = "promtail";
           };

@@ -10,7 +10,7 @@
 # Each subsystem has its own ServiceAccount + RBAC. Mayastor components share
 # a single SA (openebs-service-account) per the upstream chart convention.
 #
-# main = api-rest Service (primary Mayastor interface)
+# root = api-rest Service (primary Mayastor interface)
 # Everything else pulled in via requires chain.
 
 {
@@ -3326,7 +3326,7 @@ in
       #  Entry point
       # ==========================================================================
 
-      main = {
+      root = {
         resource = self.apiRestService;
         requires =
           # --- Mayastor components ---

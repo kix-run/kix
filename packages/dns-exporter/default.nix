@@ -77,6 +77,6 @@ in
         }
         |> scope.mkResource;
 
-      main = self.service;
+      root = self.service;
     };
 }

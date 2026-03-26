@@ -4,7 +4,7 @@
 # ClusterRole, ClusterRoleBinding, and optionally HPA, PDB, metrics
 # Service, and ServiceMonitor.
 #
-# main = Service (kube-dns), selecting the Deployment via .out.selector.
+# root = Service (kube-dns), selecting the Deployment via .out.selector.
 
 {
   scope,
@@ -475,9 +475,9 @@ in
           null;
 
       # --- Entry point ---
-      # main is the Service. The Deployment is tracked via .out.selector,
+      # root is the Service. The Deployment is tracked via .out.selector,
       # ConfigMap and ServiceAccount via .out.name.
       # RBAC is pulled in via inverse dependency detection.
-      main = self.service;
+      root = self.service;
     };
 }

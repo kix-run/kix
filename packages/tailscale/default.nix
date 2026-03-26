@@ -5,7 +5,7 @@
 #
 # Resources: ClusterRole, ClusterRoleBinding, IngressClass.
 #
-# main = IngressClass (root resource; depends on RBAC)
+# root = IngressClass (root resource; depends on RBAC)
 
 {
   scope,
@@ -197,7 +197,7 @@ in
       };
 
       # --- Entry point ---
-      main = {
+      root = {
         resource = self.ingressClass;
         requires = [
           self.clusterRole

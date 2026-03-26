@@ -474,7 +474,7 @@ in
         };
       };
 
-      main = {
+      root = {
         resource = self.deployment;
         requires = [
           self.serviceAccount

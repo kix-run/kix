@@ -100,7 +100,7 @@
     in
     classResources
     // {
-      main = {
+      root = {
         resource = self.lbs1-pool1-2x;
         requires = classList;
         out = {

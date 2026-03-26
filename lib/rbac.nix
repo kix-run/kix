@@ -197,7 +197,7 @@ rec {
   #
   # Merge onto self with //, list for requires with builtins.attrValues:
   #   self: let roles = mkClusterRoleSet scope { ... }; in {
-  #     main.requires = builtins.attrValues roles ++ [...];
+  #     root.requires = builtins.attrValues roles ++ [...];
   #   } // roles
   mkClusterRoleSet =
     scope:

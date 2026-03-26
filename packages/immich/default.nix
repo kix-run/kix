@@ -15,7 +15,7 @@
 # Resources: Deployment, Service, optional ConfigMap, optional Ingress,
 # optional ServiceMonitor.
 #
-# main = Service (port 2283).
+# root = Service (port 2283).
 
 {
   scope,
@@ -277,6 +277,6 @@ in
           null;
 
       # --- Entry point ---
-      main = self.service;
+      root = self.service;
     };
 }

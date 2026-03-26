@@ -253,7 +253,7 @@ rec {
       includeCrds ? true,
       includeHooks ? false,
       extraFlags ? [ ],
-      mainSelector ? null, # { kind = "Service"; } or { kind = "Service"; name = "my-svc"; }
+      rootSelector ? null, # { kind = "Service"; } or { kind = "Service"; name = "my-svc"; }
       version ? chart.version or null, # Auto-extracted from fetchHelmChart derivation
       patchResources ? lib.id, # Function applied to the list of raw JSON resources before wrapping
     }:
@@ -346,7 +346,7 @@ rec {
             }
           ) patchedResources;
 
-          # Select the main resource.
+          # Select the root resource.
           findBySelector =
             selector:
             let
@@ -358,7 +358,7 @@ rec {
             if matches == [ ] then null else builtins.head matches;
 
           # Auto-select: first Service, then first Deployment, then first resource.
-          autoSelectMain =
+          autoSelectRoot =
             let
               services = builtins.filter (r: r.kind == "Service") wrappedResources;
               deployments = builtins.filter (r: r.kind == "Deployment") wrappedResources;
@@ -375,20 +375,20 @@ rec {
             else
               throw "fromHelmChart: chart produced no resources";
 
-          mainResource =
-            if mainSelector != null then
+          rootResource =
+            if rootSelector != null then
               let
-                selected = findBySelector mainSelector;
+                selected = findBySelector rootSelector;
               in
               if selected != null then
                 selected
               else
-                throw "fromHelmChart: mainSelector ${builtins.toJSON mainSelector} matched no resources"
+                throw "fromHelmChart: rootSelector ${builtins.toJSON rootSelector} matched no resources"
             else
-              autoSelectMain;
+              autoSelectRoot;
 
-          # All non-main resources become requires of main.
-          nonMainResources = builtins.filter (r: r.outPath != mainResource.outPath) wrappedResources;
+          # All non-root resources become requires of root.
+          nonRootResources = builtins.filter (r: r.outPath != rootResource.outPath) wrappedResources;
 
           # Expose each resource as a named attribute so buildCluster's
           # collectResources can find them for the registry.
@@ -402,9 +402,9 @@ rec {
         in
         resourceAttrs
         // {
-          main = {
-            resource = mainResource;
-            requires = nonMainResources;
+          root = {
+            resource = rootResource;
+            requires = nonRootResources;
           };
         };
     };

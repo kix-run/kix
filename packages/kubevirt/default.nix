@@ -6,7 +6,7 @@
 # Resources: ServiceAccount, ClusterRole, ClusterRoleBinding,
 #            Deployment (virt-operator), KubeVirt CR, CRDs.
 #
-# main = Deployment (virt-operator)
+# root = Deployment (virt-operator)
 
 {
   scope,
@@ -643,7 +643,7 @@ in
       };
 
       # --- Entry point ---
-      main = {
+      root = {
         resource = self.deployment;
         requires = [
           self.serviceAccount

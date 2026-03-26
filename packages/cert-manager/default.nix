@@ -1227,7 +1227,7 @@
       # Entry point
       # ============================================================
 
-      main = {
+      root = {
         resource = self.controllerDeployment;
         requires =
           # CRDs

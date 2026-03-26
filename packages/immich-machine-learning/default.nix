@@ -6,7 +6,7 @@
 #
 # Resources: Deployment, Service, optional PersistentVolumeClaim (model cache).
 #
-# main = Service (port 3003).
+# root = Service (port 3003).
 
 {
   scope,
@@ -131,6 +131,6 @@ in
       service = self.deployment |> kix.service.fromWorkload { inherit name; } |> scope.mkResource;
 
       # --- Entry point ---
-      main = self.service;
+      root = self.service;
     };
 }

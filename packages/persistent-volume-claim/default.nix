@@ -8,7 +8,7 @@
 # Dependencies:
 #   storageClasses — required, provides the StorageClass name
 #
-# main = PersistentVolumeClaim.
+# root = PersistentVolumeClaim.
 
 {
   scope,
@@ -46,7 +46,7 @@
       clusterConfig,
     }:
     {
-      main = scope.mkResource {
+      root = scope.mkResource {
         apiVersion = "v1";
         kind = "PersistentVolumeClaim";
         name = scope.instanceName;

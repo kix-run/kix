@@ -158,18 +158,18 @@ rec {
               }
             );
 
-            # Extract main's out
-            rawMain =
-              parts.main or (throw "Import instance '${instanceName}': package build must define 'main'");
-            mainRes =
-              if rawMain ? resource then
-                rawMain.resource
-              else if rawMain ? _type then
-                rawMain
+            # Extract root's out
+            rawRoot =
+              parts.root or (throw "Import instance '${instanceName}': package build must define 'root'");
+            rootRes =
+              if rawRoot ? resource then
+                rawRoot.resource
+              else if rawRoot ? _type then
+                rawRoot
               else
-                throw "Import instance '${instanceName}': main must be a resource or { resource, requires }";
+                throw "Import instance '${instanceName}': root must be a resource or { resource, requires }";
           in
-          (mainRes.out or { }) // importDef.out
+          (rootRes.out or { }) // importDef.out
         else
           importDef.out;
 
@@ -203,7 +203,7 @@ rec {
       _type = "k8s-instance";
       _isImport = true;
       _packageInstance = markerResource;
-      main = markerResource;
+      root = markerResource;
       out = derivedOut;
       _meta = {
         inherit instanceName namespaceName;

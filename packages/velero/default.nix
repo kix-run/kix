@@ -8,7 +8,7 @@
 #            DaemonSet (node-agent), ConfigMap (volume-policies), Service,
 #            BackupStorageLocation, VolumeSnapshotLocation, Schedule CRs.
 #
-# main = Deployment (velero server)
+# root = Deployment (velero server)
 
 {
   scope,
@@ -622,7 +622,7 @@ in
           null;
 
       # --- Entry point ---
-      main = {
+      root = {
         resource = self.deployment;
         requires = [
           self.serviceAccount

@@ -20,7 +20,7 @@
 #   Exporter   -- Deployment, Service, ConfigMap, Secret
 #   Ingress    -- Ingress (optional)
 #
-# main = Ingress (or core Service when ingress disabled)
+# root = Ingress (or core Service when ingress disabled)
 
 {
   scope,
@@ -1399,7 +1399,7 @@ in
           component = "redis";
         };
         spec = {
-          type = "ClusterIP";
+          clusterIP = "None";
           selector = selectorLabels // {
             component = "redis";
           };
@@ -1421,7 +1421,7 @@ in
       # Entry point
       # ============================================================
 
-      main = {
+      root = {
         resource = if config.ingress.enabled then self.ingress else self.coreService;
         requires = [
           self.coreDeployment

@@ -160,25 +160,25 @@ in
               }
             );
 
-        # --- Resolve main resource and package-level requires ---
-        rawMain =
-          parts.main
-            or (throw "Instance '${instanceName}' in namespace '${namespaceName}' must define 'main'");
+        # --- Resolve root resource and package-level requires ---
+        rawRoot =
+          parts.root
+            or (throw "Instance '${instanceName}' in namespace '${namespaceName}' must define 'root'");
 
-        # main can be either { resource = ...; requires = [...]; } or a resource directly
-        mainRes =
-          if rawMain ? resource then
-            rawMain.resource
-          else if rawMain ? _type && rawMain._type == "k8s-resource" then
-            rawMain
+        # root can be either { resource = ...; requires = [...]; } or a resource directly
+        rootRes =
+          if rawRoot ? resource then
+            rawRoot.resource
+          else if rawRoot ? _type && rawRoot._type == "k8s-resource" then
+            rawRoot
           else
-            throw "Instance '${instanceName}': main must be a resource or { resource, requires }";
+            throw "Instance '${instanceName}': root must be a resource or { resource, requires }";
 
-        packageRequires = if rawMain ? resource then rawMain.requires or [ ] else [ ];
+        packageRequires = if rawRoot ? resource then rawRoot.requires or [ ] else [ ];
 
         # Package-level out extensions (functions, complex types beyond string outputs).
-        # Merged on top of the main resource's auto-derived out.
-        packageOut = if rawMain ? resource then rawMain.out or { } else { };
+        # Merged on top of the root resource's auto-derived out.
+        packageOut = if rawRoot ? resource then rawRoot.out or { } else { };
 
         # --- Forward closure computation ---
         # Follows both store-path references in manifests AND explicit `requires`.
@@ -189,7 +189,7 @@ in
         allPartResources = builtins.filter (v: (v._type or "") == "k8s-resource") (
           collectTypedAttrs {
             excludeKeys = [
-              "main"
+              "root"
               "meta"
             ];
           } parts
@@ -220,8 +220,8 @@ in
           in
           manifestDeps ++ requiresDeps;
 
-        # Compute the forward closure from mainRes + packageRequires
-        forwardRoots = [ mainRes ] ++ packageRequires;
+        # Compute the forward closure from rootRes + packageRequires
+        forwardRoots = [ rootRes ] ++ packageRequires;
         forwardClosure =
           let
             go =
@@ -325,13 +325,13 @@ in
           };
 
         # --- Create PackageInstance CRD (Phase 5) ---
-        # Lists main.requires as package-requires and true inverse deps.
+        # Lists root.requires as package-requires and true inverse deps.
         # Structural deps (via `requires`) are tracked by the cluster-level
         # closure which also follows `requires`.
         packageInstance = mkPackageInstance {
           inherit instanceName namespaceName;
           namespace = namespaceResource;
-          mainResource = mainRes;
+          mainResource = rootRes;
           inherit packageRequires;
           inherit inverseDeps;
           version =
@@ -428,7 +428,7 @@ in
           }
         ) allPartResources;
 
-        # 3. Orphaned resources: defined in parts but not reachable from main
+        # 3. Orphaned resources: defined in parts but not reachable from root
         reachablePaths =
           let
             inverseSet = builtins.listToAttrs (
@@ -475,7 +475,7 @@ in
             (warn (
               w: "resource '${res w.resource}' requires '${res w.req}' multiple times"
             ) duplicateRequiresWarnings)
-            (warn (r: "resource '${res r}' is defined but not reachable from main (orphaned)") orphanedWarnings)
+            (warn (r: "resource '${res r}' is defined but not reachable from root (orphaned)") orphanedWarnings)
           ];
 
         diagnostics = meta.combineDiagnostics {
@@ -500,7 +500,7 @@ in
                   packageMeta
                   packageInstance
                   ;
-                mainOut = (mainRes.out or { }) // packageOut;
+                rootOut = (rootRes.out or { }) // packageOut;
                 aliases = instCfg.aliases or [ ];
               };
             in
