@@ -365,11 +365,15 @@ rec {
   # References all PackageInstance store paths via string context in spec.instances.
   # `nix-store --tree` / `exportReferencesGraph` on this path gives the full cluster DAG.
   mkActivation =
-    { name, instances }:
+    {
+      name,
+      instances,
+      extraDeps ? [ ],
+    }:
     mkResource {
       apiVersion = "kix.dev/v1alpha1";
       kind = "Activation";
-      inherit name;
+      inherit name extraDeps;
       namespace = clusterScoped;
       extra.spec = {
         inherit instances;

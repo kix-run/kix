@@ -262,7 +262,10 @@ rec {
       lib,
     }:
     {
-      meta = lib.optionalAttrs (version != null) { inherit version; };
+      meta = {
+        isHelm = true;
+      }
+      // lib.optionalAttrs (version != null) { inherit version; };
 
       options = {
         values = lib.mkOption {

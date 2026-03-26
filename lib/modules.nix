@@ -183,5 +183,33 @@
         compatibility checks (meta.k8s.minVersion / maxVersion).
       '';
     };
+
+    networkPolicy = lib.mkOption {
+      type = lib.types.submodule {
+        options = {
+          enable = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = "Generate CiliumNetworkPolicies from DI graph.";
+          };
+          defaultDeny = lib.mkOption {
+            type = lib.types.bool;
+            default = true;
+            description = "Generate deny-all CiliumNetworkPolicy per namespace.";
+          };
+          directions = lib.mkOption {
+            type = lib.types.enum [
+              "ingress"
+              "egress"
+              "both"
+            ];
+            default = "both";
+            description = "Which policy directions to generate.";
+          };
+        };
+      };
+      default = { };
+      description = "CiliumNetworkPolicy generation from DI graph. See v2_discussions/37.";
+    };
   };
 }

@@ -24,6 +24,7 @@ let
   meta = import ./meta.nix { inherit lib; };
 
   helpers = import ./eval/helpers.nix { inherit lib; };
+  netpol = import ./netpol.nix { inherit lib k8s helpers; };
   view = import ./eval/view.nix { inherit lib helpers; };
   crd = import ./crd.nix { inherit lib; };
   scopeMod = import ./eval/scope.nix {
@@ -52,6 +53,7 @@ let
       k8s
       meta
       helpers
+      netpol
       ;
     scope = scopeMod;
     inherit view resolve import_;
@@ -63,6 +65,7 @@ let
       meta
       kixlib
       helpers
+      netpol
       ;
     inherit (namespaceMod) mkNamespace;
     inherit (auto) computeAutoInstances;

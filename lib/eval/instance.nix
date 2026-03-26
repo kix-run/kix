@@ -6,6 +6,7 @@
   k8s,
   meta,
   helpers,
+  netpol,
   scope,
   view,
   resolve,
@@ -324,6 +325,27 @@ in
             queue = inverseDeps;
           };
 
+        # --- Network policy generation ---
+        networkResult =
+          if (clusterConfig.networkPolicy or { }).enable or false then
+            netpol.processInstance {
+              scope = scope';
+              inherit
+                instanceName
+                namespaceName
+                allPartResources
+                resolvedDepMeta
+                ;
+              networkConfig = clusterConfig.networkPolicy;
+              inherit packageMeta;
+            }
+          else
+            {
+              policies = [ ];
+              edges = [ ];
+              warnings = [ ];
+            };
+
         # --- Create PackageInstance CRD (Phase 5) ---
         # Lists root.requires as package-requires and true inverse deps.
         # Structural deps (via `requires`) are tracked by the cluster-level
@@ -333,7 +355,7 @@ in
           namespace = namespaceResource;
           mainResource = rootRes;
           inherit packageRequires;
-          inherit inverseDeps;
+          inverseDeps = inverseDeps ++ networkResult.policies;
           version =
             let
               v = instCfg.version or null;
@@ -476,6 +498,7 @@ in
               w: "resource '${res w.resource}' requires '${res w.req}' multiple times"
             ) duplicateRequiresWarnings)
             (warn (r: "resource '${res r}' is defined but not reachable from root (orphaned)") orphanedWarnings)
+            networkResult.warnings
           ];
 
         diagnostics = meta.combineDiagnostics {
@@ -506,6 +529,8 @@ in
             in
             view'
             // {
+              _networkPolicies = networkResult.policies;
+              _networkEdges = networkResult.edges;
               _diagnostics = {
                 warnings = diagnostics.allWarnings;
                 assertions = diagnostics.allAssertions;

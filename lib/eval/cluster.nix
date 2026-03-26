@@ -7,6 +7,7 @@
   meta,
   kixlib,
   helpers,
+  netpol,
   mkNamespace,
   computeAutoInstances,
   buildResolutionIndex,
@@ -166,7 +167,39 @@ in
             ];
           } raw
         )
-        ++ (if inst ? _packageInstance then [ inst._packageInstance ] else [ ]);
+        ++ (if inst ? _packageInstance then [ inst._packageInstance ] else [ ])
+        ++ (inst._networkPolicies or [ ]);
+
+      # --- Network policy generation (cluster-level) ---
+      networkConfig = cfg.networkPolicy;
+
+      allNetworkEdges =
+        if networkConfig.enable then
+          builtins.concatMap (inst: inst._networkEdges or [ ]) allInstancesList
+        else
+          [ ];
+
+      clusterIngressPolicies =
+        if networkConfig.enable then
+          netpol.generateIngressPolicies {
+            allEdges = allNetworkEdges;
+            inherit nsResources networkConfig;
+          }
+        else
+          [ ];
+
+      defaultDenyPolicies =
+        if networkConfig.enable && networkConfig.defaultDeny then
+          map (
+            nsName:
+            netpol.generateDefaultDeny {
+              namespaceName = nsName;
+              nsResource = nsResources.${nsName};
+              directions = networkConfig.directions;
+            }
+          ) allNsNames
+        else
+          [ ];
 
       allResources =
         (builtins.concatMap collectResources allInstancesList)
@@ -178,7 +211,9 @@ in
           [ ns.resource ]
           ++ (if ns.quota != null then [ ns.quota ] else [ ])
           ++ builtins.attrValues ns.netpols
-        ) allNsNames);
+        ) allNsNames)
+        ++ clusterIngressPolicies
+        ++ defaultDenyPolicies;
 
       # Activation CRD — cluster-level root of the Nix store DAG.
       # Only includes active instances (excludes inactive optionals).
@@ -191,6 +226,7 @@ in
         instances = lib.mapAttrs (
           _nsName: nsInsts: lib.mapAttrs (_: inst: inst._packageInstance.out.name) nsInsts
         ) activeClusterInstances;
+        extraDeps = clusterIngressPolicies ++ defaultDenyPolicies;
       };
 
       # Package index — PI store path → owned resource store paths.
