@@ -54,6 +54,7 @@ let
       meta
       helpers
       netpol
+      kixlib
       ;
     scope = scopeMod;
     inherit view resolve import_;

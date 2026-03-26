@@ -7,6 +7,7 @@
   meta,
   helpers,
   netpol,
+  kixlib,
   scope,
   view,
   resolve,
@@ -58,14 +59,15 @@ in
           clusterDomain = clusterConfig.clusterDomain or "cluster.local";
         };
 
-        # 1. Call the package function with DI deps — returns { meta?, options, build }
-        raw = kixCallPackage {
+        # 1. Call the package function with DI deps — returns { result, resolvedDeps }
+        kixCallResult = kixCallPackage {
           packageFn = instCfg.package;
           scope = scope';
           inherit resolutionIndex allInstances;
           deps = instCfg.deps;
           namespace = namespaceName;
         };
+        raw = kixCallResult.result;
 
         # Package-declared metadata (lifecycle, scope, etc.)
         packageMeta = raw.meta or { };
@@ -143,23 +145,42 @@ in
         boundOverlays = map (o: o scope') allOverlays;
 
         # 4. Build the inner fixpoint — build receives { self, config, clusterConfig }
-        parts =
-          if boundOverlays != [ ] then
-            lib.fix (
-              self:
-              builtins.foldl' (acc: overlay: acc // (overlay self acc)) (raw.build {
-                inherit self clusterConfig;
-                config = evaluatedConfig;
-              }) boundOverlays
-            )
+        #    build can be a function (single-file) or a list of paths/functions (multi-file).
+        #    Paths are imported; all entries are called with { self, config, clusterConfig }
+        #    and optionally { scope, lib } if the function accepts them (arg introspection).
+        rawBuildEntries =
+          if builtins.isList raw.build then
+            map (entry: if builtins.isPath entry then import entry else entry) raw.build
           else
-            lib.fix (
-              self:
-              raw.build {
-                inherit self clusterConfig;
-                config = evaluatedConfig;
-              }
-            );
+            [ raw.build ];
+
+        callBuildFn =
+          self: fn:
+          let
+            args = builtins.functionArgs fn;
+            base = {
+              inherit self clusterConfig;
+              config = evaluatedConfig;
+            };
+            extra =
+              lib.optionalAttrs (args ? scope) { scope = scope'; }
+              // lib.optionalAttrs (args ? lib) { inherit lib; }
+              // lib.optionalAttrs (args ? kix) { kix = kixlib; };
+            # Pass resolved DI deps — part files can request them by name
+            depArgs = lib.intersectAttrs args kixCallResult.resolvedDeps;
+          in
+          fn (base // extra // depArgs);
+
+        parts = lib.fix (
+          self:
+          let
+            merged = builtins.foldl' (acc: fn: acc // (callBuildFn self fn)) { } rawBuildEntries;
+          in
+          if boundOverlays != [ ] then
+            builtins.foldl' (acc: overlay: acc // (overlay self acc)) merged boundOverlays
+          else
+            merged
+        );
 
         # --- Resolve root resource and package-level requires ---
         rawRoot =

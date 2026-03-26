@@ -211,11 +211,14 @@ rec {
       ) { } depArgNames;
 
     in
-    packageFn (
-      {
-        inherit scope lib;
-      }
-      // lib.optionalAttrs (fnArgs ? kix) { kix = kixlib; }
-      // resolvedDeps
-    );
+    {
+      result = packageFn (
+        {
+          inherit scope lib;
+        }
+        // lib.optionalAttrs (fnArgs ? kix) { kix = kixlib; }
+        // resolvedDeps
+      );
+      inherit resolvedDeps;
+    };
 }
