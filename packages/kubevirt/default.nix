@@ -557,135 +557,89 @@ in
       # from the upstream kubevirt-operator.yaml manifest.
 
       crds = {
-        kubeVirt = scope.mkCRD {
-          group = "kubevirt.io";
-          kind = "KubeVirt";
-          listKind = "KubeVirtList";
-          plural = "kubevirts";
-          singular = "kubevirt";
-        };
+        kubeVirt = scope.mkCRD (scope.crd.fromKind "KubeVirt" { spec.group = "kubevirt.io"; });
 
-        virtualMachine = scope.mkCRD {
-          group = "kubevirt.io";
-          kind = "VirtualMachine";
-          listKind = "VirtualMachineList";
-          plural = "virtualmachines";
-          singular = "virtualmachine";
-          shortNames = [
+        virtualMachine = scope.mkCRD (
+          scope.crd.fromKind "VirtualMachine" { spec.group = "kubevirt.io"; }
+          |> scope.crd.withShortNames [
             "vm"
             "vms"
-          ];
-        };
+          ]
+        );
 
-        virtualMachineInstance = scope.mkCRD {
-          group = "kubevirt.io";
-          kind = "VirtualMachineInstance";
-          listKind = "VirtualMachineInstanceList";
-          plural = "virtualmachineinstances";
-          singular = "virtualmachineinstance";
-          shortNames = [
+        virtualMachineInstance = scope.mkCRD (
+          scope.crd.fromKind "VirtualMachineInstance" { spec.group = "kubevirt.io"; }
+          |> scope.crd.withShortNames [
             "vmi"
             "vmis"
-          ];
-        };
+          ]
+        );
 
-        virtualMachineInstanceMigration = scope.mkCRD {
-          group = "kubevirt.io";
-          kind = "VirtualMachineInstanceMigration";
-          listKind = "VirtualMachineInstanceMigrationList";
-          plural = "virtualmachineinstancemigrations";
-          singular = "virtualmachineinstancemigration";
-          shortNames = [
+        virtualMachineInstanceMigration = scope.mkCRD (
+          scope.crd.fromKind "VirtualMachineInstanceMigration" { spec.group = "kubevirt.io"; }
+          |> scope.crd.withShortNames [
             "vmim"
             "vmims"
-          ];
-        };
+          ]
+        );
 
-        virtualMachineInstancePreset = scope.mkCRD {
-          group = "kubevirt.io";
-          kind = "VirtualMachineInstancePreset";
-          listKind = "VirtualMachineInstancePresetList";
-          plural = "virtualmachineinstancepresets";
-          singular = "virtualmachineinstancepreset";
-          shortNames = [
+        virtualMachineInstancePreset = scope.mkCRD (
+          scope.crd.fromKind "VirtualMachineInstancePreset" { spec.group = "kubevirt.io"; }
+          |> scope.crd.withShortNames [
             "vmipreset"
             "vmipresets"
-          ];
-        };
+          ]
+        );
 
-        virtualMachineInstanceReplicaSet = scope.mkCRD {
-          group = "kubevirt.io";
-          kind = "VirtualMachineInstanceReplicaSet";
-          listKind = "VirtualMachineInstanceReplicaSetList";
-          plural = "virtualmachineinstancereplicasets";
-          singular = "virtualmachineinstancereplicaset";
-          shortNames = [ "vmirs" ];
-        };
+        virtualMachineInstanceReplicaSet = scope.mkCRD (
+          scope.crd.fromKind "VirtualMachineInstanceReplicaSet" { spec.group = "kubevirt.io"; }
+          |> scope.crd.withShortNames [ "vmirs" ]
+        );
 
-        virtualMachineClone = scope.mkCRD {
-          group = "clone.kubevirt.io";
-          kind = "VirtualMachineClone";
-          listKind = "VirtualMachineCloneList";
-          plural = "virtualmachineclones";
-          singular = "virtualmachineclone";
-          shortNames = [
+        virtualMachineClone = scope.mkCRD (
+          scope.crd.fromKind "VirtualMachineClone" { spec.group = "clone.kubevirt.io"; }
+          |> scope.crd.withShortNames [
             "vmclone"
             "vmclones"
-          ];
-          version = "v1beta1";
-        };
+          ]
+          |> scope.crd.withVersion "v1beta1"
+        );
 
-        virtualMachineExport = scope.mkCRD {
-          group = "export.kubevirt.io";
-          kind = "VirtualMachineExport";
-          listKind = "VirtualMachineExportList";
-          plural = "virtualmachineexports";
-          singular = "virtualmachineexport";
-          shortNames = [
+        virtualMachineExport = scope.mkCRD (
+          scope.crd.fromKind "VirtualMachineExport" { spec.group = "export.kubevirt.io"; }
+          |> scope.crd.withShortNames [
             "vmexport"
             "vmexports"
-          ];
-          version = "v1beta1";
-        };
+          ]
+          |> scope.crd.withVersion "v1beta1"
+        );
 
-        virtualMachineSnapshot = scope.mkCRD {
-          group = "snapshot.kubevirt.io";
-          kind = "VirtualMachineSnapshot";
-          listKind = "VirtualMachineSnapshotList";
-          plural = "virtualmachinesnapshots";
-          singular = "virtualmachinesnapshot";
-          shortNames = [
+        virtualMachineSnapshot = scope.mkCRD (
+          scope.crd.fromKind "VirtualMachineSnapshot" { spec.group = "snapshot.kubevirt.io"; }
+          |> scope.crd.withShortNames [
             "vmsnapshot"
             "vmsnapshots"
-          ];
-          version = "v1beta1";
-        };
+          ]
+          |> scope.crd.withVersion "v1beta1"
+        );
 
-        virtualMachineSnapshotContent = scope.mkCRD {
-          group = "snapshot.kubevirt.io";
-          kind = "VirtualMachineSnapshotContent";
-          listKind = "VirtualMachineSnapshotContentList";
-          plural = "virtualmachinesnapshotcontents";
-          singular = "virtualmachinesnapshotcontent";
-          shortNames = [
+        virtualMachineSnapshotContent = scope.mkCRD (
+          scope.crd.fromKind "VirtualMachineSnapshotContent" { spec.group = "snapshot.kubevirt.io"; }
+          |> scope.crd.withShortNames [
             "vmsnapshotcontent"
             "vmsnapshotcontents"
-          ];
-          version = "v1beta1";
-        };
+          ]
+          |> scope.crd.withVersion "v1beta1"
+        );
 
-        virtualMachineRestore = scope.mkCRD {
-          group = "snapshot.kubevirt.io";
-          kind = "VirtualMachineRestore";
-          listKind = "VirtualMachineRestoreList";
-          plural = "virtualmachinerestores";
-          singular = "virtualmachinerestore";
-          shortNames = [
+        virtualMachineRestore = scope.mkCRD (
+          scope.crd.fromKind "VirtualMachineRestore" { spec.group = "snapshot.kubevirt.io"; }
+          |> scope.crd.withShortNames [
             "vmrestore"
             "vmrestores"
-          ];
-          version = "v1beta1";
-        };
+          ]
+          |> scope.crd.withVersion "v1beta1"
+        );
       };
 
       # --- Entry point ---

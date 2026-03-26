@@ -714,93 +714,57 @@ in
 
       # --- CRDs ---
       crds = {
-        cdi = scope.mkCRD {
-          group = "cdi.kubevirt.io";
-          kind = "CDI";
-          listKind = "CDIList";
-          plural = "cdis";
-          singular = "cdi";
-          crdScope = "Cluster";
-          version = "v1beta1";
-        };
+        cdi = scope.mkCRD (
+          scope.crd.fromKind "CDI" { spec.group = "cdi.kubevirt.io"; }
+          |> scope.crd.clusterScoped
+          |> scope.crd.withVersion "v1beta1"
+        );
 
-        dataVolume = scope.mkCRD {
-          group = "cdi.kubevirt.io";
-          kind = "DataVolume";
-          listKind = "DataVolumeList";
-          plural = "datavolumes";
-          singular = "datavolume";
-          shortNames = [
+        dataVolume = scope.mkCRD (
+          scope.crd.fromKind "DataVolume" { spec.group = "cdi.kubevirt.io"; }
+          |> scope.crd.withShortNames [
             "dv"
             "dvs"
-          ];
-          version = "v1beta1";
-        };
+          ]
+          |> scope.crd.withVersion "v1beta1"
+        );
 
-        dataImportCron = scope.mkCRD {
-          group = "cdi.kubevirt.io";
-          kind = "DataImportCron";
-          listKind = "DataImportCronList";
-          plural = "dataimportcrons";
-          singular = "dataimportcron";
-          version = "v1beta1";
-        };
+        dataImportCron = scope.mkCRD (
+          scope.crd.fromKind "DataImportCron" { spec.group = "cdi.kubevirt.io"; }
+          |> scope.crd.withVersion "v1beta1"
+        );
 
-        dataSource = scope.mkCRD {
-          group = "cdi.kubevirt.io";
-          kind = "DataSource";
-          listKind = "DataSourceList";
-          plural = "datasources";
-          singular = "datasource";
-          version = "v1beta1";
-        };
+        dataSource = scope.mkCRD (
+          scope.crd.fromKind "DataSource" { spec.group = "cdi.kubevirt.io"; }
+          |> scope.crd.withVersion "v1beta1"
+        );
 
-        objectTransfer = scope.mkCRD {
-          group = "cdi.kubevirt.io";
-          kind = "ObjectTransfer";
-          listKind = "ObjectTransferList";
-          plural = "objecttransfers";
-          singular = "objecttransfer";
-          crdScope = "Cluster";
-          version = "v1beta1";
-        };
+        objectTransfer = scope.mkCRD (
+          scope.crd.fromKind "ObjectTransfer" { spec.group = "cdi.kubevirt.io"; }
+          |> scope.crd.clusterScoped
+          |> scope.crd.withVersion "v1beta1"
+        );
 
-        storageProfile = scope.mkCRD {
-          group = "cdi.kubevirt.io";
-          kind = "StorageProfile";
-          listKind = "StorageProfileList";
-          plural = "storageprofiles";
-          singular = "storageprofile";
-          crdScope = "Cluster";
-          version = "v1beta1";
-        };
+        storageProfile = scope.mkCRD (
+          scope.crd.fromKind "StorageProfile" { spec.group = "cdi.kubevirt.io"; }
+          |> scope.crd.clusterScoped
+          |> scope.crd.withVersion "v1beta1"
+        );
 
-        volumeCloneSource = scope.mkCRD {
-          group = "cdi.kubevirt.io";
-          kind = "VolumeCloneSource";
-          listKind = "VolumeCloneSourceList";
-          plural = "volumeclonesources";
-          singular = "volumeclonesource";
-          version = "v1beta1";
-        };
+        volumeCloneSource = scope.mkCRD (
+          scope.crd.fromKind "VolumeCloneSource" { spec.group = "cdi.kubevirt.io"; }
+          |> scope.crd.withVersion "v1beta1"
+        );
 
-        volumeImportSource = scope.mkCRD {
-          group = "cdi.kubevirt.io";
-          kind = "VolumeImportSource";
-          listKind = "VolumeImportSourceList";
-          plural = "volumeimportsources";
-          singular = "volumeimportsource";
-          version = "v1beta1";
-        };
+        volumeImportSource = scope.mkCRD (
+          scope.crd.fromKind "VolumeImportSource" { spec.group = "cdi.kubevirt.io"; }
+          |> scope.crd.withVersion "v1beta1"
+        );
 
-        volumeUploadSource = scope.mkCRD {
-          group = "cdi.kubevirt.io";
-          kind = "VolumeUploadSource";
-          listKind = "VolumeUploadSourceList";
-          plural = "volumeuploadsources";
-          singular = "volumeuploadsource";
-          version = "v1beta1";
-        };
+        volumeUploadSource = scope.mkCRD (
+          scope.crd.fromKind "VolumeUploadSource" { spec.group = "cdi.kubevirt.io"; }
+          |> scope.crd.withVersion "v1beta1"
+        );
       };
 
       # --- Entry point ---

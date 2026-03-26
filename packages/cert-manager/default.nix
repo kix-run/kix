@@ -219,19 +219,16 @@
         readOnlyRootFilesystem = true;
       };
 
-      # CRD helper — delegates to scope.mkCRD which auto-attaches CR builders on .out.
+      # CRD helper — wraps scope.mkCRD with cert-manager labels and default category.
       mkCRD =
-        {
-          categories ? [ "cert-manager" ],
-          ...
-        }@args:
-        scope.mkCRD (
-          removeAttrs args [ "categories" ]
-          // {
-            labels = controllerLabels;
-            inherit categories;
-          }
-        );
+        categories: attrs:
+        scope.mkCRD (attrs |> scope.crd.withLabels controllerLabels |> scope.crd.withCategories categories);
+
+      mkCertManagerCRD = mkCRD [ "cert-manager" ];
+      mkAcmeCRD = mkCRD [
+        "cert-manager"
+        "cert-manager-acme"
+      ];
 
     in
     let
@@ -537,17 +534,13 @@
       # ============================================================
 
       crds = {
-        certificates = mkCRD {
-          group = "cert-manager.io";
-          kind = "Certificate";
-          listKind = "CertificateList";
-          plural = "certificates";
-          singular = "certificate";
-          shortNames = [
+        certificates = mkCertManagerCRD (
+          scope.crd.fromKind "Certificate" { spec.group = "cert-manager.io"; }
+          |> scope.crd.withShortNames [
             "cert"
             "certs"
-          ];
-          printerColumns = [
+          ]
+          |> scope.crd.withPrinterColumns [
             {
               jsonPath = ".status.conditions[?(@.type==\"Ready\")].status";
               name = "Ready";
@@ -574,24 +567,18 @@
               name = "Age";
               type = "date";
             }
-          ];
-          schema =
-            (builtins.elemAt (builtins.fromJSON (builtins.readFile ./certificates.cert-manager.io-customresourcedefinition.yaml.json)).spec.versions 0)
-            .schema.openAPIV3Schema.properties.spec;
+          ]
+          |> scope.crd.withSchema (builtins.elemAt (builtins.fromJSON (builtins.readFile ./certificates.cert-manager.io-customresourcedefinition.yaml.json)).spec.versions 0)
+          .schema.openAPIV3Schema.properties.spec
+        );
 
-        };
-
-        certificateRequests = mkCRD {
-          group = "cert-manager.io";
-          kind = "CertificateRequest";
-          listKind = "CertificateRequestList";
-          plural = "certificaterequests";
-          singular = "certificaterequest";
-          shortNames = [
+        certificateRequests = mkCertManagerCRD (
+          scope.crd.fromKind "CertificateRequest" { spec.group = "cert-manager.io"; }
+          |> scope.crd.withShortNames [
             "cr"
             "crs"
-          ];
-          printerColumns = [
+          ]
+          |> scope.crd.withPrinterColumns [
             {
               jsonPath = ".status.conditions[?(@.type==\"Approved\")].status";
               name = "Approved";
@@ -628,20 +615,12 @@
               name = "Age";
               type = "date";
             }
-          ];
-        };
+          ]
+        );
 
-        challenges = mkCRD {
-          group = "acme.cert-manager.io";
-          kind = "Challenge";
-          listKind = "ChallengeList";
-          plural = "challenges";
-          singular = "challenge";
-          categories = [
-            "cert-manager"
-            "cert-manager-acme"
-          ];
-          printerColumns = [
+        challenges = mkAcmeCRD (
+          scope.crd.fromKind "Challenge" { spec.group = "acme.cert-manager.io"; }
+          |> scope.crd.withPrinterColumns [
             {
               jsonPath = ".status.state";
               name = "State";
@@ -663,17 +642,13 @@
               name = "Age";
               type = "date";
             }
-          ];
-        };
+          ]
+        );
 
-        clusterIssuers = mkCRD {
-          group = "cert-manager.io";
-          kind = "ClusterIssuer";
-          listKind = "ClusterIssuerList";
-          plural = "clusterissuers";
-          singular = "clusterissuer";
-          crdScope = "Cluster";
-          printerColumns = [
+        clusterIssuers = mkCertManagerCRD (
+          scope.crd.fromKind "ClusterIssuer" { spec.group = "cert-manager.io"; }
+          |> scope.crd.clusterScoped
+          |> scope.crd.withPrinterColumns [
             {
               jsonPath = ".status.conditions[?(@.type==\"Ready\")].status";
               name = "Ready";
@@ -690,16 +665,12 @@
               name = "Age";
               type = "date";
             }
-          ];
-        };
+          ]
+        );
 
-        issuers = mkCRD {
-          group = "cert-manager.io";
-          kind = "Issuer";
-          listKind = "IssuerList";
-          plural = "issuers";
-          singular = "issuer";
-          printerColumns = [
+        issuers = mkCertManagerCRD (
+          scope.crd.fromKind "Issuer" { spec.group = "cert-manager.io"; }
+          |> scope.crd.withPrinterColumns [
             {
               jsonPath = ".status.conditions[?(@.type==\"Ready\")].status";
               name = "Ready";
@@ -716,20 +687,12 @@
               name = "Age";
               type = "date";
             }
-          ];
-        };
+          ]
+        );
 
-        orders = mkCRD {
-          group = "acme.cert-manager.io";
-          kind = "Order";
-          listKind = "OrderList";
-          plural = "orders";
-          singular = "order";
-          categories = [
-            "cert-manager"
-            "cert-manager-acme"
-          ];
-          printerColumns = [
+        orders = mkAcmeCRD (
+          scope.crd.fromKind "Order" { spec.group = "acme.cert-manager.io"; }
+          |> scope.crd.withPrinterColumns [
             {
               jsonPath = ".status.state";
               name = "State";
@@ -751,8 +714,8 @@
               name = "Age";
               type = "date";
             }
-          ];
-        };
+          ]
+        );
       };
 
       # ============================================================

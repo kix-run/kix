@@ -785,95 +785,73 @@ in
       # the operator webhook at admission time.
 
       crds = {
-        sgCluster = scope.mkCRD {
-          group = "stackgres.io";
-          singular = "sgcluster";
-          plural = "sgclusters";
-          kind = "SGCluster";
-          listKind = "SGClusterList";
-          shortNames = [ "sgclu" ];
-        };
+        sgCluster = scope.mkCRD (
+          scope.crd.fromKind "SGCluster" { spec.group = "stackgres.io"; }
+          |> scope.crd.withShortNames [ "sgclu" ]
+        );
 
-        sgInstanceProfile = scope.mkCRD {
-          group = "stackgres.io";
-          singular = "sginstanceprofile";
-          plural = "sginstanceprofiles";
-          kind = "SGInstanceProfile";
-          listKind = "SGInstanceProfileList";
-          shortNames = [ "sginp" ];
-        };
+        sgInstanceProfile = scope.mkCRD (
+          scope.crd.fromKind "SGInstanceProfile" { spec.group = "stackgres.io"; }
+          |> scope.crd.withShortNames [ "sginp" ]
+        );
 
-        sgPostgresConfig = scope.mkCRD {
-          group = "stackgres.io";
-          singular = "sgpgconfig";
-          plural = "sgpgconfigs";
-          kind = "SGPostgresConfig";
-          listKind = "SGPostgresConfigList";
-          shortNames = [ "sgpgc" ];
-        };
+        sgPostgresConfig = scope.mkCRD (
+          scope.crd.fromKind "SGPostgresConfig" {
+            spec.group = "stackgres.io";
+            spec.names = {
+              singular = "sgpgconfig";
+              plural = "sgpgconfigs";
+            };
+          }
+          |> scope.crd.withShortNames [ "sgpgc" ]
+        );
 
-        sgPoolingConfig = scope.mkCRD {
-          group = "stackgres.io";
-          singular = "sgpoolconfig";
-          plural = "sgpoolconfigs";
-          kind = "SGPoolingConfig";
-          listKind = "SGPoolingConfigList";
-          shortNames = [ "sgpoc" ];
-        };
+        sgPoolingConfig = scope.mkCRD (
+          scope.crd.fromKind "SGPoolingConfig" {
+            spec.group = "stackgres.io";
+            spec.names = {
+              singular = "sgpoolconfig";
+              plural = "sgpoolconfigs";
+            };
+          }
+          |> scope.crd.withShortNames [ "sgpoc" ]
+        );
 
-        sgBackupConfig = scope.mkCRD {
-          group = "stackgres.io";
-          singular = "sgbackupconfig";
-          plural = "sgbackupconfigs";
-          kind = "SGBackupConfig";
-          listKind = "SGBackupConfigList";
-          shortNames = [ "sgbac" ];
-        };
+        sgBackupConfig = scope.mkCRD (
+          scope.crd.fromKind "SGBackupConfig" { spec.group = "stackgres.io"; }
+          |> scope.crd.withShortNames [ "sgbac" ]
+        );
 
-        sgObjectStorage = scope.mkCRD {
-          group = "stackgres.io";
-          singular = "sgobjectstorage";
-          plural = "sgobjectstorages";
-          kind = "SGObjectStorage";
-          listKind = "SGObjectStorageList";
-          shortNames = [ "sgobs" ];
-        };
+        sgObjectStorage = scope.mkCRD (
+          scope.crd.fromKind "SGObjectStorage" { spec.group = "stackgres.io"; }
+          |> scope.crd.withShortNames [ "sgobs" ]
+        );
 
-        sgDistributedLogs = scope.mkCRD {
-          group = "stackgres.io";
-          singular = "sgdistributedlogs";
-          plural = "sgdistributedlogs";
-          kind = "SGDistributedLogs";
-          listKind = "SGDistributedLogsList";
-          shortNames = [ "sgdil" ];
-        };
+        sgDistributedLogs = scope.mkCRD (
+          scope.crd.fromKind "SGDistributedLogs" {
+            spec.group = "stackgres.io";
+            spec.names.plural = "sgdistributedlogs";
+          }
+          |> scope.crd.withShortNames [ "sgdil" ]
+        );
 
-        sgShardedCluster = scope.mkCRD {
-          group = "stackgres.io";
-          singular = "sgshardedcluster";
-          plural = "sgshardedclusters";
-          kind = "SGShardedCluster";
-          listKind = "SGShardedClusterList";
-          shortNames = [ "sgshr" ];
-        };
+        sgShardedCluster = scope.mkCRD (
+          scope.crd.fromKind "SGShardedCluster" { spec.group = "stackgres.io"; }
+          |> scope.crd.withShortNames [ "sgshr" ]
+        );
 
-        sgScript = scope.mkCRD {
-          group = "stackgres.io";
-          singular = "sgscript";
-          plural = "sgscripts";
-          kind = "SGScript";
-          listKind = "SGScriptList";
-          shortNames = [ "sgscr" ];
-        };
+        sgScript = scope.mkCRD (
+          scope.crd.fromKind "SGScript" { spec.group = "stackgres.io"; }
+          |> scope.crd.withShortNames [ "sgscr" ]
+        );
 
-        sgDbOps = scope.mkCRD {
-          group = "stackgres.io";
-          singular = "sgdbops";
-          plural = "sgdbops";
-          kind = "SGDbOps";
-          listKind = "SGDbOpsList";
-          shortNames = [ "sgdbo" ];
-        };
+        sgDbOps = scope.mkCRD (
+          scope.crd.fromKind "SGDbOps" {
+            spec.group = "stackgres.io";
+            spec.names.plural = "sgdbops";
+          }
+          |> scope.crd.withShortNames [ "sgdbo" ]
+        );
       };
 
       # ===== ValidatingWebhookConfiguration =====

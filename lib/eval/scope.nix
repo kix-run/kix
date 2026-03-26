@@ -5,6 +5,7 @@
   lib,
   k8s,
   rbac,
+  crd,
 }:
 
 let
@@ -123,91 +124,41 @@ rec {
 
       # ── CRD support ──────────────────────────────────────────────────
 
-      # Create a CRD resource with auto-attached CR builders on .out.
+      # Create a CRD resource from a K8s-native spec shape.
       # Returns a resource (usable in requires, etc.) with .out.{cr, mkCR}.
+      #
+      # Accepts the same structure as a real CRD manifest's spec, plus an
+      # optional top-level `labels` for the CRD resource metadata.
+      # Use crd.fromKind and other transforms to build the input.
+      #
+      # Example:
+      #   crd.fromKind "SGCluster" { spec.group = "stackgres.io"; }
+      #   |> crd.withShortNames [ "sgclu" ]
+      #   |> scope.mkCRD
       mkCRD =
-        {
-          group,
-          kind,
-          plural,
-          singular,
-          listKind,
-          version ? "v1",
-          crdScope ? "Namespaced",
-          labels ? { },
-          shortNames ? [ ],
-          categories ? [ ],
-          printerColumns ? [ ],
-          schema ?
-            builtins.trace
-              "mkCRD: no schema provided for ${kind}, using permissive default — consider adding an OpenAPI schema"
-              {
-                type = "object";
-                "x-kubernetes-preserve-unknown-fields" = true;
-              },
-        }:
+        attrs:
         let
+          crdSpec = attrs.spec or (throw "mkCRD: spec is required");
+          labels = attrs.labels or { };
+          crKind = crdSpec.names.kind;
+          group = crdSpec.group;
+          plural = crdSpec.names.plural;
+          version = (builtins.head crdSpec.versions).name;
+          crdScope = crdSpec.scope or "Namespaced";
+
           crdResource = scopeMkClusterResource {
             apiVersion = "apiextensions.k8s.io/v1";
             kind = "CustomResourceDefinition";
             name = "${plural}.${group}";
             inherit labels;
-            extra.spec = {
-              inherit group;
-              scope = crdScope;
-              names = {
-                inherit
-                  kind
-                  listKind
-                  plural
-                  singular
-                  ;
-              }
-              // lib.optionalAttrs (shortNames != [ ]) { inherit shortNames; }
-              // lib.optionalAttrs (categories != [ ]) { inherit categories; };
-              versions = [
-                (
-                  {
-                    name = version;
-                    served = true;
-                    storage = true;
-                    subresources.status = { };
-                    schema.openAPIV3Schema = {
-                      type = "object";
-                      properties = {
-                        apiVersion = {
-                          type = "string";
-                        };
-                        kind = {
-                          type = "string";
-                        };
-                        metadata = {
-                          type = "object";
-                        };
-                        spec = schema;
-                        status = {
-                          type = "object";
-                          "x-kubernetes-preserve-unknown-fields" = true;
-                        };
-                      };
-                    };
-                  }
-                  // lib.optionalAttrs (printerColumns != [ ]) {
-                    additionalPrinterColumns = printerColumns;
-                  }
-                )
-              ];
-            };
+            extra.spec = crdSpec;
           };
 
           builders = k8s.mkCRDBuilders {
             crdOrRef = crdResource;
-            inherit
-              group
-              kind
-              version
-              crdScope
-              ;
+            group = group;
+            kind = crKind;
+            inherit version crdScope;
           };
         in
         crdResource
@@ -303,7 +254,12 @@ rec {
         mkStatefulSet = mkWorkload "apps/v1" "StatefulSet";
         mkDaemonSet = mkWorkload "apps/v1" "DaemonSet";
 
-        inherit mkCRD mkCRDRef mkCR;
+        inherit
+          crd
+          mkCRD
+          mkCRDRef
+          mkCR
+          ;
       };
     in
     scopeObj;

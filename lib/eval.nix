@@ -25,7 +25,15 @@ let
 
   helpers = import ./eval/helpers.nix { inherit lib; };
   view = import ./eval/view.nix { inherit lib helpers; };
-  scopeMod = import ./eval/scope.nix { inherit lib k8s rbac; };
+  crd = import ./crd.nix { inherit lib; };
+  scopeMod = import ./eval/scope.nix {
+    inherit
+      lib
+      k8s
+      rbac
+      crd
+      ;
+  };
   resolve = import ./eval/resolve.nix { inherit lib kixlib; };
   import_ = import ./eval/import.nix {
     inherit
