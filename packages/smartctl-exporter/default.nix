@@ -62,6 +62,13 @@
 
     serviceMonitor = {
       enabled = true;
+      relabelings = [
+        {
+          action = "replace";
+          sourceLabels = [ "__meta_kubernetes_pod_node_name" ];
+          targetLabel = "node";
+        }
+      ];
     };
 
     prometheusRules = {

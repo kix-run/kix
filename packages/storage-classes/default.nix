@@ -11,6 +11,11 @@
 }:
 
 {
+  meta = {
+    version = "1.0.0";
+    defaultAliases = [ "storageClasses" ];
+  };
+
   options = {
     classes = lib.mkOption {
       type = lib.types.attrsOf lib.types.anything;

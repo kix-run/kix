@@ -117,8 +117,7 @@ def _is_runtime_resource(doc: dict) -> bool:
 
     # Bare ServiceAccounts in kube-system (no labels, no annotations) are
     # auto-created by kube-controller-manager for built-in controllers.
-    if (kind == "serviceaccount" and ns == "kube-system"
-            and not labels and not annotations):
+    if kind == "serviceaccount" and ns == "kube-system" and not labels and not annotations:
         return True
 
     # Helm internal bookkeeping
@@ -242,11 +241,11 @@ def _is_runtime_resource(doc: dict) -> bool:
     #   - StackGres PVCs: stackgres.io/cluster-name (+ ownerRefs, caught earlier)
     #   - prometheus PVCs: operator.prometheus.io/name
     _STS_PVC_LABELS = {
-        "app.kubernetes.io/name",           # Helm-standard: valkey, loki, etc.
-        "app.kubernetes.io/instance",       # Helm-standard: instance name
-        "stackgres.io/cluster-name",        # StackGres PVCs
-        "operator.prometheus.io/name",      # Prometheus operator PVCs
-        "app",                              # Legacy label used by some charts
+        "app.kubernetes.io/name",  # Helm-standard: valkey, loki, etc.
+        "app.kubernetes.io/instance",  # Helm-standard: instance name
+        "stackgres.io/cluster-name",  # StackGres PVCs
+        "operator.prometheus.io/name",  # Prometheus operator PVCs
+        "app",  # Legacy label used by some charts
     }
     if kind == "persistentvolumeclaim" and re.search(r"-\d+$", name):
         if labels.keys() & _STS_PVC_LABELS:
@@ -274,8 +273,8 @@ def _is_controller_owned(doc: dict) -> bool:
     # NO ownerReferences — verified via cluster dump inspection.
     managed_by = labels.get("app.kubernetes.io/managed-by", "")
     _OPERATOR_MANAGERS = {
-        "virt-operator",       # KubeVirt: creates virt-api, virt-controller, etc.
-        "cdi-operator",        # CDI: creates cdi-apiserver, cdi-uploadproxy, etc.
+        "virt-operator",  # KubeVirt: creates virt-api, virt-controller, etc.
+        "cdi-operator",  # CDI: creates cdi-apiserver, cdi-uploadproxy, etc.
     }
     if managed_by in _OPERATOR_MANAGERS:
         return True
@@ -290,9 +289,13 @@ def _is_controller_owned(doc: dict) -> bool:
     return False
 
 
-def load_resources(directory: Path, normalizer, service: str | None = None,
-                   skip_controller_owned: bool = False,
-                   skip_runtime: bool = False) -> dict[str, dict]:
+def load_resources(
+    directory: Path,
+    normalizer,
+    service: str | None = None,
+    skip_controller_owned: bool = False,
+    skip_runtime: bool = False,
+) -> dict[str, dict]:
     """Load and normalize all YAML files from a directory.
 
     Supports both layouts:
@@ -311,6 +314,7 @@ def load_resources(directory: Path, normalizer, service: str | None = None,
 
     Returns dict mapping "{namespace}/{name}-{kind}" -> normalized doc.
     """
+
     def _matches_service(stem: str) -> bool:
         if service is None:
             return True
@@ -550,8 +554,10 @@ def generate_report(
 
     # Find probable renames (mutual best match + structural similarity)
     rename_pairs = find_rename_pairs(
-        kix_only, cluster_only,
-        kix_resources, cluster_resources,
+        kix_only,
+        cluster_only,
+        kix_resources,
+        cluster_resources,
         ignore_paths,
     )
     renamed_kix = {kix_key for kix_key, _, _, _ in rename_pairs}
@@ -588,23 +594,18 @@ def generate_report(
     n_total = len(identical) + len(modified) + n_kix_only + n_cluster_only
 
     # Aggregate diff counts across all modified resources
-    total_extra = sum(
-        sum(1 for d in diffs if d.kind == DiffKind.EXTRA_IN_B)
-        for _, diffs in modified
-    )
-    total_missing = sum(
-        sum(1 for d in diffs if d.kind == DiffKind.MISSING_IN_B)
-        for _, diffs in modified
-    )
+    total_extra = sum(sum(1 for d in diffs if d.kind == DiffKind.EXTRA_IN_B) for _, diffs in modified)
+    total_missing = sum(sum(1 for d in diffs if d.kind == DiffKind.MISSING_IN_B) for _, diffs in modified)
     total_changed = sum(
-        sum(1 for d in diffs if d.kind in (DiffKind.VALUE_MISMATCH, DiffKind.TYPE_MISMATCH))
-        for _, diffs in modified
+        sum(1 for d in diffs if d.kind in (DiffKind.VALUE_MISMATCH, DiffKind.TYPE_MISMATCH)) for _, diffs in modified
     )
 
     if color:
         lines.append(f"{_BOLD}Summary{_RESET}  {_DIM}({n_total} resources){_RESET}")
         lines.append(f"  Identical:    {_DIM}{len(identical)}{_RESET}")
-        lines.append(f"  Modified:     {_YELLOW}{len(modified)}{_RESET}  {_GREEN}+{total_extra}{_RESET} {_RED}-{total_missing}{_RESET} {_YELLOW}~{total_changed}{_RESET}")
+        lines.append(
+            f"  Modified:     {_YELLOW}{len(modified)}{_RESET}  {_GREEN}+{total_extra}{_RESET} {_RED}-{total_missing}{_RESET} {_YELLOW}~{total_changed}{_RESET}"
+        )
         lines.append(f"  kix-only:     {_RED}{n_kix_only}{_RESET}")
         lines.append(f"  Cluster-only: {_GREEN}{n_cluster_only}{_RESET}")
     else:
@@ -627,7 +628,9 @@ def generate_report(
             non_rename_diffs = [d for d in diffs if d.path not in _RENAME_ONLY_PATHS]
             pct = int(ratio * 100)
             if color:
-                lines.append(f"  {_CYAN}{_BOLD}{format_resource(kix_key)}{_RESET} <-> {_CYAN}{_BOLD}{format_resource(cluster_key)}{_RESET} {_DIM}({pct}% match){_RESET}")
+                lines.append(
+                    f"  {_CYAN}{_BOLD}{format_resource(kix_key)}{_RESET} <-> {_CYAN}{_BOLD}{format_resource(cluster_key)}{_RESET} {_DIM}({pct}% match){_RESET}"
+                )
             else:
                 lines.append(f"### `{format_resource(kix_key)}` <-> `{format_resource(cluster_key)}` ({pct}% match)")
             lines.append("")
@@ -672,8 +675,7 @@ def generate_report(
             # Diff counts for the header
             n_missing = sum(1 for d in diffs if d.kind == DiffKind.MISSING_IN_B)
             n_extra = sum(1 for d in diffs if d.kind == DiffKind.EXTRA_IN_B)
-            n_changed = sum(1 for d in diffs
-                            if d.kind in (DiffKind.VALUE_MISMATCH, DiffKind.TYPE_MISMATCH))
+            n_changed = sum(1 for d in diffs if d.kind in (DiffKind.VALUE_MISMATCH, DiffKind.TYPE_MISMATCH))
 
             if color:
                 label = f"{name}" if ns == "_cluster" else f"{ns}/{name}"
@@ -722,34 +724,66 @@ def generate_report(
 @click.command()
 @click.argument("kix_dir", type=click.Path(exists=True, file_okay=False))
 @click.argument("cluster_dir", type=click.Path(exists=True, file_okay=False))
-@click.option("--ignore-path", multiple=True,
-              help="JSON paths to ignore (e.g. '*.annotations', '$.spec.strategy')")
-@click.option("--service", default=None,
-              help="Only compare resources whose name matches this service (e.g. 'coredns')")
-@click.option("--color/--no-color", default=None,
-              help="Colorize diff output (default: auto-detect TTY)")
-@click.option("--ignore-cluster-defaults/--no-ignore-cluster-defaults", default=True,
-              help="Ignore fields that K8s auto-assigns (clusterIP, ipFamilies, sessionAffinity, etc.). On by default.")
-@click.option("--full-diff", is_flag=True, default=False,
-              help="Show full unified diffs for multi-line string values (e.g. ConfigMaps)")
-@click.option("--ignore-port-names/--no-ignore-port-names", default=True,
-              help="Ignore port name differences in container ports (default: enabled)")
-@click.option("--ignore-dns-suffix/--no-ignore-dns-suffix", default=True,
-              help="Treat FQDN service DNS names (x.ns.svc.cluster.local) as equivalent to short names (default: enabled)")
-@click.option("--skip-controller-owned/--no-skip-controller-owned", default=True,
-              help="Skip cluster resources with ownerReferences[controller=true] (auto-created by controllers)")
-@click.option("--skip-runtime/--no-skip-runtime", default=True,
-              help="Skip runtime-generated cluster resources (built-in RBAC, default SAs, helm secrets, velero snapshots, etc.)")
-@click.option("--skip-all", is_flag=True, default=False,
-              help="Enable all skip/ignore flags (cluster-defaults, port-names, dns-suffix, controller-owned, runtime)")
-@click.option("--files-only", is_flag=True, default=False,
-              help="Only show file-level info, skip detailed line-by-line diffs")
-@click.option("--only-broken", is_flag=True, default=False,
-              help="Hide identical resources from the output")
-def main(kix_dir: str, cluster_dir: str, ignore_path: tuple[str, ...], service: str | None,
-         color: bool | None, ignore_cluster_defaults: bool, full_diff: bool,
-         ignore_port_names: bool, ignore_dns_suffix: bool, skip_controller_owned: bool,
-         skip_runtime: bool, skip_all: bool, files_only: bool, only_broken: bool):
+@click.option("--ignore-path", multiple=True, help="JSON paths to ignore (e.g. '*.annotations', '$.spec.strategy')")
+@click.option("--service", default=None, help="Only compare resources whose name matches this service (e.g. 'coredns')")
+@click.option("--color/--no-color", default=None, help="Colorize diff output (default: auto-detect TTY)")
+@click.option(
+    "--ignore-cluster-defaults/--no-ignore-cluster-defaults",
+    default=True,
+    help="Ignore fields that K8s auto-assigns (clusterIP, ipFamilies, sessionAffinity, etc.). On by default.",
+)
+@click.option(
+    "--full-diff",
+    is_flag=True,
+    default=False,
+    help="Show full unified diffs for multi-line string values (e.g. ConfigMaps)",
+)
+@click.option(
+    "--ignore-port-names/--no-ignore-port-names",
+    default=True,
+    help="Ignore port name differences in container ports (default: enabled)",
+)
+@click.option(
+    "--ignore-dns-suffix/--no-ignore-dns-suffix",
+    default=True,
+    help="Treat FQDN service DNS names (x.ns.svc.cluster.local) as equivalent to short names (default: enabled)",
+)
+@click.option(
+    "--skip-controller-owned/--no-skip-controller-owned",
+    default=True,
+    help="Skip cluster resources with ownerReferences[controller=true] (auto-created by controllers)",
+)
+@click.option(
+    "--skip-runtime/--no-skip-runtime",
+    default=True,
+    help="Skip runtime-generated cluster resources (built-in RBAC, default SAs, helm secrets, velero snapshots, etc.)",
+)
+@click.option(
+    "--skip-all",
+    is_flag=True,
+    default=False,
+    help="Enable all skip/ignore flags (cluster-defaults, port-names, dns-suffix, controller-owned, runtime)",
+)
+@click.option(
+    "--files-only", is_flag=True, default=False, help="Only show file-level info, skip detailed line-by-line diffs"
+)
+@click.option("--only-broken", is_flag=True, default=False, help="Hide identical resources from the output")
+def main(
+    kix_dir: str,
+    cluster_dir: str,
+    ignore_path: tuple[str, ...],
+    service: str | None,
+    color: bool | None,
+    ignore_cluster_defaults: bool,
+    full_diff: bool,
+    ignore_port_names: bool,
+    ignore_dns_suffix: bool,
+    skip_controller_owned: bool,
+    skip_runtime: bool,
+    skip_all: bool,
+    files_only: bool,
+    only_broken: bool,
+):
     """Compare kix manifests against a cluster dump.
 
     KIX_DIR is the kix output directory (e.g. ./result from nix build).
@@ -786,6 +820,7 @@ def main(kix_dir: str, cluster_dir: str, ignore_path: tuple[str, ...], service: 
             for step in post_steps:
                 doc = step(doc)
             return doc
+
         return wrapped
 
     if service:
@@ -796,17 +831,23 @@ def main(kix_dir: str, cluster_dir: str, ignore_path: tuple[str, ...], service: 
     click.echo(f"  {len(kix_resources)} resources", err=True)
 
     click.echo("Loading cluster dump...", err=True)
-    cluster_resources = load_resources(cluster_path, _with_post(normalize_cluster), service,
-                                       skip_controller_owned=skip_controller_owned,
-                                       skip_runtime=skip_runtime)
+    cluster_resources = load_resources(
+        cluster_path,
+        _with_post(normalize_cluster),
+        service,
+        skip_controller_owned=skip_controller_owned,
+        skip_runtime=skip_runtime,
+    )
     click.echo(f"  {len(cluster_resources)} resources", err=True)
 
     # Resolve color: explicit flag wins, otherwise auto-detect TTY on stdout
     use_color = color if color is not None else sys.stdout.isatty()
 
     report = generate_report(
-        kix_path, cluster_path,
-        kix_resources, cluster_resources,
+        kix_path,
+        cluster_path,
+        kix_resources,
+        cluster_resources,
         ignore_paths,
         color=use_color,
         full_diff=full_diff,

@@ -188,10 +188,7 @@ def _strip_k8s_defaults(doc: dict) -> dict:
             # protocol defaults to TCP on service ports
             ports = spec.get("ports")
             if isinstance(ports, list):
-                spec["ports"] = [
-                    _strip_port_protocol_default(p) if isinstance(p, dict) else p
-                    for p in ports
-                ]
+                spec["ports"] = [_strip_port_protocol_default(p) if isinstance(p, dict) else p for p in ports]
             doc["spec"] = spec
 
     # Deployments / StatefulSets / DaemonSets: strip K8s-defaulted spec fields
@@ -333,7 +330,7 @@ def _strip_pod_spec_defaults(doc: dict) -> dict:
             pod_spec.pop("enableServiceLinks")
 
         # Volume defaults
-        for volume in (pod_spec.get("volumes") or []):
+        for volume in pod_spec.get("volumes") or []:
             if not isinstance(volume, dict):
                 continue
             # secret.defaultMode defaults to 420 (0644)
@@ -360,10 +357,7 @@ def _strip_pod_spec_defaults(doc: dict) -> dict:
             # protocol defaults to TCP on container ports
             ports = container.get("ports")
             if isinstance(ports, list):
-                container["ports"] = [
-                    _strip_port_protocol_default(p) if isinstance(p, dict) else p
-                    for p in ports
-                ]
+                container["ports"] = [_strip_port_protocol_default(p) if isinstance(p, dict) else p for p in ports]
 
             # fieldRef.apiVersion defaults to "v1" in env vars
             env = container.get("env")
@@ -413,13 +407,7 @@ def _find_pod_specs(doc: dict) -> list[dict]:
     if isinstance(tmpl, dict):
         specs.append(tmpl)
     # CronJob
-    job_spec = (
-        doc.get("spec", {})
-        .get("jobTemplate", {})
-        .get("spec", {})
-        .get("template", {})
-        .get("spec")
-    )
+    job_spec = doc.get("spec", {}).get("jobTemplate", {}).get("spec", {}).get("template", {}).get("spec")
     if isinstance(job_spec, dict):
         specs.append(job_spec)
     # Pod directly
@@ -495,10 +483,12 @@ def _normalize_rbac_rules(doc: dict) -> dict:
     for key, resources in sorted(merged.items()):
         if key[0] == "nonres":
             _, urls, verbs = key
-            canonical.append({
-                "nonResourceURLs": list(urls),
-                "verbs": list(verbs),
-            })
+            canonical.append(
+                {
+                    "nonResourceURLs": list(urls),
+                    "verbs": list(verbs),
+                }
+            )
         else:
             _, api_groups, verbs, resource_names = key
             rule = {
@@ -576,13 +566,7 @@ def _find_metadata_blocks(doc: dict) -> list[dict]:
                 blocks.append(vct_meta)
 
     # Job template (CronJob)
-    job_tmpl = (
-        doc.get("spec", {})
-        .get("jobTemplate", {})
-        .get("spec", {})
-        .get("template", {})
-        .get("metadata")
-    )
+    job_tmpl = doc.get("spec", {}).get("jobTemplate", {}).get("spec", {}).get("template", {}).get("metadata")
     if isinstance(job_tmpl, dict):
         blocks.append(job_tmpl)
 
@@ -620,10 +604,7 @@ def _normalize_configmap_data(doc: dict) -> dict:
             lines = [line.rstrip() for line in v.splitlines()]
             return re.sub(r"\n{2,}", "\n", "\n".join(lines)).strip()
 
-        doc["data"] = {
-            k: normalize_text(v) if isinstance(v, str) else v
-            for k, v in data.items()
-        }
+        doc["data"] = {k: normalize_text(v) if isinstance(v, str) else v for k, v in data.items()}
     return doc
 
 
@@ -656,7 +637,11 @@ _SORT_DICT_ARRAYS: dict[str, Any] = {
     "hostAliases": lambda h: h.get("ip", ""),
     "webhooks": lambda w: w.get("name", ""),
     "topologySpreadConstraints": lambda t: t.get("topologyKey", ""),
-    "tolerations": lambda t: (t.get("key", ""), t.get("operator", ""), t.get("effect", "")),
+    "tolerations": lambda t: (
+        t.get("key", ""),
+        t.get("operator", ""),
+        t.get("effect", ""),
+    ),
     "imagePullSecrets": lambda s: s.get("name", ""),
     "groups": lambda g: g.get("name", ""),
     "volumeClaimTemplates": lambda v: v.get("metadata", {}).get("name", ""),
@@ -703,19 +688,13 @@ def strip_port_names(doc: dict) -> dict:
                 continue
             ports = container.get("ports")
             if isinstance(ports, list):
-                container["ports"] = [
-                    {k: v for k, v in p.items() if k != "name"}
-                    for p in ports if isinstance(p, dict)
-                ]
+                container["ports"] = [{k: v for k, v in p.items() if k != "name"} for p in ports if isinstance(p, dict)]
     # Service ports
     if doc.get("kind") == "Service":
         spec = doc.get("spec", {})
         ports = spec.get("ports")
         if isinstance(ports, list):
-            spec["ports"] = [
-                {k: v for k, v in p.items() if k != "name"}
-                for p in ports if isinstance(p, dict)
-            ]
+            spec["ports"] = [{k: v for k, v in p.items() if k != "name"} for p in ports if isinstance(p, dict)]
     return doc
 
 
@@ -724,11 +703,11 @@ def normalize_dns_suffix(doc: dict) -> dict:
     return _walk_strings(doc, _shorten_fqdn)
 
 
-_FQDN_RE = re.compile(r'([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)\.(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)\.svc\.[a-z0-9][\w.-]*')
+_FQDN_RE = re.compile(r"([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)\.(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)\.svc\.[a-z0-9][\w.-]*")
 
 
 def _shorten_fqdn(s: str) -> str:
-    return _FQDN_RE.sub(r'\1', s)
+    return _FQDN_RE.sub(r"\1", s)
 
 
 def _walk_strings(obj: Any, fn) -> Any:

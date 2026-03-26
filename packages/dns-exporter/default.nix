@@ -14,6 +14,10 @@ let
   name = scope.instanceName;
 in
 {
+  meta = {
+    version = "1.0.0";
+  };
+
   options = {
     image = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
@@ -58,7 +62,20 @@ in
         }
         |> scope.mkDeployment;
 
-      service = self.deployment |> kix.service.fromWorkload { inherit name; } |> scope.mkResource;
+      service =
+        self.deployment
+        |> kix.service.fromWorkload {
+          inherit name;
+          ports = [
+            {
+              name = "metrics";
+              port = 15353;
+              targetPort = 15353;
+              protocol = "TCP";
+            }
+          ];
+        }
+        |> scope.mkResource;
 
       main = self.service;
     };

@@ -38,9 +38,44 @@
   };
 
   defaultValues = {
+    # --- Default rule overrides ---
+    defaultRules = {
+      overrides = {
+        KubeDeploymentReplicasMismatch = {
+          "for" = "1h";
+        };
+        KubeHpaMaxedOut = {
+          "for" = "6h";
+        };
+        CPUThrottlingHigh = {
+          "for" = "1h";
+        };
+        NodeDiskIOSaturation = {
+          "for" = "6h";
+        };
+      };
+    };
+
     # --- Prometheus ---
     prometheus = {
       enabled = true;
+      ingress = {
+        enabled = true;
+        ingressClassName = "private-v2";
+        annotations = {
+          "cert-manager.io/issuer" = "letsencrypt-production";
+          "cert-manager.io/issuer-kind" = "ClusterIssuer";
+          "ingress.kubernetes.io/ssl-redirect" = "true";
+        };
+        hosts = [ "prometheus.nw1.example.net" ];
+        paths = [ "/" ];
+        tls = [
+          {
+            secretName = "prometheus-tls";
+            hosts = [ "prometheus.nw1.example.net" ];
+          }
+        ];
+      };
       prometheusSpec = {
         retention = "90d";
         retentionSize = "320GiB";
@@ -131,8 +166,37 @@
         };
         datasources = {
           enabled = true;
-          searchNamespace = "ALL";
         };
+      };
+      dashboardProviders = {
+        "dashboardproviders.yaml" = {
+          apiVersion = 1;
+          providers = [
+            {
+              name = "default";
+              orgId = 1;
+              folder = "default";
+              type = "file";
+              disableDeletion = false;
+              editable = true;
+              options = {
+                path = "/var/lib/grafana/dashboards/standard";
+              };
+            }
+          ];
+        };
+      };
+      dashboards = {
+        default = {
+          cardinality-explorer = {
+            gnetId = 11304;
+            revision = 1;
+            datasource = "Prometheus";
+          };
+        };
+      };
+      dashboardsConfigMaps = {
+        default = "prometheus-grafana-dashboards-default";
       };
       # Admin credentials use the chart-generated secret (prometheus-grafana).
     };
@@ -213,6 +277,8 @@
         };
       };
       extraArgs = [
+        "--collector.filesystem.fs-types-exclude=^(autofs|binfmt_misc|bpf|cgroup2?|configfs|debugfs|devpts|devtmpfs|fusectl|hugetlbfs|iso9660|mqueue|nsfs|overlay|proc|procfs|pstore|rpc_pipefs|securityfs|selinuxfs|squashfs|sysfs|tracefs)$"
+        "--collector.filesystem.mount-points-exclude=^/(dev|proc|sys|var/lib/docker/.+|var/lib/kubelet/.+)($|/)"
         "--collector.textfile.directory=/var/lib/node_exporter/textfile_collector"
       ];
       extraHostVolumeMounts = [
@@ -254,8 +320,7 @@
     };
 
     # --- Global ---
-    # Disable components we handle separately or don't need.
-    kubeProxy.enabled = false;
-    kubeEtcd.enabled = false;
+    kubeEtcd.enabled = true;
+    kubeProxy.enabled = true;
   };
 }

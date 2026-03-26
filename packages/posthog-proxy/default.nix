@@ -19,6 +19,10 @@ let
   name = scope.instanceName;
 in
 {
+  meta = {
+    version = "1.0.0";
+  };
+
   options = {
     host = lib.mkOption {
       type = lib.types.str;

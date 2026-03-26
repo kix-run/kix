@@ -58,4 +58,4 @@ pre-commit:
 
     format-python:
       glob: "scripts/**/*.py"
-      run: python3 -m black --check --line-length 120 {staged_files}
+      run: devenv shell -- ruff-check --line-length 120 {staged_files}

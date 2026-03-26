@@ -575,6 +575,10 @@
               type = "date";
             }
           ];
+          schema =
+            (builtins.elemAt (builtins.fromJSON (builtins.readFile ./certificates.cert-manager.io-customresourcedefinition.yaml.json)).spec.versions 0)
+            .schema.openAPIV3Schema.properties.spec;
+
         };
 
         certificateRequests = mkCRD {

@@ -204,6 +204,9 @@ in
           spec = {
             schedule = scheduleCfg.schedule;
             template = scheduleCfg.template or { };
+          }
+          // lib.optionalAttrs (scheduleCfg ? skipImmediately) {
+            skipImmediately = scheduleCfg.skipImmediately;
           };
         }
       ) config.schedules;
@@ -485,6 +488,7 @@ in
                 };
                 spec = {
                   serviceAccountName = "${name}-server";
+                  automountServiceAccountToken = true;
                   securityContext = {
                     runAsUser = 0;
                   };
@@ -579,6 +583,7 @@ in
         spec = {
           provider = config.backupStorageLocation.provider;
           default = true;
+          accessMode = "ReadWrite";
           objectStorage = {
             bucket = config.backupStorageLocation.bucket;
           };

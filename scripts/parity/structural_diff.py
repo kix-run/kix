@@ -22,15 +22,17 @@ from typing import Any, Callable
 
 class DiffKind(Enum):
     """Type of structural difference between two values."""
-    MISSING_IN_B = "missing_in_b"   # Key exists in A but not B
-    EXTRA_IN_B = "extra_in_b"       # Key exists in B but not A
-    VALUE_MISMATCH = "value_mismatch"   # Both have the key but values differ
-    TYPE_MISMATCH = "type_mismatch"     # Same key, different types (e.g. str vs int)
+
+    MISSING_IN_B = "missing_in_b"  # Key exists in A but not B
+    EXTRA_IN_B = "extra_in_b"  # Key exists in B but not A
+    VALUE_MISMATCH = "value_mismatch"  # Both have the key but values differ
+    TYPE_MISMATCH = "type_mismatch"  # Same key, different types (e.g. str vs int)
 
 
 @dataclass
 class Difference:
     """A single structural difference at a specific JSON path."""
+
     path: str
     kind: DiffKind
     a_value: Any = None
@@ -58,8 +60,11 @@ class Difference:
                 )
 
 
-def _compact(value: Any, max_len: int = 120) -> str:
-    """Compact representation of a value for diff output."""
+def _compact(value: Any, max_len: int = 120, full: bool = False) -> str:
+    """Compact representation of a value for diff output.
+
+    If *full* is True, strings and collections are never truncated.
+    """
     if value is None:
         return "null"
     if isinstance(value, bool):
@@ -67,15 +72,17 @@ def _compact(value: Any, max_len: int = 120) -> str:
     if isinstance(value, (int, float)):
         return str(value)
     if isinstance(value, str):
+        if full:
+            return repr(value)
         if len(value) <= max_len and "\n" not in value:
             return repr(value)
         lines = value.splitlines()
         return repr(lines[0][:80] + f"... ({len(lines)} lines)")
     if isinstance(value, (dict, list)):
         r = repr(value)
-        if len(r) <= max_len:
+        if full or len(r) <= max_len:
             return r
-        return r[:max_len - 3] + "..."
+        return r[: max_len - 3] + "..."
     return repr(value)
 
 
@@ -84,7 +91,9 @@ def _compact(value: Any, max_len: int = 120) -> str:
 _LIST_KEY_EXTRACTORS: dict[str, Callable[[dict], str]] = {
     "containers": lambda item: item.get("name", ""),
     "initContainers": lambda item: item.get("name", ""),
-    "ports": lambda item: item.get("name", "") or f"{item.get('containerPort', item.get('port', ''))}:{item.get('protocol', 'TCP')}",
+    "ports": lambda item: (
+        item.get("name", "") or f"{item.get('containerPort', item.get('port', ''))}:{item.get('protocol', 'TCP')}"
+    ),
     "volumes": lambda item: item.get("name", ""),
     "volumeMounts": lambda item: item.get("mountPath", ""),
     "env": lambda item: item.get("name", ""),
@@ -171,14 +180,36 @@ def _diff_keyed_list(
         if ignore_paths and _path_ignored(child_path, ignore_paths):
             continue
         if key in a_by_key and key in b_by_key:
-            diffs.extend(structural_diff(
-                a_by_key[key], b_by_key[key], child_path,
-                ignore_paths, a_label, b_label,
-            ))
+            diffs.extend(
+                structural_diff(
+                    a_by_key[key],
+                    b_by_key[key],
+                    child_path,
+                    ignore_paths,
+                    a_label,
+                    b_label,
+                )
+            )
         elif key in a_by_key:
-            diffs.append(Difference(child_path, DiffKind.MISSING_IN_B, a_by_key[key], a_label=a_label, b_label=b_label))
+            diffs.append(
+                Difference(
+                    child_path,
+                    DiffKind.MISSING_IN_B,
+                    a_by_key[key],
+                    a_label=a_label,
+                    b_label=b_label,
+                )
+            )
         else:
-            diffs.append(Difference(child_path, DiffKind.EXTRA_IN_B, b_value=b_by_key[key], a_label=a_label, b_label=b_label))
+            diffs.append(
+                Difference(
+                    child_path,
+                    DiffKind.EXTRA_IN_B,
+                    b_value=b_by_key[key],
+                    a_label=a_label,
+                    b_label=b_label,
+                )
+            )
 
     return diffs
 
@@ -231,9 +262,25 @@ def structural_diff(
             if ignore_paths and _path_ignored(child_path, ignore_paths):
                 continue
             if key not in b:
-                diffs.append(Difference(child_path, DiffKind.MISSING_IN_B, a[key], a_label=a_label, b_label=b_label))
+                diffs.append(
+                    Difference(
+                        child_path,
+                        DiffKind.MISSING_IN_B,
+                        a[key],
+                        a_label=a_label,
+                        b_label=b_label,
+                    )
+                )
             elif key not in a:
-                diffs.append(Difference(child_path, DiffKind.EXTRA_IN_B, b_value=b[key], a_label=a_label, b_label=b_label))
+                diffs.append(
+                    Difference(
+                        child_path,
+                        DiffKind.EXTRA_IN_B,
+                        b_value=b[key],
+                        a_label=a_label,
+                        b_label=b_label,
+                    )
+                )
             else:
                 diffs.extend(structural_diff(a[key], b[key], child_path, ignore_paths, a_label, b_label))
         return diffs
@@ -256,10 +303,12 @@ def structural_diff(
         b_by_key: dict[str, list] = {}
         for k, v in b_keyed:
             b_by_key.setdefault(k, []).append(v)
-        all_keys = list(dict.fromkeys(
-            [k for k, _ in sorted(a_keyed, key=lambda x: x[0])]
-            + [k for k, _ in sorted(b_keyed, key=lambda x: x[0])]
-        ))
+        all_keys = list(
+            dict.fromkeys(
+                [k for k, _ in sorted(a_keyed, key=lambda x: x[0])]
+                + [k for k, _ in sorted(b_keyed, key=lambda x: x[0])]
+            )
+        )
         idx = 0
         for key in all_keys:
             a_items = a_by_key.get(key, [])
@@ -271,15 +320,40 @@ def structural_diff(
                 if ignore_paths and _path_ignored(child_path, ignore_paths):
                     idx += 1
                     continue
-                diffs.extend(structural_diff(a_items[j], b_items[j], child_path, ignore_paths, a_label, b_label))
+                diffs.extend(
+                    structural_diff(
+                        a_items[j],
+                        b_items[j],
+                        child_path,
+                        ignore_paths,
+                        a_label,
+                        b_label,
+                    )
+                )
                 idx += 1
             for j in range(paired, len(a_items)):
                 child_path = f"{path}[{idx}]"
-                diffs.append(Difference(child_path, DiffKind.MISSING_IN_B, a_items[j], a_label=a_label, b_label=b_label))
+                diffs.append(
+                    Difference(
+                        child_path,
+                        DiffKind.MISSING_IN_B,
+                        a_items[j],
+                        a_label=a_label,
+                        b_label=b_label,
+                    )
+                )
                 idx += 1
             for j in range(paired, len(b_items)):
                 child_path = f"{path}[{idx}]"
-                diffs.append(Difference(child_path, DiffKind.EXTRA_IN_B, b_value=b_items[j], a_label=a_label, b_label=b_label))
+                diffs.append(
+                    Difference(
+                        child_path,
+                        DiffKind.EXTRA_IN_B,
+                        b_value=b_items[j],
+                        a_label=a_label,
+                        b_label=b_label,
+                    )
+                )
                 idx += 1
         return diffs
 
@@ -298,14 +372,26 @@ def structural_diff(
 
 # Matches K8s resource quantities like "500m", "1.5Gi", "100", "2e3"
 _QUANTITY_RE = re.compile(
-    r'^([+-]?(?:\d+\.?\d*|\d*\.?\d+)(?:e[+-]?\d+)?)\s*'
-    r'(n|u|m|k|Ki|Mi|Gi|Ti|Pi|Ei|M|G|T|P|E)?$'
+    r"^([+-]?(?:\d+\.?\d*|\d*\.?\d+)(?:e[+-]?\d+)?)\s*"
+    r"(n|u|m|k|Ki|Mi|Gi|Ti|Pi|Ei|M|G|T|P|E)?$"
 )
 
 _QUANTITY_MULTIPLIERS = {
-    "n": 1e-9, "u": 1e-6, "m": 1e-3,
-    "k": 1e3, "M": 1e6, "G": 1e9, "T": 1e12, "P": 1e15, "E": 1e18,
-    "Ki": 2**10, "Mi": 2**20, "Gi": 2**30, "Ti": 2**40, "Pi": 2**50, "Ei": 2**60,
+    "n": 1e-9,
+    "u": 1e-6,
+    "m": 1e-3,
+    "k": 1e3,
+    "M": 1e6,
+    "G": 1e9,
+    "T": 1e12,
+    "P": 1e15,
+    "E": 1e18,
+    "Ki": 2**10,
+    "Mi": 2**20,
+    "Gi": 2**30,
+    "Ti": 2**40,
+    "Pi": 2**50,
+    "Ei": 2**60,
 }
 
 
@@ -343,7 +429,14 @@ def _path_ignored(path: str, ignore_paths: set[str]) -> bool:
     return False
 
 
-def _multiline_diff(a: str, b: str, a_label: str, b_label: str, indent: str = "      ", color: bool = False) -> str:
+def _multiline_diff(
+    a: str,
+    b: str,
+    a_label: str,
+    b_label: str,
+    indent: str = "      ",
+    color: bool = False,
+) -> str:
     """Generate a unified diff for multi-line string values."""
     a_lines = a.splitlines(keepends=True)
     b_lines = b.splitlines(keepends=True)
@@ -371,28 +464,26 @@ def _multiline_diff(a: str, b: str, a_label: str, b_label: str, indent: str = " 
 
 def _format_diff_plain(d: Difference, full_diff: bool = False) -> str:
     """Render a single Difference as plain text."""
+    _c = lambda v: _compact(v, full=full_diff)
     match d.kind:
         case DiffKind.MISSING_IN_B:
-            return f"  - {d.path}: {_compact(d.a_value)}"
+            return f"  - {d.path}: {_c(d.a_value)}"
         case DiffKind.EXTRA_IN_B:
-            return f"  + {d.path}: {_compact(d.b_value)}"
+            return f"  + {d.path}: {_c(d.b_value)}"
         case DiffKind.VALUE_MISMATCH:
-            if (full_diff and isinstance(d.a_value, str) and isinstance(d.b_value, str)
-                    and ("\n" in d.a_value or "\n" in d.b_value)):
-                return (
-                    f"  ~ {d.path}:\n"
-                    + _multiline_diff(d.a_value, d.b_value, d.a_label, d.b_label)
-                )
-            return (
-                f"  ~ {d.path}:\n"
-                f"      {d.a_label}: {_compact(d.a_value)}\n"
-                f"      {d.b_label}: {_compact(d.b_value)}"
-            )
+            if (
+                full_diff
+                and isinstance(d.a_value, str)
+                and isinstance(d.b_value, str)
+                and ("\n" in d.a_value or "\n" in d.b_value)
+            ):
+                return f"  ~ {d.path}:\n" + _multiline_diff(d.a_value, d.b_value, d.a_label, d.b_label)
+            return f"  ~ {d.path}:\n      {d.a_label}: {_c(d.a_value)}\n      {d.b_label}: {_c(d.b_value)}"
         case DiffKind.TYPE_MISMATCH:
             return (
                 f"  ! {d.path}: type mismatch\n"
-                f"      {d.a_label}: {type(d.a_value).__name__} = {_compact(d.a_value)}\n"
-                f"      {d.b_label}: {type(d.b_value).__name__} = {_compact(d.b_value)}"
+                f"      {d.a_label}: {type(d.a_value).__name__} = {_c(d.a_value)}\n"
+                f"      {d.b_label}: {type(d.b_value).__name__} = {_c(d.b_value)}"
             )
     return str(d)
 
@@ -426,24 +517,29 @@ _RESET = "\033[0m"
 
 def _colorize_diff(d: Difference, full_diff: bool = False) -> str:
     """Render a single Difference with ANSI colour codes."""
+    _c = lambda v: _compact(v, full=full_diff)
     match d.kind:
         case DiffKind.MISSING_IN_B:
-            return f"  {_RED}{_BOLD}-{_RESET} {_DIM}{d.path}:{_RESET} {_RED}{_compact(d.a_value)}{_RESET}"
+            return f"  {_RED}{_BOLD}-{_RESET} {_DIM}{d.path}:{_RESET} {_RED}{_c(d.a_value)}{_RESET}"
         case DiffKind.EXTRA_IN_B:
-            return f"  {_GREEN}{_BOLD}+{_RESET} {_DIM}{d.path}:{_RESET} {_GREEN}{_compact(d.b_value)}{_RESET}"
+            return f"  {_GREEN}{_BOLD}+{_RESET} {_DIM}{d.path}:{_RESET} {_GREEN}{_c(d.b_value)}{_RESET}"
         case DiffKind.VALUE_MISMATCH:
-            if (full_diff and isinstance(d.a_value, str) and isinstance(d.b_value, str)
-                    and ("\n" in d.a_value or "\n" in d.b_value)):
+            if (
+                full_diff
+                and isinstance(d.a_value, str)
+                and isinstance(d.b_value, str)
+                and ("\n" in d.a_value or "\n" in d.b_value)
+            ):
                 diff_text = _multiline_diff(d.a_value, d.b_value, d.a_label, d.b_label, color=True)
                 return f"  {_YELLOW}{_BOLD}~{_RESET} {_DIM}{d.path}:{_RESET}\n{diff_text}"
             return (
                 f"  {_YELLOW}{_BOLD}~{_RESET} {_DIM}{d.path}:{_RESET}\n"
-                f"      {_RED}{d.a_label}: {_compact(d.a_value)}{_RESET}\n"
-                f"      {_GREEN}{d.b_label}: {_compact(d.b_value)}{_RESET}"
+                f"      {_RED}{d.a_label}: {_c(d.a_value)}{_RESET}\n"
+                f"      {_GREEN}{d.b_label}: {_c(d.b_value)}{_RESET}"
             )
         case DiffKind.TYPE_MISMATCH:
             return (
                 f"  {_CYAN}{_BOLD}!{_RESET} {_DIM}{d.path}:{_RESET} type mismatch\n"
-                f"      {_RED}{d.a_label}: {type(d.a_value).__name__} = {_compact(d.a_value)}{_RESET}\n"
-                f"      {_GREEN}{d.b_label}: {type(d.b_value).__name__} = {_compact(d.b_value)}{_RESET}"
+                f"      {_RED}{d.a_label}: {type(d.a_value).__name__} = {_c(d.a_value)}{_RESET}\n"
+                f"      {_GREEN}{d.b_label}: {type(d.b_value).__name__} = {_c(d.b_value)}{_RESET}"
             )

@@ -18,6 +18,7 @@
 
 {
   meta = {
+    version = "1.0.0";
     description = "Persistent Volume Claim — operator-managed storage";
     lifecycle = "stateful";
     scope = "namespace";

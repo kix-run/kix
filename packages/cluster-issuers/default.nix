@@ -14,6 +14,10 @@
 }:
 
 {
+  meta = {
+    version = "1.0.0";
+  };
+
   options = {
     issuers = lib.mkOption {
       type = lib.types.attrsOf lib.types.anything;

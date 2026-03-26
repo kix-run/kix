@@ -30,6 +30,10 @@ let
 
 in
 {
+  meta = {
+    version = "1.0.0";
+  };
+
   options = {
     classes = lib.mkOption {
       type = lib.types.attrsOf lib.types.anything;

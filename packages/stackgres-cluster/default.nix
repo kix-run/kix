@@ -26,6 +26,11 @@ let
 
 in
 {
+  meta = {
+    version = "1.0.0";
+    defaultAliases = [ "postgres" ];
+  };
+
   options = {
     instances = lib.mkOption {
       type = lib.types.int;
@@ -204,8 +209,11 @@ in
         lc_time = "C.UTF-8";
       };
 
-      # Merge user overrides on top of defaults.
-      postgresqlConf = defaultPostgresqlConf // config.pgConfig.postgresqlConf;
+      # Merge user overrides on top of defaults, filtering out null values
+      # (set a key to null in postgresqlConf to remove a default).
+      postgresqlConf = lib.filterAttrs (_: v: v != null) (
+        defaultPostgresqlConf // config.pgConfig.postgresqlConf
+      );
 
     in
     {

@@ -17,11 +17,18 @@ let
 
   commonLabels = {
     app = "event-logger";
+  };
+
+  metaLabels = commonLabels // {
     role = "monitoring";
   };
 
 in
 {
+  meta = {
+    version = "1.0.0";
+  };
+
   options = {
     image = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
@@ -62,19 +69,20 @@ in
         apiVersion = "v1";
         kind = "ServiceAccount";
         name = "event-logger";
-        labels = commonLabels;
+        labels = metaLabels;
       };
 
       clusterRole = scope.mkClusterResource {
         apiVersion = "rbac.authorization.k8s.io/v1";
         kind = "ClusterRole";
         name = "event-logger";
-        labels = commonLabels;
+        labels = metaLabels;
         extra.rules = [
           {
             apiGroups = [ "" ];
             resources = [ "events" ];
             verbs = [
+              "get"
               "list"
               "watch"
             ];
@@ -86,7 +94,7 @@ in
         apiVersion = "rbac.authorization.k8s.io/v1";
         kind = "ClusterRoleBinding";
         name = "event-logger";
-        labels = commonLabels;
+        labels = metaLabels;
         extra.roleRef = {
           apiGroup = "rbac.authorization.k8s.io";
           kind = "ClusterRole";
@@ -106,7 +114,7 @@ in
         apiVersion = "v1";
         kind = "ConfigMap";
         name = "event-logger";
-        labels = commonLabels;
+        labels = metaLabels;
         data."k8s_event_logger.py" = ''
           #!/usr/bin/env -S uv --quiet run --script
           # /// script
@@ -130,6 +138,7 @@ in
           def format_event(event: Dict[str, Any]) -> Dict[str, Any]:
               """Format Kubernetes event for structured logging."""
               obj = event["object"]
+              # Extract and format relevant fields
               formatted_event = {
                   "timestamp": datetime.now(timezone.utc).isoformat(),
                   "type": obj.type,
@@ -150,18 +159,22 @@ in
                   "reporting_component": getattr(obj, "reporting_component", None),
                   "source_component": getattr(obj.source, "component", None) if hasattr(obj, "source") else None,
               }
+              # Clean None values for better JSON output
               return {k: v for k, v in formatted_event.items() if v is not None}
           def main():
               """Watch and log all Kubernetes events as JSON."""
+              # Load kubeconfig based on whether we're running in-cluster or not
               try:
                   config.load_incluster_config()
                   print(json.dumps({"message": "Using in-cluster configuration"}, cls=DateTimeEncoder), flush=True)
               except config.ConfigException:
                   config.load_kube_config()
                   print(json.dumps({"message": "Using kubeconfig file"}, cls=DateTimeEncoder), flush=True)
+              # Create API client
               v1 = client.CoreV1Api()
               w = watch.Watch()
               print(json.dumps({"message": "Starting to watch Kubernetes events"}, cls=DateTimeEncoder), flush=True)
+              # Watch events across all namespaces
               for event in w.stream(v1.list_event_for_all_namespaces):
                   formatted_event = format_event(event)
                   print(json.dumps(formatted_event, cls=DateTimeEncoder), flush=True)
@@ -172,6 +185,7 @@ in
 
       # --- Mounts ---
       scriptMount = kix.mount.configMap self.configMap {
+        name = "config-volume";
         mountPath = "/app";
         defaultMode = 493; # 0755
       };
@@ -180,7 +194,7 @@ in
       deployment =
         {
           name = "event-logger";
-          labels = commonLabels;
+          labels = metaLabels;
           spec = {
             replicas = config.replicaCount;
             selector.matchLabels = commonLabels;

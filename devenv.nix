@@ -29,7 +29,7 @@ in
     pkgs.lefthook
     pkgs.pkg-config
     pkgs.nixfmt-rfc-style
-    pkgs.treefmt
+    pkgs.ruff
   ]
   ++ nixLibs;
 
@@ -103,6 +103,8 @@ in
     config.programs = {
       nixfmt.enable = true;
       rustfmt.enable = true;
+      ruff-check.enable = true;
+      ruff-format.enable = true;
     };
   };
 

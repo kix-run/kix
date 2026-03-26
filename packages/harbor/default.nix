@@ -1327,8 +1327,9 @@ in
             component = "redis";
           };
           spec = {
-            serviceName = self.redisHeadlessService.name;
+            serviceName = self.redisService.name;
             replicas = 1;
+            podManagementPolicy = "OrderedReady";
             selector.matchLabels = selectorLabels // {
               component = "redis";
             };
@@ -1390,31 +1391,6 @@ in
         }
         |> scope.mkStatefulSet;
 
-      redisHeadlessService = scope.mkResource {
-        apiVersion = "v1";
-        kind = "Service";
-        name = "${name}-redis-headless";
-        labels = selectorLabels // {
-          component = "redis";
-        };
-        spec = {
-          type = "ClusterIP";
-          clusterIP = "None";
-          selector = selectorLabels // {
-            component = "redis";
-          };
-          ports = [
-            {
-              name = "tcp-redis";
-              port = 6379;
-              targetPort = 6379;
-              protocol = "TCP";
-            }
-          ];
-        };
-        requires = [ self.redisStatefulSet ];
-      };
-
       redisService = scope.mkResource {
         apiVersion = "v1";
         kind = "Service";
@@ -1465,7 +1441,6 @@ in
           self.exporterEnvConfigMap
           self.exporterDeployment
           self.exporterService
-          self.redisHeadlessService
           self.redisStatefulSet
           self.redisService
         ]

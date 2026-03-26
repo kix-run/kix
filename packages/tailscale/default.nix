@@ -22,6 +22,10 @@ let
 
 in
 {
+  meta = {
+    version = "1.0.0";
+  };
+
   options = {
     # Name of the ServiceAccount the operator runs as (typically created
     # by the operator's own deployment manifests, not managed here).

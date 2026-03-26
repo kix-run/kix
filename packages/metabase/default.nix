@@ -171,7 +171,7 @@ in
                 livenessProbe = {
                   httpGet = {
                     path = config.livenessProbe.path;
-                    port = "http";
+                    port = config.port;
                     scheme = "HTTP";
                   };
                   initialDelaySeconds = config.livenessProbe.initialDelaySeconds;
@@ -182,7 +182,7 @@ in
                 readinessProbe = {
                   httpGet = {
                     path = config.readinessProbe.path;
-                    port = "http";
+                    port = config.port;
                     scheme = "HTTP";
                   };
                   initialDelaySeconds = config.readinessProbe.initialDelaySeconds;
@@ -207,7 +207,7 @@ in
             {
               name = "metabase";
               port = config.servicePort;
-              targetPort = "http";
+              targetPort = config.port;
               protocol = "TCP";
             }
           ];

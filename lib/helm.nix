@@ -34,6 +34,7 @@ let
   helmAnnotationPrefixes = [
     "meta.helm.sh/"
     "helm.sh/"
+    "checksum/"
   ];
   helmLabelKeys = [
     "app.kubernetes.io/managed-by" # Helm sets this to "Helm"; we replace with "kix"
@@ -45,6 +46,57 @@ let
   stripHelmAnnotations = annotations: lib.filterAttrs (k: _: !(isHelmAnnotation k)) annotations;
 
   stripHelmLabels = labels: lib.filterAttrs (k: _: !(builtins.elem k helmLabelKeys)) labels;
+
+  # Strip Helm-injected annotations from pod template metadata inside a spec.
+  # Handles spec.template.metadata.annotations for Deployments, StatefulSets, DaemonSets.
+  # Also strips default strategy/updateStrategy that K8s adds server-side.
+  cleanSpec =
+    spec:
+    let
+      tmpl = spec.template or null;
+      tmplMeta = if tmpl != null then (tmpl.metadata or { }) else { };
+      rawTmplAnnotations = tmplMeta.annotations or { };
+      tmplAnnotations = if rawTmplAnnotations == null then { } else rawTmplAnnotations;
+      cleanedTmplAnnotations = stripHelmAnnotations tmplAnnotations;
+      cleanedTmplMeta =
+        if tmplAnnotations == { } then
+          tmplMeta
+        else if cleanedTmplAnnotations == { } then
+          builtins.removeAttrs tmplMeta [ "annotations" ]
+        else
+          tmplMeta // { annotations = cleanedTmplAnnotations; };
+      # If cleaned metadata is empty, remove it from the template entirely.
+      cleanedTmpl =
+        if tmpl == null then
+          null
+        else if cleanedTmplMeta == { } then
+          builtins.removeAttrs tmpl [ "metadata" ]
+        else
+          tmpl // { metadata = cleanedTmplMeta; };
+
+      # Strip default strategy/updateStrategy that Helm charts emit but K8s
+      # doesn't persist (they match the built-in defaults).
+      defaultStrategy = {
+        type = "RollingUpdate";
+      };
+      defaultUpdateStrategy = {
+        rollingUpdate = {
+          partition = 0;
+        };
+      };
+      specAfterTemplate = if tmpl == null then spec else spec // { template = cleanedTmpl; };
+      specAfterStrategy =
+        if (specAfterTemplate.strategy or null) == defaultStrategy then
+          builtins.removeAttrs specAfterTemplate [ "strategy" ]
+        else
+          specAfterTemplate;
+      specAfterUpdateStrategy =
+        if (specAfterStrategy.updateStrategy or null) == defaultUpdateStrategy then
+          builtins.removeAttrs specAfterStrategy [ "updateStrategy" ]
+        else
+          specAfterStrategy;
+    in
+    specAfterUpdateStrategy;
 
   # Standard top-level K8s manifest fields.
   standardFields = [
@@ -163,7 +215,12 @@ rec {
       cleanedLabels = stripHelmLabels rawLabels;
 
       # Everything outside standard fields goes into `extra`.
-      extra = lib.filterAttrs (k: _: !(builtins.elem k standardFields)) resource;
+      rawExtra = lib.filterAttrs (k: _: !(builtins.elem k standardFields)) resource;
+
+      # Secrets default to type "Opaque" in K8s; ensure it's explicit so the
+      # output matches what K8s stores.
+      extra =
+        if kind == "Secret" && !(rawExtra ? type) then rawExtra // { type = "Opaque"; } else rawExtra;
 
       # Respect the resource's original namespace when it differs from the
       # scope's namespace (e.g. kube-system services for control-plane
@@ -178,7 +235,7 @@ rec {
       }
       // lib.optionalAttrs (cleanedAnnotations != { }) { annotations = cleanedAnnotations; }
       // lib.optionalAttrs (cleanedLabels != { }) { labels = cleanedLabels; }
-      // lib.optionalAttrs (resource ? spec) { spec = resource.spec; }
+      // lib.optionalAttrs (resource ? spec) { spec = cleanSpec resource.spec; }
       // lib.optionalAttrs (resource ? data) { data = resource.data; }
       // lib.optionalAttrs (resource ? stringData) { stringData = resource.stringData; }
       // lib.optionalAttrs (extra != { }) { inherit extra; }
@@ -197,12 +254,16 @@ rec {
       includeHooks ? false,
       extraFlags ? [ ],
       mainSelector ? null, # { kind = "Service"; } or { kind = "Service"; name = "my-svc"; }
+      version ? chart.version or null, # Auto-extracted from fetchHelmChart derivation
+      patchResources ? lib.id, # Function applied to the list of raw JSON resources before wrapping
     }:
     {
       scope,
       lib,
     }:
     {
+      meta = lib.optionalAttrs (version != null) { inherit version; };
+
       options = {
         values = lib.mkOption {
           type = lib.types.attrsOf lib.types.anything;
@@ -273,6 +334,9 @@ rec {
             && !(isTestHook r)
           ) expandedResources;
 
+          # Apply user-provided patches to raw resources before wrapping.
+          patchedResources = patchResources filteredResources;
+
           # Wrap each resource into a v2 resource.
           wrappedResources = map (
             r:
@@ -280,7 +344,7 @@ rec {
               inherit scope;
               resource = r;
             }
-          ) filteredResources;
+          ) patchedResources;
 
           # Select the main resource.
           findBySelector =

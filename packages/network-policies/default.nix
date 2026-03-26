@@ -1,11 +1,13 @@
-# NetworkPolicy package — Cilium cluster-wide network policies.
+# NetworkPolicy package — Cilium network policies.
 #
 # Defines Cilium cluster-wide network policies for baseline connectivity
 # (DNS, API server, internet egress, ingress-nginx, Prometheus scraping,
 # Cilium health checks) and tenant isolation policies that allow traffic
 # between namespaces belonging to the same tenant.
 #
-# All policies use CiliumClusterwideNetworkPolicy (cluster-scoped).
+# Also generates per-namespace CiliumNetworkPolicy resources for
+# internal system traffic (allowing traffic between system namespaces
+# plus host/kube-apiserver entities).
 
 {
   scope,
@@ -36,8 +38,55 @@ let
       };
     };
 
+  # Per-namespace CiliumNetworkPolicy for internal system traffic.
+  # Creates a CNP in `nsName` that allows ingress/egress between all
+  # namespaces in `allNs` plus host and kube-apiserver entities.
+  mkInternalSystemTraffic =
+    allNs: nsName:
+    let
+      nsScope = scope.forNamespace nsName;
+      nsMatch = {
+        matchExpressions = [
+          {
+            key = "io.kubernetes.pod.namespace";
+            operator = "In";
+            values = allNs;
+          }
+        ];
+      };
+    in
+    nsScope.mkResource {
+      apiVersion = "cilium.io/v2";
+      kind = "CiliumNetworkPolicy";
+      name = "internal-system-traffic";
+      spec = {
+        egress = [
+          { toEndpoints = [ nsMatch ]; }
+          {
+            toEntities = [
+              "host"
+              "kube-apiserver"
+            ];
+          }
+        ];
+        ingress = [
+          { fromEndpoints = [ nsMatch ]; }
+          {
+            fromEntities = [
+              "host"
+              "kube-apiserver"
+            ];
+          }
+        ];
+      };
+    };
+
 in
 {
+  meta = {
+    version = "1.0.0";
+  };
+
   options = {
     clusterwidePolicies = lib.mkOption {
       type = lib.types.anything;
@@ -69,6 +118,13 @@ in
     namespacePolicies = lib.mkOption {
       type = lib.types.attrsOf lib.types.anything;
       default = { };
+    };
+    # Namespaces that get an `internal-system-traffic` CiliumNetworkPolicy
+    # allowing mutual ingress/egress between all listed namespaces plus
+    # host and kube-apiserver entities.
+    internalSystemTraffic = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
     };
   };
 
@@ -299,6 +355,17 @@ in
         };
       };
 
+      # --- Per-namespace internal system traffic policies ---
+
+      istNamespaces = config.internalSystemTraffic;
+      internalSystemTrafficPolicies = builtins.listToAttrs (
+        map (nsName: {
+          name = "internal-system-traffic-${nsName}";
+          value = mkInternalSystemTraffic istNamespaces nsName;
+        }) istNamespaces
+      );
+      internalSystemTrafficList = builtins.attrValues internalSystemTrafficPolicies;
+
       # --- Tenant isolation policies ---
 
       tenantPolicies = lib.mapAttrs mkTenantPolicy config.tenants;
@@ -318,7 +385,7 @@ in
 
       tenantPoliciesList = builtins.attrValues tenantPolicies;
 
-      allPolicies = clusterwidePoliciesList ++ tenantPoliciesList;
+      allPolicies = clusterwidePoliciesList ++ tenantPoliciesList ++ internalSystemTrafficList;
 
     in
     # Cluster-wide baseline policies
@@ -338,6 +405,7 @@ in
         name: _: lib.nameValuePair "allow-within-tenant-${name}" tenantPolicies.${name}
       ) config.tenants
     )
+    // internalSystemTrafficPolicies
     // {
       main = {
         resource = self.global-dns;

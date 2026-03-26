@@ -7,8 +7,8 @@
 # Mirrors the Bitnami Valkey Helm chart topology.
 #
 # Resources: ServiceAccount, ConfigMap (scripts + health + configuration),
-# StatefulSet, Service (main), Service (headless), and optionally:
-# Service (metrics), Secret (credentials).
+# StatefulSet, Service (main), Service (headless), NetworkPolicy,
+# PodDisruptionBudget, and optionally: Service (metrics), Secret (credentials).
 #
 # main = main Service.
 
@@ -20,6 +20,7 @@
 
 {
   meta = {
+    version = "8.1.1";
     description = "Valkey — Redis-compatible in-memory data store";
     lifecycle = "stateful";
     provides = [
@@ -31,7 +32,6 @@
       "redis"
     ];
     k8s.minVersion = "1.25";
-    version = "8.1.1";
   };
 
   options = {
@@ -158,7 +158,9 @@
     let
       name = scope.instanceName;
 
-      selectorLabels = scope.selectorLabels;
+      selectorLabels = scope.selectorLabels // {
+        "app.kubernetes.io/name" = "valkey";
+      };
 
       # When sentinel is disabled, use "primary" component label to match Bitnami's primary/replica topology.
       componentName = if config.sentinel.enabled then "node" else "primary";
@@ -712,6 +714,24 @@
         exit $exit_status
       '';
 
+      parseSentinelsAwk = ''
+        /ip/ {FOUND_IP=1}
+        /port/ {FOUND_PORT=1}
+        /runid/ {FOUND_RUNID=1}
+        !/ip|port|runid/ {
+          if (FOUND_IP==1) {
+            IP=$1; FOUND_IP=0;
+          }
+          else if (FOUND_PORT==1) {
+            PORT=$1;
+            FOUND_PORT=0;
+          } else if (FOUND_RUNID==1) {
+            printf "\nsentinel known-sentinel primary %s %s %s", IP, PORT, $0;
+            FOUND_RUNID=0;
+          }
+        }
+      '';
+
       # ── Configuration ConfigMap ─────────────────────────────────
       sentinelConf = ''
         dir "/tmp"
@@ -782,7 +802,7 @@
           )
         );
         ports = [
-          (kix.port (if config.sentinel.enabled then "valkey" else "redis") 6379)
+          (kix.port "redis" 6379)
         ];
         livenessProbe = {
           exec.command = [
@@ -1123,20 +1143,15 @@
         data = {
           "ping_liveness_local.sh" = pingLivenessLocalScript;
           "ping_readiness_local.sh" = pingReadinessLocalScript;
+          "ping_liveness_primary.sh" = pingLivenessPrimaryScript;
+          "ping_readiness_primary.sh" = pingReadinessPrimaryScript;
+          "ping_liveness_local_and_primary.sh" = pingLivenessLocalAndPrimaryScript;
+          "ping_readiness_local_and_primary.sh" = pingReadinessLocalAndPrimaryScript;
+          "parse_sentinels.awk" = parseSentinelsAwk;
         }
-        // (
-          if config.sentinel.enabled then
-            {
-              "ping_sentinel.sh" = pingSentinelScript;
-            }
-          else
-            {
-              "ping_liveness_primary.sh" = pingLivenessPrimaryScript;
-              "ping_readiness_primary.sh" = pingReadinessPrimaryScript;
-              "ping_liveness_local_and_primary.sh" = pingLivenessLocalAndPrimaryScript;
-              "ping_readiness_local_and_primary.sh" = pingReadinessLocalAndPrimaryScript;
-            }
-        );
+        // lib.optionalAttrs config.sentinel.enabled {
+          "ping_sentinel.sh" = pingSentinelScript;
+        };
       };
 
       # --- ConfigMap (configuration — sentinel.conf + valkey.conf) ---
@@ -1291,15 +1306,13 @@
         spec = {
           type = "ClusterIP";
           clusterIP = "None";
+          publishNotReadyAddresses = true;
           selector = selectorLabels;
           ports = [
             {
               name = "tcp-redis";
               port = 6379;
-              # The container port name changes based on mode: sentinel mode
-              # names it "valkey", primary/replica mode names it "redis" (legacy).
-              # See valkeyContainer.ports definition.
-              targetPort = if config.sentinel.enabled then "valkey" else "redis";
+              targetPort = "redis";
               protocol = "TCP";
             }
           ]
@@ -1326,14 +1339,14 @@
             {
               name = "tcp-redis";
               port = 6379;
-              targetPort = 6379;
+              targetPort = "redis";
               protocol = "TCP";
             }
           ]
           ++ lib.optional config.sentinel.enabled {
             name = "tcp-sentinel";
             port = 26379;
-            targetPort = 26379;
+            targetPort = "valkey-sentinel";
             protocol = "TCP";
           };
         };
@@ -1345,6 +1358,56 @@
           primarySet = config.sentinel.primarySet;
         };
         requires = [ self.statefulSet ];
+      };
+
+      # --- NetworkPolicy ---
+      networkPolicy = scope.mkResource {
+        apiVersion = "networking.k8s.io/v1";
+        kind = "NetworkPolicy";
+        inherit name;
+        labels = selectorLabels;
+        spec = {
+          podSelector.matchLabels = selectorLabels;
+          policyTypes = [
+            "Ingress"
+            "Egress"
+          ];
+          egress = [ { } ];
+          ingress = [
+            {
+              ports = [
+                {
+                  port = 6379;
+                  protocol = "TCP";
+                }
+              ]
+              ++ lib.optional config.sentinel.enabled {
+                port = 26379;
+                protocol = "TCP";
+              };
+            }
+          ]
+          ++ lib.optional config.metrics.enabled {
+            ports = [
+              {
+                port = 9121;
+                protocol = "TCP";
+              }
+            ];
+          };
+        };
+      };
+
+      # --- PodDisruptionBudget (node) ---
+      podDisruptionBudget = scope.mkResource {
+        apiVersion = "policy/v1";
+        kind = "PodDisruptionBudget";
+        name = "${name}-${if config.sentinel.enabled then "node" else "primary"}";
+        labels = commonLabels;
+        spec = {
+          maxUnavailable = 1;
+          selector.matchLabels = selectorLabels // componentLabel;
+        };
       };
 
       # --- Service (metrics, optional) ---
@@ -1396,7 +1459,11 @@
           self.headlessService
         ]
         ++ lib.optional (self.secret != null) self.secret
-        ++ lib.optional (self.metricsService != null) self.metricsService;
+        ++ lib.optional (self.metricsService != null) self.metricsService
+        ++ [
+          self.networkPolicy
+          self.podDisruptionBudget
+        ];
       };
     };
 }

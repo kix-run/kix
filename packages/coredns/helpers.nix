@@ -57,8 +57,52 @@ rec {
       ]
     );
 
-  # Build a complete Corefile from a list of server blocks.
-  mkCorefile = servers: lib.concatStringsSep "\n" (map renderServerBlock servers);
+  # Render a snippet definition block.
+  # { snippet = "common_plugins"; plugins = [ ... ]; }
+  # -> "(common_plugins) {\n    ...\n}"
+  renderSnippet =
+    block:
+    let
+      pluginLines = map (renderPlugin "    ") (block.plugins or [ ]);
+    in
+    lib.concatStringsSep "\n" (
+      (lib.optional (block ? comment) "# ${block.comment}")
+      ++ [
+        "(${block.snippet}) {"
+      ]
+      ++ pluginLines
+      ++ [
+        "}"
+      ]
+    );
+
+  # Render a generic Corefile block — dispatches on shape.
+  # - { snippet = ...; } -> snippet definition
+  # - { header = ...; } -> raw header server block (e.g. "dns://.:53")
+  # - otherwise -> standard server block
+  renderBlock =
+    block:
+    if block ? snippet then
+      renderSnippet block
+    else if block ? header then
+      let
+        pluginLines = map (renderPlugin "    ") (block.plugins or [ ]);
+      in
+      lib.concatStringsSep "\n" (
+        (lib.optional (block ? comment) "# ${block.comment}")
+        ++ [
+          "${block.header} {"
+        ]
+        ++ pluginLines
+        ++ [
+          "}"
+        ]
+      )
+    else
+      renderServerBlock block;
+
+  # Build a complete Corefile from a list of server/snippet blocks.
+  mkCorefile = servers: lib.concatStringsSep "\n" (map renderBlock servers);
 
   # Default server block matching the upstream Helm chart defaults.
   defaultServer = {

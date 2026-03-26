@@ -234,6 +234,7 @@
             namespace = scope.namespaceName;
           }
         ];
+        labels = config.extraLabels;
         roles = {
           "${name}-${scope.namespaceName}" = grant [
             # Core resources: services, pods, nodes, endpoints, namespaces

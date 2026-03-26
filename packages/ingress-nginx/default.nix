@@ -132,6 +132,16 @@ in
         };
       };
     };
+    allocateLoadBalancerNodePorts = lib.mkOption {
+      type = lib.types.nullOr lib.types.bool;
+      default = null;
+      description = "Whether to allocate node ports for LoadBalancer services";
+    };
+    nodePorts = lib.mkOption {
+      type = lib.types.attrsOf lib.types.int;
+      default = { };
+      description = "Map of port name to nodePort value (e.g. { http = 30080; https = 30443; })";
+    };
   };
 
   build =
@@ -150,7 +160,7 @@ in
       controllerValue =
         if config.controllerValue != null then config.controllerValue else "k8s.io/${name}";
 
-      electionId = "${name}-leader";
+      electionId = "ingress-controller-${name}-leader";
 
       selectorLabels = {
         "app.kubernetes.io/name" = "ingress-nginx";
@@ -450,41 +460,88 @@ in
       };
 
       # --- Service ---
-      service = scope.mkResource {
-        apiVersion = "v1";
-        kind = "Service";
+      service =
+        let
+          addNodePort =
+            portDef:
+            portDef
+            // lib.optionalAttrs (config.nodePorts ? ${portDef.name}) {
+              nodePort = config.nodePorts.${portDef.name};
+            };
+        in
+        scope.mkResource {
+          apiVersion = "v1";
+          kind = "Service";
+          name = "${name}-controller";
+          labels = commonLabels;
+          spec = {
+            type = config.serviceType;
+            selector = self.deployment.out.selector;
+            ports = map addNodePort [
+              {
+                name = "http";
+                port = 80;
+                protocol = "TCP";
+                targetPort = "http";
+                appProtocol = "http";
+              }
+              {
+                name = "https";
+                port = 443;
+                protocol = "TCP";
+                targetPort = "https";
+                appProtocol = "https";
+              }
+            ];
+          }
+          // lib.optionalAttrs (config.serviceType == "LoadBalancer") {
+            externalTrafficPolicy = config.externalTrafficPolicy;
+          }
+          // lib.optionalAttrs (config.allocateLoadBalancerNodePorts != null) {
+            allocateLoadBalancerNodePorts = config.allocateLoadBalancerNodePorts;
+          }
+          // lib.optionalAttrs (config.clusterIP != null) {
+            clusterIP = config.clusterIP;
+          };
+          requires = [
+            self.ingressClass
+            self.configmap
+            self.pdb
+            self.admissionService
+          ];
+        };
+
+      # --- PodDisruptionBudget ---
+      pdb = scope.mkResource {
+        apiVersion = "policy/v1";
+        kind = "PodDisruptionBudget";
         name = "${name}-controller";
         labels = commonLabels;
         spec = {
-          type = config.serviceType;
+          minAvailable = 1;
+          selector.matchLabels = self.deployment.out.selector;
+        };
+      };
+
+      # --- Admission webhook Service ---
+      admissionService = scope.mkResource {
+        apiVersion = "v1";
+        kind = "Service";
+        name = "${name}-controller-admission";
+        labels = commonLabels;
+        spec = {
+          type = "ClusterIP";
           selector = self.deployment.out.selector;
           ports = [
             {
-              name = "http";
-              port = 80;
-              protocol = "TCP";
-              targetPort = "http";
-              appProtocol = "http";
-            }
-            {
-              name = "https";
+              name = "https-webhook";
               port = 443;
               protocol = "TCP";
-              targetPort = "https";
+              targetPort = "webhook";
               appProtocol = "https";
             }
           ];
-        }
-        // lib.optionalAttrs (config.serviceType == "LoadBalancer") {
-          externalTrafficPolicy = config.externalTrafficPolicy;
-        }
-        // lib.optionalAttrs (config.clusterIP != null) {
-          clusterIP = config.clusterIP;
         };
-        requires = [
-          self.ingressClass
-          self.configmap
-        ];
       };
 
       # --- IngressClass (cluster-scoped) ---

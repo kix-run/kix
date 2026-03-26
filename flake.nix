@@ -107,6 +107,10 @@
               inherit kix;
               packages = packages';
             };
+            immich = import ./clusters/test-immich.nix {
+              inherit kix;
+              packages = packages';
+            };
           };
 
           # --- Pipeline derivation builders ---

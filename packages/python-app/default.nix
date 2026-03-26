@@ -21,6 +21,11 @@ let
   name = scope.instanceName;
 in
 {
+  meta = {
+    version = "1.0.0";
+    description = "Generic Django/Next.js application platform";
+  };
+
   options = {
     # Naming overrides
     releaseName = lib.mkOption {
@@ -519,6 +524,7 @@ in
           image ? null,
           lifecycle ? null,
           env ? null,
+          rawEnv ? [ ],
           secrets ? null,
           ports ? null,
           probes ? null,
@@ -537,8 +543,8 @@ in
         // lib.optionalAttrs (command != null) { inherit command; }
         // lib.optionalAttrs (args != null) { inherit args; }
         // lib.optionalAttrs (lifecycle != null) { inherit lifecycle; }
-        // lib.optionalAttrs (env != null) {
-          env = kix.mkEnvVars env;
+        // lib.optionalAttrs (env != null || rawEnv != [ ]) {
+          env = (if env != null then kix.mkEnvVars env else [ ]) ++ rawEnv;
         }
         // lib.optionalAttrs (ports != null) {
           ports = map (p: kix.port p.name p.containerPort) ports;
@@ -581,6 +587,7 @@ in
           image ? null,
           lifecycle ? null,
           env ? null,
+          rawEnv ? [ ],
           secrets ? null,
           ports ? null,
           probes ? null,
@@ -608,6 +615,7 @@ in
                       image
                       lifecycle
                       env
+                      rawEnv
                       secrets
                       ports
                       probes
@@ -678,6 +686,7 @@ in
             image = wCfg.image or null;
             lifecycle = wCfg.lifecycle or null;
             env = wCfg.env or null;
+            rawEnv = wCfg.rawEnv or [ ];
             secrets = wCfg.secrets or null;
             ports = wCfg.ports or null;
             probes = wCfg.probes or null;
@@ -703,6 +712,7 @@ in
           image = wCfg.image or null;
           lifecycle = wCfg.lifecycle or null;
           env = wCfg.env or null;
+          rawEnv = wCfg.rawEnv or [ ];
           secrets = wCfg.secrets or null;
           ports = wCfg.ports or null;
           probes = wCfg.probes or null;
@@ -725,6 +735,7 @@ in
             image = pCfg.image or null;
             lifecycle = pCfg.lifecycle or null;
             env = pCfg.env or null;
+            rawEnv = pCfg.rawEnv or [ ];
             secrets = pCfg.secrets or null;
             ports = pCfg.ports or null;
             probes = pCfg.probes or null;

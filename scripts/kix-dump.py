@@ -42,7 +42,6 @@ SKIP_RESOURCES = {
     "endpoints",
     "leases.coordination.k8s.io",
     "componentstatuses",
-
     # Node / cluster inventory (not declarative)
     "nodes",
     "nodes.metrics.k8s.io",
@@ -52,17 +51,14 @@ SKIP_RESOURCES = {
     "csistoragecapacities.storage.k8s.io",
     "volumeattachments.storage.k8s.io",
     "runtimeclasses.node.k8s.io",
-
     # API machinery
     "apiservices.apiregistration.k8s.io",
     "flowschemas.flowcontrol.apiserver.k8s.io",
     "prioritylevelconfigurations.flowcontrol.apiserver.k8s.io",
-
     # Cilium runtime state
     "ciliumidentities.cilium.io",
     "ciliumendpoints.cilium.io",
     "ciliumnodes.cilium.io",
-
     # Backup runtime state (Velero)
     "backups.velero.io",
     "datadownloads.velero.io",
@@ -70,35 +66,27 @@ SKIP_RESOURCES = {
     "podvolumebackups.velero.io",
     "podvolumerestores.velero.io",
     "backuprepositories.velero.io",
-
     # StackGres operational state
     "sgbackups.stackgres.io",
     "sgdbops.stackgres.io",
-
     # cert-manager transient state
     "orders.acme.cert-manager.io",
     "challenges.acme.cert-manager.io",
     "certificaterequests.cert-manager.io",
-
     # KubeVirt runtime
     "virtualmachineinstances.kubevirt.io",
-
     # Persistent volumes (dynamically provisioned, not declared)
     "persistentvolumes",
-
     # GitHub Actions runner ephemeral resources
     "ephemeralrunners.actions.github.com",
     "ephemeralrunnersets.actions.github.com",
-
     # CDI runtime
     "storageprofiles.cdi.kubevirt.io",
-
     # K3s/RKE2 internal
     "etcdsnapshotfiles.k3s.cattle.io",
     "addons.k3s.cattle.io",
     "helmcharts.helm.cattle.io",
     "helmchartconfigs.helm.cattle.io",
-
     # ZFS runtime state
     "zfsvolumes.zfs.openebs.io",
     "zfsnodes.zfs.openebs.io",
@@ -147,11 +135,16 @@ def get_api_resources(context: str | None = None) -> list[tuple[str, bool]]:
     """
     results = []
     for namespaced in [True, False]:
-        raw = kubectl([
-            "api-resources", "--verbs=list",
-            f"--namespaced={str(namespaced).lower()}",
-            "-o", "name",
-        ], context)
+        raw = kubectl(
+            [
+                "api-resources",
+                "--verbs=list",
+                f"--namespaced={str(namespaced).lower()}",
+                "-o",
+                "name",
+            ],
+            context,
+        )
         for line in raw.strip().splitlines():
             line = line.strip()
             if line:
@@ -302,16 +295,23 @@ def dump_all(
 @click.command()
 @click.argument("output_dir", type=click.Path())
 @click.option("--context", default=None, help="Kubernetes context to use")
-@click.option("--match-kix", "kix_dir", type=click.Path(exists=True, file_okay=False),
-              help="Match resources from a kix output directory")
-@click.option("--managed", "mode_managed", is_flag=True,
-              help="Fetch all resources with managed-by=kix label")
-@click.option("--namespaces", default=None,
-              help="Comma-separated namespaces to dump")
-@click.option("--all", "mode_all", is_flag=True,
-              help="Dump all resources across all namespaces")
-def main(output_dir: str, context: str | None, kix_dir: str | None,
-         mode_managed: bool, namespaces: str | None, mode_all: bool):
+@click.option(
+    "--match-kix",
+    "kix_dir",
+    type=click.Path(exists=True, file_okay=False),
+    help="Match resources from a kix output directory",
+)
+@click.option("--managed", "mode_managed", is_flag=True, help="Fetch all resources with managed-by=kix label")
+@click.option("--namespaces", default=None, help="Comma-separated namespaces to dump")
+@click.option("--all", "mode_all", is_flag=True, help="Dump all resources across all namespaces")
+def main(
+    output_dir: str,
+    context: str | None,
+    kix_dir: str | None,
+    mode_managed: bool,
+    namespaces: str | None,
+    mode_all: bool,
+):
     """Dump live cluster resources into a normalized YAML directory.
 
     OUTPUT_DIR is the directory to write normalized YAML files to.

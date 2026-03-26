@@ -10,6 +10,13 @@
 
 rec {
   # Normalize mixed availablePackages entries (raw functions vs attrsets).
+  # Skips entries that aren't valid packages (e.g. Helm chart specs).
+  isPackageEntry =
+    value:
+    builtins.isFunction value
+    || (value._type or "") == "kix-import"
+    || (builtins.isAttrs value && value ? package);
+
   normalizeAvailablePackages =
     raw:
     lib.mapAttrs (
@@ -32,7 +39,7 @@ rec {
           namespace = value.namespace or null;
           aliases = value.aliases or [ ];
         }
-    ) raw;
+    ) (lib.filterAttrs (_: isPackageEntry) raw);
 
   # Get required dep arg names from a package function (no evaluation needed).
   getRequiredDeps =
