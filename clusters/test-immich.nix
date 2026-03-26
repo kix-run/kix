@@ -40,6 +40,34 @@ kix.buildCluster {
           ];
         };
       };
+
+      # Firezone VPN — shares the postgres instance from immich namespace.
+      instances.firezone = {
+        firezone-db = {
+          package = packages.stackgres-cluster;
+          aliases = [ "postgres" ];
+        };
+
+        firezone = {
+          package = packages.firezone;
+          config = {
+            domain = "vpn.example.com";
+            admin = {
+              email = "admin@example.com";
+              password = "changeme";
+            };
+            wireguard.privateKey = "PLACEHOLDER_GENERATE_WITH_wg_genkey";
+            secrets = {
+              guardianSecretKey = "PLACEHOLDER_CHANGE_ME_guardian";
+              secretKeyBase = "PLACEHOLDER_CHANGE_ME_secret_key_base";
+              databaseEncryptionKey = "PLACEHOLDER_CHANGE_ME_db_enc_key";
+              liveViewSigningSalt = "PLACEHOLDER_CHANGE_ME_lv_salt";
+              cookieSigningSalt = "PLACEHOLDER_CHANGE_ME_cookie_salt";
+              cookieEncryptionSalt = "PLACEHOLDER_CHANGE_ME_cookie_enc_salt";
+            };
+          };
+        };
+      };
     }
   ];
 }
