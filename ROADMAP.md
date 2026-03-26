@@ -39,6 +39,7 @@
 - [ ] auto-sealing of resources? => evaluator turns every attrset that has a "kind" attribute into a resource on first pass of the fixpoint
 - [ ] aliases and meta could be on the packages options maybe? => allows default aliases to just be a mkDefault
 - [ ] smarter store paths. Nixos puts the package version into the storepath hash-name-version. This helps a lot with diffing fast.
+- [ ] package definition from dependencies as top level closure input to an explicit dependencies attrset that can carry more information and value (only depend if config.X is set etc). Then pass deps to build closure. This likely makes the fixpoint simpler as well.
 
 ### Validation
 
@@ -220,6 +221,7 @@
   - "You don't have to wipe and restart anymore"
   - Code completion working in the demo
   - "This is what I want" — no separate argo/flux/etc setup needed
+- [ ] replacing CI/CD times
 
 ## Key risks & design principles
 
