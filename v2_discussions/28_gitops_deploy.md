@@ -266,7 +266,84 @@ This is the point where `kix deploy` is a running process, not a one-shot comman
 
 ---
 
-## 6. What kix should NOT copy from Flux/Argo
+## 6. Integration with Flux / Argo
+
+kix is a *source of manifests*; Flux/Argo are *reconciliation engines*. They don't have to compete at every layer. Integration is worth doing as an adoption bridge — teams already running Argo shouldn't have to rip it out to start using kix for authoring.
+
+```
+kix eval → manifests (store paths)
+                │
+        ┌───────┴────────┐
+        │                │
+   kix deploy        Flux / Argo
+   (own engine)      (existing engine)
+```
+
+### 6.1 Integration modes
+
+**Mode A: kix as a rendered-manifest source (works today)**
+
+kix eval outputs a directory of YAML manifests (`result/`). Point Flux or Argo at that directory — CI commits the rendered output to a git path, Flux `Kustomization` or Argo `Application` picks it up.
+
+This works *right now* but loses kix's advantages: no DAG-ordered waves (Flux/Argo do their own ordering), no content-hash-based drift detection, no PackageInstance-based pruning. It's "kix as a fancy Helm template." Valid as an adoption path — not a long-term architecture.
+
+**Mode B: kix as an Argo Config Management Plugin (recommended starting point)**
+
+Argo supports Config Management Plugins — custom commands that generate manifests. kix fits this directly:
+
+```yaml
+apiVersion: argoproj.io/v1alpha1
+kind: ConfigManagementPlugin
+metadata:
+  name: kix
+spec:
+  generate:
+    command: ["kix", "eval", "--format", "yaml-stream"]
+  discover:
+    find:
+      glob: "flake.nix"
+```
+
+Argo calls `kix eval`, gets YAML, does its own apply/health/sync. kix annotations (content-hash, depends-on) survive as passthrough — Argo ignores what it doesn't understand but preserves them. This gives you:
+
+- kix for authoring + validation + DI + the full eval-time feature set
+- Argo for reconciliation + UI + RBAC + notifications + health checks
+
+The main loss is wave ordering — Argo has its own sync-wave system that doesn't read kix's DAG. The bridge: emit `argocd.argoproj.io/sync-wave` annotations from the kix DAG during eval (see §6.2).
+
+**Mode C: Coexistence — kix deploy for kix packages, Flux/Argo for the rest (long-term)**
+
+Run `kix deploy` for packages where you want the full kix experience (DAG-ordered waves, hash-based pruning, self-healing). Run Flux/Argo for everything else (legacy Helm charts not yet migrated, third-party vendor resources).
+
+This works if they don't fight over the same resources. The mechanism: kix-managed resources carry a `kix.dev/managed-by: kix` field manager. Argo is configured to exclude these resources (`resource.exclusions`), Flux ignores them via distinct `fieldManager` in server-side apply. Each tool owns its fields, no conflicts.
+
+This is the endgame — but requires `kix deploy` to be production-ready first (Milestone 3+).
+
+### 6.2 Compatibility annotations
+
+If kix eval can optionally emit annotations for Flux/Argo, the same eval output works with both `kix deploy` AND external reconcilers. These are a thin translation layer in the output formatter — they don't pollute the kix model.
+
+| Annotation | Source in kix | Purpose |
+|---|---|---|
+| `argocd.argoproj.io/sync-wave: "<n>"` | DAG topological sort → wave number | Argo deploys in wave order |
+| `argocd.argoproj.io/hook: PreSync` | Resources in wave 0 with `kind: Job` | Argo runs migrations before main sync |
+| `argocd.argoproj.io/hook: PostSync` | Resources with no dependents + `kind: Job` | Argo runs smoke tests after sync |
+| `kustomize.toolkit.fluxcd.io/prune: disabled` | `meta.lifecycle = "stateful"` | Flux skips pruning for stateful resources |
+
+Generation should be opt-in (e.g. `kix eval --compat=argo` or a cluster-level `deploy.compat = "argo"` option) so the default output stays clean.
+
+### 6.3 Recommended adoption path
+
+1. **Start with Mode B** (Argo CMP). Teams already on Argo adopt kix for authoring without changing their deploy pipeline. Emit sync-wave annotations for ordered deployment.
+2. **Build `kix deploy` to Milestone 1–2** in parallel. Test on non-critical clusters.
+3. **Migrate to Mode C** — move packages to `kix deploy` one by one as confidence grows. Argo handles the shrinking set of un-migrated packages.
+4. **Eventually Mode C with no Argo** — `kix deploy` handles everything. Argo is removed.
+
+This path means kix is useful from day one (better authoring) and never requires a big-bang migration away from existing tooling.
+
+---
+
+## 7. What kix should NOT copy from Flux/Argo
 
 Some Flux/Argo features exist because of limitations in their architecture that kix doesn't share:
 
@@ -278,7 +355,7 @@ Some Flux/Argo features exist because of limitations in their architecture that 
 
 ---
 
-## 7. Open Questions
+## 8. Open Questions
 
 1. **Where does the reconciliation loop run?** Options: (a) `kix deploy --watch` as a long-running CLI process, (b) a kix-operator pod in-cluster (Argo model), (c) a CI job on a cron (Flux model with push). Likely all three eventually, but what's the MVP?
 

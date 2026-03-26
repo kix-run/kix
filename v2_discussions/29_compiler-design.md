@@ -326,6 +326,52 @@ The Nix store is the compiler's intermediate representation. We chose it on purp
 
 ---
 
+## 9. Why Nix + Rust (Language Evaluation)
+
+### 9.1 The non-negotiable requirement
+
+The feature that makes kix's architecture work is **automatic dependency tracking through string context**. When you interpolate `postgres.out.fqdn` into a resource, Nix embeds postgres's store hash into the consuming resource. The dependency edge isn't declared — it falls out of the computation. This gives us the Merkle DAG, which gives us everything in section 8.
+
+Any replacement language must provide an equivalent, or the entire architecture collapses back to explicit dependency declarations.
+
+### 9.2 Alternatives evaluated
+
+**Dhall.** Real type system (the biggest thing Nix lacks). Total, imports with integrity checking. But: strict evaluation (no fixpoints for self-referential packages), no string context equivalent, no module system, and totality prevents general recursion needed for auto-instantiation's transitive closure. Dhall is designed for *validating* configuration, not *computing* it. kix needs computation.
+
+**CUE.** Types-as-values, unification-based merging (similar in spirit to the module system), built-in constraints, created by an ex-Borg engineer. Unification could replace parts of the module system. But: no string context, strict evaluation, no function-argument introspection (DI resolution depends on this), deliberately Turing-incomplete. CUE would be excellent for validation passes but can't serve as the full compiler foundation.
+
+**Jsonnet.** Functional, lazy (like Nix), hermetic, JSON-native, widely used for K8s (Tanka, kube-prometheus). Lazy evaluation means fixpoints work. But: no string context, no store, no module system (object merging is much weaker), no function-argument introspection, no IFD. Jsonnet is Nix without the features that make kix possible.
+
+**Nickel.** Nix-inspired, lazy evaluation, contracts (gradual typing), merge system inspired by NixOS modules. The closest alternative — fixpoints work, composition works, better error messages than Nix. But: explicitly chose not to replicate string context. If Nickel added a context-tracking mechanism, it could work — with years of infrastructure investment to match the maturity of what Nix provides today.
+
+**Haskell.** Most powerful type system of any production language, lazy by default, could model string context as a writer monad. GADTs could make invalid resource references unrepresentable. But: you'd build everything from scratch (store, module system, content addressing, Helm bridge). And cluster definitions would be Haskell programs — the app-developer persona doesn't want to learn Haskell to deploy a web service.
+
+**Rust / Go as the configuration language.** Rich ecosystems, familiar. But: strict evaluation, no purity guarantees, no content addressing. These make sense as compiler implementation languages, not as the language users write packages in.
+
+**Custom DSL.** Design everything purpose-built: string context, lazy evaluation, type system, module system, K8s-aware primitives. Theoretically ideal, but 3-5 years of language engineering before you can build the compiler on top.
+
+### 9.3 Summary
+
+| Language | String context | Lazy eval | Module system | Types | Verdict |
+|---|---|---|---|---|---|
+| **Nix** | native | native | mature | none | Strong foundation, weak error UX |
+| **Nickel** | no | yes | immature | contracts | Closest alternative, missing the key feature |
+| **Haskell** | buildable (monad) | native | build from scratch | excellent | Right for compiler impl, wrong for config language |
+| **Dhall** | no | no | no | strong | Too restrictive for computation |
+| **CUE** | no | no | unification | built-in | Good for validation, not full compiler |
+| **Jsonnet** | no | yes | weak | none | Nix without the magic |
+| **Custom DSL** | designable | designable | designable | designable | Years before you start |
+
+### 9.4 The decision: Nix as frontend, Rust as backend
+
+Nix stays because string context is irreplaceable. Its weaknesses (no types, bad errors, no graph operations, no efficient set operations, no state accumulation) are precisely what Rust compensates for. The architecture described in `36_rust_oracle_at_fixpoint.md` — Rust as a query engine callable from Nix during fixpoint evaluation — addresses Nix's limitations without giving up its unique strengths.
+
+The Rust CLI (`cli/`) already implements the post-evaluation backend: structural diffing with K8s semantics, wave computation, SSA-based deployment. The next evolution is Rust at the fixpoint — an oracle that provides graph queries, constraint solving, schema validation, and rich diagnostics during Nix evaluation, where all context is available.
+
+This isn't a compromise. It's the strongest version of both: Nix for what only Nix can do (automatic dependency tracking, lazy fixpoints, functional resource construction), Rust for what Nix fundamentally can't do (indexed analysis, accumulated state, domain-aware error messages, K8s schema knowledge).
+
+---
+
 ## 10. Concrete Next Steps (Rough Priority)
 
 Ordered by: how much "compiler behavior" does the user experience, relative to effort.
@@ -366,7 +412,7 @@ The most "compiler-like" behavior — errors no other tool catches:
 
 ---
 
-## 11. Open Questions
+## 12. Open Questions
 
 1. **Connection syntax:** How should a package declare "I connect to postgres on port 5432"? Should it be part of the function signature, a separate `connections` declaration, or derived from `out` field usage?
 
