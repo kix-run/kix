@@ -26,7 +26,8 @@ def get_references(path):
     try:
         out = subprocess.check_output(
             ["nix-store", "-q", "--references", path],
-            stderr=subprocess.DEVNULL, text=True,
+            stderr=subprocess.DEVNULL,
+            text=True,
         )
         refs = [r for r in out.strip().split("\n") if r and r != path]
         refs.sort(key=lambda p: store_name(p).lower())
@@ -45,7 +46,8 @@ def bulk_load_graph(root_path):
     try:
         out = subprocess.check_output(
             ["nix-store", "-q", "--graph", root_path],
-            stderr=subprocess.DEVNULL, text=True,
+            stderr=subprocess.DEVNULL,
+            text=True,
         )
     except subprocess.CalledProcessError:
         return set()
@@ -70,8 +72,7 @@ def bulk_load_graph(root_path):
         deps.setdefault(dst, set()).add(src)
 
     for path in all_paths:
-        refs = sorted(deps.get(path, set()),
-                      key=lambda p: store_name(p).lower())
+        refs = sorted(deps.get(path, set()), key=lambda p: store_name(p).lower())
         _ref_cache[path] = refs
 
     return all_paths
@@ -98,6 +99,7 @@ def read_store_json(path):
 
 
 # ── Kix model ─────────────────────────────────────────────────────────
+
 
 class KixModel:
     """Pre-computed package/resource/dependency graph from the Nix store."""
@@ -145,14 +147,20 @@ class KixModel:
             ns = meta.get("metadata", {}).get("namespace", "_cluster")
             name = meta.get("spec", {}).get("instanceName", store_name(pi_path))
             self.packages[pi_path] = {
-                "ns": ns, "name": name, "store_path": pi_path,
-                "resources": [], "metadata": meta,
+                "ns": ns,
+                "name": name,
+                "store_path": pi_path,
+                "resources": [],
+                "metadata": meta,
             }
             self.namespaces.setdefault(ns, []).append(pi_path)
 
             if self.cluster_name == "cluster":
-                part_of = (meta.get("metadata", {}).get("labels", {})
-                           .get("app.kubernetes.io/part-of", ""))
+                part_of = (
+                    meta.get("metadata", {})
+                    .get("labels", {})
+                    .get("app.kubernetes.io/part-of", "")
+                )
                 if part_of:
                     self.cluster_name = part_of
 
@@ -180,8 +188,9 @@ class KixModel:
             meta = read_store_json(res_path)
             if not meta:
                 continue
-            deps = [r for r in get_references(res_path)
-                    if is_k8s_path(r) and r != res_path]
+            deps = [
+                r for r in get_references(res_path) if is_k8s_path(r) and r != res_path
+            ]
             self.resources[res_path] = {
                 "kind": meta.get("kind", "?"),
                 "name": meta.get("metadata", {}).get("name", "?"),
@@ -213,8 +222,11 @@ class KixModel:
                 pis = [r for r in get_references(ref) if is_k8s_path(r)]
                 return ref, pis
 
-        pi_paths = [r for r in get_references(root)
-                    if store_name(r).startswith("k8s-PackageInstance-")]
+        pi_paths = [
+            r
+            for r in get_references(root)
+            if store_name(r).startswith("k8s-PackageInstance-")
+        ]
         if pi_paths:
             return None, pi_paths
 
@@ -234,11 +246,13 @@ class KixModel:
                     dep_res = self.resources.get(dep_path)
                     if not dep_res or dep_res["kind"] == "Namespace":
                         continue
-                    deps.append({
-                        "from": f"{res['kind']}/{res['name']}",
-                        "to": f"{dep_res['kind']}/{dep_res['name']}",
-                        "target_pi": dep_owner,
-                    })
+                    deps.append(
+                        {
+                            "from": f"{res['kind']}/{res['name']}",
+                            "to": f"{dep_res['kind']}/{dep_res['name']}",
+                            "target_pi": dep_owner,
+                        }
+                    )
             self.cross_deps[pi_path] = deps
 
     def resource_label(self, path):
@@ -267,7 +281,12 @@ class KixModel:
         pkg = self.packages.get(pi_path)
         if not pkg:
             return None
-        return pkg["metadata"].get("metadata", {}).get("annotations", {}).get("kix.dev/content-hash")
+        return (
+            pkg["metadata"]
+            .get("metadata", {})
+            .get("annotations", {})
+            .get("kix.dev/content-hash")
+        )
 
     def packages_by_key(self):
         """Return dict of ns/name → pi_path."""

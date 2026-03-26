@@ -106,7 +106,9 @@ def kubectl(args: list[str], context: str | None = None) -> str:
     cmd += args
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        raise click.ClickException(f"kubectl {' '.join(args)} failed:\n{result.stderr.strip()}")
+        raise click.ClickException(
+            f"kubectl {' '.join(args)} failed:\n{result.stderr.strip()}"
+        )
     return result.stdout
 
 
@@ -301,9 +303,16 @@ def dump_all(
     type=click.Path(exists=True, file_okay=False),
     help="Match resources from a kix output directory",
 )
-@click.option("--managed", "mode_managed", is_flag=True, help="Fetch all resources with managed-by=kix label")
+@click.option(
+    "--managed",
+    "mode_managed",
+    is_flag=True,
+    help="Fetch all resources with managed-by=kix label",
+)
 @click.option("--namespaces", default=None, help="Comma-separated namespaces to dump")
-@click.option("--all", "mode_all", is_flag=True, help="Dump all resources across all namespaces")
+@click.option(
+    "--all", "mode_all", is_flag=True, help="Dump all resources across all namespaces"
+)
 def main(
     output_dir: str,
     context: str | None,
@@ -322,9 +331,13 @@ def main(
     # Determine mode
     modes = sum([kix_dir is not None, mode_managed, namespaces is not None, mode_all])
     if modes == 0:
-        raise click.UsageError("Specify one of: --match-kix, --managed, --namespaces, or --all")
+        raise click.UsageError(
+            "Specify one of: --match-kix, --managed, --namespaces, or --all"
+        )
     if modes > 1:
-        raise click.UsageError("Specify only one of: --match-kix, --managed, --namespaces, or --all")
+        raise click.UsageError(
+            "Specify only one of: --match-kix, --managed, --namespaces, or --all"
+        )
 
     click.echo("Dumping cluster resources...", err=True)
 
@@ -354,7 +367,9 @@ def main(
             filepath.parent.mkdir(parents=True, exist_ok=True)
 
             with open(filepath, "w") as f:
-                yaml.dump(doc, f, default_flow_style=False, sort_keys=True, allow_unicode=True)
+                yaml.dump(
+                    doc, f, default_flow_style=False, sort_keys=True, allow_unicode=True
+                )
             written += 1
 
         # Build the command string for the report
@@ -372,7 +387,11 @@ def main(
         cmd_parts.append(output_dir)
         cmd_str = " ".join(cmd_parts)
 
-        mode = "match-kix" if kix_dir else ("managed" if mode_managed else ("all" if mode_all else "namespaces"))
+        mode = (
+            "match-kix"
+            if kix_dir
+            else ("managed" if mode_managed else ("all" if mode_all else "namespaces"))
+        )
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         # Write report

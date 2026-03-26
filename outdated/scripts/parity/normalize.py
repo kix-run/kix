@@ -29,9 +29,9 @@ STRIP_ANNOTATIONS = {
 
 # Annotation prefixes — any annotation starting with these is stripped.
 STRIP_ANNOTATION_PREFIXES = [
-    "checksum/",       # Helm uses checksum/config, checksum/health, etc.
+    "checksum/",  # Helm uses checksum/config, checksum/health, etc.
     "build.kix.dev/",  # kix build metadata
-    "helm.sh/",        # Helm hook annotations (hook, hook-weight, hook-delete-policy)
+    "helm.sh/",  # Helm hook annotations (hook, hook-weight, hook-delete-policy)
 ]
 
 # Helm prefixes resource names with the release name. kix uses plain app names.
@@ -173,17 +173,21 @@ def _normalize_configmap_data(doc: dict) -> dict:
       of empty values can leave extra blank lines that Helm doesn't produce)
     """
     import re
+
     if doc.get("kind") != "ConfigMap":
         return doc
     data = doc.get("data")
     if isinstance(data, dict):
         doc = dict(doc)
+
         def normalize_text(v: str) -> str:
             # Strip trailing whitespace from each line, collapse blank lines, strip ends
             lines = [line.rstrip() for line in v.splitlines()]
             return re.sub(r"\n{2,}", "\n", "\n".join(lines)).strip()
-        doc["data"] = {k: normalize_text(v) if isinstance(v, str) else v
-                       for k, v in data.items()}
+
+        doc["data"] = {
+            k: normalize_text(v) if isinstance(v, str) else v for k, v in data.items()
+        }
     return doc
 
 
@@ -216,12 +220,21 @@ def _sort_arrays(obj: Any) -> Any:
         result = {}
         for k, v in obj.items():
             if k == "ports" and isinstance(v, list) and v and isinstance(v[0], dict):
-                result[k] = sorted(v, key=lambda p: (p.get("name", ""), p.get("protocol", "")))
+                result[k] = sorted(
+                    v, key=lambda p: (p.get("name", ""), p.get("protocol", ""))
+                )
             elif k == "env" and isinstance(v, list) and v and isinstance(v[0], dict):
                 result[k] = sorted(v, key=lambda e: e.get("name", ""))
-            elif k == "volumeMounts" and isinstance(v, list) and v and isinstance(v[0], dict):
+            elif (
+                k == "volumeMounts"
+                and isinstance(v, list)
+                and v
+                and isinstance(v[0], dict)
+            ):
                 result[k] = sorted(v, key=lambda vm: vm.get("mountPath", ""))
-            elif k == "volumes" and isinstance(v, list) and v and isinstance(v[0], dict):
+            elif (
+                k == "volumes" and isinstance(v, list) and v and isinstance(v[0], dict)
+            ):
                 result[k] = sorted(v, key=lambda vol: vol.get("name", ""))
             else:
                 result[k] = _sort_arrays(v)

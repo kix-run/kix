@@ -7,7 +7,6 @@
 # ]
 # ///
 import json
-import sys
 from datetime import datetime, timezone
 from typing import Any, Dict
 
@@ -41,12 +40,16 @@ def format_event(event: Dict[str, Any]) -> Dict[str, Any]:
         "involved_object_name": obj.involved_object.name,
         "involved_object_namespace": obj.involved_object.namespace,
         "involved_object_uid": obj.involved_object.uid,
-        "involved_object_api_version": getattr(obj.involved_object, "api_version", None),
+        "involved_object_api_version": getattr(
+            obj.involved_object, "api_version", None
+        ),
         "first_timestamp": obj.first_timestamp,
         "last_timestamp": obj.last_timestamp,
         "event_time": getattr(obj, "event_time", None),
         "reporting_component": getattr(obj, "reporting_component", None),
-        "source_component": (getattr(obj.source, "component", None) if hasattr(obj, "source") else None),
+        "source_component": (
+            getattr(obj.source, "component", None) if hasattr(obj, "source") else None
+        ),
     }
 
     # Clean None values for better JSON output
@@ -59,7 +62,9 @@ def main():
     try:
         config.load_incluster_config()
         print(
-            json.dumps({"message": "Using in-cluster configuration"}, cls=DateTimeEncoder),
+            json.dumps(
+                {"message": "Using in-cluster configuration"}, cls=DateTimeEncoder
+            ),
             flush=True,
         )
     except config.ConfigException:
@@ -74,7 +79,9 @@ def main():
     w = watch.Watch()
 
     print(
-        json.dumps({"message": "Starting to watch Kubernetes events"}, cls=DateTimeEncoder),
+        json.dumps(
+            {"message": "Starting to watch Kubernetes events"}, cls=DateTimeEncoder
+        ),
         flush=True,
     )
 

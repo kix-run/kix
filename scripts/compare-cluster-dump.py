@@ -28,7 +28,12 @@ import yaml
 _YAMLLoader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from parity.normalize import normalize_kix, normalize_cluster, resource_key, strip_port_names, normalize_dns_suffix
+from parity.normalize import (
+    normalize_kix,
+    normalize_cluster,
+    strip_port_names,
+    normalize_dns_suffix,
+)
 from parity.structural_diff import structural_diff, format_diffs, DiffKind
 
 # Fields that Kubernetes auto-assigns at runtime — never present in kix output.
@@ -117,7 +122,12 @@ def _is_runtime_resource(doc: dict) -> bool:
 
     # Bare ServiceAccounts in kube-system (no labels, no annotations) are
     # auto-created by kube-controller-manager for built-in controllers.
-    if kind == "serviceaccount" and ns == "kube-system" and not labels and not annotations:
+    if (
+        kind == "serviceaccount"
+        and ns == "kube-system"
+        and not labels
+        and not annotations
+    ):
         return True
 
     # Helm internal bookkeeping
@@ -193,7 +203,11 @@ def _is_runtime_resource(doc: dict) -> bool:
     if kind == "clusterrolebinding" and name.startswith("helm-kube-system-rke2-"):
         return True
     # RKE2 node password secrets (created during node join).
-    if kind == "secret" and ns == "kube-system" and name.endswith(".node-password.rke2"):
+    if (
+        kind == "secret"
+        and ns == "kube-system"
+        and name.endswith(".node-password.rke2")
+    ):
         return True
     # objectset.rio.cattle.io labels indicate resources managed by RKE2's
     # internal controller (cattle agent / fleet).
@@ -280,7 +294,9 @@ def _is_controller_owned(doc: dict) -> bool:
         return True
 
     owner_refs = metadata.get("ownerReferences", [])
-    if any(ref.get("controller") is True for ref in owner_refs if isinstance(ref, dict)):
+    if any(
+        ref.get("controller") is True for ref in owner_refs if isinstance(ref, dict)
+    ):
         return True
     for field in ("annotations", "labels"):
         entries = metadata.get(field, {})
@@ -577,15 +593,21 @@ def generate_report(
     if color:
         lines.append(f"{_BOLD}kix diff report{_RESET}")
         lines.append("")
-        lines.append(f"Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}")
+        lines.append(
+            f"Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}"
+        )
         lines.append(f"kix:     {kix_dir} ({len(kix_resources)} resources)")
         lines.append(f"cluster: {cluster_dir} ({len(cluster_resources)} resources)")
     else:
         lines.append("# kix diff report")
         lines.append("")
-        lines.append(f"**Generated:** {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}")
+        lines.append(
+            f"**Generated:** {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}"
+        )
         lines.append(f"**kix:** `{kix_dir}` ({len(kix_resources)} resources)")
-        lines.append(f"**cluster:** `{cluster_dir}` ({len(cluster_resources)} resources)")
+        lines.append(
+            f"**cluster:** `{cluster_dir}` ({len(cluster_resources)} resources)"
+        )
     lines.append("")
 
     # Summary (exclude renames from kix-only / cluster-only counts)
@@ -594,10 +616,20 @@ def generate_report(
     n_total = len(identical) + len(modified) + n_kix_only + n_cluster_only
 
     # Aggregate diff counts across all modified resources
-    total_extra = sum(sum(1 for d in diffs if d.kind == DiffKind.EXTRA_IN_B) for _, diffs in modified)
-    total_missing = sum(sum(1 for d in diffs if d.kind == DiffKind.MISSING_IN_B) for _, diffs in modified)
+    total_extra = sum(
+        sum(1 for d in diffs if d.kind == DiffKind.EXTRA_IN_B) for _, diffs in modified
+    )
+    total_missing = sum(
+        sum(1 for d in diffs if d.kind == DiffKind.MISSING_IN_B)
+        for _, diffs in modified
+    )
     total_changed = sum(
-        sum(1 for d in diffs if d.kind in (DiffKind.VALUE_MISMATCH, DiffKind.TYPE_MISMATCH)) for _, diffs in modified
+        sum(
+            1
+            for d in diffs
+            if d.kind in (DiffKind.VALUE_MISMATCH, DiffKind.TYPE_MISMATCH)
+        )
+        for _, diffs in modified
     )
 
     if color:
@@ -614,7 +646,9 @@ def generate_report(
         lines.append("| Category | Count |")
         lines.append("|----------|-------|")
         lines.append(f"| Identical | {len(identical)} |")
-        lines.append(f"| Modified | {len(modified)}  (+{total_extra} -{total_missing} ~{total_changed}) |")
+        lines.append(
+            f"| Modified | {len(modified)}  (+{total_extra} -{total_missing} ~{total_changed}) |"
+        )
         lines.append(f"| kix-only | {n_kix_only} |")
         lines.append(f"| Cluster-only | {n_cluster_only} |")
         lines.append(f"| **Total** | **{n_total}** |")
@@ -622,7 +656,11 @@ def generate_report(
 
     # Probable renames section (before kix-only/cluster-only so context is clear)
     if rename_pairs:
-        lines.append(f"{_BOLD}Probable renames / moves{_RESET}" if color else "## Probable renames / moves")
+        lines.append(
+            f"{_BOLD}Probable renames / moves{_RESET}"
+            if color
+            else "## Probable renames / moves"
+        )
         lines.append("")
         for kix_key, cluster_key, ratio, diffs in rename_pairs:
             non_rename_diffs = [d for d in diffs if d.path not in _RENAME_ONLY_PATHS]
@@ -632,38 +670,62 @@ def generate_report(
                     f"  {_CYAN}{_BOLD}{format_resource(kix_key)}{_RESET} <-> {_CYAN}{_BOLD}{format_resource(cluster_key)}{_RESET} {_DIM}({pct}% match){_RESET}"
                 )
             else:
-                lines.append(f"### `{format_resource(kix_key)}` <-> `{format_resource(cluster_key)}` ({pct}% match)")
+                lines.append(
+                    f"### `{format_resource(kix_key)}` <-> `{format_resource(cluster_key)}` ({pct}% match)"
+                )
             lines.append("")
             if not files_only:
                 if non_rename_diffs:
                     if not color:
                         lines.append("```")
-                    lines.append(format_diffs(non_rename_diffs, color=color, full_diff=full_diff))
+                    lines.append(
+                        format_diffs(non_rename_diffs, color=color, full_diff=full_diff)
+                    )
                     if not color:
                         lines.append("```")
                 else:
                     if color:
-                        lines.append(f"  {_DIM}(identical apart from name/namespace){_RESET}")
+                        lines.append(
+                            f"  {_DIM}(identical apart from name/namespace){_RESET}"
+                        )
                     else:
-                        lines.append("*Structurally identical (only name/namespace differs)*")
+                        lines.append(
+                            "*Structurally identical (only name/namespace differs)*"
+                        )
             lines.append("")
 
     # kix-only section (excluding resources that were matched as renames)
     unmatched_kix = [k for k in kix_only if k not in renamed_kix]
     if unmatched_kix:
-        lines.append(f"{_BOLD}{_RED}kix-only (not in cluster){_RESET}" if color else "## kix-only (not in cluster)")
+        lines.append(
+            f"{_BOLD}{_RED}kix-only (not in cluster){_RESET}"
+            if color
+            else "## kix-only (not in cluster)"
+        )
         lines.append("")
         for key in unmatched_kix:
-            lines.append(f"  {_RED}- {format_resource(key)}{_RESET}" if color else f"- `{format_resource(key)}`")
+            lines.append(
+                f"  {_RED}- {format_resource(key)}{_RESET}"
+                if color
+                else f"- `{format_resource(key)}`"
+            )
         lines.append("")
 
     # Cluster-only section (excluding resources that were matched as renames)
     unmatched_cluster = [k for k in cluster_only if k not in renamed_cluster]
     if unmatched_cluster:
-        lines.append(f"{_BOLD}{_GREEN}Cluster-only (not in kix){_RESET}" if color else "## Cluster-only (not in kix)")
+        lines.append(
+            f"{_BOLD}{_GREEN}Cluster-only (not in kix){_RESET}"
+            if color
+            else "## Cluster-only (not in kix)"
+        )
         lines.append("")
         for key in unmatched_cluster:
-            lines.append(f"  {_GREEN}+ {format_resource(key)}{_RESET}" if color else f"- `{format_resource(key)}`")
+            lines.append(
+                f"  {_GREEN}+ {format_resource(key)}{_RESET}"
+                if color
+                else f"- `{format_resource(key)}`"
+            )
         lines.append("")
 
     # Modified section
@@ -675,7 +737,11 @@ def generate_report(
             # Diff counts for the header
             n_missing = sum(1 for d in diffs if d.kind == DiffKind.MISSING_IN_B)
             n_extra = sum(1 for d in diffs if d.kind == DiffKind.EXTRA_IN_B)
-            n_changed = sum(1 for d in diffs if d.kind in (DiffKind.VALUE_MISMATCH, DiffKind.TYPE_MISMATCH))
+            n_changed = sum(
+                1
+                for d in diffs
+                if d.kind in (DiffKind.VALUE_MISMATCH, DiffKind.TYPE_MISMATCH)
+            )
 
             if color:
                 label = f"{name}" if ns == "_cluster" else f"{ns}/{name}"
@@ -683,7 +749,9 @@ def generate_report(
                 lines.append(f"  {_BOLD}{kind} {label}{_RESET}  {counts}")
             else:
                 label = name if ns == "_cluster" else f"{ns}/{name}"
-                lines.append(f"### {kind} {label}  (+{n_extra} -{n_missing} ~{n_changed})")
+                lines.append(
+                    f"### {kind} {label}  (+{n_extra} -{n_missing} ~{n_changed})"
+                )
             lines.append("")
 
             if not files_only:
@@ -697,7 +765,9 @@ def generate_report(
     # Identical list (collapsed in markdown, dim in color mode)
     if identical and not only_broken:
         if color:
-            lines.append(f"{_BOLD}Identical{_RESET} {_DIM}({len(identical)} resources match exactly){_RESET}")
+            lines.append(
+                f"{_BOLD}Identical{_RESET} {_DIM}({len(identical)} resources match exactly){_RESET}"
+            )
             lines.append("")
             for key in identical:
                 lines.append(f"  {_DIM}{format_resource(key)}{_RESET}")
@@ -724,9 +794,21 @@ def generate_report(
 @click.command()
 @click.argument("kix_dir", type=click.Path(exists=True, file_okay=False))
 @click.argument("cluster_dir", type=click.Path(exists=True, file_okay=False))
-@click.option("--ignore-path", multiple=True, help="JSON paths to ignore (e.g. '*.annotations', '$.spec.strategy')")
-@click.option("--service", default=None, help="Only compare resources whose name matches this service (e.g. 'coredns')")
-@click.option("--color/--no-color", default=None, help="Colorize diff output (default: auto-detect TTY)")
+@click.option(
+    "--ignore-path",
+    multiple=True,
+    help="JSON paths to ignore (e.g. '*.annotations', '$.spec.strategy')",
+)
+@click.option(
+    "--service",
+    default=None,
+    help="Only compare resources whose name matches this service (e.g. 'coredns')",
+)
+@click.option(
+    "--color/--no-color",
+    default=None,
+    help="Colorize diff output (default: auto-detect TTY)",
+)
 @click.option(
     "--ignore-cluster-defaults/--no-ignore-cluster-defaults",
     default=True,
@@ -765,9 +847,17 @@ def generate_report(
     help="Enable all skip/ignore flags (cluster-defaults, port-names, dns-suffix, controller-owned, runtime)",
 )
 @click.option(
-    "--files-only", is_flag=True, default=False, help="Only show file-level info, skip detailed line-by-line diffs"
+    "--files-only",
+    is_flag=True,
+    default=False,
+    help="Only show file-level info, skip detailed line-by-line diffs",
 )
-@click.option("--only-broken", is_flag=True, default=False, help="Hide identical resources from the output")
+@click.option(
+    "--only-broken",
+    is_flag=True,
+    default=False,
+    help="Hide identical resources from the output",
+)
 def main(
     kix_dir: str,
     cluster_dir: str,

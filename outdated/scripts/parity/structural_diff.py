@@ -20,15 +20,17 @@ from typing import Any
 
 class DiffKind(Enum):
     """Type of structural difference between two values."""
-    MISSING_IN_KIX = "missing_in_kix"   # Key exists in Helm but not kix
-    EXTRA_IN_KIX = "extra_in_kix"       # Key exists in kix but not Helm
-    VALUE_MISMATCH = "value_mismatch"   # Both have the key but values differ
-    TYPE_MISMATCH = "type_mismatch"     # Same key, different types (e.g. str vs int)
+
+    MISSING_IN_KIX = "missing_in_kix"  # Key exists in Helm but not kix
+    EXTRA_IN_KIX = "extra_in_kix"  # Key exists in kix but not Helm
+    VALUE_MISMATCH = "value_mismatch"  # Both have the key but values differ
+    TYPE_MISMATCH = "type_mismatch"  # Same key, different types (e.g. str vs int)
 
 
 @dataclass
 class Difference:
     """A single structural difference at a specific JSON path."""
+
     path: str
     kind: DiffKind
     helm_value: Any = None
@@ -76,7 +78,7 @@ def _compact(value: Any, max_len: int = 120) -> str:
         r = repr(value)
         if len(r) <= max_len:
             return r
-        return r[:max_len - 3] + "..."
+        return r[: max_len - 3] + "..."
     return repr(value)
 
 
@@ -129,9 +131,13 @@ def structural_diff(
             if key not in kix:
                 diffs.append(Difference(child_path, DiffKind.MISSING_IN_KIX, helm[key]))
             elif key not in helm:
-                diffs.append(Difference(child_path, DiffKind.EXTRA_IN_KIX, kix_value=kix[key]))
+                diffs.append(
+                    Difference(child_path, DiffKind.EXTRA_IN_KIX, kix_value=kix[key])
+                )
             else:
-                diffs.extend(structural_diff(helm[key], kix[key], child_path, ignore_paths))
+                diffs.extend(
+                    structural_diff(helm[key], kix[key], child_path, ignore_paths)
+                )
         return diffs
 
     # Lists — compare element-by-element (order-sensitive; normalization
@@ -142,7 +148,9 @@ def structural_diff(
             if i >= len(kix):
                 diffs.append(Difference(child_path, DiffKind.MISSING_IN_KIX, helm[i]))
             elif i >= len(helm):
-                diffs.append(Difference(child_path, DiffKind.EXTRA_IN_KIX, kix_value=kix[i]))
+                diffs.append(
+                    Difference(child_path, DiffKind.EXTRA_IN_KIX, kix_value=kix[i])
+                )
             else:
                 diffs.extend(structural_diff(helm[i], kix[i], child_path, ignore_paths))
         return diffs

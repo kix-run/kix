@@ -36,9 +36,11 @@ def parse_closure_file(path):
             if i < len(lines):
                 refs.append(lines[i])
                 i += 1
-        entries.append({
-            "path": store_path,
-            "references": refs,
-        })
+        entries.append(
+            {
+                "path": store_path,
+                "references": refs,
+            }
+        )
 
     return entries

@@ -41,7 +41,10 @@ def extract_kind_from_path(path):
 
 def main():
     if len(sys.argv) < 4:
-        print(f"Usage: {sys.argv[0]} <closure-graph-file> <activation-path> <output-dir> [--by-namespace]", file=sys.stderr)
+        print(
+            f"Usage: {sys.argv[0]} <closure-graph-file> <activation-path> <output-dir> [--by-namespace]",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     closure_file_path = sys.argv[1]

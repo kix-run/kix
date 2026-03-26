@@ -92,7 +92,8 @@ _LIST_KEY_EXTRACTORS: dict[str, Callable[[dict], str]] = {
     "containers": lambda item: item.get("name", ""),
     "initContainers": lambda item: item.get("name", ""),
     "ports": lambda item: (
-        item.get("name", "") or f"{item.get('containerPort', item.get('port', ''))}:{item.get('protocol', 'TCP')}"
+        item.get("name", "")
+        or f"{item.get('containerPort', item.get('port', ''))}:{item.get('protocol', 'TCP')}"
     ),
     "volumes": lambda item: item.get("name", ""),
     "volumeMounts": lambda item: item.get("mountPath", ""),
@@ -103,7 +104,9 @@ _LIST_KEY_EXTRACTORS: dict[str, Callable[[dict], str]] = {
     "volumeClaimTemplates": lambda item: item.get("metadata", {}).get("name", ""),
     "webhooks": lambda item: item.get("name", ""),
     "topologySpreadConstraints": lambda item: item.get("topologyKey", ""),
-    "tolerations": lambda item: f"{item.get('key', '')}:{item.get('operator', '')}:{item.get('effect', '')}",
+    "tolerations": lambda item: (
+        f"{item.get('key', '')}:{item.get('operator', '')}:{item.get('effect', '')}"
+    ),
     "imagePullSecrets": lambda item: item.get("name", ""),
     "ownerReferences": lambda item: f"{item.get('kind', '')}:{item.get('name', '')}",
 }
@@ -249,7 +252,9 @@ def structural_diff(
     if type(a) is not type(b):
         if isinstance(a, (int, float)) and isinstance(b, (int, float)):
             if a != b:
-                diffs.append(Difference(path, DiffKind.VALUE_MISMATCH, a, b, a_label, b_label))
+                diffs.append(
+                    Difference(path, DiffKind.VALUE_MISMATCH, a, b, a_label, b_label)
+                )
             return diffs
         diffs.append(Difference(path, DiffKind.TYPE_MISMATCH, a, b, a_label, b_label))
         return diffs
@@ -282,7 +287,11 @@ def structural_diff(
                     )
                 )
             else:
-                diffs.extend(structural_diff(a[key], b[key], child_path, ignore_paths, a_label, b_label))
+                diffs.extend(
+                    structural_diff(
+                        a[key], b[key], child_path, ignore_paths, a_label, b_label
+                    )
+                )
         return diffs
 
     # Lists — try key-based matching first, fall back to content-based matching
@@ -290,7 +299,9 @@ def structural_diff(
         parent_key = _path_leaf(path)
         key_fn = _get_list_key_fn(parent_key, a, b)
         if key_fn is not None:
-            return diffs + _diff_keyed_list(a, b, path, key_fn, ignore_paths, a_label, b_label)
+            return diffs + _diff_keyed_list(
+                a, b, path, key_fn, ignore_paths, a_label, b_label
+            )
         # Normalize both lists (deep-sort inner lists) and match by content
         a_normed = [_normalize(v) for v in a]
         b_normed = [_normalize(v) for v in b]
@@ -363,7 +374,9 @@ def structural_diff(
         if isinstance(a, str) and isinstance(b, str) and _quantities_equal(a, b):
             pass  # semantically equal quantities
         else:
-            diffs.append(Difference(path, DiffKind.VALUE_MISMATCH, a, b, a_label, b_label))
+            diffs.append(
+                Difference(path, DiffKind.VALUE_MISMATCH, a, b, a_label, b_label)
+            )
 
     return diffs
 
@@ -440,7 +453,9 @@ def _multiline_diff(
     """Generate a unified diff for multi-line string values."""
     a_lines = a.splitlines(keepends=True)
     b_lines = b.splitlines(keepends=True)
-    diff_lines = list(difflib.unified_diff(a_lines, b_lines, fromfile=a_label, tofile=b_label))
+    diff_lines = list(
+        difflib.unified_diff(a_lines, b_lines, fromfile=a_label, tofile=b_label)
+    )
     if not diff_lines:
         return f"{indent}(no differences)"
     result = []
@@ -464,7 +479,10 @@ def _multiline_diff(
 
 def _format_diff_plain(d: Difference, full_diff: bool = False) -> str:
     """Render a single Difference as plain text."""
-    _c = lambda v: _compact(v, full=full_diff)
+
+    def _c(v):
+        return _compact(v, full=full_diff)
+
     match d.kind:
         case DiffKind.MISSING_IN_B:
             return f"  - {d.path}: {_c(d.a_value)}"
@@ -477,7 +495,9 @@ def _format_diff_plain(d: Difference, full_diff: bool = False) -> str:
                 and isinstance(d.b_value, str)
                 and ("\n" in d.a_value or "\n" in d.b_value)
             ):
-                return f"  ~ {d.path}:\n" + _multiline_diff(d.a_value, d.b_value, d.a_label, d.b_label)
+                return f"  ~ {d.path}:\n" + _multiline_diff(
+                    d.a_value, d.b_value, d.a_label, d.b_label
+                )
             return f"  ~ {d.path}:\n      {d.a_label}: {_c(d.a_value)}\n      {d.b_label}: {_c(d.b_value)}"
         case DiffKind.TYPE_MISMATCH:
             return (
@@ -488,7 +508,9 @@ def _format_diff_plain(d: Difference, full_diff: bool = False) -> str:
     return str(d)
 
 
-def format_diffs(diffs: list[Difference], color: bool = False, full_diff: bool = False) -> str:
+def format_diffs(
+    diffs: list[Difference], color: bool = False, full_diff: bool = False
+) -> str:
     """Format a list of differences for terminal output.
 
     If *color* is True, ANSI escape codes are used to highlight lines:
@@ -517,7 +539,10 @@ _RESET = "\033[0m"
 
 def _colorize_diff(d: Difference, full_diff: bool = False) -> str:
     """Render a single Difference with ANSI colour codes."""
-    _c = lambda v: _compact(v, full=full_diff)
+
+    def _c(v):
+        return _compact(v, full=full_diff)
+
     match d.kind:
         case DiffKind.MISSING_IN_B:
             return f"  {_RED}{_BOLD}-{_RESET} {_DIM}{d.path}:{_RESET} {_RED}{_c(d.a_value)}{_RESET}"
@@ -530,8 +555,12 @@ def _colorize_diff(d: Difference, full_diff: bool = False) -> str:
                 and isinstance(d.b_value, str)
                 and ("\n" in d.a_value or "\n" in d.b_value)
             ):
-                diff_text = _multiline_diff(d.a_value, d.b_value, d.a_label, d.b_label, color=True)
-                return f"  {_YELLOW}{_BOLD}~{_RESET} {_DIM}{d.path}:{_RESET}\n{diff_text}"
+                diff_text = _multiline_diff(
+                    d.a_value, d.b_value, d.a_label, d.b_label, color=True
+                )
+                return (
+                    f"  {_YELLOW}{_BOLD}~{_RESET} {_DIM}{d.path}:{_RESET}\n{diff_text}"
+                )
             return (
                 f"  {_YELLOW}{_BOLD}~{_RESET} {_DIM}{d.path}:{_RESET}\n"
                 f"      {_RED}{d.a_label}: {_c(d.a_value)}{_RESET}\n"

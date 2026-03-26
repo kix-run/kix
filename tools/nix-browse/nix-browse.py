@@ -19,17 +19,29 @@ import sys
 # Allow imports from tools/lib/
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from lib.kix_model import (  # noqa: E402
-    resolve_path, get_references, bulk_load_graph, store_name,
-    is_k8s_path, read_store_json, KixModel, _ref_cache,
+    resolve_path,
+    get_references,
+    store_name,
+    KixModel,
 )
 
 
 # ── Tree model ────────────────────────────────────────────────────────
 
+
 class TreeNode:
     """A node in the tree. Supports both lazy (nix) and pre-built (kix) trees."""
-    __slots__ = ("path", "name", "children", "expanded", "depth",
-                 "loaded", "tag", "data")
+
+    __slots__ = (
+        "path",
+        "name",
+        "children",
+        "expanded",
+        "depth",
+        "loaded",
+        "tag",
+        "data",
+    )
 
     def __init__(self, path, depth=0, tag="store", data=None):
         self.path = path
@@ -57,16 +69,19 @@ class TreeNode:
 def flatten_visible(root):
     """Flatten the tree into the currently visible rows."""
     rows = []
+
     def walk(node):
         rows.append(node)
         if node.expanded:
             for child in node.children:
                 walk(child)
+
     walk(root)
     return rows
 
 
 # ── Kix tree builders ─────────────────────────────────────────────────
+
 
 def build_package_tree(model):
     """Build the kix:packages tree: Activation → Namespace → Package → Deps."""
@@ -76,19 +91,20 @@ def build_package_tree(model):
     root.expanded = True
 
     for ns_name in sorted(model.namespaces):
-        ns_node = TreeNode(None, depth=1, tag="namespace",
-                           data={"ns": ns_name})
+        ns_node = TreeNode(None, depth=1, tag="namespace", data={"ns": ns_name})
         ns_node.name = ns_name
         ns_node.loaded = True
         ns_node.expanded = True
 
-        for pi_path in sorted(model.namespaces[ns_name],
-                               key=lambda p: model.packages[p]["name"]):
+        for pi_path in sorted(
+            model.namespaces[ns_name], key=lambda p: model.packages[p]["name"]
+        ):
             pkg = model.packages[pi_path]
             n_res = len(pkg["resources"])
 
-            pi_node = TreeNode(pi_path, depth=2, tag="package",
-                               data={"pi_path": pi_path})
+            pi_node = TreeNode(
+                pi_path, depth=2, tag="package", data={"pi_path": pi_path}
+            )
             pi_node.name = f"{pkg['name']}  ({n_res} resources)"
             pi_node.loaded = True
 
@@ -108,8 +124,12 @@ def build_package_tree(model):
                 if len(edges) > 1:
                     via += f" (+{len(edges) - 1})"
 
-                dep_node = TreeNode(target_pi, depth=3, tag="dep",
-                                    data={"deps": edges, "target_pi": target_pi})
+                dep_node = TreeNode(
+                    target_pi,
+                    depth=3,
+                    tag="dep",
+                    data={"deps": edges, "target_pi": target_pi},
+                )
                 dep_node.name = f"→ {target_label}  via {via}"
                 dep_node.loaded = True
                 pi_node.children.append(dep_node)
@@ -146,8 +166,7 @@ def build_detail_tree(model, pi_path):
         res_node.name = f"{res['kind']}/{res['name']}"
         res_node.loaded = True
 
-        for dep_path in sorted(res["deps"],
-                                key=lambda p: model.resource_label(p)):
+        for dep_path in sorted(res["deps"], key=lambda p: model.resource_label(p)):
             dep_res = model.resources.get(dep_path)
             if not dep_res or dep_res["kind"] == "Namespace":
                 continue
@@ -171,6 +190,7 @@ def build_detail_tree(model, pi_path):
 
 
 # ── Preview logic ─────────────────────────────────────────────────────
+
 
 def preview_for(path):
     """Return (lines, title) for a store path."""
@@ -306,6 +326,7 @@ def format_size(nbytes):
 
 # ── View state ────────────────────────────────────────────────────────
 
+
 class ViewState:
     def __init__(self, root=None):
         self.root = root
@@ -323,13 +344,13 @@ KEY_ENTER = (curses.KEY_ENTER, 10, 13)
 def main(stdscr, root_path):
     curses.curs_set(0)
     curses.use_default_colors()
-    curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_CYAN)    # selected
-    curses.init_pair(2, curses.COLOR_BLACK, curses.COLOR_GREEN)   # title/bar
-    curses.init_pair(3, curses.COLOR_YELLOW, -1)                  # search match
+    curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_CYAN)  # selected
+    curses.init_pair(2, curses.COLOR_BLACK, curses.COLOR_GREEN)  # title/bar
+    curses.init_pair(3, curses.COLOR_YELLOW, -1)  # search match
     curses.init_pair(4, curses.COLOR_BLACK, curses.COLOR_YELLOW)  # search input
-    curses.init_pair(5, curses.COLOR_GREEN, -1)                   # package node
-    curses.init_pair(6, curses.COLOR_BLUE, -1)                    # namespace node
-    curses.init_pair(7, curses.COLOR_MAGENTA, -1)                 # dep node
+    curses.init_pair(5, curses.COLOR_GREEN, -1)  # package node
+    curses.init_pair(6, curses.COLOR_BLUE, -1)  # namespace node
+    curses.init_pair(7, curses.COLOR_MAGENTA, -1)  # dep node
 
     # ── View state ──
     nix_root = TreeNode(root_path)
@@ -358,11 +379,13 @@ def main(stdscr, root_path):
             return bool(kix_model.packages)
 
         h, w = stdscr.getmaxyx()
+
         def show_status(msg):
             try:
                 stdscr.erase()
-                stdscr.addstr(h // 2, max(0, (w - len(msg)) // 2),
-                              msg, curses.color_pair(4))
+                stdscr.addstr(
+                    h // 2, max(0, (w - len(msg)) // 2), msg, curses.color_pair(4)
+                )
                 stdscr.refresh()
             except curses.error:
                 pass
@@ -447,8 +470,7 @@ def main(stdscr, root_path):
         search_matches = set()
         if search_query:
             q = search_query.lower()
-            search_matches = {i for i, n in enumerate(visible)
-                              if q in n.name.lower()}
+            search_matches = {i for i, n in enumerate(visible) if q in n.name.lower()}
 
         # ── Row 0: Mode bar (left) + Preview title (right) ──
         modes_display = [("raw", "raw"), ("kix-packages", "kix:packages")]
@@ -487,7 +509,7 @@ def main(stdscr, root_path):
 
             node = visible[row_idx]
             y = tree_y_start + i
-            selected = (row_idx == v.cursor)
+            selected = row_idx == v.cursor
 
             indent = "  " * node.depth
             node.ensure_children()
@@ -544,12 +566,14 @@ def main(stdscr, root_path):
         title_bar = f" {preview_title} " if preview_title else ""
         title_bar = title_bar[:preview_w]
         try:
-            stdscr.addnstr(0, px, title_bar, preview_w,
-                           curses.color_pair(2) | curses.A_BOLD)
+            stdscr.addnstr(
+                0, px, title_bar, preview_w, curses.color_pair(2) | curses.A_BOLD
+            )
             rem = preview_w - len(title_bar)
             if rem > 0:
-                stdscr.addstr(0, px + len(title_bar), " " * (rem - 1),
-                              curses.color_pair(2))
+                stdscr.addstr(
+                    0, px + len(title_bar), " " * (rem - 1), curses.color_pair(2)
+                )
         except curses.error:
             pass
 
@@ -558,7 +582,7 @@ def main(stdscr, root_path):
             line_idx = v.preview_scroll + (i - 1)
             if line_idx >= len(preview_lines):
                 break
-            line = preview_lines[line_idx].replace("\t", "    ")[:preview_w - 1]
+            line = preview_lines[line_idx].replace("\t", "    ")[: preview_w - 1]
             try:
                 stdscr.addnstr(i, px, line, preview_w - 1)
             except curses.error:
@@ -567,12 +591,14 @@ def main(stdscr, root_path):
         # Path bar (bottom-right)
         path_str = f" {selected_node.path or selected_node.name} "
         try:
-            stdscr.addnstr(h - 1, px, path_str[:preview_w], preview_w,
-                           curses.color_pair(2))
+            stdscr.addnstr(
+                h - 1, px, path_str[:preview_w], preview_w, curses.color_pair(2)
+            )
             pad = preview_w - len(path_str)
             if pad > 0:
-                stdscr.addstr(h - 1, px + len(path_str),
-                              " " * (pad - 1), curses.color_pair(2))
+                stdscr.addstr(
+                    h - 1, px + len(path_str), " " * (pad - 1), curses.color_pair(2)
+                )
         except curses.error:
             pass
 
@@ -626,13 +652,14 @@ def main(stdscr, root_path):
         elif key == ord("N"):
             if search_matches:
                 backward = sorted(
-                    (i for i in search_matches if i < v.cursor), reverse=True)
+                    (i for i in search_matches if i < v.cursor), reverse=True
+                )
                 v.cursor = backward[0] if backward else max(search_matches)
 
         elif key == ord("J") or key == curses.KEY_NPAGE:
             v.preview_scroll = min(
-                v.preview_scroll + 10,
-                max(0, len(preview_lines) - h + 2))
+                v.preview_scroll + 10, max(0, len(preview_lines) - h + 2)
+            )
 
         elif key == ord("K") or key == curses.KEY_PPAGE:
             v.preview_scroll = max(0, v.preview_scroll - 10)
@@ -655,11 +682,12 @@ def main(stdscr, root_path):
                 node.expanded = False
 
         elif key == ord("y"):
-            text = (visible[v.cursor].path or visible[v.cursor].name)
+            text = visible[v.cursor].path or visible[v.cursor].name
             for cmd in (["xclip", "-selection", "clipboard"], ["wl-copy"]):
                 try:
-                    subprocess.run(cmd, input=text.encode(), check=True,
-                                   stderr=subprocess.DEVNULL)
+                    subprocess.run(
+                        cmd, input=text.encode(), check=True, stderr=subprocess.DEVNULL
+                    )
                     break
                 except (subprocess.CalledProcessError, FileNotFoundError):
                     continue
@@ -733,8 +761,9 @@ def text_mode(root_path):
     # Per-package detail
     print()
     for ns_name in sorted(model.namespaces):
-        for pi_path in sorted(model.namespaces[ns_name],
-                               key=lambda p: model.packages[p]["name"]):
+        for pi_path in sorted(
+            model.namespaces[ns_name], key=lambda p: model.packages[p]["name"]
+        ):
             pkg = model.packages[pi_path]
             detail = build_detail_tree(model, pi_path)
             # Only print packages that have deps worth showing

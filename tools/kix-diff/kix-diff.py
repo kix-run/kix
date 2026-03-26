@@ -10,7 +10,6 @@ Usage: kix-diff.py <old-result> <new-result>
 """
 
 import argparse
-import json
 import os
 import sys
 
@@ -26,19 +25,41 @@ from parity.structural_diff import structural_diff, format_diffs  # noqa: E402
 
 _COLOR = sys.stdout.isatty()
 
+
 def _c(code, text):
     return f"\033[{code}m{text}\033[0m" if _COLOR else text
 
-def _bold(t):    return _c("1", t)
-def _dim(t):     return _c("2", t)
-def _green(t):   return _c("32", t)
-def _red(t):     return _c("31", t)
-def _yellow(t):  return _c("33", t)
-def _cyan(t):    return _c("36", t)
-def _magenta(t): return _c("35", t)
+
+def _bold(t):
+    return _c("1", t)
+
+
+def _dim(t):
+    return _c("2", t)
+
+
+def _green(t):
+    return _c("32", t)
+
+
+def _red(t):
+    return _c("31", t)
+
+
+def _yellow(t):
+    return _c("33", t)
+
+
+def _cyan(t):
+    return _c("36", t)
+
+
+def _magenta(t):
+    return _c("35", t)
 
 
 # ── Package diff ──────────────────────────────────────────────────────
+
 
 def diff_packages(old_model, new_model):
     """Compare package sets. Returns (added, removed, changed, unchanged) lists.
@@ -54,19 +75,27 @@ def diff_packages(old_model, new_model):
     added = []
     for k in sorted(new_keys - old_keys):
         p = new_model.packages[new_pkgs[k]]
-        added.append({
-            "key": k, "name": p["name"], "ns": p["ns"],
-            "new_version": new_model.package_version(new_pkgs[k]),
-            "resource_count": len(p["resources"]),
-        })
+        added.append(
+            {
+                "key": k,
+                "name": p["name"],
+                "ns": p["ns"],
+                "new_version": new_model.package_version(new_pkgs[k]),
+                "resource_count": len(p["resources"]),
+            }
+        )
 
     removed = []
     for k in sorted(old_keys - new_keys):
         p = old_model.packages[old_pkgs[k]]
-        removed.append({
-            "key": k, "name": p["name"], "ns": p["ns"],
-            "old_version": old_model.package_version(old_pkgs[k]),
-        })
+        removed.append(
+            {
+                "key": k,
+                "name": p["name"],
+                "ns": p["ns"],
+                "old_version": old_model.package_version(old_pkgs[k]),
+            }
+        )
 
     changed = []
     unchanged = []
@@ -82,12 +111,16 @@ def diff_packages(old_model, new_model):
         new_v = new_model.package_version(new_pi)
         old_res = len(old_model.packages[old_pi]["resources"])
         new_res = len(new_model.packages[new_pi]["resources"])
-        changed.append({
-            "key": k, "name": old_model.packages[old_pi]["name"],
-            "ns": old_model.packages[old_pi]["ns"],
-            "old_version": old_v, "new_version": new_v,
-            "resource_delta": new_res - old_res,
-        })
+        changed.append(
+            {
+                "key": k,
+                "name": old_model.packages[old_pi]["name"],
+                "ns": old_model.packages[old_pi]["ns"],
+                "old_version": old_v,
+                "new_version": new_v,
+                "resource_delta": new_res - old_res,
+            }
+        )
 
     return added, removed, changed, unchanged
 
@@ -104,9 +137,9 @@ def print_package_summary(added, removed, changed, unchanged):
 
     # Compute column width for alignment
     all_names = (
-        [e["name"] for e in added] +
-        [e["name"] for e in removed] +
-        [e["name"] for e in changed]
+        [e["name"] for e in added]
+        + [e["name"] for e in removed]
+        + [e["name"] for e in changed]
     )
     name_w = max((len(n) for n in all_names), default=10) + 2
 
@@ -141,6 +174,7 @@ def print_package_summary(added, removed, changed, unchanged):
 
 # ── Edge diff ─────────────────────────────────────────────────────────
 
+
 def _edge_set(model):
     """Build a set of (source_pkg_key, target_pkg_key) edges."""
     edges = set()
@@ -168,9 +202,7 @@ def _edge_detail(model):
                 continue
             tgt = model.package_key(tgt_pi)
             edge_key = (src, tgt)
-            detail.setdefault(edge_key, []).append(
-                f"{dep['from']} → {dep['to']}"
-            )
+            detail.setdefault(edge_key, []).append(f"{dep['from']} → {dep['to']}")
     return detail
 
 
@@ -209,11 +241,13 @@ def diff_edges(old_model, new_model):
         old_pkg_edges = {e for e in old_edges if e[0] == key or e[1] == key}
         new_pkg_edges = {e for e in new_edges if e[0] == key or e[1] == key}
         if old_pkg_edges != new_pkg_edges:
-            moved.append({
-                "key": key,
-                "lost": sorted(old_pkg_edges - new_pkg_edges),
-                "gained": sorted(new_pkg_edges - old_pkg_edges),
-            })
+            moved.append(
+                {
+                    "key": key,
+                    "lost": sorted(old_pkg_edges - new_pkg_edges),
+                    "gained": sorted(new_pkg_edges - old_pkg_edges),
+                }
+            )
 
     return added, removed, moved, new_detail
 
@@ -247,6 +281,7 @@ def print_edge_changes(added, removed, moved, new_detail):
 
 
 # ── Manifest diffs grouped by package ─────────────────────────────────
+
 
 def _resource_key(res):
     """Stable key for a resource: Kind/name."""
@@ -288,14 +323,17 @@ def diff_manifests(old_model, new_model, changed_keys):
 
         modified = []
         for rk in sorted(old_rks & new_rks):
-            diffs = structural_diff(old_manifests[rk], new_manifests[rk],
-                                    a_label="old", b_label="new")
+            diffs = structural_diff(
+                old_manifests[rk], new_manifests[rk], a_label="old", b_label="new"
+            )
             if diffs:
                 modified.append({"key": rk, "diffs": diffs})
 
         if added or removed or modified:
             result[pkg_key] = {
-                "added": added, "removed": removed, "modified": modified,
+                "added": added,
+                "removed": removed,
+                "modified": modified,
             }
 
     return result
@@ -313,7 +351,9 @@ def print_manifest_diffs(manifest_diffs, full_diff=False):
 
     for pkg_key in sorted(manifest_diffs):
         d = manifest_diffs[pkg_key]
-        print(f"  {_cyan('──')} {_bold(pkg_key)} {_cyan('─' * max(1, 60 - len(pkg_key)))}")
+        print(
+            f"  {_cyan('──')} {_bold(pkg_key)} {_cyan('─' * max(1, 60 - len(pkg_key)))}"
+        )
 
         for rk in d["added"]:
             print(f"    {_green('+ ' + rk)}")
@@ -334,6 +374,7 @@ def print_manifest_diffs(manifest_diffs, full_diff=False):
 
 
 # ── Stateful resource warnings ────────────────────────────────────────
+
 
 def warn_stateful_changes(old_model, new_model, changed_keys):
     """Warn about changes to stateful packages (PVCs, databases, etc.)."""
@@ -364,18 +405,20 @@ def warn_stateful_changes(old_model, new_model, changed_keys):
 
 # ── Main ──────────────────────────────────────────────────────────────
 
+
 def main():
     parser = argparse.ArgumentParser(
         description="Compare two kix activations and show what changed.",
     )
     parser.add_argument("old", help="Path to old result (symlink or store path)")
     parser.add_argument("new", help="Path to new result (symlink or store path)")
-    parser.add_argument("--full-diff", action="store_true",
-                        help="Show full multi-line string diffs")
-    parser.add_argument("--no-manifests", action="store_true",
-                        help="Skip manifest-level diffs (faster)")
-    parser.add_argument("--no-color", action="store_true",
-                        help="Disable color output")
+    parser.add_argument(
+        "--full-diff", action="store_true", help="Show full multi-line string diffs"
+    )
+    parser.add_argument(
+        "--no-manifests", action="store_true", help="Skip manifest-level diffs (faster)"
+    )
+    parser.add_argument("--no-color", action="store_true", help="Disable color output")
     args = parser.parse_args()
 
     global _COLOR
@@ -392,6 +435,7 @@ def main():
     def _status(label):
         def fn(msg):
             print(f"\r{_dim(f'[{label}] {msg}')}", end="", flush=True)
+
         return fn
 
     old_model = KixModel(old_path, status_fn=_status("old"))
@@ -427,11 +471,15 @@ def main():
 
     # Summary line
     total = len(added) + len(removed) + len(changed) + len(unchanged)
-    print(_dim(f"Total: {total} packages — "
-               f"{_green(str(len(added)))} added, "
-               f"{_red(str(len(removed)))} removed, "
-               f"{_yellow(str(len(changed)))} changed, "
-               f"{len(unchanged)} unchanged"))
+    print(
+        _dim(
+            f"Total: {total} packages — "
+            f"{_green(str(len(added)))} added, "
+            f"{_red(str(len(removed)))} removed, "
+            f"{_yellow(str(len(changed)))} changed, "
+            f"{len(unchanged)} unchanged"
+        )
+    )
 
 
 if __name__ == "__main__":

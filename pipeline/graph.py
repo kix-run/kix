@@ -46,7 +46,10 @@ def build_manifest_filename(manifest):
 
 def main():
     if len(sys.argv) != 5:
-        print(f"Usage: {sys.argv[0]} <closure-graph-file> <activation-path> <manifests-dir> <output-dir>", file=sys.stderr)
+        print(
+            f"Usage: {sys.argv[0]} <closure-graph-file> <activation-path> <manifests-dir> <output-dir>",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     closure_file_path = sys.argv[1]
@@ -95,15 +98,17 @@ def main():
         ns_key = namespace if namespace else "_cluster_"
         resource_id = f"{kind}/{name}@{ns_key}"
 
-        nodes.append({
-            "id": resource_id,
-            "apiVersion": api_version,
-            "kind": kind,
-            "name": name,
-            "namespace": namespace,
-            "file": path_to_filename[path],
-            "identityHash": extract_identity_hash(path),
-        })
+        nodes.append(
+            {
+                "id": resource_id,
+                "apiVersion": api_version,
+                "kind": kind,
+                "name": name,
+                "namespace": namespace,
+                "file": path_to_filename[path],
+                "identityHash": extract_identity_hash(path),
+            }
+        )
 
         # Edges from references
         refs = entry.get("references", [])
