@@ -129,24 +129,6 @@
         "app.kubernetes.io/component" = "cainjector";
       };
 
-      controllerSelector = {
-        "app.kubernetes.io/name" = "cert-manager";
-        "app.kubernetes.io/instance" = name;
-        "app.kubernetes.io/component" = "controller";
-      };
-
-      webhookSelector = {
-        "app.kubernetes.io/name" = "webhook";
-        "app.kubernetes.io/instance" = name;
-        "app.kubernetes.io/component" = "webhook";
-      };
-
-      cainjectorSelector = {
-        "app.kubernetes.io/name" = "cainjector";
-        "app.kubernetes.io/instance" = name;
-        "app.kubernetes.io/component" = "cainjector";
-      };
-
       # --- Helpers ---
 
       mkControllerSubject = sa: [
@@ -837,7 +819,7 @@
         labels = controllerLabels;
         spec = {
           type = "ClusterIP";
-          selector = controllerSelector;
+          selector = self.controllerDeployment.out.selector;
           ports = [
             {
               name = "tcp-prometheus-servicemonitor";
@@ -861,7 +843,7 @@
         labels = controllerLabels;
         spec = {
           replicas = config.replicaCount;
-          selector.matchLabels = controllerSelector;
+          selector.matchLabels = controllerLabels;
           template = {
             metadata = {
               labels = controllerLabels;
@@ -959,7 +941,7 @@
         labels = webhookLabels;
         spec = {
           type = "ClusterIP";
-          selector = webhookSelector;
+          selector = self.webhookDeployment.out.selector;
           ports = [
             {
               name = "https";
@@ -986,7 +968,7 @@
         labels = webhookLabels;
         spec = {
           replicas = config.webhook.replicaCount;
-          selector.matchLabels = webhookSelector;
+          selector.matchLabels = webhookLabels;
           template = {
             metadata = {
               labels = webhookLabels;
@@ -1179,7 +1161,7 @@
         labels = cainjectorLabels;
         spec = {
           type = "ClusterIP";
-          selector = cainjectorSelector;
+          selector = self.cainjectorDeployment.out.selector;
           ports = [
             {
               name = "http-metrics";
@@ -1200,7 +1182,7 @@
         labels = cainjectorLabels;
         spec = {
           replicas = config.cainjector.replicaCount;
-          selector.matchLabels = cainjectorSelector;
+          selector.matchLabels = cainjectorLabels;
           template = {
             metadata = {
               labels = cainjectorLabels;
