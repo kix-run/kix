@@ -135,7 +135,9 @@ let
   # Build the CRD spec input for a given crdDef entry.
   mkCrdInput =
     def:
-    scope.crd.fromKind def.kind ({ spec.group = sgGroup; } // (def.specOverrides or { }))
+    scope.crd.fromKind def.kind (
+      lib.recursiveUpdate { spec.group = sgGroup; } (def.specOverrides or { })
+    )
     |> scope.crd.withShortNames def.shortNames;
 
   # Extract resolved names (singular/plural) from each CRD definition.
