@@ -80,12 +80,15 @@ rec {
   # ---------------------------------------------------------------------------
   # peekPackageMeta — extract meta from a package without full evaluation.
   #
-  # Package functions only take system args (scope, lib, kix) — no deps.
-  # Deps are discovered from build function args, so we can always peek.
+  # Accepts function packages, inline attrset packages, and kix-imports.
+  # Uses the same shape detection as resolve.normalizePackage.
   # ---------------------------------------------------------------------------
   peekPackageMeta =
     { package, kixlib }:
-    if (package._type or "") == "kix-import" then
+    if builtins.isAttrs package && package ? build then
+      # Inline attrset package
+      package.meta or { }
+    else if (package._type or "") == "kix-import" then
       package.meta or { }
     else
       let

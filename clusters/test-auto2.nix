@@ -12,70 +12,47 @@
 
 let
   # Minimal test package that requires valkey as a hard dependency.
-  testAppPackage =
-    {
-      scope,
-      lib,
-    }:
-    {
-      options = { };
-
-      build =
-        {
-          self,
-          config,
-          valkey,
-          ...
-        }:
-        {
-          root = scope.mkResource {
-            apiVersion = "v1";
-            kind = "ConfigMap";
-            name = "test-app";
-            data = {
-              REDIS_HOST = valkey.out.fqdn;
-            };
-          };
+  testAppPackage = {
+    build =
+      { scope, valkey, ... }:
+      {
+        root = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          name = "test-app";
+          data.REDIS_HOST = valkey.out.fqdn;
         };
-    };
+      };
+  };
 
   # A package with no deps, used to test that optional instances
   # that are NOT needed don't produce resources.
-  unusedOptionalPackage =
-    { scope, lib }:
-    {
-      options = { };
-      build =
-        { ... }:
-        {
-          root = scope.mkResource {
-            apiVersion = "v1";
-            kind = "ConfigMap";
-            name = "unused";
-            data.placeholder = "true";
-          };
+  unusedOptionalPackage = {
+    build =
+      { scope, ... }:
+      {
+        root = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          name = "unused";
+          data.placeholder = "true";
         };
-    };
+      };
+  };
 
   # A package that requires coredns — used to test optional activation.
-  needsCorednsPackage =
-    {
-      scope,
-      lib,
-    }:
-    {
-      options = { };
-      build =
-        { coredns, ... }:
-        {
-          root = scope.mkResource {
-            apiVersion = "v1";
-            kind = "ConfigMap";
-            name = "needs-coredns";
-            data.DNS_SERVICE = coredns.out.fqdn;
-          };
+  needsCorednsPackage = {
+    build =
+      { scope, coredns, ... }:
+      {
+        root = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          name = "needs-coredns";
+          data.DNS_SERVICE = coredns.out.fqdn;
         };
-    };
+      };
+  };
 in
 kix.buildCluster {
   name = "test-auto";

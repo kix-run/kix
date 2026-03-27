@@ -20,7 +20,8 @@ rec {
     value:
     builtins.isFunction value
     || (value._type or "") == "kix-import"
-    || (builtins.isAttrs value && value ? package);
+    || (builtins.isAttrs value && value ? package)
+    || (builtins.isAttrs value && value ? build); # inline attrset package
 
   normalizeAvailablePackages =
     raw:
@@ -38,6 +39,13 @@ rec {
           namespace = null;
           aliases = [ ];
         }
+      else if builtins.isAttrs value && value ? build then
+        # Inline attrset package
+        {
+          package = value;
+          namespace = null;
+          aliases = [ ];
+        }
       else
         {
           package = value.package or (throw "availablePackages.${name}: missing 'package'");
@@ -46,21 +54,19 @@ rec {
         }
     ) (lib.filterAttrs (_: isPackageEntry) raw);
 
-  # Get required dep names by calling the package (phase 1) and introspecting
-  # build function args. Required = no default (no ? null).
+  # Get required dep names from a package. Uses normalizePackage to handle
+  # both function packages and inline attrset packages.
   getRequiredDeps =
     pkg:
-    if builtins.isFunction pkg then
+    let
+      raw = resolve.normalizePackage {
+        package = pkg;
+        scope = { };
+      };
+    in
+    if raw ? build then
       let
-        fnArgs = builtins.functionArgs pkg;
-        result = pkg (
-          {
-            scope = { };
-            inherit lib;
-          }
-          // lib.optionalAttrs (fnArgs ? kix) { kix = kixlib; }
-        );
-        discoveredDeps = discoverBuildDeps result.build;
+        discoveredDeps = discoverBuildDeps raw.build;
       in
       builtins.filter (name: !(discoveredDeps.${name}.optional or false)) (
         builtins.attrNames discoveredDeps

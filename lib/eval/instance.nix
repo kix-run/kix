@@ -65,9 +65,9 @@ in
           clusterDomain = clusterConfig.clusterDomain or "cluster.local";
         };
 
-        # 1. Phase 1: call package with system args only
+        # 1. Phase 1: normalize package (function or inline attrset) with system args
         raw = callPackagePhase1 {
-          packageFn = instCfg.package;
+          package = instCfg.package;
           scope = scope';
         };
 

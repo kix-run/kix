@@ -184,20 +184,33 @@ rec {
     in
     lib.recursiveUpdate optionDefaults evaluated;
 
-  # Phase 1: call package function with system args only.
+  # Normalize a package value to its phase-1 result.
+  # Accepts: function (traditional), attrset with `build` (inline), or kix-import.
   # Returns { meta?, options?, deps?, build, assertions?, warnings? }.
-  # No dep resolution — package function must not take dep args.
-  callPackagePhase1 =
-    { packageFn, scope }:
-    let
-      fnArgs = builtins.functionArgs packageFn;
-    in
-    packageFn (
-      {
-        inherit scope lib;
-      }
-      // lib.optionalAttrs (fnArgs ? kix) { kix = kixlib; }
-    );
+  #
+  # This is the SINGLE place that knows about package shapes — all other code
+  # calls this instead of doing its own detection.
+  normalizePackage =
+    { package, scope }:
+    if builtins.isAttrs package && package ? build then
+      # Inline package — already a { meta?, options?, deps?, build } attrset
+      package
+    else if (package._type or "") == "kix-import" then
+      package
+    else
+      # Function package — call with system args only
+      let
+        fnArgs = builtins.functionArgs package;
+      in
+      package (
+        {
+          inherit scope lib;
+        }
+        // lib.optionalAttrs (fnArgs ? kix) { kix = kixlib; }
+      );
+
+  # Convenience alias — same as normalizePackage but named for clarity at call sites.
+  callPackagePhase1 = normalizePackage;
 
   # Discover deps by introspecting build function args.
   # Returns { depName = { optional = bool; }; } for each discovered dep.
