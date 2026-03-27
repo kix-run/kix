@@ -30,6 +30,7 @@ in
     pkgs.pkg-config
     pkgs.nixfmt-rfc-style
     pkgs.ruff
+    pkgs.wrangler
   ]
   ++ nixLibs;
 
