@@ -103,6 +103,9 @@ pub fn is_immediate_kind(kind: &str) -> bool {
             | "HorizontalPodAutoscaler"
             | "ServiceMonitor"
             | "PriorityClass"
+            | "PackageInstance"
+            | "Activation"
+            | "StorageClass"
     )
 }
 

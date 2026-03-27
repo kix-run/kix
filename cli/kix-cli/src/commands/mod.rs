@@ -3,6 +3,7 @@ pub mod check;
 pub mod completions;
 pub mod deploy;
 pub mod diff;
+pub mod gc;
 pub mod graph;
 pub mod inspect;
 pub mod list;

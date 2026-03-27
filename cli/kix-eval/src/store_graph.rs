@@ -114,9 +114,9 @@ fn bulk_load_graph(root_path: &Path) -> HashMap<PathBuf, Vec<PathBuf>> {
         let src = PathBuf::from(format!("{nix_store}{src_base}"));
         let dst = PathBuf::from(format!("{nix_store}{dst_base}"));
 
-        // In dot output, edge is "src -> dst" meaning src depends on dst
-        // (dst is a reference of src)
-        deps.entry(src).or_default().push(dst);
+        // In dot output, edge is "dependency -> dependent" (reference → referrer).
+        // We store as: dependent → [dependencies] (dst depends on src).
+        deps.entry(dst).or_default().push(src);
     }
 
     // Sort references for deterministic output
@@ -282,7 +282,34 @@ impl StoreGraph {
             );
         }
 
-        // 5. Compute cross-package dependencies using bulk-loaded graph
+        // 5. Discover cluster-level resources (Namespaces, CRDs, Activation)
+        //    These are k8s store paths in the DAG but not owned by any PI.
+        //    Collect all unique paths from both keys and values of ref_cache.
+        status_fn("Discovering cluster-level resources...");
+        let mut all_dag_paths: std::collections::HashSet<PathBuf> =
+            std::collections::HashSet::new();
+        for (k, vs) in &ref_cache {
+            all_dag_paths.insert(k.clone());
+            for v in vs {
+                all_dag_paths.insert(v.clone());
+            }
+        }
+        for path in &all_dag_paths {
+            if !is_k8s_path(path) || resources.contains_key(path) {
+                continue;
+            }
+            if let Ok(manifest) = read_store_json(path) {
+                resources.insert(
+                    path.clone(),
+                    ResourceNode {
+                        store_path: path.clone(),
+                        manifest,
+                    },
+                );
+            }
+        }
+
+        // 6. Compute cross-package dependencies using bulk-loaded graph
         status_fn("Computing cross-package dependencies...");
         for (pi_path, pkg) in packages.iter_mut() {
             let mut deps = Vec::new();

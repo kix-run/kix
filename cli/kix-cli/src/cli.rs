@@ -72,6 +72,9 @@ pub enum Command {
     /// Deep-dive: DI deps, parts, out
     Inspect(InspectArgs),
 
+    /// Garbage-collect stale kix-managed resources
+    Gc(GcArgs),
+
     /// Manage cluster snapshots for CI/offline use
     Snapshot(SnapshotArgs),
 
@@ -90,6 +93,7 @@ impl Command {
             Command::Status(a) => Some(&a.cluster),
             Command::Graph(a) => Some(&a.cluster),
             Command::Inspect(a) => Some(&a.cluster),
+            Command::Gc(a) => Some(&a.cluster),
             Command::Snapshot(_) | Command::List(_) | Command::Completions(_) => None,
         }
     }
@@ -151,6 +155,20 @@ pub struct DeployArgs {
 pub enum OnError {
     Stop,
     Continue,
+}
+
+#[derive(clap::Args)]
+pub struct GcArgs {
+    /// Cluster name
+    pub cluster: String,
+
+    /// Skip confirmation prompt
+    #[arg(short, long)]
+    pub yes: bool,
+
+    /// Full cluster scan (default: diff old vs new activation store graphs)
+    #[arg(long)]
+    pub hard: bool,
 }
 
 #[derive(clap::Args)]

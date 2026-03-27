@@ -50,6 +50,7 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 
 # Hashing
 blake3 = "1"
+sha2 = "0.10"
 
 # Paths
 directories = "6"

@@ -28,6 +28,7 @@ in
     mkImportResource
     mkPackageInstance
     mkActivation
+    kixCRDs
     attachCtxDeep
     extractStoreHash
     nsOf

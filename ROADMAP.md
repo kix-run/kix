@@ -54,6 +54,7 @@
 - [ ] Content-addressing means updates launch side-by-side (different hash), not in-place replacement — native K8s rolling update semantics become incompatible. This is a fundamental design property that needs explicit handling
 - [ ] Kubenix-style service definitions (`services.coredns."default".enable = true`) — allows multi-instance, attribute-set-keyed service declarations
 - [ ] Move to manifest module system — explicit migration step for how manifests are composed
+- [ ] a "kix managed only" mode
 
 ## Security & compliance
 
@@ -126,11 +127,15 @@
 - [ ] Warnings when PVCs change or major versions change — hint on the package definition
 - [ ] Live-cluster sanity checks (resource limits, etc.)
 - [ ] Content-hash-based drift detection — recompute hash and compare against live state, contrast with nix store evaluation
+- [ ] Content-hash normalization for change detection — the live resource always contains server-added fields (uid, resourceVersion, creationTimestamp, defaulted values, status). The content hash must be computed on a normalized representation that strips these fields before comparison, otherwise re-deploy always sees "changed". Need to define the canonical normalization pipeline and whether the hash covers the full manifest or only kix-managed fields (SSA field ownership).
 
 ## Deployment & reconciliation (kix deploy)
 
-- [ ] Wave rollouts — dependency graph fully describes deployment order; deploy in correct waves. Note: dependencies describe *order* but NOT readiness/liveness — these are separate concerns
-- [ ] Wait for ready across all resource types
+- [x] Wave rollouts — dependency graph fully describes deployment order; deploy in correct waves with CRD re-discovery between waves
+- [x] Wait for ready across all resource types (Deployment, StatefulSet, DaemonSet, Job, PVC, CRD, generic CR conditions)
+- [x] Activation CR deployed as cluster-level deployment record; stale Activations cleaned up post-deploy
+- [x] `kix gc` — garbage-collect orphaned kix-managed resources against a cluster's expected manifest set
+- [ ] `kix gc` without cluster eval — GC purely from live Activation/PI graph (no nix eval required)
 - [ ] Non-K8s side effects (e.g. Forgejo user creation) — start with execution on "ssh", later crossplane or provider plugins
 - [ ] Auto-collect readiness — custom general runtime readiness checks (also outside k8s)
 - [ ] Auto-inject package identity labels (hash?, otherwise package name + version, like helm best practice)

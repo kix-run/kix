@@ -1,15 +1,31 @@
 //! `kix deploy` — wave-based deployment with confirmation.
+//!
+//! Uses the store graph (like `kix diff`) for proper stamping and dependency
+//! tracking, NOT raw eval output.  Flow:
+//!   1. `nix build .#cluster-<name>-activation`  → result dir
+//!   2. StoreGraph::from_result_dir              → packages + resources
+//!   3. stamp_annotations                        → identity/content/depends-on
+//!   4. ResourceGraph::from_manifests            → DAG
+//!   5. compute_waves                            → ordered deployment plan
+//!   6. detect_changes against live cluster
+//!   7. apply wave-by-wave with readiness checks
+//!   8. clean up stale Activations
 
 use std::io::Write;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use miette::{IntoDiagnostic, Result, miette};
+use serde_json::Value;
 
 use kix_cluster::apply::{ApplyAction, ChangeAction};
 use kix_cluster::fetch;
 use kix_cluster::graph::ResourceGraph;
 use kix_cluster::readiness::{self, ReadinessResult};
 use kix_cluster::waves::compute_waves;
+use kix_eval::build::build_cluster_activation_with_status;
+use kix_eval::store_graph::StoreGraph;
+use kix_manifest::stamp::stamp_annotations;
 use kix_manifest::types::{CLUSTER_SCOPED, ResourceId};
 
 use crate::cli::{DeployArgs, OnError};
@@ -18,14 +34,38 @@ use crate::output;
 use super::CommandContext;
 
 pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
-    // 1. Eval cluster
-    let cluster = ctx.eval_cluster_or_suggest(&args.cluster)?;
-    let manifest_count = cluster.raw_manifests.len();
+    let flake_path = resolve_flake_path(&ctx.global.flake)?;
 
+    // 1. Build activation (nix build) and load store graph
+    if !ctx.global.quiet {
+        println!("Building cluster '{}'...", output::bold(&args.cluster));
+    }
+    let status = |msg: &str| {
+        if !ctx.global.quiet {
+            eprint!("\r\x1b[2K  {msg}");
+        }
+    };
+    let result_path = build_cluster_activation_with_status(&flake_path, &args.cluster, &status)
+        .map_err(|e| miette!("failed to build cluster: {e}"))?;
+    let mut graph = StoreGraph::from_result_dir_with_status(&result_path, &status)
+        .map_err(|e| miette!("failed to load store graph: {e}"))?;
+    stamp_annotations(&mut graph);
+    if !ctx.global.quiet {
+        eprint!("\r\x1b[2K");
+    }
+
+    // 2. Collect stamped manifests from graph
+    let manifests: Vec<Value> = graph
+        .resources
+        .values()
+        .map(|r| r.manifest.clone())
+        .collect();
+
+    let manifest_count = manifests.len();
     if !ctx.global.quiet {
         println!(
             "Cluster {}: {} manifests",
-            output::bold(&cluster.name),
+            output::bold(&graph.cluster_name),
             manifest_count,
         );
     }
@@ -37,11 +77,11 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         return Ok(());
     }
 
-    // 2. Build DAG
-    let graph = ResourceGraph::from_manifests(&cluster.raw_manifests).into_diagnostic()?;
+    // 3. Build DAG from stamped manifests
+    let resource_graph = ResourceGraph::from_manifests(&manifests).into_diagnostic()?;
 
-    // 3. Compute waves
-    let waves = compute_waves(&graph);
+    // 4. Compute waves
+    let waves = compute_waves(&resource_graph);
 
     if waves.is_empty() {
         if !ctx.global.quiet {
@@ -51,13 +91,24 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     }
 
     let global = ctx.global.clone();
-    ctx.runtime.block_on(run_deploy_async(
+    let cluster_name = graph.cluster_name.clone();
+    let deploy_result = ctx.runtime.block_on(run_deploy_async(
         args,
         &global,
-        &graph,
+        &resource_graph,
         &waves,
-        &cluster.raw_manifests,
-    ))
+        &manifests,
+        &cluster_name,
+    ));
+
+    // Save activation path for soft GC on next deploy
+    if deploy_result.is_ok()
+        && let Err(e) = kix_eval::store::save_activation_path(&args.cluster, &result_path)
+    {
+        tracing::warn!("failed to save activation path: {e}");
+    }
+
+    deploy_result
 }
 
 async fn run_deploy_async(
@@ -65,13 +116,14 @@ async fn run_deploy_async(
     global: &crate::cli::GlobalArgs,
     graph: &ResourceGraph,
     waves: &[Vec<petgraph::graph::NodeIndex>],
-    raw_manifests: &[serde_json::Value],
+    raw_manifests: &[Value],
+    cluster_name: &str,
 ) -> Result<()> {
     let timeout = parse_timeout(args.timeout.as_deref())?;
     let _ = raw_manifests; // manifests accessed via graph nodes
 
     // Build wave manifests: Vec<Vec<&Value>> indexed by wave
-    let wave_manifests: Vec<Vec<&serde_json::Value>> = waves
+    let wave_manifests: Vec<Vec<&Value>> = waves
         .iter()
         .map(|wave| wave.iter().map(|&idx| &graph.graph[idx].manifest).collect())
         .collect();
@@ -110,8 +162,7 @@ async fn run_deploy_async(
         wave_manifests
             .iter()
             .map(|wave| {
-                let wave_values: Vec<serde_json::Value> =
-                    wave.iter().map(|m| (*m).clone()).collect();
+                let wave_values: Vec<Value> = wave.iter().map(|m| (*m).clone()).collect();
                 kix_cluster::apply::detect_changes(&wave_values, &live)
             })
             .collect()
@@ -198,7 +249,7 @@ async fn run_deploy_async(
             )
         })?;
 
-    let discovery = fetch::discover_resources(&client)
+    let mut discovery = fetch::discover_resources(&client)
         .await
         .map_err(|e| miette!("API discovery failed: {e}"))?;
 
@@ -385,6 +436,19 @@ async fn run_deploy_async(
                 }
             }
         }
+
+        // Re-discover API resources if this wave created CRDs
+        // (the API server needs to register them before CRs can be applied)
+        let wave_had_crds = actions.iter().any(|a| {
+            if let ChangeAction::Apply(m) = a {
+                ResourceId::from_value(m).kind == "CustomResourceDefinition"
+            } else {
+                false
+            }
+        });
+        if wave_had_crds && let Ok(new_disc) = fetch::discover_resources(&client).await {
+            discovery = new_disc;
+        }
     }
 
     // Prune warnings
@@ -483,7 +547,12 @@ async fn run_deploy_async(
         }
     }
 
-    // 9. Summary
+    // 9. Clean up stale Activations
+    if total_failed == 0 {
+        cleanup_stale_activations(&client, &discovery, cluster_name, global).await;
+    }
+
+    // 10. Summary
     println!();
     print_summary(
         total_created,
@@ -497,6 +566,44 @@ async fn run_deploy_async(
     }
 
     Ok(())
+}
+
+/// Delete Activation CRs on the cluster that don't match the current cluster name.
+async fn cleanup_stale_activations(
+    client: &kube::Client,
+    discovery: &[(kube::discovery::ApiResource, kube::discovery::Scope)],
+    current_cluster: &str,
+    global: &crate::cli::GlobalArgs,
+) {
+    // Find the Activation API resource
+    let ar_scope = discovery
+        .iter()
+        .find(|(ar, _)| ar.kind == "Activation" && ar.group == "kix.dev");
+
+    let Some((ar, _scope)) = ar_scope else {
+        return; // Activation CRD not registered yet
+    };
+
+    let api: kube::api::Api<kube::api::DynamicObject> =
+        kube::api::Api::all_with(client.clone(), ar);
+
+    let lp = kube::api::ListParams::default().labels("app.kubernetes.io/managed-by=kix");
+
+    let list = match api.list(&lp).await {
+        Ok(l) => l,
+        Err(_) => return, // Silently skip if we can't list
+    };
+
+    for activation in list.items {
+        let name = activation.metadata.name.as_deref().unwrap_or("");
+        if name == current_cluster {
+            continue; // Keep the current one
+        }
+        if !global.quiet {
+            println!("  {} stale Activation '{}' deleted", output::red("-"), name,);
+        }
+        let _ = api.delete(name, &kube::api::DeleteParams::default()).await;
+    }
 }
 
 fn print_plan(
@@ -614,6 +721,20 @@ fn parse_timeout(s: Option<&str>) -> Result<Duration> {
     Err(miette!(
         "invalid timeout format '{s}'. Use '5m', '300s', or a number of seconds"
     ))
+}
+
+fn resolve_flake_path(flake: &str) -> Result<PathBuf> {
+    if flake.contains(':') {
+        Ok(PathBuf::from(flake))
+    } else {
+        let path = PathBuf::from(flake);
+        if path.is_absolute() {
+            Ok(path)
+        } else {
+            let cwd = std::env::current_dir().into_diagnostic()?;
+            Ok(cwd.join(path))
+        }
+    }
 }
 
 #[cfg(test)]

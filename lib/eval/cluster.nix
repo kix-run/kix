@@ -201,19 +201,23 @@ in
         else
           [ ];
 
-      allResources =
-        (builtins.concatMap collectResources allInstancesList)
-        ++ (builtins.concatMap (
-          nsName:
-          let
-            ns = nsResources.${nsName};
-          in
-          [ ns.resource ]
-          ++ (if ns.quota != null then [ ns.quota ] else [ ])
-          ++ builtins.attrValues ns.netpols
-        ) allNsNames)
-        ++ clusterIngressPolicies
-        ++ defaultDenyPolicies;
+      allResources = [
+        k8s.kixCRDs.packageInstance
+        k8s.kixCRDs.activation
+      ]
+      ++ (builtins.concatMap collectResources allInstancesList)
+      ++ (builtins.concatMap (
+        nsName:
+        let
+          ns = nsResources.${nsName};
+        in
+        [ ns.resource ]
+        ++ (if ns.quota != null then [ ns.quota ] else [ ])
+        ++ builtins.attrValues ns.netpols
+      ) allNsNames)
+      ++ clusterIngressPolicies
+      ++ defaultDenyPolicies
+      ++ [ activation ];
 
       # Activation CRD — cluster-level root of the Nix store DAG.
       # Only includes active instances (excludes inactive optionals).

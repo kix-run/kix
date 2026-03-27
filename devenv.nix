@@ -31,6 +31,8 @@ in
     pkgs.nixfmt-rfc-style
     pkgs.ruff
     pkgs.wrangler
+    pkgs.kind
+    pkgs.kubectl
   ]
   ++ nixLibs;
 
@@ -80,6 +82,33 @@ in
   '';
   scripts.docs-build.exec = ''
     uv run --group docs mkdocs build "$@"
+  '';
+
+  # kind: create/delete local cluster and deploy kix manifests.
+  scripts.kind-up.exec = ''
+    name="''${1:-kix-test}"
+    kind create cluster --name "$name" 2>&1
+  '';
+  scripts.kind-down.exec = ''
+    name="''${1:-kix-test}"
+    kind delete cluster --name "$name" 2>&1
+  '';
+  scripts.kind-deploy.exec = ''
+    cluster="''${1:?Usage: kind-deploy <cluster-name> [--kind-name <name>]}"
+    kind_name="''${2:-kix-test}"
+    echo "Building kix manifests for $cluster..."
+    nix build ".#cluster-$cluster" --extra-experimental-features pipe-operators
+    echo "Applying manifests to kind cluster $kind_name..."
+    # Apply CRDs first and wait for them to register
+    for f in result/*-customresourcedefinition.yaml; do
+      [ -e "$f" ] || continue
+      echo "  apply $(basename "$f")"
+      kubectl --context "kind-$kind_name" apply -f "$f"
+    done
+    kubectl --context "kind-$kind_name" wait --for=condition=Established crd --all --timeout=30s 2>/dev/null || true
+    # Apply everything (CRDs are idempotent, CRs now work)
+    kubectl --context "kind-$kind_name" apply -f result/
+    echo "Done."
   '';
 
   scripts.kix-dag-svg.exec = ''

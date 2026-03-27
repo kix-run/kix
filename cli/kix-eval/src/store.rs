@@ -28,6 +28,30 @@ pub fn resolve_symlinks(path: &Path) -> PathBuf {
     })
 }
 
+/// Directory for persisting activation state between deploys.
+fn activations_dir() -> PathBuf {
+    default_cache_dir().join("activations")
+}
+
+/// Save the activation result directory path after a successful deploy.
+/// Next deploy / GC can load this as the "old" activation.
+pub fn save_activation_path(cluster: &str, result_dir: &Path) -> std::io::Result<()> {
+    let dir = activations_dir();
+    std::fs::create_dir_all(&dir)?;
+    let file = dir.join(format!("{cluster}.path"));
+    std::fs::write(&file, result_dir.to_string_lossy().as_bytes())
+}
+
+/// Load the previously saved activation result directory path.
+/// Returns None if no previous deploy is recorded.
+pub fn load_activation_path(cluster: &str) -> Option<PathBuf> {
+    let file = activations_dir().join(format!("{cluster}.path"));
+    std::fs::read_to_string(&file)
+        .ok()
+        .map(|s| PathBuf::from(s.trim()))
+        .filter(|p| p.exists())
+}
+
 fn dirs_fallback_home() -> PathBuf {
     std::env::var_os("HOME")
         .map(PathBuf::from)

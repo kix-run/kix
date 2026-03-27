@@ -80,6 +80,7 @@ fn main() -> miette::Result<()> {
         Command::List(args) => commands::list::run(args, &mut ctx),
         Command::Graph(args) => commands::graph::run(args, &mut ctx),
         Command::Inspect(args) => commands::inspect::run(args, &mut ctx),
+        Command::Gc(args) => commands::gc::run(args, &mut ctx),
         Command::Snapshot(args) => commands::snapshot::run(args, &mut ctx),
         Command::Completions(_) => unreachable!(),
     }

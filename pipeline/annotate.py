@@ -56,14 +56,11 @@ def main():
 
     closure = parse_closure_file(closure_file_path)
 
-    # Filter to k8s resource paths, excluding the Activation CRD itself
+    # Filter to k8s resource paths
     k8s_entries = []
     for entry in closure:
         path = entry["path"]
         if not is_k8s_path(path):
-            continue
-        kind = extract_kind_from_path(path)
-        if kind == "Activation":
             continue
         k8s_entries.append(entry)
 

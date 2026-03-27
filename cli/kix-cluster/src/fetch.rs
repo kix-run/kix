@@ -287,13 +287,30 @@ async fn fetch_parallel(
 
         let lp = lp.clone();
         let fqn = resource_fqn(ar);
+        let kind = ar.kind.clone();
+        let api_version = ar.api_version.clone();
         set.spawn(async move {
             match api.list(&lp).await {
                 Ok(list) => {
                     if !list.items.is_empty() {
                         tracing::debug!(resource = %fqn, count = list.items.len(), "fetched");
                     }
-                    Ok(list.items)
+                    // Inject kind/apiVersion into data (LIST responses omit them)
+                    let items: Vec<DynamicObject> = list
+                        .items
+                        .into_iter()
+                        .map(|mut obj| {
+                            if let Some(map) = obj.data.as_object_mut() {
+                                map.entry("kind")
+                                    .or_insert_with(|| serde_json::Value::String(kind.clone()));
+                                map.entry("apiVersion").or_insert_with(|| {
+                                    serde_json::Value::String(api_version.clone())
+                                });
+                            }
+                            obj
+                        })
+                        .collect();
+                    Ok(items)
                 }
                 Err(kube::Error::Api(ref resp)) if resp.code == 403 => {
                     // RBAC forbidden — skip silently (common with CRDs)

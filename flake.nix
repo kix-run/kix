@@ -115,6 +115,10 @@
               inherit kix;
               packages = packages';
             };
+            kind = import ./clusters/test-kind.nix {
+              inherit kix;
+              packages = packages';
+            };
           };
 
           # --- Pipeline derivation builders ---
