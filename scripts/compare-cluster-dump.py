@@ -282,6 +282,53 @@ def _is_runtime_resource(doc: dict) -> bool:
         if labels.keys() & _STS_PVC_LABELS:
             return True
 
+    # ---------------------------------------------------------------
+    # StackGres operator-generated CRs
+    # ---------------------------------------------------------------
+    # The operator creates SGScript, SGPoolingConfig, SGInstanceProfile,
+    # and SGObjectStorage resources from SGCluster definitions.
+    # Old-format SGPostgresConfig (without pg version in name) are leftovers.
+    _SG_OPERATOR_KINDS = {
+        "sgpoolingconfig",
+        "sginstanceprofile",
+        "sgobjectstorage",
+    }
+    if kind in _SG_OPERATOR_KINDS:
+        return True
+
+    # ---------------------------------------------------------------
+    # System namespaces and RBAC
+    # ---------------------------------------------------------------
+    # Namespaces auto-created by K8s or the distribution.
+    if kind == "namespace" and name in (
+        "kube-public",
+        "kube-node-lease",
+        "kube-system",
+        "default",
+        "nginx",
+        "arc-runners",
+    ):
+        return True
+    # RKE2 / system ClusterRoles and ClusterRoleBindings
+    if kind in ("clusterrole", "clusterrolebinding") and (
+        name.startswith("system:")
+        or name.startswith("rke2-")
+        or name == "kube-apiserver-kubelet-admin"
+    ):
+        return True
+
+    # ---------------------------------------------------------------
+    # Infisical operator CRs
+    # ---------------------------------------------------------------
+    if kind == "infisicalsecret":
+        return True
+
+    # ---------------------------------------------------------------
+    # OpenEBS internal logging (loki/promtail inside openebs-system)
+    # ---------------------------------------------------------------
+    if ns == "openebs-system" and ("loki" in name or "promtail" in name):
+        return True
+
     return False
 
 
@@ -964,6 +1011,9 @@ def _strip_crd_runtime(doc: dict) -> dict:
     spec.pop("conversion", None)
     for version in spec.get("versions", []):
         version.pop("additionalPrinterColumns", None)
+        version.pop("subresources", None)
+        version.pop("deprecated", None)
+        version.pop("deprecationWarning", None)
     names = spec.get("names", {})
     names.pop("shortNames", None)
     names.pop("categories", None)

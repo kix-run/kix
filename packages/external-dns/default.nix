@@ -258,18 +258,25 @@
             )
             # Kong
             (kong.tcpingresses |> watch)
-            # Extensions, networking.k8s.io, Ambassador — shared resources
-            (
-              [
-                extensions.ingresses
-                extensions.hosts
-                networkingK8s.ingresses
-                networkingK8s.hosts
-                ambassador.ingresses
-                ambassador.hosts
-              ]
-              |> watch
-            )
+            # Extensions, networking.k8s.io, Ambassador — shared ingresses/hosts
+            [
+              {
+                apiGroups = [
+                  "extensions"
+                  "networking.k8s.io"
+                  "getambassador.io"
+                ];
+                resources = [
+                  "ingresses"
+                  "hosts"
+                ];
+                verbs = [
+                  "get"
+                  "list"
+                  "watch"
+                ];
+              }
+            ]
             # Gateway API
             (
               [
@@ -283,15 +290,23 @@
               |> watch
             )
             # Gloo / Gateway Solo
-            (
-              [
-                gloo.proxies
-                gloo.virtualservices
-                gatewaySolo.proxies
-                gatewaySolo.virtualservices
-              ]
-              |> watch
-            )
+            [
+              {
+                apiGroups = [
+                  "gloo.solo.io"
+                  "gateway.solo.io"
+                ];
+                resources = [
+                  "proxies"
+                  "virtualservices"
+                ];
+                verbs = [
+                  "get"
+                  "list"
+                  "watch"
+                ];
+              }
+            ]
             # Istio
             (
               [

@@ -94,9 +94,39 @@ let
       ];
 
       "${name}-controller-orders" = grant [
-        (acme.orders |> reconcile)
+        # orders + challenges: get, list, watch (grant merges same apiGroup+verbs)
+        (
+          [
+            acme.orders
+            acme.challenges
+          ]
+          |> watch
+        )
+        # orders, orders/status: update, patch (grant merges same apiGroup+verbs)
+        (
+          acme.orders
+          |> allow [
+            "update"
+            "patch"
+          ]
+        )
+        (
+          (acme "orders/status")
+          |> allow [
+            "update"
+            "patch"
+          ]
+        )
+        # challenges: create, delete
+        (
+          acme.challenges
+          |> allow [
+            "create"
+            "delete"
+          ]
+        )
+        # orders/finalizers: update
         (acme.orders |> finalize)
-        (acme.challenges |> own)
         (cm.clusterissuers |> watch)
         (cm.issuers |> watch)
         (core.secrets |> watch)

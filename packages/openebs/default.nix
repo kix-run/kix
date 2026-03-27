@@ -132,8 +132,18 @@ let
   coord = group "coordination.k8s.io" [ "leases" ];
   apiext = group "apiextensions.k8s.io" [ "customresourcedefinitions" ];
   appsGrp = group "apps" [ "deployments" ];
-  zfsAll = group "zfs.openebs.io" [ ];
-  lvmAll = group "local.openebs.io" [ ];
+  zfsAll = group "zfs.openebs.io" [
+    "zfsvolumes"
+    "zfssnapshots"
+    "zfsbackups"
+    "zfsrestores"
+    "zfsnodes"
+  ];
+  lvmAll = group "local.openebs.io" [
+    "lvmvolumes"
+    "lvmsnapshots"
+    "lvmnodes"
+  ];
 
 in
 {
@@ -206,24 +216,24 @@ in
       type = lib.types.anything;
       default = {
         enabled = true;
-        image = "openebs/zfs-driver:2.7.0";
+        image = "openebs/zfs-driver:2.7.1";
         csiProvisioner = "registry.k8s.io/sig-storage/csi-provisioner:v3.5.0";
-        csiResizer = "registry.k8s.io/sig-storage/csi-resizer:v1.9.3";
-        csiSnapshotter = "registry.k8s.io/sig-storage/csi-snapshotter:v6.3.3";
-        snapshotController = "registry.k8s.io/sig-storage/snapshot-controller:v6.3.3";
-        csiNodeRegistrar = "registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.10.0";
+        csiResizer = "registry.k8s.io/sig-storage/csi-resizer:v1.8.0";
+        csiSnapshotter = "registry.k8s.io/sig-storage/csi-snapshotter:v6.2.2";
+        snapshotController = "registry.k8s.io/sig-storage/snapshot-controller:v6.2.2";
+        csiNodeRegistrar = "registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.8.0";
       };
     };
     lvmLocalPv = lib.mkOption {
       type = lib.types.anything;
       default = {
         enabled = true;
-        image = "openebs/lvm-driver:1.7.0";
+        image = "openebs/lvm-driver:1.6.1";
         csiProvisioner = "registry.k8s.io/sig-storage/csi-provisioner:v3.5.0";
-        csiResizer = "registry.k8s.io/sig-storage/csi-resizer:v1.9.3";
-        csiSnapshotter = "registry.k8s.io/sig-storage/csi-snapshotter:v6.3.3";
-        snapshotController = "registry.k8s.io/sig-storage/snapshot-controller:v6.3.3";
-        csiNodeRegistrar = "registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.10.0";
+        csiResizer = "registry.k8s.io/sig-storage/csi-resizer:v1.8.0";
+        csiSnapshotter = "registry.k8s.io/sig-storage/csi-snapshotter:v6.2.2";
+        snapshotController = "registry.k8s.io/sig-storage/snapshot-controller:v6.2.2";
+        csiNodeRegistrar = "registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.8.0";
       };
     };
     localPvProvisioner = lib.mkOption {
@@ -433,7 +443,21 @@ in
             labels = zfsControllerLabels;
             roles = {
               "${name}-zfs-provisioner-role" = grant [
-                (core.persistentvolumes |> full)
+                (
+                  core.secrets
+                  |> allow [
+                    "get"
+                    "list"
+                  ]
+                )
+                (core.namespaces |> allow [ "*" ])
+                (
+                  [
+                    core.persistentvolumes
+                    core.services
+                  ]
+                  |> full
+                )
                 (
                   core.persistentvolumeclaims
                   |> allow [
@@ -450,8 +474,6 @@ in
                     "patch"
                   ]
                 )
-                (storage.storageclasses |> watch)
-                (storage.csinodes |> watch)
                 (
                   core.events
                   |> allow [
@@ -464,6 +486,26 @@ in
                 )
                 (core.nodes |> watch)
                 (
+                  core.pods
+                  |> allow [
+                    "get"
+                    "list"
+                    "watch"
+                    "update"
+                    "patch"
+                  ]
+                )
+                (
+                  [
+                    zfsAll.zfsvolumes
+                    zfsAll.zfssnapshots
+                    zfsAll.zfsbackups
+                    zfsAll.zfsrestores
+                    zfsAll.zfsnodes
+                  ]
+                  |> allow [ "*" ]
+                )
+                (
                   coord.leases
                   |> allow [
                     "get"
@@ -474,7 +516,14 @@ in
                     "create"
                   ]
                 )
-                (zfsAll "*" |> allow [ "*" ])
+                (
+                  [
+                    storage.storageclasses
+                    storage.csinodes
+                  ]
+                  |> watch
+                )
+                (storage "csistoragecapacities" |> allow [ "*" ])
               ];
               "${name}-zfs-snapshotter-role" = grant [
                 (snap.volumesnapshotclasses |> watch)
@@ -533,7 +582,34 @@ in
                     "patch"
                   ]
                 )
-                (zfsAll "*" |> allow [ "*" ])
+                (
+                  [
+                    core.persistentvolumes
+                    core.nodes
+                    core.services
+                  ]
+                  |> allow [
+                    "get"
+                    "list"
+                  ]
+                )
+                (
+                  [
+                    zfsAll.zfsvolumes
+                    zfsAll.zfssnapshots
+                    zfsAll.zfsbackups
+                    zfsAll.zfsrestores
+                    zfsAll.zfsnodes
+                  ]
+                  |> allow [
+                    "get"
+                    "list"
+                    "watch"
+                    "create"
+                    "update"
+                    "patch"
+                  ]
+                )
               ];
             };
           }
@@ -554,7 +630,14 @@ in
             labels = lvmControllerLabels;
             roles = {
               "${name}-lvm-provisioner-role" = grant [
-                (core.persistentvolumes |> full)
+                (core.namespaces |> watch)
+                (
+                  [
+                    core.persistentvolumes
+                    core.services
+                  ]
+                  |> full
+                )
                 (
                   core.persistentvolumeclaims
                   |> allow [
@@ -571,8 +654,6 @@ in
                     "patch"
                   ]
                 )
-                (storage.storageclasses |> watch)
-                (storage.csinodes |> watch)
                 (
                   core.events
                   |> allow [
@@ -585,6 +666,16 @@ in
                 )
                 (core.nodes |> watch)
                 (
+                  core.pods
+                  |> allow [
+                    "get"
+                    "list"
+                    "watch"
+                    "update"
+                    "patch"
+                  ]
+                )
+                (
                   coord.leases
                   |> allow [
                     "get"
@@ -595,7 +686,22 @@ in
                     "create"
                   ]
                 )
-                (lvmAll "*" |> allow [ "*" ])
+                (
+                  [
+                    lvmAll.lvmvolumes
+                    lvmAll.lvmsnapshots
+                    lvmAll.lvmnodes
+                  ]
+                  |> allow [ "*" ]
+                )
+                (
+                  [
+                    storage.storageclasses
+                    storage.csinodes
+                  ]
+                  |> watch
+                )
+                (storage "csistoragecapacities" |> allow [ "*" ])
               ];
               "${name}-lvm-snapshotter-role" = grant [
                 (snap.volumesnapshotclasses |> watch)
@@ -654,7 +760,32 @@ in
                     "patch"
                   ]
                 )
-                (lvmAll "*" |> allow [ "*" ])
+                (
+                  [
+                    core.persistentvolumes
+                    core.nodes
+                    core.services
+                  ]
+                  |> allow [
+                    "get"
+                    "list"
+                  ]
+                )
+                (
+                  [
+                    lvmAll.lvmvolumes
+                    lvmAll.lvmsnapshots
+                    lvmAll.lvmnodes
+                  ]
+                  |> allow [
+                    "get"
+                    "list"
+                    "watch"
+                    "create"
+                    "update"
+                    "patch"
+                  ]
+                )
               ];
             };
           }
@@ -748,7 +879,9 @@ in
             apiVersion = "v1";
             kind = "Service";
             name = "${name}-etcd-headless";
-            labels = mayastorLabels // {
+            labels = {
+              "app.kubernetes.io/name" = "etcd";
+              "app.kubernetes.io/instance" = name;
               "app.kubernetes.io/component" = "etcd";
             };
             spec = {
@@ -763,13 +896,13 @@ in
                 {
                   name = "client";
                   port = 2379;
-                  targetPort = 2379;
+                  targetPort = "client";
                   protocol = "TCP";
                 }
                 {
                   name = "peer";
                   port = 2380;
-                  targetPort = 2380;
+                  targetPort = "peer";
                   protocol = "TCP";
                 }
               ];
@@ -784,7 +917,9 @@ in
             apiVersion = "v1";
             kind = "Service";
             name = "${name}-etcd";
-            labels = mayastorLabels // {
+            labels = {
+              "app.kubernetes.io/name" = "etcd";
+              "app.kubernetes.io/instance" = name;
               "app.kubernetes.io/component" = "etcd";
             };
             spec = {
@@ -794,13 +929,13 @@ in
                 {
                   name = "client";
                   port = 2379;
-                  targetPort = 2379;
+                  targetPort = "client";
                   protocol = "TCP";
                 }
                 {
                   name = "peer";
                   port = 2380;
-                  targetPort = 2380;
+                  targetPort = "peer";
                   protocol = "TCP";
                 }
               ];
@@ -815,7 +950,9 @@ in
             apiVersion = "apps/v1";
             kind = "StatefulSet";
             name = "${name}-etcd";
-            labels = mayastorLabels // {
+            labels = {
+              "app.kubernetes.io/name" = "etcd";
+              "app.kubernetes.io/instance" = name;
               "app.kubernetes.io/component" = "etcd";
             };
             spec = {
@@ -832,6 +969,7 @@ in
                   "app.kubernetes.io/name" = "etcd";
                   "app.kubernetes.io/instance" = name;
                   app = "etcd";
+                  "openebs.io/logging" = "true";
                 };
                 spec = {
                   affinity.podAntiAffinity.requiredDuringSchedulingIgnoredDuringExecution = [
@@ -843,6 +981,7 @@ in
                       topologyKey = "kubernetes.io/hostname";
                     }
                   ];
+                  serviceAccountName = "default";
                   securityContext = {
                     fsGroup = 1001;
                   };
@@ -854,7 +993,7 @@ in
                       command = [
                         "/bin/bash"
                         "-ec"
-                        "chown -R 1001:1001 /bitnami/etcd"
+                        "chown -R 1001:1001 /bitnami/etcd\n"
                       ];
                       securityContext.runAsUser = 0;
                       volumeMounts = [
@@ -954,7 +1093,7 @@ in
                         }
                         {
                           name = "ETCD_INITIAL_CLUSTER_STATE";
-                          value = "new";
+                          value = "existing";
                         }
                         {
                           name = "ETCD_INITIAL_CLUSTER";
@@ -972,6 +1111,10 @@ in
                         {
                           name = "ETCD_QUOTA_BACKEND_BYTES";
                           value = "8589934592";
+                        }
+                        {
+                          name = "ETCD_AUTH_TOKEN";
+                          value = "jwt,priv-key=/opt/bitnami/etcd/certs/token/jwt-token.pem,sign-method=RS256,ttl=10m";
                         }
                       ];
                       ports = [
@@ -1005,7 +1148,21 @@ in
                           name = "data";
                           mountPath = "/bitnami/etcd";
                         }
+                        {
+                          name = "etcd-jwt-token";
+                          mountPath = "/opt/bitnami/etcd/certs/token";
+                          readOnly = true;
+                        }
                       ];
+                    }
+                  ];
+                  volumes = [
+                    {
+                      name = "etcd-jwt-token";
+                      secret = {
+                        secretName = "${name}-etcd-jwt-token-custom";
+                        defaultMode = 256; # 0400
+                      };
                     }
                   ];
                 };
@@ -1060,31 +1217,34 @@ in
             apiVersion = "v1";
             kind = "ConfigMap";
             name = "${name}-nats-config";
-            labels = mayastorLabels // {
+            labels = {
+              "app.kubernetes.io/name" = "nats";
+              "app.kubernetes.io/instance" = name;
               "app.kubernetes.io/component" = "nats";
             };
-            data."nats.conf" = ''
-              # NATS config for OpenEBS Mayastor
-              pid_file: "/var/run/nats/nats.pid"
-              http: 8222
-              server_name: $SERVER_NAME
-              cluster {
-                port: 6222
-                routes [
-                  ${builtins.concatStringsSep "\n          " (
-                    lib.genList (
-                      i: "nats://${name}-nats-${toString i}.${name}-nats.${ns}:6222"
-                    ) config.mayastor.nats.replicaCount
-                  )}
-                ]
-                cluster_advertise: $CLUSTER_ADVERTISE
-                connect_retries: 120
-              }
-              max_payload: 8MB
-              max_pending: 128MB
-              lame_duck_duration: 30s
-              lame_duck_grace_period: 10s
-            '';
+            data."nats.conf" = builtins.concatStringsSep "\n" [
+              "# NATS config for OpenEBS Mayastor"
+              ''pid_file: "/var/run/nats/nats.pid"''
+              "http: 8222"
+              "server_name: $SERVER_NAME"
+              "cluster {"
+              "  port: 6222"
+              "  routes ["
+              (builtins.concatStringsSep "\n" (
+                lib.genList (
+                  i: "    nats://${name}-nats-${toString i}.${name}-nats.${ns}:6222"
+                ) config.mayastor.nats.replicaCount
+              ))
+              "  ]"
+              "  cluster_advertise: $CLUSTER_ADVERTISE"
+              "  connect_retries: 120"
+              "}"
+              "max_payload: 8MB"
+              "max_pending: 128MB"
+              "lame_duck_duration: 30s"
+              "lame_duck_grace_period: 10s"
+              ""
+            ];
           })
         else
           null;
@@ -1095,7 +1255,9 @@ in
             apiVersion = "v1";
             kind = "ServiceAccount";
             name = "${name}-nats";
-            labels = mayastorLabels // {
+            labels = {
+              "app.kubernetes.io/name" = "nats";
+              "app.kubernetes.io/instance" = name;
               "app.kubernetes.io/component" = "nats";
             };
           })
@@ -1108,30 +1270,55 @@ in
             apiVersion = "v1";
             kind = "Service";
             name = "${name}-nats";
-            labels = mayastorLabels // {
+            labels = {
+              "app.kubernetes.io/name" = "nats";
+              "app.kubernetes.io/instance" = name;
               "app.kubernetes.io/component" = "nats";
             };
             spec = {
               selector = self.natsStatefulSet.out.selector;
+              publishNotReadyAddresses = true;
               ports = [
                 {
                   name = "client";
                   port = 4222;
+                  targetPort = 4222;
+                  appProtocol = "tcp";
                   protocol = "TCP";
                 }
                 {
                   name = "cluster";
                   port = 6222;
+                  targetPort = 6222;
+                  appProtocol = "tcp";
                   protocol = "TCP";
                 }
                 {
                   name = "monitor";
                   port = 8222;
+                  targetPort = 8222;
+                  appProtocol = "http";
                   protocol = "TCP";
                 }
                 {
                   name = "metrics";
                   port = 7777;
+                  targetPort = 7777;
+                  appProtocol = "http";
+                  protocol = "TCP";
+                }
+                {
+                  name = "leafnodes";
+                  port = 7422;
+                  targetPort = 7422;
+                  appProtocol = "tcp";
+                  protocol = "TCP";
+                }
+                {
+                  name = "gateways";
+                  port = 7522;
+                  targetPort = 7522;
+                  appProtocol = "tcp";
                   protocol = "TCP";
                 }
               ];
@@ -1146,7 +1333,9 @@ in
             apiVersion = "apps/v1";
             kind = "StatefulSet";
             name = "${name}-nats";
-            labels = mayastorLabels // {
+            labels = {
+              "app.kubernetes.io/name" = "nats";
+              "app.kubernetes.io/instance" = name;
               "app.kubernetes.io/component" = "nats";
             };
             spec = {
@@ -1158,10 +1347,18 @@ in
                 "app.kubernetes.io/instance" = name;
               };
               template = {
-                metadata.labels = {
-                  "app.kubernetes.io/name" = "nats";
-                  "app.kubernetes.io/instance" = name;
-                  app = "nats";
+                metadata = {
+                  labels = {
+                    "app.kubernetes.io/name" = "nats";
+                    "app.kubernetes.io/instance" = name;
+                    app = "nats";
+                    "openebs.io/logging" = "true";
+                  };
+                  annotations = {
+                    "prometheus.io/path" = "/metrics";
+                    "prometheus.io/port" = "7777";
+                    "prometheus.io/scrape" = "true";
+                  };
                 };
                 spec = {
                   serviceAccountName = self.natsSa.out.name;
@@ -1333,11 +1530,13 @@ in
                 {
                   name = "grpc";
                   port = 50051;
+                  targetPort = 50051;
                   protocol = "TCP";
                 }
                 {
                   name = "ha-cluster";
                   port = 50052;
+                  targetPort = 50052;
                   protocol = "TCP";
                 }
               ];
@@ -1361,6 +1560,7 @@ in
               template = {
                 metadata.labels = mayastorSelector "agent-core" // {
                   "openebs.io/version" = config.mayastor.version;
+                  "openebs.io/logging" = "true";
                 };
                 spec = {
                   serviceAccountName = self.mayastorSa.out.name;
@@ -1525,6 +1725,7 @@ in
               template = {
                 metadata.labels = mayastorSelector "api-rest" // {
                   "openebs.io/version" = config.mayastor.version;
+                  "openebs.io/logging" = "true";
                 };
                 spec = {
                   priorityClassName = self.priorityClass.out.name;
@@ -1540,7 +1741,7 @@ in
                       command = [
                         "sh"
                         "-c"
-                        "trap \"exit 1\" TERM; until nc -vzw 5 ${name}-agent-core 50051; do date; echo \"Waiting for agent-core...\"; sleep 1; done;"
+                        "trap \"exit 1\" TERM; until nc -vzw 5 ${name}-agent-core 50051; do date; echo \"Waiting for agent-core-grpc services...\"; sleep 1; done;"
                       ];
                     }
                     {
@@ -1600,7 +1801,7 @@ in
                       resources = {
                         limits = {
                           cpu = "100m";
-                          memory = "64Mi";
+                          memory = "128Mi";
                         };
                         requests = {
                           cpu = "50m";
@@ -1637,6 +1838,7 @@ in
               template = {
                 metadata.labels = mayastorSelector "operator-diskpool" // {
                   "openebs.io/version" = config.mayastor.version;
+                  "openebs.io/logging" = "true";
                 };
                 spec = {
                   serviceAccountName = self.mayastorSa.out.name;
@@ -1653,7 +1855,7 @@ in
                       command = [
                         "sh"
                         "-c"
-                        "trap \"exit 1\" TERM; until nc -vzw 5 ${name}-agent-core 50051; do date; echo \"Waiting for agent-core...\"; sleep 1; done;"
+                        "trap \"exit 1\" TERM; until nc -vzw 5 ${name}-agent-core 50051; do date; echo \"Waiting for agent-core-grpc services...\"; sleep 1; done;"
                       ];
                     }
                     {
@@ -1732,6 +1934,7 @@ in
               template = {
                 metadata.labels = mayastorSelector "csi-controller" // {
                   "openebs.io/version" = config.mayastor.version;
+                  "openebs.io/logging" = "true";
                 };
                 spec = {
                   hostNetwork = true;
@@ -1750,7 +1953,7 @@ in
                       command = [
                         "sh"
                         "-c"
-                        "trap \"exit 1\" TERM; until nc -vzw 5 ${name}-api-rest 8081; do date; echo \"Waiting for REST API...\"; sleep 1; done;"
+                        "trap \"exit 1\" TERM; until nc -vzw 5 ${name}-api-rest 8081; do date; echo \"Waiting for REST API endpoint to become available\"; sleep 1; done;"
                       ];
                     }
                   ];
@@ -1933,6 +2136,7 @@ in
               template = {
                 metadata.labels = mayastorSelector "csi-node" // {
                   "openebs.io/version" = config.mayastor.version;
+                  "openebs.io/logging" = "true";
                 };
                 spec = {
                   serviceAccountName = self.mayastorSa.out.name;
@@ -1941,6 +2145,17 @@ in
                   nodeSelector = {
                     "kubernetes.io/arch" = "amd64";
                   };
+                  initContainers = [
+                    {
+                      name = "nvme-tcp-probe";
+                      image = config.mayastor.image.alpineSh;
+                      command = [
+                        "sh"
+                        "-c"
+                        ''trap "exit 1" TERM; until [ -d /sys/module/nvme_tcp ]; do [ -z "$WARNED" ] && echo "nvme_tcp module not loaded..."; WARNED=1; sleep 60; done;''
+                      ];
+                    }
+                  ];
                   containers = [
                     {
                       name = "csi-node";
@@ -2008,7 +2223,7 @@ in
                       ];
                       resources = {
                         limits = {
-                          cpu = "100m";
+                          cpu = "500m";
                           memory = "128Mi";
                         };
                         requests = {
@@ -2126,6 +2341,7 @@ in
               template = {
                 metadata.labels = mayastorSelector "io-engine" // {
                   "openebs.io/version" = config.mayastor.version;
+                  "openebs.io/logging" = "true";
                 };
                 spec = {
                   hostNetwork = true;
@@ -2142,7 +2358,7 @@ in
                       command = [
                         "sh"
                         "-c"
-                        "trap \"exit 1\" TERM; until nc -vzw 5 ${name}-agent-core 50051; do date; echo \"Waiting for agent-core...\"; sleep 1; done;"
+                        "trap \"exit 1\" TERM; until nc -vzw 5 ${name}-agent-core 50051; do date; echo \"Waiting for agent-core-grpc services...\"; sleep 1; done;"
                       ];
                     }
                     {
@@ -2369,6 +2585,7 @@ in
               template = {
                 metadata.labels = mayastorSelector "agent-ha-node" // {
                   "openebs.io/version" = config.mayastor.version;
+                  "openebs.io/logging" = "true";
                 };
                 spec = {
                   hostNetwork = true;
@@ -2384,7 +2601,7 @@ in
                       command = [
                         "sh"
                         "-c"
-                        "trap \"exit 1\" TERM; until nc -vzw 5 ${name}-agent-core 50052; do date; echo \"Waiting for agent-cluster-grpc...\"; sleep 1; done;"
+                        "trap \"exit 1\" TERM; until nc -vzw 5 ${name}-agent-core 50052; do date; echo \"Waiting for agent-cluster-grpc services...\"; sleep 1; done;"
                       ];
                     }
                   ];
@@ -2601,15 +2818,20 @@ in
               replicas = 1;
               selector.matchLabels = {
                 app = "openebs-zfs-controller";
-                role = "openebs-zfs";
+                component = "openebs-zfs-controller";
+                release = name;
               };
               template = {
                 metadata.labels = {
                   app = "openebs-zfs-controller";
                   role = "openebs-zfs";
+                  name = "openebs-zfs-controller";
+                  "openebs.io/component-name" = "openebs-zfs-controller";
+                  "openebs.io/version" = zfsVersion;
                 };
                 spec = {
                   serviceAccountName = self.zfsControllerSa.out.name;
+                  priorityClassName = "openebs-zfs-csi-controller-critical";
                   containers = [
                     {
                       name = "csi-provisioner";
@@ -2620,7 +2842,6 @@ in
                         "--v=5"
                         "--feature-gates=Topology=true"
                         "--strict-topology"
-                        "--leader-election"
                         "--extra-create-metadata=true"
                         "--enable-capacity=true"
                         "--default-fstype=ext4"
@@ -2629,6 +2850,14 @@ in
                         {
                           name = "ADDRESS";
                           value = "/var/lib/csi/sockets/pluginproxy/csi.sock";
+                        }
+                        {
+                          name = "NAMESPACE";
+                          valueFrom.fieldRef.fieldPath = "metadata.namespace";
+                        }
+                        {
+                          name = "POD_NAME";
+                          valueFrom.fieldRef.fieldPath = "metadata.name";
                         }
                       ];
                       volumeMounts = [
@@ -2640,12 +2869,11 @@ in
                     }
                     {
                       name = "csi-resizer";
-                      image = config.zfsLocalPv.csiResizer;
+                      image = "registry.k8s.io/sig-storage/csi-resizer:v1.8.0";
                       imagePullPolicy = "IfNotPresent";
                       args = [
                         "--v=5"
                         "--csi-address=$(ADDRESS)"
-                        "--leader-election"
                       ];
                       env = [
                         {
@@ -2662,12 +2890,10 @@ in
                     }
                     {
                       name = "csi-snapshotter";
-                      image = config.zfsLocalPv.csiSnapshotter;
+                      image = "registry.k8s.io/sig-storage/csi-snapshotter:v6.2.2";
                       imagePullPolicy = "IfNotPresent";
                       args = [
                         "--csi-address=$(ADDRESS)"
-                        "--v=5"
-                        "--leader-election"
                       ];
                       env = [
                         {
@@ -2684,21 +2910,19 @@ in
                     }
                     {
                       name = "snapshot-controller";
-                      image = config.zfsLocalPv.snapshotController;
+                      image = "registry.k8s.io/sig-storage/snapshot-controller:v6.2.2";
                       imagePullPolicy = "IfNotPresent";
                       args = [
                         "--v=5"
-                        "--leader-election=true"
                       ];
                     }
                     {
                       name = "openebs-zfs-plugin";
-                      image = config.zfsLocalPv.image;
+                      image = "openebs/zfs-driver:${zfsVersion}";
                       imagePullPolicy = "IfNotPresent";
                       args = [
                         "--endpoint=$(OPENEBS_CSI_ENDPOINT)"
-                        "--nodeid=$(OPENEBS_NODE_ID)"
-                        "--plugin-type=controller"
+                        "--plugin=$(OPENEBS_CONTROLLER_DRIVER)"
                       ];
                       env = [
                         {
@@ -2706,12 +2930,16 @@ in
                           value = "unix:///var/lib/csi/sockets/pluginproxy/csi.sock";
                         }
                         {
-                          name = "OPENEBS_NAMESPACE";
-                          valueFrom.fieldRef.fieldPath = "metadata.namespace";
+                          name = "OPENEBS_CONTROLLER_DRIVER";
+                          value = "controller";
                         }
                         {
-                          name = "OPENEBS_NODE_ID";
-                          valueFrom.fieldRef.fieldPath = "spec.nodeName";
+                          name = "OPENEBS_IO_ENABLE_ANALYTICS";
+                          value = "true";
+                        }
+                        {
+                          name = "OPENEBS_IO_INSTALLER_TYPE";
+                          value = "zfs-localpv-helm";
                         }
                       ];
                       volumeMounts = [
@@ -2751,22 +2979,32 @@ in
             };
             spec = {
               selector.matchLabels = {
-                app = "openebs-zfs-node";
+                name = "openebs-zfs-node";
+                release = name;
               };
               updateStrategy = {
                 type = "RollingUpdate";
+                rollingUpdate = {
+                  maxSurge = 0;
+                  maxUnavailable = "100%";
+                };
               };
               template = {
                 metadata.labels = {
                   app = "openebs-zfs-node";
                   role = "openebs-zfs";
+                  name = "openebs-zfs-node";
+                  "openebs.io/component-name" = "openebs-zfs-node";
+                  "openebs.io/version" = zfsVersion;
                 };
                 spec = {
                   serviceAccountName = self.zfsNodeSa.out.name;
+                  hostNetwork = true;
+                  priorityClassName = "openebs-zfs-csi-node-critical";
                   containers = [
                     {
                       name = "csi-node-driver-registrar";
-                      image = config.zfsLocalPv.csiNodeRegistrar;
+                      image = "registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.8.0";
                       imagePullPolicy = "IfNotPresent";
                       args = [
                         "--v=5"
@@ -2776,21 +3014,30 @@ in
                       env = [
                         {
                           name = "ADDRESS";
-                          value = "/csi/csi.sock";
+                          value = "/plugin/csi.sock";
                         }
                         {
                           name = "DRIVER_REG_SOCK_PATH";
-                          value = "/var/lib/kubelet/plugins/zfs.csi.openebs.io/csi.sock";
+                          value = "/var/lib/kubelet/plugins/zfs-localpv/csi.sock";
                         }
                         {
                           name = "KUBE_NODE_NAME";
                           valueFrom.fieldRef.fieldPath = "spec.nodeName";
                         }
+                        {
+                          name = "NODE_DRIVER";
+                          value = "openebs-zfs";
+                        }
+                      ];
+                      lifecycle.preStop.exec.command = [
+                        "/bin/sh"
+                        "-c"
+                        "rm -rf /registration/zfs-localpv /registration/zfs-localpv-reg.sock"
                       ];
                       volumeMounts = [
                         {
                           name = "plugin-dir";
-                          mountPath = "/csi";
+                          mountPath = "/plugin";
                         }
                         {
                           name = "registration-dir";
@@ -2800,32 +3047,43 @@ in
                     }
                     {
                       name = "openebs-zfs-plugin";
-                      image = config.zfsLocalPv.image;
+                      image = "openebs/zfs-driver:${zfsVersion}";
                       imagePullPolicy = "IfNotPresent";
-                      securityContext.privileged = true;
+                      securityContext = {
+                        privileged = true;
+                        allowPrivilegeEscalation = true;
+                      };
                       args = [
                         "--endpoint=$(OPENEBS_CSI_ENDPOINT)"
-                        "--nodeid=$(OPENEBS_NODE_ID)"
-                        "--plugin-type=node"
+                        "--nodename=$(OPENEBS_NODE_NAME)"
+                        "--plugin=$(OPENEBS_NODE_DRIVER)"
                       ];
                       env = [
                         {
                           name = "OPENEBS_CSI_ENDPOINT";
-                          value = "unix:///csi/csi.sock";
+                          value = "unix:///plugin/csi.sock";
                         }
                         {
-                          name = "OPENEBS_NODE_ID";
+                          name = "OPENEBS_NODE_NAME";
                           valueFrom.fieldRef.fieldPath = "spec.nodeName";
+                        }
+                        {
+                          name = "OPENEBS_NODE_DRIVER";
+                          value = "agent";
                         }
                         {
                           name = "OPENEBS_NAMESPACE";
                           valueFrom.fieldRef.fieldPath = "metadata.namespace";
                         }
+                        {
+                          name = "ALLOWED_TOPOLOGIES";
+                          value = "All";
+                        }
                       ];
                       volumeMounts = [
                         {
                           name = "plugin-dir";
-                          mountPath = "/csi";
+                          mountPath = "/plugin";
                         }
                         {
                           name = "device-dir";
@@ -2835,6 +3093,7 @@ in
                           name = "host-root";
                           mountPath = "/host";
                           mountPropagation = "HostToContainer";
+                          readOnly = true;
                         }
                         {
                           name = "pods-mount-dir";
@@ -2843,8 +3102,12 @@ in
                         }
                         {
                           name = "chroot-zfs";
-                          mountPath = "/usr/local/bin/zfs";
+                          mountPath = "/sbin/zfs";
                           subPath = "zfs";
+                        }
+                        {
+                          name = "encr-keys";
+                          mountPath = "/home/keys";
                         }
                       ];
                     }
@@ -2874,7 +3137,7 @@ in
                     {
                       name = "plugin-dir";
                       hostPath = {
-                        path = "/var/lib/kubelet/plugins/zfs.csi.openebs.io/";
+                        path = "/var/lib/kubelet/plugins/zfs-localpv/";
                         type = "DirectoryOrCreate";
                       };
                     }
@@ -2892,6 +3155,13 @@ in
                         defaultMode = 365;
                       };
                     } # 0555
+                    {
+                      name = "encr-keys";
+                      hostPath = {
+                        path = "/home/keys";
+                        type = "DirectoryOrCreate";
+                      };
+                    }
                   ];
                 };
               };
@@ -2963,15 +3233,20 @@ in
               replicas = 1;
               selector.matchLabels = {
                 app = "openebs-lvm-controller";
-                role = "openebs-lvm";
+                component = "openebs-lvm-controller";
+                release = name;
               };
               template = {
                 metadata.labels = {
                   app = "openebs-lvm-controller";
                   role = "openebs-lvm";
+                  name = "openebs-lvm-controller";
+                  "openebs.io/component-name" = "openebs-lvm-controller";
+                  "openebs.io/version" = lvmVersion;
                 };
                 spec = {
                   serviceAccountName = self.lvmControllerSa.out.name;
+                  priorityClassName = "openebs-lvm-localpv-csi-controller-critical";
                   containers = [
                     {
                       name = "csi-provisioner";
@@ -2982,7 +3257,6 @@ in
                         "--v=5"
                         "--feature-gates=Topology=true"
                         "--strict-topology"
-                        "--leader-election"
                         "--extra-create-metadata=true"
                         "--enable-capacity=true"
                         "--default-fstype=ext4"
@@ -2991,6 +3265,14 @@ in
                         {
                           name = "ADDRESS";
                           value = "/var/lib/csi/sockets/pluginproxy/csi.sock";
+                        }
+                        {
+                          name = "NAMESPACE";
+                          valueFrom.fieldRef.fieldPath = "metadata.namespace";
+                        }
+                        {
+                          name = "POD_NAME";
+                          valueFrom.fieldRef.fieldPath = "metadata.name";
                         }
                       ];
                       volumeMounts = [
@@ -3002,12 +3284,11 @@ in
                     }
                     {
                       name = "csi-resizer";
-                      image = config.lvmLocalPv.csiResizer;
+                      image = "registry.k8s.io/sig-storage/csi-resizer:v1.8.0";
                       imagePullPolicy = "IfNotPresent";
                       args = [
                         "--v=5"
                         "--csi-address=$(ADDRESS)"
-                        "--leader-election"
                       ];
                       env = [
                         {
@@ -3024,12 +3305,10 @@ in
                     }
                     {
                       name = "csi-snapshotter";
-                      image = config.lvmLocalPv.csiSnapshotter;
+                      image = "registry.k8s.io/sig-storage/csi-snapshotter:v6.2.2";
                       imagePullPolicy = "IfNotPresent";
                       args = [
                         "--csi-address=$(ADDRESS)"
-                        "--v=5"
-                        "--leader-election"
                       ];
                       env = [
                         {
@@ -3046,21 +3325,21 @@ in
                     }
                     {
                       name = "snapshot-controller";
-                      image = config.lvmLocalPv.snapshotController;
+                      image = "registry.k8s.io/sig-storage/snapshot-controller:v6.2.2";
                       imagePullPolicy = "IfNotPresent";
                       args = [
                         "--v=5"
-                        "--leader-election=true"
                       ];
                     }
                     {
                       name = "openebs-lvm-plugin";
-                      image = config.lvmLocalPv.image;
+                      image = "openebs/lvm-driver:${lvmVersion}";
                       imagePullPolicy = "IfNotPresent";
                       args = [
                         "--endpoint=$(OPENEBS_CSI_ENDPOINT)"
-                        "--nodeid=$(OPENEBS_NODE_ID)"
-                        "--plugin-type=controller"
+                        "--kube-api-burst=0"
+                        "--kube-api-qps=0"
+                        "--plugin=$(OPENEBS_CONTROLLER_DRIVER)"
                       ];
                       env = [
                         {
@@ -3068,12 +3347,20 @@ in
                           value = "unix:///var/lib/csi/sockets/pluginproxy/csi.sock";
                         }
                         {
-                          name = "OPENEBS_NAMESPACE";
+                          name = "LVM_NAMESPACE";
                           valueFrom.fieldRef.fieldPath = "metadata.namespace";
                         }
                         {
-                          name = "OPENEBS_NODE_ID";
-                          valueFrom.fieldRef.fieldPath = "spec.nodeName";
+                          name = "OPENEBS_CONTROLLER_DRIVER";
+                          value = "controller";
+                        }
+                        {
+                          name = "OPENEBS_IO_ENABLE_ANALYTICS";
+                          value = "true";
+                        }
+                        {
+                          name = "OPENEBS_IO_INSTALLER_TYPE";
+                          value = "lvm-localpv-helm";
                         }
                       ];
                       volumeMounts = [
@@ -3113,20 +3400,31 @@ in
             };
             spec = {
               selector.matchLabels = {
-                app = "openebs-lvm-node";
+                name = "openebs-lvm-node";
+                release = name;
               };
-              updateStrategy.type = "RollingUpdate";
+              updateStrategy = {
+                type = "RollingUpdate";
+                rollingUpdate = {
+                  maxSurge = 0;
+                  maxUnavailable = "100%";
+                };
+              };
               template = {
                 metadata.labels = {
                   app = "openebs-lvm-node";
                   role = "openebs-lvm";
+                  name = "openebs-lvm-node";
+                  "openebs.io/component-name" = "openebs-lvm-node";
+                  "openebs.io/version" = lvmVersion;
                 };
                 spec = {
                   serviceAccountName = self.lvmNodeSa.out.name;
+                  priorityClassName = "openebs-lvm-localpv-csi-node-critical";
                   containers = [
                     {
                       name = "csi-node-driver-registrar";
-                      image = config.lvmLocalPv.csiNodeRegistrar;
+                      image = "registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.8.0";
                       imagePullPolicy = "IfNotPresent";
                       args = [
                         "--v=5"
@@ -3136,21 +3434,30 @@ in
                       env = [
                         {
                           name = "ADDRESS";
-                          value = "/csi/csi.sock";
+                          value = "/plugin/csi.sock";
                         }
                         {
                           name = "DRIVER_REG_SOCK_PATH";
-                          value = "/var/lib/kubelet/plugins/local.csi.openebs.io/csi.sock";
+                          value = "/var/lib/kubelet/plugins/lvm-localpv/csi.sock";
                         }
                         {
                           name = "KUBE_NODE_NAME";
                           valueFrom.fieldRef.fieldPath = "spec.nodeName";
                         }
+                        {
+                          name = "NODE_DRIVER";
+                          value = "openebs-lvm";
+                        }
+                      ];
+                      lifecycle.preStop.exec.command = [
+                        "/bin/sh"
+                        "-c"
+                        "rm -rf /registration/lvm-localpv /registration/lvm-localpv-reg.sock"
                       ];
                       volumeMounts = [
                         {
                           name = "plugin-dir";
-                          mountPath = "/csi";
+                          mountPath = "/plugin";
                         }
                         {
                           name = "registration-dir";
@@ -3160,32 +3467,50 @@ in
                     }
                     {
                       name = "openebs-lvm-plugin";
-                      image = config.lvmLocalPv.image;
+                      image = "openebs/lvm-driver:${lvmVersion}";
                       imagePullPolicy = "IfNotPresent";
-                      securityContext.privileged = true;
+                      securityContext = {
+                        privileged = true;
+                        allowPrivilegeEscalation = true;
+                      };
                       args = [
                         "--endpoint=$(OPENEBS_CSI_ENDPOINT)"
                         "--nodeid=$(OPENEBS_NODE_ID)"
-                        "--plugin-type=node"
+                        "--kube-api-burst=0"
+                        "--kube-api-qps=0"
+                        "--listen-address=$(METRICS_LISTEN_ADDRESS)"
+                        "--plugin=$(OPENEBS_NODE_DRIVER)"
                       ];
                       env = [
                         {
                           name = "OPENEBS_CSI_ENDPOINT";
-                          value = "unix:///csi/csi.sock";
+                          value = "unix:///plugin/csi.sock";
                         }
                         {
                           name = "OPENEBS_NODE_ID";
                           valueFrom.fieldRef.fieldPath = "spec.nodeName";
                         }
                         {
-                          name = "OPENEBS_NAMESPACE";
+                          name = "LVM_NAMESPACE";
                           valueFrom.fieldRef.fieldPath = "metadata.namespace";
+                        }
+                        {
+                          name = "ALLOWED_TOPOLOGIES";
+                          value = "kubernetes.io/hostname,";
+                        }
+                        {
+                          name = "METRICS_LISTEN_ADDRESS";
+                          value = ":9500";
+                        }
+                        {
+                          name = "OPENEBS_NODE_DRIVER";
+                          value = "agent";
                         }
                       ];
                       volumeMounts = [
                         {
                           name = "plugin-dir";
-                          mountPath = "/csi";
+                          mountPath = "/plugin";
                         }
                         {
                           name = "device-dir";
@@ -3217,7 +3542,7 @@ in
                     {
                       name = "plugin-dir";
                       hostPath = {
-                        path = "/var/lib/kubelet/plugins/local.csi.openebs.io/";
+                        path = "/var/lib/kubelet/plugins/lvm-localpv/";
                         type = "DirectoryOrCreate";
                       };
                     }
@@ -3286,24 +3611,36 @@ in
             apiVersion = "apps/v1";
             kind = "Deployment";
             name = "${name}-localpv-provisioner";
-            labels = localPvLabels;
+            labels = localPvLabels // {
+              "openebs.io/component-name" = "${name}-localpv-provisioner";
+            };
             spec = {
               replicas = 1;
+              strategy.type = "Recreate";
               selector.matchLabels = {
                 app = "localpv-provisioner";
+                component = "localpv-provisioner";
+                release = name;
               };
               template = {
                 metadata.labels = {
                   app = "localpv-provisioner";
+                  name = "${name}-localpv-provisioner";
+                  "openebs.io/component-name" = "${name}-localpv-provisioner";
                 };
                 spec = {
                   serviceAccountName = self.localPvSa.out.name;
+                  tolerations = controlPlaneTolerations;
                   containers = [
                     {
-                      name = "openebs-provisioner-hostpath";
+                      name = "openebs-localpv-provisioner";
                       image = config.localPvProvisioner.image;
                       imagePullPolicy = "IfNotPresent";
                       env = [
+                        {
+                          name = "LEADER_ELECTION_ENABLED";
+                          value = "true";
+                        }
                         {
                           name = "NODE_NAME";
                           valueFrom.fieldRef.fieldPath = "spec.nodeName";
@@ -3321,12 +3658,12 @@ in
                           value = config.localPvProvisioner.basePath;
                         }
                         {
-                          name = "OPENEBS_IO_INSTALLER_TYPE";
-                          value = "kix";
+                          name = "OPENEBS_IO_ENABLE_ANALYTICS";
+                          value = "true";
                         }
                         {
-                          name = "OPENEBS_IO_ENABLE_ANALYTICS";
-                          value = "false";
+                          name = "OPENEBS_IO_INSTALLER_TYPE";
+                          value = "openebs-localpv-provisioner-helm";
                         }
                       ];
                       livenessProbe = {

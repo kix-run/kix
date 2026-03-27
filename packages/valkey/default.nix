@@ -726,8 +726,7 @@
             PORT=$1;
             FOUND_PORT=0;
           } else if (FOUND_RUNID==1) {
-            printf "\nsentinel known-sentinel primary %s %s %s", IP, PORT, $0;
-            FOUND_RUNID=0;
+            printf "\nsentinel known-sentinel primary %s %s %s", IP, PORT, $0; FOUND_RUNID=0;
           }
         }
       '';
@@ -1306,20 +1305,19 @@
         spec = {
           type = "ClusterIP";
           clusterIP = "None";
-          publishNotReadyAddresses = true;
           selector = selectorLabels;
           ports = [
             {
               name = "tcp-redis";
               port = 6379;
-              targetPort = "redis";
+              targetPort = 6379;
               protocol = "TCP";
             }
           ]
           ++ lib.optional config.sentinel.enabled {
             name = "tcp-sentinel";
             port = 26379;
-            targetPort = "valkey-sentinel";
+            targetPort = 26379;
             protocol = "TCP";
           };
         };
@@ -1339,14 +1337,14 @@
             {
               name = "tcp-redis";
               port = 6379;
-              targetPort = "redis";
+              targetPort = 6379;
               protocol = "TCP";
             }
           ]
           ++ lib.optional config.sentinel.enabled {
             name = "tcp-sentinel";
             port = 26379;
-            targetPort = "valkey-sentinel";
+            targetPort = 26379;
             protocol = "TCP";
           };
         };

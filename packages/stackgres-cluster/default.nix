@@ -72,9 +72,18 @@ in
       type = lib.types.anything;
       default = {
         enabled = false;
-        retention = 5;
-        cronSchedule = "30 04 * * *";
-        compression = "lz4";
+        backups = [
+          {
+            cronSchedule = "0 1 * * *";
+            retention = 7;
+            compression = "lz4";
+          }
+          {
+            cronSchedule = "0 12 * * 1";
+            retention = 3;
+            compression = "lz4";
+          }
+        ];
         s3 = {
           bucket = null;
           endpoint = null;
@@ -84,6 +93,10 @@ in
           secretKeyField = "secretkey";
         };
       };
+    };
+    pgConfigIncludeVersion = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
     };
     pooling = lib.mkOption {
       type = lib.types.anything;
@@ -250,8 +263,10 @@ in
         name =
           if config.pgConfig.name != null then
             config.pgConfig.name
+          else if config.pgConfigIncludeVersion then
+            "${name}-pg${config.postgres.version}-config"
           else
-            "${name}-pg${config.postgres.version}-config";
+            "${name}-config";
         labels = selectorLabels;
         spec = {
           postgresVersion = config.postgres.version;
@@ -370,14 +385,17 @@ in
             sgPostgresConfig = self.pgConfig.out.name;
           }
           // lib.optionalAttrs config.backup.enabled {
-            backups = [
+            backups = map (
+              b:
               {
                 sgObjectStorage = self.objectStorage.out.name;
-                cronSchedule = config.backup.cronSchedule;
-                retention = config.backup.retention;
-                compression = config.backup.compression;
+                compression = b.compression;
+                retention = b.retention;
               }
-            ];
+              // lib.optionalAttrs (b ? cronSchedule) {
+                cronSchedule = b.cronSchedule;
+              }
+            ) config.backup.backups;
           }
           // lib.optionalAttrs config.pooling.enabled {
             sgPoolingConfig = self.poolingConfig.out.name;

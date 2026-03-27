@@ -93,27 +93,14 @@ in
         name = "${name}-operator";
         labels = kubevirtLabels;
         extra.rules = [
-          # KubeVirt resources
+          # Core: serviceaccounts, services, endpoints, pods/exec
           {
-            apiGroups = [ "kubevirt.io" ];
+            apiGroups = [ "" ];
             resources = [
-              "kubevirts"
-              "virtualmachines"
-              "virtualmachines/status"
-              "virtualmachines/finalizers"
-              "virtualmachineinstances"
-              "virtualmachineinstances/status"
-              "virtualmachineinstances/finalizers"
-              "virtualmachineinstancemigrations"
-              "virtualmachineinstancemigrations/status"
-              "virtualmachineinstancemigrations/finalizers"
-              "virtualmachineinstancepresets"
-              "virtualmachineinstancereplicasets"
-              "virtualmachineinstancereplicasets/status"
-              "virtualmachineinstancereplicasets/finalizers"
-              "virtualmachineclones"
-              "virtualmachineclones/status"
-              "virtualmachineclones/finalizers"
+              "serviceaccounts"
+              "services"
+              "endpoints"
+              "pods/exec"
             ];
             verbs = [
               "get"
@@ -121,100 +108,363 @@ in
               "watch"
               "create"
               "update"
-              "patch"
               "delete"
-              "deletecollection"
+              "patch"
             ];
           }
-          # Snapshot resources
+          # Core: configmaps (patch, delete)
           {
-            apiGroups = [ "snapshot.kubevirt.io" ];
-            resources = [
-              "virtualmachinesnapshots"
-              "virtualmachinesnapshots/status"
-              "virtualmachinesnapshotcontents"
-              "virtualmachinesnapshotcontents/status"
-              "virtualmachinerestores"
-              "virtualmachinerestores/status"
+            apiGroups = [ "" ];
+            resources = [ "configmaps" ];
+            verbs = [
+              "patch"
+              "delete"
             ];
+          }
+          # Core: namespaces (get, list, watch, patch)
+          {
+            apiGroups = [ "" ];
+            resources = [ "namespaces" ];
             verbs = [
               "get"
               "list"
               "watch"
-              "create"
-              "update"
               "patch"
-              "delete"
             ];
           }
-          # Export resources
+          # Core: pods (get, list, delete, patch)
           {
-            apiGroups = [ "export.kubevirt.io" ];
-            resources = [
-              "virtualmachineexports"
-              "virtualmachineexports/status"
+            apiGroups = [ "" ];
+            resources = [ "pods" ];
+            verbs = [
+              "get"
+              "list"
+              "delete"
+              "patch"
             ];
+          }
+          # Core: persistentvolumeclaims (get)
+          {
+            apiGroups = [ "" ];
+            resources = [ "persistentvolumeclaims" ];
+            verbs = [ "get" ];
+          }
+          # Core: configmaps (get, list, watch)
+          {
+            apiGroups = [ "" ];
+            resources = [ "configmaps" ];
             verbs = [
               "get"
               "list"
               "watch"
-              "create"
-              "update"
-              "patch"
-              "delete"
             ];
           }
-          # Core resources
+          # Core: limitranges
+          {
+            apiGroups = [ "" ];
+            resources = [ "limitranges" ];
+            verbs = [
+              "watch"
+              "list"
+            ];
+          }
+          # Core: namespaces (get, list, watch)
+          {
+            apiGroups = [ "" ];
+            resources = [ "namespaces" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          # Core: namespaces (get, list, watch, patch)
+          {
+            apiGroups = [ "" ];
+            resources = [ "namespaces" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "patch"
+            ];
+          }
+          # Core: pods, configmaps, endpoints, services (full)
           {
             apiGroups = [ "" ];
             resources = [
               "pods"
-              "pods/exec"
-              "pods/status"
-              "pods/log"
-              "services"
-              "endpoints"
-              "persistentvolumeclaims"
-              "events"
               "configmaps"
-              "secrets"
-              "nodes"
-              "serviceaccounts"
-              "namespaces"
-              "resourcequotas"
-              "limitranges"
+              "endpoints"
+              "services"
             ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "delete"
+              "update"
+              "create"
+              "patch"
+            ];
+          }
+          # Core: events
+          {
+            apiGroups = [ "" ];
+            resources = [ "events" ];
+            verbs = [
+              "update"
+              "create"
+              "patch"
+            ];
+          }
+          # Core: secrets (create)
+          {
+            apiGroups = [ "" ];
+            resources = [ "secrets" ];
+            verbs = [ "create" ];
+          }
+          # Core: pods/finalizers
+          {
+            apiGroups = [ "" ];
+            resources = [ "pods/finalizers" ];
+            verbs = [ "update" ];
+          }
+          # Core: pods/eviction
+          {
+            apiGroups = [ "" ];
+            resources = [ "pods/eviction" ];
+            verbs = [ "create" ];
+          }
+          # Core: pods/status
+          {
+            apiGroups = [ "" ];
+            resources = [ "pods/status" ];
+            verbs = [ "patch" ];
+          }
+          # Core: nodes
+          {
+            apiGroups = [ "" ];
+            resources = [ "nodes" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "update"
+              "patch"
+            ];
+          }
+          # Core: persistentvolumeclaims (full)
+          {
+            apiGroups = [ "" ];
+            resources = [ "persistentvolumeclaims" ];
             verbs = [
               "get"
               "list"
               "watch"
               "create"
               "update"
-              "patch"
               "delete"
+              "patch"
             ];
           }
-          # Apps
+          # Core: namespaces (get)
+          {
+            apiGroups = [ "" ];
+            resources = [ "namespaces" ];
+            verbs = [ "get" ];
+          }
+          # Core: resourcequotas
+          {
+            apiGroups = [ "" ];
+            resources = [ "resourcequotas" ];
+            verbs = [
+              "list"
+              "watch"
+            ];
+          }
+          # Core: nodes (patch, list, watch, get)
+          {
+            apiGroups = [ "" ];
+            resources = [ "nodes" ];
+            verbs = [
+              "patch"
+              "list"
+              "watch"
+              "get"
+            ];
+          }
+          # Core: configmaps (get, list, watch)
+          {
+            apiGroups = [ "" ];
+            resources = [ "configmaps" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          # Core: events (create, patch)
+          {
+            apiGroups = [ "" ];
+            resources = [ "events" ];
+            verbs = [
+              "create"
+              "patch"
+            ];
+          }
+          # Admission webhooks
+          {
+            apiGroups = [ "admissionregistration.k8s.io" ];
+            resources = [
+              "validatingwebhookconfigurations"
+              "mutatingwebhookconfigurations"
+              "validatingadmissionpolicybindings"
+              "validatingadmissionpolicies"
+            ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "create"
+              "delete"
+              "update"
+              "patch"
+            ];
+          }
+          # CRDs (get, list, watch, create, delete, patch)
+          {
+            apiGroups = [ "apiextensions.k8s.io" ];
+            resources = [ "customresourcedefinitions" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "create"
+              "delete"
+              "patch"
+            ];
+          }
+          # CRDs (get, list, watch)
+          {
+            apiGroups = [ "apiextensions.k8s.io" ];
+            resources = [ "customresourcedefinitions" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          # CRDs (get, list, watch)
+          {
+            apiGroups = [ "apiextensions.k8s.io" ];
+            resources = [ "customresourcedefinitions" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          # CRDs (get, list, watch)
+          {
+            apiGroups = [ "apiextensions.k8s.io" ];
+            resources = [ "customresourcedefinitions" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          # API services
+          {
+            apiGroups = [ "apiregistration.k8s.io" ];
+            resources = [ "apiservices" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "create"
+              "delete"
+              "update"
+              "patch"
+            ];
+          }
+          # Apps: controllerrevisions (watch, list, create, delete, patch)
+          {
+            apiGroups = [ "apps" ];
+            resources = [ "controllerrevisions" ];
+            verbs = [
+              "watch"
+              "list"
+              "create"
+              "delete"
+              "patch"
+            ];
+          }
+          # Apps: deployments, daemonsets
           {
             apiGroups = [ "apps" ];
             resources = [
               "deployments"
               "daemonsets"
-              "replicasets"
-              "statefulsets"
-              "controllerrevisions"
             ];
             verbs = [
               "get"
               "list"
               "watch"
               "create"
-              "update"
-              "patch"
               "delete"
+              "patch"
             ];
           }
-          # Batch
+          # Apps: controllerrevisions (create, list, get)
+          {
+            apiGroups = [ "apps" ];
+            resources = [ "controllerrevisions" ];
+            verbs = [
+              "create"
+              "list"
+              "get"
+            ];
+          }
+          # Apps: daemonsets (list)
+          {
+            apiGroups = [ "apps" ];
+            resources = [ "daemonsets" ];
+            verbs = [ "list" ];
+          }
+          # Apps: controllerrevisions (watch, list, create, delete, get, update)
+          {
+            apiGroups = [ "apps" ];
+            resources = [ "controllerrevisions" ];
+            verbs = [
+              "watch"
+              "list"
+              "create"
+              "delete"
+              "get"
+              "update"
+            ];
+          }
+          # Authentication: tokenreviews
+          {
+            apiGroups = [ "authentication.k8s.io" ];
+            resources = [ "tokenreviews" ];
+            verbs = [ "create" ];
+          }
+          # Authorization: subjectaccessreviews
+          {
+            apiGroups = [ "authorization.k8s.io" ];
+            resources = [ "subjectaccessreviews" ];
+            verbs = [ "create" ];
+          }
+          # Authorization: subjectaccessreviews
+          {
+            apiGroups = [ "authorization.k8s.io" ];
+            resources = [ "subjectaccessreviews" ];
+            verbs = [ "create" ];
+          }
+          # Batch: jobs (get, list, watch, create, delete, patch)
           {
             apiGroups = [ "batch" ];
             resources = [ "jobs" ];
@@ -223,9 +473,637 @@ in
               "list"
               "watch"
               "create"
+              "delete"
+              "patch"
+            ];
+          }
+          # Batch: jobs (create, get, delete)
+          {
+            apiGroups = [ "batch" ];
+            resources = [ "jobs" ];
+            verbs = [
+              "create"
+              "get"
+              "delete"
+            ];
+          }
+          # CDI: datasources, datavolumes (get, list, watch)
+          {
+            apiGroups = [ "cdi.kubevirt.io" ];
+            resources = [
+              "datasources"
+              "datavolumes"
+            ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          # CDI: wildcard
+          {
+            apiGroups = [ "cdi.kubevirt.io" ];
+            resources = [ "*" ];
+            verbs = [ "*" ];
+          }
+          # Clone: virtualmachineclones (status, finalizers)
+          {
+            apiGroups = [ "clone.kubevirt.io" ];
+            resources = [
+              "virtualmachineclones"
+              "virtualmachineclones/status"
+              "virtualmachineclones/finalizers"
+            ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
               "update"
               "patch"
               "delete"
+            ];
+          }
+          # Clone: virtualmachineclones (full + deletecollection)
+          {
+            apiGroups = [ "clone.kubevirt.io" ];
+            resources = [ "virtualmachineclones" ];
+            verbs = [
+              "get"
+              "delete"
+              "create"
+              "update"
+              "patch"
+              "list"
+              "watch"
+              "deletecollection"
+            ];
+          }
+          # Clone: virtualmachineclones (no deletecollection)
+          {
+            apiGroups = [ "clone.kubevirt.io" ];
+            resources = [ "virtualmachineclones" ];
+            verbs = [
+              "get"
+              "delete"
+              "create"
+              "update"
+              "patch"
+              "list"
+              "watch"
+            ];
+          }
+          # Clone: virtualmachineclones (get, list, watch)
+          {
+            apiGroups = [ "clone.kubevirt.io" ];
+            resources = [ "virtualmachineclones" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          # Export: virtualmachineexports (status, finalizers)
+          {
+            apiGroups = [ "export.kubevirt.io" ];
+            resources = [
+              "virtualmachineexports"
+              "virtualmachineexports/status"
+              "virtualmachineexports/finalizers"
+            ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "create"
+              "update"
+              "delete"
+              "patch"
+            ];
+          }
+          # Export: virtualmachineexports (get, list, watch)
+          {
+            apiGroups = [ "export.kubevirt.io" ];
+            resources = [ "virtualmachineexports" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          # Export: virtualmachineexports (full + deletecollection)
+          {
+            apiGroups = [ "export.kubevirt.io" ];
+            resources = [ "virtualmachineexports" ];
+            verbs = [
+              "get"
+              "delete"
+              "create"
+              "update"
+              "patch"
+              "list"
+              "watch"
+              "deletecollection"
+            ];
+          }
+          # Export: virtualmachineexports (no deletecollection)
+          {
+            apiGroups = [ "export.kubevirt.io" ];
+            resources = [ "virtualmachineexports" ];
+            verbs = [
+              "get"
+              "delete"
+              "create"
+              "update"
+              "patch"
+              "list"
+              "watch"
+            ];
+          }
+          # Export: virtualmachineexports (get, list, watch)
+          {
+            apiGroups = [ "export.kubevirt.io" ];
+            resources = [ "virtualmachineexports" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          # Instancetype: all types (get, list, watch)
+          {
+            apiGroups = [ "instancetype.kubevirt.io" ];
+            resources = [
+              "virtualmachineinstancetypes"
+              "virtualmachineclusterinstancetypes"
+              "virtualmachinepreferences"
+              "virtualmachineclusterpreferences"
+            ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          # Instancetype: all types (get, list, watch)
+          {
+            apiGroups = [ "instancetype.kubevirt.io" ];
+            resources = [
+              "virtualmachineinstancetypes"
+              "virtualmachineclusterinstancetypes"
+              "virtualmachinepreferences"
+              "virtualmachineclusterpreferences"
+            ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          # Instancetype: all types (full + deletecollection)
+          {
+            apiGroups = [ "instancetype.kubevirt.io" ];
+            resources = [
+              "virtualmachineinstancetypes"
+              "virtualmachineclusterinstancetypes"
+              "virtualmachinepreferences"
+              "virtualmachineclusterpreferences"
+            ];
+            verbs = [
+              "get"
+              "delete"
+              "create"
+              "update"
+              "patch"
+              "list"
+              "watch"
+              "deletecollection"
+            ];
+          }
+          # Instancetype: all types (no deletecollection)
+          {
+            apiGroups = [ "instancetype.kubevirt.io" ];
+            resources = [
+              "virtualmachineinstancetypes"
+              "virtualmachineclusterinstancetypes"
+              "virtualmachinepreferences"
+              "virtualmachineclusterpreferences"
+            ];
+            verbs = [
+              "get"
+              "delete"
+              "create"
+              "update"
+              "patch"
+              "list"
+              "watch"
+            ];
+          }
+          # Instancetype: all types (get, list, watch)
+          {
+            apiGroups = [ "instancetype.kubevirt.io" ];
+            resources = [
+              "virtualmachineinstancetypes"
+              "virtualmachineclusterinstancetypes"
+              "virtualmachinepreferences"
+              "virtualmachineclusterpreferences"
+            ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          # Instancetype: cluster types only (get, list, watch)
+          {
+            apiGroups = [ "instancetype.kubevirt.io" ];
+            resources = [
+              "virtualmachineclusterinstancetypes"
+              "virtualmachineclusterpreferences"
+            ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          # k8s.cni.cncf.io: network-attachment-definitions
+          {
+            apiGroups = [ "k8s.cni.cncf.io" ];
+            resources = [ "network-attachment-definitions" ];
+            verbs = [ "get" ];
+          }
+          # KubeVirt: kubevirts (get, list, watch, patch, update)
+          {
+            apiGroups = [ "kubevirt.io" ];
+            resources = [ "kubevirts" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "patch"
+              "update"
+              "patch"
+            ];
+          }
+          # KubeVirt: virtualmachines, virtualmachineinstances
+          {
+            apiGroups = [ "kubevirt.io" ];
+            resources = [
+              "virtualmachines"
+              "virtualmachineinstances"
+            ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "patch"
+              "update"
+            ];
+          }
+          # KubeVirt: virtualmachines/status
+          {
+            apiGroups = [ "kubevirt.io" ];
+            resources = [ "virtualmachines/status" ];
+            verbs = [ "patch" ];
+          }
+          # KubeVirt: virtualmachineinstancemigrations
+          {
+            apiGroups = [ "kubevirt.io" ];
+            resources = [ "virtualmachineinstancemigrations" ];
+            verbs = [
+              "create"
+              "get"
+              "list"
+              "watch"
+              "patch"
+            ];
+          }
+          # KubeVirt: virtualmachineinstancepresets
+          {
+            apiGroups = [ "kubevirt.io" ];
+            resources = [ "virtualmachineinstancepresets" ];
+            verbs = [
+              "watch"
+              "list"
+            ];
+          }
+          # KubeVirt: kubevirts (get, list, watch)
+          {
+            apiGroups = [ "kubevirt.io" ];
+            resources = [ "kubevirts" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          # KubeVirt: wildcard
+          {
+            apiGroups = [ "kubevirt.io" ];
+            resources = [ "*" ];
+            verbs = [ "*" ];
+          }
+          # KubeVirt: finalizers
+          {
+            apiGroups = [ "kubevirt.io" ];
+            resources = [
+              "virtualmachines/finalizers"
+              "virtualmachineinstances/finalizers"
+            ];
+            verbs = [ "update" ];
+          }
+          # KubeVirt: virtualmachineinstances (update, list, watch)
+          {
+            apiGroups = [ "kubevirt.io" ];
+            resources = [ "virtualmachineinstances" ];
+            verbs = [
+              "update"
+              "list"
+              "watch"
+            ];
+          }
+          # KubeVirt: kubevirts (get, list, watch)
+          {
+            apiGroups = [ "kubevirt.io" ];
+            resources = [ "kubevirts" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          # KubeVirt: kubevirts (list, watch)
+          {
+            apiGroups = [ "kubevirt.io" ];
+            resources = [ "kubevirts" ];
+            verbs = [
+              "list"
+              "watch"
+            ];
+          }
+          # KubeVirt: kubevirts (get, list)
+          {
+            apiGroups = [ "kubevirt.io" ];
+            resources = [ "kubevirts" ];
+            verbs = [
+              "get"
+              "list"
+            ];
+          }
+          # KubeVirt: VMs, VMIs, presets, replicasets (full + deletecollection)
+          {
+            apiGroups = [ "kubevirt.io" ];
+            resources = [
+              "virtualmachines"
+              "virtualmachineinstances"
+              "virtualmachineinstancepresets"
+              "virtualmachineinstancereplicasets"
+            ];
+            verbs = [
+              "get"
+              "delete"
+              "create"
+              "update"
+              "patch"
+              "list"
+              "watch"
+              "deletecollection"
+            ];
+          }
+          # KubeVirt: virtualmachineinstancemigrations (get, list, watch)
+          {
+            apiGroups = [ "kubevirt.io" ];
+            resources = [ "virtualmachineinstancemigrations" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          # KubeVirt: VMs, VMIs, presets, replicasets (no deletecollection)
+          {
+            apiGroups = [ "kubevirt.io" ];
+            resources = [
+              "virtualmachines"
+              "virtualmachineinstances"
+              "virtualmachineinstancepresets"
+              "virtualmachineinstancereplicasets"
+            ];
+            verbs = [
+              "get"
+              "delete"
+              "create"
+              "update"
+              "patch"
+              "list"
+              "watch"
+            ];
+          }
+          # KubeVirt: virtualmachineinstancemigrations (get, list, watch)
+          {
+            apiGroups = [ "kubevirt.io" ];
+            resources = [ "virtualmachineinstancemigrations" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          # KubeVirt: kubevirts (get, list)
+          {
+            apiGroups = [ "kubevirt.io" ];
+            resources = [ "kubevirts" ];
+            verbs = [
+              "get"
+              "list"
+            ];
+          }
+          # KubeVirt: kubevirts (get, list)
+          {
+            apiGroups = [ "kubevirt.io" ];
+            resources = [ "kubevirts" ];
+            verbs = [
+              "get"
+              "list"
+            ];
+          }
+          # KubeVirt: all main resources (get, list, watch)
+          {
+            apiGroups = [ "kubevirt.io" ];
+            resources = [
+              "virtualmachines"
+              "virtualmachineinstances"
+              "virtualmachineinstancepresets"
+              "virtualmachineinstancereplicasets"
+              "virtualmachineinstancemigrations"
+            ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          # KubeVirt: virtualmachineinstancemigrations (full + deletecollection)
+          {
+            apiGroups = [ "kubevirt.io" ];
+            resources = [ "virtualmachineinstancemigrations" ];
+            verbs = [
+              "get"
+              "delete"
+              "create"
+              "update"
+              "patch"
+              "list"
+              "watch"
+              "deletecollection"
+            ];
+          }
+          # Migrations: migrationpolicies
+          {
+            apiGroups = [ "migrations.kubevirt.io" ];
+            resources = [ "migrationpolicies" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          # Migrations: migrationpolicies
+          {
+            apiGroups = [ "migrations.kubevirt.io" ];
+            resources = [ "migrationpolicies" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          # Migrations: migrationpolicies
+          {
+            apiGroups = [ "migrations.kubevirt.io" ];
+            resources = [ "migrationpolicies" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          # Migrations: migrationpolicies
+          {
+            apiGroups = [ "migrations.kubevirt.io" ];
+            resources = [ "migrationpolicies" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          # Migrations: migrationpolicies
+          {
+            apiGroups = [ "migrations.kubevirt.io" ];
+            resources = [ "migrationpolicies" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          # Migrations: migrationpolicies
+          {
+            apiGroups = [ "migrations.kubevirt.io" ];
+            resources = [ "migrationpolicies" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          # Monitoring: servicemonitors, prometheusrules
+          {
+            apiGroups = [ "monitoring.coreos.com" ];
+            resources = [
+              "servicemonitors"
+              "prometheusrules"
+            ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "create"
+              "delete"
+              "update"
+              "patch"
+            ];
+          }
+          # Policy: poddisruptionbudgets
+          {
+            apiGroups = [ "policy" ];
+            resources = [ "poddisruptionbudgets" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "delete"
+              "create"
+              "patch"
+            ];
+          }
+          # Pool: virtualmachinepools (status, finalizers, scale)
+          {
+            apiGroups = [ "pool.kubevirt.io" ];
+            resources = [
+              "virtualmachinepools"
+              "virtualmachinepools/finalizers"
+              "virtualmachinepools/status"
+              "virtualmachinepools/scale"
+            ];
+            verbs = [
+              "watch"
+              "list"
+              "create"
+              "delete"
+              "update"
+              "patch"
+              "get"
+            ];
+          }
+          # Pool: virtualmachinepools (full + deletecollection)
+          {
+            apiGroups = [ "pool.kubevirt.io" ];
+            resources = [ "virtualmachinepools" ];
+            verbs = [
+              "get"
+              "delete"
+              "create"
+              "update"
+              "patch"
+              "list"
+              "watch"
+              "deletecollection"
+            ];
+          }
+          # Pool: virtualmachinepools (no deletecollection)
+          {
+            apiGroups = [ "pool.kubevirt.io" ];
+            resources = [ "virtualmachinepools" ];
+            verbs = [
+              "get"
+              "delete"
+              "create"
+              "update"
+              "patch"
+              "list"
+              "watch"
+            ];
+          }
+          # Pool: virtualmachinepools (get, list, watch)
+          {
+            apiGroups = [ "pool.kubevirt.io" ];
+            resources = [ "virtualmachinepools" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
             ];
           }
           # RBAC
@@ -242,84 +1120,161 @@ in
               "list"
               "watch"
               "create"
-              "update"
-              "patch"
               "delete"
+              "patch"
+              "update"
             ];
           }
-          # CRDs
-          {
-            apiGroups = [ "apiextensions.k8s.io" ];
-            resources = [ "customresourcedefinitions" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "create"
-              "update"
-              "patch"
-              "delete"
-            ];
-          }
-          # API services
-          {
-            apiGroups = [ "apiregistration.k8s.io" ];
-            resources = [ "apiservices" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "create"
-              "update"
-              "patch"
-              "delete"
-            ];
-          }
-          # Admission webhooks
-          {
-            apiGroups = [ "admissionregistration.k8s.io" ];
-            resources = [
-              "validatingwebhookconfigurations"
-              "mutatingwebhookconfigurations"
-            ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "create"
-              "update"
-              "patch"
-              "delete"
-            ];
-          }
-          # Policy
-          {
-            apiGroups = [ "policy" ];
-            resources = [ "poddisruptionbudgets" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "create"
-              "update"
-              "patch"
-              "delete"
-            ];
-          }
-          # Security context constraints (OpenShift compat)
+          # Security: securitycontextconstraints (create, get, list, watch)
           {
             apiGroups = [ "security.openshift.io" ];
+            resources = [ "securitycontextconstraints" ];
+            verbs = [
+              "create"
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          # Security: securitycontextconstraints (resourceNames: privileged)
+          {
+            apiGroups = [ "security.openshift.io" ];
+            resourceNames = [ "privileged" ];
+            resources = [ "securitycontextconstraints" ];
+            verbs = [
+              "get"
+              "patch"
+              "update"
+            ];
+          }
+          # Security: securitycontextconstraints (resourceNames: kubevirt-handler, kubevirt-controller)
+          {
+            apiGroups = [ "security.openshift.io" ];
+            resourceNames = [
+              "kubevirt-handler"
+              "kubevirt-controller"
+            ];
             resources = [ "securitycontextconstraints" ];
             verbs = [
               "get"
               "list"
               "watch"
+              "update"
+              "delete"
+            ];
+          }
+          # Snapshot: virtualmachinesnapshots, restores, contents (get, list, watch)
+          {
+            apiGroups = [ "snapshot.kubevirt.io" ];
+            resources = [
+              "virtualmachinesnapshots"
+              "virtualmachinerestores"
+              "virtualmachinesnapshotcontents"
+            ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          # Snapshot: all with status/finalizers
+          {
+            apiGroups = [ "snapshot.kubevirt.io" ];
+            resources = [
+              "virtualmachinesnapshots"
+              "virtualmachinesnapshots/status"
+              "virtualmachinesnapshots/finalizers"
+              "virtualmachinesnapshotcontents"
+              "virtualmachinesnapshotcontents/status"
+              "virtualmachinesnapshotcontents/finalizers"
+              "virtualmachinerestores"
+              "virtualmachinerestores/status"
+            ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
               "create"
               "update"
+              "delete"
               "patch"
             ];
           }
-          # Storage
+          # Snapshot: main resources (full + deletecollection)
+          {
+            apiGroups = [ "snapshot.kubevirt.io" ];
+            resources = [
+              "virtualmachinesnapshots"
+              "virtualmachinesnapshotcontents"
+              "virtualmachinerestores"
+            ];
+            verbs = [
+              "get"
+              "delete"
+              "create"
+              "update"
+              "patch"
+              "list"
+              "watch"
+              "deletecollection"
+            ];
+          }
+          # Snapshot: main resources (no deletecollection)
+          {
+            apiGroups = [ "snapshot.kubevirt.io" ];
+            resources = [
+              "virtualmachinesnapshots"
+              "virtualmachinesnapshotcontents"
+              "virtualmachinerestores"
+            ];
+            verbs = [
+              "get"
+              "delete"
+              "create"
+              "update"
+              "patch"
+              "list"
+              "watch"
+            ];
+          }
+          # Snapshot: main resources (get, list, watch)
+          {
+            apiGroups = [ "snapshot.kubevirt.io" ];
+            resources = [
+              "virtualmachinesnapshots"
+              "virtualmachinesnapshotcontents"
+              "virtualmachinerestores"
+            ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          # Snapshot storage: volumesnapshotclasses
+          {
+            apiGroups = [ "snapshot.storage.k8s.io" ];
+            resources = [ "volumesnapshotclasses" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          # Snapshot storage: volumesnapshots
+          {
+            apiGroups = [ "snapshot.storage.k8s.io" ];
+            resources = [ "volumesnapshots" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "create"
+              "update"
+              "delete"
+            ];
+          }
+          # Storage: storageclasses
           {
             apiGroups = [ "storage.k8s.io" ];
             resources = [ "storageclasses" ];
@@ -329,46 +1284,182 @@ in
               "watch"
             ];
           }
-          # CDI integration
+          # Subresources: stop, addvolume, removevolume, freeze, unfreeze, reset, softreboot, sev
           {
-            apiGroups = [ "cdi.kubevirt.io" ];
+            apiGroups = [ "subresources.kubevirt.io" ];
             resources = [
-              "datavolumes"
-              "datavolumes/source"
+              "virtualmachines/stop"
+              "virtualmachineinstances/addvolume"
+              "virtualmachineinstances/removevolume"
+              "virtualmachineinstances/freeze"
+              "virtualmachineinstances/unfreeze"
+              "virtualmachineinstances/reset"
+              "virtualmachineinstances/softreboot"
+              "virtualmachineinstances/sev/setupsession"
+              "virtualmachineinstances/sev/injectlaunchsecret"
+            ];
+            verbs = [ "update" ];
+          }
+          # Subresources: version, guestfs
+          {
+            apiGroups = [ "subresources.kubevirt.io" ];
+            resources = [
+              "version"
+              "guestfs"
             ];
             verbs = [
               "get"
               "list"
-              "watch"
-              "create"
-              "update"
-              "patch"
-              "delete"
             ];
           }
-          # Scheduling
+          # Subresources: console, vnc, portforward, guestosinfo, etc (get)
           {
-            apiGroups = [ "scheduling.k8s.io" ];
-            resources = [ "priorityclasses" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
+            apiGroups = [ "subresources.kubevirt.io" ];
+            resources = [
+              "virtualmachineinstances/console"
+              "virtualmachineinstances/vnc"
+              "virtualmachineinstances/vnc/screenshot"
+              "virtualmachineinstances/portforward"
+              "virtualmachineinstances/guestosinfo"
+              "virtualmachineinstances/filesystemlist"
+              "virtualmachineinstances/userlist"
+              "virtualmachineinstances/sev/fetchcertchain"
+              "virtualmachineinstances/sev/querylaunchmeasurement"
+              "virtualmachineinstances/usbredir"
             ];
+            verbs = [ "get" ];
           }
-          # Coordination (leader election)
+          # Subresources: pause, unpause, addvolume, removevolume, freeze, unfreeze, softreboot, reset, sev
           {
-            apiGroups = [ "coordination.k8s.io" ];
-            resources = [ "leases" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "create"
-              "update"
-              "patch"
-              "delete"
+            apiGroups = [ "subresources.kubevirt.io" ];
+            resources = [
+              "virtualmachineinstances/pause"
+              "virtualmachineinstances/unpause"
+              "virtualmachineinstances/addvolume"
+              "virtualmachineinstances/removevolume"
+              "virtualmachineinstances/freeze"
+              "virtualmachineinstances/unfreeze"
+              "virtualmachineinstances/softreboot"
+              "virtualmachineinstances/reset"
+              "virtualmachineinstances/sev/setupsession"
+              "virtualmachineinstances/sev/injectlaunchsecret"
             ];
+            verbs = [ "update" ];
+          }
+          # Subresources: expand-spec, portforward (get)
+          {
+            apiGroups = [ "subresources.kubevirt.io" ];
+            resources = [
+              "virtualmachines/expand-spec"
+              "virtualmachines/portforward"
+            ];
+            verbs = [ "get" ];
+          }
+          # Subresources: start, stop, restart, addvolume, removevolume, memorydump (update)
+          {
+            apiGroups = [ "subresources.kubevirt.io" ];
+            resources = [
+              "virtualmachines/start"
+              "virtualmachines/stop"
+              "virtualmachines/restart"
+              "virtualmachines/addvolume"
+              "virtualmachines/removevolume"
+              "virtualmachines/memorydump"
+            ];
+            verbs = [ "update" ];
+          }
+          # Subresources: expand-vm-spec (update)
+          {
+            apiGroups = [ "subresources.kubevirt.io" ];
+            resources = [ "expand-vm-spec" ];
+            verbs = [ "update" ];
+          }
+          # Subresources: console, vnc, portforward, guestosinfo, etc (get) — duplicate
+          {
+            apiGroups = [ "subresources.kubevirt.io" ];
+            resources = [
+              "virtualmachineinstances/console"
+              "virtualmachineinstances/vnc"
+              "virtualmachineinstances/vnc/screenshot"
+              "virtualmachineinstances/portforward"
+              "virtualmachineinstances/guestosinfo"
+              "virtualmachineinstances/filesystemlist"
+              "virtualmachineinstances/userlist"
+              "virtualmachineinstances/sev/fetchcertchain"
+              "virtualmachineinstances/sev/querylaunchmeasurement"
+              "virtualmachineinstances/usbredir"
+            ];
+            verbs = [ "get" ];
+          }
+          # Subresources: pause, unpause, addvolume, removevolume, freeze, unfreeze, softreboot, reset, sev — duplicate
+          {
+            apiGroups = [ "subresources.kubevirt.io" ];
+            resources = [
+              "virtualmachineinstances/pause"
+              "virtualmachineinstances/unpause"
+              "virtualmachineinstances/addvolume"
+              "virtualmachineinstances/removevolume"
+              "virtualmachineinstances/freeze"
+              "virtualmachineinstances/unfreeze"
+              "virtualmachineinstances/softreboot"
+              "virtualmachineinstances/reset"
+              "virtualmachineinstances/sev/setupsession"
+              "virtualmachineinstances/sev/injectlaunchsecret"
+            ];
+            verbs = [ "update" ];
+          }
+          # Subresources: expand-spec, portforward (get) — duplicate
+          {
+            apiGroups = [ "subresources.kubevirt.io" ];
+            resources = [
+              "virtualmachines/expand-spec"
+              "virtualmachines/portforward"
+            ];
+            verbs = [ "get" ];
+          }
+          # Subresources: start, stop, restart, addvolume, removevolume, memorydump (update) — duplicate
+          {
+            apiGroups = [ "subresources.kubevirt.io" ];
+            resources = [
+              "virtualmachines/start"
+              "virtualmachines/stop"
+              "virtualmachines/restart"
+              "virtualmachines/addvolume"
+              "virtualmachines/removevolume"
+              "virtualmachines/memorydump"
+            ];
+            verbs = [ "update" ];
+          }
+          # Subresources: expand-vm-spec (update) — duplicate
+          {
+            apiGroups = [ "subresources.kubevirt.io" ];
+            resources = [ "expand-vm-spec" ];
+            verbs = [ "update" ];
+          }
+          # Subresources: expand-spec, guestosinfo, filesystemlist, userlist, sev (get)
+          {
+            apiGroups = [ "subresources.kubevirt.io" ];
+            resources = [
+              "virtualmachines/expand-spec"
+              "virtualmachineinstances/guestosinfo"
+              "virtualmachineinstances/filesystemlist"
+              "virtualmachineinstances/userlist"
+              "virtualmachineinstances/sev/fetchcertchain"
+              "virtualmachineinstances/sev/querylaunchmeasurement"
+            ];
+            verbs = [ "get" ];
+          }
+          # Subresources: expand-vm-spec (update)
+          {
+            apiGroups = [ "subresources.kubevirt.io" ];
+            resources = [ "expand-vm-spec" ];
+            verbs = [ "update" ];
+          }
+          # Subresources: virtualmachines/migrate (update)
+          {
+            apiGroups = [ "subresources.kubevirt.io" ];
+            resources = [ "virtualmachines/migrate" ];
+            verbs = [ "update" ];
           }
         ];
       };
@@ -409,6 +1500,7 @@ in
           };
           template = {
             metadata = {
+              name = "virt-operator";
               labels = podLabels;
             };
             spec = {

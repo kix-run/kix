@@ -83,8 +83,18 @@ let
   coord = group "coordination.k8s.io" [ "leases" ];
   apiext = group "apiextensions.k8s.io" [ "customresourcedefinitions" ];
   appsGrp = group "apps" [ "deployments" ];
-  zfsAll = group "zfs.openebs.io" [ ];
-  lvmAll = group "local.openebs.io" [ ];
+  zfsAll = group "zfs.openebs.io" [
+    "zfsvolumes"
+    "zfssnapshots"
+    "zfsbackups"
+    "zfsrestores"
+    "zfsnodes"
+  ];
+  lvmAll = group "local.openebs.io" [
+    "lvmvolumes"
+    "lvmsnapshots"
+    "lvmnodes"
+  ];
 
 in
 {
