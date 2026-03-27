@@ -130,8 +130,16 @@ in
 
       hasMetrics = config.metrics.enabled && prometheus != null;
 
-      # DI-driven ingress: created when ingressNginx is injected AND host is set.
-      hasIngress = ingressNginx != null && config.ingress.host != null;
+      # Ingress host: explicit config > auto-derive from cluster domain > disabled.
+      clusterDomain = clusterConfig.cluster.domain or null;
+      ingressHost =
+        if config.ingress.host != null then
+          config.ingress.host
+        else if clusterDomain != null then
+          "${name}.${clusterDomain}"
+        else
+          null;
+      hasIngress = ingressNginx != null && ingressHost != null;
       hasTls = hasIngress && clusterIssuer != null;
     in
     {
@@ -226,10 +234,10 @@ in
           self.service
           |> kix.ingress.fromService {
             inherit name;
-            host = config.ingress.host;
+            host = ingressHost;
             className = ingressNginx.out.ingressClassName;
             tls = lib.optional hasTls {
-              hosts = [ config.ingress.host ];
+              hosts = [ ingressHost ];
               secretName = "${name}-tls";
             };
             annotations = {

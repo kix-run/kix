@@ -206,7 +206,10 @@ def _strip_k8s_defaults(doc: dict) -> dict:
             strategy = spec.get("strategy", {})
             if isinstance(strategy, dict) and strategy.get("type") == "RollingUpdate":
                 rolling = strategy.get("rollingUpdate", {})
-                if rolling == {"maxSurge": "25%", "maxUnavailable": "25%"}:
+                if not rolling or rolling == {
+                    "maxSurge": "25%",
+                    "maxUnavailable": "25%",
+                }:
                     spec.pop("strategy", None)
             doc["spec"] = spec
 
@@ -344,6 +347,10 @@ def _strip_pod_spec_defaults(doc: dict) -> dict:
             secret = volume.get("secret")
             if isinstance(secret, dict) and secret.get("defaultMode") == 420:
                 secret.pop("defaultMode")
+            # configMap.defaultMode defaults to 420 (0644)
+            config_map = volume.get("configMap")
+            if isinstance(config_map, dict) and config_map.get("defaultMode") == 420:
+                config_map.pop("defaultMode")
             # projected.defaultMode defaults to 420
             projected = volume.get("projected")
             if isinstance(projected, dict) and projected.get("defaultMode") == 420:

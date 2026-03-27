@@ -1352,6 +1352,7 @@
         };
         outputs = {
           port = "6379";
+          primaryFqdn = "${name}-primary.${scope.namespaceName}.svc.cluster.local";
         }
         // lib.optionalAttrs config.sentinel.enabled {
           sentinelPort = "26379";

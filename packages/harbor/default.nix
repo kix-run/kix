@@ -219,7 +219,7 @@ in
           null;
       hasIngress = ingressNginx != null && effectiveHost != null;
       hasTls = hasIngress && clusterIssuer != null;
-      tlsSecretName = "${name}-tls";
+      tlsSecretName = "${name}-ingress";
 
       # Internal URLs — plain strings matching the service names.
       # No self-reference needed: these are deterministic from the instance name.

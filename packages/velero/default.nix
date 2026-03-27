@@ -77,16 +77,7 @@ in
     nodeAgent = lib.mkOption {
       type = lib.types.anything;
       default = {
-        resources = {
-          requests = {
-            cpu = "100m";
-            memory = "128Mi";
-          };
-          limits = {
-            cpu = "1";
-            memory = "1Gi";
-          };
-        };
+        resources = { };
       };
     };
     resources = lib.mkOption {
@@ -521,58 +512,62 @@ in
                     runAsUser = 0;
                   };
                   containers = [
-                    {
-                      name = "node-agent";
-                      image = "${config.image.repository}:${config.image.tag}";
-                      imagePullPolicy = config.image.pullPolicy;
-                      command = [ "/velero" ];
-                      args = nodeAgentArgs;
-                      env = credentialEnvVars ++ [
-                        {
-                          name = "NODE_NAME";
-                          valueFrom.fieldRef.fieldPath = "spec.nodeName";
-                        }
-                        {
-                          name = "VELERO_NAMESPACE";
-                          valueFrom.fieldRef.fieldPath = "metadata.namespace";
-                        }
-                        {
-                          name = "VELERO_SCRATCH_DIR";
-                          value = "/scratch";
-                        }
-                      ];
-                      ports = [
-                        {
-                          name = "http-monitoring";
-                          containerPort = 8085;
-                          protocol = "TCP";
-                        }
-                      ];
-                      resources = config.nodeAgent.resources;
-                      volumeMounts =
-                        lib.optionals hasCredentials [
+                    (
+                      {
+                        name = "node-agent";
+                        image = "${config.image.repository}:${config.image.tag}";
+                        imagePullPolicy = config.image.pullPolicy;
+                        command = [ "/velero" ];
+                        args = nodeAgentArgs;
+                        env = credentialEnvVars ++ [
                           {
-                            name = "cloud-credentials";
-                            mountPath = "/credentials";
-                          }
-                        ]
-                        ++ [
-                          {
-                            name = "host-plugins";
-                            mountPath = "/host_plugins";
-                            mountPropagation = "HostToContainer";
+                            name = "NODE_NAME";
+                            valueFrom.fieldRef.fieldPath = "spec.nodeName";
                           }
                           {
-                            name = "host-pods";
-                            mountPath = "/host_pods";
-                            mountPropagation = "HostToContainer";
+                            name = "VELERO_NAMESPACE";
+                            valueFrom.fieldRef.fieldPath = "metadata.namespace";
                           }
                           {
-                            name = "scratch";
-                            mountPath = "/scratch";
+                            name = "VELERO_SCRATCH_DIR";
+                            value = "/scratch";
                           }
                         ];
-                    }
+                        ports = [
+                          {
+                            name = "http-monitoring";
+                            containerPort = 8085;
+                            protocol = "TCP";
+                          }
+                        ];
+                        volumeMounts =
+                          lib.optionals hasCredentials [
+                            {
+                              name = "cloud-credentials";
+                              mountPath = "/credentials";
+                            }
+                          ]
+                          ++ [
+                            {
+                              name = "host-plugins";
+                              mountPath = "/host_plugins";
+                              mountPropagation = "HostToContainer";
+                            }
+                            {
+                              name = "host-pods";
+                              mountPath = "/host_pods";
+                              mountPropagation = "HostToContainer";
+                            }
+                            {
+                              name = "scratch";
+                              mountPath = "/scratch";
+                            }
+                          ];
+                      }
+                      // lib.optionalAttrs (config.nodeAgent.resources != { }) {
+                        resources = config.nodeAgent.resources;
+                      }
+                    )
                   ];
                   volumes =
                     lib.optionals hasCredentials [

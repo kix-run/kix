@@ -258,7 +258,7 @@ rec {
                 ++ selfEgress
                 ++ lib.optional needsApiServerAccess apiServerEgressRule
                 ++ lib.optional (networkMeta.allowExternalEgress or false) {
-                  toEntities = [ "world" ];
+                  toEntities = networkMeta.externalEgressEntities or [ "world" ];
                 }
                 ++ (networkMeta.extraEgress or [ ]);
               in
@@ -293,7 +293,7 @@ rec {
               isHostNet = w.rawManifest.spec.template.spec.hostNetwork or false;
 
               externalRules = lib.optional needsExternalIngress {
-                fromEntities = [ "world" ];
+                fromEntities = networkMeta.externalIngressEntities or [ "world" ];
               };
 
               selfIngress = lib.optional (w.kind == "StatefulSet") {

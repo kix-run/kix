@@ -186,18 +186,6 @@
           ];
         };
       };
-      dashboards = {
-        default = {
-          cardinality-explorer = {
-            gnetId = 11304;
-            revision = 1;
-            datasource = "Prometheus";
-          };
-        };
-      };
-      dashboardsConfigMaps = {
-        default = "prometheus-grafana-dashboards-default";
-      };
       # Admin credentials use the chart-generated secret (prometheus-grafana).
     };
 

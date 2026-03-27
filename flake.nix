@@ -111,6 +111,10 @@
               inherit kix;
               packages = packages';
             };
+            ludo = import ./clusters/ludo.nix {
+              inherit kix;
+              packages = packages';
+            };
           };
 
           # --- Pipeline derivation builders ---

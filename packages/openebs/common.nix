@@ -11,6 +11,8 @@ let
     "app.kubernetes.io/name" = "openebs";
     "app.kubernetes.io/instance" = name;
     "app.kubernetes.io/component" = "mayastor";
+    "openebs.io/release" = name;
+    "openebs.io/version" = "2.8.0";
   };
 
   zfsLabels = {

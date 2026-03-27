@@ -1,15 +1,16 @@
 # Tailscale operator package.
 #
-# Deploys the Tailscale Kubernetes operator with cluster-wide RBAC
-# and an IngressClass for Tailscale-based ingress.
+# Deploys the Tailscale Kubernetes operator with cluster-wide and
+# namespace-scoped RBAC, an IngressClass, ProxyClasses, and Connectors.
 #
-# Resources: ClusterRole, ClusterRoleBinding, IngressClass.
-#
-# root = IngressClass (root resource; depends on RBAC)
+# Resources: ServiceAccount (operator + proxies), Role + RoleBinding (operator + proxies),
+#            ClusterRole, ClusterRoleBinding, Deployment, IngressClass,
+#            ProxyClass (cluster-scoped), Connector (cluster-scoped).
 
 {
   scope,
   lib,
+  kix,
 }:
 
 let
@@ -27,21 +28,76 @@ in
   };
 
   options = {
-    # Name of the ServiceAccount the operator runs as (typically created
-    # by the operator's own deployment manifests, not managed here).
-    operatorServiceAccountName = lib.mkOption {
+    # --- Images ---
+    operatorImage = lib.mkOption {
       type = lib.types.str;
-      default = "operator";
+      default = "tailscale/k8s-operator:v1.82.0";
     };
 
-    # IngressClass controller identifier.
+    proxyImage = lib.mkOption {
+      type = lib.types.str;
+      default = "tailscale/tailscale:v1.82.0";
+    };
+
+    # --- Deployment ---
+    replicaCount = lib.mkOption {
+      type = lib.types.int;
+      default = 1;
+    };
+
+    resources = lib.mkOption {
+      type = lib.types.anything;
+      default = {
+        limits = {
+          cpu = "2";
+          memory = "1Gi";
+        };
+      };
+    };
+
+    # --- Operator env vars (cluster-specific) ---
+    operatorHostname = lib.mkOption {
+      type = lib.types.str;
+      default = "tailscale-operator";
+    };
+
+    operatorInitialTags = lib.mkOption {
+      type = lib.types.str;
+      default = "tag:k8s-operator";
+    };
+
+    operatorLogging = lib.mkOption {
+      type = lib.types.str;
+      default = "info";
+    };
+
+    proxyTags = lib.mkOption {
+      type = lib.types.str;
+      default = "tag:k8s";
+    };
+
+    proxyDefaultClass = lib.mkOption {
+      type = lib.types.str;
+      default = "default";
+    };
+
+    proxyFirewallMode = lib.mkOption {
+      type = lib.types.str;
+      default = "auto";
+    };
+
+    oauthSecretName = lib.mkOption {
+      type = lib.types.str;
+      default = "operator-oauth";
+    };
+
+    # --- IngressClass ---
     ingressClassController = lib.mkOption {
       type = lib.types.str;
       default = "tailscale.com/ts-ingress";
     };
 
-    # ClusterRole rules for the operator.  Sensible defaults cover the
-    # typical Tailscale operator needs; override per-cluster if required.
+    # --- ClusterRole rules ---
     clusterRoleRules = lib.mkOption {
       type = lib.types.listOf lib.types.anything;
       default = [
@@ -144,6 +200,146 @@ in
         }
       ];
     };
+
+    # --- Namespace-scoped operator Role rules ---
+    operatorRoleRules = lib.mkOption {
+      type = lib.types.listOf lib.types.anything;
+      default = [
+        {
+          apiGroups = [ "" ];
+          resources = [
+            "secrets"
+            "serviceaccounts"
+            "configmaps"
+          ];
+          verbs = [
+            "create"
+            "delete"
+            "deletecollection"
+            "get"
+            "list"
+            "patch"
+            "update"
+            "watch"
+          ];
+        }
+        {
+          apiGroups = [ "" ];
+          resources = [ "pods" ];
+          verbs = [
+            "get"
+            "list"
+            "watch"
+            "update"
+          ];
+        }
+        {
+          apiGroups = [ "" ];
+          resources = [ "pods/status" ];
+          verbs = [ "update" ];
+        }
+        {
+          apiGroups = [ "apps" ];
+          resources = [
+            "statefulsets"
+            "deployments"
+          ];
+          verbs = [
+            "create"
+            "delete"
+            "deletecollection"
+            "get"
+            "list"
+            "patch"
+            "update"
+            "watch"
+          ];
+        }
+        {
+          apiGroups = [ "discovery.k8s.io" ];
+          resources = [ "endpointslices" ];
+          verbs = [
+            "get"
+            "list"
+            "watch"
+            "create"
+            "update"
+            "deletecollection"
+          ];
+        }
+        {
+          apiGroups = [ "monitoring.coreos.com" ];
+          resources = [ "servicemonitors" ];
+          verbs = [
+            "get"
+            "list"
+            "update"
+            "create"
+            "delete"
+          ];
+        }
+        {
+          apiGroups = [ "rbac.authorization.k8s.io" ];
+          resources = [
+            "roles"
+            "rolebindings"
+          ];
+          verbs = [
+            "get"
+            "create"
+            "patch"
+            "update"
+            "list"
+            "watch"
+            "deletecollection"
+          ];
+        }
+      ];
+    };
+
+    # --- Proxies Role rules ---
+    proxiesRoleRules = lib.mkOption {
+      type = lib.types.listOf lib.types.anything;
+      default = [
+        {
+          apiGroups = [ "" ];
+          resources = [ "secrets" ];
+          verbs = [
+            "create"
+            "delete"
+            "deletecollection"
+            "get"
+            "list"
+            "patch"
+            "update"
+            "watch"
+          ];
+        }
+        {
+          apiGroups = [ "" ];
+          resources = [ "events" ];
+          verbs = [
+            "create"
+            "patch"
+            "get"
+          ];
+        }
+      ];
+    };
+
+    # --- ProxyClasses (cluster-scoped CRs) ---
+    proxyClasses = lib.mkOption {
+      type = lib.types.attrsOf lib.types.anything;
+      default = { };
+      description = "ProxyClass resources to create. Keys are resource names, values are specs.";
+    };
+
+    # --- Connectors (cluster-scoped CRs) ---
+    connectors = lib.mkOption {
+      type = lib.types.attrsOf lib.types.anything;
+      default = { };
+      description = "Connector resources to create. Keys are resource names, values are specs.";
+    };
   };
 
   build =
@@ -152,7 +348,49 @@ in
       config,
       clusterConfig,
     }:
+    let
+      # --- ProxyClass resources ---
+      proxyClassResources = lib.mapAttrs (
+        pcName: pcSpec:
+        scope.mkClusterResource {
+          apiVersion = "tailscale.com/v1alpha1";
+          kind = "ProxyClass";
+          name = pcName;
+          labels = selectorLabels;
+          spec = pcSpec;
+        }
+      ) config.proxyClasses;
+
+      # --- Connector resources ---
+      connectorResources = lib.mapAttrs (
+        cName: cSpec:
+        scope.mkClusterResource {
+          apiVersion = "tailscale.com/v1alpha1";
+          kind = "Connector";
+          name = cName;
+          labels = selectorLabels;
+          spec = cSpec;
+        }
+      ) config.connectors;
+
+    in
     {
+
+      # --- Operator ServiceAccount ---
+      operatorServiceAccount = scope.mkResource {
+        apiVersion = "v1";
+        kind = "ServiceAccount";
+        name = "operator";
+        labels = selectorLabels;
+      };
+
+      # --- Proxies ServiceAccount ---
+      proxiesServiceAccount = scope.mkResource {
+        apiVersion = "v1";
+        kind = "ServiceAccount";
+        name = "proxies";
+        labels = selectorLabels;
+      };
 
       # --- ClusterRole (operator-wide permissions) ---
       clusterRole = scope.mkClusterResource {
@@ -178,12 +416,186 @@ in
           subjects = [
             {
               kind = "ServiceAccount";
-              name = config.operatorServiceAccountName;
+              name = self.operatorServiceAccount.out.name;
               namespace = scope.namespaceName;
             }
           ];
         };
       };
+
+      # --- Operator Role (namespace-scoped) ---
+      operatorRole = scope.mkResource {
+        apiVersion = "rbac.authorization.k8s.io/v1";
+        kind = "Role";
+        name = "operator";
+        labels = selectorLabels;
+        extra.rules = config.operatorRoleRules;
+      };
+
+      # --- Operator RoleBinding ---
+      operatorRoleBinding = scope.mkResource {
+        apiVersion = "rbac.authorization.k8s.io/v1";
+        kind = "RoleBinding";
+        name = "operator";
+        labels = selectorLabels;
+        extra = {
+          roleRef = {
+            apiGroup = "rbac.authorization.k8s.io";
+            kind = "Role";
+            name = self.operatorRole.out.name;
+          };
+          subjects = [
+            {
+              kind = "ServiceAccount";
+              name = self.operatorServiceAccount.out.name;
+              namespace = scope.namespaceName;
+            }
+          ];
+        };
+      };
+
+      # --- Proxies Role (namespace-scoped) ---
+      proxiesRole = scope.mkResource {
+        apiVersion = "rbac.authorization.k8s.io/v1";
+        kind = "Role";
+        name = "proxies";
+        labels = selectorLabels;
+        extra.rules = config.proxiesRoleRules;
+      };
+
+      # --- Proxies RoleBinding ---
+      proxiesRoleBinding = scope.mkResource {
+        apiVersion = "rbac.authorization.k8s.io/v1";
+        kind = "RoleBinding";
+        name = "proxies";
+        labels = selectorLabels;
+        extra = {
+          roleRef = {
+            apiGroup = "rbac.authorization.k8s.io";
+            kind = "Role";
+            name = self.proxiesRole.out.name;
+          };
+          subjects = [
+            {
+              kind = "ServiceAccount";
+              name = self.proxiesServiceAccount.out.name;
+              namespace = scope.namespaceName;
+            }
+          ];
+        };
+      };
+
+      # --- Operator Deployment ---
+      deployment =
+        {
+          name = "operator";
+          labels = selectorLabels;
+          spec = {
+            replicas = config.replicaCount;
+            selector.matchLabels = {
+              app = "operator";
+            };
+            strategy.type = "Recreate";
+            template.spec = {
+              serviceAccountName = self.operatorServiceAccount.out.name;
+              nodeSelector = {
+                "kubernetes.io/os" = "linux";
+              };
+              containers = [
+                {
+                  name = "operator";
+                  image = config.operatorImage;
+                  imagePullPolicy = "Always";
+                  env = [
+                    {
+                      name = "APISERVER_PROXY";
+                      value = "false";
+                    }
+                    {
+                      name = "CLIENT_ID_FILE";
+                      value = "/oauth/client_id";
+                    }
+                    {
+                      name = "CLIENT_SECRET_FILE";
+                      value = "/oauth/client_secret";
+                    }
+                    {
+                      name = "OPERATOR_HOSTNAME";
+                      value = config.operatorHostname;
+                    }
+                    {
+                      name = "OPERATOR_INITIAL_TAGS";
+                      value = config.operatorInitialTags;
+                    }
+                    {
+                      name = "OPERATOR_LOGGING";
+                      value = config.operatorLogging;
+                    }
+                    {
+                      name = "OPERATOR_NAMESPACE";
+                      valueFrom.fieldRef = {
+                        apiVersion = "v1";
+                        fieldPath = "metadata.namespace";
+                      };
+                    }
+                    {
+                      name = "OPERATOR_SECRET";
+                      value = "operator";
+                    }
+                    {
+                      name = "POD_NAME";
+                      valueFrom.fieldRef = {
+                        apiVersion = "v1";
+                        fieldPath = "metadata.name";
+                      };
+                    }
+                    {
+                      name = "POD_UID";
+                      valueFrom.fieldRef = {
+                        apiVersion = "v1";
+                        fieldPath = "metadata.uid";
+                      };
+                    }
+                    {
+                      name = "PROXY_DEFAULT_CLASS";
+                      value = config.proxyDefaultClass;
+                    }
+                    {
+                      name = "PROXY_FIREWALL_MODE";
+                      value = config.proxyFirewallMode;
+                    }
+                    {
+                      name = "PROXY_IMAGE";
+                      value = config.proxyImage;
+                    }
+                    {
+                      name = "PROXY_TAGS";
+                      value = config.proxyTags;
+                    }
+                  ];
+                  resources = config.resources;
+                  volumeMounts = [
+                    {
+                      mountPath = "/oauth";
+                      name = "oauth";
+                      readOnly = true;
+                    }
+                  ];
+                }
+              ];
+              volumes = [
+                {
+                  name = "oauth";
+                  secret = {
+                    defaultMode = 420;
+                    secretName = config.oauthSecretName;
+                  };
+                }
+              ];
+            };
+          };
+        }
+        |> scope.mkDeployment;
 
       # --- IngressClass (cluster-scoped) ---
       ingressClass = scope.mkClusterResource {
@@ -198,11 +610,19 @@ in
 
       # --- Entry point ---
       root = {
-        resource = self.ingressClass;
+        resource = self.deployment;
         requires = [
           self.clusterRole
           self.clusterRoleBinding
-        ];
+          self.ingressClass
+          self.proxiesServiceAccount
+          self.proxiesRole
+          self.proxiesRoleBinding
+        ]
+        ++ builtins.attrValues proxyClassResources
+        ++ builtins.attrValues connectorResources;
       };
-    };
+    }
+    // proxyClassResources
+    // connectorResources;
 }

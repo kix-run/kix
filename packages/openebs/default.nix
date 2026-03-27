@@ -28,18 +28,52 @@ let
     "app.kubernetes.io/name" = "openebs";
     "app.kubernetes.io/instance" = name;
     "app.kubernetes.io/component" = "mayastor";
+    "openebs.io/release" = name;
+    "openebs.io/version" = "2.8.0";
   };
 
+  zfsVersion = "2.7.1";
   zfsLabels = {
     "app.kubernetes.io/name" = "openebs";
     "app.kubernetes.io/instance" = name;
     "app.kubernetes.io/component" = "zfs-localpv";
   };
 
+  # Labels for ZFS controller-side resources
+  zfsControllerLabels = zfsLabels // {
+    "openebs.io/component-name" = "openebs-zfs-controller";
+    "openebs.io/version" = zfsVersion;
+    role = "openebs-zfs";
+  };
+
+  # Labels for ZFS node-side resources
+  zfsNodeLabels = zfsLabels // {
+    name = "openebs-zfs-node";
+    "openebs.io/component-name" = "openebs-zfs-node";
+    "openebs.io/version" = zfsVersion;
+    role = "openebs-zfs";
+  };
+
+  lvmVersion = "1.6.1";
   lvmLabels = {
     "app.kubernetes.io/name" = "openebs";
     "app.kubernetes.io/instance" = name;
     "app.kubernetes.io/component" = "lvm-localpv";
+  };
+
+  # Labels for LVM controller-side resources
+  lvmControllerLabels = lvmLabels // {
+    "openebs.io/component-name" = "openebs-lvm-controller";
+    "openebs.io/version" = lvmVersion;
+    role = "openebs-lvm";
+  };
+
+  # Labels for LVM node-side resources
+  lvmNodeLabels = lvmLabels // {
+    name = "openebs-lvm-node";
+    "openebs.io/component-name" = "openebs-lvm-node";
+    "openebs.io/version" = lvmVersion;
+    role = "openebs-lvm";
   };
 
   localPvLabels = {
@@ -112,7 +146,7 @@ in
       type = lib.types.anything;
       default = {
         enabled = true;
-        version = "v2.8.0";
+        version = "2.8.0";
         image = {
           ioEngine = "docker.io/openebs/mayastor-io-engine:v2.8.0";
           agentCore = "docker.io/openebs/mayastor-agent-core:v2.8.0";
@@ -199,6 +233,19 @@ in
         image = "openebs/provisioner-localpv:4.2.0";
         basePath = "/var/openebs/local";
       };
+    };
+    diskPools = lib.mkOption {
+      type = lib.types.listOf (
+        lib.types.submodule {
+          options = {
+            name = lib.mkOption { type = lib.types.str; };
+            node = lib.mkOption { type = lib.types.str; };
+            disks = lib.mkOption { type = lib.types.listOf lib.types.str; };
+          };
+        }
+      );
+      default = [ ];
+      description = "DiskPool custom resources for Mayastor";
     };
   };
 
@@ -383,7 +430,7 @@ in
                 namespace = ns;
               }
             ];
-            labels = zfsLabels;
+            labels = zfsControllerLabels;
             roles = {
               "${name}-zfs-provisioner-role" = grant [
                 (core.persistentvolumes |> full)
@@ -472,7 +519,7 @@ in
                 namespace = ns;
               }
             ];
-            labels = zfsLabels;
+            labels = zfsNodeLabels;
             roles = {
               "${name}-zfs-driver-registrar-role" = grant [
                 (
@@ -504,7 +551,7 @@ in
                 namespace = ns;
               }
             ];
-            labels = lvmLabels;
+            labels = lvmControllerLabels;
             roles = {
               "${name}-lvm-provisioner-role" = grant [
                 (core.persistentvolumes |> full)
@@ -593,7 +640,7 @@ in
                 namespace = ns;
               }
             ];
-            labels = lvmLabels;
+            labels = lvmNodeLabels;
             roles = {
               "${name}-lvm-driver-registrar-role" = grant [
                 (
@@ -625,7 +672,9 @@ in
                 namespace = ns;
               }
             ];
-            labels = localPvLabels;
+            labels = localPvLabels // {
+              "openebs.io/component-name" = "${name}-localpv-provisioner";
+            };
             roles = {
               "${name}-localpv-provisioner" = grant [
                 (core.nodes |> watch)
@@ -2483,7 +2532,7 @@ in
             apiVersion = "v1";
             kind = "ServiceAccount";
             name = "${name}-zfs-controller-sa";
-            labels = zfsLabels;
+            labels = zfsControllerLabels;
           })
         else
           null;
@@ -2494,7 +2543,7 @@ in
             apiVersion = "v1";
             kind = "ServiceAccount";
             name = "${name}-zfs-node-sa";
-            labels = zfsLabels;
+            labels = zfsNodeLabels;
           })
         else
           null;
@@ -2523,7 +2572,7 @@ in
             apiVersion = "v1";
             kind = "ConfigMap";
             name = "${name}-zfspv-bin";
-            labels = zfsLabels;
+            labels = zfsNodeLabels;
             data.zfs = ''
               #!/bin/sh
               if [ -x /host/sbin/zfs ]; then
@@ -2545,7 +2594,7 @@ in
             apiVersion = "apps/v1";
             kind = "Deployment";
             name = "${name}-zfs-localpv-controller";
-            labels = zfsLabels // {
+            labels = zfsControllerLabels // {
               app = "openebs-zfs-controller";
             };
             spec = {
@@ -2697,7 +2746,7 @@ in
             apiVersion = "apps/v1";
             kind = "DaemonSet";
             name = "${name}-zfs-localpv-node";
-            labels = zfsLabels // {
+            labels = zfsNodeLabels // {
               app = "openebs-zfs-node";
             };
             spec = {
@@ -2867,7 +2916,7 @@ in
             apiVersion = "v1";
             kind = "ServiceAccount";
             name = "${name}-lvm-controller-sa";
-            labels = lvmLabels;
+            labels = lvmControllerLabels;
           })
         else
           null;
@@ -2878,7 +2927,7 @@ in
             apiVersion = "v1";
             kind = "ServiceAccount";
             name = "${name}-lvm-node-sa";
-            labels = lvmLabels;
+            labels = lvmNodeLabels;
           })
         else
           null;
@@ -2907,7 +2956,7 @@ in
             apiVersion = "apps/v1";
             kind = "Deployment";
             name = "${name}-lvm-localpv-controller";
-            labels = lvmLabels // {
+            labels = lvmControllerLabels // {
               app = "openebs-lvm-controller";
             };
             spec = {
@@ -3059,7 +3108,7 @@ in
             apiVersion = "apps/v1";
             kind = "DaemonSet";
             name = "${name}-lvm-localpv-node";
-            labels = lvmLabels // {
+            labels = lvmNodeLabels // {
               app = "openebs-lvm-node";
             };
             spec = {
@@ -3198,7 +3247,7 @@ in
             apiVersion = "v1";
             kind = "Service";
             name = "${name}-lvm-localpv-node-service";
-            labels = lvmLabels;
+            labels = lvmNodeLabels;
             spec = {
               selector = self.lvmNode.out.selector;
               ports = [
@@ -3224,7 +3273,9 @@ in
             apiVersion = "v1";
             kind = "ServiceAccount";
             name = "${name}-localpv-provisioner";
-            labels = localPvLabels;
+            labels = localPvLabels // {
+              "openebs.io/component-name" = "${name}-localpv-provisioner";
+            };
           })
         else
           null;
@@ -3323,6 +3374,25 @@ in
           null;
 
       # ==========================================================================
+      # ==========================================================================
+      #  DiskPool custom resources
+      # ==========================================================================
+
+      diskPoolResources = lib.listToAttrs (
+        map (pool: {
+          name = "diskPool-${pool.name}";
+          value = scope.mkResource {
+            apiVersion = "openebs.io/v1beta2";
+            kind = "DiskPool";
+            name = pool.name;
+            spec = {
+              node = pool.node;
+              disks = pool.disks;
+            };
+          };
+        }) config.diskPools
+      );
+
       #  Entry point
       # ==========================================================================
 
@@ -3375,7 +3445,9 @@ in
             self.localPvSa
             self.localPvDeployment
             self.localPvStorageClass
-          ];
+          ]
+          # --- DiskPool CRs ---
+          ++ lib.attrValues self.diskPoolResources;
       };
     }
     // mayastorClusterRoles

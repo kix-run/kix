@@ -210,6 +210,7 @@ in
 {
   meta = {
     version = "1.16.3";
+    defaultAliases = [ "stackgresOperator" ];
   };
 
   options = {

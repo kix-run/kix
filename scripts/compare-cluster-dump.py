@@ -1,4 +1,4 @@
-#!/usr/bin/env -S uv run --script
+#!/usr/bin/env -S uv run --quiet --script
 # /// script
 # requires-python = ">=3.11"
 # dependencies = ["pyyaml", "click"]
@@ -14,6 +14,7 @@ Produces a structured markdown report with:
 Output is designed for both human reading and LLM consumption.
 """
 
+import json
 import re
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -235,6 +236,22 @@ def _is_runtime_resource(doc: dict) -> bool:
     if kind == "customresourcedefinition":
         crd_domain = ".".join(name.split(".")[-3:]) if name.count(".") >= 2 else ""
         if crd_domain in _SNAPSHOT_CRD_DOMAINS:
+            return True
+
+    # ---------------------------------------------------------------
+    # StackGres operator-generated resources
+    # ---------------------------------------------------------------
+    # The StackGres operator creates Services (primary/replicas endpoints),
+    # SGScripts (init scripts), and old-format SGPostgresConfigs from SGCluster
+    # definitions. These are not declaratively managed.
+    sg_labels = labels.get("app", "")
+    if sg_labels == "StackGresCluster" and kind == "service":
+        return True
+    if kind in ("sgscript", "sgconfig", "sgdistributedlogs"):
+        return True
+    # Operator-created primary/replicas services follow a naming pattern
+    if kind == "service" and (name.endswith("-primary") or name.endswith("-replicas")):
+        if any(k.startswith("stackgres.io/") for k in labels):
             return True
 
     # ---------------------------------------------------------------
@@ -788,12 +805,254 @@ def generate_report(
     return "\n".join(lines)
 
 
+def _diff_to_dict(d) -> dict:
+    """Convert a Difference dataclass to a JSON-serializable dict."""
+    result = {"path": d.path, "kind": d.kind.value}
+    if d.a_value is not None:
+        result[d.a_label] = d.a_value
+    if d.b_value is not None:
+        result[d.b_label] = d.b_value
+    return result
+
+
+def generate_json_report(
+    kix_dir: Path,
+    cluster_dir: Path,
+    kix_resources: dict[str, dict],
+    cluster_resources: dict[str, dict],
+    ignore_paths: set[str] | None,
+) -> dict:
+    """Generate a structured JSON diff report."""
+    kix_keys = set(kix_resources.keys())
+    cluster_keys = set(cluster_resources.keys())
+
+    common = kix_keys & cluster_keys
+    kix_only = sorted(kix_keys - cluster_keys)
+    cluster_only = sorted(cluster_keys - kix_keys)
+
+    identical = []
+    modified = []
+
+    for key in sorted(common):
+        diffs = structural_diff(
+            kix_resources[key],
+            cluster_resources[key],
+            "$",
+            ignore_paths,
+            a_label="kix",
+            b_label="cluster",
+        )
+        if diffs:
+            modified.append((key, diffs))
+        else:
+            identical.append(key)
+
+    # Find probable renames
+    rename_pairs = find_rename_pairs(
+        kix_only,
+        cluster_only,
+        kix_resources,
+        cluster_resources,
+        ignore_paths,
+    )
+    renamed_kix = {kix_key for kix_key, _, _, _ in rename_pairs}
+    renamed_cluster = {cluster_key for _, cluster_key, _, _ in rename_pairs}
+
+    _RENAME_ONLY_PATHS = {"$.metadata.name", "$.metadata.namespace"}
+    for kix_key, cluster_key, ratio, diffs in rename_pairs:
+        non_rename_diffs = [d for d in diffs if d.path not in _RENAME_ONLY_PATHS]
+        if non_rename_diffs:
+            modified.append((kix_key, non_rename_diffs))
+        else:
+            identical.append(kix_key)
+
+    def _resource_entry(key: str) -> dict:
+        kind, ns, name = parse_resource_id(key)
+        return {"key": key, "kind": kind, "namespace": ns, "name": name}
+
+    def _modified_entry(key: str, diffs) -> dict:
+        entry = _resource_entry(key)
+        entry["diffs"] = [_diff_to_dict(d) for d in diffs]
+        entry["counts"] = {
+            "extra": sum(1 for d in diffs if d.kind == DiffKind.EXTRA_IN_B),
+            "missing": sum(1 for d in diffs if d.kind == DiffKind.MISSING_IN_B),
+            "changed": sum(
+                1
+                for d in diffs
+                if d.kind in (DiffKind.VALUE_MISMATCH, DiffKind.TYPE_MISMATCH)
+            ),
+        }
+        return entry
+
+    unmatched_kix = [k for k in kix_only if k not in renamed_kix]
+    unmatched_cluster = [k for k in cluster_only if k not in renamed_cluster]
+
+    total_extra = sum(
+        sum(1 for d in diffs if d.kind == DiffKind.EXTRA_IN_B) for _, diffs in modified
+    )
+    total_missing = sum(
+        sum(1 for d in diffs if d.kind == DiffKind.MISSING_IN_B)
+        for _, diffs in modified
+    )
+    total_changed = sum(
+        sum(
+            1
+            for d in diffs
+            if d.kind in (DiffKind.VALUE_MISMATCH, DiffKind.TYPE_MISMATCH)
+        )
+        for _, diffs in modified
+    )
+
+    return {
+        "generated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "kix_dir": str(kix_dir),
+        "cluster_dir": str(cluster_dir),
+        "kix_resource_count": len(kix_resources),
+        "cluster_resource_count": len(cluster_resources),
+        "summary": {
+            "identical": len(identical),
+            "modified": len(modified),
+            "kix_only": len(unmatched_kix),
+            "cluster_only": len(unmatched_cluster),
+            "total": len(identical)
+            + len(modified)
+            + len(unmatched_kix)
+            + len(unmatched_cluster),
+            "diff_totals": {
+                "extra": total_extra,
+                "missing": total_missing,
+                "changed": total_changed,
+            },
+        },
+        "renames": [
+            {
+                "kix": _resource_entry(kix_key),
+                "cluster": _resource_entry(cluster_key),
+                "match_ratio": round(ratio, 3),
+                "diffs": [
+                    _diff_to_dict(d) for d in diffs if d.path not in _RENAME_ONLY_PATHS
+                ],
+            }
+            for kix_key, cluster_key, ratio, diffs in rename_pairs
+        ],
+        "kix_only": [_resource_entry(k) for k in unmatched_kix],
+        "cluster_only": [_resource_entry(k) for k in unmatched_cluster],
+        "modified": [_modified_entry(key, diffs) for key, diffs in modified],
+        "identical": [_resource_entry(k) for k in identical],
+    }
+
+
 def _strip_crd_schema(doc: dict) -> dict:
     """Remove the OpenAPI schema from CRD versions to skip schema comparison."""
     if doc.get("kind") != "CustomResourceDefinition":
         return doc
     for version in doc.get("spec", {}).get("versions", []):
         version.pop("schema", None)
+    return doc
+
+
+def _strip_crd_runtime(doc: dict) -> dict:
+    """Strip CRD fields that operators add at runtime.
+
+    Removes: spec.conversion (webhook config injected by operators),
+    spec.versions[].additionalPrinterColumns, spec.names.shortNames,
+    spec.names.categories, and operator-injected metadata.labels on CRDs.
+    """
+    if doc.get("kind") != "CustomResourceDefinition":
+        return doc
+    spec = doc.get("spec", {})
+    spec.pop("conversion", None)
+    for version in spec.get("versions", []):
+        version.pop("additionalPrinterColumns", None)
+    names = spec.get("names", {})
+    names.pop("shortNames", None)
+    names.pop("categories", None)
+    # Remove operator-injected labels (e.g. operator.kubevirt.io)
+    metadata = doc.get("metadata", {})
+    labels = metadata.get("labels", {})
+    for key in list(labels.keys()):
+        if "operator" in key:
+            del labels[key]
+    return doc
+
+
+def _strip_webhook_match_policy(doc: dict) -> dict:
+    """Strip matchPolicy from webhook configurations (cluster default added by K8s)."""
+    kind = doc.get("kind", "")
+    if kind not in ("MutatingWebhookConfiguration", "ValidatingWebhookConfiguration"):
+        return doc
+    for webhook in doc.get("webhooks", []):
+        webhook.pop("matchPolicy", None)
+    return doc
+
+
+# StackGres fields that the operator enriches at runtime — never in declarative manifests.
+_SG_CLUSTER_RUNTIME_FIELDS = {
+    "managedSql",
+    "nonProductionOptions",
+    "toInstallPostgresExtensions",
+}
+_SG_CLUSTER_PODS_RUNTIME_FIELDS = {
+    "disableConnectionPooling",
+    "disableEnvoy",
+    "disableMetricsExporter",
+    "disablePostgresUtil",
+    "managementPolicy",
+    "resources",
+    "scheduling",
+}
+_SG_CLUSTER_CONFIGS_RUNTIME_FIELDS = {
+    "observability",
+}
+_SG_PROFILE_RUNTIME_FIELDS = {
+    "containers",
+    "initContainers",
+    "requests",
+    "hugePages",
+    "cpu",  # operator recalculates as total (2x declared) in millicpu format
+    "memory",  # operator recalculates as total in Mi format
+}
+
+
+def _strip_sg_runtime(doc: dict) -> dict:
+    """Strip StackGres operator-enriched fields from SGCluster/SGInstanceProfile.
+
+    The StackGres operator populates many spec fields with defaults at runtime
+    that are not present in the declarative manifest.
+    """
+    kind = doc.get("kind", "")
+    spec = doc.get("spec", {})
+
+    if kind == "SGCluster":
+        for field in _SG_CLUSTER_RUNTIME_FIELDS:
+            spec.pop(field, None)
+        pods = spec.get("pods", {})
+        for field in _SG_CLUSTER_PODS_RUNTIME_FIELDS:
+            pods.pop(field, None)
+        configs = spec.get("configurations", {})
+        for field in _SG_CLUSTER_CONFIGS_RUNTIME_FIELDS:
+            configs.pop(field, None)
+        # Normalize backup entries: strip operator-added fields so only
+        # the declarative fields are compared.
+        for backup in configs.get("backups", []):
+            for f in (
+                "fastVolumeSnapshot",
+                "path",
+                "performance",
+                "reconciliationTimeout",
+                "useVolumeSnapshot",
+            ):
+                backup.pop(f, None)
+        # Normalize postgres version to major only (operator stores minor e.g. 16.8)
+        pg = spec.get("postgres", {})
+        ver = pg.get("version", "")
+        if "." in str(ver):
+            pg["version"] = str(ver).split(".")[0]
+
+    elif kind == "SGInstanceProfile":
+        for field in _SG_PROFILE_RUNTIME_FIELDS:
+            spec.pop(field, None)
+
     return doc
 
 
@@ -855,10 +1114,25 @@ def _strip_crd_schema(doc: dict) -> dict:
     help="Skip the OpenAPI schema validation section of CRDs (spec.versions[].schema)",
 )
 @click.option(
+    "--skip-crd-runtime/--no-skip-crd-runtime",
+    default=False,
+    help="Skip CRD fields added at runtime (conversion webhooks, additionalPrinterColumns, shortNames, categories)",
+)
+@click.option(
+    "--skip-webhook-defaults/--no-skip-webhook-defaults",
+    default=False,
+    help="Skip webhook matchPolicy field (K8s auto-assigns 'Equivalent')",
+)
+@click.option(
+    "--skip-sg-runtime/--no-skip-sg-runtime",
+    default=False,
+    help="Skip StackGres operator-enriched fields (runtime defaults in SGCluster, SGInstanceProfile)",
+)
+@click.option(
     "--skip-all",
     is_flag=True,
     default=False,
-    help="Enable all skip/ignore flags (cluster-defaults, port-names, dns-suffix, controller-owned, runtime, crd-schema)",
+    help="Enable all skip/ignore flags",
 )
 @click.option(
     "--files-only",
@@ -872,6 +1146,21 @@ def _strip_crd_schema(doc: dict) -> dict:
     default=False,
     help="Hide identical resources from the output",
 )
+@click.option(
+    "--json-output",
+    "json_output",
+    is_flag=True,
+    default=False,
+    help="Output structured JSON instead of markdown/colored text",
+)
+@click.option(
+    "-o",
+    "--output",
+    "output_file",
+    type=click.Path(dir_okay=False, writable=True),
+    default=None,
+    help="Write output to a file instead of stdout (useful with --json-output to avoid shell noise)",
+)
 def main(
     kix_dir: str,
     cluster_dir: str,
@@ -883,11 +1172,16 @@ def main(
     ignore_port_names: bool,
     ignore_dns_suffix: bool,
     skip_crd_schema: bool,
+    skip_crd_runtime: bool,
+    skip_webhook_defaults: bool,
+    skip_sg_runtime: bool,
     skip_controller_owned: bool,
     skip_runtime: bool,
     skip_all: bool,
     files_only: bool,
     only_broken: bool,
+    json_output: bool,
+    output_file: str | None,
 ):
     """Compare kix manifests against a cluster dump.
 
@@ -907,6 +1201,9 @@ def main(
         skip_controller_owned = True
         skip_runtime = True
         skip_crd_schema = True
+        skip_crd_runtime = True
+        skip_webhook_defaults = True
+        skip_sg_runtime = True
 
     ignore_paths = set(ignore_path) if ignore_path else set()
     if ignore_cluster_defaults:
@@ -921,6 +1218,12 @@ def main(
         post_steps.append(normalize_dns_suffix)
     if skip_crd_schema:
         post_steps.append(_strip_crd_schema)
+    if skip_crd_runtime:
+        post_steps.append(_strip_crd_runtime)
+    if skip_webhook_defaults:
+        post_steps.append(_strip_webhook_match_policy)
+    if skip_sg_runtime:
+        post_steps.append(_strip_sg_runtime)
 
     def _with_post(base_normalizer):
         def wrapped(doc):
@@ -948,23 +1251,38 @@ def main(
     )
     click.echo(f"  {len(cluster_resources)} resources", err=True)
 
-    # Resolve color: explicit flag wins, otherwise auto-detect TTY on stdout
-    use_color = color if color is not None else sys.stdout.isatty()
+    if json_output:
+        report_text = json.dumps(
+            generate_json_report(
+                kix_path,
+                cluster_path,
+                kix_resources,
+                cluster_resources,
+                ignore_paths,
+            ),
+            indent=2,
+            default=str,
+        )
+    else:
+        # Resolve color: explicit flag wins, otherwise auto-detect TTY on stdout
+        use_color = color if color is not None else sys.stdout.isatty()
+        report_text = generate_report(
+            kix_path,
+            cluster_path,
+            kix_resources,
+            cluster_resources,
+            ignore_paths,
+            color=use_color,
+            full_diff=full_diff,
+            files_only=files_only,
+            only_broken=only_broken,
+        )
 
-    report = generate_report(
-        kix_path,
-        cluster_path,
-        kix_resources,
-        cluster_resources,
-        ignore_paths,
-        color=use_color,
-        full_diff=full_diff,
-        files_only=files_only,
-        only_broken=only_broken,
-    )
-
-    # Write report to stdout (progress messages go to stderr)
-    click.echo(report)
+    if output_file:
+        Path(output_file).write_text(report_text + "\n")
+        click.echo(f"Wrote output to {output_file}", err=True)
+    else:
+        click.echo(report_text)
 
 
 if __name__ == "__main__":

@@ -110,7 +110,7 @@ in
 
   # Install lefthook git hooks on shell entry
   enterShell = ''
-    lefthook install 2>/dev/null || true
+    # lefthook install >/dev/null 2>&1 || true
   '';
 
   # kix CLI

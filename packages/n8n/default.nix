@@ -169,7 +169,8 @@ in
           DB_POSTGRESDB_DATABASE = config.database.name;
           DB_POSTGRESDB_USER = config.database.user;
           # Redis / Queue — derived from valkey DI dep
-          QUEUE_BULL_REDIS_HOST = valkey.out.fqdn;
+          QUEUE_BULL_REDIS_HOST = valkey.out.primaryFqdn;
+          QUEUE_BULL_REDIS_PORT = valkey.out.port;
           # Execution mode — queue mode for workers
           EXECUTIONS_MODE = "queue";
         }

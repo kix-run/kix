@@ -6,7 +6,7 @@
 #
 # Resources: ServiceAccount, ClusterRole, ClusterRoleBinding, Role,
 # RoleBinding, ConfigMap (NGINX config), Deployment, Service
-# (LoadBalancer/ClusterIP), IngressClass.
+# (LoadBalancer/ClusterIP), IngressClass, ValidatingWebhookConfiguration.
 #
 # root = Service, selecting the Deployment via out.selector.
 # IngressClass and ConfigMap pulled in via requires.
@@ -39,7 +39,7 @@ let
 in
 {
   meta = {
-    version = "v1.13.2";
+    version = "v1.14.0";
     description = "NGINX Ingress Controller for Kubernetes";
     provides = [
       "ingress"
@@ -59,17 +59,17 @@ in
       type = lib.types.anything;
       default = {
         repository = "registry.k8s.io/ingress-nginx/controller";
-        tag = "v1.13.2";
+        tag = "v1.14.0";
         pullPolicy = "IfNotPresent";
       };
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;
-      default = 3;
+      default = 1;
     };
     serviceType = lib.mkOption {
       type = lib.types.str;
-      default = "LoadBalancer";
+      default = "ClusterIP";
     };
     externalTrafficPolicy = lib.mkOption {
       type = lib.types.str;
@@ -85,7 +85,7 @@ in
     };
     isDefaultClass = lib.mkOption {
       type = lib.types.bool;
-      default = false;
+      default = true;
     };
     controllerValue = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
@@ -160,7 +160,7 @@ in
       controllerValue =
         if config.controllerValue != null then config.controllerValue else "k8s.io/${name}";
 
-      electionId = "ingress-controller-${name}-leader";
+      electionId = "${name}-leader";
 
       selectorLabels = {
         "app.kubernetes.io/name" = "ingress-nginx";
@@ -286,7 +286,7 @@ in
       configmap = scope.mkResource {
         apiVersion = "v1";
         kind = "ConfigMap";
-        name = "${name}-controller";
+        name = name;
         labels = commonLabels;
         data =
           config.config
@@ -299,7 +299,7 @@ in
       deployment = scope.mkResource {
         apiVersion = "apps/v1";
         kind = "Deployment";
-        name = "${name}-controller";
+        name = name;
         labels = commonLabels;
         spec = {
           replicas = config.replicaCount;
@@ -328,7 +328,7 @@ in
                   imagePullPolicy = config.image.pullPolicy;
                   args = [
                     "/nginx-ingress-controller"
-                    "--publish-service=$(POD_NAMESPACE)/${name}-controller"
+                    "--publish-service=$(POD_NAMESPACE)/${name}"
                     "--election-id=${electionId}"
                     "--controller-class=${controllerValue}"
                     "--ingress-class=${ingressClassName}"
@@ -472,7 +472,7 @@ in
         scope.mkResource {
           apiVersion = "v1";
           kind = "Service";
-          name = "${name}-controller";
+          name = name;
           labels = commonLabels;
           spec = {
             type = config.serviceType;
@@ -508,6 +508,7 @@ in
             self.configmap
             self.pdb
             self.admissionService
+            self.admissionWebhook
           ];
         };
 
@@ -515,7 +516,7 @@ in
       pdb = scope.mkResource {
         apiVersion = "policy/v1";
         kind = "PodDisruptionBudget";
-        name = "${name}-controller";
+        name = name;
         labels = commonLabels;
         spec = {
           minAvailable = 1;
@@ -527,7 +528,7 @@ in
       admissionService = scope.mkResource {
         apiVersion = "v1";
         kind = "Service";
-        name = "${name}-controller-admission";
+        name = "${name}-admission";
         labels = commonLabels;
         spec = {
           type = "ClusterIP";
@@ -542,6 +543,44 @@ in
             }
           ];
         };
+      };
+
+      # --- ValidatingWebhookConfiguration (cluster-scoped) ---
+      admissionWebhook = scope.mkClusterResource {
+        apiVersion = "admissionregistration.k8s.io/v1";
+        kind = "ValidatingWebhookConfiguration";
+        name = "${name}-admission";
+        labels = commonLabels // {
+          "app.kubernetes.io/component" = "admission-webhook";
+        };
+        extra.webhooks = [
+          {
+            name = "validate.nginx.ingress.kubernetes.io";
+            admissionReviewVersions = [ "v1" ];
+            clientConfig.service = {
+              name = self.admissionService.out.name;
+              namespace = scope.namespaceName;
+              path = "/networking/v1/ingresses";
+              port = 443;
+            };
+            failurePolicy = "Fail";
+            matchPolicy = "Equivalent";
+            rules = [
+              {
+                apiGroups = [ "networking.k8s.io" ];
+                apiVersions = [ "v1" ];
+                operations = [
+                  "CREATE"
+                  "UPDATE"
+                ];
+                resources = [ "ingresses" ];
+                scope = "*";
+              }
+            ];
+            sideEffects = "None";
+            timeoutSeconds = 10;
+          }
+        ];
       };
 
       # --- IngressClass (cluster-scoped) ---

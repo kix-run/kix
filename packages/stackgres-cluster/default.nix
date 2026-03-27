@@ -132,6 +132,7 @@ in
       config,
       clusterConfig,
       storageClasses ? null,
+      stackgresOperator, # runtime dep — ensures operator is deployed before clusters
     }:
     let
       # Parse memory to MB for calculations.
@@ -246,7 +247,11 @@ in
       pgConfig = scope.mkResource {
         apiVersion = "stackgres.io/v1";
         kind = "SGPostgresConfig";
-        name = if config.pgConfig.name != null then config.pgConfig.name else "${name}-config";
+        name =
+          if config.pgConfig.name != null then
+            config.pgConfig.name
+          else
+            "${name}-pg${config.postgres.version}-config";
         labels = selectorLabels;
         spec = {
           postgresVersion = config.postgres.version;
@@ -365,7 +370,6 @@ in
             sgPostgresConfig = self.pgConfig.out.name;
           }
           // lib.optionalAttrs config.backup.enabled {
-            sgObjectStorage = self.objectStorage.out.name;
             backups = [
               {
                 sgObjectStorage = self.objectStorage.out.name;

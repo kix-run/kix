@@ -1,11 +1,8 @@
 # Monitoring — Prometheus, Grafana, Loki, Promtail.
-# Lightweight config for a single-node home server.
-# Owned by: Luca (platform)
 
 {
   config,
   lib,
-  packages,
   kix,
   ...
 }:
@@ -27,31 +24,9 @@
           releaseName = "prometheus";
           includeCrds = true;
         };
-
         config.values = {
-          # Tune for 16GB RAM — keep retention short, small resource requests
-          prometheus.prometheusSpec = {
-            retention = "7d";
-            resources = {
-              requests = {
-                cpu = "100m";
-                memory = "512Mi";
-              };
-              limits = {
-                memory = "1Gi";
-              };
-            };
-          };
+          prometheus.prometheusSpec.retention = "7d";
           grafana = {
-            resources = {
-              requests = {
-                cpu = "50m";
-                memory = "128Mi";
-              };
-              limits = {
-                memory = "256Mi";
-              };
-            };
             "grafana.ini".server.root_url = "https://grafana.${config.cluster.domain}";
             additionalDataSources = [
               {
