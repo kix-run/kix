@@ -17,6 +17,7 @@ let
 in
 {
   meta = {
+    version = "2.10.0-cf";
     description = "Caddy reverse proxy";
     network = {
       externalIngressEntities = [ "all" ];

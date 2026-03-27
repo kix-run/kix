@@ -72,6 +72,19 @@ in
           kind = "Service";
           name = "homeassistant-home-assistant";
         };
+        # StatefulSet needs a headless Service for per-pod DNS identity.
+        patchResources = map (
+          r:
+          if r.kind == "Service" && r.metadata.name == "homeassistant-home-assistant" then
+            r
+            // {
+              spec = r.spec // {
+                clusterIP = "None";
+              };
+            }
+          else
+            r
+        );
       };
       config.values = {
         ingress = {

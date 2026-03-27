@@ -12,6 +12,7 @@ let
   # Create a helm-bridge package from the local chart.
   testChartPackage = kix.fromHelmChart {
     chart = testChartPath;
+    version = "0.1.0";
     values = {
       replicaCount = 2;
       image.tag = "1.27-alpine";

@@ -1276,6 +1276,7 @@ in
               "app.kubernetes.io/component" = "nats";
             };
             spec = {
+              clusterIP = "None";
               selector = self.natsStatefulSet.out.selector;
               publishNotReadyAddresses = true;
               ports = [
@@ -1671,8 +1672,6 @@ in
             requires = [
               self.etcdService
               self.natsService
-              self.mayastorSa
-              self.priorityClass
             ];
           })
         else
@@ -1816,7 +1815,6 @@ in
             requires = [
               self.agentCoreService
               self.etcdService
-              self.priorityClass
             ];
           })
         else
@@ -1911,8 +1909,6 @@ in
               self.apiRestService
               self.agentCoreService
               self.etcdService
-              self.mayastorSa
-              self.priorityClass
             ];
           })
         else
@@ -2108,8 +2104,6 @@ in
             };
             requires = [
               self.apiRestService
-              self.mayastorSa
-              self.priorityClass
             ];
           })
         else
@@ -2318,7 +2312,6 @@ in
             };
             requires = [
               self.apiRestService
-              self.mayastorSa
             ];
           })
         else
@@ -2818,8 +2811,7 @@ in
               replicas = 1;
               selector.matchLabels = {
                 app = "openebs-zfs-controller";
-                component = "openebs-zfs-controller";
-                release = name;
+                name = "openebs-zfs-controller";
               };
               template = {
                 metadata.labels = {
@@ -2960,7 +2952,6 @@ in
               };
             };
             requires = [
-              self.zfsControllerSa
               self.zfsCsiDriver
             ];
           })
@@ -2979,8 +2970,8 @@ in
             };
             spec = {
               selector.matchLabels = {
+                app = "openebs-zfs-node";
                 name = "openebs-zfs-node";
-                release = name;
               };
               updateStrategy = {
                 type = "RollingUpdate";
@@ -3167,8 +3158,6 @@ in
               };
             };
             requires = [
-              self.zfsNodeSa
-              self.zfsConfigMap
               self.zfsCsiDriver
             ];
           })
@@ -3233,8 +3222,7 @@ in
               replicas = 1;
               selector.matchLabels = {
                 app = "openebs-lvm-controller";
-                component = "openebs-lvm-controller";
-                release = name;
+                name = "openebs-lvm-controller";
               };
               template = {
                 metadata.labels = {
@@ -3381,7 +3369,6 @@ in
               };
             };
             requires = [
-              self.lvmControllerSa
               self.lvmCsiDriver
             ];
           })
@@ -3400,8 +3387,8 @@ in
             };
             spec = {
               selector.matchLabels = {
+                app = "openebs-lvm-node";
                 name = "openebs-lvm-node";
-                release = name;
               };
               updateStrategy = {
                 type = "RollingUpdate";
@@ -3558,7 +3545,6 @@ in
               };
             };
             requires = [
-              self.lvmNodeSa
               self.lvmCsiDriver
             ];
           })
@@ -3619,8 +3605,7 @@ in
               strategy.type = "Recreate";
               selector.matchLabels = {
                 app = "localpv-provisioner";
-                component = "localpv-provisioner";
-                release = name;
+                name = "${name}-localpv-provisioner";
               };
               template = {
                 metadata.labels = {
@@ -3680,7 +3665,7 @@ in
                 };
               };
             };
-            requires = [ self.localPvSa ];
+            requires = [ ];
           })
         else
           null;

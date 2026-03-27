@@ -25,6 +25,7 @@
     # k3s provides local-path-provisioner; this satisfies the storageClasses DI dep.
     kube-system.storage-classes = {
       package = {
+        meta.version = "1.0.0";
         meta.defaultAliases = [ "storageClasses" ];
         build =
           { scope, ... }:

@@ -13,6 +13,7 @@
 let
   # Minimal test package that requires valkey as a hard dependency.
   testAppPackage = {
+    meta.version = "0.0.0";
     build =
       { scope, valkey, ... }:
       {
@@ -42,6 +43,7 @@ let
 
   # A package that requires coredns — used to test optional activation.
   needsCorednsPackage = {
+    meta.version = "0.0.0";
     build =
       { scope, coredns, ... }:
       {
