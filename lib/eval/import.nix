@@ -149,13 +149,40 @@ rec {
               inherit instCfg clusterConfig;
             };
 
-            # Run fixpoint — only out will be forced
+            # Run fixpoint — only out will be forced.
+            # Null out dep args: imports run in isolation, deps aren't resolved.
+            buildEntries =
+              if builtins.isList raw.build then
+                map (entry: if builtins.isPath entry then import entry else entry) raw.build
+              else
+                [ raw.build ];
+            allBuildArgs = builtins.foldl' (acc: fn: acc // builtins.functionArgs fn) { } buildEntries;
+            depArgNames' = builtins.attrNames (
+              removeAttrs allBuildArgs [
+                "self"
+                "config"
+                "clusterConfig"
+                "scope"
+                "lib"
+                "kix"
+                "deps"
+              ]
+            );
+            nullBuildDeps = builtins.listToAttrs (
+              map (name: {
+                inherit name;
+                value = null;
+              }) depArgNames'
+            );
             parts = lib.fix (
               self:
-              raw.build {
-                inherit self clusterConfig;
-                config = evaluatedConfig;
-              }
+              raw.build (
+                {
+                  inherit self clusterConfig;
+                  config = evaluatedConfig;
+                }
+                // nullBuildDeps
+              )
             );
 
             # Extract root's out

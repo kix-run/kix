@@ -13,6 +13,11 @@ kix.buildCluster {
     {
       availablePackages = packages;
 
+      # Operator is cluster-scoped — declare once to avoid duplicate CRDs.
+      instances.stackgres-system.stackgres-operator = {
+        package = packages.stackgres-operator;
+      };
+
       instances.immich = {
         immich = {
           package = packages.immich;

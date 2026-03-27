@@ -19,6 +19,7 @@ kix.buildCluster {
         kube-system = { };
         cache = { };
         cert-manager = { };
+        stackgres-system = { };
         immich = { };
       };
 
@@ -116,6 +117,12 @@ kix.buildCluster {
           cert-manager = {
             package = packages.cert-manager;
 
+          };
+        };
+
+        stackgres-system = {
+          stackgres-operator = {
+            package = packages.stackgres-operator;
           };
         };
 
