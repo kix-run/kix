@@ -10,7 +10,6 @@
 {
   scope,
   lib,
-  certManager,
 }:
 
 {
@@ -55,6 +54,7 @@
       self,
       config,
       clusterConfig,
+      certManager,
     }:
     let
       # Use CRD builders from cert-manager's crds folder (via DI).

@@ -12,7 +12,6 @@
 {
   scope,
   lib,
-  prometheus ? null,
 }:
 
 let
@@ -137,6 +136,7 @@ in
       self,
       config,
       clusterConfig,
+      prometheus ? null,
     }:
     let
       # Whether PDB is enabled: at least one of minAvailable/maxUnavailable is set.

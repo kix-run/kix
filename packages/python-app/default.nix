@@ -17,10 +17,6 @@
   scope,
   lib,
   kix,
-  postgres ? null,
-  valkey ? null,
-  ingressNginx ? null,
-  clusterIssuer ? null,
 }:
 
 let
@@ -295,6 +291,10 @@ in
       self,
       config,
       clusterConfig,
+      postgres ? null,
+      valkey ? null,
+      ingressNginx ? null,
+      clusterIssuer ? null,
     }:
     let
 

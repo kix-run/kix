@@ -17,7 +17,6 @@
 {
   scope,
   lib,
-  objectStorage ? null,
 }:
 
 let
@@ -149,6 +148,7 @@ in
       self,
       config,
       clusterConfig,
+      objectStorage ? null,
     }:
     let
       # S3 endpoint: explicit config > objectStorage DI dep

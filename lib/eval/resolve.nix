@@ -1,7 +1,26 @@
 # Resolution and dependency injection — index building, DNS-like arg resolution,
-# config evaluation, and kixCallPackage.
+# config evaluation, and two-phase package calling.
 
 { lib, kixlib }:
+
+let
+  systemArgNames = [
+    "scope"
+    "lib"
+    "kix"
+  ];
+
+  # Args that are passed to build functions by the eval system (not deps).
+  systemBuildArgNames = [
+    "self"
+    "config"
+    "clusterConfig"
+    "scope"
+    "lib"
+    "kix"
+    "deps"
+  ];
+in
 
 rec {
   # Build the resolution index from static metadata.
@@ -165,60 +184,71 @@ rec {
     in
     lib.recursiveUpdate optionDefaults evaluated;
 
-  # Introspect package function args, resolve deps, call function.
-  # Returns { options, build } — the package's typed options and build function.
-  # allInstances is the outer fixpoint — used to look up resolved deps.
-  kixCallPackage =
-    {
-      packageFn,
-      scope,
-      resolutionIndex,
-      allInstances,
-      deps ? { },
-      namespace,
-    }:
+  # Phase 1: call package function with system args only.
+  # Returns { meta?, options?, deps?, build, assertions?, warnings? }.
+  # No dep resolution — package function must not take dep args.
+  callPackagePhase1 =
+    { packageFn, scope }:
     let
       fnArgs = builtins.functionArgs packageFn;
-      systemArgNames = [
-        "scope"
-        "lib"
-        "kix"
-      ];
-      depArgNames = builtins.attrNames (removeAttrs fnArgs systemArgNames);
-
-      # Resolve each dependency
-      resolvedDeps = builtins.foldl' (
-        acc: argName:
-        let
-          explicitOverride = deps.${argName} or null;
-          resolution = resolveArg {
-            inherit argName resolutionIndex explicitOverride;
-            requesterNamespace = namespace;
-            hasDefault = fnArgs.${argName} or false;
-          };
-        in
-        if resolution.found then
-          acc
-          // {
-            ${argName} =
-              if resolution.direct or false then
-                resolution.value
-              else
-                allInstances.${resolution.namespace}.${resolution.instanceName};
-          }
-        else
-          acc # arg has Nix default, let it fall through
-      ) { } depArgNames;
-
     in
+    packageFn (
+      {
+        inherit scope lib;
+      }
+      // lib.optionalAttrs (fnArgs ? kix) { kix = kixlib; }
+    );
+
+  # Discover deps by introspecting build function args.
+  # Returns { depName = { optional = bool; }; } for each discovered dep.
+  discoverBuildDeps =
+    rawBuild:
+    let
+      buildEntries =
+        if builtins.isList rawBuild then
+          map (entry: if builtins.isPath entry then import entry else entry) rawBuild
+        else
+          [ rawBuild ];
+      # Union all build function args across entries
+      allBuildArgs = builtins.foldl' (acc: fn: acc // builtins.functionArgs fn) { } buildEntries;
+      depArgs = removeAttrs allBuildArgs systemBuildArgNames;
+    in
+    lib.mapAttrs (name: hasDefault: { optional = hasDefault; }) depArgs;
+
+  # Resolve discovered deps against the cluster.
+  # Returns attrset of resolved dep instances (by name).
+  resolveDeclaredDeps =
     {
-      result = packageFn (
-        {
-          inherit scope lib;
+      declaredDeps,
+      resolutionIndex,
+      namespace,
+      explicitOverrides,
+      allInstances,
+    }:
+    builtins.foldl' (
+      acc: argName:
+      let
+        depSpec = declaredDeps.${argName};
+        isOptional = depSpec.optional or false;
+        explicitOverride = explicitOverrides.${argName} or null;
+        resolution = resolveArg {
+          inherit argName resolutionIndex explicitOverride;
+          requesterNamespace = namespace;
+          hasDefault = isOptional;
+        };
+      in
+      if resolution.found then
+        acc
+        // {
+          ${argName} =
+            if resolution.direct or false then
+              resolution.value
+            else
+              allInstances.${resolution.namespace}.${resolution.instanceName};
         }
-        // lib.optionalAttrs (fnArgs ? kix) { kix = kixlib; }
-        // resolvedDeps
-      );
-      inherit resolvedDeps;
-    };
+      else
+        acc # optional dep, not found — will get null via Nix default
+    ) { } (builtins.attrNames declaredDeps);
+
+  inherit systemArgNames systemBuildArgNames;
 }

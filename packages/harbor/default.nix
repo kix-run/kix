@@ -27,10 +27,6 @@
   scope,
   lib,
   kix,
-  postgres,
-  ingressNginx ? null,
-  clusterIssuer ? null,
-  prometheus ? null,
 }:
 
 let
@@ -197,6 +193,10 @@ in
       self,
       config,
       clusterConfig,
+      postgres,
+      ingressNginx ? null,
+      clusterIssuer ? null,
+      prometheus ? null,
     }:
     let
       # --- Derived values ---

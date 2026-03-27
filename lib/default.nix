@@ -42,7 +42,9 @@ in
     mkNamespace
     buildResolutionIndex
     resolveArg
-    kixCallPackage
+    callPackagePhase1
+    discoverBuildDeps
+    resolveDeclaredDeps
     evaluateInstance
     evaluateImportInstance
     buildCluster

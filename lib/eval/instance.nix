@@ -19,7 +19,13 @@ let
   inherit (helpers) collectTypedAttrs;
   inherit (scope) mkScope;
   inherit (view) mkPackageView;
-  inherit (resolve) resolveArg evaluateInstanceConfig kixCallPackage;
+  inherit (resolve)
+    resolveArg
+    evaluateInstanceConfig
+    callPackagePhase1
+    discoverBuildDeps
+    resolveDeclaredDeps
+    ;
   inherit (import_) evaluateImportInstance;
 in
 
@@ -59,39 +65,42 @@ in
           clusterDomain = clusterConfig.clusterDomain or "cluster.local";
         };
 
-        # 1. Call the package function with DI deps — returns { result, resolvedDeps }
-        kixCallResult = kixCallPackage {
+        # 1. Phase 1: call package with system args only
+        raw = callPackagePhase1 {
           packageFn = instCfg.package;
           scope = scope';
-          inherit resolutionIndex allInstances;
-          deps = instCfg.deps;
-          namespace = namespaceName;
         };
-        raw = kixCallResult.result;
 
         # Package-declared metadata (lifecycle, scope, etc.)
         packageMeta = raw.meta or { };
 
-        # --- Resolved dependency info (for validation) ---
-        fnArgs = builtins.functionArgs instCfg.package;
-        depArgNames = builtins.attrNames (
-          removeAttrs fnArgs [
-            "scope"
-            "lib"
-            "kix"
-          ]
-        );
+        # 2. Discover deps from build function args
+        discoveredDeps = discoverBuildDeps raw.build;
+        # Merge with optional deps enrichment (assertions/warnings per dep)
+        depsEnrichment = raw.deps or { };
+        # All dep names come from build args — enrichment only adds metadata
+        depArgNames = builtins.attrNames discoveredDeps;
         deps = instCfg.deps or { };
+
+        # 3. Resolve deps
+        resolvedDeps = resolveDeclaredDeps {
+          declaredDeps = discoveredDeps;
+          inherit resolutionIndex allInstances;
+          namespace = namespaceName;
+          explicitOverrides = deps;
+        };
 
         # Resolve dep metadata for cross-checks
         resolvedDepMeta = builtins.foldl' (
           acc: argName:
           let
+            depSpec = discoveredDeps.${argName};
+            isOptional = depSpec.optional or false;
+            explicitOverride = deps.${argName} or null;
             resolution = resolveArg {
-              inherit argName resolutionIndex;
+              inherit argName resolutionIndex explicitOverride;
               requesterNamespace = namespaceName;
-              hasDefault = fnArgs.${argName} or false;
-              explicitOverride = deps.${argName} or null;
+              hasDefault = isOptional;
             };
           in
           if resolution.found && !(resolution.direct or false) then
@@ -165,9 +174,10 @@ in
             extra =
               lib.optionalAttrs (args ? scope) { scope = scope'; }
               // lib.optionalAttrs (args ? lib) { inherit lib; }
-              // lib.optionalAttrs (args ? kix) { kix = kixlib; };
-            # Pass resolved DI deps — part files can request them by name
-            depArgs = lib.intersectAttrs args kixCallResult.resolvedDeps;
+              // lib.optionalAttrs (args ? kix) { kix = kixlib; }
+              // lib.optionalAttrs (args ? deps) { deps = resolvedDeps; };
+            # Pass resolved DI deps by name — build entries request what they need
+            depArgs = lib.intersectAttrs args resolvedDeps;
           in
           fn (base // extra // depArgs);
 
@@ -501,6 +511,8 @@ in
             evaluatedConfig
             parts
             resolvedDepMeta
+            depsEnrichment
+            resolvedDeps
             ;
         };
 

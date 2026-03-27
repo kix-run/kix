@@ -13,7 +13,6 @@
 {
   scope,
   lib,
-  storageClasses,
 }:
 
 {
@@ -44,6 +43,7 @@
       self,
       config,
       clusterConfig,
+      storageClasses,
     }:
     {
       root = scope.mkResource {

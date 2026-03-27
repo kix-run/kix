@@ -18,9 +18,6 @@
   scope,
   lib,
   kix,
-  postgres,
-  ingressNginx ? null,
-  clusterIssuer ? null,
 }:
 
 let
@@ -125,6 +122,9 @@ in
       self,
       config,
       clusterConfig,
+      postgres,
+      ingressNginx ? null,
+      clusterIssuer ? null,
     }:
     let
       # Secret name for credentials.

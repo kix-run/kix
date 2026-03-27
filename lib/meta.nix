@@ -80,8 +80,8 @@ rec {
   # ---------------------------------------------------------------------------
   # peekPackageMeta — extract meta from a package without full evaluation.
   #
-  # For packages whose DI args all have defaults, we call with null deps to
-  # peek at meta. If the package throws or has required args, returns {}.
+  # Package functions only take system args (scope, lib, kix) — no deps.
+  # Deps are discovered from build function args, so we can always peek.
   # ---------------------------------------------------------------------------
   peekPackageMeta =
     { package, kixlib }:
@@ -90,29 +90,15 @@ rec {
     else
       let
         fnArgs = builtins.functionArgs package;
-        depArgs = removeAttrs fnArgs [
-          "scope"
-          "lib"
-          "kix"
-        ];
-        canPeek = builtins.all lib.id (builtins.attrValues depArgs);
+        result = package (
+          {
+            scope = { };
+            inherit lib;
+          }
+          // lib.optionalAttrs (fnArgs ? kix) { kix = kixlib; }
+        );
       in
-      if !canPeek then
-        { }
-      else
-        let
-          result = builtins.tryEval (
-            package (
-              {
-                scope = { };
-                inherit lib;
-              }
-              // lib.optionalAttrs (fnArgs ? kix) { kix = kixlib; }
-              // lib.mapAttrs (_: _: null) depArgs
-            )
-          );
-        in
-        if result.success then result.value.meta or { } else { };
+      result.meta or { };
 
   # ---------------------------------------------------------------------------
   # effectiveAliases — instance aliases win, fall back to package defaults.
@@ -230,7 +216,8 @@ rec {
     };
 
   # ---------------------------------------------------------------------------
-  # evaluatePackageDiagnostics — call package-declared warnings/assertions fns.
+  # evaluatePackageDiagnostics — call package-declared warnings/assertions fns
+  # and per-dep diagnostics from deps enrichment.
   #
   # Returns { warnings = [...]; assertions = [...]; }
   # ---------------------------------------------------------------------------
@@ -240,6 +227,8 @@ rec {
       evaluatedConfig,
       parts,
       resolvedDepMeta,
+      depsEnrichment ? { },
+      resolvedDeps ? { },
     }:
     let
       ctx = {
@@ -247,10 +236,32 @@ rec {
         self = parts;
         deps = lib.mapAttrs (_: di: di.instance) resolvedDepMeta;
       };
+
+      # Per-dep diagnostics from deps enrichment
+      depDiagnostics =
+        lib.foldlAttrs
+          (
+            acc: depName: enrichment:
+            let
+              dep = resolvedDeps.${depName} or null;
+            in
+            if dep == null then
+              acc
+            else
+              {
+                warnings = acc.warnings ++ (if enrichment ? warnings then enrichment.warnings dep else [ ]);
+                assertions = acc.assertions ++ (if enrichment ? assertions then enrichment.assertions dep else [ ]);
+              }
+          )
+          {
+            warnings = [ ];
+            assertions = [ ];
+          }
+          depsEnrichment;
     in
     {
-      warnings = if raw ? warnings then raw.warnings ctx else [ ];
-      assertions = if raw ? assertions then raw.assertions ctx else [ ];
+      warnings = (if raw ? warnings then raw.warnings ctx else [ ]) ++ depDiagnostics.warnings;
+      assertions = (if raw ? assertions then raw.assertions ctx else [ ]) ++ depDiagnostics.assertions;
     };
 
   # ---------------------------------------------------------------------------

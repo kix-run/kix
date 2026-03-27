@@ -22,10 +22,6 @@
   scope,
   lib,
   kix,
-  postgres,
-  valkey,
-  ingressNginx ? null,
-  clusterIssuer ? null,
 }:
 
 let
@@ -118,6 +114,10 @@ in
       self,
       config,
       clusterConfig,
+      postgres,
+      valkey,
+      ingressNginx ? null,
+      clusterIssuer ? null,
     }:
     let
       # Secret name for credentials (used as secretRef on envFrom).

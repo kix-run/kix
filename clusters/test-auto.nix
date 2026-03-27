@@ -16,13 +16,17 @@ let
     {
       scope,
       lib,
-      valkey,
     }:
     {
       options = { };
 
       build =
-        { self, config, ... }:
+        {
+          self,
+          config,
+          valkey,
+          ...
+        }:
         {
           root = scope.mkResource {
             apiVersion = "v1";
@@ -58,12 +62,11 @@ let
     {
       scope,
       lib,
-      coredns,
     }:
     {
       options = { };
       build =
-        { ... }:
+        { coredns, ... }:
         {
           root = scope.mkResource {
             apiVersion = "v1";

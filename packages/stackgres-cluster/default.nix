@@ -14,7 +14,6 @@
 {
   scope,
   lib,
-  storageClasses ? null,
 }:
 
 let
@@ -132,6 +131,7 @@ in
       self,
       config,
       clusterConfig,
+      storageClasses ? null,
     }:
     let
       # Parse memory to MB for calculations.

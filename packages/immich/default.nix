@@ -22,13 +22,6 @@
   scope,
   lib,
   kix,
-  valkey,
-  postgres,
-  storage,
-  machineLearning ? null,
-  ingressNginx ? null,
-  clusterIssuer ? null,
-  prometheus ? null,
 }:
 
 let
@@ -48,33 +41,26 @@ in
     };
   };
 
-  assertions =
-    {
-      config,
-      self,
-      deps,
-    }:
-    let
-      extNames = deps.postgres.out.extensionNames or null;
-    in
-    lib.optional (extNames != null && !(builtins.elem "vectors" extNames)) {
-      assertion = false;
-      message = "immich requires the pgvecto.rs extension (\"vectors\") on its postgres instance, but it is not configured. Add { name = \"vectors\"; publisher = \"tensorchord\"; version = \"...\"; } to postgres.extensions.";
-    };
+  # Per-dep diagnostics — co-located with the dep they validate.
+  deps = {
+    postgres.assertions =
+      dep:
+      let
+        extNames = dep.out.extensionNames or null;
+      in
+      lib.optional (extNames != null && !(builtins.elem "vectors" extNames)) {
+        assertion = false;
+        message = "immich requires the pgvecto.rs extension (\"vectors\") on its postgres instance, but it is not configured. Add { name = \"vectors\"; publisher = \"tensorchord\"; version = \"...\"; } to postgres.extensions.";
+      };
 
-  warnings =
-    {
-      config,
-      self,
-      deps,
-    }:
-    let
-      storageSizeGi = kix.parseGi (deps.storage.out.size or "0");
-    in
-    lib.optional (storageSizeGi != null && storageSizeGi < 50)
-      "library storage is ${
-        deps.storage.out.size or "unknown"
-      } — recommended minimum is 50Gi for photo libraries";
+    storage.warnings =
+      dep:
+      let
+        storageSizeGi = kix.parseGi (dep.out.size or "0");
+      in
+      lib.optional (storageSizeGi != null && storageSizeGi < 50)
+        "library storage is ${dep.out.size or "unknown"} — recommended minimum is 50Gi for photo libraries";
+  };
 
   options = {
     image = lib.mkOption {
@@ -119,6 +105,13 @@ in
       self,
       config,
       clusterConfig,
+      valkey,
+      postgres,
+      storage,
+      machineLearning ? null,
+      ingressNginx ? null,
+      clusterIssuer ? null,
+      prometheus ? null,
     }:
     let
       hasConfig = config.configuration != null;

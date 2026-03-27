@@ -6,7 +6,12 @@
   lib,
   meta,
   kixlib,
+  resolve,
 }:
+
+let
+  inherit (resolve) discoverBuildDeps;
+in
 
 rec {
   # Normalize mixed availablePackages entries (raw functions vs attrsets).
@@ -41,22 +46,25 @@ rec {
         }
     ) (lib.filterAttrs (_: isPackageEntry) raw);
 
-  # Get required dep arg names from a package function (no evaluation needed).
+  # Get required dep names by calling the package (phase 1) and introspecting
+  # build function args. Required = no default (no ? null).
   getRequiredDeps =
     pkg:
-    let
-      systemArgs = [
-        "scope"
-        "lib"
-        "kix"
-      ];
-    in
     if builtins.isFunction pkg then
       let
         fnArgs = builtins.functionArgs pkg;
-        depArgs = removeAttrs fnArgs systemArgs;
+        result = pkg (
+          {
+            scope = { };
+            inherit lib;
+          }
+          // lib.optionalAttrs (fnArgs ? kix) { kix = kixlib; }
+        );
+        discoveredDeps = discoverBuildDeps result.build;
       in
-      builtins.filter (name: !depArgs.${name}) (builtins.attrNames depArgs)
+      builtins.filter (name: !(discoveredDeps.${name}.optional or false)) (
+        builtins.attrNames discoveredDeps
+      )
     else
       [ ];
 

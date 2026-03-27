@@ -12,7 +12,7 @@
 #   import.nix    — mkImport, mkImportScope, evaluateImportInstance
 #   namespace.nix — mkNamespace
 #   auto.nix      — auto-instantiation (normalise, getRequiredDeps, compute)
-#   resolve.nix   — DI resolution, config evaluation, kixCallPackage
+#   resolve.nix   — DI resolution, config evaluation, two-phase package calling
 #   instance.nix  — evaluateInstance
 #   cluster.nix   — buildCluster
 
@@ -46,7 +46,14 @@ let
     inherit (resolve) evaluateInstanceConfig;
   };
   namespaceMod = import ./eval/namespace.nix { inherit lib k8s; };
-  auto = import ./eval/auto.nix { inherit lib meta kixlib; };
+  auto = import ./eval/auto.nix {
+    inherit
+      lib
+      meta
+      kixlib
+      resolve
+      ;
+  };
   instance = import ./eval/instance.nix {
     inherit
       lib
@@ -101,7 +108,11 @@ in
     resolveArg
     extractDeferredValues
     evaluateInstanceConfig
-    kixCallPackage
+    callPackagePhase1
+    discoverBuildDeps
+    resolveDeclaredDeps
+    systemArgNames
+    systemBuildArgNames
     ;
 
   # Instance evaluation
