@@ -788,6 +788,15 @@ def generate_report(
     return "\n".join(lines)
 
 
+def _strip_crd_schema(doc: dict) -> dict:
+    """Remove the OpenAPI schema from CRD versions to skip schema comparison."""
+    if doc.get("kind") != "CustomResourceDefinition":
+        return doc
+    for version in doc.get("spec", {}).get("versions", []):
+        version.pop("schema", None)
+    return doc
+
+
 # --- Main ---
 
 
@@ -841,10 +850,15 @@ def generate_report(
     help="Skip runtime-generated cluster resources (built-in RBAC, default SAs, helm secrets, velero snapshots, etc.)",
 )
 @click.option(
+    "--skip-crd-schema/--no-skip-crd-schema",
+    default=False,
+    help="Skip the OpenAPI schema validation section of CRDs (spec.versions[].schema)",
+)
+@click.option(
     "--skip-all",
     is_flag=True,
     default=False,
-    help="Enable all skip/ignore flags (cluster-defaults, port-names, dns-suffix, controller-owned, runtime)",
+    help="Enable all skip/ignore flags (cluster-defaults, port-names, dns-suffix, controller-owned, runtime, crd-schema)",
 )
 @click.option(
     "--files-only",
@@ -868,6 +882,7 @@ def main(
     full_diff: bool,
     ignore_port_names: bool,
     ignore_dns_suffix: bool,
+    skip_crd_schema: bool,
     skip_controller_owned: bool,
     skip_runtime: bool,
     skip_all: bool,
@@ -891,6 +906,7 @@ def main(
         ignore_dns_suffix = True
         skip_controller_owned = True
         skip_runtime = True
+        skip_crd_schema = True
 
     ignore_paths = set(ignore_path) if ignore_path else set()
     if ignore_cluster_defaults:
@@ -903,6 +919,8 @@ def main(
         post_steps.append(strip_port_names)
     if ignore_dns_suffix:
         post_steps.append(normalize_dns_suffix)
+    if skip_crd_schema:
+        post_steps.append(_strip_crd_schema)
 
     def _with_post(base_normalizer):
         def wrapped(doc):

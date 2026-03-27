@@ -76,10 +76,14 @@ Focus on the **Modified** section. Each entry shows exactly which fields differ 
 
 ## Package Anatomy
 
-Every package is a function `{ scope, lib, kix, ...deps }: ...` that returns `{ meta?, options, build }`.
+Packages have two accepted shapes:
+
+### Function package (standard — for packages in `packages/`)
+
+A function `{ scope, lib, kix }: ...` that returns `{ meta?, options?, deps?, build }`. **Dependencies are declared as build function args**, not package function args.
 
 ```nix
-{ scope, lib, kix, postgres, storage, ingressNginx ? null, clusterIssuer ? null }:
+{ scope, lib, kix }:
 let
   name = scope.instanceName;
 in
@@ -90,6 +94,18 @@ in
     scope = "cluster";        # "cluster" (default) | "namespace"
     description = "My package";
     maintainer = "team-name";
+  };
+
+  # Optional: per-dep diagnostics (assertions/warnings co-located with the dep)
+  deps = {
+    postgres.assertions = dep:
+      lib.optional (!(builtins.elem "vectors" (dep.out.extensionNames or []))) {
+        assertion = false;
+        message = "requires pgvecto.rs extension";
+      };
+    storage.warnings = dep:
+      lib.optional ((kix.parseGi (dep.out.size or "0")) < 50)
+        "storage < 50Gi — recommended minimum";
   };
 
   options = {
@@ -105,7 +121,8 @@ in
     };
   };
 
-  build = { self, config, clusterConfig }:
+  # Deps are build function args: required = no default, optional = ? null
+  build = { self, config, clusterConfig, postgres, storage, ingressNginx ? null, clusterIssuer ? null }:
   let
     # Shared values in let block
     healthCheck = { httpGet = { path = "/health"; port = "http"; }; periodSeconds = 10; };
@@ -160,6 +177,25 @@ in
   };
 }
 ```
+
+### Inline attrset package (for test fixtures and simple inline packages)
+
+A plain attrset `{ build, meta?, options?, deps? }` — no function wrapper needed. The build function receives `scope` from the eval system (request it as an arg).
+
+```nix
+myTestPackage = {
+  build = { scope, valkey, ... }: {
+    root = scope.mkResource {
+      apiVersion = "v1";
+      kind = "ConfigMap";
+      name = "test-app";
+      data.REDIS_HOST = valkey.out.fqdn;
+    };
+  };
+};
+```
+
+Use function packages for `packages/` directory files (they need `scope` at the top level for naming). Use inline attrsets for test fixtures and simple inline definitions in cluster files.
 
 ### Self-references for dependency tracking
 
@@ -532,13 +568,20 @@ my-helm-app = {
 
 ### Dependency Injection (DI)
 
-Packages declare dependencies as function args. Hard deps are required args, optional features get `? null`:
+Packages declare dependencies as **build function args**. Required deps have no default, optional deps get `? null`:
 
 ```nix
-{ scope, lib, valkey, postgres, storage, machineLearning ? null, ingressNginx ? null }:
+{ scope, lib, kix }:
+{
+  build = { self, config, valkey, postgres, storage, machineLearning ? null, ingressNginx ? null, ... }: { ... };
+}
 ```
 
+The eval system discovers deps by introspecting build function args (stripping system args like `self`, `config`, `scope`, `lib`, `kix`, `clusterConfig`, `deps`). Everything else is treated as a dep.
+
 DI resolution finds instances by matching arg names to instance names or `aliases` in the cluster definition. Same-namespace matches first, then cluster-wide (must be unambiguous).
+
+The resolved deps attrset is also available as a single `deps` arg in build functions for convenience.
 
 **Infrastructure DI patterns:**
 
@@ -582,9 +625,9 @@ instances = {
 **In the consuming package (modern — kix.mount.pvc):**
 
 ```nix
-{ scope, lib, kix, storage }:  # storage is a hard dep
+{ scope, lib, kix }:
 # ...
-build = { self, config, clusterConfig }: {
+build = { self, config, clusterConfig, storage }: {  # storage is a hard dep (build arg)
   dataMount = kix.mount.pvc storage { mountPath = "/data"; };
 
   deployment =
@@ -610,14 +653,14 @@ containers = [{ volumeMounts = [{ name = "data"; mountPath = "/data"; }]; }];
 - Cross-namespace safety: `meta.scope = "namespace"` prevents mounting PVCs across namespaces (build-time error)
 - Visible in the cluster definition — no hidden state
 
-**Consumer-side validation:** Packages can validate their DI deps using `builtins.trace` warnings:
+**Consumer-side validation:** Packages can validate their DI deps using per-dep diagnostics in the `deps` enrichment:
 
 ```nix
-_storageWarning =
-  if storageSizeGi < 50 then
-    builtins.trace "warning: recommended minimum is 50Gi"
-      null
-  else null;
+deps = {
+  storage.warnings = dep:
+    lib.optional ((kix.parseGi (dep.out.size or "0")) < 50)
+      "storage < 50Gi — recommended minimum";
+};
 ```
 
 ### Package Meta
