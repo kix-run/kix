@@ -43,6 +43,19 @@ in
 
   # Per-dep diagnostics — co-located with the dep they validate.
   deps = {
+    # Config injection: automatically add required extensions to postgres.
+    # Uses listOf merge — concatenates with any cluster-defined extensions.
+    postgres.config = {
+      extensions = [
+        {
+          name = "vectors";
+          publisher = "tensorchord";
+          version = "0.4.0";
+          repository = "https://extensions.stackgres.io/postgres/repository";
+        }
+      ];
+    };
+
     postgres.assertions =
       dep:
       let

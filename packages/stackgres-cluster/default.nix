@@ -40,10 +40,14 @@ in
       type = lib.types.anything;
       default = {
         version = "16";
-        extensions = [ ];
         flavor = "vanilla";
         ssl.enabled = true;
       };
+    };
+    extensions = lib.mkOption {
+      type = lib.types.listOf lib.types.anything;
+      default = [ ];
+      description = "PostgreSQL extensions to install (e.g. pgvecto.rs). Uses listOf for merge semantics with dep config injection.";
     };
     storage = lib.mkOption {
       type = lib.types.anything;
@@ -370,8 +374,8 @@ in
               enabled = config.postgres.ssl.enabled;
             };
           }
-          // lib.optionalAttrs (config.postgres.extensions != [ ]) {
-            extensions = config.postgres.extensions;
+          // lib.optionalAttrs (config.extensions != [ ]) {
+            extensions = config.extensions;
           };
           sgInstanceProfile = self.instanceProfile.out.name;
           profile = config.profile;
@@ -438,7 +442,7 @@ in
 
         # Package-level out: expose configured extension names for consumer validation.
         out = {
-          extensionNames = map (e: e.name) config.postgres.extensions;
+          extensionNames = map (e: e.name) config.extensions;
         };
       };
     };

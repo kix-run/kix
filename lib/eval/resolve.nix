@@ -160,11 +160,61 @@ rec {
       packageOptions,
       instCfg,
       clusterConfig ? { },
+      configInjections ? [ ],
     }:
     let
       deferredConfig = instCfg.config;
       configValues = extractDeferredValues deferredConfig;
-      wrappedModules = map (v: if builtins.isFunction v then v else { config = v; }) configValues;
+
+      # --- mkLocked support ---
+      # Scan instance config values for locked fields (top-level only).
+      findLockedInAttrs =
+        attrs:
+        if builtins.isAttrs attrs then
+          lib.filterAttrs (_: v: builtins.isAttrs v && (v._type or "") == "locked") attrs
+        else
+          { };
+
+      lockedFields = builtins.foldl' (
+        acc: m: if builtins.isAttrs m then acc // findLockedInAttrs m else acc
+      ) { } configValues;
+
+      # Check dep injections against locked fields
+      lockedConflicts = builtins.concatMap (
+        injection:
+        let
+          injectionKeys = builtins.attrNames (injection.config or { });
+          conflicts = builtins.filter (key: lockedFields ? ${key}) injectionKeys;
+        in
+        map (key: {
+          inherit key;
+          source = injection.source or "unknown";
+        }) conflicts
+      ) configInjections;
+
+      _lockedCheck =
+        if lockedConflicts != [ ] then
+          let
+            msgs = map (c: "'${c.key}' (injected by ${c.source})") lockedConflicts;
+          in
+          throw "dep config injection blocked by locked fields: ${builtins.concatStringsSep ", " msgs}"
+        else
+          null;
+
+      # Unwrap locked values before feeding into evalModules
+      unwrapLocked = v: if builtins.isAttrs v && (v._type or "") == "locked" then v.value else v;
+
+      unwrapLockedAttrs =
+        attrs: if builtins.isAttrs attrs then lib.mapAttrs (_: unwrapLocked) attrs else attrs;
+
+      wrappedModules = map (
+        v: if builtins.isFunction v then v else { config = unwrapLockedAttrs v; }
+      ) configValues;
+
+      # Dep injection modules — merged at same priority as instance config.
+      # For listOf types: concatenates with instance config.
+      # For scalar types: errors on conflict (user must resolve).
+      injectionModules = map (injection: { config = injection.config; }) configInjections;
 
       evaluated =
         removeAttrs
@@ -173,6 +223,7 @@ rec {
               { options = packageOptions; }
               { config = clusterConfig.global or { }; }
             ]
+            ++ injectionModules
             ++ wrappedModules;
           }).config
           [ "_module" ];
@@ -182,7 +233,7 @@ rec {
         lib.mapAttrs (_: opt: if opt ? default then opt.default else null) packageOptions
       );
     in
-    lib.recursiveUpdate optionDefaults evaluated;
+    builtins.seq _lockedCheck (lib.recursiveUpdate optionDefaults evaluated);
 
   # Normalize a package value to its phase-1 result.
   # Accepts: function (traditional), attrset with `build` (inline), or kix-import.
@@ -262,6 +313,104 @@ rec {
       else
         acc # optional dep, not found — will get null via Nix default
     ) { } (builtins.attrNames declaredDeps);
+
+  # Resolve deps to coordinates only — no instance lookup needed.
+  # Used by the phase-1 pre-pass to build the config injection map.
+  resolveDepTargets =
+    {
+      declaredDeps,
+      resolutionIndex,
+      namespace,
+      explicitOverrides,
+    }:
+    lib.mapAttrs (
+      argName: depSpec:
+      let
+        isOptional = depSpec.optional or false;
+        explicitOverride = explicitOverrides.${argName} or null;
+        resolution = resolveArg {
+          inherit argName resolutionIndex explicitOverride;
+          requesterNamespace = namespace;
+          hasDefault = isOptional;
+        };
+      in
+      if resolution.found then
+        if resolution.direct or false then
+          {
+            found = true;
+            direct = true;
+          }
+        else
+          {
+            found = true;
+            inherit (resolution) namespace instanceName;
+          }
+      else
+        { found = false; }
+    ) declaredDeps;
+
+  # Build the config injection map from phase-1 pre-pass results.
+  # Inverts "consumer X wants to inject config into dep Y" into
+  # "target Y receives config injections from [X1, X2, ...]".
+  #
+  # Returns { ns.inst = [ { config, source } ]; }
+  buildConfigInjections =
+    phase1Map:
+    let
+      entries = builtins.concatMap (
+        ns:
+        builtins.concatMap (
+          inst:
+          let
+            p1 = phase1Map.${ns}.${inst};
+          in
+          builtins.concatMap (
+            depName:
+            let
+              target = p1.resolvedTargets.${depName};
+              depEnrichment = p1.depsEnrichment.${depName} or { };
+              hasConfig = depEnrichment ? config;
+            in
+            if target.found && !(target.direct or false) && hasConfig then
+              [
+                {
+                  targetNs = target.namespace;
+                  targetInst = target.instanceName;
+                  config = depEnrichment.config;
+                  source = "${ns}/${inst}";
+                }
+              ]
+            else
+              [ ]
+          ) (builtins.attrNames p1.discoveredDeps)
+        ) (builtins.attrNames phase1Map.${ns})
+      ) (builtins.attrNames phase1Map);
+    in
+    builtins.foldl' (
+      acc: e:
+      let
+        existing = (acc.${e.targetNs} or { }).${e.targetInst} or [ ];
+      in
+      acc
+      // {
+        ${e.targetNs} = (acc.${e.targetNs} or { }) // {
+          ${e.targetInst} = existing ++ [
+            {
+              inherit (e) config source;
+            }
+          ];
+        };
+      }
+    ) { } entries;
+
+  # Lock a config field against dep config injection.
+  # Cluster authors wrap a field value with mkLocked to prevent any
+  # consumer from injecting into it. Injections targeting a locked
+  # field produce a build-time error with source attribution.
+  mkLocked = value: {
+    _type = "locked";
+    inherit value;
+  };
 
   inherit systemArgNames systemBuildArgNames;
 }

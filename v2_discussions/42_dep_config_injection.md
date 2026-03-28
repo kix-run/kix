@@ -324,32 +324,38 @@ Config injection handles "set this config on my dep." Some constraints can't be 
 
 `deps.*.config`, `deps.*.assertions`, and `deps.*.warnings` coexist.
 
-## Scope of changes
+## Implementation (done)
 
-### Must change
-
-| File | Change |
-|------|--------|
-| `lib/eval/cluster.nix` | Add phase-1 pre-pass, build injection map, pass to fixpoint |
-| `lib/eval/resolve.nix` | Add `resolveDepTargets` (resolution without instance lookup) |
-| `lib/eval/instance.nix` | Accept `phase1` + `configInjections`, skip redundant phase-1 work, pass injections to `evaluateInstanceConfig` |
-| `lib/eval/resolve.nix` | `evaluateInstanceConfig` accepts and applies `configInjections` |
-
-### May change
+### Files changed
 
 | File | Change |
 |------|--------|
-| `lib/eval/auto.nix` | Could reuse phase-1 results instead of calling `getRequiredDeps` separately (optimization, not required) |
-| `packages/stackgres-cluster/default.nix` | Migrate `extensions` option from `anything` to `listOf anything` for proper merge semantics |
-| `packages/immich/default.nix` | Add `deps.postgres.config` (the motivating example) |
+| `lib/eval/resolve.nix` | Added `resolveDepTargets`, `buildConfigInjections`, `mkLocked`. Updated `evaluateInstanceConfig` to accept `configInjections`, check locked fields, unwrap locked values, and merge injection modules. |
+| `lib/eval/cluster.nix` | Added phase-1 pre-pass between resolution index and fixpoint. Passes per-instance `configInjections` into the fixpoint. |
+| `lib/eval/instance.nix` | Accepts `configInjections` param, forwards to `evaluateInstanceConfig`. |
+| `lib/eval.nix` | Wires new functions (`resolveDepTargets`, `buildConfigInjections`, `mkLocked`) through the module hierarchy. Passes `callPackagePhase1`, `discoverBuildDeps`, `resolveDepTargets`, `buildConfigInjections` to cluster.nix. |
+| `lib/default.nix` | Exports `resolveDepTargets`, `buildConfigInjections`, `mkLocked` so cluster authors can use `kix.mkLocked`. |
+| `packages/stackgres-cluster/default.nix` | Migrated `extensions` from nested `postgres.extensions` (type `anything`) to a top-level option with `listOf anything` for proper merge semantics. |
+| `packages/immich/default.nix` | Added `deps.postgres.config.extensions` with the vectors extension. |
+| `clusters/test-immich.nix` | Removed manual `config.postgres.extensions` — now auto-injected by immich. |
 
-### Won't change
+### Key implementation decisions
+
+**Minimal scope in pre-pass.** The phase-1 pre-pass calls `callPackagePhase1` with `{ instanceName; namespaceName; }` instead of a full `mkScope`. No current packages use `scope.mkResource` at the top level (outside `build`), so this is safe. The build function thunk captures this minimal scope but is never called in the pre-pass — only `builtins.functionArgs` introspection is used.
+
+**Pre-pass skips `instCfg.deps`.** Explicit dep overrides (`instCfg.deps`) may reference `ref` (the cluster fixpoint), which causes infinite recursion if accessed during the pre-pass. The pre-pass uses `explicitOverrides = {}` and relies on DNS resolution via the resolution index. If a cluster author uses explicit overrides to re-target a dep, config injection targets the DNS-resolved instance as a best-effort fallback. In practice this is correct because DNS resolution finds the same target for the common case.
+
+**Same-priority merge.** Injection modules and instance config modules are fed into `evalModules` at the same priority. For `listOf` types, both contribute (concatenate). For scalar types, conflicts error. This is transparent — no silent overrides. `mkLocked` handles the "prevent injection" case explicitly.
+
+**Instance evaluation not deduplicated.** The pre-pass computes `callPackagePhase1` + `discoverBuildDeps` independently from the fixpoint's `evaluateInstance`. The fixpoint recomputes phase-1 with a full scope because the `build` thunk captures scope in its closure. Nix's call-by-need may share some thunks, but this is not guaranteed. This is acceptable — the pre-pass is cheap (no build function calls, just arg introspection).
+
+### Files not changed
 
 | File | Reason |
 |------|--------|
-| `lib/meta.nix` | Assertions/warnings pipeline unchanged |
+| `lib/meta.nix` | Assertions/warnings pipeline unchanged — `deps.*.assertions` and `deps.*.config` coexist |
+| `lib/eval/auto.nix` | Could reuse phase-1 results (optimization, not done) |
 | Other packages | Only packages that want to inject config need `deps.*.config` |
-| Cluster definitions | Existing configs keep working — injections are additive |
 
 ## Locking fields against injection (`kix.mkLocked`)
 

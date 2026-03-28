@@ -31,18 +31,10 @@ kix.buildCluster {
           };
         };
 
-        # Explicit — needs pgvecto.rs extension for immich.
+        # pgvecto.rs extension is now auto-injected by immich via dep config injection.
         immich-db = {
           package = packages.stackgres-cluster;
           aliases = [ "postgres" ];
-          config.postgres.extensions = [
-            {
-              name = "vectors";
-              publisher = "tensorchord";
-              version = "0.4.0";
-              repository = "https://extensions.stackgres.io/postgres/repository";
-            }
-          ];
         };
       };
 

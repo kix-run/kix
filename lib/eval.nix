@@ -77,7 +77,13 @@ let
       ;
     inherit (namespaceMod) mkNamespace;
     inherit (auto) computeAutoInstances;
-    inherit (resolve) buildResolutionIndex;
+    inherit (resolve)
+      buildResolutionIndex
+      callPackagePhase1
+      discoverBuildDeps
+      resolveDepTargets
+      buildConfigInjections
+      ;
     inherit (instance) evaluateInstance;
   };
 
@@ -111,6 +117,9 @@ in
     callPackagePhase1
     discoverBuildDeps
     resolveDeclaredDeps
+    resolveDepTargets
+    buildConfigInjections
+    mkLocked
     systemArgNames
     systemBuildArgNames
     ;

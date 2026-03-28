@@ -46,6 +46,9 @@ in
     callPackagePhase1
     discoverBuildDeps
     resolveDeclaredDeps
+    resolveDepTargets
+    buildConfigInjections
+    mkLocked
     evaluateInstance
     evaluateImportInstance
     buildCluster

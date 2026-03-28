@@ -11,6 +11,10 @@
   mkNamespace,
   computeAutoInstances,
   buildResolutionIndex,
+  callPackagePhase1,
+  discoverBuildDeps,
+  resolveDepTargets,
+  buildConfigInjections,
   evaluateInstance,
 }:
 
@@ -99,6 +103,52 @@ in
 
       resolutionIndex = buildResolutionIndex staticMeta;
 
+      # 5b. Phase-1 pre-pass: resolve dep targets and collect config injections.
+      #     Uses a minimal scope (just naming) — packages only use scope.instanceName
+      #     at the top level. Build thunks are not called, only introspected.
+      #     See v2_discussions/42_dep_config_injection.md for design rationale.
+      #
+      #     NOTE: explicitOverrides is {} — we deliberately skip instCfg.deps because
+      #     it may reference `ref` (the cluster fixpoint), which would cause infinite
+      #     recursion. DNS resolution via resolutionIndex handles resolution for the
+      #     pre-pass. If a cluster author uses explicit dep overrides to re-target a
+      #     dep, config injection uses DNS resolution as a best-effort fallback.
+      phase1Instances = lib.mapAttrs (
+        nsName: nsInsts:
+        lib.mapAttrs (
+          instName: instCfg:
+          if (instCfg.package._type or "") == "kix-import" then
+            {
+              discoveredDeps = { };
+              depsEnrichment = { };
+              resolvedTargets = { };
+            }
+          else
+            let
+              raw = callPackagePhase1 {
+                package = instCfg.package;
+                scope = {
+                  instanceName = instName;
+                  namespaceName = nsName;
+                };
+              };
+              discoveredDeps = discoverBuildDeps raw.build;
+              depsEnrichment = raw.deps or { };
+              resolvedTargets = resolveDepTargets {
+                declaredDeps = discoveredDeps;
+                inherit resolutionIndex;
+                namespace = nsName;
+                explicitOverrides = { };
+              };
+            in
+            {
+              inherit discoveredDeps depsEnrichment resolvedTargets;
+            }
+        ) nsInsts
+      ) mergedInstances;
+
+      configInjections = buildConfigInjections phase1Instances;
+
       # 6. Build nested fixpoint
       clusterInstances = lib.fix (
         self:
@@ -116,6 +166,7 @@ in
               clusterConfig = cfg;
               inherit resolutionIndex;
               globalPartsOverlays = cfg.globalPartsOverlays;
+              configInjections = configInjections.${nsName}.${instName} or [ ];
             }
           ) nsInsts
         ) mergedInstances

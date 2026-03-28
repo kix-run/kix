@@ -43,6 +43,7 @@ in
       allInstances,
       globalPartsOverlays ? [ ],
       clusterConfig ? { },
+      configInjections ? [ ],
     }@args:
 
     # Import instances take a separate evaluation path — no resource collection,
@@ -144,10 +145,10 @@ in
             ;
         };
 
-        # 2. Evaluate typed config: package options + instance config
+        # 2. Evaluate typed config: package options + instance config + dep injections
         evaluatedConfig = evaluateInstanceConfig {
           packageOptions = raw.options or { };
-          inherit instCfg clusterConfig;
+          inherit instCfg clusterConfig configInjections;
         };
 
         # 3. Combine global + instance overlays (signature: scope → self → base → attrset)
