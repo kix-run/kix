@@ -2,7 +2,7 @@
 title: "A Real CLI: Rust + Nix FFI"
 date: 2026-03-23
 date_end: 2026-03-24
-series: 11/11
+series: 11
 commits:
   - fe4e399  # feat: kix Rust CLI with mock backend
   - 38f8f52  # feat: wire real Nix FFI backend via nix-bindings-rust
@@ -11,7 +11,7 @@ commits:
 
 # A Real CLI: Rust + Nix FFI
 
-*2026-03-23 to 2026-03-24 -- Post 11 of 11*
+*2026-03-23 to 2026-03-24 -- Post 11*
 
 ---
 
@@ -83,4 +83,4 @@ The integration tests are the most valuable. They catch regressions in the FFI l
 
 Three weeks. That is how long it took to go from "what if Kubernetes manifests were Nix packages" to a working CLI that builds, diffs, and graphs a production cluster. The Nix DSL handles 357 manifests across 26 packages. The Rust CLI makes it usable. The diff tooling makes it safe.
 
-kixpkgs is not done. There are rough edges everywhere -- error messages need work, the graph output is basic, and the diff algorithm still trips on certain CRD structures. But the core loop works. Write a package, build, diff, deploy. That loop is fast enough and reliable enough to use every day. That was the goal.
+kixpkgs is not done. There are rough edges everywhere -- error messages need work, the graph output is basic, and the diff algorithm still trips on certain CRD structures. But the core loop works: write a package, build, diff. The next posts cover what happened when that loop needed to go further -- leaner packages, auto-generated network policies, and a full deploy lifecycle.

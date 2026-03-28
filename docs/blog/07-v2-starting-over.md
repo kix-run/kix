@@ -2,7 +2,7 @@
 title: "V2: Starting Over (Sort Of)"
 date: 2026-03-14
 date_end: 2026-03-17
-series: 7/11
+series: 7
 commits:
   - 7d811eb  # feat: v2 first stab at implementation
   - 9f6be91  # chore: remove v1 code paths, consolidate to v2-only
@@ -12,7 +12,7 @@ commits:
 
 # V2: Starting Over (Sort Of)
 
-*2026-03-14 to 2026-03-17 -- Post 7 of 11*
+*2026-03-14 to 2026-03-17 -- Post 7*
 
 ---
 

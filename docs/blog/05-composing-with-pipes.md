@@ -2,13 +2,13 @@
 title: "Composing Resources with Pipes"
 date: 2026-03-09
 date_end: 2026-03-10
-series: 5/11
+series: 5
 commit: bad90c9  # feat: pipe-based chart composition — mkServiceDeployment, withMetrics, chart refactors
 ---
 
 # Composing Resources with Pipes
 
-*2026-03-09 to 2026-03-10 -- Post 5 of 11*
+*2026-03-09 to 2026-03-10 -- Post 5*
 
 ---
 

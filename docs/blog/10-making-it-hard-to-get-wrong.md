@@ -2,7 +2,7 @@
 title: "Making It Hard to Get Wrong"
 date: 2026-03-18
 date_end: 2026-03-23
-series: 10/11
+series: 10
 commits:
   - b305478  # feat: rbac DSL, with cert-manager example
   - 9459cb5  # feat: rbac, selector dsl and applied to a few packages
@@ -12,7 +12,7 @@ commits:
 
 # Making It Hard to Get Wrong
 
-*2026-03-18 to 2026-03-23 -- Post 10 of 11*
+*2026-03-18 to 2026-03-23 -- Post 10*
 
 ---
 

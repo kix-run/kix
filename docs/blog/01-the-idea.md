@@ -1,13 +1,13 @@
 ---
 title: "The Idea: Kubernetes Manifests as Nix Packages"
 date: 2026-03-07
-series: 1/11
+series: 1
 commit: b979523  # feat: initial kix — Kubernetes resources as Nix modules
 ---
 
 # The Idea: Kubernetes Manifests as Nix Packages
 
-*2026-03-07 -- Post 1 of 11*
+*2026-03-07 -- Post 1*
 
 ---
 

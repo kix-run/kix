@@ -1,7 +1,7 @@
 ---
 title: "The Dependency Problem"
 date: 2026-03-09
-series: 4/11
+series: 4
 commits:
   - 9046d26  # docs: add dependency tracking design doc
   - e5a7667  # docs: dependency tracking V4 — capability interfaces and architecture redesign
@@ -9,7 +9,7 @@ commits:
 
 # The Dependency Problem
 
-*2026-03-09 -- Post 4 of 11*
+*2026-03-09 -- Post 4*
 
 ---
 

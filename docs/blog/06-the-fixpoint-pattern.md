@@ -2,7 +2,7 @@
 title: "The Fixpoint Pattern"
 date: 2026-03-11
 date_end: 2026-03-12
-series: 6/11
+series: 6
 commits:
   - 1767801  # feat: first rough fixpoint impl
   - 7db9223  # feat: migrate example clusters to fixpoint approach
@@ -10,7 +10,7 @@ commits:
 
 # The Fixpoint Pattern
 
-*2026-03-11 to 2026-03-12 -- Post 6 of 11*
+*2026-03-11 to 2026-03-12 -- Post 6*
 
 ---
 

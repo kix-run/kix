@@ -2,7 +2,7 @@
 title: "From Packages to Clusters"
 date: 2026-03-07
 date_end: 2026-03-08
-series: 3/11
+series: 3
 commits:
   - f5eb344  # feat: intent merging — cluster defaults, service registry, cross-cutting modules
   - 6b67097  # feat: declarative cluster state — multi-chart composition
@@ -11,7 +11,7 @@ commits:
 
 # From Packages to Clusters
 
-*2026-03-07 to 2026-03-08 -- Post 3 of 11*
+*2026-03-07 to 2026-03-08 -- Post 3*
 
 ---
 

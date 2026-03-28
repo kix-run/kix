@@ -2,13 +2,13 @@
 title: "Migrating a Production Cluster"
 date: 2026-03-17
 date_end: 2026-03-18
-series: 8/11
+series: 8
 commit: 996e0aa  # feat: production cluster migration — 26 packages, 357 manifests
 ---
 
 # Migrating a Production Cluster
 
-*2026-03-17 to 2026-03-18 -- Post 8 of 11*
+*2026-03-17 to 2026-03-18 -- Post 8*
 
 ---
 

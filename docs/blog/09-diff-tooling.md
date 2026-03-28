@@ -1,7 +1,7 @@
 ---
 title: "Diff Tooling: Trust but Verify"
 date: 2026-03-18
-series: 9/11
+series: 9
 commits:
   - 97a099b  # feat: cluster diff tooling for migration verification
   - e6ef705  # feat: kix-diff based on service and color
@@ -9,7 +9,7 @@ commits:
 
 # Diff Tooling: Trust but Verify
 
-*2026-03-18 -- Post 9 of 11*
+*2026-03-18 -- Post 9*
 
 ---
 

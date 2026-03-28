@@ -2,13 +2,13 @@
 title: "Parity Testing: Proving Nix Can Replace Helm"
 date: 2026-03-07
 date_end: 2026-03-08
-series: 2/11
+series: 2
 commit: 7bf95e2  # feat: multi-variant parity testing for Helm migrations
 ---
 
 # Parity Testing: Proving Nix Can Replace Helm
 
-*2026-03-07 to 2026-03-08 -- Post 2 of 11*
+*2026-03-07 to 2026-03-08 -- Post 2*
 
 ---
 
