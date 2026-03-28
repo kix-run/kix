@@ -4,7 +4,7 @@ use miette::Result;
 
 use crate::cli::{InspectArgs, OutputFormat};
 use crate::output::{self, CommandResponse};
-use kix_manifest::types::{CLUSTER_SCOPED, ResourceId};
+use kix::manifest::types::{CLUSTER_SCOPED, ResourceId};
 
 use super::CommandContext;
 

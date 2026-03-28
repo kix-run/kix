@@ -5,15 +5,15 @@ use std::path::{Path, PathBuf};
 use miette::{IntoDiagnostic, Result, miette};
 use serde_json::Value;
 
-use kix_cluster::fetch;
-use kix_eval::build_cluster_activation_with_status;
-use kix_eval::store_graph::StoreGraph;
-use kix_manifest::diff::display::format_diffs;
-use kix_manifest::diff::engine::structural_diff;
-use kix_manifest::diff::{DiffConfig, Difference};
-use kix_manifest::serialize::load_manifests_from_dir;
-use kix_manifest::stamp::stamp_annotations;
-use kix_manifest::types::ResourceId;
+use kix::cluster::fetch;
+use kix::eval::build_cluster_activation_with_status;
+use kix::eval::store_graph::StoreGraph;
+use kix::manifest::diff::display::format_diffs;
+use kix::manifest::diff::engine::structural_diff;
+use kix::manifest::diff::{DiffConfig, Difference};
+use kix::manifest::serialize::load_manifests_from_dir;
+use kix::manifest::stamp::stamp_annotations;
+use kix::manifest::types::ResourceId;
 
 use crate::cli::{DiffArgs, OutputFormat};
 use crate::output;

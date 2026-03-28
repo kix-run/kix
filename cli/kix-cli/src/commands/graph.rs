@@ -27,7 +27,7 @@ impl CommandResponse for GraphResponse {
 pub fn run(args: &GraphArgs, ctx: &mut CommandContext) -> Result<()> {
     let cluster = ctx.eval_cluster_or_suggest(&args.cluster)?;
 
-    let graph = kix_cluster::graph::ResourceGraph::from_manifests(&cluster.raw_manifests)
+    let graph = kix::cluster::graph::ResourceGraph::from_manifests(&cluster.raw_manifests)
         .into_diagnostic()?;
 
     // --format takes priority over global -o

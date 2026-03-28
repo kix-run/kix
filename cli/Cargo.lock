@@ -1279,7 +1279,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "kix"
+name = "kix-cli"
 version = "0.1.0"
 dependencies = [
  "assert_cmd",
@@ -1290,9 +1290,7 @@ dependencies = [
  "indicatif",
  "insta",
  "k8s-openapi",
- "kix-cluster",
- "kix-eval",
- "kix-manifest",
+ "kix-lib",
  "kube",
  "miette",
  "owo-colors",
@@ -1308,55 +1306,27 @@ dependencies = [
 ]
 
 [[package]]
-name = "kix-cluster"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "futures",
- "indexmap",
- "k8s-openapi",
- "kix-manifest",
- "kube",
- "petgraph",
- "serde",
- "serde_json",
- "serde_yml",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "kix-eval"
+name = "kix-lib"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "blake3",
+ "chrono",
  "directories",
+ "futures",
  "indexmap",
+ "insta",
+ "k8s-openapi",
+ "kube",
  "nix-bindings-expr",
  "nix-bindings-fetchers",
  "nix-bindings-flake",
  "nix-bindings-store",
  "nix-bindings-util",
- "rusqlite",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
- "tracing",
-]
-
-[[package]]
-name = "kix-manifest"
-version = "0.1.0"
-dependencies = [
- "indexmap",
- "insta",
- "kix-eval",
  "owo-colors",
+ "petgraph",
  "rayon",
+ "rusqlite",
  "serde",
  "serde_json",
  "serde_yml",
@@ -1364,8 +1334,27 @@ dependencies = [
  "strsim",
  "tempfile",
  "thiserror 2.0.18",
+ "tokio",
  "tracing",
  "walkdir",
+]
+
+[[package]]
+name = "kix-operator"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "assert_cmd",
+ "futures",
+ "k8s-openapi",
+ "kix-lib",
+ "kube",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

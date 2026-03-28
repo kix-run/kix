@@ -22,16 +22,19 @@ use std::time::Duration;
 use miette::{IntoDiagnostic, Result, miette};
 use serde_json::Value;
 
-use kix_cluster::activation;
-use kix_cluster::apply::{ApplyAction, ChangeAction};
-use kix_cluster::fetch;
-use kix_cluster::graph::ResourceGraph;
-use kix_cluster::readiness::{self, ReadinessResult};
-use kix_cluster::waves::compute_waves;
-use kix_eval::build::build_cluster_activation_with_status;
-use kix_eval::store_graph::StoreGraph;
-use kix_manifest::stamp::stamp_annotations;
-use kix_manifest::types::{CLUSTER_SCOPED, ResourceId};
+use kix::cluster::activation;
+use kix::cluster::apply::{ApplyAction, ChangeAction};
+use kix::cluster::fetch;
+use kix::cluster::graph::ResourceGraph;
+use kix::cluster::readiness;
+use kix::cluster::reconcile::{
+    OnErrorPolicy, PrunePolicy, ReconcileConfig, ReconcileEvent, ReconcileObserver, ReconcileResult,
+};
+use kix::cluster::waves::compute_waves;
+use kix::eval::build::build_cluster_activation_with_status;
+use kix::eval::store_graph::StoreGraph;
+use kix::manifest::stamp::stamp_annotations;
+use kix::manifest::types::ResourceId;
 
 use crate::cli::{DeployArgs, OnError, PruneMode};
 use crate::output;
@@ -99,7 +102,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     };
 
     // 4. Local DAG diff: old vs new
-    let all_actions = kix_cluster::apply::detect_changes(&new_manifests, &old_manifests);
+    let all_actions = kix::cluster::apply::detect_changes(&new_manifests, &old_manifests);
 
     // Separate into apply actions and orphans
     let mut orphan_rids: Vec<ResourceId> = Vec::new();
@@ -266,7 +269,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
 
     // Save activation path for next deploy's diff
     if deploy_result.is_ok()
-        && let Err(e) = kix_eval::store::save_activation_path(&args.cluster, &result_path)
+        && let Err(e) = kix::eval::store::save_activation_path(&args.cluster, &result_path)
     {
         tracing::warn!("failed to save activation path: {e}");
     }
@@ -281,7 +284,7 @@ fn load_old_from_cache(
     cluster: &str,
     global: &crate::cli::GlobalArgs,
 ) -> (Option<StoreGraph>, Vec<Value>) {
-    let old_path = kix_eval::store::load_activation_path(cluster);
+    let old_path = kix::eval::store::load_activation_path(cluster);
     match old_path {
         Some(old_result_dir) => {
             if !global.quiet {
@@ -356,7 +359,7 @@ async fn load_old_from_cluster(
             }
 
             // Resolve identity-hash to local store graph
-            match kix_eval::store::resolve_activation_by_hash(cluster, hash) {
+            match kix::eval::store::resolve_activation_by_hash(cluster, hash) {
                 Some(result_dir) => {
                     let noop = |_: &str| {};
                     match StoreGraph::from_result_dir_with_status(&result_dir, &noop) {
@@ -397,7 +400,132 @@ async fn load_old_from_cluster(
     }
 }
 
-// ── Apply engine (async) ─────────────────────────────────────────────
+// ── Apply engine (async) — thin wrapper around reconcile() ──────────
+
+/// CLI observer that prints colored progress to stdout/stderr.
+struct CliObserver {
+    quiet: bool,
+}
+
+impl ReconcileObserver for CliObserver {
+    fn on_event(&self, event: &ReconcileEvent) {
+        match event {
+            ReconcileEvent::WaveSkipped {
+                wave_index, count, ..
+            } => {
+                if !self.quiet {
+                    println!(
+                        "\n{} {} resources (already complete, skipping)",
+                        output::bold(&format!("Wave {}:", wave_index + 1)),
+                        count,
+                    );
+                }
+            }
+            ReconcileEvent::WaveUnchanged {
+                wave_index, count, ..
+            } => {
+                if !self.quiet {
+                    println!(
+                        "\n{} {} resources unchanged",
+                        output::bold(&format!("Wave {}:", wave_index + 1)),
+                        count,
+                    );
+                }
+            }
+            ReconcileEvent::WaveStart {
+                wave_index,
+                apply_count,
+                ..
+            } => {
+                if !self.quiet {
+                    println!(
+                        "\n{} applying {} resources...",
+                        output::bold(&format!("Wave {}:", wave_index + 1)),
+                        apply_count,
+                    );
+                }
+            }
+            ReconcileEvent::ResourceApplied { rid, action } => {
+                let (symbol, label) = match action {
+                    ApplyAction::Created => (output::green("+"), "created"),
+                    ApplyAction::Configured => (output::yellow("~"), "configured"),
+                    ApplyAction::Unchanged => (output::dim("="), "unchanged"),
+                    ApplyAction::Skipped => (output::dim("-"), "skipped"),
+                };
+                if !self.quiet || !matches!(action, ApplyAction::Unchanged) {
+                    println!("  {} {} {}", symbol, rid, output::dim(label));
+                }
+            }
+            ReconcileEvent::ResourceFailed { rid, error } => {
+                eprintln!("  {} {} {}", output::red("!"), rid, output::red(error),);
+            }
+            ReconcileEvent::ReadinessWaiting { rid } => {
+                if !self.quiet {
+                    print!("  Waiting for {} ...", output::dim(&rid.to_string()));
+                    std::io::stdout().flush().ok();
+                }
+            }
+            ReconcileEvent::ReadinessReady { .. } => {
+                if !self.quiet {
+                    println!(" {}", output::green("ready"));
+                }
+            }
+            ReconcileEvent::ReadinessTimeout {
+                elapsed, message, ..
+            } => {
+                println!(
+                    " {} ({}s): {}",
+                    output::yellow("timed out"),
+                    elapsed.as_secs(),
+                    message,
+                );
+            }
+            ReconcileEvent::ReadinessFailed { message, .. } => {
+                println!(" {}: {}", output::red("failed"), message);
+            }
+            ReconcileEvent::Stopped { reason } => {
+                eprintln!("\n{}", output::red(reason));
+            }
+            ReconcileEvent::CrdRediscovery => {}
+            ReconcileEvent::WaveComplete { .. } => {}
+            ReconcileEvent::PruneStart { count } => {
+                println!();
+                println!(
+                    "{} Pruning {} orphaned resources...",
+                    output::bold("Prune:"),
+                    count,
+                );
+            }
+            ReconcileEvent::PruneSkipped { rid, reason } => {
+                println!("  {} {} — {}", output::yellow("!"), rid, reason,);
+            }
+            ReconcileEvent::PruneOk { rid } => {
+                println!(
+                    "  {} pruned {}/{}@{}",
+                    output::red("-"),
+                    rid.kind,
+                    rid.name,
+                    rid.namespace,
+                );
+            }
+            ReconcileEvent::PruneFailed { rid, error } => {
+                eprintln!("  {} {}: {}", output::red("!"), rid, output::red(error),);
+            }
+            ReconcileEvent::Finalized { activation, old } => {
+                if !self.quiet {
+                    if let Some(old) = old {
+                        println!("  {} Activation '{}' → Superseded", output::dim("•"), old,);
+                    }
+                    println!(
+                        "  {} Activation '{}' → Active",
+                        output::green("•"),
+                        activation,
+                    );
+                }
+            }
+        }
+    }
+}
 
 #[allow(clippy::too_many_arguments)]
 async fn run_deploy_async(
@@ -429,490 +557,79 @@ async fn run_deploy_async(
         .await
         .map_err(|e| miette!("API discovery failed: {e}"))?;
 
-    let mut total_created = 0usize;
-    let mut total_configured = 0usize;
-    let mut total_unchanged = 0usize;
-    let mut total_failed = 0usize;
-
-    // Determine resume point (if a previous deploy crashed mid-wave)
-    let activation_ar = activation::find_activation_ar(&discovery).map(|(ar, _)| ar.clone());
-    let resume_from = if let (Some(ar), Some(act_name)) = (&activation_ar, activation_name) {
-        match activation::resume_point(&client, ar, act_name).await {
-            Ok(Some(idx)) if idx > 0 => {
-                if !global.quiet {
-                    println!(
-                        "Resuming from wave {} (waves 1-{} already complete)",
-                        idx + 1,
-                        idx,
-                    );
-                }
-                idx
-            }
-            _ => 0,
-        }
-    } else {
-        0
+    // Map CLI args to reconcile config
+    let prune_mode = args.prune_mode.unwrap_or(PruneMode::Default);
+    let prune_policy = match prune_mode {
+        PruneMode::No => PrunePolicy::Skip,
+        PruneMode::Default if !args.prune => PrunePolicy::WarnOnly,
+        PruneMode::Default | PruneMode::Eager => PrunePolicy::Delete,
+    };
+    let on_error = match args.on_error {
+        OnError::Stop => OnErrorPolicy::Stop,
+        OnError::Continue => OnErrorPolicy::Continue,
     };
 
-    // Record deploy start on the Activation CR
-    if let (Some(ar), Some(act_name)) = (&activation_ar, activation_name)
-        && let Err(e) = activation::begin_deploy(&client, ar, act_name, wave_actions.len()).await
-    {
-        tracing::warn!("failed to set Deploying phase: {e}");
-    }
+    let config = ReconcileConfig {
+        timeout,
+        on_error,
+        prune: prune_policy,
+    };
 
-    // Apply waves (creates and updates only)
-    for (wave_idx, actions) in wave_actions.iter().enumerate() {
-        // Skip waves completed in a previous (crashed) deploy
-        if wave_idx < resume_from {
-            let wave_count = actions.len();
-            if !global.quiet {
-                println!(
-                    "\n{} {} resources (already complete, skipping)",
-                    output::bold(&format!("Wave {}:", wave_idx + 1)),
-                    wave_count,
-                );
-            }
-            total_unchanged += wave_count;
-            continue;
+    let observer = CliObserver {
+        quiet: global.quiet,
+    };
+
+    let result = kix::cluster::reconcile::reconcile(
+        &client,
+        &mut discovery,
+        wave_actions,
+        orphan_rids,
+        old_manifests,
+        cluster_name,
+        activation_name,
+        activation_identity_hash,
+        &config,
+        &observer,
+    )
+    .await;
+
+    match result {
+        Ok(r) => {
+            println!();
+            print_summary(&r);
+            Ok(())
         }
-        let apply_count = actions
-            .iter()
-            .filter(|a| matches!(a, ChangeAction::Apply(_)))
-            .count();
-
-        if apply_count == 0 {
-            if !global.quiet {
-                println!(
-                    "\n{} {} resources unchanged",
-                    output::bold(&format!("Wave {}:", wave_idx + 1)),
-                    actions.len(),
-                );
-            }
-            total_unchanged += actions.len();
-            // Record wave as complete (all skipped)
-            if let (Some(ar), Some(act_name)) = (&activation_ar, activation_name) {
-                let _ = activation::record_wave(
-                    &client,
-                    ar,
-                    act_name,
-                    &activation::WaveRecord {
-                        wave_index: wave_idx,
-                        status: activation::WaveStatus::Complete,
-                        resource_count: actions.len(),
-                        applied: 0,
-                        failed: 0,
-                    },
-                )
-                .await;
-            }
-            continue;
-        }
-
-        if !global.quiet {
-            println!(
-                "\n{} applying {} resources...",
-                output::bold(&format!("Wave {}:", wave_idx + 1)),
-                apply_count,
-            );
-        }
-
-        let results = kix_cluster::apply::apply_wave(
-            &client,
-            &discovery,
-            actions,
-            false,
-            activation_identity_hash,
-        )
-        .await;
-
-        let mut wave_failed = false;
-        for (rid, result) in &results {
-            match result {
-                Ok(apply_result) => {
-                    let (symbol, label) = match apply_result.action {
-                        ApplyAction::Created => {
-                            total_created += 1;
-                            (output::green("+"), "created")
-                        }
-                        ApplyAction::Configured => {
-                            total_configured += 1;
-                            (output::yellow("~"), "configured")
-                        }
-                        ApplyAction::Unchanged => {
-                            total_unchanged += 1;
-                            (output::dim("="), "unchanged")
-                        }
-                        ApplyAction::Skipped => {
-                            total_unchanged += 1;
-                            (output::dim("-"), "skipped")
-                        }
-                    };
-                    if !global.quiet || apply_result.action != ApplyAction::Unchanged {
-                        println!("  {} {} {}", symbol, rid, output::dim(label));
-                    }
+        Err(e) => {
+            // Extract partial result from error variants for summary
+            let partial = match &e {
+                kix::cluster::reconcile::ReconcileError::WaveFailed { partial_result, .. } => {
+                    Some(partial_result)
                 }
-                Err(e) => {
-                    total_failed += 1;
-                    wave_failed = true;
-                    eprintln!(
-                        "  {} {} {}",
-                        output::red("!"),
-                        rid,
-                        output::red(&e.to_string())
-                    );
-                }
-            }
-        }
-
-        // Check failure mode
-        if wave_failed {
-            match args.on_error {
-                OnError::Stop => {
-                    eprintln!(
-                        "\n{}",
-                        output::red("Deploy stopped due to errors (--on-error=stop).")
-                    );
-                    print_summary(
-                        total_created,
-                        total_configured,
-                        total_unchanged,
-                        total_failed,
-                    );
-                    std::process::exit(1);
-                }
-                OnError::Continue => {
-                    eprintln!(
-                        "  {}",
-                        output::yellow("Continuing despite errors (--on-error=continue)...")
-                    );
-                }
-            }
-        }
-
-        // Readiness polling for this wave
-        if !wave_failed || matches!(args.on_error, OnError::Continue) {
-            for action in actions {
-                if let ChangeAction::Apply(manifest) = action {
-                    let rid = ResourceId::from_value(manifest);
-
-                    if !results.iter().any(|(r, res)| *r == rid && res.is_ok()) {
-                        continue;
-                    }
-
-                    let kind = &rid.kind;
-
-                    if readiness::is_immediate_kind(kind) {
-                        continue;
-                    }
-
-                    let ar_scope = discovery.iter().find(|(ar, _)| ar.kind == rid.kind);
-
-                    if let Some((ar, scope)) = ar_scope {
-                        let ns = if rid.namespace == CLUSTER_SCOPED {
-                            None
-                        } else {
-                            Some(rid.namespace.as_str())
-                        };
-
-                        if !global.quiet {
-                            print!("  Waiting for {} ...", output::dim(&rid.to_string()));
-                            std::io::stdout().flush().ok();
-                        }
-
-                        match readiness::wait_for_ready(
-                            &client, ar, scope, &rid.name, ns, kind, timeout,
-                        )
-                        .await
-                        {
-                            Ok(ReadinessResult::Ready) => {
-                                if !global.quiet {
-                                    println!(" {}", output::green("ready"));
-                                }
-                            }
-                            Ok(ReadinessResult::TimedOut { elapsed, message }) => {
-                                println!(
-                                    " {} ({}s): {}",
-                                    output::yellow("timed out"),
-                                    elapsed.as_secs(),
-                                    message,
-                                );
-                                if matches!(args.on_error, OnError::Stop) {
-                                    eprintln!(
-                                        "\n{}",
-                                        output::red("Deploy stopped: readiness timeout.")
-                                    );
-                                    print_summary(
-                                        total_created,
-                                        total_configured,
-                                        total_unchanged,
-                                        total_failed,
-                                    );
-                                    std::process::exit(1);
-                                }
-                            }
-                            Ok(ReadinessResult::Failed(msg)) => {
-                                println!(" {}: {}", output::red("failed"), msg);
-                                total_failed += 1;
-                                if matches!(args.on_error, OnError::Stop) {
-                                    eprintln!(
-                                        "\n{}",
-                                        output::red("Deploy stopped: readiness failure.")
-                                    );
-                                    print_summary(
-                                        total_created,
-                                        total_configured,
-                                        total_unchanged,
-                                        total_failed,
-                                    );
-                                    std::process::exit(1);
-                                }
-                            }
-                            Err(e) => {
-                                println!(" {}: {}", output::red("error"), e);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Re-discover API resources if this wave created CRDs
-        let wave_had_crds = actions.iter().any(|a| {
-            if let ChangeAction::Apply(m) = a {
-                ResourceId::from_value(m).kind == "CustomResourceDefinition"
-            } else {
-                false
-            }
-        });
-        if wave_had_crds && let Ok(new_disc) = fetch::discover_resources(&client).await {
-            discovery = new_disc;
-        }
-
-        // Record wave progress on the Activation CR
-        if let (Some(ar), Some(act_name)) = (&activation_ar, activation_name) {
-            let wave_applied = results
-                .iter()
-                .filter(|(_, r)| {
-                    r.as_ref().is_ok_and(|r| {
-                        matches!(r.action, ApplyAction::Created | ApplyAction::Configured)
-                    })
-                })
-                .count();
-            let wave_failed_count = results.iter().filter(|(_, r)| r.is_err()).count();
-            let status = if wave_failed {
-                activation::WaveStatus::Failed
-            } else {
-                activation::WaveStatus::Complete
+                kix::cluster::reconcile::ReconcileError::ReadinessTimeout {
+                    partial_result,
+                    ..
+                } => Some(partial_result),
+                kix::cluster::reconcile::ReconcileError::ReadinessFailed {
+                    partial_result, ..
+                } => Some(partial_result),
+                _ => None,
             };
-            let _ = activation::record_wave(
-                &client,
-                ar,
-                act_name,
-                &activation::WaveRecord {
-                    wave_index: wave_idx,
-                    status,
-                    resource_count: actions.len(),
-                    applied: wave_applied,
-                    failed: wave_failed_count,
-                },
-            )
-            .await;
-        }
-    }
-
-    // Prune orphans (after all apply waves)
-    let prune_mode = args.prune_mode.unwrap_or(PruneMode::Default);
-    if !orphan_rids.is_empty() && prune_mode != PruneMode::No {
-        // Compute reverse topo order for orphans from old manifests
-        let ordered_orphans = compute_prune_order(orphan_rids, old_manifests);
-
-        if prune_mode == PruneMode::Default && !args.prune {
-            // Warn about orphans but don't delete
-            println!();
-            println!(
-                "{} {} resources on cluster not in new activation (use --prune to delete):",
-                output::yellow("Orphans:"),
-                ordered_orphans.len(),
-            );
-            for rid in &ordered_orphans {
-                println!("  {} {}", output::yellow("-"), rid);
+            if let Some(r) = partial {
+                print_summary(r);
             }
-        } else {
-            // Actually prune
-            let ar_by_kind: std::collections::HashMap<
-                String,
-                (&kube::discovery::ApiResource, kube::discovery::Scope),
-            > = discovery
-                .iter()
-                .map(|(ar, scope)| (ar.kind.clone(), (ar, scope.clone())))
-                .collect();
-
-            println!();
-            println!(
-                "{} Pruning {} orphaned resources...",
-                output::bold("Prune:"),
-                ordered_orphans.len(),
-            );
-
-            for rid in &ordered_orphans {
-                if rid.kind == "Namespace" {
-                    println!(
-                        "  {} {} — skipping Namespace pruning — use kubectl delete ns manually",
-                        output::yellow("!"),
-                        rid,
-                    );
-                    continue;
-                }
-
-                let Some(&(ar, ref scope)) = ar_by_kind.get(&rid.kind) else {
-                    eprintln!(
-                        "  {} {} — unknown kind, cannot prune",
-                        output::red("!"),
-                        rid,
-                    );
-                    total_failed += 1;
-                    continue;
-                };
-
-                let api: kube::api::Api<kube::api::DynamicObject> = match scope {
-                    kube::discovery::Scope::Namespaced => {
-                        let ns = if rid.namespace == CLUSTER_SCOPED {
-                            "default"
-                        } else {
-                            &rid.namespace
-                        };
-                        kube::api::Api::namespaced_with(client.clone(), ns, ar)
-                    }
-                    kube::discovery::Scope::Cluster => kube::api::Api::all_with(client.clone(), ar),
-                };
-
-                match api
-                    .delete(&rid.name, &kube::api::DeleteParams::default())
-                    .await
-                {
-                    Ok(_) => {
-                        println!(
-                            "  {} pruned {}/{}@{}",
-                            output::red("-"),
-                            rid.kind,
-                            rid.name,
-                            rid.namespace,
-                        );
-                    }
-                    Err(e) => {
-                        eprintln!(
-                            "  {} {}: {}",
-                            output::red("!"),
-                            rid,
-                            output::red(&e.to_string()),
-                        );
-                        total_failed += 1;
-                    }
-                }
-            }
-        }
-    }
-
-    // Finalize activation lifecycle (mark old as Superseded, new as Active)
-    if total_failed == 0
-        && let Some(act_name) = activation_name
-        && let Some((ar, _)) = activation::find_activation_ar(&discovery)
-    {
-        // Find the previously Active activation
-        let old_activation = activation::find_active(&client, ar, cluster_name)
-            .await
-            .ok()
-            .flatten()
-            // Don't supersede ourselves (first deploy or redeploy of same name)
-            .filter(|old| old.name != act_name);
-
-        if let Err(e) = activation::finalize_deploy(
-            &client,
-            ar,
-            cluster_name,
-            act_name,
-            old_activation.as_ref(),
-        )
-        .await
-        {
-            tracing::warn!("failed to finalize activation lifecycle: {e}");
-        } else if !global.quiet {
-            if let Some(ref old) = old_activation {
-                println!(
-                    "  {} Activation '{}' → Superseded",
-                    output::dim("•"),
-                    old.name,
-                );
-            }
-            println!(
-                "  {} Activation '{}' → Active",
-                output::green("•"),
-                act_name,
-            );
-        }
-    }
-
-    // Summary
-    println!();
-    print_summary(
-        total_created,
-        total_configured,
-        total_unchanged,
-        total_failed,
-    );
-
-    if total_failed > 0 {
-        std::process::exit(1);
-    }
-
-    Ok(())
-}
-
-/// Compute prune order: reverse topological order from old graph (dependents first).
-fn compute_prune_order(orphan_rids: &[ResourceId], old_manifests: &[Value]) -> Vec<ResourceId> {
-    // Build graph from old manifests that are orphans
-    let orphan_set: std::collections::HashSet<String> = orphan_rids
-        .iter()
-        .map(|rid| format!("{}/{}/{}", rid.kind, rid.namespace, rid.name))
-        .collect();
-
-    let orphan_manifests: Vec<Value> = old_manifests
-        .iter()
-        .filter(|m| {
-            let rid = ResourceId::from_value(m);
-            orphan_set.contains(&format!("{}/{}/{}", rid.kind, rid.namespace, rid.name))
-        })
-        .cloned()
-        .collect();
-
-    match ResourceGraph::from_manifests(&orphan_manifests) {
-        Ok(graph) => {
-            let waves = compute_waves(&graph);
-            // Reverse: delete dependents (later waves) first
-            let mut ordered: Vec<ResourceId> = Vec::new();
-            for wave in waves.into_iter().rev() {
-                for idx in wave {
-                    ordered.push(graph.graph[idx].id.clone());
-                }
-            }
-            ordered
-        }
-        Err(_) => {
-            // If graph construction fails, fall back to unordered
-            orphan_rids.to_vec()
+            std::process::exit(1);
         }
     }
 }
 
-fn print_summary(created: usize, configured: usize, unchanged: usize, failed: usize) {
-    let failed_str = failed.to_string();
+fn print_summary(r: &ReconcileResult) {
+    let failed_str = r.failed.to_string();
     println!(
         "Deploy complete: {} created, {} configured, {} unchanged, {} failed",
-        output::green(&created.to_string()),
-        output::yellow(&configured.to_string()),
-        output::dim(&unchanged.to_string()),
-        if failed > 0 {
+        output::green(&r.created.to_string()),
+        output::yellow(&r.configured.to_string()),
+        output::dim(&r.unchanged.to_string()),
+        if r.failed > 0 {
             output::red(&failed_str)
         } else {
             output::dim(&failed_str)
@@ -949,7 +666,7 @@ fn parse_timeout(s: Option<&str>) -> Result<Duration> {
     ))
 }
 
-fn resolve_flake_path(flake: &str) -> Result<PathBuf> {
+pub(crate) fn resolve_flake_path(flake: &str) -> Result<PathBuf> {
     if flake.contains(':') {
         Ok(PathBuf::from(flake))
     } else {

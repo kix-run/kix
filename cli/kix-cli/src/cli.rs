@@ -75,6 +75,9 @@ pub enum Command {
     /// Garbage-collect stale kix-managed resources
     Gc(GcArgs),
 
+    /// Drift detection: compare intended state vs live cluster
+    Health(HealthArgs),
+
     /// Manage cluster snapshots for CI/offline use
     Snapshot(SnapshotArgs),
 
@@ -94,6 +97,7 @@ impl Command {
             Command::Graph(a) => Some(&a.cluster),
             Command::Inspect(a) => Some(&a.cluster),
             Command::Gc(a) => Some(&a.cluster),
+            Command::Health(a) => Some(&a.cluster),
             Command::Snapshot(_) | Command::List(_) | Command::Completions(_) => None,
         }
     }
@@ -187,6 +191,12 @@ pub struct GcArgs {
     /// Full cluster scan (default: diff old vs new activation store graphs)
     #[arg(long)]
     pub hard: bool,
+}
+
+#[derive(clap::Args)]
+pub struct HealthArgs {
+    /// Cluster name
+    pub cluster: String,
 }
 
 #[derive(clap::Args)]

@@ -1,0 +1,76 @@
+[package]
+name = "kix-lib"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "kix library — Nix evaluation, K8s manifest handling, and cluster operations"
+
+[lib]
+name = "kix"
+path = "src/lib.rs"
+
+[dependencies]
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+serde_yml.workspace = true
+
+# Error handling
+thiserror.workspace = true
+anyhow.workspace = true
+
+# Diffing
+similar.workspace = true
+strsim.workspace = true
+rayon.workspace = true
+indexmap.workspace = true
+
+# Output formatting
+owo-colors.workspace = true
+
+# K8s
+kube.workspace = true
+tokio.workspace = true
+futures.workspace = true
+
+# DAG
+petgraph.workspace = true
+
+# SQLite (eval caching)
+rusqlite.workspace = true
+
+# Hashing
+blake3.workspace = true
+
+# Paths
+directories.workspace = true
+walkdir.workspace = true
+tempfile.workspace = true
+
+# Time
+chrono.workspace = true
+
+# Logging
+tracing.workspace = true
+
+# Nix FFI bindings (optional, enabled via nix-ffi feature)
+nix-bindings-expr = { workspace = true, optional = true }
+nix-bindings-store = { workspace = true, optional = true }
+nix-bindings-flake = { workspace = true, optional = true }
+nix-bindings-util = { workspace = true, optional = true }
+nix-bindings-fetchers = { workspace = true, optional = true }
+
+[features]
+nix-ffi = [
+  "dep:nix-bindings-expr",
+  "dep:nix-bindings-store",
+  "dep:nix-bindings-flake",
+  "dep:nix-bindings-util",
+  "dep:nix-bindings-fetchers",
+]
+test-util = []
+
+[dev-dependencies]
+tempfile.workspace = true
+insta.workspace = true
+k8s-openapi = { version = "0.24", features = ["latest"] }

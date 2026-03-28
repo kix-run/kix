@@ -5,6 +5,7 @@ pub mod deploy;
 pub mod diff;
 pub mod gc;
 pub mod graph;
+pub mod health;
 pub mod inspect;
 pub mod list;
 pub mod snapshot;
@@ -17,7 +18,7 @@ use miette::IntoDiagnostic;
 use crate::cli::{GlobalArgs, OutputFormat};
 
 pub struct CommandContext {
-    pub evaluator: kix_eval::eval::KixEvaluator,
+    pub evaluator: kix::eval::KixEvaluator,
     pub global: GlobalArgs,
     pub runtime: tokio::runtime::Runtime,
 }
@@ -41,11 +42,11 @@ impl CommandContext {
     pub fn eval_cluster_or_suggest(
         &mut self,
         name: &str,
-    ) -> miette::Result<kix_eval::eval::ClusterOutput> {
+    ) -> miette::Result<kix::eval::ClusterOutput> {
         use miette::IntoDiagnostic;
         match self.evaluator.eval_cluster(name) {
             Ok(o) => Ok(o),
-            Err(kix_eval::error::KixEvalError::ClusterNotFound { name }) => {
+            Err(kix::eval::error::KixEvalError::ClusterNotFound { name }) => {
                 let clusters = self.evaluator.list_clusters().unwrap_or_default();
                 let mut msg = format!("cluster '{}' not found", name);
                 if !clusters.is_empty() {
@@ -77,10 +78,10 @@ fn resolve_flake_path(flake: &str) -> miette::Result<PathBuf> {
 }
 
 /// Create a KixEvaluator with the real Nix FFI backend.
-fn create_evaluator(flake: &str) -> miette::Result<kix_eval::eval::KixEvaluator> {
-    let backend = kix_eval::ffi::FfiNixBackend::new().map_err(|e| miette::miette!("{:#}", e))?;
+fn create_evaluator(flake: &str) -> miette::Result<kix::eval::KixEvaluator> {
+    let backend = kix::eval::ffi::FfiNixBackend::new().map_err(|e| miette::miette!("{:#}", e))?;
 
     let flake_path = resolve_flake_path(flake)?;
-    let cache_dir = kix_eval::store::default_cache_dir();
-    kix_eval::eval::KixEvaluator::new(backend, &flake_path, &cache_dir).into_diagnostic()
+    let cache_dir = kix::eval::store::default_cache_dir();
+    kix::eval::KixEvaluator::new(backend, &flake_path, &cache_dir).into_diagnostic()
 }

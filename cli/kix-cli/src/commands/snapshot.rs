@@ -4,13 +4,13 @@ use std::path::Path;
 use miette::{IntoDiagnostic, Result, miette};
 use serde_json::Value;
 
-use kix_cluster::fetch;
-use kix_manifest::diff::display::format_diffs;
-use kix_manifest::diff::engine::structural_diff;
-use kix_manifest::diff::rename::find_renames;
-use kix_manifest::diff::{DiffConfig, Difference};
-use kix_manifest::serialize::load_manifests_from_dir;
-use kix_manifest::types::{CLUSTER_SCOPED, ResourceId};
+use kix::cluster::fetch;
+use kix::manifest::diff::display::format_diffs;
+use kix::manifest::diff::engine::structural_diff;
+use kix::manifest::diff::rename::find_renames;
+use kix::manifest::diff::{DiffConfig, Difference};
+use kix::manifest::serialize::load_manifests_from_dir;
+use kix::manifest::types::{CLUSTER_SCOPED, ResourceId};
 
 use crate::cli::{OutputFormat, SnapshotArgs, SnapshotCommand, SnapshotDiffArgs, SnapshotSaveArgs};
 use crate::output;

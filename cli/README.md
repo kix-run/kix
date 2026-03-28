@@ -5,13 +5,12 @@ Rust CLI for kixpkgs. Evaluates Nix-defined Kubernetes clusters, diffs against l
 ## Workspace
 
 ```
-kix-cli/        binary — clap CLI, command dispatch, plan display
-kix-eval/        Nix FFI, store graph, eval caching
-kix-manifest/    K8s types, structural diff engine, annotation stamping
-kix-cluster/     apply, fetch, DAG, waves, readiness, activation lifecycle
+kix/             library — eval, manifest handling, cluster operations
+kix-cli/         binary — clap CLI, command dispatch, plan display
+kix-operator/    binary — kube-rs controller watching Activation CRs
 ```
 
-`kix-cli` depends on all three. `kix-cluster` depends on `kix-manifest`. No other cross-deps.
+Both binaries depend on `kix`. No other cross-deps.
 
 ## Deploy pipeline
 
@@ -28,14 +27,17 @@ nix build → StoreGraph → stamp annotations
 
 ### kix-cli (`kix-cli/src/`)
 
-- `cli.rs` — all clap command/flag definitions (`DeployArgs`, `GcArgs`, `DiffArgs`, `GlobalArgs`, enums)
+- `cli.rs` — all clap command/flag definitions (`DeployArgs`, `GcArgs`, `DiffArgs`, `HealthArgs`, `GlobalArgs`, enums)
 - `plan.rs` — shared plan renderer for deploy + gc. `PackageDiff`/`PackageChangeDiff` types, `diff_graphs()` for package-level comparison, `print_package_plan()` for namespace-grouped changes-only display
 - `output.rs` — color helpers (`green`/`red`/`yellow`/`dim`/`bold` → `Cow<str>`), `is_interactive()`, `CommandResponse` trait
-- `commands/deploy.rs` — deploy pipeline: resolves old activation (from cluster or `--current-activation` cache), runs `detect_changes`, displays plan, confirms, delegates to `apply_wave`, prunes orphans
+- `commands/deploy.rs` — deploy pipeline: resolves old activation, displays plan, confirms, delegates to `kix::cluster::reconcile::reconcile()` for the wave loop
 - `commands/diff.rs` — three modes: build-to-build (two StoreGraphs), vs live cluster, vs snapshot directory
 - `commands/gc.rs` — soft (DAG diff old vs new) and hard (full cluster scan) garbage collection
+- `commands/health.rs` — drift detection: builds intended state, fetches live state, compares normalized content hashes
 
-### kix-eval (`kix-eval/src/`)
+### kix library (`kix/src/`)
+
+#### eval (`kix/src/eval/`)
 
 - `store_graph.rs` — **central data structure.** `StoreGraph` holds the full in-memory DAG: `PackageNode` (instance_name, namespace, version, resource_paths, cross_deps), `ResourceNode` (store_path, manifest). Built from result dir's `kix-packages.json` + `nix-store -q --graph`
 - `store.rs` — activation cache at `~/.cache/kix/activations/`. `save/load_activation_path()` for local cache, `resolve_activation_by_hash()` to go from cluster identity-hash → local result dir
@@ -44,7 +46,7 @@ nix build → StoreGraph → stamp annotations
 - `cache.rs` — SQLite cache keyed by BLAKE3 of (flake path + lock + source fingerprint + attr)
 - `mock.rs` — `MockNixBackend` for tests without Nix
 
-### kix-manifest (`kix-manifest/src/`)
+#### manifest (`kix/src/manifest/`)
 
 - `types.rs` — `ResourceId` (kind/namespace/name), `CLUSTER_SCOPED` constant. Used everywhere
 - `stamp.rs` — `stamp_annotations()` writes `kix.dev/*` annotations onto StoreGraph manifests in-place
@@ -53,7 +55,7 @@ nix build → StoreGraph → stamp annotations
 - `diff/display.rs` — `format_diffs()` renders differences as colored text
 - `serialize.rs` — YAML/JSON output, `load_manifests_from_dir()` for snapshot loading
 
-### kix-cluster (`kix-cluster/src/`)
+#### cluster (`kix/src/cluster/`)
 
 - `apply.rs` — `detect_changes()` (identity-hash set diff → `ChangeAction::Apply/Skip/Orphan`), `apply_wave()` (SSA via `kube`)
 - `graph.rs` — `ResourceGraph` (petgraph DAG built from `kix.dev/depends-on` annotations)
@@ -61,6 +63,8 @@ nix build → StoreGraph → stamp annotations
 - `readiness.rs` — `wait_for_ready()` polls per-kind conditions (Deployment replicas, CRD Established, Job succeeded, etc.)
 - `activation.rs` — Activation CR lifecycle: `find_active()`, `begin_deploy()`, `record_wave()`, `finalize_deploy()`, `resume_point()`
 - `fetch.rs` — `make_client()`, `discover_resources()`, `fetch_managed_resources()` (parallel LIST with label selectors)
+- `reconcile.rs` — **extracted deploy engine.** `reconcile()` is the wave-by-wave apply loop used by both CLI and operator. `ReconcileObserver` trait for progress events, `ReconcileConfig` for behavior (timeout, on-error, prune policy)
+- `normalize.rs` — content-hash normalization for drift detection. Strips server metadata, kix annotations, status, nulls. `detect_drift()` compares intended vs live
 
 ## Key patterns
 

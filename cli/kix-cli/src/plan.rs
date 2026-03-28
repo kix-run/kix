@@ -5,12 +5,12 @@
 
 use std::collections::BTreeMap;
 
-use kix_eval::PackageNode;
-use kix_eval::store_graph::StoreGraph;
-use kix_manifest::diff::display::format_diffs;
-use kix_manifest::diff::engine::structural_diff;
-use kix_manifest::diff::{DiffConfig, Difference};
-use kix_manifest::types::ResourceId;
+use kix::eval::PackageNode;
+use kix::eval::store_graph::StoreGraph;
+use kix::manifest::diff::display::format_diffs;
+use kix::manifest::diff::engine::structural_diff;
+use kix::manifest::diff::{DiffConfig, Difference};
+use kix::manifest::types::ResourceId;
 use serde_json::Value;
 
 use crate::output;
@@ -354,7 +354,7 @@ pub fn print_package_plan(diff: &PackageDiff, verbose: bool) {
 /// Print a compact wave visualization.
 pub fn print_wave_summary(
     waves: &[Vec<petgraph::graph::NodeIndex>],
-    graph: &kix_cluster::graph::ResourceGraph,
+    graph: &kix::cluster::graph::ResourceGraph,
 ) {
     if waves.is_empty() {
         return;

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["kix-cli", "kix-eval", "kix-manifest", "kix-cluster"]
+members = ["kix-cli", "kix", "kix-operator"]
 
 [workspace.package]
 version = "0.1.0"
@@ -72,9 +72,7 @@ nix-bindings-util = { git = "https://github.com/nixops4/nix-bindings-rust.git", 
 nix-bindings-fetchers = { git = "https://github.com/nixops4/nix-bindings-rust.git", rev = "7de15fa26057c8cf0b6178ff166e529c09ea89a7" }
 
 # Internal crates
-kix-eval = { path = "kix-eval" }
-kix-manifest = { path = "kix-manifest" }
-kix-cluster = { path = "kix-cluster" }
+kix-lib = { path = "kix" }
 
 # Test dependencies (used as dev-dependencies in member crates)
 # Listed here so members can inherit them with .workspace = true

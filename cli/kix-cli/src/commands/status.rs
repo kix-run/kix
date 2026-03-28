@@ -4,7 +4,7 @@ use miette::{IntoDiagnostic, Result};
 
 use crate::cli::{OutputFormat, StatusArgs};
 use crate::output::{self, CommandResponse};
-use kix_manifest::types::CLUSTER_SCOPED;
+use kix::manifest::types::CLUSTER_SCOPED;
 
 use super::CommandContext;
 
@@ -62,15 +62,15 @@ async fn run_async(_args: &StatusArgs, global: &crate::cli::GlobalArgs) -> Resul
     };
 
     // Connect to cluster
-    let client = kix_cluster::fetch::make_client(global.context.as_deref())
+    let client = kix::cluster::fetch::make_client(global.context.as_deref())
         .await
         .into_diagnostic()?;
 
     // Discover and fetch managed resources
-    let discovery = kix_cluster::fetch::discover_resources(&client)
+    let discovery = kix::cluster::fetch::discover_resources(&client)
         .await
         .into_diagnostic()?;
-    let resources = kix_cluster::fetch::fetch_managed_resources(&client, &discovery)
+    let resources = kix::cluster::fetch::fetch_managed_resources(&client, &discovery)
         .await
         .into_diagnostic()?;
 
@@ -106,7 +106,7 @@ async fn run_async(_args: &StatusArgs, global: &crate::cli::GlobalArgs) -> Resul
                 .unwrap_or(CLUSTER_SCOPED)
                 .to_string();
 
-            let is_ready = kix_cluster::readiness::check_readiness(obj, &kind);
+            let is_ready = kix::cluster::readiness::check_readiness(obj, &kind);
             let ready_str = if is_ready { "True" } else { "False" }.to_string();
 
             let status_str = compute_status(obj, &kind);

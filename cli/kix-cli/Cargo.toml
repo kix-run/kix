@@ -1,5 +1,5 @@
 [package]
-name = "kix"
+name = "kix-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,9 +10,7 @@ name = "kix"
 path = "src/main.rs"
 
 [dependencies]
-kix-eval = { workspace = true, features = ["nix-ffi"] }
-kix-manifest.workspace = true
-kix-cluster.workspace = true
+kix-lib = { workspace = true, features = ["nix-ffi"] }
 serde.workspace = true
 kube.workspace = true
 clap.workspace = true

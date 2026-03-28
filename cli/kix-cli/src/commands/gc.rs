@@ -17,14 +17,14 @@ use std::path::PathBuf;
 use miette::{IntoDiagnostic, Result, miette};
 use serde_json::Value;
 
-use kix_cluster::fetch;
-use kix_cluster::graph::ResourceGraph;
-use kix_cluster::waves::compute_waves;
-use kix_eval::build::build_cluster_activation_with_status;
-use kix_eval::store;
-use kix_eval::store_graph::{StoreGraph, store_hash};
-use kix_manifest::stamp::stamp_annotations;
-use kix_manifest::types::{CLUSTER_SCOPED, ResourceId};
+use kix::cluster::fetch;
+use kix::cluster::graph::ResourceGraph;
+use kix::cluster::waves::compute_waves;
+use kix::eval::build::build_cluster_activation_with_status;
+use kix::eval::store;
+use kix::eval::store_graph::{StoreGraph, store_hash};
+use kix::manifest::stamp::stamp_annotations;
+use kix::manifest::types::{CLUSTER_SCOPED, ResourceId};
 
 use crate::cli::GcArgs;
 use crate::output;
@@ -282,9 +282,9 @@ async fn run_hard_async(
     }
 
     // Find Superseded activations (spec.active == false) for this cluster
-    if let Some((ar, _)) = kix_cluster::activation::find_activation_ar(&discovery)
+    if let Some((ar, _)) = kix::cluster::activation::find_activation_ar(&discovery)
         && let Ok(superseded) =
-            kix_cluster::activation::list_superseded(&client, ar, cluster_name).await
+            kix::cluster::activation::list_superseded(&client, ar, cluster_name).await
     {
         for name in superseded {
             garbage.push(ResourceId {

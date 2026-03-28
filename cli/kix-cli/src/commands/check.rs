@@ -4,7 +4,7 @@ use miette::{IntoDiagnostic, Result};
 
 use crate::cli::{CheckArgs, OutputFormat};
 use crate::output::{self, CommandResponse};
-use kix_manifest::validate::{PreflightResult, default_tools, run_preflight};
+use kix::manifest::validate::{PreflightResult, default_tools, run_preflight};
 
 use super::CommandContext;
 
@@ -80,7 +80,7 @@ pub fn run(args: &CheckArgs, ctx: &mut CommandContext) -> Result<()> {
             });
             Some(output)
         }
-        Err(kix_eval::error::KixEvalError::ClusterNotFound { name }) => {
+        Err(kix::eval::error::KixEvalError::ClusterNotFound { name }) => {
             return Err(miette::miette!("cluster '{}' not found", name));
         }
         Err(e) => {
@@ -97,11 +97,11 @@ pub fn run(args: &CheckArgs, ctx: &mut CommandContext) -> Result<()> {
     if let Some(output) = &cluster_output {
         // Write manifests to a temp dir for preflight tools
         let tmp_dir = tempfile::tempdir().into_diagnostic()?;
-        kix_manifest::serialize::write_manifests_to_dir(&output.raw_manifests, tmp_dir.path())
+        kix::manifest::serialize::write_manifests_to_dir(&output.raw_manifests, tmp_dir.path())
             .map_err(|e| miette::miette!("failed to write manifests: {e}"))?;
 
         let tools = default_tools();
-        let tool_refs: Vec<&dyn kix_manifest::validate::PreflightTool> =
+        let tool_refs: Vec<&dyn kix::manifest::validate::PreflightTool> =
             tools.iter().map(|t| t.as_ref()).collect();
         let preflight_results = run_preflight(tmp_dir.path(), &tool_refs);
 
