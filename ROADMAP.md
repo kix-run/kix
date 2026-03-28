@@ -39,8 +39,8 @@
 - [ ] auto-sealing of resources? => evaluator turns every attrset that has a "kind" attribute into a resource on first pass of the fixpoint
 - [ ] aliases and meta could be on the packages options maybe? => allows default aliases to just be a mkDefault
 - [ ] smarter store paths. Nixos puts the package version into the storepath hash-name-version. This helps a lot with diffing fast.
-- [ ] package definition from dependencies as top level closure input to an explicit dependencies attrset that can carry more information and value (only depend if config.X is set etc). Then pass deps to build closure. This likely makes the fixpoint simpler as well.
-  - **Design direction:** kix packages already return `{ meta, options, build }` — unlike nixpkgs (where the function IS the build), we have a natural place to declare deps as a returned attrset. Phase 1: call package with only `scope`/`lib`/`kix` → get `meta`, `options`, `deps` (no fixpoint needed). Phase 2: resolve deps per-instance from the resolution index. Phase 3: pass resolved deps into `build`. This eliminates `builtins.functionArgs` introspection and the `peekPackageMeta` tryEval hack. Multiple instances of the same package can share phase 1 (same meta/options/dep declarations), only diverging at resolution and build. Constraint: options/meta cannot depend on resolved deps (already true today — `peekPackageMeta` proves it).
+- [x] package definition from dependencies as top level closure input to an explicit dependencies attrset that can carry more information and value (only depend if config.X is set etc). Then pass deps to build closure. This likely makes the fixpoint simpler as well.
+  - Implemented in `lib/eval/resolve.nix`: `normalizePackage`/`callPackagePhase1` calls package with only system args → returns `{ meta, options, deps?, build }`. `discoverBuildDeps` introspects build function args; `resolveDeclaredDeps` resolves against the cluster. `lib/eval/instance.nix` wires the full two-phase pattern. Packages (e.g. immich) return `{ meta, options, deps, build }` with deps as build function arguments.
 
 ### Validation
 
@@ -71,8 +71,22 @@
   - [ ] Revoking team member permissions
 - [ ] Supply chain security (SLSA) — locked inputs for everything: not just flake inputs but arbitrary external git refs, downloads (must carry hash), and file references. Partial immunity to supply chain attacks
 - [ ] Run static analysis of kyverno and other policy engines at build time — sane defaults out of the box
-- [ ] Network policies — autogenerate, check, verify, and abstract (cilium compatible); can be partially inferred from dependency graph (if you depend on a service, you need DNS access to it)
+- [x] Network policies — autogenerate, check, verify, and abstract (cilium compatible); can be partially inferred from dependency graph (if you depend on a service, you need DNS access to it)
+  - Implemented in `lib/netpol.nix` (430+ lines): auto-derives CiliumNetworkPolicy from the store-path dependency graph. Module option `networkPolicy` in `lib/modules.nix` with `enable`, `defaultDeny`, and `directions` flags. Auto-detects API server access, external ingress, self-communication; generates per-workload egress and per-service ingress rules.
+  - [ ] Network policies should be attached per-resource, not per-instance. Currently policies are collected on `_networkPolicies` at the instance level and injected in `cluster.nix`. They should instead be associated with the individual resources (workloads/services) that generate them, so they participate naturally in the store DAG and resource-level dependency tracking. See `v2_discussions/37_di_derived_network_policies.md` for the design: derive NetworkPolicies directly from DI graph + store-path DAG edges, per-workload egress and per-service ingress, without a separate connection graph abstraction.
+  - [ ] Network policy generation is hard-coded to CiliumNetworkPolicy. Should respect `cluster.capabilities.networkPolicyAPI`: generate standard K8s NetworkPolicy when `"k8s"`, CiliumNetworkPolicy when `"cilium"`, CalicoNetworkPolicy when `"calico"`, and skip generation entirely when `"none"`. Currently any cluster with `networkPolicy.enable = true` must have Cilium.
 - [ ] Permission system in kix deploy — what blast radius am I allowed to have
+
+## System contracts and cluster capabilities
+
+> See `v2_discussions/48_system_contracts.md` for full design decisions.
+
+- [x] Cluster hardware profile — `cluster.provider`, `cluster.capabilities.*`, `cluster.network.*`, `cluster.nodes` module options. Flavor presets in `lib/flavors/` for 10 distributions. See `v2_discussions/45_cluster_hardware_profile.md`, `lib/modules.nix` (capability option definitions with TODO annotations), `lib/flavors/*.nix`.
+- [x] Capability checks at resource construction — `lib/eval/scope.nix` checks `loadBalancer` (on Service type=LoadBalancer), `daemonSets` (on DaemonSet), `privilegedContainers` (on hostNetwork/hostPID/privileged). Capabilities flow from `clusterConfig` → `lib/eval/instance.nix` → `mkScope`.
+- [ ] Flavor-provided DI imports for system services — flavors must provide `mkImport` instances for platform-managed services (`dns`, `storageClasses`, `ingressController`). Currently flavors only set capabilities; they don't contribute to the DI graph. Requires flavors to have access to `kix.mkImport` via specialArgs. See TODO annotations on `ingressController`, `persistentStorage`, `cni`, `networkPolicyAPI`, `rwxStorage`, `volumeSnapshots` in `lib/modules.nix`.
+- [ ] Auto-injected DNS dependency — post-evaluation pass (like `lib/netpol.nix`) that detects FQDN references in resources and auto-adds a store-path edge to the `dns` DI provider. Ensures correct deploy ordering and build-time error if no DNS provider exists. Packages with `meta.defaultAliases = ["dns"]` (e.g. coredns) satisfy this automatically.
+- [ ] Post-eval verification for Helm imports — scan resources from `fromHelmChart` for implied prerequisites (PVCs without `storageClasses` provider, Ingress without `ingressController`, LoadBalancer without capability). Safety net for opaque resource sets that bypass DSL-level DI wiring.
+- [ ] Migrate capability TODOs to DI — several capabilities are marked for DI migration in `lib/modules.nix`: `ingressController` → DI dep with `out.ingressClassName`; `cni` / `networkPolicyAPI` → CNI as DI dep with `out.networkPolicyAPI`; `rwxStorage` → storage provider `out.accessModes`; `volumeSnapshots` → snapshot controller DI dep.
 
 ## Platform capabilities (module-level features)
 
@@ -95,6 +109,8 @@
 - [ ] Compatibility matrix — four distinct failure phases: build, deploy, health, application. Need to know *when* things will fail, not just *if*
 - [ ] Encodable "known issues" — broken side effects should be expressible in code so a problem can't recur; capturing institutional knowledge about failure modes directly in the DSL
 - [ ] Templating parity — ensure the DSL can express everything a Helm template can, as a migration enabler
+- [ ] Helm compatibility mode for live cluster migration — a flag (per-instance or global) that makes kix produce Helm-style labels and annotations (`app.kubernetes.io/managed-by: Helm`, `meta.helm.sh/release-name`, `meta.helm.sh/release-namespace`) so that `kubectl apply` adopts existing Helm-managed resources without conflicts. Enables zero-downtime migration from Helm to kix on live clusters. `labelStyle = "helm"` partially exists but doesn't cover Helm's ownership annotations.
+  - [ ] `fromHelmChart` should preserve Helm's kind-based resource ordering (Namespace → SA → ConfigMap → RBAC → Deployment → Service → Ingress) when loading resources, so the kix deploy wave order matches what Helm would do — avoids surprises during migration where resources appear in a different apply sequence
 - [ ] allow a resource to be defined as `self.deployment = moved { new attr name, message }` to inform a consumer of changes. We could have more and more advanced of these.
 
 ## DSL improvements
@@ -104,13 +120,15 @@
 - [x] Auto-selectors derived from resource spec/labels (`.out.selector`)
 - [x] RBAC DSL with intent-based verbs
 - [ ] HPA as dependency / composition — auto-wires scaling to the right target
-- [ ] Pipe-friendly resource composition — `binary |> as deployment |> expose { port = 9090; }` — kix as *the* platform engineering language, replacing the wild west of ansible/helm/scripts
+- [x] Pipe-friendly resource composition — `binary |> as deployment |> expose { port = 9090; }` — kix as *the* platform engineering language, replacing the wild west of ansible/helm/scripts
+  - Implemented in `lib/compose.nix`: extensive `|>` pipe operator usage for service composition (`deployment |> kix.service.fromWorkload |> scope.mkResource`), mount injection, and resource building
 - [ ] Builder/transformer placement — should package builders (`withCert`, `mkCertificate`) live on `out` (via `main.out`) or on parts directly? Current: `main.out` for DI-visible transforms, parts for package-internal helpers like `mkCertificate`. Storage uses plain values (`out.storageClassName`) rather than transformers. Needs a clear convention as more infra packages expose builders
 - [ ] Remove `outputs` design — custom `outputs` on `mkResource` is a bolted-on escape hatch; port, fqdn, and other DI-visible values should be auto-derived or come from a richer `out` model, not manual string declarations per resource. `main.out` (package-level out) partially addresses this — it allows complex types (lists, functions) beyond stringified resource outputs (e.g. stackgres-cluster exposes `out.extensionNames` as a list, cluster-issuers exposes `out.withCert` as a function). But per-resource `outputs` still exists for simple string values like port.
 - [ ] Port wiring logic — carry port information up through container → pod → service → ingress; prevent wiring things that don't have a route
 - [ ] Functional composition as correctness — "this service wraps this app, this HPA wraps this app, you figure out the rest"; correct wiring emerges from composition, not from template deduplication
 - [ ] Image convention — `"${config.image.repository}:${config.image.tag}"` + `imagePullPolicy` is repeated in every package. Standardize as a single option (full image string or structured with a helper) so packages don't each reinvent image construction
-- [ ] Better CoreDNS corefile handling
+- [x] Better CoreDNS corefile handling
+  - `packages/coredns/helpers.nix`: structured Corefile generation with `renderPlugin()`, `renderServerBlock()`, `renderSnippet()`, `mkCorefile()`, and `defaultServer` definitions. Structured server definitions via package options.
 - [ ] Full CoreDNS binary building
 - [ ] selector based on "identity" to say "i want this and exactly this resource"
 
@@ -123,15 +141,20 @@
 
 - [x] kix-dump — normalize and dump live cluster state
 - [x] kix-diff — compare kix output against dump (summary, renames, modified, identical)
-- [ ] Diff on instance level (grouped by package instance)
-- [ ] Diff on resource level (individual resource changes)
+- [x] Diff on instance level (grouped by package instance)
+  - `cli/kix-cli/src/plan.rs`: `diff_graphs()` groups by `(namespace, instance_name)`. Python version in `tools/kix-diff/kix-diff.py`: `diff_packages()` returns grouped diffs by package key.
+- [x] Diff on resource level (individual resource changes)
+  - `cli/kix-cli/src/plan.rs`: `diff_package_resources()` produces per-resource diffs via `PackageChangeDiff.resource_diffs`. Python version in `tools/kix-diff/kix-diff.py`: `diff_manifests()` with per-resource output.
 - [ ] Warnings when PVCs change or major versions change — hint on the package definition
 - [ ] Live-cluster sanity checks (resource limits, etc.)
 - [ ] Content-hash-based drift detection — recompute hash and compare against live state, contrast with nix store evaluation
-- [ ] Content-hash normalization for change detection — the live resource always contains server-added fields (uid, resourceVersion, creationTimestamp, defaulted values, status). The content hash must be computed on a normalized representation that strips these fields before comparison, otherwise re-deploy always sees "changed". Need to define the canonical normalization pipeline and whether the hash covers the full manifest or only kix-managed fields (SSA field ownership).
+- [ ] Merkle-walk integrity check — fast health check without nix build. Walk from the Active Activation CR through `kix.dev/depends-on` edges, verifying identity hashes at each node. Requires enriching `kix.dev/depends-on` with resource hints (`hash:kind/namespace/name`) for targeted GETs instead of full LIST. Two modes: fast integrity (graph walk only) and deep drift (content-hash comparison). See `v2_discussions/archive/51_merkle_health_check.md` for full design.
+- [x] Content-hash normalization for change detection — the live resource always contains server-added fields (uid, resourceVersion, creationTimestamp, defaulted values, status). The content hash must be computed on a normalized representation that strips these fields before comparison, otherwise re-deploy always sees "changed".
+  - `cli/kix/src/cluster/normalize.rs`: `normalize_for_content_hash()` strips server metadata, status, kix annotations, kubectl bookkeeping, null values, and sorts keys. `cli/kix/src/cluster/fetch.rs`: `normalize_for_diff()` removes uid, resourceVersion, creationTimestamp, generation, managedFields, status, and last-applied-configuration. Python parity version in `scripts/parity/normalize.py`.
 
 ## Deployment & reconciliation (kix deploy)
 
+- [ ] Deploy target verification — stamp `cluster.provider` and allowed kubeconfig contexts into the Activation CR (`kix.dev/provider`, `kix.dev/allowed-contexts`). `kix deploy` checks the target `--context` against `cluster.deploy.allowedContexts` before applying, preventing accidental cross-environment deploys (e.g. deploying a kind-targeted build to production). Simple string match on context name — no fragile auto-detection.
 - [x] Wave rollouts — dependency graph fully describes deployment order; deploy in correct waves with CRD re-discovery between waves
 - [x] Wait for ready across all resource types (Deployment, StatefulSet, DaemonSet, Job, PVC, CRD, generic CR conditions)
 - [x] Activation CR deployed as cluster-level deployment record; stale Activations cleaned up post-deploy
@@ -140,7 +163,7 @@
 - [ ] Non-K8s side effects (e.g. Forgejo user creation) — start with execution on "ssh", later crossplane or provider plugins
 - [ ] Auto-collect readiness — custom general runtime readiness checks (also outside k8s)
 - [ ] Auto-inject package identity labels (hash?, otherwise package name + version, like helm best practice)
-- [ ] Rollback — point to previous content hash; previous version may still be cached in nix store or even still running
+- [x] Rollback — `kix rollback <cluster>` finds the most recent Superseded activation, resolves its store path from the local Nix store, and re-applies via the existing reconcile engine. No nix build required. Supports `--dry-run`, `--yes`, `--prune`. Uses `find_most_recent_superseded()` in `activation.rs` and the standard wave-based reconcile loop.
 - [ ] Canary rollouts — everything runs in parallel via different hashes; unchanged subsystems are reused (same hash = same resource); update only redeploys what changed
 - [ ] Migrations as k8s jobs — defined per package for major version upgrades; package hints whether a major version change is rollback-safe (e.g. postgres: only one version)
 - [ ] Rollout pattern as a developer choice — no magical "always works" pattern due to state; stateless deps can duplicate, stateful deps need careful management
@@ -151,10 +174,13 @@
 
 > "Since we have content-addressing, we can see a full dependency tree. Not only great for garbage collection, but especially interesting for debugging and cluster reasoning."
 
-- [ ] Graph view — visualize the full dependency tree of resources in the cluster
+- [x] Graph view — visualize the full dependency tree of resources in the cluster
+  - `cli/kix-cli/src/commands/graph.rs`: supports dot (graphviz), JSON, and tree output formats. Backend in `cli/kix/src/cluster/graph.rs` using petgraph DAG.
+  - Note: this is the structural dependency graph only, not runtime observability. No health/readiness/runtime state.
   - As a debugging confidence tool: "we can't prevent bugs, but we want to very quickly give you confidence in knowing where it is" — reduce time-to-localize, not just time-to-prevent
+- [ ] Observability — enrich the graph with runtime health: know what is healthy, degraded, or potentially impaired. Requires integration with monitoring (prometheus, etc.) and cluster health checks to understand consequences of changes.
+- [ ] Topology-aware monitoring — auto-generate monitoring configuration (PrometheusRules, ServiceMonitors, Grafana dashboards, Alertmanager inhibition rules) from the dependency graph. Blast-radius alerting, correlated error suppression, dependency-chain health dashboards. The Datadog value prop ("find the problem faster") via compile-time graph analysis. Also: derive service mesh CRDs (Istio/Cilium) from the connection graph, making the mesh thinner. See `v2_discussions/49_topology_aware_monitoring.md`.
 - [ ] Garbage collection — unreferenced resources are detectable
-- [ ] Integration with monitoring (prometheus, etc.) for runtime graph enrichment — understand consequences of changes
 - [ ] Cross-service failure debugging — understanding why something failed across many microservices, enriched by the dependency graph
 
 ## Tooling & CLI
@@ -195,7 +221,7 @@
 - [ ] Local dev loop — Tilt-inspired watch + rebuild + deploy cycle for fast inner-loop iteration, distinct from GitOps
 - [ ] Potentially trivial air-gapped environments
 - [ ] Replacing etcd with a nix store (very speculative)
-- [ ] hardware.nix type file to describe what is raw available and derive helpers, storage, etc etc
+- [x] hardware.nix type file to describe what is raw available and derive helpers, storage, etc etc
 
 ### AI & developer experience
 - [ ] AI skills: recommended in-kix actions on warnings/errors; skill to read changelogs and derive warnings and checks

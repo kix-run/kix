@@ -1,7 +1,7 @@
 # Thin Operator — Production Readiness Plan
 
 **Status:** Plan
-**Related:** `44_operator_remaining_work.md`, `45_multi_team_and_operator_models.md`
+**Related:** `43_activation_operator.md` (core design), `44_operator_remaining_work.md`, `45_multi_team_and_operator_models.md`
 **Goal:** A self-contained, deployable, observable kix operator that works without Nix on the host.
 
 ---

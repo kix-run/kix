@@ -213,56 +213,52 @@ Based on the mapping above, `kix deploy` has three layers:
 
 ## 5. Roadmap to GitOps MVP
 
-### Milestone 1: "It deploys and prunes" (the minimum viable loop)
+### Milestone 1: "It deploys and prunes" — COMPLETE
 
-This is the point where `kix deploy` replaces `kubectl apply -f result/` and you can stop using Flux/Argo for basic cases.
+All items implemented:
+- **Server-side apply** — `apply.rs` uses `Patch::Apply` (SSA) with `kix` as field manager
+- **Wave engine** — `graph.rs` + `waves.rs` (Kahn's toposort), `reconcile.rs` for wave-by-wave apply loop
+- **Pruning** — `detect_changes()` identifies orphans, GC command handles cleanup
+- **Basic health checks** — `readiness.rs` polls per-kind conditions (Deployment, StatefulSet, DaemonSet, Job, PVC, CRD, generic CR)
+- **Deploy status CLI output** — plan display in `plan.rs`, per-wave progress in deploy command
 
-| Item | Difficulty | Notes |
+### Milestone 1.5: "It recovers" — COMPLETE
+
+- **Rollback** — `rollback.rs` finds most recent Superseded, re-applies via reconcile engine
+- **Drift detection** — `kix health` builds intended state, compares normalized content hashes
+- **Activation lifecycle** — `activation.rs` manages Active/Superseded/Deploying state machine with wave progress for crash recovery
+
+### Milestone 2: "It self-heals" (continuous reconciliation) — OPEN
+
+| Item | Status | Notes |
 |---|---|---|
-| **Server-side apply** | Trivial | Use `kubectl apply --server-side` instead of client-side. Default from day one. |
-| **Wave engine** | Easy | Topological sort of DAG → wave assignment. Apply in order. Already have the DAG. |
-| **Pruning by hash ownership** | Medium | Track resource set on PackageInstance. After apply, delete resources in old set but not new set. Reverse wave order for deletion. |
-| **Basic health checks** | Medium | Deployment, StatefulSet, DaemonSet, Job. Poll `.status` with timeout. Block between waves. |
-| **Deploy status CLI output** | Easy | Print per-resource status during deploy. Colorized table: resource, wave, state. |
+| **Continuous reconciliation loop** | Open | Operator skeleton exists (`kix-operator/`) but not production-ready. See `46_thin_operator_production_plan.md` |
+| **Self-healing** | Open | Falls out of reconciliation loop — if live hash ≠ expected hash, re-apply |
+| **Drift detection reporting** | Done | `kix health` command with in-sync/drifted/missing reporting |
+| **Retry with backoff** | Open | Standard engineering, not yet in operator |
+| **Merkle-walk integrity check** | Open | Fast cluster-only health check without nix build. See `archive/51_merkle_health_check.md`, tracked in ROADMAP |
 
-**"Done" looks like:** `kix deploy .#cluster-nw1` applies resources in dependency order, waits for each wave to be healthy, prunes resources that disappeared from the eval, and prints a status summary. No manual `kubectl delete` of old resources.
+### Milestone 3: "It's safe for production" (guardrails) — PARTIAL
 
-### Milestone 2: "It self-heals" (continuous reconciliation)
-
-This is the point where `kix deploy` is a running process, not a one-shot command.
-
-| Item | Difficulty | Notes |
+| Item | Status | Notes |
 |---|---|---|
-| **Continuous reconciliation loop** | Easy | Re-eval on timer or git webhook. Compare content hashes against live. Re-apply drifted resources. |
-| **Self-healing** | Trivial (on top of M1) | Same as reconciliation — if live hash ≠ expected hash, re-apply. Falls out of the loop. |
-| **Drift detection reporting** | Easy | `kix status` command showing which resources have drifted. |
-| **Retry with backoff** | Easy | Wrap apply in exponential backoff for transient API errors. |
+| **Diff preview before apply** | Done | `kix diff` exists with multiple modes (build-to-build, vs live, vs snapshot) |
+| **Apply-time server-side dry-run** | Open | `--dry-run` flag exists on deploy but doesn't use server-side dry-run |
+| **Manual approval gates** | Open | Interactive confirmation exists; webhook/CI gates not yet |
+| **Deploy history** | Done | Activation chain with `kix.dev/previous`, `kix.dev/deployed-at` annotations |
+| **Suspend/resume** | Open | |
 
-**"Done" looks like:** `kix deploy --watch .#cluster-nw1` runs continuously. Someone `kubectl edit`s a resource → kix detects the hash mismatch within the next reconciliation interval → reverts it. Transient API failures don't crash the loop.
+### Milestone 4: "It replaces Flux/Argo" (full feature parity) — OPEN
 
-### Milestone 3: "It's safe for production" (guardrails)
-
-| Item | Difficulty | Notes |
+| Item | Status | Notes |
 |---|---|---|
-| **Diff preview before apply** | Easy | `kix diff` already exists. Wire it into the deploy flow as a pre-apply step with `--dry-run` flag. |
-| **Apply-time server-side dry-run** | Trivial | `kubectl apply --dry-run=server` before actual apply. Catches quota/admission issues. |
-| **Manual approval gates** | Easy | For specified namespaces or resource types, pause and prompt before applying. Interactive in CLI, webhook in CI. |
-| **Deploy history** | Trivial | Log `(timestamp, root-hash, git-commit, user)` to a local file or ConfigMap. Rollback = `kix deploy --to-hash <hash>`. |
-| **Suspend/resume** | Trivial | Flag that skips reconciliation. `kix suspend <instance>` / `kix resume <instance>`. |
-
-**"Done" looks like:** `kix deploy --dry-run` shows the full plan without applying. Deploying to production requires approval. You can `kix rollback` to a previous deploy. You can suspend a misbehaving package without removing it.
-
-### Milestone 4: "It replaces Flux/Argo" (full feature parity)
-
-| Item | Difficulty | Notes |
-|---|---|---|
-| **Notifications** | Easy | Webhook on state transitions (deploy started/succeeded/failed). Slack/generic HTTP. |
-| **Sync windows** | Trivial | Time-of-day guard before reconciliation. |
-| **Scoped deploy permissions** | Easy | Static analysis of eval output: which namespaces, which resource types. Compare against allowed set per deployer. Uniquely easy in kix because the full output is known at eval time. |
-| **Image update automation** | Medium | Registry watcher → update flake input → trigger re-eval. Propagation through DAG is automatic. |
-| **Pre-delete hooks** | Medium | Run cleanup Jobs before pruning stateful resources. Package `meta.lifecycle = "stateful"` already marks these. |
-| **Multi-cluster** | Medium | Already modeled: multiple cluster definitions in `clusters/`. Deploy loop targets a kubeconfig context per cluster. Shared packages, different instance configs. |
-| **OCI artifact source** | Medium | Push eval output to OCI registry. Deploy loop pulls from OCI instead of running nix eval. Decouples eval from deploy. |
+| **Notifications** | Open | Webhook on state transitions |
+| **Sync windows** | Open | Time-of-day guard |
+| **Scoped deploy permissions** | Open | |
+| **Image update automation** | Open | Registry watcher → update flake input |
+| **Pre-delete hooks** | Open | `meta.lifecycle = "stateful"` marks these |
+| **Multi-cluster** | Open | Multiple cluster defs exist; deploy scoping not yet |
+| **OCI artifact source** | Open | See `46_thin_operator_production_plan.md` WP1 |
 
 ---
 

@@ -1,5 +1,9 @@
 # 45 — Cluster Hardware Profile (`hardware.nix` for Kubernetes)
 
+**Status:** Partially implemented
+**Implemented:** Module options (`cluster.provider`, `cluster.capabilities.*`, `cluster.network.*`, `cluster.nodes`) in `lib/modules.nix`. Distro-level flavor presets (`lib/flavors/{k3s,kind,kubeadm}.nix`) exposed as `kix.flavors.*`. Clusters `ludo` and `test-kind` use flavors.
+**Not yet implemented:** Component-level flavors, flavor-provided imports, package capability assertions.
+
 ## Problem
 
 In NixOS, `hardware.nix` captures the physical reality of a machine — what disks exist, what CPU features are available, which kernel modules to load. The rest of the configuration builds on top of that foundation. kix has no equivalent. Today, platform-specific facts are scattered across `platform.nix` files as ad-hoc options and inline packages (storage classes, disk pools, CIDR ranges), and packages have no structured way to ask "what can this cluster actually do?"

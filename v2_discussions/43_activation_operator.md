@@ -382,30 +382,36 @@ Halt is the safe default. The operator records exactly which wave failed and whi
 
 ## 6. Interaction with Existing kix Components
 
-### What already exists and maps directly
+### Implementation status (as of March 2026)
 
-| Component | Current state | Role in operator |
-|-----------|--------------|------------------|
-| `mkActivation` (k8s.nix) | Generates Activation CR with instance refs | The object the operator watches |
-| `packageIndex.json` (cluster.nix) | PI → resource store path mapping | Manifest discovery |
-| `graph.rs` (kix-cluster) | DAG from depends-on annotations | Wave computation |
-| `waves.rs` (kix-cluster) | Kahn's algorithm toposort | Deploy ordering |
-| `apply.rs` (kix-cluster) | SSA + content-hash change detection | Apply logic |
-| `readiness.rs` (kix-cluster) | Per-kind health checks | Wave gates |
-| `fetch.rs` (kix-cluster) | Fetch live managed resources | Drift detection |
+| Component | Status | Location |
+|-----------|--------|----------|
+| `mkActivation` (k8s.nix) | **Done** | Generates Activation CR with instance refs |
+| `packageIndex.json` (cluster.nix) | **Done** | PI → resource store path mapping |
+| `graph.rs` | **Done** | DAG from depends-on annotations |
+| `waves.rs` | **Done** | Kahn's algorithm toposort |
+| `apply.rs` | **Done** | SSA + identity-hash change detection |
+| `readiness.rs` | **Done** | Per-kind health checks (Deployment, StatefulSet, DaemonSet, Job, PVC, CRD, generic CR) |
+| `activation.rs` | **Done** | Full lifecycle: find_active, finalize_deploy, begin_deploy, record_wave, resume_point |
+| `reconcile.rs` | **Done** | Extracted deploy engine with ReconcileObserver trait, shared by CLI and operator |
+| `normalize.rs` | **Done** | Content-hash normalization for drift detection |
+| Activation controller | **Done** | `kix-operator/` — watches Activation CRs, reconciles, error backoff |
+| Wave progress / crash resume | **Done** | `status.waves[]` array, `resume_point()` |
+| Closure differ | **Done** | `detect_changes()` in apply.rs — identity-hash set diff |
+| `kix.dev/activations` annotation | **Done** | Read-modify-write in apply.rs, reference counting for multi-activation |
 
-### What needs to be built
+### What still needs to be built
 
 | Component | Description |
 |-----------|-------------|
-| **Activation controller** | K8s controller watching Activation CRs, dispatching reconcile/GC |
-| **Closure differ** | Given two activation hashes, compute added/removed/changed resource sets |
-| **Multi-activation reference tracker** | Maintain `kix.dev/activation-refs` across activations |
-| **History recorder** | Persist activation lineage (generation chain + timestamps + commits) |
-| **Drift detector** | Periodic loop comparing live content-hash annotations against expected |
-| **Manifest artifact puller** | Fetch evaluated manifests from OCI/cache given an activation hash |
+| **OCI artifact format + puller** | Manifest transport without Nix store. See `46_thin_operator_production_plan.md` WP1-2 |
+| **Leader election** | Only one operator instance reconciles at a time |
+| **Prometheus metrics** | kix_reconcile_total, kix_resources_applied_total, etc. |
+| **K8s event recording** | Write Events on Activation CR for `kubectl describe` visibility |
+| **Graceful shutdown** | Finish current wave on SIGTERM, record progress |
+| **Container image + deployment manifests** | Distroless image, kix-system namespace, RBAC |
 
-Most of the hard reconciliation logic (waves, SSA, readiness) already exists in `kix-cluster`. The operator is primarily a **controller wrapper** around that existing engine, adding the activation lifecycle and multi-activation coordination.
+The engine is complete. What remains is **operationalization** — making it deployable, observable, and reliable as an in-cluster service. See `46_thin_operator_production_plan.md` for the detailed production readiness plan.
 
 ---
 

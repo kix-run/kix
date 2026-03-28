@@ -351,6 +351,87 @@ Config injection handles "set this config on my dep." Some constraints can't be 
 | Other packages | Only packages that want to inject config need `deps.*.config` |
 | Cluster definitions | Existing configs keep working — injections are additive |
 
+## Locking fields against injection (`kix.mkLocked`)
+
+### Problem
+
+The priority order (package defaults < dep injections < global config < instance config) means instance config always wins over dep injections. But "wins" means **silent override** — `mkForce` bumps priority without erroring when a lower-priority source also set the field. If a platform team explicitly forbids the `vectors` extension on their postgres and immich injects it, the injection gets silently squashed and immich breaks at runtime with no build-time signal.
+
+### Approaches considered
+
+**Assertions (post-merge validation):** The platform team adds assertions to their postgres instance config:
+
+```nix
+instances.postgres.config.assertions = [{
+  assertion = !builtins.any (e: e.name == "vectors") config.extensions;
+  message = "vectors extension is forbidden on this cluster's postgres";
+}];
+```
+
+Dep injection merges `vectors` in, assertion fires, clear error. But the platform team has to anticipate what consumers might inject — they're writing deny-list assertions against things they might not know about. Burden is on the wrong side.
+
+**`mkForce` as convention + custom detection:** Platform team uses `mkForce` to "lock" a field. `evaluateInstanceConfig` detects the collision: "field `extensions` was set with `mkForce` and a dep injection also targets it → error." This requires custom introspection — the module system doesn't expose "was this forced?" after evaluation. You'd need to compare dep injection keys against instance config keys and check for `mkForce`/`mkOverride` wrappers *before* feeding them into `evalModules`. Also: `mkForce` conflates "I want my value to win" with "nobody else should set this" — those are different intents. Grepping for `mkForce` as a governance gate catches legitimate uses (overriding a default) alongside lockdowns.
+
+**`kix.mkLocked` (explicit lock mechanism):** Create a dedicated wrapper:
+
+```nix
+instances.postgres.config.extensions = kix.mkLocked [];
+```
+
+`evaluateInstanceConfig` unwraps it before passing to `evalModules`, but first checks: if any dep injection touches a locked field, error with source attribution.
+
+### Decision: `kix.mkLocked`
+
+`kix.mkLocked` is the right design:
+
+- **Explicit intent.** `mkForce` is a priority hammer; `mkLocked` is a semantic signal meaning "this field is sealed." Different intents, different mechanisms.
+- **Burden on the right side.** The platform team declares "this field is closed" rather than writing deny-rules for things they can't predict.
+- **Clear errors.** "immich tried to inject `extensions` into `postgres`, but `postgres` locked that field in cluster config" — with source attribution.
+- **Orthogonal to priority.** `mkLocked` is not a priority level — it's a "seal" bit. The value still merges at instance-config priority; the seal prevents lower-priority sources from contributing to that field.
+
+### Implementation
+
+`mkLocked` is a simple wrapper:
+
+```nix
+kix.mkLocked = value: { _type = "locked"; inherit value; };
+```
+
+In `evaluateInstanceConfig`, before feeding modules into `evalModules`:
+
+```nix
+# Extract locked fields from instance config
+lockedFields = lib.filterAttrs (_: v: v ? _type && v._type == "locked") instCfg.config;
+
+# Check dep injections against locked fields
+lockedConflicts = lib.concatMap (injection:
+  lib.filter (field: lockedFields ? ${field})
+    (builtins.attrNames injection.config)
+) configInjections;
+
+# Error if any dep injection touches a locked field
+assert lockedConflicts == [] ||
+  throw "dep config injection blocked by locked fields: ${show lockedConflicts}";
+
+# Unwrap locked values before passing to evalModules
+unwrappedConfig = lib.mapAttrs (_: v:
+  if v ? _type && v._type == "locked" then v.value else v
+) instCfg.config;
+```
+
+### Granularity
+
+`mkLocked` on `extensions = mkLocked []` means "exactly this value, nothing else can contribute." This covers the primary use case: platform team says "no extensions" or "exactly these extensions."
+
+A more flexible deny-list (`extensionsDeny = ["vectors"]` — "allow extensions, but not these") is a possible future extension but adds complexity. Start with the simple sealed semantics and see if the deny-list need actually arises.
+
+### Priority order (updated)
+
+1. Package option defaults (`default = ...` in `lib.mkOption`)
+2. **Dep config injections** (from consumers of this instance)
+3. Global config (`clusterConfig.global`)
+4. Instance config (from cluster definition) — may use `mkLocked` to seal fields against (2)
+
 ## Open questions
 
 1. **Should injections be traceable?** When postgres gets `extensions = [vectors]` injected by immich, should there be a trace/warning so the cluster author knows? Pro: transparency. Con: noise.
@@ -362,3 +443,5 @@ Config injection handles "set this config on my dep." Some constraints can't be 
 4. **Transitive injection:** If A injects config into B, and B has a dep on C, should A be able to inject into C? Probably not — keep it one level deep to avoid complexity.
 
 5. **Phase-1 scope:** The pre-pass needs to call `callPackagePhase1`, which needs a `scope`. Currently `mkScope` requires `namespaceResource`, `clusterLabels`, etc. We could either: (a) build full scopes in the pre-pass, or (b) create a lightweight `mkPhase1Scope` that only provides naming/labels (no `mkResource`). Option (b) is cleaner but means packages can't call `scope.mkResource` at the top level. None currently do in their `deps`/`meta` declarations, so this is safe.
+
+6. **Nested locking:** `mkLocked` works at the top level of instance config fields. Should it support locking nested paths (e.g., lock `extensions` but not all of `config`)? Probably start with top-level only — nested locking adds introspection complexity for marginal benefit.

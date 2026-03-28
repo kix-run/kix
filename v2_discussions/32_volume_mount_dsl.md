@@ -1,5 +1,7 @@
 # 32 — Volume Mount DSL Redesign
 
+**Status:** Active. The base constructors and injection helpers exist in `lib/compose.nix`. The proposed improvements (`.path` exposure, `.mountAt` on resources, volume deduplication, volume/mount-point split) are not yet implemented.
+
 ## Status quo
 
 ### What exists in `lib/compose.nix`
