@@ -17,6 +17,7 @@ futures.workspace = true
 petgraph.workspace = true
 tracing.workspace = true
 indexmap.workspace = true
+chrono.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

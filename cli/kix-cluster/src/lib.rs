@@ -2,6 +2,7 @@
 
 //! K8s cluster operations — fetching, deploying, status, graph.
 
+pub mod activation;
 pub mod apply;
 pub mod fetch;
 pub mod graph;

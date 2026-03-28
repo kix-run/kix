@@ -1311,6 +1311,7 @@ dependencies = [
 name = "kix-cluster"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "futures",
  "indexmap",
  "k8s-openapi",

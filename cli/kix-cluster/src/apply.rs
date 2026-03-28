@@ -141,12 +141,16 @@ pub fn detect_changes(new_manifests: &[Value], old_manifests: &[Value]) -> Vec<C
 }
 
 /// Apply a single resource via server-side apply.
+///
+/// If `activation_hash` is provided, the resource's `kix.dev/activations`
+/// annotation is updated to include this activation (read-modify-write).
 pub async fn apply_resource(
     client: &Client,
     ar: &ApiResource,
     scope: Scope,
     manifest: &Value,
     dry_run: bool,
+    activation_hash: Option<&str>,
 ) -> Result<ApplyResult, ApplyError> {
     let rid = ResourceId::from_value(manifest);
     let name = rid.name.clone();
@@ -180,6 +184,18 @@ pub async fn apply_resource(
             source: e,
         })?;
 
+    // Update kix.dev/activations annotation (merge current activation into set)
+    if let Some(act_hash) = activation_hash
+        && !dry_run
+        && let Err(e) = update_activations_annotation(&api, &name, act_hash).await
+    {
+        tracing::warn!(
+            resource = %rid.display_id(),
+            error = %e,
+            "failed to update activations annotation"
+        );
+    }
+
     let action = if existed {
         ApplyAction::Configured
     } else {
@@ -194,7 +210,49 @@ pub async fn apply_resource(
     })
 }
 
+/// Read-modify-write the `kix.dev/activations` annotation on a resource.
+/// Merges `activation_hash` into the comma-separated set of activation hashes.
+async fn update_activations_annotation(
+    api: &Api<DynamicObject>,
+    name: &str,
+    activation_hash: &str,
+) -> Result<(), kube::Error> {
+    // Read current annotation
+    let current = api.get(name).await?;
+    let existing = current
+        .data
+        .pointer("/metadata/annotations")
+        .and_then(|a| a.get(ACTIVATIONS_ANNOTATION))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    // Build the merged set
+    let mut hashes: std::collections::BTreeSet<&str> = existing
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+    hashes.insert(activation_hash);
+    let merged = hashes.into_iter().collect::<Vec<_>>().join(",");
+
+    // Patch with strategic merge (not SSA — we only want to touch this one annotation)
+    let patch = serde_json::json!({
+        "metadata": {
+            "annotations": {
+                ACTIVATIONS_ANNOTATION: merged,
+            }
+        }
+    });
+    api.patch(name, &PatchParams::default(), &Patch::Merge(&patch))
+        .await?;
+
+    Ok(())
+}
+
 /// Apply all resources in a wave in parallel.
+///
+/// If `activation_hash` is provided, each applied resource gets the activation
+/// merged into its `kix.dev/activations` annotation.
 ///
 /// Returns a vec of (ResourceId, Result) pairs for each action in the wave.
 pub async fn apply_wave(
@@ -202,6 +260,7 @@ pub async fn apply_wave(
     discovery: &[(ApiResource, Scope)],
     wave: &[ChangeAction],
     dry_run: bool,
+    activation_hash: Option<&str>,
 ) -> Vec<(ResourceId, Result<ApplyResult, ApplyError>)> {
     // Build kind -> (ApiResource, Scope) lookup
     let ar_by_kind: HashMap<String, (ApiResource, Scope)> = discovery
@@ -234,8 +293,17 @@ pub async fn apply_wave(
                 let ar = ar.clone();
                 let scope = scope.clone();
                 let manifest = manifest.clone();
+                let act_hash = activation_hash.map(|s| s.to_string());
                 set.spawn(async move {
-                    let result = apply_resource(&client, &ar, scope, &manifest, dry_run).await;
+                    let result = apply_resource(
+                        &client,
+                        &ar,
+                        scope,
+                        &manifest,
+                        dry_run,
+                        act_hash.as_deref(),
+                    )
+                    .await;
                     (rid, result)
                 });
             }

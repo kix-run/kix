@@ -23,6 +23,7 @@ use std::time::Duration;
 use miette::{IntoDiagnostic, Result, miette};
 use serde_json::Value;
 
+use kix_cluster::activation;
 use kix_cluster::apply::{ApplyAction, ChangeAction};
 use kix_cluster::fetch;
 use kix_cluster::graph::ResourceGraph;
@@ -181,6 +182,27 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         })
         .collect();
 
+    // Find the Activation resource name and identity-hash from the new manifests
+    let activation_manifest = new_manifests.iter().find(|m| {
+        m.get("kind")
+            .and_then(|v| v.as_str())
+            .is_some_and(|k| k == "Activation")
+    });
+    let activation_name = activation_manifest.and_then(|m| {
+        m.pointer("/metadata/name")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    });
+    let activation_identity_hash = activation_manifest.and_then(|m| {
+        m.pointer("/metadata/annotations/kix.dev~1identity-hash")
+            .or_else(|| {
+                m.pointer("/metadata/annotations")
+                    .and_then(|a| a.get("kix.dev/identity-hash"))
+            })
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    });
+
     let global = ctx.global.clone();
     let cluster_name = new_graph.cluster_name.clone();
     let deploy_result = ctx.runtime.block_on(run_deploy_async(
@@ -192,6 +214,8 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         &orphan_rids,
         &old_manifests,
         &cluster_name,
+        activation_name.as_deref(),
+        activation_identity_hash.as_deref(),
     ));
 
     // Save activation path for next deploy's diff
@@ -214,6 +238,8 @@ async fn run_deploy_async(
     orphan_rids: &[ResourceId],
     old_manifests: &[Value],
     cluster_name: &str,
+    activation_name: Option<&str>,
+    activation_identity_hash: Option<&str>,
 ) -> Result<()> {
     let timeout = parse_timeout(args.timeout.as_deref())?;
 
@@ -314,8 +340,48 @@ async fn run_deploy_async(
     let mut total_unchanged = 0usize;
     let mut total_failed = 0usize;
 
+    // Determine resume point (if a previous deploy crashed mid-wave)
+    let activation_ar = activation::find_activation_ar(&discovery).map(|(ar, _)| ar.clone());
+    let resume_from = if let (Some(ar), Some(act_name)) = (&activation_ar, activation_name) {
+        match activation::resume_point(&client, ar, act_name).await {
+            Ok(Some(idx)) if idx > 0 => {
+                if !global.quiet {
+                    println!(
+                        "Resuming from wave {} (waves 1-{} already complete)",
+                        idx + 1,
+                        idx,
+                    );
+                }
+                idx
+            }
+            _ => 0,
+        }
+    } else {
+        0
+    };
+
+    // Record deploy start on the Activation CR
+    if let (Some(ar), Some(act_name)) = (&activation_ar, activation_name)
+        && let Err(e) = activation::begin_deploy(&client, ar, act_name, wave_actions.len()).await
+    {
+        tracing::warn!("failed to set Deploying phase: {e}");
+    }
+
     // Apply waves (creates and updates only)
     for (wave_idx, actions) in wave_actions.iter().enumerate() {
+        // Skip waves completed in a previous (crashed) deploy
+        if wave_idx < resume_from {
+            let wave_count = actions.len();
+            if !global.quiet {
+                println!(
+                    "\n{} {} resources (already complete, skipping)",
+                    output::bold(&format!("Wave {}:", wave_idx + 1)),
+                    wave_count,
+                );
+            }
+            total_unchanged += wave_count;
+            continue;
+        }
         let apply_count = actions
             .iter()
             .filter(|a| matches!(a, ChangeAction::Apply(_)))
@@ -330,6 +396,22 @@ async fn run_deploy_async(
                 );
             }
             total_unchanged += actions.len();
+            // Record wave as complete (all skipped)
+            if let (Some(ar), Some(act_name)) = (&activation_ar, activation_name) {
+                let _ = activation::record_wave(
+                    &client,
+                    ar,
+                    act_name,
+                    &activation::WaveRecord {
+                        wave_index: wave_idx,
+                        status: activation::WaveStatus::Complete,
+                        resource_count: actions.len(),
+                        applied: 0,
+                        failed: 0,
+                    },
+                )
+                .await;
+            }
             continue;
         }
 
@@ -341,7 +423,14 @@ async fn run_deploy_async(
             );
         }
 
-        let results = kix_cluster::apply::apply_wave(&client, &discovery, actions, false).await;
+        let results = kix_cluster::apply::apply_wave(
+            &client,
+            &discovery,
+            actions,
+            false,
+            activation_identity_hash,
+        )
+        .await;
 
         let mut wave_failed = false;
         for (rid, result) in &results {
@@ -505,6 +594,37 @@ async fn run_deploy_async(
         if wave_had_crds && let Ok(new_disc) = fetch::discover_resources(&client).await {
             discovery = new_disc;
         }
+
+        // Record wave progress on the Activation CR
+        if let (Some(ar), Some(act_name)) = (&activation_ar, activation_name) {
+            let wave_applied = results
+                .iter()
+                .filter(|(_, r)| {
+                    r.as_ref().is_ok_and(|r| {
+                        matches!(r.action, ApplyAction::Created | ApplyAction::Configured)
+                    })
+                })
+                .count();
+            let wave_failed_count = results.iter().filter(|(_, r)| r.is_err()).count();
+            let status = if wave_failed {
+                activation::WaveStatus::Failed
+            } else {
+                activation::WaveStatus::Complete
+            };
+            let _ = activation::record_wave(
+                &client,
+                ar,
+                act_name,
+                &activation::WaveRecord {
+                    wave_index: wave_idx,
+                    status,
+                    resource_count: actions.len(),
+                    applied: wave_applied,
+                    failed: wave_failed_count,
+                },
+            )
+            .await;
+        }
     }
 
     // Prune orphans (after all apply waves)
@@ -600,9 +720,43 @@ async fn run_deploy_async(
         }
     }
 
-    // Clean up stale Activations
-    if total_failed == 0 {
-        cleanup_stale_activations(&client, &discovery, cluster_name, global).await;
+    // Finalize activation lifecycle (mark old as Superseded, new as Active)
+    if total_failed == 0
+        && let Some(act_name) = activation_name
+        && let Some((ar, _)) = activation::find_activation_ar(&discovery)
+    {
+        // Find the previously Active activation
+        let old_activation = activation::find_active(&client, ar, cluster_name)
+            .await
+            .ok()
+            .flatten()
+            // Don't supersede ourselves (first deploy or redeploy of same name)
+            .filter(|old| old.name != act_name);
+
+        if let Err(e) = activation::finalize_deploy(
+            &client,
+            ar,
+            cluster_name,
+            act_name,
+            old_activation.as_ref(),
+        )
+        .await
+        {
+            tracing::warn!("failed to finalize activation lifecycle: {e}");
+        } else if !global.quiet {
+            if let Some(ref old) = old_activation {
+                println!(
+                    "  {} Activation '{}' → Superseded",
+                    output::dim("•"),
+                    old.name,
+                );
+            }
+            println!(
+                "  {} Activation '{}' → Active",
+                output::green("•"),
+                act_name,
+            );
+        }
     }
 
     // Summary
@@ -654,44 +808,6 @@ fn compute_prune_order(orphan_rids: &[ResourceId], old_manifests: &[Value]) -> V
             // If graph construction fails, fall back to unordered
             orphan_rids.to_vec()
         }
-    }
-}
-
-/// Delete Activation CRs on the cluster that don't match the current cluster name.
-async fn cleanup_stale_activations(
-    client: &kube::Client,
-    discovery: &[(kube::discovery::ApiResource, kube::discovery::Scope)],
-    current_cluster: &str,
-    global: &crate::cli::GlobalArgs,
-) {
-    // Find the Activation API resource
-    let ar_scope = discovery
-        .iter()
-        .find(|(ar, _)| ar.kind == "Activation" && ar.group == "kix.dev");
-
-    let Some((ar, _scope)) = ar_scope else {
-        return; // Activation CRD not registered yet
-    };
-
-    let api: kube::api::Api<kube::api::DynamicObject> =
-        kube::api::Api::all_with(client.clone(), ar);
-
-    let lp = kube::api::ListParams::default().labels("app.kubernetes.io/managed-by=kix");
-
-    let list = match api.list(&lp).await {
-        Ok(l) => l,
-        Err(_) => return, // Silently skip if we can't list
-    };
-
-    for activation in list.items {
-        let name = activation.metadata.name.as_deref().unwrap_or("");
-        if name == current_cluster {
-            continue; // Keep the current one
-        }
-        if !global.quiet {
-            println!("  {} stale Activation '{}' deleted", output::red("-"), name,);
-        }
-        let _ = api.delete(name, &kube::api::DeleteParams::default()).await;
     }
 }
 

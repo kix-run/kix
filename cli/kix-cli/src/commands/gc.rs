@@ -243,9 +243,20 @@ async fn run_hard_async(
         println!("Found {} live kix-managed resources", live.len());
     }
 
-    // Find resources with identity-hash not in expected set
+    // Find resources with identity-hash not in expected set.
+    // Skip Activation CRs here — they're handled separately below.
     let mut garbage: Vec<ResourceId> = Vec::new();
     for obj in &live {
+        let obj_kind = obj
+            .data
+            .get("kind")
+            .and_then(|v| v.as_str())
+            .or_else(|| obj.types.as_ref().map(|t| t.kind.as_str()))
+            .unwrap_or("");
+        if obj_kind == "Activation" {
+            continue; // handled in the stale-activation block below
+        }
+
         let identity_hash = obj
             .data
             .pointer("/metadata/annotations")
@@ -279,26 +290,17 @@ async fn run_hard_async(
         }
     }
 
-    // Also find stale Activations
-    let activation_ar = discovery
-        .iter()
-        .find(|(ar, _)| ar.kind == "Activation" && ar.group == "kix.dev");
-
-    if let Some((ar, _)) = activation_ar {
-        let api: kube::api::Api<kube::api::DynamicObject> =
-            kube::api::Api::all_with(client.clone(), ar);
-        let lp = kube::api::ListParams::default().labels("app.kubernetes.io/managed-by=kix");
-        if let Ok(list) = api.list(&lp).await {
-            for activation in &list.items {
-                let name = activation.metadata.name.as_deref().unwrap_or("");
-                if name != cluster_name {
-                    garbage.push(ResourceId {
-                        kind: "Activation".to_string(),
-                        namespace: CLUSTER_SCOPED.to_string(),
-                        name: name.to_string(),
-                    });
-                }
-            }
+    // Find Superseded activations (spec.active == false) for this cluster
+    if let Some((ar, _)) = kix_cluster::activation::find_activation_ar(&discovery)
+        && let Ok(superseded) =
+            kix_cluster::activation::list_superseded(&client, ar, cluster_name).await
+    {
+        for name in superseded {
+            garbage.push(ResourceId {
+                kind: "Activation".to_string(),
+                namespace: CLUSTER_SCOPED.to_string(),
+                name,
+            });
         }
     }
 
