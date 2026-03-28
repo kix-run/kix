@@ -138,6 +138,10 @@ pub struct DeployArgs {
     #[arg(long)]
     pub dry_run: bool,
 
+    /// Use local activation cache instead of fetching from cluster
+    #[arg(long)]
+    pub current_activation: bool,
+
     /// Behavior on error: stop or continue
     #[arg(long, default_value = "stop")]
     pub on_error: OnError,

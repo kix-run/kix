@@ -6,8 +6,8 @@ use miette::{IntoDiagnostic, Result, miette};
 use serde_json::Value;
 
 use kix_cluster::fetch;
+use kix_eval::build_cluster_activation_with_status;
 use kix_eval::store_graph::StoreGraph;
-use kix_eval::{PackageNode, build_cluster_activation_with_status};
 use kix_manifest::diff::display::format_diffs;
 use kix_manifest::diff::engine::structural_diff;
 use kix_manifest::diff::{DiffConfig, Difference};
@@ -17,39 +17,16 @@ use kix_manifest::types::ResourceId;
 
 use crate::cli::{DiffArgs, OutputFormat};
 use crate::output;
+use crate::plan::PackageDiff;
 
 use super::CommandContext;
 
-// ── Package-level diff types ─────────────────────────────────────────
+// ── Diff-specific types ──────────────────────────────────────────────
 
 struct DiffResult {
     packages: PackageDiff,
     /// Flat resource list for non-graph old sides (live cluster / snapshot).
     legacy_resource_diff: Option<LegacyResourceDiff>,
-}
-
-struct PackageDiff {
-    added: Vec<PackageInfo>,
-    removed: Vec<PackageInfo>,
-    changed: Vec<PackageChangeDiff>,
-    unchanged: usize,
-}
-
-#[derive(Clone)]
-struct PackageInfo {
-    key: String, // ns/name
-    version: Option<String>,
-    resource_count: usize,
-}
-
-struct PackageChangeDiff {
-    key: String,
-    old_version: Option<String>,
-    new_version: Option<String>,
-    /// Per-resource diffs within this package (only changed resources).
-    resource_diffs: Vec<(ResourceId, Vec<Difference>)>,
-    added_resources: Vec<ResourceId>,
-    removed_resources: Vec<ResourceId>,
 }
 
 /// Fallback for live-cluster or snapshot diffs where we don't have a store graph
@@ -152,119 +129,10 @@ fn set_spinner(spinner: &Option<indicatif::ProgressBar>, msg: &str) {
 // ── Build-to-build diff (both sides are store graphs) ────────────────
 
 fn diff_graphs(old: &StoreGraph, new: &StoreGraph) -> DiffResult {
-    let config = DiffConfig::new("old", "new");
-
-    let old_pkgs: BTreeMap<String, &PackageNode> = old
-        .packages
-        .values()
-        .map(|p| (format!("{}/{}", p.namespace, p.instance_name), p))
-        .collect();
-    let new_pkgs: BTreeMap<String, &PackageNode> = new
-        .packages
-        .values()
-        .map(|p| (format!("{}/{}", p.namespace, p.instance_name), p))
-        .collect();
-
-    let mut added = Vec::new();
-    let mut removed = Vec::new();
-    let mut changed = Vec::new();
-    let mut unchanged = 0usize;
-
-    for (key, new_pkg) in &new_pkgs {
-        if let Some(old_pkg) = old_pkgs.get(key) {
-            // Content-hash early exit: if all resource store paths are identical,
-            // the package is unchanged — no need to deep-diff.
-            if old_pkg.resource_paths == new_pkg.resource_paths {
-                unchanged += 1;
-                continue;
-            }
-
-            // Package changed — diff resources within it
-            let change = diff_package_resources(key, old_pkg, new_pkg, old, new, &config);
-            changed.push(change);
-        } else {
-            added.push(PackageInfo {
-                key: key.clone(),
-                version: new_pkg.version.clone(),
-                resource_count: new_pkg.resource_paths.len(),
-            });
-        }
-    }
-
-    for (key, old_pkg) in &old_pkgs {
-        if !new_pkgs.contains_key(key) {
-            removed.push(PackageInfo {
-                key: key.clone(),
-                version: old_pkg.version.clone(),
-                resource_count: old_pkg.resource_paths.len(),
-            });
-        }
-    }
-
     DiffResult {
-        packages: PackageDiff {
-            added,
-            removed,
-            changed,
-            unchanged,
-        },
+        packages: crate::plan::diff_graphs(old, new),
         legacy_resource_diff: None,
     }
-}
-
-/// Diff resources within a changed package.
-fn diff_package_resources(
-    key: &str,
-    old_pkg: &PackageNode,
-    new_pkg: &PackageNode,
-    old_graph: &StoreGraph,
-    new_graph: &StoreGraph,
-    config: &DiffConfig,
-) -> PackageChangeDiff {
-    // Build ResourceId → manifest maps for old and new
-    let old_res = resource_map_for_package(old_pkg, old_graph);
-    let new_res = resource_map_for_package(new_pkg, new_graph);
-
-    let mut resource_diffs = Vec::new();
-    let mut added_resources = Vec::new();
-    let mut removed_resources = Vec::new();
-
-    for (id, new_val) in &new_res {
-        if let Some(old_val) = old_res.get(id) {
-            let diffs = structural_diff(new_val, old_val, "$", config);
-            if !diffs.is_empty() {
-                resource_diffs.push((id.clone(), diffs));
-            }
-        } else {
-            added_resources.push(id.clone());
-        }
-    }
-
-    for id in old_res.keys() {
-        if !new_res.contains_key(id) {
-            removed_resources.push(id.clone());
-        }
-    }
-
-    PackageChangeDiff {
-        key: key.to_string(),
-        old_version: old_pkg.version.clone(),
-        new_version: new_pkg.version.clone(),
-        resource_diffs,
-        added_resources,
-        removed_resources,
-    }
-}
-
-fn resource_map_for_package<'a>(
-    pkg: &PackageNode,
-    graph: &'a StoreGraph,
-) -> BTreeMap<ResourceId, &'a Value> {
-    pkg.resource_paths
-        .iter()
-        .filter_map(|p| graph.resources.get(p))
-        .map(|node| (ResourceId::from_value(&node.manifest), &node.manifest))
-        .collect()
 }
 
 // ── Graph vs flat manifests (live cluster / snapshot) ────────────────

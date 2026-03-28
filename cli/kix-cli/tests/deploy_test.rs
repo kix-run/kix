@@ -18,18 +18,29 @@ fn kix() -> Command {
 #[test]
 fn deploy_dry_run_shows_plan() {
     kix()
-        .args(["deploy", "example", "--dry-run", "--yes"])
+        .args([
+            "deploy",
+            "example",
+            "--dry-run",
+            "--yes",
+            "--current-activation",
+        ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Deployment plan"))
-        .stdout(predicate::str::contains("Wave"))
+        .stdout(predicate::str::contains("Plan:"))
         .stdout(predicate::str::contains("Dry run"));
 }
 
 #[test]
 fn apply_alias_works() {
     kix()
-        .args(["apply", "example", "--dry-run", "--yes"])
+        .args([
+            "apply",
+            "example",
+            "--dry-run",
+            "--yes",
+            "--current-activation",
+        ])
         .assert()
         .success()
         .stdout(predicate::str::contains("Dry run"));

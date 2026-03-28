@@ -9,12 +9,11 @@
 //!   1. `nix build .#cluster-<name>-activation`  → result dir
 //!   2. StoreGraph::from_result_dir              → packages + resources
 //!   3. stamp_annotations                        → identity/depends-on
-//!   4. Load old activation from cache (if any)
-//!   5. Local DAG diff: old vs new manifests
-//!   6. ResourceGraph::from_manifests            → DAG for new resources
-//!   7. compute_waves on create/update resources
-//!   8. Apply wave-by-wave with readiness checks
-//!   9. Prune orphans (reverse topo order from old graph)
+//!   4. Connect to cluster, fetch Active Activation (unless --current-activation)
+//!   5. Resolve old activation to local store graph
+//!   6. Package-grouped plan display
+//!   7. Confirm → Apply wave-by-wave with readiness checks
+//!   8. Prune orphans (reverse topo order from old graph)
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -36,6 +35,7 @@ use kix_manifest::types::{CLUSTER_SCOPED, ResourceId};
 
 use crate::cli::{DeployArgs, OnError, PruneMode};
 use crate::output;
+use crate::plan;
 
 use super::CommandContext;
 
@@ -83,54 +83,30 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         return Ok(());
     }
 
-    // 3. Load old activation (from cache) for local diff
-    let old_manifests: Vec<Value> = {
-        let old_path = kix_eval::store::load_activation_path(&args.cluster);
-        match old_path {
-            Some(old_result_dir) => {
-                if !ctx.global.quiet {
-                    println!("Loading previous activation for diff...");
-                }
-                let noop = |_: &str| {};
-                match StoreGraph::from_result_dir_with_status(&old_result_dir, &noop) {
-                    Ok(mut old_graph) => {
-                        stamp_annotations(&mut old_graph);
-                        old_graph
-                            .resources
-                            .values()
-                            .map(|r| r.manifest.clone())
-                            .collect()
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            "failed to load old activation: {e}, treating as first deploy"
-                        );
-                        vec![]
-                    }
-                }
-            }
-            None => {
-                if !ctx.global.quiet {
-                    println!("No previous activation — first deploy.");
-                }
-                vec![]
-            }
-        }
+    // 3. Resolve old activation
+    //    Default: connect to cluster, fetch Active Activation, resolve to local store graph
+    //    --current-activation: use local cache (no cluster connection yet)
+    let (old_graph, old_manifests, pre_client) = if args.current_activation {
+        // Local cache mode — no cluster connection
+        let (og, om) = load_old_from_cache(&args.cluster, &ctx.global);
+        (og, om, None)
+    } else {
+        // Cluster-aware mode — connect and fetch Active Activation
+        let (og, om, client) = ctx
+            .runtime
+            .block_on(load_old_from_cluster(&args.cluster, &ctx.global))?;
+        (og, om, client)
     };
 
     // 4. Local DAG diff: old vs new
     let all_actions = kix_cluster::apply::detect_changes(&new_manifests, &old_manifests);
 
     // Separate into apply actions and orphans
-    let mut apply_manifests: Vec<Value> = Vec::new();
-    let mut skip_rids: Vec<ResourceId> = Vec::new();
     let mut orphan_rids: Vec<ResourceId> = Vec::new();
 
     for action in &all_actions {
-        match action {
-            ChangeAction::Apply(m) => apply_manifests.push(m.clone()),
-            ChangeAction::Skip(rid) => skip_rids.push(rid.clone()),
-            ChangeAction::Orphan(rid) => orphan_rids.push(rid.clone()),
+        if let ChangeAction::Orphan(rid) = action {
+            orphan_rids.push(rid.clone());
         }
     }
 
@@ -203,78 +179,34 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
             .map(|s| s.to_string())
     });
 
-    let global = ctx.global.clone();
-    let cluster_name = new_graph.cluster_name.clone();
-    let deploy_result = ctx.runtime.block_on(run_deploy_async(
-        args,
-        &global,
-        &resource_graph,
-        &waves,
-        &wave_actions,
-        &orphan_rids,
-        &old_manifests,
-        &cluster_name,
-        activation_name.as_deref(),
-        activation_identity_hash.as_deref(),
-    ));
+    // 6. Display plan — package-grouped, changes only
+    if !ctx.global.quiet {
+        let pkg_diff = match (&old_graph, &Some(&new_graph)) {
+            (Some(old), Some(new)) => plan::diff_graphs(old, new),
+            _ => {
+                // First deploy — everything is "added"
+                plan::diff_graphs(&StoreGraph::empty(&new_graph.cluster_name), &new_graph)
+            }
+        };
 
-    // Save activation path for next deploy's diff
-    if deploy_result.is_ok()
-        && let Err(e) = kix_eval::store::save_activation_path(&args.cluster, &result_path)
-    {
-        tracing::warn!("failed to save activation path: {e}");
+        plan::print_package_plan(&pkg_diff, ctx.global.verbose > 0);
+        plan::print_wave_summary(&waves, &resource_graph);
+        plan::print_plan_summary(&pkg_diff);
+
+        if !orphan_rids.is_empty() {
+            let orphan_str = orphan_rids.len().to_string();
+            println!("  {} orphaned", output::red(&orphan_str),);
+        }
     }
-
-    deploy_result
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn run_deploy_async(
-    args: &DeployArgs,
-    global: &crate::cli::GlobalArgs,
-    graph: &ResourceGraph,
-    waves: &[Vec<petgraph::graph::NodeIndex>],
-    wave_actions: &[Vec<ChangeAction>],
-    orphan_rids: &[ResourceId],
-    old_manifests: &[Value],
-    cluster_name: &str,
-    activation_name: Option<&str>,
-    activation_identity_hash: Option<&str>,
-) -> Result<()> {
-    let timeout = parse_timeout(args.timeout.as_deref())?;
-
-    // Display plan
-    print_plan(waves, wave_actions, graph, global);
 
     let total_apply = wave_actions
         .iter()
         .flat_map(|w| w.iter())
         .filter(|a| matches!(a, ChangeAction::Apply(_)))
         .count();
-    let total_skip = wave_actions
-        .iter()
-        .flat_map(|w| w.iter())
-        .filter(|a| matches!(a, ChangeAction::Skip(_)))
-        .count();
-
-    if !global.quiet {
-        println!();
-        let orphan_count = orphan_rids.len();
-        let orphan_str = orphan_count.to_string();
-        println!(
-            "Plan: {} to apply, {} unchanged, {} orphaned",
-            output::green(&total_apply.to_string()),
-            output::dim(&total_skip.to_string()),
-            if orphan_count > 0 {
-                output::red(&orphan_str)
-            } else {
-                output::dim(&orphan_str)
-            },
-        );
-    }
 
     if args.dry_run {
-        if !global.quiet {
+        if !ctx.global.quiet {
             if !orphan_rids.is_empty() {
                 println!();
                 println!(
@@ -282,7 +214,7 @@ async fn run_deploy_async(
                     output::yellow("Orphans:"),
                     orphan_rids.len(),
                 );
-                for rid in orphan_rids {
+                for rid in &orphan_rids {
                     println!("  {} {}", output::red("-"), rid);
                 }
             }
@@ -293,10 +225,6 @@ async fn run_deploy_async(
     }
 
     if total_apply == 0 && orphan_rids.is_empty() {
-        if !global.quiet {
-            println!();
-            println!("{}", output::green("Everything up to date."));
-        }
         return Ok(());
     }
 
@@ -322,7 +250,78 @@ async fn run_deploy_async(
         }
     }
 
-    // Connect to cluster for apply
+    let global = ctx.global.clone();
+    let cluster_name = new_graph.cluster_name.clone();
+    let deploy_result = ctx.runtime.block_on(run_deploy_async(
+        args,
+        &global,
+        &wave_actions,
+        &orphan_rids,
+        &old_manifests,
+        &cluster_name,
+        activation_name.as_deref(),
+        activation_identity_hash.as_deref(),
+        pre_client,
+    ));
+
+    // Save activation path for next deploy's diff
+    if deploy_result.is_ok()
+        && let Err(e) = kix_eval::store::save_activation_path(&args.cluster, &result_path)
+    {
+        tracing::warn!("failed to save activation path: {e}");
+    }
+
+    deploy_result
+}
+
+// ── Old activation resolution ────────────────────────────────────────
+
+/// Load old activation from local cache (--current-activation mode).
+fn load_old_from_cache(
+    cluster: &str,
+    global: &crate::cli::GlobalArgs,
+) -> (Option<StoreGraph>, Vec<Value>) {
+    let old_path = kix_eval::store::load_activation_path(cluster);
+    match old_path {
+        Some(old_result_dir) => {
+            if !global.quiet {
+                println!("Loading previous activation from cache...");
+            }
+            let noop = |_: &str| {};
+            match StoreGraph::from_result_dir_with_status(&old_result_dir, &noop) {
+                Ok(mut old_graph) => {
+                    stamp_annotations(&mut old_graph);
+                    let manifests = old_graph
+                        .resources
+                        .values()
+                        .map(|r| r.manifest.clone())
+                        .collect();
+                    (Some(old_graph), manifests)
+                }
+                Err(e) => {
+                    tracing::warn!("failed to load old activation: {e}, treating as first deploy");
+                    (None, vec![])
+                }
+            }
+        }
+        None => {
+            if !global.quiet {
+                println!("No previous activation — first deploy.");
+            }
+            (None, vec![])
+        }
+    }
+}
+
+/// Connect to cluster, fetch Active Activation, resolve to local store graph.
+async fn load_old_from_cluster(
+    cluster: &str,
+    global: &crate::cli::GlobalArgs,
+) -> Result<(Option<StoreGraph>, Vec<Value>, Option<kube::Client>)> {
+    if !global.quiet {
+        println!("Connecting to cluster...");
+    }
+
     let client = fetch::make_client(global.context.as_deref())
         .await
         .map_err(|e| {
@@ -330,6 +329,101 @@ async fn run_deploy_async(
                 "failed to connect to cluster: {e}. Check your kubeconfig or try --context <name>"
             )
         })?;
+
+    let discovery = fetch::discover_resources(&client)
+        .await
+        .map_err(|e| miette!("API discovery failed: {e}"))?;
+
+    // Try to find the Active Activation on the cluster
+    let active = if let Some((ar, _)) = activation::find_activation_ar(&discovery) {
+        activation::find_active(&client, ar, cluster)
+            .await
+            .ok()
+            .flatten()
+    } else {
+        None
+    };
+
+    match active {
+        Some(act) if act.identity_hash.is_some() => {
+            let hash = act.identity_hash.as_ref().unwrap();
+            if !global.quiet {
+                println!(
+                    "Active activation: {} ({}...)",
+                    output::bold(&act.name),
+                    &hash[..8.min(hash.len())],
+                );
+            }
+
+            // Resolve identity-hash to local store graph
+            match kix_eval::store::resolve_activation_by_hash(cluster, hash) {
+                Some(result_dir) => {
+                    let noop = |_: &str| {};
+                    match StoreGraph::from_result_dir_with_status(&result_dir, &noop) {
+                        Ok(mut old_graph) => {
+                            stamp_annotations(&mut old_graph);
+                            let manifests = old_graph
+                                .resources
+                                .values()
+                                .map(|r| r.manifest.clone())
+                                .collect();
+                            Ok((Some(old_graph), manifests, Some(client)))
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "failed to load old activation store graph: {e}, treating as first deploy"
+                            );
+                            Ok((None, vec![], Some(client)))
+                        }
+                    }
+                }
+                None => {
+                    if !global.quiet {
+                        println!(
+                            "  {} store path for activation not found locally — treating as first deploy",
+                            output::yellow("!"),
+                        );
+                    }
+                    Ok((None, vec![], Some(client)))
+                }
+            }
+        }
+        _ => {
+            if !global.quiet {
+                println!("No previous activation on cluster — first deploy.");
+            }
+            Ok((None, vec![], Some(client)))
+        }
+    }
+}
+
+// ── Apply engine (async) ─────────────────────────────────────────────
+
+#[allow(clippy::too_many_arguments)]
+async fn run_deploy_async(
+    args: &DeployArgs,
+    global: &crate::cli::GlobalArgs,
+    wave_actions: &[Vec<ChangeAction>],
+    orphan_rids: &[ResourceId],
+    old_manifests: &[Value],
+    cluster_name: &str,
+    activation_name: Option<&str>,
+    activation_identity_hash: Option<&str>,
+    pre_client: Option<kube::Client>,
+) -> Result<()> {
+    let timeout = parse_timeout(args.timeout.as_deref())?;
+
+    // Reuse pre-established connection or create a new one
+    let client = match pre_client {
+        Some(c) => c,
+        None => fetch::make_client(global.context.as_deref())
+            .await
+            .map_err(|e| {
+                miette!(
+                    "failed to connect to cluster: {e}. Check your kubeconfig or try --context <name>"
+                )
+            })?,
+    };
 
     let mut discovery = fetch::discover_resources(&client)
         .await
@@ -807,71 +901,6 @@ fn compute_prune_order(orphan_rids: &[ResourceId], old_manifests: &[Value]) -> V
         Err(_) => {
             // If graph construction fails, fall back to unordered
             orphan_rids.to_vec()
-        }
-    }
-}
-
-fn print_plan(
-    waves: &[Vec<petgraph::graph::NodeIndex>],
-    wave_actions: &[Vec<ChangeAction>],
-    graph: &ResourceGraph,
-    global: &crate::cli::GlobalArgs,
-) {
-    if global.quiet {
-        return;
-    }
-
-    println!();
-    println!(
-        "{} ({} waves)",
-        output::bold("Deployment plan"),
-        waves.len(),
-    );
-
-    for (i, (wave_nodes, actions)) in waves.iter().zip(wave_actions.iter()).enumerate() {
-        let apply = actions
-            .iter()
-            .filter(|a| matches!(a, ChangeAction::Apply(_)))
-            .count();
-        let skip = actions
-            .iter()
-            .filter(|a| matches!(a, ChangeAction::Skip(_)))
-            .count();
-
-        println!();
-        println!(
-            "{} ({} resources)",
-            output::bold(&format!("Wave {}", i + 1)),
-            wave_nodes.len(),
-        );
-
-        for (action, node_idx) in actions.iter().zip(wave_nodes.iter()) {
-            let node = &graph.graph[*node_idx];
-            let rid = &node.id;
-            match action {
-                ChangeAction::Apply(_) => {
-                    println!("  {} {}", output::green("+"), rid);
-                }
-                ChangeAction::Skip(_) => {
-                    println!("  {} {}", output::dim("="), rid);
-                }
-                ChangeAction::Orphan(_) => {
-                    // Orphans don't appear in wave plan (they're handled separately)
-                }
-            }
-        }
-
-        if apply > 0 || skip > 0 {
-            let mut parts = Vec::new();
-            if apply > 0 {
-                let s = format!("{apply} apply");
-                parts.push(output::green(&s).into_owned());
-            }
-            if skip > 0 {
-                let s = format!("{skip} skip");
-                parts.push(output::dim(&s).into_owned());
-            }
-            println!("  {}", parts.join(", "));
         }
     }
 }

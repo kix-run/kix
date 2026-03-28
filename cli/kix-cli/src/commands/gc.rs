@@ -28,6 +28,7 @@ use kix_manifest::types::{CLUSTER_SCOPED, ResourceId};
 
 use crate::cli::GcArgs;
 use crate::output;
+use crate::plan;
 
 use super::CommandContext;
 
@@ -109,23 +110,20 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         return Ok(());
     }
 
-    // 4. Build graph from garbage manifests for reverse dependency ordering
-    let garbage_values: Vec<Value> = garbage_manifests.values().cloned().collect();
-    let garbage_rids: Vec<ResourceId> = garbage_values.iter().map(ResourceId::from_value).collect();
-
+    // 4. Display package-grouped garbage plan
+    let pkg_diff = plan::diff_garbage(&old_graph, &new_graph);
     if !ctx.global.quiet {
-        println!(
-            "\n{} {} resources to remove (reverse dependency order):",
-            output::bold("Garbage:"),
-            garbage_rids.len(),
-        );
+        println!();
+        println!("{}", output::bold("Garbage collection plan"));
+        plan::print_package_plan(&pkg_diff, ctx.global.verbose > 0);
+        plan::print_plan_summary(&pkg_diff);
     }
 
-    // Try to compute waves for reverse ordering
+    // 5. Compute reverse dependency ordering for deletion
+    let garbage_values: Vec<Value> = garbage_manifests.values().cloned().collect();
     let ordered_rids = match ResourceGraph::from_manifests(&garbage_values) {
         Ok(graph) => {
             let waves = compute_waves(&graph);
-            // Reverse: delete dependents (later waves) first
             let mut ordered: Vec<ResourceId> = Vec::new();
             for wave in waves.into_iter().rev() {
                 for idx in wave {
@@ -134,17 +132,10 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
             }
             ordered
         }
-        Err(_) => {
-            // If graph construction fails, fall back to unordered
-            garbage_rids
-        }
+        Err(_) => garbage_values.iter().map(ResourceId::from_value).collect(),
     };
 
-    for rid in &ordered_rids {
-        println!("  {} {}", output::red("-"), rid);
-    }
-
-    // 5. Confirm and delete
+    // 6. Confirm and delete
     if !args.yes {
         if !output::is_interactive() {
             eprintln!(

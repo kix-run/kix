@@ -6,6 +6,8 @@ Nix-based Kubernetes manifest generator. Packages in `packages/` produce K8s res
 
 When modifying kix APIs, package conventions, or the diff tooling, keep the `kix-migration` skill (`.claude/skills/kix-migration/SKILL.md`) up to date. This is the primary reference for LLMs working on migrations — stale guidance causes wasted effort.
 
+When modifying CLI public APIs, commands, data flows, or crate structure, keep `cli/README.md` up to date. This is the primary reference for LLMs working on CLI features — stale docs cause wasted exploration.
+
 ## Breaking changes
 
 The kix API is in active development. Breaking changes are fine — none of the clusters are actively deployed. Prioritize clean design over backwards compatibility.

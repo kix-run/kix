@@ -52,6 +52,51 @@ pub fn load_activation_path(cluster: &str) -> Option<PathBuf> {
         .filter(|p| p.exists())
 }
 
+/// Resolve an identity-hash to the activation result directory.
+///
+/// Checks the local cache first (fast path). If that doesn't match,
+/// tries to find the store path by globbing `/nix/store/{hash}*`.
+/// Returns None if the store path is gone (e.g. nix-collect-garbage ran).
+pub fn resolve_activation_by_hash(cluster: &str, identity_hash: &str) -> Option<PathBuf> {
+    // Fast path: check if the cached result dir matches this hash
+    if let Some(cached_dir) = load_activation_path(cluster) {
+        let activation_link = cached_dir.join("activation");
+        if let Ok(target) = std::fs::read_link(&activation_link) {
+            let target_hash = target
+                .file_name()
+                .and_then(|n| n.to_str())
+                .filter(|n| n.len() >= 32)
+                .map(|n| &n[..32]);
+            if target_hash == Some(identity_hash) {
+                return Some(cached_dir);
+            }
+        }
+    }
+
+    // Slow path: find a matching store path and check if it has a result dir structure
+    // The identity-hash is the first 32 chars of the store path basename
+    let store_dir = PathBuf::from("/nix/store");
+    if let Ok(entries) = std::fs::read_dir(&store_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.starts_with(identity_hash)
+                && name_str.len() > 32
+                && name_str.as_bytes()[32] == b'-'
+                && name_str.contains("activation")
+            {
+                let path = entry.path();
+                // Check if this looks like a result dir (has kix-packages.json)
+                if path.join("kix-packages.json").exists() {
+                    return Some(path);
+                }
+            }
+        }
+    }
+
+    None
+}
+
 fn dirs_fallback_home() -> PathBuf {
     std::env::var_os("HOME")
         .map(PathBuf::from)

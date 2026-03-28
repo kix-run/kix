@@ -64,10 +64,16 @@ fn inspect_text() {
 #[test]
 fn deploy_dry_run() {
     kix()
-        .args(["deploy", "example", "--dry-run", "--yes"])
+        .args([
+            "deploy",
+            "example",
+            "--dry-run",
+            "--yes",
+            "--current-activation",
+        ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Wave"))
+        .stdout(predicate::str::contains("Plan:"))
         .stdout(predicate::str::contains("Dry run"));
 }
 

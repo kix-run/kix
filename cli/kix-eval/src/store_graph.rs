@@ -179,6 +179,18 @@ fn resource_label(manifest: &serde_json::Value) -> String {
 }
 
 impl StoreGraph {
+    /// Create an empty StoreGraph (for first-deploy comparisons).
+    pub fn empty(cluster_name: &str) -> Self {
+        Self {
+            cluster_name: cluster_name.to_string(),
+            activation_path: PathBuf::new(),
+            packages: IndexMap::new(),
+            resources: HashMap::new(),
+            resource_owner: HashMap::new(),
+            ref_cache: HashMap::new(),
+        }
+    }
+
     /// Build a StoreGraph from a result directory.
     ///
     /// `status_fn` is called with progress messages during loading.
