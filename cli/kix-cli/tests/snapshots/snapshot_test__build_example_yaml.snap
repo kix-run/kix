@@ -2,6 +2,76 @@
 source: kix-cli/tests/snapshot_test.rs
 expression: stdout
 ---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kix
+  name: packageinstances.kix.dev
+spec:
+  group: kix.dev
+  names:
+    kind: PackageInstance
+    listKind: PackageInstanceList
+    plural: packageinstances
+    singular: packageinstance
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            type: string
+          kind:
+            type: string
+          metadata:
+            type: object
+          spec:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+          status:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+        type: object
+    served: true
+    storage: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kix
+  name: activations.kix.dev
+spec:
+  group: kix.dev
+  names:
+    kind: Activation
+    listKind: ActivationList
+    plural: activations
+    singular: activation
+  scope: Cluster
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            type: string
+          kind:
+            type: string
+          metadata:
+            type: object
+          spec:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+          status:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+        type: object
+    served: true
+    storage: true
+---
 apiVersion: v1
 data:
   prestop-sentinel.sh: |
@@ -399,11 +469,11 @@ spec:
   - name: tcp-redis
     port: 6379
     protocol: TCP
-    targetPort: valkey
+    targetPort: 6379
   - name: tcp-sentinel
     port: 26379
     protocol: TCP
-    targetPort: valkey-sentinel
+    targetPort: 26379
   selector:
     app.kubernetes.io/instance: valkey
     app.kubernetes.io/name: valkey
@@ -411,6 +481,21 @@ spec:
 ---
 apiVersion: v1
 data:
+  parse_sentinels.awk: |
+    /ip/ {FOUND_IP=1}
+    /port/ {FOUND_PORT=1}
+    /runid/ {FOUND_RUNID=1}
+    !/ip|port|runid/ {
+      if (FOUND_IP==1) {
+        IP=$1; FOUND_IP=0;
+      }
+      else if (FOUND_PORT==1) {
+        PORT=$1;
+        FOUND_PORT=0;
+      } else if (FOUND_RUNID==1) {
+        printf "\nsentinel known-sentinel primary %s %s %s", IP, PORT, $0; FOUND_RUNID=0;
+      }
+    }
   ping_liveness_local.sh: |
     #!/bin/bash
     [[ -f $VALKEY_PASSWORD_FILE ]] && export VALKEY_PASSWORD="$(< "${VALKEY_PASSWORD_FILE}")"
@@ -431,6 +516,32 @@ data:
       echo "$response"
       exit 1
     fi
+  ping_liveness_local_and_primary.sh: |
+    script_dir="$(dirname "$0")"
+    exit_status=0
+    "$script_dir/ping_liveness_local.sh" $1 || exit_status=$?
+    "$script_dir/ping_liveness_primary.sh" $1 || exit_status=$?
+    exit $exit_status
+  ping_liveness_primary.sh: |
+    #!/bin/bash
+    [[ -f $VALKEY_PRIMARY_PASSWORD_FILE ]] && export VALKEY_PRIMARY_PASSWORD="$(< "${VALKEY_PRIMARY_PASSWORD_FILE}")"
+    [[ -n "$VALKEY_PRIMARY_PASSWORD" ]] && export REDISCLI_AUTH="$VALKEY_PRIMARY_PASSWORD"
+    response=$(
+      timeout -s 15 $1 \
+      valkey-cli \
+        -h $VALKEY_PRIMARY_HOST \
+        -p $VALKEY_PRIMARY_PORT_NUMBER \
+        ping
+    )
+    if [ "$?" -eq "124" ]; then
+      echo "Timed out"
+      exit 1
+    fi
+    responseFirstWord=$(echo $response | head -n1 | awk '{print $1;}')
+    if [ "$response" != "PONG" ] && [ "$responseFirstWord" != "LOADING" ]; then
+      echo "$response"
+      exit 1
+    fi
   ping_readiness_local.sh: |
     #!/bin/bash
     [[ -f $VALKEY_PASSWORD_FILE ]] && export VALKEY_PASSWORD="$(< "${VALKEY_PASSWORD_FILE}")"
@@ -440,6 +551,31 @@ data:
       valkey-cli \
         -h localhost \
         -p $VALKEY_PORT \
+        ping
+    )
+    if [ "$?" -eq "124" ]; then
+      echo "Timed out"
+      exit 1
+    fi
+    if [ "$response" != "PONG" ]; then
+      echo "$response"
+      exit 1
+    fi
+  ping_readiness_local_and_primary.sh: |
+    script_dir="$(dirname "$0")"
+    exit_status=0
+    "$script_dir/ping_readiness_local.sh" $1 || exit_status=$?
+    "$script_dir/ping_readiness_primary.sh" $1 || exit_status=$?
+    exit $exit_status
+  ping_readiness_primary.sh: |
+    #!/bin/bash
+    [[ -f $VALKEY_PRIMARY_PASSWORD_FILE ]] && export VALKEY_PRIMARY_PASSWORD="$(< "${VALKEY_PRIMARY_PASSWORD_FILE}")"
+    [[ -n "$VALKEY_PRIMARY_PASSWORD" ]] && export REDISCLI_AUTH="$VALKEY_PRIMARY_PASSWORD"
+    response=$(
+      timeout -s 15 $1 \
+      valkey-cli \
+        -h $VALKEY_PRIMARY_HOST \
+        -p $VALKEY_PRIMARY_PORT_NUMBER \
         ping
     )
     if [ "$?" -eq "124" ]; then
@@ -532,6 +668,57 @@ spec:
     app.kubernetes.io/name: valkey
   type: ClusterIP
 ---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/instance: valkey
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: valkey
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: valkey
+  namespace: cache
+spec:
+  egress:
+  - {}
+  ingress:
+  - ports:
+    - port: 6379
+      protocol: TCP
+    - port: 26379
+      protocol: TCP
+  - ports:
+    - port: 9121
+      protocol: TCP
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: valkey
+      app.kubernetes.io/name: valkey
+  policyTypes:
+  - Ingress
+  - Egress
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  labels:
+    app.kubernetes.io/component: node
+    app.kubernetes.io/instance: valkey
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: valkey
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: valkey-node
+  namespace: cache
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: node
+      app.kubernetes.io/instance: valkey
+      app.kubernetes.io/name: valkey
+---
 apiVersion: v1
 automountServiceAccountToken: false
 kind: ServiceAccount
@@ -570,7 +757,7 @@ spec:
     metadata:
       annotations:
         checksum/configmap: iy7713k9gfhpkymw9kl3hwvfmkzv3h5s
-        checksum/health: sg5vknz1d77938v6ifrphlc6b43dns45
+        checksum/health: ii781nn9dgb9ckqc6y9hl031kpkn8yl0
         checksum/scripts: iy7713k9gfhpkymw9kl3hwvfmkzv3h5s
         checksum/secret: '44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a'
         prometheus.io/port: '9121'
@@ -804,7 +991,7 @@ spec:
         name: valkey
         ports:
         - containerPort: 6379
-          name: valkey
+          name: redis
           protocol: TCP
         readinessProbe:
           exec:
@@ -912,8 +1099,8 @@ apiVersion: kix.dev/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.dev/main: valkey
-    kix.dev/package-requires: ServiceAccount/valkey,ConfigMap/valkey-scripts,ConfigMap/valkey-health,ConfigMap/valkey-configuration,StatefulSet/valkey-node,Service/valkey-headless,Service/valkey-metrics
+    kix.dev/package-requires: ServiceAccount/valkey,ConfigMap/valkey-scripts,ConfigMap/valkey-health,ConfigMap/valkey-configuration,StatefulSet/valkey-node,Service/valkey-headless,Service/valkey-metrics,NetworkPolicy/valkey,PodDisruptionBudget/valkey-node
+    kix.dev/root: valkey
   labels:
     app.kubernetes.io/instance: valkey
     app.kubernetes.io/managed-by: kix
@@ -1737,15 +1924,13 @@ rules:
   resources:
   - challenges
   verbs:
-  - get
-  - list
-  - watch
   - create
   - delete
 - apiGroups:
   - acme.cert-manager.io
   resources:
   - orders
+  - challenges
   verbs:
   - get
   - list
@@ -1756,8 +1941,8 @@ rules:
   - orders
   - orders/status
   verbs:
-  - patch
   - update
+  - patch
 - apiGroups:
   - acme.cert-manager.io
   resources:
@@ -2238,8 +2423,585 @@ spec:
           metadata:
             type: object
           spec:
+            description: |-
+              Specification of the desired state of the Certificate resource.
+              https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
+            properties:
+              additionalOutputFormats:
+                description: |-
+                  Defines extra output formats of the private key and signed certificate chain
+                  to be written to this Certificate's target Secret.
+
+                  This is a Beta Feature enabled by default. It can be disabled with the
+                  `--feature-gates=AdditionalCertificateOutputFormats=false` option set on both
+                  the controller and webhook components.
+                items:
+                  description: |-
+                    CertificateAdditionalOutputFormat defines an additional output format of a
+                    Certificate resource. These contain supplementary data formats of the signed
+                    certificate chain and paired private key.
+                  properties:
+                    type:
+                      description: |-
+                        Type is the name of the format type that should be written to the
+                        Certificate's target Secret.
+                      enum:
+                      - DER
+                      - CombinedPEM
+                      type: string
+                  required:
+                  - type
+                  type: object
+                type: array
+              commonName:
+                description: |-
+                  Requested common name X509 certificate subject attribute.
+                  More info: https://datatracker.ietf.org/doc/html/rfc5280#section-4.1.2.6
+                  NOTE: TLS clients will ignore this value when any subject alternative name is
+                  set (see https://tools.ietf.org/html/rfc6125#section-6.4.4).
+
+                  Should have a length of 64 characters or fewer to avoid generating invalid CSRs.
+                  Cannot be set if the `literalSubject` field is set.
+                type: string
+              dnsNames:
+                description: Requested DNS subject alternative names.
+                items:
+                  type: string
+                type: array
+              duration:
+                description: |-
+                  Requested 'duration' (i.e. lifetime) of the Certificate. Note that the
+                  issuer may choose to ignore the requested duration, just like any other
+                  requested attribute.
+
+                  If unset, this defaults to 90 days.
+                  Minimum accepted duration is 1 hour.
+                  Value must be in units accepted by Go time.ParseDuration https://golang.org/pkg/time/#ParseDuration.
+                type: string
+              emailAddresses:
+                description: Requested email subject alternative names.
+                items:
+                  type: string
+                type: array
+              encodeUsagesInRequest:
+                description: |-
+                  Whether the KeyUsage and ExtKeyUsage extensions should be set in the encoded CSR.
+
+                  This option defaults to true, and should only be disabled if the target
+                  issuer does not support CSRs with these X509 KeyUsage/ ExtKeyUsage extensions.
+                type: boolean
+              ipAddresses:
+                description: Requested IP address subject alternative names.
+                items:
+                  type: string
+                type: array
+              isCA:
+                description: |-
+                  Requested basic constraints isCA value.
+                  The isCA value is used to set the `isCA` field on the created CertificateRequest
+                  resources. Note that the issuer may choose to ignore the requested isCA value, just
+                  like any other requested attribute.
+
+                  If true, this will automatically add the `cert sign` usage to the list
+                  of requested `usages`.
+                type: boolean
+              issuerRef:
+                description: |-
+                  Reference to the issuer responsible for issuing the certificate.
+                  If the issuer is namespace-scoped, it must be in the same namespace
+                  as the Certificate. If the issuer is cluster-scoped, it can be used
+                  from any namespace.
+
+                  The `name` field of the reference must always be specified.
+                properties:
+                  group:
+                    description: Group of the resource being referred to.
+                    type: string
+                  kind:
+                    description: Kind of the resource being referred to.
+                    type: string
+                  name:
+                    description: Name of the resource being referred to.
+                    type: string
+                required:
+                - name
+                type: object
+              keystores:
+                description: Additional keystore output formats to be stored in the Certificate's Secret.
+                properties:
+                  jks:
+                    description: |-
+                      JKS configures options for storing a JKS keystore in the
+                      `spec.secretName` Secret resource.
+                    properties:
+                      alias:
+                        description: |-
+                          Alias specifies the alias of the key in the keystore, required by the JKS format.
+                          If not provided, the default alias `certificate` will be used.
+                        type: string
+                      create:
+                        description: |-
+                          Create enables JKS keystore creation for the Certificate.
+                          If true, a file named `keystore.jks` will be created in the target
+                          Secret resource, encrypted using the password stored in
+                          `passwordSecretRef` or `password`.
+                          The keystore file will be updated immediately.
+                          If the issuer provided a CA certificate, a file named `truststore.jks`
+                          will also be created in the target Secret resource, encrypted using the
+                          password stored in `passwordSecretRef`
+                          containing the issuing Certificate Authority
+                        type: boolean
+                      password:
+                        description: |-
+                          Password provides a literal password used to encrypt the JKS keystore.
+                          Mutually exclusive with passwordSecretRef.
+                          One of password or passwordSecretRef must provide a password with a non-zero length.
+                        type: string
+                      passwordSecretRef:
+                        description: |-
+                          PasswordSecretRef is a reference to a non-empty key in a Secret resource
+                          containing the password used to encrypt the JKS keystore.
+                          Mutually exclusive with password.
+                          One of password or passwordSecretRef must provide a password with a non-zero length.
+                        properties:
+                          key:
+                            description: |-
+                              The key of the entry in the Secret resource's `data` field to be used.
+                              Some instances of this field may be defaulted, in others it may be
+                              required.
+                            type: string
+                          name:
+                            description: |-
+                              Name of the resource being referred to.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                        required:
+                        - name
+                        type: object
+                    required:
+                    - create
+                    type: object
+                  pkcs12:
+                    description: |-
+                      PKCS12 configures options for storing a PKCS12 keystore in the
+                      `spec.secretName` Secret resource.
+                    properties:
+                      create:
+                        description: |-
+                          Create enables PKCS12 keystore creation for the Certificate.
+                          If true, a file named `keystore.p12` will be created in the target
+                          Secret resource, encrypted using the password stored in
+                          `passwordSecretRef` or in `password`.
+                          The keystore file will be updated immediately.
+                          If the issuer provided a CA certificate, a file named `truststore.p12` will
+                          also be created in the target Secret resource, encrypted using the
+                          password stored in `passwordSecretRef` containing the issuing Certificate
+                          Authority
+                        type: boolean
+                      password:
+                        description: |-
+                          Password provides a literal password used to encrypt the PKCS#12 keystore.
+                          Mutually exclusive with passwordSecretRef.
+                          One of password or passwordSecretRef must provide a password with a non-zero length.
+                        type: string
+                      passwordSecretRef:
+                        description: |-
+                          PasswordSecretRef is a reference to a non-empty key in a Secret resource
+                          containing the password used to encrypt the PKCS#12 keystore.
+                          Mutually exclusive with password.
+                          One of password or passwordSecretRef must provide a password with a non-zero length.
+                        properties:
+                          key:
+                            description: |-
+                              The key of the entry in the Secret resource's `data` field to be used.
+                              Some instances of this field may be defaulted, in others it may be
+                              required.
+                            type: string
+                          name:
+                            description: |-
+                              Name of the resource being referred to.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                        required:
+                        - name
+                        type: object
+                      profile:
+                        description: |-
+                          Profile specifies the key and certificate encryption algorithms and the HMAC algorithm
+                          used to create the PKCS12 keystore. Default value is `LegacyRC2` for backward compatibility.
+
+                          If provided, allowed values are:
+                          `LegacyRC2`: Deprecated. Not supported by default in OpenSSL 3 or Java 20.
+                          `LegacyDES`: Less secure algorithm. Use this option for maximal compatibility.
+                          `Modern2023`: Secure algorithm. Use this option in case you have to always use secure algorithms
+                          (eg. because of company policy). Please note that the security of the algorithm is not that important
+                          in reality, because the unencrypted certificate and private key are also stored in the Secret.
+                        enum:
+                        - LegacyRC2
+                        - LegacyDES
+                        - Modern2023
+                        type: string
+                    required:
+                    - create
+                    type: object
+                type: object
+              literalSubject:
+                description: |-
+                  Requested X.509 certificate subject, represented using the LDAP "String
+                  Representation of a Distinguished Name" [1].
+                  Important: the LDAP string format also specifies the order of the attributes
+                  in the subject, this is important when issuing certs for LDAP authentication.
+                  Example: `CN=foo,DC=corp,DC=example,DC=com`
+                  More info [1]: https://datatracker.ietf.org/doc/html/rfc4514
+                  More info: https://github.com/cert-manager/cert-manager/issues/3203
+                  More info: https://github.com/cert-manager/cert-manager/issues/4424
+
+                  Cannot be set if the `subject` or `commonName` field is set.
+                type: string
+              nameConstraints:
+                description: |-
+                  x.509 certificate NameConstraint extension which MUST NOT be used in a non-CA certificate.
+                  More Info: https://datatracker.ietf.org/doc/html/rfc5280#section-4.2.1.10
+
+                  This is an Alpha Feature and is only enabled with the
+                  `--feature-gates=NameConstraints=true` option set on both
+                  the controller and webhook components.
+                properties:
+                  critical:
+                    description: if true then the name constraints are marked critical.
+                    type: boolean
+                  excluded:
+                    description: |-
+                      Excluded contains the constraints which must be disallowed. Any name matching a
+                      restriction in the excluded field is invalid regardless
+                      of information appearing in the permitted
+                    properties:
+                      dnsDomains:
+                        description: DNSDomains is a list of DNS domains that are permitted or excluded.
+                        items:
+                          type: string
+                        type: array
+                      emailAddresses:
+                        description: EmailAddresses is a list of Email Addresses that are permitted or excluded.
+                        items:
+                          type: string
+                        type: array
+                      ipRanges:
+                        description: |-
+                          IPRanges is a list of IP Ranges that are permitted or excluded.
+                          This should be a valid CIDR notation.
+                        items:
+                          type: string
+                        type: array
+                      uriDomains:
+                        description: URIDomains is a list of URI domains that are permitted or excluded.
+                        items:
+                          type: string
+                        type: array
+                    type: object
+                  permitted:
+                    description: Permitted contains the constraints in which the names must be located.
+                    properties:
+                      dnsDomains:
+                        description: DNSDomains is a list of DNS domains that are permitted or excluded.
+                        items:
+                          type: string
+                        type: array
+                      emailAddresses:
+                        description: EmailAddresses is a list of Email Addresses that are permitted or excluded.
+                        items:
+                          type: string
+                        type: array
+                      ipRanges:
+                        description: |-
+                          IPRanges is a list of IP Ranges that are permitted or excluded.
+                          This should be a valid CIDR notation.
+                        items:
+                          type: string
+                        type: array
+                      uriDomains:
+                        description: URIDomains is a list of URI domains that are permitted or excluded.
+                        items:
+                          type: string
+                        type: array
+                    type: object
+                type: object
+              otherNames:
+                description: |-
+                  `otherNames` is an escape hatch for SAN that allows any type. We currently restrict the support to string like otherNames, cf RFC 5280 p 37
+                  Any UTF8 String valued otherName can be passed with by setting the keys oid: x.x.x.x and UTF8Value: somevalue for `otherName`.
+                  Most commonly this would be UPN set with oid: 1.3.6.1.4.1.311.20.2.3
+                  You should ensure that any OID passed is valid for the UTF8String type as we do not explicitly validate this.
+                items:
+                  properties:
+                    oid:
+                      description: |-
+                        OID is the object identifier for the otherName SAN.
+                        The object identifier must be expressed as a dotted string, for
+                        example, "1.2.840.113556.1.4.221".
+                      type: string
+                    utf8Value:
+                      description: |-
+                        utf8Value is the string value of the otherName SAN.
+                        The utf8Value accepts any valid UTF8 string to set as value for the otherName SAN.
+                      type: string
+                  type: object
+                type: array
+              privateKey:
+                description: |-
+                  Private key options. These include the key algorithm and size, the used
+                  encoding and the rotation policy.
+                properties:
+                  algorithm:
+                    description: |-
+                      Algorithm is the private key algorithm of the corresponding private key
+                      for this certificate.
+
+                      If provided, allowed values are either `RSA`, `ECDSA` or `Ed25519`.
+                      If `algorithm` is specified and `size` is not provided,
+                      key size of 2048 will be used for `RSA` key algorithm and
+                      key size of 256 will be used for `ECDSA` key algorithm.
+                      key size is ignored when using the `Ed25519` key algorithm.
+                    enum:
+                    - RSA
+                    - ECDSA
+                    - Ed25519
+                    type: string
+                  encoding:
+                    description: |-
+                      The private key cryptography standards (PKCS) encoding for this
+                      certificate's private key to be encoded in.
+
+                      If provided, allowed values are `PKCS1` and `PKCS8` standing for PKCS#1
+                      and PKCS#8, respectively.
+                      Defaults to `PKCS1` if not specified.
+                    enum:
+                    - PKCS1
+                    - PKCS8
+                    type: string
+                  rotationPolicy:
+                    description: |-
+                      RotationPolicy controls how private keys should be regenerated when a
+                      re-issuance is being processed.
+
+                      If set to `Never`, a private key will only be generated if one does not
+                      already exist in the target `spec.secretName`. If one does exist but it
+                      does not have the correct algorithm or size, a warning will be raised
+                      to await user intervention.
+                      If set to `Always`, a private key matching the specified requirements
+                      will be generated whenever a re-issuance occurs.
+                      Default is `Never` for backward compatibility.
+                    enum:
+                    - Never
+                    - Always
+                    type: string
+                  size:
+                    description: |-
+                      Size is the key bit size of the corresponding private key for this certificate.
+
+                      If `algorithm` is set to `RSA`, valid values are `2048`, `4096` or `8192`,
+                      and will default to `2048` if not specified.
+                      If `algorithm` is set to `ECDSA`, valid values are `256`, `384` or `521`,
+                      and will default to `256` if not specified.
+                      If `algorithm` is set to `Ed25519`, Size is ignored.
+                      No other values are allowed.
+                    type: integer
+                type: object
+              renewBefore:
+                description: |-
+                  How long before the currently issued certificate's expiry cert-manager should
+                  renew the certificate. For example, if a certificate is valid for 60 minutes,
+                  and `renewBefore=10m`, cert-manager will begin to attempt to renew the certificate
+                  50 minutes after it was issued (i.e. when there are 10 minutes remaining until
+                  the certificate is no longer valid).
+
+                  NOTE: The actual lifetime of the issued certificate is used to determine the
+                  renewal time. If an issuer returns a certificate with a different lifetime than
+                  the one requested, cert-manager will use the lifetime of the issued certificate.
+
+                  If unset, this defaults to 1/3 of the issued certificate's lifetime.
+                  Minimum accepted value is 5 minutes.
+                  Value must be in units accepted by Go time.ParseDuration https://golang.org/pkg/time/#ParseDuration.
+                  Cannot be set if the `renewBeforePercentage` field is set.
+                type: string
+              renewBeforePercentage:
+                description: |-
+                  `renewBeforePercentage` is like `renewBefore`, except it is a relative percentage
+                  rather than an absolute duration. For example, if a certificate is valid for 60
+                  minutes, and  `renewBeforePercentage=25`, cert-manager will begin to attempt to
+                  renew the certificate 45 minutes after it was issued (i.e. when there are 15
+                  minutes (25%) remaining until the certificate is no longer valid).
+
+                  NOTE: The actual lifetime of the issued certificate is used to determine the
+                  renewal time. If an issuer returns a certificate with a different lifetime than
+                  the one requested, cert-manager will use the lifetime of the issued certificate.
+
+                  Value must be an integer in the range (0,100). The minimum effective
+                  `renewBefore` derived from the `renewBeforePercentage` and `duration` fields is 5
+                  minutes.
+                  Cannot be set if the `renewBefore` field is set.
+                format: int32
+                type: integer
+              revisionHistoryLimit:
+                description: |-
+                  The maximum number of CertificateRequest revisions that are maintained in
+                  the Certificate's history. Each revision represents a single `CertificateRequest`
+                  created by this Certificate, either when it was created, renewed, or Spec
+                  was changed. Revisions will be removed by oldest first if the number of
+                  revisions exceeds this number.
+
+                  If set, revisionHistoryLimit must be a value of `1` or greater.
+                  If unset (`nil`), revisions will not be garbage collected.
+                  Default value is `nil`.
+                format: int32
+                type: integer
+              secretName:
+                description: |-
+                  Name of the Secret resource that will be automatically created and
+                  managed by this Certificate resource. It will be populated with a
+                  private key and certificate, signed by the denoted issuer. The Secret
+                  resource lives in the same namespace as the Certificate resource.
+                type: string
+              secretTemplate:
+                description: |-
+                  Defines annotations and labels to be copied to the Certificate's Secret.
+                  Labels and annotations on the Secret will be changed as they appear on the
+                  SecretTemplate when added or removed. SecretTemplate annotations are added
+                  in conjunction with, and cannot overwrite, the base set of annotations
+                  cert-manager sets on the Certificate's Secret.
+                properties:
+                  annotations:
+                    additionalProperties:
+                      type: string
+                    description: Annotations is a key value map to be copied to the target Kubernetes Secret.
+                    type: object
+                  labels:
+                    additionalProperties:
+                      type: string
+                    description: Labels is a key value map to be copied to the target Kubernetes Secret.
+                    type: object
+                type: object
+              subject:
+                description: |-
+                  Requested set of X509 certificate subject attributes.
+                  More info: https://datatracker.ietf.org/doc/html/rfc5280#section-4.1.2.6
+
+                  The common name attribute is specified separately in the `commonName` field.
+                  Cannot be set if the `literalSubject` field is set.
+                properties:
+                  countries:
+                    description: Countries to be used on the Certificate.
+                    items:
+                      type: string
+                    type: array
+                  localities:
+                    description: Cities to be used on the Certificate.
+                    items:
+                      type: string
+                    type: array
+                  organizationalUnits:
+                    description: Organizational Units to be used on the Certificate.
+                    items:
+                      type: string
+                    type: array
+                  organizations:
+                    description: Organizations to be used on the Certificate.
+                    items:
+                      type: string
+                    type: array
+                  postalCodes:
+                    description: Postal codes to be used on the Certificate.
+                    items:
+                      type: string
+                    type: array
+                  provinces:
+                    description: State/Provinces to be used on the Certificate.
+                    items:
+                      type: string
+                    type: array
+                  serialNumber:
+                    description: Serial number to be used on the Certificate.
+                    type: string
+                  streetAddresses:
+                    description: Street addresses to be used on the Certificate.
+                    items:
+                      type: string
+                    type: array
+                type: object
+              uris:
+                description: Requested URI subject alternative names.
+                items:
+                  type: string
+                type: array
+              usages:
+                description: |-
+                  Requested key usages and extended key usages.
+                  These usages are used to set the `usages` field on the created CertificateRequest
+                  resources. If `encodeUsagesInRequest` is unset or set to `true`, the usages
+                  will additionally be encoded in the `request` field which contains the CSR blob.
+
+                  If unset, defaults to `digital signature` and `key encipherment`.
+                items:
+                  description: |-
+                    KeyUsage specifies valid usage contexts for keys.
+                    See:
+                    https://tools.ietf.org/html/rfc5280#section-4.2.1.3
+                    https://tools.ietf.org/html/rfc5280#section-4.2.1.12
+
+                    Valid KeyUsage values are as follows:
+                    "signing",
+                    "digital signature",
+                    "content commitment",
+                    "key encipherment",
+                    "key agreement",
+                    "data encipherment",
+                    "cert sign",
+                    "crl sign",
+                    "encipher only",
+                    "decipher only",
+                    "any",
+                    "server auth",
+                    "client auth",
+                    "code signing",
+                    "email protection",
+                    "s/mime",
+                    "ipsec end system",
+                    "ipsec tunnel",
+                    "ipsec user",
+                    "timestamping",
+                    "ocsp signing",
+                    "microsoft sgc",
+                    "netscape sgc"
+                  enum:
+                  - signing
+                  - digital signature
+                  - content commitment
+                  - key encipherment
+                  - key agreement
+                  - data encipherment
+                  - cert sign
+                  - crl sign
+                  - encipher only
+                  - decipher only
+                  - any
+                  - server auth
+                  - client auth
+                  - code signing
+                  - email protection
+                  - s/mime
+                  - ipsec end system
+                  - ipsec tunnel
+                  - ipsec user
+                  - timestamping
+                  - ocsp signing
+                  - microsoft sgc
+                  - netscape sgc
+                  type: string
+                type: array
+            required:
+            - issuerRef
+            - secretName
             type: object
-            x-kubernetes-preserve-unknown-fields: true
           status:
             type: object
             x-kubernetes-preserve-unknown-fields: true
@@ -2767,8 +3529,8 @@ kind: PackageInstance
 metadata:
   annotations:
     kix.dev/inverse-deps: ClusterRoleBinding/cert-manager-cainjector,RoleBinding/cert-manager-cainjector:leaderelection,ClusterRoleBinding/cert-manager-controller-approve:cert-manager-io,ClusterRoleBinding/cert-manager-controller-certificates,ClusterRoleBinding/cert-manager-controller-certificatesigningrequests,ClusterRoleBinding/cert-manager-controller-challenges,ClusterRoleBinding/cert-manager-controller-clusterissuers,ClusterRoleBinding/cert-manager-controller-ingress-shim,ClusterRoleBinding/cert-manager-controller-issuers,ClusterRoleBinding/cert-manager-controller-orders,Role/cert-manager-tokenrequest,RoleBinding/cert-manager-cert-manager-tokenrequest,RoleBinding/cert-manager-webhook:dynamic-serving,ClusterRoleBinding/cert-manager-webhook:subjectaccessreviews,RoleBinding/cert-manager:leaderelection
-    kix.dev/main: cert-manager
     kix.dev/package-requires: CustomResourceDefinition/certificates.cert-manager.io,CustomResourceDefinition/certificaterequests.cert-manager.io,CustomResourceDefinition/challenges.acme.cert-manager.io,CustomResourceDefinition/clusterissuers.cert-manager.io,CustomResourceDefinition/issuers.cert-manager.io,CustomResourceDefinition/orders.acme.cert-manager.io,ServiceAccount/cert-manager,Service/cert-manager,ClusterRole/cert-manager-cluster-view,ClusterRole/cert-manager-view,ClusterRole/cert-manager-edit,ServiceAccount/cert-manager-webhook,Service/cert-manager-webhook,Deployment/cert-manager-webhook,MutatingWebhookConfiguration/cert-manager-webhook,ValidatingWebhookConfiguration/cert-manager-webhook,ServiceAccount/cert-manager-cainjector,Service/cert-manager-cainjector,Deployment/cert-manager-cainjector
+    kix.dev/root: cert-manager
   labels:
     app.kubernetes.io/instance: cert-manager
     app.kubernetes.io/managed-by: kix
@@ -2876,7 +3638,7 @@ apiVersion: kix.dev/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.dev/main: immich-server
+    kix.dev/root: immich-server
   labels:
     app.kubernetes.io/instance: immich
     app.kubernetes.io/managed-by: kix
@@ -2980,7 +3742,7 @@ apiVersion: kix.dev/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.dev/main: machineLearning
+    kix.dev/root: machineLearning
   labels:
     app.kubernetes.io/instance: machineLearning
     app.kubernetes.io/managed-by: kix
@@ -3006,12 +3768,12 @@ metadata:
   namespace: immich
 spec:
   configurations:
-    sgPostgresConfig: postgres-config
+    sgPostgresConfig: postgres-pg16-config
   instances: 2
   pods:
     persistentVolume:
       size: '20Gi'
-      storageClass: localzfs-retain
+      storageClass: lbs1-pool1-2x
   postgres:
     extensions:
     - name: vectors
@@ -3059,7 +3821,7 @@ metadata:
     app.kubernetes.io/name: stackgres-cluster
     app.kubernetes.io/part-of: kix-example
     team: platform
-  name: postgres-config
+  name: postgres-pg16-config
   namespace: immich
 spec:
   postgresVersion: '16'
@@ -3122,8 +3884,8 @@ apiVersion: kix.dev/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.dev/main: postgres
-    kix.dev/package-requires: SGInstanceProfile/postgres-profile,SGPostgresConfig/postgres-config
+    kix.dev/package-requires: SGInstanceProfile/postgres-profile,SGPostgresConfig/postgres-pg16-config
+    kix.dev/root: postgres
   labels:
     app.kubernetes.io/instance: postgres
     app.kubernetes.io/managed-by: kix
@@ -3134,13 +3896,13 @@ metadata:
 spec:
   instanceName: postgres
   namespaceName: immich
-  version: <undefined>
+  version: '1.0.0'
 ---
 apiVersion: kix.dev/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.dev/main: storage
+    kix.dev/root: storage
   labels:
     app.kubernetes.io/instance: storage
     app.kubernetes.io/managed-by: kix
@@ -3151,7 +3913,7 @@ metadata:
 spec:
   instanceName: storage
   namespaceName: immich
-  version: <undefined>
+  version: '1.0.0'
 ---
 apiVersion: v1
 data:
@@ -3417,44 +4179,12 @@ metadata:
   name: coredns
   namespace: kube-system
 ---
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  labels:
-    app.kubernetes.io/instance: coredns
-    app.kubernetes.io/managed-by: kix
-    app.kubernetes.io/name: coredns
-    app.kubernetes.io/part-of: kix-example
-    k8s-app: coredns
-    kubernetes.io/cluster-service: 'true'
-    kubernetes.io/name: CoreDNS
-    team: platform
-  name: coredns
-  namespace: kube-system
-spec:
-  endpoints:
-  - port: metrics
-  namespaceSelector:
-    matchNames:
-    - kube-system
-  selector:
-    matchLabels:
-      app.kubernetes.io/component: metrics
-      app.kubernetes.io/instance: coredns
-      app.kubernetes.io/managed-by: kix
-      app.kubernetes.io/name: coredns
-      app.kubernetes.io/part-of: kix-example
-      k8s-app: coredns
-      kubernetes.io/cluster-service: 'true'
-      kubernetes.io/name: CoreDNS
-      team: platform
----
 apiVersion: kix.dev/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
     kix.dev/inverse-deps: ClusterRoleBinding/coredns
-    kix.dev/main: coredns
+    kix.dev/root: coredns
   labels:
     app.kubernetes.io/instance: coredns
     app.kubernetes.io/managed-by: kix
@@ -3534,8 +4264,8 @@ apiVersion: kix.dev/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.dev/main: lbs1-pool1-2x
     kix.dev/package-requires: StorageClass/lbs1-pool1-2x,StorageClass/localzfs,StorageClass/localzfs-retain
+    kix.dev/root: lbs1-pool1-2x
   labels:
     app.kubernetes.io/instance: storage-classes
     app.kubernetes.io/managed-by: kix
@@ -3546,7 +4276,1750 @@ metadata:
 spec:
   instanceName: storage-classes
   namespaceName: kube-system
-  version: <undefined>
+  version: '1.0.0'
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/instance: stackgres-operator
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: stackgres-operator
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: stackgres-operator
+rules:
+- apiGroups:
+  - ''
+  - apps
+  - extensions
+  - rbac.authorization.k8s.io
+  - batch
+  resources:
+  - pods
+  - pods/exec
+  - pods/log
+  - services
+  - endpoints
+  - endpoints/restricted
+  - persistentvolumeclaims
+  - configmaps
+  - secrets
+  - deployments
+  - statefulsets
+  - serviceaccounts
+  - namespaces
+  - roles
+  - rolebindings
+  - events
+  - cronjobs
+  - jobs
+  verbs:
+  - get
+  - list
+  - watch
+  - update
+  - create
+  - delete
+  - deletecollection
+  - patch
+- apiGroups:
+  - ''
+  - apps
+  - batch
+  resources:
+  - statefulsets/finalizers
+  - persistentvolumeclaims/finalizers
+  - deployments/finalizers
+  - services/finalizers
+  - endpoints/finalizers
+  - cronjobs/finalizers
+  - jobs/finalizers
+  - pods/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - ''
+  resources:
+  - namespaces
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - admissionregistration.k8s.io
+  resourceNames:
+  - stackgres-operator
+  resources:
+  - mutatingwebhookconfigurations
+  - validatingwebhookconfigurations
+  verbs:
+  - get
+  - patch
+- apiGroups:
+  - apiextensions.k8s.io
+  resourceNames:
+  - sgbackups.stackgres.io
+  - sgbackupconfigs.stackgres.io
+  - sgclusters.stackgres.io
+  - sgconfigs.stackgres.io
+  - sgdbops.stackgres.io
+  - sgdistributedlogs.stackgres.io
+  - sginstanceprofiles.stackgres.io
+  - sgobjectstorages.stackgres.io
+  - sgpoolconfigs.stackgres.io
+  - sgpgconfigs.stackgres.io
+  - sgscripts.stackgres.io
+  - sgshardedbackups.stackgres.io
+  - sgshardedclusters.stackgres.io
+  - sgshardeddbops.stackgres.io
+  - sgstreams.stackgres.io
+  resources:
+  - customresourcedefinitions
+  verbs:
+  - get
+- apiGroups:
+  - apiextensions.k8s.io
+  resources:
+  - customresourcedefinitions
+  verbs:
+  - list
+- apiGroups:
+  - apiextensions.k8s.io
+  resources:
+  - customresourcedefinitions
+  verbs:
+  - create
+- apiGroups:
+  - apiextensions.k8s.io
+  resourceNames:
+  - sgbackups.stackgres.io
+  - sgbackupconfigs.stackgres.io
+  - sgclusters.stackgres.io
+  - sgconfigs.stackgres.io
+  - sgdbops.stackgres.io
+  - sgdistributedlogs.stackgres.io
+  - sginstanceprofiles.stackgres.io
+  - sgobjectstorages.stackgres.io
+  - sgpoolconfigs.stackgres.io
+  - sgpgconfigs.stackgres.io
+  - sgscripts.stackgres.io
+  - sgshardedbackups.stackgres.io
+  - sgshardedclusters.stackgres.io
+  - sgshardeddbops.stackgres.io
+  - sgstreams.stackgres.io
+  resources:
+  - customresourcedefinitions
+  verbs:
+  - patch
+  - update
+- apiGroups:
+  - apiextensions.k8s.io
+  resourceNames:
+  - prometheuses.monitoring.coreos.com
+  resources:
+  - customresourcedefinitions
+  verbs:
+  - get
+- apiGroups:
+  - autoscaling.k8s.io
+  resources:
+  - verticalpodautoscalers
+  verbs:
+  - get
+  - list
+  - watch
+  - update
+  - create
+  - delete
+  - patch
+- apiGroups:
+  - keda.sh
+  resources:
+  - scaledobjects
+  - triggerauthentications
+  verbs:
+  - get
+  - list
+  - watch
+  - update
+  - create
+  - delete
+  - patch
+- apiGroups:
+  - monitoring.coreos.com
+  resources:
+  - servicemonitors
+  - podmonitors
+  verbs:
+  - list
+  - get
+  - create
+  - delete
+  - update
+  - patch
+- apiGroups:
+  - monitoring.coreos.com
+  resources:
+  - prometheus
+  - prometheuses
+  - podmonitors
+  verbs:
+  - list
+  - get
+- apiGroups:
+  - serving.knative.dev
+  resources:
+  - services
+  verbs:
+  - get
+  - list
+  - watch
+  - update
+  - create
+  - delete
+  - patch
+- apiGroups:
+  - shardingsphere.apache.org
+  resources:
+  - computenodes
+  verbs:
+  - get
+  - list
+  - watch
+  - update
+  - create
+  - delete
+  - patch
+- apiGroups:
+  - snapshot.storage.k8s.io
+  resources:
+  - volumesnapshots
+  verbs:
+  - list
+  - get
+  - watch
+  - create
+- apiGroups:
+  - stackgres.io
+  resources:
+  - sgbackups
+  - sgbackupconfigs
+  - sgclusters
+  - sgconfigs
+  - sgdbops
+  - sgdistributedlogs
+  - sginstanceprofiles
+  - sgobjectstorages
+  - sgpoolconfigs
+  - sgpgconfigs
+  - sgscripts
+  - sgshardedbackups
+  - sgshardedclusters
+  - sgshardeddbops
+  - sgstreams
+  verbs:
+  - create
+  - watch
+  - list
+  - get
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - stackgres.io
+  resources:
+  - sgbackups/status
+  - sgbackupconfigs/status
+  - sgclusters/status
+  - sgconfigs/status
+  - sgdbops/status
+  - sgdistributedlogs/status
+  - sginstanceprofiles/status
+  - sgobjectstorages/status
+  - sgpoolconfigs/status
+  - sgpgconfigs/status
+  - sgscripts/status
+  - sgshardedbackups/status
+  - sgshardedclusters/status
+  - sgshardeddbops/status
+  - sgstreams/status
+  - sgbackups/finalizers
+  - sgbackupconfigs/finalizers
+  - sgclusters/finalizers
+  - sgconfigs/finalizers
+  - sgdbops/finalizers
+  - sgdistributedlogs/finalizers
+  - sginstanceprofiles/finalizers
+  - sgobjectstorages/finalizers
+  - sgpoolconfigs/finalizers
+  - sgpgconfigs/finalizers
+  - sgscripts/finalizers
+  - sgshardedbackups/finalizers
+  - sgshardedclusters/finalizers
+  - sgshardeddbops/finalizers
+  - sgstreams/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - storage.k8s.io
+  resources:
+  - storageclasses
+  verbs:
+  - get
+  - list
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/instance: stackgres-operator
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: stackgres-operator
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: stackgres-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: stackgres-operator
+subjects:
+- kind: ServiceAccount
+  name: stackgres-operator
+  namespace: stackgres-system
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  labels:
+    app.kubernetes.io/instance: stackgres-operator
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: sgbackups.stackgres.io
+spec:
+  group: stackgres.io
+  names:
+    kind: SGBackup
+    listKind: SGBackupList
+    plural: sgbackups
+    shortNames:
+    - sgbkp
+    singular: sgbackup
+  scope: Namespaced
+  versions:
+  - name: v1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            type: string
+          kind:
+            type: string
+          metadata:
+            type: object
+          spec:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+          status:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+        type: object
+    served: true
+    storage: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  labels:
+    app.kubernetes.io/instance: stackgres-operator
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: sgbackupconfigs.stackgres.io
+spec:
+  group: stackgres.io
+  names:
+    kind: SGBackupConfig
+    listKind: SGBackupConfigList
+    plural: sgbackupconfigs
+    shortNames:
+    - sgbac
+    singular: sgbackupconfig
+  scope: Namespaced
+  versions:
+  - name: v1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            type: string
+          kind:
+            type: string
+          metadata:
+            type: object
+          spec:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+          status:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+        type: object
+    served: true
+    storage: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  labels:
+    app.kubernetes.io/instance: stackgres-operator
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: sgclusters.stackgres.io
+spec:
+  group: stackgres.io
+  names:
+    kind: SGCluster
+    listKind: SGClusterList
+    plural: sgclusters
+    shortNames:
+    - sgclu
+    singular: sgcluster
+  scope: Namespaced
+  versions:
+  - name: v1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            type: string
+          kind:
+            type: string
+          metadata:
+            type: object
+          spec:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+          status:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+        type: object
+    served: true
+    storage: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  labels:
+    app.kubernetes.io/instance: stackgres-operator
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: sgconfigs.stackgres.io
+spec:
+  group: stackgres.io
+  names:
+    kind: SGConfig
+    listKind: SGConfigList
+    plural: sgconfigs
+    shortNames:
+    - sgcfg
+    singular: sgconfig
+  scope: Namespaced
+  versions:
+  - name: v1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            type: string
+          kind:
+            type: string
+          metadata:
+            type: object
+          spec:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+          status:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+        type: object
+    served: true
+    storage: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  labels:
+    app.kubernetes.io/instance: stackgres-operator
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: sgdbops.stackgres.io
+spec:
+  group: stackgres.io
+  names:
+    kind: SGDbOps
+    listKind: SGDbOpsList
+    plural: sgdbops
+    shortNames:
+    - sgdbo
+    singular: sgdbops
+  scope: Namespaced
+  versions:
+  - name: v1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            type: string
+          kind:
+            type: string
+          metadata:
+            type: object
+          spec:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+          status:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+        type: object
+    served: true
+    storage: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  labels:
+    app.kubernetes.io/instance: stackgres-operator
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: sgdistributedlogs.stackgres.io
+spec:
+  group: stackgres.io
+  names:
+    kind: SGDistributedLogs
+    listKind: SGDistributedLogsList
+    plural: sgdistributedlogs
+    shortNames:
+    - sgdil
+    singular: sgdistributedlogs
+  scope: Namespaced
+  versions:
+  - name: v1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            type: string
+          kind:
+            type: string
+          metadata:
+            type: object
+          spec:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+          status:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+        type: object
+    served: true
+    storage: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  labels:
+    app.kubernetes.io/instance: stackgres-operator
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: sginstanceprofiles.stackgres.io
+spec:
+  group: stackgres.io
+  names:
+    kind: SGInstanceProfile
+    listKind: SGInstanceProfileList
+    plural: sginstanceprofiles
+    shortNames:
+    - sginp
+    singular: sginstanceprofile
+  scope: Namespaced
+  versions:
+  - name: v1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            type: string
+          kind:
+            type: string
+          metadata:
+            type: object
+          spec:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+          status:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+        type: object
+    served: true
+    storage: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  labels:
+    app.kubernetes.io/instance: stackgres-operator
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: sgobjectstorages.stackgres.io
+spec:
+  group: stackgres.io
+  names:
+    kind: SGObjectStorage
+    listKind: SGObjectStorageList
+    plural: sgobjectstorages
+    shortNames:
+    - sgobs
+    singular: sgobjectstorage
+  scope: Namespaced
+  versions:
+  - name: v1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            type: string
+          kind:
+            type: string
+          metadata:
+            type: object
+          spec:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+          status:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+        type: object
+    served: true
+    storage: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  labels:
+    app.kubernetes.io/instance: stackgres-operator
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: sgpoolconfigs.stackgres.io
+spec:
+  group: stackgres.io
+  names:
+    kind: SGPoolingConfig
+    listKind: SGPoolingConfigList
+    plural: sgpoolconfigs
+    shortNames:
+    - sgpoc
+    singular: sgpoolconfig
+  scope: Namespaced
+  versions:
+  - name: v1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            type: string
+          kind:
+            type: string
+          metadata:
+            type: object
+          spec:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+          status:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+        type: object
+    served: true
+    storage: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  labels:
+    app.kubernetes.io/instance: stackgres-operator
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: sgpgconfigs.stackgres.io
+spec:
+  group: stackgres.io
+  names:
+    kind: SGPostgresConfig
+    listKind: SGPostgresConfigList
+    plural: sgpgconfigs
+    shortNames:
+    - sgpgc
+    singular: sgpgconfig
+  scope: Namespaced
+  versions:
+  - name: v1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            type: string
+          kind:
+            type: string
+          metadata:
+            type: object
+          spec:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+          status:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+        type: object
+    served: true
+    storage: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  labels:
+    app.kubernetes.io/instance: stackgres-operator
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: sgscripts.stackgres.io
+spec:
+  group: stackgres.io
+  names:
+    kind: SGScript
+    listKind: SGScriptList
+    plural: sgscripts
+    shortNames:
+    - sgscr
+    singular: sgscript
+  scope: Namespaced
+  versions:
+  - name: v1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            type: string
+          kind:
+            type: string
+          metadata:
+            type: object
+          spec:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+          status:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+        type: object
+    served: true
+    storage: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  labels:
+    app.kubernetes.io/instance: stackgres-operator
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: sgshardedbackups.stackgres.io
+spec:
+  group: stackgres.io
+  names:
+    kind: SGShardedBackup
+    listKind: SGShardedBackupList
+    plural: sgshardedbackups
+    shortNames:
+    - sgsbk
+    singular: sgshardedbackup
+  scope: Namespaced
+  versions:
+  - name: v1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            type: string
+          kind:
+            type: string
+          metadata:
+            type: object
+          spec:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+          status:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+        type: object
+    served: true
+    storage: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  labels:
+    app.kubernetes.io/instance: stackgres-operator
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: sgshardedclusters.stackgres.io
+spec:
+  group: stackgres.io
+  names:
+    kind: SGShardedCluster
+    listKind: SGShardedClusterList
+    plural: sgshardedclusters
+    shortNames:
+    - sgshr
+    singular: sgshardedcluster
+  scope: Namespaced
+  versions:
+  - name: v1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            type: string
+          kind:
+            type: string
+          metadata:
+            type: object
+          spec:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+          status:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+        type: object
+    served: true
+    storage: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  labels:
+    app.kubernetes.io/instance: stackgres-operator
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: sgshardeddbops.stackgres.io
+spec:
+  group: stackgres.io
+  names:
+    kind: SGShardedDbOps
+    listKind: SGShardedDbOpsList
+    plural: sgshardeddbops
+    shortNames:
+    - sgsdo
+    singular: sgshardeddbops
+  scope: Namespaced
+  versions:
+  - name: v1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            type: string
+          kind:
+            type: string
+          metadata:
+            type: object
+          spec:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+          status:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+        type: object
+    served: true
+    storage: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  labels:
+    app.kubernetes.io/instance: stackgres-operator
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: sgstreams.stackgres.io
+spec:
+  group: stackgres.io
+  names:
+    kind: SGStream
+    listKind: SGStreamList
+    plural: sgstreams
+    shortNames:
+    - sgstr
+    singular: sgstream
+  scope: Namespaced
+  versions:
+  - name: v1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            type: string
+          kind:
+            type: string
+          metadata:
+            type: object
+          spec:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+          status:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+        type: object
+    served: true
+    storage: true
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  annotations:
+    stackgres.io/operator-version: '1.16.3'
+  labels:
+    app.kubernetes.io/instance: stackgres-operator
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: stackgres-operator
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: stackgres-operator
+      namespace: stackgres-system
+      path: /stackgres/mutation/sgbackup
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: sgbackup.mutating-webhook.stackgres.io
+  reinvocationPolicy: Never
+  rules:
+  - apiGroups:
+    - stackgres.io
+    apiVersions:
+    - '*'
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - sgbackups
+    scope: '*'
+  sideEffects: None
+  timeoutSeconds: 10
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: stackgres-operator
+      namespace: stackgres-system
+      path: /stackgres/mutation/sgcluster
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: sgcluster.mutating-webhook.stackgres.io
+  reinvocationPolicy: Never
+  rules:
+  - apiGroups:
+    - stackgres.io
+    apiVersions:
+    - '*'
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - sgclusters
+    scope: '*'
+  sideEffects: None
+  timeoutSeconds: 10
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: stackgres-operator
+      namespace: stackgres-system
+      path: /stackgres/mutation/sgdbops
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: sgdbops.mutating-webhook.stackgres.io
+  reinvocationPolicy: Never
+  rules:
+  - apiGroups:
+    - stackgres.io
+    apiVersions:
+    - '*'
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - sgdbops
+    scope: '*'
+  sideEffects: None
+  timeoutSeconds: 10
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: stackgres-operator
+      namespace: stackgres-system
+      path: /stackgres/mutation/sgdistributedlogs
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: sgdistributedlogs.mutating-webhook.stackgres.io
+  reinvocationPolicy: Never
+  rules:
+  - apiGroups:
+    - stackgres.io
+    apiVersions:
+    - '*'
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - sgdistributedlogs
+    scope: '*'
+  sideEffects: None
+  timeoutSeconds: 10
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: stackgres-operator
+      namespace: stackgres-system
+      path: /stackgres/mutation/sginstanceprofile
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: sginstanceprofile.mutating-webhook.stackgres.io
+  reinvocationPolicy: Never
+  rules:
+  - apiGroups:
+    - stackgres.io
+    apiVersions:
+    - '*'
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - sginstanceprofiles
+    scope: '*'
+  sideEffects: None
+  timeoutSeconds: 10
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: stackgres-operator
+      namespace: stackgres-system
+      path: /stackgres/mutation/sgobjectstorage
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: sgobjectstorage.mutating-webhook.stackgres.io
+  reinvocationPolicy: Never
+  rules:
+  - apiGroups:
+    - stackgres.io
+    apiVersions:
+    - '*'
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - sgobjectstorages
+    scope: '*'
+  sideEffects: None
+  timeoutSeconds: 10
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: stackgres-operator
+      namespace: stackgres-system
+      path: /stackgres/mutation/sgpoolconfig
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: sgpoolconfig.mutating-webhook.stackgres.io
+  reinvocationPolicy: Never
+  rules:
+  - apiGroups:
+    - stackgres.io
+    apiVersions:
+    - '*'
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - sgpoolconfigs
+    scope: '*'
+  sideEffects: None
+  timeoutSeconds: 10
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: stackgres-operator
+      namespace: stackgres-system
+      path: /stackgres/mutation/sgpgconfig
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: sgpgconfig.mutating-webhook.stackgres.io
+  reinvocationPolicy: Never
+  rules:
+  - apiGroups:
+    - stackgres.io
+    apiVersions:
+    - '*'
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - sgpgconfigs
+    scope: '*'
+  sideEffects: None
+  timeoutSeconds: 10
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: stackgres-operator
+      namespace: stackgres-system
+      path: /stackgres/mutation/sgscript
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: sgscript.mutating-webhook.stackgres.io
+  reinvocationPolicy: Never
+  rules:
+  - apiGroups:
+    - stackgres.io
+    apiVersions:
+    - '*'
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - sgscripts
+    scope: '*'
+  sideEffects: None
+  timeoutSeconds: 10
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: stackgres-operator
+      namespace: stackgres-system
+      path: /stackgres/mutation/sgshardedbackup
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: sgshardedbackup.mutating-webhook.stackgres.io
+  reinvocationPolicy: Never
+  rules:
+  - apiGroups:
+    - stackgres.io
+    apiVersions:
+    - '*'
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - sgshardedbackups
+    scope: '*'
+  sideEffects: None
+  timeoutSeconds: 10
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: stackgres-operator
+      namespace: stackgres-system
+      path: /stackgres/mutation/sgshardedcluster
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: sgshardedcluster.mutating-webhook.stackgres.io
+  reinvocationPolicy: Never
+  rules:
+  - apiGroups:
+    - stackgres.io
+    apiVersions:
+    - '*'
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - sgshardedclusters
+    scope: '*'
+  sideEffects: None
+  timeoutSeconds: 10
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: stackgres-operator
+      namespace: stackgres-system
+      path: /stackgres/mutation/sgshardeddbops
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: sgshardeddbops.mutating-webhook.stackgres.io
+  reinvocationPolicy: Never
+  rules:
+  - apiGroups:
+    - stackgres.io
+    apiVersions:
+    - '*'
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - sgshardeddbops
+    scope: '*'
+  sideEffects: None
+  timeoutSeconds: 10
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: stackgres-operator
+      namespace: stackgres-system
+      path: /stackgres/mutation/sgstream
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: sgstream.mutating-webhook.stackgres.io
+  reinvocationPolicy: Never
+  rules:
+  - apiGroups:
+    - stackgres.io
+    apiVersions:
+    - '*'
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - sgstreams
+    scope: '*'
+  sideEffects: None
+  timeoutSeconds: 10
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: stackgres-operator
+    app.kubernetes.io/instance: stackgres-operator
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    group: stackgres.io
+    team: platform
+    version: '1.16.3'
+  name: stackgres-operator
+  namespace: stackgres-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: stackgres-operator
+      group: stackgres.io
+  template:
+    metadata:
+      labels:
+        app: stackgres-operator
+        group: stackgres.io
+    spec:
+      containers:
+      - env:
+        - name: OPERATOR_NAME
+          value: stackgres-operator
+        - name: OPERATOR_NAMESPACE
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.namespace
+        - name: OPERATOR_SERVICE_ACCOUNT
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: spec.serviceAccountName
+        - name: OPERATOR_POD_NAME
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.name
+        - name: OPERATOR_IP
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: status.podIP
+        - name: OPERATOR_IMAGE_VERSION
+          value: '1.16.3'
+        - name: OPERATOR_NATIVE_IMAGE_VERSION
+          value: '1.16.3'
+        - name: OPERATOR_JVM_IMAGE_VERSION
+          value: '1.16.3-jvm'
+        - name: SG_CONTAINER_REGISTRY
+          value: quay.io
+        - name: SG_IMAGE_PULL_POLICY
+          value: IfNotPresent
+        - name: INSTALL_CRDS
+          value: 'true'
+        - name: INSTALL_WEBHOOKS
+          value: 'true'
+        - name: INSTALL_CONVERSION_WEBHOOKS
+          value: 'true'
+        - name: INSTALL_CERTS
+          value: 'true'
+        - name: INSTALL_CONFIG
+          value: 'true'
+        - name: CLUSTER_ROLE_DISABLED
+          value: 'false'
+        - name: DISABLE_RECONCILIATION
+          value: 'false'
+        - name: WAIT_CRDS_UPGRADE
+          value: 'false'
+        - name: EXTENSIONS_REPOSITORY_URLS
+          value: https://extensions.stackgres.io/postgres/repository
+        - name: PROMETHEUS_AUTOBIND
+          value: 'true'
+        - name: GRAFANA_EMBEDDED
+          value: 'false'
+        - name: SGCONFIG_NAMESPACE
+          value: stackgres-system
+        image: quay.io/stackgres/operator:1.16.3
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /q/health/live
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 10
+          periodSeconds: 60
+          timeoutSeconds: 10
+        name: stackgres-operator
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        - containerPort: 8443
+          name: https
+          protocol: TCP
+        readinessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /q/health/ready
+            port: 8080
+            scheme: HTTP
+          periodSeconds: 2
+          timeoutSeconds: 1
+        resources:
+          limits:
+            cpu: '2'
+            memory: '4Gi'
+          requests:
+            cpu: '100m'
+            memory: '512Mi'
+        volumeMounts:
+        - mountPath: /etc/operator/certs
+          name: operator-certs
+          readOnly: true
+      securityContext:
+        fsGroup: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        runAsUser: 1000
+      serviceAccountName: stackgres-operator
+      volumes:
+      - name: operator-certs
+        secret:
+          defaultMode: 420
+          optional: true
+          secretName: stackgres-operator-certs
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/instance: stackgres-operator
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: stackgres-operator
+  namespace: stackgres-system
+spec:
+  ports:
+  - name: https
+    port: 443
+    protocol: TCP
+    targetPort: https
+  selector:
+    app: stackgres-operator
+  type: ClusterIP
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    app.kubernetes.io/instance: stackgres-operator
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: stackgres-operator
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: stackgres-operator
+  namespace: stackgres-system
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  annotations:
+    stackgres.io/operator-version: '1.16.3'
+  labels:
+    app.kubernetes.io/instance: stackgres-operator
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: stackgres-operator
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: stackgres-operator
+      namespace: stackgres-system
+      path: /stackgres/validation/sgbackup
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: sgbackup.validating-webhook.stackgres.io
+  rules:
+  - apiGroups:
+    - stackgres.io
+    apiVersions:
+    - '*'
+    operations:
+    - CREATE
+    - UPDATE
+    - DELETE
+    resources:
+    - sgbackups
+    scope: '*'
+  sideEffects: None
+  timeoutSeconds: 10
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: stackgres-operator
+      namespace: stackgres-system
+      path: /stackgres/validation/sgcluster
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: sgcluster.validating-webhook.stackgres.io
+  rules:
+  - apiGroups:
+    - stackgres.io
+    apiVersions:
+    - '*'
+    operations:
+    - CREATE
+    - UPDATE
+    - DELETE
+    resources:
+    - sgclusters
+    scope: '*'
+  sideEffects: None
+  timeoutSeconds: 10
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: stackgres-operator
+      namespace: stackgres-system
+      path: /stackgres/validation/sgdbops
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: sgdbops.validating-webhook.stackgres.io
+  rules:
+  - apiGroups:
+    - stackgres.io
+    apiVersions:
+    - '*'
+    operations:
+    - CREATE
+    - UPDATE
+    - DELETE
+    resources:
+    - sgdbops
+    scope: '*'
+  sideEffects: None
+  timeoutSeconds: 10
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: stackgres-operator
+      namespace: stackgres-system
+      path: /stackgres/validation/sgdistributedlogs
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: sgdistributedlogs.validating-webhook.stackgres.io
+  rules:
+  - apiGroups:
+    - stackgres.io
+    apiVersions:
+    - '*'
+    operations:
+    - CREATE
+    - UPDATE
+    - DELETE
+    resources:
+    - sgdistributedlogs
+    scope: '*'
+  sideEffects: None
+  timeoutSeconds: 10
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: stackgres-operator
+      namespace: stackgres-system
+      path: /stackgres/validation/sginstanceprofile
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: sginstanceprofile.validating-webhook.stackgres.io
+  rules:
+  - apiGroups:
+    - stackgres.io
+    apiVersions:
+    - '*'
+    operations:
+    - CREATE
+    - UPDATE
+    - DELETE
+    resources:
+    - sginstanceprofiles
+    scope: '*'
+  sideEffects: None
+  timeoutSeconds: 10
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: stackgres-operator
+      namespace: stackgres-system
+      path: /stackgres/validation/sgobjectstorage
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: sgobjectstorage.validating-webhook.stackgres.io
+  rules:
+  - apiGroups:
+    - stackgres.io
+    apiVersions:
+    - '*'
+    operations:
+    - CREATE
+    - UPDATE
+    - DELETE
+    resources:
+    - sgobjectstorages
+    scope: '*'
+  sideEffects: None
+  timeoutSeconds: 10
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: stackgres-operator
+      namespace: stackgres-system
+      path: /stackgres/validation/sgpoolconfig
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: sgpoolconfig.validating-webhook.stackgres.io
+  rules:
+  - apiGroups:
+    - stackgres.io
+    apiVersions:
+    - '*'
+    operations:
+    - CREATE
+    - UPDATE
+    - DELETE
+    resources:
+    - sgpoolconfigs
+    scope: '*'
+  sideEffects: None
+  timeoutSeconds: 10
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: stackgres-operator
+      namespace: stackgres-system
+      path: /stackgres/validation/sgpgconfig
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: sgpgconfig.validating-webhook.stackgres.io
+  rules:
+  - apiGroups:
+    - stackgres.io
+    apiVersions:
+    - '*'
+    operations:
+    - CREATE
+    - UPDATE
+    - DELETE
+    resources:
+    - sgpgconfigs
+    scope: '*'
+  sideEffects: None
+  timeoutSeconds: 10
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: stackgres-operator
+      namespace: stackgres-system
+      path: /stackgres/validation/sgscript
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: sgscript.validating-webhook.stackgres.io
+  rules:
+  - apiGroups:
+    - stackgres.io
+    apiVersions:
+    - '*'
+    operations:
+    - CREATE
+    - UPDATE
+    - DELETE
+    resources:
+    - sgscripts
+    scope: '*'
+  sideEffects: None
+  timeoutSeconds: 10
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: stackgres-operator
+      namespace: stackgres-system
+      path: /stackgres/validation/sgshardedbackup
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: sgshardedbackup.validating-webhook.stackgres.io
+  rules:
+  - apiGroups:
+    - stackgres.io
+    apiVersions:
+    - '*'
+    operations:
+    - CREATE
+    - UPDATE
+    - DELETE
+    resources:
+    - sgshardedbackups
+    scope: '*'
+  sideEffects: None
+  timeoutSeconds: 10
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: stackgres-operator
+      namespace: stackgres-system
+      path: /stackgres/validation/sgshardedcluster
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: sgshardedcluster.validating-webhook.stackgres.io
+  rules:
+  - apiGroups:
+    - stackgres.io
+    apiVersions:
+    - '*'
+    operations:
+    - CREATE
+    - UPDATE
+    - DELETE
+    resources:
+    - sgshardedclusters
+    scope: '*'
+  sideEffects: None
+  timeoutSeconds: 10
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: stackgres-operator
+      namespace: stackgres-system
+      path: /stackgres/validation/sgshardeddbops
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: sgshardeddbops.validating-webhook.stackgres.io
+  rules:
+  - apiGroups:
+    - stackgres.io
+    apiVersions:
+    - '*'
+    operations:
+    - CREATE
+    - UPDATE
+    - DELETE
+    resources:
+    - sgshardeddbops
+    scope: '*'
+  sideEffects: None
+  timeoutSeconds: 10
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: stackgres-operator
+      namespace: stackgres-system
+      path: /stackgres/validation/sgstream
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: sgstream.validating-webhook.stackgres.io
+  rules:
+  - apiGroups:
+    - stackgres.io
+    apiVersions:
+    - '*'
+    operations:
+    - CREATE
+    - UPDATE
+    - DELETE
+    resources:
+    - sgstreams
+    scope: '*'
+  sideEffects: None
+  timeoutSeconds: 10
+---
+apiVersion: kix.dev/v1alpha1
+kind: PackageInstance
+metadata:
+  annotations:
+    kix.dev/package-requires: ServiceAccount/stackgres-operator,ClusterRole/stackgres-operator,ClusterRoleBinding/stackgres-operator,Service/stackgres-operator,ValidatingWebhookConfiguration/stackgres-operator,MutatingWebhookConfiguration/stackgres-operator,CustomResourceDefinition/sgbackups.stackgres.io,CustomResourceDefinition/sgbackupconfigs.stackgres.io,CustomResourceDefinition/sgclusters.stackgres.io,CustomResourceDefinition/sgconfigs.stackgres.io,CustomResourceDefinition/sgdbops.stackgres.io,CustomResourceDefinition/sgdistributedlogs.stackgres.io,CustomResourceDefinition/sginstanceprofiles.stackgres.io,CustomResourceDefinition/sgobjectstorages.stackgres.io,CustomResourceDefinition/sgpoolconfigs.stackgres.io,CustomResourceDefinition/sgpgconfigs.stackgres.io,CustomResourceDefinition/sgscripts.stackgres.io,CustomResourceDefinition/sgshardedbackups.stackgres.io,CustomResourceDefinition/sgshardedclusters.stackgres.io,CustomResourceDefinition/sgshardeddbops.stackgres.io,CustomResourceDefinition/sgstreams.stackgres.io
+    kix.dev/root: stackgres-operator
+  labels:
+    app.kubernetes.io/instance: stackgres-operator
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: stackgres-operator
+  namespace: stackgres-system
+spec:
+  instanceName: stackgres-operator
+  namespaceName: stackgres-system
+  version: '1.16.3'
 ---
 apiVersion: v1
 kind: Namespace
@@ -3579,3 +6052,34 @@ metadata:
     app.kubernetes.io/managed-by: kix
     kubernetes.io/metadata.name: kube-system
   name: kube-system
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kix
+    kubernetes.io/metadata.name: stackgres-system
+  name: stackgres-system
+---
+apiVersion: kix.dev/v1alpha1
+kind: Activation
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kix
+  name: example
+spec:
+  instances:
+    cache:
+      valkey: valkey
+    cert-manager:
+      cert-manager: cert-manager
+    immich:
+      immich: immich
+      machineLearning: machineLearning
+      postgres: postgres
+      storage: storage
+    kube-system:
+      coredns: coredns
+      storage-classes: storage-classes
+    stackgres-system:
+      stackgres-operator: stackgres-operator

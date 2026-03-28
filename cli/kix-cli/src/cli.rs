@@ -146,9 +146,23 @@ pub struct DeployArgs {
     #[arg(long, value_parser = validate_timeout)]
     pub timeout: Option<String>,
 
-    /// Delete resources on cluster that are not in the manifests
+    /// Delete orphaned resources (from old activation but not new)
     #[arg(long)]
     pub prune: bool,
+
+    /// Prune mode: default (prune after apply), eager (interleave), no (skip pruning)
+    #[arg(long, value_name = "MODE")]
+    pub prune_mode: Option<PruneMode>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum PruneMode {
+    /// Prune orphans after all apply waves complete (default)
+    Default,
+    /// Interleave prune waves with apply waves
+    Eager,
+    /// Skip pruning entirely, defer to `kix gc`
+    No,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]

@@ -1,11 +1,14 @@
 //! `kix gc` — garbage-collect stale kix-managed resources from the cluster.
 //!
 //! Two modes:
-//!   - **Soft (default):** Diff old vs new activation store graphs. Resources only
-//!     in the old graph are garbage. Deletes in reverse dependency order (dependents
-//!     first). Fast: no cluster-wide resource scan.
+//!   - **Soft (default):** Diff old vs new activation store graphs locally.
+//!     Resources only in the old graph are garbage. Deletes in reverse
+//!     dependency order (dependents first). Fast: no cluster-wide resource scan.
+//!     This is the same diff that deploy computes — soft GC is essentially
+//!     "deploy's prune phase, run separately."
 //!   - **Hard (`--hard`):** Full cluster scan — fetches all kix-managed resources,
-//!     compares identity hashes against the expected set, deletes orphans.
+//!     compares identity hashes against the expected set from all active
+//!     activations, deletes orphans.
 
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
@@ -87,7 +90,6 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     let new_hashes: HashSet<String> = new_graph.resources.keys().map(|p| store_hash(p)).collect();
 
     // Collect garbage manifests (from old graph, for kind/name/ns info)
-    // Build a map from identity hash → manifest for reverse-order deletion
     let mut garbage_manifests: HashMap<String, Value> = HashMap::new();
     for (path, res) in &old_graph.resources {
         let hash = store_hash(path);
@@ -108,7 +110,6 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     }
 
     // 4. Build graph from garbage manifests for reverse dependency ordering
-    //    (delete dependents first, then their dependencies)
     let garbage_values: Vec<Value> = garbage_manifests.values().cloned().collect();
     let garbage_rids: Vec<ResourceId> = garbage_values.iter().map(ResourceId::from_value).collect();
 

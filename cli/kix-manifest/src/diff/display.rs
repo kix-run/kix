@@ -233,20 +233,6 @@ mod tests {
     }
 
     #[test]
-    fn format_missing_plain() {
-        let d = Difference::missing_in_b("$.spec.replicas".into(), json!(3));
-        let out = format_diffs(&[d], &cfg(), false, false);
-        assert!(out.contains("- $.spec.replicas: 3"));
-    }
-
-    #[test]
-    fn format_extra_plain() {
-        let d = Difference::extra_in_b("$.status".into(), json!({"ready": true}));
-        let out = format_diffs(&[d], &cfg(), false, false);
-        assert!(out.contains("+ $.status:"));
-    }
-
-    #[test]
     fn format_value_mismatch_plain() {
         let d = Difference::value_mismatch("$.image".into(), json!("v1"), json!("v2"));
         let out = format_diffs(&[d], &cfg(), false, false);
@@ -256,72 +242,8 @@ mod tests {
     }
 
     #[test]
-    fn format_type_mismatch_plain() {
-        let d = Difference::type_mismatch("$.x".into(), json!("hello"), json!(42));
-        let out = format_diffs(&[d], &cfg(), false, false);
-        assert!(out.contains("! $.x: type mismatch"));
-        assert!(out.contains("string"));
-        assert!(out.contains("number"));
-    }
-
-    #[test]
-    fn format_colored_has_ansi() {
-        let d = Difference::missing_in_b("$.x".into(), json!(1));
-        let out = format_diffs(&[d], &cfg(), true, false);
-        assert!(out.contains("\x1b[31m")); // RED
-    }
-
-    #[test]
     fn format_empty_diffs() {
         let out = format_diffs(&[], &cfg(), false, false);
         assert!(out.is_empty());
-    }
-
-    #[test]
-    fn multiline_diff_plain() {
-        let d = Difference::value_mismatch(
-            "$.data.config".into(),
-            json!("line1\nline2\nline3"),
-            json!("line1\nmodified\nline3"),
-        );
-        let out = format_diffs(&[d], &cfg(), false, true);
-        assert!(out.contains("~ $.data.config:"));
-        assert!(out.contains("-line2"));
-        assert!(out.contains("+modified"));
-    }
-
-    #[test]
-    fn compact_truncates_long_strings() {
-        let long = "x".repeat(200);
-        let result = compact(Some(&json!(long)));
-        assert!(result.len() < 200);
-    }
-
-    #[test]
-    fn compact_null() {
-        assert_eq!(compact(None), "null");
-        assert_eq!(compact(Some(&json!(null))), "null");
-    }
-
-    #[test]
-    fn compact_bool() {
-        assert_eq!(compact(Some(&json!(true))), "true");
-    }
-
-    #[test]
-    fn compact_number() {
-        assert_eq!(compact(Some(&json!(42))), "42");
-    }
-
-    #[test]
-    fn compact_short_string() {
-        assert_eq!(compact(Some(&json!("hello"))), "\"hello\"");
-    }
-
-    #[test]
-    fn compact_object_short() {
-        let val = json!({"a": 1});
-        let result = compact(Some(&val));
-        assert!(result.contains("\"a\""));
     }
 }

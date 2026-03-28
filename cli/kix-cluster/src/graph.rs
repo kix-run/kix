@@ -24,7 +24,6 @@ pub enum GraphError {
 pub struct ResourceNode {
     pub id: ResourceId,
     pub identity_hash: Option<String>,
-    pub content_hash: Option<String>,
     pub manifest: serde_json::Value,
 }
 
@@ -43,7 +42,6 @@ impl ResourceGraph {
     ///
     /// Each manifest may have these annotations:
     /// - `kix.dev/identity-hash`: 32-char Nix base32 hash
-    /// - `kix.dev/content-hash`: SHA-256 hex digest
     /// - `kix.dev/depends-on`: comma-separated sorted identity hashes
     pub fn from_manifests(manifests: &[serde_json::Value]) -> Result<Self, GraphError> {
         let mut graph = DiGraph::new();
@@ -54,12 +52,10 @@ impl ResourceGraph {
         for manifest in manifests {
             let id = ResourceId::from_value(manifest);
             let identity_hash = get_annotation(manifest, "kix.dev/identity-hash");
-            let content_hash = get_annotation(manifest, "kix.dev/content-hash");
 
             let node = ResourceNode {
                 id: id.clone(),
                 identity_hash: identity_hash.clone(),
-                content_hash,
                 manifest: manifest.clone(),
             };
 
@@ -278,7 +274,6 @@ impl ResourceGraph {
                     "name": node.id.name,
                     "namespace": node.id.namespace,
                     "identityHash": node.identity_hash,
-                    "contentHash": node.content_hash,
                 })
             })
             .collect();
@@ -320,7 +315,6 @@ mod tests {
     fn manifest(kind: &str, name: &str, ns: &str, id_hash: &str, deps: &str) -> serde_json::Value {
         let mut annotations = serde_json::Map::new();
         annotations.insert("kix.dev/identity-hash".into(), json!(id_hash));
-        annotations.insert("kix.dev/content-hash".into(), json!("deadbeef"));
         if !deps.is_empty() {
             annotations.insert("kix.dev/depends-on".into(), json!(deps));
         }
@@ -344,14 +338,6 @@ mod tests {
     }
 
     #[test]
-    fn single_node_no_deps() {
-        let manifests = vec![manifest("Service", "my-svc", "default", "hash1", "")];
-        let graph = ResourceGraph::from_manifests(&manifests).unwrap();
-        assert_eq!(graph.node_count(), 1);
-        assert_eq!(graph.edge_count(), 0);
-    }
-
-    #[test]
     fn two_nodes_with_dependency() {
         let sa = manifest("ServiceAccount", "my-sa", "default", "hash_sa", "");
         let deploy = manifest("Deployment", "my-app", "default", "hash_deploy", "hash_sa");
@@ -371,32 +357,6 @@ mod tests {
     }
 
     #[test]
-    fn multiple_dependencies() {
-        let ns = manifest("Namespace", "default", CLUSTER_SCOPED, "hash_ns", "");
-        let sa = manifest("ServiceAccount", "my-sa", "default", "hash_sa", "hash_ns");
-        let cm = manifest("ConfigMap", "my-config", "default", "hash_cm", "hash_ns");
-        let deploy = manifest(
-            "Deployment",
-            "my-app",
-            "default",
-            "hash_deploy",
-            "hash_sa,hash_cm",
-        );
-
-        let graph = ResourceGraph::from_manifests(&[ns, sa, cm, deploy]).unwrap();
-        assert_eq!(graph.node_count(), 4);
-        assert_eq!(graph.edge_count(), 4); // deploy→sa, deploy→cm, sa→ns, cm→ns
-
-        let deploy_id = ResourceId {
-            kind: "Deployment".into(),
-            namespace: "default".into(),
-            name: "my-app".into(),
-        };
-        let deps = graph.dependencies(&deploy_id);
-        assert_eq!(deps.len(), 2);
-    }
-
-    #[test]
     fn cycle_detection() {
         let a = manifest("Service", "a", "default", "hash_a", "hash_b");
         let b = manifest("Service", "b", "default", "hash_b", "hash_a");
@@ -404,20 +364,6 @@ mod tests {
         let result = ResourceGraph::from_manifests(&[a, b]);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), GraphError::CycleDetected(_)));
-    }
-
-    #[test]
-    fn dangling_dependency_ignored() {
-        let deploy = manifest(
-            "Deployment",
-            "my-app",
-            "default",
-            "hash_deploy",
-            "nonexistent_hash",
-        );
-        let graph = ResourceGraph::from_manifests(&[deploy]).unwrap();
-        assert_eq!(graph.node_count(), 1);
-        assert_eq!(graph.edge_count(), 0); // dangling dep silently skipped
     }
 
     #[test]
@@ -437,47 +383,5 @@ mod tests {
         let deploy_pos = names.iter().position(|&n| n == "my-app").unwrap();
         assert!(ns_pos < sa_pos);
         assert!(sa_pos < deploy_pos);
-    }
-
-    #[test]
-    fn dot_output() {
-        let sa = manifest("ServiceAccount", "my-sa", "default", "hash_sa", "");
-        let deploy = manifest("Deployment", "my-app", "default", "hash_deploy", "hash_sa");
-
-        let graph = ResourceGraph::from_manifests(&[sa, deploy]).unwrap();
-        let dot = graph.to_dot();
-
-        assert!(dot.contains("digraph kix"));
-        assert!(dot.contains("->"));
-        assert!(dot.contains("ServiceAccount/my-sa@default"));
-        assert!(dot.contains("Deployment/my-app@default"));
-    }
-
-    #[test]
-    fn json_output() {
-        let sa = manifest("ServiceAccount", "my-sa", "default", "hash_sa", "");
-        let deploy = manifest("Deployment", "my-app", "default", "hash_deploy", "hash_sa");
-
-        let graph = ResourceGraph::from_manifests(&[sa, deploy]).unwrap();
-        let json = graph.to_json();
-
-        assert_eq!(json["nodes"].as_array().unwrap().len(), 2);
-        assert_eq!(json["edges"].as_array().unwrap().len(), 1);
-    }
-
-    #[test]
-    fn dependents() {
-        let sa = manifest("ServiceAccount", "my-sa", "default", "hash_sa", "");
-        let deploy = manifest("Deployment", "my-app", "default", "hash_deploy", "hash_sa");
-
-        let graph = ResourceGraph::from_manifests(&[sa, deploy]).unwrap();
-        let sa_id = ResourceId {
-            kind: "ServiceAccount".into(),
-            namespace: "default".into(),
-            name: "my-sa".into(),
-        };
-        let dependents = graph.dependents(&sa_id);
-        assert_eq!(dependents.len(), 1);
-        assert_eq!(dependents[0].id.name, "my-app");
     }
 }

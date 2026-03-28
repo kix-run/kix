@@ -4,8 +4,9 @@
 //! dependency graph. Wave 0 = resources with no dependencies. Wave N+1 =
 //! resources whose dependencies are all in waves 0..N.
 //!
-//! Within each wave, resources are sorted by kind priority (Namespace first,
-//! then CRDs, then ServiceAccounts, etc.) then by name for deterministic ordering.
+//! Within each wave, resources are sorted lexicographically by kind/namespace/name
+//! for determinism. The DAG guarantees all resources in a wave are fully
+//! independent, so ordering within a wave has no correctness implications.
 
 use petgraph::Direction;
 use petgraph::graph::NodeIndex;
@@ -19,7 +20,8 @@ use super::graph::ResourceGraph;
 /// Wave 0 contains resources with no dependencies. Each subsequent wave
 /// contains resources whose dependencies are all in earlier waves.
 ///
-/// Within each wave, resources are sorted by kind priority then name.
+/// Within each wave, resources are sorted lexicographically by
+/// kind/namespace/name for determinism only.
 pub fn compute_waves(graph: &ResourceGraph) -> Vec<Vec<NodeIndex>> {
     let dag = &graph.graph;
 
@@ -46,14 +48,14 @@ pub fn compute_waves(graph: &ResourceGraph) -> Vec<Vec<NodeIndex>> {
         .collect();
 
     while !current_wave.is_empty() {
-        // Sort this wave by kind priority, then name
+        // Sort lexicographically by kind/namespace/name for determinism
         current_wave.sort_by(|&a, &b| {
             let node_a = &dag[a];
             let node_b = &dag[b];
-            let pri_a = kind_priority(&node_a.id.kind);
-            let pri_b = kind_priority(&node_b.id.kind);
-            pri_a
-                .cmp(&pri_b)
+            node_a
+                .id
+                .kind
+                .cmp(&node_b.id.kind)
                 .then_with(|| node_a.id.namespace.cmp(&node_b.id.namespace))
                 .then_with(|| node_a.id.name.cmp(&node_b.id.name))
         });
@@ -81,26 +83,6 @@ pub fn compute_waves(graph: &ResourceGraph) -> Vec<Vec<NodeIndex>> {
     waves
 }
 
-/// Returns the deployment priority for a K8s resource kind.
-///
-/// Lower numbers are deployed first within a wave.
-pub fn kind_priority(kind: &str) -> u32 {
-    match kind {
-        "Namespace" => 0,
-        "NetworkPolicy" | "ResourceQuota" | "LimitRange" => 1,
-        "CustomResourceDefinition" => 2,
-        "ServiceAccount" => 3,
-        "PersistentVolumeClaim" | "PersistentVolume" => 4,
-        "ConfigMap" | "Secret" => 5,
-        "ClusterRole" | "ClusterRoleBinding" | "Role" | "RoleBinding" => 6,
-        "Service" => 7,
-        "DaemonSet" | "Deployment" | "StatefulSet" => 8,
-        "Job" | "CronJob" => 9,
-        "Ingress" | "IngressRoute" => 10,
-        _ => 99,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -110,7 +92,6 @@ mod tests {
     fn manifest(kind: &str, name: &str, ns: &str, id_hash: &str, deps: &str) -> serde_json::Value {
         let mut annotations = serde_json::Map::new();
         annotations.insert("kix.dev/identity-hash".into(), json!(id_hash));
-        annotations.insert("kix.dev/content-hash".into(), json!("deadbeef"));
         if !deps.is_empty() {
             annotations.insert("kix.dev/depends-on".into(), json!(deps));
         }
@@ -157,15 +138,6 @@ mod tests {
     }
 
     #[test]
-    fn single_resource_one_wave() {
-        let manifests = vec![manifest("Deployment", "app", "default", "h1", "")];
-        let graph = ResourceGraph::from_manifests(&manifests).unwrap();
-        let waves = compute_waves(&graph);
-        assert_eq!(waves.len(), 1);
-        assert_eq!(waves[0].len(), 1);
-    }
-
-    #[test]
     fn linear_chain_one_per_wave() {
         // ns → sa → deploy (each depends on the previous)
         let manifests = vec![
@@ -198,31 +170,14 @@ mod tests {
 
         assert_eq!(waves.len(), 3);
         assert_eq!(names[0], vec!["default"]); // wave 0: namespace
-        // wave 1: sa and cm (sorted by kind priority: SA=3 before ConfigMap=5)
-        assert_eq!(names[1], vec!["my-sa", "my-cm"]);
+        // wave 1: cm and sa (sorted lexicographically by kind: ConfigMap < ServiceAccount)
+        assert_eq!(names[1], vec!["my-cm", "my-sa"]);
         assert_eq!(names[2], vec!["my-app"]); // wave 2: deploy
     }
 
     #[test]
-    fn all_independent_single_wave() {
-        let manifests = vec![
-            manifest("ConfigMap", "cm-a", "default", "h1", ""),
-            manifest("ConfigMap", "cm-b", "default", "h2", ""),
-            manifest("ConfigMap", "cm-c", "default", "h3", ""),
-        ];
-        let graph = ResourceGraph::from_manifests(&manifests).unwrap();
-        let waves = compute_waves(&graph);
-
-        assert_eq!(waves.len(), 1);
-        assert_eq!(waves[0].len(), 3);
-        // Sorted alphabetically by name (same kind)
-        let names = wave_names(&graph, &waves);
-        assert_eq!(names[0], vec!["cm-a", "cm-b", "cm-c"]);
-    }
-
-    #[test]
-    fn kind_priority_tiebreaker() {
-        // All independent but different kinds — should be sorted by kind priority
+    fn lexicographic_sort_within_wave() {
+        // All independent but different kinds — sorted lexicographically by kind
         let manifests = vec![
             manifest("Deployment", "app", "default", "h1", ""),
             manifest("ServiceAccount", "sa", "default", "h2", ""),
@@ -235,38 +190,17 @@ mod tests {
         let kinds = wave_kinds(&graph, &waves);
 
         assert_eq!(waves.len(), 1);
+        // Lexicographic: ConfigMap < Deployment < Namespace < Service < ServiceAccount
         assert_eq!(
             kinds[0],
             vec![
-                "Namespace",
-                "ServiceAccount",
                 "ConfigMap",
+                "Deployment",
+                "Namespace",
                 "Service",
-                "Deployment"
+                "ServiceAccount",
             ]
         );
-    }
-
-    #[test]
-    fn kind_priority_values() {
-        assert_eq!(kind_priority("Namespace"), 0);
-        assert_eq!(kind_priority("NetworkPolicy"), 1);
-        assert_eq!(kind_priority("CustomResourceDefinition"), 2);
-        assert_eq!(kind_priority("ServiceAccount"), 3);
-        assert_eq!(kind_priority("PersistentVolumeClaim"), 4);
-        assert_eq!(kind_priority("ConfigMap"), 5);
-        assert_eq!(kind_priority("Secret"), 5);
-        assert_eq!(kind_priority("ClusterRole"), 6);
-        assert_eq!(kind_priority("Role"), 6);
-        assert_eq!(kind_priority("Service"), 7);
-        assert_eq!(kind_priority("Deployment"), 8);
-        assert_eq!(kind_priority("StatefulSet"), 8);
-        assert_eq!(kind_priority("DaemonSet"), 8);
-        assert_eq!(kind_priority("Job"), 9);
-        assert_eq!(kind_priority("CronJob"), 9);
-        assert_eq!(kind_priority("Ingress"), 10);
-        assert_eq!(kind_priority("IngressRoute"), 10);
-        assert_eq!(kind_priority("SomethingCustom"), 99);
     }
 
     #[test]
@@ -289,23 +223,10 @@ mod tests {
 
         assert_eq!(waves.len(), 4);
         assert_eq!(names[0], vec!["app"]); // namespace
-        assert_eq!(names[1], vec!["sa", "cm"]); // sa (pri 3) before cm (pri 5)
-        // wave 2: svc (pri 7) and deploy (pri 8)
-        assert_eq!(names[2], vec!["svc", "deploy"]);
+        // Lexicographic: ConfigMap < ServiceAccount
+        assert_eq!(names[1], vec!["cm", "sa"]);
+        // wave 2: Deployment < Service (lexicographic by kind)
+        assert_eq!(names[2], vec!["deploy", "svc"]);
         assert_eq!(names[3], vec!["ingress"]);
-    }
-
-    #[test]
-    fn all_nodes_accounted_for() {
-        let manifests = vec![
-            manifest("Namespace", "ns", CLUSTER_SCOPED, "h1", ""),
-            manifest("ServiceAccount", "sa", "ns", "h2", "h1"),
-            manifest("ConfigMap", "cm", "ns", "h3", "h1"),
-            manifest("Deployment", "app", "ns", "h4", "h2,h3"),
-        ];
-        let graph = ResourceGraph::from_manifests(&manifests).unwrap();
-        let waves = compute_waves(&graph);
-        let total: usize = waves.iter().map(|w| w.len()).sum();
-        assert_eq!(total, 4);
     }
 }

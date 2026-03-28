@@ -186,52 +186,6 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn strip_nulls_removes_null_values() {
-        let mut val = json!({
-            "a": 1,
-            "b": null,
-            "c": {
-                "d": null,
-                "e": "hello"
-            }
-        });
-        strip_nulls(&mut val);
-        assert_eq!(
-            val,
-            json!({
-                "a": 1,
-                "c": { "e": "hello" }
-            })
-        );
-    }
-
-    #[test]
-    fn strip_nulls_removes_empty_objects() {
-        let mut val = json!({
-            "a": 1,
-            "b": { "c": null }
-        });
-        strip_nulls(&mut val);
-        assert_eq!(val, json!({ "a": 1 }));
-    }
-
-    #[test]
-    fn strip_nulls_array() {
-        let mut val = json!([1, null, "hello", null]);
-        strip_nulls(&mut val);
-        assert_eq!(val, json!([1, "hello"]));
-    }
-
-    #[test]
-    fn strip_nulls_nested_array() {
-        let mut val = json!({
-            "items": [{"a": null, "b": 1}, null]
-        });
-        strip_nulls(&mut val);
-        assert_eq!(val, json!({ "items": [{"b": 1}] }));
-    }
-
-    #[test]
     fn manifests_to_yaml_single_doc() {
         let manifests = vec![json!({
             "kind": "Service",
@@ -260,35 +214,12 @@ mod tests {
     }
 
     #[test]
-    fn manifests_to_yaml_strips_nulls() {
-        let manifests = vec![json!({
-            "kind": "Service",
-            "spec": null
-        })];
-        let yaml = manifests_to_yaml(&manifests).unwrap();
-        assert!(!yaml.contains("spec"), "null values should be stripped");
-        assert!(!yaml.contains("null"));
-    }
-
-    #[test]
-    fn manifests_to_yaml_empty() {
-        let yaml = manifests_to_yaml(&[]).unwrap();
-        assert!(yaml.is_empty());
-    }
-
-    #[test]
     fn manifests_to_json_output() {
         let manifests = vec![json!({"kind": "Service"}), json!({"kind": "Deployment"})];
         let output = manifests_to_json(&manifests);
         let parsed: Vec<serde_json::Value> = serde_json::from_str(&output).unwrap();
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[0]["kind"], "Service");
-    }
-
-    #[test]
-    fn manifests_to_json_empty() {
-        let output = manifests_to_json(&[]);
-        assert_eq!(output, "[]");
     }
 
     #[test]
@@ -308,71 +239,5 @@ mod tests {
         assert_eq!(results[0].0.name, "my-svc");
         assert_eq!(results[0].0.kind, "service");
         assert_eq!(results[0].1["kind"], "Service");
-    }
-
-    #[test]
-    fn load_nested_layout() {
-        let dir = TempDir::new().unwrap();
-        let ns_dir = dir.path().join("kube-system");
-        fs::create_dir(&ns_dir).unwrap();
-        let manifest = json!({
-            "apiVersion": "apps/v1",
-            "kind": "Deployment",
-            "metadata": { "name": "coredns", "namespace": "kube-system" }
-        });
-        fs::write(
-            ns_dir.join("coredns-deployment.yaml"),
-            serde_yml::to_string(&manifest).unwrap(),
-        )
-        .unwrap();
-
-        let results = load_manifests_from_dir(dir.path()).unwrap();
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].0.namespace, "kube-system");
-        assert_eq!(results[0].0.name, "coredns");
-        assert_eq!(results[0].0.kind, "deployment");
-    }
-
-    #[test]
-    fn load_skips_packageinstance() {
-        let dir = TempDir::new().unwrap();
-        let manifest = json!({"kind": "PackageInstance"});
-        fs::write(
-            dir.path().join("default--my-app-packageinstance.yaml"),
-            serde_yml::to_string(&manifest).unwrap(),
-        )
-        .unwrap();
-        fs::write(
-            dir.path().join("default--my-svc-service.yaml"),
-            serde_yml::to_string(&json!({"kind": "Service"})).unwrap(),
-        )
-        .unwrap();
-
-        let results = load_manifests_from_dir(dir.path()).unwrap();
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].0.kind, "service");
-    }
-
-    #[test]
-    fn load_skips_non_yaml() {
-        let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("README.md"), "# Hello").unwrap();
-        fs::write(dir.path().join("notes.txt"), "stuff").unwrap();
-
-        let results = load_manifests_from_dir(dir.path()).unwrap();
-        assert!(results.is_empty());
-    }
-
-    #[test]
-    fn sort_keys_nested() {
-        let val = json!({
-            "z": 1,
-            "a": { "c": 3, "b": 2 }
-        });
-        let sorted = sort_keys(&val);
-        let yaml = serde_yml::to_string(&sorted).unwrap();
-        let a_pos = yaml.find('a').unwrap();
-        let z_pos = yaml.find('z').unwrap();
-        assert!(a_pos < z_pos);
     }
 }

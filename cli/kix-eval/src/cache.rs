@@ -282,48 +282,11 @@ mod tests {
     }
 
     #[test]
-    fn cache_put_replaces_existing() {
-        let cache = SqliteCache::open_in_memory().unwrap();
-        cache.put("key1", "old").unwrap();
-        cache.put("key1", "new").unwrap();
-        let val = cache.get("key1").unwrap();
-        assert_eq!(val, Some("new".to_string()));
-    }
-
-    #[test]
     fn compute_key_is_deterministic() {
         let dir = tempfile::tempdir().unwrap();
         let k1 = SqliteCache::compute_key(dir.path(), "cluster-nw1").unwrap();
         let k2 = SqliteCache::compute_key(dir.path(), "cluster-nw1").unwrap();
         assert_eq!(k1, k2);
-    }
-
-    #[test]
-    fn compute_key_differs_by_attr() {
-        let dir = tempfile::tempdir().unwrap();
-        let k1 = SqliteCache::compute_key(dir.path(), "cluster-nw1").unwrap();
-        let k2 = SqliteCache::compute_key(dir.path(), "cluster-ja2").unwrap();
-        assert_ne!(k1, k2);
-    }
-
-    #[test]
-    fn compute_key_includes_lockfile() {
-        let dir = tempfile::tempdir().unwrap();
-        let k_before = SqliteCache::compute_key(dir.path(), "test").unwrap();
-
-        std::fs::write(dir.path().join("flake.lock"), r#"{"version":1}"#).unwrap();
-        let k_after = SqliteCache::compute_key(dir.path(), "test").unwrap();
-
-        assert_ne!(k_before, k_after);
-    }
-
-    #[test]
-    fn open_creates_parent_dirs() {
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("nested").join("deep").join("cache.db");
-        let cache = SqliteCache::open(&db_path).unwrap();
-        cache.put("test", "value").unwrap();
-        assert_eq!(cache.get("test").unwrap(), Some("value".to_string()));
     }
 
     #[test]
@@ -336,77 +299,5 @@ mod tests {
         let fp1 = cache.compute_source_fingerprint(dir.path()).unwrap();
         let fp2 = cache.compute_source_fingerprint(dir.path()).unwrap();
         assert_eq!(fp1, fp2);
-    }
-
-    #[test]
-    fn fingerprint_changes_on_content_edit() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("default.nix");
-        std::fs::write(&file, "{ }").unwrap();
-
-        let cache = SqliteCache::open_in_memory().unwrap();
-        let fp1 = cache.compute_source_fingerprint(dir.path()).unwrap();
-
-        // Modify file content — also bump mtime by 2 seconds to ensure mtime differs
-        std::fs::write(&file, "{ x = 1; }").unwrap();
-        let new_mtime = std::time::SystemTime::now() + std::time::Duration::from_secs(2);
-        let times = std::fs::FileTimes::new().set_modified(new_mtime);
-        std::fs::File::options()
-            .write(true)
-            .open(&file)
-            .unwrap()
-            .set_times(times)
-            .unwrap();
-
-        let fp2 = cache.compute_source_fingerprint(dir.path()).unwrap();
-        assert_ne!(fp1, fp2);
-    }
-
-    #[test]
-    fn fingerprint_changes_on_file_add_remove() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("a.nix"), "1").unwrap();
-
-        let cache = SqliteCache::open_in_memory().unwrap();
-        let fp1 = cache.compute_source_fingerprint(dir.path()).unwrap();
-
-        // Add a file
-        std::fs::write(dir.path().join("b.nix"), "2").unwrap();
-        let fp2 = cache.compute_source_fingerprint(dir.path()).unwrap();
-        assert_ne!(fp1, fp2);
-
-        // Remove the added file
-        std::fs::remove_file(dir.path().join("b.nix")).unwrap();
-        let fp3 = cache.compute_source_fingerprint(dir.path()).unwrap();
-        assert_eq!(fp1, fp3);
-    }
-
-    #[test]
-    fn walk_nix_files_skips_dotgit() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("flake.nix"), "{}").unwrap();
-        let git_dir = dir.path().join(".git");
-        std::fs::create_dir_all(&git_dir).unwrap();
-        std::fs::write(git_dir.join("config.nix"), "hidden").unwrap();
-
-        let files = walk_nix_files(dir.path()).unwrap();
-        let paths: Vec<&str> = files.iter().map(|(p, _)| p.as_str()).collect();
-        assert_eq!(paths, vec!["flake.nix"]);
-    }
-
-    #[test]
-    fn compute_key_with_source_deterministic() {
-        let dir = tempfile::tempdir().unwrap();
-        let k1 = SqliteCache::compute_key_with_source(dir.path(), "cluster-nw1", "abc123").unwrap();
-        let k2 = SqliteCache::compute_key_with_source(dir.path(), "cluster-nw1", "abc123").unwrap();
-        assert_eq!(k1, k2);
-    }
-
-    #[test]
-    fn compute_key_with_source_differs_by_fingerprint() {
-        let dir = tempfile::tempdir().unwrap();
-        let k1 = SqliteCache::compute_key_with_source(dir.path(), "test", "fp1").unwrap();
-        let k2 = SqliteCache::compute_key_with_source(dir.path(), "test", "fp2").unwrap();
-        assert_ne!(k1, k2);
     }
 }

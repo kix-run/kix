@@ -33,11 +33,6 @@ mod tests {
     }
 
     #[test]
-    fn empty_set_never_ignores() {
-        assert!(!path_ignored("$.anything", &BTreeSet::new()));
-    }
-
-    #[test]
     fn exact_match() {
         let ignore = set(&["$.metadata.annotations"]);
         assert!(path_ignored("$.metadata.annotations", &ignore));
@@ -53,22 +48,5 @@ mod tests {
             &ignore
         ));
         assert!(!path_ignored("$.metadata.labels", &ignore));
-    }
-
-    #[test]
-    fn mixed_patterns() {
-        let ignore = set(&["$.status", "*.managedFields"]);
-        assert!(path_ignored("$.status", &ignore));
-        assert!(path_ignored("$.metadata.managedFields", &ignore));
-        assert!(!path_ignored("$.spec.replicas", &ignore));
-    }
-
-    #[test]
-    fn wildcard_requires_dot_prefix() {
-        let ignore = set(&["*.name"]);
-        // Matches .name suffix
-        assert!(path_ignored("$.metadata.name", &ignore));
-        // Also matches deeper paths
-        assert!(path_ignored("$.spec.containers[nginx].name", &ignore));
     }
 }

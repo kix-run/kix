@@ -1,29 +1,20 @@
 //! Annotation stamping: add `kix.dev/*` annotations to resource manifests.
 //!
 //! After building a `StoreGraph`, this module stamps each resource with:
-//! - `kix.dev/content-hash` — the 32-char Nix store hash of the resource
+//! - `kix.dev/identity-hash` — the 32-char Nix store hash of the resource
 //! - `kix.dev/package` — owning package instance name
 //! - `kix.dev/package-namespace` — namespace of the owning package
 //! - `kix.dev/depends-on` — comma-separated store hashes of cross-package deps
+//! - `kix.dev/activations` — comma-separated activation identity-hashes (set during apply)
 
 use std::path::PathBuf;
 
 use kix_eval::store_graph::{StoreGraph, store_hash};
 
-/// Compute SHA-256 content hash of a store path's file contents.
-fn content_hash_of(path: &std::path::Path) -> String {
-    use sha2::{Digest, Sha256};
-    match std::fs::read(path) {
-        Ok(bytes) => format!("{:x}", Sha256::digest(&bytes)),
-        Err(_) => String::new(),
-    }
-}
-
 /// Collected stamping info for a single resource.
 struct StampEntry {
     res_path: PathBuf,
     identity_hash: String,
-    content_hash: String,
     package: String,
     package_namespace: String,
     dep_hashes: Vec<String>,
@@ -45,7 +36,6 @@ pub fn stamp_annotations(graph: &mut StoreGraph) {
             stamp_info.push(StampEntry {
                 res_path: res_path.clone(),
                 identity_hash: store_hash(res_path),
-                content_hash: content_hash_of(res_path),
                 package: pkg.instance_name.clone(),
                 package_namespace: pkg.namespace.clone(),
                 dep_hashes,
@@ -75,7 +65,6 @@ pub fn stamp_annotations(graph: &mut StoreGraph) {
 
             stamp_info.push(StampEntry {
                 identity_hash: store_hash(&res_path),
-                content_hash: content_hash_of(&res_path),
                 package: "_cluster".to_string(),
                 package_namespace: "_cluster".to_string(),
                 dep_hashes,
@@ -94,10 +83,6 @@ pub fn stamp_annotations(graph: &mut StoreGraph) {
         new_anns.insert(
             "kix.dev/identity-hash".to_string(),
             serde_json::Value::String(entry.identity_hash),
-        );
-        new_anns.insert(
-            "kix.dev/content-hash".to_string(),
-            serde_json::Value::String(entry.content_hash),
         );
         new_anns.insert(
             "kix.dev/package".to_string(),

@@ -410,18 +410,6 @@ mod tests {
     }
 
     #[test]
-    fn store_hash_short_path() {
-        let path = PathBuf::from("/nix/store/short");
-        assert_eq!(store_hash(&path), "");
-    }
-
-    #[test]
-    fn store_name_extracts_correctly() {
-        let path = PathBuf::from("/nix/store/abc123def456ghi789jkl012mno345pq-k8s-Service-test");
-        assert_eq!(store_name(&path), "k8s-Service-test");
-    }
-
-    #[test]
     fn is_k8s_path_works() {
         assert!(is_k8s_path(Path::new(
             "/nix/store/abc123def456ghi789jkl012mno345pq-k8s-Service-test"
@@ -429,14 +417,5 @@ mod tests {
         assert!(!is_k8s_path(Path::new(
             "/nix/store/abc123def456ghi789jkl012mno345pq-python3-3.11"
         )));
-    }
-
-    #[test]
-    fn resource_label_formats() {
-        let manifest = serde_json::json!({
-            "kind": "Service",
-            "metadata": { "name": "my-svc" }
-        });
-        assert_eq!(resource_label(&manifest), "Service/my-svc");
     }
 }

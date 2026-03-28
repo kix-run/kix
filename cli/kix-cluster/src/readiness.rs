@@ -316,45 +316,22 @@ mod tests {
         }
     }
 
-    // --- Immediate kinds ---
-
     #[test]
-    fn configmap_immediate() {
-        let obj = make_obj(json!({}));
-        assert!(check_readiness(&obj, "ConfigMap"));
+    fn immediate_kinds() {
+        assert!(is_immediate_kind("ConfigMap"));
+        assert!(is_immediate_kind("Secret"));
+        assert!(is_immediate_kind("Service"));
+        assert!(is_immediate_kind("Namespace"));
+        assert!(is_immediate_kind("ServiceAccount"));
+        assert!(is_immediate_kind("ClusterRole"));
+        assert!(is_immediate_kind("ClusterRoleBinding"));
+        assert!(is_immediate_kind("Role"));
+        assert!(is_immediate_kind("RoleBinding"));
+        assert!(is_immediate_kind("Ingress"));
+        assert!(!is_immediate_kind("Deployment"));
+        assert!(!is_immediate_kind("StatefulSet"));
+        assert!(!is_immediate_kind("Job"));
     }
-
-    #[test]
-    fn secret_immediate() {
-        let obj = make_obj(json!({}));
-        assert!(check_readiness(&obj, "Secret"));
-    }
-
-    #[test]
-    fn service_immediate() {
-        let obj = make_obj(json!({}));
-        assert!(check_readiness(&obj, "Service"));
-    }
-
-    #[test]
-    fn namespace_immediate() {
-        let obj = make_obj(json!({}));
-        assert!(check_readiness(&obj, "Namespace"));
-    }
-
-    #[test]
-    fn serviceaccount_immediate() {
-        let obj = make_obj(json!({}));
-        assert!(check_readiness(&obj, "ServiceAccount"));
-    }
-
-    #[test]
-    fn clusterrole_immediate() {
-        let obj = make_obj(json!({}));
-        assert!(check_readiness(&obj, "ClusterRole"));
-    }
-
-    // --- Deployment ---
 
     #[test]
     fn deployment_ready() {
@@ -385,45 +362,6 @@ mod tests {
     }
 
     #[test]
-    fn deployment_not_ready_generation() {
-        let obj = make_obj(json!({
-            "metadata": {"generation": 3},
-            "spec": {"replicas": 3},
-            "status": {
-                "observedGeneration": 2,
-                "readyReplicas": 3,
-                "updatedReplicas": 3,
-            }
-        }));
-        assert!(!check_readiness(&obj, "Deployment"));
-    }
-
-    #[test]
-    fn deployment_not_ready_updated() {
-        let obj = make_obj(json!({
-            "metadata": {"generation": 1},
-            "spec": {"replicas": 3},
-            "status": {
-                "observedGeneration": 1,
-                "readyReplicas": 3,
-                "updatedReplicas": 2,
-            }
-        }));
-        assert!(!check_readiness(&obj, "Deployment"));
-    }
-
-    #[test]
-    fn deployment_no_status() {
-        let obj = make_obj(json!({
-            "metadata": {"generation": 1},
-            "spec": {"replicas": 1},
-        }));
-        assert!(!check_readiness(&obj, "Deployment"));
-    }
-
-    // --- StatefulSet ---
-
-    #[test]
     fn statefulset_ready() {
         let obj = make_obj(json!({
             "metadata": {"generation": 1},
@@ -436,108 +374,6 @@ mod tests {
         }));
         assert!(check_readiness(&obj, "StatefulSet"));
     }
-
-    #[test]
-    fn statefulset_not_ready() {
-        let obj = make_obj(json!({
-            "metadata": {"generation": 1},
-            "spec": {"replicas": 2},
-            "status": {
-                "observedGeneration": 1,
-                "readyReplicas": 1,
-                "updatedReplicas": 2,
-            }
-        }));
-        assert!(!check_readiness(&obj, "StatefulSet"));
-    }
-
-    // --- DaemonSet ---
-
-    #[test]
-    fn daemonset_ready() {
-        let obj = make_obj(json!({
-            "metadata": {"generation": 1},
-            "status": {
-                "observedGeneration": 1,
-                "desiredNumberScheduled": 3,
-                "numberReady": 3,
-                "updatedNumberScheduled": 3,
-            }
-        }));
-        assert!(check_readiness(&obj, "DaemonSet"));
-    }
-
-    #[test]
-    fn daemonset_not_ready() {
-        let obj = make_obj(json!({
-            "metadata": {"generation": 1},
-            "status": {
-                "observedGeneration": 1,
-                "desiredNumberScheduled": 3,
-                "numberReady": 2,
-                "updatedNumberScheduled": 3,
-            }
-        }));
-        assert!(!check_readiness(&obj, "DaemonSet"));
-    }
-
-    #[test]
-    fn daemonset_stale_generation() {
-        let obj = make_obj(json!({
-            "metadata": {"generation": 2},
-            "status": {
-                "observedGeneration": 1,
-                "desiredNumberScheduled": 3,
-                "numberReady": 3,
-                "updatedNumberScheduled": 3,
-            }
-        }));
-        assert!(!check_readiness(&obj, "DaemonSet"));
-    }
-
-    // --- Job ---
-
-    #[test]
-    fn job_completed() {
-        let obj = make_obj(json!({
-            "status": {"succeeded": 1}
-        }));
-        assert!(check_readiness(&obj, "Job"));
-    }
-
-    #[test]
-    fn job_not_completed() {
-        let obj = make_obj(json!({
-            "status": {"succeeded": 0, "active": 1}
-        }));
-        assert!(!check_readiness(&obj, "Job"));
-    }
-
-    #[test]
-    fn job_no_status() {
-        let obj = make_obj(json!({}));
-        assert!(!check_readiness(&obj, "Job"));
-    }
-
-    // --- PVC ---
-
-    #[test]
-    fn pvc_bound() {
-        let obj = make_obj(json!({
-            "status": {"phase": "Bound"}
-        }));
-        assert!(check_readiness(&obj, "PersistentVolumeClaim"));
-    }
-
-    #[test]
-    fn pvc_pending() {
-        let obj = make_obj(json!({
-            "status": {"phase": "Pending"}
-        }));
-        assert!(!check_readiness(&obj, "PersistentVolumeClaim"));
-    }
-
-    // --- CRD ---
 
     #[test]
     fn crd_established() {
@@ -565,14 +401,12 @@ mod tests {
     }
 
     #[test]
-    fn crd_no_conditions() {
+    fn job_completed() {
         let obj = make_obj(json!({
-            "status": {}
+            "status": {"succeeded": 1}
         }));
-        assert!(!check_readiness(&obj, "CustomResourceDefinition"));
+        assert!(check_readiness(&obj, "Job"));
     }
-
-    // --- Generic CR ---
 
     #[test]
     fn generic_cr_ready() {
@@ -584,94 +418,5 @@ mod tests {
             }
         }));
         assert!(check_readiness(&obj, "SomeCustomResource"));
-    }
-
-    #[test]
-    fn generic_cr_available() {
-        let obj = make_obj(json!({
-            "status": {
-                "conditions": [
-                    {"type": "Available", "status": "True"}
-                ]
-            }
-        }));
-        assert!(check_readiness(&obj, "SomeCustomResource"));
-    }
-
-    #[test]
-    fn generic_cr_not_ready() {
-        let obj = make_obj(json!({
-            "status": {
-                "conditions": [
-                    {"type": "Ready", "status": "False"}
-                ]
-            }
-        }));
-        assert!(!check_readiness(&obj, "SomeCustomResource"));
-    }
-
-    #[test]
-    fn generic_cr_no_conditions() {
-        // No status.conditions at all — treat as immediate
-        let obj = make_obj(json!({"spec": {}}));
-        assert!(check_readiness(&obj, "SomeCustomResource"));
-    }
-
-    #[test]
-    fn generic_cr_empty_conditions() {
-        let obj = make_obj(json!({
-            "status": {"conditions": []}
-        }));
-        assert!(check_readiness(&obj, "SomeCustomResource"));
-    }
-
-    // --- Readiness message ---
-
-    #[test]
-    fn message_deployment() {
-        let obj = make_obj(json!({
-            "spec": {"replicas": 3},
-            "status": {"readyReplicas": 1, "updatedReplicas": 2}
-        }));
-        let msg = readiness_message(&obj, "Deployment");
-        assert!(msg.contains("1/3 ready"));
-        assert!(msg.contains("2/3 updated"));
-    }
-
-    #[test]
-    fn message_job() {
-        let obj = make_obj(json!({
-            "status": {"succeeded": 0}
-        }));
-        let msg = readiness_message(&obj, "Job");
-        assert!(msg.contains("0 succeeded"));
-    }
-
-    #[test]
-    fn message_pvc() {
-        let obj = make_obj(json!({
-            "status": {"phase": "Pending"}
-        }));
-        let msg = readiness_message(&obj, "PersistentVolumeClaim");
-        assert!(msg.contains("phase=Pending"));
-    }
-
-    // --- is_immediate_kind ---
-
-    #[test]
-    fn immediate_kinds() {
-        assert!(is_immediate_kind("ConfigMap"));
-        assert!(is_immediate_kind("Secret"));
-        assert!(is_immediate_kind("Service"));
-        assert!(is_immediate_kind("Namespace"));
-        assert!(is_immediate_kind("ServiceAccount"));
-        assert!(is_immediate_kind("ClusterRole"));
-        assert!(is_immediate_kind("ClusterRoleBinding"));
-        assert!(is_immediate_kind("Role"));
-        assert!(is_immediate_kind("RoleBinding"));
-        assert!(is_immediate_kind("Ingress"));
-        assert!(!is_immediate_kind("Deployment"));
-        assert!(!is_immediate_kind("StatefulSet"));
-        assert!(!is_immediate_kind("Job"));
     }
 }

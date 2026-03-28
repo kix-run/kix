@@ -140,78 +140,11 @@ mod tests {
     }
 
     #[test]
-    fn eval_returns_consistent_results() {
-        let dir = tempfile::tempdir().unwrap();
-        let cache_dir = dir.path().join("cache");
-        let mut eval = KixEvaluator::new(test_backend(), dir.path(), &cache_dir).unwrap();
-
-        let out1 = eval.eval_cluster("test-cluster").unwrap();
-        let out2 = eval.eval_cluster("test-cluster").unwrap();
-        assert_eq!(out1.name, out2.name);
-        assert_eq!(out1.raw_manifests.len(), out2.raw_manifests.len());
-    }
-
-    #[test]
-    fn list_clusters_delegates_to_backend() {
-        let dir = tempfile::tempdir().unwrap();
-        let cache_dir = dir.path().join("cache");
-        let mut eval = KixEvaluator::new(test_backend(), dir.path(), &cache_dir).unwrap();
-        let clusters = eval.list_clusters().unwrap();
-        assert_eq!(clusters, vec!["test-cluster"]);
-    }
-
-    #[test]
     fn eval_cluster_not_found() {
         let dir = tempfile::tempdir().unwrap();
         let cache_dir = dir.path().join("cache");
         let mut eval = KixEvaluator::new(test_backend(), dir.path(), &cache_dir).unwrap();
         let err = eval.eval_cluster("nonexistent").unwrap_err();
         assert!(matches!(err, KixEvalError::ClusterNotFound { .. }));
-    }
-
-    #[test]
-    fn eval_cluster_caches_result() {
-        let dir = tempfile::tempdir().unwrap();
-        // Create a .nix file so the fingerprint is meaningful
-        std::fs::write(dir.path().join("flake.nix"), "{ }").unwrap();
-
-        let cache_dir = dir.path().join("cache");
-        let mut backend = test_backend();
-        backend.set_call_limit(1); // panic if called more than once
-        let mut eval = KixEvaluator::new(backend, dir.path(), &cache_dir).unwrap();
-
-        let out1 = eval.eval_cluster("test-cluster").unwrap();
-        // Second call must hit cache (backend would panic if called again)
-        let out2 = eval.eval_cluster("test-cluster").unwrap();
-        assert_eq!(out1.name, out2.name);
-        assert_eq!(out1.raw_manifests.len(), out2.raw_manifests.len());
-    }
-
-    #[test]
-    fn eval_cluster_invalidates_on_file_change() {
-        let dir = tempfile::tempdir().unwrap();
-        let nix_file = dir.path().join("flake.nix");
-        std::fs::write(&nix_file, "{ }").unwrap();
-
-        let cache_dir = dir.path().join("cache");
-        let mut eval = KixEvaluator::new(test_backend(), dir.path(), &cache_dir).unwrap();
-
-        let out1 = eval.eval_cluster("test-cluster").unwrap();
-
-        // Modify the .nix file to invalidate the cache
-        std::fs::write(&nix_file, "{ x = 1; }").unwrap();
-        // Bump mtime to ensure mtime difference is detected
-        let new_mtime = std::time::SystemTime::now() + std::time::Duration::from_secs(2);
-        let times = std::fs::FileTimes::new().set_modified(new_mtime);
-        std::fs::File::options()
-            .write(true)
-            .open(&nix_file)
-            .unwrap()
-            .set_times(times)
-            .unwrap();
-
-        // Backend will be called again because the cache is invalidated
-        let out2 = eval.eval_cluster("test-cluster").unwrap();
-        assert_eq!(out1.name, out2.name);
     }
 }

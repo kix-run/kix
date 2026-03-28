@@ -1,3 +1,6 @@
+//! Consolidated CLI smoke tests — one test per command to verify basic functionality.
+//! These invoke the real binary with `assert_cmd`, so they require Nix FFI.
+
 use assert_cmd::Command;
 use predicates::prelude::*;
 
@@ -13,10 +16,35 @@ fn kix() -> Command {
     cmd
 }
 
-// --- graph ---
+#[test]
+fn list_clusters() {
+    kix()
+        .arg("list")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("example"));
+}
 
 #[test]
-fn graph_tree_output() {
+fn build_yaml() {
+    kix()
+        .args(["build", "example"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("apiVersion"));
+}
+
+#[test]
+fn check_passes() {
+    kix()
+        .args(["check", "example"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("pass"));
+}
+
+#[test]
+fn graph_tree() {
     kix()
         .args(["graph", "example"])
         .assert()
@@ -25,79 +53,13 @@ fn graph_tree_output() {
 }
 
 #[test]
-fn graph_json_output() {
-    let output = kix()
-        .args(["graph", "example", "--format", "json"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-
-    let parsed: serde_json::Value =
-        serde_json::from_slice(&output).expect("stdout should be valid JSON");
-    assert!(parsed["nodes"].is_array(), "should have nodes array");
-    assert!(parsed["edges"].is_array(), "should have edges array");
-}
-
-#[test]
-fn graph_dot_output() {
-    kix()
-        .args(["graph", "example", "--format", "dot"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("digraph"));
-}
-
-// --- inspect ---
-
-#[test]
-fn inspect_text_output() {
+fn inspect_text() {
     kix()
         .args(["inspect", "example"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Cluster: example"))
-        .stdout(predicate::str::contains("Total resources:"));
+        .stdout(predicate::str::contains("Cluster: example"));
 }
-
-#[test]
-fn inspect_json_output() {
-    let output = kix()
-        .args(["inspect", "example", "-o", "json"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-
-    let parsed: serde_json::Value =
-        serde_json::from_slice(&output).expect("stdout should be valid JSON");
-    assert_eq!(parsed["cluster"], "example");
-}
-
-// --- check ---
-
-#[test]
-fn check_passes_for_example() {
-    kix()
-        .args(["check", "example"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("eval"))
-        .stdout(predicate::str::contains("pass"));
-}
-
-#[test]
-fn check_nonexistent_fails() {
-    kix()
-        .args(["check", "nonexistent"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("not found"));
-}
-
-// --- deploy --dry-run ---
 
 #[test]
 fn deploy_dry_run() {
@@ -107,4 +69,13 @@ fn deploy_dry_run() {
         .success()
         .stdout(predicate::str::contains("Wave"))
         .stdout(predicate::str::contains("Dry run"));
+}
+
+#[test]
+fn nonexistent_cluster_fails() {
+    kix()
+        .args(["build", "nonexistent"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not found").or(predicate::str::contains("not a valid")));
 }

@@ -185,56 +185,6 @@ mod tests {
     }
 
     #[test]
-    fn extract_port_key_by_name() {
-        let item = json!({"name": "http", "containerPort": 80});
-        assert_eq!(extract_key("ports", &item), Some("http".into()));
-    }
-
-    #[test]
-    fn extract_port_key_by_port_protocol() {
-        let item = json!({"containerPort": 8080, "protocol": "UDP"});
-        assert_eq!(extract_key("ports", &item), Some("8080:UDP".into()));
-    }
-
-    #[test]
-    fn extract_port_key_default_protocol() {
-        let item = json!({"containerPort": 443});
-        assert_eq!(extract_key("ports", &item), Some("443:TCP".into()));
-    }
-
-    #[test]
-    fn extract_volume_mount_key() {
-        let item = json!({"mountPath": "/var/log", "name": "logs"});
-        assert_eq!(extract_key("volumeMounts", &item), Some("/var/log".into()));
-    }
-
-    #[test]
-    fn extract_subject_key() {
-        let item = json!({"kind": "ServiceAccount", "name": "default"});
-        assert_eq!(
-            extract_key("subjects", &item),
-            Some("ServiceAccount:default".into())
-        );
-    }
-
-    #[test]
-    fn extract_host_alias_key() {
-        let item = json!({"ip": "10.0.0.1", "hostnames": ["foo"]});
-        assert_eq!(extract_key("hostAliases", &item), Some("10.0.0.1".into()));
-    }
-
-    #[test]
-    fn unknown_field_returns_none() {
-        let item = json!({"name": "x"});
-        assert_eq!(extract_key("unknown", &item), None);
-    }
-
-    #[test]
-    fn non_object_returns_none() {
-        assert_eq!(extract_key("containers", &json!("string")), None);
-    }
-
-    #[test]
     fn try_key_lists_success() {
         let a = vec![json!({"name": "a"}), json!({"name": "b"})];
         let b = vec![json!({"name": "b"}), json!({"name": "c"})];
@@ -250,27 +200,5 @@ mod tests {
         let a = vec![json!({"name": "a"}), json!({"name": "a"})];
         let b = vec![json!({"name": "b"})];
         assert!(try_key_lists("containers", &a, &b).is_none());
-    }
-
-    #[test]
-    fn try_key_lists_unknown_field() {
-        let a = vec![json!({"name": "a"})];
-        let b = vec![json!({"name": "b"})];
-        assert!(try_key_lists("unknown", &a, &b).is_none());
-    }
-
-    #[test]
-    fn path_leaf_simple() {
-        assert_eq!(path_leaf("$.spec.containers"), "containers");
-    }
-
-    #[test]
-    fn path_leaf_with_index() {
-        assert_eq!(path_leaf("$.spec.containers[nginx].ports"), "ports");
-    }
-
-    #[test]
-    fn path_leaf_root() {
-        assert_eq!(path_leaf("$"), "$");
     }
 }

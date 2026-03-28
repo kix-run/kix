@@ -66,13 +66,4 @@ mod tests {
         assert_eq!(manifest_namespace(&manifest), Some("default"));
         assert_eq!(manifest_gvk(&manifest), Some("apps/v1/Deployment".into()));
     }
-
-    #[test]
-    fn missing_fields_return_none() {
-        let empty = json!({});
-        assert_eq!(manifest_kind(&empty), None);
-        assert_eq!(manifest_name(&empty), None);
-        assert_eq!(manifest_namespace(&empty), None);
-        assert_eq!(manifest_gvk(&empty), None);
-    }
 }

@@ -9,5 +9,8 @@ expression: stdout
  example-import 
  full           
  helm           
+ immich         
  nw1            
+ kind           
+ ludo           
  minimal

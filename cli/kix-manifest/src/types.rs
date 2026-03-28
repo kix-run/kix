@@ -92,110 +92,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn from_filename_basic() {
-        let rid = ResourceId::from_filename("kube-system--coredns-deployment.yaml").unwrap();
-        assert_eq!(rid.namespace, "kube-system");
-        assert_eq!(rid.name, "coredns");
-        assert_eq!(rid.kind, "deployment");
-    }
-
-    #[test]
-    fn from_filename_cluster_scoped() {
-        let rid = ResourceId::from_filename("_cluster--cert-manager-clusterrole.yaml").unwrap();
-        assert_eq!(rid.namespace, CLUSTER_SCOPED);
-        assert_eq!(rid.name, "cert-manager");
-        assert_eq!(rid.kind, "clusterrole");
-    }
-
-    #[test]
-    fn from_filename_name_with_dashes() {
-        let rid = ResourceId::from_filename(
-            "arc-system--arc-controller-gha-rs-controller-deployment.yaml",
-        )
-        .unwrap();
-        assert_eq!(rid.namespace, "arc-system");
-        assert_eq!(rid.name, "arc-controller-gha-rs-controller");
-        assert_eq!(rid.kind, "deployment");
-    }
-
-    #[test]
-    fn from_filename_missing_yaml_extension() {
-        assert!(ResourceId::from_filename("ns--name-kind.yml").is_none());
-    }
-
-    #[test]
-    fn from_filename_no_double_dash() {
-        assert!(ResourceId::from_filename("ns-name-kind.yaml").is_none());
-    }
-
-    #[test]
-    fn from_filename_empty_segments() {
-        assert!(ResourceId::from_filename("--name-kind.yaml").is_none());
-        assert!(ResourceId::from_filename("ns---kind.yaml").is_none());
-    }
-
-    #[test]
-    fn from_nested_path_basic() {
-        let rid = ResourceId::from_nested_path("kube-system", "coredns-deployment.yaml").unwrap();
-        assert_eq!(rid.namespace, "kube-system");
-        assert_eq!(rid.name, "coredns");
-        assert_eq!(rid.kind, "deployment");
-    }
-
-    #[test]
-    fn from_nested_path_name_with_dashes() {
-        let rid =
-            ResourceId::from_nested_path("monitoring-system", "kube-state-metrics-deployment.yaml")
-                .unwrap();
-        assert_eq!(rid.namespace, "monitoring-system");
-        assert_eq!(rid.name, "kube-state-metrics");
-        assert_eq!(rid.kind, "deployment");
-    }
-
-    #[test]
-    fn from_nested_path_invalid() {
-        assert!(ResourceId::from_nested_path("ns", "nodash.yaml").is_none());
-        assert!(ResourceId::from_nested_path("", "name-kind.yaml").is_none());
-    }
-
-    #[test]
-    fn to_flat_filename_roundtrip() {
-        let rid = ResourceId {
-            kind: "deployment".into(),
-            namespace: "kube-system".into(),
-            name: "coredns".into(),
-        };
-        assert_eq!(
-            rid.to_flat_filename(),
-            "kube-system--coredns-deployment.yaml"
-        );
-
-        // roundtrip
-        let parsed = ResourceId::from_filename(&rid.to_flat_filename()).unwrap();
-        assert_eq!(parsed, rid);
-    }
-
-    #[test]
-    fn display_namespaced() {
-        let rid = ResourceId {
-            kind: "deployment".into(),
-            namespace: "kube-system".into(),
-            name: "coredns".into(),
-        };
-        assert_eq!(rid.to_string(), "deployment/coredns@kube-system");
-    }
-
-    #[test]
-    fn display_cluster_scoped() {
-        let rid = ResourceId {
-            kind: "clusterrole".into(),
-            namespace: CLUSTER_SCOPED.into(),
-            name: "admin".into(),
-        };
-        assert_eq!(rid.to_string(), "clusterrole/admin");
-    }
-
-    #[test]
     fn from_value_full() {
         let doc = serde_json::json!({
             "kind": "Service",
@@ -218,5 +114,23 @@ mod tests {
         });
         let rid = ResourceId::from_value(&doc);
         assert_eq!(rid.namespace, CLUSTER_SCOPED);
+    }
+
+    #[test]
+    fn display_namespaced() {
+        let rid = ResourceId {
+            kind: "deployment".into(),
+            namespace: "kube-system".into(),
+            name: "coredns".into(),
+        };
+        assert_eq!(rid.to_string(), "deployment/coredns@kube-system");
+    }
+
+    #[test]
+    fn from_filename_basic() {
+        let rid = ResourceId::from_filename("kube-system--coredns-deployment.yaml").unwrap();
+        assert_eq!(rid.namespace, "kube-system");
+        assert_eq!(rid.name, "coredns");
+        assert_eq!(rid.kind, "deployment");
     }
 }

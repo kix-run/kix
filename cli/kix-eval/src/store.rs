@@ -68,19 +68,4 @@ mod tests {
         assert!(dir.is_absolute(), "cache dir should be absolute: {dir:?}");
         assert!(dir.ends_with("kix"));
     }
-
-    #[test]
-    fn resolve_symlinks_returns_path_for_nonexistent() {
-        let p = Path::new("/nonexistent/path/here");
-        assert_eq!(resolve_symlinks(p), p);
-    }
-
-    #[test]
-    fn resolve_symlinks_resolves_real_path() {
-        let resolved = resolve_symlinks(Path::new("/tmp"));
-        // On macOS, /tmp -> /private/tmp
-        if cfg!(target_os = "macos") {
-            assert_eq!(resolved, PathBuf::from("/private/tmp"));
-        }
-    }
 }

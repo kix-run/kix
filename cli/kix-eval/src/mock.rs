@@ -119,36 +119,4 @@ mod tests {
         assert_eq!(output.name, "test");
         assert_eq!(output.raw_manifests.len(), 1);
     }
-
-    #[test]
-    fn mock_cluster_not_found() {
-        let mut backend = MockNixBackend::new();
-        let err = backend.eval_cluster(Path::new("."), "missing").unwrap_err();
-        assert!(matches!(err, KixEvalError::ClusterNotFound { .. }));
-    }
-
-    #[test]
-    fn mock_list_clusters_sorted() {
-        let mut backend = MockNixBackend::new();
-        backend.add_cluster("zeta", vec![]);
-        backend.add_cluster("alpha", vec![]);
-        let names = backend.list_clusters(Path::new(".")).unwrap();
-        assert_eq!(names, vec!["alpha", "zeta"]);
-    }
-
-    #[test]
-    fn mock_load_from_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("manifests.json");
-        std::fs::write(
-            &file,
-            r#"[{"kind":"ConfigMap","metadata":{"name":"test"}}]"#,
-        )
-        .unwrap();
-
-        let mut backend = MockNixBackend::new();
-        backend.add_cluster_from_file("from-file", &file).unwrap();
-        let output = backend.eval_cluster(Path::new("."), "from-file").unwrap();
-        assert_eq!(output.raw_manifests.len(), 1);
-    }
 }

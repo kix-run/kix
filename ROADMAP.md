@@ -55,6 +55,7 @@
 - [ ] Kubenix-style service definitions (`services.coredns."default".enable = true`) — allows multi-instance, attribute-set-keyed service declarations
 - [ ] Move to manifest module system — explicit migration step for how manifests are composed
 - [ ] a "kix managed only" mode
+- [ ] multi-activation support => should they be mutually exclusive? (prepending all names with the cluster name) or should they share resources => same hash, same resource? (makes things like postgres probably tough (?))
 
 ## Security & compliance
 

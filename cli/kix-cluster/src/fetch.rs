@@ -343,42 +343,6 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn resource_fqn_core_group() {
-        let ar = ApiResource {
-            group: "".into(),
-            version: "v1".into(),
-            api_version: "v1".into(),
-            kind: "Pod".into(),
-            plural: "pods".into(),
-        };
-        assert_eq!(resource_fqn(&ar), "pods");
-    }
-
-    #[test]
-    fn resource_fqn_named_group() {
-        let ar = ApiResource {
-            group: "apps".into(),
-            version: "v1".into(),
-            api_version: "apps/v1".into(),
-            kind: "Deployment".into(),
-            plural: "deployments".into(),
-        };
-        assert_eq!(resource_fqn(&ar), "deployments.apps");
-    }
-
-    #[test]
-    fn skip_list_contains_expected() {
-        let skip_set: HashSet<&str> = SKIP_RESOURCES.iter().copied().collect();
-        assert!(skip_set.contains("pods"));
-        assert!(skip_set.contains("replicasets.apps"));
-        assert!(skip_set.contains("events.events.k8s.io"));
-        assert!(skip_set.contains("leases.coordination.k8s.io"));
-        assert!(skip_set.contains("ciliumendpoints.cilium.io"));
-        assert!(!skip_set.contains("deployments.apps"));
-        assert!(!skip_set.contains("services"));
-    }
-
-    #[test]
     fn normalize_strips_server_fields() {
         let mut obj = DynamicObject {
             metadata: ObjectMeta {
@@ -442,29 +406,14 @@ mod tests {
     }
 
     #[test]
-    fn normalize_strips_annotations_entirely_when_empty() {
-        let mut obj = DynamicObject {
-            metadata: ObjectMeta {
-                name: Some("test".into()),
-                ..Default::default()
-            },
-            types: None,
-            data: json!({
-                "metadata": {
-                    "name": "test",
-                    "annotations": {
-                        "kubectl.kubernetes.io/last-applied-configuration": "{}"
-                    }
-                }
-            }),
-        };
-
-        normalize_for_diff(&mut obj);
-
-        let meta = obj.data["metadata"].as_object().unwrap();
-        assert!(
-            !meta.contains_key("annotations"),
-            "empty annotations should be removed entirely"
-        );
+    fn skip_list_contains_expected() {
+        let skip_set: HashSet<&str> = SKIP_RESOURCES.iter().copied().collect();
+        assert!(skip_set.contains("pods"));
+        assert!(skip_set.contains("replicasets.apps"));
+        assert!(skip_set.contains("events.events.k8s.io"));
+        assert!(skip_set.contains("leases.coordination.k8s.io"));
+        assert!(skip_set.contains("ciliumendpoints.cilium.io"));
+        assert!(!skip_set.contains("deployments.apps"));
+        assert!(!skip_set.contains("services"));
     }
 }

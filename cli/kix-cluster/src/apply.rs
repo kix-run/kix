@@ -1,10 +1,10 @@
-//! Apply engine — SSA-based resource application with content-hash change detection.
+//! Apply engine — SSA-based resource application with local DAG diff change detection.
 //!
 //! Uses server-side apply (`Patch::Apply`) with `kix` as the field manager.
-//! Change detection compares `kix.dev/content-hash` annotations to skip
-//! unchanged resources.
+//! Change detection diffs two sets of stamped manifests locally by comparing
+//! identity-hashes, without querying the live cluster.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use kix_manifest::types::{CLUSTER_SCOPED, ResourceId};
 use kube::{
@@ -16,11 +16,11 @@ use serde_json::Value;
 use thiserror::Error;
 use tokio::task::JoinSet;
 
-/// Annotation key for content hash (changes when resource spec changes).
-pub const CONTENT_HASH_ANNOTATION: &str = "kix.dev/content-hash";
-
-/// Annotation key for identity hash (stable across content changes).
+/// Annotation key for identity hash (derived from Nix store path).
 pub const IDENTITY_HASH_ANNOTATION: &str = "kix.dev/identity-hash";
+
+/// Annotation key for activations (comma-separated activation identity-hashes).
+pub const ACTIVATIONS_ANNOTATION: &str = "kix.dev/activations";
 
 /// Field manager name for server-side apply.
 const FIELD_MANAGER: &str = "kix";
@@ -53,23 +53,91 @@ pub struct ApplyResult {
 pub enum ApplyAction {
     /// Resource was created (didn't exist before).
     Created,
-    /// Resource was updated (content-hash changed).
+    /// Resource was updated (identity-hash changed).
     Configured,
-    /// Resource was skipped (content-hash matched).
+    /// Resource was skipped (identity-hash matched).
     Unchanged,
     /// Resource was skipped for another reason.
     Skipped,
 }
 
-/// A change action determined by comparing manifests against live state.
+/// A change action determined by local DAG diff (old vs new activation).
 #[derive(Debug, Clone)]
 pub enum ChangeAction {
     /// Resource needs to be applied (new or changed).
     Apply(Value),
-    /// Resource is unchanged, skip it.
+    /// Resource is unchanged (same identity-hash), skip it.
     Skip(ResourceId),
-    /// Resource exists on cluster but not in manifests, candidate for pruning.
-    Prune(ResourceId),
+    /// Resource exists in old activation but not new — candidate for pruning.
+    Orphan(ResourceId),
+}
+
+/// Detect changes by diffing two sets of stamped manifests locally.
+///
+/// Matches resources by Kubernetes identity (kind + namespace + name),
+/// then compares identity-hashes to determine if content changed.
+///
+/// `new_manifests`: manifests from the new activation (what we want to deploy)
+/// `old_manifests`: manifests from the old/current activation (what's deployed)
+///
+/// Returns actions for the new manifests (Apply or Skip) plus Orphan actions
+/// for resources in old but not in new.
+pub fn detect_changes(new_manifests: &[Value], old_manifests: &[Value]) -> Vec<ChangeAction> {
+    // Index old manifests by K8s identity (kind/ns/name) → identity-hash
+    let old_by_k8s_id: HashMap<String, &str> = old_manifests
+        .iter()
+        .filter_map(|m| {
+            let rid = ResourceId::from_value(m);
+            let k8s_id = format!("{}/{}/{}", rid.kind, rid.namespace, rid.name);
+            let hash = m
+                .pointer("/metadata/annotations")
+                .and_then(|a| a.get(IDENTITY_HASH_ANNOTATION))
+                .and_then(Value::as_str)?;
+            Some((k8s_id, hash))
+        })
+        .collect();
+
+    // Track which old K8s identities are matched by new manifests
+    let mut matched_old_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut actions: Vec<ChangeAction> = Vec::new();
+
+    for manifest in new_manifests {
+        let rid = ResourceId::from_value(manifest);
+        let k8s_id = format!("{}/{}/{}", rid.kind, rid.namespace, rid.name);
+
+        let new_hash = manifest
+            .pointer("/metadata/annotations")
+            .and_then(|a| a.get(IDENTITY_HASH_ANNOTATION))
+            .and_then(Value::as_str);
+
+        match (old_by_k8s_id.get(&k8s_id), new_hash) {
+            (Some(&old_hash), Some(new_h)) if old_hash == new_h => {
+                // Same identity-hash → identical content+deps, skip
+                matched_old_ids.insert(k8s_id);
+                actions.push(ChangeAction::Skip(rid));
+            }
+            (Some(_), _) => {
+                // Different identity-hash or missing → content changed, apply
+                matched_old_ids.insert(k8s_id);
+                actions.push(ChangeAction::Apply(manifest.clone()));
+            }
+            (None, _) => {
+                // Not in old graph → new resource, apply
+                actions.push(ChangeAction::Apply(manifest.clone()));
+            }
+        }
+    }
+
+    // Find orphans: old resources not matched by any new resource
+    for old_manifest in old_manifests {
+        let rid = ResourceId::from_value(old_manifest);
+        let k8s_id = format!("{}/{}/{}", rid.kind, rid.namespace, rid.name);
+        if !matched_old_ids.contains(&k8s_id) {
+            actions.push(ChangeAction::Orphan(rid));
+        }
+    }
+
+    actions
 }
 
 /// Apply a single resource via server-side apply.
@@ -124,83 +192,6 @@ pub async fn apply_resource(
         action,
         resource_id: rid,
     })
-}
-
-/// Detect changes by comparing content-hash annotations between
-/// generated manifests and live resources.
-///
-/// Returns a list of `ChangeAction` values indicating what needs
-/// to be applied, skipped, or pruned.
-pub fn detect_changes(manifests: &[Value], live: &[DynamicObject]) -> Vec<ChangeAction> {
-    // Index live resources by identity-hash
-    let live_by_identity: HashMap<&str, &DynamicObject> = live
-        .iter()
-        .filter_map(|obj| {
-            let hash = obj
-                .data
-                .pointer("/metadata/annotations")
-                .and_then(|a| a.get(IDENTITY_HASH_ANNOTATION))
-                .and_then(Value::as_str)?;
-            Some((hash, obj))
-        })
-        .collect();
-
-    // Track which identity hashes are in the manifest set
-    let mut manifest_identity_hashes: HashSet<String> = HashSet::new();
-    let mut actions: Vec<ChangeAction> = Vec::new();
-
-    for manifest in manifests {
-        let content_hash = manifest
-            .pointer("/metadata/annotations")
-            .and_then(|a| a.get(CONTENT_HASH_ANNOTATION))
-            .and_then(Value::as_str);
-
-        let identity_hash = manifest
-            .pointer("/metadata/annotations")
-            .and_then(|a| a.get(IDENTITY_HASH_ANNOTATION))
-            .and_then(Value::as_str);
-
-        if let Some(id_hash) = identity_hash {
-            manifest_identity_hashes.insert(id_hash.to_string());
-        }
-
-        // Find matching live resource by identity hash
-        let live_obj = identity_hash.and_then(|h| live_by_identity.get(h).copied());
-
-        match (live_obj, content_hash) {
-            (Some(live_resource), Some(manifest_hash)) => {
-                // Compare content hashes
-                let live_hash = live_resource
-                    .data
-                    .pointer("/metadata/annotations")
-                    .and_then(|a| a.get(CONTENT_HASH_ANNOTATION))
-                    .and_then(Value::as_str);
-
-                if live_hash == Some(manifest_hash) {
-                    actions.push(ChangeAction::Skip(ResourceId::from_value(manifest)));
-                } else {
-                    actions.push(ChangeAction::Apply(manifest.clone()));
-                }
-            }
-            (None, _) => {
-                // Resource doesn't exist on cluster — needs creation
-                actions.push(ChangeAction::Apply(manifest.clone()));
-            }
-            (Some(_), None) => {
-                // No content hash on manifest — always apply
-                actions.push(ChangeAction::Apply(manifest.clone()));
-            }
-        }
-    }
-
-    // Find live resources with kix identity hashes not in manifest set (prune candidates)
-    for (identity_hash, live_obj) in &live_by_identity {
-        if !manifest_identity_hashes.contains(*identity_hash) {
-            actions.push(ChangeAction::Prune(ResourceId::from_value(&live_obj.data)));
-        }
-    }
-
-    actions
 }
 
 /// Apply all resources in a wave in parallel.
@@ -260,9 +251,9 @@ pub async fn apply_wave(
                     )
                 });
             }
-            ChangeAction::Prune(rid) => {
-                // Pruning is handled separately by the deploy command,
-                // but we report it here for tracking
+            ChangeAction::Orphan(rid) => {
+                // Orphans are handled separately (prune phase),
+                // but we report them here for tracking
                 let rid = rid.clone();
                 set.spawn(async move {
                     (
@@ -282,11 +273,6 @@ pub async fn apply_wave(
         match join_result {
             Ok(pair) => results.push(pair),
             Err(e) => {
-                // JoinError means the task panicked or was cancelled. This shouldn't happen
-                // in normal operation (our tasks don't panic). We log and continue rather
-                // than failing the entire wave, since other resources may have applied
-                // successfully. The missing result will surface as a discrepancy in the
-                // deploy summary.
                 tracing::warn!(error = %e, "task join error during apply wave");
             }
         }
@@ -299,13 +285,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn manifest(
-        kind: &str,
-        name: &str,
-        ns: &str,
-        content_hash: &str,
-        identity_hash: &str,
-    ) -> Value {
+    fn manifest(kind: &str, name: &str, ns: &str, identity_hash: &str) -> Value {
         json!({
             "apiVersion": "apps/v1",
             "kind": kind,
@@ -313,106 +293,70 @@ mod tests {
                 "name": name,
                 "namespace": ns,
                 "annotations": {
-                    CONTENT_HASH_ANNOTATION: content_hash,
                     IDENTITY_HASH_ANNOTATION: identity_hash,
                 }
             }
         })
     }
 
-    fn live_obj(
-        kind: &str,
-        name: &str,
-        ns: &str,
-        content_hash: &str,
-        identity_hash: &str,
-    ) -> DynamicObject {
-        DynamicObject {
-            metadata: kube::api::ObjectMeta {
-                name: Some(name.into()),
-                namespace: Some(ns.into()),
-                ..Default::default()
-            },
-            types: None,
-            data: json!({
-                "apiVersion": "apps/v1",
-                "kind": kind,
-                "metadata": {
-                    "name": name,
-                    "namespace": ns,
-                    "annotations": {
-                        CONTENT_HASH_ANNOTATION: content_hash,
-                        IDENTITY_HASH_ANNOTATION: identity_hash,
-                    }
-                }
-            }),
-        }
-    }
-
     #[test]
     fn detect_new_resource() {
-        let manifests = vec![manifest("Deployment", "app", "default", "abc123", "id1")];
-        let live: Vec<DynamicObject> = vec![];
+        let new = vec![manifest("Deployment", "app", "default", "id1")];
+        let old: Vec<Value> = vec![];
 
-        let actions = detect_changes(&manifests, &live);
+        let actions = detect_changes(&new, &old);
         assert_eq!(actions.len(), 1);
         assert!(matches!(&actions[0], ChangeAction::Apply(_)));
     }
 
     #[test]
     fn detect_unchanged_resource() {
-        let manifests = vec![manifest("Deployment", "app", "default", "abc123", "id1")];
-        let live = vec![live_obj("Deployment", "app", "default", "abc123", "id1")];
+        let new = vec![manifest("Deployment", "app", "default", "id1")];
+        let old = vec![manifest("Deployment", "app", "default", "id1")];
 
-        let actions = detect_changes(&manifests, &live);
+        let actions = detect_changes(&new, &old);
         assert_eq!(actions.len(), 1);
         assert!(matches!(&actions[0], ChangeAction::Skip(_)));
     }
 
     #[test]
     fn detect_changed_resource() {
-        let manifests = vec![manifest("Deployment", "app", "default", "new-hash", "id1")];
-        let live = vec![live_obj("Deployment", "app", "default", "old-hash", "id1")];
+        let new = vec![manifest("Deployment", "app", "default", "new-hash")];
+        let old = vec![manifest("Deployment", "app", "default", "old-hash")];
 
-        let actions = detect_changes(&manifests, &live);
+        let actions = detect_changes(&new, &old);
         assert_eq!(actions.len(), 1);
         assert!(matches!(&actions[0], ChangeAction::Apply(_)));
     }
 
     #[test]
-    fn detect_prune_candidate() {
-        let manifests: Vec<Value> = vec![];
-        let live = vec![live_obj(
-            "Deployment",
-            "old-app",
-            "default",
-            "hash",
-            "id-orphan",
-        )];
+    fn detect_orphan() {
+        let new: Vec<Value> = vec![];
+        let old = vec![manifest("Deployment", "old-app", "default", "id-orphan")];
 
-        let actions = detect_changes(&manifests, &live);
+        let actions = detect_changes(&new, &old);
         assert_eq!(actions.len(), 1);
-        assert!(matches!(&actions[0], ChangeAction::Prune(_)));
-        if let ChangeAction::Prune(rid) = &actions[0] {
+        assert!(matches!(&actions[0], ChangeAction::Orphan(_)));
+        if let ChangeAction::Orphan(rid) = &actions[0] {
             assert_eq!(rid.name, "old-app");
         }
     }
 
     #[test]
     fn detect_mixed_actions() {
-        let manifests = vec![
-            manifest("Deployment", "unchanged", "default", "hash1", "id1"),
-            manifest("Deployment", "changed", "default", "new-hash", "id2"),
-            manifest("Deployment", "new-app", "default", "hash3", "id3"),
+        let new = vec![
+            manifest("Deployment", "unchanged", "default", "id1"),
+            manifest("Deployment", "changed", "default", "new-hash"),
+            manifest("Deployment", "new-app", "default", "id3"),
         ];
-        let live = vec![
-            live_obj("Deployment", "unchanged", "default", "hash1", "id1"),
-            live_obj("Deployment", "changed", "default", "old-hash", "id2"),
-            live_obj("Deployment", "orphan", "default", "hash-x", "id-orphan"),
+        let old = vec![
+            manifest("Deployment", "unchanged", "default", "id1"),
+            manifest("Deployment", "changed", "default", "old-hash"),
+            manifest("Deployment", "orphan", "default", "id-orphan"),
         ];
 
-        let actions = detect_changes(&manifests, &live);
-        // 3 manifest actions + 1 prune = 4
+        let actions = detect_changes(&new, &old);
+        // 3 new manifest actions + 1 orphan = 4
         assert_eq!(actions.len(), 4);
 
         let skips: Vec<_> = actions
@@ -423,56 +367,27 @@ mod tests {
             .iter()
             .filter(|a| matches!(a, ChangeAction::Apply(_)))
             .collect();
-        let prunes: Vec<_> = actions
+        let orphans: Vec<_> = actions
             .iter()
-            .filter(|a| matches!(a, ChangeAction::Prune(_)))
+            .filter(|a| matches!(a, ChangeAction::Orphan(_)))
             .collect();
 
         assert_eq!(skips.len(), 1); // unchanged
         assert_eq!(applies.len(), 2); // changed + new
-        assert_eq!(prunes.len(), 1); // orphan
+        assert_eq!(orphans.len(), 1); // orphan
     }
 
     #[test]
-    fn detect_no_content_hash_always_applies() {
-        let manifests = vec![json!({
-            "apiVersion": "v1",
-            "kind": "ConfigMap",
-            "metadata": {
-                "name": "test",
-                "namespace": "default",
-                "annotations": {
-                    IDENTITY_HASH_ANNOTATION: "id1",
-                }
-            }
-        })];
-        let live = vec![live_obj("ConfigMap", "test", "default", "any-hash", "id1")];
+    fn first_deploy_all_applies() {
+        let new = vec![
+            manifest("Namespace", "default", CLUSTER_SCOPED, "id1"),
+            manifest("Deployment", "app", "default", "id2"),
+        ];
+        let old: Vec<Value> = vec![];
 
-        let actions = detect_changes(&manifests, &live);
-        assert_eq!(actions.len(), 1);
-        assert!(matches!(&actions[0], ChangeAction::Apply(_)));
-    }
-
-    #[test]
-    fn detect_no_identity_hash_on_live_treats_as_new() {
-        let manifests = vec![manifest("Deployment", "app", "default", "hash", "id1")];
-        // Live object has no identity hash annotation
-        let live = vec![DynamicObject {
-            metadata: kube::api::ObjectMeta {
-                name: Some("app".into()),
-                namespace: Some("default".into()),
-                ..Default::default()
-            },
-            types: None,
-            data: json!({
-                "kind": "Deployment",
-                "metadata": {"name": "app", "namespace": "default"}
-            }),
-        }];
-
-        let actions = detect_changes(&manifests, &live);
-        assert_eq!(actions.len(), 1);
-        assert!(matches!(&actions[0], ChangeAction::Apply(_)));
+        let actions = detect_changes(&new, &old);
+        assert_eq!(actions.len(), 2);
+        assert!(actions.iter().all(|a| matches!(a, ChangeAction::Apply(_))));
     }
 
     #[test]

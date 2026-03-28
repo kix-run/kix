@@ -1,15 +1,20 @@
-//! `kix deploy` — wave-based deployment with confirmation.
+//! `kix deploy` — wave-based deployment with local DAG diff.
 //!
-//! Uses the store graph (like `kix diff`) for proper stamping and dependency
-//! tracking, NOT raw eval output.  Flow:
+//! Uses the store graph for proper stamping and dependency tracking.
+//! Change detection is a local operation — diffs two Nix store graphs
+//! by K8s identity (kind+ns+name) and identity-hash, without querying
+//! the live cluster.
+//!
+//! Flow:
 //!   1. `nix build .#cluster-<name>-activation`  → result dir
 //!   2. StoreGraph::from_result_dir              → packages + resources
-//!   3. stamp_annotations                        → identity/content/depends-on
-//!   4. ResourceGraph::from_manifests            → DAG
-//!   5. compute_waves                            → ordered deployment plan
-//!   6. detect_changes against live cluster
-//!   7. apply wave-by-wave with readiness checks
-//!   8. clean up stale Activations
+//!   3. stamp_annotations                        → identity/depends-on
+//!   4. Load old activation from cache (if any)
+//!   5. Local DAG diff: old vs new manifests
+//!   6. ResourceGraph::from_manifests            → DAG for new resources
+//!   7. compute_waves on create/update resources
+//!   8. Apply wave-by-wave with readiness checks
+//!   9. Prune orphans (reverse topo order from old graph)
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -28,7 +33,7 @@ use kix_eval::store_graph::StoreGraph;
 use kix_manifest::stamp::stamp_annotations;
 use kix_manifest::types::{CLUSTER_SCOPED, ResourceId};
 
-use crate::cli::{DeployArgs, OnError};
+use crate::cli::{DeployArgs, OnError, PruneMode};
 use crate::output;
 
 use super::CommandContext;
@@ -36,7 +41,7 @@ use super::CommandContext;
 pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     let flake_path = resolve_flake_path(&ctx.global.flake)?;
 
-    // 1. Build activation (nix build) and load store graph
+    // 1. Build new activation and load store graph
     if !ctx.global.quiet {
         println!("Building cluster '{}'...", output::bold(&args.cluster));
     }
@@ -47,25 +52,25 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     };
     let result_path = build_cluster_activation_with_status(&flake_path, &args.cluster, &status)
         .map_err(|e| miette!("failed to build cluster: {e}"))?;
-    let mut graph = StoreGraph::from_result_dir_with_status(&result_path, &status)
+    let mut new_graph = StoreGraph::from_result_dir_with_status(&result_path, &status)
         .map_err(|e| miette!("failed to load store graph: {e}"))?;
-    stamp_annotations(&mut graph);
+    stamp_annotations(&mut new_graph);
     if !ctx.global.quiet {
         eprint!("\r\x1b[2K");
     }
 
-    // 2. Collect stamped manifests from graph
-    let manifests: Vec<Value> = graph
+    // 2. Collect stamped manifests from new graph
+    let new_manifests: Vec<Value> = new_graph
         .resources
         .values()
         .map(|r| r.manifest.clone())
         .collect();
 
-    let manifest_count = manifests.len();
+    let manifest_count = new_manifests.len();
     if !ctx.global.quiet {
         println!(
             "Cluster {}: {} manifests",
-            output::bold(&graph.cluster_name),
+            output::bold(&new_graph.cluster_name),
             manifest_count,
         );
     }
@@ -77,10 +82,59 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         return Ok(());
     }
 
-    // 3. Build DAG from stamped manifests
-    let resource_graph = ResourceGraph::from_manifests(&manifests).into_diagnostic()?;
+    // 3. Load old activation (from cache) for local diff
+    let old_manifests: Vec<Value> = {
+        let old_path = kix_eval::store::load_activation_path(&args.cluster);
+        match old_path {
+            Some(old_result_dir) => {
+                if !ctx.global.quiet {
+                    println!("Loading previous activation for diff...");
+                }
+                let noop = |_: &str| {};
+                match StoreGraph::from_result_dir_with_status(&old_result_dir, &noop) {
+                    Ok(mut old_graph) => {
+                        stamp_annotations(&mut old_graph);
+                        old_graph
+                            .resources
+                            .values()
+                            .map(|r| r.manifest.clone())
+                            .collect()
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "failed to load old activation: {e}, treating as first deploy"
+                        );
+                        vec![]
+                    }
+                }
+            }
+            None => {
+                if !ctx.global.quiet {
+                    println!("No previous activation — first deploy.");
+                }
+                vec![]
+            }
+        }
+    };
 
-    // 4. Compute waves
+    // 4. Local DAG diff: old vs new
+    let all_actions = kix_cluster::apply::detect_changes(&new_manifests, &old_manifests);
+
+    // Separate into apply actions and orphans
+    let mut apply_manifests: Vec<Value> = Vec::new();
+    let mut skip_rids: Vec<ResourceId> = Vec::new();
+    let mut orphan_rids: Vec<ResourceId> = Vec::new();
+
+    for action in &all_actions {
+        match action {
+            ChangeAction::Apply(m) => apply_manifests.push(m.clone()),
+            ChangeAction::Skip(rid) => skip_rids.push(rid.clone()),
+            ChangeAction::Orphan(rid) => orphan_rids.push(rid.clone()),
+        }
+    }
+
+    // 5. Build DAG from ALL new manifests (for wave computation)
+    let resource_graph = ResourceGraph::from_manifests(&new_manifests).into_diagnostic()?;
     let waves = compute_waves(&resource_graph);
 
     if waves.is_empty() {
@@ -90,18 +144,57 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         return Ok(());
     }
 
+    // Map each wave node to its change action
+    let new_manifest_actions: std::collections::HashMap<String, &ChangeAction> = {
+        let mut map = std::collections::HashMap::new();
+        for action in &all_actions {
+            let k8s_id = match action {
+                ChangeAction::Apply(m) => {
+                    let rid = ResourceId::from_value(m);
+                    format!("{}/{}/{}", rid.kind, rid.namespace, rid.name)
+                }
+                ChangeAction::Skip(rid) => {
+                    format!("{}/{}/{}", rid.kind, rid.namespace, rid.name)
+                }
+                ChangeAction::Orphan(_) => continue,
+            };
+            map.insert(k8s_id, action);
+        }
+        map
+    };
+
+    // Build wave actions: for each wave, map nodes to their ChangeAction
+    let wave_actions: Vec<Vec<ChangeAction>> = waves
+        .iter()
+        .map(|wave| {
+            wave.iter()
+                .map(|&idx| {
+                    let node = &resource_graph.graph[idx];
+                    let k8s_id = format!("{}/{}/{}", node.id.kind, node.id.namespace, node.id.name);
+                    match new_manifest_actions.get(&k8s_id) {
+                        Some(ChangeAction::Apply(m)) => ChangeAction::Apply(m.clone()),
+                        Some(ChangeAction::Skip(rid)) => ChangeAction::Skip(rid.clone()),
+                        _ => ChangeAction::Skip(node.id.clone()),
+                    }
+                })
+                .collect()
+        })
+        .collect();
+
     let global = ctx.global.clone();
-    let cluster_name = graph.cluster_name.clone();
+    let cluster_name = new_graph.cluster_name.clone();
     let deploy_result = ctx.runtime.block_on(run_deploy_async(
         args,
         &global,
         &resource_graph,
         &waves,
-        &manifests,
+        &wave_actions,
+        &orphan_rids,
+        &old_manifests,
         &cluster_name,
     ));
 
-    // Save activation path for soft GC on next deploy
+    // Save activation path for next deploy's diff
     if deploy_result.is_ok()
         && let Err(e) = kix_eval::store::save_activation_path(&args.cluster, &result_path)
     {
@@ -111,65 +204,21 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     deploy_result
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_deploy_async(
     args: &DeployArgs,
     global: &crate::cli::GlobalArgs,
     graph: &ResourceGraph,
     waves: &[Vec<petgraph::graph::NodeIndex>],
-    raw_manifests: &[Value],
+    wave_actions: &[Vec<ChangeAction>],
+    orphan_rids: &[ResourceId],
+    old_manifests: &[Value],
     cluster_name: &str,
 ) -> Result<()> {
     let timeout = parse_timeout(args.timeout.as_deref())?;
-    let _ = raw_manifests; // manifests accessed via graph nodes
 
-    // Build wave manifests: Vec<Vec<&Value>> indexed by wave
-    let wave_manifests: Vec<Vec<&Value>> = waves
-        .iter()
-        .map(|wave| wave.iter().map(|&idx| &graph.graph[idx].manifest).collect())
-        .collect();
-
-    // 4. If not dry-run, fetch live state and detect changes
-    let wave_actions: Vec<Vec<ChangeAction>> = if args.dry_run {
-        // In dry-run mode, treat everything as Apply
-        wave_manifests
-            .iter()
-            .map(|wave| {
-                wave.iter()
-                    .map(|m| ChangeAction::Apply((*m).clone()))
-                    .collect()
-            })
-            .collect()
-    } else {
-        // Fetch live state
-        if !global.quiet {
-            println!("Fetching live cluster state...");
-        }
-        let client = fetch::make_client(global.context.as_deref())
-            .await
-            .map_err(|e| miette!("failed to connect to cluster: {e}. Check your kubeconfig or try --context <name>"))?;
-        let discovery = fetch::discover_resources(&client)
-            .await
-            .map_err(|e| miette!("API discovery failed: {e}"))?;
-        let live = fetch::fetch_managed_resources(&client, &discovery)
-            .await
-            .map_err(|e| miette!("failed to fetch live resources: {e}"))?;
-
-        if !global.quiet {
-            println!("Found {} live managed resources", live.len());
-        }
-
-        // Detect changes per wave
-        wave_manifests
-            .iter()
-            .map(|wave| {
-                let wave_values: Vec<Value> = wave.iter().map(|m| (*m).clone()).collect();
-                kix_cluster::apply::detect_changes(&wave_values, &live)
-            })
-            .collect()
-    };
-
-    // 5. Display plan
-    print_plan(waves, &wave_actions, graph, global);
+    // Display plan
+    print_plan(waves, wave_actions, graph, global);
 
     let total_apply = wave_actions
         .iter()
@@ -181,36 +230,43 @@ async fn run_deploy_async(
         .flat_map(|w| w.iter())
         .filter(|a| matches!(a, ChangeAction::Skip(_)))
         .count();
-    let total_prune = wave_actions
-        .iter()
-        .flat_map(|w| w.iter())
-        .filter(|a| matches!(a, ChangeAction::Prune(_)))
-        .count();
 
     if !global.quiet {
         println!();
-        let prune_str = total_prune.to_string();
+        let orphan_count = orphan_rids.len();
+        let orphan_str = orphan_count.to_string();
         println!(
-            "Plan: {} to apply, {} unchanged, {} to prune",
+            "Plan: {} to apply, {} unchanged, {} orphaned",
             output::green(&total_apply.to_string()),
             output::dim(&total_skip.to_string()),
-            if total_prune > 0 {
-                output::red(&prune_str)
+            if orphan_count > 0 {
+                output::red(&orphan_str)
             } else {
-                output::dim(&prune_str)
+                output::dim(&orphan_str)
             },
         );
     }
 
     if args.dry_run {
         if !global.quiet {
+            if !orphan_rids.is_empty() {
+                println!();
+                println!(
+                    "{} {} resources would be orphaned:",
+                    output::yellow("Orphans:"),
+                    orphan_rids.len(),
+                );
+                for rid in orphan_rids {
+                    println!("  {} {}", output::red("-"), rid);
+                }
+            }
             println!();
             println!("{}", output::dim("Dry run — no changes applied."));
         }
         return Ok(());
     }
 
-    if total_apply == 0 && total_prune == 0 {
+    if total_apply == 0 && orphan_rids.is_empty() {
         if !global.quiet {
             println!();
             println!("{}", output::green("Everything up to date."));
@@ -218,7 +274,7 @@ async fn run_deploy_async(
         return Ok(());
     }
 
-    // 6. Confirmation
+    // Confirmation
     if !args.yes {
         if !output::is_interactive() {
             eprintln!(
@@ -240,7 +296,7 @@ async fn run_deploy_async(
         }
     }
 
-    // 7. Apply waves
+    // Connect to cluster for apply
     let client = fetch::make_client(global.context.as_deref())
         .await
         .map_err(|e| {
@@ -258,6 +314,7 @@ async fn run_deploy_async(
     let mut total_unchanged = 0usize;
     let mut total_failed = 0usize;
 
+    // Apply waves (creates and updates only)
     for (wave_idx, actions) in wave_actions.iter().enumerate() {
         let apply_count = actions
             .iter()
@@ -350,7 +407,7 @@ async fn run_deploy_async(
             }
         }
 
-        // 8. Readiness polling for this wave (skip if all failed)
+        // Readiness polling for this wave
         if !wave_failed || matches!(args.on_error, OnError::Continue) {
             for action in actions {
                 if let ChangeAction::Apply(manifest) = action {
@@ -438,7 +495,6 @@ async fn run_deploy_async(
         }
 
         // Re-discover API resources if this wave created CRDs
-        // (the API server needs to register them before CRs can be applied)
         let wave_had_crds = actions.iter().any(|a| {
             if let ChangeAction::Apply(m) = a {
                 ResourceId::from_value(m).kind == "CustomResourceDefinition"
@@ -451,18 +507,25 @@ async fn run_deploy_async(
         }
     }
 
-    // Prune warnings
-    let prune_candidates: Vec<ResourceId> = wave_actions
-        .iter()
-        .flat_map(|w| w.iter())
-        .filter_map(|a| match a {
-            ChangeAction::Prune(rid) => Some(rid.clone()),
-            _ => None,
-        })
-        .collect();
+    // Prune orphans (after all apply waves)
+    let prune_mode = args.prune_mode.unwrap_or(PruneMode::Default);
+    if !orphan_rids.is_empty() && prune_mode != PruneMode::No {
+        // Compute reverse topo order for orphans from old manifests
+        let ordered_orphans = compute_prune_order(orphan_rids, old_manifests);
 
-    if !prune_candidates.is_empty() {
-        if args.prune {
+        if prune_mode == PruneMode::Default && !args.prune {
+            // Warn about orphans but don't delete
+            println!();
+            println!(
+                "{} {} resources on cluster not in new activation (use --prune to delete):",
+                output::yellow("Orphans:"),
+                ordered_orphans.len(),
+            );
+            for rid in &ordered_orphans {
+                println!("  {} {}", output::yellow("-"), rid);
+            }
+        } else {
+            // Actually prune
             let ar_by_kind: std::collections::HashMap<
                 String,
                 (&kube::discovery::ApiResource, kube::discovery::Scope),
@@ -473,12 +536,12 @@ async fn run_deploy_async(
 
             println!();
             println!(
-                "{} Pruning {} resources...",
+                "{} Pruning {} orphaned resources...",
                 output::bold("Prune:"),
-                prune_candidates.len(),
+                ordered_orphans.len(),
             );
 
-            for rid in &prune_candidates {
+            for rid in &ordered_orphans {
                 if rid.kind == "Namespace" {
                     println!(
                         "  {} {} — skipping Namespace pruning — use kubectl delete ns manually",
@@ -534,25 +597,15 @@ async fn run_deploy_async(
                     }
                 }
             }
-        } else {
-            println!();
-            println!(
-                "{} {} resources on cluster not in manifests (use --prune to delete):",
-                output::yellow("Warning:"),
-                prune_candidates.len(),
-            );
-            for rid in &prune_candidates {
-                println!("  {} {}", output::yellow("-"), rid);
-            }
         }
     }
 
-    // 9. Clean up stale Activations
+    // Clean up stale Activations
     if total_failed == 0 {
         cleanup_stale_activations(&client, &discovery, cluster_name, global).await;
     }
 
-    // 10. Summary
+    // Summary
     println!();
     print_summary(
         total_created,
@@ -566,6 +619,42 @@ async fn run_deploy_async(
     }
 
     Ok(())
+}
+
+/// Compute prune order: reverse topological order from old graph (dependents first).
+fn compute_prune_order(orphan_rids: &[ResourceId], old_manifests: &[Value]) -> Vec<ResourceId> {
+    // Build graph from old manifests that are orphans
+    let orphan_set: std::collections::HashSet<String> = orphan_rids
+        .iter()
+        .map(|rid| format!("{}/{}/{}", rid.kind, rid.namespace, rid.name))
+        .collect();
+
+    let orphan_manifests: Vec<Value> = old_manifests
+        .iter()
+        .filter(|m| {
+            let rid = ResourceId::from_value(m);
+            orphan_set.contains(&format!("{}/{}/{}", rid.kind, rid.namespace, rid.name))
+        })
+        .cloned()
+        .collect();
+
+    match ResourceGraph::from_manifests(&orphan_manifests) {
+        Ok(graph) => {
+            let waves = compute_waves(&graph);
+            // Reverse: delete dependents (later waves) first
+            let mut ordered: Vec<ResourceId> = Vec::new();
+            for wave in waves.into_iter().rev() {
+                for idx in wave {
+                    ordered.push(graph.graph[idx].id.clone());
+                }
+            }
+            ordered
+        }
+        Err(_) => {
+            // If graph construction fails, fall back to unordered
+            orphan_rids.to_vec()
+        }
+    }
 }
 
 /// Delete Activation CRs on the cluster that don't match the current cluster name.
@@ -632,10 +721,6 @@ fn print_plan(
             .iter()
             .filter(|a| matches!(a, ChangeAction::Skip(_)))
             .count();
-        let prune = actions
-            .iter()
-            .filter(|a| matches!(a, ChangeAction::Prune(_)))
-            .count();
 
         println!();
         println!(
@@ -654,13 +739,13 @@ fn print_plan(
                 ChangeAction::Skip(_) => {
                     println!("  {} {}", output::dim("="), rid);
                 }
-                ChangeAction::Prune(_) => {
-                    println!("  {} {}", output::red("-"), rid);
+                ChangeAction::Orphan(_) => {
+                    // Orphans don't appear in wave plan (they're handled separately)
                 }
             }
         }
 
-        if apply > 0 || skip > 0 || prune > 0 {
+        if apply > 0 || skip > 0 {
             let mut parts = Vec::new();
             if apply > 0 {
                 let s = format!("{apply} apply");
@@ -669,10 +754,6 @@ fn print_plan(
             if skip > 0 {
                 let s = format!("{skip} skip");
                 parts.push(output::dim(&s).into_owned());
-            }
-            if prune > 0 {
-                let s = format!("{prune} prune");
-                parts.push(output::red(&s).into_owned());
             }
             println!("  {}", parts.join(", "));
         }
