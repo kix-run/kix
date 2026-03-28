@@ -243,6 +243,73 @@ pub async fn list_superseded(
     Ok(superseded)
 }
 
+/// Info about a Superseded activation, including when it was deployed.
+#[derive(Debug, Clone)]
+pub struct SupersededActivation {
+    pub name: String,
+    pub identity_hash: Option<String>,
+    pub deployed_at: String,
+}
+
+/// List all Superseded activations for a cluster, sorted by deployed-at (most recent first).
+pub async fn list_superseded_activations(
+    client: &Client,
+    ar: &ApiResource,
+    cluster_name: &str,
+) -> Result<Vec<SupersededActivation>, ActivationError> {
+    let api: Api<DynamicObject> = Api::all_with(client.clone(), ar);
+    let lp = ListParams::default().labels(&format!(
+        "app.kubernetes.io/managed-by=kix,{CLUSTER_LABEL}={cluster_name}"
+    ));
+
+    let list = api.list(&lp).await.map_err(ActivationError::ListFailed)?;
+
+    let mut results = Vec::new();
+
+    for item in &list.items {
+        let active = item
+            .data
+            .pointer("/spec/active")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+
+        if active {
+            continue;
+        }
+
+        let name = match item.metadata.name.as_deref() {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+
+        let identity_hash = item
+            .data
+            .pointer("/metadata/annotations")
+            .and_then(|a| a.get(IDENTITY_HASH_ANNOTATION))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let deployed_at = item
+            .data
+            .pointer("/metadata/annotations")
+            .and_then(|a| a.get(DEPLOYED_AT_ANNOTATION))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        results.push(SupersededActivation {
+            name,
+            identity_hash,
+            deployed_at,
+        });
+    }
+
+    // Most recent first
+    results.sort_by(|a, b| b.deployed_at.cmp(&a.deployed_at));
+
+    Ok(results)
+}
+
 /// Delete a Superseded activation CR (after its orphaned resources are cleaned up).
 pub async fn delete_activation(
     client: &Client,

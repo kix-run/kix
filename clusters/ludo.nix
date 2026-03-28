@@ -11,6 +11,8 @@ kix.buildCluster {
   name = "ludo";
   specialArgs = { inherit packages kix; };
   modules = [
+    kix.flavors.k3s
+
     ./ludo/platform.nix
     ./ludo/databases.nix
     ./ludo/services.nix
@@ -19,6 +21,9 @@ kix.buildCluster {
     {
       # Auto-instantiate deps (coredns, valkey, stackgres-operator, etc.)
       availablePackages = packages;
+
+      # Single-node homelab — override k3s multi-node default
+      cluster.capabilities.multiNode = false;
 
       cluster.domain = "ludo.example.com"; # TODO: real domain
       monitoring.enabled = true;

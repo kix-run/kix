@@ -75,6 +75,9 @@ pub enum Command {
     /// Garbage-collect stale kix-managed resources
     Gc(GcArgs),
 
+    /// Rollback to the previous activation
+    Rollback(RollbackArgs),
+
     /// Drift detection: compare intended state vs live cluster
     Health(HealthArgs),
 
@@ -98,6 +101,7 @@ impl Command {
             Command::Inspect(a) => Some(&a.cluster),
             Command::Gc(a) => Some(&a.cluster),
             Command::Health(a) => Some(&a.cluster),
+            Command::Rollback(a) => Some(&a.cluster),
             Command::Snapshot(_) | Command::List(_) | Command::Completions(_) => None,
         }
     }
@@ -191,6 +195,24 @@ pub struct GcArgs {
     /// Full cluster scan (default: diff old vs new activation store graphs)
     #[arg(long)]
     pub hard: bool,
+}
+
+#[derive(clap::Args)]
+pub struct RollbackArgs {
+    /// Cluster name
+    pub cluster: String,
+
+    /// Skip confirmation prompt
+    #[arg(short, long)]
+    pub yes: bool,
+
+    /// Preview mode: show what would be applied without making changes
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Delete orphaned resources (resources in current activation but not in target)
+    #[arg(long)]
+    pub prune: bool,
 }
 
 #[derive(clap::Args)]

@@ -184,6 +184,254 @@
       '';
     };
 
+    # --- Cluster hardware profile ---
+    # Describes the cluster's physical/provider reality and pre-existing
+    # capabilities. Packages query capabilities for conditional logic;
+    # the flavor system sets defaults via mkDefault.
+    # See v2_discussions/45_cluster_hardware_profile.md for design rationale.
+
+    cluster.provider = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        Kubernetes distribution or provider (e.g. "k3s", "kind", "kubeadm",
+        "eks", "talos"). Informational — packages should query
+        cluster.capabilities, not branch on provider names.
+      '';
+    };
+
+    cluster.capabilities = {
+
+      # --- Topology ---
+
+      multiNode = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = ''
+          Whether the cluster has multiple schedulable nodes. When false,
+          pod anti-affinity and topology spread constraints are meaningless.
+        '';
+      };
+
+      availabilityZones = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+        description = "Known availability zones. Empty = single-zone or unknown.";
+      };
+
+      nodeAutoscaling = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Whether the cluster has built-in node autoscaling (cloud autoscaler,
+          Karpenter, GKE Autopilot). When true, cluster.nodes is a snapshot
+          and the actual node count may vary.
+        '';
+      };
+
+      managedControlPlane = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Whether the control plane is managed by a provider (EKS, GKE, AKS).
+          When true, kube-system components like CoreDNS/etcd are not user-managed,
+          and deploying replacements will conflict.
+        '';
+      };
+
+      # --- Networking ---
+
+      loadBalancer = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Whether Services of type LoadBalancer can obtain an external IP.
+          Requires a LoadBalancer controller (cloud provider, MetalLB, etc.).
+        '';
+      };
+
+      # TODO: CNI could become a DI dep — packages that need specific CNI
+      # features (e.g. Cilium's eBPF, Calico's BGP) could take the CNI as
+      # a dep and query its capabilities via out.*.
+      cni = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = ''
+          CNI plugin name (e.g. 'cilium', 'calico', 'flannel', 'aws-vpc-cni',
+          'gke-native', 'azure-cni', 'ovn-kubernetes', 'canal', 'kindnet').
+          null = unknown or not yet installed.
+        '';
+      };
+
+      # TODO: Should be derived from the CNI DI dep once CNI becomes DI.
+      # The CNI provider would expose out.networkPolicyAPI.
+      networkPolicyAPI = lib.mkOption {
+        type = lib.types.enum [
+          "k8s"
+          "cilium"
+          "calico"
+          "none"
+        ];
+        default = "none";
+        description = ''
+          Which network policy API is enforced. "none" means NetworkPolicy
+          resources are accepted but not enforced (e.g. flannel, kindnet).
+        '';
+      };
+
+      # TODO: Will be replaced by DI. Ingress controller should be a DI dep
+      # with alias "ingressController", exposing out.ingressClassName. Packages
+      # that create Ingress resources take it as a dep. This capability remains
+      # as informational metadata for the flavor but is not checked at build time.
+      ingressController = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = ''
+          Built-in ingress controller, if any (e.g. "traefik", "gce", "openshift-router").
+          null = bring your own.
+        '';
+      };
+
+      # --- Storage ---
+
+      # TODO: Storage is handled via DI (storageClasses dep). This capability
+      # is informational only — used for warnings (e.g. "PVC data is ephemeral
+      # on kind"), not build errors. The actual storage provisioner presence is
+      # verified through DI resolution of storageClasses.
+      persistentStorage = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = ''
+          Whether PVC data survives cluster restarts. False for kind/ephemeral
+          clusters where volumes are backed by container filesystems.
+        '';
+      };
+
+      # TODO: Could become a DI property — the storage provider import could
+      # expose out.accessModes = ["ReadWriteOnce" "ReadWriteMany"] and PVC
+      # packages validate against it at build time.
+      rwxStorage = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = "Whether ReadWriteMany PVCs are supported (NFS, EFS, Longhorn, etc.).";
+      };
+
+      # TODO: Could become DI — a snapshot controller provider with alias
+      # "volumeSnapshots" that packages creating VolumeSnapshot resources
+      # take as a dep. Similar to how CRD operators work via mkCRDRef.
+      volumeSnapshots = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Whether VolumeSnapshot CRDs and a snapshot controller are available.
+          Requires CSI driver with snapshot support.
+        '';
+      };
+
+      # --- Compute ---
+
+      gpu = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = "Whether GPU scheduling (nvidia.com/gpu) is available.";
+      };
+
+      # --- Security ---
+
+      privilegedContainers = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = ''
+          Whether pods can run privileged, use hostNetwork, hostPID, etc.
+          False on GKE Autopilot (hard platform restriction) and effectively
+          false on OpenShift (SCC restricted by default).
+        '';
+      };
+
+      podSecurityEnforcement = lib.mkOption {
+        type = lib.types.nullOr (
+          lib.types.enum [
+            "privileged"
+            "baseline"
+            "restricted"
+          ]
+        );
+        default = null;
+        description = ''
+          Pod Security Admission enforcement level, if any.
+          null = no cluster-wide enforcement (individual namespaces may still set labels).
+          "baseline" = GKE Autopilot default.
+          "restricted" = OpenShift SCC default.
+        '';
+      };
+
+      daemonSets = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = ''
+          Whether DaemonSets can be deployed. False on GKE Autopilot where
+          the platform manages all node-level daemons.
+        '';
+      };
+    };
+
+    cluster.network = {
+      podCidr = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = "Pod network CIDR (e.g. '10.244.0.0/16').";
+      };
+      serviceCidr = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = "Service network CIDR (e.g. '10.96.0.0/16').";
+      };
+      dnsUpstream = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+        description = "Upstream DNS resolvers (for CoreDNS forwarding, cert-manager DNS01, etc).";
+      };
+    };
+
+    cluster.nodes = lib.mkOption {
+      type = lib.types.attrsOf (
+        lib.types.submodule {
+          options = {
+            roles = lib.mkOption {
+              type = lib.types.listOf lib.types.str;
+              default = [ "worker" ];
+              description = "Node roles (e.g. 'control-plane', 'worker', 'storage', 'gpu').";
+            };
+            cpu = lib.mkOption {
+              type = lib.types.nullOr lib.types.int;
+              default = null;
+              description = "vCPU count.";
+            };
+            memory = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              description = "Total memory, K8s quantity format (e.g. '16Gi').";
+            };
+            labels = lib.mkOption {
+              type = lib.types.attrsOf lib.types.str;
+              default = { };
+              description = "Node labels (topology, zone, etc).";
+            };
+            taints = lib.mkOption {
+              type = lib.types.listOf lib.types.anything;
+              default = [ ];
+            };
+          };
+        }
+      );
+      default = { };
+      description = ''
+        Static node inventory. Packages can read this for topology-aware
+        defaults (replica count, anti-affinity, storage pools).
+        Leave empty for autoscaled or unknown-topology clusters.
+      '';
+    };
+
     networkPolicy = lib.mkOption {
       type = lib.types.submodule {
         options = {

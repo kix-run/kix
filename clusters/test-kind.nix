@@ -9,6 +9,8 @@
 kix.buildCluster {
   name = "test-kind";
   modules = [
+    kix.flavors.kind
+
     {
       namespaces = {
         echo = { };

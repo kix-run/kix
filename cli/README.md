@@ -27,12 +27,13 @@ nix build → StoreGraph → stamp annotations
 
 ### kix-cli (`kix-cli/src/`)
 
-- `cli.rs` — all clap command/flag definitions (`DeployArgs`, `GcArgs`, `DiffArgs`, `HealthArgs`, `GlobalArgs`, enums)
+- `cli.rs` — all clap command/flag definitions (`DeployArgs`, `GcArgs`, `DiffArgs`, `HealthArgs`, `RollbackArgs`, `GlobalArgs`, enums)
 - `plan.rs` — shared plan renderer for deploy + gc. `PackageDiff`/`PackageChangeDiff` types, `diff_graphs()` for package-level comparison, `print_package_plan()` for namespace-grouped changes-only display
 - `output.rs` — color helpers (`green`/`red`/`yellow`/`dim`/`bold` → `Cow<str>`), `is_interactive()`, `CommandResponse` trait
 - `commands/deploy.rs` — deploy pipeline: resolves old activation, displays plan, confirms, delegates to `kix::cluster::reconcile::reconcile()` for the wave loop
 - `commands/diff.rs` — three modes: build-to-build (two StoreGraphs), vs live cluster, vs snapshot directory
 - `commands/gc.rs` — soft (DAG diff old vs new) and hard (full cluster scan) garbage collection
+- `commands/rollback.rs` — rollback to most recent Superseded activation. No nix build — resolves old store path and re-applies via reconcile engine
 - `commands/health.rs` — drift detection: builds intended state, fetches live state, compares normalized content hashes
 
 ### kix library (`kix/src/`)
@@ -61,7 +62,7 @@ nix build → StoreGraph → stamp annotations
 - `graph.rs` — `ResourceGraph` (petgraph DAG built from `kix.dev/depends-on` annotations)
 - `waves.rs` — `compute_waves()` runs Kahn's algorithm → `Vec<Vec<NodeIndex>>`
 - `readiness.rs` — `wait_for_ready()` polls per-kind conditions (Deployment replicas, CRD Established, Job succeeded, etc.)
-- `activation.rs` — Activation CR lifecycle: `find_active()`, `begin_deploy()`, `record_wave()`, `finalize_deploy()`, `resume_point()`
+- `activation.rs` — Activation CR lifecycle: `find_active()`, `find_most_recent_superseded()`, `begin_deploy()`, `record_wave()`, `finalize_deploy()`, `resume_point()`
 - `fetch.rs` — `make_client()`, `discover_resources()`, `fetch_managed_resources()` (parallel LIST with label selectors)
 - `reconcile.rs` — **extracted deploy engine.** `reconcile()` is the wave-by-wave apply loop used by both CLI and operator. `ReconcileObserver` trait for progress events, `ReconcileConfig` for behavior (timeout, on-error, prune policy)
 - `normalize.rs` — content-hash normalization for drift detection. Strips server metadata, kix annotations, status, nulls. `detect_drift()` compares intended vs live

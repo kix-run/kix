@@ -69,6 +69,22 @@ in
     isClusterScopedKind
     ;
 
+  # --- Cluster flavors (hardware profile presets) ---
+  # Modules that set cluster.provider and cluster.capabilities defaults.
+  # Usage: modules = [ kix.flavors.k3s ./my-cluster/platform.nix ... ];
+  flavors = {
+    k3s = ./flavors/k3s.nix;
+    kind = ./flavors/kind.nix;
+    kubeadm = ./flavors/kubeadm.nix;
+    eks = ./flavors/eks.nix;
+    gke = ./flavors/gke.nix;
+    gke-autopilot = ./flavors/gke-autopilot.nix;
+    aks = ./flavors/aks.nix;
+    openshift = ./flavors/openshift.nix;
+    rke2 = ./flavors/rke2.nix;
+    talos = ./flavors/talos.nix;
+  };
+
   # --- YAML serialization ---
   # Converts a post-processed manifest attrset into a YAML file derivation.
   # Strips nulls and empty collections before serialization.

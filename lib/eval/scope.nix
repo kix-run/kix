@@ -10,6 +10,36 @@
 
 let
   inherit (k8s) clusterScoped;
+
+  # Capability check helpers. Called at resource construction time.
+  # `throw` for hard failures (resource will definitely not work),
+  # `builtins.trace` for warnings (resource works but may not behave as expected).
+  checkCapability =
+    {
+      capabilities,
+      cap,
+      message,
+    }:
+    if capabilities == { } then
+      # No capabilities provided (e.g. tests, standalone scope) — skip checks
+      null
+    else if !(capabilities.${cap} or true) then
+      throw message
+    else
+      null;
+
+  checkCapabilityNotNull =
+    {
+      capabilities,
+      cap,
+      message,
+    }:
+    if capabilities == { } then
+      null
+    else if (capabilities.${cap} or null) == null then
+      throw message
+    else
+      null;
 in
 
 rec {
@@ -24,6 +54,7 @@ rec {
       labelStyle ? "kix",
       selectorLabelsOverride ? null,
       clusterDomain ? "cluster.local",
+      capabilities ? { },
     }:
     let
       selectorLabels =
@@ -52,28 +83,93 @@ rec {
             "app.kubernetes.io/managed-by" = "kix";
           };
 
+      # --- Capability checks (evaluated lazily via builtins.seq) ---
+
+      checkLoadBalancer =
+        args:
+        let
+          specType = args.spec.type or (args.extra.spec.type or null);
+        in
+        if (args.kind or "") == "Service" && specType == "LoadBalancer" then
+          checkCapability {
+            inherit capabilities;
+            cap = "loadBalancer";
+            message =
+              "[${instanceName}] Service '${args.name or "unknown"}' uses type=LoadBalancer "
+              + "but cluster.capabilities.loadBalancer is false. "
+              + "Use type=ClusterIP or NodePort, install a LoadBalancer controller, "
+              + "or set cluster.capabilities.loadBalancer = true.";
+          }
+        else
+          null;
+
+      checkPrivileged =
+        templateSpec:
+        let
+          containers = templateSpec.containers or [ ];
+          initContainers = templateSpec.initContainers or [ ];
+          allContainers = containers ++ initContainers;
+          hasPrivileged = builtins.any (c: (c.securityContext.privileged or false) == true) allContainers;
+          hasHostNetwork = templateSpec.hostNetwork or false;
+          hasHostPID = templateSpec.hostPID or false;
+          reason =
+            if hasHostNetwork then
+              "hostNetwork: true"
+            else if hasHostPID then
+              "hostPID: true"
+            else
+              "securityContext.privileged: true";
+        in
+        if hasPrivileged || hasHostNetwork || hasHostPID then
+          checkCapability {
+            inherit capabilities;
+            cap = "privilegedContainers";
+            message =
+              "[${instanceName}] Workload uses ${reason} "
+              + "but cluster.capabilities.privilegedContainers is false. "
+              + "This cluster (e.g. GKE Autopilot, OpenShift) restricts privileged workloads.";
+          }
+        else
+          null;
+
       scopeMkResource =
         {
           labels ? { },
           ...
         }@args:
-        k8s.mkResource (
-          removeAttrs args [ "labels" ]
+        builtins.seq (checkLoadBalancer args) (
+          k8s.mkResource (
+            removeAttrs args [ "labels" ]
+            // {
+              namespace = namespaceResource;
+              inherit clusterDomain;
+              labels = clusterLabels // instanceLabels // labels;
+            }
+          )
           // {
-            namespace = namespaceResource;
-            inherit clusterDomain;
-            labels = clusterLabels // instanceLabels // labels;
+            packageLabels = labels;
           }
-        )
-        // {
-          packageLabels = labels;
-        };
+        );
 
       # WARNING: StatefulSet.spec.serviceName must use .name (plain string),
       # NOT .out.name (context-carrying). Using .out.name creates a store DAG
       # edge to the Service. If the Service also has `requires` pointing back
       # to the StatefulSet, this causes infinite recursion during evaluation.
       # The serviceName field is a plain K8s name match, not a dependency.
+      checkDaemonSet =
+        kind:
+        if kind == "DaemonSet" then
+          checkCapability {
+            inherit capabilities;
+            cap = "daemonSets";
+            message =
+              "[${instanceName}] DaemonSet cannot be deployed — "
+              + "cluster.capabilities.daemonSets is false. "
+              + "This cluster (e.g. GKE Autopilot) does not support DaemonSets.";
+          }
+        else
+          null;
+
       mkWorkload =
         apiVersion: kind: attrs:
         let
@@ -84,25 +180,29 @@ rec {
           templateMeta = spec.template.metadata or { };
           templateSpec = spec.template.spec or { };
         in
-        scopeMkResource (
-          removeAttrs attrs [ "spec" ]
-          // {
-            inherit apiVersion kind;
-            spec =
-              removeAttrs spec [
-                "selector"
-                "template"
-              ]
+        builtins.seq (checkDaemonSet kind) (
+          builtins.seq (checkPrivileged templateSpec) (
+            scopeMkResource (
+              removeAttrs attrs [ "spec" ]
               // {
-                selector.matchLabels = selector;
-                template = {
-                  metadata = templateMeta // {
-                    labels = templateMeta.labels or selector;
+                inherit apiVersion kind;
+                spec =
+                  removeAttrs spec [
+                    "selector"
+                    "template"
+                  ]
+                  // {
+                    selector.matchLabels = selector;
+                    template = {
+                      metadata = templateMeta // {
+                        labels = templateMeta.labels or selector;
+                      };
+                      spec = templateSpec;
+                    };
                   };
-                  spec = templateSpec;
-                };
-              };
-          }
+              }
+            )
+          )
         );
 
       scopeMkClusterResource =
@@ -241,6 +341,7 @@ rec {
               namespaces
               clusterLabels
               labelStyle
+              capabilities
               ;
             namespaceName = nsName;
             namespaceResource = nsRes;

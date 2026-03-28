@@ -63,6 +63,7 @@ in
           labelStyle = instCfg.labelStyle;
           selectorLabelsOverride = instCfg.selectorLabels;
           clusterDomain = clusterConfig.clusterDomain or "cluster.local";
+          capabilities = clusterConfig.cluster.capabilities or { };
         };
 
         # 1. Phase 1: normalize package (function or inline attrset) with system args
