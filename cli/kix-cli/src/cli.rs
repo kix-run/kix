@@ -158,6 +158,10 @@ pub struct DeployArgs {
     #[arg(long, value_parser = validate_timeout)]
     pub timeout: Option<String>,
 
+    /// Re-apply all resources even if activation identity matches (heal drift)
+    #[arg(long)]
+    pub reconcile: bool,
+
     /// Delete orphaned resources (from old activation but not new)
     #[arg(long)]
     pub prune: bool,

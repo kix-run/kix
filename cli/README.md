@@ -30,7 +30,7 @@ nix build → StoreGraph → stamp annotations
 - `cli.rs` — all clap command/flag definitions (`DeployArgs`, `GcArgs`, `DiffArgs`, `HealthArgs`, `RollbackArgs`, `GlobalArgs`, enums)
 - `plan.rs` — shared plan renderer for deploy + gc. `PackageDiff`/`PackageChangeDiff` types, `diff_graphs()` for package-level comparison, `print_package_plan()` for namespace-grouped changes-only display
 - `output.rs` — color helpers (`green`/`red`/`yellow`/`dim`/`bold` → `Cow<str>`), `is_interactive()`, `CommandResponse` trait
-- `commands/deploy.rs` — deploy pipeline: resolves old activation, displays plan, confirms, delegates to `kix::cluster::reconcile::reconcile()` for the wave loop
+- `commands/deploy.rs` — deploy pipeline: resolves old activation, displays plan, confirms, delegates to `kix::cluster::reconcile::reconcile()` for the wave loop. `--reconcile` forces re-apply of all resources even when activation identity matches (heals drift)
 - `commands/diff.rs` — three modes: build-to-build (two StoreGraphs), vs live cluster, vs snapshot directory
 - `commands/gc.rs` — soft (DAG diff old vs new) and hard (full cluster scan) garbage collection
 - `commands/rollback.rs` — rollback to most recent Superseded activation. No nix build — resolves old store path and re-applies via reconcile engine

@@ -152,6 +152,7 @@
 - [x] Health check: package-level grouping — resources grouped by `kix.dev/package` annotation, per-package status (healthy/degraded/at-risk)
 - [x] Health check: blast radius analysis — walks dependency graph forward from broken resources to find at-risk dependents. Shows dependency chains in verbose mode.
   - `cli/kix-cli/src/commands/health.rs`: `compute_blast_radius()` does BFS through `ResourceGraph::dependents()`, marks transitive dependents as AT RISK with reason chains
+- [x] Health check: active activation scoping — BFS from the active activation's identity hash filters out superseded activations and their orphaned dependencies, so health only reports on the live deployment graph.
 - [ ] Merkle-walk integrity check — fast health check without nix build. Walk from the Active Activation CR through `kix.dev/depends-on` edges, verifying identity hashes at each node. Requires enriching `kix.dev/depends-on` with resource hints (`hash:kind/namespace/name`) for targeted GETs instead of full LIST. Two modes: fast integrity (graph walk only) and deep drift (content-hash comparison). See `v2_discussions/archive/51_merkle_health_check.md` for full design.
 - [x] Content-hash normalization for change detection — the live resource always contains server-added fields (uid, resourceVersion, creationTimestamp, defaulted values, status). The content hash must be computed on a normalized representation that strips these fields before comparison, otherwise re-deploy always sees "changed".
   - `cli/kix/src/cluster/normalize.rs`: `normalize_for_content_hash()` strips server metadata, status, kix annotations, kubectl bookkeeping, null values, and sorts keys. `cli/kix/src/cluster/fetch.rs`: `normalize_for_diff()` removes uid, resourceVersion, creationTimestamp, generation, managedFields, status, and last-applied-configuration. Python parity version in `scripts/parity/normalize.py`.
@@ -167,6 +168,7 @@
 - [ ] Non-K8s side effects (e.g. Forgejo user creation) — start with execution on "ssh", later crossplane or provider plugins
 - [ ] Auto-collect readiness — custom general runtime readiness checks (also outside k8s)
 - [ ] Auto-inject package identity labels (hash?, otherwise package name + version, like helm best practice)
+- [x] Reconcile mode — `kix deploy --reconcile` re-applies all resources even when the activation identity hash matches, healing drift from manual cluster changes. Converts `Skip` actions to `Apply` after change detection.
 - [x] Rollback — `kix rollback <cluster>` finds the most recent Superseded activation, resolves its store path from the local Nix store, and re-applies via the existing reconcile engine. No nix build required. Supports `--dry-run`, `--yes`, `--prune`. Uses `find_most_recent_superseded()` in `activation.rs` and the standard wave-based reconcile loop.
 - [ ] Canary rollouts — everything runs in parallel via different hashes; unchanged subsystems are reused (same hash = same resource); update only redeploys what changed
 - [ ] Migrations as k8s jobs — defined per package for major version upgrades; package hints whether a major version change is rollback-safe (e.g. postgres: only one version)

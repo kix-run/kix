@@ -198,14 +198,24 @@ pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
         );
     }
 
+    // 5. Filter to only resources reachable from the active activation.
+    //    Old/superseded activations and their orphaned deps are excluded so
+    //    they don't pollute the health report.
+    let active_hash = activation.identity_hash.as_deref().unwrap_or("");
+    let reachable = reachable_from(active_hash, &live_by_hash);
+    let live_by_hash: HashMap<String, LiveResource> = live_by_hash
+        .into_iter()
+        .filter(|(h, _)| reachable.contains(h))
+        .collect();
+
     if !ctx.global.quiet {
         println!("{} kix-managed resources on cluster", live_by_hash.len());
     }
 
-    // 5. Walk the dependency graph from activation root
+    // 6. Walk the dependency graph from activation root
     let health_map = walk_graph(&activation, &live_by_hash, ctx.global.verbose);
 
-    // 6. Group by package and display
+    // 7. Group by package and display
     let packages = group_by_package(&live_by_hash, &health_map);
     display_results(&packages, ctx.global.verbose, ctx.global.quiet);
 
@@ -304,6 +314,32 @@ fn walk_graph(
     }
 
     health
+}
+
+/// BFS from a root hash to find all transitively reachable identity hashes.
+fn reachable_from(
+    root_hash: &str,
+    live_by_hash: &HashMap<String, LiveResource>,
+) -> std::collections::HashSet<String> {
+    let mut visited = std::collections::HashSet::new();
+    let mut queue = std::collections::VecDeque::new();
+
+    if live_by_hash.contains_key(root_hash) {
+        queue.push_back(root_hash.to_string());
+        visited.insert(root_hash.to_string());
+    }
+
+    while let Some(hash) = queue.pop_front() {
+        if let Some(resource) = live_by_hash.get(&hash) {
+            for dep_hash in &resource.depends_on {
+                if live_by_hash.contains_key(dep_hash) && visited.insert(dep_hash.clone()) {
+                    queue.push_back(dep_hash.clone());
+                }
+            }
+        }
+    }
+
+    visited
 }
 
 /// Group resources by package for display.

@@ -104,6 +104,34 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     // 4. Local DAG diff: old vs new
     let all_actions = kix::cluster::apply::detect_changes(&new_manifests, &old_manifests);
 
+    // --reconcile: force re-apply of all resources regardless of identity match
+    let all_actions: Vec<ChangeAction> = if args.reconcile {
+        let manifest_by_k8s_id: std::collections::HashMap<String, &Value> = new_manifests
+            .iter()
+            .map(|m| {
+                let rid = ResourceId::from_value(m);
+                (format!("{}/{}/{}", rid.kind, rid.namespace, rid.name), m)
+            })
+            .collect();
+
+        all_actions
+            .into_iter()
+            .map(|action| match action {
+                ChangeAction::Skip(ref rid) => {
+                    let k8s_id = format!("{}/{}/{}", rid.kind, rid.namespace, rid.name);
+                    if let Some(&manifest) = manifest_by_k8s_id.get(&k8s_id) {
+                        ChangeAction::Apply(manifest.clone())
+                    } else {
+                        action
+                    }
+                }
+                other => other,
+            })
+            .collect()
+    } else {
+        all_actions
+    };
+
     // Separate into apply actions and orphans
     let mut orphan_rids: Vec<ResourceId> = Vec::new();
 
