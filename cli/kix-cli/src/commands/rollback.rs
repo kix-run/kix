@@ -162,18 +162,22 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
         );
     }
 
-    // 4. Resolve target activation to local store graph
-    let target_result_dir =
-        kix::eval::store::resolve_activation_by_hash(&args.cluster, target_hash).ok_or_else(
-            || {
-                miette!(
-                    "store path for activation '{}' not found locally (hash: {}). \
+    // 4. Resolve target activation to local store graph.
+    //    Prefer built-via annotation (direct path), fall back to hash-based lookup.
+    let target_result_dir = selected
+        .built_via
+        .as_ref()
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.join("kix-packages.json").exists())
+        .or_else(|| kix::eval::store::resolve_activation_by_hash(&args.cluster, target_hash))
+        .ok_or_else(|| {
+            miette!(
+                "store path for activation '{}' not found locally (hash: {}). \
                  Was it garbage-collected?",
-                    target_name,
-                    target_hash,
-                )
-            },
-        )?;
+                target_name,
+                target_hash,
+            )
+        })?;
 
     let noop = |_: &str| {};
     let mut target_graph = StoreGraph::from_result_dir_with_status(&target_result_dir, &noop)
@@ -186,20 +190,29 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
         .map(|r| r.manifest.clone())
         .collect();
 
-    // 5. Resolve current activation to local store graph (for diff)
-    let current_hash = current.identity_hash.as_deref().unwrap_or("");
-    let (current_graph, current_manifests) =
-        match kix::eval::store::resolve_activation_by_hash(&args.cluster, current_hash) {
-            Some(dir) => match StoreGraph::from_result_dir_with_status(&dir, &noop) {
-                Ok(mut g) => {
-                    stamp_annotations(&mut g);
-                    let m = g.resources.values().map(|r| r.manifest.clone()).collect();
-                    (Some(g), m)
-                }
-                Err(_) => (None, vec![]),
-            },
-            None => (None, vec![]),
-        };
+    // 5. Resolve current activation to local store graph (for diff).
+    //    Prefer built-via, fall back to hash-based lookup.
+    let noop2 = |_: &str| {};
+    let current_result_dir = current
+        .built_via
+        .as_ref()
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.join("kix-packages.json").exists())
+        .or_else(|| {
+            let hash = current.identity_hash.as_deref().unwrap_or("");
+            kix::eval::store::resolve_activation_by_hash(&args.cluster, hash)
+        });
+    let (current_graph, current_manifests) = match current_result_dir {
+        Some(dir) => match StoreGraph::from_result_dir_with_status(&dir, &noop2) {
+            Ok(mut g) => {
+                stamp_annotations(&mut g);
+                let m = g.resources.values().map(|r| r.manifest.clone()).collect();
+                (Some(g), m)
+            }
+            Err(_) => (None, vec![]),
+        },
+        None => (None, vec![]),
+    };
 
     // 6. Compute changes (current → target)
     let all_actions = kix::cluster::apply::detect_changes(&target_manifests, &current_manifests);

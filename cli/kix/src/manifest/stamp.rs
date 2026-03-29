@@ -4,8 +4,9 @@
 //! - `kix.dev/identity-hash` — the 32-char Nix store hash of the resource
 //! - `kix.dev/package` — owning package instance name
 //! - `kix.dev/package-namespace` — namespace of the owning package
-//! - `kix.dev/depends-on` — comma-separated store hashes of cross-package deps
 //! - `kix.dev/activations` — comma-separated activation identity-hashes (set during apply)
+//!
+//! Note: `kix.dev/depends-on` is stamped at resource creation time in Nix (lib/k8s.nix).
 
 use std::path::PathBuf;
 
@@ -17,7 +18,6 @@ struct StampEntry {
     identity_hash: String,
     package: String,
     package_namespace: String,
-    dep_hashes: Vec<String>,
 }
 
 /// Stamp kix.dev annotations onto every resource manifest in the graph.
@@ -30,15 +30,11 @@ pub fn stamp_annotations(graph: &mut StoreGraph) {
 
     for pkg in graph.packages.values() {
         for res_path in &pkg.resource_paths {
-            let cross_refs = graph.cross_pkg_refs(res_path);
-            let dep_hashes: Vec<String> = cross_refs.iter().map(|r| store_hash(r)).collect();
-
             stamp_info.push(StampEntry {
                 res_path: res_path.clone(),
                 identity_hash: store_hash(res_path),
                 package: pkg.instance_name.clone(),
                 package_namespace: pkg.namespace.clone(),
-                dep_hashes,
             });
         }
     }
@@ -54,20 +50,10 @@ pub fn stamp_annotations(graph: &mut StoreGraph) {
             .cloned()
             .collect();
         for res_path in cluster_paths {
-            // Find k8s deps in the ref_cache
-            let empty = vec![];
-            let refs = graph.ref_cache.get(&res_path).unwrap_or(&empty);
-            let dep_hashes: Vec<String> = refs
-                .iter()
-                .filter(|r| graph.resources.contains_key(r.as_path()) && **r != res_path)
-                .map(|r| store_hash(r))
-                .collect();
-
             stamp_info.push(StampEntry {
                 identity_hash: store_hash(&res_path),
                 package: "_cluster".to_string(),
                 package_namespace: "_cluster".to_string(),
-                dep_hashes,
                 res_path,
             });
         }
@@ -79,7 +65,42 @@ pub fn stamp_annotations(graph: &mut StoreGraph) {
             continue;
         };
 
+        // For Activation CRs:
+        // - Rename to include identity hash so each deploy creates a distinct CR
+        //   (enabling supersede/rollback lifecycle).
+        // - Add kix.dev/built-via annotation with the activation result dir path
+        //   so rollback can find manifests without a nix build.
+        let is_activation =
+            res.manifest.pointer("/kind").and_then(|v| v.as_str()) == Some("Activation");
+        if is_activation {
+            let hash_prefix = &entry.identity_hash[..12.min(entry.identity_hash.len())];
+            if let Some(meta) = res
+                .manifest
+                .pointer_mut("/metadata")
+                .and_then(|v| v.as_object_mut())
+            {
+                let base_name = meta
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("activation")
+                    .to_string();
+                meta.insert(
+                    "name".to_string(),
+                    serde_json::Value::String(format!("{}-{}", base_name, hash_prefix)),
+                );
+            }
+        }
+
         let mut new_anns = serde_json::Map::new();
+
+        if is_activation {
+            // Store the activation result dir path so rollback/deploy can
+            // load manifests directly from the nix store without rebuilding.
+            new_anns.insert(
+                "kix.dev/built-via".to_string(),
+                serde_json::Value::String(graph.result_dir.to_string_lossy().to_string()),
+            );
+        }
         new_anns.insert(
             "kix.dev/identity-hash".to_string(),
             serde_json::Value::String(entry.identity_hash),
@@ -92,12 +113,6 @@ pub fn stamp_annotations(graph: &mut StoreGraph) {
             "kix.dev/package-namespace".to_string(),
             serde_json::Value::String(entry.package_namespace),
         );
-        if !entry.dep_hashes.is_empty() {
-            new_anns.insert(
-                "kix.dev/depends-on".to_string(),
-                serde_json::Value::String(entry.dep_hashes.join(",")),
-            );
-        }
 
         if let Some(anns) = res
             .manifest

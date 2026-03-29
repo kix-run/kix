@@ -42,9 +42,11 @@ nix build → StoreGraph → stamp annotations
 
 - `store_graph.rs` — **central data structure.** `StoreGraph` holds the full in-memory DAG: `PackageNode` (instance_name, namespace, version, resource_paths, cross_deps), `ResourceNode` (store_path, manifest). Built from result dir's `kix-packages.json` + `nix-store -q --graph`
 - `store.rs` — activation cache at `~/.cache/kix/activations/`. `save/load_activation_path()` for local cache, `resolve_activation_by_hash()` to go from cluster identity-hash → local result dir
-- `eval.rs` — `KixEvaluator` wrapping a `NixBackend` trait with SQLite caching
+- `evaluator.rs` — `KixEvaluator` wrapping a `NixBackend` trait with SQLite caching
+- `cli_backend.rs` — **production backend.** `CliNixBackend` shells out to `nix` CLI commands: `nix flake show --json` for listing clusters, `nix build` + StoreGraph for evaluation. Benefits from Nix's built-in eval cache.
 - `build.rs` — `build_cluster_activation_with_status()` shells out to `nix build .#cluster-{name}-activation`
 - `cache.rs` — SQLite cache keyed by BLAKE3 of (flake path + lock + source fingerprint + attr)
+- `ffi.rs` — experimental `FfiNixBackend` using `nix-bindings-*` FFI crates (gated behind `nix-ffi` feature, not currently used)
 - `mock.rs` — `MockNixBackend` for tests without Nix
 
 #### manifest (`kix/src/manifest/`)
@@ -79,6 +81,6 @@ nix build → StoreGraph → stamp annotations
 
 **Annotations** stamped at build time: `kix.dev/identity-hash`, `kix.dev/package`, `kix.dev/depends-on`, `kix.dev/activations`. Everything downstream reads these, never raw store paths.
 
-**Backend abstraction.** `NixBackend` trait — `FfiNixBackend` (production, `nix-ffi` feature) and `MockNixBackend` (tests, no Nix needed).
+**Backend abstraction.** `NixBackend` trait — `CliNixBackend` (production, shells out to `nix` CLI) and `MockNixBackend` (tests, no Nix needed). An experimental `FfiNixBackend` using direct C FFI exists behind the `nix-ffi` feature but is not currently used.
 
 **Error boundary.** `thiserror` in libraries, `miette` in binary.

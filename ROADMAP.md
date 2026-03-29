@@ -147,7 +147,11 @@
   - `cli/kix-cli/src/plan.rs`: `diff_package_resources()` produces per-resource diffs via `PackageChangeDiff.resource_diffs`. Python version in `tools/kix-diff/kix-diff.py`: `diff_manifests()` with per-resource output.
 - [ ] Warnings when PVCs change or major versions change — hint on the package definition
 - [ ] Live-cluster sanity checks (resource limits, etc.)
-- [ ] Content-hash-based drift detection — recompute hash and compare against live state, contrast with nix store evaluation
+- [x] Content-hash-based drift detection — recompute hash and compare against live state, contrast with nix store evaluation
+  - `kix health` builds intended state, normalizes both sides, compares Blake3 content hashes. Reports InSync/Drifted/Missing per resource.
+- [x] Health check: package-level grouping — resources grouped by `kix.dev/package` annotation, per-package status (healthy/degraded/at-risk)
+- [x] Health check: blast radius analysis — walks dependency graph forward from broken resources to find at-risk dependents. Shows dependency chains in verbose mode.
+  - `cli/kix-cli/src/commands/health.rs`: `compute_blast_radius()` does BFS through `ResourceGraph::dependents()`, marks transitive dependents as AT RISK with reason chains
 - [ ] Merkle-walk integrity check — fast health check without nix build. Walk from the Active Activation CR through `kix.dev/depends-on` edges, verifying identity hashes at each node. Requires enriching `kix.dev/depends-on` with resource hints (`hash:kind/namespace/name`) for targeted GETs instead of full LIST. Two modes: fast integrity (graph walk only) and deep drift (content-hash comparison). See `v2_discussions/archive/51_merkle_health_check.md` for full design.
 - [x] Content-hash normalization for change detection — the live resource always contains server-added fields (uid, resourceVersion, creationTimestamp, defaulted values, status). The content hash must be computed on a normalized representation that strips these fields before comparison, otherwise re-deploy always sees "changed".
   - `cli/kix/src/cluster/normalize.rs`: `normalize_for_content_hash()` strips server metadata, status, kix annotations, kubectl bookkeeping, null values, and sorts keys. `cli/kix/src/cluster/fetch.rs`: `normalize_for_diff()` removes uid, resourceVersion, creationTimestamp, generation, managedFields, status, and last-applied-configuration. Python parity version in `scripts/parity/normalize.py`.

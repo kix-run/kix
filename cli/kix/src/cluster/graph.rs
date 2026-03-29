@@ -72,11 +72,16 @@ impl ResourceGraph {
             let from_idx = id_to_node[&id];
 
             if let Some(deps_str) = get_annotation(manifest, "kix.dev/depends-on") {
-                for dep_hash in deps_str
+                for dep_entry in deps_str
                     .split(',')
                     .map(|s| s.trim())
                     .filter(|s| !s.is_empty())
                 {
+                    // Tagged format: bare hash (implicit), requires:<hash>, extra:<hash>
+                    let dep_hash = dep_entry
+                        .strip_prefix("requires:")
+                        .or_else(|| dep_entry.strip_prefix("extra:"))
+                        .unwrap_or(dep_entry);
                     if let Some(&to_idx) = hash_to_node.get(dep_hash) {
                         // Edge: from depends on to
                         graph.add_edge(from_idx, to_idx, ());
@@ -198,7 +203,7 @@ impl ResourceGraph {
 
         for (i, &root) in roots.iter().enumerate() {
             let is_last = i == roots.len() - 1;
-            self.render_tree_node(&mut output, root, "", is_last, &mut vec![]);
+            self.render_tree_node(&mut output, root, "", is_last, true, &mut vec![]);
         }
 
         output
@@ -210,6 +215,7 @@ impl ResourceGraph {
         idx: NodeIndex,
         prefix: &str,
         is_last: bool,
+        is_root: bool,
         visited: &mut Vec<NodeIndex>,
     ) {
         if visited.contains(&idx) {
@@ -224,7 +230,7 @@ impl ResourceGraph {
         }
         visited.push(idx);
 
-        let connector = if prefix.is_empty() {
+        let connector = if is_root {
             ""
         } else if is_last {
             "└── "
@@ -245,7 +251,7 @@ impl ResourceGraph {
             .neighbors_directed(idx, petgraph::Direction::Incoming)
             .collect();
 
-        let child_prefix = if prefix.is_empty() {
+        let child_prefix = if is_root {
             String::new()
         } else if is_last {
             format!("{}    ", prefix)
@@ -255,7 +261,7 @@ impl ResourceGraph {
 
         for (j, &child) in children.iter().enumerate() {
             let child_is_last = j == children.len() - 1;
-            self.render_tree_node(output, child, &child_prefix, child_is_last, visited);
+            self.render_tree_node(output, child, &child_prefix, child_is_last, false, visited);
         }
 
         visited.pop();

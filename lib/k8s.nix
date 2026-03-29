@@ -164,6 +164,32 @@ rec {
 
       manifestJson = builtins.toJSON rawManifest;
 
+      # --- Dependency annotation (kix.dev/depends-on) ---
+      # Tagged format: bare hash = implicit (interpolation), requires:<hash>, extra:<hash>
+      implicitCtxPaths = builtins.filter (p: lib.hasPrefix "/nix/store/" p) (
+        builtins.attrNames (builtins.getContext manifestJson)
+      );
+      implicitEntries = map extractStoreHash implicitCtxPaths;
+
+      requiresResources = builtins.filter (dep: builtins.isAttrs dep && dep ? outPath) requires;
+      requiresEntries = map (dep: "requires:${extractStoreHash dep}") requiresResources;
+
+      extraResources = builtins.filter (dep: builtins.isAttrs dep && dep ? outPath) extraDeps;
+      extraEntries = map (dep: "extra:${extractStoreHash dep}") extraResources;
+
+      depEntries = implicitEntries ++ requiresEntries ++ extraEntries;
+
+      # Stamp depends-on into manifest annotations (if any deps exist)
+      rawManifestStamped =
+        if depEntries == [ ] then
+          rawManifest
+        else
+          lib.recursiveUpdate rawManifest {
+            metadata.annotations."kix.dev/depends-on" = builtins.concatStringsSep "," depEntries;
+          };
+
+      manifestJsonStamped = builtins.toJSON rawManifestStamped;
+
       # Collect store contexts from requires and extraDeps so they influence
       # the content-addressed store path (Nix store DAG edges).
       allDeps = requires ++ extraDeps;
@@ -172,7 +198,7 @@ rec {
       ) { } allDeps;
 
       # Append dep contexts to manifestJson
-      manifestJsonWithDeps = builtins.appendContext manifestJson depContexts;
+      manifestJsonWithDeps = builtins.appendContext manifestJsonStamped depContexts;
 
       # Sanitize the name for use in store paths (colons and other special
       # characters are not allowed in Nix store path names).
@@ -240,12 +266,12 @@ rec {
         out = mergedOut;
 
         # Raw manifest (real names, dep contexts on strings, no self-context).
-        # Used internally for serialization, hash computation, dep detection.
-        inherit rawManifest;
+        # Includes kix.dev/depends-on annotation when deps exist.
+        rawManifest = rawManifestStamped;
 
         # Manifest re-export with this resource's own context on all strings.
         # Use for cross-resource field access: self.deployment.manifest.spec.X
-        manifest = attachCtxDeep _identityCtx rawManifest;
+        manifest = attachCtxDeep _identityCtx rawManifestStamped;
       };
     in
     self;

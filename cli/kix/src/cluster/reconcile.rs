@@ -223,11 +223,11 @@ pub async fn reconcile(
         0
     };
 
-    // Record deploy start on the Activation CR
+    // Record deploy start on the Activation CR (may 404 if first deploy — harmless)
     if let (Some(ar), Some(act_name)) = (&activation_ar, activation_name)
         && let Err(e) = activation::begin_deploy(client, ar, act_name, wave_actions.len()).await
     {
-        tracing::warn!("failed to set Deploying phase: {e}");
+        tracing::debug!("activation not yet on cluster (first deploy): {e}");
     }
 
     // Apply waves

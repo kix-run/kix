@@ -31,6 +31,8 @@ pub struct KixPackageIndex {
 pub struct StoreGraph {
     pub cluster_name: String,
     pub activation_path: PathBuf,
+    /// The result directory containing kix-packages.json + activation symlink.
+    pub result_dir: PathBuf,
     pub packages: IndexMap<PathBuf, PackageNode>,
     pub resources: HashMap<PathBuf, ResourceNode>,
     /// resource store path → owning PI store path.
@@ -184,6 +186,7 @@ impl StoreGraph {
         Self {
             cluster_name: cluster_name.to_string(),
             activation_path: PathBuf::new(),
+            result_dir: PathBuf::new(),
             packages: IndexMap::new(),
             resources: HashMap::new(),
             resource_owner: HashMap::new(),
@@ -368,6 +371,7 @@ impl StoreGraph {
         Ok(StoreGraph {
             cluster_name: index.cluster,
             activation_path,
+            result_dir: result_dir.to_path_buf(),
             packages,
             resources,
             resource_owner,

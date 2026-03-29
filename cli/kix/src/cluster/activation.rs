@@ -58,6 +58,8 @@ pub struct ActiveActivation {
     pub name: String,
     /// The identity-hash annotation value.
     pub identity_hash: Option<String>,
+    /// Store path of the activation result dir (contains kix-packages.json).
+    pub built_via: Option<String>,
 }
 
 /// Find the Activation ApiResource from discovery results.
@@ -92,15 +94,17 @@ pub async fn find_active(
 
         if active {
             let name = item.metadata.name.clone().unwrap_or_default();
-            let identity_hash = item
-                .data
-                .pointer("/metadata/annotations")
+            let annotations = item.metadata.annotations.as_ref();
+            let identity_hash = annotations
                 .and_then(|a| a.get(IDENTITY_HASH_ANNOTATION))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
+                .cloned();
+            let built_via = annotations
+                .and_then(|a| a.get(BUILT_VIA_ANNOTATION))
+                .cloned();
             return Ok(Some(ActiveActivation {
                 name,
                 identity_hash,
+                built_via,
             }));
         }
     }
@@ -110,15 +114,17 @@ pub async fn find_active(
     for item in &list.items {
         let name = item.metadata.name.as_deref().unwrap_or("");
         if !name.is_empty() {
-            let identity_hash = item
-                .data
-                .pointer("/metadata/annotations")
+            let annotations = item.metadata.annotations.as_ref();
+            let identity_hash = annotations
                 .and_then(|a| a.get(IDENTITY_HASH_ANNOTATION))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
+                .cloned();
+            let built_via = annotations
+                .and_then(|a| a.get(BUILT_VIA_ANNOTATION))
+                .cloned();
             return Ok(Some(ActiveActivation {
                 name: name.to_string(),
                 identity_hash,
+                built_via,
             }));
         }
     }
@@ -140,21 +146,12 @@ pub async fn finalize_deploy(
     old_activation: Option<&ActiveActivation>,
 ) -> Result<(), ActivationError> {
     let api: Api<DynamicObject> = Api::all_with(client.clone(), ar);
-    let pp = PatchParams::apply(FIELD_MANAGER).force();
+    let _pp = PatchParams::apply(FIELD_MANAGER).force();
     let now = chrono::Utc::now().to_rfc3339();
 
-    // 1. Supersede old activation
+    // 1. Supersede old activation (merge patch to preserve existing annotations)
     if let Some(old) = old_activation {
         let patch = json!({
-            "apiVersion": "kix.dev/v1alpha1",
-            "kind": "Activation",
-            "metadata": {
-                "name": old.name,
-                "labels": {
-                    "app.kubernetes.io/managed-by": "kix",
-                    CLUSTER_LABEL: cluster_name,
-                },
-            },
             "spec": {
                 "active": false,
             },
@@ -163,7 +160,7 @@ pub async fn finalize_deploy(
             },
         });
 
-        api.patch(&old.name, &pp, &Patch::Apply(&patch))
+        api.patch(&old.name, &PatchParams::default(), &Patch::Merge(&patch))
             .await
             .map_err(|e| ActivationError::PatchFailed {
                 name: old.name.clone(),
@@ -173,7 +170,8 @@ pub async fn finalize_deploy(
         tracing::info!(activation = %old.name, "marked as Superseded");
     }
 
-    // 2. Update new activation with lifecycle annotations
+    // 2. Update new activation with lifecycle annotations (merge patch to preserve
+    //    kix.dev/identity-hash and other annotations set during wave apply)
     let mut annotations = serde_json::Map::new();
     annotations.insert(DEPLOYED_AT_ANNOTATION.to_string(), Value::String(now));
     if let Some(old) = old_activation
@@ -183,12 +181,8 @@ pub async fn finalize_deploy(
     }
 
     let patch = json!({
-        "apiVersion": "kix.dev/v1alpha1",
-        "kind": "Activation",
         "metadata": {
-            "name": new_activation_name,
             "labels": {
-                "app.kubernetes.io/managed-by": "kix",
                 CLUSTER_LABEL: cluster_name,
             },
             "annotations": annotations,
@@ -202,12 +196,16 @@ pub async fn finalize_deploy(
         },
     });
 
-    api.patch(new_activation_name, &pp, &Patch::Apply(&patch))
-        .await
-        .map_err(|e| ActivationError::PatchFailed {
-            name: new_activation_name.to_string(),
-            source: e,
-        })?;
+    api.patch(
+        new_activation_name,
+        &PatchParams::default(),
+        &Patch::Merge(&patch),
+    )
+    .await
+    .map_err(|e| ActivationError::PatchFailed {
+        name: new_activation_name.to_string(),
+        source: e,
+    })?;
 
     tracing::info!(activation = %new_activation_name, "marked as Active");
 
@@ -243,12 +241,17 @@ pub async fn list_superseded(
     Ok(superseded)
 }
 
+/// Annotation key for the activation result dir store path.
+pub const BUILT_VIA_ANNOTATION: &str = "kix.dev/built-via";
+
 /// Info about a Superseded activation, including when it was deployed.
 #[derive(Debug, Clone)]
 pub struct SupersededActivation {
     pub name: String,
     pub identity_hash: Option<String>,
     pub deployed_at: String,
+    /// Store path of the activation result dir (contains kix-packages.json).
+    pub built_via: Option<String>,
 }
 
 /// List all Superseded activations for a cluster, sorted by deployed-at (most recent first).
@@ -282,25 +285,25 @@ pub async fn list_superseded_activations(
             None => continue,
         };
 
-        let identity_hash = item
-            .data
-            .pointer("/metadata/annotations")
+        let annotations = item.metadata.annotations.as_ref();
+        let identity_hash = annotations
             .and_then(|a| a.get(IDENTITY_HASH_ANNOTATION))
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+            .cloned();
 
-        let deployed_at = item
-            .data
-            .pointer("/metadata/annotations")
+        let deployed_at = annotations
             .and_then(|a| a.get(DEPLOYED_AT_ANNOTATION))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
+            .cloned()
+            .unwrap_or_default();
+
+        let built_via = annotations
+            .and_then(|a| a.get(BUILT_VIA_ANNOTATION))
+            .cloned();
 
         results.push(SupersededActivation {
             name,
             identity_hash,
             deployed_at,
+            built_via,
         });
     }
 

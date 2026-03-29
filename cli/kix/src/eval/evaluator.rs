@@ -104,9 +104,35 @@ impl KixEvaluator {
         Ok(output)
     }
 
-    /// List available clusters (not cached — cheap operation).
+    /// List available clusters, with source-fingerprint caching.
     pub fn list_clusters(&mut self) -> Result<Vec<String>, KixEvalError> {
-        self.backend.list_clusters(&self.flake_path)
+        let start = std::time::Instant::now();
+
+        let fingerprint = self.cache.compute_source_fingerprint(&self.flake_path)?;
+        let cache_key = SqliteCache::compute_key_with_source(
+            &self.flake_path,
+            "__list_clusters",
+            &fingerprint,
+        )?;
+
+        if let Some(cached_json) = self.cache.get(&cache_key)? {
+            if let Ok(names) = serde_json::from_str::<Vec<String>>(&cached_json) {
+                tracing::info!(elapsed = ?start.elapsed(), "list_clusters cache hit");
+                return Ok(names);
+            }
+            tracing::warn!("corrupted list_clusters cache entry, re-evaluating");
+        }
+
+        let names = self.backend.list_clusters(&self.flake_path)?;
+
+        if let Ok(json) = serde_json::to_string(&names)
+            && let Err(e) = self.cache.put(&cache_key, &json)
+        {
+            tracing::warn!(error = %e, "failed to cache list_clusters result");
+        }
+
+        tracing::info!(elapsed = ?start.elapsed(), "list_clusters complete");
+        Ok(names)
     }
 }
 

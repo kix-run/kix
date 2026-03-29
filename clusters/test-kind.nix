@@ -1,13 +1,14 @@
-# clusters/test-kind.nix — Lightweight cluster for local testing with kind.
+# clusters/test-kind-v2.nix — Updated kind cluster for demo (v2).
 #
-# Contains only resources that work out-of-the-box in a vanilla kind cluster.
-# Build:  nix build .#cluster-kind --extra-experimental-features pipe-operators
-# Apply:  kubectl apply -f result/
+# Changes from v1: different message, 2 replicas.
+# Used by demo/vhs/run-demos.sh to simulate a cluster config change.
+#
+# Build:  nix build .#cluster-kind-activation --extra-experimental-features pipe-operators
 
 { kix, packages }:
 
 kix.buildCluster {
-  name = "test-kind";
+  name = "kind";
   modules = [
     kix.flavors.kind
 
@@ -21,7 +22,8 @@ kix.buildCluster {
           echo-server = {
             package = packages.echo-server;
             config = {
-              message = "hello from kix on kind v2!";
+              message = "hello from kix v2 — updated!";
+              replicaCount = 2;
             };
           };
         };

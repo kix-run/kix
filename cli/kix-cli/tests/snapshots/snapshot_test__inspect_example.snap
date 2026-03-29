@@ -3,13 +3,13 @@ source: kix-cli/tests/snapshot_test.rs
 expression: stdout
 ---
 Cluster: example
-Total resources: 114
+Total resources: 115
 
 Namespaces (6):
   (cluster-scoped) (63 resources)
   cache (11 resources)
   cert-manager (18 resources)
-  immich (11 resources)
+  immich (12 resources)
   kube-system (7 resources)
   stackgres-system (4 resources)
 
@@ -31,6 +31,7 @@ Resource kinds:
  ValidatingWebhookConfiguration  2     
  Activation                      1     
  NetworkPolicy                   1     
+ PersistentVolumeClaim           1     
  PodDisruptionBudget             1     
  SGCluster                       1     
  SGInstanceProfile               1     
@@ -140,6 +141,7 @@ Resources:
     PackageInstance/machineLearning
     PackageInstance/postgres
     PackageInstance/storage
+    PersistentVolumeClaim/storage
     SGCluster/postgres
     SGInstanceProfile/postgres-profile
     SGPostgresConfig/postgres-pg16-config

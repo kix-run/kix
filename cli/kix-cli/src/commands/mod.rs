@@ -78,9 +78,9 @@ fn resolve_flake_path(flake: &str) -> miette::Result<PathBuf> {
     }
 }
 
-/// Create a KixEvaluator with the real Nix FFI backend.
+/// Create a KixEvaluator with the CLI subprocess backend.
 fn create_evaluator(flake: &str) -> miette::Result<kix::eval::KixEvaluator> {
-    let backend = kix::eval::ffi::FfiNixBackend::new().map_err(|e| miette::miette!("{:#}", e))?;
+    let backend = kix::eval::CliNixBackend::new();
 
     let flake_path = resolve_flake_path(flake)?;
     let cache_dir = kix::eval::store::default_cache_dir();

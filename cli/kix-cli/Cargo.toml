@@ -10,7 +10,7 @@ name = "kix"
 path = "src/main.rs"
 
 [dependencies]
-kix-lib = { workspace = true, features = ["nix-ffi"] }
+kix-lib.workspace = true
 serde.workspace = true
 kube.workspace = true
 clap.workspace = true

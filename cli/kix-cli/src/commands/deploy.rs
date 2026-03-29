@@ -358,8 +358,15 @@ async fn load_old_from_cluster(
                 );
             }
 
-            // Resolve identity-hash to local store graph
-            match kix::eval::store::resolve_activation_by_hash(cluster, hash) {
+            // Resolve to local store graph: prefer built-via, fall back to hash lookup
+            let result_dir = act
+                .built_via
+                .as_ref()
+                .map(std::path::PathBuf::from)
+                .filter(|p| p.join("kix-packages.json").exists())
+                .or_else(|| kix::eval::store::resolve_activation_by_hash(cluster, hash));
+
+            match result_dir {
                 Some(result_dir) => {
                     let noop = |_: &str| {};
                     match StoreGraph::from_result_dir_with_status(&result_dir, &noop) {

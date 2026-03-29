@@ -72,12 +72,53 @@ pub async fn detect_drift(
 ) -> Result<Vec<DriftReport>, FetchError> {
     // Fetch all kix-managed resources from the cluster
     let live_objects = fetch::fetch_managed_resources(client, discovery).await?;
-
     // Build lookup: (kind, namespace, name) → normalized live manifest
     let mut live_map: std::collections::HashMap<String, Value> = std::collections::HashMap::new();
     for mut obj in live_objects {
         fetch::normalize_for_diff(&mut obj);
-        let value = serde_json::to_value(&obj.data).unwrap_or_default();
+        // Reconstruct a full manifest Value from the DynamicObject.
+        // LIST responses may put name/namespace only in typed metadata,
+        // not in obj.data, so we must merge them back.
+        let mut value = obj.data.clone();
+        if let Some(map) = value.as_object_mut() {
+            let meta = map
+                .entry("metadata")
+                .or_insert_with(|| serde_json::json!({}));
+            if let Some(meta_obj) = meta.as_object_mut() {
+                if let Some(name) = &obj.metadata.name {
+                    meta_obj
+                        .entry("name")
+                        .or_insert_with(|| serde_json::Value::String(name.clone()));
+                }
+                if let Some(ns) = &obj.metadata.namespace {
+                    meta_obj
+                        .entry("namespace")
+                        .or_insert_with(|| serde_json::Value::String(ns.clone()));
+                }
+                if let Some(labels) = &obj.metadata.labels
+                    && !labels.is_empty()
+                {
+                    meta_obj
+                        .entry("labels")
+                        .or_insert_with(|| serde_json::to_value(labels).unwrap_or_default());
+                }
+                if let Some(annotations) = &obj.metadata.annotations
+                    && !annotations.is_empty()
+                {
+                    let existing = meta_obj
+                        .entry("annotations")
+                        .or_insert_with(|| serde_json::json!({}));
+                    if let (Some(existing_map), serde_json::Value::Object(ann_map)) = (
+                        existing.as_object_mut(),
+                        serde_json::to_value(annotations).unwrap_or_default(),
+                    ) {
+                        for (k, v) in ann_map {
+                            existing_map.entry(k).or_insert(v);
+                        }
+                    }
+                }
+            }
+        }
         let rid = ResourceId::from_value(&value);
         let key = format!("{}/{}/{}", rid.kind, rid.namespace, rid.name);
         live_map.insert(key, value);
@@ -90,18 +131,23 @@ pub async fn detect_drift(
 
         let status = match live_map.get(&key) {
             Some(live_value) => {
-                let intended_hash = content_hash(intended_manifest);
-                let live_hash = content_hash(live_value);
+                // Project the live manifest onto the shape of the intended manifest.
+                // Only compare fields that are present in the intended (normalized) manifest.
+                // This ignores server-defaulted fields (strategy, probe defaults, etc.)
+                // which are added by K8s but not declared in the intended state.
+                let norm_intended = normalize_for_content_hash(intended_manifest);
+                let norm_live = normalize_for_content_hash(live_value);
+                let projected_live = project_onto_shape(&norm_intended, &norm_live);
 
-                if intended_hash == live_hash {
+                let intended_hash_str = hash_value(&norm_intended);
+                let projected_hash_str = hash_value(&projected_live);
+
+                if intended_hash_str == projected_hash_str {
                     DriftStatus::InSync
                 } else {
                     // Generate a human-readable diff
-                    let intended_yaml =
-                        serde_yml::to_string(&normalize_for_content_hash(intended_manifest))
-                            .unwrap_or_default();
-                    let live_yaml = serde_yml::to_string(&normalize_for_content_hash(live_value))
-                        .unwrap_or_default();
+                    let intended_yaml = serde_yml::to_string(&norm_intended).unwrap_or_default();
+                    let live_yaml = serde_yml::to_string(&projected_live).unwrap_or_default();
 
                     let diff = unified_diff(&intended_yaml, &live_yaml);
                     DriftStatus::Drifted { diff }
@@ -200,6 +246,56 @@ fn sort_keys(v: &Value) -> Value {
         }
         Value::Array(arr) => Value::Array(arr.iter().map(sort_keys).collect()),
         other => other.clone(),
+    }
+}
+
+/// Blake3 hash of a normalized Value (already sorted/stripped).
+fn hash_value(v: &Value) -> String {
+    let canonical = serde_json::to_string(v).unwrap_or_default();
+    blake3::hash(canonical.as_bytes()).to_hex().to_string()
+}
+
+/// Project `live` onto the shape of `intended` — only keep fields that exist in `intended`.
+///
+/// For objects: only include keys present in `intended`, recursing into nested objects.
+/// For arrays: keep the full live array (don't drop elements) but project each element
+/// onto the shape of the corresponding intended element (by index).
+/// For scalars: return the live value.
+///
+/// This ensures server-defaulted fields (e.g. `strategy`, `progressDeadlineSeconds`,
+/// probe `scheme`/`timeoutSeconds`) are ignored in comparison since they don't appear
+/// in the intended manifest.
+fn project_onto_shape(intended: &Value, live: &Value) -> Value {
+    match (intended, live) {
+        (Value::Object(intended_map), Value::Object(live_map)) => {
+            let mut result = serde_json::Map::new();
+            for (key, intended_val) in intended_map {
+                if let Some(live_val) = live_map.get(key) {
+                    result.insert(key.clone(), project_onto_shape(intended_val, live_val));
+                }
+                // If key is in intended but not in live, it's missing — keep intended
+                // value so the diff shows it as removed
+            }
+            Value::Object(result)
+        }
+        (Value::Array(intended_arr), Value::Array(live_arr)) => {
+            // Project element-by-element where both exist
+            let projected: Vec<Value> = live_arr
+                .iter()
+                .enumerate()
+                .map(|(i, live_elem)| {
+                    if let Some(intended_elem) = intended_arr.get(i) {
+                        project_onto_shape(intended_elem, live_elem)
+                    } else {
+                        // Live has more elements than intended — keep as-is
+                        live_elem.clone()
+                    }
+                })
+                .collect();
+            Value::Array(projected)
+        }
+        // For scalars or type mismatches, return the live value as-is
+        (_, live) => live.clone(),
     }
 }
 

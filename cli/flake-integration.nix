@@ -1,15 +1,13 @@
 # Nix flake integration for the kix CLI binary.
 #
 # This file shows how to add `packages.kix` and `apps.kix` outputs
-# to the kixpkgs flake. It uses Crane for building and links against
-# Nix C libraries for FFI evaluation.
+# to the kixpkgs flake. It uses Crane for building.
 #
 # To integrate, add the inputs and merge the perSystem outputs into
 # the existing flake.nix.
 #
 # Prerequisites:
 #   - Nix >= 2.28.0 with flakes enabled
-#   - nix-bindings-rust crates (from github:cachix/nix-bindings-rust, branch for-upstream)
 #   - Cargo.lock up to date
 #
 # Usage:
@@ -24,15 +22,6 @@
   #   url = "github:ipetkov/crane";
   #   inputs.nixpkgs.follows = "nixpkgs";
   # };
-  #
-  # inputs.nix-src = {
-  #   url = "github:NixOS/nix/2.28.0";
-  # };
-  #
-  # inputs.nix-bindings-rust = {
-  #   url = "github:cachix/nix-bindings-rust/for-upstream";
-  #   inputs.nix.follows = "nix-src";
-  # };
 
   # --- perSystem output (inside flake-parts perSystem module) ---
   #
@@ -43,55 +32,27 @@
       pkgs,
       lib,
       crane,
-      nix-src,
       ...
     }:
     let
       craneLib = crane.mkLib pkgs;
 
-      # Nix C libraries needed for FFI
-      nixPkg = nix-src.packages.${pkgs.system}.default;
-      nixLibs = [
-        nixPkg.libs.nix-expr-c
-        nixPkg.libs.nix-store-c
-        nixPkg.libs.nix-util-c
-        nixPkg.libs.nix-flake-c
-        nixPkg.libs.nix-fetchers-c
-      ];
-
-      # pkg-config names that nix-bindings-*-sys crates look for:
-      #   nix-util-c, nix-store-c, nix-expr-c, nix-flake-c, nix-fetchers-c, bdw-gc
-      #
-      # bindgenHook sets LIBCLANG_PATH for generating Rust bindings from C headers.
-
       commonArgs = {
         src = craneLib.cleanCargoSource ../cli;
         strictDeps = true;
 
-        buildInputs =
-          nixLibs
-          ++ [
-            pkgs.boehmgc
-            pkgs.openssl
-          ]
-          ++ lib.optionals pkgs.stdenv.isLinux [ pkgs.dbus ]
-          ++ lib.optionals pkgs.stdenv.isDarwin [
-            pkgs.darwin.apple_sdk.frameworks.Security
-            pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
-          ];
+        buildInputs = [
+          pkgs.openssl
+        ]
+        ++ lib.optionals pkgs.stdenv.isLinux [ pkgs.dbus ]
+        ++ lib.optionals pkgs.stdenv.isDarwin [
+          pkgs.darwin.apple_sdk.frameworks.Security
+          pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
+        ];
 
         nativeBuildInputs = [
           pkgs.pkg-config
-          pkgs.rustPlatform.bindgenHook
         ];
-
-        # Enable the nix-ffi feature for real FFI evaluation
-        cargoExtraArgs = "--features nix-ffi";
-
-        # Ensure Nix C libraries are found at runtime
-        postFixup = ''
-          patchelf --add-rpath ${lib.makeLibraryPath nixLibs} $out/bin/kix
-        '';
       };
 
       # Build dependencies separately for caching

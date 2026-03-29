@@ -1,4 +1,4 @@
-//! Nix FFI wrapper for kix.
+//! Nix evaluation layer for kix.
 //!
 //! Provides store management, expression evaluation, flake attribute
 //! navigation, eval caching, and error translation. All Nix complexity
@@ -6,17 +6,23 @@
 //!
 //! # Backend selection
 //!
-//! The `NixBackend` trait in [`eval`] abstracts over Nix evaluation.
-//! Two implementations exist:
+//! The `NixBackend` trait in [`evaluator`] abstracts over Nix evaluation.
+//! Three implementations exist:
+//!
+//! - [`cli_backend::CliNixBackend`] — shells out to `nix` CLI commands.
+//!   Default backend for production use. Benefits from Nix's built-in
+//!   eval cache for fast repeated invocations.
 //!
 //! - [`mock::MockNixBackend`] — returns canned data, always available,
 //!   used for testing and development without a Nix installation.
 //!
-//! - `NixFfiBackend` (gated behind `#[cfg(feature = "nix-ffi")]`) —
-//!   real FFI evaluation via `nix-bindings-*` crates.
+//! - `FfiNixBackend` (gated behind `#[cfg(feature = "nix-ffi")]`) —
+//!   direct FFI evaluation via `nix-bindings-*` crates. Experimental,
+//!   not currently used by the CLI.
 
 pub mod build;
 pub mod cache;
+pub mod cli_backend;
 pub mod error;
 pub mod evaluator;
 pub mod mock;
@@ -25,10 +31,12 @@ pub mod store_graph;
 pub mod value;
 
 pub use build::{build_cluster_activation, build_cluster_activation_with_status};
+pub use cli_backend::CliNixBackend;
 pub use error::KixEvalError;
 pub use evaluator::{ClusterOutput, KixEvaluator, NixBackend};
 pub use store_graph::{CrossDep, KixPackageIndex, PackageNode, ResourceNode, StoreGraph};
 
 /// Real Nix FFI backend — available only when built with Nix C libraries.
+/// Experimental: not currently used by the CLI.
 #[cfg(feature = "nix-ffi")]
 pub mod ffi;

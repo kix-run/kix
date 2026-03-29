@@ -30,14 +30,17 @@
 //! registration (`nix_init()` is called first via `Once`).
 
 use std::cell::RefCell;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Once;
 
 use anyhow::{Context, Result};
 use nix_bindings_expr::eval_state::{self, EvalState, EvalStateBuilder, ThreadRegistrationGuard};
 use nix_bindings_expr::value::ValueType;
 use nix_bindings_fetchers::FetchersSettings;
-use nix_bindings_flake::{EvalStateBuilderExt, FlakeSettings};
+use nix_bindings_flake::{
+    EvalStateBuilderExt, FlakeLockFlags, FlakeReference, FlakeReferenceParseFlags, FlakeSettings,
+    LockedFlake,
+};
 use nix_bindings_store::store::Store;
 use nix_bindings_util::settings;
 use serde_json::Value;
@@ -79,23 +82,38 @@ fn gc_register_current_thread() -> Result<()> {
 
 /// Real Nix FFI backend.
 ///
+/// Uses the `LockedFlake` API to participate in Nix's built-in eval cache
+/// (`~/.cache/nix/eval-cache-v*/`). This makes repeated evaluations fast —
+/// attribute names and values are cached by Nix itself, unlike the previous
+/// `eval_from_string` + `builtins.getFlake` approach which bypassed the cache.
+///
 /// SAFETY: This type wraps Nix C pointers that are not Send/Sync by default.
 /// We guarantee single-threaded access — all evaluation happens on one thread.
 /// The KixEvaluator wraps this behind a non-shared mutable reference.
 pub struct FfiNixBackend {
     eval_state: EvalState,
-    // Kept alive for the lifetime of the backend (Nix requires them).
-    _flake_settings: FlakeSettings,
-    _fetchers_settings: FetchersSettings,
+    flake_settings: FlakeSettings,
+    fetchers_settings: FetchersSettings,
+    /// Cached flake outputs for the most recently locked flake path.
+    /// Avoids re-locking the flake on every eval_cluster/list_clusters call
+    /// within the same CLI invocation.
+    cached_outputs: Option<CachedFlakeOutputs>,
+}
+
+/// Cached LockedFlake and its outputs Value for a specific flake path.
+struct CachedFlakeOutputs {
+    flake_path: PathBuf,
+    /// The locked flake — kept alive so the outputs Value remains valid.
+    _locked_flake: LockedFlake,
+    /// The lazy outputs attrset from `locked_flake.outputs()`.
+    outputs: nix_bindings_expr::value::Value,
 }
 
 // SAFETY: FfiNixBackend wraps Nix C pointers (via EvalState) that are not Send.
 // We guarantee single-threaded access through these invariants:
 // 1. KixEvaluator holds this as Box<dyn NixBackend> behind &mut self — no shared access.
 // 2. eval_cluster() and list_clusters() are the only entry points; both take &mut self.
-// 3. _flake_settings and _fetchers_settings are kept alive for Nix's lifetime requirements
-//    but are never accessed after construction — they are purely RAII guards.
-// 4. The NixBackend trait requires Send for boxing, but the evaluator is never moved
+// 3. The NixBackend trait requires Send for boxing, but the evaluator is never moved
 //    across threads — it lives on the main thread for its entire lifetime.
 unsafe impl Send for FfiNixBackend {}
 
@@ -103,16 +121,6 @@ impl FfiNixBackend {
     /// Create a new FFI backend.
     ///
     /// Opens a store and creates an EvalState with flake support.
-    ///
-    /// # FFI safety
-    ///
-    /// All nix-bindings-rust APIs used here return `Result` and handle null/invalid
-    /// pointers internally — `Store::open`, `EvalStateBuilder::new`, and `.build()`
-    /// return errors rather than null pointers on failure. The `require_string` and
-    /// `eval_from_string` methods similarly return `Result` on invalid values.
-    /// Memory for Nix values is managed by the Boehm GC (registered via
-    /// `gc_register_current_thread`), and string results from `require_string`
-    /// are copied into owned Rust `String`s — no borrowed references to Nix memory.
     pub fn new() -> Result<Self, KixEvalError> {
         tracing::debug!("initializing Nix runtime");
         gc_register_current_thread().map_err(KixEvalError::init)?;
@@ -141,14 +149,108 @@ impl FfiNixBackend {
 
         Ok(Self {
             eval_state,
-            _flake_settings: flake_settings,
-            _fetchers_settings: fetchers_settings,
+            flake_settings,
+            fetchers_settings,
+            cached_outputs: None,
         })
     }
 
-    // NOTE: eval_flake via FlakeReference API is available for future use
-    // when we want to avoid eval_from_string. For now, eval_from_string with
-    // builtins.getFlake is simpler and handles the flake-parts output structure.
+    /// Ensure the cached flake outputs are populated for the given flake path.
+    ///
+    /// Uses the `LockedFlake` API which participates in Nix's eval cache.
+    /// The outputs are lazy — only attributes that are actually accessed get evaluated.
+    fn ensure_flake_outputs(&mut self, flake_path: &Path) -> Result<(), KixEvalError> {
+        // Already cached for this path?
+        if let Some(ref cached) = self.cached_outputs {
+            if cached.flake_path == flake_path {
+                return Ok(());
+            }
+        }
+
+        let flake_str = flake_path.to_string_lossy();
+        validate_nix_string_safe(&flake_str, "lock_flake")?;
+
+        tracing::debug!(flake = %flake_str, "locking flake via LockedFlake API");
+
+        let parse_flags =
+            FlakeReferenceParseFlags::new(&self.flake_settings).map_err(KixEvalError::init)?;
+        let lock_flags = FlakeLockFlags::new(&self.flake_settings).map_err(KixEvalError::init)?;
+
+        let (flake_ref, _fragment) = FlakeReference::parse_with_fragment(
+            &self.fetchers_settings,
+            &self.flake_settings,
+            &parse_flags,
+            &format!("path:{}", flake_str),
+        )
+        .map_err(|e| KixEvalError::eval(flake_str.to_string(), "lock_flake", e))?;
+
+        let locked_flake = LockedFlake::lock(
+            &self.fetchers_settings,
+            &self.flake_settings,
+            &self.eval_state,
+            &lock_flags,
+            &flake_ref,
+        )
+        .map_err(|e| KixEvalError::eval(flake_str.to_string(), "lock_flake", e))?;
+        tracing::debug!("flake locked");
+
+        let outputs = locked_flake
+            .outputs(&self.flake_settings, &mut self.eval_state)
+            .map_err(|e| KixEvalError::eval(flake_str.to_string(), "get_outputs", e))?;
+        tracing::debug!("flake outputs obtained (lazy)");
+
+        self.cached_outputs = Some(CachedFlakeOutputs {
+            flake_path: flake_path.to_path_buf(),
+            _locked_flake: locked_flake,
+            outputs,
+        });
+
+        Ok(())
+    }
+
+    /// Get cached flake outputs. Must call `ensure_flake_outputs` first.
+    fn flake_outputs(&self) -> &nix_bindings_expr::value::Value {
+        &self
+            .cached_outputs
+            .as_ref()
+            .expect("ensure_flake_outputs not called")
+            .outputs
+    }
+
+    /// Navigate from flake outputs down to `legacyPackages.<system>.kixClusters`.
+    fn get_kix_clusters(
+        &mut self,
+        flake_path: &Path,
+    ) -> Result<nix_bindings_expr::value::Value, KixEvalError> {
+        let flake_str = flake_path.to_string_lossy().to_string();
+
+        // Get current system
+        let sys_value = self
+            .eval_state
+            .eval_from_string("builtins.currentSystem", ".")
+            .map_err(|e| KixEvalError::eval(flake_str.clone(), "currentSystem", e))?;
+        let system = self
+            .eval_state
+            .require_string(&sys_value)
+            .map_err(|e| KixEvalError::eval(flake_str.clone(), "currentSystem", e))?;
+
+        self.ensure_flake_outputs(flake_path)?;
+        let outputs = self.flake_outputs().clone();
+
+        let legacy_pkgs = self
+            .eval_state
+            .require_attrs_select(&outputs, "legacyPackages")
+            .map_err(|e| KixEvalError::eval(flake_str.clone(), "legacyPackages", e))?;
+
+        let per_system = self
+            .eval_state
+            .require_attrs_select(&legacy_pkgs, &system)
+            .map_err(|e| KixEvalError::eval(flake_str.clone(), &system, e))?;
+
+        self.eval_state
+            .require_attrs_select(&per_system, "kixClusters")
+            .map_err(|e| KixEvalError::eval(flake_str.clone(), "kixClusters", e))
+    }
 
     /// Classify a Nix evaluation error as either ClusterNotFound or a generic eval error.
     fn classify_eval_error(
@@ -195,9 +297,6 @@ impl NixBackend for FfiNixBackend {
         flake_path: &Path,
         cluster_name: &str,
     ) -> Result<ClusterOutput, KixEvalError> {
-        // SECURITY: This validation is critical — `cluster_name` is interpolated into a Nix
-        // expression string below. Only alphanumeric, hyphens, and underscores are safe.
-        // Relaxing this check without updating the interpolation could enable Nix injection.
         if !cluster_name
             .chars()
             .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
@@ -205,58 +304,45 @@ impl NixBackend for FfiNixBackend {
             return Err(KixEvalError::not_found(cluster_name));
         }
         tracing::info!(cluster = cluster_name, "evaluating cluster");
+        let flake_str = flake_path.to_string_lossy().to_string();
 
-        let flake_str = flake_path.to_string_lossy();
-        validate_nix_string_safe(&flake_str, cluster_name)?;
+        let kix_clusters = self.get_kix_clusters(flake_path)?;
 
-        // Evaluate cluster rawManifests via the flake's legacyPackages output.
-        // The flake exposes: legacyPackages.<system>.kixClusters.<name>
-        debug_assert!(
-            cluster_name
-                .chars()
-                .all(|c| c.is_alphanumeric() || c == '-' || c == '_'),
-            "cluster name must be pre-validated before Nix expression interpolation"
-        );
-        let raw_manifests_expr = format!(
-            r#"
-            let
-              flake = builtins.getFlake "path:{}";
-              sys = builtins.currentSystem;
-            in builtins.toJSON flake.legacyPackages.${{sys}}.kixClusters.{}.rawManifests
-            "#,
-            flake_str, cluster_name
-        );
-
-        // Use eval_from_string for the expression.
-        // Attribute-missing errors surface either here or during force(),
-        // so we check both for "not found" patterns.
-        let json_value = self
+        let cluster = self
             .eval_state
-            .eval_from_string(&raw_manifests_expr, ".")
+            .require_attrs_select(&kix_clusters, cluster_name)
             .map_err(|e| Self::classify_eval_error(e, &flake_str, cluster_name))?;
-        tracing::debug!(cluster = cluster_name, "expression parsed");
 
-        // Force evaluation — attribute errors often surface here rather than
-        // during initial parse.
-        self.eval_state
-            .force(&json_value)
-            .map_err(|e| Self::classify_eval_error(e, &flake_str, cluster_name))?;
-        tracing::debug!(cluster = cluster_name, "evaluation forced");
-
-        // Get the JSON string
-        let json_str = self
+        let raw_manifests_value = self
             .eval_state
-            .require_string(&json_value)
-            .map_err(|e| KixEvalError::eval(flake_str.to_string(), cluster_name, e))?;
+            .require_attrs_select(&cluster, "rawManifests")
+            .map_err(|e| Self::classify_eval_error(e, &flake_str, cluster_name))?;
 
-        // Parse JSON into manifests
-        let raw_manifests: Vec<Value> = serde_json::from_str(&json_str).map_err(|e| {
-            KixEvalError::eval(
-                flake_str.to_string(),
-                cluster_name,
-                anyhow::anyhow!("failed to parse manifest JSON: {}", e),
-            )
-        })?;
+        // Force and convert the manifests list to JSON via value tree walking.
+        let raw_manifests_json = nix_value_to_json(&mut self.eval_state, &raw_manifests_value)
+            .map_err(|e| KixEvalError::eval(flake_str.clone(), cluster_name, e))?;
+
+        let raw_manifests: Vec<Value> = match raw_manifests_json {
+            Value::Array(arr) => arr,
+            other => {
+                return Err(KixEvalError::eval(
+                    flake_str,
+                    cluster_name,
+                    anyhow::anyhow!(
+                        "expected rawManifests to be a list, got {}",
+                        match &other {
+                            Value::Null => "null",
+                            Value::Bool(_) => "bool",
+                            Value::Number(_) => "number",
+                            Value::String(_) => "string",
+                            Value::Object(_) => "attrset",
+                            Value::Array(_) => unreachable!(),
+                        }
+                    ),
+                ));
+            }
+        };
+
         tracing::debug!(
             cluster = cluster_name,
             manifests = raw_manifests.len(),
@@ -271,40 +357,15 @@ impl NixBackend for FfiNixBackend {
 
     fn list_clusters(&mut self, flake_path: &Path) -> Result<Vec<String>, KixEvalError> {
         tracing::debug!("listing available clusters");
-        let flake_str = flake_path.to_string_lossy();
-        validate_nix_string_safe(&flake_str, "list_clusters")?;
 
-        let expr = format!(
-            r#"
-            let
-              flake = builtins.getFlake "path:{}";
-              sys = builtins.currentSystem;
-            in builtins.toJSON (builtins.attrNames flake.legacyPackages.${{sys}}.kixClusters)
-            "#,
-            flake_str
-        );
+        let kix_clusters = self.get_kix_clusters(flake_path)?;
 
-        let json_value = self
+        let names = self
             .eval_state
-            .eval_from_string(&expr, ".")
-            .map_err(|e| KixEvalError::eval(flake_str.to_string(), "list_clusters", e))?;
-
-        self.eval_state
-            .force(&json_value)
-            .map_err(|e| KixEvalError::eval(flake_str.to_string(), "list_clusters", e))?;
-
-        let json_str = self
-            .eval_state
-            .require_string(&json_value)
-            .map_err(|e| KixEvalError::eval(flake_str.to_string(), "list_clusters", e))?;
-
-        let names: Vec<String> = serde_json::from_str(&json_str).map_err(|e| {
-            KixEvalError::eval(
-                flake_str.to_string(),
-                "list_clusters",
-                anyhow::anyhow!("failed to parse cluster names: {}", e),
-            )
-        })?;
+            .require_attrs_names(&kix_clusters)
+            .map_err(|e| {
+                KixEvalError::eval(flake_path.to_string_lossy().to_string(), "list_clusters", e)
+            })?;
         tracing::debug!(count = names.len(), "clusters found");
 
         Ok(names)

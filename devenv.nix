@@ -146,6 +146,6 @@ in
 
   # kix CLI
   scripts.kix.exec = ''
-    cargo run --manifest-path "$DEVENV_ROOT/cli/Cargo.toml" -- "$@"
+    cargo run --manifest-path "$DEVENV_ROOT/cli/Cargo.toml" --bin kix -- "$@"
   '';
 }
