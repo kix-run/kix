@@ -83,3 +83,31 @@ The Nix evaluation currently produces one DAG per cluster. If multiple activatio
 The `kix.dev/activations` annotation (set by `update_activations_annotation` in `apply.rs`) already tracks which activations reference each resource. This is the foundation for reference-counted cleanup — the finalizer just needs to check whether other activations still reference a resource before deleting it.
 
 The operator currently hard-codes skip lists for its own CRDs. This should evolve into a general mechanism, not a growing list of special cases.
+
+## 6 Potential Solutions
+
+### one activation per cluster
+compile checks verify on this level
+
+### lsp isolate activations fully at compile time
+-> everyone gets their own coredns
+by prefixing every name
+
+### let kix reuse what is the same
+-> if people want the exact same thing they get it
+=> very dangeous
+
+### create a "flavor" / import-from-activation
+pull out the system services into their own activation and import this activation instead
+
+### conflict on hash - kix reuse with uniqueness block
+collide on same resource name when marked
+
+### organizational separation
+-> organize activations into teams
+could be namespaces in kubernetes as well
+separate "who runs things"
+
+
+active activation = hard boundary
+
