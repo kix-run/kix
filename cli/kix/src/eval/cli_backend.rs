@@ -11,8 +11,10 @@
 use std::path::Path;
 use std::process::Command;
 
+use std::collections::BTreeMap;
+
 use super::error::KixEvalError;
-use super::evaluator::{ClusterOutput, NixBackend};
+use super::evaluator::{ClusterOutput, ClusterPackageInfo, NixBackend, PackageInfo};
 
 /// Nix CLI subprocess backend.
 pub struct CliNixBackend;
@@ -124,5 +126,122 @@ impl NixBackend for CliNixBackend {
         tracing::debug!(count = clusters.len(), "clusters found");
 
         Ok(clusters)
+    }
+
+    fn list_packages(
+        &mut self,
+        flake_path: &Path,
+    ) -> Result<BTreeMap<String, PackageInfo>, KixEvalError> {
+        tracing::debug!("listing packages via nix eval");
+
+        let attr = format!(".#legacyPackages.{}.kixPackages", current_nix_system());
+
+        let output = Command::new("nix")
+            .args([
+                "eval",
+                &attr,
+                "--json",
+                "--extra-experimental-features",
+                "nix-command flakes pipe-operators",
+            ])
+            .current_dir(flake_path)
+            .output()
+            .map_err(|e| KixEvalError::StoreGraphError {
+                message: format!("failed to run nix eval: {e}"),
+            })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(KixEvalError::StoreGraphError {
+                message: format!("nix eval kixPackages failed: {stderr}"),
+            });
+        }
+
+        let packages: BTreeMap<String, PackageInfo> = serde_json::from_slice(&output.stdout)
+            .map_err(|e| KixEvalError::StoreGraphError {
+                message: format!("failed to parse kixPackages output: {e}"),
+            })?;
+
+        tracing::debug!(count = packages.len(), "packages found");
+        Ok(packages)
+    }
+
+    fn list_cluster_packages(
+        &mut self,
+        flake_path: &Path,
+        cluster_name: &str,
+    ) -> Result<ClusterPackageInfo, KixEvalError> {
+        if !cluster_name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+        {
+            return Err(KixEvalError::not_found(cluster_name));
+        }
+
+        tracing::debug!(
+            cluster = cluster_name,
+            "listing cluster packages via nix eval"
+        );
+
+        let attr = format!(
+            ".#legacyPackages.{}.kixClusters.{}.info",
+            current_nix_system(),
+            cluster_name
+        );
+
+        let output = Command::new("nix")
+            .args([
+                "eval",
+                &attr,
+                "--json",
+                "--extra-experimental-features",
+                "nix-command flakes pipe-operators",
+            ])
+            .current_dir(flake_path)
+            .output()
+            .map_err(|e| KixEvalError::StoreGraphError {
+                message: format!("failed to run nix eval: {e}"),
+            })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            // Check if this looks like a cluster-not-found error
+            if stderr.contains("does not provide attribute") {
+                return Err(KixEvalError::ClusterNotFound {
+                    name: cluster_name.to_string(),
+                });
+            }
+            return Err(KixEvalError::StoreGraphError {
+                message: format!("nix eval cluster info failed: {stderr}"),
+            });
+        }
+
+        let info: ClusterPackageInfo =
+            serde_json::from_slice(&output.stdout).map_err(|e| KixEvalError::StoreGraphError {
+                message: format!("failed to parse cluster info output: {e}"),
+            })?;
+
+        tracing::debug!(
+            cluster = cluster_name,
+            instances = info.instances.values().map(|ns| ns.len()).sum::<usize>(),
+            available = info.available_packages.len(),
+            "cluster packages found"
+        );
+        Ok(info)
+    }
+}
+
+/// Determine the current Nix system string at compile time.
+fn current_nix_system() -> &'static str {
+    if cfg!(all(target_arch = "x86_64", target_os = "linux")) {
+        "x86_64-linux"
+    } else if cfg!(all(target_arch = "aarch64", target_os = "linux")) {
+        "aarch64-linux"
+    } else if cfg!(all(target_arch = "x86_64", target_os = "macos")) {
+        "x86_64-darwin"
+    } else if cfg!(all(target_arch = "aarch64", target_os = "macos")) {
+        "aarch64-darwin"
+    } else {
+        "x86_64-linux"
     }
 }

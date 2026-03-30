@@ -21,6 +21,31 @@ pub struct ClusterOutput {
     pub raw_manifests: Vec<Value>,
 }
 
+/// Version info for a package in the global registry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PackageInfo {
+    pub version: Option<String>,
+}
+
+/// Version + auto-instantiation info for a cluster instance.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstanceInfo {
+    pub version: Option<String>,
+    #[serde(default)]
+    pub auto: bool,
+}
+
+/// Per-cluster package metadata (instances + available packages).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClusterPackageInfo {
+    /// Nested: namespace → instance name → info
+    pub instances:
+        std::collections::BTreeMap<String, std::collections::BTreeMap<String, InstanceInfo>>,
+    /// Available packages (may include packages not yet instantiated)
+    #[serde(rename = "availablePackages")]
+    pub available_packages: std::collections::BTreeMap<String, PackageInfo>,
+}
+
 /// Abstraction over Nix evaluation. Implementations provide either real
 /// FFI evaluation or mock/test data.
 pub trait NixBackend: Send {
@@ -33,6 +58,19 @@ pub trait NixBackend: Send {
 
     /// List available cluster names in the flake.
     fn list_clusters(&mut self, flake_path: &Path) -> Result<Vec<String>, KixEvalError>;
+
+    /// List all packages in the flake with version info.
+    fn list_packages(
+        &mut self,
+        flake_path: &Path,
+    ) -> Result<std::collections::BTreeMap<String, PackageInfo>, KixEvalError>;
+
+    /// List instances and available packages for a specific cluster.
+    fn list_cluster_packages(
+        &mut self,
+        flake_path: &Path,
+        cluster_name: &str,
+    ) -> Result<ClusterPackageInfo, KixEvalError>;
 }
 
 /// Evaluator wrapping a `NixBackend`.
@@ -133,6 +171,86 @@ impl KixEvaluator {
 
         tracing::info!(elapsed = ?start.elapsed(), "list_clusters complete");
         Ok(names)
+    }
+
+    /// List all packages with version info, with source-fingerprint caching.
+    pub fn list_packages(
+        &mut self,
+    ) -> Result<std::collections::BTreeMap<String, PackageInfo>, KixEvalError> {
+        let start = std::time::Instant::now();
+
+        let fingerprint = self.cache.compute_source_fingerprint(&self.flake_path)?;
+        let cache_key = SqliteCache::compute_key_with_source(
+            &self.flake_path,
+            "__list_packages",
+            &fingerprint,
+        )?;
+
+        if let Some(cached_json) = self.cache.get(&cache_key)? {
+            if let Ok(packages) = serde_json::from_str::<
+                std::collections::BTreeMap<String, PackageInfo>,
+            >(&cached_json)
+            {
+                tracing::info!(elapsed = ?start.elapsed(), "list_packages cache hit");
+                return Ok(packages);
+            }
+            tracing::warn!("corrupted list_packages cache entry, re-evaluating");
+        }
+
+        let packages = self.backend.list_packages(&self.flake_path)?;
+
+        if let Ok(json) = serde_json::to_string(&packages)
+            && let Err(e) = self.cache.put(&cache_key, &json)
+        {
+            tracing::warn!(error = %e, "failed to cache list_packages result");
+        }
+
+        tracing::info!(elapsed = ?start.elapsed(), "list_packages complete");
+        Ok(packages)
+    }
+
+    /// List instances and available packages for a cluster, with caching.
+    pub fn list_cluster_packages(
+        &mut self,
+        cluster_name: &str,
+    ) -> Result<ClusterPackageInfo, KixEvalError> {
+        let start = std::time::Instant::now();
+
+        let fingerprint = self.cache.compute_source_fingerprint(&self.flake_path)?;
+        let cache_key = SqliteCache::compute_key_with_source(
+            &self.flake_path,
+            &format!("__cluster_packages_{cluster_name}"),
+            &fingerprint,
+        )?;
+
+        if let Some(cached_json) = self.cache.get(&cache_key)? {
+            if let Ok(info) = serde_json::from_str::<ClusterPackageInfo>(&cached_json) {
+                tracing::info!(
+                    cluster = cluster_name,
+                    elapsed = ?start.elapsed(),
+                    "list_cluster_packages cache hit"
+                );
+                return Ok(info);
+            }
+            tracing::warn!("corrupted list_cluster_packages cache entry, re-evaluating");
+        }
+
+        let info = self
+            .backend
+            .list_cluster_packages(&self.flake_path, cluster_name)?;
+
+        if let Ok(json) = serde_json::to_string(&info)
+            && let Err(e) = self.cache.put(&cache_key, &json)
+        {
+            tracing::warn!(error = %e, "failed to cache list_cluster_packages result");
+        }
+
+        tracing::info!(
+            cluster = cluster_name,
+            elapsed = ?start.elapsed(),
+            "list_cluster_packages complete"
+        );
+        Ok(info)
     }
 }
 

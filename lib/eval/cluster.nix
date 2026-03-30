@@ -306,6 +306,68 @@ in
         inherit allInstancesList;
       };
 
+      # --- Lightweight metadata for CLI tooling (no manifest generation) ---
+
+      # Detect inline attrset packages (have `build` but aren't kix-imports).
+      isInlinePackage = v: builtins.isAttrs v && v ? build && (v._type or "") != "kix-import";
+
+      isPackageEntry =
+        v:
+        builtins.isFunction v
+        || (v._type or "") == "kix-import"
+        || (builtins.isAttrs v && v ? package)
+        || (builtins.isAttrs v && v ? build);
+
+      getPackageFromEntry =
+        v:
+        if builtins.isFunction v then
+          v
+        else if (v._type or "") == "kix-import" then
+          v
+        else if builtins.isAttrs v && v ? build then
+          v
+        else
+          v.package;
+
+      instanceInfo = lib.mapAttrs (
+        _nsName: nsInsts:
+        lib.mapAttrs (
+          _instName: instCfg:
+          let
+            pkgMeta = meta.peekPackageMeta {
+              package = instCfg.package;
+              inherit kixlib;
+            };
+          in
+          {
+            version = pkgMeta.version or null;
+            auto = instCfg._autoInstantiated or false;
+          }
+        ) nsInsts
+      ) mergedInstances;
+
+      availablePackagesInfo = lib.mapAttrs (
+        _name: value:
+        let
+          version =
+            if isInlinePackage value then
+              "inline"
+            else
+              (meta.peekPackageMeta {
+                package = getPackageFromEntry value;
+                inherit kixlib;
+              }).version or null;
+        in
+        {
+          inherit version;
+        }
+      ) (lib.filterAttrs (_: isPackageEntry) cfg.availablePackages);
+
+      info = {
+        instances = instanceInfo;
+        availablePackages = availablePackagesInfo;
+      };
+
     in
     builtins.seq clusterDiagnostics.assertionCheck {
       _type = "k8s-cluster-v2";
@@ -316,7 +378,7 @@ in
 
       namespaces = nsResources;
 
-      inherit activation packageIndex;
+      inherit activation packageIndex info;
 
       # Cluster-level diagnostics for tooling
       diagnostics = {

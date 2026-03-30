@@ -46,7 +46,7 @@ use nix_bindings_util::settings;
 use serde_json::Value;
 
 use super::error::KixEvalError;
-use super::evaluator::{ClusterOutput, NixBackend};
+use super::evaluator::{ClusterOutput, ClusterPackageInfo, NixBackend, PackageInfo};
 
 static NIX_INIT: Once = Once::new();
 
@@ -369,6 +369,76 @@ impl NixBackend for FfiNixBackend {
         tracing::debug!(count = names.len(), "clusters found");
 
         Ok(names)
+    }
+
+    fn list_packages(
+        &mut self,
+        flake_path: &Path,
+    ) -> Result<std::collections::BTreeMap<String, PackageInfo>, KixEvalError> {
+        let flake_str = flake_path.to_string_lossy().to_string();
+
+        self.ensure_flake_outputs(flake_path)?;
+        let outputs = self.flake_outputs().clone();
+
+        let sys_value = self
+            .eval_state
+            .eval_from_string("builtins.currentSystem", ".")
+            .map_err(|e| KixEvalError::eval(flake_str.clone(), "currentSystem", e))?;
+        let system = self
+            .eval_state
+            .require_string(&sys_value)
+            .map_err(|e| KixEvalError::eval(flake_str.clone(), "currentSystem", e))?;
+
+        let legacy_pkgs = self
+            .eval_state
+            .require_attrs_select(&outputs, "legacyPackages")
+            .map_err(|e| KixEvalError::eval(flake_str.clone(), "legacyPackages", e))?;
+        let per_system = self
+            .eval_state
+            .require_attrs_select(&legacy_pkgs, &system)
+            .map_err(|e| KixEvalError::eval(flake_str.clone(), &system, e))?;
+        let kix_packages = self
+            .eval_state
+            .require_attrs_select(&per_system, "kixPackages")
+            .map_err(|e| KixEvalError::eval(flake_str.clone(), "kixPackages", e))?;
+
+        let json = nix_value_to_json(&mut self.eval_state, &kix_packages)
+            .map_err(|e| KixEvalError::eval(flake_str.clone(), "kixPackages", e))?;
+
+        serde_json::from_value(json).map_err(|e| KixEvalError::StoreGraphError {
+            message: format!("failed to parse kixPackages: {e}"),
+        })
+    }
+
+    fn list_cluster_packages(
+        &mut self,
+        flake_path: &Path,
+        cluster_name: &str,
+    ) -> Result<ClusterPackageInfo, KixEvalError> {
+        if !cluster_name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+        {
+            return Err(KixEvalError::not_found(cluster_name));
+        }
+        let flake_str = flake_path.to_string_lossy().to_string();
+
+        let kix_clusters = self.get_kix_clusters(flake_path)?;
+        let cluster = self
+            .eval_state
+            .require_attrs_select(&kix_clusters, cluster_name)
+            .map_err(|e| Self::classify_eval_error(e, &flake_str, cluster_name))?;
+        let info = self
+            .eval_state
+            .require_attrs_select(&cluster, "info")
+            .map_err(|e| Self::classify_eval_error(e, &flake_str, cluster_name))?;
+
+        let json = nix_value_to_json(&mut self.eval_state, &info)
+            .map_err(|e| KixEvalError::eval(flake_str.clone(), cluster_name, e))?;
+
+        serde_json::from_value(json).map_err(|e| KixEvalError::StoreGraphError {
+            message: format!("failed to parse cluster info: {e}"),
+        })
     }
 }
 

@@ -90,6 +90,12 @@ rec {
       package.meta or { }
     else if (package._type or "") == "kix-import" then
       package.meta or { }
+    else if builtins.isAttrs package && package ? meta then
+      # Plain attrset with meta (e.g. helm chart data packages)
+      package.meta
+    else if builtins.isAttrs package && !(builtins.isFunction package) then
+      # Other attrset without meta — nothing to extract
+      { }
     else
       let
         fnArgs = builtins.functionArgs package;

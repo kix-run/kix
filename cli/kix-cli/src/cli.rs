@@ -63,7 +63,7 @@ pub enum Command {
     /// Resource health table
     Status(StatusArgs),
 
-    /// Available clusters in this flake
+    /// List clusters, packages, or other resources
     List(ListArgs),
 
     /// Dependency DAG visualization
@@ -102,7 +102,11 @@ impl Command {
             Command::Gc(a) => Some(&a.cluster),
             Command::Health(a) => Some(&a.cluster),
             Command::Rollback(a) => Some(&a.cluster),
-            Command::Snapshot(_) | Command::List(_) | Command::Completions(_) => None,
+            Command::List(a) => match &a.command {
+                ListCommand::Packages(p) => p.cluster.as_deref(),
+                ListCommand::Clusters => None,
+            },
+            Command::Snapshot(_) | Command::Completions(_) => None,
         }
     }
 }
@@ -248,7 +252,26 @@ pub struct StatusArgs {
 }
 
 #[derive(clap::Args)]
-pub struct ListArgs {}
+pub struct ListArgs {
+    #[command(subcommand)]
+    pub command: ListCommand,
+}
+
+#[derive(Subcommand)]
+pub enum ListCommand {
+    /// Available clusters in this flake
+    Clusters,
+
+    /// Available packages (optionally scoped to a cluster)
+    Packages(ListPackagesArgs),
+}
+
+#[derive(clap::Args)]
+pub struct ListPackagesArgs {
+    /// Show packages for a specific cluster (adds installed status)
+    #[arg(long)]
+    pub cluster: Option<String>,
+}
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum GraphFormat {

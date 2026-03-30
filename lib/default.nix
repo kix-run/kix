@@ -18,6 +18,7 @@ let
   helm = import ./helm.nix { inherit pkgs lib; };
   rbac = import ./rbac.nix { inherit lib; };
   kixlib = import ./compose.nix { inherit lib; };
+  meta = import ./meta.nix { inherit lib; };
 in
 
 {
@@ -62,6 +63,9 @@ in
 
   # --- kixlib (compose.nix) — pure helpers passed to packages as `kix` arg ---
   inherit kixlib;
+
+  # --- Package metadata introspection ---
+  inherit (meta) peekPackageMeta;
 
   # --- Helm bridge (helm.nix) ---
   inherit (helm)

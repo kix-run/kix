@@ -10,7 +10,7 @@ use std::path::Path;
 use serde_json::Value;
 
 use super::error::KixEvalError;
-use super::evaluator::{ClusterOutput, NixBackend};
+use super::evaluator::{ClusterOutput, ClusterPackageInfo, NixBackend, PackageInfo};
 
 /// Mock backend that returns pre-configured cluster data.
 pub struct MockNixBackend {
@@ -99,6 +99,29 @@ impl NixBackend for MockNixBackend {
         let mut names: Vec<String> = self.clusters.keys().cloned().collect();
         names.sort();
         Ok(names)
+    }
+
+    fn list_packages(
+        &mut self,
+        _flake_path: &Path,
+    ) -> Result<std::collections::BTreeMap<String, PackageInfo>, KixEvalError> {
+        Ok(std::collections::BTreeMap::new())
+    }
+
+    fn list_cluster_packages(
+        &mut self,
+        _flake_path: &Path,
+        cluster_name: &str,
+    ) -> Result<ClusterPackageInfo, KixEvalError> {
+        if !self.clusters.contains_key(cluster_name) {
+            return Err(KixEvalError::ClusterNotFound {
+                name: cluster_name.to_string(),
+            });
+        }
+        Ok(ClusterPackageInfo {
+            instances: std::collections::BTreeMap::new(),
+            available_packages: std::collections::BTreeMap::new(),
+        })
     }
 }
 

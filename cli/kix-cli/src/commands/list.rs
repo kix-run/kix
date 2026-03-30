@@ -1,15 +1,19 @@
+use std::collections::BTreeMap;
+
 use miette::{IntoDiagnostic, Result};
 
-use crate::cli::{ListArgs, OutputFormat};
+use crate::cli::{ListArgs, ListCommand, OutputFormat};
 use crate::output::{self, CommandResponse};
 
 use super::CommandContext;
 
-struct ListResponse {
+// --- Clusters ---
+
+struct ClustersResponse {
     clusters: Vec<String>,
 }
 
-impl CommandResponse for ListResponse {
+impl CommandResponse for ClustersResponse {
     fn format_text(&self) -> String {
         let mut table = comfy_table::Table::new();
         table.load_preset(comfy_table::presets::NOTHING);
@@ -25,7 +29,63 @@ impl CommandResponse for ListResponse {
     }
 }
 
-pub fn run(_args: &ListArgs, ctx: &mut CommandContext) -> Result<()> {
+// --- Packages ---
+
+struct PackageRow {
+    name: String,
+    version: String,
+    status: Option<String>,
+}
+
+struct PackagesResponse {
+    packages: Vec<PackageRow>,
+    show_status: bool,
+}
+
+impl CommandResponse for PackagesResponse {
+    fn format_text(&self) -> String {
+        let mut table = comfy_table::Table::new();
+        table.load_preset(comfy_table::presets::NOTHING);
+        if self.show_status {
+            table.set_header(["NAME", "VERSION", "STATUS"]);
+            for p in &self.packages {
+                table.add_row([&p.name, &p.version, p.status.as_deref().unwrap_or("-")]);
+            }
+        } else {
+            table.set_header(["NAME", "VERSION"]);
+            for p in &self.packages {
+                table.add_row([&p.name, &p.version]);
+            }
+        }
+        table.to_string()
+    }
+
+    fn as_json(&self) -> serde_json::Value {
+        let entries: Vec<serde_json::Value> = self
+            .packages
+            .iter()
+            .map(|p| {
+                let mut m = serde_json::Map::new();
+                m.insert("name".into(), serde_json::json!(p.name));
+                m.insert("version".into(), serde_json::json!(p.version));
+                if self.show_status {
+                    m.insert("status".into(), serde_json::json!(p.status));
+                }
+                serde_json::Value::Object(m)
+            })
+            .collect();
+        serde_json::json!(entries)
+    }
+}
+
+pub fn run(args: &ListArgs, ctx: &mut CommandContext) -> Result<()> {
+    match &args.command {
+        ListCommand::Clusters => run_clusters(ctx),
+        ListCommand::Packages(pkg_args) => run_packages(pkg_args.cluster.as_deref(), ctx),
+    }
+}
+
+fn run_clusters(ctx: &mut CommandContext) -> Result<()> {
     let clusters = ctx.evaluator.list_clusters().into_diagnostic()?;
 
     if clusters.is_empty() {
@@ -33,11 +93,82 @@ pub fn run(_args: &ListArgs, ctx: &mut CommandContext) -> Result<()> {
         return Ok(());
     }
 
-    let response = ListResponse { clusters };
+    let response = ClustersResponse { clusters };
     println!(
         "{}",
         output::render(&response, ctx.output_format(OutputFormat::Text))?
     );
+    Ok(())
+}
 
+fn run_packages(cluster: Option<&str>, ctx: &mut CommandContext) -> Result<()> {
+    let mut rows: BTreeMap<String, PackageRow> = BTreeMap::new();
+    let show_status = cluster.is_some();
+
+    if let Some(cluster_name) = cluster {
+        // Cluster-scoped: only query cluster info (has versions for everything)
+        let cluster_info = ctx
+            .evaluator
+            .list_cluster_packages(cluster_name)
+            .into_diagnostic()?;
+
+        // Add instances
+        for (ns, ns_instances) in &cluster_info.instances {
+            for (inst_name, inst_info) in ns_instances {
+                let status = if inst_info.auto {
+                    format!("installed (auto) [{ns}]")
+                } else {
+                    format!("installed [{ns}]")
+                };
+
+                rows.entry(inst_name.clone())
+                    .and_modify(|r| r.status = Some(status.clone()))
+                    .or_insert_with(|| PackageRow {
+                        name: inst_name.clone(),
+                        version: inst_info.version.as_deref().unwrap_or("-").to_string(),
+                        status: Some(status),
+                    });
+            }
+        }
+
+        // Add available packages (not already installed)
+        for (name, avail_info) in &cluster_info.available_packages {
+            rows.entry(name.clone()).or_insert_with(|| PackageRow {
+                name: name.clone(),
+                version: avail_info.version.as_deref().unwrap_or("-").to_string(),
+                status: Some("available".to_string()),
+            });
+        }
+    } else {
+        // Global: list all packages from the flake
+        let global_packages = ctx.evaluator.list_packages().into_diagnostic()?;
+
+        for (name, info) in &global_packages {
+            rows.insert(
+                name.clone(),
+                PackageRow {
+                    name: name.clone(),
+                    version: info.version.as_deref().unwrap_or("-").to_string(),
+                    status: None,
+                },
+            );
+        }
+    }
+
+    if rows.is_empty() {
+        eprintln!("No packages found.");
+        return Ok(());
+    }
+
+    let packages: Vec<PackageRow> = rows.into_values().collect();
+
+    let response = PackagesResponse {
+        packages,
+        show_status,
+    };
+    println!(
+        "{}",
+        output::render(&response, ctx.output_format(OutputFormat::Text))?
+    );
     Ok(())
 }

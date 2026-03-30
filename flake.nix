@@ -213,6 +213,16 @@
           # are attrsets, not derivations. The `clusters` let-binding is internal
           # to perSystem, so we expose it here for the CLI to reach via builtins.getFlake.
           legacyPackages.kixClusters = clusters;
+
+          # Package registry with versions — used by `kix list packages`.
+          # Pure evaluation (no build), keyed by package directory name.
+          legacyPackages.kixPackages = lib.mapAttrs (_name: pkg: {
+            version =
+              (kix.peekPackageMeta {
+                package = pkg;
+                kixlib = kix.kixlib;
+              }).version or null;
+          }) packages';
         };
     };
 }

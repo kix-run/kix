@@ -33,7 +33,9 @@ pub mod value;
 pub use build::{build_cluster_activation, build_cluster_activation_with_status};
 pub use cli_backend::CliNixBackend;
 pub use error::KixEvalError;
-pub use evaluator::{ClusterOutput, KixEvaluator, NixBackend};
+pub use evaluator::{
+    ClusterOutput, ClusterPackageInfo, InstanceInfo, KixEvaluator, NixBackend, PackageInfo,
+};
 pub use store_graph::{CrossDep, KixPackageIndex, PackageNode, ResourceNode, StoreGraph};
 
 /// Real Nix FFI backend — available only when built with Nix C libraries.
