@@ -241,6 +241,10 @@ pub struct HealthArgs {
 pub struct StatusArgs {
     /// Cluster name
     pub cluster: String,
+
+    /// Show operator-managed activation status with package-grouped resources
+    #[arg(long)]
+    pub operator: bool,
 }
 
 #[derive(clap::Args)]
