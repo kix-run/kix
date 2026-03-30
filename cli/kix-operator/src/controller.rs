@@ -18,7 +18,6 @@ use kube::{
 use serde_json::Value;
 use thiserror::Error;
 
-use kix::cluster::activation;
 use kix::cluster::apply::{ChangeAction, IDENTITY_HASH_ANNOTATION};
 use kix::cluster::fetch;
 use kix::cluster::graph::ResourceGraph;
@@ -33,8 +32,18 @@ use crate::observer::OperatorObserver;
 /// Finalizer name for operator-managed cleanup.
 const FINALIZER: &str = "kix.dev/operator-gc";
 
+/// Annotation storing the source path that was last successfully applied.
+const LAST_APPLIED_SOURCE: &str = "kix.dev/last-applied-source";
+
 /// Default requeue interval after successful reconciliation.
-const REQUEUE_INTERVAL: Duration = Duration::from_secs(300);
+/// Override with KIX_REQUEUE_INTERVAL_SECS env var.
+fn requeue_interval() -> Duration {
+    std::env::var("KIX_REQUEUE_INTERVAL_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .unwrap_or(Duration::from_secs(300))
+}
 
 /// Default requeue interval after errors.
 const ERROR_REQUEUE_INTERVAL: Duration = Duration::from_secs(30);
@@ -194,7 +203,7 @@ pub async fn reconcile_activation(
     // Only reconcile active activations
     if !is_active(&activation) {
         tracing::debug!(name, "Activation is not active, skipping");
-        return Ok(Action::requeue(REQUEUE_INTERVAL));
+        return Ok(Action::requeue(requeue_interval()));
     }
 
     // Ensure finalizer is set
@@ -211,17 +220,22 @@ pub async fn reconcile_activation(
 
     if new_manifests.is_empty() {
         tracing::warn!(name, "No manifests found in store graph");
-        return Ok(Action::requeue(REQUEUE_INTERVAL));
+        return Ok(Action::requeue(requeue_interval()));
     }
 
     tracing::info!(name, count = new_manifests.len(), "Loaded manifests");
 
-    // 3. Resolve previous activation (if any)
-    let old_manifests = resolve_old_manifests(&ctx.client, &ctx.activation_ar, &cluster, name)
-        .await
-        .unwrap_or_default();
+    // 3. Determine if source changed since last successful apply
+    let last_applied = activation
+        .metadata
+        .annotations
+        .as_ref()
+        .and_then(|a| a.get(LAST_APPLIED_SOURCE))
+        .map(|s| s.as_str());
+    let source_changed = last_applied != Some(path.to_str().unwrap_or(""));
 
-    // 4. Local DAG diff
+    // 4. Resolve previous state and detect changes
+    let old_manifests = resolve_old_manifests(&activation).unwrap_or_default();
     let all_actions = kix::cluster::apply::detect_changes(&new_manifests, &old_manifests);
 
     let apply_count = all_actions
@@ -233,21 +247,50 @@ pub async fn reconcile_activation(
         .filter(|a| matches!(a, ChangeAction::Orphan(_)))
         .count();
 
-    tracing::info!(
-        name,
-        apply = apply_count,
-        orphans = orphan_count,
-        unchanged = all_actions.len() - apply_count - orphan_count,
-        "Change detection complete"
-    );
+    // 5. Choose reconcile strategy based on whether source changed
+    let (wave_actions, orphan_rids) = if source_changed {
+        // Source changed: full reconcile with change detection + orphan pruning
+        tracing::info!(
+            name,
+            apply = apply_count,
+            orphans = orphan_count,
+            unchanged = all_actions.len() - apply_count - orphan_count,
+            "Source changed — full reconcile"
+        );
+        build_wave_actions(&all_actions, &new_manifests)?
+    } else {
+        // Source unchanged (requeue): drift-correction — apply manifests that
+        // could have drifted. Skip CRDs (re-applying triggers API watch restarts)
+        // and the Activation CR itself (re-applying triggers the controller watch).
+        let skip_kinds: &[&str] = &["CustomResourceDefinition", "Activation"];
+        let drift_actions: Vec<ChangeAction> = new_manifests
+            .iter()
+            .filter(|m| !skip_kinds.contains(&ResourceId::from_value(m).kind.as_str()))
+            .map(|m| ChangeAction::Apply(m.clone()))
+            .collect();
 
-    if apply_count == 0 && orphan_count == 0 {
-        tracing::info!(name, "No changes to apply");
-        return Ok(Action::requeue(REQUEUE_INTERVAL));
-    }
+        if drift_actions.is_empty() {
+            tracing::info!(name, "No driftable manifests to reconcile");
+            return Ok(Action::requeue(requeue_interval()));
+        }
 
-    // 5. Build waves
-    let (wave_actions, orphan_rids) = build_wave_actions(&all_actions, &new_manifests)?;
+        tracing::debug!(
+            name,
+            count = drift_actions.len(),
+            "Source unchanged — drift-correction reconcile"
+        );
+
+        // Build waves from drift actions (no orphans in drift mode)
+        let drift_manifests: Vec<Value> = new_manifests
+            .iter()
+            .filter(|m| !skip_kinds.contains(&ResourceId::from_value(m).kind.as_str()))
+            .cloned()
+            .collect();
+        (
+            build_wave_actions(&drift_actions, &drift_manifests)?.0,
+            vec![],
+        )
+    };
 
     // Find activation identity hash for annotation merging
     let act_identity_hash = identity_hash(&activation);
@@ -265,6 +308,12 @@ pub async fn reconcile_activation(
 
     let observer = OperatorObserver::new(name);
 
+    // During drift-correction (source unchanged), don't pass activation_name
+    // to the reconcile engine — otherwise it patches the Activation CR status
+    // (begin_deploy, record_wave, finalize_deploy), which triggers the controller
+    // watch and causes an infinite loop.
+    let reconcile_act_name = if source_changed { Some(name) } else { None };
+
     let result = kix::cluster::reconcile::reconcile(
         &ctx.client,
         &mut discovery,
@@ -272,7 +321,7 @@ pub async fn reconcile_activation(
         &orphan_rids,
         &old_manifests,
         &cluster,
-        Some(name),
+        reconcile_act_name,
         act_identity_hash.as_deref(),
         &config,
         &observer,
@@ -290,7 +339,27 @@ pub async fn reconcile_activation(
                 failed = r.failed,
                 "Reconciliation complete"
             );
-            Ok(Action::requeue(REQUEUE_INTERVAL))
+
+            // Only stamp annotation when source actually changed, to avoid
+            // triggering the Activation watch on steady-state reconciles.
+            if source_changed {
+                let api: Api<DynamicObject> = Api::all_with(ctx.client.clone(), &ctx.activation_ar);
+                let patch = serde_json::json!({
+                    "metadata": {
+                        "annotations": {
+                            LAST_APPLIED_SOURCE: path.display().to_string()
+                        }
+                    }
+                });
+                if let Err(e) = api
+                    .patch(name, &PatchParams::default(), &Patch::Merge(&patch))
+                    .await
+                {
+                    tracing::warn!(name, error = %e, "Failed to stamp last-applied-source");
+                }
+            }
+
+            Ok(Action::requeue(requeue_interval()))
         }
         Err(e) => {
             tracing::error!(name, error = %e, "Reconciliation failed");
@@ -299,31 +368,25 @@ pub async fn reconcile_activation(
     }
 }
 
-/// Resolve old manifests from the previous active activation (if any).
-async fn resolve_old_manifests(
-    client: &Client,
-    ar: &ApiResource,
-    cluster: &str,
-    current_name: &str,
-) -> Option<Vec<Value>> {
-    let active = activation::find_active(client, ar, cluster)
-        .await
-        .ok()
-        .flatten()
-        .filter(|a| a.name != current_name)?;
+/// Resolve old manifests from the last successfully applied source path.
+///
+/// Reads the `kix.dev/last-applied-source` annotation from the Activation CR.
+/// If present, loads manifests from that path so `detect_changes` can compare
+/// identity hashes and skip unchanged resources.
+fn resolve_old_manifests(activation: &DynamicObject) -> Option<Vec<Value>> {
+    let last_path = activation
+        .metadata
+        .annotations
+        .as_ref()
+        .and_then(|a| a.get(LAST_APPLIED_SOURCE))?;
 
-    let hash = active.identity_hash.as_ref()?;
-    let result_dir = kix::eval::store::resolve_activation_by_hash(cluster, hash)?;
+    let path = Path::new(last_path);
+    if !path.exists() {
+        tracing::warn!(path = %last_path, "Last-applied source path no longer exists");
+        return None;
+    }
 
-    let noop = |_: &str| {};
-    let mut old_graph = StoreGraph::from_result_dir_with_status(&result_dir, &noop).ok()?;
-    stamp_annotations(&mut old_graph);
-    let manifests = old_graph
-        .resources
-        .values()
-        .map(|r| r.manifest.clone())
-        .collect();
-
+    let (_graph, manifests) = load_and_stamp(path).ok()?;
     Some(manifests)
 }
 
@@ -353,7 +416,14 @@ async fn handle_delete(
             .filter(|rid| rid.kind != "Activation") // Don't delete the Activation itself
             .collect();
 
-        let ordered = compute_prune_order(&all_rids, &manifests);
+        // Skip kix's own CRDs — deleting them would break the operator
+        let kix_crds: &[&str] = &["activations.kix.dev", "packageinstances.kix.dev"];
+        let ordered: Vec<ResourceId> = compute_prune_order(&all_rids, &manifests)
+            .into_iter()
+            .filter(|rid| {
+                !(rid.kind == "CustomResourceDefinition" && kix_crds.contains(&rid.name.as_str()))
+            })
+            .collect();
 
         let discovery = fetch::discover_resources(&ctx.client)
             .await

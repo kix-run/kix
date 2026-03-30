@@ -34,6 +34,8 @@ in
     pkgs.kind
     pkgs.kubectl
     pkgs.vhs
+    pkgs.tmux
+    pkgs.viddy
   ]
   ++ nixLibs;
 
