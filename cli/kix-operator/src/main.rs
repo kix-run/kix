@@ -6,9 +6,18 @@
 //! # How it works
 //!
 //! 1. Watches Activation CRs (kix.dev/v1alpha1) via kube-rs informer
-//! 2. On create/update: loads the store graph from `spec.source.path`, computes
-//!    a local DAG diff against the previous activation, and applies wave-by-wave
-//! 3. On delete (finalizer): cleans up resources unique to the deleted activation
+//! 2. Phase-based lifecycle: Queued → Deploying → Active → Superseded
+//! 3. Unified reconcile: fetches live cluster state, compares identity-hashes,
+//!    applies only what changed (works for both new deploys and drift correction)
+//! 4. On delete (finalizer): cleans up resources for Active activations only
+//!
+//! # Reconcile loop prevention
+//!
+//! **Stream-level generation filter** — a custom `generation_filter` on the
+//! watcher stream drops events where `metadata.generation` hasn't changed.
+//! This prevents status-only changes from even reaching the reconciler.
+//! (kube-rs's built-in `predicate_filter` can't be used with `DynamicObject`
+//! because `ApiResource` doesn't implement `Default`.)
 //!
 //! # Requirements
 //!
@@ -19,6 +28,7 @@
 mod controller;
 mod observer;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use futures::StreamExt;
@@ -26,8 +36,7 @@ use kube::{
     Client,
     api::{Api, DynamicObject},
     discovery::ApiResource,
-    runtime::Controller,
-    runtime::watcher,
+    runtime::{Controller, WatchStreamExt, reflector::store::Writer, watcher},
 };
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -42,6 +51,34 @@ fn activation_api_resource() -> ApiResource {
         kind: "Activation".into(),
         plural: "activations".into(),
     }
+}
+
+/// Stream-level generation filter for `DynamicObject`.
+///
+/// kube-rs's `predicate_filter(predicates::generation)` requires
+/// `K::DynamicType: Default`, which `ApiResource` doesn't implement.
+/// This is a manual equivalent: it tracks the last seen generation per
+/// object name and drops events where the generation hasn't changed
+/// (i.e., status-only updates).
+fn generation_filter(
+    stream: impl futures::Stream<Item = Result<DynamicObject, watcher::Error>>,
+) -> impl futures::Stream<Item = Result<DynamicObject, watcher::Error>> {
+    let mut cache: HashMap<String, i64> = HashMap::new();
+    stream.filter_map(move |item| {
+        let emit = match &item {
+            Ok(obj) => {
+                let name = obj.metadata.name.clone().unwrap_or_default();
+                let generation = obj.metadata.generation.unwrap_or(0);
+                let changed = cache.get(&name).is_none_or(|&old| old != generation);
+                if changed {
+                    cache.insert(name, generation);
+                }
+                changed
+            }
+            Err(_) => true,
+        };
+        async move { if emit { Some(item) } else { None } }
+    })
 }
 
 #[tokio::main]
@@ -85,9 +122,23 @@ async fn main() -> anyhow::Result<()> {
         activation_ar: ar.clone(),
     });
 
-    // Start the controller (use new_with for dynamic types)
-    tracing::info!("Starting Activation controller");
-    Controller::new_with(activations, watcher::Config::default(), ar.clone())
+    // Build the watcher stream with generation-based dedup.
+    // The reflect → applied_objects → generation_filter pipeline means:
+    //   1. reflect: populates the in-memory store for the controller
+    //   2. applied_objects: collapses watcher events into object snapshots
+    //   3. generation_filter: drops events where generation hasn't changed
+    //      (status-only updates), preventing them from reaching the reconciler
+    let writer = Writer::<DynamicObject>::new(ar.clone());
+    let reader = writer.as_reader();
+    let stream = generation_filter(
+        watcher(activations, watcher::Config::default())
+            .default_backoff()
+            .reflect(writer)
+            .applied_objects(),
+    );
+
+    tracing::info!("Starting Activation controller with generation filter");
+    Controller::for_stream_with(stream, reader, ar.clone())
         .run(reconcile_activation, error_policy, ctx)
         .for_each(|res| async move {
             match res {

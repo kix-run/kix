@@ -30,10 +30,11 @@ nix build → StoreGraph → stamp annotations
 - `cli.rs` — all clap command/flag definitions (`DeployArgs`, `GcArgs`, `DiffArgs`, `HealthArgs`, `RollbackArgs`, `GlobalArgs`, enums)
 - `plan.rs` — shared plan renderer for deploy + gc. `PackageDiff`/`PackageChangeDiff` types, `diff_graphs()` for package-level comparison, `print_package_plan()` for namespace-grouped changes-only display
 - `output.rs` — color helpers (`green`/`red`/`yellow`/`dim`/`bold` → `Cow<str>`), `is_interactive()`, `CommandResponse` trait
-- `commands/deploy.rs` — deploy pipeline: resolves old activation, displays plan, confirms, delegates to `kix::cluster::reconcile::reconcile()` for the wave loop. `--reconcile` forces re-apply of all resources even when activation identity matches (heals drift)
+- `commands/deploy.rs` — deploy pipeline: resolves old activation, displays plan, confirms, delegates to `kix::cluster::reconcile::reconcile()` for the wave loop. `--reconcile` forces re-apply of all resources even when activation identity matches (heals drift). `--operator` delegates to the kix-operator instead
 - `commands/diff.rs` — three modes: build-to-build (two StoreGraphs), vs live cluster, vs snapshot directory
-- `commands/gc.rs` — soft (DAG diff old vs new) and hard (full cluster scan) garbage collection
-- `commands/rollback.rs` — rollback to most recent Superseded activation. No nix build — resolves old store path and re-applies via reconcile engine
+- `commands/gc.rs` — soft (DAG diff old vs new) and hard (full cluster scan) garbage collection. `--operator` deletes Superseded Activation CRs and lets the operator finalizer handle resource cleanup
+- `commands/rollback.rs` — rollback to most recent Superseded activation. No nix build — resolves old store path and re-applies via reconcile engine. `--operator` patches the Activation CR's source path and lets the operator reconcile
+- `commands/operator.rs` — shared helpers for operator mode: `connect_and_verify()`, `apply_activation()`, `watch_activation_progress()`, `wait_for_deletion()`
 - `commands/health.rs` — drift detection: builds intended state, fetches live state, compares normalized content hashes
 
 ### kix library (`kix/src/`)
@@ -60,11 +61,11 @@ nix build → StoreGraph → stamp annotations
 
 #### cluster (`kix/src/cluster/`)
 
-- `apply.rs` — `detect_changes()` (identity-hash set diff → `ChangeAction::Apply/Skip/Orphan`), `apply_wave()` (SSA via `kube`)
+- `apply.rs` — `detect_changes()` (identity-hash set diff → `ChangeAction::Apply/Skip/Orphan`), `detect_changes_live()` (compare desired manifests against live cluster resources by identity-hash), `apply_wave()` (SSA via `kube`)
 - `graph.rs` — `ResourceGraph` (petgraph DAG built from `kix.dev/depends-on` annotations)
 - `waves.rs` — `compute_waves()` runs Kahn's algorithm → `Vec<Vec<NodeIndex>>`
 - `readiness.rs` — `wait_for_ready()` polls per-kind conditions (Deployment replicas, CRD Established, Job succeeded, etc.)
-- `activation.rs` — Activation CR lifecycle: `find_active()`, `find_most_recent_superseded()`, `begin_deploy()`, `record_wave()`, `finalize_deploy()`, `resume_point()`
+- `activation.rs` — Activation CR lifecycle: phase-based model (Queued → Deploying → Active → Superseded). `find_active()`, `find_queued()`, `list_superseded_activations()`, `begin_deploy()`, `record_waves()`, `finalize_deploy()`, `resume_point()`, `supersede_activation()`, `read_phase()`. All status writes use `patch_status` (status subresource). `status.previousActivation` links activations for rollback. `record_waves()` accepts accumulated wave records to avoid GET-before-PATCH round-trips
 - `fetch.rs` — `make_client()`, `discover_resources()`, `fetch_managed_resources()` (parallel LIST with label selectors)
 - `reconcile.rs` — **extracted deploy engine.** `reconcile()` is the wave-by-wave apply loop used by both CLI and operator. `ReconcileObserver` trait for progress events, `ReconcileConfig` for behavior (timeout, on-error, prune policy)
 - `normalize.rs` — content-hash normalization for drift detection. Strips server metadata, kix annotations, status, nulls. `detect_drift()` compares intended vs live
@@ -82,5 +83,14 @@ nix build → StoreGraph → stamp annotations
 **Annotations** stamped at build time: `kix.dev/identity-hash`, `kix.dev/package`, `kix.dev/depends-on`, `kix.dev/activations`. Everything downstream reads these, never raw store paths.
 
 **Backend abstraction.** `NixBackend` trait — `CliNixBackend` (production, shells out to `nix` CLI) and `MockNixBackend` (tests, no Nix needed). An experimental `FfiNixBackend` using direct C FFI exists behind the `nix-ffi` feature but is not currently used.
+
+**Operator mode** (`--operator` flag on deploy/rollback/gc). Instead of calling the reconcile engine directly, the CLI creates or patches Activation CRs and watches their status. The operator does the actual wave-by-wave apply. Build + plan display still happens locally (needs Nix). Three flows:
+- `deploy --operator`: build locally → show plan → apply Activation CR with source path → watch status.waves
+- `rollback --operator`: find superseded activation → patch Activation CR source path to target → watch progress
+- `gc --operator`: delete Superseded Activation CRs → operator finalizer cleans up resources
+
+**Operator reconcile loop prevention.** The operator uses a stream-level generation filter to drop status-only updates. All status writes go through the status subresource (`patch_status`), which doesn't bump `metadata.generation`. The controller dispatches by phase: Queued CRs trigger activation switchover + deploy, Active CRs trigger drift detection, Superseded CRs are no-ops.
+
+**Unified reconcile.** Both new deployments and drift correction use the same path: load desired manifests, fetch live kix-managed resources from the cluster, compare identity-hashes (`detect_changes_live`), wave-plan, and apply. No "old manifests" concept — the cluster IS the old state.
 
 **Error boundary.** `thiserror` in libraries, `miette` in binary.

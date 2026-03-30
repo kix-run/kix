@@ -140,6 +140,99 @@ pub fn detect_changes(new_manifests: &[Value], old_manifests: &[Value]) -> Vec<C
     actions
 }
 
+/// Detect changes by comparing desired manifests against live cluster resources.
+///
+/// For each desired manifest:
+///   - Look up live resource by K8s identity (kind/namespace/name)
+///   - If not found → Apply (resource missing from cluster)
+///   - If identity-hash differs → Apply (drifted or changed)
+///   - If identity-hash matches → Skip
+///
+/// For each live resource not in desired set → Orphan
+///
+/// This replaces `detect_changes` for the operator, where the cluster
+/// is the source of truth for "old state" rather than a local manifest set.
+pub fn detect_changes_live(
+    desired_manifests: &[Value],
+    live_resources: &[DynamicObject],
+) -> Vec<ChangeAction> {
+    // Index live resources by K8s identity → identity-hash
+    let mut live_by_k8s_id: HashMap<String, Option<&str>> = HashMap::new();
+    let mut live_rids: HashMap<String, ResourceId> = HashMap::new();
+
+    for obj in live_resources {
+        let kind = obj
+            .data
+            .get("kind")
+            .and_then(|v| v.as_str())
+            .or_else(|| obj.types.as_ref().map(|t| t.kind.as_str()))
+            .unwrap_or("");
+        let name = obj.metadata.name.as_deref().unwrap_or("");
+        let ns = obj
+            .metadata
+            .namespace
+            .as_deref()
+            .unwrap_or(crate::manifest::types::CLUSTER_SCOPED);
+        let k8s_id = format!("{kind}/{ns}/{name}");
+
+        let hash = obj
+            .metadata
+            .annotations
+            .as_ref()
+            .and_then(|a| a.get(IDENTITY_HASH_ANNOTATION))
+            .map(|s| s.as_str());
+
+        live_by_k8s_id.insert(k8s_id.clone(), hash);
+        live_rids.insert(
+            k8s_id,
+            ResourceId {
+                kind: kind.to_string(),
+                name: name.to_string(),
+                namespace: ns.to_string(),
+            },
+        );
+    }
+
+    let mut matched_live_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut actions: Vec<ChangeAction> = Vec::new();
+
+    for manifest in desired_manifests {
+        let rid = ResourceId::from_value(manifest);
+        let k8s_id = format!("{}/{}/{}", rid.kind, rid.namespace, rid.name);
+
+        let desired_hash = manifest
+            .pointer("/metadata/annotations")
+            .and_then(|a| a.get(IDENTITY_HASH_ANNOTATION))
+            .and_then(Value::as_str);
+
+        match (live_by_k8s_id.get(&k8s_id), desired_hash) {
+            (Some(Some(live_hash)), Some(desired_h)) if *live_hash == desired_h => {
+                // Live hash matches desired → no drift, skip
+                matched_live_ids.insert(k8s_id);
+                actions.push(ChangeAction::Skip(rid));
+            }
+            (Some(_), _) => {
+                // Live exists but hash differs or missing → apply
+                matched_live_ids.insert(k8s_id);
+                actions.push(ChangeAction::Apply(manifest.clone()));
+            }
+            (None, _) => {
+                // Not on cluster → apply
+                actions.push(ChangeAction::Apply(manifest.clone()));
+            }
+        }
+    }
+
+    // Find orphans: live resources not matched by any desired manifest
+    for (k8s_id, rid) in &live_rids {
+        if !matched_live_ids.contains(k8s_id) {
+            actions.push(ChangeAction::Orphan(rid.clone()));
+        }
+    }
+
+    actions
+}
+
 /// Apply a single resource via server-side apply.
 ///
 /// If `activation_hash` is provided, the resource's `kix.dev/activations`
@@ -351,6 +444,7 @@ pub async fn apply_wave(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kube::api::ObjectMeta;
     use serde_json::json;
 
     fn manifest(kind: &str, name: &str, ns: &str, identity_hash: &str) -> Value {
@@ -464,5 +558,120 @@ mod tests {
         assert_eq!(ApplyAction::Configured, ApplyAction::Configured);
         assert_eq!(ApplyAction::Unchanged, ApplyAction::Unchanged);
         assert_ne!(ApplyAction::Created, ApplyAction::Configured);
+    }
+
+    // -- detect_changes_live tests --
+
+    fn live_object(kind: &str, name: &str, ns: &str, identity_hash: &str) -> DynamicObject {
+        let mut annotations = std::collections::BTreeMap::new();
+        annotations.insert(
+            IDENTITY_HASH_ANNOTATION.to_string(),
+            identity_hash.to_string(),
+        );
+        DynamicObject {
+            metadata: ObjectMeta {
+                name: Some(name.to_string()),
+                namespace: if ns == crate::manifest::types::CLUSTER_SCOPED {
+                    None
+                } else {
+                    Some(ns.to_string())
+                },
+                annotations: Some(annotations),
+                ..Default::default()
+            },
+            types: Some(kube::api::TypeMeta {
+                kind: kind.to_string(),
+                api_version: "apps/v1".to_string(),
+            }),
+            data: json!({
+                "kind": kind,
+                "apiVersion": "apps/v1",
+                "metadata": {
+                    "name": name,
+                    "namespace": ns,
+                    "annotations": {
+                        IDENTITY_HASH_ANNOTATION: identity_hash,
+                    }
+                }
+            }),
+        }
+    }
+
+    #[test]
+    fn live_detect_new_resource() {
+        let desired = vec![manifest("Deployment", "app", "default", "id1")];
+        let live: Vec<DynamicObject> = vec![];
+
+        let actions = detect_changes_live(&desired, &live);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(&actions[0], ChangeAction::Apply(_)));
+    }
+
+    #[test]
+    fn live_detect_unchanged_resource() {
+        let desired = vec![manifest("Deployment", "app", "default", "id1")];
+        let live = vec![live_object("Deployment", "app", "default", "id1")];
+
+        let actions = detect_changes_live(&desired, &live);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(&actions[0], ChangeAction::Skip(_)));
+    }
+
+    #[test]
+    fn live_detect_drifted_resource() {
+        let desired = vec![manifest("Deployment", "app", "default", "desired-hash")];
+        let live = vec![live_object("Deployment", "app", "default", "live-hash")];
+
+        let actions = detect_changes_live(&desired, &live);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(&actions[0], ChangeAction::Apply(_)));
+    }
+
+    #[test]
+    fn live_detect_orphan() {
+        let desired: Vec<Value> = vec![];
+        let live = vec![live_object("Deployment", "orphan", "default", "id1")];
+
+        let actions = detect_changes_live(&desired, &live);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(&actions[0], ChangeAction::Orphan(_)));
+        if let ChangeAction::Orphan(rid) = &actions[0] {
+            assert_eq!(rid.name, "orphan");
+        }
+    }
+
+    #[test]
+    fn live_detect_mixed() {
+        let desired = vec![
+            manifest("Deployment", "unchanged", "default", "id1"),
+            manifest("Deployment", "drifted", "default", "new-hash"),
+            manifest("Deployment", "new-app", "default", "id3"),
+        ];
+        let live = vec![
+            live_object("Deployment", "unchanged", "default", "id1"),
+            live_object("Deployment", "drifted", "default", "old-hash"),
+            live_object("Deployment", "orphan", "default", "id-orphan"),
+        ];
+
+        let actions = detect_changes_live(&desired, &live);
+        // 3 desired actions + 1 orphan = 4
+        assert_eq!(actions.len(), 4);
+
+        let skips = actions
+            .iter()
+            .filter(|a| matches!(a, ChangeAction::Skip(_)))
+            .count();
+        let applies = actions
+            .iter()
+            .filter(|a| matches!(a, ChangeAction::Apply(_)))
+            .count();
+        let orphans = actions
+            .iter()
+            .filter(|a| matches!(a, ChangeAction::Orphan(_)))
+            .count();
+
+        assert_eq!(skips, 1);
+        assert_eq!(applies, 2);
+        assert_eq!(orphans, 1);
     }
 }

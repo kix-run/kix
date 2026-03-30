@@ -25,15 +25,13 @@ pub const PREVIOUS_ANNOTATION: &str = "kix.dev/previous";
 pub const DEPLOYED_AT_ANNOTATION: &str = "kix.dev/deployed-at";
 
 /// Activation phase values (stored in status.phase).
+pub const PHASE_QUEUED: &str = "Queued";
 pub const PHASE_ACTIVE: &str = "Active";
 pub const PHASE_SUPERSEDED: &str = "Superseded";
 pub const PHASE_DEPLOYING: &str = "Deploying";
 
 /// Label for filtering activations by cluster.
 pub const CLUSTER_LABEL: &str = "kix.dev/cluster";
-
-/// Field manager for activation status updates.
-const FIELD_MANAGER: &str = "kix";
 
 #[derive(Error, Debug)]
 pub enum ActivationError {
@@ -72,6 +70,7 @@ pub fn find_activation_ar(discovery: &[(ApiResource, Scope)]) -> Option<&(ApiRes
 /// Find the current Active activation for a given cluster.
 ///
 /// Returns None if no Active activation exists (first deploy).
+/// Matches on `status.phase == "Active"`.
 pub async fn find_active(
     client: &Client,
     ar: &ApiResource,
@@ -84,15 +83,14 @@ pub async fn find_active(
 
     let list = api.list(&lp).await.map_err(ActivationError::ListFailed)?;
 
-    // Find the one with spec.active == true
     for item in &list.items {
-        let active = item
+        let phase = item
             .data
-            .pointer("/spec/active")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+            .pointer("/status/phase")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
 
-        if active {
+        if phase == PHASE_ACTIVE {
             let name = item.metadata.name.clone().unwrap_or_default();
             let annotations = item.metadata.annotations.as_ref();
             let identity_hash = annotations
@@ -109,34 +107,14 @@ pub async fn find_active(
         }
     }
 
-    // Fallback: if no spec.active field set, find by cluster name
-    // (backwards compat with activations created before state machine)
-    for item in &list.items {
-        let name = item.metadata.name.as_deref().unwrap_or("");
-        if !name.is_empty() {
-            let annotations = item.metadata.annotations.as_ref();
-            let identity_hash = annotations
-                .and_then(|a| a.get(IDENTITY_HASH_ANNOTATION))
-                .cloned();
-            let built_via = annotations
-                .and_then(|a| a.get(BUILT_VIA_ANNOTATION))
-                .cloned();
-            return Ok(Some(ActiveActivation {
-                name: name.to_string(),
-                identity_hash,
-                built_via,
-            }));
-        }
-    }
-
     Ok(None)
 }
 
 /// After a successful deploy, update the activation lifecycle:
-/// 1. Mark the old activation as Superseded (spec.active=false, status.phase=Superseded)
+/// 1. Mark the old activation as Superseded (status.phase=Superseded)
 /// 2. Set kix.dev/previous on the new activation pointing to the old one
 /// 3. Set kix.dev/deployed-at timestamp on the new activation
-/// 4. Ensure the new activation has spec.active=true and status.phase=Active
+/// 4. Set the new activation to status.phase=Active with status.previousActivation
 /// 5. Add kix.dev/cluster label for filtering
 pub async fn finalize_deploy(
     client: &Client,
@@ -146,28 +124,11 @@ pub async fn finalize_deploy(
     old_activation: Option<&ActiveActivation>,
 ) -> Result<(), ActivationError> {
     let api: Api<DynamicObject> = Api::all_with(client.clone(), ar);
-    let _pp = PatchParams::apply(FIELD_MANAGER).force();
     let now = chrono::Utc::now().to_rfc3339();
 
-    // 1. Supersede old activation (merge patch to preserve existing annotations)
+    // 1. Supersede old activation
     if let Some(old) = old_activation {
-        let patch = json!({
-            "spec": {
-                "active": false,
-            },
-            "status": {
-                "phase": PHASE_SUPERSEDED,
-            },
-        });
-
-        api.patch(&old.name, &PatchParams::default(), &Patch::Merge(&patch))
-            .await
-            .map_err(|e| ActivationError::PatchFailed {
-                name: old.name.clone(),
-                source: e,
-            })?;
-
-        tracing::info!(activation = %old.name, "marked as Superseded");
+        supersede_activation(client, ar, &old.name).await?;
     }
 
     // 2. Update new activation with lifecycle annotations (merge patch to preserve
@@ -180,7 +141,7 @@ pub async fn finalize_deploy(
         annotations.insert(PREVIOUS_ANNOTATION.to_string(), Value::String(hash.clone()));
     }
 
-    let patch = json!({
+    let spec_patch = json!({
         "metadata": {
             "labels": {
                 CLUSTER_LABEL: cluster_name,
@@ -188,18 +149,32 @@ pub async fn finalize_deploy(
             "annotations": annotations,
         },
         "spec": {
-            "active": true,
             "cluster": cluster_name,
         },
-        "status": {
-            "phase": PHASE_ACTIVE,
-        },
     });
-
     api.patch(
         new_activation_name,
         &PatchParams::default(),
-        &Patch::Merge(&patch),
+        &Patch::Merge(&spec_patch),
+    )
+    .await
+    .map_err(|e| ActivationError::PatchFailed {
+        name: new_activation_name.to_string(),
+        source: e,
+    })?;
+
+    // 3. Set status to Active with previousActivation link
+    let mut status = serde_json::Map::new();
+    status.insert("phase".to_string(), json!(PHASE_ACTIVE));
+    if let Some(old) = old_activation {
+        status.insert("previousActivation".to_string(), json!(old.name));
+    }
+
+    let status_patch = json!({ "status": status });
+    api.patch_status(
+        new_activation_name,
+        &PatchParams::default(),
+        &Patch::Merge(&status_patch),
     )
     .await
     .map_err(|e| ActivationError::PatchFailed {
@@ -227,13 +202,15 @@ pub async fn list_superseded(
 
     let mut superseded = Vec::new();
     for item in &list.items {
-        let active = item
+        let phase = item
             .data
-            .pointer("/spec/active")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true); // default to active if field missing (backwards compat)
+            .pointer("/status/phase")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
 
-        if !active && let Some(name) = item.metadata.name.as_deref() {
+        if phase == PHASE_SUPERSEDED
+            && let Some(name) = item.metadata.name.as_deref()
+        {
             superseded.push(name.to_string());
         }
     }
@@ -270,13 +247,13 @@ pub async fn list_superseded_activations(
     let mut results = Vec::new();
 
     for item in &list.items {
-        let active = item
+        let phase = item
             .data
-            .pointer("/spec/active")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true);
+            .pointer("/status/phase")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
 
-        if active {
+        if phase != PHASE_SUPERSEDED {
             continue;
         }
 
@@ -330,6 +307,98 @@ pub async fn delete_activation(
 }
 
 // ---------------------------------------------------------------------------
+// Phase transition helpers
+// ---------------------------------------------------------------------------
+
+/// Info about a Queued activation.
+#[derive(Debug, Clone)]
+pub struct QueuedActivation {
+    pub name: String,
+    pub identity_hash: Option<String>,
+    pub created_at: Option<String>,
+}
+
+/// Find all Queued activations for a cluster, sorted by creation time (newest first).
+pub async fn find_queued(
+    client: &Client,
+    ar: &ApiResource,
+    cluster_name: &str,
+) -> Result<Vec<QueuedActivation>, ActivationError> {
+    let api: Api<DynamicObject> = Api::all_with(client.clone(), ar);
+    let lp = ListParams::default().labels(&format!(
+        "app.kubernetes.io/managed-by=kix,{CLUSTER_LABEL}={cluster_name}"
+    ));
+
+    let list = api.list(&lp).await.map_err(ActivationError::ListFailed)?;
+
+    let mut queued = Vec::new();
+    for item in &list.items {
+        let phase = item
+            .data
+            .pointer("/status/phase")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        // Treat empty/missing phase as Queued (new CR without status yet)
+        if phase == PHASE_QUEUED || phase.is_empty() {
+            let name = item.metadata.name.clone().unwrap_or_default();
+            let annotations = item.metadata.annotations.as_ref();
+            let identity_hash = annotations
+                .and_then(|a| a.get(IDENTITY_HASH_ANNOTATION))
+                .cloned();
+            let created_at = item
+                .metadata
+                .creation_timestamp
+                .as_ref()
+                .map(|t| t.0.to_rfc3339());
+            queued.push(QueuedActivation {
+                name,
+                identity_hash,
+                created_at,
+            });
+        }
+    }
+
+    // Newest first (reverse chronological)
+    queued.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+
+    Ok(queued)
+}
+
+/// Mark an activation as Superseded (status.phase only).
+pub async fn supersede_activation(
+    client: &Client,
+    ar: &ApiResource,
+    name: &str,
+) -> Result<(), ActivationError> {
+    let api: Api<DynamicObject> = Api::all_with(client.clone(), ar);
+
+    let status_patch = json!({
+        "status": {
+            "phase": PHASE_SUPERSEDED,
+        },
+    });
+    api.patch_status(name, &PatchParams::default(), &Patch::Merge(&status_patch))
+        .await
+        .map_err(|e| ActivationError::PatchFailed {
+            name: name.to_string(),
+            source: e,
+        })?;
+
+    tracing::info!(activation = %name, "marked as Superseded");
+    Ok(())
+}
+
+/// Read `status.phase` from an activation.
+pub fn read_phase(activation: &DynamicObject) -> &str {
+    activation
+        .data
+        .pointer("/status/phase")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+}
+
+// ---------------------------------------------------------------------------
 // Wave progress persistence
 // ---------------------------------------------------------------------------
 
@@ -371,8 +440,7 @@ pub async fn begin_deploy(
 ) -> Result<(), ActivationError> {
     let api: Api<DynamicObject> = Api::all_with(client.clone(), ar);
 
-    let patch = json!({
-        "metadata": { "name": activation_name },
+    let status_patch = json!({
         "status": {
             "phase": PHASE_DEPLOYING,
             "totalWaves": total_waves,
@@ -380,10 +448,10 @@ pub async fn begin_deploy(
         },
     });
 
-    api.patch(
+    api.patch_status(
         activation_name,
         &PatchParams::default(),
-        &Patch::Merge(&patch),
+        &Patch::Merge(&status_patch),
     )
     .await
     .map_err(|e| ActivationError::PatchFailed {
@@ -404,58 +472,42 @@ pub struct WaveRecord {
     pub failed: usize,
 }
 
-/// Record the completion status of a wave on the Activation CR.
+/// Record the completion status of waves on the Activation CR.
 ///
-/// Appends to `status.waves` array. The operator (or a resumed CLI deploy)
-/// can read this to determine where to resume after a crash.
-pub async fn record_wave(
+/// Patches `status.waves` with the full accumulated list. The caller
+/// tracks wave records in memory and passes the complete list each time,
+/// eliminating the need for a GET-before-PATCH round-trip.
+pub async fn record_waves(
     client: &Client,
     ar: &ApiResource,
     activation_name: &str,
-    wave: &WaveRecord,
+    waves: &[WaveRecord],
 ) -> Result<(), ActivationError> {
     let api: Api<DynamicObject> = Api::all_with(client.clone(), ar);
 
-    // Read current status.waves to append
-    let current = api
-        .get(activation_name)
-        .await
-        .map_err(|e| ActivationError::PatchFailed {
-            name: activation_name.to_string(),
-            source: e,
-        })?;
+    let wave_json: Vec<Value> = waves
+        .iter()
+        .map(|w| {
+            json!({
+                "wave": w.wave_index,
+                "status": w.status.as_str(),
+                "resources": w.resource_count,
+                "applied": w.applied,
+                "failed": w.failed,
+            })
+        })
+        .collect();
 
-    let mut waves: Vec<Value> = current
-        .data
-        .pointer("/status/waves")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-
-    // Ensure array is long enough (in case waves are recorded out of order)
-    while waves.len() <= wave.wave_index {
-        waves.push(json!({ "status": "Pending" }));
-    }
-
-    waves[wave.wave_index] = json!({
-        "wave": wave.wave_index,
-        "status": wave.status.as_str(),
-        "resources": wave.resource_count,
-        "applied": wave.applied,
-        "failed": wave.failed,
-    });
-
-    let patch = json!({
-        "metadata": { "name": activation_name },
+    let status_patch = json!({
         "status": {
-            "waves": waves,
+            "waves": wave_json,
         },
     });
 
-    api.patch(
+    api.patch_status(
         activation_name,
         &PatchParams::default(),
-        &Patch::Merge(&patch),
+        &Patch::Merge(&status_patch),
     )
     .await
     .map_err(|e| ActivationError::PatchFailed {

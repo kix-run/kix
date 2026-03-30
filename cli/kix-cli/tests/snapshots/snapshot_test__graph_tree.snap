@@ -2,262 +2,91 @@
 source: kix-cli/tests/snapshot_test.rs
 expression: stdout
 ---
+ClusterRole/cert-manager-controller-certificates
+└── ClusterRoleBinding/cert-manager-controller-certificates
+    └── PackageInstance/cert-manager@cert-manager
+        └── Activation/example-yybkqrrnqkpi
+CustomResourceDefinition/orders.acme.cert-manager.io
+└── PackageInstance/cert-manager@cert-manager
+    └── Activation/example-yybkqrrnqkpi
+Namespace/stackgres-system
+├── PackageInstance/stackgres-operator@stackgres-system
+│   └── Activation/example-yybkqrrnqkpi
+├── Deployment/stackgres-operator@stackgres-system
+│   └── PackageInstance/stackgres-operator@stackgres-system
+│       └── Activation/example-yybkqrrnqkpi
+├── ServiceAccount/stackgres-operator@stackgres-system
+│   ├── PackageInstance/stackgres-operator@stackgres-system
+│   │   └── Activation/example-yybkqrrnqkpi
+│   ├── Deployment/stackgres-operator@stackgres-system
+│   │   └── PackageInstance/stackgres-operator@stackgres-system
+│   │       └── Activation/example-yybkqrrnqkpi
+│   └── ClusterRoleBinding/stackgres-operator
+│       └── PackageInstance/stackgres-operator@stackgres-system
+│           └── Activation/example-yybkqrrnqkpi
+└── Service/stackgres-operator@stackgres-system
+    ├── PackageInstance/stackgres-operator@stackgres-system
+    │   └── Activation/example-yybkqrrnqkpi
+    ├── ValidatingWebhookConfiguration/stackgres-operator
+    │   └── PackageInstance/stackgres-operator@stackgres-system
+    │       └── Activation/example-yybkqrrnqkpi
+    └── MutatingWebhookConfiguration/stackgres-operator
+        └── PackageInstance/stackgres-operator@stackgres-system
+            └── Activation/example-yybkqrrnqkpi
+CustomResourceDefinition/certificaterequests.cert-manager.io
+└── PackageInstance/cert-manager@cert-manager
+    └── Activation/example-yybkqrrnqkpi
+CustomResourceDefinition/sgstreams.stackgres.io
+└── PackageInstance/stackgres-operator@stackgres-system
+    └── Activation/example-yybkqrrnqkpi
 ClusterRole/cert-manager-edit
 └── PackageInstance/cert-manager@cert-manager
     └── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/sgshardedbackups.stackgres.io
-└── PackageInstance/stackgres-operator@stackgres-system
-    └── Activation/example-yybkqrrnqkpi
-ClusterRole/stackgres-operator
-├── PackageInstance/stackgres-operator@stackgres-system
-│   └── Activation/example-yybkqrrnqkpi
-└── ClusterRoleBinding/stackgres-operator
-    └── PackageInstance/stackgres-operator@stackgres-system
-        └── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/sgconfigs.stackgres.io
-└── PackageInstance/stackgres-operator@stackgres-system
-    └── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/clusterissuers.cert-manager.io
-└── PackageInstance/cert-manager@cert-manager
-    └── Activation/example-yybkqrrnqkpi
-ClusterRole/cert-manager-view
-└── PackageInstance/cert-manager@cert-manager
-    └── Activation/example-yybkqrrnqkpi
-ClusterRole/cert-manager-controller-issuers
-└── ClusterRoleBinding/cert-manager-controller-issuers
+ClusterRole/cert-manager-controller-ingress-shim
+└── ClusterRoleBinding/cert-manager-controller-ingress-shim
     └── PackageInstance/cert-manager@cert-manager
         └── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/sgobjectstorages.stackgres.io
-└── PackageInstance/stackgres-operator@stackgres-system
-    └── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/challenges.acme.cert-manager.io
-└── PackageInstance/cert-manager@cert-manager
-    └── Activation/example-yybkqrrnqkpi
-Namespace/cache
-├── ConfigMap/valkey-scripts@cache
-│   ├── PackageInstance/valkey@cache
-│   │   └── Activation/example-yybkqrrnqkpi
-│   └── StatefulSet/valkey-node@cache
-│       ├── PackageInstance/valkey@cache
-│       │   └── Activation/example-yybkqrrnqkpi
-│       ├── Service/valkey@cache
-│       │   ├── PackageInstance/valkey@cache
-│       │   │   └── Activation/example-yybkqrrnqkpi
-│       │   └── Deployment/immich-server@immich
-│       │       └── Service/immich-server@immich
-│       │           └── PackageInstance/immich@immich
-│       │               └── Activation/example-yybkqrrnqkpi
-│       ├── Service/valkey-headless@cache
-│       │   └── PackageInstance/valkey@cache
-│       │       └── Activation/example-yybkqrrnqkpi
-│       └── Service/valkey-metrics@cache
-│           └── PackageInstance/valkey@cache
-│               └── Activation/example-yybkqrrnqkpi
-├── PackageInstance/valkey@cache
-│   └── Activation/example-yybkqrrnqkpi
-├── PodDisruptionBudget/valkey-node@cache
-│   └── PackageInstance/valkey@cache
-│       └── Activation/example-yybkqrrnqkpi
-├── ConfigMap/valkey-configuration@cache
-│   ├── PackageInstance/valkey@cache
-│   │   └── Activation/example-yybkqrrnqkpi
-│   └── StatefulSet/valkey-node@cache
-│       ├── PackageInstance/valkey@cache
-│       │   └── Activation/example-yybkqrrnqkpi
-│       ├── Service/valkey@cache
-│       │   ├── PackageInstance/valkey@cache
-│       │   │   └── Activation/example-yybkqrrnqkpi
-│       │   └── Deployment/immich-server@immich
-│       │       └── Service/immich-server@immich
-│       │           └── PackageInstance/immich@immich
-│       │               └── Activation/example-yybkqrrnqkpi
-│       ├── Service/valkey-headless@cache
-│       │   └── PackageInstance/valkey@cache
-│       │       └── Activation/example-yybkqrrnqkpi
-│       └── Service/valkey-metrics@cache
-│           └── PackageInstance/valkey@cache
-│               └── Activation/example-yybkqrrnqkpi
-├── NetworkPolicy/valkey@cache
-│   └── PackageInstance/valkey@cache
-│       └── Activation/example-yybkqrrnqkpi
-├── Service/valkey@cache
-│   ├── PackageInstance/valkey@cache
+Namespace/immich
+├── SGCluster/postgres@immich
+│   ├── PackageInstance/postgres@immich
 │   │   └── Activation/example-yybkqrrnqkpi
 │   └── Deployment/immich-server@immich
 │       └── Service/immich-server@immich
 │           └── PackageInstance/immich@immich
 │               └── Activation/example-yybkqrrnqkpi
-├── StatefulSet/valkey-node@cache
-│   ├── PackageInstance/valkey@cache
-│   │   └── Activation/example-yybkqrrnqkpi
-│   ├── Service/valkey@cache
-│   │   ├── PackageInstance/valkey@cache
-│   │   │   └── Activation/example-yybkqrrnqkpi
-│   │   └── Deployment/immich-server@immich
-│   │       └── Service/immich-server@immich
-│   │           └── PackageInstance/immich@immich
-│   │               └── Activation/example-yybkqrrnqkpi
-│   ├── Service/valkey-headless@cache
-│   │   └── PackageInstance/valkey@cache
-│   │       └── Activation/example-yybkqrrnqkpi
-│   └── Service/valkey-metrics@cache
-│       └── PackageInstance/valkey@cache
-│           └── Activation/example-yybkqrrnqkpi
-├── Service/valkey-headless@cache
-│   └── PackageInstance/valkey@cache
-│       └── Activation/example-yybkqrrnqkpi
-├── ConfigMap/valkey-health@cache
-│   ├── PackageInstance/valkey@cache
-│   │   └── Activation/example-yybkqrrnqkpi
-│   └── StatefulSet/valkey-node@cache
-│       ├── PackageInstance/valkey@cache
-│       │   └── Activation/example-yybkqrrnqkpi
-│       ├── Service/valkey@cache
-│       │   ├── PackageInstance/valkey@cache
-│       │   │   └── Activation/example-yybkqrrnqkpi
-│       │   └── Deployment/immich-server@immich
-│       │       └── Service/immich-server@immich
-│       │           └── PackageInstance/immich@immich
-│       │               └── Activation/example-yybkqrrnqkpi
-│       ├── Service/valkey-headless@cache
-│       │   └── PackageInstance/valkey@cache
-│       │       └── Activation/example-yybkqrrnqkpi
-│       └── Service/valkey-metrics@cache
-│           └── PackageInstance/valkey@cache
-│               └── Activation/example-yybkqrrnqkpi
-├── ServiceAccount/valkey@cache
-│   ├── PackageInstance/valkey@cache
-│   │   └── Activation/example-yybkqrrnqkpi
-│   └── StatefulSet/valkey-node@cache
-│       ├── PackageInstance/valkey@cache
-│       │   └── Activation/example-yybkqrrnqkpi
-│       ├── Service/valkey@cache
-│       │   ├── PackageInstance/valkey@cache
-│       │   │   └── Activation/example-yybkqrrnqkpi
-│       │   └── Deployment/immich-server@immich
-│       │       └── Service/immich-server@immich
-│       │           └── PackageInstance/immich@immich
-│       │               └── Activation/example-yybkqrrnqkpi
-│       ├── Service/valkey-headless@cache
-│       │   └── PackageInstance/valkey@cache
-│       │       └── Activation/example-yybkqrrnqkpi
-│       └── Service/valkey-metrics@cache
-│           └── PackageInstance/valkey@cache
-│               └── Activation/example-yybkqrrnqkpi
-└── Service/valkey-metrics@cache
-    └── PackageInstance/valkey@cache
-        └── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/activations.kix.dev
-└── Activation/example-yybkqrrnqkpi
-Namespace/stackgres-system
-├── ServiceAccount/stackgres-operator@stackgres-system
-│   ├── Deployment/stackgres-operator@stackgres-system
-│   │   └── PackageInstance/stackgres-operator@stackgres-system
-│   │       └── Activation/example-yybkqrrnqkpi
-│   ├── PackageInstance/stackgres-operator@stackgres-system
-│   │   └── Activation/example-yybkqrrnqkpi
-│   └── ClusterRoleBinding/stackgres-operator
-│       └── PackageInstance/stackgres-operator@stackgres-system
-│           └── Activation/example-yybkqrrnqkpi
-├── Service/stackgres-operator@stackgres-system
-│   ├── MutatingWebhookConfiguration/stackgres-operator
-│   │   └── PackageInstance/stackgres-operator@stackgres-system
-│   │       └── Activation/example-yybkqrrnqkpi
-│   ├── PackageInstance/stackgres-operator@stackgres-system
-│   │   └── Activation/example-yybkqrrnqkpi
-│   └── ValidatingWebhookConfiguration/stackgres-operator
-│       └── PackageInstance/stackgres-operator@stackgres-system
-│           └── Activation/example-yybkqrrnqkpi
-├── Deployment/stackgres-operator@stackgres-system
-│   └── PackageInstance/stackgres-operator@stackgres-system
-│       └── Activation/example-yybkqrrnqkpi
-└── PackageInstance/stackgres-operator@stackgres-system
-    └── Activation/example-yybkqrrnqkpi
-ClusterRole/cert-manager-cainjector
-└── ClusterRoleBinding/cert-manager-cainjector
-    └── PackageInstance/cert-manager@cert-manager
-        └── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/sgshardeddbops.stackgres.io
-└── PackageInstance/stackgres-operator@stackgres-system
-    └── Activation/example-yybkqrrnqkpi
-ClusterRole/cert-manager-cluster-view
-└── PackageInstance/cert-manager@cert-manager
-    └── Activation/example-yybkqrrnqkpi
-ClusterRole/cert-manager-controller-approve:cert-manager-io
-└── ClusterRoleBinding/cert-manager-controller-approve:cert-manager-io
-    └── PackageInstance/cert-manager@cert-manager
-        └── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/packageinstances.kix.dev
-├── PackageInstance/storage-classes@kube-system
-│   └── Activation/example-yybkqrrnqkpi
-├── PackageInstance/postgres@immich
-│   └── Activation/example-yybkqrrnqkpi
-├── PackageInstance/storage@immich
-│   └── Activation/example-yybkqrrnqkpi
-├── PackageInstance/valkey@cache
-│   └── Activation/example-yybkqrrnqkpi
-├── PackageInstance/coredns@kube-system
-│   └── Activation/example-yybkqrrnqkpi
-├── PackageInstance/cert-manager@cert-manager
-│   └── Activation/example-yybkqrrnqkpi
-├── PackageInstance/stackgres-operator@stackgres-system
-│   └── Activation/example-yybkqrrnqkpi
-├── PackageInstance/immich@immich
-│   └── Activation/example-yybkqrrnqkpi
-└── PackageInstance/machineLearning@immich
-    └── Activation/example-yybkqrrnqkpi
-ClusterRole/cert-manager-controller-certificatesigningrequests
-└── ClusterRoleBinding/cert-manager-controller-certificatesigningrequests
-    └── PackageInstance/cert-manager@cert-manager
-        └── Activation/example-yybkqrrnqkpi
-ClusterRole/coredns
-└── ClusterRoleBinding/coredns
-    └── PackageInstance/coredns@kube-system
-        └── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/issuers.cert-manager.io
-└── PackageInstance/cert-manager@cert-manager
-    └── Activation/example-yybkqrrnqkpi
-ClusterRole/cert-manager-controller-orders
-└── ClusterRoleBinding/cert-manager-controller-orders
-    └── PackageInstance/cert-manager@cert-manager
-        └── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/certificates.cert-manager.io
-└── PackageInstance/cert-manager@cert-manager
-    └── Activation/example-yybkqrrnqkpi
-Namespace/immich
-├── PackageInstance/postgres@immich
-│   └── Activation/example-yybkqrrnqkpi
-├── PackageInstance/storage@immich
-│   └── Activation/example-yybkqrrnqkpi
-├── SGInstanceProfile/postgres-profile@immich
-│   ├── PackageInstance/postgres@immich
-│   │   └── Activation/example-yybkqrrnqkpi
-│   └── SGCluster/postgres@immich
-│       ├── PackageInstance/postgres@immich
-│       │   └── Activation/example-yybkqrrnqkpi
-│       └── Deployment/immich-server@immich
-│           └── Service/immich-server@immich
-│               └── PackageInstance/immich@immich
-│                   └── Activation/example-yybkqrrnqkpi
-├── Service/immich-server@immich
-│   └── PackageInstance/immich@immich
-│       └── Activation/example-yybkqrrnqkpi
-├── SGPostgresConfig/postgres-pg16-config@immich
-│   ├── PackageInstance/postgres@immich
-│   │   └── Activation/example-yybkqrrnqkpi
-│   └── SGCluster/postgres@immich
-│       ├── PackageInstance/postgres@immich
-│       │   └── Activation/example-yybkqrrnqkpi
-│       └── Deployment/immich-server@immich
-│           └── Service/immich-server@immich
-│               └── PackageInstance/immich@immich
-│                   └── Activation/example-yybkqrrnqkpi
 ├── Service/machineLearning@immich
 │   ├── Deployment/immich-server@immich
 │   │   └── Service/immich-server@immich
 │   │       └── PackageInstance/immich@immich
 │   │           └── Activation/example-yybkqrrnqkpi
 │   └── PackageInstance/machineLearning@immich
+│       └── Activation/example-yybkqrrnqkpi
+├── SGPostgresConfig/postgres-pg16-config@immich
+│   ├── SGCluster/postgres@immich
+│   │   ├── PackageInstance/postgres@immich
+│   │   │   └── Activation/example-yybkqrrnqkpi
+│   │   └── Deployment/immich-server@immich
+│   │       └── Service/immich-server@immich
+│   │           └── PackageInstance/immich@immich
+│   │               └── Activation/example-yybkqrrnqkpi
+│   └── PackageInstance/postgres@immich
+│       └── Activation/example-yybkqrrnqkpi
+├── PackageInstance/immich@immich
+│   └── Activation/example-yybkqrrnqkpi
+├── Service/immich-server@immich
+│   └── PackageInstance/immich@immich
+│       └── Activation/example-yybkqrrnqkpi
+├── PackageInstance/postgres@immich
+│   └── Activation/example-yybkqrrnqkpi
+├── SGInstanceProfile/postgres-profile@immich
+│   ├── SGCluster/postgres@immich
+│   │   ├── PackageInstance/postgres@immich
+│   │   │   └── Activation/example-yybkqrrnqkpi
+│   │   └── Deployment/immich-server@immich
+│   │       └── Service/immich-server@immich
+│   │           └── PackageInstance/immich@immich
+│   │               └── Activation/example-yybkqrrnqkpi
+│   └── PackageInstance/postgres@immich
 │       └── Activation/example-yybkqrrnqkpi
 ├── Deployment/machineLearning@immich
 │   └── Service/machineLearning@immich
@@ -267,280 +96,91 @@ Namespace/immich
 │       │           └── Activation/example-yybkqrrnqkpi
 │       └── PackageInstance/machineLearning@immich
 │           └── Activation/example-yybkqrrnqkpi
-├── SGCluster/postgres@immich
-│   ├── PackageInstance/postgres@immich
-│   │   └── Activation/example-yybkqrrnqkpi
-│   └── Deployment/immich-server@immich
-│       └── Service/immich-server@immich
-│           └── PackageInstance/immich@immich
-│               └── Activation/example-yybkqrrnqkpi
 ├── PersistentVolumeClaim/storage@immich
-│   ├── PackageInstance/storage@immich
-│   │   └── Activation/example-yybkqrrnqkpi
-│   └── Deployment/immich-server@immich
-│       └── Service/immich-server@immich
-│           └── PackageInstance/immich@immich
-│               └── Activation/example-yybkqrrnqkpi
-├── PackageInstance/immich@immich
-│   └── Activation/example-yybkqrrnqkpi
+│   ├── Deployment/immich-server@immich
+│   │   └── Service/immich-server@immich
+│   │       └── PackageInstance/immich@immich
+│   │           └── Activation/example-yybkqrrnqkpi
+│   └── PackageInstance/storage@immich
+│       └── Activation/example-yybkqrrnqkpi
 ├── Deployment/immich-server@immich
 │   └── Service/immich-server@immich
 │       └── PackageInstance/immich@immich
 │           └── Activation/example-yybkqrrnqkpi
+├── PackageInstance/storage@immich
+│   └── Activation/example-yybkqrrnqkpi
+└── PackageInstance/machineLearning@immich
+    └── Activation/example-yybkqrrnqkpi
+CustomResourceDefinition/sgconfigs.stackgres.io
+└── PackageInstance/stackgres-operator@stackgres-system
+    └── Activation/example-yybkqrrnqkpi
+CustomResourceDefinition/activations.kix.dev
+└── Activation/example-yybkqrrnqkpi
+CustomResourceDefinition/sgshardedbackups.stackgres.io
+└── PackageInstance/stackgres-operator@stackgres-system
+    └── Activation/example-yybkqrrnqkpi
+CustomResourceDefinition/clusterissuers.cert-manager.io
+└── PackageInstance/cert-manager@cert-manager
+    └── Activation/example-yybkqrrnqkpi
+CustomResourceDefinition/packageinstances.kix.dev
+├── PackageInstance/stackgres-operator@stackgres-system
+│   └── Activation/example-yybkqrrnqkpi
+├── PackageInstance/storage-classes@kube-system
+│   └── Activation/example-yybkqrrnqkpi
+├── PackageInstance/immich@immich
+│   └── Activation/example-yybkqrrnqkpi
+├── PackageInstance/cert-manager@cert-manager
+│   └── Activation/example-yybkqrrnqkpi
+├── PackageInstance/coredns@kube-system
+│   └── Activation/example-yybkqrrnqkpi
+├── PackageInstance/postgres@immich
+│   └── Activation/example-yybkqrrnqkpi
+├── PackageInstance/valkey@cache
+│   └── Activation/example-yybkqrrnqkpi
+├── PackageInstance/storage@immich
+│   └── Activation/example-yybkqrrnqkpi
 └── PackageInstance/machineLearning@immich
     └── Activation/example-yybkqrrnqkpi
 CustomResourceDefinition/sginstanceprofiles.stackgres.io
 └── PackageInstance/stackgres-operator@stackgres-system
     └── Activation/example-yybkqrrnqkpi
-ClusterRole/cert-manager-controller-ingress-shim
-└── ClusterRoleBinding/cert-manager-controller-ingress-shim
+ClusterRole/stackgres-operator
+├── PackageInstance/stackgres-operator@stackgres-system
+│   └── Activation/example-yybkqrrnqkpi
+└── ClusterRoleBinding/stackgres-operator
+    └── PackageInstance/stackgres-operator@stackgres-system
+        └── Activation/example-yybkqrrnqkpi
+ClusterRole/cert-manager-controller-issuers
+└── ClusterRoleBinding/cert-manager-controller-issuers
     └── PackageInstance/cert-manager@cert-manager
         └── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/sgstreams.stackgres.io
-└── PackageInstance/stackgres-operator@stackgres-system
-    └── Activation/example-yybkqrrnqkpi
-Namespace/cert-manager
-├── Service/cert-manager@cert-manager
-│   └── PackageInstance/cert-manager@cert-manager
-│       └── Activation/example-yybkqrrnqkpi
-├── Deployment/cert-manager-webhook@cert-manager
-│   ├── PackageInstance/cert-manager@cert-manager
-│   │   └── Activation/example-yybkqrrnqkpi
-│   └── Service/cert-manager-webhook@cert-manager
-│       ├── MutatingWebhookConfiguration/cert-manager-webhook
-│       │   └── PackageInstance/cert-manager@cert-manager
-│       │       └── Activation/example-yybkqrrnqkpi
-│       ├── PackageInstance/cert-manager@cert-manager
-│       │   └── Activation/example-yybkqrrnqkpi
-│       └── ValidatingWebhookConfiguration/cert-manager-webhook
-│           └── PackageInstance/cert-manager@cert-manager
-│               └── Activation/example-yybkqrrnqkpi
-├── PackageInstance/cert-manager@cert-manager
-│   └── Activation/example-yybkqrrnqkpi
-├── Role/cert-manager-tokenrequest@cert-manager
-│   ├── PackageInstance/cert-manager@cert-manager
-│   │   └── Activation/example-yybkqrrnqkpi
-│   └── RoleBinding/cert-manager-cert-manager-tokenrequest@cert-manager
-│       └── PackageInstance/cert-manager@cert-manager
-│           └── Activation/example-yybkqrrnqkpi
-├── Role/cert-manager-webhook:dynamic-serving@cert-manager
-│   └── RoleBinding/cert-manager-webhook:dynamic-serving@cert-manager
-│       └── PackageInstance/cert-manager@cert-manager
-│           └── Activation/example-yybkqrrnqkpi
-├── Service/cert-manager-cainjector@cert-manager
-│   └── PackageInstance/cert-manager@cert-manager
-│       └── Activation/example-yybkqrrnqkpi
-├── RoleBinding/cert-manager-cert-manager-tokenrequest@cert-manager
-│   └── PackageInstance/cert-manager@cert-manager
-│       └── Activation/example-yybkqrrnqkpi
-├── ServiceAccount/cert-manager@cert-manager
-│   ├── PackageInstance/cert-manager@cert-manager
-│   │   └── Activation/example-yybkqrrnqkpi
-│   ├── Role/cert-manager-tokenrequest@cert-manager
-│   │   ├── PackageInstance/cert-manager@cert-manager
-│   │   │   └── Activation/example-yybkqrrnqkpi
-│   │   └── RoleBinding/cert-manager-cert-manager-tokenrequest@cert-manager
-│   │       └── PackageInstance/cert-manager@cert-manager
-│   │           └── Activation/example-yybkqrrnqkpi
-│   ├── ClusterRoleBinding/cert-manager-controller-challenges
-│   │   └── PackageInstance/cert-manager@cert-manager
-│   │       └── Activation/example-yybkqrrnqkpi
-│   ├── ClusterRoleBinding/cert-manager-controller-certificatesigningrequests
-│   │   └── PackageInstance/cert-manager@cert-manager
-│   │       └── Activation/example-yybkqrrnqkpi
-│   ├── RoleBinding/cert-manager-cert-manager-tokenrequest@cert-manager
-│   │   └── PackageInstance/cert-manager@cert-manager
-│   │       └── Activation/example-yybkqrrnqkpi
-│   ├── ClusterRoleBinding/cert-manager-controller-issuers
-│   │   └── PackageInstance/cert-manager@cert-manager
-│   │       └── Activation/example-yybkqrrnqkpi
-│   ├── RoleBinding/cert-manager:leaderelection@cert-manager
-│   │   └── PackageInstance/cert-manager@cert-manager
-│   │       └── Activation/example-yybkqrrnqkpi
-│   ├── ClusterRoleBinding/cert-manager-controller-clusterissuers
-│   │   └── PackageInstance/cert-manager@cert-manager
-│   │       └── Activation/example-yybkqrrnqkpi
-│   ├── Deployment/cert-manager@cert-manager
-│   │   ├── Service/cert-manager@cert-manager
-│   │   │   └── PackageInstance/cert-manager@cert-manager
-│   │   │       └── Activation/example-yybkqrrnqkpi
-│   │   └── PackageInstance/cert-manager@cert-manager
-│   │       └── Activation/example-yybkqrrnqkpi
-│   ├── ClusterRoleBinding/cert-manager-controller-approve:cert-manager-io
-│   │   └── PackageInstance/cert-manager@cert-manager
-│   │       └── Activation/example-yybkqrrnqkpi
-│   ├── ClusterRoleBinding/cert-manager-controller-certificates
-│   │   └── PackageInstance/cert-manager@cert-manager
-│   │       └── Activation/example-yybkqrrnqkpi
-│   ├── ClusterRoleBinding/cert-manager-controller-orders
-│   │   └── PackageInstance/cert-manager@cert-manager
-│   │       └── Activation/example-yybkqrrnqkpi
-│   └── ClusterRoleBinding/cert-manager-controller-ingress-shim
-│       └── PackageInstance/cert-manager@cert-manager
-│           └── Activation/example-yybkqrrnqkpi
-├── ServiceAccount/cert-manager-cainjector@cert-manager
-│   ├── PackageInstance/cert-manager@cert-manager
-│   │   └── Activation/example-yybkqrrnqkpi
-│   ├── ClusterRoleBinding/cert-manager-cainjector
-│   │   └── PackageInstance/cert-manager@cert-manager
-│   │       └── Activation/example-yybkqrrnqkpi
-│   ├── Deployment/cert-manager-cainjector@cert-manager
-│   │   ├── PackageInstance/cert-manager@cert-manager
-│   │   │   └── Activation/example-yybkqrrnqkpi
-│   │   └── Service/cert-manager-cainjector@cert-manager
-│   │       └── PackageInstance/cert-manager@cert-manager
-│   │           └── Activation/example-yybkqrrnqkpi
-│   └── RoleBinding/cert-manager-cainjector:leaderelection@cert-manager
-│       └── PackageInstance/cert-manager@cert-manager
-│           └── Activation/example-yybkqrrnqkpi
-├── Deployment/cert-manager-cainjector@cert-manager
-│   ├── PackageInstance/cert-manager@cert-manager
-│   │   └── Activation/example-yybkqrrnqkpi
-│   └── Service/cert-manager-cainjector@cert-manager
-│       └── PackageInstance/cert-manager@cert-manager
-│           └── Activation/example-yybkqrrnqkpi
-├── Service/cert-manager-webhook@cert-manager
-│   ├── MutatingWebhookConfiguration/cert-manager-webhook
-│   │   └── PackageInstance/cert-manager@cert-manager
-│   │       └── Activation/example-yybkqrrnqkpi
-│   ├── PackageInstance/cert-manager@cert-manager
-│   │   └── Activation/example-yybkqrrnqkpi
-│   └── ValidatingWebhookConfiguration/cert-manager-webhook
-│       └── PackageInstance/cert-manager@cert-manager
-│           └── Activation/example-yybkqrrnqkpi
-├── RoleBinding/cert-manager-webhook:dynamic-serving@cert-manager
-│   └── PackageInstance/cert-manager@cert-manager
-│       └── Activation/example-yybkqrrnqkpi
-├── RoleBinding/cert-manager:leaderelection@cert-manager
-│   └── PackageInstance/cert-manager@cert-manager
-│       └── Activation/example-yybkqrrnqkpi
-├── Role/cert-manager:leaderelection@cert-manager
-│   └── RoleBinding/cert-manager:leaderelection@cert-manager
-│       └── PackageInstance/cert-manager@cert-manager
-│           └── Activation/example-yybkqrrnqkpi
-├── Deployment/cert-manager@cert-manager
-│   ├── Service/cert-manager@cert-manager
-│   │   └── PackageInstance/cert-manager@cert-manager
-│   │       └── Activation/example-yybkqrrnqkpi
-│   └── PackageInstance/cert-manager@cert-manager
-│       └── Activation/example-yybkqrrnqkpi
-├── RoleBinding/cert-manager-cainjector:leaderelection@cert-manager
-│   └── PackageInstance/cert-manager@cert-manager
-│       └── Activation/example-yybkqrrnqkpi
-├── ServiceAccount/cert-manager-webhook@cert-manager
-│   ├── Deployment/cert-manager-webhook@cert-manager
-│   │   ├── PackageInstance/cert-manager@cert-manager
-│   │   │   └── Activation/example-yybkqrrnqkpi
-│   │   └── Service/cert-manager-webhook@cert-manager
-│   │       ├── MutatingWebhookConfiguration/cert-manager-webhook
-│   │       │   └── PackageInstance/cert-manager@cert-manager
-│   │       │       └── Activation/example-yybkqrrnqkpi
-│   │       ├── PackageInstance/cert-manager@cert-manager
-│   │       │   └── Activation/example-yybkqrrnqkpi
-│   │       └── ValidatingWebhookConfiguration/cert-manager-webhook
-│   │           └── PackageInstance/cert-manager@cert-manager
-│   │               └── Activation/example-yybkqrrnqkpi
-│   ├── ClusterRoleBinding/cert-manager-webhook:subjectaccessreviews
-│   │   └── PackageInstance/cert-manager@cert-manager
-│   │       └── Activation/example-yybkqrrnqkpi
-│   ├── PackageInstance/cert-manager@cert-manager
-│   │   └── Activation/example-yybkqrrnqkpi
-│   └── RoleBinding/cert-manager-webhook:dynamic-serving@cert-manager
-│       └── PackageInstance/cert-manager@cert-manager
-│           └── Activation/example-yybkqrrnqkpi
-└── Role/cert-manager-cainjector:leaderelection@cert-manager
-    └── RoleBinding/cert-manager-cainjector:leaderelection@cert-manager
-        └── PackageInstance/cert-manager@cert-manager
-            └── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/sgclusters.stackgres.io
-└── PackageInstance/stackgres-operator@stackgres-system
-    └── Activation/example-yybkqrrnqkpi
-Namespace/kube-system
-├── PackageInstance/storage-classes@kube-system
-│   └── Activation/example-yybkqrrnqkpi
-├── ConfigMap/coredns@kube-system
-│   └── Deployment/coredns@kube-system
-│       ├── Service/coredns@kube-system
-│       │   └── PackageInstance/coredns@kube-system
-│       │       └── Activation/example-yybkqrrnqkpi
-│       └── Service/coredns-metrics@kube-system
-│           └── Service/coredns@kube-system
-│               └── PackageInstance/coredns@kube-system
-│                   └── Activation/example-yybkqrrnqkpi
-├── PackageInstance/coredns@kube-system
-│   └── Activation/example-yybkqrrnqkpi
-├── Deployment/coredns@kube-system
-│   ├── Service/coredns@kube-system
-│   │   └── PackageInstance/coredns@kube-system
-│   │       └── Activation/example-yybkqrrnqkpi
-│   └── Service/coredns-metrics@kube-system
-│       └── Service/coredns@kube-system
-│           └── PackageInstance/coredns@kube-system
-│               └── Activation/example-yybkqrrnqkpi
-├── Service/coredns@kube-system
-│   └── PackageInstance/coredns@kube-system
-│       └── Activation/example-yybkqrrnqkpi
-├── Service/coredns-metrics@kube-system
-│   └── Service/coredns@kube-system
-│       └── PackageInstance/coredns@kube-system
-│           └── Activation/example-yybkqrrnqkpi
-└── ServiceAccount/coredns@kube-system
-    ├── ClusterRoleBinding/coredns
-    │   └── PackageInstance/coredns@kube-system
-    │       └── Activation/example-yybkqrrnqkpi
-    └── Deployment/coredns@kube-system
-        ├── Service/coredns@kube-system
-        │   └── PackageInstance/coredns@kube-system
-        │       └── Activation/example-yybkqrrnqkpi
-        └── Service/coredns-metrics@kube-system
-            └── Service/coredns@kube-system
-                └── PackageInstance/coredns@kube-system
-                    └── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/orders.acme.cert-manager.io
+CustomResourceDefinition/certificates.cert-manager.io
 └── PackageInstance/cert-manager@cert-manager
-    └── Activation/example-yybkqrrnqkpi
-ClusterRole/cert-manager-controller-challenges
-└── ClusterRoleBinding/cert-manager-controller-challenges
-    └── PackageInstance/cert-manager@cert-manager
-        └── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/sgbackups.stackgres.io
-└── PackageInstance/stackgres-operator@stackgres-system
-    └── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/sgshardedclusters.stackgres.io
-└── PackageInstance/stackgres-operator@stackgres-system
     └── Activation/example-yybkqrrnqkpi
 StorageClass/localzfs-retain
 └── PackageInstance/storage-classes@kube-system
     └── Activation/example-yybkqrrnqkpi
-StorageClass/localzfs
-└── PackageInstance/storage-classes@kube-system
-    └── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/sgpoolconfigs.stackgres.io
-└── PackageInstance/stackgres-operator@stackgres-system
-    └── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/sgpgconfigs.stackgres.io
+CustomResourceDefinition/sgclusters.stackgres.io
 └── PackageInstance/stackgres-operator@stackgres-system
     └── Activation/example-yybkqrrnqkpi
 CustomResourceDefinition/sgdistributedlogs.stackgres.io
+└── PackageInstance/stackgres-operator@stackgres-system
+    └── Activation/example-yybkqrrnqkpi
+CustomResourceDefinition/sgdbops.stackgres.io
+└── PackageInstance/stackgres-operator@stackgres-system
+    └── Activation/example-yybkqrrnqkpi
+ClusterRole/cert-manager-controller-clusterissuers
+└── ClusterRoleBinding/cert-manager-controller-clusterissuers
+    └── PackageInstance/cert-manager@cert-manager
+        └── Activation/example-yybkqrrnqkpi
+CustomResourceDefinition/sgbackupconfigs.stackgres.io
 └── PackageInstance/stackgres-operator@stackgres-system
     └── Activation/example-yybkqrrnqkpi
 ClusterRole/cert-manager-webhook:subjectaccessreviews
 └── ClusterRoleBinding/cert-manager-webhook:subjectaccessreviews
     └── PackageInstance/cert-manager@cert-manager
         └── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/certificaterequests.cert-manager.io
-└── PackageInstance/cert-manager@cert-manager
-    └── Activation/example-yybkqrrnqkpi
-ClusterRole/cert-manager-controller-clusterissuers
-└── ClusterRoleBinding/cert-manager-controller-clusterissuers
-    └── PackageInstance/cert-manager@cert-manager
-        └── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/sgscripts.stackgres.io
-└── PackageInstance/stackgres-operator@stackgres-system
-    └── Activation/example-yybkqrrnqkpi
 StorageClass/lbs1-pool1-2x
-├── PackageInstance/storage-classes@kube-system
-│   └── Activation/example-yybkqrrnqkpi
 ├── SGCluster/postgres@immich
 │   ├── PackageInstance/postgres@immich
 │   │   └── Activation/example-yybkqrrnqkpi
@@ -548,20 +188,380 @@ StorageClass/lbs1-pool1-2x
 │       └── Service/immich-server@immich
 │           └── PackageInstance/immich@immich
 │               └── Activation/example-yybkqrrnqkpi
+├── PackageInstance/storage-classes@kube-system
+│   └── Activation/example-yybkqrrnqkpi
 └── PersistentVolumeClaim/storage@immich
-    ├── PackageInstance/storage@immich
+    ├── Deployment/immich-server@immich
+    │   └── Service/immich-server@immich
+    │       └── PackageInstance/immich@immich
+    │           └── Activation/example-yybkqrrnqkpi
+    └── PackageInstance/storage@immich
+        └── Activation/example-yybkqrrnqkpi
+CustomResourceDefinition/sgshardeddbops.stackgres.io
+└── PackageInstance/stackgres-operator@stackgres-system
+    └── Activation/example-yybkqrrnqkpi
+CustomResourceDefinition/sgbackups.stackgres.io
+└── PackageInstance/stackgres-operator@stackgres-system
+    └── Activation/example-yybkqrrnqkpi
+Namespace/cert-manager
+├── Role/cert-manager-tokenrequest@cert-manager
+│   ├── PackageInstance/cert-manager@cert-manager
+│   │   └── Activation/example-yybkqrrnqkpi
+│   └── RoleBinding/cert-manager-cert-manager-tokenrequest@cert-manager
+│       └── PackageInstance/cert-manager@cert-manager
+│           └── Activation/example-yybkqrrnqkpi
+├── RoleBinding/cert-manager-cainjector:leaderelection@cert-manager
+│   └── PackageInstance/cert-manager@cert-manager
+│       └── Activation/example-yybkqrrnqkpi
+├── Role/cert-manager-webhook:dynamic-serving@cert-manager
+│   └── RoleBinding/cert-manager-webhook:dynamic-serving@cert-manager
+│       └── PackageInstance/cert-manager@cert-manager
+│           └── Activation/example-yybkqrrnqkpi
+├── ServiceAccount/cert-manager-cainjector@cert-manager
+│   ├── RoleBinding/cert-manager-cainjector:leaderelection@cert-manager
+│   │   └── PackageInstance/cert-manager@cert-manager
+│   │       └── Activation/example-yybkqrrnqkpi
+│   ├── PackageInstance/cert-manager@cert-manager
+│   │   └── Activation/example-yybkqrrnqkpi
+│   ├── ClusterRoleBinding/cert-manager-cainjector
+│   │   └── PackageInstance/cert-manager@cert-manager
+│   │       └── Activation/example-yybkqrrnqkpi
+│   └── Deployment/cert-manager-cainjector@cert-manager
+│       ├── PackageInstance/cert-manager@cert-manager
+│       │   └── Activation/example-yybkqrrnqkpi
+│       └── Service/cert-manager-cainjector@cert-manager
+│           └── PackageInstance/cert-manager@cert-manager
+│               └── Activation/example-yybkqrrnqkpi
+├── PackageInstance/cert-manager@cert-manager
+│   └── Activation/example-yybkqrrnqkpi
+├── Deployment/cert-manager@cert-manager
+│   ├── PackageInstance/cert-manager@cert-manager
+│   │   └── Activation/example-yybkqrrnqkpi
+│   └── Service/cert-manager@cert-manager
+│       └── PackageInstance/cert-manager@cert-manager
+│           └── Activation/example-yybkqrrnqkpi
+├── Service/cert-manager@cert-manager
+│   └── PackageInstance/cert-manager@cert-manager
+│       └── Activation/example-yybkqrrnqkpi
+├── RoleBinding/cert-manager-cert-manager-tokenrequest@cert-manager
+│   └── PackageInstance/cert-manager@cert-manager
+│       └── Activation/example-yybkqrrnqkpi
+├── Role/cert-manager:leaderelection@cert-manager
+│   └── RoleBinding/cert-manager:leaderelection@cert-manager
+│       └── PackageInstance/cert-manager@cert-manager
+│           └── Activation/example-yybkqrrnqkpi
+├── Deployment/cert-manager-webhook@cert-manager
+│   ├── PackageInstance/cert-manager@cert-manager
+│   │   └── Activation/example-yybkqrrnqkpi
+│   └── Service/cert-manager-webhook@cert-manager
+│       ├── PackageInstance/cert-manager@cert-manager
+│       │   └── Activation/example-yybkqrrnqkpi
+│       ├── MutatingWebhookConfiguration/cert-manager-webhook
+│       │   └── PackageInstance/cert-manager@cert-manager
+│       │       └── Activation/example-yybkqrrnqkpi
+│       └── ValidatingWebhookConfiguration/cert-manager-webhook
+│           └── PackageInstance/cert-manager@cert-manager
+│               └── Activation/example-yybkqrrnqkpi
+├── RoleBinding/cert-manager-webhook:dynamic-serving@cert-manager
+│   └── PackageInstance/cert-manager@cert-manager
+│       └── Activation/example-yybkqrrnqkpi
+├── Service/cert-manager-webhook@cert-manager
+│   ├── PackageInstance/cert-manager@cert-manager
+│   │   └── Activation/example-yybkqrrnqkpi
+│   ├── MutatingWebhookConfiguration/cert-manager-webhook
+│   │   └── PackageInstance/cert-manager@cert-manager
+│   │       └── Activation/example-yybkqrrnqkpi
+│   └── ValidatingWebhookConfiguration/cert-manager-webhook
+│       └── PackageInstance/cert-manager@cert-manager
+│           └── Activation/example-yybkqrrnqkpi
+├── ServiceAccount/cert-manager@cert-manager
+│   ├── Role/cert-manager-tokenrequest@cert-manager
+│   │   ├── PackageInstance/cert-manager@cert-manager
+│   │   │   └── Activation/example-yybkqrrnqkpi
+│   │   └── RoleBinding/cert-manager-cert-manager-tokenrequest@cert-manager
+│   │       └── PackageInstance/cert-manager@cert-manager
+│   │           └── Activation/example-yybkqrrnqkpi
+│   ├── ClusterRoleBinding/cert-manager-controller-orders
+│   │   └── PackageInstance/cert-manager@cert-manager
+│   │       └── Activation/example-yybkqrrnqkpi
+│   ├── ClusterRoleBinding/cert-manager-controller-certificatesigningrequests
+│   │   └── PackageInstance/cert-manager@cert-manager
+│   │       └── Activation/example-yybkqrrnqkpi
+│   ├── ClusterRoleBinding/cert-manager-controller-approve:cert-manager-io
+│   │   └── PackageInstance/cert-manager@cert-manager
+│   │       └── Activation/example-yybkqrrnqkpi
+│   ├── PackageInstance/cert-manager@cert-manager
+│   │   └── Activation/example-yybkqrrnqkpi
+│   ├── Deployment/cert-manager@cert-manager
+│   │   ├── PackageInstance/cert-manager@cert-manager
+│   │   │   └── Activation/example-yybkqrrnqkpi
+│   │   └── Service/cert-manager@cert-manager
+│   │       └── PackageInstance/cert-manager@cert-manager
+│   │           └── Activation/example-yybkqrrnqkpi
+│   ├── RoleBinding/cert-manager-cert-manager-tokenrequest@cert-manager
+│   │   └── PackageInstance/cert-manager@cert-manager
+│   │       └── Activation/example-yybkqrrnqkpi
+│   ├── ClusterRoleBinding/cert-manager-controller-ingress-shim
+│   │   └── PackageInstance/cert-manager@cert-manager
+│   │       └── Activation/example-yybkqrrnqkpi
+│   ├── RoleBinding/cert-manager:leaderelection@cert-manager
+│   │   └── PackageInstance/cert-manager@cert-manager
+│   │       └── Activation/example-yybkqrrnqkpi
+│   ├── ClusterRoleBinding/cert-manager-controller-issuers
+│   │   └── PackageInstance/cert-manager@cert-manager
+│   │       └── Activation/example-yybkqrrnqkpi
+│   ├── ClusterRoleBinding/cert-manager-controller-certificates
+│   │   └── PackageInstance/cert-manager@cert-manager
+│   │       └── Activation/example-yybkqrrnqkpi
+│   ├── ClusterRoleBinding/cert-manager-controller-challenges
+│   │   └── PackageInstance/cert-manager@cert-manager
+│   │       └── Activation/example-yybkqrrnqkpi
+│   └── ClusterRoleBinding/cert-manager-controller-clusterissuers
+│       └── PackageInstance/cert-manager@cert-manager
+│           └── Activation/example-yybkqrrnqkpi
+├── Service/cert-manager-cainjector@cert-manager
+│   └── PackageInstance/cert-manager@cert-manager
+│       └── Activation/example-yybkqrrnqkpi
+├── Deployment/cert-manager-cainjector@cert-manager
+│   ├── PackageInstance/cert-manager@cert-manager
+│   │   └── Activation/example-yybkqrrnqkpi
+│   └── Service/cert-manager-cainjector@cert-manager
+│       └── PackageInstance/cert-manager@cert-manager
+│           └── Activation/example-yybkqrrnqkpi
+├── RoleBinding/cert-manager:leaderelection@cert-manager
+│   └── PackageInstance/cert-manager@cert-manager
+│       └── Activation/example-yybkqrrnqkpi
+├── Role/cert-manager-cainjector:leaderelection@cert-manager
+│   └── RoleBinding/cert-manager-cainjector:leaderelection@cert-manager
+│       └── PackageInstance/cert-manager@cert-manager
+│           └── Activation/example-yybkqrrnqkpi
+└── ServiceAccount/cert-manager-webhook@cert-manager
+    ├── PackageInstance/cert-manager@cert-manager
     │   └── Activation/example-yybkqrrnqkpi
-    └── Deployment/immich-server@immich
-        └── Service/immich-server@immich
-            └── PackageInstance/immich@immich
-                └── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/sgdbops.stackgres.io
-└── PackageInstance/stackgres-operator@stackgres-system
-    └── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/sgbackupconfigs.stackgres.io
-└── PackageInstance/stackgres-operator@stackgres-system
-    └── Activation/example-yybkqrrnqkpi
-ClusterRole/cert-manager-controller-certificates
-└── ClusterRoleBinding/cert-manager-controller-certificates
+    ├── ClusterRoleBinding/cert-manager-webhook:subjectaccessreviews
+    │   └── PackageInstance/cert-manager@cert-manager
+    │       └── Activation/example-yybkqrrnqkpi
+    ├── Deployment/cert-manager-webhook@cert-manager
+    │   ├── PackageInstance/cert-manager@cert-manager
+    │   │   └── Activation/example-yybkqrrnqkpi
+    │   └── Service/cert-manager-webhook@cert-manager
+    │       ├── PackageInstance/cert-manager@cert-manager
+    │       │   └── Activation/example-yybkqrrnqkpi
+    │       ├── MutatingWebhookConfiguration/cert-manager-webhook
+    │       │   └── PackageInstance/cert-manager@cert-manager
+    │       │       └── Activation/example-yybkqrrnqkpi
+    │       └── ValidatingWebhookConfiguration/cert-manager-webhook
+    │           └── PackageInstance/cert-manager@cert-manager
+    │               └── Activation/example-yybkqrrnqkpi
+    └── RoleBinding/cert-manager-webhook:dynamic-serving@cert-manager
+        └── PackageInstance/cert-manager@cert-manager
+            └── Activation/example-yybkqrrnqkpi
+ClusterRole/cert-manager-controller-orders
+└── ClusterRoleBinding/cert-manager-controller-orders
     └── PackageInstance/cert-manager@cert-manager
+        └── Activation/example-yybkqrrnqkpi
+ClusterRole/cert-manager-cluster-view
+└── PackageInstance/cert-manager@cert-manager
+    └── Activation/example-yybkqrrnqkpi
+StorageClass/localzfs
+└── PackageInstance/storage-classes@kube-system
+    └── Activation/example-yybkqrrnqkpi
+CustomResourceDefinition/sgobjectstorages.stackgres.io
+└── PackageInstance/stackgres-operator@stackgres-system
+    └── Activation/example-yybkqrrnqkpi
+CustomResourceDefinition/sgpgconfigs.stackgres.io
+└── PackageInstance/stackgres-operator@stackgres-system
+    └── Activation/example-yybkqrrnqkpi
+Namespace/kube-system
+├── PackageInstance/storage-classes@kube-system
+│   └── Activation/example-yybkqrrnqkpi
+├── Service/coredns-metrics@kube-system
+│   └── Service/coredns@kube-system
+│       └── PackageInstance/coredns@kube-system
+│           └── Activation/example-yybkqrrnqkpi
+├── Service/coredns@kube-system
+│   └── PackageInstance/coredns@kube-system
+│       └── Activation/example-yybkqrrnqkpi
+├── PackageInstance/coredns@kube-system
+│   └── Activation/example-yybkqrrnqkpi
+├── ServiceAccount/coredns@kube-system
+│   ├── ClusterRoleBinding/coredns
+│   │   └── PackageInstance/coredns@kube-system
+│   │       └── Activation/example-yybkqrrnqkpi
+│   └── Deployment/coredns@kube-system
+│       ├── Service/coredns-metrics@kube-system
+│       │   └── Service/coredns@kube-system
+│       │       └── PackageInstance/coredns@kube-system
+│       │           └── Activation/example-yybkqrrnqkpi
+│       └── Service/coredns@kube-system
+│           └── PackageInstance/coredns@kube-system
+│               └── Activation/example-yybkqrrnqkpi
+├── ConfigMap/coredns@kube-system
+│   └── Deployment/coredns@kube-system
+│       ├── Service/coredns-metrics@kube-system
+│       │   └── Service/coredns@kube-system
+│       │       └── PackageInstance/coredns@kube-system
+│       │           └── Activation/example-yybkqrrnqkpi
+│       └── Service/coredns@kube-system
+│           └── PackageInstance/coredns@kube-system
+│               └── Activation/example-yybkqrrnqkpi
+└── Deployment/coredns@kube-system
+    ├── Service/coredns-metrics@kube-system
+    │   └── Service/coredns@kube-system
+    │       └── PackageInstance/coredns@kube-system
+    │           └── Activation/example-yybkqrrnqkpi
+    └── Service/coredns@kube-system
+        └── PackageInstance/coredns@kube-system
+            └── Activation/example-yybkqrrnqkpi
+Namespace/cache
+├── ConfigMap/valkey-configuration@cache
+│   ├── StatefulSet/valkey-node@cache
+│   │   ├── Service/valkey-metrics@cache
+│   │   │   └── PackageInstance/valkey@cache
+│   │   │       └── Activation/example-yybkqrrnqkpi
+│   │   ├── PackageInstance/valkey@cache
+│   │   │   └── Activation/example-yybkqrrnqkpi
+│   │   ├── Service/valkey@cache
+│   │   │   ├── PackageInstance/valkey@cache
+│   │   │   │   └── Activation/example-yybkqrrnqkpi
+│   │   │   └── Deployment/immich-server@immich
+│   │   │       └── Service/immich-server@immich
+│   │   │           └── PackageInstance/immich@immich
+│   │   │               └── Activation/example-yybkqrrnqkpi
+│   │   └── Service/valkey-headless@cache
+│   │       └── PackageInstance/valkey@cache
+│   │           └── Activation/example-yybkqrrnqkpi
+│   └── PackageInstance/valkey@cache
+│       └── Activation/example-yybkqrrnqkpi
+├── StatefulSet/valkey-node@cache
+│   ├── Service/valkey-metrics@cache
+│   │   └── PackageInstance/valkey@cache
+│   │       └── Activation/example-yybkqrrnqkpi
+│   ├── PackageInstance/valkey@cache
+│   │   └── Activation/example-yybkqrrnqkpi
+│   ├── Service/valkey@cache
+│   │   ├── PackageInstance/valkey@cache
+│   │   │   └── Activation/example-yybkqrrnqkpi
+│   │   └── Deployment/immich-server@immich
+│   │       └── Service/immich-server@immich
+│   │           └── PackageInstance/immich@immich
+│   │               └── Activation/example-yybkqrrnqkpi
+│   └── Service/valkey-headless@cache
+│       └── PackageInstance/valkey@cache
+│           └── Activation/example-yybkqrrnqkpi
+├── Service/valkey-metrics@cache
+│   └── PackageInstance/valkey@cache
+│       └── Activation/example-yybkqrrnqkpi
+├── PodDisruptionBudget/valkey-node@cache
+│   └── PackageInstance/valkey@cache
+│       └── Activation/example-yybkqrrnqkpi
+├── ConfigMap/valkey-health@cache
+│   ├── StatefulSet/valkey-node@cache
+│   │   ├── Service/valkey-metrics@cache
+│   │   │   └── PackageInstance/valkey@cache
+│   │   │       └── Activation/example-yybkqrrnqkpi
+│   │   ├── PackageInstance/valkey@cache
+│   │   │   └── Activation/example-yybkqrrnqkpi
+│   │   ├── Service/valkey@cache
+│   │   │   ├── PackageInstance/valkey@cache
+│   │   │   │   └── Activation/example-yybkqrrnqkpi
+│   │   │   └── Deployment/immich-server@immich
+│   │   │       └── Service/immich-server@immich
+│   │   │           └── PackageInstance/immich@immich
+│   │   │               └── Activation/example-yybkqrrnqkpi
+│   │   └── Service/valkey-headless@cache
+│   │       └── PackageInstance/valkey@cache
+│   │           └── Activation/example-yybkqrrnqkpi
+│   └── PackageInstance/valkey@cache
+│       └── Activation/example-yybkqrrnqkpi
+├── ConfigMap/valkey-scripts@cache
+│   ├── StatefulSet/valkey-node@cache
+│   │   ├── Service/valkey-metrics@cache
+│   │   │   └── PackageInstance/valkey@cache
+│   │   │       └── Activation/example-yybkqrrnqkpi
+│   │   ├── PackageInstance/valkey@cache
+│   │   │   └── Activation/example-yybkqrrnqkpi
+│   │   ├── Service/valkey@cache
+│   │   │   ├── PackageInstance/valkey@cache
+│   │   │   │   └── Activation/example-yybkqrrnqkpi
+│   │   │   └── Deployment/immich-server@immich
+│   │   │       └── Service/immich-server@immich
+│   │   │           └── PackageInstance/immich@immich
+│   │   │               └── Activation/example-yybkqrrnqkpi
+│   │   └── Service/valkey-headless@cache
+│   │       └── PackageInstance/valkey@cache
+│   │           └── Activation/example-yybkqrrnqkpi
+│   └── PackageInstance/valkey@cache
+│       └── Activation/example-yybkqrrnqkpi
+├── NetworkPolicy/valkey@cache
+│   └── PackageInstance/valkey@cache
+│       └── Activation/example-yybkqrrnqkpi
+├── PackageInstance/valkey@cache
+│   └── Activation/example-yybkqrrnqkpi
+├── ServiceAccount/valkey@cache
+│   ├── StatefulSet/valkey-node@cache
+│   │   ├── Service/valkey-metrics@cache
+│   │   │   └── PackageInstance/valkey@cache
+│   │   │       └── Activation/example-yybkqrrnqkpi
+│   │   ├── PackageInstance/valkey@cache
+│   │   │   └── Activation/example-yybkqrrnqkpi
+│   │   ├── Service/valkey@cache
+│   │   │   ├── PackageInstance/valkey@cache
+│   │   │   │   └── Activation/example-yybkqrrnqkpi
+│   │   │   └── Deployment/immich-server@immich
+│   │   │       └── Service/immich-server@immich
+│   │   │           └── PackageInstance/immich@immich
+│   │   │               └── Activation/example-yybkqrrnqkpi
+│   │   └── Service/valkey-headless@cache
+│   │       └── PackageInstance/valkey@cache
+│   │           └── Activation/example-yybkqrrnqkpi
+│   └── PackageInstance/valkey@cache
+│       └── Activation/example-yybkqrrnqkpi
+├── Service/valkey@cache
+│   ├── PackageInstance/valkey@cache
+│   │   └── Activation/example-yybkqrrnqkpi
+│   └── Deployment/immich-server@immich
+│       └── Service/immich-server@immich
+│           └── PackageInstance/immich@immich
+│               └── Activation/example-yybkqrrnqkpi
+└── Service/valkey-headless@cache
+    └── PackageInstance/valkey@cache
+        └── Activation/example-yybkqrrnqkpi
+CustomResourceDefinition/sgscripts.stackgres.io
+└── PackageInstance/stackgres-operator@stackgres-system
+    └── Activation/example-yybkqrrnqkpi
+ClusterRole/cert-manager-controller-approve:cert-manager-io
+└── ClusterRoleBinding/cert-manager-controller-approve:cert-manager-io
+    └── PackageInstance/cert-manager@cert-manager
+        └── Activation/example-yybkqrrnqkpi
+ClusterRole/cert-manager-controller-certificatesigningrequests
+└── ClusterRoleBinding/cert-manager-controller-certificatesigningrequests
+    └── PackageInstance/cert-manager@cert-manager
+        └── Activation/example-yybkqrrnqkpi
+CustomResourceDefinition/sgshardedclusters.stackgres.io
+└── PackageInstance/stackgres-operator@stackgres-system
+    └── Activation/example-yybkqrrnqkpi
+ClusterRole/cert-manager-controller-challenges
+└── ClusterRoleBinding/cert-manager-controller-challenges
+    └── PackageInstance/cert-manager@cert-manager
+        └── Activation/example-yybkqrrnqkpi
+ClusterRole/cert-manager-cainjector
+└── ClusterRoleBinding/cert-manager-cainjector
+    └── PackageInstance/cert-manager@cert-manager
+        └── Activation/example-yybkqrrnqkpi
+CustomResourceDefinition/issuers.cert-manager.io
+└── PackageInstance/cert-manager@cert-manager
+    └── Activation/example-yybkqrrnqkpi
+CustomResourceDefinition/challenges.acme.cert-manager.io
+└── PackageInstance/cert-manager@cert-manager
+    └── Activation/example-yybkqrrnqkpi
+CustomResourceDefinition/sgpoolconfigs.stackgres.io
+└── PackageInstance/stackgres-operator@stackgres-system
+    └── Activation/example-yybkqrrnqkpi
+ClusterRole/cert-manager-view
+└── PackageInstance/cert-manager@cert-manager
+    └── Activation/example-yybkqrrnqkpi
+ClusterRole/coredns
+└── ClusterRoleBinding/coredns
+    └── PackageInstance/coredns@kube-system
         └── Activation/example-yybkqrrnqkpi

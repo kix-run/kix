@@ -8,6 +8,7 @@ pub mod graph;
 pub mod health;
 pub mod inspect;
 pub mod list;
+pub mod operator;
 pub mod rollback;
 pub mod snapshot;
 pub mod status;

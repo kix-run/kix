@@ -169,6 +169,10 @@ pub struct DeployArgs {
     /// Prune mode: default (prune after apply), eager (interleave), no (skip pruning)
     #[arg(long, value_name = "MODE")]
     pub prune_mode: Option<PruneMode>,
+
+    /// Delegate deployment to the kix operator instead of applying directly
+    #[arg(long)]
+    pub operator: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -199,6 +203,10 @@ pub struct GcArgs {
     /// Full cluster scan (default: diff old vs new activation store graphs)
     #[arg(long)]
     pub hard: bool,
+
+    /// Delegate garbage collection to the operator (deletes superseded Activation CRs)
+    #[arg(long)]
+    pub operator: bool,
 }
 
 #[derive(clap::Args)]
@@ -217,6 +225,10 @@ pub struct RollbackArgs {
     /// Delete orphaned resources (resources in current activation but not in target)
     #[arg(long)]
     pub prune: bool,
+
+    /// Delegate rollback to the operator instead of applying directly
+    #[arg(long)]
+    pub operator: bool,
 }
 
 #[derive(clap::Args)]

@@ -230,6 +230,10 @@ pub async fn reconcile(
         tracing::debug!("activation not yet on cluster (first deploy): {e}");
     }
 
+    // Accumulated wave records — passed to record_waves each time to avoid
+    // the GET-before-PATCH round-trip that the old record_wave did.
+    let mut accumulated_waves: Vec<WaveRecord> = Vec::new();
+
     // Apply waves
     for (wave_idx, actions) in wave_actions.iter().enumerate() {
         // Skip waves completed in a previous (crashed) deploy
@@ -241,6 +245,13 @@ pub async fn reconcile(
                 reason: "already complete",
             });
             result.unchanged += count;
+            accumulated_waves.push(WaveRecord {
+                wave_index: wave_idx,
+                status: WaveStatus::Complete,
+                resource_count: count,
+                applied: 0,
+                failed: 0,
+            });
             continue;
         }
 
@@ -256,16 +267,16 @@ pub async fn reconcile(
             });
             result.unchanged += actions.len();
 
-            // Record wave as complete (all skipped)
+            let record = WaveRecord {
+                wave_index: wave_idx,
+                status: WaveStatus::Complete,
+                resource_count: actions.len(),
+                applied: 0,
+                failed: 0,
+            };
+            accumulated_waves.push(record);
             if let (Some(ar), Some(act_name)) = (&activation_ar, activation_name) {
-                let record = WaveRecord {
-                    wave_index: wave_idx,
-                    status: WaveStatus::Complete,
-                    resource_count: actions.len(),
-                    applied: 0,
-                    failed: 0,
-                };
-                let _ = activation::record_wave(client, ar, act_name, &record).await;
+                let _ = activation::record_waves(client, ar, act_name, &accumulated_waves).await;
             }
             continue;
         }
@@ -408,33 +419,34 @@ pub async fn reconcile(
         }
 
         // Record wave progress on the Activation CR
-        if let (Some(ar), Some(act_name)) = (&activation_ar, activation_name) {
-            let wave_applied = results
-                .iter()
-                .filter(|(_, r)| {
-                    r.as_ref().is_ok_and(|r| {
-                        matches!(r.action, ApplyAction::Created | ApplyAction::Configured)
-                    })
+        let wave_applied = results
+            .iter()
+            .filter(|(_, r)| {
+                r.as_ref().is_ok_and(|r| {
+                    matches!(r.action, ApplyAction::Created | ApplyAction::Configured)
                 })
-                .count();
-            let wave_failed_count = results.iter().filter(|(_, r)| r.is_err()).count();
-            let status = if wave_failed {
-                WaveStatus::Failed
-            } else {
-                WaveStatus::Complete
-            };
-            let record = WaveRecord {
-                wave_index: wave_idx,
-                status: status.clone(),
-                resource_count: actions.len(),
-                applied: wave_applied,
-                failed: wave_failed_count,
-            };
-            observer.on_event(&ReconcileEvent::WaveComplete {
-                wave_index: wave_idx,
-                record: record.clone(),
-            });
-            let _ = activation::record_wave(client, ar, act_name, &record).await;
+            })
+            .count();
+        let wave_failed_count = results.iter().filter(|(_, r)| r.is_err()).count();
+        let status = if wave_failed {
+            WaveStatus::Failed
+        } else {
+            WaveStatus::Complete
+        };
+        let record = WaveRecord {
+            wave_index: wave_idx,
+            status: status.clone(),
+            resource_count: actions.len(),
+            applied: wave_applied,
+            failed: wave_failed_count,
+        };
+        observer.on_event(&ReconcileEvent::WaveComplete {
+            wave_index: wave_idx,
+            record: record.clone(),
+        });
+        accumulated_waves.push(record);
+        if let (Some(ar), Some(act_name)) = (&activation_ar, activation_name) {
+            let _ = activation::record_waves(client, ar, act_name, &accumulated_waves).await;
         }
     }
 
@@ -509,8 +521,13 @@ pub async fn reconcile(
         }
     }
 
-    // Finalize activation lifecycle (mark old as Superseded, new as Active)
-    if result.failed == 0
+    // Finalize activation lifecycle (mark old as Superseded, new as Active).
+    // Only finalize when resources were actually changed — calling finalize_deploy
+    // unconditionally creates an infinite reconcile loop because it always sets a new
+    // kix.dev/deployed-at timestamp, which bumps metadata.generation.
+    let actually_changed = result.created > 0 || result.configured > 0 || result.pruned > 0;
+    if actually_changed
+        && result.failed == 0
         && let Some(act_name) = activation_name
         && let Some((ar, _)) = activation::find_activation_ar(discovery)
     {

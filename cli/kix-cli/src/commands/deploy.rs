@@ -43,6 +43,10 @@ use crate::plan;
 use super::CommandContext;
 
 pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
+    if args.operator {
+        return run_operator(args, ctx);
+    }
+
     let flake_path = resolve_flake_path(&ctx.global.flake)?;
 
     // 1. Build new activation and load store graph
@@ -713,6 +717,191 @@ pub(crate) fn resolve_flake_path(flake: &str) -> Result<PathBuf> {
             Ok(cwd.join(path))
         }
     }
+}
+
+// ── Operator-delegated deploy ────────────────────────────────────────
+
+fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
+    let flake_path = resolve_flake_path(&ctx.global.flake)?;
+
+    // 1. Build new activation and load store graph (same as direct mode)
+    if !ctx.global.quiet {
+        println!(
+            "Building cluster '{}' (operator mode)...",
+            output::bold(&args.cluster)
+        );
+    }
+    let status = |msg: &str| {
+        if !ctx.global.quiet {
+            eprint!("\r\x1b[2K  {msg}");
+        }
+    };
+    let result_path = build_cluster_activation_with_status(&flake_path, &args.cluster, &status)
+        .map_err(|e| miette!("failed to build cluster: {e}"))?;
+    let mut new_graph = StoreGraph::from_result_dir_with_status(&result_path, &status)
+        .map_err(|e| miette!("failed to load store graph: {e}"))?;
+    stamp_annotations(&mut new_graph);
+    if !ctx.global.quiet {
+        eprint!("\r\x1b[2K");
+    }
+
+    let new_manifests: Vec<Value> = new_graph
+        .resources
+        .values()
+        .map(|r| r.manifest.clone())
+        .collect();
+
+    let manifest_count = new_manifests.len();
+    if !ctx.global.quiet {
+        println!(
+            "Cluster {}: {} manifests",
+            output::bold(&new_graph.cluster_name),
+            manifest_count,
+        );
+    }
+
+    if manifest_count == 0 {
+        if !ctx.global.quiet {
+            println!("Nothing to deploy.");
+        }
+        return Ok(());
+    }
+
+    // 2. Find activation name and identity hash from manifests
+    let activation_manifest = new_manifests.iter().find(|m| {
+        m.get("kind")
+            .and_then(|v| v.as_str())
+            .is_some_and(|k| k == "Activation")
+    });
+    let activation_name = activation_manifest
+        .and_then(|m| {
+            m.pointer("/metadata/name")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
+        .ok_or_else(|| miette!("no Activation resource found in cluster manifests"))?;
+    let activation_identity_hash = activation_manifest.and_then(|m| {
+        m.pointer("/metadata/annotations")
+            .and_then(|a| a.get("kix.dev/identity-hash"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    });
+
+    // 3. Show plan (optional, same as direct mode)
+    if !ctx.global.quiet {
+        let old_graph = if args.current_activation {
+            let (og, _) = load_old_from_cache(&args.cluster, &ctx.global);
+            og
+        } else {
+            ctx.runtime
+                .block_on(load_old_from_cluster(&args.cluster, &ctx.global))
+                .ok()
+                .and_then(|(og, _, _)| og)
+        };
+
+        let pkg_diff = match &old_graph {
+            Some(old) => plan::diff_graphs(old, &new_graph),
+            None => plan::diff_graphs(&StoreGraph::empty(&new_graph.cluster_name), &new_graph),
+        };
+
+        plan::print_package_plan(&pkg_diff, ctx.global.verbose > 0);
+
+        let resource_graph = ResourceGraph::from_manifests(&new_manifests).into_diagnostic()?;
+        let waves = compute_waves(&resource_graph);
+        plan::print_wave_summary(&waves, &resource_graph);
+        plan::print_plan_summary(&pkg_diff);
+    }
+
+    if args.dry_run {
+        if !ctx.global.quiet {
+            println!();
+            println!("{}", output::dim("Dry run — no changes applied."));
+        }
+        return Ok(());
+    }
+
+    // 4. Confirmation
+    if !args.yes {
+        if !output::is_interactive() {
+            eprintln!(
+                "{}",
+                output::yellow(
+                    "Non-interactive terminal detected. Use --yes to skip confirmation."
+                )
+            );
+            std::process::exit(1);
+        }
+        print!("\nDelegate deploy to operator? [y/N] ");
+        std::io::Write::flush(&mut std::io::stdout()).into_diagnostic()?;
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input).into_diagnostic()?;
+        let input = input.trim().to_lowercase();
+        if input != "y" && input != "yes" {
+            println!("Deploy cancelled.");
+            return Ok(());
+        }
+    }
+
+    // 5. Apply Activation CR and watch progress
+    let global = ctx.global.clone();
+    let source_path = result_path.display().to_string();
+    let cluster_name = new_graph.cluster_name.clone();
+
+    ctx.runtime.block_on(async {
+        let (client, ar) =
+            super::operator::connect_and_verify(global.context.as_deref(), global.quiet).await?;
+
+        if !global.quiet {
+            println!(
+                "Applying Activation CR '{}' (source: {})...",
+                output::bold(&activation_name),
+                output::dim(&source_path),
+            );
+        }
+
+        super::operator::apply_activation(
+            &client,
+            &ar,
+            &activation_name,
+            &cluster_name,
+            &source_path,
+            activation_identity_hash.as_deref(),
+        )
+        .await?;
+
+        if !global.quiet {
+            println!(
+                "  {} Activation CR applied — waiting for operator...",
+                output::green("✓"),
+            );
+        }
+
+        super::operator::watch_activation_progress(
+            &client,
+            &ar,
+            &activation_name,
+            &source_path,
+            global.quiet,
+        )
+        .await?;
+
+        println!();
+        println!(
+            "Deploy via operator {}: Activation '{}' is {}",
+            output::green("complete"),
+            output::bold(&activation_name),
+            output::green("Active"),
+        );
+
+        Ok::<(), miette::Report>(())
+    })?;
+
+    // Save activation path for next deploy's diff
+    if let Err(e) = kix::eval::store::save_activation_path(&args.cluster, &result_path) {
+        tracing::warn!("failed to save activation path: {e}");
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

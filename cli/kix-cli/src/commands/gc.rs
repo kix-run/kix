@@ -33,6 +33,9 @@ use crate::plan;
 use super::CommandContext;
 
 pub fn run(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
+    if args.operator {
+        return ctx.runtime.block_on(run_operator(args, ctx));
+    }
     if args.hard {
         run_hard(args, ctx)
     } else {
@@ -281,7 +284,7 @@ async fn run_hard_async(
         }
     }
 
-    // Find Superseded activations (spec.active == false) for this cluster
+    // Find Superseded activations (status.phase == Superseded) for this cluster
     if let Some((ar, _)) = kix::cluster::activation::find_activation_ar(&discovery)
         && let Ok(superseded) =
             kix::cluster::activation::list_superseded(&client, ar, cluster_name).await
@@ -332,6 +335,112 @@ async fn run_hard_async(
     }
 
     delete_resources(global, &garbage).await
+}
+
+// ---------------------------------------------------------------------------
+// Operator-delegated GC: delete Superseded Activation CRs
+// ---------------------------------------------------------------------------
+
+async fn run_operator(args: &GcArgs, ctx: &CommandContext) -> Result<()> {
+    let (client, ar) =
+        super::operator::connect_and_verify(ctx.global.context.as_deref(), ctx.global.quiet)
+            .await?;
+
+    let discovery = kix::cluster::fetch::discover_resources(&client)
+        .await
+        .map_err(|e| miette!("API discovery failed: {e}"))?;
+
+    let (activation_ar, _) = kix::cluster::activation::find_activation_ar(&discovery)
+        .ok_or_else(|| miette!("Activation CRD not registered on cluster"))?
+        .clone();
+
+    // Find all superseded activations
+    let superseded =
+        kix::cluster::activation::list_superseded(&client, &activation_ar, &args.cluster)
+            .await
+            .map_err(|e| miette!("failed to list superseded activations: {e}"))?;
+
+    if superseded.is_empty() {
+        if !ctx.global.quiet {
+            println!(
+                "{} No superseded activations to clean up.",
+                output::green("✓"),
+            );
+        }
+        return Ok(());
+    }
+
+    println!(
+        "{} {} superseded activation(s) to delete:",
+        output::bold("Garbage:"),
+        superseded.len(),
+    );
+    for name in &superseded {
+        println!("  {} Activation/{}", output::red("-"), name);
+    }
+
+    // Confirmation
+    if !args.yes {
+        if !output::is_interactive() {
+            eprintln!(
+                "{}",
+                output::yellow("Non-interactive terminal. Use --yes to confirm deletion.")
+            );
+            std::process::exit(1);
+        }
+        print!(
+            "\nDelete {} superseded activation(s)? (operator finalizer will GC resources) [y/N] ",
+            superseded.len()
+        );
+        std::io::Write::flush(&mut std::io::stdout()).into_diagnostic()?;
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input).into_diagnostic()?;
+        let input = input.trim().to_lowercase();
+        if input != "y" && input != "yes" {
+            println!("GC cancelled.");
+            return Ok(());
+        }
+    }
+
+    // Delete each superseded Activation CR and watch for finalizer cleanup
+    let mut deleted = 0usize;
+    let mut failed = 0usize;
+
+    for name in &superseded {
+        if !ctx.global.quiet {
+            println!("Deleting Activation '{}'...", output::bold(name));
+        }
+
+        match kix::cluster::activation::delete_activation(&client, &activation_ar, name).await {
+            Ok(_) => {
+                // Wait for finalizer to complete deletion
+                super::operator::wait_for_deletion(&client, &ar, name, ctx.global.quiet).await?;
+                deleted += 1;
+            }
+            Err(e) => {
+                eprintln!("  {} Failed to delete '{}': {}", output::red("!"), name, e);
+                failed += 1;
+            }
+        }
+    }
+
+    println!();
+    let failed_str = failed.to_string();
+    println!(
+        "GC via operator complete: {} deleted, {} failed",
+        output::green(&deleted.to_string()),
+        if failed > 0 {
+            output::red(&failed_str)
+        } else {
+            output::dim(&failed_str)
+        },
+    );
+
+    if failed > 0 {
+        std::process::exit(1);
+    }
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

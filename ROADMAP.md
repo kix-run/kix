@@ -206,18 +206,19 @@
 - [ ] Audit trail for escape hatches — any break-glass action should be visible in the build output / diff summary so it doesn't silently become permanent
 
 ### GitOps & operator
-- [ ] Trivial GitOps — evaluate nix recipe, when all is built, replace the current hash of the head node
+- [x] CLI operator mode — `kix deploy/rollback/gc --operator` delegates cluster mutations to the kix-operator via Activation CRs. CLI builds locally, creates/patches CRs, watches status for progress. Operator handles wave-by-wave apply, drift correction, and finalizer cleanup.
+- [x] Operator reconcile loop prevention — `observedGeneration` guard skips already-processed generations, all status writes use `patch_status` (status subresource, no generation bump), `record_waves` accumulates wave records in memory to eliminate GET-before-PATCH round-trips. Removed the `reconcile_act_name` hack and blind drift-correction re-apply.
+- [x] Trivial GitOps — evaluate nix recipe, when all is built, replace the current hash of the head node
 - [ ] kix operator — argo-like nix operator that re-evaluates from git; can reconcile with live cluster state as input variable
   - Inline operators: current cluster state as a pure input — side effects that depend on cluster state can be *configured* (not just executed) in the functional system. This is a general purity capability, not just an operator concern. Solves 90% of operator use cases and can be shipped as part of the package
   - Open question: how does this handle hashes and drift?
-- [ ] feature parity with helm, argo, flux
+- [ ] Feature parity with helm, argo, flux (as a long-term benchmark) — but framed as replacement, not complement: kix eliminates the need for a separate GitOps operator stack
 
 ### Advanced deployment
 - [ ] PR as its own isolated deployment / fast preview environments — reuse unchanged systems (same hash), everything else gets its own deployment; touching data needs consideration
 - [ ] Multi-zone, multi-cluster management — runtime concern for failover, but can model through re-eval with global cluster state variables
   - Client cluster provisioning: backwards compatibility across all clusters is critical; cluster config depends on per-client negotiations
   - Replaces fragile playbooks (Ansible "what changed?" pipelines with unexpected results) with functional, reproducible evaluation
-- [ ] Feature parity with helm, argo, flux (as a long-term benchmark) — but framed as replacement, not complement: kix eliminates the need for a separate GitOps operator stack
 - [ ] Running jobs — install/run separation: "install" produces a derivation with ready manifests, "run" executes with ownership linked to a completing job → fully garbage-collectable
 
 ### Vertical integration

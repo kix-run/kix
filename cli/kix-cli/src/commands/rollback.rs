@@ -30,6 +30,9 @@ use crate::plan;
 use super::CommandContext;
 
 pub fn run(args: &RollbackArgs, ctx: &mut CommandContext) -> Result<()> {
+    if args.operator {
+        return ctx.runtime.block_on(run_operator_async(args, ctx));
+    }
     ctx.runtime.block_on(run_async(args, ctx))
 }
 
@@ -413,6 +416,210 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
             std::process::exit(1);
         }
     }
+}
+
+// ── Operator-delegated rollback ──────────────────────────────────────
+
+async fn run_operator_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
+    // 1. Connect and find current + superseded activations
+    let (client, ar) =
+        super::operator::connect_and_verify(ctx.global.context.as_deref(), ctx.global.quiet)
+            .await?;
+
+    let discovery = kix::cluster::fetch::discover_resources(&client)
+        .await
+        .map_err(|e| miette!("API discovery failed: {e}"))?;
+
+    let (activation_ar, _) = activation::find_activation_ar(&discovery)
+        .ok_or_else(|| miette!("Activation CRD not registered on cluster"))?
+        .clone();
+
+    // 2. Find current Active activation
+    let current = activation::find_active(&client, &activation_ar, &args.cluster)
+        .await
+        .map_err(|e| miette!("failed to find active activation: {e}"))?
+        .ok_or_else(|| miette!("no active activation found for cluster '{}'", args.cluster))?;
+
+    if !ctx.global.quiet {
+        let hash_preview = current
+            .identity_hash
+            .as_deref()
+            .map(|h| format!(" ({}...)", &h[..8.min(h.len())]))
+            .unwrap_or_default();
+        println!(
+            "Current activation: {}{}",
+            output::bold(&current.name),
+            hash_preview,
+        );
+    }
+
+    // 3. Find superseded activations
+    let superseded =
+        activation::list_superseded_activations(&client, &activation_ar, &args.cluster)
+            .await
+            .map_err(|e| miette!("failed to list superseded activations: {e}"))?;
+
+    if superseded.is_empty() {
+        return Err(miette!(
+            "no superseded activations found — nothing to rollback to"
+        ));
+    }
+
+    // Interactive selection or auto-select most recent
+    let selected = if args.yes || !output::is_interactive() {
+        &superseded[0]
+    } else {
+        println!();
+        println!("Available activations to rollback to:");
+        for (i, act) in superseded.iter().enumerate() {
+            let hash_preview = act
+                .identity_hash
+                .as_deref()
+                .map(|h| format!("{}...", &h[..8.min(h.len())]))
+                .unwrap_or_else(|| "no hash".to_string());
+            let ts = if act.deployed_at.is_empty() {
+                "unknown".to_string()
+            } else {
+                act.deployed_at.clone()
+            };
+            println!(
+                "  {} {} ({}) — deployed {}",
+                output::bold(&format!("[{}]", i + 1)),
+                act.name,
+                hash_preview,
+                ts,
+            );
+        }
+
+        print!("\nSelect activation [1]: ");
+        std::io::Write::flush(&mut std::io::stdout()).into_diagnostic()?;
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input).into_diagnostic()?;
+        let input = input.trim();
+
+        let idx = if input.is_empty() {
+            0
+        } else {
+            input
+                .parse::<usize>()
+                .map_err(|_| miette!("invalid selection: '{}'", input))?
+                .checked_sub(1)
+                .ok_or_else(|| miette!("selection must be >= 1"))?
+        };
+
+        if idx >= superseded.len() {
+            return Err(miette!(
+                "selection {} out of range (1-{})",
+                idx + 1,
+                superseded.len()
+            ));
+        }
+
+        &superseded[idx]
+    };
+
+    let target_name = selected.name.clone();
+    let target_hash = selected.identity_hash.clone();
+
+    // 4. Resolve the target's store path
+    let target_source_path = selected
+        .built_via
+        .as_ref()
+        .filter(|p| std::path::Path::new(p).join("kix-packages.json").exists())
+        .cloned()
+        .or_else(|| {
+            target_hash.as_ref().and_then(|h| {
+                kix::eval::store::resolve_activation_by_hash(&args.cluster, h)
+                    .map(|p| p.display().to_string())
+            })
+        })
+        .ok_or_else(|| {
+            miette!(
+                "store path for activation '{}' not found locally. Was it garbage-collected?",
+                target_name,
+            )
+        })?;
+
+    if !ctx.global.quiet {
+        println!(
+            "Rollback target:   {} (via operator)",
+            output::bold(&target_name),
+        );
+    }
+
+    if args.dry_run {
+        if !ctx.global.quiet {
+            println!();
+            println!("{}", output::dim("Dry run — no changes applied."));
+        }
+        return Ok(());
+    }
+
+    // 5. Confirmation
+    if !args.yes {
+        if !output::is_interactive() {
+            eprintln!(
+                "{}",
+                output::yellow(
+                    "Non-interactive terminal detected. Use --yes to skip confirmation."
+                )
+            );
+            std::process::exit(1);
+        }
+        print!("\nDelegate rollback to operator? [y/N] ");
+        std::io::Write::flush(&mut std::io::stdout()).into_diagnostic()?;
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input).into_diagnostic()?;
+        let input = input.trim().to_lowercase();
+        if input != "y" && input != "yes" {
+            println!("Rollback cancelled.");
+            return Ok(());
+        }
+    }
+
+    // 6. Patch the current Activation CR to point to the target's source path
+    //    The operator will detect the source change and reconcile.
+    if !ctx.global.quiet {
+        println!(
+            "Updating Activation CR '{}' to point to rollback target...",
+            output::bold(&current.name),
+        );
+    }
+
+    super::operator::apply_activation(
+        &client,
+        &ar,
+        &current.name,
+        &args.cluster,
+        &target_source_path,
+        target_hash.as_deref(),
+    )
+    .await?;
+
+    if !ctx.global.quiet {
+        println!(
+            "  {} Activation CR updated — waiting for operator...",
+            output::green("✓"),
+        );
+    }
+
+    super::operator::watch_activation_progress(
+        &client,
+        &ar,
+        &current.name,
+        &target_source_path,
+        ctx.global.quiet,
+    )
+    .await?;
+
+    println!();
+    println!(
+        "Rollback via operator {}: rolled back to '{}'",
+        output::green("complete"),
+        output::bold(&target_name),
+    );
+
+    Ok(())
 }
 
 fn print_summary(r: &ReconcileResult) {
