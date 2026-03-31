@@ -25,12 +25,14 @@ pub struct ClusterOutput {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PackageInfo {
     pub version: Option<String>,
+    pub owner: Option<String>,
 }
 
 /// Version + auto-instantiation info for a cluster instance.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstanceInfo {
     pub version: Option<String>,
+    pub owner: Option<String>,
     #[serde(default)]
     pub auto: bool,
 }

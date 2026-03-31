@@ -341,6 +341,7 @@ in
           in
           {
             version = pkgMeta.version or null;
+            owner = pkgMeta.owner or null;
             auto = instCfg._autoInstantiated or false;
           }
         ) nsInsts
@@ -349,17 +350,19 @@ in
       availablePackagesInfo = lib.mapAttrs (
         _name: value:
         let
-          version =
+          pkgMeta =
             if isInlinePackage value then
-              "inline"
+              { }
             else
-              (meta.peekPackageMeta {
+              meta.peekPackageMeta {
                 package = getPackageFromEntry value;
                 inherit kixlib;
-              }).version or null;
+              };
+          version = if isInlinePackage value then "inline" else pkgMeta.version or null;
         in
         {
           inherit version;
+          owner = pkgMeta.owner or null;
         }
       ) (lib.filterAttrs (_: isPackageEntry) cfg.availablePackages);
 

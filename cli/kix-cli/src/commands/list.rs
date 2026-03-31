@@ -34,6 +34,7 @@ impl CommandResponse for ClustersResponse {
 struct PackageRow {
     name: String,
     version: String,
+    owner: String,
     status: Option<String>,
 }
 
@@ -46,10 +47,28 @@ impl CommandResponse for PackagesResponse {
     fn format_text(&self) -> String {
         let mut table = comfy_table::Table::new();
         table.load_preset(comfy_table::presets::NOTHING);
+        let has_owners = self.packages.iter().any(|p| p.owner != "-");
         if self.show_status {
-            table.set_header(["NAME", "VERSION", "STATUS"]);
+            if has_owners {
+                table.set_header(["NAME", "VERSION", "OWNER", "STATUS"]);
+                for p in &self.packages {
+                    table.add_row([
+                        &p.name,
+                        &p.version,
+                        &p.owner,
+                        p.status.as_deref().unwrap_or("-"),
+                    ]);
+                }
+            } else {
+                table.set_header(["NAME", "VERSION", "STATUS"]);
+                for p in &self.packages {
+                    table.add_row([&p.name, &p.version, p.status.as_deref().unwrap_or("-")]);
+                }
+            }
+        } else if has_owners {
+            table.set_header(["NAME", "VERSION", "OWNER"]);
             for p in &self.packages {
-                table.add_row([&p.name, &p.version, p.status.as_deref().unwrap_or("-")]);
+                table.add_row([&p.name, &p.version, &p.owner]);
             }
         } else {
             table.set_header(["NAME", "VERSION"]);
@@ -68,6 +87,7 @@ impl CommandResponse for PackagesResponse {
                 let mut m = serde_json::Map::new();
                 m.insert("name".into(), serde_json::json!(p.name));
                 m.insert("version".into(), serde_json::json!(p.version));
+                m.insert("owner".into(), serde_json::json!(p.owner));
                 if self.show_status {
                     m.insert("status".into(), serde_json::json!(p.status));
                 }
@@ -126,6 +146,7 @@ fn run_packages(cluster: Option<&str>, ctx: &mut CommandContext) -> Result<()> {
                     .or_insert_with(|| PackageRow {
                         name: inst_name.clone(),
                         version: inst_info.version.as_deref().unwrap_or("-").to_string(),
+                        owner: inst_info.owner.as_deref().unwrap_or("-").to_string(),
                         status: Some(status),
                     });
             }
@@ -136,6 +157,7 @@ fn run_packages(cluster: Option<&str>, ctx: &mut CommandContext) -> Result<()> {
             rows.entry(name.clone()).or_insert_with(|| PackageRow {
                 name: name.clone(),
                 version: avail_info.version.as_deref().unwrap_or("-").to_string(),
+                owner: avail_info.owner.as_deref().unwrap_or("-").to_string(),
                 status: Some("available".to_string()),
             });
         }
@@ -149,6 +171,7 @@ fn run_packages(cluster: Option<&str>, ctx: &mut CommandContext) -> Result<()> {
                 PackageRow {
                     name: name.clone(),
                     version: info.version.as_deref().unwrap_or("-").to_string(),
+                    owner: info.owner.as_deref().unwrap_or("-").to_string(),
                     status: None,
                 },
             );

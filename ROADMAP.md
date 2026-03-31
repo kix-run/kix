@@ -61,6 +61,7 @@
 
 > "Security teams have money — platform teams do not. But platform teams can get money from security."
 
+- [x] Package ownership model — `meta.owner` field on packages, surfaced in `kix list packages` (text and JSON). OWNER column auto-hides when no packages declare owners. Foundation for IDP catalog, scorecards, and team-scoped views.
 - [ ] Security defaults via mkDefault — e.g. all pods non-root by default, users must mkForce to override
   - mkForce as an auditable signal: any use of mkForce to override security defaults can be flagged, surfaced in review, or blocked by policy
   - The full nix module priority hierarchy (mkDefault → normal → mkOverride → mkForce) is what makes multi-team cluster configs maintainable at scale
@@ -191,6 +192,9 @@
 
 ## Tooling & CLI
 
+- [ ] `kix export` — dump all manifests into a human-readable directory structure (`namespace/kind-name.yaml`) for use without kix. The exit strategy: "stop using kix at any time, take the YAML." See `v2_discussions/58_satchel_mvp_technical_requirements.md`
+- [ ] `kix init` — scaffold a new cluster definition for a given provider (`kix init --provider gke`). Generates `flake.nix`, cluster definition with flavor preset, and starter packages (ingress, monitoring, cert-manager)
+- [ ] CI/CD integration — GitHub Action / GitLab CI template for the plan/apply loop: (a) PR triggers `kix diff`, posts change summary as PR comment (packages changed, resources added/modified/removed, blast radius), (b) merge triggers `kix deploy`. The diff engine and deploy pipeline exist — this is the CI plumbing. Nix binary cache setup guide for fast CI rebuilds. See `v2_discussions/58_satchel_mvp_technical_requirements.md`
 - [ ] kix CLI working without installed nix
 - [ ] LSP or code smell checks for kix package definitions
 - [ ] Rust bridge to nix binary (https://github.com/nixops4/nix-bindings-rust)
@@ -238,6 +242,16 @@
 
 - [ ] enable platform teams and cluster operators to loop in application developers safely
 
+### Service catalog (prebuilt packages)
+- [ ] kube-prometheus-stack package — monitoring + alerting + Grafana dashboards. Via `fromHelmChart` initially, native later. Auto-wire ServiceMonitors via DI (partially exists)
+- [ ] Logging stack package — Loki + promtail/fluentbit as kix packages
+- [ ] external-secrets-operator package — secret management via external stores (GCP Secret Manager, Vault, AWS Secrets Manager). Standard pattern for secret injection without kix solving secret management itself
+- [ ] Prebuilt service catalog completeness — postgres (StackGres, exists), redis/valkey (exists), S3 (exists as mkImport), cert-manager (exists). Gap: no turnkey monitoring or logging
+
+### Terraform coexistence
+- [ ] Terraform output → kix import bridge — documented pattern and tooling for consuming Terraform outputs (database URLs, bucket names, service account keys) as kix DI inputs via `mkImport`. Pragmatic scope boundary: kix manages K8s, Terraform manages cloud resources, the bridge connects them. See `v2_discussions/58_satchel_mvp_technical_requirements.md`
+- [ ] Long-term: connector/provider abstraction that can wrap Terraform providers, Crossplane XRDs, or raw API calls at compile time. Absorbs cloud resource management into kix evaluation
+
 ### Ecosystem & adoption
 - [ ] Functional CRDs — deploy against kix, not k8s directly; the end user never needs to think about CRDs/operators. kix evaluates the "need" into manifests (imperative CRD operators replaced by pure evaluation where possible)
   - Stateful operators should stay; pure configuration operators can be absorbed
@@ -249,6 +263,9 @@
 
 - [ ] Demo index.html shows `name` and `labels` at top level of `mkResource` without explaining that the DSL auto-nests them under `metadata` — add a callout or insight box so readers understand this isn't standard K8s structure but a deliberate ergonomic shortcut
 - [ ] @luca Immich (from simple to full) — package is functional with DI-driven ingress/TLS, extension validation, storage validation, ML worker, metrics. Cluster definitions exist for ludo (homelab) and example. Remaining: document the progression from bare minimum to full production config, auto-derive host from `cluster.domain`.
+- [ ] Multi-environment pattern guide — how to set up dev/prod sharing the same packages with different configs (`mkEnv`, separate cluster definitions, branch-based CI deploy). Reference implementation in `clusters/`
+- [ ] Exit strategy documentation — clearly document that kix outputs are plain K8s YAML, nothing proprietary runs in the cluster, and `kix export` produces a standalone manifest directory. Address lock-in concerns for startup adoption
+- [ ] GKE quickstart — reference cluster definition using GKE flavor, with ingress, cert-manager, monitoring. Verify `lib/flavors/gke.nix` completeness
 - [ ] How-to case studies for simple cases
 - [ ] Create skill/guide for proper package creation
 - [ ] Naming conventions for packages, services, resources, etc.

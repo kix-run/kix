@@ -216,13 +216,19 @@
 
           # Package registry with versions — used by `kix list packages`.
           # Pure evaluation (no build), keyed by package directory name.
-          legacyPackages.kixPackages = lib.mapAttrs (_name: pkg: {
-            version =
-              (kix.peekPackageMeta {
+          legacyPackages.kixPackages = lib.mapAttrs (
+            _name: pkg:
+            let
+              m = kix.peekPackageMeta {
                 package = pkg;
                 kixlib = kix.kixlib;
-              }).version or null;
-          }) packages';
+              };
+            in
+            {
+              version = m.version or null;
+              owner = m.owner or null;
+            }
+          ) packages';
         };
     };
 }
