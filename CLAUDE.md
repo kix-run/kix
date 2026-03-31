@@ -10,6 +10,10 @@ When modifying CLI public APIs, commands, data flows, or crate structure, keep `
 
 When implementing new features or completing existing ones, check `ROADMAP.md` and mark completed items as `[x]`, expand descriptions with implementation details, or add new items discovered during development.
 
+## Structured thinking
+
+When the user wants to think through, brainstorm, design, or analyze something — or is about to build something bigger that needs upfront thinking — use the `structured-thinking` skill instead of plan mode. It routes to the right folder (`business_discussions/` or `v2_discussions/`), surfaces existing discussions, and produces a durable document (RFC, design doc, strategy memo, etc.) rather than an ephemeral plan.
+
 ## Breaking changes
 
 The kix API is in active development. Breaking changes are fine — none of the clusters are actively deployed. Prioritize clean design over backwards compatibility.
