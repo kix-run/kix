@@ -164,6 +164,11 @@
 - [x] Wave rollouts — dependency graph fully describes deployment order; deploy in correct waves with CRD re-discovery between waves
 - [x] Wait for ready across all resource types (Deployment, StatefulSet, DaemonSet, Job, PVC, CRD, generic CR conditions)
 - [x] Activation CR deployed as cluster-level deployment record; stale Activations cleaned up post-deploy
+  - [x] Activation name includes identity-hash prefix (e.g. `kind-52943986w98c`) so each deploy creates a distinct CR, enabling supersede/rollback lifecycle. Stamped in `stamp.rs`.
+  - [x] `kix.dev/built-via` annotation on Activation CRs stores the result dir store path, so rollback and deploy can load manifests without a nix rebuild. Used by `rollback.rs` and `deploy.rs` `load_old_from_cluster`.
+  - [x] `finalize_deploy` uses merge patch (not SSA) to supersede old activations, preserving `kix.dev/identity-hash` and other annotations.
+  - [ ] Activation CR should be deployed first (wave -1) with `status.phase: Deploying`, then finalized to `Active` at the end. Currently deployed in the last wave, so `begin_deploy` progress recording 404s on first deploy (harmless, logged at debug level). Deploying first also enables crash recovery — the Activation exists on the cluster before any resources are applied.
+  - [ ] Old Activation prune policy — superseded Activations are currently warn-only during prune ("prune policy is warn-only"). They must be kept for rollback, but the message is confusing. Should either explicitly skip Activations during prune with a clear message, or have a separate `kix gc --activations` to clean old ones.
 - [x] `kix gc` — garbage-collect orphaned kix-managed resources against a cluster's expected manifest set
 - [ ] `kix gc` without cluster eval — GC purely from live Activation/PI graph (no nix eval required)
 - [ ] Non-K8s side effects (e.g. Forgejo user creation) — start with execution on "ssh", later crossplane or provider plugins
