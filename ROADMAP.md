@@ -27,7 +27,8 @@
 - [x] v2_discussions/11 → injecting storage, certs, and other infra items from the cluster graph (different package types?)
   - Storage DI: PVCs are first-class instances in the cluster definition (packages/persistent-volume-claim). storage-classes exposes `out.storageClassName`. Consuming packages (e.g. immich) take `storage` as a hard DI dep, mount via `storage.out.name`. Package `meta` (lifecycle, scope) enables cross-namespace validation and kix-diff protection.
 - [x] Use "already existing" cluster elements — `kix.mkImport { from = package; }` evaluates packages in import mode (lightweight `mkImportResource`, no store paths) to derive `out` properties for DI resolution. Deployed as a marker PackageInstance CR only.
-  - [ ] kix deploy should verify imported resources actually exist in the live cluster
+  - [ ] kix deploy should verify imported resources actually exist in the live cluster — import markers carry `kix.dev/import-fqdn` and `kix.dev/import-name`; extend with `apiVersion`/`kind`/`namespace` so the CLI can issue targeted GET requests before wave deployment. See also: flavor-provided DI imports below.
+  - [ ] Flavor-provided DI imports for system services — flavors must provide `mkImport` instances for platform-managed services (`dns`, `storageClasses`, `ingressController`). Currently flavors only set capabilities; they don't contribute to the DI graph. Requires flavors to have access to `kix.mkImport` via specialArgs. These imports are the primary candidates for pre-deploy verification (above). See TODO annotations on `ingressController`, `persistentStorage`, `cni`, `networkPolicyAPI`, `rwxStorage`, `volumeSnapshots` in `lib/modules.nix`.
 - [ ] Default metadata scoping — which resources should global metadata apply to? Not higher-order resources like Deployments/Services, but what about CRDs?
 - [ ] Non-manifest side effects — external imperative actions (e.g. creating a Forgejo user, provisioning a DNS record) as first-class graph nodes alongside manifests. kix deploy resolves these as tasks, not resources. Later feature — requires extending the graph model beyond K8s manifests
 - [ ] "Wire" vs "compose" coherence — sharing selectors by reference can copy wrong state if labels are accessed; post-processing breaks composition. Needs a principled solution
@@ -35,7 +36,7 @@
 - [ ] Dynamic duplicate dependencies — the same resource (e.g. a second CoreDNS) can be pulled in twice; deduplication is the consumer's responsibility, not the creator's
 - [ ] mkManifest pre-creation hook as escape hatch — global function hook for raw access to any resource before it becomes a manifest
 - [x] CRDs, creation and basic usage — `mkCRDRef` creates CRD references with auto-generated `mkCR` builders; used by cert-manager, stackgres, monitoring packages
-  - [ ] CRD schema management, verification against live cluster, and import from existing CRD definitions
+  - [ ] (low priority) CRD schema management, verification against live cluster, and import from existing CRD definitions — requires either a Nix-native OpenAPI subset validator or the Rust oracle at fixpoint (doc 36). Deferred until the Rust integration path is clearer.
 - [ ] auto-sealing of resources? => evaluator turns every attrset that has a "kind" attribute into a resource on first pass of the fixpoint
 - [ ] aliases and meta could be on the packages options maybe? => allows default aliases to just be a mkDefault
 - [ ] smarter store paths. Nixos puts the package version into the storepath hash-name-version. This helps a lot with diffing fast.
@@ -84,7 +85,6 @@
 
 - [x] Cluster hardware profile — `cluster.provider`, `cluster.capabilities.*`, `cluster.network.*`, `cluster.nodes` module options. Flavor presets in `lib/flavors/` for 10 distributions. See `v2_discussions/45_cluster_hardware_profile.md`, `lib/modules.nix` (capability option definitions with TODO annotations), `lib/flavors/*.nix`.
 - [x] Capability checks at resource construction — `lib/eval/scope.nix` checks `loadBalancer` (on Service type=LoadBalancer), `daemonSets` (on DaemonSet), `privilegedContainers` (on hostNetwork/hostPID/privileged). Capabilities flow from `clusterConfig` → `lib/eval/instance.nix` → `mkScope`.
-- [ ] Flavor-provided DI imports for system services — flavors must provide `mkImport` instances for platform-managed services (`dns`, `storageClasses`, `ingressController`). Currently flavors only set capabilities; they don't contribute to the DI graph. Requires flavors to have access to `kix.mkImport` via specialArgs. See TODO annotations on `ingressController`, `persistentStorage`, `cni`, `networkPolicyAPI`, `rwxStorage`, `volumeSnapshots` in `lib/modules.nix`.
 - [ ] Auto-injected DNS dependency — post-evaluation pass (like `lib/netpol.nix`) that detects FQDN references in resources and auto-adds a store-path edge to the `dns` DI provider. Ensures correct deploy ordering and build-time error if no DNS provider exists. Packages with `meta.defaultAliases = ["dns"]` (e.g. coredns) satisfy this automatically.
 - [ ] Post-eval verification for Helm imports — scan resources from `fromHelmChart` for implied prerequisites (PVCs without `storageClasses` provider, Ingress without `ingressController`, LoadBalancer without capability). Safety net for opaque resource sets that bypass DSL-level DI wiring.
 - [ ] Migrate capability TODOs to DI — several capabilities are marked for DI migration in `lib/modules.nix`: `ingressController` → DI dep with `out.ingressClassName`; `cni` / `networkPolicyAPI` → CNI as DI dep with `out.networkPolicyAPI`; `rwxStorage` → storage provider `out.accessModes`; `volumeSnapshots` → snapshot controller DI dep.
@@ -135,7 +135,7 @@
 
 ## Post eval validation (kix validate)
 
-- [ ] OpenAPI schema validation at build time — K8s resources have a known openAPI spec, verify against it during eval
+- [ ] (low priority) OpenAPI schema validation at build time — K8s resources have a known openAPI spec, verify against it during eval. Blocked on CRD schema validation infrastructure; deferred.
 
 
 ## Drift detection & diffing (kix diff)
