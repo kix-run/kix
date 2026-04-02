@@ -58,13 +58,7 @@ in
         };
       };
     };
-    ingress = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        host = null;
-        annotations = { };
-      };
-    };
+    ingress = kix.options.ingress;
     existingSecret = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
@@ -117,130 +111,102 @@ in
     };
   };
 
-  build =
-    {
-      self,
-      config,
-      clusterConfig,
-      postgres,
-      ingressNginx ? null,
-      clusterIssuer ? null,
-    }:
-    let
-      # Secret name for credentials.
-      secretName = if config.existingSecret != null then config.existingSecret else "${name}-secrets";
+  build = [
+    (
+      {
+        self,
+        config,
+        clusterConfig,
+        postgres,
+        scope,
+        kix,
+        ...
+      }:
+      let
+        # Secret name for credentials.
+        secretName = if config.existingSecret != null then config.existingSecret else "${name}-secrets";
+      in
+      {
 
-      # DI-driven ingress: created when ingressNginx is injected AND host is set.
-      clusterDomain = clusterConfig.cluster.domain or null;
-      effectiveHost =
-        if config.ingress.host != null then
-          config.ingress.host
-        else if clusterDomain != null then
-          "${name}.${clusterDomain}"
-        else
-          null;
-      hasIngress = ingressNginx != null && effectiveHost != null;
-      hasTls = hasIngress && clusterIssuer != null;
-    in
-    {
+        # --- Deployment ---
+        deployment =
+          {
+            name = "web";
+            spec = {
+              replicas = config.replicaCount;
+              selector.matchLabels = scope.selectorLabels;
+              template.spec.containers = [
+                {
+                  name = "web";
+                  image = "${config.image.repository}:${config.image.tag}";
+                  imagePullPolicy = config.image.pullPolicy;
+                  env = kix.mkEnvVars (
+                    {
+                      JAVA_TIMEZONE = config.timezone;
+                      MB_DB_TYPE = config.database.type;
+                      MB_EMOJI_IN_LOGS = config.emojiInLogs;
+                      MB_JETTY_HOST = config.jettyHost;
+                      MB_JETTY_PORT = toString config.port;
+                      MB_SITE_URL = if config.siteUrl != "" then config.siteUrl else null;
+                    }
+                    // config.env
+                  );
+                  envFrom = [
+                    { secretRef.name = secretName; }
+                  ];
+                  ports = [
+                    (kix.port "http" config.port)
+                  ];
+                  livenessProbe = {
+                    httpGet = {
+                      path = config.livenessProbe.path;
+                      port = config.port;
+                      scheme = "HTTP";
+                    };
+                    initialDelaySeconds = config.livenessProbe.initialDelaySeconds;
+                    periodSeconds = config.livenessProbe.periodSeconds;
+                    timeoutSeconds = config.livenessProbe.timeoutSeconds;
+                    failureThreshold = config.livenessProbe.failureThreshold;
+                  };
+                  readinessProbe = {
+                    httpGet = {
+                      path = config.readinessProbe.path;
+                      port = config.port;
+                      scheme = "HTTP";
+                    };
+                    initialDelaySeconds = config.readinessProbe.initialDelaySeconds;
+                    periodSeconds = config.readinessProbe.periodSeconds;
+                    timeoutSeconds = config.readinessProbe.timeoutSeconds;
+                    failureThreshold = config.readinessProbe.failureThreshold;
+                  };
+                  resources = config.resources;
+                }
+              ];
+            };
+          }
+          |> scope.mkDeployment;
 
-      # --- Deployment ---
-      deployment =
-        {
-          name = "web";
-          spec = {
-            replicas = config.replicaCount;
-            selector.matchLabels = scope.selectorLabels;
-            template.spec.containers = [
+        # --- Service ---
+        # Port 80 -> targetPort 3000, so we pass explicit ports to override auto-derived ones.
+        service =
+          self.deployment
+          |> kix.service.fromWorkload {
+            name = "web";
+            ports = [
               {
-                name = "web";
-                image = "${config.image.repository}:${config.image.tag}";
-                imagePullPolicy = config.image.pullPolicy;
-                env = kix.mkEnvVars (
-                  {
-                    JAVA_TIMEZONE = config.timezone;
-                    MB_DB_TYPE = config.database.type;
-                    MB_EMOJI_IN_LOGS = config.emojiInLogs;
-                    MB_JETTY_HOST = config.jettyHost;
-                    MB_JETTY_PORT = toString config.port;
-                    MB_SITE_URL = if config.siteUrl != "" then config.siteUrl else null;
-                  }
-                  // config.env
-                );
-                envFrom = [
-                  { secretRef.name = secretName; }
-                ];
-                ports = [
-                  (kix.port "http" config.port)
-                ];
-                livenessProbe = {
-                  httpGet = {
-                    path = config.livenessProbe.path;
-                    port = config.port;
-                    scheme = "HTTP";
-                  };
-                  initialDelaySeconds = config.livenessProbe.initialDelaySeconds;
-                  periodSeconds = config.livenessProbe.periodSeconds;
-                  timeoutSeconds = config.livenessProbe.timeoutSeconds;
-                  failureThreshold = config.livenessProbe.failureThreshold;
-                };
-                readinessProbe = {
-                  httpGet = {
-                    path = config.readinessProbe.path;
-                    port = config.port;
-                    scheme = "HTTP";
-                  };
-                  initialDelaySeconds = config.readinessProbe.initialDelaySeconds;
-                  periodSeconds = config.readinessProbe.periodSeconds;
-                  timeoutSeconds = config.readinessProbe.timeoutSeconds;
-                  failureThreshold = config.readinessProbe.failureThreshold;
-                };
-                resources = config.resources;
+                name = "metabase";
+                port = config.servicePort;
+                targetPort = config.port;
+                protocol = "TCP";
               }
             ];
-          };
-        }
-        |> scope.mkDeployment;
-
-      # --- Service ---
-      # Port 80 -> targetPort 3000, so we pass explicit ports to override auto-derived ones.
-      service =
-        self.deployment
-        |> kix.service.fromWorkload {
-          name = "web";
-          ports = [
-            {
-              name = "metabase";
-              port = config.servicePort;
-              targetPort = config.port;
-              protocol = "TCP";
-            }
-          ];
-        }
-        |> scope.mkResource;
-
-      # --- Ingress (DI-driven) ---
-      # Created automatically when ingressNginx is injected and host is set.
-      # TLS is auto-enabled when clusterIssuer is injected.
-      ingress =
-        if hasIngress then
-          self.service
-          |> kix.ingress.fromService {
-            inherit name;
-            host = effectiveHost;
-            className = ingressNginx.out.ingressClassName;
-            tls = lib.optional hasTls {
-              hosts = [ effectiveHost ];
-              secretName = "${name}-tls";
-            };
-            annotations = config.ingress.annotations;
           }
-          |> (if hasTls then clusterIssuer.out.withCert else lib.id)
-          |> scope.mkResource
-        else
-          null;
+          |> scope.mkResource;
 
-      # --- Entry point ---
-      root = self.service;
-    };
+        # --- Entry point ---
+        root = self.service;
+      }
+    )
+    (kix.expose { service = "service"; })
+  ];
 }

@@ -432,6 +432,52 @@
       '';
     };
 
+    # --- Scorecard rule system ---
+    # Declarative policy framework with multi-level evaluation and
+    # configurable severity. See v2_discussions/60_scorecard_rules_design.md.
+
+    scorecard = lib.mkOption {
+      type = lib.types.submodule {
+        options = {
+          enable = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = "Enable scorecard rule evaluation during cluster build.";
+          };
+          rules = lib.mkOption {
+            type = lib.types.attrsOf lib.types.anything;
+            default = { };
+            description = ''
+              Rule definitions. Nested attrset: { category.ruleName = rule; }.
+              Each rule has: description, level, severity, check, and optional
+              tags and appliesTo fields.
+            '';
+          };
+          ruleDefaults = lib.mkOption {
+            type = lib.types.attrsOf lib.types.anything;
+            default = { };
+            description = ''
+              Cluster-wide rule defaults. Currently supports:
+              severity = "warning"|"error"|"info" — default severity for rules
+              that don't specify their own.
+            '';
+          };
+          ruleOverrides = lib.mkOption {
+            type = lib.types.attrsOf lib.types.anything;
+            default = { };
+            description = ''
+              Scope-specific rule overrides. Supports:
+              byNamespace."pattern" = { "rule.pattern".severity = ...; };
+              byOwner."pattern" = { "rule.pattern".severity = ...; };
+              byRule."ruleName" = { enabled = false; };
+            '';
+          };
+        };
+      };
+      default = { };
+      description = "Scorecard policy evaluation. See v2_discussions/60_scorecard_rules_design.md.";
+    };
+
     networkPolicy = lib.mkOption {
       type = lib.types.submodule {
         options = {

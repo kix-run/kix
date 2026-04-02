@@ -19,6 +19,8 @@ let
   rbac = import ./rbac.nix { inherit lib; };
   kixlib = import ./compose.nix { inherit lib; };
   meta = import ./meta.nix { inherit lib; };
+  scorecard = import ./scorecard.nix { inherit lib; };
+  rules = import ./rules { inherit lib; };
 in
 
 {
@@ -66,6 +68,9 @@ in
 
   # --- Package metadata introspection ---
   inherit (meta) peekPackageMeta;
+
+  # --- Scorecard rule engine + built-in rule library ---
+  inherit scorecard rules;
 
   # --- Helm bridge (helm.nix) ---
   inherit (helm)

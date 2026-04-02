@@ -19,6 +19,9 @@ pub struct ClusterOutput {
     pub name: String,
     /// Raw K8s manifests as JSON values (one per resource).
     pub raw_manifests: Vec<Value>,
+    /// Scorecard findings from Nix evaluation (None if scorecard disabled).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scorecard_report: Option<Value>,
 }
 
 /// Version info for a package in the global registry.

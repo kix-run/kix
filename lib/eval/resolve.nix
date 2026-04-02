@@ -273,8 +273,18 @@ rec {
           map (entry: if builtins.isPath entry then import entry else entry) rawBuild
         else
           [ rawBuild ];
-      # Union all build function args across entries
-      allBuildArgs = builtins.foldl' (acc: fn: acc // builtins.functionArgs fn) { } buildEntries;
+      # Union all build function args across entries.
+      # For deps declared by multiple entries: required wins over optional
+      # (both must have a default for the result to be optional).
+      allBuildArgs = builtins.foldl' (
+        acc: fn:
+        let
+          fnArgs = builtins.functionArgs fn;
+          # For deps in both: AND optionality (required wins)
+          overrides = lib.mapAttrs (n: v: acc.${n} && v) (lib.intersectAttrs acc fnArgs);
+        in
+        acc // fnArgs // overrides
+      ) { } buildEntries;
       depArgs = removeAttrs allBuildArgs systemBuildArgNames;
     in
     lib.mapAttrs (name: hasDefault: { optional = hasDefault; }) depArgs;

@@ -179,11 +179,16 @@
             "cluster-${cname}-graph" = mkDeployGraph cluster;
             # Activation root — inspect the DAG with:
             #   nix-store -q --tree $(readlink result/activation)
-            "cluster-${cname}-activation" = pkgs.runCommand "k8s-activation-${cluster.name}" { } ''
-              mkdir -p $out
-              ln -s ${cluster.activation} $out/activation
-              ln -s ${cluster.packageIndex} $out/kix-packages.json
-            '';
+            "cluster-${cname}-activation" = pkgs.runCommand "k8s-activation-${cluster.name}" { } (
+              ''
+                mkdir -p $out
+                ln -s ${cluster.activation} $out/activation
+                ln -s ${cluster.packageIndex} $out/kix-packages.json
+              ''
+              + lib.optionalString (cluster.scorecardReport != null) ''
+                ln -s ${builtins.toFile "kix-scorecard.json" (builtins.toJSON cluster.scorecardReport)} $out/kix-scorecard.json
+              ''
+            );
           }) clusters;
 
           clusterChecks = lib.concatMapAttrs (cname: cluster: {

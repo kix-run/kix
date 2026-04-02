@@ -352,6 +352,7 @@ impl NixBackend for FfiNixBackend {
         Ok(ClusterOutput {
             name: cluster_name.to_string(),
             raw_manifests,
+            scorecard_report: None,
         })
     }
 

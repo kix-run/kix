@@ -115,66 +115,58 @@ in
     };
     replicaCount = lib.mkOption { type = lib.types.int; default = 1; };
     env = lib.mkOption { type = lib.types.attrsOf lib.types.str; default = { }; };
-    ingress = lib.mkOption {
-      type = lib.types.anything;
-      default = { enabled = false; host = ""; };
-    };
+    ingress = kix.options.ingress;  # standardized { host, annotations } options
   };
 
   # Deps are build function args: required = no default, optional = ? null
-  build = { self, config, clusterConfig, postgres, storage, ingressNginx ? null, clusterIssuer ? null }:
-  let
-    # Shared values in let block
-    healthCheck = { httpGet = { path = "/health"; port = "http"; }; periodSeconds = 10; };
-  in
-  {
-    # --- Mounts (declare separately, inject via withMounts) ---
-    dataMount = kix.mount.pvc storage { mountPath = "/data"; };
+  # build can be a list — each entry's deps are discovered and merged automatically.
+  build = [
+    # App logic — knows nothing about infrastructure
+    ({ self, config, clusterConfig, postgres, storage, scope, kix, ... }:
+    let
+      # Shared values in let block
+      healthCheck = { httpGet = { path = "/health"; port = "http"; }; periodSeconds = 10; };
+    in
+    {
+      # --- Mounts (declare separately, inject via withMounts) ---
+      dataMount = kix.mount.pvc storage { mountPath = "/data"; };
 
-    # --- Workloads (pipe-friendly composition) ---
-    deployment =
-      {
-        name = "${name}-server";
-        spec = {
-          replicas = config.replicaCount;
-          selector.matchLabels = scope.selectorLabels;
-          template.spec.containers = [{
-            name = "server";
-            image = "${config.image.repository}:${config.image.tag}";
-            env = kix.mkEnvVars ({
-              DB_HOST = postgres.out.fqdn;
-              DB_PORT = postgres.out.port;
-            } // config.env);
-            ports = [ (kix.port "http" 8080) ];
-            livenessProbe = healthCheck;
-            readinessProbe = healthCheck;
-          }];
-        };
-      }
-      |> kix.withMounts [ self.dataMount ]
-      |> scope.mkDeployment;
-
-    # --- Services (auto-derive from workload) ---
-    service = self.deployment
-      |> kix.service.fromWorkload { name = "${name}-server"; }
-      |> scope.mkResource;
-
-    # --- Ingress (optional, pipe-friendly) ---
-    ingress =
-      if config.ingress.enabled then
-        self.service
-        |> kix.ingress.fromService {
-          inherit name;
-          host = config.ingress.host;
-          className = if ingressNginx != null then ingressNginx.out.ingressClassName else "public";
+      # --- Workloads (pipe-friendly composition) ---
+      deployment =
+        {
+          name = "${name}-server";
+          spec = {
+            replicas = config.replicaCount;
+            selector.matchLabels = scope.selectorLabels;
+            template.spec.containers = [{
+              name = "server";
+              image = "${config.image.repository}:${config.image.tag}";
+              env = kix.mkEnvVars ({
+                DB_HOST = postgres.out.fqdn;
+                DB_PORT = postgres.out.port;
+              } // config.env);
+              ports = [ (kix.port "http" 8080) ];
+              livenessProbe = healthCheck;
+              readinessProbe = healthCheck;
+            }];
+          };
         }
-        |> (if clusterIssuer != null then clusterIssuer.out.withCert else lib.id)
-        |> scope.mkResource
-      else null;
+        |> kix.withMounts [ self.dataMount ]
+        |> scope.mkDeployment;
 
-    # root — entry point. Resources reachable via self.* refs are auto-tracked.
-    root = if config.ingress.enabled then self.ingress else self.service;
-  };
+      # --- Services (auto-derive from workload) ---
+      service = self.deployment
+        |> kix.service.fromWorkload { name = "${name}-server"; }
+        |> scope.mkResource;
+
+      # root — entry point. Resources reachable via self.* refs are auto-tracked.
+      root = self.service;
+    })
+
+    # Exposure — kix.expose declares ingressNginx/clusterIssuer as its own DI deps.
+    # Creates Ingress when ingressNginx is in the cluster, adds TLS when clusterIssuer is present.
+    (kix.expose { service = "service"; })
+  ];
 }
 ```
 
@@ -378,24 +370,27 @@ coreService = self.coreDeployment
 |----------|-------------|
 | `kix.ingress.fromService { name, host, path?, pathType?, port?, className?, tls?, annotations?, ... } service` | Auto-derive Ingress from a Service. Reads backend name and port from `service.out`. |
 
+**Preferred: Use `kix.expose` as a composable build entry** (handles ingressNginx/clusterIssuer DI automatically):
+
 ```nix
-# Simple ingress (from immich):
-ingress = self.service
-  |> kix.ingress.fromService {
-    inherit name;
-    host = config.ingress.host;
-    className = if ingressNginx != null then ingressNginx.out.ingressClassName else "public";
-    tls = lib.optional (config.ingress.tls.enabled or false) {
-      hosts = [ config.ingress.host ];
-      secretName = config.ingress.tls.secretName;
-    };
-    annotations = { "nginx.ingress.kubernetes.io/proxy-body-size" = "0"; };
-  }
-  |> (if clusterIssuer != null then clusterIssuer.out.withCert else lib.id)
-  |> scope.mkResource;
+options = {
+  ingress = kix.options.ingress;  # standardized { host, annotations }
+};
+build = [
+  ({ self, config, scope, kix, postgres, ... }: {
+    # ... app logic, no infrastructure deps ...
+    service = self.deployment |> kix.service.fromWorkload { name = "myapp"; } |> scope.mkResource;
+    root = self.service;
+  })
+  (kix.expose { service = "service"; })
+  # With custom annotations: (kix.expose { service = "service"; defaultAnnotations = { "nginx.ingress.kubernetes.io/proxy-body-size" = "0"; }; })
+  # With explicit port: (kix.expose { service = "service"; port = 13000; })
+];
 ```
 
-For complex ingresses with multiple backends/paths (like harbor), build the Ingress manually with `scope.mkResource` and reference services via `self.coreService.out.name`.
+`kix.expose` parameters: `service` (string key in self), `partName` (default "ingress"), `defaultAnnotations`, `port`, `tlsSecretName`.
+
+For complex ingresses with multiple backends/paths (like harbor, python-app), build the Ingress manually with `scope.mkResource` and reference services via `self.coreService.out.name`.
 
 #### Utility helpers
 
@@ -573,7 +568,7 @@ Packages declare dependencies as **build function args**. Required deps have no 
 ```nix
 { scope, lib, kix }:
 {
-  build = { self, config, valkey, postgres, storage, machineLearning ? null, ingressNginx ? null, ... }: { ... };
+  build = [ ({ self, config, valkey, postgres, storage, scope, kix, machineLearning ? null, ... }: { ... }) (kix.expose { service = "service"; defaultAnnotations = { "nginx.ingress.kubernetes.io/proxy-body-size" = "0"; }; }) ];
 }
 ```
 
@@ -753,7 +748,7 @@ Complex applications like Harbor have multiple sub-services (core, portal, regis
 - **Pipe the diff to an LLM.** The JSON-path format is designed for LLM consumption: `./scripts/kix-diff.py ./result cluster-dump/ | pbcopy`
 - **Look at existing packages for patterns:**
   - `packages/reloader/` — clean simple package (single Deployment + Service)
-  - `packages/immich/` — mid-complexity with DI storage, optional ML, conditional ingress, `kix.mount.*` + `kix.withMounts` + `kix.mkEnvVars` + `kix.service.fromWorkload` + `kix.ingress.fromService` patterns
+  - `packages/immich/` — mid-complexity with DI storage, optional ML, `kix.expose` for ingress, `kix.mount.*` + `kix.withMounts` + `kix.mkEnvVars` + `kix.service.fromWorkload` + composable build list patterns
   - `packages/harbor/` — complex multi-component package (core, portal, registry, jobservice, exporter) with shared let bindings, per-component selectors, inline PVCs, manual multi-container volumes
   - `packages/valkey/` — complex multi-resource package
   - `packages/storage-classes/` — `lib.mapAttrs` to generate resources from config

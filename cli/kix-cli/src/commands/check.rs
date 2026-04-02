@@ -46,6 +46,109 @@ impl CommandResponse for CheckResponse {
     }
 }
 
+/// Convert scorecard findings to SARIF 2.1.0 JSON.
+fn to_sarif(scorecard_report: &serde_json::Value) -> serde_json::Value {
+    let findings = scorecard_report
+        .get("findings")
+        .and_then(|f| f.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    // Collect unique rules
+    let mut rules: Vec<serde_json::Value> = Vec::new();
+    let mut rule_indices: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+
+    for finding in &findings {
+        let rule_id = finding
+            .get("rule")
+            .and_then(|r| r.as_str())
+            .unwrap_or("unknown");
+        if !rule_indices.contains_key(rule_id) {
+            let idx = rules.len();
+            rule_indices.insert(rule_id.to_string(), idx);
+            rules.push(serde_json::json!({
+                "id": rule_id,
+                "shortDescription": { "text": rule_id },
+                "defaultConfiguration": {
+                    "level": match finding.get("severity").and_then(|s| s.as_str()) {
+                        Some("error") => "error",
+                        Some("warning") => "warning",
+                        _ => "note"
+                    }
+                },
+                "properties": {
+                    "tags": finding.get("tags").cloned().unwrap_or(serde_json::json!([]))
+                }
+            }));
+        }
+    }
+
+    // Convert findings to SARIF results
+    let results: Vec<serde_json::Value> = findings
+        .iter()
+        .map(|f| {
+            let rule_id = f.get("rule").and_then(|r| r.as_str()).unwrap_or("unknown");
+            let severity = f
+                .get("severity")
+                .and_then(|s| s.as_str())
+                .unwrap_or("warning");
+            let level = match severity {
+                "error" => "error",
+                "warning" => "warning",
+                _ => "note",
+            };
+            let message = f
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("check failed");
+            let namespace = f.get("namespace").and_then(|n| n.as_str());
+            let instance = f.get("instance").and_then(|i| i.as_str());
+            let resource = f.get("resource").and_then(|r| r.as_str());
+
+            let location_text = [namespace, instance, resource]
+                .iter()
+                .filter_map(|s| *s)
+                .collect::<Vec<_>>()
+                .join("/");
+
+            let mut result = serde_json::json!({
+                "ruleId": rule_id,
+                "ruleIndex": rule_indices.get(rule_id).copied().unwrap_or(0),
+                "level": level,
+                "message": { "text": message }
+            });
+
+            // Add location if we have context
+            if !location_text.is_empty() {
+                result["locations"] = serde_json::json!([{
+                    "logicalLocations": [{
+                        "fullyQualifiedName": location_text,
+                        "kind": f.get("level").and_then(|l| l.as_str()).unwrap_or("module")
+                    }]
+                }]);
+            }
+
+            result
+        })
+        .collect();
+
+    serde_json::json!({
+        "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [{
+            "tool": {
+                "driver": {
+                    "name": "kix",
+                    "informationUri": "https://kix.dev",
+                    "rules": rules
+                }
+            },
+            "results": results
+        }]
+    })
+}
+
 pub fn run(args: &CheckArgs, ctx: &mut CommandContext) -> Result<()> {
     let mut results: Vec<CheckResult> = Vec::new();
 
@@ -110,8 +213,66 @@ pub fn run(args: &CheckArgs, ctx: &mut CommandContext) -> Result<()> {
         }
     }
 
+    // Step 3: Include scorecard findings
+    if let Some(output) = &cluster_output {
+        if let Some(report) = &output.scorecard_report {
+            if let Some(findings) = report.get("findings").and_then(|f| f.as_array()) {
+                let errors = findings
+                    .iter()
+                    .filter(|f| f.get("severity").and_then(|s| s.as_str()) == Some("error"))
+                    .count();
+                let warnings = findings
+                    .iter()
+                    .filter(|f| f.get("severity").and_then(|s| s.as_str()) == Some("warning"))
+                    .count();
+                let infos = findings
+                    .iter()
+                    .filter(|f| f.get("severity").and_then(|s| s.as_str()) == Some("info"))
+                    .count();
+
+                let result_str = if errors > 0 { "fail" } else { "pass" };
+                results.push(CheckResult {
+                    tool: "scorecard".into(),
+                    result: result_str.into(),
+                    details: format!("{} errors, {} warnings, {} info", errors, warnings, infos),
+                });
+            }
+        } else {
+            results.push(CheckResult {
+                tool: "scorecard".into(),
+                result: "skip".into(),
+                details: "scorecard not enabled in cluster definition".into(),
+            });
+        }
+    }
+
     // Determine exit code
     let has_failure = results.iter().any(|r| r.result == "fail");
+
+    // SARIF output: print SARIF JSON and exit instead of normal output
+    if args.sarif {
+        let sarif = if let Some(output) = &cluster_output {
+            if let Some(report) = &output.scorecard_report {
+                to_sarif(report)
+            } else {
+                // No scorecard data — emit empty SARIF run
+                to_sarif(&serde_json::json!({"findings": []}))
+            }
+        } else {
+            // Eval failed — emit empty SARIF run
+            to_sarif(&serde_json::json!({"findings": []}))
+        };
+
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&sarif).expect("SARIF serialization should not fail")
+        );
+
+        if has_failure {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
 
     let response = CheckResponse { results };
     println!(

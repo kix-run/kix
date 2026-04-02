@@ -23,6 +23,7 @@ let
   kixlib = import ./compose.nix { inherit lib; };
   meta = import ./meta.nix { inherit lib; };
 
+  scorecard = import ./scorecard.nix { inherit lib; };
   helpers = import ./eval/helpers.nix { inherit lib; };
   netpol = import ./netpol.nix { inherit lib k8s helpers; };
   view = import ./eval/view.nix { inherit lib helpers; };
@@ -62,6 +63,7 @@ let
       helpers
       netpol
       kixlib
+      scorecard
       ;
     scope = scopeMod;
     inherit view resolve import_;
@@ -74,6 +76,7 @@ let
       kixlib
       helpers
       netpol
+      scorecard
       ;
     inherit (namespaceMod) mkNamespace;
     inherit (auto) computeAutoInstances;

@@ -5,11 +5,10 @@
 #
 # Dependencies:
 #   postgres            — required, database backend
-#   ingressNginx        — optional, auto-creates ingress when present (+ host is set)
-#   clusterIssuer       — optional, auto-enables TLS when present
 #
-# Resources: Secret (env), Secret (files), ConfigMap (env), Deployment, Service,
-# optional Ingress.
+# Exposure: uses kix.expose (port 13000) for optional ingress/TLS.
+#
+# Resources: Secret (env), Secret (files), ConfigMap (env), Deployment, Service.
 #
 # root = Service (port 13000 http + 51820 wireguard/UDP).
 
@@ -119,13 +118,7 @@ in
       };
     };
 
-    ingress = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        host = null;
-        annotations = { };
-      };
-    };
+    ingress = kix.options.ingress;
 
     env = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
@@ -167,181 +160,167 @@ in
       }
     ];
 
-  build =
-    {
-      self,
-      config,
-      clusterConfig,
-      postgres,
-      ingressNginx ? null,
-      clusterIssuer ? null,
-    }:
-    let
-      wg = config.wireguard;
+  build = [
+    (
+      {
+        self,
+        config,
+        clusterConfig,
+        postgres,
+        scope,
+        kix,
+        ...
+      }:
+      let
+        wg = config.wireguard;
 
-      hasIngress = ingressNginx != null && config.ingress.host != null;
-      hasTls = hasIngress && clusterIssuer != null;
-      hasSaml = config.saml.cert != null && config.saml.key != null;
+        hasSaml = config.saml.cert != null && config.saml.key != null;
 
-      dbPasswordEnv =
-        if config.database.passwordSecretRef != null then
-          [
-            {
-              name = "DATABASE_PASSWORD";
-              valueFrom.secretKeyRef = {
-                name = config.database.passwordSecretRef.name;
-                key = config.database.passwordSecretRef.key;
-              };
-            }
-          ]
-        else
-          [ ];
-    in
-    {
-      # --- ConfigMap: non-secret env vars ---
-      configMap = scope.mkResource {
-        apiVersion = "v1";
-        kind = "ConfigMap";
-        name = "${name}-env";
-        data = {
-          EXTERNAL_URL = "https://${config.domain}";
-          DATABASE_HOST = postgres.out.fqdn;
-          DATABASE_PORT = postgres.out.port;
-          DATABASE_NAME = config.database.name;
-          DATABASE_USER = config.database.user;
-          DEFAULT_CLIENT_ENDPOINT = "${config.domain}:${toString wg.port}";
-          WIREGUARD_PORT = toString wg.port;
-          WIREGUARD_IPV4_NETWORK = wg.ipv4Network;
-          WIREGUARD_IPV4_ADDRESS = wg.ipv4Address;
-          WIREGUARD_IPV6_NETWORK = wg.ipv6Network;
-          WIREGUARD_IPV6_ADDRESS = wg.ipv6Address;
-          TELEMETRY_ENABLED = if config.telemetry.enabled then "true" else "false";
-          RESET_ADMIN_ON_BOOT = if config.admin.resetOnBoot then "true" else "false";
-        };
-      };
-
-      # --- Secret: sensitive env vars ---
-      envSecret = scope.mkResource {
-        apiVersion = "v1";
-        kind = "Secret";
-        name = "${name}-env";
-        stringData = {
-          DEFAULT_ADMIN_EMAIL = config.admin.email;
-          DEFAULT_ADMIN_PASSWORD = config.admin.password;
-          GUARDIAN_SECRET_KEY = config.secrets.guardianSecretKey;
-          SECRET_KEY_BASE = config.secrets.secretKeyBase;
-          LIVE_VIEW_SIGNING_SALT = config.secrets.liveViewSigningSalt or "";
-          COOKIE_SIGNING_SALT = config.secrets.cookieSigningSalt or "";
-          COOKIE_ENCRYPTION_SALT = config.secrets.cookieEncryptionSalt or "";
-          DATABASE_ENCRYPTION_KEY = config.secrets.databaseEncryptionKey;
-        };
-      };
-
-      # --- Secret: file-based secrets (WireGuard key, optional SAML) ---
-      filesSecret = scope.mkResource {
-        apiVersion = "v1";
-        kind = "Secret";
-        name = "${name}-files";
-        stringData = {
-          private_key = config.wireguard.privateKey;
-        }
-        // lib.optionalAttrs hasSaml {
-          "saml.crt" = config.saml.cert;
-          "saml.key" = config.saml.key;
-        };
-      };
-
-      # --- Mounts ---
-      filesMount = kix.mount.secret self.filesSecret {
-        mountPath = "/var/firezone";
-        defaultMode = 256; # 0400
-      };
-
-      # --- Deployment ---
-      deployment =
-        {
-          name = name;
-          spec = {
-            replicas = config.replicaCount;
-            selector.matchLabels = scope.selectorLabels;
-            template.spec = {
-              initContainers = [
-                {
-                  name = "init-sysctl";
-                  image = "busybox:1.36";
-                  command = [
-                    "sh"
-                    "-c"
-                    ''
-                      sysctl -w net.ipv4.ip_forward=1
-                      sysctl -w net.ipv6.conf.all.disable_ipv6=0
-                      sysctl -w net.ipv6.conf.all.forwarding=1
-                    ''
-                  ];
-                  securityContext.privileged = true;
-                }
-              ];
-              containers = [
-                {
-                  name = "firezone";
-                  image = "${config.image.repository}:${config.image.tag}";
-                  imagePullPolicy = config.image.pullPolicy;
-                  ports = [
-                    (kix.port "wireguard" wg.port // { protocol = "UDP"; })
-                    (kix.port "http" 13000)
-                  ];
-                  envFrom = [
-                    { configMapRef.name = self.configMap.out.name; }
-                    { secretRef.name = self.envSecret.out.name; }
-                  ];
-                  env = kix.mkEnv config.env dbPasswordEnv;
-                  securityContext.capabilities.add = [
-                    "NET_ADMIN"
-                    "SYS_MODULE"
-                  ];
-                }
-              ];
-            };
+        dbPasswordEnv =
+          if config.database.passwordSecretRef != null then
+            [
+              {
+                name = "DATABASE_PASSWORD";
+                valueFrom.secretKeyRef = {
+                  name = config.database.passwordSecretRef.name;
+                  key = config.database.passwordSecretRef.key;
+                };
+              }
+            ]
+          else
+            [ ];
+      in
+      {
+        # --- ConfigMap: non-secret env vars ---
+        configMap = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          name = "${name}-env";
+          data = {
+            EXTERNAL_URL = "https://${config.domain}";
+            DATABASE_HOST = postgres.out.fqdn;
+            DATABASE_PORT = postgres.out.port;
+            DATABASE_NAME = config.database.name;
+            DATABASE_USER = config.database.user;
+            DEFAULT_CLIENT_ENDPOINT = "${config.domain}:${toString wg.port}";
+            WIREGUARD_PORT = toString wg.port;
+            WIREGUARD_IPV4_NETWORK = wg.ipv4Network;
+            WIREGUARD_IPV4_ADDRESS = wg.ipv4Address;
+            WIREGUARD_IPV6_NETWORK = wg.ipv6Network;
+            WIREGUARD_IPV6_ADDRESS = wg.ipv6Address;
+            TELEMETRY_ENABLED = if config.telemetry.enabled then "true" else "false";
+            RESET_ADMIN_ON_BOOT = if config.admin.resetOnBoot then "true" else "false";
           };
-        }
-        |> kix.withMounts [ self.filesMount ]
-        |> scope.mkDeployment;
+        };
 
-      # --- Service ---
-      service =
-        self.deployment
-        |> kix.service.fromWorkload {
-          name = name;
-          type = config.service.type;
-          annotations = config.service.annotations;
-          outputs = {
-            httpPort = "13000";
-            wireguardPort = toString wg.port;
+        # --- Secret: sensitive env vars ---
+        envSecret = scope.mkResource {
+          apiVersion = "v1";
+          kind = "Secret";
+          name = "${name}-env";
+          stringData = {
+            DEFAULT_ADMIN_EMAIL = config.admin.email;
+            DEFAULT_ADMIN_PASSWORD = config.admin.password;
+            GUARDIAN_SECRET_KEY = config.secrets.guardianSecretKey;
+            SECRET_KEY_BASE = config.secrets.secretKeyBase;
+            LIVE_VIEW_SIGNING_SALT = config.secrets.liveViewSigningSalt or "";
+            COOKIE_SIGNING_SALT = config.secrets.cookieSigningSalt or "";
+            COOKIE_ENCRYPTION_SALT = config.secrets.cookieEncryptionSalt or "";
+            DATABASE_ENCRYPTION_KEY = config.secrets.databaseEncryptionKey;
           };
-        }
-        |> scope.mkResource;
+        };
 
-      # --- Ingress (DI-driven) ---
-      ingress =
-        if hasIngress then
-          self.service
-          |> kix.ingress.fromService {
-            inherit name;
-            host = config.ingress.host;
-            port = 13000;
-            className = ingressNginx.out.ingressClassName;
-            tls = lib.optional hasTls {
-              hosts = [ config.ingress.host ];
-              secretName = "${name}-tls";
-            };
-            annotations = config.ingress.annotations;
+        # --- Secret: file-based secrets (WireGuard key, optional SAML) ---
+        filesSecret = scope.mkResource {
+          apiVersion = "v1";
+          kind = "Secret";
+          name = "${name}-files";
+          stringData = {
+            private_key = config.wireguard.privateKey;
           }
-          |> (if hasTls then clusterIssuer.out.withCert else lib.id)
-          |> scope.mkResource
-        else
-          null;
+          // lib.optionalAttrs hasSaml {
+            "saml.crt" = config.saml.cert;
+            "saml.key" = config.saml.key;
+          };
+        };
 
-      # --- Entry point ---
-      root = self.service;
-    };
+        # --- Mounts ---
+        filesMount = kix.mount.secret self.filesSecret {
+          mountPath = "/var/firezone";
+          defaultMode = 256; # 0400
+        };
+
+        # --- Deployment ---
+        deployment =
+          {
+            name = name;
+            spec = {
+              replicas = config.replicaCount;
+              selector.matchLabels = scope.selectorLabels;
+              template.spec = {
+                initContainers = [
+                  {
+                    name = "init-sysctl";
+                    image = "busybox:1.36";
+                    command = [
+                      "sh"
+                      "-c"
+                      ''
+                        sysctl -w net.ipv4.ip_forward=1
+                        sysctl -w net.ipv6.conf.all.disable_ipv6=0
+                        sysctl -w net.ipv6.conf.all.forwarding=1
+                      ''
+                    ];
+                    securityContext.privileged = true;
+                  }
+                ];
+                containers = [
+                  {
+                    name = "firezone";
+                    image = "${config.image.repository}:${config.image.tag}";
+                    imagePullPolicy = config.image.pullPolicy;
+                    ports = [
+                      (kix.port "wireguard" wg.port // { protocol = "UDP"; })
+                      (kix.port "http" 13000)
+                    ];
+                    envFrom = [
+                      { configMapRef.name = self.configMap.out.name; }
+                      { secretRef.name = self.envSecret.out.name; }
+                    ];
+                    env = kix.mkEnv config.env dbPasswordEnv;
+                    securityContext.capabilities.add = [
+                      "NET_ADMIN"
+                      "SYS_MODULE"
+                    ];
+                  }
+                ];
+              };
+            };
+          }
+          |> kix.withMounts [ self.filesMount ]
+          |> scope.mkDeployment;
+
+        # --- Service ---
+        service =
+          self.deployment
+          |> kix.service.fromWorkload {
+            name = name;
+            type = config.service.type;
+            annotations = config.service.annotations;
+            outputs = {
+              httpPort = "13000";
+              wireguardPort = toString wg.port;
+            };
+          }
+          |> scope.mkResource;
+
+        # --- Entry point ---
+        root = self.service;
+      }
+    )
+    (kix.expose {
+      service = "service";
+      port = 13000;
+    })
+  ];
 }

@@ -8,6 +8,7 @@
   helpers,
   netpol,
   kixlib,
+  scorecard,
   scope,
   view,
   resolve,
@@ -379,6 +380,52 @@ in
               warnings = [ ];
             };
 
+        # --- Scorecard rule evaluation (manifest + package level) ---
+        scorecardConfig = clusterConfig.scorecard or { };
+        scorecardEnabled = (scorecardConfig.enable or false) && (scorecardConfig.rules or { }) != { };
+        owner = packageMeta.owner or null;
+
+        scorecardManifestFindings =
+          if scorecardEnabled then
+            builtins.concatMap (
+              resource:
+              scorecard.evaluateManifestRules {
+                rules = scorecardConfig.rules;
+                inherit
+                  resource
+                  instanceName
+                  namespaceName
+                  owner
+                  ;
+                ruleDefaults = scorecardConfig.ruleDefaults or { };
+                ruleOverrides = scorecardConfig.ruleOverrides or { };
+              }
+            ) (builtins.filter (r: r ? kind) (map (r: r.rawManifest or { }) allPartResources))
+          else
+            [ ];
+
+        scorecardPackageFindings =
+          if scorecardEnabled then
+            scorecard.evaluatePackageRules {
+              rules = scorecardConfig.rules;
+              resources = map (r: r.rawManifest or { }) allPartResources;
+              inherit
+                parts
+                instanceName
+                namespaceName
+                owner
+                ;
+              config = evaluatedConfig;
+              meta = packageMeta;
+              ruleDefaults = scorecardConfig.ruleDefaults or { };
+              ruleOverrides = scorecardConfig.ruleOverrides or { };
+            }
+          else
+            [ ];
+
+        scorecardFindings = scorecardManifestFindings ++ scorecardPackageFindings;
+        scorecardDiag = scorecard.scorecardToWarnings scorecardFindings;
+
         # --- Create PackageInstance CRD (Phase 5) ---
         # Lists root.requires as package-requires and true inverse deps.
         # Structural deps (via `requires`) are tracked by the cluster-level
@@ -507,7 +554,7 @@ in
         ) allPartResources;
 
         # --- Package-declared warnings and assertions (post-build) ---
-        packageResult = meta.evaluatePackageDiagnostics {
+        packageResultRaw = meta.evaluatePackageDiagnostics {
           inherit
             raw
             evaluatedConfig
@@ -516,6 +563,11 @@ in
             depsEnrichment
             resolvedDeps
             ;
+        };
+        # Merge scorecard error-level findings as assertions
+        packageResult = {
+          warnings = packageResultRaw.warnings;
+          assertions = packageResultRaw.assertions ++ scorecardDiag.assertions;
         };
 
         # --- Combine all diagnostics ---
@@ -534,6 +586,7 @@ in
             ) duplicateRequiresWarnings)
             (warn (r: "resource '${res r}' is defined but not reachable from root (orphaned)") orphanedWarnings)
             networkResult.warnings
+            scorecardDiag.warnings
           ];
 
         diagnostics = meta.combineDiagnostics {
@@ -566,6 +619,7 @@ in
             // {
               _networkPolicies = networkResult.policies;
               _networkEdges = networkResult.edges;
+              _scorecardFindings = scorecardFindings;
               _diagnostics = {
                 warnings = diagnostics.allWarnings;
                 assertions = diagnostics.allAssertions;

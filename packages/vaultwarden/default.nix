@@ -5,9 +5,9 @@
 #
 # Dependencies:
 #   storage        — required, persistent volume for SQLite DB + attachments
-#   ingressNginx   — optional, auto-creates ingress when present (+ domain is set)
-#   clusterIssuer  — optional, auto-enables TLS when present
 #   postgres       — optional, uses Postgres instead of SQLite when present
+#
+# Exposure handled by kix.expose (ingress via DI).
 #
 # root = Service (port 8080).
 
@@ -57,13 +57,7 @@ in
       default = { };
       description = "Extra environment variables (SCREAMING_SNAKE_CASE).";
     };
-    ingress = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        host = null;
-        annotations = { };
-      };
-    };
+    ingress = kix.options.ingress;
     adminToken = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
@@ -71,117 +65,102 @@ in
     };
   };
 
-  build =
-    {
-      self,
-      config,
-      clusterConfig,
-      storage,
-      ingressNginx ? null,
-      clusterIssuer ? null,
-      postgres ? null,
-    }:
-    let
-      clusterDomain = clusterConfig.cluster.domain or null;
-      ingressHost =
-        if config.ingress.host != null then
-          config.ingress.host
-        else if clusterDomain != null then
-          "${name}.${clusterDomain}"
-        else
-          null;
-      hasIngress = ingressNginx != null && ingressHost != null;
-      hasTls = hasIngress && clusterIssuer != null;
-      usePostgres = postgres != null;
+  build = [
+    (
+      {
+        self,
+        config,
+        clusterConfig,
+        storage,
+        scope,
+        kix,
+        postgres ? null,
+        ...
+      }:
+      let
+        clusterDomain = clusterConfig.cluster.domain or null;
+        effectiveHost =
+          if config.ingress.host != null then
+            config.ingress.host
+          else if clusterDomain != null then
+            "${name}.${clusterDomain}"
+          else
+            null;
+        usePostgres = postgres != null;
 
-      healthCheck = {
-        httpGet = {
-          path = "/alive";
-          port = "http";
-        };
-        periodSeconds = 10;
-        timeoutSeconds = 1;
-      };
-
-      # Database URL: Postgres if injected, else SQLite in the data volume.
-      databaseUrl =
-        if usePostgres then
-          "postgresql://vaultwarden:vaultwarden@${postgres.out.fqdn}:${postgres.out.port}/vaultwarden"
-        else
-          "/data/db.sqlite3";
-    in
-    {
-      deployment =
-        {
-          name = name;
-          spec = {
-            replicas = 1;
-            strategy.type = "Recreate"; # SQLite can't handle concurrent writers
-            selector.matchLabels = scope.selectorLabels;
-            template.spec = {
-              containers = [
-                {
-                  name = "vaultwarden";
-                  image = "${config.image.repository}:${config.image.tag}";
-                  ports = [ (kix.port "http" 8080) ];
-                  env = kix.mkEnvVars (
-                    {
-                      DATA_FOLDER = "/data";
-                      DATABASE_URL = databaseUrl;
-                      DOMAIN =
-                        if config.domain != null then
-                          config.domain
-                        else if ingressHost != null then
-                          "https://${ingressHost}"
-                        else
-                          null;
-                      SIGNUPS_ALLOWED = lib.boolToString config.signupsAllowed;
-                      INVITATIONS_ALLOWED = lib.boolToString config.invitationsAllowed;
-                      SHOW_PASSWORD_HINT = lib.boolToString config.showPasswordHint;
-                      ROCKET_ADDRESS = "0.0.0.0";
-                      ROCKET_PORT = "8080";
-                      ADMIN_TOKEN = config.adminToken;
-                    }
-                    // config.env
-                  );
-                  livenessProbe = healthCheck // {
-                    initialDelaySeconds = 5;
-                    failureThreshold = 10;
-                  };
-                  readinessProbe = healthCheck // {
-                    initialDelaySeconds = 5;
-                    failureThreshold = 3;
-                  };
-                }
-              ];
-            };
+        healthCheck = {
+          httpGet = {
+            path = "/alive";
+            port = "http";
           };
-        }
-        |> kix.withMounts [
-          (kix.mount.pvc storage { mountPath = "/data"; })
-        ]
-        |> scope.mkDeployment;
+          periodSeconds = 10;
+          timeoutSeconds = 1;
+        };
 
-      service = self.deployment |> kix.service.fromWorkload { inherit name; } |> scope.mkResource;
-
-      ingress =
-        if hasIngress then
-          self.service
-          |> kix.ingress.fromService {
-            inherit name;
-            host = ingressHost;
-            className = ingressNginx.out.ingressClassName;
-            tls = lib.optional hasTls {
-              hosts = [ ingressHost ];
-              secretName = "${name}-tls";
+        # Database URL: Postgres if injected, else SQLite in the data volume.
+        databaseUrl =
+          if usePostgres then
+            "postgresql://vaultwarden:vaultwarden@${postgres.out.fqdn}:${postgres.out.port}/vaultwarden"
+          else
+            "/data/db.sqlite3";
+      in
+      {
+        deployment =
+          {
+            name = name;
+            spec = {
+              replicas = 1;
+              strategy.type = "Recreate"; # SQLite can't handle concurrent writers
+              selector.matchLabels = scope.selectorLabels;
+              template.spec = {
+                containers = [
+                  {
+                    name = "vaultwarden";
+                    image = "${config.image.repository}:${config.image.tag}";
+                    ports = [ (kix.port "http" 8080) ];
+                    env = kix.mkEnvVars (
+                      {
+                        DATA_FOLDER = "/data";
+                        DATABASE_URL = databaseUrl;
+                        DOMAIN =
+                          if config.domain != null then
+                            config.domain
+                          else if effectiveHost != null then
+                            "https://${effectiveHost}"
+                          else
+                            null;
+                        SIGNUPS_ALLOWED = lib.boolToString config.signupsAllowed;
+                        INVITATIONS_ALLOWED = lib.boolToString config.invitationsAllowed;
+                        SHOW_PASSWORD_HINT = lib.boolToString config.showPasswordHint;
+                        ROCKET_ADDRESS = "0.0.0.0";
+                        ROCKET_PORT = "8080";
+                        ADMIN_TOKEN = config.adminToken;
+                      }
+                      // config.env
+                    );
+                    livenessProbe = healthCheck // {
+                      initialDelaySeconds = 5;
+                      failureThreshold = 10;
+                    };
+                    readinessProbe = healthCheck // {
+                      initialDelaySeconds = 5;
+                      failureThreshold = 3;
+                    };
+                  }
+                ];
+              };
             };
-            annotations = config.ingress.annotations;
           }
-          |> (if hasTls then clusterIssuer.out.withCert else lib.id)
-          |> scope.mkResource
-        else
-          null;
+          |> kix.withMounts [
+            (kix.mount.pvc storage { mountPath = "/data"; })
+          ]
+          |> scope.mkDeployment;
 
-      root = self.service;
-    };
+        service = self.deployment |> kix.service.fromWorkload { inherit name; } |> scope.mkResource;
+
+        root = self.service;
+      }
+    )
+    (kix.expose { service = "service"; })
+  ];
 }

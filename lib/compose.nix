@@ -351,4 +351,97 @@ rec {
   # Usage: { ... } |> kix.withMountsOn "registry" [ ... ] |> scope.mkDeployment;
   withMountsOn = containerName: _injectMounts containerName;
 
+  # --- Shared option definitions ---
+
+  options = {
+    # Standard ingress options. Packages use: options.ingress = kix.options.ingress;
+    ingress = {
+      host = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = "Ingress hostname. Null = auto-derive from cluster.domain.";
+      };
+      annotations = lib.mkOption {
+        type = lib.types.attrsOf lib.types.str;
+        default = { };
+        description = "Extra ingress annotations.";
+      };
+    };
+  };
+
+  # --- Exposure build entry ---
+  #
+  # Returns a build entry function that creates an Ingress resource when
+  # ingressNginx is present in the cluster, with auto-TLS when clusterIssuer
+  # is present. The app developer adds this to their build list and never
+  # touches infrastructure deps directly.
+  #
+  # Usage:
+  #   build = [
+  #     ({ self, config, scope, kix, myDep, ... }: { ... app logic ... })
+  #     (kix.expose { service = "service"; })
+  #   ];
+  #
+  # The returned build entry declares ingressNginx and clusterIssuer as
+  # optional DI deps via function args — they're discovered automatically.
+  expose =
+    {
+      service, # string: part name in self to expose (e.g. "service")
+      partName ? "ingress", # string: name of the generated part in self
+      defaultAnnotations ? { }, # attrset: package-level default annotations
+      port ? null, # int or null: override auto-derived service port
+      tlsSecretName ? null, # string or null: override auto-derived TLS secret name
+    }:
+    {
+      self,
+      config,
+      clusterConfig,
+      scope,
+      lib,
+      ingressNginx ? null,
+      clusterIssuer ? null,
+      ...
+    }:
+    let
+      svc = self.${service};
+      name = scope.instanceName;
+
+      clusterDomain = clusterConfig.cluster.domain or null;
+      configHost = (config.ingress or { }).host or null;
+      effectiveHost =
+        if configHost != null then
+          configHost
+        else if clusterDomain != null then
+          "${name}.${clusterDomain}"
+        else
+          null;
+
+      hasIngress = ingressNginx != null && effectiveHost != null;
+      hasTls = hasIngress && clusterIssuer != null;
+
+      configAnnotations = (config.ingress or { }).annotations or { };
+    in
+    {
+      ${partName} =
+        if hasIngress then
+          svc
+          |> ingress.fromService (
+            {
+              inherit name;
+              host = effectiveHost;
+              className = ingressNginx.out.ingressClassName;
+              tls = lib.optional hasTls {
+                hosts = [ effectiveHost ];
+                secretName = if tlsSecretName != null then tlsSecretName else "${name}-tls";
+              };
+              annotations = defaultAnnotations // configAnnotations;
+            }
+            // lib.optionalAttrs (port != null) { inherit port; }
+          )
+          |> (if hasTls then clusterIssuer.out.withCert else lib.id)
+          |> scope.mkResource
+        else
+          null;
+    };
+
 }

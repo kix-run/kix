@@ -135,6 +135,10 @@ pub struct DiffArgs {
 pub struct CheckArgs {
     /// Cluster to validate
     pub cluster: String,
+
+    /// Output SARIF 2.1.0 JSON (for GitHub Code Scanning integration)
+    #[arg(long)]
+    pub sarif: bool,
 }
 
 #[derive(clap::Args)]

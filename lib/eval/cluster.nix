@@ -8,6 +8,7 @@
   kixlib,
   helpers,
   netpol,
+  scorecard,
   mkNamespace,
   computeAutoInstances,
   buildResolutionIndex,
@@ -203,6 +204,7 @@ in
               "_meta"
               "_packageInstance"
               "_diagnostics"
+              "_scorecardFindings"
               "_isImport"
               "root"
               "fqdn"
@@ -251,6 +253,66 @@ in
           ) allNsNames
         else
           [ ];
+
+      # --- Scorecard evaluation (namespace + cluster level) ---
+      scorecardConfig = cfg.scorecard or { };
+      scorecardEnabled = (scorecardConfig.enable or false) && (scorecardConfig.rules or { }) != { };
+
+      # Collect per-instance findings from the fixpoint
+      instanceScorecardFindings =
+        if scorecardEnabled then
+          builtins.concatMap (inst: inst._scorecardFindings or [ ]) allInstancesList
+        else
+          [ ];
+
+      # Namespace-level rules
+      namespaceScorecardFindings =
+        if scorecardEnabled then
+          builtins.concatMap (
+            nsName:
+            let
+              nsInstances = clusterInstances.${nsName} or { };
+              activeNsInstances = lib.filterAttrs (instName: _: isActive nsName instName) nsInstances;
+              nsResources = builtins.concatMap (inst: map (r: r.rawManifest or { }) (collectResources inst)) (
+                builtins.attrValues activeNsInstances
+              );
+            in
+            scorecard.evaluateNamespaceRules {
+              rules = scorecardConfig.rules;
+              instances = activeNsInstances;
+              resources = nsResources;
+              namespaceName = nsName;
+              ruleDefaults = scorecardConfig.ruleDefaults or { };
+              ruleOverrides = scorecardConfig.ruleOverrides or { };
+            }
+          ) allNsNames
+        else
+          [ ];
+
+      # Cluster-level rules
+      clusterScorecardFindings =
+        if scorecardEnabled then
+          scorecard.evaluateClusterRules {
+            rules = scorecardConfig.rules;
+            allInstances = clusterInstances;
+            allResources = builtins.concatMap (
+              inst: map (r: r.rawManifest or { }) (collectResources inst)
+            ) allInstancesList;
+            clusterConfig = cfg;
+            ruleDefaults = scorecardConfig.ruleDefaults or { };
+            ruleOverrides = scorecardConfig.ruleOverrides or { };
+          }
+        else
+          [ ];
+
+      allScorecardFindings =
+        instanceScorecardFindings ++ namespaceScorecardFindings ++ clusterScorecardFindings;
+
+      scorecardReport =
+        if scorecardEnabled then
+          scorecard.buildScorecardReport { findings = allScorecardFindings; }
+        else
+          null;
 
       allResources = [
         k8s.kixCRDs.packageInstance
@@ -387,6 +449,9 @@ in
       diagnostics = {
         inherit (clusterDiagnostics) warnings assertions failedAssertions;
       };
+
+      # Scorecard report (null if disabled)
+      inherit scorecardReport;
 
       rawManifests = map (
         r: builtins.fromJSON (builtins.unsafeDiscardStringContext (builtins.toJSON r.rawManifest))

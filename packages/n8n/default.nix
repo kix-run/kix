@@ -84,13 +84,7 @@ in
         };
       };
     };
-    ingress = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        host = null;
-        annotations = { };
-      };
-    };
+    ingress = kix.options.ingress;
     env = lib.mkOption {
       type = lib.types.attrsOf lib.types.anything;
       default = { };
@@ -109,180 +103,82 @@ in
     };
   };
 
-  build =
-    {
-      self,
-      config,
-      clusterConfig,
-      postgres,
-      valkey,
-      ingressNginx ? null,
-      clusterIssuer ? null,
-    }:
-    let
-      # Secret name for credentials (used as secretRef on envFrom).
-      secretName = if config.existingSecret != null then config.existingSecret else "${name}-app-secret";
+  build = [
+    (
+      {
+        self,
+        config,
+        clusterConfig,
+        postgres,
+        valkey,
+        scope,
+        kix,
+        ...
+      }:
+      let
+        # Secret name for credentials (used as secretRef on envFrom).
+        secretName = if config.existingSecret != null then config.existingSecret else "${name}-app-secret";
 
-      # envFrom for main deployment: app configmap + secret.
-      mainEnvFrom = [
-        { configMapRef.name = self.configmap.out.name; }
-        { secretRef.name = secretName; }
-      ];
+        # envFrom for main deployment: app configmap + secret.
+        mainEnvFrom = [
+          { configMapRef.name = self.configmap.out.name; }
+          { secretRef.name = secretName; }
+        ];
 
-      # envFrom for worker deployment: app configmap + worker configmap + secret.
-      workerEnvFrom = [
-        { configMapRef.name = self.configmap.out.name; }
-        { configMapRef.name = self.workerConfigmap.out.name; }
-        { secretRef.name = secretName; }
-      ];
+        # envFrom for worker deployment: app configmap + worker configmap + secret.
+        workerEnvFrom = [
+          { configMapRef.name = self.configmap.out.name; }
+          { configMapRef.name = self.workerConfigmap.out.name; }
+          { secretRef.name = secretName; }
+        ];
+      in
+      {
 
-      # DI-driven ingress: created when ingressNginx is injected AND host is set.
-      clusterDomain = clusterConfig.cluster.domain or null;
-      effectiveHost =
-        if config.ingress.host != null then
-          config.ingress.host
-        else if clusterDomain != null then
-          "${name}.${clusterDomain}"
-        else
-          null;
-      hasIngress = ingressNginx != null && effectiveHost != null;
-      hasTls = hasIngress && clusterIssuer != null;
-    in
-    {
-
-      # --- ServiceAccount ---
-      serviceAccount = scope.mkResource {
-        apiVersion = "v1";
-        kind = "ServiceAccount";
-        name = "${name}";
-      };
-
-      # --- ConfigMap (environment variables) ---
-      configmap = scope.mkResource {
-        apiVersion = "v1";
-        kind = "ConfigMap";
-        name = "${name}-app-config";
-        data = {
-          # Database — derived from postgres DI dep
-          DB_TYPE = config.database.type;
-          DB_POSTGRESDB_HOST = postgres.out.fqdn;
-          DB_POSTGRESDB_DATABASE = config.database.name;
-          DB_POSTGRESDB_USER = config.database.user;
-          # Redis / Queue — derived from valkey DI dep
-          QUEUE_BULL_REDIS_HOST = valkey.out.primaryFqdn;
-          QUEUE_BULL_REDIS_PORT = valkey.out.port;
-          # Execution mode — queue mode for workers
-          EXECUTIONS_MODE = "queue";
-        }
-        // config.env;
-      };
-
-      # --- Worker ConfigMap (worker-specific overrides) ---
-      workerConfigmap = scope.mkResource {
-        apiVersion = "v1";
-        kind = "ConfigMap";
-        name = "${name}-worker-config";
-        data = {
-          PORT = toString config.worker.port;
-        };
-      };
-
-      # --- Deployment (main — UI + API) ---
-      deployment =
-        {
+        # --- ServiceAccount ---
+        serviceAccount = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ServiceAccount";
           name = "${name}";
-          spec = {
-            replicas = config.replicaCount;
-            revisionHistoryLimit = 3;
-            selector.matchLabels = mainSelectorLabels;
-            strategy.type = "Recreate";
-            template = {
-              metadata.annotations = {
-                "checksum/configmap" = self.configmap.out.identityHash;
-              };
-              spec = {
-                serviceAccountName = self.serviceAccount.out.name;
-                securityContext = {
-                  fsGroup = 1000;
-                  runAsNonRoot = true;
-                  runAsUser = 1000;
-                  runAsGroup = 1000;
-                };
-                affinity = {
-                  podAntiAffinity = {
-                    preferredDuringSchedulingIgnoredDuringExecution = [
-                      {
-                        weight = 100;
-                        podAffinityTerm = {
-                          labelSelector = {
-                            matchExpressions = [
-                              {
-                                key = "app.kubernetes.io/name";
-                                operator = "In";
-                                values = [ "n8n" ];
-                              }
-                            ];
-                          };
-                          topologyKey = "kubernetes.io/hostname";
-                        };
-                      }
-                    ];
-                  };
-                };
-                containers = [
-                  {
-                    name = "n8n";
-                    image = "${config.image.repository}:${config.image.tag}";
-                    imagePullPolicy = config.image.pullPolicy;
-                    envFrom = mainEnvFrom;
-                    ports = [
-                      (kix.port "http" config.port)
-                    ];
-                    livenessProbe = {
-                      httpGet = {
-                        path = "/healthz";
-                        port = "http";
-                      };
-                      periodSeconds = 10;
-                      timeoutSeconds = 1;
-                      failureThreshold = 3;
-                    };
-                    readinessProbe = {
-                      httpGet = {
-                        path = "/healthz";
-                        port = "http";
-                      };
-                      periodSeconds = 10;
-                      timeoutSeconds = 1;
-                      failureThreshold = 3;
-                    };
-                    resources = config.resources;
-                    volumeMounts = [
-                      {
-                        name = "data";
-                        mountPath = "/home/node/.n8n";
-                      }
-                    ];
-                  }
-                ];
-                volumes = [
-                  { name = "data"; }
-                ];
-              };
-            };
-          };
-        }
-        |> scope.mkDeployment;
+        };
 
-      # --- Deployment (worker — queue workers) ---
-      worker =
-        if config.worker.enabled then
+        # --- ConfigMap (environment variables) ---
+        configmap = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          name = "${name}-app-config";
+          data = {
+            # Database — derived from postgres DI dep
+            DB_TYPE = config.database.type;
+            DB_POSTGRESDB_HOST = postgres.out.fqdn;
+            DB_POSTGRESDB_DATABASE = config.database.name;
+            DB_POSTGRESDB_USER = config.database.user;
+            # Redis / Queue — derived from valkey DI dep
+            QUEUE_BULL_REDIS_HOST = valkey.out.primaryFqdn;
+            QUEUE_BULL_REDIS_PORT = valkey.out.port;
+            # Execution mode — queue mode for workers
+            EXECUTIONS_MODE = "queue";
+          }
+          // config.env;
+        };
+
+        # --- Worker ConfigMap (worker-specific overrides) ---
+        workerConfigmap = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          name = "${name}-worker-config";
+          data = {
+            PORT = toString config.worker.port;
+          };
+        };
+
+        # --- Deployment (main — UI + API) ---
+        deployment =
           {
-            name = "${name}-worker";
+            name = "${name}";
             spec = {
-              replicas = config.worker.replicaCount;
+              replicas = config.replicaCount;
               revisionHistoryLimit = 3;
-              selector.matchLabels = workerSelectorLabels;
+              selector.matchLabels = mainSelectorLabels;
               strategy.type = "Recreate";
               template = {
                 metadata.annotations = {
@@ -296,19 +192,35 @@ in
                     runAsUser = 1000;
                     runAsGroup = 1000;
                   };
+                  affinity = {
+                    podAntiAffinity = {
+                      preferredDuringSchedulingIgnoredDuringExecution = [
+                        {
+                          weight = 100;
+                          podAffinityTerm = {
+                            labelSelector = {
+                              matchExpressions = [
+                                {
+                                  key = "app.kubernetes.io/name";
+                                  operator = "In";
+                                  values = [ "n8n" ];
+                                }
+                              ];
+                            };
+                            topologyKey = "kubernetes.io/hostname";
+                          };
+                        }
+                      ];
+                    };
+                  };
                   containers = [
                     {
-                      name = "n8n-worker";
+                      name = "n8n";
                       image = "${config.image.repository}:${config.image.tag}";
                       imagePullPolicy = config.image.pullPolicy;
-                      command = [ "n8n" ];
-                      args = [
-                        "worker"
-                        "--concurrency=${toString config.worker.concurrency}"
-                      ];
-                      envFrom = workerEnvFrom;
+                      envFrom = mainEnvFrom;
                       ports = [
-                        (kix.port "http" config.worker.port)
+                        (kix.port "http" config.port)
                       ];
                       livenessProbe = {
                         httpGet = {
@@ -328,6 +240,7 @@ in
                         timeoutSeconds = 1;
                         failureThreshold = 3;
                       };
+                      resources = config.resources;
                       volumeMounts = [
                         {
                           name = "data";
@@ -343,52 +256,105 @@ in
               };
             };
           }
-          |> scope.mkDeployment
-        else
-          null;
+          |> scope.mkDeployment;
 
-      # --- Service ---
-      service =
-        self.deployment
-        |> kix.service.fromWorkload {
-          name = "${name}";
-          ports = [
+        # --- Deployment (worker — queue workers) ---
+        worker =
+          if config.worker.enabled then
             {
-              name = "http";
-              port = config.servicePort;
-              targetPort = "http";
-              protocol = "TCP";
+              name = "${name}-worker";
+              spec = {
+                replicas = config.worker.replicaCount;
+                revisionHistoryLimit = 3;
+                selector.matchLabels = workerSelectorLabels;
+                strategy.type = "Recreate";
+                template = {
+                  metadata.annotations = {
+                    "checksum/configmap" = self.configmap.out.identityHash;
+                  };
+                  spec = {
+                    serviceAccountName = self.serviceAccount.out.name;
+                    securityContext = {
+                      fsGroup = 1000;
+                      runAsNonRoot = true;
+                      runAsUser = 1000;
+                      runAsGroup = 1000;
+                    };
+                    containers = [
+                      {
+                        name = "n8n-worker";
+                        image = "${config.image.repository}:${config.image.tag}";
+                        imagePullPolicy = config.image.pullPolicy;
+                        command = [ "n8n" ];
+                        args = [
+                          "worker"
+                          "--concurrency=${toString config.worker.concurrency}"
+                        ];
+                        envFrom = workerEnvFrom;
+                        ports = [
+                          (kix.port "http" config.worker.port)
+                        ];
+                        livenessProbe = {
+                          httpGet = {
+                            path = "/healthz";
+                            port = "http";
+                          };
+                          periodSeconds = 10;
+                          timeoutSeconds = 1;
+                          failureThreshold = 3;
+                        };
+                        readinessProbe = {
+                          httpGet = {
+                            path = "/healthz";
+                            port = "http";
+                          };
+                          periodSeconds = 10;
+                          timeoutSeconds = 1;
+                          failureThreshold = 3;
+                        };
+                        volumeMounts = [
+                          {
+                            name = "data";
+                            mountPath = "/home/node/.n8n";
+                          }
+                        ];
+                      }
+                    ];
+                    volumes = [
+                      { name = "data"; }
+                    ];
+                  };
+                };
+              };
             }
-          ];
-          outputs = {
-            port = toString config.servicePort;
-          };
-          requires = lib.optional (self.worker != null) self.worker;
-        }
-        |> scope.mkResource;
+            |> scope.mkDeployment
+          else
+            null;
 
-      # --- Ingress (DI-driven) ---
-      # Created automatically when ingressNginx is injected and host is set.
-      # TLS is auto-enabled when clusterIssuer is injected.
-      ingress =
-        if hasIngress then
-          self.service
-          |> kix.ingress.fromService {
-            inherit name;
-            host = effectiveHost;
-            className = ingressNginx.out.ingressClassName;
-            tls = lib.optional hasTls {
-              hosts = [ effectiveHost ];
-              secretName = "${name}-tls";
+        # --- Service ---
+        service =
+          self.deployment
+          |> kix.service.fromWorkload {
+            name = "${name}";
+            ports = [
+              {
+                name = "http";
+                port = config.servicePort;
+                targetPort = "http";
+                protocol = "TCP";
+              }
+            ];
+            outputs = {
+              port = toString config.servicePort;
             };
-            annotations = config.ingress.annotations;
+            requires = lib.optional (self.worker != null) self.worker;
           }
-          |> (if hasTls then clusterIssuer.out.withCert else lib.id)
-          |> scope.mkResource
-        else
-          null;
+          |> scope.mkResource;
 
-      # --- Entry point ---
-      root = self.service;
-    };
+        # --- Entry point ---
+        root = self.service;
+      }
+    )
+    (kix.expose { service = "service"; })
+  ];
 }

@@ -61,6 +61,29 @@ impl NixBackend for CliNixBackend {
             .map(|r| r.manifest.clone())
             .collect();
 
+        // Read scorecard report if present
+        let scorecard_path = result_dir.join("kix-scorecard.json");
+        let scorecard_report = if scorecard_path.exists() {
+            match std::fs::read_to_string(&scorecard_path) {
+                Ok(json_str) => match serde_json::from_str::<serde_json::Value>(&json_str) {
+                    Ok(val) => {
+                        tracing::debug!(cluster = cluster_name, "scorecard report loaded");
+                        Some(val)
+                    }
+                    Err(e) => {
+                        tracing::warn!(cluster = cluster_name, error = %e, "failed to parse scorecard report");
+                        None
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!(cluster = cluster_name, error = %e, "failed to read scorecard report");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         tracing::info!(
             cluster = cluster_name,
             manifests = raw_manifests.len(),
@@ -70,6 +93,7 @@ impl NixBackend for CliNixBackend {
         Ok(ClusterOutput {
             name: cluster_name.to_string(),
             raw_manifests,
+            scorecard_report,
         })
     }
 

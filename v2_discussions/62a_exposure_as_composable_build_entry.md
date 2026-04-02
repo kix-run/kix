@@ -1,6 +1,6 @@
 # 62a — Exposure as a Composable Build Entry
 
-**Status:** Design exploration
+**Status:** Implemented (Phase 0–3)
 **Related:** `62_exposure_compilation.md` (predecessor — rejected approaches require app dev to know infrastructure deps), `42_dep_config_injection.md` (config push from consumer to dep), `29_compiler-design.md` (§6 persona-driven intent model)
 
 ---

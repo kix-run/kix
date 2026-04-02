@@ -92,6 +92,7 @@ impl NixBackend for MockNixBackend {
         Ok(ClusterOutput {
             name: cluster_name.to_string(),
             raw_manifests: manifests,
+            scorecard_report: None,
         })
     }
 
