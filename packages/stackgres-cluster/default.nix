@@ -29,6 +29,7 @@ in
   meta = {
     version = "1.0.0";
     defaultAliases = [ "postgres" ];
+    lifecycle = "stateful";
   };
 
   options = {

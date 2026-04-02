@@ -91,6 +91,11 @@ in
   # Optional: package metadata for lifecycle and scoping rules
   meta = {
     lifecycle = "stateless";  # "stateless" (default) | "stateful"
+    # "stateful" means this package PROVIDES state that other packages depend on.
+    # Examples: postgres (stores data for immich/n8n), valkey (queues for consumers),
+    # persistent-volume-claim (storage mounted by other packages).
+    # A package that merely CONSUMES stateful services (e.g. immich uses postgres)
+    # is NOT stateful — it doesn't hold state that others depend on.
     scope = "cluster";        # "cluster" (default) | "namespace"
     description = "My package";
     maintainer = "team-name";
@@ -671,7 +676,7 @@ meta = {
 };
 ```
 
-- `lifecycle = "stateful"` — flags the package for special kix-diff treatment (PVC deletion = error, not just warning)
+- `lifecycle = "stateful"` — this package **provides state that other packages depend on**. A version change, deletion, or storage migration on this package can break its consumers. Triggers kix-diff protection (PVC deletion = error, not just warning) and migration pair detection during deploy. Examples: `persistent-volume-claim` (mounted by consumers), `stackgres-cluster` (database for apps), `valkey` (queue backend). A package that merely *consumes* stateful services (e.g. immich depends on postgres) is **not** stateful — it doesn't hold state that others depend on.
 - `scope = "namespace"` — DI resolution errors if a consumer in a different namespace depends on this package
 - Both are enforced by `lib/eval.nix` at build time
 
