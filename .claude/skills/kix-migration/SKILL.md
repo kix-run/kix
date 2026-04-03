@@ -397,6 +397,36 @@ build = [
 
 For complex ingresses with multiple backends/paths (like harbor, python-app), build the Ingress manually with `scope.mkResource` and reference services via `self.coreService.out.name`.
 
+**Monitoring: Use `kix.monitor` as a composable build entry** (handles prometheus DI automatically):
+
+```nix
+build = [
+  ({ self, config, scope, kix, myDep, ... }: { ... app logic ... })
+  (kix.monitor { service = "service"; port = "metrics"; })
+  # With alert rules:
+  # (kix.monitor {
+  #   service = "service";
+  #   port = "metrics";
+  #   alerts = {
+  #     HighErrorRate = {
+  #       expr = ''rate(http_requests_total{status=~"5.."}[5m]) > 0.05'';
+  #       "for" = "5m";
+  #       severity = "warning";
+  #       description = "Error rate above 5%";
+  #     };
+  #   };
+  # })
+];
+```
+
+`kix.monitor` parameters: `service` (string key in self), `port` (default "metrics"), `path` (default "/metrics"), `alerts` (attrset of alert definitions), `extraEndpoints`, `extraLabels`.
+
+Use `options.metrics = kix.options.monitor;` for standardized metrics options (`enabled`, `interval`).
+
+When `prometheus` is not present in the cluster, `kix.monitor` emits nothing. When present, it creates a ServiceMonitor and optional PrometheusRule.
+
+For packages that already use `prometheus ? null` directly (immich, harbor, coredns), the manual approach is also fine — `kix.monitor` is just sugar for the common case.
+
 #### Utility helpers
 
 | Function | Signature | Description |
@@ -441,6 +471,7 @@ else null;
 | `kix.mergeFragments { fragments; namespacePolicies; }` | **When multiple teams own different parts of a cluster.** Each team produces a fragment `{ namespaces, instances }` and `mergeFragments` combines them with collision detection. Don't manually merge attrsets — use this. | Deep-merges namespaces, detects instance collisions across fragments. |
 | `kix.fromHelmChart { chart; values; releaseName; includeCrds; }` | **When migrating a Helm-managed service that you don't want to rewrite in pure kix yet.** Wraps a Helm chart so its output is tracked like any other kix package. Use this as a stepping stone — pure kix packages are preferred for full control. | Renders a Helm chart and wraps each resource as a kix resource. |
 | `kix.fetchHelmChart { repo; name; version; hash; }` | **Always paired with `fromHelmChart`.** Fetches and pins a Helm chart by content hash. To get the hash, run the build once with a fake hash and Nix will tell you the correct one. | Returns a pinned chart path for `fromHelmChart`. |
+| `kix.mkImport { from?; out?; }` | **When a resource exists in the cluster but is not managed by kix.** Participates in DI (provides `out` values) but produces only a marker CR. Two modes: `from` (derives `out` lazily from a package build) or raw `out` (manual values). DI resolution prefers managed instances over imports. | Creates an import marker. Flavor modules use this for platform-provided services. |
 
 ### Useful `lib` functions for packages
 
@@ -546,6 +577,34 @@ Key patterns in module-based clusters:
 - **`clusterDomain`** — set the cluster DNS domain (default `"cluster.local"`). Affects all `resource.out.fqdn` values: `clusterDomain = "nw1.example.net";`
 - **Cluster-wide options** — declared in one module (e.g., `platform.nix`), consumed by others via `config.cluster.domain` etc.
 
+### Flavors (cluster hardware profiles)
+
+Flavors are NixOS modules that set `cluster.provider`, `cluster.capabilities`, and **platform-provided DI imports** for built-in services. Use them as the first module in `buildCluster`:
+
+```nix
+kix.buildCluster {
+  name = "my-cluster";
+  modules = [
+    kix.flavors.gke      # sets capabilities + provides DNS/storage imports
+    ./my-cluster/platform.nix
+    ./my-cluster/apps.nix
+  ];
+}
+```
+
+Available flavors: `k3s`, `kind`, `kubeadm`, `eks`, `gke`, `gke-autopilot`, `aks`, `openshift`, `rke2`, `talos`.
+
+Flavors provide optional `mkImport` instances for platform-managed services:
+- **DNS** (`platform-dns`, alias `dns`) — all flavors. Provides `out.name` and `out.fqdn`.
+- **Storage** (`platform-storage`, alias `storageClasses`) — only flavors with built-in storage (GKE: `standard-rwo`, EKS: `gp3`, AKS: `managed-csi`, k3s: `local-path`, kind: `standard`).
+
+These are `optional = true` — they only activate when a package depends on them. If the cluster installs its own `storage-classes` package, it automatically takes priority (DI resolution prefers managed instances over imports).
+
+Override flavor defaults with normal NixOS module priority:
+```nix
+{ cluster.capabilities.cni = "cilium"; }  # override flavor's default CNI
+```
+
 ### Helm charts in cluster definitions
 
 For apps you don't want to rewrite in pure kix:
@@ -579,7 +638,7 @@ Packages declare dependencies as **build function args**. Required deps have no 
 
 The eval system discovers deps by introspecting build function args (stripping system args like `self`, `config`, `scope`, `lib`, `kix`, `clusterConfig`, `deps`). Everything else is treated as a dep.
 
-DI resolution finds instances by matching arg names to instance names or `aliases` in the cluster definition. Same-namespace matches first, then cluster-wide (must be unambiguous).
+DI resolution finds instances by matching arg names to instance names or `aliases` in the cluster definition. Resolution priority: (1) explicit dep overrides, (2) same-namespace match, (3) cluster-wide match (must be unambiguous). **Managed instances take priority over imports** — if both exist for the same key, the managed instance wins automatically.
 
 The resolved deps attrset is also available as a single `deps` arg in build functions for convenience.
 
@@ -740,6 +799,18 @@ Complex applications like Harbor have multiple sub-services (core, portal, regis
      ];
    };
    ```
+
+7. **`root` with `postHooks`** — for Jobs that must run AFTER the package is fully deployed (e.g., webhook cert patching, database migration). Post-hook resources must depend on forward-closure resources (typically root or its descendants) so wave ordering places them after the main package. The PackageInstance CR depends on them, so the package isn't "done" until post-hooks complete. Jobs use existing readiness (`status.succeeded >= 1`).
+   ```nix
+   root = {
+     resource = self.service;
+     postHooks = [
+       self.migrationJob    # runs after service is ready
+       self.webhookPatchJob # runs after operator is deployed
+     ];
+   };
+   ```
+   A warning is emitted if a post-hook doesn't reference any forward-closure resource (meaning it won't be ordered after root).
 
 ## Migration Tips
 

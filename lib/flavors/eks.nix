@@ -5,8 +5,10 @@
 # AWS Load Balancer Controller addon (NLB/ALB).
 # EBS CSI driver addon provides persistent storage.
 # No ingress controller — bring your own.
+#
+# Platform imports: DNS (coredns, managed by EKS), storage (gp3 via EBS CSI).
 
-{ lib, ... }:
+{ lib, kix, ... }:
 {
   cluster.provider = lib.mkDefault "eks";
 
@@ -18,5 +20,29 @@
     persistentStorage = lib.mkDefault true; # EBS CSI
     volumeSnapshots = lib.mkDefault false; # requires manual snapshot-controller install
     nodeAutoscaling = lib.mkDefault false; # Karpenter / cluster-autoscaler must be installed
+  };
+
+  # Platform-provided imports.
+  instances.kube-system = {
+    platform-dns = {
+      package = kix.mkImport {
+        out = {
+          name = "coredns";
+          fqdn = "kube-dns.kube-system.svc.cluster.local";
+        };
+      };
+      aliases = [ "dns" ];
+      optional = true;
+    };
+
+    platform-storage = {
+      package = kix.mkImport {
+        out = {
+          storageClassName = "gp3";
+        };
+      };
+      aliases = [ "storageClasses" ];
+      optional = true;
+    };
   };
 }

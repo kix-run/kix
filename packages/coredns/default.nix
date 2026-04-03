@@ -376,6 +376,7 @@ in
         requires =
           lib.optional (self.metricsService != null) self.metricsService
           ++ lib.optional (self.serviceMonitor != null) self.serviceMonitor
+          ++ lib.optional (self.prometheusRules != null) self.prometheusRules
           ++ lib.optional (self.hpa != null) self.hpa
           ++ lib.optional (self.pdb != null) self.pdb;
       };
@@ -425,6 +426,45 @@ in
                     interval = config.prometheus.monitor.interval;
                   }
                 )
+              ];
+            };
+          }
+        else
+          null;
+
+      # --- Optional: PrometheusRule (DNS alerts) ---
+      prometheusRules =
+        if prometheus != null then
+          prometheus.out.mkPrometheusRule scope {
+            name = "${scope.instanceName}-dns-alerts";
+            labels = commonLabels;
+            spec = {
+              groups = [
+                {
+                  name = "node-dns-rules";
+                  rules = [
+                    {
+                      alert = "NodeDNSDown";
+                      expr = ''min by (node) (up{job="dns-exporter"}) == 0'';
+                      "for" = "5m";
+                      labels.severity = "critical";
+                      annotations = {
+                        summary = "Node CoreDNS service is down";
+                        description = "Node CoreDNS service on {{ $labels.node }} has been down for 5 minutes.";
+                      };
+                    }
+                    {
+                      alert = "NodeDNSQueryTimeHigh";
+                      expr = "avg_over_time(dnsexp_dns_query_time_seconds[5m]) > 100";
+                      "for" = "5m";
+                      labels.severity = "warning";
+                      annotations = {
+                        summary = "Node CoreDNS query time is high";
+                        description = "Node CoreDNS query time on {{ $labels.node }} has been high for 5 minutes.";
+                      };
+                    }
+                  ];
+                }
               ];
             };
           }

@@ -362,6 +362,55 @@ MigrationPair {
 
 kix can't copy the secret (it may not have access to the external store), but it *can* verify that the new ExternalSecret resolves to a Secret with the same keys as the old inline Secret, and warn if keys are missing.
 
+### 4.5 Operator swaps (e.g. StackGres → Zalando postgres-operator)
+
+When the *operator itself* changes — not just a version bump but a completely different operator managing the same logical service — the K8s resource kinds change (SGCluster → postgresql.acid.zalan.de). This is still a migration pair because the **dep slot identity** is unchanged: immich's `database` dep resolved to a StackGres-backed package before and a Zalando-backed package now. Same slot, different backing — that's enough. No resource type tag matching is needed.
+
+```
+MigrationPair {
+  source: SGCluster (stackgres, postgres 16)
+  target: postgresql (zalando, postgres 16)
+  consumer: immich, n8n
+  reason: "postgres operator changed: stackgres -> zalando"
+  strategy: "pg_dump-pg_restore"
+  riskLevel: critical
+}
+```
+
+The deploy ordering for operator swaps follows the general migration flow (see §3 refinement below):
+
+1. **Deploy new subtree** (leaf→root, normal waves) — Zalando operator is deployed, both operators coexist
+2. **Hit migration pair → pause → execute migration** — pg_dump from StackGres instance, create Zalando instance, pg_restore
+3. **Continue deploying** — consumers get updated connection strings (via `out.host` / `out.port` on the new package)
+4. **Prune old subtree** — SGCluster CR removed, then StackGres operator removed (root→leaf)
+
+This works because K8s is additive by default — old and new operators coexist during the migration window. The exception is **mutual exclusivity**: if two operators claim the same CRD or fight over the same resources, they can't coexist. In that case, a maintenance window covering the blast radius is required (scale down consumers, remove old operator, deploy new operator, migrate, scale up).
+
+Package-level hints for operator swaps:
+
+```nix
+# packages/postgres-zalando
+meta.migration = {
+  database = {
+    strategy = "pg_dump-pg_restore";
+    requiresDowntime = true;
+    rollbackSafe = true;  # old operator + data still exists during migration
+    coexistenceRequired = true;  # old operator must stay running during migration
+  };
+};
+```
+
+### 4.6 Refined general migration ordering
+
+The deploy loop ordering for *all* migration types (not just operator swaps) simplifies to:
+
+1. **Deploy new subtree** (leaf→root, normal waves) — additive, safe
+2. **When a migration pair is hit, pause and run migration** — both old and new versions are in the cluster, execute the migration strategy (pg_dump, rsync, etc.)
+3. **After migration succeeds, continue deploying** — consumers now reference new resources
+4. **Prune old subtree** (root→leaf, normal prune waves)
+
+This supersedes the more complex DIFF → PLAN → MIGRATE → APPLY phasing in §3. Migrations happen *within* the normal deploy flow rather than as a separate phase — the deploy simply pauses at the right moment. The only special case is mutual exclusivity, which requires an explicit maintenance window for the affected blast radius.
+
 ---
 
 ## 5. The Operator Replacement Thesis

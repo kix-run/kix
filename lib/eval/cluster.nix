@@ -17,6 +17,7 @@
   resolveDepTargets,
   buildConfigInjections,
   evaluateInstance,
+  mkImport,
 }:
 
 let
@@ -42,6 +43,10 @@ in
         modules = [ (import ../modules.nix) ] ++ modules;
         specialArgs = {
           ref = clusterInstances; # lazy — resolved during fixpoint
+          # Expose mkImport to all modules (especially flavors) so they can
+          # declare platform-provided imports without requiring the caller to
+          # pass the full kix library via specialArgs.
+          kix = { inherit mkImport; };
         }
         // specialArgs;
       };
@@ -97,6 +102,7 @@ in
                 instanceAliases = instCfg.aliases or [ ];
                 inherit packageMeta;
               };
+              isImport = (instCfg.package._type or "") == "kix-import";
             };
           }
         ) nsInsts
@@ -405,6 +411,7 @@ in
             version = pkgMeta.version or null;
             owner = pkgMeta.owner or null;
             auto = instCfg._autoInstantiated or false;
+            isImport = (instCfg.package._type or "") == "kix-import";
           }
         ) nsInsts
       ) mergedInstances;

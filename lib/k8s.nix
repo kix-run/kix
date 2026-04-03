@@ -342,7 +342,8 @@ rec {
   };
 
   # Creates a PackageInstance CRD — root of each package's DAG subgraph.
-  # Holds references to the root resource, inverse deps, and package-level requires.
+  # Holds references to the root resource, inverse deps, package-level requires,
+  # and post-hooks (resources deployed after all other package resources complete).
   mkPackageInstance =
     {
       instanceName,
@@ -350,6 +351,7 @@ rec {
       namespace,
       mainResource,
       packageRequires ? [ ],
+      postHooks ? [ ],
       inverseDeps ? [ ],
       version ? null,
       labels ? { },
@@ -380,6 +382,9 @@ rec {
         "kix.dev/package-requires" = builtins.concatStringsSep "," (
           map (r: "${r.kind}/${r.out.name}") packageRequires
         );
+      }
+      // lib.optionalAttrs (postHooks != [ ]) {
+        "kix.dev/post-hooks" = builtins.concatStringsSep "," (map (r: "${r.kind}/${r.out.name}") postHooks);
       }
       // extraAnnotations;
       extra.spec = {

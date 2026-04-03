@@ -171,7 +171,17 @@ impl ResourceGraph {
         for idx in self.graph.node_indices() {
             let node = &self.graph[idx];
             let label = node.id.display_id();
-            dot.push_str(&format!("  \"{}\" [label=\"{}\"];\n", idx.index(), label));
+            let is_import =
+                get_annotation(&node.manifest, "kix.dev/mode").as_deref() == Some("import");
+            if is_import {
+                dot.push_str(&format!(
+                    "  \"{}\" [label=\"{} (import)\" style=dashed color=gray];\n",
+                    idx.index(),
+                    label
+                ));
+            } else {
+                dot.push_str(&format!("  \"{}\" [label=\"{}\"];\n", idx.index(), label));
+            }
         }
 
         dot.push('\n');
@@ -238,11 +248,15 @@ impl ResourceGraph {
             "├── "
         };
 
+        let node = &self.graph[idx];
+        let is_import = get_annotation(&node.manifest, "kix.dev/mode").as_deref() == Some("import");
+        let suffix = if is_import { " (import)" } else { "" };
         output.push_str(&format!(
-            "{}{}{}\n",
+            "{}{}{}{}\n",
             prefix,
             connector,
-            self.graph[idx].id.display_id()
+            node.id.display_id(),
+            suffix,
         ));
 
         // Children = resources that depend on this one (incoming edges)
@@ -274,12 +288,15 @@ impl ResourceGraph {
             .node_indices()
             .map(|idx| {
                 let node = &self.graph[idx];
+                let is_import =
+                    get_annotation(&node.manifest, "kix.dev/mode").as_deref() == Some("import");
                 serde_json::json!({
                     "id": node.id.display_id(),
                     "kind": node.id.kind,
                     "name": node.id.name,
                     "namespace": node.id.namespace,
                     "identityHash": node.identity_hash,
+                    "isImport": is_import,
                 })
             })
             .collect();

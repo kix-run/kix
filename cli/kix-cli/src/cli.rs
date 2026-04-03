@@ -178,6 +178,10 @@ pub struct DeployArgs {
     #[arg(long, value_name = "MODE")]
     pub prune_mode: Option<PruneMode>,
 
+    /// Skip pre-deploy verification of imported resources
+    #[arg(long)]
+    pub skip_import_checks: bool,
+
     /// Delegate deployment to the kix operator instead of applying directly
     #[arg(long)]
     pub operator: bool,

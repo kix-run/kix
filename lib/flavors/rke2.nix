@@ -3,8 +3,10 @@
 # Designed for security-conscious environments. Ships Canal (Flannel + Calico
 # NetworkPolicy enforcement) by default. CIS benchmark hardened out of the box.
 # No default StorageClass or LoadBalancer — install Longhorn, MetalLB, etc.
+#
+# Platform imports: DNS (coredns, bundled). No default storage.
 
-{ lib, ... }:
+{ lib, kix, ... }:
 {
   cluster.provider = lib.mkDefault "rke2";
 
@@ -14,5 +16,19 @@
     networkPolicyAPI = lib.mkDefault "calico";
     persistentStorage = lib.mkDefault false; # no default StorageClass
     volumeSnapshots = lib.mkDefault false;
+  };
+
+  # Platform-provided imports.
+  instances.kube-system = {
+    platform-dns = {
+      package = kix.mkImport {
+        out = {
+          name = "coredns";
+          fqdn = "kube-dns.kube-system.svc.cluster.local";
+        };
+      };
+      aliases = [ "dns" ];
+      optional = true;
+    };
   };
 }

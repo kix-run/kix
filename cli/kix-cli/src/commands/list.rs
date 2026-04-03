@@ -36,6 +36,7 @@ struct PackageRow {
     version: String,
     owner: String,
     status: Option<String>,
+    is_import: bool,
 }
 
 struct PackagesResponse {
@@ -90,6 +91,7 @@ impl CommandResponse for PackagesResponse {
                 m.insert("owner".into(), serde_json::json!(p.owner));
                 if self.show_status {
                     m.insert("status".into(), serde_json::json!(p.status));
+                    m.insert("isImport".into(), serde_json::json!(p.is_import));
                 }
                 serde_json::Value::Object(m)
             })
@@ -135,7 +137,9 @@ fn run_packages(cluster: Option<&str>, ctx: &mut CommandContext) -> Result<()> {
         // Add instances
         for (ns, ns_instances) in &cluster_info.instances {
             for (inst_name, inst_info) in ns_instances {
-                let status = if inst_info.auto {
+                let status = if inst_info.is_import {
+                    format!("import [{ns}]")
+                } else if inst_info.auto {
                     format!("installed (auto) [{ns}]")
                 } else {
                     format!("installed [{ns}]")
@@ -148,6 +152,7 @@ fn run_packages(cluster: Option<&str>, ctx: &mut CommandContext) -> Result<()> {
                         version: inst_info.version.as_deref().unwrap_or("-").to_string(),
                         owner: inst_info.owner.as_deref().unwrap_or("-").to_string(),
                         status: Some(status),
+                        is_import: inst_info.is_import,
                     });
             }
         }
@@ -159,6 +164,7 @@ fn run_packages(cluster: Option<&str>, ctx: &mut CommandContext) -> Result<()> {
                 version: avail_info.version.as_deref().unwrap_or("-").to_string(),
                 owner: avail_info.owner.as_deref().unwrap_or("-").to_string(),
                 status: Some("available".to_string()),
+                is_import: false,
             });
         }
     } else {
@@ -173,6 +179,7 @@ fn run_packages(cluster: Option<&str>, ctx: &mut CommandContext) -> Result<()> {
                     version: info.version.as_deref().unwrap_or("-").to_string(),
                     owner: info.owner.as_deref().unwrap_or("-").to_string(),
                     status: None,
+                    is_import: false,
                 },
             );
         }

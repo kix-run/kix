@@ -106,7 +106,7 @@ rec {
       importDef = instCfg.package; # { _type = "kix-import"; from, out }
 
       # Derive out: from package build (lazy) + manual overrides
-      derivedOut =
+      derived =
         if importDef.from != null then
           let
             importScope = mkImportScope {
@@ -118,8 +118,9 @@ rec {
                 ;
             };
 
-            # Call the package function with null for all dependency args.
-            # Laziness ensures only out-relevant code paths are forced.
+            # Call the package function with proxy deps that throw clear errors.
+            # Laziness ensures only out-relevant code paths are forced;
+            # if the package tries to access a dep, the proxy explains why it fails.
             fnArgs = builtins.functionArgs importDef.from;
             depArgNames = builtins.attrNames (
               removeAttrs fnArgs [
@@ -128,10 +129,13 @@ rec {
                 "kix"
               ]
             );
+            mkDepProxy =
+              depName:
+              builtins.throw "Import instance '${instanceName}': package accessed dependency '${depName}', but imports run without dependency resolution. Either use a raw 'out' override (mkImport { out = { ... }; }) or use a mixed import (mkImport { from = ...; out = { fieldThatNeedsDep = \"value\"; }; }).";
             nullDeps = builtins.listToAttrs (
               map (name: {
                 inherit name;
-                value = null;
+                value = mkDepProxy name;
               }) depArgNames
             );
             raw = importDef.from (
@@ -150,7 +154,7 @@ rec {
             };
 
             # Run fixpoint — only out will be forced.
-            # Null out dep args: imports run in isolation, deps aren't resolved.
+            # Proxy deps: imports run in isolation, deps aren't resolved.
             buildEntries =
               if builtins.isList raw.build then
                 map (entry: if builtins.isPath entry then import entry else entry) raw.build
@@ -171,7 +175,7 @@ rec {
             nullBuildDeps = builtins.listToAttrs (
               map (name: {
                 inherit name;
-                value = null;
+                value = mkDepProxy name;
               }) depArgNames'
             );
             parts = lib.fix (
@@ -196,9 +200,21 @@ rec {
               else
                 throw "Import instance '${instanceName}': root must be a resource or { resource, requires }";
           in
-          (rootRes.out or { }) // importDef.out
+          {
+            out = (rootRes.out or { }) // importDef.out;
+            hints =
+              lib.optionalAttrs (rootRes.kind or "" != "") {
+                kind = rootRes.kind;
+              }
+              // lib.optionalAttrs (rootRes.apiVersion or "" != "") {
+                apiVersion = rootRes.apiVersion;
+              };
+          }
         else
-          importDef.out;
+          {
+            out = importDef.out;
+            hints = { };
+          };
 
       # Marker PackageInstance — deployed to mark this import in the cluster.
       # Carries import metadata so deploy tooling can verify the external resource.
@@ -210,11 +226,17 @@ rec {
         annotations = {
           "kix.dev/mode" = "import";
         }
-        // lib.optionalAttrs (derivedOut ? name) {
-          "kix.dev/import-name" = derivedOut.name;
+        // lib.optionalAttrs (derived.out ? name) {
+          "kix.dev/import-name" = derived.out.name;
         }
-        // lib.optionalAttrs (derivedOut ? fqdn) {
-          "kix.dev/import-fqdn" = derivedOut.fqdn;
+        // lib.optionalAttrs (derived.out ? fqdn) {
+          "kix.dev/import-fqdn" = derived.out.fqdn;
+        }
+        // lib.optionalAttrs (derived.hints ? kind) {
+          "kix.dev/import-kind" = derived.hints.kind;
+        }
+        // lib.optionalAttrs (derived.hints ? apiVersion) {
+          "kix.dev/import-apiversion" = derived.hints.apiVersion;
         };
         labels = clusterLabels // {
           "app.kubernetes.io/instance" = instanceName;
@@ -231,7 +253,7 @@ rec {
       _isImport = true;
       _packageInstance = markerResource;
       root = markerResource;
-      out = derivedOut;
+      out = derived.out;
       _meta = {
         inherit instanceName namespaceName;
         namespace = namespaceName;

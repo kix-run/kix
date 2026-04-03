@@ -82,8 +82,16 @@ rec {
     else
       let
         candidates = resolutionIndex.byKey.${argName} or [ ];
-        sameNs = builtins.filter (c: c.namespace == requesterNamespace) candidates;
-        otherNs = builtins.filter (c: c.namespace != requesterNamespace) candidates;
+
+        # Prefer managed instances over imports — if both exist for the same
+        # key, the managed instance wins. This lets flavors provide fallback
+        # imports for platform services (DNS, storage, ingress) that are
+        # automatically shadowed when the cluster installs its own package.
+        managed = builtins.filter (c: !(c.meta.isImport or false)) candidates;
+        effectiveCandidates = if managed != [ ] then managed else candidates;
+
+        sameNs = builtins.filter (c: c.namespace == requesterNamespace) effectiveCandidates;
+        otherNs = builtins.filter (c: c.namespace != requesterNamespace) effectiveCandidates;
       in
       # Same namespace, exactly one → use it
       if builtins.length sameNs == 1 then

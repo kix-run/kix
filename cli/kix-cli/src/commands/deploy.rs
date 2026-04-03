@@ -26,6 +26,7 @@ use kix::cluster::activation;
 use kix::cluster::apply::{ApplyAction, ChangeAction};
 use kix::cluster::fetch;
 use kix::cluster::graph::ResourceGraph;
+use kix::cluster::imports;
 use kix::cluster::readiness;
 use kix::cluster::reconcile::{
     OnErrorPolicy, PrunePolicy, ReconcileConfig, ReconcileEvent, ReconcileObserver, ReconcileResult,
@@ -231,6 +232,50 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         if !orphan_rids.is_empty() {
             let orphan_str = orphan_rids.len().to_string();
             println!("  {} orphaned", output::red(&orphan_str),);
+        }
+    }
+
+    // 7. Pre-deploy import validation
+    let import_markers = imports::collect_import_markers(&new_manifests);
+    if !import_markers.is_empty() && !args.skip_import_checks {
+        if let Some(ref client) = pre_client {
+            // We have a cluster connection — validate imports
+            let import_results = ctx.runtime.block_on(async {
+                let discovery = fetch::discover_resources(client)
+                    .await
+                    .map_err(|e| miette!("API discovery failed: {e}"))?;
+                Ok::<_, miette::Report>(
+                    imports::validate_imports(client, &discovery, &import_markers).await,
+                )
+            })?;
+
+            let has_failures = import_results
+                .iter()
+                .any(|(_, r)| matches!(r, imports::ImportCheckResult::NotFound { .. }));
+
+            if !ctx.global.quiet {
+                println!();
+                println!("{}", output::bold("Imports:"));
+                for line in imports::format_validation_summary(&import_results) {
+                    println!("{line}");
+                }
+            }
+
+            if has_failures {
+                eprintln!(
+                    "\n{}",
+                    output::red("Import validation failed. Use --skip-import-checks to override.")
+                );
+                std::process::exit(1);
+            }
+        } else if !ctx.global.quiet {
+            // No cluster connection (--current-activation mode) — just report
+            println!();
+            println!(
+                "{} {} imports detected (skipping validation — no cluster connection)",
+                output::dim("Imports:"),
+                import_markers.len(),
+            );
         }
     }
 

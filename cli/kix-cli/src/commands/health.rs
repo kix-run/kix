@@ -22,6 +22,7 @@ const IDENTITY_HASH: &str = "kix.dev/identity-hash";
 const DEPENDS_ON: &str = "kix.dev/depends-on";
 const PACKAGE: &str = "kix.dev/package";
 const PACKAGE_NAMESPACE: &str = "kix.dev/package-namespace";
+const IMPORT_MODE: &str = "kix.dev/mode";
 
 /// A live resource with its parsed annotations.
 #[allow(dead_code)]
@@ -31,6 +32,7 @@ struct LiveResource {
     package: String,
     package_namespace: String,
     depends_on: Vec<String>,
+    is_import: bool,
     raw: serde_json::Value,
 }
 
@@ -39,6 +41,8 @@ struct LiveResource {
 enum ResourceHealth {
     /// Reachable from activation root, all deps present.
     Healthy,
+    /// Import marker — external resource, not managed by kix.
+    External,
     /// Referenced in depends-on but not found in live resources.
     Missing { expected_by: String },
     /// Resource itself is OK, but depends on something unhealthy.
@@ -53,6 +57,10 @@ struct PackageHealth {
 
 impl PackageHealth {
     fn status_label(&self) -> &'static str {
+        let all_external = self
+            .resources
+            .iter()
+            .all(|(_, h)| matches!(h, ResourceHealth::External));
         let has_missing = self
             .resources
             .iter()
@@ -62,7 +70,9 @@ impl PackageHealth {
             .iter()
             .any(|(_, h)| matches!(h, ResourceHealth::AtRisk { .. }));
 
-        if has_missing {
+        if all_external {
+            "external"
+        } else if has_missing {
             "DEGRADED"
         } else if has_at_risk {
             "AT RISK"
@@ -74,14 +84,14 @@ impl PackageHealth {
     fn healthy_count(&self) -> usize {
         self.resources
             .iter()
-            .filter(|(_, h)| matches!(h, ResourceHealth::Healthy))
+            .filter(|(_, h)| matches!(h, ResourceHealth::Healthy | ResourceHealth::External))
             .count()
     }
 
     fn is_healthy(&self) -> bool {
         self.resources
             .iter()
-            .all(|(_, h)| matches!(h, ResourceHealth::Healthy))
+            .all(|(_, h)| matches!(h, ResourceHealth::Healthy | ResourceHealth::External))
     }
 }
 
@@ -164,6 +174,9 @@ pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
             .and_then(|a| a.get(PACKAGE_NAMESPACE))
             .cloned()
             .unwrap_or_else(|| "_cluster".to_string());
+        let is_import = annotations
+            .and_then(|a| a.get(IMPORT_MODE))
+            .is_some_and(|v| v == "import");
         let depends_on_str = annotations
             .and_then(|a| a.get(DEPENDS_ON))
             .cloned()
@@ -193,6 +206,7 @@ pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
                 package,
                 package_namespace,
                 depends_on,
+                is_import,
                 raw: obj.data,
             },
         );
@@ -239,6 +253,12 @@ fn walk_graph(
 
     // First pass: check each resource's direct dependencies
     for (hash, resource) in live_by_hash {
+        // Import markers are external — skip dependency checking
+        if resource.is_import {
+            health.insert(hash.clone(), ResourceHealth::External);
+            continue;
+        }
+
         if verbose > 1 {
             println!(
                 "  {} checking {} ({})",
@@ -413,12 +433,29 @@ fn display_results(packages: &[PackageHealth], verbose: u8, quiet: bool) {
 
         let status_colored = match status {
             "healthy" => output::green("✓"),
+            "external" => output::dim("→"),
             "DEGRADED" => output::red("✗"),
             "AT RISK" => output::yellow("!"),
             _ => output::dim("?"),
         };
 
-        let counts = format!("{}/{} resources healthy", healthy, total);
+        let external_count = pkg
+            .resources
+            .iter()
+            .filter(|(_, h)| matches!(h, ResourceHealth::External))
+            .count();
+        let counts = if external_count == total {
+            format!("{} imported", total)
+        } else if external_count > 0 {
+            format!(
+                "{}/{} resources healthy, {} imported",
+                healthy - external_count,
+                total - external_count,
+                external_count
+            )
+        } else {
+            format!("{}/{} resources healthy", healthy, total)
+        };
         let counts_colored = if healthy == total {
             output::green(&counts)
         } else if healthy == 0 {
@@ -514,7 +551,16 @@ fn display_results(packages: &[PackageHealth], verbose: u8, quiet: bool) {
     }
 
     // Summary line
-    let total_healthy: usize = packages.iter().map(|p| p.healthy_count()).sum();
+    let total_healthy: usize = packages
+        .iter()
+        .flat_map(|p| &p.resources)
+        .filter(|(_, h)| matches!(h, ResourceHealth::Healthy))
+        .count();
+    let total_external: usize = packages
+        .iter()
+        .flat_map(|p| &p.resources)
+        .filter(|(_, h)| matches!(h, ResourceHealth::External))
+        .count();
     let total_missing: usize = packages
         .iter()
         .flat_map(|p| &p.resources)
@@ -527,11 +573,15 @@ fn display_results(packages: &[PackageHealth], verbose: u8, quiet: bool) {
         .count();
 
     let healthy_str = total_healthy.to_string();
+    let external_str = total_external.to_string();
     let missing_str = total_missing.to_string();
     let at_risk_str = total_at_risk.to_string();
 
     println!();
     print!("Health: {} in-sync", output::green(&healthy_str));
+    if total_external > 0 {
+        print!(", {} imported", output::dim(&external_str));
+    }
     if total_missing > 0 {
         print!(", {} missing", output::red(&missing_str));
     }

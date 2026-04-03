@@ -154,9 +154,12 @@
       self,
       config,
       clusterConfig,
+      prometheus ? null,
     }:
     let
       name = scope.instanceName;
+
+      hasMetrics = config.metrics.enabled && prometheus != null;
 
       selectorLabels = scope.selectorLabels // {
         "app.kubernetes.io/name" = "valkey";
@@ -1443,6 +1446,104 @@
         else
           null;
 
+      # --- PrometheusRule (alerts, optional) ---
+      prometheusRules =
+        if hasMetrics then
+          prometheus.out.mkPrometheusRule scope {
+            name = "${name}-alerts";
+            spec = {
+              groups = [
+                {
+                  name = "valkey-alerts";
+                  rules = [
+                    {
+                      alert = "ValkeyDown";
+                      expr = "redis_up == 0";
+                      "for" = "1m";
+                      labels.severity = "critical";
+                      annotations = {
+                        summary = "Valkey instance is down";
+                        description = "Valkey instance {{ $labels.instance }} has been down for more than 1 minute";
+                      };
+                    }
+                    {
+                      alert = "ValkeyOutOfConfiguredMaxmemory";
+                      expr = "redis_memory_used_bytes / on(pod) group_left() kube_pod_container_resource_limits{container=\"valkey\", resource=\"memory\"} * 100 > 80";
+                      "for" = "5m";
+                      labels.severity = "critical";
+                      annotations = {
+                        summary = "Valkey running out of configured maxmemory";
+                        description = "Valkey instance {{ $labels.instance }} is using {{ $value | humanizePercentage }} of Kubernetes memory limit";
+                      };
+                    }
+                    {
+                      alert = "ValkeyMemoryHigh";
+                      expr = "redis_memory_used_bytes / on(pod) group_left() kube_pod_container_resource_limits{container=\"valkey\", resource=\"memory\"} * 100 > 60";
+                      "for" = "10m";
+                      labels.severity = "warning";
+                      annotations = {
+                        summary = "Valkey memory usage is high";
+                        description = "Valkey instance {{ $labels.instance }} is using {{ $value | humanizePercentage }} of Kubernetes memory limit";
+                      };
+                    }
+                    {
+                      alert = "ValkeyTooManyConnections";
+                      expr = "redis_connected_clients > 1000";
+                      "for" = "5m";
+                      labels.severity = "warning";
+                      annotations = {
+                        summary = "Valkey has too many connections";
+                        description = "Valkey instance {{ $labels.instance }} has {{ $value }} connected clients";
+                      };
+                    }
+                    {
+                      alert = "ValkeyNotEnoughConnections";
+                      expr = "redis_connected_clients < 1";
+                      "for" = "5m";
+                      labels.severity = "warning";
+                      annotations = {
+                        summary = "Valkey has no connections";
+                        description = "Valkey instance {{ $labels.instance }} has no connected clients for more than 5 minutes";
+                      };
+                    }
+                    {
+                      alert = "ValkeyRejectedConnections";
+                      expr = "increase(redis_rejected_connections_total[1m]) > 0";
+                      "for" = "5m";
+                      labels.severity = "warning";
+                      annotations = {
+                        summary = "Valkey is rejecting connections";
+                        description = "Valkey instance {{ $labels.instance }} has rejected connections in the last minute";
+                      };
+                    }
+                    {
+                      alert = "ValkeyNoQuorum";
+                      expr = "max(\n  label_replace(redis_connected_slaves, \"statefulset\", \"$1\", \"pod\", \"^(.*)-[0-9]+$\")\n) by (statefulset, namespace)\n<\non(statefulset, namespace) group_left()\n((kube_statefulset_status_replicas{statefulset=~\".*valkey.*-node\"} - 1) / 2)\n";
+                      "for" = "5m";
+                      labels.severity = "critical";
+                      annotations = {
+                        summary = "Valkey has lost sentinel quorum";
+                        description = "Valkey cluster {{ $labels.statefulset }} in {{ $labels.namespace }} has {{ $value }} connected replicas - sentinel cannot perform automatic failover (requires quorum)";
+                      };
+                    }
+                    {
+                      alert = "ValkeyReplicaDegraded";
+                      expr = "max(\n  label_replace(redis_connected_slaves, \"statefulset\", \"$1\", \"pod\", \"^(.*)-[0-9]+$\")\n) by (statefulset, namespace)\n<\non(statefulset, namespace) group_left()\n(kube_statefulset_status_replicas{statefulset=~\".*valkey.*-node\"} - 1)\nand\nmax(\n  label_replace(redis_connected_slaves, \"statefulset\", \"$1\", \"pod\", \"^(.*)-[0-9]+$\")\n) by (statefulset, namespace)\n>=\non(statefulset, namespace) group_left()\n((kube_statefulset_status_replicas{statefulset=~\".*valkey.*-node\"} - 1) / 2)\n";
+                      "for" = "5m";
+                      labels.severity = "warning";
+                      annotations = {
+                        summary = "Valkey cluster is degraded";
+                        description = "Valkey cluster {{ $labels.statefulset }} in {{ $labels.namespace }} has {{ $value }} connected replicas (below configured replica count)";
+                      };
+                    }
+                  ];
+                }
+              ];
+            };
+          }
+        else
+          null;
+
       # --- Entry point ---
       # root = primary Service. Exposes both redis (6379) and sentinel (26379) ports.
       # Consumers connect to sentinel to discover the current primary via
@@ -1459,6 +1560,7 @@
         ]
         ++ lib.optional (self.secret != null) self.secret
         ++ lib.optional (self.metricsService != null) self.metricsService
+        ++ lib.optional (self.prometheusRules != null) self.prometheusRules
         ++ [
           self.networkPolicy
           self.podDisruptionBudget

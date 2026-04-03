@@ -38,6 +38,8 @@ pub struct InstanceInfo {
     pub owner: Option<String>,
     #[serde(default)]
     pub auto: bool,
+    #[serde(default, rename = "isImport")]
+    pub is_import: bool,
 }
 
 /// Per-cluster package metadata (instances + available packages).

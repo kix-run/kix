@@ -88,6 +88,7 @@ let
       buildConfigInjections
       ;
     inherit (instance) evaluateInstance;
+    inherit (import_) mkImport;
   };
 
 in

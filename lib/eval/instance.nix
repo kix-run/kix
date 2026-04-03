@@ -200,16 +200,23 @@ in
           parts.root
             or (throw "Instance '${instanceName}' in namespace '${namespaceName}' must define 'root'");
 
-        # root can be either { resource = ...; requires = [...]; } or a resource directly
+        # root can be either { resource = ...; requires = [...]; postHooks = [...]; } or a resource directly
         rootRes =
           if rawRoot ? resource then
             rawRoot.resource
           else if rawRoot ? _type && rawRoot._type == "k8s-resource" then
             rawRoot
           else
-            throw "Instance '${instanceName}': root must be a resource or { resource, requires }";
+            throw "Instance '${instanceName}': root must be a resource or { resource, requires, postHooks }";
 
         packageRequires = if rawRoot ? resource then rawRoot.requires or [ ] else [ ];
+
+        # Post-hooks: resources deployed AFTER all other package resources complete.
+        # Must depend on forward-closure resources (typically root or its descendants)
+        # so wave ordering places them after the main package resources.
+        # The PackageInstance CR depends on them, so the package isn't "done" until
+        # post-hooks finish. Jobs use readiness = status.succeeded >= 1.
+        postHooks = if rawRoot ? resource then rawRoot.postHooks or [ ] else [ ];
 
         # Package-level out extensions (functions, complex types beyond string outputs).
         # Merged on top of the root resource's auto-derived out.
@@ -255,8 +262,8 @@ in
           in
           manifestDeps ++ requiresDeps;
 
-        # Compute the forward closure from rootRes + packageRequires
-        forwardRoots = [ rootRes ] ++ packageRequires;
+        # Compute the forward closure from rootRes + packageRequires + postHooks
+        forwardRoots = [ rootRes ] ++ packageRequires ++ postHooks;
         forwardClosure =
           let
             go =
@@ -434,7 +441,7 @@ in
           inherit instanceName namespaceName;
           namespace = namespaceResource;
           mainResource = rootRes;
-          inherit packageRequires;
+          inherit packageRequires postHooks;
           inverseDeps = inverseDeps ++ networkResult.policies;
           version =
             let
@@ -553,6 +560,24 @@ in
           r: !(builtins.hasAttr (builtins.unsafeDiscardStringContext r.outPath) reachablePaths)
         ) allPartResources;
 
+        # 4. Post-hooks without forward-closure dependencies: would not be ordered
+        # after root in the deploy graph — likely a bug.
+        postHookWarnings =
+          let
+            # Forward paths excluding the post-hooks themselves
+            nonPostHookForwardPaths = builtins.removeAttrs forwardPaths (
+              map (r: builtins.unsafeDiscardStringContext r.outPath) postHooks
+            );
+            hookMissingDep =
+              hook:
+              let
+                deps = getForwardDeps hook;
+                depPaths = map (d: builtins.unsafeDiscardStringContext d.outPath) deps;
+              in
+              !(builtins.any (p: builtins.hasAttr p nonPostHookForwardPaths) depPaths);
+          in
+          builtins.filter hookMissingDep postHooks;
+
         # --- Package-declared warnings and assertions (post-build) ---
         packageResultRaw = meta.evaluatePackageDiagnostics {
           inherit
@@ -585,6 +610,10 @@ in
               w: "resource '${res w.resource}' requires '${res w.req}' multiple times"
             ) duplicateRequiresWarnings)
             (warn (r: "resource '${res r}' is defined but not reachable from root (orphaned)") orphanedWarnings)
+            (warn (
+              r:
+              "post-hook '${res r}' does not depend on any forward-closure resource — it won't be ordered after root in the deploy graph"
+            ) postHookWarnings)
             networkResult.warnings
             scorecardDiag.warnings
           ];

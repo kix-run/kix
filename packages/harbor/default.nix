@@ -1244,6 +1244,137 @@ in
           null;
 
       # ============================================================
+      # PrometheusRule -- Alert definitions
+      # ============================================================
+
+      prometheusRules =
+        if hasMetrics then
+          prometheus.out.mkPrometheusRule scope {
+            name = "${name}-alerts";
+            spec = {
+              groups = [
+                {
+                  name = "harbor-alerts";
+                  rules = [
+                    {
+                      alert = "HarborHealthCheckFailed";
+                      expr = "harbor_health == 0";
+                      "for" = "5m";
+                      labels.severity = "critical";
+                      annotations = {
+                        summary = "Harbor health check failed";
+                        description = "Harbor instance {{ $labels.instance }} health check is failing.";
+                      };
+                    }
+                    {
+                      alert = "HarborCoreHighInflightRequests";
+                      expr = "harbor_core_http_inflight_requests > 100";
+                      "for" = "10m";
+                      labels.severity = "warning";
+                      annotations = {
+                        summary = "High number of inflight requests in Harbor Core";
+                        description = "Harbor Core instance {{ $labels.instance }} has more than 100 inflight requests.";
+                      };
+                    }
+                    {
+                      alert = "HarborCoreHighRequestDuration";
+                      expr = "(sum by (method, instance) (rate(harbor_core_http_request_duration_seconds_sum[1m]) ) / sum by (method, instance) (rate(harbor_core_http_request_duration_seconds_count[1m]) )) > 1";
+                      "for" = "10m";
+                      labels.severity = "warning";
+                      annotations = {
+                        summary = "High request duration in Harbor Core";
+                        description = "Harbor Core instance {{ $labels.instance }} has an average {{ $labels.method }} request duration of more than 1 second.";
+                      };
+                    }
+                    {
+                      alert = "HarborCoreHttp5xxRequestErrors";
+                      expr = ''sum(rate(harbor_core_http_request_total{code=~"5.."}[5m])) / sum(rate(harbor_core_http_request_total[5m])) > 0.1'';
+                      "for" = "10m";
+                      labels.severity = "critical";
+                      annotations = {
+                        summary = "High rate of HTTP 5xx errors in Harbor Core";
+                        description = "Harbor Core instance {{ $labels.instance }} is experiencing more than 10% HTTP 5xx errors";
+                      };
+                    }
+                    {
+                      alert = "HarborCoreHttp4xxRequestErrors";
+                      expr = ''sum(rate(harbor_core_http_request_total{code=~"4.."}[5m])) / sum(rate(harbor_core_http_request_total[5m])) > 0.3'';
+                      "for" = "10m";
+                      labels.severity = "critical";
+                      annotations = {
+                        summary = "High rate of HTTP 4xx errors in Harbor Core";
+                        description = "Harbor Core instance {{ $labels.instance }} is experiencing more than 30% HTTP 4xx errors";
+                      };
+                    }
+                    {
+                      alert = "HarborArtifactPullsHigh";
+                      expr = "rate(harbor_artifact_pulled[5m]) > 0.1";
+                      "for" = "10m";
+                      labels.severity = "warning";
+                      annotations = {
+                        summary = "High rate of artifact pulls in Harbor";
+                        description = "Harbor instance {{ $labels.instance }} is experiencing a high rate of artifact pulls.";
+                      };
+                    }
+                    {
+                      alert = "HarborProjectQuotaUsageHigh";
+                      expr = "(harbor_project_quota_usage_byte / harbor_project_quota_byte) > 0.8";
+                      "for" = "10m";
+                      labels.severity = "warning";
+                      annotations = {
+                        summary = "High quota usage in Harbor project";
+                        description = "Quota usage in Harbor project {{ $labels.project_name }} is above 80%.";
+                      };
+                    }
+                    {
+                      alert = "HarborTaskQueueSizeHigh";
+                      expr = "harbor_task_queue_size > 20";
+                      "for" = "10m";
+                      labels.severity = "warning";
+                      annotations = {
+                        summary = "High task queue size in Harbor";
+                        description = "Harbor instance {{ $labels.instance }} has more than 20 tasks in the queue.";
+                      };
+                    }
+                    {
+                      alert = "HarborTaskQueueLatencyHigh";
+                      expr = "harbor_task_queue_latency > 60";
+                      "for" = "10m";
+                      labels.severity = "warning";
+                      annotations = {
+                        summary = "High task queue latency in Harbor";
+                        description = "Harbor instance {{ $labels.instance }} has a task queue latency of more than 60 seconds.";
+                      };
+                    }
+                    {
+                      alert = "HarborTaskConcurrencyHigh";
+                      expr = "harbor_task_concurrency > 10";
+                      "for" = "10m";
+                      labels.severity = "warning";
+                      annotations = {
+                        summary = "High task concurrency in Harbor";
+                        description = "Harbor instance {{ $labels.instance }} is running more than 10 tasks concurrently.";
+                      };
+                    }
+                    {
+                      alert = "HarborInstanceDown";
+                      expr = ''up{job="harbor"} == 0'';
+                      "for" = "5m";
+                      labels.severity = "critical";
+                      annotations = {
+                        summary = "Harbor instance is down";
+                        description = "Harbor instance {{ $labels.instance }} is down.";
+                      };
+                    }
+                  ];
+                }
+              ];
+            };
+          }
+        else
+          null;
+
+      # ============================================================
       # Ingress
       # ============================================================
 
@@ -1451,7 +1582,8 @@ in
           self.redisService
         ]
         ++ lib.optional hasIngress self.ingress
-        ++ lib.optional hasMetrics self.serviceMonitor;
+        ++ lib.optional hasMetrics self.serviceMonitor
+        ++ lib.optional hasMetrics self.prometheusRules;
       };
     };
 }

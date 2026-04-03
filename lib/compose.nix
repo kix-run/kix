@@ -367,6 +367,20 @@ rec {
         description = "Extra ingress annotations.";
       };
     };
+
+    # Standard monitoring options. Packages use: options.metrics = kix.options.monitor;
+    monitor = {
+      enabled = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = "Enable metrics endpoint and monitoring resources (ServiceMonitor, PrometheusRules) when prometheus is available.";
+      };
+      interval = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = "Scrape interval (e.g. \"30s\"). Null = use Prometheus default.";
+      };
+    };
   };
 
   # --- Exposure build entry ---
@@ -440,6 +454,134 @@ rec {
           )
           |> (if hasTls then clusterIssuer.out.withCert else lib.id)
           |> scope.mkResource
+        else
+          null;
+    };
+
+  # --- Monitoring build entry ---
+  #
+  # Returns a build entry function that creates ServiceMonitor and optional
+  # PrometheusRule resources when prometheus is present in the cluster.
+  # The app developer adds this to their build list and never touches
+  # monitoring deps directly.
+  #
+  # Usage:
+  #   build = [
+  #     ({ self, config, scope, kix, myDep, ... }: { ... app logic ... })
+  #     (kix.monitor { service = "service"; port = "metrics"; })
+  #   ];
+  #
+  #   # With alert rules:
+  #   (kix.monitor {
+  #     service = "service";
+  #     port = "metrics";
+  #     alerts = {
+  #       highErrorRate = {
+  #         expr = ''rate(http_requests_total{status=~"5.."}[5m]) > 0.05'';
+  #         "for" = "5m";
+  #         severity = "warning";
+  #         description = "Error rate above 5%";
+  #       };
+  #     };
+  #   })
+  #
+  # The returned build entry declares prometheus as an optional DI dep via
+  # function args — it's discovered automatically by discoverBuildDeps.
+  monitor =
+    {
+      service, # string: part name in self to monitor (e.g. "service")
+      port ? "metrics", # string or int: port name or number on the service
+      path ? "/metrics", # string: scrape path
+      alerts ? { }, # attrset: alert name -> { expr, for?, severity, description? }
+      extraEndpoints ? [ ], # list: additional scrape endpoints
+      extraLabels ? { }, # attrset: additional labels on ServiceMonitor/PrometheusRule
+    }:
+    {
+      self,
+      config,
+      scope,
+      lib,
+      prometheus ? null,
+      ...
+    }:
+    let
+      name = scope.instanceName;
+      svc = self.${service};
+
+      metricsConfig = config.metrics or { };
+      metricsEnabled = (metricsConfig.enabled or true) && prometheus != null;
+      scrapeInterval = (metricsConfig.interval or null);
+
+      # Build ServiceMonitor endpoints
+      primaryEndpoint = {
+        port = if builtins.isInt port then null else port;
+        targetPort = if builtins.isInt port then port else null;
+        scheme = "http";
+        inherit path;
+      }
+      // lib.optionalAttrs (scrapeInterval != null) {
+        interval = scrapeInterval;
+      };
+      endpoints = [ (lib.filterAttrs (_: v: v != null) primaryEndpoint) ] ++ extraEndpoints;
+
+      # Build PrometheusRule groups from the alerts attrset
+      alertRules = lib.mapAttrsToList (
+        alertName: alertDef:
+        {
+          alert = alertName;
+          expr = alertDef.expr;
+          labels = {
+            severity = alertDef.severity or "warning";
+          }
+          // (alertDef.labels or { });
+          annotations =
+            { }
+            // lib.optionalAttrs (alertDef ? description) {
+              description = alertDef.description;
+            }
+            // lib.optionalAttrs (alertDef ? summary) {
+              summary = alertDef.summary;
+            }
+            // lib.optionalAttrs (alertDef ? runbook_url) {
+              runbook_url = alertDef.runbook_url;
+            }
+            // (alertDef.annotations or { });
+        }
+        // lib.optionalAttrs (alertDef ? "for") {
+          "for" = alertDef."for";
+        }
+      ) alerts;
+      hasAlerts = alerts != { };
+    in
+    {
+      serviceMonitor =
+        if metricsEnabled then
+          prometheus.out.mkServiceMonitor scope {
+            inherit name;
+            labels = extraLabels;
+            spec = {
+              namespaceSelector.matchNames = [ scope.namespaceName ];
+              selector.matchLabels = svc.out.selector;
+              inherit endpoints;
+            };
+          }
+        else
+          null;
+
+      prometheusRules =
+        if metricsEnabled && hasAlerts then
+          prometheus.out.mkPrometheusRule scope {
+            name = "${name}-alerts";
+            labels = extraLabels;
+            spec = {
+              groups = [
+                {
+                  name = "${name}-alerts";
+                  rules = alertRules;
+                }
+              ];
+            };
+          }
         else
           null;
     };
