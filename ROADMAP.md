@@ -97,8 +97,17 @@
 
 > "If Prometheus is already there, why not auto-enable it in CoreDNS?"
 
-- [ ] Monitoring module — `monitoring.enable = true` instantiates the full Prometheus stack (Prometheus, Grafana, Alertmanager, node-exporter, kube-state-metrics) as individual kix-native packages with sane defaults. Each component individually overridable/disableable. Replaces the current Helm chart wrapper. See `v2_discussions/68_prometheus_stack_kix_native.md`.
+- [x] Monitoring module — native Prometheus stack packages replace monolithic kube-prometheus-stack Helm chart. See `v2_discussions/68_prometheus_stack_kix_native.md`.
   - [x] `kix.monitor` composable build entry — like `kix.expose` but for monitoring. Packages add `(kix.monitor { service = "service"; port = "metrics"; })` to their build list and get ServiceMonitor + default PrometheusRules auto-generated when prometheus is available via DI. Parameters: `service`, `port` (default "metrics"), `path` (default "/metrics"), `alerts` (attrset of alert definitions), `extraEndpoints`, `extraLabels`. Standardized options via `kix.options.monitor` (`enabled`, `interval`). Implemented in `lib/compose.nix`.
+  - [x] `packages/prometheus-operator/` — CRDs + operator Deployment + RBAC. Exposes `out.mkServiceMonitor`, `out.mkPodMonitor`, `out.mkPrometheusRule`, `out.mkPrometheus`, `out.mkAlertmanager`, `out.mkProbe`. Eliminates the `partsOverlays` CRDRef hack.
+  - [x] `packages/prometheus/` — Prometheus CR (operator manages StatefulSet). Configurable retention, storage, scrape intervals. Exposes `out.serviceUrl`.
+  - [x] `packages/alertmanager/` — Alertmanager CR. Cluster-level routing config via options.
+  - [x] `packages/node-exporter/` — DaemonSet + ServiceMonitor + PrometheusRules via `prometheus ? null` DI.
+  - [x] `packages/kube-state-metrics/` — Deployment + ClusterRole + ServiceMonitor via `prometheus ? null` DI.
+  - [x] `clusters/ludo/monitoring.nix` — migrated to native packages (including native Grafana).
+  - [x] Monitoring module — `kix.modules.monitoring` in `lib/modules/monitoring.nix`. `monitoring.enabled = true` instantiates the full stack. Per-component options: `monitoring.prometheus.retention`, `monitoring.grafana.enabled`, `monitoring.loki.enabled`, etc. Auto-wires Grafana datasources via DI, Prometheus→Alertmanager connection.
+  - [x] `packages/grafana/` — Native Grafana package with k8s-sidecar dashboard/datasource provisioning, DI-wired datasources, optional ServiceMonitor, ClusterRole RBAC for sidecars.
+  - [ ] Migrate nw1 to native monitoring stack.
 - [ ] Capability switchboard — turning on Prometheus sets `config.metrics.enabled` globally; packages can react with `lib.mkIf config.services.prometheus.enable`. This is also a platform capability signal: a machine-readable, introspectable feature advertisement (could also exist for AI)
 - [ ] Modules that auto-configure based on cluster features — "if we have a prometheus, I will use it"; "wherever I run, I expect a DNS entry for X"
 - [ ] Importable decision sets — like nixos-hardware profiles but for clusters (e.g. `import security-hardened` changes default pod settings across all packages)

@@ -97,6 +97,13 @@ in
     talos = ./flavors/talos.nix;
   };
 
+  # --- Reusable modules ---
+  # Cluster-level modules that instantiate and wire packages.
+  # Usage: modules = [ kix.modules.monitoring ... ];
+  modules = {
+    monitoring = ./modules/monitoring.nix;
+  };
+
   # --- YAML serialization ---
   # Converts a post-processed manifest attrset into a YAML file derivation.
   # Strips nulls and empty collections before serialization.

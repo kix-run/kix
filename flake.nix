@@ -106,6 +106,14 @@
               inherit kix;
               packages = packages';
             };
+            monitoring-helm = import ./clusters/test-monitoring-helm.nix {
+              inherit kix;
+              packages = packages';
+            };
+            monitoring-native = import ./clusters/test-monitoring-native.nix {
+              inherit kix;
+              packages = packages';
+            };
           };
 
           # Auto-generate per-cluster outputs from the registry.

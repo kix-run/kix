@@ -254,6 +254,14 @@ These packages already use the `prometheus ? null` pattern and will work unchang
 - [x] Harbor alert rules moved to package — `packages/harbor/default.nix`
 - [x] CoreDNS alert rules moved to package — `packages/coredns/default.nix`
 - [x] Valkey alert rules moved to package — `packages/valkey/default.nix`
-- [ ] Monitoring module (`monitoring.enable = true`)
-- [ ] Individual native packages (prometheus-operator, prometheus, grafana, alertmanager, node-exporter, kube-state-metrics)
-- [ ] Remove migrated rules from `clusters/nw1/monitoring.nix`
+- [x] `packages/prometheus-operator/` — CRDs (ServiceMonitor, PodMonitor, PrometheusRule, Prometheus, Alertmanager, Probe, ScrapeConfig, ThanosRuler, AlertmanagerConfig), operator Deployment + RBAC, exposes `out.mkServiceMonitor/mkPodMonitor/mkPrometheusRule/mkPrometheus/mkAlertmanager/mkProbe`
+- [x] `packages/prometheus/` — Prometheus CR (operator reconciles into StatefulSet), configurable retention/storage/resources, exposes `out.serviceUrl`
+- [x] `packages/alertmanager/` — Alertmanager CR, routing config via options, exposes `out.serviceUrl`
+- [x] `packages/node-exporter/` — DaemonSet with host mounts, ships own ServiceMonitor + PrometheusRules (filesystem/memory/cpu alerts) via `prometheus ? null` DI
+- [x] `packages/kube-state-metrics/` — Deployment + RBAC, ships own ServiceMonitor via DI
+- [x] `clusters/ludo/monitoring.nix` — migrated from kube-prometheus-stack Helm chart to native packages (prometheus-operator, prometheus-server, alertmanager, node-exporter, kube-state-metrics, grafana)
+- [x] Monitoring module — `lib/modules/monitoring.nix`, exported as `kix.modules.monitoring`. Options: `monitoring.enabled`, per-component enable/config (`monitoring.prometheus.retention`, `monitoring.grafana.enabled`, etc.), auto-wires Grafana datasources from enabled components via DI, auto-connects Prometheus→Alertmanager. Used in `clusters/ludo/monitoring.nix`.
+- [x] `packages/prometheus-default-rules/` — Standard Kubernetes monitoring rules and ServiceMonitors extracted from kube-prometheus-stack 71.2.0. 35 PrometheusRules (~150 alerts, ~90 recording rules) + 7 ServiceMonitors (kubelet, apiserver, etcd, scheduler, controller-manager, coredns, kube-proxy). Opt-in via `monitoring.defaultRules.enabled = true`. Per-group toggles: `rules.etcd`, `rules.kubeApiserver`, `monitors.kubelet`, etc.
+- [x] `packages/grafana/` — Native Grafana package. Deployment with k8s-sidecar containers for dashboard/datasource auto-provisioning. Auto-wires Prometheus, Alertmanager, and Loki datasources via DI (`prometheusServer.out.serviceUrl`, `alertmanager.out.serviceUrl`). Optional ServiceMonitor via `prometheus` DI. ClusterRole RBAC for sidecars. Configurable persistence, grafana.ini, extra datasources/dashboard providers.
+- [ ] Migrate `clusters/nw1/monitoring.nix` to native packages
+- [ ] Remove migrated alert rules from `clusters/nw1/monitoring.nix`

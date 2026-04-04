@@ -1,0 +1,24 @@
+{
+  "endpoints": [
+    {
+      "path": "/metrics",
+      "port": "http-web"
+    },
+    {
+      "path": "/metrics",
+      "port": "reloader-web"
+    }
+  ],
+  "namespaceSelector": {
+    "matchNames": [
+      "monitoring-system"
+    ]
+  },
+  "selector": {
+    "matchLabels": {
+      "app": "kube-prometheus-stack-prometheus",
+      "release": "prometheus",
+      "self-monitor": "true"
+    }
+  }
+}
