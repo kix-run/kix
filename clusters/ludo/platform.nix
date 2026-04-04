@@ -1,5 +1,8 @@
 # Platform — infra that needs explicit config on this cluster.
 # Everything with acceptable defaults auto-instantiates via availablePackages.
+#
+# This cluster uses Gateway API (envoy-gateway) instead of ingress-nginx.
+# LAN-only: no TLS, plain HTTP.
 
 {
   config,
@@ -13,16 +16,12 @@
       type = lib.types.str;
       description = "Base domain for the cluster";
     };
-
-    tls.clusterIssuer = lib.mkOption {
-      type = lib.types.str;
-      default = "letsencrypt-staging";
-    };
   };
 
   config.instances = {
 
     # k3s provides local-path-provisioner; this satisfies the storageClasses DI dep.
+    # Default class uses Delete policy (fine for ephemeral data).
     kube-system.storage-classes = {
       package = {
         meta.version = "1.0.0";
@@ -42,17 +41,39 @@
               annotations."storageclass.kubernetes.io/is-default-class" = "true";
               outputs.storageClassName = "local-path";
             };
+
+            # Retain class for data you don't want to lose on PVC deletion.
+            retain = scope.mkResource {
+              apiVersion = "storage.k8s.io/v1";
+              kind = "StorageClass";
+              name = "local-path-retain";
+              extra = {
+                provisioner = "rancher.io/local-path";
+                reclaimPolicy = "Retain";
+                volumeBindingMode = "WaitForFirstConsumer";
+              };
+              outputs.storageClassName = "local-path-retain";
+            };
           };
       };
     };
 
-    # TLS issuers — just scope to our domain
-    cert-manager.cluster-issuers = {
-      package = packages.cluster-issuers;
+    # Gateway API — replaces ingress-nginx on this cluster.
+    # Envoy Gateway controller is installed separately (e.g. via Helm).
+    # This provides the GatewayClass + Gateway resources and the DI contract
+    # that kix.expose consumes to emit HTTPRoutes instead of Ingresses.
+    gateway-system.gateway = {
+      package = packages."envoy-gateway";
       config = {
-        mainIssuer = config.tls.clusterIssuer;
-        issuers.letsencrypt-staging.dnsZones = [ config.cluster.domain ];
-        issuers.letsencrypt-production.dnsZones = [ config.cluster.domain ];
+        controllerName = "gateway.envoyproxy.io/gatewayclass-controller";
+        listeners = [
+          {
+            name = "http";
+            port = 80;
+            protocol = "HTTP";
+            allowedRoutes.namespaces.from = "All";
+          }
+        ];
       };
     };
 

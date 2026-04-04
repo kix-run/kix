@@ -32,10 +32,9 @@ rec {
       }
       ''
         echo "Validating ${name}..."
-        kubeconform -strict -summary \
+        find ${drv} -name '*.yaml' | xargs kubeconform -strict -summary \
           -ignore-missing-schemas \
-          -schema-location '${kubernetesSchemas}/master-standalone-strict/{{ .ResourceKind }}{{ .KindSuffix }}.json' \
-          ${drv}/*.yaml
+          -schema-location '${kubernetesSchemas}/master-standalone-strict/{{ .ResourceKind }}{{ .KindSuffix }}.json'
         touch $out
       '';
 

@@ -27,7 +27,7 @@
 
       # Expose kix library + packages for external flake consumers.
       # Usage: kixpkgs.lib.forPkgs { inherit pkgs lib; }
-      #   => { kix, packages, mkAnnotatedManifests }
+      #   => { kix, packages, mkManifests }
       flake.lib.forPkgs =
         { pkgs, lib }:
         let
@@ -35,23 +35,10 @@
           entries = builtins.readDir ./packages;
           dirs = lib.filterAttrs (_: type: type == "directory") entries;
           packages = lib.mapAttrs (name: _: import ./packages/${name}) dirs;
-          python3 = pkgs.python3.withPackages (p: [ p.pyyaml ]);
-          mkAnnotatedManifests =
-            cluster:
-            pkgs.runCommand "k8s-manifests-${cluster.name}"
-              {
-                exportReferencesGraph = [
-                  "closure"
-                  cluster.activation
-                ];
-                nativeBuildInputs = [ python3 ];
-              }
-              ''
-                PYTHONPATH=${./pipeline} python3 ${./pipeline/annotate.py} closure ${cluster.activation} $out
-              '';
         in
         {
-          inherit kix packages mkAnnotatedManifests;
+          inherit kix packages;
+          inherit (kix) mkManifests;
         };
 
       perSystem =
@@ -121,62 +108,9 @@
             };
           };
 
-          # --- Pipeline derivation builders ---
-          # Each takes a cluster (with .activation) and uses exportReferencesGraph
-          # to read the Nix store DAG inside the build sandbox.
-
-          python3 = pkgs.python3.withPackages (p: [ p.pyyaml ]);
-
-          mkAnnotatedManifests =
-            cluster:
-            pkgs.runCommand "k8s-manifests-${cluster.name}"
-              {
-                exportReferencesGraph = [
-                  "closure"
-                  cluster.activation
-                ];
-                nativeBuildInputs = [ python3 ];
-              }
-              ''
-                PYTHONPATH=${./pipeline} python3 ${./pipeline/annotate.py} closure ${cluster.activation} $out
-              '';
-
-          mkAnnotatedManifestsByNs =
-            cluster:
-            pkgs.runCommand "k8s-manifests-by-ns-${cluster.name}"
-              {
-                exportReferencesGraph = [
-                  "closure"
-                  cluster.activation
-                ];
-                nativeBuildInputs = [ python3 ];
-              }
-              ''
-                PYTHONPATH=${./pipeline} python3 ${./pipeline/annotate.py} closure ${cluster.activation} $out --by-namespace
-              '';
-
-          mkDeployGraph =
-            cluster:
-            let
-              manifests = mkAnnotatedManifests cluster;
-            in
-            pkgs.runCommand "k8s-deploy-graph-${cluster.name}"
-              {
-                exportReferencesGraph = [
-                  "closure"
-                  cluster.activation
-                ];
-                nativeBuildInputs = [ pkgs.python3 ];
-              }
-              ''
-                PYTHONPATH=${./pipeline} python3 ${./pipeline/graph.py} closure ${cluster.activation} ${manifests} $out
-              '';
-
           # Auto-generate per-cluster outputs from the registry.
           clusterPackages = lib.concatMapAttrs (cname: cluster: {
-            "cluster-${cname}" = mkAnnotatedManifests cluster;
-            "cluster-${cname}-by-ns" = mkAnnotatedManifestsByNs cluster;
-            "cluster-${cname}-graph" = mkDeployGraph cluster;
+            "cluster-${cname}" = kix.mkManifests cluster;
             # Activation root — inspect the DAG with:
             #   nix-store -q --tree $(readlink result/activation)
             "cluster-${cname}-activation" = pkgs.runCommand "k8s-activation-${cluster.name}" { } (
@@ -192,7 +126,7 @@
           }) clusters;
 
           clusterChecks = lib.concatMapAttrs (cname: cluster: {
-            "schema-cluster-${cname}" = kixChecks.schemaCheck "cluster-${cname}" (mkAnnotatedManifests cluster);
+            "schema-cluster-${cname}" = kixChecks.schemaCheck "cluster-${cname}" (kix.mkManifests cluster);
             "validate-cluster-${cname}" =
               assert kixChecks.validateManifestSet "cluster-${cname}" cluster.rawManifests;
               pkgs.runCommand "validate-cluster-${cname}" { } ''

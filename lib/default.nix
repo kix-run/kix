@@ -131,4 +131,66 @@ in
       kind = manifest.kind or "resource";
     in
     yamlFormat.generate "${name}-${lib.toLower kind}.yaml" cleaned;
+
+  # --- Cluster manifest output ---
+  # Builds a directory of YAML files from a cluster, organized by namespace.
+  # Output: $out/<namespace>/<name>-<kind>.yaml
+  # Cluster-scoped resources go in $out/_cluster/<name>-<kind>.yaml
+  mkManifests =
+    cluster:
+    let
+      manifests = cluster.rawManifests;
+
+      # Group manifests by namespace.
+      grouped = builtins.groupBy (m: m.metadata.namespace or "_cluster") manifests;
+
+      # Build a YAML file for each manifest, collecting into namespace dirs.
+      mkYaml =
+        manifest:
+        let
+          yamlFormat = pkgs.formats.yaml { };
+          removeNulls =
+            attrs:
+            builtins.mapAttrs
+              (
+                _: v:
+                if builtins.isAttrs v && !(lib.isDerivation v) && !(v ? type) then
+                  removeNulls v
+                else if builtins.isList v then
+                  builtins.map (x: if builtins.isAttrs x && !(lib.isDerivation x) then removeNulls x else x) v
+                else
+                  v
+              )
+              (
+                lib.filterAttrs (
+                  _: v:
+                  v != null
+                  && !(builtins.isAttrs v && !(lib.isDerivation v) && !(v ? type) && v == { })
+                  && !(builtins.isList v && v == [ ])
+                ) attrs
+              );
+          cleaned = removeNulls manifest;
+          name = manifest.metadata.name or "unnamed";
+          kind = manifest.kind or "resource";
+        in
+        {
+          filename = "${name}-${lib.toLower kind}.yaml";
+          drv = yamlFormat.generate "${name}-${lib.toLower kind}.yaml" cleaned;
+        };
+
+      # Build copy commands: one per namespace dir.
+      nsCopyCommands = lib.concatStringsSep "\n" (
+        lib.mapAttrsToList (
+          ns: nsManifests:
+          let
+            yamls = map mkYaml nsManifests;
+            copies = lib.concatMapStringsSep "\n" (y: "  cp ${y.drv} $out/${ns}/${y.filename}") yamls;
+          in
+          ''
+              mkdir -p $out/${ns}
+            ${copies}''
+        ) grouped
+      );
+    in
+    pkgs.runCommand "k8s-manifests-${cluster.name}" { } nsCopyCommands;
 }

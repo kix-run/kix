@@ -369,13 +369,20 @@ coreService = self.coreDeployment
   |> scope.mkResource;
 ```
 
-#### Ingress helpers
+#### Ingress / HTTPRoute helpers
 
 | Function | Description |
 |----------|-------------|
-| `kix.ingress.fromService { name, host, path?, pathType?, port?, className?, tls?, annotations?, ... } service` | Auto-derive Ingress from a Service. Reads backend name and port from `service.out`. |
+| `kix.ingress.fromService { name, host, path?, pathType?, port?, className?, tls?, annotations?, ... } service` | Auto-derive Ingress from a Service (legacy, for clusters using ingress-nginx). |
+| `kix.httpRoute.fromService { name, host, parentRef, path?, pathType?, port?, ... } service` | Auto-derive HTTPRoute from a Service (Gateway API, for clusters using envoy-gateway or similar). `parentRef = { name, namespace? }` references the Gateway. |
 
-**Preferred: Use `kix.expose` as a composable build entry** (handles ingressNginx/clusterIssuer DI automatically):
+**Preferred: Use `kix.expose` as a composable build entry** — auto-detects whether the cluster uses Gateway API or Ingress:
+
+- If `gateway` DI dep is present (has `out.gatewayRef`) → emits `HTTPRoute`
+- If `ingressNginx` DI dep is present (has `out.ingressClassName`) → emits `Ingress` with optional TLS
+- If neither is present → no exposure resource (service is internal-only)
+
+App packages don't need to know which mode the cluster uses. Just add `kix.expose`:
 
 ```nix
 options = {
@@ -388,14 +395,18 @@ build = [
     root = self.service;
   })
   (kix.expose { service = "service"; })
-  # With custom annotations: (kix.expose { service = "service"; defaultAnnotations = { "nginx.ingress.kubernetes.io/proxy-body-size" = "0"; }; })
+  # With custom annotations (Ingress mode only): (kix.expose { service = "service"; defaultAnnotations = { "nginx.ingress.kubernetes.io/proxy-body-size" = "0"; }; })
   # With explicit port: (kix.expose { service = "service"; port = 13000; })
 ];
 ```
 
-`kix.expose` parameters: `service` (string key in self), `partName` (default "ingress"), `defaultAnnotations`, `port`, `tlsSecretName`.
+`kix.expose` parameters: `service` (string key in self), `partName` (default "ingress"), `defaultAnnotations` (Ingress mode only), `port`, `tlsSecretName` (Ingress mode only).
 
-For complex ingresses with multiple backends/paths (like harbor, python-app), build the Ingress manually with `scope.mkResource` and reference services via `self.coreService.out.name`.
+**Cluster-side wiring:**
+- Gateway API cluster: instantiate `packages/envoy-gateway` with alias `"gateway"`. Apps auto-get HTTPRoutes.
+- Ingress cluster: instantiate `packages/ingress-nginx` with alias `"ingressNginx"`. Apps auto-get Ingress resources.
+
+For complex routing with multiple backends/paths: in Gateway API mode, build the HTTPRoute manually with `kix.httpRoute.fromService` or raw `scope.mkResource`. In Ingress mode, build the Ingress manually. Reference services via `self.coreService.out.name`.
 
 **Monitoring: Use `kix.monitor` as a composable build entry** (handles prometheus DI automatically):
 
@@ -537,7 +548,9 @@ For larger clusters, split into NixOS-style modules in `clusters/<name>/`. Each 
     # ... other cluster-wide config
   };
   config.instances.kube-system = {
-    ingress-nginx = { package = packages.ingress-nginx; };
+    ingress-nginx = { package = packages.ingress-nginx; };  # Ingress API
+    # OR for Gateway API:
+    # gateway = { package = packages."envoy-gateway"; config.controllerName = "gateway.envoyproxy.io/gatewayclass-controller"; };
   };
 }
 ```
@@ -646,7 +659,7 @@ The resolved deps attrset is also available as a single `deps` arg in build func
 
 | Pattern | Example | When to use |
 |---------|---------|-------------|
-| Plain value on `out` | `storageClasses.out.storageClassName`, `ingressNginx.out.ingressClassName` | Single field the consumer needs |
+| Plain value on `out` | `storageClasses.out.storageClassName`, `ingressNginx.out.ingressClassName`, `gateway.out.gatewayRef` | Single field the consumer needs |
 | Transformer on `root.out` | `clusterIssuer.out.withCert` — modifies mkResource args | Adding annotations/fields the consumer would forget |
 | Builder on parts | `clusterIssuer.mkCertificate { name, hosts, secretName }` | Creating CRD instances for the consumer |
 

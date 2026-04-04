@@ -1,0 +1,193 @@
+plugins:
+  # ─── Package Context ───────────────────────────────────────────────
+  # Show which kix package owns the selected resource, its identity hash,
+  # and dependency annotations.
+  kix-package:
+    shortCut: Shift-P
+    description: "[kix] Package info"
+    scopes:
+      - all
+    command: bash
+    args:
+      - -c
+      - |
+        JSON=$(kubectl get $RESOURCE_NAME/$NAME -n $NAMESPACE -o json 2>/dev/null || kubectl get $RESOURCE_NAME/$NAME -o json 2>/dev/null)
+        PKG=$(echo "$JSON" | jq -r '.metadata.annotations["kix.dev/package"] // "not kix-managed"')
+        PKG_NS=$(echo "$JSON" | jq -r '.metadata.annotations["kix.dev/package-namespace"] // "-"')
+        HASH=$(echo "$JSON" | jq -r '.metadata.annotations["kix.dev/identity-hash"] // "-"')
+        DEPS=$(echo "$JSON" | jq -r '.metadata.annotations["kix.dev/depends-on"] // "(none)"')
+        MODE=$(echo "$JSON" | jq -r '.metadata.annotations["kix.dev/mode"] // "managed"')
+        printf '\n  %-18s %s\n' "Package:" "$PKG"
+        printf '  %-18s %s\n' "Package NS:" "$PKG_NS"
+        printf '  %-18s %s\n' "Identity Hash:" "$HASH"
+        printf '  %-18s %s\n' "Mode:" "$MODE"
+        printf '  %-18s %s\n' "Depends On:" "$DEPS"
+        printf '\n'
+
+  # ─── Package Siblings ──────────────────────────────────────────────
+  # List all resources belonging to the same kix package.
+  kix-siblings:
+    shortCut: Shift-I
+    description: "[kix] Package siblings"
+    scopes:
+      - all
+    command: bash
+    args:
+      - -c
+      - |
+        JSON=$(kubectl get $RESOURCE_NAME/$NAME -n $NAMESPACE -o json 2>/dev/null || kubectl get $RESOURCE_NAME/$NAME -o json 2>/dev/null)
+        PKG=$(echo "$JSON" | jq -r '.metadata.annotations["kix.dev/package"] // empty')
+        PKG_NS=$(echo "$JSON" | jq -r '.metadata.annotations["kix.dev/package-namespace"] // empty')
+        if [ -z "$PKG" ]; then
+          echo "Not a kix-managed resource."
+          exit 0
+        fi
+        printf '\n  Package: %s  (ns: %s)\n\n' "$PKG" "$PKG_NS"
+        # Scan common resource types in the package namespace
+        kubectl get deploy,sts,ds,svc,cm,secret,sa,role,rolebinding,networkpolicy,pvc,ingress,job,cronjob \
+          -n "$PKG_NS" \
+          -l "app.kubernetes.io/managed-by=kix" \
+          -o json 2>/dev/null | \
+          jq -r --arg pkg "$PKG" '
+            .items[]
+            | select(.metadata.annotations["kix.dev/package"] == $pkg)
+            | "  \(.kind + " " * (24 - (.kind | length) | if . < 0 then 0 else . end))  \(.metadata.name)"
+          ' | sort
+        # Also check cluster-scoped resources
+        kubectl get clusterrole,clusterrolebinding \
+          -l "app.kubernetes.io/managed-by=kix" \
+          -o json 2>/dev/null | \
+          jq -r --arg pkg "$PKG" '
+            .items[]
+            | select(.metadata.annotations["kix.dev/package"] == $pkg)
+            | "  \(.kind + " " * (24 - (.kind | length) | if . < 0 then 0 else . end))  \(.metadata.name)"
+          ' 2>/dev/null | sort
+        printf '\n'
+
+  # ─── DAG Neighbors ─────────────────────────────────────────────────
+  # Show direct dependencies and dependents of the selected resource.
+  kix-dag:
+    shortCut: Shift-D
+    description: "[kix] DAG neighbors"
+    scopes:
+      - all
+    command: bash
+    args:
+      - -c
+      - |
+        JSON=$(kubectl get $RESOURCE_NAME/$NAME -n $NAMESPACE -o json 2>/dev/null || kubectl get $RESOURCE_NAME/$NAME -o json 2>/dev/null)
+        HASH=$(echo "$JSON" | jq -r '.metadata.annotations["kix.dev/identity-hash"] // empty')
+        DEPS=$(echo "$JSON" | jq -r '.metadata.annotations["kix.dev/depends-on"] // ""')
+        if [ -z "$HASH" ]; then
+          echo "Not a kix-managed resource (no identity hash)."
+          exit 0
+        fi
+        printf '\n  %s/%s  (hash: %s)\n' "$RESOURCE_NAME" "$NAME" "${HASH:0:12}..."
+
+        # Build lookup of all kix resources: hash → Kind/ns/name, and their deps
+        LOOKUP=$(kubectl get deploy,sts,ds,svc,cm,secret,sa,role,rolebinding,clusterrole,clusterrolebinding,networkpolicy,pvc,ingress,job,cronjob \
+          -A -l "app.kubernetes.io/managed-by=kix" -o json 2>/dev/null | \
+          jq -c '.items[] | {
+            hash: .metadata.annotations["kix.dev/identity-hash"],
+            id: "\(.kind)/\(.metadata.namespace // "(cluster)")/\(.metadata.name)",
+            pkg: .metadata.annotations["kix.dev/package"],
+            deps: (.metadata.annotations["kix.dev/depends-on"] // "")
+          }')
+
+        printf '\n  ── Depends on ──\n'
+        if [ -n "$DEPS" ]; then
+          echo "$DEPS" | tr ',' '\n' | sed 's/^.*://' | while read -r dep_hash; do
+            MATCH=$(echo "$LOOKUP" | jq -r --arg h "$dep_hash" 'select(.hash == $h) | "  → \(.id)  [\(.pkg)]"' 2>/dev/null | head -1)
+            if [ -n "$MATCH" ]; then
+              echo "$MATCH"
+            else
+              echo "  → (unresolved: ${dep_hash:0:12}...)"
+            fi
+          done
+        else
+          echo "  (none)"
+        fi
+
+        printf '\n  ── Depended on by ──\n'
+        DEPENDENTS=$(echo "$LOOKUP" | jq -r --arg h "$HASH" '
+          select(.deps | split(",") | map(ltrimstr("requires:") | ltrimstr("extra:")) | any(. == $h))
+          | "  ← \(.id)  [\(.pkg)]"' 2>/dev/null)
+        if [ -n "$DEPENDENTS" ]; then
+          echo "$DEPENDENTS"
+        else
+          echo "  (none)"
+        fi
+        printf '\n'
+
+  # ─── Blast Radius ──────────────────────────────────────────────────
+  # Show all transitive dependents — everything that would break if this
+  # resource disappeared.
+  kix-blast:
+    shortCut: Shift-B
+    description: "[kix] Blast radius"
+    scopes:
+      - all
+    command: bash
+    args:
+      - -c
+      - |
+        JSON=$(kubectl get $RESOURCE_NAME/$NAME -n $NAMESPACE -o json 2>/dev/null || kubectl get $RESOURCE_NAME/$NAME -o json 2>/dev/null)
+        ROOT_HASH=$(echo "$JSON" | jq -r '.metadata.annotations["kix.dev/identity-hash"] // empty')
+        if [ -z "$ROOT_HASH" ]; then
+          echo "Not a kix-managed resource (no identity hash)."
+          exit 0
+        fi
+
+        # Build full lookup
+        LOOKUP=$(kubectl get deploy,sts,ds,svc,cm,secret,sa,role,rolebinding,clusterrole,clusterrolebinding,networkpolicy,pvc,ingress,job,cronjob \
+          -A -l "app.kubernetes.io/managed-by=kix" -o json 2>/dev/null | \
+          jq -c '.items[] | {
+            hash: .metadata.annotations["kix.dev/identity-hash"],
+            id: "\(.kind)/\(.metadata.namespace // "(cluster)")/\(.metadata.name)",
+            pkg: .metadata.annotations["kix.dev/package"],
+            deps: (.metadata.annotations["kix.dev/depends-on"] // "")
+          }')
+
+        printf '\n  Blast radius for %s/%s\n\n' "$RESOURCE_NAME" "$NAME"
+
+        # BFS: collect all transitive dependents
+        QUEUE="$ROOT_HASH"
+        SEEN="$ROOT_HASH"
+        DEPTH=0
+        while [ -n "$QUEUE" ]; do
+          DEPTH=$((DEPTH + 1))
+          NEXT_QUEUE=""
+          for h in $QUEUE; do
+            # Find resources whose depends-on contains this hash
+            DEPENDENTS=$(echo "$LOOKUP" | jq -r --arg h "$h" '
+              select(.deps | split(",") | map(ltrimstr("requires:") | ltrimstr("extra:")) | any(. == $h))
+              | "\(.hash)\t\(.id)\t\(.pkg)"' 2>/dev/null)
+            while IFS=$'\t' read -r dep_hash dep_id dep_pkg; do
+              [ -z "$dep_hash" ] && continue
+              # Skip if already seen
+              if echo "$SEEN" | grep -qw "$dep_hash" 2>/dev/null; then
+                continue
+              fi
+              SEEN="$SEEN $dep_hash"
+              NEXT_QUEUE="$NEXT_QUEUE $dep_hash"
+              printf '  %*s↑ %s  [%s]\n' "$((DEPTH * 2))" "" "$dep_id" "$dep_pkg"
+            done <<< "$DEPENDENTS"
+          done
+          QUEUE="$NEXT_QUEUE"
+          # Safety: cap at 10 levels
+          if [ "$DEPTH" -ge 10 ]; then
+            echo "  (truncated at depth 10)"
+            break
+          fi
+        done
+
+        if [ "$DEPTH" -eq 1 ] && [ -z "$NEXT_QUEUE" ]; then
+          # Check if anything was found at depth 1
+          FIRST_CHECK=$(echo "$LOOKUP" | jq -r --arg h "$ROOT_HASH" '
+            select(.deps | split(",") | map(ltrimstr("requires:") | ltrimstr("extra:")) | any(. == $h))
+            | .hash' 2>/dev/null | head -1)
+          if [ -z "$FIRST_CHECK" ]; then
+            echo "  (no dependents — this is a leaf resource)"
+          fi
+        fi
+        printf '\n'

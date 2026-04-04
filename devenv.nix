@@ -36,6 +36,8 @@ in
     pkgs.vhs
     pkgs.tmux
     pkgs.viddy
+    pkgs.k9s
+    pkgs.jq
   ]
   ++ nixLibs;
 
@@ -149,5 +151,17 @@ in
   # kix CLI
   scripts.kix.exec = ''
     cargo run --manifest-path "$DEVENV_ROOT/cli/Cargo.toml" --bin kix -- "$@"
+  '';
+
+  # k9s with kix plugins: launches k9s with the kix plugin set loaded.
+  # Copies the kix plugin file into the user's real k9s config dir, then
+  # launches k9s. On exit the plugin file stays (it's harmless and useful).
+  # Usage: kix-k9s [--context <ctx>] [k9s flags...]
+  scripts.kix-k9s.exec = ''
+    K9S_DIR="''${XDG_CONFIG_HOME:-$HOME/.config}/k9s"
+    mkdir -p "$K9S_DIR/plugins"
+    cp "$DEVENV_ROOT/tools/k9s-plugin/plugins.yaml" "$K9S_DIR/plugins/kix.yaml"
+    echo "Installed kix plugins → $K9S_DIR/plugins/kix.yaml"
+    k9s "$@"
   '';
 }

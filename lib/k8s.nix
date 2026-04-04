@@ -2,10 +2,7 @@
 #
 # Resources use real K8s names in manifests (not store paths).
 # Dependency tracking uses Nix string context on out.name/selector/fqdn values.
-#
-# Post-processing (annotations, deploy graph, waves) is done in Phase 2
-# by pipeline scripts that read the store DAG via exportReferencesGraph.
-# See pipeline/ directory.
+# The CLI reads the store DAG for deploy ordering, diffing, and wave computation.
 
 { lib }:
 

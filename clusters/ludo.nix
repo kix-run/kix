@@ -25,7 +25,7 @@ kix.buildCluster {
       # Single-node homelab — override k3s multi-node default
       cluster.capabilities.multiNode = false;
 
-      cluster.domain = "ludo.example.com"; # TODO: real domain
+      cluster.domain = "ludo.lan";
       monitoring.enabled = true;
       clusterLabels = {
         "app.kubernetes.io/part-of" = "ludo";

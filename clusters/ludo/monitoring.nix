@@ -27,7 +27,7 @@
         config.values = {
           prometheus.prometheusSpec.retention = "7d";
           grafana = {
-            "grafana.ini".server.root_url = "https://grafana.${config.cluster.domain}";
+            "grafana.ini".server.root_url = "http://grafana.${config.cluster.domain}";
             additionalDataSources = [
               {
                 name = "Loki";

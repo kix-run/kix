@@ -1,6 +1,10 @@
 # Services — all application workloads.
-# Ingress hosts auto-derive from cluster.domain (e.g. immich.ludo.example.com).
+# Hosts auto-derive from cluster.domain (e.g. immich.ludo.lan).
 # Override with config.ingress.host if a different subdomain is needed.
+#
+# This cluster uses Gateway API. Packages using kix.expose get HTTPRoutes
+# automatically — no per-app ingress controller wiring needed.
+# LAN-only: plain HTTP, no TLS.
 
 {
   config,
@@ -10,6 +14,7 @@
 }:
 let
   domain = config.cluster.domain;
+  ref = config.ref;
 in
 {
   config.instances = {
@@ -54,11 +59,14 @@ in
       vaultwarden = {
         package = packages.vaultwarden;
         # ingress.host defaults to vaultwarden.<domain> ✓
-        # domain defaults to https://vaultwarden.<domain> ✓
       };
     };
 
     # --- HomeAssistant: home automation ---
+    # NOTE: Helm chart creates its own Ingress resource via values.
+    # On this cluster we disable the Helm-managed Ingress and let
+    # the chart just run the app. Exposure is handled by a manual
+    # HTTPRoute wired to the gateway.
     homeassistant.homeassistant = {
       package = kix.fromHelmChart {
         chart = kix.fetchHelmChart {
@@ -87,27 +95,8 @@ in
         );
       };
       config.values = {
-        ingress = {
-          enabled = true;
-          className = "nginx";
-          hosts = [
-            {
-              host = "home.${domain}";
-              paths = [
-                {
-                  path = "/";
-                  pathType = "Prefix";
-                }
-              ];
-            }
-          ];
-          tls = [
-            {
-              secretName = "homeassistant-tls";
-              hosts = [ "home.${domain}" ];
-            }
-          ];
-        };
+        # Disable Helm-managed Ingress — exposure via Gateway API HTTPRoute.
+        ingress.enabled = false;
         persistence = {
           enabled = true;
           size = "5Gi";

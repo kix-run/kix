@@ -13,6 +13,10 @@
 #     |> clusterIssuer.out.withCert
 #     |> scope.mkResource;
 #
+#   route = self.service
+#     |> kix.httpRoute.fromService { name = "my-route"; host = "example.com"; parentRef = gateway.out.gatewayRef; }
+#     |> scope.mkResource;
+#
 # Mount helpers:
 #   libraryMount = kix.mount.pvc storage { mountPath = "/data"; };
 #   configMount  = kix.mount.configMap self.configMap { mountPath = "/config"; subPath = "app.conf"; };
@@ -201,6 +205,82 @@ rec {
       // passthrough;
   };
 
+  # --- HTTPRoute helpers (Gateway API) ---
+
+  httpRoute = {
+    # Create an HTTPRoute attrset from a service resource.
+    #
+    # Auto-derives:
+    #   - backend service name from service.out.name
+    #   - backend port from service.out.port (override with `port`)
+    #
+    # Consumed config: name, host, parentRef, path, pathType, port
+    # Passthrough to mkResource: annotations, labels, requires, extra, etc.
+    fromService =
+      {
+        name,
+        host,
+        parentRef, # { name, namespace? } — reference to the Gateway
+        path ? "/",
+        pathType ? "PathPrefix",
+        port ? null,
+        ...
+      }@cfg:
+      svc:
+      let
+        servicePort =
+          if port != null then
+            port
+          else if svc ? out.port then
+            builtins.fromJSON (builtins.unsafeDiscardStringContext svc.out.port)
+          else
+            throw "httpRoute.fromService: service '${svc.name or "unknown"}' has no out.port — specify port explicitly";
+        passthrough = removeAttrs cfg [
+          "name"
+          "host"
+          "parentRef"
+          "path"
+          "pathType"
+          "port"
+        ];
+      in
+      {
+        apiVersion = "gateway.networking.k8s.io/v1";
+        kind = "HTTPRoute";
+        inherit name;
+        spec = {
+          parentRefs = [
+            (
+              {
+                name = parentRef.name;
+              }
+              // lib.optionalAttrs (parentRef ? namespace) { namespace = parentRef.namespace; }
+            )
+          ];
+          hostnames = [ host ];
+          rules = [
+            {
+              matches = [
+                {
+                  path = {
+                    type = pathType;
+                    value = path;
+                  };
+                }
+              ];
+              backendRefs = [
+                {
+                  name = svc.out.name;
+                  port = servicePort;
+                }
+              ];
+            }
+          ];
+        };
+      }
+      // passthrough;
+  };
+
   # --- Mount helpers ---
   # Typed constructors for volume mounts. Each returns a mount object
   # ({ _type, name, mountPath, source }) or null if the resource is null.
@@ -385,10 +465,13 @@ rec {
 
   # --- Exposure build entry ---
   #
-  # Returns a build entry function that creates an Ingress resource when
-  # ingressNginx is present in the cluster, with auto-TLS when clusterIssuer
-  # is present. The app developer adds this to their build list and never
-  # touches infrastructure deps directly.
+  # Returns a build entry function that creates an Ingress or HTTPRoute
+  # resource, depending on which DI dep is present:
+  #   - gateway → HTTPRoute (Gateway API). TLS is the Gateway's concern.
+  #   - ingressNginx → Ingress (legacy). TLS via clusterIssuer.
+  #
+  # The app developer adds this to their build list and never touches
+  # infrastructure deps directly.
   #
   # Usage:
   #   build = [
@@ -396,15 +479,15 @@ rec {
   #     (kix.expose { service = "service"; })
   #   ];
   #
-  # The returned build entry declares ingressNginx and clusterIssuer as
-  # optional DI deps via function args — they're discovered automatically.
+  # The returned build entry declares gateway, ingressNginx, and clusterIssuer
+  # as optional DI deps via function args — they're discovered automatically.
   expose =
     {
       service, # string: part name in self to expose (e.g. "service")
       partName ? "ingress", # string: name of the generated part in self
-      defaultAnnotations ? { }, # attrset: package-level default annotations
+      defaultAnnotations ? { }, # attrset: package-level default annotations (Ingress mode only)
       port ? null, # int or null: override auto-derived service port
-      tlsSecretName ? null, # string or null: override auto-derived TLS secret name
+      tlsSecretName ? null, # string or null: override auto-derived TLS secret name (Ingress mode only)
     }:
     {
       self,
@@ -412,6 +495,7 @@ rec {
       clusterConfig,
       scope,
       lib,
+      gateway ? null,
       ingressNginx ? null,
       clusterIssuer ? null,
       ...
@@ -430,14 +514,43 @@ rec {
         else
           null;
 
-      hasIngress = ingressNginx != null && effectiveHost != null;
-      hasTls = hasIngress && clusterIssuer != null;
+      # Gateway API mode: gateway DI dep with out.gatewayRef
+      hasGateway = gateway != null && gateway ? out.gatewayRef;
+
+      # Legacy Ingress mode: ingressNginx DI dep with out.ingressClassName
+      hasIngress = ingressNginx != null;
+
+      # Both present → ambiguous, fail early so the cluster operator wires explicitly.
+      useGateway =
+        hasGateway
+        && (
+          if hasIngress then
+            throw "kix.expose (${name}): both 'gateway' and 'ingressNginx' are present. Wire exactly one via deps in the cluster definition."
+          else
+            true
+        );
+      useIngress = hasIngress && !hasGateway;
+
+      hasExposure = (useGateway || useIngress) && effectiveHost != null;
+      hasTls = hasExposure && useIngress && clusterIssuer != null;
 
       configAnnotations = (config.ingress or { }).annotations or { };
     in
     {
       ${partName} =
-        if hasIngress then
+        if hasExposure && useGateway then
+          svc
+          |> httpRoute.fromService (
+            {
+              inherit name;
+              host = effectiveHost;
+              parentRef = gateway.out.gatewayRef;
+            }
+            // lib.optionalAttrs (port != null) { inherit port; }
+          )
+          |> scope.mkResource
+
+        else if hasExposure && useIngress then
           svc
           |> ingress.fromService (
             {
@@ -454,6 +567,7 @@ rec {
           )
           |> (if hasTls then clusterIssuer.out.withCert else lib.id)
           |> scope.mkResource
+
         else
           null;
     };
