@@ -59,7 +59,7 @@ kix.buildCluster {
               version = "71.2.0";
               hash = "sha256-TyftOI7LrTeqbU5IsVjRKb78xC1edDHwegq773QEuUM=";
             };
-            values = (import ../packages/kube-prometheus-stack).defaultValues;
+            values = (import ../kix/packages/kube-prometheus-stack).defaultValues;
             releaseName = "prometheus";
             includeCrds = true;
           };

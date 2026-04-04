@@ -212,16 +212,16 @@ in
       selector = self.operatorDeployment.out.selector;
       ports = [
         {
-          name = "https";
-          port = 443;
-          targetPort = "https";
-        }
-        {
           name = "http-metrics";
           port = 8080;
           targetPort = "http-metrics";
         }
-      ];
+      ]
+      ++ lib.optional config.enableAdmissionWebhook {
+        name = "https";
+        port = 443;
+        targetPort = "https";
+      };
     };
     outputs = {
       metricsPort = "8080";

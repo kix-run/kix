@@ -31,10 +31,10 @@
       flake.lib.forPkgs =
         { pkgs, lib }:
         let
-          kix = import ./lib { inherit pkgs lib; };
-          entries = builtins.readDir ./packages;
+          kix = import ./kix/lib { inherit pkgs lib; };
+          entries = builtins.readDir ./kix/packages;
           dirs = lib.filterAttrs (_: type: type == "directory") entries;
-          packages = lib.mapAttrs (name: _: import ./packages/${name}) dirs;
+          packages = lib.mapAttrs (name: _: import ./kix/packages/${name}) dirs;
         in
         {
           inherit kix packages;
@@ -47,21 +47,21 @@
           lib = pkgs.lib;
 
           # Consolidated kix library.
-          kix = import ./lib { inherit pkgs lib; };
+          kix = import ./kix/lib { inherit pkgs lib; };
 
           # Checks library (schema + cross-resource validation).
-          kixChecks = import ./checks.nix { inherit pkgs lib; };
+          kixChecks = import ./kix/checks.nix { inherit pkgs lib; };
 
           # PI wiring invariant checks.
-          piChecks = import ./pi-checks.nix { inherit lib; };
+          piChecks = import ./kix/pi-checks.nix { inherit lib; };
 
-          # Auto-discover packages from packages/ directory.
+          # Auto-discover packages from kix/packages/ directory.
           packages' =
             let
-              entries = builtins.readDir ./packages;
+              entries = builtins.readDir ./kix/packages;
               dirs = lib.filterAttrs (_: type: type == "directory") entries;
             in
-            lib.mapAttrs (name: _: import ./packages/${name}) dirs;
+            lib.mapAttrs (name: _: import ./kix/packages/${name}) dirs;
 
           # Cluster registry — add new clusters here, outputs are auto-generated.
           clusters = {
@@ -82,7 +82,7 @@
               inherit kix;
               packages = packages';
             };
-            nw1 = import ./clusters/nw1.nix {
+            nw1 = import ./nw1/cluster.nix {
               inherit kix;
               packages = packages';
             };
@@ -98,7 +98,7 @@
               inherit kix;
               packages = packages';
             };
-            ludo = import ./clusters/ludo.nix {
+            ludo = import ./ludo/cluster.nix {
               inherit kix;
               packages = packages';
             };
