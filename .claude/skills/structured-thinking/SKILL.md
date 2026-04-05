@@ -16,7 +16,7 @@ You are helping the user think through a topic in a structured way, producing a 
 
 Before anything else, ground your understanding in the actual system:
 
-1. **List both folders** — `ls business_discussions/` and `ls v2_discussions/` to see what discussions currently exist. This is mandatory every time — don't rely on memory.
+1. **Read the indexes** — read `v2_discussions/README.md` and `ls business_discussions/` to see what discussions currently exist. The v2 README is a curated, themed index with status markers and one-line summaries — use it to find relevant prior art instead of raw `ls`. This is mandatory every time — don't rely on memory.
 2. **Read the compiler doc** — `v2_discussions/29_compiler-design.md` is the conceptual anchor for the whole project. If the user's topic is loose or abstract, read this to ground yourself in what kix actually *is* and *does*. Not mandatory for narrow topics, but reach for it when you need to orient.
 3. **Read code when opining on technical topics** — skim relevant files in `lib/` and read `cli/README.md` for CLI context. Your opinions in design docs must be grounded in what the code actually does today, not just what docs say it does. If you're writing about the DSL, read the relevant lib files. If you're writing about deploy, read the CLI README and relevant command source.
 
@@ -30,7 +30,7 @@ Before writing anything, figure out:
    - `v2_discussions/` — technical design, architecture, DSL features, deployment, operator, tooling, compiler
    - If it spans both (e.g. "how do we productize feature X"), pick the one that matches the *primary question*. A technical feature's business case goes in `business_discussions/`. A business need's technical design goes in `v2_discussions/`.
 3. **What type of document?** Choose carefully — the type reflects the maturity of the idea (see Document Types below). You may consult the user on what document type they feel like describes their thought best. In case the user creates a new document type that is not listed, update this skill.
-4. **What exists already?** From the folder listings in Step 0, identify related docs. Surface what you find — the user may want to build on or reference existing work.
+4. **What exists already?** From the v2 README index and business_discussions listing in Step 0, identify related docs by theme and status. Surface what you find — the user may want to build on or reference existing work. Pay attention to status markers: don't build on superseded docs without checking their successors.
 
 Tell the user what you found and propose: folder, document type, and any existing docs worth reading first. Wait for confirmation before writing.
 
@@ -39,7 +39,7 @@ Tell the user what you found and propose: folder, document type, and any existin
 Discussion documents build on each other. Before writing:
 
 - In `business_discussions/`: check the `prereqs` field in frontmatter of related docs. Read those if they're relevant.
-- In `v2_discussions/`: check the `Related:` links at the top. Read those if they're relevant. They may or may not be relevant.
+- In `v2_discussions/`: use the README index to find docs in the same theme group, then check `Related:` links in the specific docs you read. The index shows status — prefer reading active docs over implemented/archived ones unless you need historical context.
 - Skim `ROADMAP.md` for relevant sections when the topic touches planned or built features.
 - **Check `v2_discussions/archive/`** for superseded or implemented discussions on the same topic. Archived docs aren't wrong — they represent prior thinking that may still be valid or contain important context for why something was decided.
 
@@ -61,7 +61,7 @@ Use the appropriate format (see Document Types below).
 ### Numbering
 
 - `business_discussions/`: two-digit prefix, next available number. Check existing files.
-- `v2_discussions/`: two-digit prefix, next available number. Check existing files.
+- `v2_discussions/`: two-digit prefix (three digits once we pass 99), next available number. Check the README index for the current highest number. After creating a new doc, add it to the appropriate theme group in the README.
 In case the new discussion is simply a new variant of another main document you may use <number>[a-Z]_doc-name.
 
 ## Document types
@@ -179,7 +179,7 @@ Brainstorm → RFC → Design Doc → Implementation Plan
 
 Not every idea goes through every stage. A brainstorm might die. An RFC might be rejected. A design doc might be written directly if the "what" is obvious and only the "how" needs discussion. Use judgment.
 
-When a document is superseded or fully implemented, move it to `v2_discussions/archive/` with a status update. Don't delete — the reasoning history matters.
+When a document is superseded or fully implemented, move it to `v2_discussions/archive/` with a status update, and update the README index (mark as **Implemented** or **Superseded**, update the link to point to `archive/`, and add to the Archive section). Don't delete — the reasoning history matters.
 Consult the user first if you plan to move a document.
 
 ## Principles
