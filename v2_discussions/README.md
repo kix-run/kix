@@ -39,15 +39,13 @@ Automated wiring (network, RBAC, storage) derived from the dependency graph.
 
 | # | Document | Status | Summary |
 |---|----------|--------|---------|
-| 22 | [Secrets DI](22_secrets_di.md) | Design | Secrets as first-class DI resources with producer model and shape validation. |
 | 35 | [CRD-derived RBAC & webhooks](35_crd_derived_rbac_webhooks.md) | Proposal | Auto-derive RBAC rules and webhooks from CRD definitions. |
 | 37 | [DI-derived NetworkPolicies](37_di_derived_network_policies.md) | Draft | Auto-generate NetworkPolicies from DI resolution and string context. |
 | 48 | [System contracts](48_system_contracts.md) | Partial | DI for service deps + capability checks for compile-time cluster prerequisites. |
 | 62a | [Exposure compilation](archive/62a_exposure_as_composable_build_entry.md) | **Implemented** | Composable build entries for service exposure (cert-manager, ingress). Archived. |
 | 63a | [Storage as cluster concern](63a_storage_as_cluster_concern.md) | Design | Storage choice is cluster operator's concern, not package author's. |
-| 64 | [Secret management](64_secret_management.md) | Draft | Six concerns: definition, injection, provisioning, rotation, access control, transport. |
-| 64a | [Secret origins & ownership](64a_secret_origins_and_ownership.md) | Draft | Catalog of seven secret origin types with ownership/consumer patterns. |
 | 70 | [Gateway API migration](70_gateway_api_migration.md) | RFC | Migrate from ingress-nginx to Gateway API as standard traffic management. |
+| 74 | [Secrets](74_secrets.md) | RFC | Unified secrets RFC: seven origin types, DI model, six concerns, provider tiers. Consolidates docs 22, 64, 64a. |
 
 ## Operator & Deploy
 
@@ -161,6 +159,9 @@ Customer-facing planning, demo, milestones.
 - **62a** — Exposure as composable build entry (phases 0–3)
 
 ### Superseded
+- **22** — Secrets DI (consolidated into 74)
 - **30, 33, 34** — Connection graph series (superseded by 37's DI-derived approach)
 - **62** — Exposure compilation (superseded by 62a)
 - **63** — Storage compilation (superseded by 63a)
+- **64** — Secret management six concerns (consolidated into 74)
+- **64a** — Secret origins & ownership (consolidated into 74)
