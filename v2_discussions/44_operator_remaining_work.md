@@ -1,6 +1,6 @@
 # Operator Remaining Work — Manifest Artifact, Drift Detection, Controller Runtime
 
-**Status:** RFC
+**Status:** Archived — drift detection and controller runtime are implemented. OCI artifact design absorbed into `62_operator_production_implementation_plan.md` and `46_thin_operator_production_plan.md`.
 **Related:** `29_deploy_architecture.md` (deploy pipeline), `43_activation_operator.md` (operator design)
 
 ---

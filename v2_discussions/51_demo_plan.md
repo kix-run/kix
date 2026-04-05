@@ -360,3 +360,118 @@ The v1/v2 swap is done by `cp` in the CLI tape (simulating "I edited my cluster"
 - **Operator logs panel:** Showing operator logs alongside the resource changes would make the reconciliation loop more visible. Could use a split terminal.
 - **Richer cluster:** A multi-package cluster with DI (e.g., coredns + app depending on it) would make blast radius more dramatic. Planned for a future iteration.
 - **Network policy derivation demo:** Once implemented, showing auto-generated NetworkPolicies from the dependency graph would be a strong compiler demo.
+
+---
+
+## 7. Demo Catalog
+
+Beyond the lifecycle demo above, these are the other demos we could build, organized by implementation readiness. (Consolidated from earlier brainstorming in doc 53.)
+
+### Tier 1: Ready Today (or with minor work)
+
+**1.2 Package Authoring — "How to Write a kix Package"**
+- Audience: Package authors, developers evaluating kix
+- Story: Start from scratch, build an echo-server package step by step
+- Shows: Package anatomy (`meta`, `options`, `build`), `scope.mkResource`/`scope.mkDeployment`, `self.configmap.out.name` dependency tracking, pipe composition (`|> kix.service.fromWorkload`), `kix inspect`/`kix graph`/`kix build`
+- Format: VHS tape that "types out" the nix file, or side-by-side (nix code on left, YAML on right)
+
+**1.3 Cluster Definition — "How to Wire a Cluster"**
+- Audience: Cluster operators, platform teams
+- Shows: `kix.buildCluster` with modules, namespace + instance declarations, config overrides, DI resolution, flavors
+- Implementation: Use the `example` cluster definition (coredns + valkey + cert-manager + immich)
+
+**1.4 Diff Deep-Dive**
+- Audience: Change management / PR review
+- Shows: `kix diff kind`, build-to-build comparison, package-grouped output, keyed-list-aware diffing, rename detection, CI exit codes
+- Implementation: Ready today
+
+**1.5 Dependency Graph Visualization**
+- Audience: Universal
+- Shows: `kix graph kind --format tree/dot/json`, graphviz SVG rendering, content-address-derived edges
+- Implementation: Ready today
+
+**1.6 Snapshot + Offline Diff**
+- Audience: CI/CD, audit teams
+- Shows: `kix snapshot save/diff`, offline change detection without cluster access, CI integration
+- Implementation: Ready today
+
+### Tier 2: Needs Moderate Work
+
+**2.1 Auto-Instantiation** — App declares postgres dependency, kix auto-creates it. Demo: `test-auto` cluster.
+
+**2.2 DI-Driven Defaults** — Add ingress controller → all apps get ingresses. Remove it → graceful degradation. Demo: example cluster with/without cert-manager.
+
+**2.3 Content-Addressing Explained** — Change one ConfigMap value, watch the hash cascade through the DAG. Shows determinism + blast radius.
+
+**2.4 Hardware Flavors** — Same cluster definition, different flavors (kind, k3s, hetzner). Build-to-build diffs show manifest differences.
+
+**2.5 Security Defaults** — Non-root by default via `mkDefault`; overrides require `mkForce` (greppable, auditable). Needs implementation (ROADMAP item).
+
+**2.6 Network Policy Derivation** — NetworkPolicies auto-derived from dependency graph. `lib/netpol.nix` exists; needs demo cluster with Cilium on kind.
+
+### Tier 3: Needs Significant Work
+
+- **Compiler errors** — Missing dependency, version incompatibility, extension mismatch, cross-namespace violation. Refs: `29_compiler-design.md` sections 3-5.
+- **CRD Schema Validation** — Typo in cert-manager CR caught at build time. `mkCRD` has schemas; `mkCR` needs validation pass.
+- **Connection Graph + Port Fan-Out** — Typed connection edges → derived env vars, network policies, port validation. Ref: `29_compiler-design.md` 4.1-4.3.
+- **Whole-Cluster Analysis** — Selector uniqueness, port conflicts, quota fit. Ref: `29_compiler-design.md` section 5.
+- **PR Preview Environments** — Content-addressing means unchanged services share resources. Needs multi-activation support.
+- **Canary / Wave Rollouts** — Different hash = different resource = side-by-side. Needs traffic management integration.
+- **Vertical Integration** — Rust source → Nix binary → container image → running pod. Needs nix-snapshotter.
+- **Air-Gapped Deployment** — `nix copy --to`, no downloads during deploy. Ref: `47_air_gapped_deploys.md`.
+
+### Tier 4: Aspirational
+
+- Topology-aware monitoring (auto-generated dashboards from dep graph)
+- Cross-cluster comparison (staging vs prod hash divergence)
+- "What if" analysis (upgrade impact preview)
+- Functional CRDs (compile-time operator replacement)
+- Local dev loop (Tilt-inspired watch + rebuild)
+- Supply chain audit (Merkle DAG walk, cryptographic verification)
+
+---
+
+## 8. Planned Demo: "The Compiler Catches Everything" (VHS Tape)
+
+**Audience:** Platform engineers, technical decision-makers
+**Format:** Single VHS tape, ~3-5 min, continuous narrative
+**Protagonist:** Immich (real app, real postgres+pgvecto.rs dependency)
+**One-line:** Missing → wrong → automatic → governed → composable → traceable — all at build time.
+
+**Scene 1 — Missing DI:** Cluster with immich but no postgres → build-time error.
+
+**Scene 2 — Wrong Usage:** Add postgres without pgvecto.rs → build-time error (immich requires it).
+
+**Scene 3 — Auto-Configuration:** Leave postgres unlocked. Immich's DI auto-configures postgres with right extensions. `kix inspect` + `kix graph` show the result. Variant: remove explicit postgres, enable auto-instantiation.
+
+**Scene 4 — Locked Fields Enforce Team Boundaries:** Platform team locks `extensions` with `mkLocked`. Immich's DI injection blocked → build-time error. Team governance at build time.
+
+**Scene 5 — DI-Driven Defaults Compose:** Unlock postgres, add cert-manager. `kix diff` shows immich now has TLS annotations + Certificate CR. No one edited immich's config.
+
+**Scene 6 — Content-Addressing Reveals Blast Radius:** Change postgres `max_connections`. Diff shows postgres + immich get new hashes. Cert-manager untouched. Blast radius computed, not guessed.
+
+**Closing:** Six scenarios, zero cluster access. Every mistake caught, every dependency resolved, every boundary enforced — all before a single manifest reaches the API server.
+
+---
+
+## 9. Demo Packaging Strategy
+
+### Format options
+- **VHS GIF** — current approach, good for README/website, self-contained
+- **Asciinema** — terminal recording with copy-paste support, better for tutorials
+- **Live demo** — most compelling for talks/meetings, riskiest
+- **Side-by-side** — nix code on left, resulting resources on right (for package authoring)
+- **Split terminal** — k9s or operator logs alongside CLI (for lifecycle demos)
+
+### Progressive complexity
+Demos should be watchable in order, each building on the previous:
+1. "What does kix produce?" (build + inspect)
+2. "How do I deploy?" (deploy + health)
+3. "How do I write a package?" (package authoring)
+4. "How do I wire a cluster?" (cluster definition)
+5. "What happens when things break?" (lifecycle demo)
+6. "What does the compiler catch?" (build-time errors)
+7. "Where is this going?" (vision demos)
+
+### Demo index page
+A simple page (or README section) linking to all available demos with one-line descriptions and estimated duration.

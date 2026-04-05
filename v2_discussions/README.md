@@ -46,6 +46,8 @@ Automated wiring (network, RBAC, storage) derived from the dependency graph.
 | 63a | [Storage as cluster concern](63a_storage_as_cluster_concern.md) | Design | Storage choice is cluster operator's concern, not package author's. |
 | 70 | [Gateway API migration](70_gateway_api_migration.md) | RFC | Migrate from ingress-nginx to Gateway API as standard traffic management. |
 | 74 | [Secrets](74_secrets.md) | RFC | Unified secrets RFC: seven origin types, DI model, six concerns, provider tiers. Consolidates docs 22, 64, 64a. |
+| 75 | [Secrets — what actually matters](75_secrets_what_actually_matters.md) | Brainstorm | Cuts through the 74 overdesign: Problem A (values) vs Problem B (contracts). SOPS default, ship contracts+values together. |
+| 76 | [Secrets design](76_secrets_design.md) | Design | Concrete API: mkSecret (SOPS, hash-verified), mkSecretRef (external), out.keyRef/mkEnv, DI override, CLI commands. |
 
 ## Operator & Deploy
 
@@ -120,8 +122,8 @@ Customer-facing planning, demo, milestones.
 | 66 | [Milestone roadmap](66_milestone_roadmap.md) | Draft | Five user archetypes, cumulative milestones. |
 | 51 | [Demo plan](51_demo_plan.md) | Plan | Full lifecycle demo: deploy, change, break, detect, fix, rollback. |
 | 52 | [Demo implementation todo](52_demo_implementation_todo.md) | Plan | Implementation tasks for VHS demos from doc 51. |
-| 53 | [Demo brainstorm](53_demo_brainstorm.md) | Fragment | Catalog of possible demos by readiness tier. |
-| 57 | [Adam management brainstorm](57-adam-management-brainstorm.md) | Fragment | Early brainstorm: dashboards, centralized deploy, audit trails. |
+| 53 | [Demo brainstorm](archive/53_demo_brainstorm.md) | **Archived** | Folded into 51 (demo catalog, compiler demo, packaging strategy). |
+| 57 | [Adam management brainstorm](archive/57-adam-management-brainstorm.md) | **Archived** | Promoted to `business_discussions/26_centralized_deployment_platform.md`. |
 
 ---
 
@@ -157,6 +159,10 @@ Customer-facing planning, demo, milestones.
 - **51** — Merkle health check design
 - **56** — Unified operator reconcile (phase-based lifecycle)
 - **62a** — Exposure as composable build entry (phases 0–3)
+
+### Folded / Promoted
+- **53** — Demo brainstorm (unique content folded into 51: demo catalog, compiler demo tape, packaging strategy)
+- **57** — Management brainstorm (promoted to `business_discussions/26_centralized_deployment_platform.md` as centralized deployment platform RFC)
 
 ### Superseded
 - **22** — Secrets DI (consolidated into 74)
