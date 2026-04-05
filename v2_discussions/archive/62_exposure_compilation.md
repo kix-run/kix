@@ -1,6 +1,6 @@
 # 62 — Exposure Compilation: From Boilerplate to Derived Resources
 
-**Status:** Design exploration
+**Status:** Superseded by 62a
 **Related:** `29_compiler-design.md` (§4.4 Exposure/Ingress Compilation), `39_di_driven_defaults_design.md` (archived, DI-driven ingress pattern), `31_port_fanout_dsl.md` (named ports), `32_volume_mount_dsl.md` (mount helpers)
 
 ---

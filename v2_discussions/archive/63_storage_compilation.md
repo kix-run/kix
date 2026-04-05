@@ -1,6 +1,6 @@
 # 63 — Storage Compilation: PVC Creation + Mount Wiring
 
-**Status:** Design exploration
+**Status:** Superseded by 63a
 **Related:** `32_volume_mount_dsl.md` (mount helpers, `.path`, `.mountAt` — the foundation), `29_compiler-design.md` (§4.5 Storage Wiring), `39_di_driven_defaults_design.md` (archived, storage DI pattern)
 
 ---
