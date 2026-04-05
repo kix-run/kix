@@ -1,6 +1,6 @@
 # 76: Secrets in kix — Design Doc
 
-**Status:** Design
+**Status:** Implemented (core primitives + package migration). SOPS CLI commands and deploy-time hydration are not yet implemented.
 **Related:** `75_secrets_what_actually_matters.md` (strategic framing), `74_secrets.md` (full RFC), `29_compiler-design.md` (Merkle DAG)
 
 ---

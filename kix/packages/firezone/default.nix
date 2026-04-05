@@ -214,9 +214,7 @@ in
         };
 
         # --- Secret: sensitive env vars ---
-        envSecret = scope.mkResource {
-          apiVersion = "v1";
-          kind = "Secret";
+        envSecret = scope.mkSecret {
           name = "${name}-env";
           stringData = {
             DEFAULT_ADMIN_EMAIL = config.admin.email;
@@ -231,9 +229,7 @@ in
         };
 
         # --- Secret: file-based secrets (WireGuard key, optional SAML) ---
-        filesSecret = scope.mkResource {
-          apiVersion = "v1";
-          kind = "Secret";
+        filesSecret = scope.mkSecret {
           name = "${name}-files";
           stringData = {
             private_key = config.wireguard.privateKey;
@@ -285,7 +281,7 @@ in
                     ];
                     envFrom = [
                       { configMapRef.name = self.configMap.out.name; }
-                      { secretRef.name = self.envSecret.out.name; }
+                      self.envSecret.out.envFrom
                     ];
                     env = kix.mkEnv config.env dbPasswordEnv;
                     securityContext.capabilities.add = [

@@ -107,14 +107,9 @@ in
       };
 
       # Alertmanager config as a Secret (the operator expects this)
-      alertmanagerConfig = scope.mkResource {
-        apiVersion = "v1";
-        kind = "Secret";
+      alertmanagerConfig = scope.mkSecret {
         name = "alertmanager-${name}";
-        extra = {
-          type = "Opaque";
-          stringData."alertmanager.yaml" = builtins.toJSON config.config;
-        };
+        stringData."alertmanager.yaml" = builtins.toJSON config.config;
       };
 
       # Alertmanager CR — operator reconciles into StatefulSet

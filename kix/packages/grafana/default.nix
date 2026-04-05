@@ -275,20 +275,8 @@ in
             RESOURCE = "both";
           }
           ++ [
-            {
-              name = "REQ_USERNAME";
-              valueFrom.secretKeyRef = {
-                name = self.secret.out.name;
-                key = "admin-user";
-              };
-            }
-            {
-              name = "REQ_PASSWORD";
-              valueFrom.secretKeyRef = {
-                name = self.secret.out.name;
-                key = "admin-password";
-              };
-            }
+            (self.secret.out.keyRef "admin-user" // { name = "REQ_USERNAME"; })
+            (self.secret.out.keyRef "admin-password" // { name = "REQ_PASSWORD"; })
           ];
         securityContext = sidecarSecCtx;
         volumeMounts = [
@@ -314,20 +302,8 @@ in
             RESOURCE = "both";
           }
           ++ [
-            {
-              name = "REQ_USERNAME";
-              valueFrom.secretKeyRef = {
-                name = self.secret.out.name;
-                key = "admin-user";
-              };
-            }
-            {
-              name = "REQ_PASSWORD";
-              valueFrom.secretKeyRef = {
-                name = self.secret.out.name;
-                key = "admin-password";
-              };
-            }
+            (self.secret.out.keyRef "admin-user" // { name = "REQ_USERNAME"; })
+            (self.secret.out.keyRef "admin-password" // { name = "REQ_PASSWORD"; })
           ];
         securityContext = sidecarSecCtx;
         volumeMounts = [
@@ -425,16 +401,11 @@ in
         };
       };
 
-      secret = scope.mkResource {
-        apiVersion = "v1";
-        kind = "Secret";
+      secret = scope.mkSecret {
         inherit name;
-        extra = {
-          type = "Opaque";
-          stringData = {
-            admin-user = config.adminUser;
-            admin-password = config.adminPassword;
-          };
+        stringData = {
+          admin-user = config.adminUser;
+          admin-password = config.adminPassword;
         };
       };
 
@@ -519,20 +490,8 @@ in
                       name = "GF_PATHS_PROVISIONING";
                       value = "/etc/grafana/provisioning";
                     }
-                    {
-                      name = "GF_SECURITY_ADMIN_USER";
-                      valueFrom.secretKeyRef = {
-                        name = self.secret.out.name;
-                        key = "admin-user";
-                      };
-                    }
-                    {
-                      name = "GF_SECURITY_ADMIN_PASSWORD";
-                      valueFrom.secretKeyRef = {
-                        name = self.secret.out.name;
-                        key = "admin-password";
-                      };
-                    }
+                    (self.secret.out.keyRef "admin-user" // { name = "GF_SECURITY_ADMIN_USER"; })
+                    (self.secret.out.keyRef "admin-password" // { name = "GF_SECURITY_ADMIN_PASSWORD"; })
                     {
                       name = "POD_IP";
                       valueFrom.fieldRef = {

@@ -341,23 +341,18 @@ in
         };
       };
 
-      coreSecret = scope.mkResource {
-        apiVersion = "v1";
-        kind = "Secret";
+      coreSecret = scope.mkSecret {
         name = "${name}-core";
-        extra = {
-          type = "Opaque";
-          stringData = {
-            HARBOR_ADMIN_PASSWORD =
-              if config.adminPassword != null then config.adminPassword else "Harbor12345";
-            secretKey = if config.secretKey != null then config.secretKey else "not-a-secure-key!";
-            secret = "not-a-secure-key!";
-            CSRF_KEY = "not-a-secure-csrf-key-change-me!";
-            REGISTRY_CREDENTIAL_PASSWORD = "harbor_registry_password";
-          }
-          // lib.optionalAttrs (config.database.existingSecret == null) {
-            POSTGRESQL_PASSWORD = "";
-          };
+        stringData = {
+          HARBOR_ADMIN_PASSWORD =
+            if config.adminPassword != null then config.adminPassword else "Harbor12345";
+          secretKey = if config.secretKey != null then config.secretKey else "not-a-secure-key!";
+          secret = "not-a-secure-key!";
+          CSRF_KEY = "not-a-secure-csrf-key-change-me!";
+          REGISTRY_CREDENTIAL_PASSWORD = "harbor_registry_password";
+        }
+        // lib.optionalAttrs (config.database.existingSecret == null) {
+          POSTGRESQL_PASSWORD = "";
         };
       };
 
@@ -433,23 +428,11 @@ in
                   };
                   envFrom = [
                     { configMapRef.name = self.coreConfigMap.out.name; }
-                    { secretRef.name = self.coreSecret.out.name; }
+                    self.coreSecret.out.envFrom
                   ];
                   env = [
-                    {
-                      name = "CORE_SECRET";
-                      valueFrom.secretKeyRef = {
-                        name = self.coreSecret.out.name;
-                        key = "secret";
-                      };
-                    }
-                    {
-                      name = "JOBSERVICE_SECRET";
-                      valueFrom.secretKeyRef = {
-                        name = self.jobserviceSecret.out.name;
-                        key = "JOBSERVICE_SECRET";
-                      };
-                    }
+                    (self.coreSecret.out.keyRef "secret" // { name = "CORE_SECRET"; })
+                    (self.jobserviceSecret.out.keyRef "JOBSERVICE_SECRET" // { name = "JOBSERVICE_SECRET"; })
                   ];
                   ports = [
                     {
@@ -689,28 +672,18 @@ in
         };
       };
 
-      registrySecret = scope.mkResource {
-        apiVersion = "v1";
-        kind = "Secret";
+      registrySecret = scope.mkSecret {
         name = "${name}-registry";
-        extra = {
-          type = "Opaque";
-          stringData = {
-            REGISTRY_HTTP_SECRET = "placeholder-http-secret";
-            REGISTRY_HTPASSWD = "harbor_registry_user:$2y$10$placeholder_bcrypt_hash";
-          };
+        stringData = {
+          REGISTRY_HTTP_SECRET = "placeholder-http-secret";
+          REGISTRY_HTPASSWD = "harbor_registry_user:$2y$10$placeholder_bcrypt_hash";
         };
       };
 
-      registryHtpasswdSecret = scope.mkResource {
-        apiVersion = "v1";
-        kind = "Secret";
+      registryHtpasswdSecret = scope.mkSecret {
         name = "${name}-registry-htpasswd";
-        extra = {
-          type = "Opaque";
-          stringData = {
-            REGISTRY_HTPASSWD = "harbor_registry_user:$2y$10$placeholder_bcrypt_hash";
-          };
+        stringData = {
+          REGISTRY_HTPASSWD = "harbor_registry_user:$2y$10$placeholder_bcrypt_hash";
         };
       };
 
@@ -780,7 +753,7 @@ in
                   readinessProbe = registryProbe // {
                     initialDelaySeconds = 1;
                   };
-                  envFrom = [ { secretRef.name = self.registrySecret.out.name; } ];
+                  envFrom = [ self.registrySecret.out.envFrom ];
                   volumeMounts = [
                     {
                       name = "registry-config";
@@ -816,25 +789,13 @@ in
                     initialDelaySeconds = 1;
                   };
                   env = [
-                    {
-                      name = "CORE_SECRET";
-                      valueFrom.secretKeyRef = {
-                        name = self.coreSecret.out.name;
-                        key = "secret";
-                      };
-                    }
-                    {
-                      name = "JOBSERVICE_SECRET";
-                      valueFrom.secretKeyRef = {
-                        name = self.jobserviceSecret.out.name;
-                        key = "JOBSERVICE_SECRET";
-                      };
-                    }
+                    (self.coreSecret.out.keyRef "secret" // { name = "CORE_SECRET"; })
+                    (self.jobserviceSecret.out.keyRef "JOBSERVICE_SECRET" // { name = "JOBSERVICE_SECRET"; })
                   ];
                   envFrom = [
                     { configMapRef.name = self.registryCtlConfigMap.out.name; }
-                    { secretRef.name = self.registrySecret.out.name; }
-                    { secretRef.name = self.registryCtlSecret.out.name; }
+                    self.registrySecret.out.envFrom
+                    self.registryCtlSecret.out.envFrom
                   ];
                   volumeMounts = [
                     {
@@ -889,14 +850,10 @@ in
         name = "${name}-registryctl";
       };
 
-      registryCtlSecret = scope.mkResource {
-        apiVersion = "v1";
-        kind = "Secret";
+      registryCtlSecret = scope.mkSecret {
         name = "${name}-registryctl";
-        extra = {
-          type = "Opaque";
-          stringData = { };
-        };
+        keys = [ ];
+        stringData = { };
       };
 
       # ============================================================
@@ -966,17 +923,12 @@ in
         };
       };
 
-      jobserviceSecret = scope.mkResource {
-        apiVersion = "v1";
-        kind = "Secret";
+      jobserviceSecret = scope.mkSecret {
         name = "${name}-jobservice";
-        extra = {
-          type = "Opaque";
-          stringData = {
-            CORE_SECRET = "not-a-secure-secret";
-            JOBSERVICE_SECRET = "not-a-secure-secret";
-            REGISTRY_CREDENTIAL_PASSWORD = "harbor_registry_password";
-          };
+        stringData = {
+          CORE_SECRET = "not-a-secure-secret";
+          JOBSERVICE_SECRET = "not-a-secure-secret";
+          REGISTRY_CREDENTIAL_PASSWORD = "harbor_registry_password";
         };
       };
 
@@ -1045,17 +997,11 @@ in
                     initialDelaySeconds = 20;
                   };
                   env = [
-                    {
-                      name = "CORE_SECRET";
-                      valueFrom.secretKeyRef = {
-                        name = self.coreSecret.out.name;
-                        key = "secret";
-                      };
-                    }
+                    (self.coreSecret.out.keyRef "secret" // { name = "CORE_SECRET"; })
                   ];
                   envFrom = [
                     { configMapRef.name = self.jobserviceEnvConfigMap.out.name; }
-                    { secretRef.name = self.jobserviceSecret.out.name; }
+                    self.jobserviceSecret.out.envFrom
                   ];
                   resources = {
                     requests = {
@@ -1090,14 +1036,10 @@ in
       # Exporter -- Prometheus metrics exporter
       # ============================================================
 
-      exporterSecret = scope.mkResource {
-        apiVersion = "v1";
-        kind = "Secret";
+      exporterSecret = scope.mkSecret {
         name = "${name}-exporter";
-        extra = {
-          type = "Opaque";
-          stringData = { };
-        };
+        keys = [ ];
+        stringData = { };
       };
 
       exporterEnvConfigMap = scope.mkResource {
@@ -1202,7 +1144,7 @@ in
                   };
                   envFrom = [
                     { configMapRef.name = self.exporterEnvConfigMap.out.name; }
-                    { secretRef.name = self.exporterSecret.out.name; }
+                    self.exporterSecret.out.envFrom
                   ];
                   securityContext = containerSecurityContext;
                 }

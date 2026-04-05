@@ -1100,16 +1100,12 @@
       # In primary/replica mode, the secret is named {name} (not {name}-credentials).
       secret =
         if config.auth.enabled && config.auth.existingSecret == null then
-          scope.mkResource {
-            apiVersion = "v1";
-            kind = "Secret";
+          scope.mkSecret {
             name = if config.sentinel.enabled then "${name}-credentials" else "${name}";
             labels = selectorLabels;
-            extra = {
-              type = "Opaque";
-              stringData = lib.optionalAttrs (config.auth.password != null) {
-                ${authPasswordKey} = config.auth.password;
-              };
+            keys = [ authPasswordKey ];
+            stringData = lib.optionalAttrs (config.auth.password != null) {
+              ${authPasswordKey} = config.auth.password;
             };
           }
         else

@@ -314,6 +314,136 @@ rec {
       # Uses scopeObj (lazy self-reference) so crd.out.mkCR gets the full scope.
       mkCR = crd: args: crd.out.mkCR scopeObj args;
 
+      # ── Secret support ──────────────────────────────────────────────
+
+      # Create a kix-managed Secret resource with enriched out API.
+      # Accepts inline stringData (for dev/config-derived secrets) or
+      # source + hash (for SOPS-encrypted secrets, kix-deploy hydrates).
+      #
+      # The out API provides: keyRef, mkEnv, envFrom, volume — all with
+      # build-time key validation and automatic dependency tracking.
+      #
+      # Usage:
+      #   creds = scope.mkSecret {
+      #     name = "db-credentials";
+      #     keys = [ "username" "password" ];
+      #     stringData = { username = "admin"; password = "s3cret"; };
+      #   };
+      #   env = creds.out.mkEnv { DB_USER = "username"; DB_PASS = "password"; };
+      mkSecret =
+        {
+          name,
+          keys ? null,
+          type ? "Opaque",
+          stringData ? { },
+          source ? null,
+          hash ? null,
+          meta ? { },
+          labels ? { },
+          annotations ? { },
+          requires ? [ ],
+          extra ? { },
+        }:
+        let
+          effectiveKeys =
+            if keys != null then
+              keys
+            else if stringData != { } then
+              builtins.attrNames stringData
+            else
+              throw "mkSecret \"${name}\": either 'keys' or 'stringData' must be provided";
+
+          resource = scopeMkResource {
+            apiVersion = "v1";
+            kind = "Secret";
+            inherit
+              name
+              labels
+              requires
+              ;
+            annotations =
+              annotations
+              // {
+                "kix.dev/secret-keys" = builtins.concatStringsSep "," effectiveKeys;
+              }
+              // lib.optionalAttrs (source != null) {
+                "kix.dev/sops-source" = toString source;
+              }
+              // lib.optionalAttrs (hash != null) {
+                "kix.dev/content-hash" = hash;
+              }
+              // lib.optionalAttrs (meta ? classification) {
+                "kix.dev/classification" = meta.classification;
+              }
+              // lib.optionalAttrs (meta ? rotationPolicy) {
+                "kix.dev/rotation-policy" = meta.rotationPolicy;
+              };
+            extra = {
+              inherit type;
+            }
+            // lib.optionalAttrs (stringData != { }) { inherit stringData; }
+            // extra;
+          };
+
+          resourceCtx = builtins.getContext "${resource}";
+          attachCtx = value: builtins.appendContext (toString value) resourceCtx;
+
+          secretHelpers = k8s.mkSecretHelpers {
+            inherit name type attachCtx;
+            keys = effectiveKeys;
+          };
+        in
+        resource // { out = resource.out // secretHelpers; };
+
+      # Reference an externally-managed secret (Vault, ESO, cert-manager, bootstrap).
+      # No manifest produced — creates a store path for dependency tracking only.
+      # Same out API as mkSecret: keyRef, mkEnv, envFrom, volume.
+      #
+      # Usage:
+      #   creds = scope.mkSecretRef {
+      #     name = "vault-db-creds";
+      #     keys = [ "username" "password" ];
+      #   };
+      #   env = creds.out.mkEnv { DB_USER = "username"; };
+      mkSecretRef =
+        {
+          name,
+          keys,
+          type ? "Opaque",
+          requires ? [ ],
+        }:
+        let
+          refPath = builtins.toFile "secret-ref-${name}" (
+            builtins.toJSON {
+              inherit
+                name
+                keys
+                type
+                ;
+            }
+          );
+          refCtx = builtins.getContext "${refPath}";
+          attachCtx = value: builtins.appendContext (toString value) refCtx;
+
+          secretHelpers = k8s.mkSecretHelpers {
+            inherit
+              name
+              keys
+              type
+              attachCtx
+              ;
+          };
+        in
+        {
+          _type = "secret-ref";
+          outPath = refPath;
+          inherit requires;
+          out = {
+            name = attachCtx name;
+          }
+          // secretHelpers;
+        };
+
       # The scope object — self-referencing via Nix laziness so mkCR can pass
       # the full scope to crd.out.mkCR.
       scopeObj = {
@@ -360,6 +490,8 @@ rec {
           mkCRD
           mkCRDRef
           mkCR
+          mkSecret
+          mkSecretRef
           ;
       };
     in

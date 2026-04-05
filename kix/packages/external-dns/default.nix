@@ -386,26 +386,12 @@
       # Container env: Cloudflare credentials from a secret named after the instance.
       containerEnv =
         config.env
-        ++ lib.optionals (config.secretName != null) [
+        ++ lib.optionals (self.secret != null) [
           {
             name = "CF_API_EMAIL";
           }
-          {
-            name = "CF_API_KEY";
-            valueFrom.secretKeyRef = {
-              name = config.secretName;
-              key = "cloudflare_api_key";
-              optional = true;
-            };
-          }
-          {
-            name = "CF_API_TOKEN";
-            valueFrom.secretKeyRef = {
-              name = config.secretName;
-              key = "cloudflare_api_token";
-              optional = true;
-            };
-          }
+          (self.secret.out.keyRef "cloudflare_api_key" // { name = "CF_API_KEY"; })
+          (self.secret.out.keyRef "cloudflare_api_token" // { name = "CF_API_TOKEN"; })
         ];
 
       # --- Mounts ---
@@ -432,14 +418,13 @@
       # --- Secret (Opaque, credentials managed externally) ---
       secret =
         if config.secretName != null then
-          scope.mkResource {
-            apiVersion = "v1";
-            kind = "Secret";
+          scope.mkSecret {
             name = config.secretName;
             labels = allLabels;
-            extra = {
-              type = "Opaque";
-            };
+            keys = [
+              "cloudflare_api_key"
+              "cloudflare_api_token"
+            ];
           }
         else
           null;

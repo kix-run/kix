@@ -72,6 +72,9 @@
   - [x] SARIF export — `kix check <cluster> --sarif` outputs SARIF 2.1.0 JSON from scorecard findings. Nix-side scorecard report serialized to `kix-scorecard.json` in the activation result dir, read by CLI backend. GitHub Code Scanning integration via `github/codeql-action/upload-sarif`. See `v2_discussions/64_mvp_implementation_approach.md`.
 - [ ] Automated compliance — continuous verification against regulatory frameworks (SOC2, HIPAA, PCI-DSS)
 - [ ] Secret handling and injection (agenix, etc.) — hashes of encrypted secrets don't trigger spurious changes; injection happens in kix-deploy
+  - [x] **Secret primitives**: `scope.mkSecret` (kix-managed, inline stringData or SOPS source+hash) and `scope.mkSecretRef` (externally-managed, no manifest). Both expose enriched `out` API: `keyRef`, `mkEnv`, `envFrom`, `volume` with build-time key validation. `kix.dev/secret-keys` annotation stamps declared keys. Standalone `packages/secret` and `packages/secret-ref` for cluster-level instances via DI. See `v2_discussions/76_secrets_design.md`.
+  - [x] **Package migration**: grafana, alertmanager, firezone, harbor, external-dns, velero, valkey, python-app, n8n, metabase migrated from raw `scope.mkResource { kind = "Secret"; }` to `scope.mkSecret`/`scope.mkSecretRef`. String-only secret references (`secretRef.name = someString`) replaced with `out.envFrom`/`out.keyRef` for dependency tracking.
+  - [ ] SOPS integration — `kix secrets generate/rotate/update-hash` CLI commands, deploy-time decryption + hash verification
   - [ ] Auto-management — weekly rolling of auto-created credentials (e.g. postgres users)
   - [ ] Revoking team member permissions
 - [ ] Supply chain security (SLSA) — locked inputs for everything: not just flake inputs but arbitrary external git refs, downloads (must carry hash), and file references. Partial immunity to supply chain attacks

@@ -273,6 +273,61 @@ rec {
     in
     self;
 
+  # --- Secret helpers -----------------------------------------------------------
+  # Shared out helpers for mkSecret and mkSecretRef. Returns an attrset with
+  # keyRef, mkEnv, envFrom, volume — all producing K8s-native structures with
+  # string context for automatic dependency tracking.
+  #
+  # keyRef and mkEnv validate requested keys against the declared keys list
+  # at nix build time, catching typos before pod startup.
+  mkSecretHelpers =
+    {
+      name, # K8s secret name (plain, context added by attachCtx)
+      keys, # list of declared key names
+      type, # K8s secret type (e.g. "Opaque")
+      attachCtx, # function: string -> string-with-context
+    }:
+    let
+      ctxName = attachCtx name;
+      helpers = {
+        inherit keys type;
+
+        # Single key reference → { valueFrom.secretKeyRef = { name, key }; }
+        keyRef =
+          key:
+          if !(builtins.elem key keys) then
+            throw "secret \"${name}\" does not declare key \"${key}\"\n  declared keys: ${builtins.concatStringsSep ", " keys}"
+          else
+            {
+              valueFrom.secretKeyRef = {
+                name = ctxName;
+                inherit key;
+              };
+            };
+
+        # Map env var names to secret keys → [ { name, valueFrom.secretKeyRef } ]
+        mkEnv =
+          mapping:
+          lib.mapAttrsToList (envName: secretKey: (helpers.keyRef secretKey) // { name = envName; }) mapping;
+
+        # Inject all keys as env vars → { secretRef = { name }; }
+        envFrom = {
+          secretRef = {
+            name = ctxName;
+          };
+        };
+
+        # Mount as volume → { name, secret.secretName }
+        volume = volName: {
+          name = volName;
+          secret = {
+            secretName = ctxName;
+          };
+        };
+      };
+    in
+    helpers;
+
   # --- kix-internal CRDs --------------------------------------------------------
   # Registered once per cluster; every PackageInstance / Activation auto-depends
   # on the corresponding CRD so `kubectl apply` works in the correct order.

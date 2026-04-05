@@ -305,12 +305,9 @@ in
       # --- Secret (S3 credentials) ---
       secret =
         if createSecret then
-          scope.mkResource {
-            apiVersion = "v1";
-            kind = "Secret";
+          scope.mkSecret {
             name = credentialSecretName;
             labels = selectorLabels;
-            extra.type = "Opaque";
             stringData = config.credentials.secretContents;
           }
         else

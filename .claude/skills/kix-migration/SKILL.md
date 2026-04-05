@@ -278,7 +278,7 @@ They auto-set `apiVersion`/`kind` and copy `spec.selector.matchLabels` to `spec.
 | `name` | Required. Resource name |
 | `spec` | Resource spec (most resources) |
 | `data` | For ConfigMaps |
-| `stringData` | For Secrets |
+| `stringData` | For Secrets (prefer `scope.mkSecret` over raw `scope.mkResource` for secrets — see Secret Primitives below) |
 | `labels` | Merged into `metadata.labels` (cluster labels + managed-by added automatically) |
 | `annotations` | Merged into `metadata.annotations` |
 | `extra` | Top-level fields merged outside metadata (e.g. `rules` for ClusterRole, `type` for Secrets, `webhooks` for webhook configs) |
@@ -289,10 +289,125 @@ They auto-set `apiVersion`/`kind` and copy `spec.selector.matchLabels` to `spec.
 
 Every resource exposes:
 - `"${resource}"` — the resource name (string interpolation creates a dependency edge)
-- `resource.out.name` — the resource name as a string (use in `envFrom`, `secretKeyRef`, etc.)
+- `resource.out.name` — the resource name as a string (with dependency context)
 - `resource.out.selector` — the resource's labels (for ServiceMonitor selectors etc.)
 - `resource.out.fqdn` — full DNS name (e.g. `my-svc.my-ns.svc.cluster.local`) with dependency context. Domain suffix configurable via `clusterDomain` cluster option.
 - `resource.out.<key>` — named outputs from the `outputs` field, with dependency context
+
+### Secret primitives
+
+**Always use `scope.mkSecret` or `scope.mkSecretRef` for secrets** — never raw `scope.mkResource { kind = "Secret"; }`. The secret primitives provide an enriched `out` API with build-time key validation and dependency tracking.
+
+#### `scope.mkSecret` — kix-managed secret
+
+Creates a K8s Secret resource with enriched `out`. Accepts inline `stringData` or SOPS `source` + `hash`.
+
+```nix
+creds = scope.mkSecret {
+  name = "${scope.instanceName}-credentials";
+  stringData = {
+    username = "admin";
+    password = config.password;
+  };
+  # keys auto-derived from stringData. Explicit keys for SOPS mode:
+  # keys = [ "username" "password" ];
+  # source = ./secrets/creds.yaml;
+  # hash = "sha256-...";
+  # type = "Opaque";  # default
+};
+```
+
+#### `scope.mkSecretRef` — externally-managed secret
+
+References a secret that exists outside kix (Vault, ESO, cert-manager, bootstrap). No manifest produced — store path for dependency tracking only.
+
+```nix
+appSecret = scope.mkSecretRef {
+  name = "my-app-secret";
+  keys = [ "API_KEY" "DB_URL" ];  # for build-time validation
+};
+```
+
+#### Secret `out` API (same for both)
+
+```nix
+secret.out.name              # K8s name with dependency context
+secret.out.keys              # declared key list
+secret.out.type              # "Opaque" etc.
+
+# Single key reference → { valueFrom.secretKeyRef = { name, key }; }
+secret.out.keyRef "password"
+
+# Map env var names to secret keys → [{ name, valueFrom.secretKeyRef }]
+secret.out.mkEnv { DB_PASS = "password"; DB_USER = "username"; }
+
+# Inject all keys → { secretRef = { name }; }
+secret.out.envFrom
+
+# Volume → { name, secret.secretName }
+secret.out.volume "creds-vol"
+```
+
+`keyRef` and `mkEnv` validate keys at build time:
+```nix
+secret.out.keyRef "typo"
+# → error: secret "db-creds" does not declare key "typo"
+#   declared keys: username, password
+```
+
+#### Usage patterns
+
+```nix
+# Environment variables (most common)
+env = creds.out.mkEnv {
+  DB_PASSWORD = "password";
+  DB_USER = "username";
+};
+
+# Or single key with custom env name
+env = [ (creds.out.keyRef "password" // { name = "DB_PASSWORD"; }) ];
+
+# All keys as env vars
+envFrom = [ creds.out.envFrom ];
+
+# Volume mount (use with kix.mount.secret for full mount injection)
+volumes = [ (creds.out.volume "creds-vol") ];
+```
+
+#### Standalone packages for DI
+
+`packages/secret` and `packages/secret-ref` wrap the primitives as first-class instances:
+
+```nix
+# Cluster definition — standalone secret for DI
+instances.cloudflare-api = {
+  package = packages.secret;
+  config = {
+    keys = [ "api-token" ];
+    source = ./secrets/cloudflare-api.yaml;
+    hash = "sha256-...";
+  };
+};
+
+# External secret ref for DI
+instances.vault-creds = {
+  package = packages.secret-ref;
+  config.keys = [ "username" "password" ];
+};
+
+# Consumer receives via DI
+instances.my-app.deps.credentials = instances.cloudflare-api;
+```
+
+#### DON'T: reference secrets by raw string
+
+```nix
+# BAD — no dependency tracking, no key validation
+envFrom = [{ secretRef.name = "my-secret"; }];
+
+# GOOD — tracked, validated
+envFrom = [ self.secret.out.envFrom ];
+```
 
 ### Composition helpers (kix.*)
 
@@ -458,12 +573,12 @@ env = kix.mkEnvVars ({
   ML_URL = if hasMl then "http://${machineLearning.out.fqdn}:${machineLearning.out.port}" else null;
 } // config.env);
 
-# kix.mkEnv — combine plain vars with secret refs:
+# kix.mkEnv — combine plain vars with secret keyRefs:
 env = kix.mkEnv {
   DB_HOSTNAME = postgres.out.fqdn;
   APP_NAME = "myapp";
 } [
-  { name = "DB_PASSWORD"; valueFrom.secretKeyRef = { name = "db-creds"; key = "password"; }; }
+  (self.dbSecret.out.keyRef "password" // { name = "DB_PASSWORD"; })
 ];
 
 # kix.parseGi — storage validation:
@@ -772,14 +887,14 @@ Complex applications like Harbor have multiple sub-services (core, portal, regis
    selector.matchLabels = selectorLabels // { component = "core"; };
    ```
 
-3. **Cross-resource references via `self.*.out.name`** — use for envFrom, secretKeyRef, etc.:
+3. **Cross-resource references via enriched `out` API** — secrets use `out.envFrom`/`out.keyRef`, configmaps use `out.name`:
    ```nix
    envFrom = [
      { configMapRef.name = self.coreConfigMap.out.name; }
-     { secretRef.name = self.coreSecret.out.name; }
+     self.coreSecret.out.envFrom
    ];
    env = [
-     { name = "CORE_SECRET"; valueFrom.secretKeyRef = { name = self.coreSecret.out.name; key = "secret"; }; }
+     (self.coreSecret.out.keyRef "secret" // { name = "CORE_SECRET"; })
    ];
    ```
 

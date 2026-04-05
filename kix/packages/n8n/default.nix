@@ -116,23 +116,25 @@ in
         ...
       }:
       let
-        # Secret name for credentials (used as secretRef on envFrom).
-        secretName = if config.existingSecret != null then config.existingSecret else "${name}-app-secret";
-
         # envFrom for main deployment: app configmap + secret.
         mainEnvFrom = [
           { configMapRef.name = self.configmap.out.name; }
-          { secretRef.name = secretName; }
+          self.appSecret.out.envFrom
         ];
 
         # envFrom for worker deployment: app configmap + worker configmap + secret.
         workerEnvFrom = [
           { configMapRef.name = self.configmap.out.name; }
           { configMapRef.name = self.workerConfigmap.out.name; }
-          { secretRef.name = secretName; }
+          self.appSecret.out.envFrom
         ];
       in
       {
+        # --- Secret reference (dependency-tracked) ---
+        appSecret = scope.mkSecretRef {
+          name = if config.existingSecret != null then config.existingSecret else "${name}-app-secret";
+          keys = [ ]; # keys unknown — external secret, used via envFrom
+        };
 
         # --- ServiceAccount ---
         serviceAccount = scope.mkResource {

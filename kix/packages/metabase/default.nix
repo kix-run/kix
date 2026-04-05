@@ -122,11 +122,12 @@ in
         kix,
         ...
       }:
-      let
-        # Secret name for credentials.
-        secretName = if config.existingSecret != null then config.existingSecret else "${name}-secrets";
-      in
       {
+        # --- Secret ref (external or default name) ---
+        appSecret = scope.mkSecretRef {
+          name = if config.existingSecret != null then config.existingSecret else "${name}-secrets";
+          keys = [ ]; # keys unknown — external secret, used via envFrom
+        };
 
         # --- Deployment ---
         deployment =
@@ -152,7 +153,7 @@ in
                     // config.env
                   );
                   envFrom = [
-                    { secretRef.name = secretName; }
+                    self.appSecret.out.envFrom
                   ];
                   ports = [
                     (kix.port "http" config.port)

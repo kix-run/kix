@@ -59,15 +59,10 @@ in
   # ── Secret (env vars) ──────────────────────────────────────────
   secret =
     if config.secretEnv != { } then
-      scope.mkResource {
-        apiVersion = "v1";
-        kind = "Secret";
+      scope.mkSecret {
         name = "${name}-secrets";
         labels = componentLabels "secrets";
-        extra = {
-          type = "Opaque";
-          stringData = config.secretEnv;
-        };
+        stringData = config.secretEnv;
       }
     else
       null;
@@ -75,15 +70,10 @@ in
   # ── Secret (file mounts) ───────────────────────────────────────
   secretFilesResource =
     if config.secretFiles != { } then
-      scope.mkResource {
-        apiVersion = "v1";
-        kind = "Secret";
+      scope.mkSecret {
         name = "${name}-secret-files";
         labels = componentLabels "secret-files";
-        extra = {
-          type = "Opaque";
-          stringData = config.secretFiles;
-        };
+        stringData = config.secretFiles;
       }
     else
       null;
