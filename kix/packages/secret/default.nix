@@ -53,6 +53,7 @@
     {
       self,
       config,
+      ...
     }:
     let
       secret = scope.mkSecret {
@@ -68,6 +69,5 @@
     in
     {
       root = secret;
-      out = secret.out;
     };
 }

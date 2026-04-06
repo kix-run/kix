@@ -172,6 +172,22 @@ impl ReconcileObserver for OperatorObserver {
                     );
                 }
             }
+            ReconcileEvent::SecretHydrated { rid, keys } => {
+                tracing::info!(
+                    activation = name,
+                    resource = %rid,
+                    keys,
+                    "Secret hydrated from SOPS"
+                );
+            }
+            ReconcileEvent::SecretHydrationFailed { rid, error } => {
+                tracing::error!(
+                    activation = name,
+                    resource = %rid,
+                    error,
+                    "Secret hydration failed"
+                );
+            }
             ReconcileEvent::Stopped { reason } => {
                 tracing::error!(activation = name, reason, "Deploy stopped");
             }

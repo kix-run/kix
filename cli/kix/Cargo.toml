@@ -41,6 +41,7 @@ rusqlite.workspace = true
 
 # Hashing
 blake3.workspace = true
+sha2.workspace = true
 
 # Paths
 directories.workspace = true

@@ -21,6 +21,7 @@ use super::activation::{self, WaveRecord, WaveStatus};
 use super::apply::{ApplyAction, ChangeAction};
 use super::graph::ResourceGraph;
 use super::readiness::{self, ReadinessResult};
+use super::secrets;
 use super::waves::compute_waves;
 use super::{apply, fetch};
 
@@ -87,6 +88,10 @@ pub enum ReconcileEvent {
         activation: String,
         old: Option<String>,
     },
+    /// A secret was hydrated (SOPS decrypted + injected).
+    SecretHydrated { rid: ResourceId, keys: usize },
+    /// Secret hydration failed.
+    SecretHydrationFailed { rid: ResourceId, error: String },
     /// Deploy stopped due to errors.
     Stopped { reason: String },
 }
@@ -287,8 +292,54 @@ pub async fn reconcile(
             total: actions.len(),
         });
 
-        let results =
-            apply::apply_wave(client, discovery, actions, false, activation_identity_hash).await;
+        // Hydrate SOPS-encrypted secrets before applying the wave.
+        // Clone into a mutable vec so we can inject stringData into Secret manifests.
+        let hydrated_actions: Vec<ChangeAction> = actions
+            .iter()
+            .map(|action| {
+                if let ChangeAction::Apply(manifest) = action {
+                    if secrets::needs_hydration(manifest) {
+                        let hydrated = manifest.clone();
+                        let mut single = [hydrated];
+                        match secrets::hydrate_secrets(&mut single) {
+                            Ok(results) => {
+                                for hr in &results {
+                                    observer.on_event(&ReconcileEvent::SecretHydrated {
+                                        rid: hr.rid.clone(),
+                                        keys: hr.keys_injected,
+                                    });
+                                }
+                                ChangeAction::Apply(single.into_iter().next().unwrap())
+                            }
+                            Err(e) => {
+                                let rid = ResourceId::from_value(manifest);
+                                observer.on_event(&ReconcileEvent::SecretHydrationFailed {
+                                    rid: rid.clone(),
+                                    error: e.to_string(),
+                                });
+                                // Keep the original manifest — apply will proceed but
+                                // the Secret won't have data (may fail at runtime).
+                                // If on_error=stop, the wave failure will catch it.
+                                ChangeAction::Apply(manifest.clone())
+                            }
+                        }
+                    } else {
+                        action.clone()
+                    }
+                } else {
+                    action.clone()
+                }
+            })
+            .collect();
+
+        let results = apply::apply_wave(
+            client,
+            discovery,
+            &hydrated_actions,
+            false,
+            activation_identity_hash,
+        )
+        .await;
 
         let mut wave_failed = false;
         for (rid, res) in &results {

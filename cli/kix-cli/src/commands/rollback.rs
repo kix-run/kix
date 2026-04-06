@@ -719,6 +719,24 @@ impl ReconcileObserver for CliObserver {
             ReconcileEvent::ReadinessFailed { message, .. } => {
                 println!(" {}: {}", output::red("failed"), message);
             }
+            ReconcileEvent::SecretHydrated { rid, keys } => {
+                if !self.quiet {
+                    println!(
+                        "  {} {} hydrated ({} keys from SOPS)",
+                        output::green("🔓"),
+                        rid,
+                        keys,
+                    );
+                }
+            }
+            ReconcileEvent::SecretHydrationFailed { rid, error } => {
+                eprintln!(
+                    "  {} {} secret hydration failed: {}",
+                    output::red("!"),
+                    rid,
+                    output::red(error),
+                );
+            }
             ReconcileEvent::Stopped { reason } => {
                 eprintln!("\n{}", output::red(reason));
             }

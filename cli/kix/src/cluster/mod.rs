@@ -8,6 +8,7 @@ pub mod imports;
 pub mod normalize;
 pub mod readiness;
 pub mod reconcile;
+pub mod secrets;
 pub mod waves;
 
 pub use graph::ResourceGraph;

@@ -36,6 +36,7 @@
     {
       self,
       config,
+      ...
     }:
     let
       ref = scope.mkSecretRef {
@@ -45,6 +46,5 @@
     in
     {
       root = ref;
-      out = ref.out;
     };
 }

@@ -74,7 +74,8 @@
 - [ ] Secret handling and injection (agenix, etc.) — hashes of encrypted secrets don't trigger spurious changes; injection happens in kix-deploy
   - [x] **Secret primitives**: `scope.mkSecret` (kix-managed, inline stringData or SOPS source+hash) and `scope.mkSecretRef` (externally-managed, no manifest). Both expose enriched `out` API: `keyRef`, `mkEnv`, `envFrom`, `volume` with build-time key validation. `kix.dev/secret-keys` annotation stamps declared keys. Standalone `packages/secret` and `packages/secret-ref` for cluster-level instances via DI. See `v2_discussions/76_secrets_design.md`.
   - [x] **Package migration**: grafana, alertmanager, firezone, harbor, external-dns, velero, valkey, python-app, n8n, metabase migrated from raw `scope.mkResource { kind = "Secret"; }` to `scope.mkSecret`/`scope.mkSecretRef`. String-only secret references (`secretRef.name = someString`) replaced with `out.envFrom`/`out.keyRef` for dependency tracking.
-  - [ ] SOPS integration — `kix secrets generate/rotate/update-hash` CLI commands, deploy-time decryption + hash verification
+  - [x] **SOPS deploy-time hydration**: `kix deploy` detects Secrets with `kix.dev/sops-source` annotations, decrypts via `sops --decrypt`, optionally verifies `kix.dev/content-hash`, injects plaintext into `stringData` before applying. Integration-tested with kind cluster + age-encrypted SOPS file. See `cli/kix/src/cluster/secrets.rs`, `clusters/test-secrets.nix`, `tests/secrets-integration.sh`.
+  - [ ] SOPS CLI commands — `kix secrets generate/rotate/update-hash` for managing SOPS files and hashes
   - [ ] Auto-management — weekly rolling of auto-created credentials (e.g. postgres users)
   - [ ] Revoking team member permissions
 - [ ] Supply chain security (SLSA) — locked inputs for everything: not just flake inputs but arbitrary external git refs, downloads (must carry hash), and file references. Partial immunity to supply chain attacks

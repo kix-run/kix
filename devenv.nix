@@ -38,6 +38,8 @@ in
     pkgs.viddy
     pkgs.k9s
     pkgs.jq
+    pkgs.sops
+    pkgs.age
   ]
   ++ nixLibs;
 
