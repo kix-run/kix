@@ -43,7 +43,6 @@ pub const SKIP_RESOURCES: &[&str] = &[
     "events",
     "events.events.k8s.io",
     "pods",
-    "jobs.batch",
     "replicasets.apps",
     "controllerrevisions.apps",
     "endpointslices.discovery.k8s.io",

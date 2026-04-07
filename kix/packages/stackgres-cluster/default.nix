@@ -110,10 +110,6 @@ in
         pgbouncerConf = { };
       };
     };
-    prometheusAutobind = lib.mkOption {
-      type = lib.types.bool;
-      default = true;
-    };
     profile = lib.mkOption {
       type = lib.types.str;
       default = "production";
@@ -124,6 +120,12 @@ in
         mode = "async";
         role = "ha-read";
       };
+    };
+    # Pod update strategy method.
+    # InPlace = upgrade without pod restart; ReducedImpact = rolling restart.
+    updateMethod = lib.mkOption {
+      type = lib.types.str;
+      default = "ReducedImpact";
     };
     postgresServices = lib.mkOption {
       type = lib.types.anything;
@@ -148,9 +150,9 @@ in
     {
       self,
       config,
-      clusterConfig,
       storageClasses ? null,
       stackgresOperator, # runtime dep — ensures operator is deployed before clusters
+      ...
     }:
     let
       # Parse memory to MB for calculations.
@@ -244,14 +246,16 @@ in
         else
           throw "stackgres-cluster: config.storage.storageClass must be set or a storageClasses dependency must be available";
 
+      # CRD refs exposed by the operator — each has .mkCR for building CRs
+      # with per-resource dependencies on the CRD import marker.
+      sgCrds = stackgresOperator.out.crds;
+
     in
     {
 
       # ===== SGInstanceProfile (CPU/memory sizing) =====
 
-      instanceProfile = scope.mkResource {
-        apiVersion = "stackgres.io/v1";
-        kind = "SGInstanceProfile";
+      instanceProfile = scope.mkCR sgCrds.sgInstanceProfile {
         name = "${name}-profile";
         labels = selectorLabels;
         spec = {
@@ -262,9 +266,7 @@ in
 
       # ===== SGPostgresConfig (PostgreSQL parameters) =====
 
-      pgConfig = scope.mkResource {
-        apiVersion = "stackgres.io/v1";
-        kind = "SGPostgresConfig";
+      pgConfig = scope.mkCR sgCrds.sgPostgresConfig {
         name =
           if config.pgConfig.name != null then
             config.pgConfig.name
@@ -282,9 +284,7 @@ in
       # ===== SGObjectStorage (S3 backup destination) =====
 
       objectStorage = lib.optionalAttrs config.backup.enabled (
-        scope.mkResource ({
-          apiVersion = "stackgres.io/v1beta1";
-          kind = "SGObjectStorage";
+        scope.mkCR sgCrds.sgObjectStorage ({
           name = config.backup.s3.bucket;
           labels = selectorLabels;
           spec = {
@@ -318,9 +318,7 @@ in
       # ===== SGPoolingConfig (optional connection pooling) =====
 
       poolingConfig = lib.optionalAttrs config.pooling.enabled (
-        scope.mkResource {
-          apiVersion = "stackgres.io/v1";
-          kind = "SGPoolingConfig";
+        scope.mkCR sgCrds.sgPoolingConfig {
           name = "${name}-pooling-config";
           labels = selectorLabels;
           spec = {
@@ -344,9 +342,7 @@ in
       # ===== SGScript (optional initialization scripts) =====
 
       initScript = lib.optionalAttrs (config.scripts != [ ]) (
-        scope.mkResource {
-          apiVersion = "stackgres.io/v1";
-          kind = "SGScript";
+        scope.mkCR sgCrds.sgScript {
           name = "${name}-init";
           labels = selectorLabels;
           spec = {
@@ -361,9 +357,7 @@ in
 
       # ===== SGCluster (the PostgreSQL cluster) =====
 
-      cluster = scope.mkResource {
-        apiVersion = "stackgres.io/v1";
-        kind = "SGCluster";
+      cluster = scope.mkCR sgCrds.sgCluster {
         name = name;
         labels = selectorLabels;
         spec = {
@@ -380,7 +374,6 @@ in
           };
           sgInstanceProfile = self.instanceProfile.out.name;
           profile = config.profile;
-          prometheusAutobind = config.prometheusAutobind;
           replication = {
             mode = config.replication.mode;
             role = config.replication.role;
@@ -410,6 +403,9 @@ in
               size = config.storage.size;
               storageClass = effectiveStorageClass;
             };
+            updateStrategy = {
+              method = config.updateMethod;
+            };
           };
         }
         // lib.optionalAttrs (config.scripts != [ ]) {
@@ -423,6 +419,10 @@ in
         };
         outputs = {
           port = "5432";
+          # StackGres creates `${name}-primary` (ExternalName alias) and
+          # `${name}-replicas` services. The auto-derived fqdn points at
+          # `${name}`, which is the real ClusterIP backing `${name}-primary`
+          # — clients can use either.
           serviceName = "${name}.${scope.namespaceName}.svc";
           serviceNamePrimary = "${name}-primary.${scope.namespaceName}.svc";
           serviceNameReplicas = "${name}-replicas.${scope.namespaceName}.svc";

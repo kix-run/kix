@@ -588,7 +588,8 @@ in
                   name = "oauth";
                   secret = {
                     defaultMode = 420;
-                    secretName = config.oauthSecretName;
+                    # User-provided external secret name — not managed by kix.
+                    secretName = kix.untrackedRef config.oauthSecretName;
                   };
                 }
               ];

@@ -20,7 +20,7 @@ use thiserror::Error;
 use super::activation::{self, WaveRecord, WaveStatus};
 use super::apply::{ApplyAction, ChangeAction};
 use super::graph::ResourceGraph;
-use super::readiness::{self, ReadinessResult};
+use super::readiness::{self, ImportTarget, ReadinessResult};
 use super::secrets;
 use super::waves::compute_waves;
 use super::{apply, fetch};
@@ -50,24 +50,51 @@ pub enum ReconcileEvent {
     /// A wave had no resources to apply (all unchanged).
     WaveUnchanged { wave_index: usize, count: usize },
     /// A single resource was applied successfully.
+    ///
+    /// When `import_target` is `Some`, the resource is an import marker
+    /// (`kix.dev/mode: import`). Observers should render imports with a
+    /// discrete visual cue referencing the target the marker describes
+    /// rather than the marker's own ResourceId.
     ResourceApplied {
         rid: ResourceId,
         action: ApplyAction,
+        import_target: Option<ImportTarget>,
     },
     /// A single resource failed to apply.
     ResourceFailed { rid: ResourceId, error: String },
     /// Waiting for a resource to become ready.
-    ReadinessWaiting { rid: ResourceId },
+    ReadinessWaiting {
+        rid: ResourceId,
+        import_target: Option<ImportTarget>,
+    },
+    /// Periodic status update while polling a resource for readiness.
+    ///
+    /// Carries a human-readable snapshot of the resource's current state
+    /// (e.g. "3/5 ready, 5/5 updated") so consumers can show live progress
+    /// without duplicating the readiness-check logic.
+    ReadinessProgress {
+        rid: ResourceId,
+        import_target: Option<ImportTarget>,
+        message: String,
+    },
     /// A resource became ready.
-    ReadinessReady { rid: ResourceId },
+    ReadinessReady {
+        rid: ResourceId,
+        import_target: Option<ImportTarget>,
+    },
     /// A resource timed out waiting for readiness.
     ReadinessTimeout {
         rid: ResourceId,
         elapsed: Duration,
         message: String,
+        import_target: Option<ImportTarget>,
     },
     /// A resource readiness check failed.
-    ReadinessFailed { rid: ResourceId, message: String },
+    ReadinessFailed {
+        rid: ResourceId,
+        message: String,
+        import_target: Option<ImportTarget>,
+    },
     /// A wave completed (recorded on Activation CR).
     WaveComplete {
         wave_index: usize,
@@ -138,6 +165,9 @@ pub struct ReconcileConfig {
     pub on_error: OnErrorPolicy,
     /// How to handle orphans.
     pub prune: PrunePolicy,
+    /// Take ownership of fields owned by other field managers (SSA force).
+    /// Default false — conflicts surface as actionable errors instead of silent clobber.
+    pub force_conflicts: bool,
 }
 
 /// Summary of a reconcile run.
@@ -338,8 +368,20 @@ pub async fn reconcile(
             &hydrated_actions,
             false,
             activation_identity_hash,
+            config.force_conflicts,
         )
         .await;
+
+        // Index hydrated action manifests by ResourceId for import-target
+        // lookup during event emission. We clone Values because the closure
+        // borrow would otherwise conflict with the later readiness loop.
+        let manifest_by_rid: HashMap<ResourceId, &Value> = hydrated_actions
+            .iter()
+            .filter_map(|action| match action {
+                ChangeAction::Apply(m) => Some((ResourceId::from_value(m), m)),
+                _ => None,
+            })
+            .collect();
 
         let mut wave_failed = false;
         for (rid, res) in &results {
@@ -350,9 +392,13 @@ pub async fn reconcile(
                         ApplyAction::Configured => result.configured += 1,
                         ApplyAction::Unchanged | ApplyAction::Skipped => result.unchanged += 1,
                     }
+                    let import_target = manifest_by_rid
+                        .get(rid)
+                        .and_then(|m| readiness::import_target_from_manifest(m));
                     observer.on_event(&ReconcileEvent::ResourceApplied {
                         rid: rid.clone(),
                         action: apply_result.action.clone(),
+                        import_target,
                     });
                 }
                 Err(e) => {
@@ -378,6 +424,7 @@ pub async fn reconcile(
         }
 
         // Readiness polling for this wave
+        let mut wave_had_crd_import = false;
         if !wave_failed || config.on_error == OnErrorPolicy::Continue {
             for action in actions {
                 if let ChangeAction::Apply(manifest) = action {
@@ -388,22 +435,48 @@ pub async fn reconcile(
                         continue;
                     }
 
-                    if readiness::is_immediate_kind(&rid.kind) {
+                    // Import markers (kix.dev/mode=import PackageInstances) are
+                    // handled specially: readiness is defined as "the described
+                    // external resource exists on the cluster", not the marker
+                    // itself. This path gates waves on operator-installed CRDs.
+                    let import_target = readiness::import_target_from_manifest(manifest);
+                    let is_crd_import = import_target
+                        .as_ref()
+                        .is_some_and(|t| t.kind == "CustomResourceDefinition");
+                    if is_crd_import {
+                        wave_had_crd_import = true;
+                    }
+
+                    if import_target.is_none() && readiness::is_immediate_kind(&rid.kind) {
                         continue;
                     }
 
-                    let ar_scope = discovery.iter().find(|(ar, _)| ar.kind == rid.kind);
+                    observer.on_event(&ReconcileEvent::ReadinessWaiting {
+                        rid: rid.clone(),
+                        import_target: import_target.clone(),
+                    });
 
-                    if let Some((ar, scope)) = ar_scope {
+                    let on_status = |msg: &str| {
+                        observer.on_event(&ReconcileEvent::ReadinessProgress {
+                            rid: rid.clone(),
+                            import_target: import_target.clone(),
+                            message: msg.to_string(),
+                        });
+                    };
+                    let readiness_outcome = if let Some(target) = &import_target {
+                        readiness::wait_for_import_target(client, target, config.timeout, on_status)
+                            .await
+                    } else {
+                        let ar_scope = discovery.iter().find(|(ar, _)| ar.kind == rid.kind);
+                        let Some((ar, scope)) = ar_scope else {
+                            continue;
+                        };
                         let ns = if rid.namespace == CLUSTER_SCOPED {
                             None
                         } else {
                             Some(rid.namespace.as_str())
                         };
-
-                        observer.on_event(&ReconcileEvent::ReadinessWaiting { rid: rid.clone() });
-
-                        match readiness::wait_for_ready(
+                        readiness::wait_for_ready(
                             client,
                             ar,
                             scope,
@@ -411,57 +484,67 @@ pub async fn reconcile(
                             ns,
                             &rid.kind,
                             config.timeout,
+                            on_status,
                         )
                         .await
-                        {
-                            Ok(ReadinessResult::Ready) => {
-                                observer
-                                    .on_event(&ReconcileEvent::ReadinessReady { rid: rid.clone() });
-                            }
-                            Ok(ReadinessResult::TimedOut { elapsed, message }) => {
-                                observer.on_event(&ReconcileEvent::ReadinessTimeout {
-                                    rid: rid.clone(),
-                                    elapsed,
-                                    message: message.clone(),
+                    };
+
+                    match readiness_outcome {
+                        Ok(ReadinessResult::Ready) => {
+                            observer.on_event(&ReconcileEvent::ReadinessReady {
+                                rid: rid.clone(),
+                                import_target: import_target.clone(),
+                            });
+                        }
+                        Ok(ReadinessResult::TimedOut { elapsed, message }) => {
+                            observer.on_event(&ReconcileEvent::ReadinessTimeout {
+                                rid: rid.clone(),
+                                elapsed,
+                                message: message.clone(),
+                                import_target: import_target.clone(),
+                            });
+                            if config.on_error == OnErrorPolicy::Stop {
+                                return Err(ReconcileError::ReadinessTimeout {
+                                    rid,
+                                    partial_result: result,
                                 });
-                                if config.on_error == OnErrorPolicy::Stop {
-                                    return Err(ReconcileError::ReadinessTimeout {
-                                        rid,
-                                        partial_result: result,
-                                    });
-                                }
                             }
-                            Ok(ReadinessResult::Failed(msg)) => {
-                                result.failed += 1;
-                                observer.on_event(&ReconcileEvent::ReadinessFailed {
-                                    rid: rid.clone(),
-                                    message: msg.clone(),
+                        }
+                        Ok(ReadinessResult::Failed(msg)) => {
+                            result.failed += 1;
+                            observer.on_event(&ReconcileEvent::ReadinessFailed {
+                                rid: rid.clone(),
+                                message: msg.clone(),
+                                import_target: import_target.clone(),
+                            });
+                            if config.on_error == OnErrorPolicy::Stop {
+                                return Err(ReconcileError::ReadinessFailed {
+                                    rid,
+                                    message: msg,
+                                    partial_result: result,
                                 });
-                                if config.on_error == OnErrorPolicy::Stop {
-                                    return Err(ReconcileError::ReadinessFailed {
-                                        rid,
-                                        message: msg,
-                                        partial_result: result,
-                                    });
-                                }
                             }
-                            Err(e) => {
-                                tracing::warn!("readiness check error for {rid}: {e}");
-                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!("readiness check error for {rid}: {e}");
                         }
                     }
                 }
             }
         }
 
-        // Re-discover API resources if this wave created CRDs
-        let wave_had_crds = actions.iter().any(|a| {
-            if let ChangeAction::Apply(m) = a {
-                ResourceId::from_value(m).kind == "CustomResourceDefinition"
-            } else {
-                false
-            }
-        });
+        // Re-discover API resources if this wave created CRDs directly OR
+        // resolved CRD import markers (operator installed CRDs out-of-band).
+        // Either way, later waves may reference new kinds that aren't yet in
+        // our discovery cache.
+        let wave_had_crds = wave_had_crd_import
+            || actions.iter().any(|a| {
+                if let ChangeAction::Apply(m) = a {
+                    ResourceId::from_value(m).kind == "CustomResourceDefinition"
+                } else {
+                    false
+                }
+            });
         if wave_had_crds {
             observer.on_event(&ReconcileEvent::CrdRediscovery);
             if let Ok(new_disc) = fetch::discover_resources(client).await {

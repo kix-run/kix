@@ -350,10 +350,13 @@ in
       # ── Secret file volumes + mounts ────────────────────────────────
       secretFileNames = builtins.attrNames config.secretFiles;
 
+      # secretVolumes uses self.secretFilesResource.out.name (DI-tracked) rather than
+      # a raw string. The map body only evaluates when secretFileNames is non-empty,
+      # which implies self.secretFilesResource != null (both gated on secretFiles != {}).
       secretVolumes = map (n: {
         name = "secret-${n}";
         secret = {
-          secretName = "${name}-secret-files";
+          secretName = self.secretFilesResource.out.name;
           items = [
             {
               key = n;
@@ -371,10 +374,19 @@ in
       }) secretFileNames;
 
       # ── Common pod spec fragments ───────────────────────────────────
+      # secretNames: list of externally-managed secret names (strings).
+      # Each is wrapped in mkSecretRef to create a DI-tracked store path,
+      # satisfying the checkSecretRefs invariant in mkWorkload.
       mkEnvFrom =
-        self: configMapName: secretRefs:
+        self: configMapName: secretNames:
         lib.optional config.useConfigMap { configMapRef.name = configMapName.out.name; }
-        ++ map (s: { secretRef.name = s; }) secretRefs;
+        ++ map (
+          sName:
+          (scope.mkSecretRef {
+            name = sName;
+            keys = [ ];
+          }).out.envFrom
+        ) secretNames;
 
       mkPodSpec =
         self:
@@ -486,7 +498,13 @@ in
           imagePullPolicy = config.frontend.image.pullPolicy;
           envFrom =
             lib.optional config.frontend.useConfigMap { configMapRef.name = self.frontendConfigmap.out.name; }
-            ++ map (s: { secretRef.name = s; }) config.frontend.secrets;
+            ++ map (
+              sName:
+              (scope.mkSecretRef {
+                name = sName;
+                keys = [ ];
+              }).out.envFrom
+            ) config.frontend.secrets;
           ports = [
             (kix.port "http" config.frontend.port)
           ];

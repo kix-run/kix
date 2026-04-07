@@ -56,7 +56,11 @@ impl ReconcileObserver for OperatorObserver {
                     "Applying wave"
                 );
             }
-            ReconcileEvent::ResourceApplied { rid, action } => {
+            ReconcileEvent::ResourceApplied {
+                rid,
+                action,
+                import_target,
+            } => {
                 let action_str = match action {
                     ApplyAction::Created => "created",
                     ApplyAction::Configured => "configured",
@@ -67,6 +71,7 @@ impl ReconcileObserver for OperatorObserver {
                     activation = name,
                     resource = %rid,
                     action = action_str,
+                    import_target = import_target.as_ref().map(|t| format!("{}/{}", t.kind, t.name)),
                     "Resource applied"
                 );
             }
@@ -78,17 +83,32 @@ impl ReconcileObserver for OperatorObserver {
                     "Resource apply failed"
                 );
             }
-            ReconcileEvent::ReadinessWaiting { rid } => {
+            ReconcileEvent::ReadinessWaiting { rid, import_target } => {
                 tracing::debug!(
                     activation = name,
                     resource = %rid,
+                    import_target = import_target.as_ref().map(|t| format!("{}/{}", t.kind, t.name)),
                     "Waiting for readiness"
                 );
             }
-            ReconcileEvent::ReadinessReady { rid } => {
+            ReconcileEvent::ReadinessProgress {
+                rid,
+                import_target,
+                message,
+            } => {
+                tracing::debug!(
+                    activation = name,
+                    resource = %rid,
+                    import_target = import_target.as_ref().map(|t| format!("{}/{}", t.kind, t.name)),
+                    status = message,
+                    "Readiness progress"
+                );
+            }
+            ReconcileEvent::ReadinessReady { rid, import_target } => {
                 tracing::info!(
                     activation = name,
                     resource = %rid,
+                    import_target = import_target.as_ref().map(|t| format!("{}/{}", t.kind, t.name)),
                     "Resource ready"
                 );
             }
@@ -96,20 +116,27 @@ impl ReconcileObserver for OperatorObserver {
                 rid,
                 elapsed,
                 message,
+                import_target,
             } => {
                 tracing::warn!(
                     activation = name,
                     resource = %rid,
                     elapsed_secs = elapsed.as_secs(),
                     message,
+                    import_target = import_target.as_ref().map(|t| format!("{}/{}", t.kind, t.name)),
                     "Readiness timeout"
                 );
             }
-            ReconcileEvent::ReadinessFailed { rid, message } => {
+            ReconcileEvent::ReadinessFailed {
+                rid,
+                message,
+                import_target,
+            } => {
                 tracing::error!(
                     activation = name,
                     resource = %rid,
                     message,
+                    import_target = import_target.as_ref().map(|t| format!("{}/{}", t.kind, t.name)),
                     "Readiness failed"
                 );
             }

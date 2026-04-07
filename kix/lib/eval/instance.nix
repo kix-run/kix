@@ -324,8 +324,19 @@ in
               let
                 ctx = builtins.getContext (builtins.toJSON r.rawManifest);
                 ctxPaths = builtins.attrNames ctx;
+                # Explicit `requires` entries count as forward references too:
+                # they're declared dependencies on forward-closure resources,
+                # even if the dependency isn't expressed via string context in
+                # the manifest body. Without this, resources that only use
+                # requires (e.g. `scope.mkCRDRef { installedBy = ...; }`) would
+                # be flagged as orphans instead of classified as inverse deps.
+                requiresPaths = map (dep: builtins.unsafeDiscardStringContext dep.outPath) (
+                  builtins.filter (dep: builtins.isAttrs dep && (dep._type or "") == "k8s-resource") (
+                    r.requires or [ ]
+                  )
+                );
               in
-              builtins.any (p: builtins.hasAttr p forwardPaths) ctxPaths;
+              builtins.any (p: builtins.hasAttr p forwardPaths) (ctxPaths ++ requiresPaths);
           in
           builtins.filter referencesForward nonForward;
 

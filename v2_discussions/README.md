@@ -48,6 +48,7 @@ Automated wiring (network, RBAC, storage) derived from the dependency graph.
 | 74 | [Secrets](74_secrets.md) | RFC | Unified secrets RFC: seven origin types, DI model, six concerns, provider tiers. Consolidates docs 22, 64, 64a. |
 | 75 | [Secrets — what actually matters](75_secrets_what_actually_matters.md) | Brainstorm | Cuts through the 74 overdesign: Problem A (values) vs Problem B (contracts). SOPS default, ship contracts+values together. |
 | 76 | [Secrets design](76_secrets_design.md) | Design | Concrete API: mkSecret (SOPS, hash-verified), mkSecretRef (external), out.keyRef/mkEnv, DI override, CLI commands. |
+| 77 | [Secret access control modules](77_secret_access_control_modules.md) | Draft | Module-system layer over sops: teams contribute keys/teams/rules, generates `.sops.yaml`, build-time validation, rekey workflow. Access changes flow through `kix diff`/`kix deploy` with severity-tiered approval gates and revocation safety. |
 
 ## Operator & Deploy
 

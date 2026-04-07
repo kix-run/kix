@@ -59,19 +59,6 @@ let
   # ── Secret file volumes + mounts ────────────────────────────────
   secretFileNames = builtins.attrNames config.secretFiles;
 
-  secretVolumes = map (n: {
-    name = "secret-${n}";
-    secret = {
-      secretName = "${name}-secret-files";
-      items = [
-        {
-          key = n;
-          path = n;
-        }
-      ];
-    };
-  }) secretFileNames;
-
   secretVolumeMounts = map (n: {
     name = "secret-${n}";
     mountPath = "/secrets/${n}";
@@ -80,10 +67,19 @@ let
   }) secretFileNames;
 
   # ── Common pod spec fragments ───────────────────────────────────
+  # secretNames: list of externally-managed secret names (strings).
+  # Each is wrapped in mkSecretRef to create a DI-tracked store path,
+  # satisfying the checkSecretRefs invariant in mkWorkload.
   mkEnvFrom =
-    self: configMapName: secretRefs:
+    self: configMapName: secretNames:
     lib.optional config.useConfigMap { configMapRef.name = configMapName.out.name; }
-    ++ map (s: { secretRef.name = s; }) secretRefs;
+    ++ map (
+      sName:
+      (scope.mkSecretRef {
+        name = sName;
+        keys = [ ];
+      }).out.envFrom
+    ) secretNames;
 
   mkPodSpec =
     self:
@@ -92,9 +88,30 @@ let
       initContainers ? [ ],
       volumes ? [ ],
     }:
+    let
+      # secretVolumes uses self.secretFilesResource.out.name (DI-tracked).
+      # Only evaluated when secretFileNames is non-empty, which implies
+      # self.secretFilesResource != null (both gated on config.secretFiles != {}).
+      secretVols =
+        if secretFileNames == [ ] then
+          [ ]
+        else
+          map (n: {
+            name = "secret-${n}";
+            secret = {
+              secretName = self.secretFilesResource.out.name;
+              items = [
+                {
+                  key = n;
+                  path = n;
+                }
+              ];
+            };
+          }) secretFileNames;
+    in
     {
       inherit containers;
-      volumes = volumes ++ secretVolumes;
+      volumes = volumes ++ secretVols;
     }
     // lib.optionalAttrs (initContainers != [ ]) {
       inherit initContainers;
@@ -195,7 +212,13 @@ let
       imagePullPolicy = config.frontend.image.pullPolicy;
       envFrom =
         lib.optional config.frontend.useConfigMap { configMapRef.name = self.frontendConfigmap.out.name; }
-        ++ map (s: { secretRef.name = s; }) config.frontend.secrets;
+        ++ map (
+          sName:
+          (scope.mkSecretRef {
+            name = sName;
+            keys = [ ];
+          }).out.envFrom
+        ) config.frontend.secrets;
       ports = [
         (kix.port "http" config.frontend.port)
       ];

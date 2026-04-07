@@ -16,6 +16,7 @@
 {
   scope,
   lib,
+  kix,
 }:
 
 let
@@ -1160,7 +1161,8 @@ in
                     {
                       name = "etcd-jwt-token";
                       secret = {
-                        secretName = "${name}-etcd-jwt-token-custom";
+                        # Created by the openebs operator at runtime, not by kix.
+                        secretName = kix.untrackedRef "${name}-etcd-jwt-token-custom";
                         defaultMode = 256; # 0400
                       };
                     }

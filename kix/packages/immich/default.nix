@@ -47,10 +47,10 @@ in
     postgres.config = {
       extensions = [
         {
-          name = "vectors";
-          publisher = "tensorchord";
-          version = "0.4.0";
-          repository = "https://extensions.stackgres.io/postgres/repository";
+          name = "vector";
+          #publisher = "tensorchord"; # TODO: verify
+          #version = "0.8.1";
+          #repository = "https://extensions.stackgres.io/postgres/repository";
         }
       ];
     };
@@ -60,7 +60,7 @@ in
       let
         extNames = dep.out.extensionNames or null;
       in
-      lib.optional (extNames != null && !(builtins.elem "vectors" extNames)) {
+      lib.optional (extNames != null && !(builtins.elem "vector" extNames)) {
         assertion = false;
         message = "immich requires the pgvecto.rs extension (\"vectors\") on its postgres instance, but it is not configured. Add { name = \"vectors\"; publisher = \"tensorchord\"; version = \"...\"; } to postgres.extensions.";
       };
@@ -174,20 +174,35 @@ in
                   name = "immich-server";
                   image = "${config.image.repository}:${config.image.tag}";
                   imagePullPolicy = config.image.pullPolicy;
-                  # kix.mkEnvVars converts { KEY = "val"; } → [{ name = "KEY"; value = "val"; }].
-                  # Null values are filtered — disabled features just set null.
-                  env = kix.mkEnvVars (
-                    {
-                      DB_HOSTNAME = postgres.out.fqdn;
-                      DB_PORT = postgres.out.port;
-                      REDIS_HOSTNAME = valkey.out.fqdn;
-                      IMMICH_MACHINE_LEARNING_URL = mlUrl;
-                      IMMICH_CONFIG_FILE =
-                        if self.configMount != null then "${self.configMount.mountPath}/immich-config.yaml" else null;
-                      IMMICH_TELEMETRY_INCLUDE = if config.metrics.enabled then "all" else null;
-                    }
-                    // config.env
-                  );
+                  # kix.mkEnv combines { KEY = "val"; } entries with raw K8s env
+                  # entries (e.g. valueFrom.secretKeyRef). Null values in the
+                  # attrset are filtered, so disabled features just set null.
+                  env =
+                    kix.mkEnv
+                      (
+                        {
+                          DB_HOSTNAME = postgres.out.fqdn;
+                          DB_PORT = postgres.out.port;
+                          REDIS_HOSTNAME = valkey.out.fqdn;
+                          IMMICH_MACHINE_LEARNING_URL = mlUrl;
+                          IMMICH_CONFIG_FILE =
+                            if self.configMount != null then "${self.configMount.mountPath}/immich-config.yaml" else null;
+                          IMMICH_TELEMETRY_INCLUDE = if config.metrics.enabled then "all" else null;
+                        }
+                        // config.env
+                      )
+                      (
+                        # Pull the valkey password from its credentials secret when
+                        # auth is enabled. Without this, immich fails with NOAUTH.
+                        lib.optionals (valkey.out ? authSecret) [
+                          (
+                            (valkey.out.authSecret.out.keyRef valkey.out.authPasswordKey)
+                            // {
+                              name = "REDIS_PASSWORD";
+                            }
+                          )
+                        ]
+                      );
                   ports = [
                     (kix.port "http" 2283)
                   ]

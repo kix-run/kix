@@ -58,6 +58,9 @@
         existingSecret = null;
         existingSecretPasswordKey = "valkey-password";
         password = null;
+        # Path to a SOPS-encrypted file containing the valkey-password key.
+        # Wired to kix.dev/sops-source so `kix deploy` decrypts it at apply time.
+        secretSource = null;
       };
     };
     sentinel = lib.mkOption {
@@ -1107,9 +1110,25 @@
             stringData = lib.optionalAttrs (config.auth.password != null) {
               ${authPasswordKey} = config.auth.password;
             };
+            source = config.auth.secretSource or null;
           }
         else
           null;
+
+      # --- Auth secret handle (for consumers) ---
+      # Consumers read the password via `valkey.out.authSecret.out.keyRef ...`.
+      # When the user points us at an existingSecret, wrap it in a SecretRef so
+      # it still carries DI context and the keyRef/mkEnv helpers.
+      authSecret =
+        if !config.auth.enabled then
+          null
+        else if config.auth.existingSecret != null then
+          scope.mkSecretRef {
+            name = config.auth.existingSecret;
+            keys = [ authPasswordKey ];
+          }
+        else
+          self.secret;
 
       # --- ConfigMap (scripts — start + prestop) ---
       configmap = scope.mkResource {
@@ -1254,7 +1273,11 @@
                     name = "valkey-password";
                     secret = {
                       secretName =
-                        if config.auth.existingSecret != null then config.auth.existingSecret else self.secret.out.name;
+                        if config.auth.existingSecret != null then
+                          # User-provided external secret — not managed by kix.
+                          kix.untrackedRef config.auth.existingSecret
+                        else
+                          self.secret.out.name;
                       defaultMode = 420; # 0644
                       items = [
                         {
@@ -1546,6 +1569,10 @@
       # SENTINEL get-master-addr-by-name.
       root = {
         resource = self.mainService;
+        out = lib.optionalAttrs (self.authSecret != null) {
+          authSecret = self.authSecret;
+          authPasswordKey = authPasswordKey;
+        };
         requires = [
           self.serviceAccount
           self.configmap

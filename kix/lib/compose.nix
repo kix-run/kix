@@ -431,6 +431,24 @@ rec {
   # Usage: { ... } |> kix.withMountsOn "registry" [ ... ] |> scope.mkDeployment;
   withMountsOn = containerName: _injectMounts containerName;
 
+  # --- Escape hatch for untracked references ---
+
+  # Explicit escape hatch for secret/resource names not managed by kix.
+  # Use when referencing resources created outside kix (Helm hooks, cert-manager,
+  # ESO, bootstrap secrets, etc.). Makes the untracked reference visible and
+  # auditable rather than silently allowing raw strings.
+  #
+  # Usage: secretName = kix.untrackedRef "ingress-nginx-admission";
+  #
+  # This bypasses the DI-tracking check in mkDeployment/mkStatefulSet/mkDaemonSet.
+  # Raw string literals without untrackedRef are a compile error.
+  untrackedRef =
+    name:
+    let
+      marker = builtins.toFile "kix-untracked-ref" name;
+    in
+    builtins.appendContext name (builtins.getContext "${marker}");
+
   # --- Shared option definitions ---
 
   options = {

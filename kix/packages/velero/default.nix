@@ -17,6 +17,7 @@
 {
   scope,
   lib,
+  kix,
 }:
 
 let
@@ -303,6 +304,8 @@ in
       };
 
       # --- Secret (S3 credentials) ---
+      # Always a resource with .out.name — either kix-managed (mkSecret) or
+      # a reference to a user-provided external secret (mkSecretRef).
       secret =
         if createSecret then
           scope.mkSecret {
@@ -311,7 +314,10 @@ in
             stringData = config.credentials.secretContents;
           }
         else
-          null;
+          scope.mkSecretRef {
+            name = credentialSecretName;
+            keys = [ ];
+          };
 
       # --- ConfigMap (volume policies) ---
       configmap =
@@ -461,7 +467,7 @@ in
                   {
                     name = "cloud-credentials";
                     secret = {
-                      secretName = credentialSecretName;
+                      secretName = self.secret.out.name;
                       defaultMode = 420;
                     };
                   }
@@ -570,7 +576,7 @@ in
                     lib.optionals hasCredentials [
                       {
                         name = "cloud-credentials";
-                        secret.secretName = credentialSecretName;
+                        secret.secretName = self.secret.out.name;
                       }
                     ]
                     ++ [

@@ -11,6 +11,7 @@
 {
   scope,
   lib,
+  kix,
 }:
 
 let
@@ -1612,7 +1613,8 @@ in
                 {
                   name = "kubevirt-operator-certs";
                   secret = {
-                    secretName = "kubevirt-operator-certs";
+                    # Created by the kubevirt operator at runtime, not by kix.
+                    secretName = kix.untrackedRef "kubevirt-operator-certs";
                     optional = true;
                   };
                 }

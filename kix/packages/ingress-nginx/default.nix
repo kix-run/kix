@@ -14,6 +14,7 @@
 {
   scope,
   lib,
+  kix,
 }:
 
 let
@@ -268,6 +269,59 @@ in
         };
       };
 
+      admissionClusterRoles =
+        let
+          adm = group "admissionregistration.k8s.io" [ "validatingwebhookconfigurations" ];
+        in
+        mkClusterRoleSet scope {
+          subjects = [
+            {
+              kind = "ServiceAccount";
+              name = self.admissionServiceAccount.out.name;
+              namespace = scope.namespaceName;
+            }
+          ];
+          labels = clusterScopedLabels // {
+            "app.kubernetes.io/component" = "admission-webhook";
+          };
+          roles = {
+            "${name}-admission" = grant [
+              (
+                adm.validatingwebhookconfigurations
+                |> allow [
+                  "get"
+                  "update"
+                ]
+              )
+            ];
+          };
+        };
+
+      admissionNsRoles = mkRoleSet scope {
+        subjects = [
+          {
+            kind = "ServiceAccount";
+            name = self.admissionServiceAccount.out.name;
+            namespace = scope.namespaceName;
+          }
+        ];
+        labels = commonLabels // {
+          "app.kubernetes.io/component" = "admission-webhook";
+        };
+        roles = {
+          "${name}-admission" = grant [
+            (
+              core.secrets
+              |> allow [
+                "get"
+                "create"
+                "update"
+              ]
+            )
+          ];
+        };
+      };
+
     in
     {
 
@@ -301,6 +355,16 @@ in
         kind = "Deployment";
         name = name;
         labels = commonLabels;
+        # Must deploy after admissionCreate so the ingress-nginx-admission
+        # secret exists before the pod tries to mount it. Controller RBAC
+        # must be reachable from root so the ServiceAccount has permissions
+        # to list ingressclasses, services, etc — without these, the
+        # controller's caches time out and the pod CrashLoops.
+        requires = [
+          self.admissionCreate
+        ]
+        ++ builtins.attrValues clusterRoles
+        ++ builtins.attrValues nsRoles;
         spec = {
           replicas = config.replicaCount;
           revisionHistoryLimit = 10;
@@ -433,7 +497,8 @@ in
                 {
                   name = "webhook-cert";
                   secret = {
-                    secretName = "${name}-admission";
+                    # Created by the webhook setup job, not by kix.
+                    secretName = kix.untrackedRef "${name}-admission";
                     defaultMode = 420;
                   };
                 }
@@ -509,6 +574,7 @@ in
             self.pdb
             self.admissionService
             self.admissionWebhook
+            self.admissionCreate
           ];
         };
 
@@ -522,6 +588,127 @@ in
           minAvailable = 1;
           selector.matchLabels = self.deployment.out.selector;
         };
+      };
+
+      # --- Admission webhook ServiceAccount ---
+      admissionServiceAccount = scope.mkResource {
+        apiVersion = "v1";
+        kind = "ServiceAccount";
+        name = "${name}-admission";
+        labels = commonLabels // {
+          "app.kubernetes.io/component" = "admission-webhook";
+        };
+        extra.automountServiceAccountToken = true;
+      };
+
+      # Job: generate TLS cert and store as secret ${name}-admission.
+      # Runs once; Kubernetes re-creates it on next apply only if deleted.
+      admissionCreate = scope.mkResource {
+        apiVersion = "batch/v1";
+        kind = "Job";
+        name = "${name}-admission-create";
+        labels = commonLabels // {
+          "app.kubernetes.io/component" = "admission-webhook";
+        };
+        annotations = {
+          "helm.sh/hook" = "pre-install,pre-upgrade";
+          "helm.sh/hook-delete-policy" = "before-hook-creation,hook-succeeded";
+        };
+        spec = {
+          template = {
+            metadata.labels = commonLabels // {
+              "app.kubernetes.io/component" = "admission-webhook";
+            };
+            spec = {
+              serviceAccountName = self.admissionServiceAccount.out.name;
+              restartPolicy = "OnFailure";
+              securityContext.runAsNonRoot = true;
+              securityContext.runAsUser = 65532;
+              securityContext.seccompProfile.type = "RuntimeDefault";
+              containers = [
+                {
+                  name = "create";
+                  image = "registry.k8s.io/ingress-nginx/kube-webhook-certgen:v1.4.4";
+                  imagePullPolicy = "IfNotPresent";
+                  args = [
+                    "create"
+                    "--host=${name}-admission,${name}-admission.$(POD_NAMESPACE).svc"
+                    "--namespace=$(POD_NAMESPACE)"
+                    "--secret-name=${name}-admission"
+                  ];
+                  env = [
+                    {
+                      name = "POD_NAMESPACE";
+                      valueFrom.fieldRef.fieldPath = "metadata.namespace";
+                    }
+                  ];
+                  securityContext.allowPrivilegeEscalation = false;
+                  securityContext.capabilities.drop = [ "ALL" ];
+                  securityContext.readOnlyRootFilesystem = true;
+                }
+              ];
+              nodeSelector."kubernetes.io/os" = "linux";
+            };
+          };
+        };
+        requires = builtins.attrValues admissionClusterRoles ++ builtins.attrValues admissionNsRoles;
+      };
+
+      # Job: patch ValidatingWebhookConfiguration with the generated CA bundle.
+      admissionPatch = scope.mkResource {
+        apiVersion = "batch/v1";
+        kind = "Job";
+        name = "${name}-admission-patch";
+        labels = commonLabels // {
+          "app.kubernetes.io/component" = "admission-webhook";
+        };
+        annotations = {
+          "helm.sh/hook" = "post-install,post-upgrade";
+          "helm.sh/hook-delete-policy" = "before-hook-creation,hook-succeeded";
+        };
+        spec = {
+          template = {
+            metadata.labels = commonLabels // {
+              "app.kubernetes.io/component" = "admission-webhook";
+            };
+            spec = {
+              serviceAccountName = self.admissionServiceAccount.out.name;
+              restartPolicy = "OnFailure";
+              securityContext.runAsNonRoot = true;
+              securityContext.runAsUser = 65532;
+              securityContext.seccompProfile.type = "RuntimeDefault";
+              containers = [
+                {
+                  name = "patch";
+                  image = "registry.k8s.io/ingress-nginx/kube-webhook-certgen:v1.4.4";
+                  imagePullPolicy = "IfNotPresent";
+                  args = [
+                    "patch"
+                    "--webhook-name=${name}-admission"
+                    "--namespace=$(POD_NAMESPACE)"
+                    "--patch-mutating=false"
+                    "--secret-name=${name}-admission"
+                    "--patch-validating=true"
+                  ];
+                  env = [
+                    {
+                      name = "POD_NAMESPACE";
+                      valueFrom.fieldRef.fieldPath = "metadata.namespace";
+                    }
+                  ];
+                  securityContext.allowPrivilegeEscalation = false;
+                  securityContext.capabilities.drop = [ "ALL" ];
+                  securityContext.readOnlyRootFilesystem = true;
+                }
+              ];
+              nodeSelector."kubernetes.io/os" = "linux";
+            };
+          };
+        };
+        requires = [
+          self.admissionCreate
+          self.admissionWebhook
+        ];
       };
 
       # --- Admission webhook Service ---
@@ -606,5 +793,7 @@ in
       };
     }
     // clusterRoles
-    // nsRoles;
+    // nsRoles
+    // admissionClusterRoles
+    // admissionNsRoles;
 }

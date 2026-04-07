@@ -26,8 +26,7 @@ use kix::cluster::activation;
 use kix::cluster::apply::{ApplyAction, ChangeAction};
 use kix::cluster::fetch;
 use kix::cluster::graph::ResourceGraph;
-use kix::cluster::imports;
-use kix::cluster::readiness;
+use kix::cluster::readiness::{self, ImportTarget};
 use kix::cluster::reconcile::{
     OnErrorPolicy, PrunePolicy, ReconcileConfig, ReconcileEvent, ReconcileObserver, ReconcileResult,
 };
@@ -235,49 +234,12 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         }
     }
 
-    // 7. Pre-deploy import validation
-    let import_markers = imports::collect_import_markers(&new_manifests);
-    if !import_markers.is_empty() && !args.skip_import_checks {
-        if let Some(ref client) = pre_client {
-            // We have a cluster connection — validate imports
-            let import_results = ctx.runtime.block_on(async {
-                let discovery = fetch::discover_resources(client)
-                    .await
-                    .map_err(|e| miette!("API discovery failed: {e}"))?;
-                Ok::<_, miette::Report>(
-                    imports::validate_imports(client, &discovery, &import_markers).await,
-                )
-            })?;
-
-            let has_failures = import_results
-                .iter()
-                .any(|(_, r)| matches!(r, imports::ImportCheckResult::NotFound { .. }));
-
-            if !ctx.global.quiet {
-                println!();
-                println!("{}", output::bold("Imports:"));
-                for line in imports::format_validation_summary(&import_results) {
-                    println!("{line}");
-                }
-            }
-
-            if has_failures {
-                eprintln!(
-                    "\n{}",
-                    output::red("Import validation failed. Use --skip-import-checks to override.")
-                );
-                std::process::exit(1);
-            }
-        } else if !ctx.global.quiet {
-            // No cluster connection (--current-activation mode) — just report
-            println!();
-            println!(
-                "{} {} imports detected (skipping validation — no cluster connection)",
-                output::dim("Imports:"),
-                import_markers.len(),
-            );
-        }
-    }
+    // Imports are no longer special-cased by deploy: they're applied like
+    // any other resource (SSA), and wave readiness polls the cluster for the
+    // described resource via `wait_for_import_target`. This means an import
+    // whose installer is in the same deploy (e.g. a CRD marker with
+    // `installedBy = operator.deployment`) is naturally wave-ordered after
+    // the installer and only polls once its wave runs.
 
     let total_apply = wave_actions
         .iter()
@@ -486,6 +448,16 @@ async fn load_old_from_cluster(
 
 // ── Apply engine (async) — thin wrapper around reconcile() ──────────
 
+/// Build the display label for a readiness-watched resource, matching the
+/// rendering used for import markers elsewhere in the CLI.
+fn readiness_label(rid: &ResourceId, import_target: Option<&ImportTarget>) -> String {
+    if let Some(target) = import_target {
+        format!("↪ import {}/{}", target.kind, target.name)
+    } else {
+        rid.to_string()
+    }
+}
+
 /// CLI observer that prints colored progress to stdout/stderr.
 struct CliObserver {
     quiet: bool,
@@ -529,7 +501,11 @@ impl ReconcileObserver for CliObserver {
                     );
                 }
             }
-            ReconcileEvent::ResourceApplied { rid, action } => {
+            ReconcileEvent::ResourceApplied {
+                rid,
+                action,
+                import_target,
+            } => {
                 let (symbol, label) = match action {
                     ApplyAction::Created => (output::green("+"), "created"),
                     ApplyAction::Configured => (output::yellow("~"), "configured"),
@@ -537,35 +513,83 @@ impl ReconcileObserver for CliObserver {
                     ApplyAction::Skipped => (output::dim("-"), "skipped"),
                 };
                 if !self.quiet || !matches!(action, ApplyAction::Unchanged) {
-                    println!("  {} {} {}", symbol, rid, output::dim(label));
+                    // Imports render with a discrete leading arrow and show the
+                    // target they describe rather than the marker's own rid.
+                    if let Some(target) = import_target {
+                        println!(
+                            "  {} {} {} {}",
+                            symbol,
+                            output::dim("↪ import"),
+                            output::dim(&format!("{}/{}", target.kind, target.name)),
+                            output::dim(label),
+                        );
+                    } else {
+                        println!("  {} {} {}", symbol, rid, output::dim(label));
+                    }
                 }
             }
             ReconcileEvent::ResourceFailed { rid, error } => {
                 eprintln!("  {} {} {}", output::red("!"), rid, output::red(error),);
             }
-            ReconcileEvent::ReadinessWaiting { rid } => {
+            ReconcileEvent::ReadinessWaiting { rid, import_target } => {
                 if !self.quiet {
-                    print!("  Waiting for {} ...", output::dim(&rid.to_string()));
+                    let label = readiness_label(rid, import_target.as_ref());
+                    print!("\r\x1b[2K  Waiting for {} ...", output::dim(&label));
                     std::io::stdout().flush().ok();
                 }
             }
-            ReconcileEvent::ReadinessReady { .. } => {
+            ReconcileEvent::ReadinessProgress {
+                rid,
+                import_target,
+                message,
+            } => {
                 if !self.quiet {
-                    println!(" {}", output::green("ready"));
+                    let label = readiness_label(rid, import_target.as_ref());
+                    print!(
+                        "\r\x1b[2K  Waiting for {} — {}",
+                        output::dim(&label),
+                        output::dim(message),
+                    );
+                    std::io::stdout().flush().ok();
+                }
+            }
+            ReconcileEvent::ReadinessReady { rid, import_target } => {
+                if !self.quiet {
+                    let label = readiness_label(rid, import_target.as_ref());
+                    println!(
+                        "\r\x1b[2K  Waiting for {} ... {}",
+                        output::dim(&label),
+                        output::green("ready"),
+                    );
                 }
             }
             ReconcileEvent::ReadinessTimeout {
-                elapsed, message, ..
+                rid,
+                import_target,
+                elapsed,
+                message,
             } => {
+                let label = readiness_label(rid, import_target.as_ref());
                 println!(
-                    " {} ({}s): {}",
+                    "\r\x1b[2K  Waiting for {} ... {} ({}s): {}",
+                    output::dim(&label),
                     output::yellow("timed out"),
                     elapsed.as_secs(),
                     message,
                 );
             }
-            ReconcileEvent::ReadinessFailed { message, .. } => {
-                println!(" {}: {}", output::red("failed"), message);
+            ReconcileEvent::ReadinessFailed {
+                rid,
+                import_target,
+                message,
+            } => {
+                let label = readiness_label(rid, import_target.as_ref());
+                println!(
+                    "\r\x1b[2K  Waiting for {} ... {}: {}",
+                    output::dim(&label),
+                    output::red("failed"),
+                    message,
+                );
             }
             ReconcileEvent::SecretHydrated { rid, keys } => {
                 if !self.quiet {
@@ -675,6 +699,7 @@ async fn run_deploy_async(
         timeout,
         on_error,
         prune: prune_policy,
+        force_conflicts: args.force_conflicts,
     };
 
     let observer = CliObserver {

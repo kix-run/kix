@@ -116,6 +116,11 @@ in
         type = lib.types.bool;
         default = true;
       };
+      replicas = lib.mkOption {
+        type = lib.types.int;
+        default = 1;
+        description = "Number of Grafana replicas. Use 1 for most setups; persistence.enabled must be false (or RWX storage) for >1.";
+      };
       rootUrl = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
@@ -160,9 +165,30 @@ in
     };
 
     # ── Loki ───────────────────────────────────────────────────────────
-    loki.enabled = lib.mkOption {
-      type = lib.types.bool;
-      default = false;
+    loki = {
+      enabled = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+      };
+      namespace = lib.mkOption {
+        type = lib.types.str;
+        default = "monitoring-loki";
+        description = ''
+          Namespace where Loki + its PVC live. Loki gets its own namespace so
+          the sibling PVC can be named `storage` (matching the immich-style
+          DI convention) without colliding with other monitoring PVCs.
+        '';
+      };
+      storageSize = lib.mkOption {
+        type = lib.types.str;
+        default = "10Gi";
+        description = "Size of the persistent volume claim backing single-binary Loki.";
+      };
+      extraValues = lib.mkOption {
+        type = lib.types.attrsOf lib.types.anything;
+        default = { };
+        description = "Extra Helm values forwarded to the loki package's `extraValues`.";
+      };
     };
 
     # ── Promtail ───────────────────────────────────────────────────────
@@ -256,6 +282,7 @@ in
           package = packages.grafana;
           config = {
             rootUrl = grafanaRootUrl;
+            replicas = cfg.grafana.replicas;
             persistence = cfg.grafana.persistence;
             # Loki is still Helm-wrapped so doesn't expose out.serviceUrl via DI.
             # Pass the datasource URL explicitly until Loki is migrated to native.
@@ -263,27 +290,24 @@ in
               lib.optional cfg.loki.enabled {
                 name = "Loki";
                 type = "loki";
-                url = "http://loki-gateway.${ns}.svc.cluster.local";
+                # Loki lives in its own namespace so the sibling PVC can be
+                # called `storage` (immich pattern).
+                url = "http://loki-gateway.${cfg.loki.namespace}.svc.cluster.local";
                 access = "proxy";
               }
               ++ cfg.grafana.extraDatasources;
           };
         };
 
-        # ── Loki (Helm) ───────────────────────────────────────────────
-        loki = lib.mkIf cfg.loki.enabled {
-          package = kix.fromHelmChart {
-            chart = kix.fetchHelmChart {
-              repo = "https://grafana.github.io/helm-charts";
-              name = "loki";
-              version = "6.24.0";
-              hash = "sha256-oMXOPOZZrT+UC5ve7vSWJPsUpeTuyECBTXby7arjyIY=";
-            };
-            values = (import ../../packages/loki).defaultValues;
-            releaseName = "loki";
-            rootSelector = {
-              kind = "Service";
-              name = "loki-gateway";
+        # ── Promtail priority class ───────────────────────────────────
+        # Promtail hardcodes priorityClassName = "monitoring-loki". We must
+        # create that PriorityClass before the DaemonSet can schedule pods.
+        priority-classes = lib.mkIf cfg.promtail.enabled {
+          package = packages.priority-classes;
+          config.classes = {
+            "monitoring-loki" = {
+              value = 1000000;
+              description = "Monitoring and log shipping workloads (Loki, Promtail)";
             };
           };
         };
@@ -306,5 +330,47 @@ in
           };
         };
       };
+
+    # ── Loki (own namespace, helm-rendered + DI'd sibling PVC) ──────────
+    # Lives in its own namespace so the sibling PVC can be named `storage`
+    # (immich pattern). The PVC participates in real DI for its
+    # storageClassName via the flavor's storageClasses import. Helm
+    # rendering happens here at the module level (rather than inside a
+    # native package) because the helm bridge isn't available to package
+    # build functions — see kix/packages/loki/default.nix for the rationale.
+    instances.${cfg.loki.namespace} = lib.mkIf cfg.loki.enabled (
+      let
+        lokiPkg = import ../../packages/loki;
+        # The PVC instance is named "storage", which matches the
+        # extraVolumes claimName baked into the package's default values.
+        # Same-namespace PVC + StatefulSet → claim resolves by name.
+        pvcName = "storage";
+        values = lib.recursiveUpdate lokiPkg.defaultValues cfg.loki.extraValues;
+      in
+      {
+        ${pvcName} = {
+          package = packages."persistent-volume-claim";
+          config.size = cfg.loki.storageSize;
+        };
+        loki = {
+          package = kix.fromHelmChart {
+            chart = kix.fetchHelmChart {
+              repo = "https://grafana.github.io/helm-charts";
+              name = "loki";
+              version = "6.24.0";
+              hash = "sha256-oMXOPOZZrT+UC5ve7vSWJPsUpeTuyECBTXby7arjyIY=";
+            };
+            inherit values;
+            releaseName = "loki";
+            rootSelector = {
+              kind = "Service";
+              name = "loki-gateway";
+            };
+          };
+        };
+      }
+    );
+
+    namespaces.${cfg.loki.namespace} = lib.mkIf cfg.loki.enabled { };
   };
 }

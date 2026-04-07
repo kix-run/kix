@@ -178,13 +178,15 @@ pub struct DeployArgs {
     #[arg(long, value_name = "MODE")]
     pub prune_mode: Option<PruneMode>,
 
-    /// Skip pre-deploy verification of imported resources
-    #[arg(long)]
-    pub skip_import_checks: bool,
-
     /// Delegate deployment to the kix operator instead of applying directly
     #[arg(long)]
     pub operator: bool,
+
+    /// Take ownership of fields currently owned by other field managers (SSA conflict override).
+    /// Without this, conflicts surface as a 409 with the conflicting field paths and current owner.
+    /// Useful when migrating resources from kubectl/helm to kix for the first time.
+    #[arg(long)]
+    pub force_conflicts: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]

@@ -1,55 +1,53 @@
 # Loki — log aggregation system.
 #
-# Wraps the upstream Grafana Loki Helm chart via fromHelmChart.
-# Deployed in distributed mode (read/write/backend) with S3 storage.
+# Provides default Helm chart values for the upstream Grafana Loki chart.
+# Cluster modules instantiate it via `kix.fromHelmChart` and pair it with a
+# sibling persistent-volume-claim instance for the underlying PVC. The PVC
+# participates in proper DI: its StorageClass comes from the flavor's
+# `storageClasses` import (kind → standard, k3s → local-path), so the same
+# cluster definition works on both without hardcoding.
+#
+# Why a value-provider and not a native kix package: the kix eval pipeline
+# only exposes `kixlib` (pure helpers) to package build functions; the helm
+# bridge (which needs `pkgs`) lives outside of eval, so a package's build
+# can't call `fromHelmChart`. Until that's threaded through (see
+# v2_discussions/), helm-wrapped services are instantiated at the
+# cluster-module level, with their PVCs declared as proper sibling
+# instances.
+#
+# Defaults: SingleBinary + filesystem object store. That's the only mode
+# that maps cleanly to a single externally-owned PVC. For HA you need
+# StatefulSet volumeClaimTemplates and a real object store — out of scope
+# for these defaults; override via `extraValues` if needed.
 #
 # Chart:   https://grafana.github.io/helm-charts
 # Name:    loki
-# Version: 6.46.0
-#
-# Usage in cluster definition:
-#
-#   loki = {
-#     package = kix.fromHelmChart {
-#       chart = kix.fetchHelmChart {
-#         repo = "https://grafana.github.io/helm-charts";
-#         name = "loki";
-#         version = "6.46.0";
-#         hash = "sha256-FIXME";
-#       };
-#       values = (import ./packages/loki).defaultValues;
-#       releaseName = "loki";
-#       rootSelector = { kind = "Service"; name = "loki-gateway"; };
-#     };
-
-#     config.values = { /* cluster-level overrides */ };
-#   };
+# Version: 6.24.0
 
 {
   meta = {
-    version = "6.46.0";
+    version = "6.24.0";
+    description = "Loki — log aggregation system (single-binary, filesystem)";
   };
 
   chart = {
     repo = "https://grafana.github.io/helm-charts";
     name = "loki";
-    version = "6.46.0";
+    version = "6.24.0";
   };
 
   defaultValues = {
-    # --- Deployment mode ---
-    deploymentMode = "SimpleScalable";
+    deploymentMode = "SingleBinary";
 
-    # --- Multi-tenancy ---
     loki = {
-      auth_enabled = true;
+      auth_enabled = false;
+      commonConfig.replication_factor = 1;
 
-      # --- Schema / Storage ---
       schemaConfig.configs = [
         {
-          from = "2024-01-01";
+          from = "2024-04-01";
           store = "tsdb";
-          object_store = "s3";
+          object_store = "filesystem";
           schema = "v13";
           index = {
             prefix = "index_";
@@ -59,174 +57,74 @@
       ];
 
       storage = {
-        type = "s3";
-        s3 = {
-          region = "eu-central";
-          bucketnames = "loki-chunks";
-          # endpoint and credentials are injected via cluster-level overrides
-          # or environment variables from a Secret.
-        };
+        type = "filesystem";
         bucketNames = {
-          chunks = "loki-chunks";
-          ruler = "loki-ruler";
-          admin = "loki-admin";
+          chunks = "chunks";
+          ruler = "ruler";
+          admin = "admin";
         };
       };
 
-      # --- Limits ---
+      pattern_ingester.enabled = true;
       limits_config = {
-        retention_period = "4320h"; # 180 days
-        max_query_parallelism = 64;
-        ingestion_rate_mb = 50;
-        ingestion_burst_size_mb = 100;
-        ingestion_rate_strategy = "global";
-        per_stream_rate_limit = "10MB";
-        per_stream_rate_limit_burst = "20MB";
-        max_cache_freshness_per_query = "10m";
-        max_chunks_per_query = 10000000;
-        max_global_streams_per_user = 50000;
-        max_line_size = "256kb";
-        query_timeout = "600s";
-        reject_old_samples = true;
-        reject_old_samples_max_age = "168h";
-        split_queries_by_interval = "12h";
+        allow_structured_metadata = true;
         volume_enabled = true;
+        retention_period = "168h"; # 7d
       };
 
-      # --- Querier ---
-      querier = {
-        max_concurrent = 16;
-      };
-
-      # --- Query scheduler ---
-      query_scheduler = {
-        max_outstanding_requests_per_tenant = 2048;
-      };
-
-      # --- Compactor (retention enforcement) ---
       compactor = {
         retention_enabled = true;
-        delete_request_store = "s3";
-        working_directory = "/var/loki/retention";
+        delete_request_store = "filesystem";
       };
 
-      # --- Ruler ---
-      rulerConfig = {
-        enable_api = true;
-        remote_write = {
-          enabled = false;
-          clients.prometheus.url = "http://prometheus-kube-prometheus-prometheus:9090/api/v1/write";
-        };
-        storage = {
-          type = "local";
-          local.directory = "/rules";
-        };
+      rulerConfig.storage = {
+        type = "local";
+        local.directory = "/var/loki/rules";
       };
     };
 
-    # --- Write path ---
-    write = {
-      replicas = 3;
-      resources = {
-        requests = {
-          cpu = "100m";
-          memory = "512Mi";
-        };
-        limits = {
-          cpu = "2";
-          memory = "4Gi";
-        };
-      };
-      persistence = {
-        enabled = true;
-        size = "10Gi";
-        storageClass = "localzfs";
-      };
-    };
+    # SingleBinary is the only mode this default targets — explicitly zero
+    # out the SimpleScalable replicas so a stale chart default can't spawn
+    # empty StatefulSets.
+    write.replicas = 0;
+    read.replicas = 0;
+    backend.replicas = 0;
 
-    # --- Read path ---
-    read = {
-      replicas = 3;
-      resources = {
-        requests = {
-          cpu = "100m";
-          memory = "512Mi";
-        };
-        limits = {
-          cpu = "2";
-          memory = "4Gi";
-        };
-      };
-    };
+    # Optional add-ons that need infra we don't want to assume.
+    chunksCache.enabled = false;
+    resultsCache.enabled = false;
+    lokiCanary.enabled = false;
+    monitoring.selfMonitoring.enabled = false;
+    test.enabled = false;
 
-    # --- Backend ---
-    backend = {
-      replicas = 3;
-      resources = {
-        requests = {
-          cpu = "100m";
-          memory = "512Mi";
-        };
-        limits = {
-          cpu = "2";
-          memory = "4Gi";
-        };
-      };
-      persistence = {
-        enabled = true;
-        size = "10Gi";
-        storageClass = "localzfs";
-      };
-    };
-
-    # --- Gateway (nginx reverse proxy) ---
+    # Gateway (nginx reverse proxy in front of single-binary).
     gateway = {
       enabled = true;
       replicas = 1;
       basicAuth.enabled = false;
-      resources = {
-        requests = {
-          cpu = "100m";
-          memory = "512Mi";
-        };
-        limits = {
-          cpu = "2";
-          memory = "4Gi";
-        };
-      };
     };
 
-    # --- Canary ---
-    lokiCanary = {
-      enabled = true;
-      resources = {
-        limits = {
-          cpu = "250m";
-          memory = "128Mi";
-        };
-      };
+    # The loki single-binary chart template hardcodes volumeClaimTemplates
+    # and ignores `existingClaim` entirely (verified against chart 6.24.0,
+    # `templates/single-binary/statefulset.yaml`). To use a kix-managed PVC
+    # we disable the chart's own persistence and mount our PVC by name via
+    # extraVolumes/extraVolumeMounts. The cluster module guarantees a PVC
+    # called "storage" exists in the same namespace as a sibling instance.
+    singleBinary = {
+      replicas = 1;
+      persistence.enabled = false;
+      extraVolumes = [
+        {
+          name = "storage";
+          persistentVolumeClaim.claimName = "storage";
+        }
+      ];
+      extraVolumeMounts = [
+        {
+          name = "storage";
+          mountPath = "/var/loki";
+        }
+      ];
     };
-
-    # --- Memcached caches ---
-    chunksCache = {
-      enabled = true;
-    };
-    resultsCache = {
-      enabled = true;
-    };
-
-    # --- Sidecar (rules loader for backend) ---
-    sidecar = {
-      rules = {
-        folderAnnotation = "k8s-sidecar-target-directory";
-      };
-    };
-
-    # --- Disable components we don't use ---
-    singleBinary.enabled = false;
-    monitoring = {
-      selfMonitoring.enabled = false;
-    };
-    test.enabled = false;
   };
 }

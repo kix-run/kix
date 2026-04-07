@@ -417,6 +417,9 @@ async fn run_reconcile(
         timeout: Duration::from_secs(300),
         on_error: OnErrorPolicy::Stop,
         prune: PrunePolicy::Delete,
+        // The operator runs unattended; surface conflicts in Activation status
+        // rather than silently clobbering fields owned by other controllers.
+        force_conflicts: false,
     };
 
     let observer = OperatorObserver::new(name);

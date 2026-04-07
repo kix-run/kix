@@ -14,7 +14,7 @@ use kix::cluster::activation;
 use kix::cluster::apply::ChangeAction;
 use kix::cluster::fetch;
 use kix::cluster::graph::ResourceGraph;
-use kix::cluster::readiness;
+use kix::cluster::readiness::{self, ImportTarget};
 use kix::cluster::reconcile::{
     OnErrorPolicy, PrunePolicy, ReconcileConfig, ReconcileEvent, ReconcileObserver, ReconcileResult,
 };
@@ -361,6 +361,10 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
         } else {
             PrunePolicy::WarnOnly
         },
+        // Rollback re-applies a known-good prior activation; if a conflict
+        // surfaces, fail loudly so the operator can investigate rather than
+        // silently overwrite whatever the cluster currently has.
+        force_conflicts: false,
     };
 
     let observer = CliObserver {
@@ -637,6 +641,15 @@ fn print_summary(r: &ReconcileResult) {
     );
 }
 
+/// Build the display label for a readiness-watched resource.
+fn readiness_label(rid: &ResourceId, import_target: Option<&ImportTarget>) -> String {
+    if let Some(target) = import_target {
+        format!("↪ import {}/{}", target.kind, target.name)
+    } else {
+        rid.to_string()
+    }
+}
+
 /// CLI observer — reuse the same pattern as deploy.
 struct CliObserver {
     quiet: bool,
@@ -680,7 +693,11 @@ impl ReconcileObserver for CliObserver {
                     );
                 }
             }
-            ReconcileEvent::ResourceApplied { rid, action } => {
+            ReconcileEvent::ResourceApplied {
+                rid,
+                action,
+                import_target,
+            } => {
                 use kix::cluster::apply::ApplyAction;
                 let (symbol, label) = match action {
                     ApplyAction::Created => (output::green("+"), "created"),
@@ -689,35 +706,81 @@ impl ReconcileObserver for CliObserver {
                     ApplyAction::Skipped => (output::dim("-"), "skipped"),
                 };
                 if !self.quiet || !matches!(action, ApplyAction::Unchanged) {
-                    println!("  {} {} {}", symbol, rid, output::dim(label));
+                    if let Some(target) = import_target {
+                        println!(
+                            "  {} {} {} {}",
+                            symbol,
+                            output::dim("↪ import"),
+                            output::dim(&format!("{}/{}", target.kind, target.name)),
+                            output::dim(label),
+                        );
+                    } else {
+                        println!("  {} {} {}", symbol, rid, output::dim(label));
+                    }
                 }
             }
             ReconcileEvent::ResourceFailed { rid, error } => {
                 eprintln!("  {} {} {}", output::red("!"), rid, output::red(error));
             }
-            ReconcileEvent::ReadinessWaiting { rid } => {
+            ReconcileEvent::ReadinessWaiting { rid, import_target } => {
                 if !self.quiet {
-                    print!("  Waiting for {} ...", output::dim(&rid.to_string()));
+                    let label = readiness_label(rid, import_target.as_ref());
+                    print!("\r\x1b[2K  Waiting for {} ...", output::dim(&label));
                     std::io::stdout().flush().ok();
                 }
             }
-            ReconcileEvent::ReadinessReady { .. } => {
+            ReconcileEvent::ReadinessProgress {
+                rid,
+                import_target,
+                message,
+            } => {
                 if !self.quiet {
-                    println!(" {}", output::green("ready"));
+                    let label = readiness_label(rid, import_target.as_ref());
+                    print!(
+                        "\r\x1b[2K  Waiting for {} — {}",
+                        output::dim(&label),
+                        output::dim(message),
+                    );
+                    std::io::stdout().flush().ok();
+                }
+            }
+            ReconcileEvent::ReadinessReady { rid, import_target } => {
+                if !self.quiet {
+                    let label = readiness_label(rid, import_target.as_ref());
+                    println!(
+                        "\r\x1b[2K  Waiting for {} ... {}",
+                        output::dim(&label),
+                        output::green("ready"),
+                    );
                 }
             }
             ReconcileEvent::ReadinessTimeout {
-                elapsed, message, ..
+                rid,
+                import_target,
+                elapsed,
+                message,
             } => {
+                let label = readiness_label(rid, import_target.as_ref());
                 println!(
-                    " {} ({}s): {}",
+                    "\r\x1b[2K  Waiting for {} ... {} ({}s): {}",
+                    output::dim(&label),
                     output::yellow("timed out"),
                     elapsed.as_secs(),
                     message,
                 );
             }
-            ReconcileEvent::ReadinessFailed { message, .. } => {
-                println!(" {}: {}", output::red("failed"), message);
+            ReconcileEvent::ReadinessFailed {
+                rid,
+                import_target,
+                message,
+            } => {
+                let label = readiness_label(rid, import_target.as_ref());
+                println!(
+                    "\r\x1b[2K  Waiting for {} ... {}: {}",
+                    output::dim(&label),
+                    output::red("failed"),
+                    message,
+                );
             }
             ReconcileEvent::SecretHydrated { rid, keys } => {
                 if !self.quiet {

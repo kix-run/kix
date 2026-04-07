@@ -170,6 +170,59 @@ rec {
         else
           null;
 
+      # Validate that all secret references in a pod spec are DI-tracked.
+      # A reference is tracked if its string carries Nix string context (i.e.,
+      # it came from secret.out.name, secret.out.envFrom, secret.out.keyRef,
+      # or kix.untrackedRef). Plain string literals have no context and fail.
+      checkSecretRefs =
+        templateSpec:
+        let
+          allContainers = (templateSpec.containers or [ ]) ++ (templateSpec.initContainers or [ ]);
+
+          validateName =
+            fieldDesc: secretName:
+            if builtins.getContext secretName == { } then
+              throw "[${instanceName}] Untracked secret reference in ${fieldDesc}: "
+              + "\"${builtins.unsafeDiscardStringContext secretName}\". "
+              + "Use secret.out.name, secret.out.envFrom, secret.out.keyRef, "
+              + "or kix.untrackedRef to opt out explicitly."
+            else
+              null;
+
+          volumeChecks = builtins.concatMap (
+            v: if v ? secret then [ (validateName "volumes[].secret.secretName" v.secret.secretName) ] else [ ]
+          ) (templateSpec.volumes or [ ]);
+
+          envFromChecks = builtins.concatMap (
+            c:
+            builtins.concatMap (
+              ef:
+              if ef ? secretRef then
+                [
+                  (validateName "envFrom[].secretRef.name in container '${c.name}'" ef.secretRef.name)
+                ]
+              else
+                [ ]
+            ) (c.envFrom or [ ])
+          ) allContainers;
+
+          keyRefChecks = builtins.concatMap (
+            c:
+            builtins.concatMap (
+              e:
+              if (e ? valueFrom) && (e.valueFrom ? secretKeyRef) then
+                [
+                  (validateName "env '${e.name}' secretKeyRef in container '${c.name}'" e.valueFrom.secretKeyRef.name)
+                ]
+              else
+                [ ]
+            ) (c.env or [ ])
+          ) allContainers;
+
+          allChecks = volumeChecks ++ envFromChecks ++ keyRefChecks;
+        in
+        builtins.foldl' (acc: check: builtins.seq check acc) null allChecks;
+
       mkWorkload =
         apiVersion: kind: attrs:
         let
@@ -182,25 +235,27 @@ rec {
         in
         builtins.seq (checkDaemonSet kind) (
           builtins.seq (checkPrivileged templateSpec) (
-            scopeMkResource (
-              removeAttrs attrs [ "spec" ]
-              // {
-                inherit apiVersion kind;
-                spec =
-                  removeAttrs spec [
-                    "selector"
-                    "template"
-                  ]
-                  // {
-                    selector.matchLabels = selector;
-                    template = {
-                      metadata = templateMeta // {
-                        labels = templateMeta.labels or selector;
+            builtins.seq (checkSecretRefs templateSpec) (
+              scopeMkResource (
+                removeAttrs attrs [ "spec" ]
+                // {
+                  inherit apiVersion kind;
+                  spec =
+                    removeAttrs spec [
+                      "selector"
+                      "template"
+                    ]
+                    // {
+                      selector.matchLabels = selector;
+                      template = {
+                        metadata = templateMeta // {
+                          labels = templateMeta.labels or selector;
+                        };
+                        spec = templateSpec;
                       };
-                      spec = templateSpec;
                     };
-                  };
-              }
+                }
+              )
             )
           )
         );
@@ -266,8 +321,20 @@ rec {
           out = crdResource.out // builders;
         };
 
-      # Create a CRD reference for externally-managed CRDs (Helm, pre-existing).
-      # Has its own store path for dependency tracking but produces no deployable manifest.
+      # Create a CRD reference for externally-managed CRDs (installed by an
+      # operator's INSTALL_CRDS bootstrap, helm, or pre-existing on the cluster).
+      #
+      # Emits a real k8s-resource — a PackageInstance import marker in the
+      # caller's namespace with kix.dev/mode=import annotations describing the
+      # expected CRD. The CLI deploy engine's readiness check for import
+      # markers polls the cluster until the described CRD is Established,
+      # which naturally gates the wave containing any CR built via `.out.mkCR`.
+      #
+      # Dependency wiring is per-CR: `mkCRDBuilders` auto-adds this marker to
+      # every CR's `requires`, so the wave graph places the marker before
+      # consuming CRs via the standard forward-closure walker. No `root.requires`
+      # plumbing, no special case in wave ordering.
+      #
       # Same .out.{cr, mkCR} interface as mkCRD.
       mkCRDRef =
         {
@@ -276,30 +343,39 @@ rec {
           plural,
           version ? "v1",
           crdScope ? "Namespaced",
-          requires ? [ ],
+          installedBy ? null,
         }:
         let
-          refPath = builtins.toFile "crd-ref-${kind}" (
-            builtins.toJSON {
-              inherit
-                group
-                kind
-                version
-                crdScope
-                ;
-            }
-          );
-          ref = {
-            _type = "crd-ref";
-            outPath = refPath;
-            inherit requires;
-            out = {
-              name = "${plural}.${group}";
-            }
-            // builders;
+          crdName = "${plural}.${group}";
+          # Sanitize group dots for a k8s-valid name.
+          groupSlug = builtins.replaceStrings [ "." ] [ "-" ] group;
+          markerName = "crd-ref-${plural}-${groupSlug}";
+
+          marker = scopeMkResource {
+            apiVersion = "kix.dev/v1alpha1";
+            kind = "PackageInstance";
+            name = markerName;
+            annotations = {
+              "kix.dev/mode" = "import";
+              "kix.dev/import-kind" = "CustomResourceDefinition";
+              "kix.dev/import-apiversion" = "apiextensions.k8s.io/v1";
+              "kix.dev/import-name" = crdName;
+            };
+            # The PackageInstance CRD must exist before the marker can be
+            # applied. When `installedBy` is provided, also require that
+            # resource directly — this orders the marker AFTER its installer
+            # (e.g. operator Deployment) in the wave graph and classifies
+            # the marker as an inverse dep of root (no orphan warning).
+            requires = [ k8s.kixCRDs.packageInstance ] ++ lib.optional (installedBy != null) installedBy;
+            extra.spec = {
+              instanceName = markerName;
+              namespaceName = namespaceName;
+              mode = "import";
+            };
           };
+
           builders = k8s.mkCRDBuilders {
-            crdOrRef = ref;
+            crdOrRef = marker;
             inherit
               group
               kind
@@ -308,7 +384,10 @@ rec {
               ;
           };
         in
-        ref;
+        marker
+        // {
+          out = marker.out // builders;
+        };
 
       # Scope-side CRD builder: reads the CRD's scope and auto-routes.
       # Uses scopeObj (lazy self-reference) so crd.out.mkCR gets the full scope.

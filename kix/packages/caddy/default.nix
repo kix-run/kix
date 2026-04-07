@@ -198,7 +198,8 @@ in
                 {
                   name = "caddy-config";
                   secret = {
-                    secretName = config.configSecretName;
+                    # User-provided external secret name — not managed by kix.
+                    secretName = kix.untrackedRef config.configSecretName;
                     defaultMode = 420;
                   };
                 }

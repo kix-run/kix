@@ -464,7 +464,8 @@ in
                 {
                   name = "token-service-private-key";
                   secret = {
-                    secretName = tlsSecretName;
+                    # TLS secret created by cert-manager, not by kix.
+                    secretName = kix.untrackedRef tlsSecretName;
                     defaultMode = 420;
                   };
                 }

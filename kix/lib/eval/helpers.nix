@@ -51,10 +51,7 @@ rec {
       expectedTypes = [ "k8s-resource" ];
     };
     crds = {
-      expectedTypes = [
-        "k8s-resource"
-        "crd-ref"
-      ];
+      expectedTypes = [ "k8s-resource" ];
     };
   };
 }

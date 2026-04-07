@@ -158,7 +158,7 @@ rec {
       namespace ? "default",
       values ? { },
       includeCrds ? true,
-      includeHooks ? false,
+      includeHooks ? true,
       extraFlags ? [ ],
     }:
     let
@@ -251,7 +251,7 @@ rec {
       values ? { },
       releaseName ? "release",
       includeCrds ? true,
-      includeHooks ? false,
+      includeHooks ? true,
       extraFlags ? [ ],
       rootSelector ? null, # { kind = "Service"; } or { kind = "Service"; name = "my-svc"; }
       version ? chart.version or null, # Auto-extracted from fetchHelmChart derivation

@@ -221,7 +221,7 @@ pub fn walk_nix_files(flake_path: &Path) -> Result<Vec<(String, u64)>, KixEvalEr
                 }
             } else if file_type.is_file()
                 && let Some(ext) = path.extension()
-                && ext == "nix"
+                && (ext == "nix" || ext == "yaml" || ext == "yml" || ext == "json")
             {
                 let rel = path
                     .strip_prefix(flake_path)
