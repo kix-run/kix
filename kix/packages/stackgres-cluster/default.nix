@@ -48,7 +48,12 @@ in
     extensions = lib.mkOption {
       type = lib.types.listOf lib.types.anything;
       default = [ ];
-      description = "PostgreSQL extensions to install (e.g. pgvecto.rs). Uses listOf for merge semantics with dep config injection.";
+      description = ''
+        PostgreSQL extensions to install (e.g. pgvecto.rs). Each entry is
+        an attrset `{ name, version? }` passed through to SGCluster;
+        `version` optionally pins a specific extension version.
+        Uses listOf for merge semantics with dep config injection.
+      '';
     };
     storage = lib.mkOption {
       type = lib.types.anything;

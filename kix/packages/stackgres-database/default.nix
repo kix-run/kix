@@ -71,8 +71,10 @@ in
   # postgres cluster, so the operator installs them on the postgres image.
   # Function-shaped injection — receives this instance's evaluated config
   # so the forwarding picks up whatever extensions consumers requested.
+  # Entries can be plain strings or `{ name, version? }` attrsets; both
+  # shapes are normalized to the attrset form expected by SGCluster.
   deps.postgres.config = consumerConfig: {
-    extensions = map (n: { name = n; }) consumerConfig.extensions;
+    extensions = map (e: if builtins.isString e then { name = e; } else e) consumerConfig.extensions;
   };
 
   options = {
@@ -95,10 +97,12 @@ in
     };
 
     extensions = lib.mkOption {
-      type = lib.types.listOf lib.types.str;
+      type = lib.types.listOf (lib.types.either lib.types.str lib.types.attrs);
       default = [ ];
       description = ''
         Extensions to CREATE EXTENSION IF NOT EXISTS on the new database.
+        Each entry is either a plain extension name (string) or an
+        attrset `{ name, version? }` to pin a specific extension version.
         Note: the extension must already be available in the cluster — declare
         it on the stackgres-cluster instance's `extensions` option so the
         operator installs it on the underlying postgres image.
@@ -337,7 +341,11 @@ in
             echo "ensuring extensions on \"${dbName}\"..."
             psql -v ON_ERROR_STOP=1 -d "${dbName}" <<'SQL'
           ${lib.concatMapStringsSep "\n" (
-            ext: "CREATE EXTENSION IF NOT EXISTS \"${ext}\" CASCADE;"
+            ext:
+            let
+              e = if builtins.isString ext then { name = ext; } else ext;
+            in
+            "CREATE EXTENSION IF NOT EXISTS \"${e.name}\" CASCADE;"
           ) config.extensions}
           SQL
         ''}

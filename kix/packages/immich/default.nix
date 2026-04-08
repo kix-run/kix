@@ -30,7 +30,7 @@ let
 in
 {
   meta = {
-    version = "v2.0.0";
+    version = "v2.7.2";
     description = "Immich — self-hosted photo management";
     owner = "app-team";
     provides = [
@@ -70,7 +70,10 @@ in
       # declared here so stackgres-database can forward them to the
       # cluster and the operator installs them on the image.
       extensions = [
-        "vchord"
+        {
+          name = "vchord";
+          version = "0.5.3";
+        }
         "uuid-ossp"
         "cube"
         "earthdistance"
@@ -88,6 +91,10 @@ in
       dep:
       let
         extensions = dep.out.extensions or null;
+        # Extensions can be strings or `{ name, version? }` attrsets; reduce
+        # to just names for the presence check.
+        extensionNames =
+          if extensions == null then null else map (e: if builtins.isString e then e else e.name) extensions;
         required = [
           "vchord"
           "uuid-ossp"
@@ -96,7 +103,7 @@ in
           "unaccent"
           "pg_trgm"
         ];
-        missing = lib.filter (e: !(builtins.elem e extensions)) required;
+        missing = lib.filter (e: !(builtins.elem e extensionNames)) required;
       in
       lib.optional (extensions != null && missing != [ ]) {
         assertion = false;
@@ -117,7 +124,7 @@ in
       type = lib.types.anything;
       default = {
         repository = "ghcr.io/immich-app/immich-server";
-        tag = "v2.0.0";
+        tag = "v2.7.2";
         pullPolicy = "IfNotPresent";
       };
     };
