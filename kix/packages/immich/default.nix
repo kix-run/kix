@@ -51,21 +51,47 @@ in
     # postgres image. End result: immich auto-instantiation pulls a fully
     # configured database + cluster with no cluster-side wiring.
     database.config = {
-      extensions = [ "vector" ];
+      # Immich's InitialMigration creates these extensions on first boot:
+      #   - vector       : pgvecto.rs / pgvector — image similarity embeddings
+      #   - uuid-ossp    : UUID generation for primary keys
+      #   - cube         : required by earthdistance (GPS coordinates)
+      #   - earthdistance: geo distance queries for the map view
+      #   - unaccent     : accent-insensitive search on metadata
+      # Missing any of these fails InitialMigration with
+      #   0A000 "extension <X> is not available".
+      # StackGres ships a minimal postgres image; extensions must be
+      # declared here so stackgres-database can forward them to the
+      # cluster and the operator installs them on the image.
+      extensions = [
+        "vector"
+        "uuid-ossp"
+        "cube"
+        "earthdistance"
+        "unaccent"
+      ];
     };
 
-    # Validate that the database instance was configured with the `vector`
-    # extension. The stackgres-database package translates `extensions = [...]`
-    # into CREATE EXTENSION statements run against the new database; the
-    # extension still has to be installed on the underlying SGCluster.
+    # Validate that the database instance was configured with all of
+    # immich's required extensions. The stackgres-database package
+    # translates `extensions = [...]` into CREATE EXTENSION statements
+    # run against the new database; each extension still has to be
+    # installed on the underlying SGCluster.
     database.assertions =
       dep:
       let
         extensions = dep.out.extensions or null;
+        required = [
+          "vector"
+          "uuid-ossp"
+          "cube"
+          "earthdistance"
+          "unaccent"
+        ];
+        missing = lib.filter (e: !(builtins.elem e extensions)) required;
       in
-      lib.optional (extensions != null && !(builtins.elem "vector" extensions)) {
+      lib.optional (extensions != null && missing != [ ]) {
         assertion = false;
-        message = "immich requires the pgvecto.rs (\"vector\") extension on its database. Add `extensions = [ \"vector\" ]` to the stackgres-database instance and ensure the underlying stackgres-cluster declares the extension under `extensions`.";
+        message = "immich requires the following postgres extensions on its database: ${lib.concatStringsSep ", " required}. Missing: ${lib.concatStringsSep ", " missing}. Add them to the stackgres-database instance's `extensions` and ensure the underlying stackgres-cluster declares them under `extensions`.";
       };
 
     storage.warnings =

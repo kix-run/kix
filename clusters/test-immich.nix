@@ -1,7 +1,11 @@
 # clusters/test-immich.nix — Immich with auto-instantiation.
 #
-# Only immich, its storage PVC, and postgres are declared explicitly.
-# Everything else (valkey, storage-classes) is auto-instantiated.
+# Only immich, its storage PVC, and the per-app database (which needs an
+# explicit dev password) are declared. valkey, storage-classes, the
+# stackgres-cluster postgres backend, and the database's required
+# extensions are all picked up via auto-instantiation + dep config
+# injection — immich declares it needs `vector`, the database forwards
+# that to postgres, and the operator installs it on the postgres image.
 #
 # Build:  nix build .#cluster-immich --extra-experimental-features pipe-operators
 
@@ -31,10 +35,30 @@ kix.buildCluster {
           };
         };
 
-        # pgvecto.rs extension is now auto-injected by immich via dep config injection.
-        immich-db = {
+        # Per-app postgres cluster. Declared so the database in this
+        # namespace doesn't reach across namespaces to firezone's
+        # postgres via cluster-wide DI resolution. Notably: NO `extensions`
+        # config — the vector extension comes via dep config injection
+        # (immich → immich-db → immich-pg) at build time.
+        immich-pg = {
           package = packages.stackgres-cluster;
           aliases = [ "postgres" ];
+        };
+
+        # Per-app database + role. The only thing we have to set is the
+        # dev password — extensions and the underlying postgres backend
+        # are wired automatically:
+        #   immich.deps.database.config.extensions = [ "vector" ]
+        #     → stackgres-database forwards to its postgres dep (immich-pg)
+        #     → operator installs the extension on the postgres image
+        immich-db = {
+          package = packages.stackgres-database;
+          aliases = [ "database" ];
+          config = {
+            database = "immich";
+            user = "immich";
+            password = "immich-dev-password";
+          };
         };
       };
 

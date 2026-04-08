@@ -626,6 +626,12 @@ rec {
       inherit name;
       labels = {
         "app.kubernetes.io/managed-by" = "kix";
+        # Stamped at build time so the CR is discoverable by `find_active`'s
+        # label selector from the moment it lands on the cluster — even if
+        # `finalize_deploy` never runs (crash, partial failure). Without this,
+        # an unfinalized Activation is invisible and the next deploy treats
+        # the cluster as empty.
+        "kix.dev/cluster" = name;
       };
       requires = [ kixCRDs.activation ];
       extraDeps = extraDeps;

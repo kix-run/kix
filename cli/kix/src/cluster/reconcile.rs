@@ -685,13 +685,19 @@ pub async fn reconcile(
         }
     }
 
-    // Finalize activation lifecycle (mark old as Superseded, new as Active).
-    // Only finalize when resources were actually changed — calling finalize_deploy
-    // unconditionally creates an infinite reconcile loop because it always sets a new
-    // kix.dev/deployed-at timestamp, which bumps metadata.generation.
+    // Finalize activation lifecycle (mark old as Superseded, new as Active or
+    // Degraded). Only finalize when resources were actually changed — calling
+    // finalize_deploy unconditionally creates an infinite reconcile loop
+    // because it always sets a new kix.dev/deployed-at timestamp, which bumps
+    // metadata.generation.
+    //
+    // Failures do NOT skip finalize: an unfinalized Activation has no
+    // kix.dev/cluster label or terminal phase, so the next deploy can't find
+    // it and treats the cluster as empty. Instead, finalize sets phase to
+    // Degraded when result.failed > 0, and `find_active` accepts Degraded as
+    // the current state for diffing purposes.
     let actually_changed = result.created > 0 || result.configured > 0 || result.pruned > 0;
     if actually_changed
-        && result.failed == 0
         && let Some(act_name) = activation_name
         && let Some((ar, _)) = activation::find_activation_ar(discovery)
     {
@@ -701,9 +707,16 @@ pub async fn reconcile(
             .flatten()
             .filter(|old| old.name != act_name);
 
-        if let Err(e) =
-            activation::finalize_deploy(client, ar, cluster_name, act_name, old_activation.as_ref())
-                .await
+        let had_failures = result.failed > 0;
+        if let Err(e) = activation::finalize_deploy(
+            client,
+            ar,
+            cluster_name,
+            act_name,
+            old_activation.as_ref(),
+            had_failures,
+        )
+        .await
         {
             tracing::warn!("failed to finalize activation lifecycle: {e}");
         } else {

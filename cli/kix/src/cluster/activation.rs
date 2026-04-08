@@ -29,6 +29,10 @@ pub const PHASE_QUEUED: &str = "Queued";
 pub const PHASE_ACTIVE: &str = "Active";
 pub const PHASE_SUPERSEDED: &str = "Superseded";
 pub const PHASE_DEPLOYING: &str = "Deploying";
+/// Deploy completed but some resources failed to apply or become ready.
+/// Treated as the "current state" for diffing/drift purposes — the next deploy
+/// must be able to find this CR to compute a meaningful plan.
+pub const PHASE_DEGRADED: &str = "Degraded";
 
 /// Label for filtering activations by cluster.
 pub const CLUSTER_LABEL: &str = "kix.dev/cluster";
@@ -69,8 +73,12 @@ pub fn find_activation_ar(discovery: &[(ApiResource, Scope)]) -> Option<&(ApiRes
 
 /// Find the current Active activation for a given cluster.
 ///
-/// Returns None if no Active activation exists (first deploy).
-/// Matches on `status.phase == "Active"`.
+/// Returns None if no current activation exists (first deploy).
+/// Matches `status.phase` against `Active` or `Degraded` — both represent
+/// "the cluster's current state" for diffing purposes. A Degraded activation
+/// is one whose deploy completed with some resource failures; it is still the
+/// most recent description of intended state and the next deploy should diff
+/// against it instead of treating the cluster as empty.
 pub async fn find_active(
     client: &Client,
     ar: &ApiResource,
@@ -90,7 +98,7 @@ pub async fn find_active(
             .and_then(|v| v.as_str())
             .unwrap_or("");
 
-        if phase == PHASE_ACTIVE {
+        if phase == PHASE_ACTIVE || phase == PHASE_DEGRADED {
             let name = item.metadata.name.clone().unwrap_or_default();
             let annotations = item.metadata.annotations.as_ref();
             let identity_hash = annotations
@@ -110,18 +118,25 @@ pub async fn find_active(
     Ok(None)
 }
 
-/// After a successful deploy, update the activation lifecycle:
+/// After a deploy, update the activation lifecycle:
 /// 1. Mark the old activation as Superseded (status.phase=Superseded)
 /// 2. Set kix.dev/previous on the new activation pointing to the old one
 /// 3. Set kix.dev/deployed-at timestamp on the new activation
-/// 4. Set the new activation to status.phase=Active with status.previousActivation
-/// 5. Add kix.dev/cluster label for filtering
+/// 4. Set the new activation phase: `Active` on a clean deploy, `Degraded` if
+///    `had_failures` is true. Either way, it becomes the cluster's current
+///    state — the next deploy must be able to find it via `find_active` to
+///    compute a meaningful diff. Marking it Active despite failures would
+///    misrepresent the state; refusing to finalize at all (the previous
+///    behavior) leaves an orphaned Activation that nothing can find.
+/// 5. Add kix.dev/cluster label for filtering (also stamped at build time
+///    via `mkActivation`, but re-asserted here for older CRs).
 pub async fn finalize_deploy(
     client: &Client,
     ar: &ApiResource,
     cluster_name: &str,
     new_activation_name: &str,
     old_activation: Option<&ActiveActivation>,
+    had_failures: bool,
 ) -> Result<(), ActivationError> {
     let api: Api<DynamicObject> = Api::all_with(client.clone(), ar);
     let now = chrono::Utc::now().to_rfc3339();
@@ -163,9 +178,14 @@ pub async fn finalize_deploy(
         source: e,
     })?;
 
-    // 3. Set status to Active with previousActivation link
+    // 3. Set status phase with previousActivation link
+    let new_phase = if had_failures {
+        PHASE_DEGRADED
+    } else {
+        PHASE_ACTIVE
+    };
     let mut status = serde_json::Map::new();
-    status.insert("phase".to_string(), json!(PHASE_ACTIVE));
+    status.insert("phase".to_string(), json!(new_phase));
     if let Some(old) = old_activation {
         status.insert("previousActivation".to_string(), json!(old.name));
     }
@@ -182,7 +202,7 @@ pub async fn finalize_deploy(
         source: e,
     })?;
 
-    tracing::info!(activation = %new_activation_name, "marked as Active");
+    tracing::info!(activation = %new_activation_name, phase = new_phase, "finalized");
 
     Ok(())
 }

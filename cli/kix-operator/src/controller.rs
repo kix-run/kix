@@ -42,7 +42,9 @@ use kube::{
 use serde_json::Value;
 use thiserror::Error;
 
-use kix::cluster::activation::{self, PHASE_ACTIVE, PHASE_DEPLOYING, PHASE_SUPERSEDED};
+use kix::cluster::activation::{
+    self, PHASE_ACTIVE, PHASE_DEGRADED, PHASE_DEPLOYING, PHASE_SUPERSEDED,
+};
 use kix::cluster::apply::{ChangeAction, IDENTITY_HASH_ANNOTATION};
 use kix::cluster::fetch;
 use kix::cluster::graph::ResourceGraph;
@@ -299,8 +301,10 @@ pub async fn reconcile_activation(
             return run_reconcile(&activation, &ctx, name, &cluster, true).await;
         }
 
-        // Active — drift detection on requeue
-        s if s == PHASE_ACTIVE => {
+        // Active or Degraded — drift detection on requeue. Degraded means the
+        // last deploy completed with some failures; the CR is still the
+        // current intended state and we want drift correction to keep trying.
+        s if s == PHASE_ACTIVE || s == PHASE_DEGRADED => {
             // Check for Queued CRs — if any, yield to let them handle the transition
             let queued = activation::find_queued(&ctx.client, &ctx.activation_ar, &cluster)
                 .await
@@ -491,8 +495,8 @@ async fn handle_delete(
 
     let phase = activation::read_phase(activation);
 
-    // Only clean up resources for Active/Deploying activations
-    if phase == PHASE_ACTIVE || phase == PHASE_DEPLOYING {
+    // Only clean up resources for current activations
+    if phase == PHASE_ACTIVE || phase == PHASE_DEPLOYING || phase == PHASE_DEGRADED {
         tracing::info!(
             name,
             phase,

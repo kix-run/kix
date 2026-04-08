@@ -217,14 +217,20 @@ pub async fn watch_activation_progress(
             }
         }
 
-        // Completion: phase is Active
-        if phase == "Active" {
+        // Completion: phase is Active or Degraded (deploy finished, possibly
+        // with failures — see Activation status for the failed-resource list)
+        if phase == "Active" || phase == "Degraded" {
             if !quiet {
+                let phase_colored = if phase == "Active" {
+                    output::green(phase)
+                } else {
+                    output::yellow(phase)
+                };
                 println!(
                     "  {} Activation '{}' is {}",
                     output::green("✓"),
                     activation_name,
-                    output::green("Active"),
+                    phase_colored,
                 );
             }
             return Ok(());

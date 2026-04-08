@@ -98,7 +98,7 @@ impl CommandResponse for OperatorStatusResponse {
             Some(act) => {
                 let phase_str = match act.phase.as_str() {
                     "Active" => output::green(&act.phase),
-                    "Deploying" | "Queued" => output::yellow(&act.phase),
+                    "Deploying" | "Queued" | "Degraded" => output::yellow(&act.phase),
                     "Failed" => output::red(&act.phase),
                     _ => output::dim(&act.phase),
                 };

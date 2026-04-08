@@ -307,12 +307,15 @@ in
 
         echo "ensuring role \"${userName}\" exists with current password..."
         ROLE_EXISTS=$(psql -tAc "SELECT 1 FROM pg_roles WHERE rolname = '${userName}'")
+        # psql -c does NOT process variable substitution (:'var'); the string
+        # is sent to the server as-is. Pipe SQL via stdin so psql's lexer
+        # runs and substitutes :'newpw' with a properly quoted literal.
         if [ "$ROLE_EXISTS" = "1" ]; then
-          psql -v ON_ERROR_STOP=1 -v newpw="$NEW_PASSWORD" \
-            -c "ALTER ROLE \"${userName}\" WITH LOGIN PASSWORD :'newpw'"
+          echo "ALTER ROLE \"${userName}\" WITH LOGIN PASSWORD :'newpw'" \
+            | psql -v ON_ERROR_STOP=1 -v newpw="$NEW_PASSWORD"
         else
-          psql -v ON_ERROR_STOP=1 -v newpw="$NEW_PASSWORD" \
-            -c "CREATE ROLE \"${userName}\" WITH LOGIN PASSWORD :'newpw'"
+          echo "CREATE ROLE \"${userName}\" WITH LOGIN PASSWORD :'newpw'" \
+            | psql -v ON_ERROR_STOP=1 -v newpw="$NEW_PASSWORD"
         fi
 
         echo "ensuring database \"${dbName}\" exists..."

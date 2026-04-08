@@ -433,6 +433,14 @@ in
             updateStrategy = {
               method = config.updateMethod;
             };
+            # StackGres ships a pgbouncer sidecar by default even without an
+            # SGPoolingConfig. Its auth_query path needs an `authenticator`
+            # role in the DB, and when that role is missing every login gets
+            # cached as a failure ("server_login_retry"), breaking even the
+            # superuser bootstrap Job. When consumers haven't explicitly
+            # opted into pooling, disable the sidecar so the main cluster
+            # service talks to postgres directly.
+            disableConnectionPooling = !config.pooling.enabled;
           };
         }
         // lib.optionalAttrs (config.scripts != [ ]) {

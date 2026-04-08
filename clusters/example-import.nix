@@ -44,11 +44,12 @@ kix.buildCluster {
           };
         };
 
-        # Immich namespace: server + ML worker.
+        # Immich namespace: server + ML worker + per-app database instance.
         # valkey resolves via DI from the cache namespace (cluster-wide).
-        # postgres resolves via DI from the database namespace (cluster-wide).
-        # storage resolves via DI from the same namespace (PVC).
-        # machineLearning resolves via DI from the same namespace.
+        # The stackgres-database instance below lives in *this* namespace
+        # but talks to the imported postgres in the `database` namespace —
+        # demonstrating the cross-namespace flow without cross-namespace
+        # secret reads (the credentials Secret is materialized locally).
         immich = {
           storage = {
             package = packages."persistent-volume-claim";
@@ -57,14 +58,19 @@ kix.buildCluster {
             };
           };
 
+          immich-db = {
+            package = packages."stackgres-database";
+            aliases = [ "database" ];
+            config = {
+              database = "immich";
+              user = "immich";
+              extensions = [ "vector" ];
+              password = "immich-dev-password";
+            };
+          };
+
           immich = {
             package = packages.immich;
-            config = {
-              # DB auth provided via env (secrets):
-              # env.DB_USERNAME = "immich";
-              # env.DB_PASSWORD = "...";  # use external secret management
-              # env.DB_DATABASE_NAME = "immich";
-            };
           };
 
           machineLearning = {

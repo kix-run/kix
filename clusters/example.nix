@@ -17,7 +17,6 @@ kix.buildCluster {
 
       namespaces = {
         kube-system = { };
-        cache = { };
         cert-manager = { };
         stackgres-system = { };
         immich = { };
@@ -104,10 +103,7 @@ kix.buildCluster {
                 };
               };
               auth = {
-                enabled = true;
-                existingSecret = "valkey-auth";
-                existingSecretPasswordKey = "valkey-password";
-                sentinel = true;
+                enabled = false;
               };
             };
           };
@@ -131,13 +127,26 @@ kix.buildCluster {
             package = packages."stackgres-cluster";
 
             config = {
-              postgres.extensions = [
+              extensions = [
                 {
-                  name = "vectors";
+                  name = "vector";
                   publisher = "tensorchord";
                   version = "0.3.0";
                 }
               ];
+            };
+          };
+
+          # Per-app database + role on the postgres cluster above.
+          # Resolved via the `database` alias by the immich package.
+          immich-db = {
+            package = packages."stackgres-database";
+            aliases = [ "database" ];
+            config = {
+              database = "immich";
+              user = "immich";
+              extensions = [ "vector" ];
+              password = "immich-dev-password";
             };
           };
 
