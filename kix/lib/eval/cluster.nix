@@ -159,6 +159,22 @@ in
 
       configInjections = buildConfigInjections phase1Instances;
 
+      # Force function-shaped injection configs against a consumer-config
+      # lookup (phase 2a `instanceConfigs` or its own self-reference).
+      # Literal-shaped injection configs pass through unchanged.
+      resolveInjectionsAgainst =
+        configMap: nsName: instName:
+        map (
+          inj:
+          if builtins.isFunction inj.config then
+            let
+              consumerCfg = (configMap.${inj.consumerNs} or { }).${inj.consumerInst} or { };
+            in
+            inj // { config = inj.config consumerCfg; }
+          else
+            inj
+        ) (configInjections.${nsName}.${instName} or [ ]);
+
       # Phase 2a: config-only fixpoint.
       #
       # Some dep config injections are function-shaped — they read parts
@@ -190,24 +206,11 @@ in
             if (instCfg.package._type or "") == "kix-import" then
               { }
             else
-              let
-                rawInjections = configInjections.${nsName}.${instName} or [ ];
-                resolvedInjections = map (
-                  inj:
-                  if builtins.isFunction inj.config then
-                    let
-                      consumerCfg = (selfCfg.${inj.consumerNs} or { }).${inj.consumerInst} or { };
-                    in
-                    inj // { config = inj.config consumerCfg; }
-                  else
-                    inj
-                ) rawInjections;
-              in
               evaluateInstanceConfig {
                 packageOptions = phase1Instances.${nsName}.${instName}.packageOptions;
                 inherit instCfg;
                 clusterConfig = cfg;
-                configInjections = resolvedInjections;
+                configInjections = resolveInjectionsAgainst selfCfg nsName instName;
               }
           ) nsInsts
         ) mergedInstances
@@ -217,21 +220,7 @@ in
       # full eval below an injection list whose `config` fields are
       # plain attrsets (regardless of whether the package author wrote
       # a function or a literal).
-      resolveInjections =
-        nsName: instName:
-        let
-          raw = configInjections.${nsName}.${instName} or [ ];
-        in
-        map (
-          inj:
-          if builtins.isFunction inj.config then
-            let
-              consumerCfg = (instanceConfigs.${inj.consumerNs} or { }).${inj.consumerInst} or { };
-            in
-            inj // { config = inj.config consumerCfg; }
-          else
-            inj
-        ) raw;
+      resolveInjections = resolveInjectionsAgainst instanceConfigs;
 
       # 6. Build nested fixpoint (phase 2b — full evaluation).
       clusterInstances = lib.fix (

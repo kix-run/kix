@@ -130,7 +130,7 @@ rec {
         # ports are trivially consistent because they're derived from the
         # container ports themselves.
         workloadPortNames = lib.unique (
-          builtins.concatMap (c: map (p: p.name) (builtins.filter (p: p ? name) (c.ports or [ ]))) (
+          builtins.concatMap (c: builtins.catAttrs "name" (c.ports or [ ])) (
             workload.rawManifest.spec.template.spec.containers or [ ]
           )
         );

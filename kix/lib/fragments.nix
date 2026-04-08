@@ -7,6 +7,21 @@
 
 rec {
 
+  # Deep merge a list of namespace config attrsets. Named network policies
+  # merge naturally. Leaf-field conflicts (same key, non-attrset value in
+  # more than one input) throw an error.
+  deepMergeNs =
+    attrsList:
+    builtins.zipAttrsWith (
+      k: values:
+      if builtins.length values == 1 then
+        builtins.head values
+      else if builtins.all builtins.isAttrs values then
+        deepMergeNs values
+      else
+        throw "namespace policy conflict on key '${k}': multiple fragments define a leaf value"
+    ) attrsList;
+
   # Merge multiple fragments into a single { namespaces, instances } for buildCluster.
   #
   # Instance collision: same (namespace, instance) from different fragments = error.
@@ -16,107 +31,36 @@ rec {
       fragments,
       namespacePolicies ? { },
     }:
-    let
-      # Merge instances with collision checking
-      mergedInstances =
+    {
+      # Deep merge namespace configs, then layer platform-owned policies on top.
+      namespaces = deepMergeNs [
+        (deepMergeNs (map (f: f.namespaces or { }) fragments))
+        namespacePolicies
+      ];
+
+      # Instance sets are per-namespace attrsets; collisions on the inner
+      # (namespace, instance) key are errors.
+      instances =
         args:
         let
-          allInstanceFns = map (
-            f: if builtins.isFunction (f.instances or { }) then f.instances else (_: f.instances or { })
+          allInstanceSets = map (
+            f:
+            let
+              v = f.instances or { };
+            in
+            if builtins.isFunction v then v args else v
           ) fragments;
-
-          # Evaluate all fragment instance functions
-          allInstanceSets = map (fn: fn args) allInstanceFns;
-
-          # Check for collisions and merge
-          mergeTwo =
-            a: b:
-            let
-              nsNames = lib.unique (builtins.attrNames a ++ builtins.attrNames b);
-            in
-            builtins.listToAttrs (
-              map (
-                nsName:
-                let
-                  aInsts = a.${nsName} or { };
-                  bInsts = b.${nsName} or { };
-                  collisions = builtins.filter (n: builtins.hasAttr n aInsts) (builtins.attrNames bInsts);
-                in
-                if collisions != [ ] then
-                  throw "instance collision in namespace '${nsName}': ${builtins.toJSON collisions} defined by multiple fragments"
-                else
-                  {
-                    name = nsName;
-                    value = aInsts // bInsts;
-                  }
-              ) nsNames
-            );
         in
-        builtins.foldl' mergeTwo { } allInstanceSets;
-
-      # Deep merge namespaces (leaf conflicts error)
-      mergedNamespaces =
-        let
-          allNs = map (f: f.namespaces or { }) fragments;
-          mergeNsTwo =
-            a: b:
-            let
-              nsNames = lib.unique (builtins.attrNames a ++ builtins.attrNames b);
-            in
-            builtins.listToAttrs (
-              map (nsName: {
-                name = nsName;
-                value = deepMergeNs (a.${nsName} or { }) (b.${nsName} or { });
-              }) nsNames
-            );
-        in
-        builtins.foldl' mergeNsTwo { } allNs;
-
-      # Apply platform-owned policies on top
-      finalNamespaces =
-        let
-          nsNames = lib.unique (builtins.attrNames mergedNamespaces ++ builtins.attrNames namespacePolicies);
-        in
-        builtins.listToAttrs (
-          map (nsName: {
-            name = nsName;
-            value = deepMergeNs (mergedNamespaces.${nsName} or { }) (namespacePolicies.${nsName} or { });
-          }) nsNames
-        );
-
-    in
-    {
-      namespaces = finalNamespaces;
-      instances = mergedInstances;
-    };
-
-  # Deep merge two namespace configs. Named network policies merge naturally.
-  # Leaf-field conflicts throw errors.
-  deepMergeNs =
-    a: b:
-    let
-      keys = lib.unique (builtins.attrNames a ++ builtins.attrNames b);
-    in
-    builtins.listToAttrs (
-      map (
-        k:
-        let
-          av = a.${k} or null;
-          bv = b.${k} or null;
-        in
-        {
-          name = k;
-          value =
-            if av == null then
-              bv
-            else if bv == null then
-              av
-            else if builtins.isAttrs av && builtins.isAttrs bv then
-              deepMergeNs av bv
+        builtins.zipAttrsWith (
+          nsName: nsInstanceSets:
+          builtins.zipAttrsWith (
+            instName: defs:
+            if builtins.length defs > 1 then
+              throw "instance collision in namespace '${nsName}': '${instName}' defined by multiple fragments"
             else
-              throw "namespace policy conflict on key '${k}': both fragments define a leaf value";
-        }
-      ) keys
-    );
+              builtins.head defs
+          ) nsInstanceSets
+        ) allInstanceSets;
+    };
 
 }

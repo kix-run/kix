@@ -21,6 +21,29 @@ let
   meta = import ./meta.nix { inherit lib; };
   scorecard = import ./scorecard.nix { inherit lib; };
   rules = import ./rules { inherit lib; };
+
+  # Recursively strip nulls, empty attrsets, and empty lists from a manifest.
+  # Preserves derivations and values with a `type` key (nixpkgs format markers).
+  removeNulls =
+    attrs:
+    builtins.mapAttrs
+      (
+        _: v:
+        if builtins.isAttrs v && !(lib.isDerivation v) && !(v ? type) then
+          removeNulls v
+        else if builtins.isList v then
+          builtins.map (x: if builtins.isAttrs x && !(lib.isDerivation x) then removeNulls x else x) v
+        else
+          v
+      )
+      (
+        lib.filterAttrs (
+          _: v:
+          v != null
+          && !(builtins.isAttrs v && !(lib.isDerivation v) && !(v ? type) && v == { })
+          && !(builtins.isList v && v == [ ])
+        ) attrs
+      );
 in
 
 {
@@ -111,28 +134,6 @@ in
     manifest:
     let
       yamlFormat = pkgs.formats.yaml { };
-
-      removeNulls =
-        attrs:
-        builtins.mapAttrs
-          (
-            _: v:
-            if builtins.isAttrs v && !(lib.isDerivation v) && !(v ? type) then
-              removeNulls v
-            else if builtins.isList v then
-              builtins.map (x: if builtins.isAttrs x && !(lib.isDerivation x) then removeNulls x else x) v
-            else
-              v
-          )
-          (
-            lib.filterAttrs (
-              _: v:
-              v != null
-              && !(builtins.isAttrs v && !(lib.isDerivation v) && !(v ? type) && v == { })
-              && !(builtins.isList v && v == [ ])
-            ) attrs
-          );
-
       cleaned = removeNulls manifest;
       name = manifest.metadata.name or "unnamed";
       kind = manifest.kind or "resource";
@@ -156,26 +157,6 @@ in
         manifest:
         let
           yamlFormat = pkgs.formats.yaml { };
-          removeNulls =
-            attrs:
-            builtins.mapAttrs
-              (
-                _: v:
-                if builtins.isAttrs v && !(lib.isDerivation v) && !(v ? type) then
-                  removeNulls v
-                else if builtins.isList v then
-                  builtins.map (x: if builtins.isAttrs x && !(lib.isDerivation x) then removeNulls x else x) v
-                else
-                  v
-              )
-              (
-                lib.filterAttrs (
-                  _: v:
-                  v != null
-                  && !(builtins.isAttrs v && !(lib.isDerivation v) && !(v ? type) && v == { })
-                  && !(builtins.isList v && v == [ ])
-                ) attrs
-              );
           cleaned = removeNulls manifest;
           name = manifest.metadata.name or "unnamed";
           kind = manifest.kind or "resource";

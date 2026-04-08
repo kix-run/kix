@@ -20,16 +20,41 @@ rec {
   # Convention: the reserved attrset key `_kix` carries kix-internal metadata
   # on any K8s fragment (volume entry, env entry, secretRef, etc.). It mirrors
   # the `_module` reserved-key pattern from NixOS modules. Validators that run
-  # before serialization (e.g. checkSecretRefs) read `_kix.*` directly; this
-  # stripper removes every `_kix` key recursively right before the manifest is
-  # rendered to JSON, so no marker ever leaks into K8s.
+  # before serialization (e.g. checkNamespacedRefs) read `_kix.*` directly;
+  # this stripper removes every `_kix` key recursively right before the
+  # manifest is rendered to JSON, so no marker ever leaks into K8s.
   #
-  # Adding a new piece of internal metadata never requires touching the
-  # stripper — just write it under `_kix` on the fragment that needs it.
+  # Adding a new piece of internal metadata requires (a) appending the key
+  # name to `validKixKeys` below and (b) writing it under `_kix` on the
+  # fragment that needs it. The whitelist check catches typos like
+  # `_kix.namespce` that would otherwise be silently stripped and cause
+  # readers (e.g. checkNamespacedRefs) to skip validation.
+  validKixKeys = [
+    "namespace"
+    "source"
+    "reflected"
+    "serviceAccountNamespace"
+  ];
+
   stripKixMeta =
     value:
     if builtins.isAttrs value then
-      lib.mapAttrs (_: stripKixMeta) (removeAttrs value [ "_kix" ])
+      let
+        _kixCheck =
+          if value ? _kix then
+            let
+              unknown = builtins.filter (k: !(builtins.elem k validKixKeys)) (builtins.attrNames value._kix);
+            in
+            if unknown != [ ] then
+              throw "unknown _kix marker key(s): ${builtins.concatStringsSep ", " unknown}. "
+              + "Valid keys: ${builtins.concatStringsSep ", " validKixKeys}. "
+              + "This is almost always a typo — check the fragment that set _kix."
+            else
+              null
+          else
+            null;
+      in
+      builtins.seq _kixCheck (lib.mapAttrs (_: stripKixMeta) (removeAttrs value [ "_kix" ]))
     else if builtins.isList value then
       map stripKixMeta value
     else

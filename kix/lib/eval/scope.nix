@@ -27,19 +27,6 @@ let
       throw message
     else
       null;
-
-  checkCapabilityNotNull =
-    {
-      capabilities,
-      cap,
-      message,
-    }:
-    if capabilities == { } then
-      null
-    else if (capabilities.${cap} or null) == null then
-      throw message
-    else
-      null;
 in
 
 rec {

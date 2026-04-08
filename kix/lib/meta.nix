@@ -11,7 +11,7 @@
 let
   # --- Version comparison (semver-ish: major.minor[.patch]) ---
 
-  parseVersion = v: map lib.toIntBase10 (builtins.filter builtins.isString (builtins.split "\\." v));
+  parseVersion = v: map lib.toIntBase10 (lib.splitString "." v);
 
   compareVersions =
     a: b:
