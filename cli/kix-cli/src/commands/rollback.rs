@@ -773,6 +773,7 @@ impl ReconcileObserver for CliObserver {
                 rid,
                 import_target,
                 message,
+                missing_keys,
             } => {
                 let label = readiness_label(rid, import_target.as_ref());
                 println!(
@@ -781,6 +782,13 @@ impl ReconcileObserver for CliObserver {
                     output::red("failed"),
                     message,
                 );
+                if !missing_keys.is_empty() {
+                    println!(
+                        "    {} missing key(s): {}",
+                        output::red("↳"),
+                        missing_keys.join(", "),
+                    );
+                }
             }
             ReconcileEvent::SecretHydrated { rid, keys } => {
                 if !self.quiet {

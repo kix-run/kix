@@ -360,8 +360,12 @@ in
         # must be reachable from root so the ServiceAccount has permissions
         # to list ingressclasses, services, etc — without these, the
         # controller's caches time out and the pod CrashLoops.
+        # Service must exist before the controller starts: --publish-service
+        # below references it, and the controller fatally exits with
+        # `no service with name ${name} found` if the lookup fails at startup.
         requires = [
           self.admissionCreate
+          self.service
         ]
         ++ builtins.attrValues clusterRoles
         ++ builtins.attrValues nsRoles;
@@ -541,7 +545,12 @@ in
           labels = commonLabels;
           spec = {
             type = config.serviceType;
-            selector = self.deployment.out.selector;
+            # Use the let-bound selectorLabels instead of
+            # self.deployment.out.selector to avoid an evaluation cycle:
+            # the deployment now `requires` this service (so the controller
+            # finds its --publish-service at startup), and routing the
+            # selector through self.deployment would form a cycle.
+            selector = selectorLabels;
             ports = map addNodePort [
               {
                 name = "http";
@@ -586,7 +595,10 @@ in
         labels = commonLabels;
         spec = {
           minAvailable = 1;
-          selector.matchLabels = self.deployment.out.selector;
+          # See selector comment on the Service: avoid routing through
+          # self.deployment.out to prevent an evaluation cycle now that
+          # the deployment requires the service (which requires the pdb).
+          selector.matchLabels = selectorLabels;
         };
       };
 
@@ -719,7 +731,9 @@ in
         labels = commonLabels;
         spec = {
           type = "ClusterIP";
-          selector = self.deployment.out.selector;
+          # See selector comment on the main Service: routed through the
+          # let-bound selectorLabels to avoid an evaluation cycle.
+          selector = selectorLabels;
           ports = [
             {
               name = "https-webhook";

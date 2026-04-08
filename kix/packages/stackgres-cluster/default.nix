@@ -250,6 +250,17 @@ in
       # with per-resource dependencies on the CRD import marker.
       sgCrds = stackgresOperator.out.crds;
 
+      # StackGres auto-creates a secret named after the cluster holding
+      # superuser/replication/authenticator credentials. Expose a ref so
+      # consumers can pull `superuser-username` / `superuser-password`.
+      superuserSecret = scope.mkSecretRef {
+        inherit name;
+        keys = [
+          "superuser-username"
+          "superuser-password"
+        ];
+      };
+
     in
     {
 
@@ -444,6 +455,9 @@ in
         # Package-level out: expose configured extension names for consumer validation.
         out = {
           extensionNames = map (e: e.name) config.extensions;
+          # Handle to the operator-created credentials secret. Consumers use
+          # `postgres.out.superuserSecret.out.mkEnv { DB_USER = "superuser-username"; ... }`.
+          superuserSecret = superuserSecret;
         };
       };
     };

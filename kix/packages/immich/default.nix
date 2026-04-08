@@ -183,6 +183,9 @@ in
                         {
                           DB_HOSTNAME = postgres.out.fqdn;
                           DB_PORT = postgres.out.port;
+                          # Until we create a dedicated immich database/role,
+                          # connect to the shared postgres with the superuser.
+                          DB_DATABASENAME = "postgres";
                           REDIS_HOSTNAME = valkey.out.fqdn;
                           IMMICH_MACHINE_LEARNING_URL = mlUrl;
                           IMMICH_CONFIG_FILE =
@@ -192,9 +195,14 @@ in
                         // config.env
                       )
                       (
+                        # Pull postgres superuser credentials from the stackgres-managed secret.
+                        (postgres.out.superuserSecret.out.mkEnv {
+                          DB_USERNAME = "superuser-username";
+                          DB_PASSWORD = "superuser-password";
+                        })
                         # Pull the valkey password from its credentials secret when
                         # auth is enabled. Without this, immich fails with NOAUTH.
-                        lib.optionals (valkey.out ? authSecret) [
+                        ++ lib.optionals (valkey.out ? authSecret) [
                           (
                             (valkey.out.authSecret.out.keyRef valkey.out.authPasswordKey)
                             // {

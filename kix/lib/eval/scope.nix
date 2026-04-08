@@ -112,15 +112,22 @@ rec {
           hasPrivileged = builtins.any (c: (c.securityContext.privileged or false) == true) allContainers;
           hasHostNetwork = templateSpec.hostNetwork or false;
           hasHostPID = templateSpec.hostPID or false;
+          volumes = templateSpec.volumes or [ ];
+          hostPathVols = builtins.filter (v: v ? hostPath) volumes;
+          hasHostPath = hostPathVols != [ ];
           reason =
             if hasHostNetwork then
               "hostNetwork: true"
             else if hasHostPID then
               "hostPID: true"
+            else if hasHostPath then
+              "hostPath volume '${(builtins.head hostPathVols).name or "?"}' → ${
+                (builtins.head hostPathVols).hostPath.path or "?"
+              }"
             else
               "securityContext.privileged: true";
         in
-        if hasPrivileged || hasHostNetwork || hasHostPID then
+        if hasPrivileged || hasHostNetwork || hasHostPID || hasHostPath then
           checkCapability {
             inherit capabilities;
             cap = "privilegedContainers";
@@ -170,39 +177,76 @@ rec {
         else
           null;
 
-      # Validate that all secret references in a pod spec are DI-tracked.
-      # A reference is tracked if its string carries Nix string context (i.e.,
-      # it came from secret.out.name, secret.out.envFrom, secret.out.keyRef,
-      # or kix.untrackedRef). Plain string literals have no context and fail.
-      checkSecretRefs =
+      # Validate that all references in a pod spec to namespaced resources
+      # (Secrets, ConfigMaps, PVCs, ServiceAccounts, imagePullSecrets) are:
+      #   1. DI-tracked (the reference name carries Nix string context —
+      #      came from resource.out.* or kix.untrackedRef, not a raw string
+      #      literal), AND
+      #   2. Same-namespace as the consuming workload (K8s does not allow
+      #      cross-namespace mounts / env refs / SA refs).
+      #
+      # The namespace lives in the `_kix.namespace` reserved-key marker that
+      # kix helpers stamp on each fragment (envFrom entry, env entry, volume
+      # entry, spec.template.spec via serviceAccount shorthand). stripKixMeta
+      # in mkResource removes it before serialization. Fragments without a
+      # `_kix` marker (e.g. raw strings wrapped via kix.untrackedRef, or
+      # fields not built by a kix helper) only get the DI-tracking check.
+      checkNamespacedRefs =
         templateSpec:
         let
           allContainers = (templateSpec.containers or [ ]) ++ (templateSpec.initContainers or [ ]);
 
-          validateName =
-            fieldDesc: secretName:
-            if builtins.getContext secretName == { } then
-              throw "[${instanceName}] Untracked secret reference in ${fieldDesc}: "
-              + "\"${builtins.unsafeDiscardStringContext secretName}\". "
-              + "Use secret.out.name, secret.out.envFrom, secret.out.keyRef, "
+          # `fragment` is the attrset that carries the optional `_kix` marker
+          # (volume entry, envFrom entry, env entry, etc.). `refName` is the
+          # context-bearing name string used for the untracked check.
+          # `kind` is a human-readable category for diagnostic messages.
+          validate =
+            kind: fieldDesc: fragment: refName:
+            let
+              plainName = builtins.unsafeDiscardStringContext refName;
+              refNs = fragment._kix.namespace or null;
+            in
+            if builtins.getContext refName == { } then
+              throw "[${instanceName}] Untracked ${kind} reference in ${fieldDesc}: "
+              + "\"${plainName}\". "
+              + "Use resource.out.name / resource.out.* helpers, "
               + "or kix.untrackedRef to opt out explicitly."
+            else if refNs != null && refNs != namespaceName then
+              throw "[${instanceName}] Cross-namespace ${kind} reference in ${fieldDesc}: "
+              + "${kind} \"${plainName}\" is declared in namespace \"${refNs}\" "
+              + "but the consuming workload is in namespace \"${namespaceName}\". "
+              + "Kubernetes does not allow cross-namespace ${kind} references — "
+              + "create or mirror the ${kind} in \"${namespaceName}\" "
+              + "(e.g. via scope.forNamespace \"${namespaceName}\"), "
+              + "or replicate it with an ExternalSecret / Reflector."
             else
               null;
 
+          # --- Volumes ---
+
           volumeChecks = builtins.concatMap (
-            v: if v ? secret then [ (validateName "volumes[].secret.secretName" v.secret.secretName) ] else [ ]
+            v:
+            (lib.optional (v ? secret) (validate "secret" "volumes[].secret.secretName" v v.secret.secretName))
+            ++ (lib.optional (v ? configMap) (
+              validate "configMap" "volumes[].configMap.name" v v.configMap.name
+            ))
+            ++ (lib.optional (v ? persistentVolumeClaim) (
+              validate "pvc" "volumes[].persistentVolumeClaim.claimName" v v.persistentVolumeClaim.claimName
+            ))
           ) (templateSpec.volumes or [ ]);
+
+          # --- envFrom / env (secret refs only; configMapRef could be added similarly) ---
 
           envFromChecks = builtins.concatMap (
             c:
             builtins.concatMap (
               ef:
-              if ef ? secretRef then
-                [
-                  (validateName "envFrom[].secretRef.name in container '${c.name}'" ef.secretRef.name)
-                ]
-              else
-                [ ]
+              (lib.optional (ef ? secretRef) (
+                validate "secret" "envFrom[].secretRef.name in container '${c.name}'" ef ef.secretRef.name
+              ))
+              ++ (lib.optional (ef ? configMapRef) (
+                validate "configMap" "envFrom[].configMapRef.name in container '${c.name}'" ef ef.configMapRef.name
+              ))
             ) (c.envFrom or [ ])
           ) allContainers;
 
@@ -212,51 +256,543 @@ rec {
               e:
               if (e ? valueFrom) && (e.valueFrom ? secretKeyRef) then
                 [
-                  (validateName "env '${e.name}' secretKeyRef in container '${c.name}'" e.valueFrom.secretKeyRef.name)
+                  (validate "secret" "env '${e.name}' secretKeyRef in container '${c.name}'" e
+                    e.valueFrom.secretKeyRef.name
+                  )
+                ]
+              else if (e ? valueFrom) && (e.valueFrom ? configMapKeyRef) then
+                [
+                  (validate "configMap" "env '${e.name}' configMapKeyRef in container '${c.name}'" e
+                    e.valueFrom.configMapKeyRef.name
+                  )
                 ]
               else
                 [ ]
             ) (c.env or [ ])
           ) allContainers;
 
-          allChecks = volumeChecks ++ envFromChecks ++ keyRefChecks;
+          # --- imagePullSecrets (typically raw names — DI-tracking only unless marker set) ---
+
+          pullSecretChecks = map (ps: validate "secret" "imagePullSecrets[].name" ps ps.name) (
+            templateSpec.imagePullSecrets or [ ]
+          );
+
+          # --- serviceAccountName ---
+          # If present, must be DI-tracked. Namespace check only fires when a
+          # `_kix.serviceAccountNamespace` marker was stamped on templateSpec
+          # (via the `serviceAccount = saResource` shorthand in mkWorkload).
+          saChecks =
+            if templateSpec ? serviceAccountName then
+              let
+                saName = templateSpec.serviceAccountName;
+                plainName = builtins.unsafeDiscardStringContext saName;
+                saNs = templateSpec._kix.serviceAccountNamespace or null;
+              in
+              if builtins.getContext saName == { } then
+                [
+                  (
+                    throw "[${instanceName}] Untracked serviceAccount reference in spec.template.spec.serviceAccountName: "
+                    + "\"${plainName}\". "
+                    + "Use `serviceAccount = self.serviceAccount;` (kix shorthand that also enables "
+                    + "cross-namespace validation) or kix.untrackedRef for external SAs."
+                  )
+                ]
+              else if saNs != null && saNs != namespaceName then
+                [
+                  (
+                    throw "[${instanceName}] Cross-namespace serviceAccount reference: "
+                    + "ServiceAccount \"${plainName}\" is declared in namespace \"${saNs}\" "
+                    + "but the consuming workload is in namespace \"${namespaceName}\". "
+                    + "Kubernetes requires a Pod's ServiceAccount to live in the Pod's own namespace."
+                  )
+                ]
+              else
+                [ null ]
+            else
+              [ ];
+
+          allChecks = volumeChecks ++ envFromChecks ++ keyRefChecks ++ pullSecretChecks ++ saChecks;
         in
         builtins.foldl' (acc: check: builtins.seq check acc) null allChecks;
+
+      # Validate that spec.selector.matchLabels is a subset (keys + values)
+      # of spec.template.metadata.labels. A mismatch produces a Deployment/
+      # StatefulSet/DaemonSet that "deploys" but never matches its own pods
+      # because the controller's label-selector can't find them.
+      #
+      # Only runs when the user supplied their own template labels (the
+      # default path in mkWorkload copies selector → labels, which is
+      # trivially a subset).
+      checkSelectorSubset =
+        selector: userTemplateLabels: kind:
+        let
+          missingKeys = lib.filter (k: !(userTemplateLabels ? ${k})) (builtins.attrNames selector);
+          mismatchedKeys = lib.filter (
+            k: userTemplateLabels ? ${k} && (toString userTemplateLabels.${k}) != (toString selector.${k})
+          ) (builtins.attrNames selector);
+          fmt =
+            labels:
+            "{ ${builtins.concatStringsSep ", " (lib.mapAttrsToList (k: v: "${k}=${toString v}") labels)} }";
+        in
+        if missingKeys != [ ] then
+          throw "[${instanceName}] ${kind} spec.selector.matchLabels ⊄ spec.template.metadata.labels: "
+          + "selector key(s) ${builtins.concatStringsSep ", " missingKeys} are missing from template labels. "
+          + "selector=${fmt selector} templateLabels=${fmt userTemplateLabels}. "
+          + "A Deployment's controller uses selector to find pods built from template — "
+          + "mismatched keys make the workload deploy pods it can't manage."
+        else if mismatchedKeys != [ ] then
+          throw "[${instanceName}] ${kind} spec.selector.matchLabels value mismatch on key(s) "
+          + "${builtins.concatStringsSep ", " mismatchedKeys}: "
+          + "selector=${fmt selector} templateLabels=${fmt userTemplateLabels}."
+        else
+          null;
+
+      # Collect all named container ports from a templateSpec.
+      # Returns list of { containerName, portName, containerPort }.
+      _collectPortNames =
+        templateSpec:
+        let
+          allContainers = (templateSpec.containers or [ ]) ++ (templateSpec.initContainers or [ ]);
+        in
+        builtins.concatMap (
+          c:
+          map (p: {
+            containerName = c.name;
+            portName = p.name or null;
+            containerPort = p.containerPort or null;
+          }) (builtins.filter (p: p ? name) (c.ports or [ ]))
+        ) allContainers;
+
+      # Validate that any named port referenced by a probe (livenessProbe,
+      # readinessProbe, startupProbe) resolves to a container port in the
+      # same container. Integer ports are allowed through without check.
+      checkNamedPorts =
+        templateSpec:
+        let
+          containers = (templateSpec.containers or [ ]) ++ (templateSpec.initContainers or [ ]);
+
+          # Per-container set of declared named ports.
+          containerPortNames = c: map (p: p.name) (builtins.filter (p: p ? name) (c.ports or [ ]));
+
+          probes = c: [
+            {
+              name = "livenessProbe";
+              value = c.livenessProbe or null;
+            }
+            {
+              name = "readinessProbe";
+              value = c.readinessProbe or null;
+            }
+            {
+              name = "startupProbe";
+              value = c.startupProbe or null;
+            }
+          ];
+
+          # Extract the named port from a probe, if any.
+          probePortName =
+            probe:
+            if probe == null then
+              null
+            else if probe ? httpGet && probe.httpGet ? port && builtins.isString probe.httpGet.port then
+              probe.httpGet.port
+            else if probe ? tcpSocket && probe.tcpSocket ? port && builtins.isString probe.tcpSocket.port then
+              probe.tcpSocket.port
+            else if probe ? grpc && probe.grpc ? port && builtins.isString probe.grpc.port then
+              probe.grpc.port
+            else
+              null;
+
+          containerChecks = builtins.concatMap (
+            c:
+            let
+              names = containerPortNames c;
+            in
+            builtins.concatMap (
+              p:
+              let
+                portName = probePortName p.value;
+              in
+              if portName == null then
+                [ ]
+              else if !(builtins.elem portName names) then
+                [
+                  (
+                    throw "[${instanceName}] Container '${c.name}' ${p.name} references named port "
+                    + "\"${portName}\" which is not declared by the container. "
+                    + "Declared named ports: [${builtins.concatStringsSep ", " names}]. "
+                    + "Add `ports = [ (kix.port \"${portName}\" <N>) ]` or use a numeric port."
+                  )
+                ]
+              else
+                [ null ]
+            ) (probes c)
+          ) containers;
+        in
+        builtins.foldl' (acc: check: builtins.seq check acc) null containerChecks;
+
+      # Parse a K8s resource quantity ("100m", "1", "128Mi", "1Gi", "1.5")
+      # into a comparable rational number. CPU uses milli-cores, memory
+      # uses bytes. Returns null for unparseable strings so the check
+      # silently skips them (custom units etc.).
+      _parseQuantity =
+        resource: q:
+        let
+          str = builtins.unsafeDiscardStringContext (toString q);
+          # CPU:  "100m" = 100, "1" = 1000, "1.5" = 1500
+          cpuMilli = builtins.match "([0-9]+)m" str;
+          cpuPlainInt = builtins.match "([0-9]+)" str;
+          cpuDecimal = builtins.match "([0-9]+)\\.([0-9]+)" str;
+          # Memory: Ki, Mi, Gi, Ti, Pi, Ei (binary) and K, M, G, T, P, E (decimal)
+          memBin = builtins.match "([0-9]+)(Ki|Mi|Gi|Ti|Pi|Ei)" str;
+          memDec = builtins.match "([0-9]+)(K|M|G|T|P|E)" str;
+          memPlain = builtins.match "([0-9]+)" str;
+          binMult =
+            s:
+            {
+              Ki = 1024;
+              Mi = 1024 * 1024;
+              Gi = 1024 * 1024 * 1024;
+              Ti = 1024 * 1024 * 1024 * 1024;
+              Pi = 1024 * 1024 * 1024 * 1024 * 1024;
+              Ei = 1024 * 1024 * 1024 * 1024 * 1024 * 1024;
+            }
+            .${s};
+          decMult =
+            s:
+            {
+              K = 1000;
+              M = 1000000;
+              G = 1000000000;
+              T = 1000000000000;
+              P = 1000000000000000;
+              E = 1000000000000000000;
+            }
+            .${s};
+        in
+        if resource == "cpu" then
+          if cpuMilli != null then
+            builtins.fromJSON (builtins.head cpuMilli)
+          else if cpuDecimal != null then
+            let
+              whole = builtins.fromJSON (builtins.elemAt cpuDecimal 0);
+              frac = builtins.elemAt cpuDecimal 1;
+              # normalize frac to 3 digits (milli)
+              fracPadded = builtins.substring 0 3 (frac + "000");
+              fracInt = builtins.fromJSON fracPadded;
+            in
+            whole * 1000 + fracInt
+          else if cpuPlainInt != null then
+            (builtins.fromJSON (builtins.head cpuPlainInt)) * 1000
+          else
+            null
+        else
+        # memory
+        if memBin != null then
+          (builtins.fromJSON (builtins.elemAt memBin 0)) * (binMult (builtins.elemAt memBin 1))
+        else if memDec != null then
+          (builtins.fromJSON (builtins.elemAt memDec 0)) * (decMult (builtins.elemAt memDec 1))
+        else if memPlain != null then
+          builtins.fromJSON (builtins.head memPlain)
+        else
+          null;
+
+      # Validate that resources.limits ≥ resources.requests per container,
+      # for cpu and memory. Unparseable quantities are skipped (fallback).
+      checkContainerResources =
+        templateSpec:
+        let
+          allContainers = (templateSpec.containers or [ ]) ++ (templateSpec.initContainers or [ ]);
+          checkOne =
+            c:
+            let
+              limits = c.resources.limits or { };
+              requests = c.resources.requests or { };
+              checkRes =
+                res:
+                if !(limits ? ${res}) || !(requests ? ${res}) then
+                  null
+                else
+                  let
+                    l = _parseQuantity res limits.${res};
+                    r = _parseQuantity res requests.${res};
+                  in
+                  if l == null || r == null then
+                    null
+                  else if l < r then
+                    throw "[${instanceName}] Container '${c.name}' resources.limits.${res} (${toString limits.${res}}) < resources.requests.${res} (${toString requests.${res}}). "
+                    + "Kubernetes rejects limits < requests at admission."
+                  else
+                    null;
+            in
+            [
+              (checkRes "cpu")
+              (checkRes "memory")
+            ];
+          allChecks = builtins.concatMap checkOne allContainers;
+        in
+        builtins.foldl' (acc: check: builtins.seq check acc) null allChecks;
+
+      # Validate that container names, env var names within each container,
+      # volume names within the pod, and named ports within each container
+      # are unique. K8s rejects duplicates at admission time (or accepts
+      # and silently keeps the last occurrence — both are surprising).
+      checkDuplicateNames =
+        templateSpec:
+        let
+          containers = templateSpec.containers or [ ];
+          initContainers = templateSpec.initContainers or [ ];
+          allContainers = containers ++ initContainers;
+          volumes = templateSpec.volumes or [ ];
+
+          dups =
+            names:
+            let
+              sorted = lib.sort (a: b: a < b) names;
+              go =
+                seen: rest:
+                if rest == [ ] then
+                  seen
+                else
+                  let
+                    x = builtins.head rest;
+                    xs = builtins.tail rest;
+                  in
+                  if xs != [ ] && x == (builtins.head xs) then go (seen ++ [ x ]) (builtins.tail xs) else go seen xs;
+            in
+            lib.unique (go [ ] sorted);
+
+          containerNameDups = dups (map (c: c.name) allContainers);
+          volumeNameDups = dups (map (v: v.name) volumes);
+
+          envDups = builtins.concatMap (
+            c:
+            let
+              envNames = map (e: e.name) (c.env or [ ]);
+              d = dups envNames;
+            in
+            if d == [ ] then
+              [ ]
+            else
+              [
+                (
+                  throw "[${instanceName}] Container '${c.name}' has duplicate env var name(s): "
+                  + "[${builtins.concatStringsSep ", " d}]."
+                )
+              ]
+          ) allContainers;
+
+          portDups = builtins.concatMap (
+            c:
+            let
+              portNames = map (p: p.name) (builtins.filter (p: p ? name) (c.ports or [ ]));
+              d = dups portNames;
+            in
+            if d == [ ] then
+              [ ]
+            else
+              [
+                (
+                  throw "[${instanceName}] Container '${c.name}' has duplicate named port(s): "
+                  + "[${builtins.concatStringsSep ", " d}]."
+                )
+              ]
+          ) allContainers;
+
+          containerNameCheck =
+            if containerNameDups != [ ] then
+              throw "[${instanceName}] Pod has duplicate container name(s): "
+              + "[${builtins.concatStringsSep ", " containerNameDups}]. "
+              + "Container names must be unique within a pod."
+            else
+              null;
+
+          volumeNameCheck =
+            if volumeNameDups != [ ] then
+              throw "[${instanceName}] Pod has duplicate volume name(s): "
+              + "[${builtins.concatStringsSep ", " volumeNameDups}]. "
+              + "Volume names must be unique within a pod (common cause: "
+              + "multiple mounts auto-derived from resources with the same name)."
+            else
+              null;
+
+          allChecks = [
+            containerNameCheck
+            volumeNameCheck
+          ]
+          ++ envDups
+          ++ portDups;
+        in
+        builtins.foldl' (acc: check: builtins.seq check acc) null allChecks;
+
+      # Validate that env[].valueFrom.fieldRef.fieldPath uses one of the
+      # K8s-supported downward-API paths. K8s silently fails pod creation
+      # with a cryptic error on unsupported paths.
+      _allowedFieldPaths = [
+        "metadata.name"
+        "metadata.namespace"
+        "metadata.uid"
+        "metadata.labels"
+        "metadata.annotations"
+        "spec.nodeName"
+        "spec.serviceAccountName"
+        "status.hostIP"
+        "status.podIP"
+        "status.podIPs"
+      ];
+
+      checkFieldRefs =
+        templateSpec:
+        let
+          allContainers = (templateSpec.containers or [ ]) ++ (templateSpec.initContainers or [ ]);
+
+          # Supports `metadata.labels['key']` and `metadata.annotations['key']` variants.
+          isAllowed =
+            path:
+            builtins.elem path _allowedFieldPaths
+            || builtins.match "metadata\\.labels\\['.*'\\]" path != null
+            || builtins.match "metadata\\.annotations\\['.*'\\]" path != null;
+
+          checksPerContainer =
+            c:
+            builtins.concatMap (
+              e:
+              if (e ? valueFrom) && (e.valueFrom ? fieldRef) then
+                let
+                  fp = e.valueFrom.fieldRef.fieldPath or null;
+                in
+                if fp != null && !(isAllowed fp) then
+                  [
+                    (
+                      throw "[${instanceName}] env '${e.name}' in container '${c.name}' uses "
+                      + "unsupported fieldRef.fieldPath \"${fp}\". Allowed: "
+                      + "${builtins.concatStringsSep ", " _allowedFieldPaths}, "
+                      + "metadata.labels['<key>'], metadata.annotations['<key>']."
+                    )
+                  ]
+                else
+                  [ null ]
+              else
+                [ ]
+            ) (c.env or [ ]);
+
+          allChecks = builtins.concatMap checksPerContainer allContainers;
+        in
+        builtins.foldl' (acc: check: builtins.seq check acc) null allChecks;
+
+      # Expand the `serviceAccount = saResource` shorthand on a templateSpec:
+      # sets `serviceAccountName` from the SA resource's out.name and stamps
+      # `_kix.serviceAccountNamespace` so checkNamespacedRefs can validate
+      # cross-namespace use. The `serviceAccount` field is stripped from
+      # the returned templateSpec (stripKixMeta handles `_kix` later).
+      _expandServiceAccount =
+        templateSpec:
+        if !(templateSpec ? serviceAccount) then
+          templateSpec
+        else
+          let
+            sa = templateSpec.serviceAccount;
+            saNs =
+              if (sa.namespace._type or "") == "k8s-cluster-scoped" then null else sa.namespace.name or null;
+            existingKix = templateSpec._kix or { };
+          in
+          if sa == null then
+            removeAttrs templateSpec [ "serviceAccount" ]
+          else
+            (removeAttrs templateSpec [ "serviceAccount" ])
+            // {
+              serviceAccountName = sa.out.name;
+              _kix =
+                existingKix
+                // lib.optionalAttrs (saNs != null) {
+                  serviceAccountNamespace = saNs;
+                };
+            };
+
+      # Expand the `headlessService = svcResource` shorthand for StatefulSet:
+      # reads svc.name (plain, no context — avoiding the recursion described
+      # in the warning above) and sets spec.serviceName accordingly. Also
+      # validates same-namespace at build time.
+      _expandHeadlessService =
+        spec:
+        if !(spec ? headlessService) then
+          spec
+        else
+          let
+            svc = spec.headlessService;
+            svcNs =
+              if (svc.namespace._type or "") == "k8s-cluster-scoped" then null else svc.namespace.name or null;
+          in
+          if svc == null then
+            removeAttrs spec [ "headlessService" ]
+          else if (svc._type or "") != "k8s-resource" || svc.kind or "" != "Service" then
+            throw "[${instanceName}] mkStatefulSet headlessService must be a Service resource "
+            + "(got ${svc._type or "non-resource"}, kind=${svc.kind or "?"})"
+          else if svcNs != null && svcNs != namespaceName then
+            throw "[${instanceName}] StatefulSet headlessService '${svc.name}' is in namespace "
+            + "\"${svcNs}\" but the StatefulSet is in namespace \"${namespaceName}\"."
+          else
+            (removeAttrs spec [ "headlessService" ])
+            // {
+              # Plain name — no string context → no DAG edge → no recursion
+              # when the Service also requires this StatefulSet (rare but
+              # the warning on checkDaemonSet above describes why this matters).
+              serviceName = svc.name;
+            };
 
       mkWorkload =
         apiVersion: kind: attrs:
         let
-          spec = attrs.spec or { };
+          rawSpec = attrs.spec or { };
+          spec = if kind == "StatefulSet" then _expandHeadlessService rawSpec else rawSpec;
           selector =
             spec.selector.matchLabels
               or (throw "mkWorkload (${kind}): spec.selector.matchLabels is required — use scope.selectorLabels");
           templateMeta = spec.template.metadata or { };
-          templateSpec = spec.template.spec or { };
+          rawTemplateSpec = spec.template.spec or { };
+          templateSpec = _expandServiceAccount rawTemplateSpec;
+
+          # Default: copy selector into template labels. When user supplies
+          # template labels explicitly, validate selector ⊆ labels instead.
+          userSuppliedLabels = templateMeta ? labels;
+          effectiveTemplateLabels = if userSuppliedLabels then templateMeta.labels else selector;
         in
         builtins.seq (checkDaemonSet kind) (
           builtins.seq (checkPrivileged templateSpec) (
-            builtins.seq (checkSecretRefs templateSpec) (
-              scopeMkResource (
-                removeAttrs attrs [ "spec" ]
-                // {
-                  inherit apiVersion kind;
-                  spec =
-                    removeAttrs spec [
-                      "selector"
-                      "template"
-                    ]
-                    // {
-                      selector.matchLabels = selector;
-                      template = {
-                        metadata = templateMeta // {
-                          labels = templateMeta.labels or selector;
-                        };
-                        spec = templateSpec;
-                      };
-                    };
-                }
+            builtins.seq
+              (if userSuppliedLabels then checkSelectorSubset selector templateMeta.labels kind else null)
+              (
+                builtins.seq (checkNamespacedRefs templateSpec) (
+                  builtins.seq (checkNamedPorts templateSpec) (
+                    builtins.seq (checkContainerResources templateSpec) (
+                      builtins.seq (checkDuplicateNames templateSpec) (
+                        builtins.seq (checkFieldRefs templateSpec) (
+                          scopeMkResource (
+                            removeAttrs attrs [ "spec" ]
+                            // {
+                              inherit apiVersion kind;
+                              spec =
+                                removeAttrs spec [
+                                  "selector"
+                                  "template"
+                                ]
+                                // {
+                                  selector.matchLabels = selector;
+                                  template = {
+                                    metadata = templateMeta // {
+                                      labels = effectiveTemplateLabels;
+                                    };
+                                    spec = templateSpec;
+                                  };
+                                };
+                            }
+                          )
+                        )
+                      )
+                    )
+                  )
+                )
               )
-            )
           )
         );
 
@@ -321,14 +857,65 @@ rec {
           out = crdResource.out // builders;
         };
 
+      # Shared import marker constructor. Emits a namespaced PackageInstance
+      # resource with `kix.dev/mode=import` annotations describing an
+      # externally-managed resource. Used by `mkCRDRef` and `mkSecretRef`.
+      #
+      # The CLI deploy engine's readiness check (cli/kix/src/cluster/readiness.rs)
+      # parses these markers into an `ImportTarget` and polls the cluster for
+      # the described resource, gating consuming waves until it exists (and
+      # for Secrets, until all `expected_keys` are present in `data`).
+      #
+      # The marker lives in the consumer's namespace. The imported resource is
+      # expected in the same namespace (for namespaced kinds) — cross-namespace
+      # imports are not supported; use a dedicated adapter instance in the
+      # owning namespace and DI the resource handle instead.
+      #
+      # Arguments:
+      #   markerName        - k8s name of the PackageInstance marker
+      #   importKind        - kind of the external resource (e.g. "Secret")
+      #   importApiVersion  - apiVersion of the external resource (e.g. "v1")
+      #   importName        - k8s name of the external resource
+      #   extraAnnotations  - additional kix.dev/* annotations (e.g. import-secret-keys)
+      #   extraRequires     - additional `requires` edges for wave placement
+      mkImportMarker =
+        {
+          markerName,
+          importKind,
+          importApiVersion,
+          importName,
+          extraAnnotations ? { },
+          extraRequires ? [ ],
+        }:
+        scopeMkResource {
+          apiVersion = "kix.dev/v1alpha1";
+          kind = "PackageInstance";
+          name = markerName;
+          annotations = {
+            "kix.dev/mode" = "import";
+            "kix.dev/import-kind" = importKind;
+            "kix.dev/import-apiversion" = importApiVersion;
+            "kix.dev/import-name" = importName;
+          }
+          // extraAnnotations;
+          # The PackageInstance CRD must exist before any marker can be
+          # applied. Callers pass extraRequires for things like `installedBy`
+          # (orders the marker AFTER its installer in the wave graph).
+          requires = [ k8s.kixCRDs.packageInstance ] ++ extraRequires;
+          extra.spec = {
+            instanceName = markerName;
+            namespaceName = namespaceName;
+            mode = "import";
+          };
+        };
+
       # Create a CRD reference for externally-managed CRDs (installed by an
       # operator's INSTALL_CRDS bootstrap, helm, or pre-existing on the cluster).
       #
       # Emits a real k8s-resource — a PackageInstance import marker in the
-      # caller's namespace with kix.dev/mode=import annotations describing the
-      # expected CRD. The CLI deploy engine's readiness check for import
-      # markers polls the cluster until the described CRD is Established,
-      # which naturally gates the wave containing any CR built via `.out.mkCR`.
+      # caller's namespace. The CLI deploy engine polls for the described CRD
+      # and waits until it's `Established=True`, which naturally gates the
+      # wave containing any CR built via `.out.mkCR`.
       #
       # Dependency wiring is per-CR: `mkCRDBuilders` auto-adds this marker to
       # every CR's `requires`, so the wave graph places the marker before
@@ -351,27 +938,12 @@ rec {
           groupSlug = builtins.replaceStrings [ "." ] [ "-" ] group;
           markerName = "crd-ref-${plural}-${groupSlug}";
 
-          marker = scopeMkResource {
-            apiVersion = "kix.dev/v1alpha1";
-            kind = "PackageInstance";
-            name = markerName;
-            annotations = {
-              "kix.dev/mode" = "import";
-              "kix.dev/import-kind" = "CustomResourceDefinition";
-              "kix.dev/import-apiversion" = "apiextensions.k8s.io/v1";
-              "kix.dev/import-name" = crdName;
-            };
-            # The PackageInstance CRD must exist before the marker can be
-            # applied. When `installedBy` is provided, also require that
-            # resource directly — this orders the marker AFTER its installer
-            # (e.g. operator Deployment) in the wave graph and classifies
-            # the marker as an inverse dep of root (no orphan warning).
-            requires = [ k8s.kixCRDs.packageInstance ] ++ lib.optional (installedBy != null) installedBy;
-            extra.spec = {
-              instanceName = markerName;
-              namespaceName = namespaceName;
-              mode = "import";
-            };
+          marker = mkImportMarker {
+            inherit markerName;
+            importKind = "CustomResourceDefinition";
+            importApiVersion = "apiextensions.k8s.io/v1";
+            importName = crdName;
+            extraRequires = lib.optional (installedBy != null) installedBy;
           };
 
           builders = k8s.mkCRDBuilders {
@@ -470,13 +1042,25 @@ rec {
           secretHelpers = k8s.mkSecretHelpers {
             inherit name type attachCtx;
             keys = effectiveKeys;
+            namespace = namespaceName;
           };
         in
         resource // { out = resource.out // secretHelpers; };
 
       # Reference an externally-managed secret (Vault, ESO, cert-manager, bootstrap).
-      # No manifest produced — creates a store path for dependency tracking only.
-      # Same out API as mkSecret: keyRef, mkEnv, envFrom, volume.
+      #
+      # Emits a real k8s-resource — a PackageInstance import marker in the
+      # caller's namespace describing the expected Secret. The CLI deploy
+      # engine polls for the Secret and validates that every declared key in
+      # `keys` is present in `data` before any consuming wave runs, turning
+      # build-time key validation into a deploy-time gate.
+      #
+      # The marker's namespace is the consumer's namespace; the referenced
+      # Secret is expected in the same namespace. Cross-namespace access is
+      # not supported — use a dedicated adapter instance in the owning
+      # namespace and DI the resource handle instead.
+      #
+      # Same .out.{name, keyRef, mkEnv, envFrom, volume} interface as mkSecret.
       #
       # Usage:
       #   creds = scope.mkSecretRef {
@@ -492,17 +1076,43 @@ rec {
           requires ? [ ],
         }:
         let
-          refPath = builtins.toFile "secret-ref-${name}" (
-            builtins.toJSON {
-              inherit
-                name
-                keys
-                type
-                ;
+          # Guard the shape of `keys`. Empty list is intentionally allowed:
+          # external secrets referenced via envFrom/volume only (keys unknown
+          # to kix) are a legitimate pattern — `keyRef` on such a ref still
+          # throws a clear "does not declare key" message at use site. When
+          # keys is empty, the CLI skips the key-presence check and only
+          # verifies that the Secret exists.
+          _ =
+            if !(builtins.isList keys) then
+              throw "mkSecretRef \"${name}\": 'keys' must be a list of strings (got ${builtins.typeOf keys})"
+            else
+              null;
+
+          # Marker name is prefixed with instanceName so two instances in the
+          # same namespace can both reference the same external secret without
+          # PackageInstance collisions on kubectl apply.
+          markerName = "secret-ref-${instanceName}-${name}";
+
+          marker = builtins.seq _ (mkImportMarker {
+            inherit markerName;
+            importKind = "Secret";
+            importApiVersion = "v1";
+            importName = name;
+            extraAnnotations = {
+              "kix.dev/secret-type" = type;
             }
-          );
-          refCtx = builtins.getContext "${refPath}";
-          attachCtx = value: builtins.appendContext (toString value) refCtx;
+            // lib.optionalAttrs (keys != [ ]) {
+              "kix.dev/import-secret-keys" = builtins.concatStringsSep "," keys;
+            };
+            extraRequires = requires;
+          });
+
+          # Derive context from the marker resource so consumers that reference
+          # the Secret through envFrom / keyRef / volume get a forward-closure
+          # edge to the marker. This mirrors mkSecret's pattern (scope.nix:1003)
+          # and replaces the old `builtins.toFile` store-path trick.
+          resourceCtx = builtins.getContext "${marker}";
+          attachCtx = value: builtins.appendContext (toString value) resourceCtx;
 
           secretHelpers = k8s.mkSecretHelpers {
             inherit
@@ -511,12 +1121,15 @@ rec {
               type
               attachCtx
               ;
+            namespace = namespaceName;
           };
         in
-        {
-          _type = "secret-ref";
-          outPath = refPath;
-          inherit requires;
+        marker
+        // {
+          # Override the marker's auto-derived out wholesale: the marker's
+          # own name/fqdn point at the PackageInstance, not the referenced
+          # Secret. Consumers need `out.name` to carry the Secret's real name
+          # (with marker context so the dep edge is still tracked).
           out = {
             name = attachCtx name;
           }

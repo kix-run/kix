@@ -376,6 +376,15 @@ in
     in
     {
 
+      # --- OAuth secret reference ---
+      # User-provided external Secret holding the operator OAuth client.
+      # Wrapping it in a SecretRef makes the volume mount DI-tracked and
+      # gates deployment on the secret existing.
+      oauthSecret = scope.mkSecretRef {
+        name = config.oauthSecretName;
+        keys = [ ];
+      };
+
       # --- Operator ServiceAccount ---
       operatorServiceAccount = scope.mkResource {
         apiVersion = "v1";
@@ -588,8 +597,7 @@ in
                   name = "oauth";
                   secret = {
                     defaultMode = 420;
-                    # User-provided external secret name — not managed by kix.
-                    secretName = kix.untrackedRef config.oauthSecretName;
+                    secretName = self.oauthSecret.out.name;
                   };
                 }
               ];

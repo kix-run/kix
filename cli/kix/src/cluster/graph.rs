@@ -92,6 +92,77 @@ impl ResourceGraph {
             }
         }
 
+        // Phase 2b: Collapse cross-package edges onto the target package's
+        // PackageInstance marker.
+        //
+        // Context: a resource R in package A may carry a direct edge to a
+        // specific resource S in package B (e.g. n8n's Ingress → ingress-nginx's
+        // IngressClass). The direct edge only gates R on S being applied, not
+        // on B being fully Ready. In practice this races the operator that
+        // reconciles R (controller Deployment, admission webhook, etc.).
+        //
+        // Fix: for every cross-package edge, add an additional edge R →
+        // B's PackageInstance marker. The PI transitively depends on all of
+        // B's resources via root + inverse-deps context, and is an immediate
+        // kind — so in Kahn's wave model it acts as a synchronization barrier
+        // ("all of B is applied AND Ready"). Consumers of B's PI therefore
+        // wait until B is fully up.
+        //
+        // The original direct edge is kept: intra-package waves still compute
+        // tightly, and the PI edge only adds ordering, never relaxes it. Edges
+        // where src or dst have no package annotation (Activation CR, kix
+        // CRDs, namespace resources) are left alone.
+        {
+            // Build package name → PackageInstance node map.
+            let mut package_to_pi: HashMap<String, NodeIndex> = HashMap::new();
+            for idx in graph.node_indices() {
+                let node = &graph[idx];
+                if node.id.kind == "PackageInstance"
+                    && let Some(pkg) = get_annotation(&node.manifest, "kix.dev/package")
+                {
+                    package_to_pi.insert(pkg, idx);
+                }
+            }
+
+            // Collect edges to add in a separate pass so we don't mutate the
+            // graph while iterating its edges.
+            let mut edges_to_add: Vec<(NodeIndex, NodeIndex)> = Vec::new();
+            for edge in graph.edge_indices() {
+                let (src, dst) = graph.edge_endpoints(edge).unwrap();
+                let src_pkg = match get_annotation(&graph[src].manifest, "kix.dev/package") {
+                    Some(p) => p,
+                    None => continue,
+                };
+                let dst_pkg = match get_annotation(&graph[dst].manifest, "kix.dev/package") {
+                    Some(p) => p,
+                    None => continue,
+                };
+                if src_pkg == dst_pkg {
+                    continue;
+                }
+                let dst_pi = match package_to_pi.get(&dst_pkg) {
+                    Some(&idx) => idx,
+                    None => continue,
+                };
+                // Skip reflexive: an edge whose src is already the target
+                // PI (the edge we'd add is a self-loop) or whose dst is
+                // already the target PI (the existing edge is the PI edge).
+                if src == dst_pi || dst == dst_pi {
+                    continue;
+                }
+                edges_to_add.push((src, dst_pi));
+            }
+
+            // Deduplicate and add, skipping pairs already connected.
+            edges_to_add.sort_by_key(|(s, d)| (s.index(), d.index()));
+            edges_to_add.dedup();
+            for (src, dst_pi) in edges_to_add {
+                if !graph.contains_edge(src, dst_pi) {
+                    graph.add_edge(src, dst_pi, ());
+                }
+            }
+        }
+
         // Phase 3: Check for cycles
         if petgraph::algo::is_cyclic_directed(&graph) {
             // Find a node in a cycle for the error message
@@ -387,6 +458,157 @@ mod tests {
         let result = ResourceGraph::from_manifests(&[a, b]);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), GraphError::CycleDetected(_)));
+    }
+
+    /// Helper: manifest with a `kix.dev/package` annotation set.
+    fn pkg_manifest(
+        kind: &str,
+        name: &str,
+        ns: &str,
+        id_hash: &str,
+        deps: &str,
+        package: &str,
+    ) -> serde_json::Value {
+        let mut annotations = serde_json::Map::new();
+        annotations.insert("kix.dev/identity-hash".into(), json!(id_hash));
+        annotations.insert("kix.dev/package".into(), json!(package));
+        if !deps.is_empty() {
+            annotations.insert("kix.dev/depends-on".into(), json!(deps));
+        }
+        json!({
+            "apiVersion": "v1",
+            "kind": kind,
+            "metadata": {
+                "name": name,
+                "namespace": ns,
+                "annotations": annotations,
+            }
+        })
+    }
+
+    #[test]
+    fn cross_package_edge_is_collapsed_to_pi() {
+        // Package A: pi_a, workload_a (workload depends on nothing — it's
+        // the upstream that the consumer needs Ready).
+        // Package B: pi_b, consumer_b. consumer_b has a direct edge to
+        // workload_a (cross-package). We expect an extra edge
+        // consumer_b → pi_a to be synthesized.
+        //
+        // pi_a depends on workload_a (via kix.dev/root annotation context
+        // in real Nix evaluation; here we model it directly).
+        let manifests = vec![
+            pkg_manifest("Deployment", "controller", "ns-a", "h_wa", "", "pkg-a"),
+            pkg_manifest("PackageInstance", "pkg-a", "ns-a", "h_pia", "h_wa", "pkg-a"),
+            pkg_manifest(
+                "Ingress", "consumer", "ns-b", "h_cb",
+                "h_wa", // direct cross-package edge to controller
+                "pkg-b",
+            ),
+            pkg_manifest("PackageInstance", "pkg-b", "ns-b", "h_pib", "h_cb", "pkg-b"),
+        ];
+
+        let graph = ResourceGraph::from_manifests(&manifests).unwrap();
+        let consumer_id = ResourceId {
+            kind: "Ingress".into(),
+            namespace: "ns-b".into(),
+            name: "consumer".into(),
+        };
+        let deps = graph.dependencies(&consumer_id);
+        let dep_names: Vec<&str> = deps.iter().map(|n| n.id.name.as_str()).collect();
+
+        // Both the direct cross-package edge and the synthesized PI edge
+        // must be present.
+        assert!(
+            dep_names.contains(&"controller"),
+            "direct cross-package edge should be preserved"
+        );
+        assert!(
+            dep_names.contains(&"pkg-a"),
+            "cross-package edge should also gate on target package's PI (added edge)"
+        );
+    }
+
+    #[test]
+    fn intra_package_edges_are_not_collapsed() {
+        // Two resources in the same package: no PI rewrite. The PI edge
+        // would collapse to src → (its own PI), which is skipped.
+        let manifests = vec![
+            pkg_manifest("ConfigMap", "cm", "ns-a", "h_cm", "", "pkg-a"),
+            pkg_manifest("Deployment", "dep", "ns-a", "h_dep", "h_cm", "pkg-a"),
+            pkg_manifest(
+                "PackageInstance",
+                "pkg-a",
+                "ns-a",
+                "h_pia",
+                "h_dep",
+                "pkg-a",
+            ),
+        ];
+
+        let graph = ResourceGraph::from_manifests(&manifests).unwrap();
+        let dep_id = ResourceId {
+            kind: "Deployment".into(),
+            namespace: "ns-a".into(),
+            name: "dep".into(),
+        };
+        let deps = graph.dependencies(&dep_id);
+
+        // Deployment depends only on ConfigMap — no extra PI edge (same package).
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].id.name, "cm");
+    }
+
+    #[test]
+    fn cross_package_edge_duplicate_is_not_added_twice() {
+        // Consumer already has a direct edge to pi_a (e.g. via _packageRequires).
+        // The cross-package rewrite must not add a duplicate edge.
+        let manifests = vec![
+            pkg_manifest("Deployment", "controller", "ns-a", "h_wa", "", "pkg-a"),
+            pkg_manifest("PackageInstance", "pkg-a", "ns-a", "h_pia", "h_wa", "pkg-a"),
+            pkg_manifest(
+                "Ingress",
+                "consumer",
+                "ns-b",
+                "h_cb",
+                "h_wa,h_pia", // already has edge to pi_a
+                "pkg-b",
+            ),
+            pkg_manifest("PackageInstance", "pkg-b", "ns-b", "h_pib", "h_cb", "pkg-b"),
+        ];
+
+        let graph = ResourceGraph::from_manifests(&manifests).unwrap();
+        let consumer_id = ResourceId {
+            kind: "Ingress".into(),
+            namespace: "ns-b".into(),
+            name: "consumer".into(),
+        };
+        let deps = graph.dependencies(&consumer_id);
+        let pi_a_count = deps.iter().filter(|n| n.id.name == "pkg-a").count();
+        assert_eq!(pi_a_count, 1, "PI edge should not be duplicated");
+    }
+
+    #[test]
+    fn unpackaged_resources_are_not_rewritten() {
+        // Activation CR style: no kix.dev/package annotation. An edge from
+        // an unpackaged node to a packaged resource should not be rewritten,
+        // since the src has no package identity.
+        let manifests = vec![
+            pkg_manifest("Deployment", "controller", "ns-a", "h_wa", "", "pkg-a"),
+            pkg_manifest("PackageInstance", "pkg-a", "ns-a", "h_pia", "h_wa", "pkg-a"),
+            // No kix.dev/package on this one.
+            manifest("Activation", "root", CLUSTER_SCOPED, "h_act", "h_wa"),
+        ];
+
+        let graph = ResourceGraph::from_manifests(&manifests).unwrap();
+        let act_id = ResourceId {
+            kind: "Activation".into(),
+            namespace: CLUSTER_SCOPED.into(),
+            name: "root".into(),
+        };
+        let deps = graph.dependencies(&act_id);
+        // Only the direct edge to controller — no PI rewrite.
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].id.name, "controller");
     }
 
     #[test]

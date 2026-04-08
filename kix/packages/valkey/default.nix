@@ -1272,12 +1272,10 @@
                   {
                     name = "valkey-password";
                     secret = {
-                      secretName =
-                        if config.auth.existingSecret != null then
-                          # User-provided external secret — not managed by kix.
-                          kix.untrackedRef config.auth.existingSecret
-                        else
-                          self.secret.out.name;
+                      # `self.authSecret` is `self.secret` in managed mode
+                      # and a `mkSecretRef` marker when the user passes
+                      # `existingSecret` — both carry DI context.
+                      secretName = self.authSecret.out.name;
                       defaultMode = 420; # 0644
                       items = [
                         {

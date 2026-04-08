@@ -90,10 +90,16 @@ pub enum ReconcileEvent {
         import_target: Option<ImportTarget>,
     },
     /// A resource readiness check failed.
+    ///
+    /// `missing_keys` is populated when the failure is an import mismatch
+    /// (`ReadinessResult::ImportMismatch`) — observers can render the exact
+    /// missing Secret keys as a structured line under the marker instead of
+    /// parsing the message string.
     ReadinessFailed {
         rid: ResourceId,
         message: String,
         import_target: Option<ImportTarget>,
+        missing_keys: Vec<String>,
     },
     /// A wave completed (recorded on Activation CR).
     WaveComplete {
@@ -516,11 +522,35 @@ pub async fn reconcile(
                                 rid: rid.clone(),
                                 message: msg.clone(),
                                 import_target: import_target.clone(),
+                                missing_keys: Vec::new(),
                             });
                             if config.on_error == OnErrorPolicy::Stop {
                                 return Err(ReconcileError::ReadinessFailed {
                                     rid,
                                     message: msg,
+                                    partial_result: result,
+                                });
+                            }
+                        }
+                        Ok(ReadinessResult::ImportMismatch {
+                            missing_keys,
+                            message,
+                        }) => {
+                            // Import marker's target exists but doesn't match
+                            // the shape declared by the marker. Terminal —
+                            // never polled again. Today this only fires for
+                            // Secret imports with missing keys.
+                            result.failed += 1;
+                            observer.on_event(&ReconcileEvent::ReadinessFailed {
+                                rid: rid.clone(),
+                                message: message.clone(),
+                                import_target: import_target.clone(),
+                                missing_keys,
+                            });
+                            if config.on_error == OnErrorPolicy::Stop {
+                                return Err(ReconcileError::ReadinessFailed {
+                                    rid,
+                                    message,
                                     partial_result: result,
                                 });
                             }

@@ -20,7 +20,13 @@ use thiserror::Error;
 
 /// A resource described by an import marker. The CLI polls the cluster for
 /// this resource and blocks the wave until it's present (and, for CRDs, also
-/// `Established=True`).
+/// `Established=True`; for Secrets with `expected_keys`, also verifies every
+/// key is present in `data`).
+///
+/// The marker lives in its own namespace and the described resource is
+/// expected in the same namespace (for namespaced kinds). Cross-namespace
+/// imports are not supported — use a dedicated adapter instance in the owning
+/// namespace and DI the resource handle instead.
 #[derive(Debug, Clone)]
 pub struct ImportTarget {
     /// K8s kind of the expected resource (e.g. "CustomResourceDefinition").
@@ -29,13 +35,24 @@ pub struct ImportTarget {
     pub api_version: String,
     /// Name of the expected resource.
     pub name: String,
-    /// Optional namespace. None = cluster-scoped or unspecified.
+    /// Namespace of the expected resource. `None` for cluster-scoped kinds
+    /// (currently just `CustomResourceDefinition`). For namespaced kinds this
+    /// is sourced from the marker's own `metadata.namespace`.
     pub namespace: Option<String>,
+    /// For `Secret` imports, the set of keys the consumer expects to find in
+    /// `data`. Parsed from the `kix.dev/import-secret-keys` annotation (comma
+    /// separated). Empty = identity-only check (resource existence).
+    pub expected_keys: Vec<String>,
 }
 
 /// Extract an [`ImportTarget`] from a manifest if it is a PackageInstance
 /// import marker (`kix.dev/mode: import`). Returns `None` for non-markers or
 /// for markers that don't have enough info to verify (no kind hint, etc.).
+///
+/// The target's namespace is sourced from the marker's own `metadata.namespace`
+/// for namespaced kinds. Cluster-scoped kinds (`CustomResourceDefinition`) set
+/// it to `None`. There is no `kix.dev/import-namespace` annotation: an import
+/// always describes a resource in the marker's own namespace.
 pub fn import_target_from_manifest(manifest: &Value) -> Option<ImportTarget> {
     let kind = manifest.get("kind").and_then(Value::as_str)?;
     if kind != "PackageInstance" {
@@ -59,27 +76,54 @@ pub fn import_target_from_manifest(manifest: &Value) -> Option<ImportTarget> {
         .get("kix.dev/import-name")
         .and_then(Value::as_str)?
         .to_string();
-    let import_namespace = annotations
-        .get("kix.dev/import-namespace")
+
+    // Cluster-scoped imports (currently just CRDs) have no target namespace.
+    // All other imports inherit the marker's own namespace.
+    let namespace = if import_kind == "CustomResourceDefinition" {
+        None
+    } else {
+        manifest
+            .pointer("/metadata/namespace")
+            .and_then(Value::as_str)
+            .map(String::from)
+    };
+
+    // Parse expected Secret keys (comma-separated, no spaces). Empty list is
+    // valid — it means "only check that the Secret exists".
+    let expected_keys = annotations
+        .get("kix.dev/import-secret-keys")
         .and_then(Value::as_str)
-        .map(String::from);
+        .map(|s| {
+            s.split(',')
+                .map(str::trim)
+                .filter(|k| !k.is_empty())
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default();
 
     Some(ImportTarget {
         kind: import_kind,
         api_version: import_api_version,
         name: import_name,
-        namespace: import_namespace,
+        namespace,
+        expected_keys,
     })
 }
 
 /// Poll the cluster for the described [`ImportTarget`] until it exists (and,
-/// for CRDs, is `Established=True`), or the timeout elapses.
+/// for CRDs, is `Established=True`; for Secrets with declared `expected_keys`,
+/// also verifies every key is present in `data`), or the timeout elapses.
 ///
 /// Unlike [`wait_for_ready`] this does not need the target kind to be in the
 /// CLI's discovery cache — for `CustomResourceDefinition` targets we construct
 /// the `ApiResource` directly from the well-known `apiextensions.k8s.io/v1`
 /// group, so we can wait for a CRD that doesn't exist yet at the start of the
 /// deploy (which is exactly the case for operator-installed CRDs).
+///
+/// Scope is determined by the target kind: `CustomResourceDefinition` is
+/// cluster-scoped, everything else is namespaced and queried in
+/// `target.namespace` (sourced from the marker's own `metadata.namespace`).
 pub async fn wait_for_import_target(
     client: &Client,
     target: &ImportTarget,
@@ -102,6 +146,7 @@ pub async fn wait_for_import_target(
     } else {
         // Generic path: construct from the import-apiversion annotation.
         // Used for non-CRD imports (e.g. waiting on an external Secret).
+        // Namespaced by definition — the marker carries its namespace.
         let (group, version) = split_api_version(&target.api_version);
         let plural = pluralize_kind(&target.kind);
         (
@@ -112,22 +157,24 @@ pub async fn wait_for_import_target(
                 kind: target.kind.clone(),
                 plural,
             },
-            // Default to namespaced if a namespace was specified, otherwise
-            // assume cluster-scoped. Consumers can set kix.dev/import-namespace.
-            if target.namespace.is_some() {
-                Scope::Namespaced
-            } else {
-                Scope::Cluster
-            },
+            Scope::Namespaced,
         )
     };
 
     let api: Api<DynamicObject> = match scope {
-        Scope::Namespaced => Api::namespaced_with(
-            client.clone(),
-            target.namespace.as_deref().unwrap_or("default"),
-            &ar,
-        ),
+        Scope::Namespaced => {
+            // Namespaced imports must carry a namespace from the marker.
+            // This is a build-time invariant enforced by mkImportMarker — if
+            // it's ever missing, the target is malformed and we bail rather
+            // than silently querying "default".
+            let ns = target.namespace.as_deref().ok_or_else(|| {
+                ReadinessError::MalformedImportTarget(format!(
+                    "namespaced import target {}/{} has no namespace (marker malformed)",
+                    target.kind, target.name
+                ))
+            })?;
+            Api::namespaced_with(client.clone(), ns, &ar)
+        }
         Scope::Cluster => Api::all_with(client.clone(), &ar),
     };
 
@@ -142,6 +189,29 @@ pub async fn wait_for_import_target(
                         return Ok(ReadinessResult::Ready);
                     }
                     "CRD present, waiting for Established=True".into()
+                } else if target.kind == "Secret" && !target.expected_keys.is_empty() {
+                    // Secret exists — verify every declared key is present in
+                    // `data`. Missing keys are a hard failure, not a transient
+                    // state: if kix deploy got here the owning reconciler
+                    // (ESO/Vault/etc.) already considers the secret populated,
+                    // and retrying won't help. Emit a mismatch result so the
+                    // observer can render the exact missing keys.
+                    let missing = check_secret_keys(&obj.data, &target.expected_keys);
+                    if missing.is_empty() {
+                        return Ok(ReadinessResult::Ready);
+                    } else {
+                        let ns = target.namespace.as_deref().unwrap_or("?");
+                        let message = format!(
+                            "Secret {}/{} is missing expected key(s): [{}]",
+                            ns,
+                            target.name,
+                            missing.join(", ")
+                        );
+                        return Ok(ReadinessResult::ImportMismatch {
+                            missing_keys: missing,
+                            message,
+                        });
+                    }
                 } else {
                     return Ok(ReadinessResult::Ready);
                 }
@@ -175,6 +245,20 @@ pub async fn wait_for_import_target(
         }
         tokio::time::sleep(POLL_INTERVAL).await;
     }
+}
+
+/// Return the subset of `expected` not present in the live Secret's `data`
+/// field. Only key presence is checked — values may be empty strings.
+fn check_secret_keys(secret: &Value, expected: &[String]) -> Vec<String> {
+    let Some(data) = secret.pointer("/data").and_then(Value::as_object) else {
+        // No `data` at all → every expected key is missing.
+        return expected.to_vec();
+    };
+    expected
+        .iter()
+        .filter(|k| !data.contains_key(k.as_str()))
+        .cloned()
+        .collect()
 }
 
 /// Split an apiVersion string into (group, version). "v1" → ("", "v1"),
@@ -211,6 +295,8 @@ const POLL_INTERVAL: Duration = Duration::from_secs(2);
 pub enum ReadinessError {
     #[error("failed to fetch resource for readiness check: {0}")]
     FetchError(#[source] kube::Error),
+    #[error("malformed import target: {0}")]
+    MalformedImportTarget(String),
 }
 
 /// Result of a readiness check.
@@ -222,6 +308,13 @@ pub enum ReadinessResult {
     TimedOut { elapsed: Duration, message: String },
     /// Resource entered a terminal failure state.
     Failed(String),
+    /// An import target exists on the cluster but does not match the shape
+    /// declared by its marker. Currently only produced by `Secret` imports
+    /// when one or more `expected_keys` are missing from `data`.
+    ImportMismatch {
+        missing_keys: Vec<String>,
+        message: String,
+    },
 }
 
 /// Wait for a resource to become ready, polling until timeout.
@@ -661,7 +754,55 @@ mod tests {
         assert_eq!(target.kind, "CustomResourceDefinition");
         assert_eq!(target.api_version, "apiextensions.k8s.io/v1");
         assert_eq!(target.name, "sgclusters.stackgres.io");
+        // CRDs are cluster-scoped — namespace is always None regardless of
+        // the marker's own metadata.namespace.
         assert_eq!(target.namespace, None);
+        assert!(target.expected_keys.is_empty());
+    }
+
+    #[test]
+    fn secret_import_marker_inherits_marker_namespace() {
+        // Namespaced imports take their namespace from the marker's own
+        // metadata.namespace, not from any annotation.
+        let manifest = json!({
+            "apiVersion": "kix.dev/v1alpha1",
+            "kind": "PackageInstance",
+            "metadata": {
+                "name": "secret-ref-myapp-db-creds",
+                "namespace": "myapp",
+                "annotations": {
+                    "kix.dev/mode": "import",
+                    "kix.dev/import-kind": "Secret",
+                    "kix.dev/import-apiversion": "v1",
+                    "kix.dev/import-name": "db-creds",
+                    "kix.dev/import-secret-keys": "username,password",
+                }
+            }
+        });
+        let target = import_target_from_manifest(&manifest).expect("should parse");
+        assert_eq!(target.kind, "Secret");
+        assert_eq!(target.name, "db-creds");
+        assert_eq!(target.namespace.as_deref(), Some("myapp"));
+        assert_eq!(target.expected_keys, vec!["username", "password"]);
+    }
+
+    #[test]
+    fn secret_import_marker_no_keys_annotation() {
+        let manifest = json!({
+            "kind": "PackageInstance",
+            "metadata": {
+                "name": "secret-ref-myapp-bootstrap",
+                "namespace": "myapp",
+                "annotations": {
+                    "kix.dev/mode": "import",
+                    "kix.dev/import-kind": "Secret",
+                    "kix.dev/import-apiversion": "v1",
+                    "kix.dev/import-name": "bootstrap",
+                }
+            }
+        });
+        let target = import_target_from_manifest(&manifest).expect("should parse");
+        assert!(target.expected_keys.is_empty());
     }
 
     #[test]
@@ -689,6 +830,39 @@ mod tests {
             }
         });
         assert!(import_target_from_manifest(&manifest).is_none());
+    }
+
+    #[test]
+    fn check_secret_keys_all_present() {
+        let secret = json!({
+            "data": {
+                "username": "YWRtaW4=",
+                "password": "czNjcjN0",
+            }
+        });
+        let missing = check_secret_keys(&secret, &["username".into(), "password".into()]);
+        assert!(missing.is_empty());
+    }
+
+    #[test]
+    fn check_secret_keys_some_missing() {
+        let secret = json!({
+            "data": {
+                "username": "YWRtaW4=",
+            }
+        });
+        let missing = check_secret_keys(
+            &secret,
+            &["username".into(), "password".into(), "token".into()],
+        );
+        assert_eq!(missing, vec!["password", "token"]);
+    }
+
+    #[test]
+    fn check_secret_keys_no_data_field() {
+        let secret = json!({});
+        let missing = check_secret_keys(&secret, &["username".into()]);
+        assert_eq!(missing, vec!["username"]);
     }
 
     #[test]

@@ -123,8 +123,33 @@ rec {
           "type"
           "ports"
         ];
+
+        # Validate that every string targetPort on the final Service.spec.ports
+        # list resolves to a named container port declared on the workload.
+        # Only user-supplied `ports` can get this wrong — the auto-extracted
+        # ports are trivially consistent because they're derived from the
+        # container ports themselves.
+        workloadPortNames = lib.unique (
+          builtins.concatMap (c: map (p: p.name) (builtins.filter (p: p ? name) (c.ports or [ ]))) (
+            workload.rawManifest.spec.template.spec.containers or [ ]
+          )
+        );
+        badTargets = builtins.filter (
+          p:
+          (p ? targetPort)
+          && builtins.isString p.targetPort
+          && !(builtins.elem p.targetPort workloadPortNames)
+        ) finalPorts;
+        _portCheck =
+          if ports != null && badTargets != [ ] then
+            throw "service.fromWorkload '${name}': targetPort(s) [${
+              builtins.concatStringsSep ", " (map (p: "\"${p.targetPort}\"") badTargets)
+            }] do not match any named container port on the workload. "
+            + "Declared container ports: [${builtins.concatStringsSep ", " workloadPortNames}]."
+          else
+            null;
       in
-      {
+      builtins.seq _portCheck {
         apiVersion = "v1";
         kind = "Service";
         inherit name;
@@ -285,6 +310,29 @@ rec {
   # Typed constructors for volume mounts. Each returns a mount object
   # ({ _type, name, mountPath, source }) or null if the resource is null.
   # Name auto-derives from the resource's out.name.
+  #
+  # Every mount source carries a `_kix.namespace` marker (extracted from the
+  # referenced resource's namespace). `_injectMounts` spreads `m.source` at
+  # the volume top level, so the marker lands as a sibling of
+  # `configMap` / `persistentVolumeClaim` / `secret` at the volume level.
+  # checkNamespacedRefs in scope.nix reads it to enforce same-namespace
+  # mounts at build time; stripKixMeta in mkResource removes it before
+  # serialization.
+
+  # Extract the home namespace of a k8s-resource. Returns null for
+  # cluster-scoped resources or if the resource attrset doesn't carry a
+  # namespace handle. Used to stamp `_kix.namespace` on mount sources.
+  _resourceNs =
+    resource:
+    let
+      ns = resource.namespace or null;
+    in
+    if ns == null then
+      null
+    else if (ns._type or "") == "k8s-cluster-scoped" then
+      null
+    else
+      ns.name or null;
 
   mount = {
     # PersistentVolumeClaim mount.
@@ -299,12 +347,23 @@ rec {
       if resource == null then
         null
       else
+        let
+          ns = _resourceNs resource;
+        in
         {
           _type = "kix-mount";
           name = if name != null then name else builtins.unsafeDiscardStringContext resource.out.name;
           inherit mountPath readOnly;
           ${if subPath != null then "subPath" else null} = subPath;
-          source.persistentVolumeClaim.claimName = resource.out.name;
+          source = {
+            persistentVolumeClaim.claimName = resource.out.name;
+          }
+          // lib.optionalAttrs (ns != null) {
+            _kix = {
+              namespace = ns;
+              source = "pvc";
+            };
+          };
         };
 
     # ConfigMap mount.
@@ -322,16 +381,27 @@ rec {
       if resource == null then
         null
       else
+        let
+          ns = _resourceNs resource;
+        in
         {
           _type = "kix-mount";
           name = if name != null then name else builtins.unsafeDiscardStringContext resource.out.name;
           inherit mountPath;
           ${if subPath != null then "subPath" else null} = subPath;
-          source.configMap = {
-            name = resource.out.name;
+          source = {
+            configMap = {
+              name = resource.out.name;
+            }
+            // lib.optionalAttrs (items != null) { inherit items; }
+            // lib.optionalAttrs (defaultMode != null) { inherit defaultMode; };
           }
-          // lib.optionalAttrs (items != null) { inherit items; }
-          // lib.optionalAttrs (defaultMode != null) { inherit defaultMode; };
+          // lib.optionalAttrs (ns != null) {
+            _kix = {
+              namespace = ns;
+              source = "configMap";
+            };
+          };
         };
 
     # Secret mount.
@@ -349,16 +419,27 @@ rec {
       if resource == null then
         null
       else
+        let
+          ns = _resourceNs resource;
+        in
         {
           _type = "kix-mount";
           name = if name != null then name else builtins.unsafeDiscardStringContext resource.out.name;
           inherit mountPath;
           ${if subPath != null then "subPath" else null} = subPath;
-          source.secret = {
-            secretName = resource.out.name;
+          source = {
+            secret = {
+              secretName = resource.out.name;
+            }
+            // lib.optionalAttrs (items != null) { inherit items; }
+            // lib.optionalAttrs (defaultMode != null) { inherit defaultMode; };
           }
-          // lib.optionalAttrs (items != null) { inherit items; }
-          // lib.optionalAttrs (defaultMode != null) { inherit defaultMode; };
+          // lib.optionalAttrs (ns != null) {
+            _kix = {
+              namespace = ns;
+              source = "secret";
+            };
+          };
         };
 
     # EmptyDir mount (no resource — name is required).
@@ -501,11 +582,14 @@ rec {
   # as optional DI deps via function args — they're discovered automatically.
   expose =
     {
-      service, # string: part name in self to expose (e.g. "service")
+      service ? null, # string: part name in self to expose (single-backend mode)
+      paths ? null, # list of { path, pathType?, service, port? }: multi-backend mode (Ingress only). `service` is the part name in self. Mutually exclusive with `service`.
       partName ? "ingress", # string: name of the generated part in self
       defaultAnnotations ? { }, # attrset: package-level default annotations (Ingress mode only)
-      port ? null, # int or null: override auto-derived service port
+      port ? null, # int or null: override auto-derived service port (single-backend mode only)
       tlsSecretName ? null, # string or null: override auto-derived TLS secret name (Ingress mode only)
+      tlsSecret ? null, # k8s-resource or null: alternative to tlsSecretName that also enables cross-namespace validation (recommended over tlsSecretName for user-provided certs)
+      tlsSecretPart ? null, # string or null: name of a part in `self` whose resource provides the TLS secret. Resolved lazily so callers can wire `self.tlsSecret` (e.g. a `mkSecretRef`) without forward references at package definition.
     }:
     {
       self,
@@ -519,8 +603,66 @@ rec {
       ...
     }:
     let
-      svc = self.${service};
       name = scope.instanceName;
+
+      _modeCheck =
+        if service == null && paths == null then
+          throw "kix.expose (${name}): one of `service` or `paths` must be set."
+        else if service != null && paths != null then
+          throw "kix.expose (${name}): `service` and `paths` are mutually exclusive."
+        else
+          null;
+
+      svc = if service != null then self.${service} else null;
+
+      # Resolve tlsSecret from a part in `self` when `tlsSecretPart` is set.
+      # Lazy lookup avoids the chicken-and-egg of passing `self.x` at package
+      # definition time (where `self` is not yet bound).
+      effectiveTlsSecret = if tlsSecretPart != null then self.${tlsSecretPart} else tlsSecret;
+
+      # Resolve the TLS secret name from the three legal sources and enforce
+      # the same-namespace invariant.
+      #   1. `tlsSecret = someResource` → resource path, full ns check.
+      #   2. `tlsSecretName = someString` → string path, require DI-tracking
+      #      (must come from kix.untrackedRef or a tracked secret.out.name).
+      #      Ns check only possible if the caller passed it via tlsSecret.
+      #   3. Neither set → auto-derived "${name}-tls" in the current scope.
+      #
+      # K8s ingress controllers only read TLS secrets from the Ingress's own
+      # namespace; a mismatch silently serves the default cert instead.
+      _tlsSecretNsCheck =
+        if effectiveTlsSecret != null then
+          let
+            secretNs =
+              if (effectiveTlsSecret.namespace._type or "") == "k8s-cluster-scoped" then
+                null
+              else
+                effectiveTlsSecret.namespace.name or null;
+          in
+          if secretNs != null && secretNs != scope.namespaceName then
+            throw "kix.expose (${name}): tlsSecret '${effectiveTlsSecret.name or "?"}' is in namespace "
+            + "\"${secretNs}\" but the Ingress is in namespace \"${scope.namespaceName}\". "
+            + "Kubernetes ingress controllers only read TLS secrets from the Ingress's own namespace."
+          else
+            null
+        else if tlsSecretName != null then
+          if builtins.getContext tlsSecretName == { } then
+            throw "kix.expose (${name}): tlsSecretName \"${tlsSecretName}\" is a raw string literal. "
+            + "Use `tlsSecret = someSecretResource` (resource form — also enables cross-namespace validation), "
+            + "`tlsSecretName = someSecret.out.name` (tracked string), "
+            + "or `tlsSecretName = kix.untrackedRef \"...\"` to opt out explicitly."
+          else
+            null
+        else
+          null;
+
+      tlsSecretNameEffective =
+        if effectiveTlsSecret != null then
+          effectiveTlsSecret.out.name
+        else if tlsSecretName != null then
+          tlsSecretName
+        else
+          "${name}-tls";
 
       clusterDomain = clusterConfig.cluster.domain or null;
       configHost = (config.ingress or { }).host or null;
@@ -553,38 +695,96 @@ rec {
       hasTls = hasExposure && useIngress && clusterIssuer != null;
 
       configAnnotations = (config.ingress or { }).annotations or { };
+
+      # Multi-backend rules: build http.paths from `paths`, resolving each
+      # `service` name against `self` to get out.name + auto-derived port.
+      multiPathRules =
+        let
+          buildPath =
+            p:
+            let
+              backendSvc = self.${p.service};
+              autoPort =
+                if backendSvc ? out.port then
+                  builtins.fromJSON (builtins.unsafeDiscardStringContext backendSvc.out.port)
+                else
+                  throw "kix.expose (${name}): paths entry for service '${p.service}' has no out.port — specify `port` explicitly.";
+              svcPort = p.port or autoPort;
+            in
+            {
+              inherit (p) path;
+              pathType = p.pathType or "Prefix";
+              backend.service = {
+                name = backendSvc.out.name;
+                port.number = svcPort;
+              };
+            };
+        in
+        [
+          {
+            host = effectiveHost;
+            http.paths = map buildPath paths;
+          }
+        ];
     in
-    {
+    builtins.seq _modeCheck {
       ${partName} =
         if hasExposure && useGateway then
-          svc
-          |> httpRoute.fromService (
-            {
-              inherit name;
-              host = effectiveHost;
-              parentRef = gateway.out.gatewayRef;
-            }
-            // lib.optionalAttrs (port != null) { inherit port; }
-          )
-          |> scope.mkResource
+          if paths != null then
+            throw "kix.expose (${name}): `paths` (multi-backend) is not yet supported in Gateway API mode."
+          else
+            svc
+            |> httpRoute.fromService (
+              {
+                inherit name;
+                host = effectiveHost;
+                parentRef = gateway.out.gatewayRef;
+              }
+              // lib.optionalAttrs (port != null) { inherit port; }
+            )
+            |> scope.mkResource
 
         else if hasExposure && useIngress then
-          svc
-          |> ingress.fromService (
-            {
-              inherit name;
-              host = effectiveHost;
-              className = ingressNginx.out.ingressClassName;
-              tls = lib.optional hasTls {
-                hosts = [ effectiveHost ];
-                secretName = if tlsSecretName != null then tlsSecretName else "${name}-tls";
-              };
-              annotations = defaultAnnotations // configAnnotations;
-            }
-            // lib.optionalAttrs (port != null) { inherit port; }
+          builtins.seq _tlsSecretNsCheck (
+            (
+              if paths != null then
+                {
+                  apiVersion = "networking.k8s.io/v1";
+                  kind = "Ingress";
+                  inherit name;
+                  annotations = defaultAnnotations // configAnnotations;
+                  spec = {
+                    ingressClassName = ingressNginx.out.ingressClassName;
+                    rules = multiPathRules;
+                  }
+                  // lib.optionalAttrs hasTls {
+                    tls = [
+                      {
+                        hosts = [ effectiveHost ];
+                        secretName = tlsSecretNameEffective;
+                      }
+                    ];
+                  };
+                }
+              else
+                svc
+                |> ingress.fromService (
+                  {
+                    inherit name;
+                    host = effectiveHost;
+                    className = ingressNginx.out.ingressClassName;
+                    tls = lib.optional hasTls {
+                      hosts = [ effectiveHost ];
+                      secretName = tlsSecretNameEffective;
+                    };
+                    annotations = defaultAnnotations // configAnnotations;
+                  }
+                  // lib.optionalAttrs (port != null) { inherit port; }
+                )
+            )
+            |> (if hasTls then clusterIssuer.out.withCert else lib.id)
+            |> scope.mkResource
           )
-          |> (if hasTls then clusterIssuer.out.withCert else lib.id)
-          |> scope.mkResource
 
         else
           null;

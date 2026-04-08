@@ -49,6 +49,8 @@ Automated wiring (network, RBAC, storage) derived from the dependency graph.
 | 75 | [Secrets — what actually matters](75_secrets_what_actually_matters.md) | Brainstorm | Cuts through the 74 overdesign: Problem A (values) vs Problem B (contracts). SOPS default, ship contracts+values together. |
 | 76 | [Secrets design](76_secrets_design.md) | Design | Concrete API: mkSecret (SOPS, hash-verified), mkSecretRef (external), out.keyRef/mkEnv, DI override, CLI commands. |
 | 77 | [Secret access control modules](77_secret_access_control_modules.md) | Draft | Module-system layer over sops: teams contribute keys/teams/rules, generates `.sops.yaml`, build-time validation, rekey workflow. Access changes flow through `kix diff`/`kix deploy` with severity-tiered approval gates and revocation safety. |
+| 78 | [Cross-namespace secret refs](78_cross_namespace_secret_refs.md) | Brainstorm | Untying the knot in `76§10.3`: `mkSecretRef` cross-namespace consumption can't be copy-on-build and drifts on copy-on-deploy. Reframe as capability-driven (operator-native / CSI / reflector / static-copy) with compile-time error as the default. |
+| 79 | [Operator readiness edges](79_operator_readiness_edges.md) | Brainstorm | Auto-derived edges from operator-backed resources (Ingress, HTTPRoute, CRs) to their reconciler workloads so deploy ordering falls out of the DAG. Direction: build-entry DI deps become ordering edges (free for `kix.expose` users) + post-eval lint that warns when raw `mkResource` produces an operator-backed kind without an edge. Wire with kix → free; bypass kix → warning. |
 
 ## Operator & Deploy
 

@@ -209,6 +209,7 @@ in
               "_type"
               "_meta"
               "_packageInstance"
+              "_packageRequires"
               "_diagnostics"
               "_scorecardFindings"
               "_isImport"

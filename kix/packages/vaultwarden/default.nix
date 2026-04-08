@@ -1,11 +1,11 @@
 # Vaultwarden — self-hosted Bitwarden-compatible password manager.
 #
-# Runs with SQLite by default (simplest). Can optionally use Postgres via DI.
-# Data is persisted via a storage PVC dependency.
+# Uses Postgres via DI. Attachments persisted on a storage PVC.
 #
 # Dependencies:
-#   storage        — required, persistent volume for SQLite DB + attachments
-#   postgres       — optional, uses Postgres instead of SQLite when present
+#   storage        — required, persistent volume for attachments/icons
+#   postgres       — required, database (expects stackgres-style credentials
+#                    secret exposed via `out.superuserSecret`)
 #
 # Exposure handled by kix.expose (ingress via DI).
 #
@@ -72,9 +72,9 @@ in
         config,
         clusterConfig,
         storage,
+        postgres,
         scope,
         kix,
-        postgres ? null,
         ...
       }:
       let
@@ -86,7 +86,6 @@ in
             "${name}.${clusterDomain}"
           else
             null;
-        usePostgres = postgres != null;
 
         healthCheck = {
           httpGet = {
@@ -97,12 +96,11 @@ in
           timeoutSeconds = 1;
         };
 
-        # Database URL: Postgres if injected, else SQLite in the data volume.
-        databaseUrl =
-          if usePostgres then
-            "postgresql://vaultwarden:vaultwarden@${postgres.out.fqdn}:${postgres.out.port}/vaultwarden"
-          else
-            "/data/db.sqlite3";
+        # Credentials come from stackgres' superuser secret via env var
+        # substitution ($(VAR) syntax). Until we create a dedicated
+        # vaultwarden role/db, connect with the superuser to the default
+        # `postgres` database.
+        databaseUrl = "postgresql://$(DB_USERNAME):$(DB_PASSWORD)@${postgres.out.fqdn}:${postgres.out.port}/postgres";
       in
       {
         deployment =
@@ -110,7 +108,7 @@ in
             name = name;
             spec = {
               replicas = 1;
-              strategy.type = "Recreate"; # SQLite can't handle concurrent writers
+              strategy.type = "Recreate";
               selector.matchLabels = scope.selectorLabels;
               template.spec = {
                 containers = [
@@ -118,26 +116,33 @@ in
                     name = "vaultwarden";
                     image = "${config.image.repository}:${config.image.tag}";
                     ports = [ (kix.port "http" 8080) ];
-                    env = kix.mkEnvVars (
-                      {
-                        DATA_FOLDER = "/data";
-                        DATABASE_URL = databaseUrl;
-                        DOMAIN =
-                          if config.domain != null then
-                            config.domain
-                          else if effectiveHost != null then
-                            "https://${effectiveHost}"
-                          else
-                            null;
-                        SIGNUPS_ALLOWED = lib.boolToString config.signupsAllowed;
-                        INVITATIONS_ALLOWED = lib.boolToString config.invitationsAllowed;
-                        SHOW_PASSWORD_HINT = lib.boolToString config.showPasswordHint;
-                        ROCKET_ADDRESS = "0.0.0.0";
-                        ROCKET_PORT = "8080";
-                        ADMIN_TOKEN = config.adminToken;
-                      }
-                      // config.env
-                    );
+                    env =
+                      # Secret refs FIRST so k8s can substitute $(DB_USERNAME)/$(DB_PASSWORD)
+                      # in DATABASE_URL. K8s only substitutes vars defined earlier in the list.
+                      (postgres.out.superuserSecret.out.mkEnv {
+                        DB_USERNAME = "superuser-username";
+                        DB_PASSWORD = "superuser-password";
+                      })
+                      ++ kix.mkEnvVars (
+                        {
+                          DATA_FOLDER = "/data";
+                          DATABASE_URL = databaseUrl;
+                          DOMAIN =
+                            if config.domain != null then
+                              config.domain
+                            else if effectiveHost != null then
+                              "https://${effectiveHost}"
+                            else
+                              null;
+                          SIGNUPS_ALLOWED = lib.boolToString config.signupsAllowed;
+                          INVITATIONS_ALLOWED = lib.boolToString config.invitationsAllowed;
+                          SHOW_PASSWORD_HINT = lib.boolToString config.showPasswordHint;
+                          ROCKET_ADDRESS = "0.0.0.0";
+                          ROCKET_PORT = "8080";
+                          ADMIN_TOKEN = config.adminToken;
+                        }
+                        // config.env
+                      );
                     livenessProbe = healthCheck // {
                       initialDelaySeconds = 5;
                       failureThreshold = 10;

@@ -15,6 +15,26 @@ rec {
     name = null;
   };
 
+  # Strip kix-internal metadata from a manifest fragment.
+  #
+  # Convention: the reserved attrset key `_kix` carries kix-internal metadata
+  # on any K8s fragment (volume entry, env entry, secretRef, etc.). It mirrors
+  # the `_module` reserved-key pattern from NixOS modules. Validators that run
+  # before serialization (e.g. checkSecretRefs) read `_kix.*` directly; this
+  # stripper removes every `_kix` key recursively right before the manifest is
+  # rendered to JSON, so no marker ever leaks into K8s.
+  #
+  # Adding a new piece of internal metadata never requires touching the
+  # stripper — just write it under `_kix` on the fragment that needs it.
+  stripKixMeta =
+    value:
+    if builtins.isAttrs value then
+      lib.mapAttrs (_: stripKixMeta) (removeAttrs value [ "_kix" ])
+    else if builtins.isList value then
+      map stripKixMeta value
+    else
+      value;
+
   # Recursively attach Nix string context to all string leaves in a value.
   # Non-string, non-null leaves (int, bool) pass through with a trace warning.
   attachCtxDeep =
@@ -141,23 +161,85 @@ rec {
         else
           namespace;
 
+      # --- extra.* shadowing check ---
+      # `extra` is a passthrough for K8s fields kix doesn't model explicitly
+      # (e.g. stackgres-specific spec keys). It must NOT override fields that
+      # kix already manages as whole sub-trees via dedicated args (spec, data,
+      # stringData), because that silently bypasses auto-derived DI tracking
+      # on spec.selector and makes the merge order confusing.
+      #
+      # `metadata.labels` and `metadata.annotations` are intentionally NOT in
+      # this list: `lib.recursiveUpdate` merges them additively with the
+      # scope-injected labels/annotations, which is a valid and supported
+      # pattern (e.g. grafana datasourcesConfigMap tagging with
+      # `extra.metadata.labels.grafana_datasource = "1"`).
+      _managedPaths = [
+        [ "apiVersion" ]
+        [ "kind" ]
+        [
+          "metadata"
+          "name"
+        ]
+        [
+          "metadata"
+          "namespace"
+        ]
+      ]
+      ++ lib.optional (spec != { }) [ "spec" ]
+      ++ lib.optional (data != { }) [ "data" ]
+      ++ lib.optional (stringData != { }) [ "stringData" ];
+
+      _hasPath =
+        attrs: path:
+        if path == [ ] then
+          true
+        else if !(builtins.isAttrs attrs) then
+          false
+        else
+          let
+            h = builtins.head path;
+            t = builtins.tail path;
+          in
+          (attrs ? ${h}) && (t == [ ] || _hasPath attrs.${h} t);
+
+      _shadowedPaths = builtins.filter (p: _hasPath extra p) _managedPaths;
+
+      _extraShadowCheck =
+        if _shadowedPaths != [ ] then
+          throw "k8s-resource '${kind}/${name}': extra.* shadows managed field(s) "
+          + "${builtins.concatStringsSep ", " (map (p: builtins.concatStringsSep "." p) _shadowedPaths)}. "
+          + "Fields under `spec`, `data`, `stringData`, `metadata.{name,namespace,labels,annotations}` "
+          + "are set via dedicated args so kix can attach DI tracking. Move your customizations into "
+          + "those args (e.g. `spec = { ... }` instead of `extra.spec = { ... }`), or use `extra` only "
+          + "for sibling fields kix doesn't manage explicitly."
+        else
+          null;
+
       # Build the K8s manifest attrset — contains real names, not store paths.
       # String values may carry Nix context from dependencies (via out.name etc.)
       # which is used for automatic dependency tracking.
-      rawManifest = lib.recursiveUpdate (
-        {
-          inherit apiVersion kind;
-          metadata = {
-            inherit name;
-          }
-          // lib.optionalAttrs (nsName != null) { namespace = nsName; }
-          // lib.optionalAttrs (labels != { }) { inherit labels; }
-          // lib.optionalAttrs (annotations != { }) { inherit annotations; };
-        }
-        // lib.optionalAttrs (spec != { }) { inherit spec; }
-        // lib.optionalAttrs (data != { }) { inherit data; }
-        // lib.optionalAttrs (stringData != { }) { inherit stringData; }
-      ) extra;
+      #
+      # `stripKixMeta` removes any `_kix` reserved-key markers (used for
+      # cross-namespace validation, provenance, etc.) recursively, so no
+      # internal metadata ever reaches the rendered K8s manifest.
+      rawManifest = builtins.seq _extraShadowCheck (
+        stripKixMeta (
+          lib.recursiveUpdate (
+            {
+              inherit apiVersion kind;
+              metadata = {
+                inherit name;
+              }
+              // lib.optionalAttrs (nsName != null) { namespace = nsName; }
+              // lib.optionalAttrs (labels != { }) { inherit labels; }
+              // lib.optionalAttrs (annotations != { }) { inherit annotations; };
+            }
+            // lib.optionalAttrs (spec != { }) { inherit spec; }
+            // lib.optionalAttrs (data != { }) { inherit data; }
+            // lib.optionalAttrs (stringData != { }) { inherit stringData; }
+          ) extra
+        )
+      );
 
       manifestJson = builtins.toJSON rawManifest;
 
@@ -286,9 +368,18 @@ rec {
       keys, # list of declared key names
       type, # K8s secret type (e.g. "Opaque")
       attachCtx, # function: string -> string-with-context
+      namespace, # namespace this secret lives in (for cross-ns validation)
     }:
     let
       ctxName = attachCtx name;
+      # Reserved-key marker — read by checkSecretRefs in mkWorkload, stripped
+      # by stripKixMeta before manifest serialization.
+      kixMeta = {
+        _kix = {
+          inherit namespace;
+          source = "secret";
+        };
+      };
       helpers = {
         inherit keys type;
 
@@ -303,7 +394,8 @@ rec {
                 name = ctxName;
                 inherit key;
               };
-            };
+            }
+            // kixMeta;
 
         # Map env var names to secret keys → [ { name, valueFrom.secretKeyRef } ]
         mkEnv =
@@ -315,15 +407,19 @@ rec {
           secretRef = {
             name = ctxName;
           };
-        };
+        }
+        // kixMeta;
 
         # Mount as volume → { name, secret.secretName }
-        volume = volName: {
-          name = volName;
-          secret = {
-            secretName = ctxName;
-          };
-        };
+        volume =
+          volName:
+          {
+            name = volName;
+            secret = {
+              secretName = ctxName;
+            };
+          }
+          // kixMeta;
       };
     in
     helpers;

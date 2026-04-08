@@ -131,12 +131,14 @@ impl ReconcileObserver for OperatorObserver {
                 rid,
                 message,
                 import_target,
+                missing_keys,
             } => {
                 tracing::error!(
                     activation = name,
                     resource = %rid,
                     message,
                     import_target = import_target.as_ref().map(|t| format!("{}/{}", t.kind, t.name)),
+                    missing_keys = ?missing_keys,
                     "Readiness failed"
                 );
             }

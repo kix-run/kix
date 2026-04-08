@@ -110,6 +110,14 @@ in
         name = name;
       };
 
+      # --- Config secret reference ---
+      # User-provided external Secret — wrapped in a SecretRef so volume
+      # mounts carry DI context and the deploy engine gates on its existence.
+      configSecret = scope.mkSecretRef {
+        name = config.configSecretName;
+        keys = [ ];
+      };
+
       # --- Deployment ---
       deployment =
         {
@@ -198,8 +206,7 @@ in
                 {
                   name = "caddy-config";
                   secret = {
-                    # User-provided external secret name — not managed by kix.
-                    secretName = kix.untrackedRef config.configSecretName;
+                    secretName = self.configSecret.out.name;
                     defaultMode = 420;
                   };
                 }
