@@ -86,6 +86,7 @@ let
       discoverBuildDeps
       resolveDepTargets
       buildConfigInjections
+      evaluateInstanceConfig
       ;
     inherit (instance) evaluateInstance;
     inherit (import_) mkImport;

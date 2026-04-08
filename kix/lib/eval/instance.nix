@@ -184,30 +184,13 @@ in
           in
           fn (base // extra // depArgs);
 
-        # Special-cased keys that concatenate across build entries / overlays
-        # instead of being last-write-wins. `_packageRequires` lets helpers
-        # like `kix.expose` contribute package-level wave deps without owning
-        # `root`.
-        mergeParts =
-          acc: next:
-          let
-            base = acc // next;
-          in
-          if next ? _packageRequires then
-            base
-            // {
-              _packageRequires = (acc._packageRequires or [ ]) ++ (next._packageRequires or [ ]);
-            }
-          else
-            base;
-
         parts = lib.fix (
           self:
           let
-            merged = builtins.foldl' (acc: fn: mergeParts acc (callBuildFn self fn)) { } rawBuildEntries;
+            merged = builtins.foldl' (acc: fn: acc // (callBuildFn self fn)) { } rawBuildEntries;
           in
           if boundOverlays != [ ] then
-            builtins.foldl' (acc: overlay: mergeParts acc (overlay self acc)) merged boundOverlays
+            builtins.foldl' (acc: overlay: acc // (overlay self acc)) merged boundOverlays
           else
             merged
         );
@@ -226,13 +209,13 @@ in
           else
             throw "Instance '${instanceName}': root must be a resource or { resource, requires, postHooks }";
 
-        # Package-level requires come from two sources:
-        #   1. The root's `requires` (explicit, set by the package author)
-        #   2. `parts._packageRequires` (contributed by helpers like
-        #      `kix.expose` that need to gate the package on a DI dep without
-        #      owning `root`)
-        packageRequires =
-          (if rawRoot ? resource then rawRoot.requires or [ ] else [ ]) ++ (parts._packageRequires or [ ]);
+        # Package-level requires come from the root's explicit `requires`
+        # (set by the package author via `root = { resource = ...; requires = [...]; }`).
+        # Cross-package edges from other sources (DI-resolved deps referenced
+        # in manifest string context) are handled by the CLI wave computation,
+        # which collapses any cross-package edge onto the target package's
+        # PackageInstance marker — see `cli/kix/src/cluster/graph.rs` Phase 2b.
+        packageRequires = if rawRoot ? resource then rawRoot.requires or [ ] else [ ];
 
         # Post-hooks: resources deployed AFTER all other package resources complete.
         # Must depend on forward-closure resources (typically root or its descendants)
@@ -673,6 +656,7 @@ in
                   namespaceName
                   packageMeta
                   packageInstance
+                  evaluatedConfig
                   ;
                 rootOut = (rootRes.out or { }) // packageOut;
                 aliases = instCfg.aliases or [ ];

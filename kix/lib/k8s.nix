@@ -369,6 +369,10 @@ rec {
       type, # K8s secret type (e.g. "Opaque")
       attachCtx, # function: string -> string-with-context
       namespace, # namespace this secret lives in (for cross-ns validation)
+      reflected ? false, # if true, secret is mirrored cross-namespace by the
+      # emberstack reflector controller — relax the same-namespace check in
+      # checkNamespacedRefs since a local copy will exist in the consumer's
+      # namespace by the time pods start.
     }:
     let
       ctxName = attachCtx name;
@@ -378,7 +382,8 @@ rec {
         _kix = {
           inherit namespace;
           source = "secret";
-        };
+        }
+        // lib.optionalAttrs reflected { reflected = true; };
       };
       helpers = {
         inherit keys type;

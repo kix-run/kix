@@ -16,6 +16,7 @@
   discoverBuildDeps,
   resolveDepTargets,
   buildConfigInjections,
+  evaluateInstanceConfig,
   evaluateInstance,
   mkImport,
 }:
@@ -129,6 +130,7 @@ in
               discoveredDeps = { };
               depsEnrichment = { };
               resolvedTargets = { };
+              packageOptions = { };
             }
           else
             let
@@ -150,13 +152,88 @@ in
             in
             {
               inherit discoveredDeps depsEnrichment resolvedTargets;
+              packageOptions = raw.options or { };
             }
         ) nsInsts
       ) mergedInstances;
 
       configInjections = buildConfigInjections phase1Instances;
 
-      # 6. Build nested fixpoint
+      # Phase 2a: config-only fixpoint.
+      #
+      # Some dep config injections are function-shaped — they read parts
+      # of the *consumer's* evaluated config and project them into the
+      # dep's config (e.g. stackgres-database taking its own
+      # `extensions = ["vector"]` and forwarding it as
+      # `[{ name = "vector"; }]` to its underlying postgres cluster).
+      #
+      # Resolving such an injection requires the consumer's evaluated
+      # config — but we can't reach for the full instance view via `self`
+      # in the main `clusterInstances` fixpoint, because that view also
+      # depends on the consumer's *build*, which depends on its DI deps,
+      # which (for a database) loops back to the postgres being injected
+      # into. Stack overflow.
+      #
+      # The trick: split eval into two fixpoints. Phase 2a only computes
+      # `evaluatedConfig` for every instance, with no build, no parts,
+      # no deps. The function-injection resolver reads from this map
+      # instead of from the full view, so the cycle disappears.
+      # Phase 2b (`clusterInstances`) then runs the normal full eval
+      # using the *resolved* injection list from phase 2a — by that
+      # point every injection's `config` is a plain attrset.
+      instanceConfigs = lib.fix (
+        selfCfg:
+        lib.mapAttrs (
+          nsName: nsInsts:
+          lib.mapAttrs (
+            instName: instCfg:
+            if (instCfg.package._type or "") == "kix-import" then
+              { }
+            else
+              let
+                rawInjections = configInjections.${nsName}.${instName} or [ ];
+                resolvedInjections = map (
+                  inj:
+                  if builtins.isFunction inj.config then
+                    let
+                      consumerCfg = (selfCfg.${inj.consumerNs} or { }).${inj.consumerInst} or { };
+                    in
+                    inj // { config = inj.config consumerCfg; }
+                  else
+                    inj
+                ) rawInjections;
+              in
+              evaluateInstanceConfig {
+                packageOptions = phase1Instances.${nsName}.${instName}.packageOptions;
+                inherit instCfg;
+                clusterConfig = cfg;
+                configInjections = resolvedInjections;
+              }
+          ) nsInsts
+        ) mergedInstances
+      );
+
+      # Same resolver, run against phase-2a results, used to feed the
+      # full eval below an injection list whose `config` fields are
+      # plain attrsets (regardless of whether the package author wrote
+      # a function or a literal).
+      resolveInjections =
+        nsName: instName:
+        let
+          raw = configInjections.${nsName}.${instName} or [ ];
+        in
+        map (
+          inj:
+          if builtins.isFunction inj.config then
+            let
+              consumerCfg = (instanceConfigs.${inj.consumerNs} or { }).${inj.consumerInst} or { };
+            in
+            inj // { config = inj.config consumerCfg; }
+          else
+            inj
+        ) raw;
+
+      # 6. Build nested fixpoint (phase 2b — full evaluation).
       clusterInstances = lib.fix (
         self:
         lib.mapAttrs (
@@ -173,7 +250,7 @@ in
               clusterConfig = cfg;
               inherit resolutionIndex;
               globalPartsOverlays = cfg.globalPartsOverlays;
-              configInjections = configInjections.${nsName}.${instName} or [ ];
+              configInjections = resolveInjections nsName instName;
             }
           ) nsInsts
         ) mergedInstances
@@ -209,7 +286,6 @@ in
               "_type"
               "_meta"
               "_packageInstance"
-              "_packageRequires"
               "_diagnostics"
               "_scorecardFindings"
               "_isImport"

@@ -24,6 +24,11 @@ in
       packageMeta,
       namespaceName,
       aliases,
+      # Evaluated config for this instance — exposed via _meta so the
+      # cluster fixpoint can resolve function-shaped dep config injections
+      # against the consumer's own config (e.g. stackgres-database
+      # forwarding its `extensions` list into postgres).
+      evaluatedConfig ? { },
     }:
     let
       ctx = "instance '${instanceName}'";
@@ -51,6 +56,11 @@ in
             packageMeta
             ;
           namespace = namespaceName;
+          # The instance's fully-resolved config (option defaults +
+          # cluster overrides + dep config injections). Read by
+          # cluster.nix when resolving function-shaped injections
+          # contributed by THIS instance into one of its deps.
+          config = evaluatedConfig;
         };
       };
 

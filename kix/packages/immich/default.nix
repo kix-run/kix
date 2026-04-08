@@ -6,7 +6,10 @@
 #
 # Dependencies:
 #   valkey              — required, job queue backend
-#   postgres            — required, database (needs pgvecto.rs / "vectors" extension)
+#   database            — required, logical database (provided by stackgres-database
+#                          or any package exposing the same out.{host,port,database,
+#                          credentials,connectionEnv} interface). The underlying
+#                          postgres cluster must have the "vector" extension installed.
 #   storage             — required, persistent volume for photo library
 #   machineLearning     — optional, ML inference service
 #   prometheus          — optional, auto-creates ServiceMonitor when present (+ metrics enabled)
@@ -34,35 +37,35 @@ in
       "photo-management"
       "media-server"
     ];
-    compatibleWith.postgres = {
-      minVersion = "15";
-      reason = "immich requires pgvecto.rs which needs PG15+";
+    compatibleWith.database = {
+      reason = "immich requires the pgvecto.rs / vector extension on its postgres backend";
     };
   };
 
-  # Per-dep diagnostics — co-located with the dep they validate.
+  # Per-dep diagnostics + config injections — co-located with the dep.
   deps = {
-    # Config injection: automatically add required extensions to postgres.
-    # Uses listOf merge — concatenates with any cluster-defined extensions.
-    postgres.config = {
-      extensions = [
-        {
-          name = "vector";
-          #publisher = "tensorchord"; # TODO: verify
-          #version = "0.8.1";
-          #repository = "https://extensions.stackgres.io/postgres/repository";
-        }
-      ];
+    # Declare the database extensions immich requires. The stackgres-database
+    # package picks these up via dep config injection and (a) runs
+    # CREATE EXTENSION on the new database, (b) forwards them to the
+    # underlying stackgres-cluster so the operator installs them on the
+    # postgres image. End result: immich auto-instantiation pulls a fully
+    # configured database + cluster with no cluster-side wiring.
+    database.config = {
+      extensions = [ "vector" ];
     };
 
-    postgres.assertions =
+    # Validate that the database instance was configured with the `vector`
+    # extension. The stackgres-database package translates `extensions = [...]`
+    # into CREATE EXTENSION statements run against the new database; the
+    # extension still has to be installed on the underlying SGCluster.
+    database.assertions =
       dep:
       let
-        extNames = dep.out.extensionNames or null;
+        extensions = dep.out.extensions or null;
       in
-      lib.optional (extNames != null && !(builtins.elem "vector" extNames)) {
+      lib.optional (extensions != null && !(builtins.elem "vector" extensions)) {
         assertion = false;
-        message = "immich requires the pgvecto.rs extension (\"vectors\") on its postgres instance, but it is not configured. Add { name = \"vectors\"; publisher = \"tensorchord\"; version = \"...\"; } to postgres.extensions.";
+        message = "immich requires the pgvecto.rs (\"vector\") extension on its database. Add `extensions = [ \"vector\" ]` to the stackgres-database instance and ensure the underlying stackgres-cluster declares the extension under `extensions`.";
       };
 
     storage.warnings =
@@ -113,7 +116,7 @@ in
         config,
         clusterConfig,
         valkey,
-        postgres,
+        database,
         storage,
         scope,
         kix,
@@ -181,11 +184,9 @@ in
                     kix.mkEnv
                       (
                         {
-                          DB_HOSTNAME = postgres.out.fqdn;
-                          DB_PORT = postgres.out.port;
-                          # Until we create a dedicated immich database/role,
-                          # connect to the shared postgres with the superuser.
-                          DB_DATABASENAME = "postgres";
+                          DB_HOSTNAME = database.out.host;
+                          DB_PORT = database.out.port;
+                          DB_DATABASENAME = database.out.database;
                           REDIS_HOSTNAME = valkey.out.fqdn;
                           IMMICH_MACHINE_LEARNING_URL = mlUrl;
                           IMMICH_CONFIG_FILE =
@@ -195,10 +196,12 @@ in
                         // config.env
                       )
                       (
-                        # Pull postgres superuser credentials from the stackgres-managed secret.
-                        (postgres.out.superuserSecret.out.mkEnv {
-                          DB_USERNAME = "superuser-username";
-                          DB_PASSWORD = "superuser-password";
+                        # Pull immich's per-app db credentials from the database
+                        # instance's local Secret (in *this* namespace — no
+                        # cross-namespace secret reads, no superuser exposure).
+                        (database.out.credentials.out.mkEnv {
+                          DB_USERNAME = "username";
+                          DB_PASSWORD = "password";
                         })
                         # Pull the valkey password from its credentials secret when
                         # auth is enabled. Without this, immich fails with NOAUTH.

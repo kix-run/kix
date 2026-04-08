@@ -205,20 +205,22 @@ rec {
             let
               plainName = builtins.unsafeDiscardStringContext refName;
               refNs = fragment._kix.namespace or null;
+              refReflected = fragment._kix.reflected or false;
             in
             if builtins.getContext refName == { } then
               throw "[${instanceName}] Untracked ${kind} reference in ${fieldDesc}: "
               + "\"${plainName}\". "
               + "Use resource.out.name / resource.out.* helpers, "
               + "or kix.untrackedRef to opt out explicitly."
-            else if refNs != null && refNs != namespaceName then
+            else if refNs != null && refNs != namespaceName && !refReflected then
               throw "[${instanceName}] Cross-namespace ${kind} reference in ${fieldDesc}: "
               + "${kind} \"${plainName}\" is declared in namespace \"${refNs}\" "
               + "but the consuming workload is in namespace \"${namespaceName}\". "
               + "Kubernetes does not allow cross-namespace ${kind} references — "
               + "create or mirror the ${kind} in \"${namespaceName}\" "
               + "(e.g. via scope.forNamespace \"${namespaceName}\"), "
-              + "or replicate it with an ExternalSecret / Reflector."
+              + "or replicate it with an ExternalSecret / Reflector "
+              + "(producers can opt in via `scope.mkSecretRef { reflect = true; }`)."
             else
               null;
 
@@ -1074,6 +1076,14 @@ rec {
           keys,
           type ? "Opaque",
           requires ? [ ],
+          reflect ? false,
+          # When `reflect = true`, the secret is expected to be mirrored
+          # cross-namespace by the emberstack reflector controller. Helpers
+          # produced from this ref get a `_kix.reflected = true` marker, which
+          # tells `checkNamespacedRefs` to permit consumption from any
+          # namespace. The producer is still responsible for ensuring the
+          # source secret carries reflector annotations (typically by
+          # emitting a one-shot annotator Job alongside this ref).
         }:
         let
           # Guard the shape of `keys`. Empty list is intentionally allowed:
@@ -1122,6 +1132,7 @@ rec {
               attachCtx
               ;
             namespace = namespaceName;
+            reflected = reflect;
           };
         in
         marker

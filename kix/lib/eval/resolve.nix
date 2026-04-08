@@ -371,7 +371,14 @@ rec {
   # Inverts "consumer X wants to inject config into dep Y" into
   # "target Y receives config injections from [X1, X2, ...]".
   #
-  # Returns { ns.inst = [ { config, source } ]; }
+  # An injection's `config` may be either a static attrset or a function
+  # `consumerConfig: { ... }`. Function-shaped injections are kept as-is
+  # here; cluster.nix resolves them lazily against the consumer's
+  # evaluated config when constructing the cluster fixpoint, so a
+  # consumer can forward parts of its own evaluated config into a dep
+  # (e.g. stackgres-database forwarding `extensions` into postgres).
+  #
+  # Returns { ns.inst = [ { config, source, consumerNs, consumerInst } ]; }
   buildConfigInjections =
     phase1Map:
     let
@@ -395,6 +402,8 @@ rec {
                   targetNs = target.namespace;
                   targetInst = target.instanceName;
                   config = depEnrichment.config;
+                  consumerNs = ns;
+                  consumerInst = inst;
                   source = "${ns}/${inst}";
                 }
               ]
@@ -414,7 +423,12 @@ rec {
         ${e.targetNs} = (acc.${e.targetNs} or { }) // {
           ${e.targetInst} = existing ++ [
             {
-              inherit (e) config source;
+              inherit (e)
+                config
+                source
+                consumerNs
+                consumerInst
+                ;
             }
           ];
         };

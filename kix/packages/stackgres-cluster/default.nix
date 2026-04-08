@@ -152,6 +152,10 @@ in
       config,
       storageClasses ? null,
       stackgresOperator, # runtime dep — ensures operator is deployed before clusters
+      reflector ? null, # optional — when present, the superuser secret is
+      # opted into cross-namespace propagation via emberstack/reflector and
+      # this package emits a one-shot annotator Job that adds the reflector
+      # annotations to the operator-managed source secret.
       ...
     }:
     let
@@ -253,12 +257,24 @@ in
       # StackGres auto-creates a secret named after the cluster holding
       # superuser/replication/authenticator credentials. Expose a ref so
       # consumers can pull `superuser-username` / `superuser-password`.
+      #
+      # `reflect` is wired from DI: when an emberstack/reflector instance is
+      # discovered in the cluster, helpers produced from this ref get a
+      # `_kix.reflected = true` marker and the cross-namespace check in
+      # `checkNamespacedRefs` is relaxed. Without reflector in the cluster,
+      # consumption stays strictly same-namespace and any cross-namespace
+      # consumer fails the build with the usual error. The annotator Job
+      # below is also gated on `reflectionEnabled`.
+      reflectionEnabled = reflector != null;
+
       superuserSecret = scope.mkSecretRef {
         inherit name;
         keys = [
           "superuser-username"
           "superuser-password"
         ];
+        reflect = reflectionEnabled;
+        requires = [ self.cluster ];
       };
 
     in
@@ -440,6 +456,141 @@ in
         };
       };
 
+      # ===== Reflector annotator (cross-namespace secret propagation) =====
+      #
+      # The StackGres operator creates `${name}` Secret in this namespace
+      # holding superuser/replication credentials. To make those credentials
+      # consumable from other namespaces (immich, vaultwarden, …) we use the
+      # emberstack/reflector controller, which copies a Secret into target
+      # namespaces when its source carries `reflector.v1.k8s.emberstack.com/*`
+      # annotations.
+      #
+      # We can't add those annotations declaratively because kix doesn't own
+      # the source manifest (the operator does). Instead we run a one-shot
+      # Job that waits for the secret to exist and then `kubectl annotate`s
+      # it. The Job has its own ServiceAccount + Role limited to
+      # patching this single secret.
+
+      reflectorAnnotatorSA =
+        if reflectionEnabled then
+          scope.mkResource {
+            apiVersion = "v1";
+            kind = "ServiceAccount";
+            name = "${name}-reflector-annotator";
+            labels = selectorLabels;
+          }
+        else
+          null;
+
+      reflectorAnnotatorRole =
+        if reflectionEnabled then
+          scope.mkResource {
+            apiVersion = "rbac.authorization.k8s.io/v1";
+            kind = "Role";
+            name = "${name}-reflector-annotator";
+            labels = selectorLabels;
+            extra.rules = [
+              {
+                apiGroups = [ "" ];
+                resources = [ "secrets" ];
+                resourceNames = [ name ];
+                verbs = [
+                  "get"
+                  "patch"
+                  "update"
+                ];
+              }
+            ];
+          }
+        else
+          null;
+
+      reflectorAnnotatorBinding =
+        if reflectionEnabled then
+          scope.mkResource {
+            apiVersion = "rbac.authorization.k8s.io/v1";
+            kind = "RoleBinding";
+            name = "${name}-reflector-annotator";
+            labels = selectorLabels;
+            extra = {
+              roleRef = {
+                apiGroup = "rbac.authorization.k8s.io";
+                kind = "Role";
+                name = self.reflectorAnnotatorRole.out.name;
+              };
+              subjects = [
+                {
+                  kind = "ServiceAccount";
+                  name = self.reflectorAnnotatorSA.out.name;
+                  namespace = scope.namespaceName;
+                }
+              ];
+            };
+          }
+        else
+          null;
+
+      reflectorAnnotatorJob =
+        if reflectionEnabled then
+          scope.mkResource {
+            apiVersion = "batch/v1";
+            kind = "Job";
+            name = "${name}-reflector-annotator";
+            labels = selectorLabels;
+            annotations = {
+              # Re-run on every apply so the annotation is reapplied if the
+              # operator ever recreates the secret.
+              "kix.dev/hook" = "post-deploy";
+              "kix.dev/hook-delete-policy" = "before-hook-creation,hook-succeeded";
+            };
+            spec = {
+              backoffLimit = 20;
+              ttlSecondsAfterFinished = 600;
+              template = {
+                metadata.labels = selectorLabels;
+                spec = {
+                  restartPolicy = "OnFailure";
+                  serviceAccountName = self.reflectorAnnotatorSA.out.name;
+                  containers = [
+                    {
+                      name = "annotate";
+                      # Bitnami sunset their free Docker Hub repos in Aug 2025
+                      # (`bitnami/kubectl` is gone). `bitnamilegacy/*` is the
+                      # frozen snapshot they pushed for migration; fine for a
+                      # one-shot annotator that just needs `kubectl annotate`.
+                      image = "bitnamilegacy/kubectl:1.30";
+                      command = [
+                        "/bin/sh"
+                        "-c"
+                      ];
+                      args = [
+                        ''
+                          set -e
+                          echo "waiting for secret ${name} in namespace ${scope.namespaceName}..."
+                          for i in $(seq 1 120); do
+                            if kubectl get secret ${name} -n ${scope.namespaceName} >/dev/null 2>&1; then
+                              break
+                            fi
+                            sleep 5
+                          done
+                          kubectl get secret ${name} -n ${scope.namespaceName} >/dev/null
+                          kubectl annotate secret ${name} -n ${scope.namespaceName} --overwrite \
+                            reflector.v1.k8s.emberstack.com/reflection-allowed=true \
+                            reflector.v1.k8s.emberstack.com/reflection-allowed-namespaces='.*' \
+                            reflector.v1.k8s.emberstack.com/reflection-auto-enabled=true \
+                            reflector.v1.k8s.emberstack.com/reflection-auto-namespaces='.*'
+                          echo "annotated."
+                        ''
+                      ];
+                    }
+                  ];
+                };
+              };
+            };
+          }
+        else
+          null;
+
       # ===== Entry point =====
 
       root = {
@@ -447,6 +598,12 @@ in
         requires = [
           self.instanceProfile
           self.pgConfig
+        ]
+        ++ lib.optionals reflectionEnabled [
+          self.reflectorAnnotatorSA
+          self.reflectorAnnotatorRole
+          self.reflectorAnnotatorBinding
+          self.reflectorAnnotatorJob
         ]
         ++ lib.optional config.backup.enabled self.objectStorage
         ++ lib.optional config.pooling.enabled self.poolingConfig

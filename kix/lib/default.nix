@@ -190,7 +190,22 @@ in
         lib.mapAttrsToList (
           ns: nsManifests:
           let
-            yamls = map mkYaml nsManifests;
+            # Dedupe by (kind, name) within a namespace. Some packages expose
+            # the same resource under multiple build-output attribute names
+            # (e.g. valkey's `authSecret` is an alias of `secret`), and the
+            # collectTypedAttrs walker gathers each occurrence — without this
+            # dedup the second `cp` fails with "Permission denied" on the
+            # already-written file.
+            uniqueManifests = builtins.attrValues (
+              lib.foldl' (
+                acc: m:
+                let
+                  key = "${m.kind or "unknown"}/${m.metadata.name or "unnamed"}";
+                in
+                if acc ? ${key} then acc else acc // { ${key} = m; }
+              ) { } nsManifests
+            );
+            yamls = map mkYaml uniqueManifests;
             copies = lib.concatMapStringsSep "\n" (y: "  cp ${y.drv} $out/${ns}/${y.filename}") yamls;
           in
           ''
