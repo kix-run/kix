@@ -319,14 +319,41 @@ creds = scope.mkSecret {
 
 #### `scope.mkSecretRef` — externally-managed secret
 
-References a secret that exists outside kix (Vault, ESO, cert-manager, bootstrap). No manifest produced — store path for dependency tracking only.
+References a secret that exists outside kix (Vault, ESO, cert-manager, operator-provisioned). Emits a `PackageInstance` import marker with `kix.dev/mode=import` that the deploy CLI polls before running the wave that depends on it — if the Secret is missing or the declared keys aren't populated, the wave fails fast.
 
 ```nix
 appSecret = scope.mkSecretRef {
   name = "my-app-secret";
-  keys = [ "API_KEY" "DB_URL" ];  # for build-time validation
+  keys = [ "API_KEY" "DB_URL" ];  # for build-time validation AND presence check at deploy time
 };
 ```
+
+**Gotcha 1 — the marker must be in the returned attrset, not just `let`.** Package build functions only emit resources that `collectTypedAttrs` finds in the returned attrset. A `mkSecretRef` stashed in a `let` binding (even if exposed via `root.out` for consumers) will *not* produce a manifest — consumers will get a dangling `kix.dev/depends-on` hash and the deploy will never actually verify the Secret. Always `inherit` the ref in the return attrset:
+
+```nix
+let
+  superuserSecret = scope.mkSecretRef { ... };
+in {
+  inherit superuserSecret;   # ← required, otherwise no marker manifest
+  # ...
+  root = {
+    resource = self.cluster;
+    out.superuserSecret = superuserSecret;
+  };
+}
+```
+
+**Gotcha 2 — wave ordering for operator-provisioned secrets.** If the Secret is created by an operator *after* some CR is applied (e.g. StackGres auto-creates `Secret/<cluster-name>` when it reconciles an `SGCluster`), the marker needs an explicit `requires` edge to that CR. Otherwise the marker lands in wave 0, the readiness poll starts before the operator has had a chance to materialize the Secret, and the deploy times out with `import target Secret/<name> not found on cluster`.
+
+```nix
+superuserRef = backendScope.mkSecretRef {
+  name = builtins.unsafeDiscardStringContext clusterName;  # strips context
+  keys = [ "superuser-username" "superuser-password" ];
+  requires = [ postgres.raw.cluster ];  # ← re-establish the dep edge
+};
+```
+
+`requires` is also the right place to re-add a dep edge when you had to `unsafeDiscardStringContext` a name (because `mkSecretRef`'s `name` flows through `builtins.toFile`, which forbids store-path context). Context-based dep tracking and `requires` are two paths into the same wave graph — use `requires` whenever the context path is unavailable.
 
 #### Secret `out` API (same for both)
 

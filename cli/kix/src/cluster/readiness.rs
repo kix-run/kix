@@ -374,10 +374,7 @@ pub fn classify_pod_terminal(pod: &Value) -> Option<(TerminalReason, String)> {
 
     // Check both init and regular container statuses. InitContainer failures
     // are common for things like "wait-for-db" containers with a bad image.
-    let slots = [
-        "/status/initContainerStatuses",
-        "/status/containerStatuses",
-    ];
+    let slots = ["/status/initContainerStatuses", "/status/containerStatuses"];
     for slot in slots {
         let Some(statuses) = pod.pointer(slot).and_then(Value::as_array) else {
             continue;
@@ -394,25 +391,20 @@ pub fn classify_pod_terminal(pod: &Value) -> Option<(TerminalReason, String)> {
                 .unwrap_or("");
 
             match waiting_reason {
-                "ImagePullBackOff" | "ErrImagePull" | "InvalidImageName"
-                | "ImageInspectError" => {
+                "ImagePullBackOff" | "ErrImagePull" | "InvalidImageName" | "ImageInspectError" => {
                     return Some((
                         TerminalReason::ImagePull,
                         format!("pod {pod_name}/{container}: {waiting_reason}: {waiting_msg}"),
                     ));
                 }
-                "CreateContainerConfigError" | "CreateContainerError"
-                | "RunContainerError" => {
+                "CreateContainerConfigError" | "CreateContainerError" | "RunContainerError" => {
                     return Some((
                         TerminalReason::ContainerConfig,
                         format!("pod {pod_name}/{container}: {waiting_reason}: {waiting_msg}"),
                     ));
                 }
                 "CrashLoopBackOff" => {
-                    let restarts = cs
-                        .get("restartCount")
-                        .and_then(Value::as_i64)
-                        .unwrap_or(0);
+                    let restarts = cs.get("restartCount").and_then(Value::as_i64).unwrap_or(0);
                     if restarts >= CRASHLOOP_RESTART_THRESHOLD {
                         // The last-termination reason is usually the real
                         // story ("Error", "OOMKilled", "StartError").
@@ -446,14 +438,13 @@ pub fn classify_pod_terminal(pod: &Value) -> Option<(TerminalReason, String)> {
 
 /// Classify workload-level terminal failures that don't require pod inspection.
 /// Currently covers Deployment progress deadline and Job backoff limit.
-pub fn classify_workload_terminal(
-    obj: &Value,
-    kind: &str,
-) -> Option<(TerminalReason, String)> {
+pub fn classify_workload_terminal(obj: &Value, kind: &str) -> Option<(TerminalReason, String)> {
     match kind {
         "Deployment" => {
             // conditions[?(@.type=='Progressing' && @.status=='False' && @.reason=='ProgressDeadlineExceeded')]
-            let conditions = obj.pointer("/status/conditions").and_then(Value::as_array)?;
+            let conditions = obj
+                .pointer("/status/conditions")
+                .and_then(Value::as_array)?;
             for c in conditions {
                 let ctype = c.get("type").and_then(Value::as_str).unwrap_or("");
                 let status = c.get("status").and_then(Value::as_str).unwrap_or("");
@@ -577,12 +568,7 @@ struct ScanResult {
 /// pod-level signals for pod-backed kinds. Returns on the first hit (in
 /// `terminal`) but always returns the fetched pods so the caller can reuse
 /// them for progress fingerprinting.
-async fn scan_terminal(
-    client: &Client,
-    obj: &Value,
-    kind: &str,
-    namespace: &str,
-) -> ScanResult {
+async fn scan_terminal(client: &Client, obj: &Value, kind: &str, namespace: &str) -> ScanResult {
     if let Some(hit) = classify_workload_terminal(obj, kind) {
         return ScanResult {
             terminal: Some(hit),
@@ -644,19 +630,12 @@ fn progress_fingerprint(obj: &DynamicObject, kind: &str, pods: &[Value]) -> Stri
                 .unwrap_or("?");
             *phases.entry(phase).or_insert(0) += 1;
 
-            for slot in [
-                "/status/initContainerStatuses",
-                "/status/containerStatuses",
-            ] {
+            for slot in ["/status/initContainerStatuses", "/status/containerStatuses"] {
                 if let Some(arr) = p.pointer(slot).and_then(Value::as_array) {
                     for cs in arr {
-                        total_restarts += cs
-                            .get("restartCount")
-                            .and_then(Value::as_i64)
-                            .unwrap_or(0);
-                        if let Some(r) = cs
-                            .pointer("/state/waiting/reason")
-                            .and_then(Value::as_str)
+                        total_restarts +=
+                            cs.get("restartCount").and_then(Value::as_i64).unwrap_or(0);
+                        if let Some(r) = cs.pointer("/state/waiting/reason").and_then(Value::as_str)
                         {
                             waiting_reasons.insert(r);
                         }
@@ -1561,7 +1540,10 @@ mod tests {
         }));
         let fp1 = progress_fingerprint(&before, "Deployment", &[]);
         let fp2 = progress_fingerprint(&after, "Deployment", &[]);
-        assert_ne!(fp1, fp2, "ready/updated count changes must register as progress");
+        assert_ne!(
+            fp1, fp2,
+            "ready/updated count changes must register as progress"
+        );
     }
 
     #[test]
@@ -1603,7 +1585,10 @@ mod tests {
         })];
         let fp1 = progress_fingerprint(&obj, "Deployment", &pods_pending);
         let fp2 = progress_fingerprint(&obj, "Deployment", &pods_running);
-        assert_ne!(fp1, fp2, "Pending→Running pod transition must register as progress");
+        assert_ne!(
+            fp1, fp2,
+            "Pending→Running pod transition must register as progress"
+        );
     }
 
     #[test]

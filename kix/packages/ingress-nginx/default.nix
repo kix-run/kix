@@ -799,10 +799,30 @@ in
       };
 
       # --- Entry point ---
+      #
+      # root.resource is the Deployment, not the Service, even though the
+      # Service is the user-facing handle. Why: this package is wired
+      # "inverse" — the Deployment requires the Service (the controller's
+      # --publish-service flag fatally exits if the Service doesn't exist
+      # at startup), so the Service is upstream of the Deployment in the
+      # forward closure. If root were the Service, the PackageInstance's
+      # "main" resource would be Ready before the actual controller pod.
+      #
+      # ingressClassName carries the Deployment's store-path context in
+      # addition to the IngressClass's. Consumer dep edges flow through
+      # manifest string-context (see kix/lib/k8s.nix:271), so any package
+      # that references `ingressNginx.out.ingressClassName` (notably
+      # kix.expose) gets a direct depends-on edge to the controller pod —
+      # not just to the IngressClass. Without this, the consumer's Ingress
+      # only edges to the IngressClass (wave 0) and lands in the same
+      # wave as the Service, racing the controller and failing admission
+      # until the controller catches up.
       root = {
-        resource = self.service;
+        resource = self.deployment;
         out = {
-          ingressClassName = self.ingressClass.out.name;
+          ingressClassName = builtins.appendContext self.ingressClass.out.name (
+            builtins.getContext self.deployment.out.name
+          );
         };
       };
     }

@@ -293,6 +293,12 @@ in
     in
     {
 
+      # Exposed in the return attrset (not just the let binding) so
+      # `collectTypedAttrs` emits the import marker as a real manifest.
+      # Without this, consumers that reference `postgres.out.superuserSecret`
+      # would get a context edge to a marker that never lands on the cluster.
+      inherit superuserSecret;
+
       # ===== SGInstanceProfile (CPU/memory sizing) =====
 
       instanceProfile = scope.mkCR sgCrds.sgInstanceProfile {

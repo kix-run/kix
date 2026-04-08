@@ -280,14 +280,17 @@ in
       #
       # `name` here flows through `builtins.toFile` (via the marker
       # PackageInstance path), so we have to hand it a context-free string.
-      # The dep edge to the SGCluster store path is preserved everywhere
-      # else `clusterName` is used (labels, env values, etc.).
+      # Stripping the context drops the implicit dep edge to the SGCluster,
+      # so we re-establish it explicitly via `requires` — otherwise the
+      # import marker lands in wave 0 and the readiness poll times out
+      # because the operator hasn't had a chance to materialize the Secret.
       superuserRef = backendScope.mkSecretRef {
         name = builtins.unsafeDiscardStringContext clusterName;
         keys = [
           "superuser-username"
           "superuser-password"
         ];
+        requires = [ postgres.raw.cluster ];
       };
 
       # --- 4. Bootstrap Job (postgres namespace) ---------------------------
@@ -429,6 +432,7 @@ in
         credentials
         bootstrapPassword
         bootstrapJob
+        superuserRef
         ;
 
       root = {
