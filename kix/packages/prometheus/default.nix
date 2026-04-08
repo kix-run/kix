@@ -32,6 +32,9 @@ in
       "promServer"
     ];
     k8s.minVersion = "1.25";
+    # Historical metrics are expendable — fresh start is acceptable on
+    # storage backend swaps. See v2_discussions/67_stateful_migration_orchestration.md.
+    lifecycle = "ephemeral";
   };
 
   options = {

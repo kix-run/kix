@@ -368,6 +368,54 @@ pub async fn reconcile(
             })
             .collect();
 
+        // Jobs have immutable spec fields (e.g. selector, template), so SSA
+        // cannot update an existing Job. Delete any pre-existing Job with the
+        // same name (foreground propagation to clean up pods) before apply.
+        for action in &hydrated_actions {
+            if let ChangeAction::Apply(manifest) = action {
+                let rid = ResourceId::from_value(manifest);
+                if rid.kind != "Job" {
+                    continue;
+                }
+                let Some((ar, scope)) = discovery.iter().find(|(ar, _)| ar.kind == "Job") else {
+                    continue;
+                };
+                let api: Api<DynamicObject> = match scope {
+                    Scope::Namespaced => {
+                        let ns = if rid.namespace == CLUSTER_SCOPED {
+                            "default"
+                        } else {
+                            &rid.namespace
+                        };
+                        Api::namespaced_with(client.clone(), ns, ar)
+                    }
+                    Scope::Cluster => Api::all_with(client.clone(), ar),
+                };
+                if api.get_opt(&rid.name).await.ok().flatten().is_some() {
+                    let dp = kube::api::DeleteParams {
+                        propagation_policy: Some(kube::api::PropagationPolicy::Foreground),
+                        ..Default::default()
+                    };
+                    match api.delete(&rid.name, &dp).await {
+                        Ok(_) => {
+                            // Wait for deletion to complete so the subsequent
+                            // apply creates a fresh Job rather than colliding.
+                            let deadline = std::time::Instant::now() + config.timeout;
+                            while std::time::Instant::now() < deadline {
+                                if api.get_opt(&rid.name).await.ok().flatten().is_none() {
+                                    break;
+                                }
+                                tokio::time::sleep(Duration::from_millis(500)).await;
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!("failed to delete existing Job {rid}: {e}");
+                        }
+                    }
+                }
+            }
+        }
+
         let results = apply::apply_wave(
             client,
             discovery,

@@ -6,6 +6,7 @@ use miette::{IntoDiagnostic, Result, miette};
 use serde_json::Value;
 
 use kix::cluster::fetch;
+use kix::cluster::migrate::{MigrationPair, detect_migration_pairs};
 use kix::eval::build_cluster_activation_with_status;
 use kix::eval::store_graph::StoreGraph;
 use kix::manifest::diff::display::format_diffs;
@@ -27,6 +28,8 @@ struct DiffResult {
     packages: PackageDiff,
     /// Flat resource list for non-graph old sides (live cluster / snapshot).
     legacy_resource_diff: Option<LegacyResourceDiff>,
+    /// Detected stateful migration pairs (doc 67). Phase 1: informational only.
+    migration_pairs: Vec<MigrationPair>,
 }
 
 /// Fallback for live-cluster or snapshot diffs where we don't have a store graph
@@ -129,9 +132,13 @@ fn set_spinner(spinner: &Option<indicatif::ProgressBar>, msg: &str) {
 // ── Build-to-build diff (both sides are store graphs) ────────────────
 
 fn diff_graphs(old: &StoreGraph, new: &StoreGraph) -> DiffResult {
+    let new_manifests: Vec<Value> = new.resources.values().map(|n| n.manifest.clone()).collect();
+    let old_manifests: Vec<Value> = old.resources.values().map(|n| n.manifest.clone()).collect();
+    let migration_pairs = detect_migration_pairs(&new_manifests, &old_manifests);
     DiffResult {
         packages: crate::plan::diff_graphs(old, new),
         legacy_resource_diff: None,
+        migration_pairs,
     }
 }
 
@@ -178,6 +185,18 @@ fn diff_graph_vs_flat(new_graph: &StoreGraph, old_manifests: &[(ResourceId, Valu
     // Build package summary from new graph (no old graph available)
     let pkg_count = new_graph.packages.len();
 
+    // Migration pair detection against the flat old side. Note: live-cluster
+    // manifests may not carry kix.dev/lifecycle if they pre-date the stamp
+    // (first deploy with this feature on). In that case no pairs fire — the
+    // detector is fail-closed.
+    let new_manifests: Vec<Value> = new_graph
+        .resources
+        .values()
+        .map(|n| n.manifest.clone())
+        .collect();
+    let old_manifests_vec: Vec<Value> = old_manifests.iter().map(|(_, v)| v.clone()).collect();
+    let migration_pairs = detect_migration_pairs(&new_manifests, &old_manifests_vec);
+
     DiffResult {
         packages: PackageDiff {
             added: Vec::new(),
@@ -191,6 +210,7 @@ fn diff_graph_vs_flat(new_graph: &StoreGraph, old_manifests: &[(ResourceId, Valu
             kix_only,
             cluster_only,
         }),
+        migration_pairs,
     }
 }
 
@@ -251,6 +271,9 @@ fn result_has_diff(result: &DiffResult) -> bool {
             || !legacy.kix_only.is_empty()
             || !legacy.cluster_only.is_empty())
     {
+        return true;
+    }
+    if !result.migration_pairs.is_empty() {
         return true;
     }
     false
@@ -436,54 +459,43 @@ fn print_text_output(result: &DiffResult, global: &crate::cli::GlobalArgs) {
         }
     }
 
-    // Stateful warnings
-    print_stateful_warnings(result);
+    // Stateful migration pairs (doc 67)
+    print_migration_pairs(&result.migration_pairs);
 
     if !result_has_diff(result) {
         println!("{}", output::green("No differences found."));
     }
 }
 
-fn print_stateful_warnings(result: &DiffResult) {
-    // Check changed packages for PVC changes
-    let mut pvc_modified = 0;
-    let mut pvc_added = 0;
-
-    for change in &result.packages.changed {
-        pvc_modified += change
-            .resource_diffs
-            .iter()
-            .filter(|(id, _)| id.kind == "PersistentVolumeClaim")
-            .count();
-        pvc_added += change
-            .added_resources
-            .iter()
-            .filter(|id| id.kind == "PersistentVolumeClaim")
-            .count();
+/// Render detected stateful migration pairs. Phase 1 is informational:
+/// we tell the user what kix *would* migrate — no execution. See doc 67 §9.
+fn print_migration_pairs(pairs: &[MigrationPair]) {
+    if pairs.is_empty() {
+        return;
     }
-
-    if let Some(ref legacy) = result.legacy_resource_diff {
-        pvc_modified += legacy
-            .modified
-            .iter()
-            .filter(|(id, _)| id.kind == "PersistentVolumeClaim")
-            .count();
-        pvc_added += legacy
-            .kix_only
-            .iter()
-            .filter(|id| id.kind == "PersistentVolumeClaim")
-            .count();
-    }
-
-    if pvc_modified > 0 || pvc_added > 0 {
+    println!(
+        "{}",
+        output::bold(&format!("Stateful migrations detected ({}):", pairs.len()))
+    );
+    for p in pairs {
+        println!("  {} {}", output::yellow("~"), output::yellow(&p.summary()));
         println!(
-            "{}",
-            output::yellow(&format!(
-                "WARNING: {pvc_modified} PVC(s) modified, {pvc_added} PVC(s) added — review carefully!"
-            ))
+            "      source: {}/{}/{}",
+            p.source.kind, p.source.namespace, p.source.name
         );
-        println!();
+        println!(
+            "      target: {}/{}/{}",
+            p.target.kind, p.target.namespace, p.target.name
+        );
     }
+    println!();
+    println!(
+        "{}",
+        output::yellow(
+            "Note: data migration is NOT yet automated. See v2_discussions/67_stateful_migration_orchestration.md."
+        )
+    );
+    println!();
 }
 
 // ── JSON output ──────────────────────────────────────────────────────
@@ -512,6 +524,23 @@ fn print_json_output(result: &DiffResult, as_yaml: bool) -> Result<()> {
             "unchanged": pkg.unchanged,
         },
     });
+
+    if !result.migration_pairs.is_empty() {
+        output["migration_pairs"] = serde_json::Value::Array(
+            result
+                .migration_pairs
+                .iter()
+                .map(|p| {
+                    serde_json::json!({
+                        "slot": p.slot,
+                        "source": p.source.display_id(),
+                        "target": p.target.display_id(),
+                        "reason": p.reason,
+                    })
+                })
+                .collect(),
+        );
+    }
 
     if let Some(ref legacy) = result.legacy_resource_diff {
         output["resources"] = serde_json::json!({

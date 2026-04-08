@@ -38,7 +38,7 @@ in
       "media-server"
     ];
     compatibleWith.database = {
-      reason = "immich requires the pgvecto.rs / vector extension on its postgres backend";
+      reason = "immich requires the VectorChord (vchord) extension plus uuid-ossp, cube, earthdistance, unaccent, pg_trgm on its postgres backend";
     };
   };
 
@@ -52,22 +52,30 @@ in
     # configured database + cluster with no cluster-side wiring.
     database.config = {
       # Immich's InitialMigration creates these extensions on first boot:
-      #   - vector       : pgvecto.rs / pgvector — image similarity embeddings
+      #   - vchord       : VectorChord — image similarity embeddings
+      #                    (upstream Immich's current default; picked by
+      #                    getVectorExtension() in preference to `vectors`
+      #                    and legacy `vector` / pgvector)
       #   - uuid-ossp    : UUID generation for primary keys
       #   - cube         : required by earthdistance (GPS coordinates)
       #   - earthdistance: geo distance queries for the map view
       #   - unaccent     : accent-insensitive search on metadata
+      #   - pg_trgm      : trigram similarity search on text fields
+      # Source of truth: Immich's InitialMigration
+      # (server/src/schema/migrations/1744910873969-InitialMigration.ts)
+      # runs CREATE EXTENSION for exactly this set.
       # Missing any of these fails InitialMigration with
       #   0A000 "extension <X> is not available".
       # StackGres ships a minimal postgres image; extensions must be
       # declared here so stackgres-database can forward them to the
       # cluster and the operator installs them on the image.
       extensions = [
-        "vector"
+        "vchord"
         "uuid-ossp"
         "cube"
         "earthdistance"
         "unaccent"
+        "pg_trgm"
       ];
     };
 
@@ -81,11 +89,12 @@ in
       let
         extensions = dep.out.extensions or null;
         required = [
-          "vector"
+          "vchord"
           "uuid-ossp"
           "cube"
           "earthdistance"
           "unaccent"
+          "pg_trgm"
         ];
         missing = lib.filter (e: !(builtins.elem e extensions)) required;
       in

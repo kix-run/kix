@@ -337,7 +337,7 @@ in
             echo "ensuring extensions on \"${dbName}\"..."
             psql -v ON_ERROR_STOP=1 -d "${dbName}" <<'SQL'
           ${lib.concatMapStringsSep "\n" (
-            ext: "CREATE EXTENSION IF NOT EXISTS \"${ext}\";"
+            ext: "CREATE EXTENSION IF NOT EXISTS \"${ext}\" CASCADE;"
           ) config.extensions}
           SQL
         ''}

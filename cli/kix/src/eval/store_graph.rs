@@ -51,6 +51,10 @@ pub struct PackageNode {
     pub namespace: String,
     /// From the PI manifest: spec.version
     pub version: Option<String>,
+    /// From the PI manifest: spec.lifecycle — "stateful" | "durable" |
+    /// "ephemeral" | None. Drives migration pair detection.
+    /// See v2_discussions/67_stateful_migration_orchestration.md.
+    pub lifecycle: Option<String>,
     /// Ordered list of owned resource store paths.
     pub resource_paths: Vec<PathBuf>,
     /// Cross-package dependency edges (computed from store refs).
@@ -260,6 +264,10 @@ impl StoreGraph {
                 .and_then(|v| v.as_str())
                 .filter(|v| *v != "<undefined>")
                 .map(|v| v.to_string());
+            let lifecycle = pi_manifest
+                .pointer("/spec/lifecycle")
+                .and_then(|v| v.as_str())
+                .map(|v| v.to_string());
 
             let mut valid_resource_paths = Vec::new();
             for res_path in resource_paths {
@@ -291,6 +299,7 @@ impl StoreGraph {
                     instance_name,
                     namespace,
                     version,
+                    lifecycle,
                     resource_paths: valid_resource_paths,
                     cross_deps: vec![],
                 },

@@ -26,6 +26,7 @@ use kix::cluster::activation;
 use kix::cluster::apply::{ApplyAction, ChangeAction};
 use kix::cluster::fetch;
 use kix::cluster::graph::ResourceGraph;
+use kix::cluster::migrate::{MigrationPair, detect_migration_pairs};
 use kix::cluster::readiness::{self, ImportTarget};
 use kix::cluster::reconcile::{
     OnErrorPolicy, PrunePolicy, ReconcileConfig, ReconcileEvent, ReconcileObserver, ReconcileResult,
@@ -107,6 +108,36 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
 
     // 4. Local DAG diff: old vs new
     let all_actions = kix::cluster::apply::detect_changes(&new_manifests, &old_manifests);
+
+    // Stateful migration pair detection (doc 67). Phase 1: detect + refuse
+    // to proceed without explicit --accept-migrations. No execution yet.
+    let migration_pairs = detect_migration_pairs(&new_manifests, &old_manifests);
+    if !migration_pairs.is_empty() {
+        print_migration_pairs(&migration_pairs);
+        if !args.accept_migrations {
+            eprintln!(
+                "{}",
+                output::red(
+                    "Refusing to deploy: stateful migration pairs detected but --accept-migrations was not passed."
+                )
+            );
+            eprintln!(
+                "{}",
+                output::yellow(
+                    "Data migration is NOT yet automated. Review the pairs above, handle the data out-of-band, then re-run with --accept-migrations."
+                )
+            );
+            std::process::exit(1);
+        }
+        if !ctx.global.quiet {
+            println!(
+                "{}",
+                output::yellow(
+                    "--accept-migrations set: proceeding with deploy. kix will NOT copy data; consumers on new backing will start empty."
+                )
+            );
+        }
+    }
 
     // --reconcile: force re-apply of all resources regardless of identity match
     let all_actions: Vec<ChangeAction> = if args.reconcile {
@@ -906,6 +937,27 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         let waves = compute_waves(&resource_graph);
         plan::print_wave_summary(&waves, &resource_graph);
         plan::print_plan_summary(&pkg_diff);
+
+        // Migration pair detection (doc 67) — same gate as direct mode.
+        // Operator-mode is non-interactive on the operator side, so the
+        // CLI must enforce the gate before handing off the Activation CR.
+        let old_manifests_for_pairs: Vec<Value> = old_graph
+            .as_ref()
+            .map(|g| g.resources.values().map(|r| r.manifest.clone()).collect())
+            .unwrap_or_default();
+        let migration_pairs = detect_migration_pairs(&new_manifests, &old_manifests_for_pairs);
+        if !migration_pairs.is_empty() {
+            print_migration_pairs(&migration_pairs);
+            if !args.accept_migrations {
+                eprintln!(
+                    "{}",
+                    output::red(
+                        "Refusing to delegate to operator: stateful migration pairs detected but --accept-migrations was not passed."
+                    )
+                );
+                std::process::exit(1);
+            }
+        }
     }
 
     if args.dry_run {
@@ -998,6 +1050,29 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Render detected stateful migration pairs to stdout. Phase 1 of doc 67:
+/// awareness only, the user must handle data movement out-of-band before
+/// re-running deploy with --accept-migrations.
+fn print_migration_pairs(pairs: &[MigrationPair]) {
+    println!();
+    println!(
+        "{}",
+        output::bold(&format!("Stateful migrations detected ({}):", pairs.len()))
+    );
+    for p in pairs {
+        println!("  {} {}", output::yellow("~"), output::yellow(&p.summary()));
+        println!(
+            "      source: {}/{}/{}",
+            p.source.kind, p.source.namespace, p.source.name
+        );
+        println!(
+            "      target: {}/{}/{}",
+            p.target.kind, p.target.namespace, p.target.name
+        );
+    }
+    println!();
 }
 
 #[cfg(test)]

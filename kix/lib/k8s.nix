@@ -509,6 +509,13 @@ rec {
       version ? null,
       labels ? { },
       extraAnnotations ? { },
+      # Package lifecycle classification. Drives migration pair detection —
+      # see v2_discussions/67_stateful_migration_orchestration.md. Accepted:
+      #   "stateful"  — user data, migrations required across backend changes
+      #   "durable"   — recoverable state, migration desirable but not critical
+      #   "ephemeral" — rebuildable (caches, metrics), never migrate
+      #   null        — unclassified (treated as ephemeral for pair detection)
+      lifecycle ? null,
     }:
     let
       resolvedVersion =
@@ -543,6 +550,9 @@ rec {
       extra.spec = {
         inherit instanceName namespaceName;
         version = resolvedVersion;
+      }
+      // lib.optionalAttrs (lifecycle != null) {
+        inherit lifecycle;
       };
     };
 

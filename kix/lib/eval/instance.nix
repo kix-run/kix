@@ -460,6 +460,7 @@ in
           mainResource = rootRes;
           inherit packageRequires postHooks;
           inverseDeps = inverseDeps ++ networkResult.policies;
+          lifecycle = packageMeta.lifecycle or null;
           version =
             let
               v = instCfg.version or null;

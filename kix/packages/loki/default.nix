@@ -28,6 +28,9 @@
   meta = {
     version = "6.24.0";
     description = "Loki — log aggregation system (single-binary, filesystem)";
+    # Logs are expendable — no migration pair on storage backend swaps.
+    # See v2_discussions/67_stateful_migration_orchestration.md.
+    lifecycle = "ephemeral";
   };
 
   chart = {

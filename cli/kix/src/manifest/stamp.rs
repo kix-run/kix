@@ -4,6 +4,8 @@
 //! - `kix.dev/identity-hash` — the 32-char Nix store hash of the resource
 //! - `kix.dev/package` — owning package instance name
 //! - `kix.dev/package-namespace` — namespace of the owning package
+//! - `kix.dev/lifecycle` — "stateful" | "durable" | "ephemeral" (from package meta);
+//!   drives migration pair detection (doc 67)
 //! - `kix.dev/activations` — comma-separated activation identity-hashes (set during apply)
 //!
 //! Note: `kix.dev/depends-on` is stamped at resource creation time in Nix (lib/k8s.nix).
@@ -18,6 +20,7 @@ struct StampEntry {
     identity_hash: String,
     package: String,
     package_namespace: String,
+    lifecycle: Option<String>,
 }
 
 /// Stamp kix.dev annotations onto every resource manifest in the graph.
@@ -35,6 +38,7 @@ pub fn stamp_annotations(graph: &mut StoreGraph) {
                 identity_hash: store_hash(res_path),
                 package: pkg.instance_name.clone(),
                 package_namespace: pkg.namespace.clone(),
+                lifecycle: pkg.lifecycle.clone(),
             });
         }
     }
@@ -54,6 +58,7 @@ pub fn stamp_annotations(graph: &mut StoreGraph) {
                 identity_hash: store_hash(&res_path),
                 package: "_cluster".to_string(),
                 package_namespace: "_cluster".to_string(),
+                lifecycle: None,
                 res_path,
             });
         }
@@ -113,6 +118,12 @@ pub fn stamp_annotations(graph: &mut StoreGraph) {
             "kix.dev/package-namespace".to_string(),
             serde_json::Value::String(entry.package_namespace),
         );
+        if let Some(lc) = entry.lifecycle {
+            new_anns.insert(
+                "kix.dev/lifecycle".to_string(),
+                serde_json::Value::String(lc),
+            );
+        }
 
         if let Some(anns) = res
             .manifest

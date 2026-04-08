@@ -187,6 +187,13 @@ pub struct DeployArgs {
     /// Useful when migrating resources from kubectl/helm to kix for the first time.
     #[arg(long)]
     pub force_conflicts: bool,
+
+    /// Acknowledge detected stateful migration pairs and proceed. Without
+    /// this flag, a deploy that would remove + add stateful resources in
+    /// the same logical slot is rejected (even with --yes) to prevent
+    /// silent data loss. See v2_discussions/67_stateful_migration_orchestration.md.
+    #[arg(long)]
+    pub accept_migrations: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]

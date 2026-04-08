@@ -178,6 +178,8 @@ in
       # effective_cache_size: ~75% of instance memory.
       effectiveCacheSize = "${toString (memoryMB * 3 / 4)}MB";
 
+      hasVchord = lib.any (e: e.name == "vchord") config.extensions;
+
       # Default postgresql.conf — sensible baseline for a managed PostgreSQL cluster.
       defaultPostgresqlConf = {
         max_connections = config.pgConfig.maxConnections;
@@ -224,7 +226,13 @@ in
         track_commit_timestamp = "on";
         track_functions = "pl";
         track_io_timing = "on";
-        shared_preload_libraries = "pg_stat_statements, auto_explain";
+        shared_preload_libraries = lib.concatStringsSep ", " (
+          [
+            "pg_stat_statements"
+            "auto_explain"
+          ]
+          ++ lib.optional hasVchord "vchord"
+        );
         "pg_stat_statements.track_utility" = "off";
         "timescaledb.license" = "timescale";
         jit_inline_above_cost = "-1";
@@ -397,7 +405,14 @@ in
             };
           }
           // lib.optionalAttrs (config.extensions != [ ]) {
-            extensions = config.extensions;
+            # add extensions and if vchord is in extensions, also add vector
+            extensions =
+              let
+                userExts = config.extensions;
+                hasVchord = lib.any (e: e.name == "vchord") userExts;
+                hasVector = lib.any (e: e.name == "vector") userExts;
+              in
+              if hasVchord && !hasVector then userExts ++ [ { name = "vector"; } ] else userExts;
           };
           sgInstanceProfile = self.instanceProfile.out.name;
           profile = config.profile;

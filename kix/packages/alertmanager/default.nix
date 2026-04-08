@@ -24,6 +24,9 @@ in
     provides = [ "alerting" ];
     defaultAliases = [ "alertmanager" ];
     k8s.minVersion = "1.25";
+    # Silences and notification state are recoverable — expendable on
+    # storage backend swaps. See v2_discussions/67_stateful_migration_orchestration.md.
+    lifecycle = "ephemeral";
   };
 
   options = {
