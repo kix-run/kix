@@ -83,6 +83,21 @@ impl ReconcileObserver for OperatorObserver {
                     "Resource apply failed"
                 );
             }
+            ReconcileEvent::ResourceRecreated { rid, reason } => {
+                tracing::warn!(
+                    activation = name,
+                    resource = %rid,
+                    reason = %reason,
+                    "Resource recreated in place due to immutable-field conflict"
+                );
+            }
+            ReconcileEvent::Cancelled { at } => {
+                tracing::warn!(
+                    activation = name,
+                    at = %at,
+                    "Reconcile cancelled"
+                );
+            }
             ReconcileEvent::ReadinessWaiting { rid, import_target } => {
                 tracing::debug!(
                     activation = name,

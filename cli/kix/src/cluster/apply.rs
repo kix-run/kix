@@ -62,6 +62,17 @@ pub enum ApplyError {
     },
 
     #[error(
+        "immutable-field conflict on {resource}: the live resource has one or more fields that cannot be updated in place. \
+         To recover, include this resource in the prune set so reconcile is authorized to delete + recreate it. \
+         Underlying error: {source}"
+    )]
+    ImmutableConflict {
+        resource: String,
+        #[source]
+        source: kube::Error,
+    },
+
+    #[error(
         "failed to update kix.dev/activations annotation on {resource} after {attempts} attempts: {source}"
     )]
     ActivationsAnnotationFailed {
@@ -441,21 +452,41 @@ where
 }
 
 /// Classify a permanent (post-retry) `kube::Error` from an SSA patch into the
-/// right `ApplyError` variant. 409 Conflict gets the dedicated `Conflict`
-/// variant; everything else falls through to `PatchFailed`.
+/// right `ApplyError` variant. 409 Conflict → `Conflict`. 422 Invalid with an
+/// immutable-field message → `ImmutableConflict`. Everything else falls
+/// through to `PatchFailed`.
 fn classify_apply_error(rid: &ResourceId, err: kube::Error) -> ApplyError {
-    if let kube::Error::Api(ref resp) = err
-        && resp.code == 409
-    {
-        return ApplyError::Conflict {
-            resource: rid.display_id(),
-            source: err,
-        };
+    if let kube::Error::Api(ref resp) = err {
+        if resp.code == 409 {
+            return ApplyError::Conflict {
+                resource: rid.display_id(),
+                source: err,
+            };
+        }
+        if resp.code == 422 && is_immutable_field_message(&resp.message) {
+            return ApplyError::ImmutableConflict {
+                resource: rid.display_id(),
+                source: err,
+            };
+        }
     }
     ApplyError::PatchFailed {
         resource: rid.display_id(),
         source: err,
     }
+}
+
+/// Detect the wire-format signatures the API server uses to reject updates to
+/// immutable spec fields. Kept as a substring match because the error bodies
+/// are free-form and vary per kind (Job uses "field is immutable", StatefulSet
+/// "updates to statefulset spec for fields other than", Service "field is
+/// immutable", etc).
+fn is_immutable_field_message(msg: &str) -> bool {
+    msg.contains("field is immutable")
+        || msg.contains("may not be changed")
+        || msg.contains("cannot be changed")
+        || msg.contains("updates to statefulset spec for fields other than")
+        || msg.contains("updates to daemonset spec for fields other than")
 }
 
 /// Classify a kube::Error as transient (worth retrying) vs permanent.
@@ -722,6 +753,23 @@ mod tests {
         let actions = detect_changes(&new, &old);
         assert_eq!(actions.len(), 2);
         assert!(actions.iter().all(|a| matches!(a, ChangeAction::Apply(_))));
+    }
+
+    #[test]
+    fn immutable_field_messages_detected() {
+        assert!(is_immutable_field_message(
+            "Job.batch \"x\" is invalid: spec.template: Invalid value: ...: field is immutable"
+        ));
+        assert!(is_immutable_field_message(
+            "Service \"x\" is invalid: spec.clusterIP: Invalid value: \"10.0.0.1\": field is immutable"
+        ));
+        assert!(is_immutable_field_message(
+            "StatefulSet.apps \"x\" is invalid: spec: Forbidden: updates to statefulset spec for fields other than 'replicas', 'ordinals'"
+        ));
+        assert!(!is_immutable_field_message(
+            "Deployment.apps \"x\" is invalid: spec.replicas: must be non-negative"
+        ));
+        assert!(!is_immutable_field_message("unrelated error"));
     }
 
     #[test]

@@ -19,6 +19,7 @@ use thiserror::Error;
 
 use super::activation::{self, WaveRecord, WaveStatus};
 use super::apply::{ApplyAction, ChangeAction};
+use super::cancel::CancelToken;
 use super::graph::ResourceGraph;
 use super::readiness::{self, ImportTarget, ReadinessResult};
 use super::secrets;
@@ -125,8 +126,19 @@ pub enum ReconcileEvent {
     SecretHydrated { rid: ResourceId, keys: usize },
     /// Secret hydration failed.
     SecretHydrationFailed { rid: ResourceId, error: String },
+    /// An apply hit an immutable-field conflict but the resource was in the
+    /// pre-authorized orphan set, so reconcile deleted the live copy and
+    /// re-applied it in place. Rendered as a distinct, destructive-but-ok
+    /// line in the CLI.
+    ResourceRecreated {
+        rid: ResourceId,
+        /// The immutable-field conflict message from the API server.
+        reason: String,
+    },
     /// Deploy stopped due to errors.
     Stopped { reason: String },
+    /// Deploy was cancelled externally (e.g. operator saw a newer Activation).
+    Cancelled { at: &'static str },
 }
 
 /// Observer for reconciliation progress.
@@ -174,6 +186,11 @@ pub struct ReconcileConfig {
     /// Take ownership of fields owned by other field managers (SSA force).
     /// Default false — conflicts surface as actionable errors instead of silent clobber.
     pub force_conflicts: bool,
+    /// Cancellation flag. The CLI passes a never-cancelled token; the
+    /// operator passes one that flips when a newer Activation supersedes
+    /// the in-flight deploy. Checked at wave boundaries and between
+    /// readiness polls.
+    pub cancel: CancelToken,
 }
 
 /// Summary of a reconcile run.
@@ -213,6 +230,9 @@ pub enum ReconcileError {
 
     #[error("activation lifecycle error: {0}")]
     ActivationError(String),
+
+    #[error("deploy cancelled")]
+    Cancelled { partial_result: ReconcileResult },
 }
 
 // ---------------------------------------------------------------------------
@@ -251,6 +271,15 @@ pub async fn reconcile(
 ) -> Result<ReconcileResult, ReconcileError> {
     let mut result = ReconcileResult::default();
 
+    // Pre-authorized delete set: the planner populates this with orphans that
+    // the deploy is allowed to remove. 422-immutable-conflict recovery during
+    // apply is gated on membership in this set — apply is NEVER allowed to
+    // delete a resource the caller didn't explicitly authorize. Recovered
+    // rids are removed from the prune set so prune doesn't delete them a
+    // second time after we re-created them in-place.
+    let orphan_set: HashSet<ResourceId> = orphan_rids.iter().cloned().collect();
+    let mut consumed_orphans: HashSet<ResourceId> = HashSet::new();
+
     // Find Activation ApiResource for status updates
     let activation_ar = activation::find_activation_ar(discovery).map(|(ar, _)| ar.clone());
 
@@ -277,6 +306,17 @@ pub async fn reconcile(
 
     // Apply waves
     for (wave_idx, actions) in wave_actions.iter().enumerate() {
+        // Cancellation point at each wave boundary. Between waves is the
+        // cheapest, cleanest place to bail — no half-applied wave state.
+        if config.cancel.is_cancelled() {
+            observer.on_event(&ReconcileEvent::Cancelled {
+                at: "wave-boundary",
+            });
+            return Err(ReconcileError::Cancelled {
+                partial_result: result,
+            });
+        }
+
         // Skip waves completed in a previous (crashed) deploy
         if wave_idx < resume_from {
             let count = actions.len();
@@ -364,55 +404,7 @@ pub async fn reconcile(
             }
         }
 
-        // Jobs have immutable spec fields (e.g. selector, template), so SSA
-        // cannot update an existing Job. Delete any pre-existing Job with the
-        // same name (foreground propagation to clean up pods) before apply.
-        for action in &hydrated_actions {
-            if let ChangeAction::Apply(manifest) = action {
-                let rid = ResourceId::from_value(manifest);
-                if rid.kind != "Job" {
-                    continue;
-                }
-                let Some((ar, scope)) = discovery.iter().find(|(ar, _)| ar.kind == "Job") else {
-                    continue;
-                };
-                let api: Api<DynamicObject> = match scope {
-                    Scope::Namespaced => {
-                        let ns = if rid.namespace == CLUSTER_SCOPED {
-                            "default"
-                        } else {
-                            &rid.namespace
-                        };
-                        Api::namespaced_with(client.clone(), ns, ar)
-                    }
-                    Scope::Cluster => Api::all_with(client.clone(), ar),
-                };
-                if api.get_opt(&rid.name).await.ok().flatten().is_some() {
-                    let dp = kube::api::DeleteParams {
-                        propagation_policy: Some(kube::api::PropagationPolicy::Foreground),
-                        ..Default::default()
-                    };
-                    match api.delete(&rid.name, &dp).await {
-                        Ok(_) => {
-                            // Wait for deletion to complete so the subsequent
-                            // apply creates a fresh Job rather than colliding.
-                            let deadline = std::time::Instant::now() + config.timeout;
-                            while std::time::Instant::now() < deadline {
-                                if api.get_opt(&rid.name).await.ok().flatten().is_none() {
-                                    break;
-                                }
-                                tokio::time::sleep(Duration::from_millis(500)).await;
-                            }
-                        }
-                        Err(e) => {
-                            tracing::warn!("failed to delete existing Job {rid}: {e}");
-                        }
-                    }
-                }
-            }
-        }
-
-        let results = apply::apply_wave(
+        let mut results = apply::apply_wave(
             client,
             discovery,
             &hydrated_actions,
@@ -421,6 +413,77 @@ pub async fn reconcile(
             config.force_conflicts,
         )
         .await;
+
+        // Immutable-conflict recovery.
+        //
+        // When SSA returns 422 "field is immutable" on a resource (Job spec
+        // change, StatefulSet selector change, Service clusterIP, etc.), we
+        // need to delete the live copy and re-create it. Apply is NOT
+        // generally allowed to delete — that's prune's job. We permit it
+        // here ONLY when the rid is in `orphan_set`, i.e. the caller has
+        // pre-authorized destruction of this resource as part of this
+        // deploy. Recovered rids are tracked in `consumed_orphans` so the
+        // prune phase doesn't delete them a second time.
+        //
+        // Collect candidate indices first so we don't borrow `results`
+        // immutably and mutably at once during the recovery loop.
+        let immutable_conflict_indices: Vec<usize> = results
+            .iter()
+            .enumerate()
+            .filter_map(|(i, (_, res))| {
+                matches!(res, Err(apply::ApplyError::ImmutableConflict { .. })).then_some(i)
+            })
+            .collect();
+        for i in immutable_conflict_indices {
+            let rid = results[i].0.clone();
+            if !orphan_set.contains(&rid) {
+                // Not pre-authorized. The actionable error message from
+                // ApplyError::ImmutableConflict will surface downstream,
+                // telling the user to add this rid to the prune set.
+                tracing::warn!(
+                    resource = %rid,
+                    "immutable-field conflict on resource NOT in orphan set; leaving as failed"
+                );
+                continue;
+            }
+            let reason = match &results[i].1 {
+                Err(apply::ApplyError::ImmutableConflict { source, .. }) => source.to_string(),
+                _ => String::new(),
+            };
+            let Some(manifest) = hydrated_actions.iter().find_map(|a| match a {
+                ChangeAction::Apply(m) if ResourceId::from_value(m) == rid => Some(m),
+                _ => None,
+            }) else {
+                continue;
+            };
+            match recreate_in_place(
+                client,
+                discovery,
+                &rid,
+                manifest,
+                config.force_conflicts,
+                activation_identity_hash,
+            )
+            .await
+            {
+                Ok(apply_result) => {
+                    consumed_orphans.insert(rid.clone());
+                    observer.on_event(&ReconcileEvent::ResourceRecreated {
+                        rid: rid.clone(),
+                        reason,
+                    });
+                    results[i] = (rid, Ok(apply_result));
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        resource = %rid,
+                        error = %e,
+                        "recreate-in-place failed; resource remains in ImmutableConflict state"
+                    );
+                    // Leave original error in results; downstream reports failed.
+                }
+            }
+        }
 
         // Index hydrated action manifests by ResourceId for import-target
         // lookup during event emission. We clone Values because the closure
@@ -505,6 +568,17 @@ pub async fn reconcile(
                 if let ChangeAction::Apply(manifest) = action {
                     let rid = ResourceId::from_value(manifest);
 
+                    // Cancellation point per resource — readiness waits can
+                    // be long-lived, so we need to interrupt between them.
+                    if config.cancel.is_cancelled() {
+                        observer.on_event(&ReconcileEvent::Cancelled {
+                            at: "readiness-loop",
+                        });
+                        return Err(ReconcileError::Cancelled {
+                            partial_result: result,
+                        });
+                    }
+
                     // Only check readiness for resources whose apply succeeded.
                     if !apply_outcomes.contains_key(&rid) {
                         continue;
@@ -539,8 +613,14 @@ pub async fn reconcile(
                         });
                     };
                     let readiness_outcome = if let Some(target) = &import_target {
-                        readiness::wait_for_import_target(client, target, config.timeout, on_status)
-                            .await
+                        readiness::wait_for_import_target(
+                            client,
+                            target,
+                            config.timeout,
+                            &config.cancel,
+                            on_status,
+                        )
+                        .await
                     } else {
                         let ar_scope = discovery.iter().find(|(ar, _)| ar.kind == rid.kind);
                         let Some((ar, scope)) = ar_scope else {
@@ -564,6 +644,7 @@ pub async fn reconcile(
                             ns,
                             &rid.kind,
                             config.timeout,
+                            &config.cancel,
                             on_status,
                         )
                         .await
@@ -574,6 +655,14 @@ pub async fn reconcile(
                             observer.on_event(&ReconcileEvent::ReadinessReady {
                                 rid: rid.clone(),
                                 import_target: import_target.clone(),
+                            });
+                        }
+                        Ok(ReadinessResult::Cancelled) => {
+                            observer.on_event(&ReconcileEvent::Cancelled {
+                                at: "readiness-poll",
+                            });
+                            return Err(ReconcileError::Cancelled {
+                                partial_result: result,
                             });
                         }
                         Ok(ReadinessResult::TimedOut { elapsed, message }) => {
@@ -682,9 +771,16 @@ pub async fn reconcile(
         }
     }
 
-    // Prune orphans (after all apply waves)
-    if !orphan_rids.is_empty() && config.prune != PrunePolicy::Skip {
-        let ordered_orphans = compute_prune_order(orphan_rids, old_manifests);
+    // Prune orphans (after all apply waves). Skip any rids that were already
+    // consumed by in-place recreate during apply — those live resources have
+    // been re-created and must not be deleted again.
+    let effective_orphans: Vec<ResourceId> = orphan_rids
+        .iter()
+        .filter(|rid| !consumed_orphans.contains(rid))
+        .cloned()
+        .collect();
+    if !effective_orphans.is_empty() && config.prune != PrunePolicy::Skip {
+        let ordered_orphans = compute_prune_order(&effective_orphans, old_manifests);
 
         observer.on_event(&ReconcileEvent::PruneStart {
             count: ordered_orphans.len(),
@@ -804,6 +900,87 @@ pub async fn reconcile(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Wall-clock bound for waiting on the live resource to disappear during
+/// an immutable-conflict recreate. Independent of the readiness timeout —
+/// deletion should be near-instant; anything longer usually means stuck
+/// finalizers, which we surface rather than mask.
+const RECREATE_DELETE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Kind-aware propagation policy for in-place recreate. Jobs foreground-delete
+/// so the old pods are gone before we re-apply (otherwise the new Job's
+/// controller collides with stale pods). StatefulSets orphan-delete so
+/// PVCs are retained across the recreate. Everything else uses Background,
+/// which is the kubectl default.
+fn delete_propagation_for(kind: &str) -> kube::api::PropagationPolicy {
+    match kind {
+        "Job" => kube::api::PropagationPolicy::Foreground,
+        "StatefulSet" => kube::api::PropagationPolicy::Orphan,
+        _ => kube::api::PropagationPolicy::Background,
+    }
+}
+
+/// Delete the live resource identified by `rid`, wait for it to disappear,
+/// then re-apply `manifest`. The caller must have already verified the rid
+/// is authorized for deletion (i.e. present in the orphan set).
+async fn recreate_in_place(
+    client: &Client,
+    discovery: &[(ApiResource, Scope)],
+    rid: &ResourceId,
+    manifest: &Value,
+    force_conflicts: bool,
+    activation_hash: Option<&str>,
+) -> Result<apply::ApplyResult, String> {
+    let Some((ar, scope)) = discovery.iter().find(|(ar, _)| ar.kind == rid.kind) else {
+        return Err(format!("kind {} not in discovery cache", rid.kind));
+    };
+    let api: Api<DynamicObject> = match scope {
+        Scope::Namespaced => {
+            let ns = if rid.namespace == CLUSTER_SCOPED {
+                "default"
+            } else {
+                &rid.namespace
+            };
+            Api::namespaced_with(client.clone(), ns, ar)
+        }
+        Scope::Cluster => Api::all_with(client.clone(), ar),
+    };
+
+    let dp = kube::api::DeleteParams {
+        propagation_policy: Some(delete_propagation_for(&rid.kind)),
+        ..Default::default()
+    };
+    api.delete(&rid.name, &dp)
+        .await
+        .map_err(|e| format!("delete failed: {e}"))?;
+
+    // Poll for deletion. Transient API errors treated as "probably gone"
+    // since the delete itself succeeded; any real problem will re-surface
+    // on the re-apply below.
+    let deadline = std::time::Instant::now() + RECREATE_DELETE_TIMEOUT;
+    while std::time::Instant::now() < deadline {
+        match api.get_opt(&rid.name).await {
+            Ok(None) => break,
+            Ok(Some(_)) => tokio::time::sleep(Duration::from_millis(500)).await,
+            Err(e) => {
+                tracing::debug!(resource = %rid, error = %e, "transient error polling deletion; assuming gone");
+                break;
+            }
+        }
+    }
+
+    apply::apply_resource(
+        client,
+        ar,
+        scope.clone(),
+        manifest,
+        false,
+        activation_hash,
+        force_conflicts,
+    )
+    .await
+    .map_err(|e| format!("re-apply failed: {e}"))
+}
 
 /// Move a resource that had a successful apply into the `failed` bucket after
 /// a readiness failure, so a single bad resource isn't counted as both

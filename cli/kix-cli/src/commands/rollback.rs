@@ -365,6 +365,7 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
         // surfaces, fail loudly so the operator can investigate rather than
         // silently overwrite whatever the cluster currently has.
         force_conflicts: false,
+        cancel: kix::cluster::cancel::CancelToken::new(),
     };
 
     let observer = CliObserver {
@@ -721,6 +722,18 @@ impl ReconcileObserver for CliObserver {
             }
             ReconcileEvent::ResourceFailed { rid, error } => {
                 eprintln!("  {} {} {}", output::red("!"), rid, output::red(error));
+            }
+            ReconcileEvent::ResourceRecreated { rid, reason } => {
+                println!(
+                    "  {} {} {} {}",
+                    output::yellow("↻"),
+                    rid,
+                    output::yellow("recreated (immutable-field conflict)"),
+                    output::dim(reason),
+                );
+            }
+            ReconcileEvent::Cancelled { at } => {
+                eprintln!("\n{} rollback cancelled at {}", output::red("✗"), at);
             }
             ReconcileEvent::ReadinessWaiting { rid, import_target } => {
                 if !self.quiet {

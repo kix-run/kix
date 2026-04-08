@@ -562,6 +562,18 @@ impl ReconcileObserver for CliObserver {
             ReconcileEvent::ResourceFailed { rid, error } => {
                 eprintln!("  {} {} {}", output::red("!"), rid, output::red(error),);
             }
+            ReconcileEvent::ResourceRecreated { rid, reason } => {
+                println!(
+                    "  {} {} {} {}",
+                    output::yellow("↻"),
+                    rid,
+                    output::yellow("recreated (immutable-field conflict)"),
+                    output::dim(reason),
+                );
+            }
+            ReconcileEvent::Cancelled { at } => {
+                eprintln!("\n{} deploy cancelled at {}", output::red("✗"), at);
+            }
             ReconcileEvent::ReadinessWaiting { rid, import_target } => {
                 if !self.quiet {
                     let label = readiness_label(rid, import_target.as_ref());
@@ -739,6 +751,7 @@ async fn run_deploy_async(
         on_error,
         prune: prune_policy,
         force_conflicts: args.force_conflicts,
+        cancel: kix::cluster::cancel::CancelToken::new(),
     };
 
     let observer = CliObserver {

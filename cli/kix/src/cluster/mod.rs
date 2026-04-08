@@ -2,6 +2,7 @@
 
 pub mod activation;
 pub mod apply;
+pub mod cancel;
 pub mod fetch;
 pub mod graph;
 pub mod migrate;

@@ -18,6 +18,8 @@ use kube::{
 use serde_json::Value;
 use thiserror::Error;
 
+use super::cancel::CancelToken;
+
 /// A resource described by an import marker. The CLI polls the cluster for
 /// this resource and blocks the wave until it's present (and, for CRDs, also
 /// `Established=True`; for Secrets with `expected_keys`, also verifies every
@@ -128,6 +130,7 @@ pub async fn wait_for_import_target(
     client: &Client,
     target: &ImportTarget,
     timeout: Duration,
+    cancel: &CancelToken,
     on_status: impl Fn(&str),
 ) -> Result<ReadinessResult, ReadinessError> {
     // Build an ApiResource for the target. CRDs are handled specially so we
@@ -180,6 +183,9 @@ pub async fn wait_for_import_target(
 
     let start = Instant::now();
     loop {
+        if cancel.is_cancelled() {
+            return Ok(ReadinessResult::Cancelled);
+        }
         let status_msg: String = match api.get_opt(&target.name).await {
             Ok(Some(obj)) => {
                 // For CRDs, also wait for Established=True so the kind is
@@ -299,6 +305,40 @@ pub enum ReadinessError {
     MalformedImportTarget(String),
 }
 
+/// Number of container restarts required before CrashLoopBackOff is treated
+/// as terminal. Allows a couple of flapping-startup cycles (InitContainer
+/// ordering, DB migrations waiting for a sidecar, etc.) before we give up.
+const CRASHLOOP_RESTART_THRESHOLD: i64 = 3;
+
+/// Classification of a terminal workload failure. Bubbles up from the per-pod
+/// and per-workload classifiers in [`classify_terminal_failure`] so callers
+/// can render the machine-readable reason distinctly from the free-form message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TerminalReason {
+    /// Container image pull failed (ImagePullBackOff, ErrImagePull, InvalidImageName).
+    ImagePull,
+    /// Container config invalid (CreateContainerConfigError, CreateContainerError).
+    ContainerConfig,
+    /// CrashLoopBackOff past the restart threshold.
+    CrashLoop,
+    /// Deployment rollout exceeded spec.progressDeadlineSeconds.
+    ProgressDeadline,
+    /// Job exceeded spec.backoffLimit.
+    JobBackoffExceeded,
+}
+
+impl TerminalReason {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TerminalReason::ImagePull => "ImagePullBackOff",
+            TerminalReason::ContainerConfig => "CreateContainerConfigError",
+            TerminalReason::CrashLoop => "CrashLoopBackOff",
+            TerminalReason::ProgressDeadline => "ProgressDeadlineExceeded",
+            TerminalReason::JobBackoffExceeded => "JobBackoffExceeded",
+        }
+    }
+}
+
 /// Result of a readiness check.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReadinessResult {
@@ -306,6 +346,10 @@ pub enum ReadinessResult {
     Ready,
     /// Timed out waiting for readiness.
     TimedOut { elapsed: Duration, message: String },
+    /// The poll loop observed a cancellation request and bailed before
+    /// reaching a definitive state. Caller should propagate cancellation
+    /// rather than treating this as a failure.
+    Cancelled,
     /// Resource entered a terminal failure state.
     Failed(String),
     /// An import target exists on the cluster but does not match the shape
@@ -317,11 +361,356 @@ pub enum ReadinessResult {
     },
 }
 
-/// Wait for a resource to become ready, polling until timeout.
+/// Scan a single pod's containerStatuses for a terminal failure reason.
+/// Returns the first terminal signal found and a human-readable message.
 ///
-/// Checks readiness immediately, then polls every 2 seconds.
-/// Returns `Ready` as soon as the condition is met, or `TimedOut`
-/// if the timeout elapses.
+/// Kept pure and test-driven so the noisy-event classification logic is
+/// independent of the cluster poll loop.
+pub fn classify_pod_terminal(pod: &Value) -> Option<(TerminalReason, String)> {
+    let pod_name = pod
+        .pointer("/metadata/name")
+        .and_then(Value::as_str)
+        .unwrap_or("?");
+
+    // Check both init and regular container statuses. InitContainer failures
+    // are common for things like "wait-for-db" containers with a bad image.
+    let slots = [
+        "/status/initContainerStatuses",
+        "/status/containerStatuses",
+    ];
+    for slot in slots {
+        let Some(statuses) = pod.pointer(slot).and_then(Value::as_array) else {
+            continue;
+        };
+        for cs in statuses {
+            let container = cs.get("name").and_then(Value::as_str).unwrap_or("?");
+            let waiting_reason = cs
+                .pointer("/state/waiting/reason")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let waiting_msg = cs
+                .pointer("/state/waiting/message")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+
+            match waiting_reason {
+                "ImagePullBackOff" | "ErrImagePull" | "InvalidImageName"
+                | "ImageInspectError" => {
+                    return Some((
+                        TerminalReason::ImagePull,
+                        format!("pod {pod_name}/{container}: {waiting_reason}: {waiting_msg}"),
+                    ));
+                }
+                "CreateContainerConfigError" | "CreateContainerError"
+                | "RunContainerError" => {
+                    return Some((
+                        TerminalReason::ContainerConfig,
+                        format!("pod {pod_name}/{container}: {waiting_reason}: {waiting_msg}"),
+                    ));
+                }
+                "CrashLoopBackOff" => {
+                    let restarts = cs
+                        .get("restartCount")
+                        .and_then(Value::as_i64)
+                        .unwrap_or(0);
+                    if restarts >= CRASHLOOP_RESTART_THRESHOLD {
+                        // The last-termination reason is usually the real
+                        // story ("Error", "OOMKilled", "StartError").
+                        let last_reason = cs
+                            .pointer("/lastState/terminated/reason")
+                            .and_then(Value::as_str)
+                            .unwrap_or("");
+                        let last_exit = cs
+                            .pointer("/lastState/terminated/exitCode")
+                            .and_then(Value::as_i64);
+                        let detail = match (last_reason, last_exit) {
+                            ("", None) => String::new(),
+                            ("", Some(code)) => format!(" (last exit={code})"),
+                            (r, None) => format!(" (last={r})"),
+                            (r, Some(code)) => format!(" (last={r} exit={code})"),
+                        };
+                        return Some((
+                            TerminalReason::CrashLoop,
+                            format!(
+                                "pod {pod_name}/{container}: CrashLoopBackOff after {restarts} restarts{detail}"
+                            ),
+                        ));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
+/// Classify workload-level terminal failures that don't require pod inspection.
+/// Currently covers Deployment progress deadline and Job backoff limit.
+pub fn classify_workload_terminal(
+    obj: &Value,
+    kind: &str,
+) -> Option<(TerminalReason, String)> {
+    match kind {
+        "Deployment" => {
+            // conditions[?(@.type=='Progressing' && @.status=='False' && @.reason=='ProgressDeadlineExceeded')]
+            let conditions = obj.pointer("/status/conditions").and_then(Value::as_array)?;
+            for c in conditions {
+                let ctype = c.get("type").and_then(Value::as_str).unwrap_or("");
+                let status = c.get("status").and_then(Value::as_str).unwrap_or("");
+                let reason = c.get("reason").and_then(Value::as_str).unwrap_or("");
+                if ctype == "Progressing"
+                    && status == "False"
+                    && reason == "ProgressDeadlineExceeded"
+                {
+                    let msg = c
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .unwrap_or("progress deadline exceeded");
+                    return Some((TerminalReason::ProgressDeadline, msg.to_string()));
+                }
+            }
+            None
+        }
+        "Job" => {
+            let failed = obj
+                .pointer("/status/failed")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            let backoff_limit = obj
+                .pointer("/spec/backoffLimit")
+                .and_then(Value::as_i64)
+                .unwrap_or(6);
+            if failed > backoff_limit {
+                return Some((
+                    TerminalReason::JobBackoffExceeded,
+                    format!("Job failed {failed} times (backoffLimit={backoff_limit})"),
+                ));
+            }
+            // Also honor the explicit Failed condition if the controller set one.
+            if let Some(conditions) = obj.pointer("/status/conditions").and_then(Value::as_array) {
+                for c in conditions {
+                    let ctype = c.get("type").and_then(Value::as_str).unwrap_or("");
+                    let status = c.get("status").and_then(Value::as_str).unwrap_or("");
+                    if ctype == "Failed" && status == "True" {
+                        let reason = c.get("reason").and_then(Value::as_str).unwrap_or("Failed");
+                        let msg = c.get("message").and_then(Value::as_str).unwrap_or("");
+                        return Some((
+                            TerminalReason::JobBackoffExceeded,
+                            format!("Job condition Failed: {reason}: {msg}"),
+                        ));
+                    }
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+/// Build a labelSelector string from a workload's `spec.selector.matchLabels`.
+/// Returns `None` if the workload has no selector (e.g. bare CRs).
+fn workload_label_selector(obj: &Value) -> Option<String> {
+    let labels = obj
+        .pointer("/spec/selector/matchLabels")
+        .and_then(Value::as_object)?;
+    if labels.is_empty() {
+        return None;
+    }
+    let mut parts: Vec<String> = labels
+        .iter()
+        .filter_map(|(k, v)| v.as_str().map(|s| format!("{k}={s}")))
+        .collect();
+    parts.sort();
+    Some(parts.join(","))
+}
+
+/// List pods matching a workload's label selector. Best-effort — returns an
+/// empty Vec on API errors so the terminal classifier can keep running off
+/// workload-level signals alone.
+async fn list_pods_for_workload(
+    client: &Client,
+    namespace: &str,
+    label_selector: &str,
+) -> Vec<Value> {
+    let pod_ar = ApiResource {
+        group: "".into(),
+        version: "v1".into(),
+        api_version: "v1".into(),
+        kind: "Pod".into(),
+        plural: "pods".into(),
+    };
+    let api: Api<DynamicObject> = Api::namespaced_with(client.clone(), namespace, &pod_ar);
+    let lp = kube::api::ListParams::default().labels(label_selector);
+    match api.list(&lp).await {
+        Ok(list) => list.items.into_iter().map(|p| p.data).collect(),
+        Err(e) => {
+            tracing::debug!(
+                namespace = namespace,
+                selector = label_selector,
+                error = %e,
+                "failed to list pods for terminal classification; skipping pod-level checks"
+            );
+            Vec::new()
+        }
+    }
+}
+
+/// Kinds whose readiness is driven by pods and therefore benefit from
+/// pod-level terminal classification.
+fn has_pods(kind: &str) -> bool {
+    matches!(
+        kind,
+        "Deployment" | "StatefulSet" | "DaemonSet" | "Job" | "ReplicaSet"
+    )
+}
+
+/// Result of one terminal-and-progress scan against the live cluster.
+/// Bundles the pods we already had to fetch for terminal classification so
+/// the surrounding poll loop can reuse them when computing the progress
+/// fingerprint, avoiding a second `list pods` round-trip per tick.
+struct ScanResult {
+    terminal: Option<(TerminalReason, String)>,
+    pods: Vec<Value>,
+}
+
+/// Full terminal-failure scan: checks workload-level signals first, then
+/// pod-level signals for pod-backed kinds. Returns on the first hit (in
+/// `terminal`) but always returns the fetched pods so the caller can reuse
+/// them for progress fingerprinting.
+async fn scan_terminal(
+    client: &Client,
+    obj: &Value,
+    kind: &str,
+    namespace: &str,
+) -> ScanResult {
+    if let Some(hit) = classify_workload_terminal(obj, kind) {
+        return ScanResult {
+            terminal: Some(hit),
+            pods: Vec::new(),
+        };
+    }
+    if !has_pods(kind) {
+        return ScanResult {
+            terminal: None,
+            pods: Vec::new(),
+        };
+    }
+    let Some(selector) = workload_label_selector(obj) else {
+        return ScanResult {
+            terminal: None,
+            pods: Vec::new(),
+        };
+    };
+    let pods = list_pods_for_workload(client, namespace, &selector).await;
+    let terminal = pods.iter().find_map(classify_pod_terminal);
+    ScanResult { terminal, pods }
+}
+
+/// Build a stable string fingerprint of a resource's *progress* state.
+/// Whenever this changes between two polls we treat it as forward progress
+/// and reset the idle timer; only if the fingerprint is unchanged for the
+/// full idle budget do we declare a no-progress timeout.
+///
+/// Includes the readiness message (which already encodes the per-kind
+/// counters), `observedGeneration`, and aggregated pod state — phase
+/// counts, total restart count, and the set of distinct waiting reasons.
+/// Excludes timestamps and other always-bumping fields so a reconcile
+/// loop on the controller side doesn't register as forward progress on
+/// its own.
+fn progress_fingerprint(obj: &DynamicObject, kind: &str, pods: &[Value]) -> String {
+    use std::collections::BTreeMap;
+
+    let mut parts: Vec<String> = Vec::with_capacity(4);
+    parts.push(readiness_message(obj, kind));
+
+    if let Some(g) = obj
+        .data
+        .pointer("/status/observedGeneration")
+        .and_then(Value::as_i64)
+    {
+        parts.push(format!("og={g}"));
+    }
+
+    if !pods.is_empty() {
+        let mut phases: BTreeMap<&str, usize> = BTreeMap::new();
+        let mut total_restarts: i64 = 0;
+        let mut waiting_reasons: std::collections::BTreeSet<&str> =
+            std::collections::BTreeSet::new();
+
+        for p in pods {
+            let phase = p
+                .pointer("/status/phase")
+                .and_then(Value::as_str)
+                .unwrap_or("?");
+            *phases.entry(phase).or_insert(0) += 1;
+
+            for slot in [
+                "/status/initContainerStatuses",
+                "/status/containerStatuses",
+            ] {
+                if let Some(arr) = p.pointer(slot).and_then(Value::as_array) {
+                    for cs in arr {
+                        total_restarts += cs
+                            .get("restartCount")
+                            .and_then(Value::as_i64)
+                            .unwrap_or(0);
+                        if let Some(r) = cs
+                            .pointer("/state/waiting/reason")
+                            .and_then(Value::as_str)
+                        {
+                            waiting_reasons.insert(r);
+                        }
+                        // Also fold the running/terminated transition into
+                        // the fingerprint via the discriminant — going from
+                        // waiting → running is forward progress even if no
+                        // counter on the workload moved yet.
+                        if cs.pointer("/state/running").is_some() {
+                            waiting_reasons.insert("__running__");
+                        }
+                        if cs.pointer("/state/terminated").is_some() {
+                            waiting_reasons.insert("__terminated__");
+                        }
+                    }
+                }
+            }
+        }
+
+        parts.push(format!("phases={phases:?}"));
+        parts.push(format!("rc={total_restarts}"));
+        parts.push(format!("waiting={waiting_reasons:?}"));
+    }
+
+    parts.join("|")
+}
+
+/// Absolute upper bound on how long any single resource may take to become
+/// Ready. Catches pathological "fingerprint flickers forever but never
+/// reaches Ready" cases. Enforced regardless of the per-resource idle
+/// budget — even an actively-progressing rollout has to finish in this
+/// time or we declare it stuck.
+const HARD_CEILING: Duration = Duration::from_secs(5 * 60);
+
+/// Wait for a resource to become ready, polling every 2 seconds.
+///
+/// Two-tier timeout model:
+///
+/// * **Idle progress timeout** (`timeout` argument): the maximum time we'll
+///   wait without observing *any* progress in the resource's status. The
+///   "progress fingerprint" combines the readiness message, observedGeneration,
+///   and pod-level state (phases, restart counts, waiting reasons). Whenever
+///   the fingerprint changes between polls we reset this timer — so a slow
+///   but actively rolling Deployment never trips it.
+/// * **Hard ceiling** (`HARD_CEILING`, currently 5 minutes): an absolute
+///   upper bound regardless of progress. Catches pathological resources
+///   whose fingerprint flickers forever but never reaches Ready.
+///
+/// Before each poll iteration we also scan for terminal failure signals
+/// (ImagePullBackOff, CrashLoopBackOff past threshold, ProgressDeadlineExceeded,
+/// Job backoff exhausted) and return `Failed` immediately on a hit.
+///
+/// Returns `Ready` on success, `Failed` on a terminal signal, `TimedOut` on
+/// either the idle or hard budget elapsing, or `Cancelled` if the cancel
+/// token flips mid-wait.
 #[allow(clippy::too_many_arguments)]
 pub async fn wait_for_ready(
     client: &Client,
@@ -331,6 +720,7 @@ pub async fn wait_for_ready(
     namespace: Option<&str>,
     kind: &str,
     timeout: Duration,
+    cancel: &CancelToken,
     on_status: impl Fn(&str),
 ) -> Result<ReadinessResult, ReadinessError> {
     // Immediate kinds: existence = ready
@@ -345,9 +735,17 @@ pub async fn wait_for_ready(
         Scope::Cluster => Api::all_with(client.clone(), ar),
     };
 
+    let idle_budget = timeout;
+    let hard_ceiling = HARD_CEILING;
+
     let start = Instant::now();
+    let mut last_progress_at = start;
+    let mut last_fingerprint = String::new();
 
     loop {
+        if cancel.is_cancelled() {
+            return Ok(ReadinessResult::Cancelled);
+        }
         let obj = api.get(name).await.map_err(ReadinessError::FetchError)?;
 
         // PVCs with WaitForFirstConsumer storage classes stay Pending until a pod
@@ -374,12 +772,47 @@ pub async fn wait_for_ready(
             return Ok(ReadinessResult::Ready);
         }
 
-        let message = readiness_message(&obj, kind);
-        on_status(&message);
+        // Terminal-failure scan; also returns the pods we fetched so the
+        // fingerprint below can reuse them without a second list call.
+        let ns_for_pods = namespace.unwrap_or("default");
+        let scan = scan_terminal(client, &obj.data, kind, ns_for_pods).await;
+        if let Some((reason, detail)) = scan.terminal {
+            return Ok(ReadinessResult::Failed(format!(
+                "{}: {detail}",
+                reason.as_str()
+            )));
+        }
 
-        let elapsed = start.elapsed();
-        if elapsed >= timeout {
-            return Ok(ReadinessResult::TimedOut { elapsed, message });
+        // Compute progress fingerprint and reset the idle timer on any change.
+        let fingerprint = progress_fingerprint(&obj, kind, &scan.pods);
+        if fingerprint != last_fingerprint {
+            last_fingerprint = fingerprint;
+            last_progress_at = Instant::now();
+        }
+
+        let message = readiness_message(&obj, kind);
+        let idle = last_progress_at.elapsed();
+        let total = start.elapsed();
+        on_status(&format!("{message} (idle {}s)", idle.as_secs()));
+
+        if idle >= idle_budget {
+            return Ok(ReadinessResult::TimedOut {
+                elapsed: total,
+                message: format!(
+                    "no progress for {}s (idle budget {}s): {message}",
+                    idle.as_secs(),
+                    idle_budget.as_secs()
+                ),
+            });
+        }
+        if total >= hard_ceiling {
+            return Ok(ReadinessResult::TimedOut {
+                elapsed: total,
+                message: format!(
+                    "hard ceiling {}s exceeded: {message}",
+                    hard_ceiling.as_secs()
+                ),
+            });
         }
 
         tokio::time::sleep(POLL_INTERVAL).await;
@@ -885,5 +1318,314 @@ mod tests {
             }
         }));
         assert!(check_readiness(&obj, "SomeCustomResource"));
+    }
+
+    // -- terminal-failure classifier tests --
+
+    #[test]
+    fn pod_image_pull_backoff_is_terminal() {
+        let pod = json!({
+            "metadata": {"name": "app-abc"},
+            "status": {
+                "containerStatuses": [{
+                    "name": "main",
+                    "state": {"waiting": {
+                        "reason": "ImagePullBackOff",
+                        "message": "Back-off pulling image registry/foo:v3"
+                    }},
+                    "restartCount": 0
+                }]
+            }
+        });
+        let (reason, msg) = classify_pod_terminal(&pod).expect("terminal");
+        assert_eq!(reason, TerminalReason::ImagePull);
+        assert!(msg.contains("app-abc/main"));
+        assert!(msg.contains("ImagePullBackOff"));
+    }
+
+    #[test]
+    fn pod_err_image_pull_is_terminal() {
+        let pod = json!({
+            "metadata": {"name": "p"},
+            "status": {
+                "containerStatuses": [{
+                    "name": "c",
+                    "state": {"waiting": {"reason": "ErrImagePull", "message": "not found"}},
+                    "restartCount": 0
+                }]
+            }
+        });
+        assert_eq!(
+            classify_pod_terminal(&pod).map(|(r, _)| r),
+            Some(TerminalReason::ImagePull)
+        );
+    }
+
+    #[test]
+    fn pod_create_container_config_error_is_terminal() {
+        let pod = json!({
+            "metadata": {"name": "p"},
+            "status": {
+                "containerStatuses": [{
+                    "name": "c",
+                    "state": {"waiting": {
+                        "reason": "CreateContainerConfigError",
+                        "message": "secret 'creds' not found"
+                    }},
+                    "restartCount": 0
+                }]
+            }
+        });
+        let (reason, msg) = classify_pod_terminal(&pod).expect("terminal");
+        assert_eq!(reason, TerminalReason::ContainerConfig);
+        assert!(msg.contains("creds"));
+    }
+
+    #[test]
+    fn pod_crashloop_below_threshold_not_terminal() {
+        let pod = json!({
+            "metadata": {"name": "p"},
+            "status": {
+                "containerStatuses": [{
+                    "name": "c",
+                    "state": {"waiting": {"reason": "CrashLoopBackOff"}},
+                    "restartCount": 1
+                }]
+            }
+        });
+        assert!(classify_pod_terminal(&pod).is_none());
+    }
+
+    #[test]
+    fn pod_crashloop_at_threshold_is_terminal() {
+        let pod = json!({
+            "metadata": {"name": "p"},
+            "status": {
+                "containerStatuses": [{
+                    "name": "c",
+                    "state": {"waiting": {"reason": "CrashLoopBackOff"}},
+                    "restartCount": 3,
+                    "lastState": {
+                        "terminated": {"reason": "Error", "exitCode": 1}
+                    }
+                }]
+            }
+        });
+        let (reason, msg) = classify_pod_terminal(&pod).expect("terminal");
+        assert_eq!(reason, TerminalReason::CrashLoop);
+        assert!(msg.contains("restarts"));
+        assert!(msg.contains("Error"));
+    }
+
+    #[test]
+    fn pod_init_container_failures_detected() {
+        let pod = json!({
+            "metadata": {"name": "p"},
+            "status": {
+                "initContainerStatuses": [{
+                    "name": "init",
+                    "state": {"waiting": {
+                        "reason": "ImagePullBackOff",
+                        "message": "x"
+                    }},
+                    "restartCount": 0
+                }],
+                "containerStatuses": []
+            }
+        });
+        assert_eq!(
+            classify_pod_terminal(&pod).map(|(r, _)| r),
+            Some(TerminalReason::ImagePull)
+        );
+    }
+
+    #[test]
+    fn pod_healthy_not_terminal() {
+        let pod = json!({
+            "metadata": {"name": "p"},
+            "status": {
+                "containerStatuses": [{
+                    "name": "c",
+                    "state": {"running": {"startedAt": "2024-01-01T00:00:00Z"}},
+                    "restartCount": 0
+                }]
+            }
+        });
+        assert!(classify_pod_terminal(&pod).is_none());
+    }
+
+    #[test]
+    fn deployment_progress_deadline_is_terminal() {
+        let obj = json!({
+            "status": {
+                "conditions": [
+                    {"type": "Available", "status": "False"},
+                    {
+                        "type": "Progressing",
+                        "status": "False",
+                        "reason": "ProgressDeadlineExceeded",
+                        "message": "ReplicaSet \"app-xyz\" has timed out progressing."
+                    }
+                ]
+            }
+        });
+        let (reason, msg) = classify_workload_terminal(&obj, "Deployment").expect("terminal");
+        assert_eq!(reason, TerminalReason::ProgressDeadline);
+        assert!(msg.contains("timed out"));
+    }
+
+    #[test]
+    fn deployment_progressing_true_not_terminal() {
+        let obj = json!({
+            "status": {
+                "conditions": [
+                    {"type": "Progressing", "status": "True", "reason": "NewReplicaSetAvailable"}
+                ]
+            }
+        });
+        assert!(classify_workload_terminal(&obj, "Deployment").is_none());
+    }
+
+    #[test]
+    fn job_backoff_exceeded_is_terminal() {
+        let obj = json!({
+            "spec": {"backoffLimit": 2},
+            "status": {"failed": 3}
+        });
+        let (reason, _) = classify_workload_terminal(&obj, "Job").expect("terminal");
+        assert_eq!(reason, TerminalReason::JobBackoffExceeded);
+    }
+
+    #[test]
+    fn job_within_backoff_not_terminal() {
+        let obj = json!({
+            "spec": {"backoffLimit": 6},
+            "status": {"failed": 2}
+        });
+        assert!(classify_workload_terminal(&obj, "Job").is_none());
+    }
+
+    #[test]
+    fn job_failed_condition_is_terminal() {
+        let obj = json!({
+            "spec": {"backoffLimit": 6},
+            "status": {
+                "failed": 1,
+                "conditions": [
+                    {"type": "Failed", "status": "True", "reason": "DeadlineExceeded", "message": "Job was active longer than specified deadline"}
+                ]
+            }
+        });
+        let (reason, msg) = classify_workload_terminal(&obj, "Job").expect("terminal");
+        assert_eq!(reason, TerminalReason::JobBackoffExceeded);
+        assert!(msg.contains("DeadlineExceeded"));
+    }
+
+    #[test]
+    fn workload_label_selector_builds_sorted() {
+        let obj = json!({
+            "spec": {
+                "selector": {
+                    "matchLabels": {
+                        "app": "foo",
+                        "release": "v1"
+                    }
+                }
+            }
+        });
+        assert_eq!(
+            workload_label_selector(&obj).as_deref(),
+            Some("app=foo,release=v1")
+        );
+    }
+
+    #[test]
+    fn workload_label_selector_missing_returns_none() {
+        let obj = json!({"spec": {}});
+        assert!(workload_label_selector(&obj).is_none());
+    }
+
+    // -- progress fingerprint tests --
+
+    #[test]
+    fn fingerprint_changes_when_replicas_progress() {
+        let before = make_obj(json!({
+            "metadata": {"name": "app", "generation": 1},
+            "spec": {"replicas": 3},
+            "status": {"observedGeneration": 1, "readyReplicas": 0, "updatedReplicas": 1}
+        }));
+        let after = make_obj(json!({
+            "metadata": {"name": "app", "generation": 1},
+            "spec": {"replicas": 3},
+            "status": {"observedGeneration": 1, "readyReplicas": 1, "updatedReplicas": 2}
+        }));
+        let fp1 = progress_fingerprint(&before, "Deployment", &[]);
+        let fp2 = progress_fingerprint(&after, "Deployment", &[]);
+        assert_ne!(fp1, fp2, "ready/updated count changes must register as progress");
+    }
+
+    #[test]
+    fn fingerprint_stable_when_nothing_moves() {
+        let obj = make_obj(json!({
+            "metadata": {"name": "app", "generation": 1},
+            "spec": {"replicas": 3},
+            "status": {"observedGeneration": 1, "readyReplicas": 0, "updatedReplicas": 0}
+        }));
+        let fp1 = progress_fingerprint(&obj, "Deployment", &[]);
+        let fp2 = progress_fingerprint(&obj, "Deployment", &[]);
+        assert_eq!(fp1, fp2);
+    }
+
+    #[test]
+    fn fingerprint_changes_on_pod_phase_transition() {
+        let obj = make_obj(json!({
+            "metadata": {"name": "app", "generation": 1},
+            "spec": {"replicas": 1},
+            "status": {"observedGeneration": 1, "readyReplicas": 0, "updatedReplicas": 1}
+        }));
+        let pods_pending = vec![json!({
+            "status": {
+                "phase": "Pending",
+                "containerStatuses": [{
+                    "state": {"waiting": {"reason": "ContainerCreating"}},
+                    "restartCount": 0
+                }]
+            }
+        })];
+        let pods_running = vec![json!({
+            "status": {
+                "phase": "Running",
+                "containerStatuses": [{
+                    "state": {"running": {}},
+                    "restartCount": 0
+                }]
+            }
+        })];
+        let fp1 = progress_fingerprint(&obj, "Deployment", &pods_pending);
+        let fp2 = progress_fingerprint(&obj, "Deployment", &pods_running);
+        assert_ne!(fp1, fp2, "Pending→Running pod transition must register as progress");
+    }
+
+    #[test]
+    fn fingerprint_changes_on_restart_count_bump() {
+        let obj = make_obj(json!({
+            "spec": {"replicas": 1},
+            "status": {"observedGeneration": 1}
+        }));
+        let pods_low = vec![json!({
+            "status": {
+                "phase": "Running",
+                "containerStatuses": [{"state": {"running": {}}, "restartCount": 1}]
+            }
+        })];
+        let pods_high = vec![json!({
+            "status": {
+                "phase": "Running",
+                "containerStatuses": [{"state": {"running": {}}, "restartCount": 2}]
+            }
+        })];
+        let fp1 = progress_fingerprint(&obj, "Deployment", &pods_low);
+        let fp2 = progress_fingerprint(&obj, "Deployment", &pods_high);
+        assert_ne!(fp1, fp2, "restart count bump should register as progress");
     }
 }

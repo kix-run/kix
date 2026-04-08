@@ -417,6 +417,11 @@ async fn run_reconcile(
     let act_identity_hash = identity_hash(activation);
 
     // 7. Run reconcile engine
+    //
+    // TODO(operator-cancel): wire this token to a per-Activation supervisor
+    // so a newer Activation arriving on the cluster can cancel the in-flight
+    // reconcile loop. For now this is a never-cancelled token — same
+    // semantics as before, but the plumbing is in place.
     let config = ReconcileConfig {
         timeout: Duration::from_secs(300),
         on_error: OnErrorPolicy::Stop,
@@ -424,6 +429,7 @@ async fn run_reconcile(
         // The operator runs unattended; surface conflicts in Activation status
         // rather than silently clobbering fields owned by other controllers.
         force_conflicts: false,
+        cancel: kix::cluster::cancel::CancelToken::new(),
     };
 
     let observer = OperatorObserver::new(name);
