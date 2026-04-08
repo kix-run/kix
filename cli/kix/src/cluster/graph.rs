@@ -95,23 +95,21 @@ impl ResourceGraph {
         // Phase 2b: Collapse cross-package edges onto the target package's
         // PackageInstance marker.
         //
-        // Context: a resource R in package A may carry a direct edge to a
-        // specific resource S in package B (e.g. n8n's Ingress → ingress-nginx's
-        // IngressClass). The direct edge only gates R on S being applied, not
-        // on B being fully Ready. In practice this races the operator that
-        // reconciles R (controller Deployment, admission webhook, etc.).
+        // DISABLED: this rewrite creates dependency cycles whenever two
+        // packages reference each other in any direction (PI_A → wA → PI_B →
+        // wB → PI_A). The intended semantics ("consumer waits until target
+        // package is fully Ready") will be reintroduced as a wave-computation
+        // concern via a side-table of package gates, so the literal DAG stays
+        // honest and cycles can be detected + degraded gracefully instead of
+        // hard-failing graph construction.
         //
-        // Fix: for every cross-package edge, add an additional edge R →
-        // B's PackageInstance marker. The PI transitively depends on all of
-        // B's resources via root + inverse-deps context, and is an immediate
-        // kind — so in Kahn's wave model it acts as a synchronization barrier
-        // ("all of B is applied AND Ready"). Consumers of B's PI therefore
-        // wait until B is fully up.
-        //
-        // The original direct edge is kept: intra-package waves still compute
-        // tightly, and the PI edge only adds ordering, never relaxes it. Edges
-        // where src or dst have no package annotation (Activation CR, kix
-        // CRDs, namespace resources) are left alone.
+        // Context (kept for when this is rewritten): a resource R in package
+        // A may carry a direct edge to a specific resource S in package B
+        // (e.g. n8n's Ingress → ingress-nginx's IngressClass). The direct
+        // edge only gates R on S being applied, not on B being fully Ready.
+        // In practice this races the operator that reconciles R (controller
+        // Deployment, admission webhook, etc.).
+        /*
         {
             // Build package name → PackageInstance node map.
             let mut package_to_pi: HashMap<String, NodeIndex> = HashMap::new();
@@ -162,6 +160,7 @@ impl ResourceGraph {
                 }
             }
         }
+        */
 
         // Phase 3: Check for cycles
         if petgraph::algo::is_cyclic_directed(&graph) {
@@ -560,7 +559,8 @@ mod tests {
 
     #[test]
     fn cross_package_edge_duplicate_is_not_added_twice() {
-        // Consumer already has a direct edge to pi_a (e.g. via _packageRequires).
+        // Consumer already has a direct edge to pi_a (e.g. because the
+        // package author wrote `root = { ...; requires = [ otherPkg ]; }`).
         // The cross-package rewrite must not add a duplicate edge.
         let manifests = vec![
             pkg_manifest("Deployment", "controller", "ns-a", "h_wa", "", "pkg-a"),
