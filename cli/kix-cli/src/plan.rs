@@ -35,10 +35,52 @@ pub struct PackageChangeDiff {
     pub key: String,
     pub old_version: Option<String>,
     pub new_version: Option<String>,
-    /// Per-resource diffs within this package (only changed resources).
+    /// Resources with actual manifest field changes (propagation-only diffs filtered out).
+    /// Only contains the real (non-propagation) differences.
     pub resource_diffs: Vec<(ResourceId, Vec<Difference>)>,
+    /// Resources whose identity-hash changed purely because a dependency's hash
+    /// propagated up (via `kix.dev/identity-hash`/`kix.dev/depends-on`/`kix.dev/activations`/
+    /// `kix.dev/built-via`). Manifest content is otherwise identical — will redeploy
+    /// only to update stamped annotations.
+    pub dep_affected_resources: Vec<ResourceId>,
     pub added_resources: Vec<ResourceId>,
     pub removed_resources: Vec<ResourceId>,
+}
+
+/// Returns true if a structural-diff path points at a kix.dev stamped annotation
+/// whose only purpose is to carry hash propagation (identity, deps, activations,
+/// built-via). Used to distinguish real content changes from dependency-propagated
+/// hash bumps.
+fn is_propagation_path(path: &str) -> bool {
+    const PROPAGATION_ANNS: &[&str] = &[
+        "kix.dev/identity-hash",
+        "kix.dev/depends-on",
+        "kix.dev/activations",
+        "kix.dev/built-via",
+    ];
+    // Only match top-level metadata.annotations — pod template annotations
+    // (e.g. $.spec.template.metadata.annotations.*) are real content changes.
+    for ann in PROPAGATION_ANNS {
+        let needle = format!("$.metadata.annotations.{ann}");
+        if path == needle || path.starts_with(&format!("{needle}.")) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Partition a set of differences into (real, propagation-only).
+fn partition_propagation(diffs: Vec<Difference>) -> (Vec<Difference>, Vec<Difference>) {
+    let mut real = Vec::new();
+    let mut propagation = Vec::new();
+    for d in diffs {
+        if is_propagation_path(&d.path) {
+            propagation.push(d);
+        } else {
+            real.push(d);
+        }
+    }
+    (real, propagation)
 }
 
 // ── Compute package-level diff between two store graphs ──────────────
@@ -110,14 +152,23 @@ fn diff_package_resources(
     let new_res = resource_map_for_package(new_pkg, new_graph);
 
     let mut resource_diffs = Vec::new();
+    let mut dep_affected_resources = Vec::new();
     let mut added_resources = Vec::new();
     let mut removed_resources = Vec::new();
 
     for (id, new_val) in &new_res {
         if let Some(old_val) = old_res.get(id) {
             let diffs = structural_diff(new_val, old_val, "$", config);
-            if !diffs.is_empty() {
-                resource_diffs.push((id.clone(), diffs));
+            if diffs.is_empty() {
+                continue;
+            }
+            let (real, _propagation) = partition_propagation(diffs);
+            if real.is_empty() {
+                // Only kix.dev propagation annotations changed — identity hash
+                // bumped because a dependency changed, but content is the same.
+                dep_affected_resources.push(id.clone());
+            } else {
+                resource_diffs.push((id.clone(), real));
             }
         } else {
             added_resources.push(id.clone());
@@ -135,6 +186,7 @@ fn diff_package_resources(
         old_version: old_pkg.version.clone(),
         new_version: new_pkg.version.clone(),
         resource_diffs,
+        dep_affected_resources,
         added_resources,
         removed_resources,
     }
@@ -197,6 +249,7 @@ pub fn diff_garbage(old: &StoreGraph, new: &StoreGraph) -> PackageDiff {
                     old_version: old_pkg.version.clone(),
                     new_version: new_pkg.version.clone(),
                     resource_diffs: Vec::new(),
+                    dep_affected_resources: Vec::new(),
                     added_resources: Vec::new(),
                     removed_resources,
                 });
@@ -304,6 +357,12 @@ pub fn print_package_plan(diff: &PackageDiff, verbose: bool) {
                     if !change.removed_resources.is_empty() {
                         parts.push(format!("{} removed", change.removed_resources.len()));
                     }
+                    if !change.dep_affected_resources.is_empty() {
+                        parts.push(format!(
+                            "{} dep-affected",
+                            change.dep_affected_resources.len()
+                        ));
+                    }
                     let detail = if parts.is_empty() {
                         String::new()
                     } else {
@@ -343,6 +402,14 @@ pub fn print_package_plan(diff: &PackageDiff, verbose: bool) {
                             for line in formatted.lines() {
                                 println!("        {line}");
                             }
+                        }
+                        for id in &change.dep_affected_resources {
+                            println!(
+                                "      {} {} {}",
+                                output::dim("~"),
+                                output::dim(&id.to_string()),
+                                output::dim("(via dependency)"),
+                            );
                         }
                     }
                 }
@@ -392,6 +459,16 @@ pub fn print_plan_summary(diff: &PackageDiff) {
     let added = diff.added.len();
     let removed = diff.removed.len();
 
+    // Aggregate resource-level counts across all changed packages to
+    // distinguish real content changes from dependency-propagated bumps.
+    let mut real_resources = 0usize;
+    let mut dep_affected_resources = 0usize;
+    for c in &diff.changed {
+        real_resources +=
+            c.resource_diffs.len() + c.added_resources.len() + c.removed_resources.len();
+        dep_affected_resources += c.dep_affected_resources.len();
+    }
+
     let mut parts = Vec::new();
     if updated > 0 {
         let s = format!("{updated} updated");
@@ -416,6 +493,13 @@ pub fn print_plan_summary(diff: &PackageDiff) {
     } else {
         println!();
         println!("  Plan: {}", parts.join(", "));
+        if real_resources > 0 || dep_affected_resources > 0 {
+            let res_line = format!(
+                "  Resources: {} real content, {} dep-affected",
+                real_resources, dep_affected_resources,
+            );
+            println!("{}", output::dim(&res_line));
+        }
     }
 }
 

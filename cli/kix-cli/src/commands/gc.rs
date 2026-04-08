@@ -113,12 +113,14 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         return Ok(());
     }
 
-    // 4. Display package-grouped garbage plan
+    // 4. Display package-grouped garbage plan.
+    //    Always render per-resource detail — GC is destructive, the user
+    //    must see what exactly will be deleted before confirming.
     let pkg_diff = plan::diff_garbage(&old_graph, &new_graph);
     if !ctx.global.quiet {
         println!();
         println!("{}", output::bold("Garbage collection plan"));
-        plan::print_package_plan(&pkg_diff, ctx.global.verbose > 0);
+        plan::print_package_plan(&pkg_diff, true);
         plan::print_plan_summary(&pkg_diff);
     }
 
@@ -239,7 +241,7 @@ async fn run_hard_async(
 
     // Find resources with identity-hash not in expected set.
     // Skip Activation CRs here — they're handled separately below.
-    let mut garbage: Vec<ResourceId> = Vec::new();
+    let mut garbage: Vec<GarbageEntry> = Vec::new();
     for obj in &live {
         let obj_kind = obj
             .data
@@ -251,37 +253,64 @@ async fn run_hard_async(
             continue; // handled in the stale-activation block below
         }
 
-        let identity_hash = obj
+        let annotations_from_data = obj
             .data
             .pointer("/metadata/annotations")
-            .and_then(|a| a.get("kix.dev/identity-hash"))
-            .and_then(|v| v.as_str())
-            .or_else(|| {
-                obj.metadata
-                    .annotations
-                    .as_ref()
-                    .and_then(|a| a.get("kix.dev/identity-hash"))
-                    .map(|s| s.as_str())
-            });
+            .and_then(|a| a.as_object());
 
-        match identity_hash {
-            Some(hash) if expected_hashes.contains(hash) => continue,
-            _ => {
-                let kind = obj
-                    .data
-                    .get("kind")
-                    .and_then(|v| v.as_str())
-                    .or_else(|| obj.types.as_ref().map(|t| t.kind.as_str()))
-                    .unwrap_or("Unknown");
-                let name = obj.metadata.name.as_deref().unwrap_or("unknown");
-                let namespace = obj.metadata.namespace.as_deref().unwrap_or(CLUSTER_SCOPED);
-                garbage.push(ResourceId {
-                    kind: kind.to_string(),
-                    name: name.to_string(),
-                    namespace: namespace.to_string(),
-                });
+        let ann_get = |key: &str| -> Option<String> {
+            if let Some(map) = annotations_from_data
+                && let Some(v) = map.get(key).and_then(|v| v.as_str())
+            {
+                return Some(v.to_string());
             }
-        }
+            obj.metadata
+                .annotations
+                .as_ref()
+                .and_then(|a| a.get(key))
+                .cloned()
+        };
+
+        let identity_hash = ann_get("kix.dev/identity-hash");
+
+        let reason = match &identity_hash {
+            Some(hash) if expected_hashes.contains(hash) => continue,
+            Some(_) => GarbageReason::HashNotExpected,
+            None => GarbageReason::NoIdentityHash,
+        };
+
+        let kind = obj
+            .data
+            .get("kind")
+            .and_then(|v| v.as_str())
+            .or_else(|| obj.types.as_ref().map(|t| t.kind.as_str()))
+            .unwrap_or("Unknown")
+            .to_string();
+        let name = obj
+            .metadata
+            .name
+            .as_deref()
+            .unwrap_or("unknown")
+            .to_string();
+        let namespace = obj
+            .metadata
+            .namespace
+            .as_deref()
+            .unwrap_or(CLUSTER_SCOPED)
+            .to_string();
+
+        garbage.push(GarbageEntry {
+            id: ResourceId {
+                kind,
+                name,
+                namespace,
+            },
+            identity_hash,
+            package: ann_get("kix.dev/package"),
+            package_namespace: ann_get("kix.dev/package-namespace"),
+            activations: ann_get("kix.dev/activations"),
+            reason,
+        });
     }
 
     // Find Superseded activations (status.phase == Superseded) for this cluster
@@ -290,10 +319,17 @@ async fn run_hard_async(
             kix::cluster::activation::list_superseded(&client, ar, cluster_name).await
     {
         for name in superseded {
-            garbage.push(ResourceId {
-                kind: "Activation".to_string(),
-                namespace: CLUSTER_SCOPED.to_string(),
-                name,
+            garbage.push(GarbageEntry {
+                id: ResourceId {
+                    kind: "Activation".to_string(),
+                    namespace: CLUSTER_SCOPED.to_string(),
+                    name,
+                },
+                identity_hash: None,
+                package: None,
+                package_namespace: None,
+                activations: None,
+                reason: GarbageReason::SupersededActivation,
             });
         }
     }
@@ -305,15 +341,7 @@ async fn run_hard_async(
         return Ok(());
     }
 
-    println!();
-    println!(
-        "{} {} resources to delete:",
-        output::bold("Garbage:"),
-        garbage.len(),
-    );
-    for rid in &garbage {
-        println!("  {} {}", output::red("-"), rid);
-    }
+    print_garbage_plan(&garbage);
 
     if !args.yes {
         if !output::is_interactive() {
@@ -334,7 +362,112 @@ async fn run_hard_async(
         }
     }
 
-    delete_resources(global, &garbage).await
+    let rids: Vec<ResourceId> = garbage.iter().map(|g| g.id.clone()).collect();
+    delete_resources(global, &rids).await
+}
+
+// ---------------------------------------------------------------------------
+// Hard GC: garbage entry + display
+// ---------------------------------------------------------------------------
+
+/// Why a live resource is flagged as garbage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GarbageReason {
+    /// Resource carries a `kix.dev/identity-hash` that isn't in the expected set.
+    HashNotExpected,
+    /// Resource has no `kix.dev/identity-hash` annotation — it looks kix-managed
+    /// (matched the managed-by label) but was never properly stamped.
+    NoIdentityHash,
+    /// An `Activation` CR in phase `Superseded` — kept for rollback history,
+    /// but GC will remove it.
+    SupersededActivation,
+}
+
+impl GarbageReason {
+    fn label(&self) -> &'static str {
+        match self {
+            GarbageReason::HashNotExpected => "identity-hash not in expected set",
+            GarbageReason::NoIdentityHash => "missing kix.dev/identity-hash",
+            GarbageReason::SupersededActivation => "superseded activation",
+        }
+    }
+}
+
+struct GarbageEntry {
+    id: ResourceId,
+    identity_hash: Option<String>,
+    package: Option<String>,
+    package_namespace: Option<String>,
+    activations: Option<String>,
+    reason: GarbageReason,
+}
+
+/// Print grouped, per-resource garbage plan with reasons and owning activation.
+fn print_garbage_plan(garbage: &[GarbageEntry]) {
+    use std::collections::BTreeMap;
+
+    println!();
+    println!(
+        "{} {} resources to delete:",
+        output::bold("Garbage:"),
+        garbage.len(),
+    );
+
+    // Group by (namespace, kind) for readable output.
+    let mut by_ns: BTreeMap<&str, BTreeMap<&str, Vec<&GarbageEntry>>> = BTreeMap::new();
+    for entry in garbage {
+        by_ns
+            .entry(entry.id.namespace.as_str())
+            .or_default()
+            .entry(entry.id.kind.as_str())
+            .or_default()
+            .push(entry);
+    }
+
+    for (ns, by_kind) in &by_ns {
+        println!();
+        println!("  {}", output::bold(ns));
+        for (kind, entries) in by_kind {
+            for entry in entries {
+                let hash_short = entry
+                    .identity_hash
+                    .as_deref()
+                    .map(|h| format!(" hash={}", &h[..12.min(h.len())]))
+                    .unwrap_or_default();
+                println!(
+                    "    {} {}/{}{}",
+                    output::red("-"),
+                    kind,
+                    entry.id.name,
+                    output::dim(&hash_short),
+                );
+
+                let reason_line = format!("reason: {}", entry.reason.label());
+                println!("        {}", output::dim(&reason_line));
+
+                if let Some(pkg) = &entry.package {
+                    let pkg_display = match &entry.package_namespace {
+                        Some(pns) if pns != "_cluster" => format!("package: {pns}/{pkg}"),
+                        _ => format!("package: {pkg}"),
+                    };
+                    println!("        {}", output::dim(&pkg_display));
+                }
+                if let Some(acts) = &entry.activations {
+                    let acts_short: Vec<String> = acts
+                        .split(',')
+                        .map(|a| a.trim())
+                        .filter(|a| !a.is_empty())
+                        .map(|a| a[..12.min(a.len())].to_string())
+                        .collect();
+                    if !acts_short.is_empty() {
+                        let line = format!("activations: {}", acts_short.join(", "));
+                        println!("        {}", output::dim(&line));
+                    }
+                }
+            }
+        }
+    }
+    println!();
 }
 
 // ---------------------------------------------------------------------------

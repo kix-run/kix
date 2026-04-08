@@ -329,44 +329,40 @@ pub async fn reconcile(
         });
 
         // Hydrate SOPS-encrypted secrets before applying the wave.
-        // Clone into a mutable vec so we can inject stringData into Secret manifests.
-        let hydrated_actions: Vec<ChangeAction> = actions
-            .iter()
-            .map(|action| {
-                if let ChangeAction::Apply(manifest) = action {
-                    if secrets::needs_hydration(manifest) {
-                        let hydrated = manifest.clone();
-                        let mut single = [hydrated];
-                        match secrets::hydrate_secrets(&mut single) {
-                            Ok(results) => {
-                                for hr in &results {
-                                    observer.on_event(&ReconcileEvent::SecretHydrated {
-                                        rid: hr.rid.clone(),
-                                        keys: hr.keys_injected,
-                                    });
-                                }
-                                ChangeAction::Apply(single.into_iter().next().unwrap())
-                            }
-                            Err(e) => {
-                                let rid = ResourceId::from_value(manifest);
-                                observer.on_event(&ReconcileEvent::SecretHydrationFailed {
-                                    rid: rid.clone(),
-                                    error: e.to_string(),
+        // Failed hydration drops the action from the wave entirely — applying
+        // a Secret with empty data would silently corrupt cluster state and
+        // SSA would happily succeed. Tracked failures are surfaced as
+        // ResourceFailed below so they count against wave_failed.
+        let mut hydration_failures: Vec<(ResourceId, String)> = Vec::new();
+        let mut hydrated_actions: Vec<ChangeAction> = Vec::with_capacity(actions.len());
+        for action in actions {
+            match action {
+                ChangeAction::Apply(manifest) if secrets::needs_hydration(manifest) => {
+                    let mut single = [manifest.clone()];
+                    match secrets::hydrate_secrets(&mut single) {
+                        Ok(results) => {
+                            for hr in &results {
+                                observer.on_event(&ReconcileEvent::SecretHydrated {
+                                    rid: hr.rid.clone(),
+                                    keys: hr.keys_injected,
                                 });
-                                // Keep the original manifest — apply will proceed but
-                                // the Secret won't have data (may fail at runtime).
-                                // If on_error=stop, the wave failure will catch it.
-                                ChangeAction::Apply(manifest.clone())
                             }
+                            hydrated_actions
+                                .push(ChangeAction::Apply(single.into_iter().next().unwrap()));
                         }
-                    } else {
-                        action.clone()
+                        Err(e) => {
+                            let rid = ResourceId::from_value(manifest);
+                            observer.on_event(&ReconcileEvent::SecretHydrationFailed {
+                                rid: rid.clone(),
+                                error: e.to_string(),
+                            });
+                            hydration_failures.push((rid, e.to_string()));
+                        }
                     }
-                } else {
-                    action.clone()
                 }
-            })
-            .collect();
+                other => hydrated_actions.push(other.clone()),
+            }
+        }
 
         // Jobs have immutable spec fields (e.g. selector, template), so SSA
         // cannot update an existing Job. Delete any pre-existing Job with the
@@ -437,15 +433,37 @@ pub async fn reconcile(
             })
             .collect();
 
-        let mut wave_failed = false;
+        // Surface hydration failures as wave failures before processing apply
+        // results, so they're indistinguishable downstream from a 422 apply error.
+        let mut wave_failed = !hydration_failures.is_empty();
+        let mut wave_apply_count = 0usize;
+        let mut wave_fail_count = hydration_failures.len();
+        for (rid, err) in &hydration_failures {
+            result.failed += 1;
+            observer.on_event(&ReconcileEvent::ResourceFailed {
+                rid: rid.clone(),
+                error: format!("secret hydration failed: {err}"),
+            });
+        }
+
+        // Index successful apply outcomes for O(1) readiness gating and for
+        // bucket-demotion when readiness later fails on an applied resource.
+        let mut apply_outcomes: HashMap<ResourceId, ApplyAction> = HashMap::new();
         for (rid, res) in &results {
             match res {
                 Ok(apply_result) => {
                     match apply_result.action {
-                        ApplyAction::Created => result.created += 1,
-                        ApplyAction::Configured => result.configured += 1,
+                        ApplyAction::Created => {
+                            result.created += 1;
+                            wave_apply_count += 1;
+                        }
+                        ApplyAction::Configured => {
+                            result.configured += 1;
+                            wave_apply_count += 1;
+                        }
                         ApplyAction::Unchanged | ApplyAction::Skipped => result.unchanged += 1,
                     }
+                    apply_outcomes.insert(rid.clone(), apply_result.action.clone());
                     let import_target = manifest_by_rid
                         .get(rid)
                         .and_then(|m| readiness::import_target_from_manifest(m));
@@ -457,6 +475,7 @@ pub async fn reconcile(
                 }
                 Err(e) => {
                     result.failed += 1;
+                    wave_fail_count += 1;
                     wave_failed = true;
                     observer.on_event(&ReconcileEvent::ResourceFailed {
                         rid: rid.clone(),
@@ -477,15 +496,17 @@ pub async fn reconcile(
             });
         }
 
-        // Readiness polling for this wave
+        // Readiness polling for this wave. Iterate hydrated_actions (not the
+        // pre-hydration `actions`) so we never poll a resource that was
+        // dropped due to hydration failure.
         let mut wave_had_crd_import = false;
         if !wave_failed || config.on_error == OnErrorPolicy::Continue {
-            for action in actions {
+            for action in &hydrated_actions {
                 if let ChangeAction::Apply(manifest) = action {
                     let rid = ResourceId::from_value(manifest);
 
-                    // Only check readiness for resources that were actually applied
-                    if !results.iter().any(|(r, res)| *r == rid && res.is_ok()) {
+                    // Only check readiness for resources whose apply succeeded.
+                    if !apply_outcomes.contains_key(&rid) {
                         continue;
                     }
 
@@ -523,6 +544,11 @@ pub async fn reconcile(
                     } else {
                         let ar_scope = discovery.iter().find(|(ar, _)| ar.kind == rid.kind);
                         let Some((ar, scope)) = ar_scope else {
+                            tracing::warn!(
+                                resource = %rid,
+                                "skipping readiness: kind not in discovery cache \
+                                 (CRD likely installed in a later wave)"
+                            );
                             continue;
                         };
                         let ns = if rid.namespace == CLUSTER_SCOPED {
@@ -565,7 +591,7 @@ pub async fn reconcile(
                             }
                         }
                         Ok(ReadinessResult::Failed(msg)) => {
-                            result.failed += 1;
+                            demote_apply_to_failed(&apply_outcomes, &mut result, &rid);
                             observer.on_event(&ReconcileEvent::ReadinessFailed {
                                 rid: rid.clone(),
                                 message: msg.clone(),
@@ -588,7 +614,7 @@ pub async fn reconcile(
                             // the shape declared by the marker. Terminal —
                             // never polled again. Today this only fires for
                             // Secret imports with missing keys.
-                            result.failed += 1;
+                            demote_apply_to_failed(&apply_outcomes, &mut result, &rid);
                             observer.on_event(&ReconcileEvent::ReadinessFailed {
                                 rid: rid.clone(),
                                 message: message.clone(),
@@ -616,7 +642,7 @@ pub async fn reconcile(
         // Either way, later waves may reference new kinds that aren't yet in
         // our discovery cache.
         let wave_had_crds = wave_had_crd_import
-            || actions.iter().any(|a| {
+            || hydrated_actions.iter().any(|a| {
                 if let ChangeAction::Apply(m) = a {
                     ResourceId::from_value(m).kind == "CustomResourceDefinition"
                 } else {
@@ -630,16 +656,10 @@ pub async fn reconcile(
             }
         }
 
-        // Record wave progress on the Activation CR
-        let wave_applied = results
-            .iter()
-            .filter(|(_, r)| {
-                r.as_ref().is_ok_and(|r| {
-                    matches!(r.action, ApplyAction::Created | ApplyAction::Configured)
-                })
-            })
-            .count();
-        let wave_failed_count = results.iter().filter(|(_, r)| r.is_err()).count();
+        // Record wave progress on the Activation CR.
+        // `applied`/`failed` here count *apply* (and hydration) outcomes only —
+        // readiness failures bump `result.failed` but don't retroactively flip
+        // a wave to Failed, since the resource did make it onto the cluster.
         let status = if wave_failed {
             WaveStatus::Failed
         } else {
@@ -649,8 +669,8 @@ pub async fn reconcile(
             wave_index: wave_idx,
             status: status.clone(),
             resource_count: actions.len(),
-            applied: wave_applied,
-            failed: wave_failed_count,
+            applied: wave_apply_count,
+            failed: wave_fail_count,
         };
         observer.on_event(&ReconcileEvent::WaveComplete {
             wave_index: wave_idx,
@@ -713,10 +733,11 @@ pub async fn reconcile(
                     Scope::Cluster => Api::all_with(client.clone(), ar),
                 };
 
-                match api
-                    .delete(&rid.name, &kube::api::DeleteParams::default())
-                    .await
-                {
+                let dp = kube::api::DeleteParams {
+                    propagation_policy: Some(kube::api::PropagationPolicy::Background),
+                    ..Default::default()
+                };
+                match api.delete(&rid.name, &dp).await {
                     Ok(_) => {
                         result.pruned += 1;
                         observer.on_event(&ReconcileEvent::PruneOk { rid: rid.clone() });
@@ -734,17 +755,19 @@ pub async fn reconcile(
     }
 
     // Finalize activation lifecycle (mark old as Superseded, new as Active or
-    // Degraded). Only finalize when resources were actually changed — calling
-    // finalize_deploy unconditionally creates an infinite reconcile loop
-    // because it always sets a new kix.dev/deployed-at timestamp, which bumps
-    // metadata.generation.
+    // Degraded). finalize_deploy unconditionally bumps kix.dev/deployed-at,
+    // which bumps metadata.generation, so we gate to avoid an infinite
+    // reconcile loop on no-op deploys.
     //
-    // Failures do NOT skip finalize: an unfinalized Activation has no
+    // We DO finalize when failures occurred: an unfinalized Activation has no
     // kix.dev/cluster label or terminal phase, so the next deploy can't find
-    // it and treats the cluster as empty. Instead, finalize sets phase to
-    // Degraded when result.failed > 0, and `find_active` accepts Degraded as
-    // the current state for diffing purposes.
-    let actually_changed = result.created > 0 || result.configured > 0 || result.pruned > 0;
+    // it and treats the cluster as empty. finalize_deploy maps had_failures
+    // to phase=Degraded, which `find_active` accepts for diffing.
+    //
+    // Pure no-op (everything Unchanged, zero failures) is the only path that
+    // skips finalize.
+    let actually_changed =
+        result.created > 0 || result.configured > 0 || result.pruned > 0 || result.failed > 0;
     if actually_changed
         && let Some(act_name) = activation_name
         && let Some((ar, _)) = activation::find_activation_ar(discovery)
@@ -776,6 +799,34 @@ pub async fn reconcile(
     }
 
     Ok(result)
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Move a resource that had a successful apply into the `failed` bucket after
+/// a readiness failure, so a single bad resource isn't counted as both
+/// "configured" and "failed". `saturating_sub` guards against any future
+/// caller invoking this twice on the same rid.
+fn demote_apply_to_failed(
+    outcomes: &HashMap<ResourceId, ApplyAction>,
+    result: &mut ReconcileResult,
+    rid: &ResourceId,
+) {
+    match outcomes.get(rid) {
+        Some(ApplyAction::Created) => {
+            result.created = result.created.saturating_sub(1);
+        }
+        Some(ApplyAction::Configured) => {
+            result.configured = result.configured.saturating_sub(1);
+        }
+        Some(ApplyAction::Unchanged) | Some(ApplyAction::Skipped) => {
+            result.unchanged = result.unchanged.saturating_sub(1);
+        }
+        None => {}
+    }
+    result.failed += 1;
 }
 
 // ---------------------------------------------------------------------------

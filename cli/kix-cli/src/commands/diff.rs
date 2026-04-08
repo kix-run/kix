@@ -409,6 +409,19 @@ fn print_text_output(result: &DiffResult, global: &crate::cli::GlobalArgs) {
                 println!("        {line}");
             }
         }
+        if !change.dep_affected_resources.is_empty() {
+            println!(
+                "      {}",
+                output::dim("affected via dependency (hash bump only, no content change):"),
+            );
+            for id in &change.dep_affected_resources {
+                println!(
+                    "        {} {}",
+                    output::dim("~"),
+                    output::dim(&id.to_string())
+                );
+            }
+        }
         println!();
     }
 
@@ -520,6 +533,7 @@ fn print_json_output(result: &DiffResult, as_yaml: bool) -> Result<()> {
                     "resource": id.display_id(),
                     "diff_count": diffs.len(),
                 })).collect::<Vec<_>>(),
+                "dep_affected_resources": c.dep_affected_resources.iter().map(|id| id.display_id()).collect::<Vec<_>>(),
             })).collect::<Vec<_>>(),
             "unchanged": pkg.unchanged,
         },
