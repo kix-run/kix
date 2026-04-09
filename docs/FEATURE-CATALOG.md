@@ -38,7 +38,7 @@ Complete inventory of kix/lib (Nix library) and CLI features. Breadth-first — 
 - **`mkImport`** — Import marker: `{ from?, out? }`. `from` = optional package function for lazy out derivation.
 - **`mkScope`** (`eval/scope.nix`) — Per-instance context. Provides: mkResource, mkClusterResource, mkDeployment, mkStatefulSet, mkDaemonSet, forNamespace, mkCRD, mkCRDRef, mkCR, full RBAC DSL. Supports kix and helm label styles via `labelStyle`.
 - **`selectorLabelsOverride`** — Override auto-derived selector labels (for immutable selectors on existing workloads).
-- **Capability checks** — Lazy checks: `checkCapability`, `checkCapabilityNotNull`. Guards for loadBalancer, privilegedContainers, daemonSets.
+- **Capability checks** — Lazy checks: `checkCapability`. Guards for loadBalancer, privilegedContainers, daemonSets.
 - **`mkNamespace`** (`eval/namespace.nix`) — Creates Namespace resource + optional ResourceQuota + NetworkPolicy resources.
 - **`mkPackageView`** (`eval/view.nix`) — Consumer-facing instance shape: folders (plain attrsets), autoKeys (root.out fields), system fields (_type, _packageInstance, root, out, raw, _meta). Known-folder validation (secrets, crds).
 - **Helpers** (`eval/helpers.nix`) — `mergeCollide` (collision-detecting merge), `collectTypedAttrs` (recursive `_type` collector), `knownFolders`.
