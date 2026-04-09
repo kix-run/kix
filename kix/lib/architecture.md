@@ -45,7 +45,7 @@ Entry points: `mkFlake` (flakes), `buildCluster` (raw), `mkEnv` (multi-env stamp
 | `netpol.nix` | Derives CiliumNetworkPolicy from store-path graph. `processInstance` (egress), `generateIngressPolicies` (inverse), `generateDefaultDeny`. |
 | `rbac.nix` | Pipe DSL: `group`, `watch`, `reconcile`, `allow`, `restrictTo`, `sub`. |
 | `scorecard.nix` | Rule engine. Levels: manifest/package/namespace/cluster. Severity override chain: rule disable → byOwner → byNamespace → rule → ruleDefaults. |
-| `rules/` | Built-in rule library (security, reliability, governance). |
+| `rules/` | Built-in rule library (security, reliability, governance, architecture). `architecture.nix` catches DI hygiene smells — packages hand-rolling resources that belong to another capability. |
 | `meta.nix` | `peekPackageMeta` (introspect without building). |
 | `env.nix` | `mkEnv` — stamp instance sets into env-prefixed namespaces. |
 | `fragments.nix` | Small reusable manifest fragments. |
@@ -63,6 +63,8 @@ Entry points: `mkFlake` (flakes), `buildCluster` (raw), `mkEnv` (multi-env stamp
 - **Netpol is derived, not declared.** Egress policies come from the same store-path context used for dep ordering. Ingress policies are the inverse. StatefulSets get self-egress; RBAC/CRD presence opens API-server egress.
 - **Helm integration is lossy on purpose.** `fromHelmChart` strips helm.sh/meta.helm.sh annotations, `app.kubernetes.io/managed-by`, default `strategy` fields, and empty/test-hook resources so kix owns the labels/ordering cleanly.
 - **Scorecard severity has a precedence chain**, not a flat config. Disable and per-owner/per-namespace overrides beat the rule's own severity, which beats `ruleDefaults`.
+- **Capability ownership via `kix.dev/capability` annotation.** The `architecture.capabilityOwnership` rule detects hand-rolled resources that belong to another capability (e.g. PVCs outside a storage provider, reflector annotator bundles outside the reflector package). Capability owners declare `meta.provides = [ "storage" | "reflection" | … ]`. Consumers obtain the resources by declaring a DI dep arg and calling the owner's `out.*` builder — the builder stamps `kix.dev/capability: <name>` on every resource it returns so the rule treats them as DI-provided rather than hand-rolled. This is what lets a consumer scope (stackgres) host resources that belong to another capability (reflection) without tripping the rule. Fingerprints live in `rules/architecture.nix`; adding a new one is a data-only change.
+- **Helm-wrapped packages can expose DI builders.** `fromHelmChart` takes `extraMeta` (merged into `meta` — declare `provides` / `defaultAliases` here) and `rootOut` (a function `{ scope, lib, self, config, clusterConfig }: { … }` whose result becomes `root.out`). This is how `reflector.out.reflectSecret` is defined without turning the Helm wrapper into a full native package.
 - **`out` is the public surface of a resource.** `name`, `fqdn`, `selector`, `identityHash` are auto-derived and context-carrying; user `outputs = {...}` extend it. Always prefer `self.svc.out.name` over `"${self.svc}"` string interpolation.
 - **Activation CR roots the closure.** `mkActivation` references every PackageInstance via string context so `nix-store -q --tree` on the Activation derivation yields the full deploy DAG. This is the contract the CLI relies on.
 

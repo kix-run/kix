@@ -256,6 +256,17 @@ rec {
       rootSelector ? null, # { kind = "Service"; } or { kind = "Service"; name = "my-svc"; }
       version ? chart.version or null, # Auto-extracted from fetchHelmChart derivation
       patchResources ? lib.id, # Function applied to the list of raw JSON resources before wrapping
+      # Extra meta merged into the auto-generated `meta` (`isHelm`, `version`).
+      # Use this to declare `provides` / `defaultAliases` for Helm-wrapped
+      # packages that participate in DI as capability owners.
+      extraMeta ? { },
+      # Builders exposed through `root.out`. This is how Helm-wrapped
+      # packages contribute DI builders (e.g. `reflector.out.reflectSecret`).
+      # The function receives `{ scope, lib, self, config, clusterConfig }`
+      # and must return an attrset; that attrset becomes `root.out`.
+      # Consumers call these builders passing their own `scope` so the
+      # emitted resources are owned by the consumer namespace.
+      rootOut ? null,
     }:
     {
       scope,
@@ -265,7 +276,8 @@ rec {
       meta = {
         isHelm = true;
       }
-      // lib.optionalAttrs (version != null) { inherit version; };
+      // lib.optionalAttrs (version != null) { inherit version; }
+      // extraMeta;
 
       options = {
         values = lib.mkOption {
@@ -408,6 +420,17 @@ rec {
           root = {
             resource = rootResource;
             requires = nonRootResources;
+          }
+          // lib.optionalAttrs (rootOut != null) {
+            out = rootOut {
+              inherit
+                scope
+                lib
+                self
+                config
+                clusterConfig
+                ;
+            };
           };
         };
     };

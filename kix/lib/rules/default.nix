@@ -10,4 +10,5 @@
   security = import ./security.nix { inherit lib; };
   reliability = import ./reliability.nix { inherit lib; };
   governance = import ./governance.nix { inherit lib; };
+  architecture = import ./architecture.nix { inherit lib; };
 }

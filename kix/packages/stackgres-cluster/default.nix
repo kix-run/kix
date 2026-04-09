@@ -500,127 +500,19 @@ in
       # annotations.
       #
       # We can't add those annotations declaratively because kix doesn't own
-      # the source manifest (the operator does). Instead we run a one-shot
-      # Job that waits for the secret to exist and then `kubectl annotate`s
-      # it. The Job has its own ServiceAccount + Role limited to
-      # patching this single secret.
+      # the source manifest (the operator does). The reflector package owns
+      # this wiring: when a reflector instance is resolved via DI, we call
+      # `reflector.out.reflectSecret scope { ... }` which returns the
+      # annotator bundle (SA + Role + RoleBinding + one-shot Job). These
+      # resources are stamped with `kix.dev/capability: reflection` so the
+      # architecture scorecard treats them as DI-provided rather than
+      # hand-rolled.
 
-      reflectorAnnotatorSA =
+      reflectorBundle =
         if reflectionEnabled then
-          scope.mkResource {
-            apiVersion = "v1";
-            kind = "ServiceAccount";
-            name = "${name}-reflector-annotator";
-            labels = selectorLabels;
-          }
-        else
-          null;
-
-      reflectorAnnotatorRole =
-        if reflectionEnabled then
-          scope.mkResource {
-            apiVersion = "rbac.authorization.k8s.io/v1";
-            kind = "Role";
-            name = "${name}-reflector-annotator";
-            labels = selectorLabels;
-            extra.rules = [
-              {
-                apiGroups = [ "" ];
-                resources = [ "secrets" ];
-                resourceNames = [ name ];
-                verbs = [
-                  "get"
-                  "patch"
-                  "update"
-                ];
-              }
-            ];
-          }
-        else
-          null;
-
-      reflectorAnnotatorBinding =
-        if reflectionEnabled then
-          scope.mkResource {
-            apiVersion = "rbac.authorization.k8s.io/v1";
-            kind = "RoleBinding";
-            name = "${name}-reflector-annotator";
-            labels = selectorLabels;
-            extra = {
-              roleRef = {
-                apiGroup = "rbac.authorization.k8s.io";
-                kind = "Role";
-                name = self.reflectorAnnotatorRole.out.name;
-              };
-              subjects = [
-                {
-                  kind = "ServiceAccount";
-                  name = self.reflectorAnnotatorSA.out.name;
-                  namespace = scope.namespaceName;
-                }
-              ];
-            };
-          }
-        else
-          null;
-
-      reflectorAnnotatorJob =
-        if reflectionEnabled then
-          scope.mkResource {
-            apiVersion = "batch/v1";
-            kind = "Job";
-            name = "${name}-reflector-annotator";
-            labels = selectorLabels;
-            annotations = {
-              # Re-run on every apply so the annotation is reapplied if the
-              # operator ever recreates the secret.
-              "kix.dev/hook" = "post-deploy";
-              "kix.dev/hook-delete-policy" = "before-hook-creation,hook-succeeded";
-            };
-            spec = {
-              backoffLimit = 20;
-              ttlSecondsAfterFinished = 600;
-              template = {
-                metadata.labels = selectorLabels;
-                spec = {
-                  restartPolicy = "OnFailure";
-                  serviceAccountName = self.reflectorAnnotatorSA.out.name;
-                  containers = [
-                    {
-                      name = "annotate";
-                      # Bitnami sunset their free Docker Hub repos in Aug 2025
-                      # (`bitnami/kubectl` is gone). `bitnamilegacy/*` is the
-                      # frozen snapshot they pushed for migration; fine for a
-                      # one-shot annotator that just needs `kubectl annotate`.
-                      image = "bitnamilegacy/kubectl:1.30";
-                      command = [
-                        "/bin/sh"
-                        "-c"
-                      ];
-                      args = [
-                        ''
-                          set -e
-                          echo "waiting for secret ${name} in namespace ${scope.namespaceName}..."
-                          for i in $(seq 1 120); do
-                            if kubectl get secret ${name} -n ${scope.namespaceName} >/dev/null 2>&1; then
-                              break
-                            fi
-                            sleep 5
-                          done
-                          kubectl get secret ${name} -n ${scope.namespaceName} >/dev/null
-                          kubectl annotate secret ${name} -n ${scope.namespaceName} --overwrite \
-                            reflector.v1.k8s.emberstack.com/reflection-allowed=true \
-                            reflector.v1.k8s.emberstack.com/reflection-allowed-namespaces='.*' \
-                            reflector.v1.k8s.emberstack.com/reflection-auto-enabled=true \
-                            reflector.v1.k8s.emberstack.com/reflection-auto-namespaces='.*'
-                          echo "annotated."
-                        ''
-                      ];
-                    }
-                  ];
-                };
-              };
-            };
+          reflector.out.reflectSecret scope {
+            secretName = name;
+            requires = [ self.cluster ];
           }
         else
           null;
@@ -633,12 +525,7 @@ in
           self.instanceProfile
           self.pgConfig
         ]
-        ++ lib.optionals reflectionEnabled [
-          self.reflectorAnnotatorSA
-          self.reflectorAnnotatorRole
-          self.reflectorAnnotatorBinding
-          self.reflectorAnnotatorJob
-        ]
+        ++ lib.optionals reflectionEnabled (lib.attrValues self.reflectorBundle)
         ++ lib.optional config.backup.enabled self.objectStorage
         ++ lib.optional config.pooling.enabled self.poolingConfig
         ++ lib.optional (config.scripts != [ ]) self.initScript;

@@ -277,13 +277,30 @@ in
           };
         };
 
+        # ── Grafana persistent storage (DI sibling) ─────────────────────
+        # Storage lives as its own instance so cluster operators control
+        # size / storageClass without reaching into grafana's config. The
+        # `storage` alias auto-wires into grafana's `storage` dep arg via
+        # `persistent-volume-claim.defaultAliases`.
+        storage = lib.mkIf (cfg.grafana.enabled && cfg.grafana.persistence.enabled) {
+          package = packages."persistent-volume-claim";
+          config = {
+            size = cfg.grafana.persistence.size;
+          }
+          //
+            lib.optionalAttrs
+              (cfg.grafana.persistence ? storageClass && cfg.grafana.persistence.storageClass != null)
+              {
+                accessModes = [ "ReadWriteOnce" ];
+              };
+        };
+
         # ── Grafana ───────────────────────────────────────────────────────
         grafana = lib.mkIf cfg.grafana.enabled {
           package = packages.grafana;
           config = {
             rootUrl = grafanaRootUrl;
             replicas = cfg.grafana.replicas;
-            persistence = cfg.grafana.persistence;
             # Loki is still Helm-wrapped so doesn't expose out.serviceUrl via DI.
             # Pass the datasource URL explicitly until Loki is migrated to native.
             datasources =

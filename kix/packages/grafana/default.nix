@@ -5,6 +5,10 @@
 # grafana_dashboard=1 / grafana_datasource=1.
 #
 # DI deps:
+#   storage ? null          — optional PVC for /var/lib/grafana. When absent,
+#                             an emptyDir is used. Provision via a sibling
+#                             `persistent-volume-claim` instance (immich pattern);
+#                             storage sizing/class stays with the cluster op.
 #   prometheus ? null       — prometheus-operator, for ServiceMonitor creation
 #   prometheusServer ? null — auto-wires Prometheus datasource via out.serviceUrl
 #   alertmanager ? null     — auto-wires Alertmanager datasource via out.serviceUrl
@@ -65,14 +69,9 @@ in
         };
       };
     };
-    persistence = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        enabled = true;
-        size = "10Gi";
-        storageClass = null;
-      };
-    };
+    # Note: persistence (PVC size / storageClass) is now controlled by a
+    # sibling `storage` instance of `persistent-volume-claim`. Leaving this
+    # option out of grafana keeps package config focused on grafana itself.
     sidecar = lib.mkOption {
       type = lib.types.anything;
       default = {
@@ -135,6 +134,10 @@ in
     {
       self,
       config,
+      # Sibling PVC instance (persistent-volume-claim package). Optional —
+      # when absent the Deployment falls back to emptyDir (useful for
+      # ephemeral/kind clusters).
+      storage ? null,
       # prometheus-operator — for ServiceMonitor creation (alias: "prometheus")
       prometheus ? null,
       # prometheus server — for datasource URL (alias: "prometheusServer")
@@ -409,21 +412,15 @@ in
         };
       };
 
-      # ── PVC ─────────────────────────────────────────────────────────────
-
-      pvc =
-        if config.persistence.enabled then
-          scope.mkResource {
-            apiVersion = "v1";
-            kind = "PersistentVolumeClaim";
-            inherit name;
-            spec = {
-              accessModes = [ "ReadWriteOnce" ];
-              resources.requests.storage = config.persistence.size;
-            }
-            // lib.optionalAttrs (config.persistence.storageClass != null) {
-              storageClassName = config.persistence.storageClass;
-            };
+      # ── Storage mount (DI) ──────────────────────────────────────────────
+      # Grafana's /var/lib/grafana is backed by the sibling `storage`
+      # instance when present. `kix.mount.pvc` returns null if storage is
+      # null, which we use below to pick an emptyDir fallback.
+      storageMount =
+        if storage != null then
+          kix.mount.pvc storage {
+            name = "storage";
+            mountPath = "/var/lib/grafana";
           }
         else
           null;
@@ -554,10 +551,17 @@ in
                     mountPath = "/tmp/dashboards";
                   }
                   ++ [
-                    {
-                      name = "storage";
-                      mountPath = "/var/lib/grafana";
-                    }
+                    (
+                      if self.storageMount != null then
+                        {
+                          inherit (self.storageMount) name mountPath;
+                        }
+                      else
+                        {
+                          name = "storage";
+                          mountPath = "/var/lib/grafana";
+                        }
+                    )
                   ];
                 }
               ]
@@ -583,11 +587,11 @@ in
               }
               ++ [
                 (
-                  if config.persistence.enabled then
+                  if self.storageMount != null then
                     {
-                      name = "storage";
-                      persistentVolumeClaim.claimName = self.pvc.out.name;
+                      inherit (self.storageMount) name;
                     }
+                    // self.storageMount.source
                   else
                     {
                       name = "storage";
@@ -651,7 +655,6 @@ in
           self.deployment
         ]
         ++ lib.optional (self.scDashboardProvider != null) self.scDashboardProvider
-        ++ lib.optional (self.pvc != null) self.pvc
         ++ lib.optional (self.serviceMonitor != null) self.serviceMonitor;
         out = {
           serviceUrl = "http://${name}.${ns}.svc.cluster.local:80";
