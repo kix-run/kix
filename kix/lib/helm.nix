@@ -405,6 +405,30 @@ rec {
           # All non-root resources become requires of root.
           nonRootResources = builtins.filter (r: r.outPath != rootResource.outPath) wrappedResources;
 
+          # Every workload emitted by the chart. Exposed to `rootOut` so
+          # packages that install CRDs via `mkCRDRef { installedBy = ...; }`
+          # can gate their CR consumers on *all* chart workloads being Ready,
+          # not just the single hand-picked root.
+          #
+          # Motivation: for helm-bundled operators (cilium, cert-manager, etc.)
+          # the CRDs are served by webhooks that live in more than one workload
+          # — e.g. cilium's CNP validating webhook runs in `cilium-operator`,
+          # while the datapath lives in the `cilium` DaemonSet. Gating only on
+          # `self.root.resource` leaves the operator Deployment in the same
+          # wave as every other non-root helm resource, so its readiness is
+          # checked *once* at that wave boundary and never re-gated when the
+          # CR wave lands two waves later. Listing every workload in the CRD
+          # marker's `installedBy` adds direct marker → workload edges, which
+          # forces the wave engine to treat each workload as a hard dependency
+          # of the marker and re-observe their readiness at the marker's own
+          # wave boundary.
+          workloadKinds = [
+            "Deployment"
+            "StatefulSet"
+            "DaemonSet"
+          ];
+          helmWorkloads = builtins.filter (r: builtins.elem r.kind workloadKinds) wrappedResources;
+
           # Expose each resource as a named attribute so buildCluster's
           # collectResources can find them for the registry.
           resourceAttrs = builtins.listToAttrs (
@@ -414,23 +438,47 @@ rec {
             }) wrappedResources
           );
 
+          # Evaluate rootOut once so we can both (a) install it as `root.out`
+          # and (b) surface any k8s-resources it produced at the top level of
+          # parts. Helm-wrapped packages that expose CRD/secret ref markers
+          # via rootOut (e.g. cilium's `cnpCrdRef`) need those marker resources
+          # to land in parts so cluster.nix's `collectResources` picks them up
+          # — it walks everything except the `root` key, so a marker living
+          # only under `root.out` is invisible to the plan and the CNPs that
+          # `requires` it end up with a phantom store-path edge.
+          #
+          # `workloads` is passed in addition to `self` so `rootOut` can wire
+          # CRD refs against every chart workload without having to re-walk
+          # `self`'s parts tree by hand.
+          rootOutAttrs =
+            if rootOut != null then
+              rootOut {
+                inherit
+                  scope
+                  lib
+                  self
+                  config
+                  clusterConfig
+                  ;
+                workloads = helmWorkloads;
+              }
+            else
+              { };
+
+          # Pick up any k8s-resource valued attrs from rootOut and expose them
+          # as sibling parts. Functions / plain attrsets (reflector-style
+          # builders) are ignored.
+          rootOutResourceParts = lib.filterAttrs (_: v: (v._type or "") == "k8s-resource") rootOutAttrs;
         in
         resourceAttrs
+        // rootOutResourceParts
         // {
           root = {
             resource = rootResource;
             requires = nonRootResources;
           }
           // lib.optionalAttrs (rootOut != null) {
-            out = rootOut {
-              inherit
-                scope
-                lib
-                self
-                config
-                clusterConfig
-                ;
-            };
+            out = rootOutAttrs;
           };
         };
     };

@@ -6,6 +6,22 @@
 # loki/promtail/descheduler: this file exports `{ meta, chart, defaultValues }`
 # and the cluster module / definition instantiates it.
 #
+# This file ALSO exports `external`, a small inline package for
+# externally-managed Cilium (helm-installed out-of-band by the distro or
+# by a bootstrap script, e.g. k3s with --flannel-backend=none or kind
+# with deploy-ludo-kind.sh). The external variant advertises the
+# `network-policy-enforcer` capability and emits the CiliumNetworkPolicy
+# CRD ref marker — it does NOT deploy cilium itself. kix/lib/netpol.nix
+# routes every generated CNP through this marker so the CNPs still
+# depend on (a proxy for) cilium's readiness, even though cilium itself
+# is not part of the kix-managed store closure.
+#
+# Usage (externally-managed):
+#
+#   instances.kube-system.cilium = {
+#     package = packages."cilium".external;
+#   };
+#
 # Why this package matters for kix/lib/netpol.nix:
 #   netpol.nix emits `CiliumNetworkPolicy` resources. Those require the
 #   Cilium CRDs plus a running cilium-agent/operator in the cluster. Pairing
@@ -19,14 +35,18 @@
 #
 # This package declares `meta.provides = [ ... "network-policy-enforcer" ]`
 # and exposes `rootOut.cnpCrdRef`, a `scope.mkCRDRef` handle for the
-# CiliumNetworkPolicy CRD with `installedBy = self.root.resource`. kix/lib
-# discovers any instance providing `"network-policy-enforcer"` at cluster
-# evaluation time and exposes its `out.cnpCrdRef` to scopes via
-# `scope.networkPolicyEnforcer`. `kix/lib/netpol.nix` emits every generated
-# CiliumNetworkPolicy through that `cnpCrdRef.out.cr` builder, so every CNP
-# transitively depends on the CRD import marker → cilium package root →
-# cilium DaemonSet + CRDs. No `networkPolicy.ciliumInstance` threading,
-# no user-facing plumbing. See v2_discussions/83.
+# CiliumNetworkPolicy CRD with `installedBy = workloads` (the full list of
+# helm-emitted workloads, surfaced by helm.nix). kix/lib discovers any
+# instance providing `"network-policy-enforcer"` at cluster evaluation time
+# and exposes its `out.cnpCrdRef` to scopes via `scope.networkPolicyEnforcer`.
+# `kix/lib/netpol.nix` emits every generated CiliumNetworkPolicy through
+# that `cnpCrdRef.out.cr` builder, so every CNP transitively depends on the
+# CRD import marker → *every* cilium workload (agent DaemonSet + operator
+# Deployment + Hubble components). That's the "whole chart Ready" gate the
+# CNP validating webhook needs — pinning the marker only to the DaemonSet
+# root leaves cilium-operator in the same wave as every other helm sibling,
+# so its readiness is checked once at that wave boundary and never re-gated
+# when the CR wave lands. See v2_discussions/83.
 #
 # Chart:   https://helm.cilium.io/
 # Name:    cilium
@@ -84,12 +104,23 @@
   # Exposed via fromHelmChart's `rootOut` hook. The returned attrset becomes
   # `root.out` on the cilium instance; kix/lib reads `cnpCrdRef` off
   # `networkPolicyEnforcer.out.cnpCrdRef` and routes every generated CNP
-  # through `cnpCrdRef.out.cr` so the CRD marker → cilium root edge is
-  # installed transitively. `installedBy = self.root.resource` orders the
-  # CRD import marker AFTER the cilium chart's root (the DaemonSet, which
-  # itself depends on every helm-emitted resource including the CRDs).
+  # through `cnpCrdRef.out.cr` so the CRD marker → cilium workloads edge is
+  # installed transitively.
+  #
+  # `installedBy = workloads` wires the marker against *every* helm-emitted
+  # workload (cilium agent DaemonSet + cilium-operator Deployment + Hubble
+  # relay/ui when enabled). Gating only on the DaemonSet root is not enough:
+  # CiliumNetworkPolicy is served by a validating webhook running in
+  # cilium-operator, and in the helm layout that Deployment is just another
+  # non-root resource sitting in the same wave as every other helm sibling.
+  # Its readiness would be observed once at that wave boundary and never
+  # re-gated when the CR wave lands two waves later, so a slow/rolling
+  # operator can be mid-restart by the time CNPs are applied and the webhook
+  # returns 503. Listing every workload forces the wave engine to re-observe
+  # all of them at the marker's wave, which is the "whole chart Ready" gate
+  # the CRs actually need.
   rootOut =
-    { scope, self, ... }:
+    { scope, workloads, ... }:
     {
       cnpCrdRef = scope.mkCRDRef {
         group = "cilium.io";
@@ -97,9 +128,74 @@
         plural = "ciliumnetworkpolicies";
         version = "v2";
         crdScope = "Namespaced";
-        installedBy = self.root.resource;
+        installedBy = workloads;
       };
     };
+
+  # Externally-managed cilium variant — inline package that emits only
+  # the CiliumNetworkPolicy CRD ref marker (no helm chart, no DaemonSet).
+  #
+  # The CLI deploy engine polls for the externally-installed CRD via the
+  # marker's import semantics (see scope.mkImportMarker in scope.nix) and
+  # waits for `Established=True` before any dependent CNP wave runs. No
+  # `installedBy` is set, so the marker has no store-path edge — the
+  # "cilium is ready" guarantee comes from the external bootstrap, not
+  # the DI graph.
+  #
+  # Declares `meta.provides = ["network-policy-enforcer" "cilium"]` so
+  # the cluster-level enforcer lookup resolves this instance, and
+  # exposes `out.cnpCrdRef` so kix/lib/netpol.nix can route CNPs through
+  # `cnpCrdRef.out.cr`.
+  external = {
+    meta = {
+      description = "Cilium (externally managed) — CNP CRD ref marker only";
+      provides = [
+        "network-policy-enforcer"
+        "cilium"
+      ];
+      # Intentionally does NOT provide "cni" / "network-policy": the real
+      # cilium DaemonSet is not part of this package. Capability lookups
+      # that need the datapath should rely on `cluster.capabilities.cni`
+      # being set by the cluster definition.
+    };
+
+    build =
+      { scope, ... }:
+      let
+        crdRef = scope.mkCRDRef {
+          group = "cilium.io";
+          kind = "CiliumNetworkPolicy";
+          plural = "ciliumnetworkpolicies";
+          version = "v2";
+          crdScope = "Namespaced";
+          # No `installedBy` — CRD is installed out-of-band by the
+          # external cilium. The CLI readiness check polls the cluster
+          # for the CRD and gates the wave until it's Established=True.
+        };
+      in
+      {
+        # Expose the crdRef at the top level of parts so
+        # `collectResources` picks it up and the PackageInstance import
+        # marker is emitted as a yaml file (the cluster-level resource
+        # collector excludes the `root` key, so resources must live on
+        # a sibling key to be serialized).
+        cnpCrdRef = crdRef;
+
+        root = {
+          # The crdRef is itself a k8s-resource (PackageInstance import
+          # marker), so it serves as the instance root directly — same
+          # store path as `parts.cnpCrdRef`, deduped by the collector.
+          resource = crdRef;
+          requires = [ ];
+          # Surface the crdRef on the instance's `out` so the cluster-
+          # level enforcer lookup (cluster.nix → enforcerOut) can read
+          # `out.cnpCrdRef` and feed it to every scope.
+          out = {
+            cnpCrdRef = crdRef;
+          };
+        };
+      };
+  };
 
   chart = {
     repo = "https://helm.cilium.io/";

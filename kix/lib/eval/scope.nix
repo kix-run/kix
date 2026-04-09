@@ -1008,7 +1008,14 @@ rec {
       # consuming CRs via the standard forward-closure walker. No `root.requires`
       # plumbing, no special case in wave ordering.
       #
-      # Same .out.{cr, mkCR} interface as mkCRD.
+      # `installedBy` accepts either a single resource or a list of resources.
+      # Every entry becomes a hard `requires` edge on the marker, so the CR's
+      # wave is gated on all of them being Ready — not just being applied.
+      # This matters for helm-bundled operators where the CRD is installed by
+      # the chart alongside multiple workloads (e.g. cilium-agent DaemonSet
+      # + cilium-operator Deployment): the CRD must wait for *every* workload
+      # that serves its admission / conversion webhooks, not just a single
+      # hand-picked root. See helm.nix's `rootOut { workloads }` plumbing.
       mkCRDRef =
         {
           group,
@@ -1024,12 +1031,20 @@ rec {
           groupSlug = builtins.replaceStrings [ "." ] [ "-" ] group;
           markerName = "crd-ref-${plural}-${groupSlug}";
 
+          installedByList =
+            if installedBy == null then
+              [ ]
+            else if builtins.isList installedBy then
+              installedBy
+            else
+              [ installedBy ];
+
           marker = mkImportMarker {
             inherit markerName;
             importKind = "CustomResourceDefinition";
             importApiVersion = "apiextensions.k8s.io/v1";
             importName = crdName;
-            extraRequires = lib.optional (installedBy != null) installedBy;
+            extraRequires = installedByList;
           };
 
           builders = k8s.mkCRDBuilders {

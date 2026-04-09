@@ -25,7 +25,7 @@ let
 
   scorecard = import ./scorecard.nix { inherit lib; };
   helpers = import ./eval/helpers.nix { inherit lib; };
-  netpol = import ./netpol.nix { inherit lib k8s helpers; };
+  netpol = import ./netpol.nix { inherit lib k8s; };
   view = import ./eval/view.nix { inherit lib helpers; };
   crd = import ./crd.nix { inherit lib; };
   scopeMod = import ./eval/scope.nix {

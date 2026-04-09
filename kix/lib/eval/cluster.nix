@@ -117,10 +117,13 @@ in
       # is surfaced to every instance's scope via `scope.networkPolicyEnforcer`,
       # and `kix/lib/netpol.nix` routes every generated CiliumNetworkPolicy
       # through `cnpCrdRef.out.cr` so the CNP → CRD marker → enforcer root
-      # edge is installed transitively. When no enforcer instance is present
-      # (e.g. cilium runs out-of-band on the cluster), netpol.nix falls back
-      # to raw `mkResource` emission — the CNPs still apply, just without the
-      # store-path edge to an in-cluster enforcer. See v2_discussions/83.
+      # edge is installed transitively. When `networkPolicy.enable = true`
+      # and no enforcer instance is declared we throw below — there is no
+      # silent fallback, because an unrouted CNP has no store-path edge to
+      # cilium and will race the operator at apply time. Externally-managed
+      # cilium should be declared via an import-style package that only
+      # emits the CRD ref marker (see `kix/packages/cilium` → `external`).
+      # See v2_discussions/83.
       #
       # If two instances advertise the capability we throw — ambiguous.
       enforcerCandidates = builtins.concatMap (
@@ -164,12 +167,31 @@ in
 
       # Lazy read from the cluster fixpoint. `out` is populated by the
       # enforcer's `rootOut` hook (see kix/packages/cilium/default.nix).
-      # Returns null when no enforcer is declared so netpol.nix can fall back.
+      # Null when no enforcer instance is declared.
       enforcerOut =
         if enforcerLookup == null then
           null
         else
           clusterInstances.${enforcerLookup.ns}.${enforcerLookup.inst}.out or null;
+
+      # Eager assertion: `networkPolicy.enable = true` requires a resolved
+      # enforcer. Throws at cluster eval time with an actionable message,
+      # before any per-instance scope is constructed. See v2_discussions/83.
+      _netpolEnforcerAssertion =
+        if (cfg.networkPolicy.enable or false) && enforcerLookup == null then
+          throw (
+            "kix: `networkPolicy.enable = true` but no instance declares "
+            + "`meta.provides = [\"network-policy-enforcer\"]`. Declare a cilium "
+            + "instance in the cluster. For externally-managed cilium (k3s with "
+            + "--flannel-backend=none, kind with helm-installed cilium, RKE2's "
+            + "bundled cilium, etc.) use the external variant that emits only "
+            + "the CRD ref marker, e.g.:\n\n"
+            + "  instances.kube-system.cilium = {\n"
+            + "    package = packages.\"cilium\".external;\n"
+            + "  };\n"
+          )
+        else
+          null;
 
       # Self-dep guard: the enforcer's own scope must not depend on itself.
       isSelfEnforcer =
@@ -575,27 +597,29 @@ in
       };
 
     in
-    builtins.seq clusterDiagnostics.assertionCheck {
-      _type = "k8s-cluster-v2";
-      inherit name;
+    builtins.seq _netpolEnforcerAssertion (
+      builtins.seq clusterDiagnostics.assertionCheck {
+        _type = "k8s-cluster-v2";
+        inherit name;
 
-      inherit clusterInstances;
-      instances = clusterInstances;
+        inherit clusterInstances;
+        instances = clusterInstances;
 
-      namespaces = nsResources;
+        namespaces = nsResources;
 
-      inherit activation packageIndex info;
+        inherit activation packageIndex info;
 
-      # Cluster-level diagnostics for tooling
-      diagnostics = {
-        inherit (clusterDiagnostics) warnings assertions failedAssertions;
-      };
+        # Cluster-level diagnostics for tooling
+        diagnostics = {
+          inherit (clusterDiagnostics) warnings assertions failedAssertions;
+        };
 
-      # Scorecard report (null if disabled)
-      inherit scorecardReport;
+        # Scorecard report (null if disabled)
+        inherit scorecardReport;
 
-      rawManifests = map (
-        r: builtins.fromJSON (builtins.unsafeDiscardStringContext (builtins.toJSON r.rawManifest))
-      ) allResources;
-    };
+        rawManifests = map (
+          r: builtins.fromJSON (builtins.unsafeDiscardStringContext (builtins.toJSON r.rawManifest))
+        ) allResources;
+      }
+    );
 }

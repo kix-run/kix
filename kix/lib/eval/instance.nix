@@ -312,6 +312,15 @@ in
         # v2_discussions/83 → "scope-level workload interception".
         _scopeEmittedNetpolCnps = builtins.concatMap (r: r._generatedNetpol or [ ]) _partResourcesFromParts;
 
+        # Drain edges the same way — `buildWorkloadCnps` already extracted
+        # cross-package service edges from each workload's raw JSON context
+        # at `scope.mkDeployment` time. Threading them through here lets
+        # `netpol.processInstance` skip re-extraction, and the cluster-level
+        # inverted-ingress pass consumes the same list via `_networkEdges`.
+        _scopeEmittedNetpolEdges = builtins.concatMap (
+          r: r._generatedNetpolEdges or [ ]
+        ) _partResourcesFromParts;
+
         allPartResources = _partResourcesFromParts ++ _scopeEmittedNetpolCnps;
 
         # Local store-path → resource lookup for forward closure walking.
@@ -327,6 +336,15 @@ in
         ) { } allPartResources;
 
         # Get forward deps: store-path refs in manifest + explicit requires
+        # + extraDeps. `extraDeps` are folded into the resource's own
+        # store-path context (see k8s.nix `manifestJsonWithDeps`) so they
+        # influence content addressing, but they don't appear in the raw
+        # manifest JSON's context — which means the walker won't find them
+        # unless we list them here explicitly. Critical for scope-level
+        # per-workload CNPs that are attached via extraDeps from
+        # `scope.mkWorkload` (see v2_discussions/83): without this edge
+        # the workload's CNPs would show up as orphans in the instance
+        # forward closure.
         getForwardDeps =
           resource:
           let
@@ -336,8 +354,11 @@ in
             requiresDeps = builtins.filter (r: builtins.isAttrs r && (r._type or "") == "k8s-resource") (
               resource.requires or [ ]
             );
+            extraDepsDeps = builtins.filter (r: builtins.isAttrs r && (r._type or "") == "k8s-resource") (
+              resource.extraDeps or [ ]
+            );
           in
-          manifestDeps ++ requiresDeps;
+          manifestDeps ++ requiresDeps ++ extraDepsDeps;
 
         # Compute the forward closure from rootRes + packageRequires + postHooks
         forwardRoots = [ rootRes ] ++ packageRequires ++ postHooks;
@@ -461,11 +482,10 @@ in
               scope = scope';
               inherit
                 instanceName
-                namespaceName
                 allPartResources
-                resolvedDepMeta
                 networkPolicyEnforcer
                 ;
+              workloadEdges = _scopeEmittedNetpolEdges;
               networkConfig = clusterConfig.networkPolicy;
               inherit packageMeta;
             }

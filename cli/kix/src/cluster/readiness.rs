@@ -839,6 +839,9 @@ pub fn check_readiness(obj: &DynamicObject, kind: &str) -> bool {
         "Job" => check_job_ready(&obj.data),
         "PersistentVolumeClaim" => check_pvc_ready(&obj.data),
         "CustomResourceDefinition" => check_crd_ready(&obj.data),
+        "CiliumNetworkPolicy" | "CiliumClusterwideNetworkPolicy" => {
+            has_condition(&obj.data, "Valid", "True")
+        }
         _ => check_generic_ready(&obj.data),
     }
 }
@@ -1033,6 +1036,24 @@ fn readiness_message(obj: &DynamicObject, kind: &str) -> String {
                 .unwrap_or("Unknown");
             format!("PVC/{name}: phase={phase}")
         }
+        "CiliumNetworkPolicy" | "CiliumClusterwideNetworkPolicy" => {
+            let reason = obj
+                .data
+                .pointer("/status/conditions")
+                .and_then(Value::as_array)
+                .and_then(|conds| {
+                    conds.iter().find_map(|c| {
+                        let ctype = c.get("type").and_then(Value::as_str)?;
+                        if ctype == "Valid" {
+                            c.get("message").and_then(Value::as_str)
+                        } else {
+                            None
+                        }
+                    })
+                })
+                .unwrap_or("no Valid=True condition");
+            format!("{kind}/{name}: {reason}")
+        }
         _ => format!("{kind}/{name}: not ready"),
     }
 }
@@ -1111,6 +1132,38 @@ mod tests {
             }
         }));
         assert!(check_readiness(&obj, "StatefulSet"));
+    }
+
+    #[test]
+    fn cilium_network_policy_valid() {
+        let obj = make_obj(json!({
+            "status": {
+                "conditions": [
+                    {"type": "Valid", "status": "True", "message": "Policy validation succeeded"},
+                ]
+            }
+        }));
+        assert!(check_readiness(&obj, "CiliumNetworkPolicy"));
+        assert!(check_readiness(&obj, "CiliumClusterwideNetworkPolicy"));
+    }
+
+    #[test]
+    fn cilium_network_policy_invalid() {
+        let obj = make_obj(json!({
+            "status": {
+                "conditions": [
+                    {"type": "Valid", "status": "False", "message": "bad selector"},
+                ]
+            }
+        }));
+        assert!(!check_readiness(&obj, "CiliumNetworkPolicy"));
+    }
+
+    #[test]
+    fn cilium_network_policy_missing_status() {
+        // Freshly created CNP before cilium-operator has set status.
+        let obj = make_obj(json!({}));
+        assert!(!check_readiness(&obj, "CiliumNetworkPolicy"));
     }
 
     #[test]

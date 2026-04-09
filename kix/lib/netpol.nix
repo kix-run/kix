@@ -15,20 +15,20 @@
 {
   lib,
   k8s,
-  helpers,
 }:
 
 let
-  inherit (helpers) collectTypedAttrs;
-
-  # Build a CiliumNetworkPolicy, routing through the enforcer's
-  # `cnpCrdRef.out.cr` when an enforcer is available. That builder stamps
-  # `apiVersion`/`kind` and adds the CRD import marker to `requires`, so
-  # every CNP transitively depends on the enforcer's root (via the marker's
-  # `installedBy`). When no enforcer is declared (e.g. cilium runs
-  # out-of-band on the cluster) we fall back to emitting the CNP directly
-  # via the caller's mkResource — the store-path edge to the enforcer is
-  # lost but the CNP is still generated.
+  # Build a CiliumNetworkPolicy by routing through the enforcer's
+  # `cnpCrdRef.out.cr`. That builder stamps `apiVersion`/`kind` and adds
+  # the CRD import marker to `requires`, so every CNP transitively
+  # depends on the enforcer's root (via the marker's `installedBy`).
+  #
+  # There is no fallback for a missing enforcer: an unrouted CNP would
+  # land in the wave graph without a store-path edge to cilium and race
+  # the operator at apply time. Cluster-level eval asserts that an
+  # enforcer is resolved before scope construction (see
+  # `kix/lib/eval/cluster.nix` → `enforcerOut`), so reaching this helper
+  # with a null enforcer is a programmer error.
   #
   # `mkResource` is the function used to materialize the resulting attrs
   # (typically `scope.mkResource` for instance-level CNPs and
@@ -42,23 +42,14 @@ let
       mkResource,
       extraArgs,
     }:
-    let
-      baseArgs = extraArgs // {
-        apiVersion = "cilium.io/v2";
-        kind = "CiliumNetworkPolicy";
-      };
-    in
-    if networkPolicyEnforcer != null && networkPolicyEnforcer.cnpCrdRef or null != null then
-      mkResource (
-        networkPolicyEnforcer.cnpCrdRef.out.cr (
-          removeAttrs baseArgs [
-            "apiVersion"
-            "kind"
-          ]
-        )
+    if networkPolicyEnforcer == null || (networkPolicyEnforcer.cnpCrdRef or null) == null then
+      throw (
+        "kix.netpol: buildCnp called without a resolved network-policy enforcer. "
+        + "This indicates a missing cluster-level assertion — cluster.nix should "
+        + "have thrown at eval time. Please file a bug."
       )
     else
-      mkResource baseArgs;
+      mkResource (networkPolicyEnforcer.cnpCrdRef.out.cr extraArgs);
 
   workloadKinds = [
     "Deployment"
@@ -85,20 +76,13 @@ let
       }
     ) { } (builtins.filter isService resources);
 
-  # Extract Service edges from a workload (built resource) via store-path context.
-  extractServiceEdges =
-    { workload, serviceRegistry }:
-    extractServiceEdgesFromJson {
-      json = builtins.toJSON workload.rawManifest;
-      inherit serviceRegistry;
-    };
-
-  # Same as `extractServiceEdges` but operating on a pre-built JSON string.
-  # Used by `buildWorkloadCnps` which runs inside `scope.mkDeployment` —
-  # before the workload resource exists — and extracts edges directly from
-  # the caller's args JSON. The store-path context on the JSON is identical
-  # to what the built `rawManifest` would carry (same input attrs), so this
-  # is a strictly equivalent path that avoids a throw-away `mkResource` call.
+  # Extract Service edges from a workload's JSON string-context. Used by
+  # `buildWorkloadCnps` which runs inside `scope.mkDeployment` — before the
+  # workload resource exists — and extracts edges directly from the caller's
+  # args JSON. The store-path context on the JSON is identical to what the
+  # built `rawManifest` would carry (same input attrs), so this is the only
+  # extractor we need; `processInstance` threads its edges through the
+  # workload sideband `_generatedNetpolEdges` rather than re-extracting.
   extractServiceEdgesFromJson =
     { json, serviceRegistry }:
     let
@@ -359,23 +343,34 @@ rec {
   #
   # What stays here:
   #   - **Warnings**: hostNetwork, helm opacity.
-  #   - **Supplementary CNPs** that depend on post-fixpoint signals
-  #     (api-server access derived from RBAC/CRD presence across the
-  #     whole instance; external-ingress derived from LoadBalancer Service
-  #     or hostNetwork workloads). These are additive permissions, not
-  #     gating policies — they depend on the workload the old way
-  #     (CNP → workload), which is fine.
-  #   - **Edges** for the cluster-level inverted-ingress pass. Same
-  #     extraction as before, run against `allPartResources`.
+  #   - **Precise api-server egress**: emitted only for workloads whose
+  #     ServiceAccount is the subject of some Role/ClusterRoleBinding in
+  #     the instance closure. Requires the instance view because the
+  #     binding is typically a sibling resource of the workload, not part
+  #     of its own manifest. Replaces the old "any RBAC in the instance
+  #     → grant apiserver to every non-hostnet workload" heuristic.
+  #   - **External-ingress supplement** for LoadBalancer Services only.
+  #     hostNetwork is no longer a trigger: the old behavior granted
+  #     world-ingress to *sibling* workloads of a hostNetwork pod, and
+  #     hostNetwork pods themselves can't be gated by CiliumNetworkPolicy.
+  #     Narrowing to just LB-backing pods requires a `mkService` hook —
+  #     see v2_discussions/85.
+  #   - **Edges** for the cluster-level inverted-ingress pass, threaded
+  #     through from `_generatedNetpolEdges` on each workload (already
+  #     extracted at `scope.mkDeployment` time — no re-extraction).
   #
   # Returns { policies = [resource]; edges = [edge]; warnings = [string]; }
   processInstance =
     {
       scope,
       instanceName,
-      namespaceName,
       allPartResources,
-      resolvedDepMeta,
+      # Flat list of edges already extracted at `scope.mkDeployment` time
+      # (see `buildWorkloadCnps.edges` and the `_generatedNetpolEdges`
+      # sideband drained in `kix/lib/eval/instance.nix`). Passed through
+      # to the cluster-level inverted-ingress pass verbatim — no
+      # re-extraction here.
+      workloadEdges,
       networkConfig,
       packageMeta,
       # Handle to the cluster-level network-policy enforcer's `out`
@@ -388,76 +383,70 @@ rec {
       directions = networkConfig.directions or "both";
       doEgress = directions == "both" || directions == "egress";
       doIngress = directions == "both" || directions == "ingress";
-      networkMeta = packageMeta.network or { };
 
       workloads = builtins.filter isWorkload allPartResources;
-
-      # --- Signal detection (derived from resource graph, no meta needed) ---
-
-      needsApiServerAccess = builtins.any (
-        r:
-        builtins.elem (r.kind or "") [
-          "ClusterRole"
-          "ClusterRoleBinding"
-          "Role"
-          "RoleBinding"
-          "CustomResourceDefinition"
-        ]
-      ) allPartResources;
-
-      needsExternalIngress = builtins.any (
-        r:
-        (isService r && (r.rawManifest.spec.type or "") == "LoadBalancer")
-        || (isWorkload r && (r.rawManifest.spec.template.spec.hostNetwork or false))
-      ) allPartResources;
 
       hostNetworkWorkloads = builtins.filter (
         w: w.rawManifest.spec.template.spec.hostNetwork or false
       ) workloads;
 
-      # --- Build service registry (local + dep services) ---
+      # --- Precise apiserver detection via SA → Binding walk ---
+      #
+      # A workload needs apiserver egress iff its ServiceAccount is the
+      # subject of some Role/ClusterRoleBinding in the instance closure.
+      # The old heuristic ("any RBAC/CRD in the instance → every non-
+      # hostnet workload gets apiserver egress") over-granted to sibling
+      # workloads that didn't bind apiserver-accessing SAs.
 
-      depResources = builtins.concatMap (
-        argName:
+      bindings = builtins.filter (
+        r:
+        builtins.elem (r.kind or "") [
+          "RoleBinding"
+          "ClusterRoleBinding"
+        ]
+      ) allPartResources;
+
+      # Set of "<ns>/<saName>" keys for ServiceAccounts bound to some
+      # Role or ClusterRole. RoleBinding subjects default to the binding's
+      # namespace when unset; ClusterRoleBinding subjects must name an
+      # explicit namespace (dropped if missing).
+      boundSAKeys = builtins.concatMap (
+        b:
         let
-          depParts = resolvedDepMeta.${argName}.instance.raw or { };
+          subjects = b.rawManifest.subjects or [ ];
+          bindingNs = b.rawManifest.metadata.namespace or null;
         in
-        builtins.filter (v: (v._type or "") == "k8s-resource") (
-          collectTypedAttrs {
-            excludeKeys = [
-              "root"
-              "meta"
-            ];
-          } depParts
+        builtins.filter (k: k != null) (
+          map (
+            s:
+            if (s.kind or "") == "ServiceAccount" then
+              let
+                ns = s.namespace or bindingNs;
+                saName = s.name or null;
+              in
+              if ns == null || saName == null then null else "${ns}/${saName}"
+            else
+              null
+          ) subjects
         )
-      ) (builtins.attrNames resolvedDepMeta);
+      ) bindings;
 
-      serviceRegistry = mkServiceRegistry (allPartResources ++ depResources);
+      workloadNeedsApiserver =
+        w:
+        let
+          saName = w.rawManifest.spec.template.spec.serviceAccountName or "default";
+          wNs = w.rawManifest.metadata.namespace or null;
+        in
+        wNs != null && builtins.elem "${wNs}/${saName}" boundSAKeys;
 
-      # --- Per-workload edge extraction ---
-
-      workloadEdges = map (w: {
-        workload = w;
-        edges = extractServiceEdges {
-          workload = w;
-          inherit serviceRegistry;
-        };
-      }) workloads;
-
-      # Flatten for cluster-level ingress pass.
-      allEdges = builtins.concatMap (
-        we:
-        map (edge: {
-          sourceSelector = we.workload.rawManifest.spec.selector.matchLabels or { };
-          sourceNamespace = namespaceName;
-          inherit (edge)
-            service
-            ports
-            targetSelector
-            targetNamespace
-            ;
-        }) we.edges
-      ) workloadEdges;
+      # External ingress is triggered only by LoadBalancer Services.
+      # hostNetwork was previously a trigger but its semantics were
+      # broken: it granted world-ingress to *sibling* workloads of a
+      # hostNetwork pod rather than to the hostNetwork pod itself (which
+      # CNPs can't gate anyway). See v2_discussions/85.
+      needsExternalIngress = builtins.any (
+        r: isService r && (r.rawManifest.spec.type or "") == "LoadBalancer"
+      ) allPartResources;
 
       # --- Supplementary api-server / external-ingress CNPs ---
       #
@@ -471,7 +460,7 @@ rec {
       # around) — additive permission grants, not readiness gates.
 
       apiServerSupplementPolicies =
-        if !doEgress || !needsApiServerAccess then
+        if !doEgress then
           [ ]
         else
           builtins.concatMap (
@@ -480,7 +469,7 @@ rec {
               wSelector = w.rawManifest.spec.selector.matchLabels or { };
               isHostNet = w.rawManifest.spec.template.spec.hostNetwork or false;
             in
-            if isHostNet then
+            if isHostNet || !(workloadNeedsApiserver w) then
               [ ]
             else
               [
@@ -529,7 +518,7 @@ rec {
                     spec = {
                       endpointSelector.matchLabels = wSelector;
                       ingress = [
-                        { fromEntities = networkMeta.externalIngressEntities or [ "world" ]; }
+                        { fromEntities = packageMeta.network.externalIngressEntities or [ "world" ]; }
                       ];
                     };
                     extraDeps = [ w ];
@@ -552,7 +541,7 @@ rec {
     in
     {
       policies = apiServerSupplementPolicies ++ externalIngressSupplementPolicies;
-      edges = allEdges;
+      edges = workloadEdges;
       inherit warnings;
     };
 

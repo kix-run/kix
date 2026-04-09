@@ -507,10 +507,14 @@
         CiliumNetworkPolicy generation from DI graph. See v2_discussions/37
         and v2_discussions/83. The enforcer that CNPs depend on is looked up
         automatically via `meta.provides ∋ "network-policy-enforcer"` (see
-        `kix/packages/cilium`) — no explicit wiring is required. When no
-        enforcer instance is declared (e.g. cilium runs out-of-band on the
-        cluster) kix still emits CNPs but without a store-path edge to an
-        in-cluster enforcer package.
+        `kix/packages/cilium`) — no explicit wiring is required, but an
+        enforcer instance MUST be declared when `enable = true`. kix throws
+        at cluster eval time if no enforcer is resolved: without the
+        store-path edge to cilium, CNPs would race the operator at apply
+        time. For externally-managed cilium (k3s with cilium helm-installed,
+        kind with bootstrap-installed cilium, RKE2's bundled cilium, etc.)
+        use `packages."cilium".external`, which emits only the CNP CRD ref
+        marker without deploying cilium itself.
       '';
     };
   };
