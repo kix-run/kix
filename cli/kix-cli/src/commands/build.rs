@@ -52,7 +52,7 @@ pub fn run(args: &BuildArgs, ctx: &mut CommandContext) -> Result<()> {
 
     // Build defaults to YAML; both Text and Yaml use multi-document YAML format
     match ctx.output_format(OutputFormat::Yaml) {
-        OutputFormat::Yaml | OutputFormat::Text => {
+        OutputFormat::Yaml | OutputFormat::Text | OutputFormat::Markdown => {
             print!("{}", response.format_text());
         }
         OutputFormat::Json => {

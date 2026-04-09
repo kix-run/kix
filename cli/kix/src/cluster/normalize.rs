@@ -184,7 +184,12 @@ fn strip_status(v: &mut Value) {
     }
 }
 
-fn strip_kix_annotations(v: &mut Value) {
+/// Remove all `kix.dev/*` annotations from a manifest's `metadata.annotations`.
+/// Used by `normalize_for_content_hash` for drift detection and by
+/// `kix export --for=exit` to produce kix-neutral YAML for exit-strategy
+/// handoff. If the annotations map becomes empty, the `annotations` key is
+/// also removed.
+pub fn strip_kix_annotations(v: &mut Value) {
     if let Some(annotations) = v
         .pointer_mut("/metadata/annotations")
         .and_then(|a| a.as_object_mut())

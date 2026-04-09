@@ -384,23 +384,14 @@ in
         ++ (inst._networkPolicies or [ ]);
 
       # --- Network policy generation (cluster-level) ---
+      #
+      # Per-workload egress/ingress CNPs (including the caller-side
+      # paired ingress grants in the callee's namespace) are all emitted
+      # at `scope.mkDeployment` time via `buildWorkloadCnps`. There is
+      # no cluster-level inverted-ingress pass — v2_discussions/83
+      # Phase C replaced it with caller-side `scope.forNamespace`
+      # emission. Only default-deny remains at this level.
       networkConfig = cfg.networkPolicy;
-
-      allNetworkEdges =
-        if networkConfig.enable then
-          builtins.concatMap (inst: inst._networkEdges or [ ]) allInstancesList
-        else
-          [ ];
-
-      clusterIngressPolicies =
-        if networkConfig.enable then
-          netpol.generateIngressPolicies {
-            allEdges = allNetworkEdges;
-            inherit nsResources networkConfig;
-            networkPolicyEnforcer = enforcerOut;
-          }
-        else
-          [ ];
 
       defaultDenyPolicies =
         if networkConfig.enable && networkConfig.defaultDeny then
@@ -490,7 +481,6 @@ in
         ++ (if ns.quota != null then [ ns.quota ] else [ ])
         ++ builtins.attrValues ns.netpols
       ) allNsNames)
-      ++ clusterIngressPolicies
       ++ defaultDenyPolicies
       ++ [ activation ];
 
@@ -505,7 +495,7 @@ in
         instances = lib.mapAttrs (
           _nsName: nsInsts: lib.mapAttrs (_: inst: inst._packageInstance.out.name) nsInsts
         ) activeClusterInstances;
-        extraDeps = clusterIngressPolicies ++ defaultDenyPolicies;
+        extraDeps = defaultDenyPolicies;
       };
 
       # Package index — PI store path → owned resource store paths.

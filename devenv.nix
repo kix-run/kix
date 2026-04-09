@@ -33,6 +33,7 @@ in
     pkgs.wrangler
     pkgs.kind
     pkgs.kubectl
+    pkgs.cilium-cli
     pkgs.vhs
     pkgs.tmux
     pkgs.viddy

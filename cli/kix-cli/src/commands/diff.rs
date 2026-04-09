@@ -85,6 +85,7 @@ pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<()> {
     match ctx.output_format(OutputFormat::Text) {
         OutputFormat::Json => print_json_output(&result, false)?,
         OutputFormat::Yaml => print_json_output(&result, true)?,
+        OutputFormat::Markdown => print_markdown_output(&result),
         OutputFormat::Text => print_text_output(&result, &ctx.global),
     }
 
@@ -514,29 +515,11 @@ fn print_migration_pairs(pairs: &[MigrationPair]) {
 // ── JSON output ──────────────────────────────────────────────────────
 
 fn print_json_output(result: &DiffResult, as_yaml: bool) -> Result<()> {
-    let pkg = &result.packages;
+    // Shared PackageDiff renderer — same structure produced by the deploy
+    // modal and the CI PR-comment action. Diff-specific extras (legacy
+    // resource listing, migration pairs) are appended below.
     let mut output = serde_json::json!({
-        "packages": {
-            "added": pkg.added.iter().map(|p| serde_json::json!({
-                "key": p.key, "version": p.version, "resources": p.resource_count,
-            })).collect::<Vec<_>>(),
-            "removed": pkg.removed.iter().map(|p| serde_json::json!({
-                "key": p.key, "version": p.version, "resources": p.resource_count,
-            })).collect::<Vec<_>>(),
-            "changed": pkg.changed.iter().map(|c| serde_json::json!({
-                "key": c.key,
-                "old_version": c.old_version,
-                "new_version": c.new_version,
-                "added_resources": c.added_resources.iter().map(|id| id.display_id()).collect::<Vec<_>>(),
-                "removed_resources": c.removed_resources.iter().map(|id| id.display_id()).collect::<Vec<_>>(),
-                "modified_resources": c.resource_diffs.iter().map(|(id, diffs)| serde_json::json!({
-                    "resource": id.display_id(),
-                    "diff_count": diffs.len(),
-                })).collect::<Vec<_>>(),
-                "dep_affected_resources": c.dep_affected_resources.iter().map(|id| id.display_id()).collect::<Vec<_>>(),
-            })).collect::<Vec<_>>(),
-            "unchanged": pkg.unchanged,
-        },
+        "packages": crate::plan::render_package_diff_json(&result.packages),
     });
 
     if !result.migration_pairs.is_empty() {
@@ -577,4 +560,90 @@ fn print_json_output(result: &DiffResult, as_yaml: bool) -> Result<()> {
         );
     }
     Ok(())
+}
+
+// ── Markdown output (GitHub PR comment format) ──────────────────────
+
+fn print_markdown_output(result: &DiffResult) {
+    // Shared package-level renderer. Same producer used by the deploy
+    // modal and the CI PR-comment GitHub Action so they stay in sync.
+    print!(
+        "{}",
+        crate::plan::render_package_diff_markdown(&result.packages)
+    );
+
+    // Append diff-specific sections that don't belong on a generic
+    // PackageDiff: the legacy resource listing (only present when diffing
+    // against a live cluster / snapshot) and detected stateful migration
+    // pairs.
+    if let Some(ref legacy) = result.legacy_resource_diff {
+        let total = legacy.identical
+            + legacy.modified.len()
+            + legacy.kix_only.len()
+            + legacy.cluster_only.len();
+        if total > 0 {
+            println!("#### Resources (vs live cluster)");
+            println!();
+            println!(
+                "{total} resources compared: {} identical, {} modified, {} kix-only, {} cluster-only",
+                legacy.identical,
+                legacy.modified.len(),
+                legacy.kix_only.len(),
+                legacy.cluster_only.len(),
+            );
+            println!();
+        }
+        if !legacy.modified.is_empty() {
+            println!("**Modified:**");
+            println!();
+            for (id, diffs) in &legacy.modified {
+                println!("- `{}` ({} diffs)", id, diffs.len());
+            }
+            println!();
+        }
+        if !legacy.kix_only.is_empty() {
+            println!("**Only in kix (will be created):**");
+            println!();
+            for id in &legacy.kix_only {
+                println!("- `{}`", id);
+            }
+            println!();
+        }
+        if !legacy.cluster_only.is_empty() {
+            println!("**Only in cluster (not managed by kix):**");
+            println!();
+            for id in &legacy.cluster_only {
+                println!("- `{}`", id);
+            }
+            println!();
+        }
+    }
+
+    if !result.migration_pairs.is_empty() {
+        println!(
+            "#### Stateful migrations detected ({})",
+            result.migration_pairs.len()
+        );
+        println!();
+        for p in &result.migration_pairs {
+            println!("- **{}**", p.summary());
+            println!(
+                "  - source: `{}/{}/{}`",
+                p.source.kind, p.source.namespace, p.source.name
+            );
+            println!(
+                "  - target: `{}/{}/{}`",
+                p.target.kind, p.target.namespace, p.target.name
+            );
+        }
+        println!();
+        println!(
+            "> :warning: Data migration is **not** yet automated. See `v2_discussions/67_stateful_migration_orchestration.md`."
+        );
+        println!();
+    }
+
+    if !result_has_diff(result) {
+        println!("No differences found.");
+    }
 }

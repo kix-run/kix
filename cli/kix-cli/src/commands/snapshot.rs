@@ -254,7 +254,7 @@ fn run_diff(args: &SnapshotDiffArgs, ctx: &mut CommandContext) -> Result<()> {
                 );
             }
         }
-        OutputFormat::Text => {
+        OutputFormat::Text | OutputFormat::Markdown => {
             let color = output::color_enabled();
             let total = identical.len()
                 + modified.len()

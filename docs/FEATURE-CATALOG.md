@@ -90,11 +90,11 @@ Pipeable CRD spec construction:
 
 ### Network Policy Generation (`netpol.nix`)
 
-Internal helpers: `mkServiceRegistry` (service discovery index), `extractServiceEdges`, `portsToCilium`, `dnsEgressRule`, `apiServerEgressRule`.
+Internal helpers: `mkServiceRegistry` (service discovery index), `extractServiceEdgesFromJson`, `portsToCilium`, `dnsEgressRule`, `apiServerEgressRule`.
 
 Auto-derives CiliumNetworkPolicy from the DI graph:
-- **Auto-detected egress:** API server access (if instance has RBAC or CRDs), DNS, self-communication (StatefulSet).
-- **Auto-detected ingress:** Inverts egress edges cluster-wide.
+- **Auto-detected egress:** API server access (precise — only workloads whose SA is subject of a RoleBinding/ClusterRoleBinding), DNS, cross-package service egress, self-communication (StatefulSet).
+- **Auto-detected ingress:** Emitted caller-side at `scope.mkDeployment` time — paired ingress CNP in the callee's namespace via `scope.forNamespace` (v2_discussions/83 Phase C). No cluster-level inverted-ingress pass.
 - **Default deny:** Per-namespace, configurable directions (ingress/egress/both).
 - Warnings for hostNetwork and Helm opacity (intra-package edges may be missing).
 

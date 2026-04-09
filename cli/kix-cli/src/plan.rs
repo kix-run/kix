@@ -267,6 +267,203 @@ pub fn diff_garbage(old: &StoreGraph, new: &StoreGraph) -> PackageDiff {
     }
 }
 
+// ── Structured renderers (shared producer) ──────────────────────────
+//
+// These are the canonical PackageDiff → (JSON | Markdown) producers. The
+// deploy modal, `kix diff`, rollback change summary, and the CI PR-comment
+// GitHub Action all consume the same output here so formats stay in sync.
+// See v2_discussions/84_m0_m1_implementation_plan.md §5.
+
+/// Render a `PackageDiff` as a JSON value suitable for machine consumption
+/// or as the base of a larger document (e.g. `kix diff` wraps it with
+/// legacy resource / migration-pair sections).
+pub fn render_package_diff_json(diff: &PackageDiff) -> Value {
+    serde_json::json!({
+        "added": diff.added.iter().map(|p| serde_json::json!({
+            "key": p.key,
+            "version": p.version,
+            "resources": p.resource_count,
+        })).collect::<Vec<_>>(),
+        "removed": diff.removed.iter().map(|p| serde_json::json!({
+            "key": p.key,
+            "version": p.version,
+            "resources": p.resource_count,
+        })).collect::<Vec<_>>(),
+        "changed": diff.changed.iter().map(|c| serde_json::json!({
+            "key": c.key,
+            "old_version": c.old_version,
+            "new_version": c.new_version,
+            "added_resources": c.added_resources.iter().map(|id| id.display_id()).collect::<Vec<_>>(),
+            "removed_resources": c.removed_resources.iter().map(|id| id.display_id()).collect::<Vec<_>>(),
+            "modified_resources": c.resource_diffs.iter().map(|(id, diffs)| serde_json::json!({
+                "resource": id.display_id(),
+                "diff_count": diffs.len(),
+            })).collect::<Vec<_>>(),
+            "dep_affected_resources": c.dep_affected_resources.iter().map(|id| id.display_id()).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
+        "unchanged": diff.unchanged,
+        "summary": {
+            "added": diff.added.len(),
+            "removed": diff.removed.len(),
+            "changed": diff.changed.len(),
+            "unchanged": diff.unchanged,
+        },
+    })
+}
+
+/// Render a `PackageDiff` as GitHub-flavored markdown suitable for a PR comment.
+/// Uses collapsed `<details>` blocks so a large diff doesn't flood the comment.
+pub fn render_package_diff_markdown(diff: &PackageDiff) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+
+    let added = diff.added.len();
+    let removed = diff.removed.len();
+    let changed = diff.changed.len();
+    let total_changes = added + removed + changed;
+
+    let _ = writeln!(out, "### kix diff");
+    let _ = writeln!(out);
+
+    if total_changes == 0 {
+        let _ = writeln!(
+            out,
+            "No package-level changes ({} unchanged).",
+            diff.unchanged
+        );
+        return out;
+    }
+
+    // Aggregate resource counts across changed packages.
+    let mut real_resources = 0usize;
+    let mut dep_affected = 0usize;
+    for c in &diff.changed {
+        real_resources +=
+            c.resource_diffs.len() + c.added_resources.len() + c.removed_resources.len();
+        dep_affected += c.dep_affected_resources.len();
+    }
+
+    let _ = writeln!(
+        out,
+        "**Plan:** {changed} updated, {added} added, {removed} removed, {} unchanged",
+        diff.unchanged
+    );
+    if real_resources > 0 || dep_affected > 0 {
+        let _ = writeln!(
+            out,
+            "**Resources:** {real_resources} with real content changes, {dep_affected} dep-affected (hash bump only)"
+        );
+    }
+    let _ = writeln!(out);
+
+    if !diff.added.is_empty() {
+        let _ = writeln!(out, "#### Added packages");
+        let _ = writeln!(out);
+        for p in &diff.added {
+            let ver = p
+                .version
+                .as_deref()
+                .map(|v| format!(" `{v}`"))
+                .unwrap_or_default();
+            let _ = writeln!(out, "- `{}`{ver} ({} resources)", p.key, p.resource_count);
+        }
+        let _ = writeln!(out);
+    }
+
+    if !diff.removed.is_empty() {
+        let _ = writeln!(out, "#### Removed packages");
+        let _ = writeln!(out);
+        for p in &diff.removed {
+            let ver = p
+                .version
+                .as_deref()
+                .map(|v| format!(" `{v}`"))
+                .unwrap_or_default();
+            let _ = writeln!(out, "- `{}`{ver} ({} resources)", p.key, p.resource_count);
+        }
+        let _ = writeln!(out);
+    }
+
+    if !diff.changed.is_empty() {
+        let _ = writeln!(out, "#### Changed packages");
+        let _ = writeln!(out);
+        for c in &diff.changed {
+            let old_ver = c.old_version.as_deref().unwrap_or("?");
+            let new_ver = c.new_version.as_deref().unwrap_or("?");
+            let ver_str = if old_ver != new_ver {
+                format!("{old_ver} → {new_ver}")
+            } else {
+                new_ver.to_string()
+            };
+
+            let mut parts = Vec::new();
+            if !c.resource_diffs.is_empty() {
+                parts.push(format!("{} changed", c.resource_diffs.len()));
+            }
+            if !c.added_resources.is_empty() {
+                parts.push(format!("{} added", c.added_resources.len()));
+            }
+            if !c.removed_resources.is_empty() {
+                parts.push(format!("{} removed", c.removed_resources.len()));
+            }
+            if !c.dep_affected_resources.is_empty() {
+                parts.push(format!("{} dep-affected", c.dep_affected_resources.len()));
+            }
+            let detail = if parts.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", parts.join(", "))
+            };
+
+            let _ = writeln!(out, "<details>");
+            let _ = writeln!(
+                out,
+                "<summary><code>{}</code> {ver_str}{detail}</summary>",
+                c.key
+            );
+            let _ = writeln!(out);
+
+            if !c.added_resources.is_empty() {
+                let _ = writeln!(out, "**Added resources:**");
+                let _ = writeln!(out);
+                for id in &c.added_resources {
+                    let _ = writeln!(out, "- `{}`", id);
+                }
+                let _ = writeln!(out);
+            }
+            if !c.removed_resources.is_empty() {
+                let _ = writeln!(out, "**Removed resources:**");
+                let _ = writeln!(out);
+                for id in &c.removed_resources {
+                    let _ = writeln!(out, "- `{}`", id);
+                }
+                let _ = writeln!(out);
+            }
+            if !c.resource_diffs.is_empty() {
+                let _ = writeln!(out, "**Modified resources:**");
+                let _ = writeln!(out);
+                for (id, diffs) in &c.resource_diffs {
+                    let _ = writeln!(out, "- `{}` ({} diffs)", id, diffs.len());
+                }
+                let _ = writeln!(out);
+            }
+            if !c.dep_affected_resources.is_empty() {
+                let _ = writeln!(out, "**Dep-affected (hash bump only, no content change):**");
+                let _ = writeln!(out);
+                for id in &c.dep_affected_resources {
+                    let _ = writeln!(out, "- `{}`", id);
+                }
+                let _ = writeln!(out);
+            }
+
+            let _ = writeln!(out, "</details>");
+            let _ = writeln!(out);
+        }
+    }
+
+    out
+}
+
 // ── Display ──────────────────────────────────────────────────────────
 
 /// Print a package-grouped plan. Only shows changes.

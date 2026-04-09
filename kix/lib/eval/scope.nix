@@ -841,7 +841,6 @@ rec {
             else
               {
                 cnps = [ ];
-                edges = [ ];
               };
 
           finalExtraDeps = (attrs.extraDeps or [ ]) ++ netpolResult.cnps;
@@ -863,15 +862,18 @@ rec {
                     builtins.seq (checkContainerResources templateSpec) (
                       builtins.seq (checkDuplicateNames templateSpec) (
                         builtins.seq (checkFieldRefs templateSpec) (
-                          # Attach the per-workload CNPs + edges as side-band
+                          # Attach the per-workload CNPs as side-band
                           # metadata. instance.nix drains these off every
                           # workload in `allPartResources` after the parts
                           # fixpoint settles and appends them to the resource
                           # pool (replacing the old `_networkPolicies` bag).
+                          # Includes the caller-side paired ingress CNPs
+                          # for cross-namespace edges (v2_discussions/83
+                          # Phase C) — those live in the target namespace
+                          # but are owned by this instance.
                           workload
                           // {
                             _generatedNetpol = netpolResult.cnps;
-                            _generatedNetpolEdges = netpolResult.edges;
                           }
                         )
                       )

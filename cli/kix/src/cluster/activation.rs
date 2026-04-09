@@ -249,6 +249,10 @@ pub struct SupersededActivation {
     pub deployed_at: String,
     /// Store path of the activation result dir (contains kix-packages.json).
     pub built_via: Option<String>,
+    /// Name of the activation that this one superseded, taken from
+    /// `status.previousActivation`. Lets the history walk reconstruct the
+    /// deploy chain for `kix rollback --list`.
+    pub previous_activation: Option<String>,
 }
 
 /// List all Superseded activations for a cluster, sorted by deployed-at (most recent first).
@@ -296,11 +300,18 @@ pub async fn list_superseded_activations(
             .and_then(|a| a.get(BUILT_VIA_ANNOTATION))
             .cloned();
 
+        let previous_activation = item
+            .data
+            .pointer("/status/previousActivation")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
         results.push(SupersededActivation {
             name,
             identity_hash,
             deployed_at,
             built_via,
+            previous_activation,
         });
     }
 

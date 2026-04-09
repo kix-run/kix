@@ -754,8 +754,36 @@ async fn run_deploy_async(
         cancel: kix::cluster::cancel::CancelToken::new(),
     };
 
-    let observer = CliObserver {
+    // Select observer. --tui opts into the experimental inline dashboard,
+    // but only when stdout is a real terminal; otherwise fall back to the
+    // line-oriented CliObserver so CI logs and piped output stay sane.
+    let cli_observer = CliObserver {
         quiet: global.quiet,
+    };
+    let use_tui = args.tui && super::deploy_tui::is_supported();
+    let tui_driver = if use_tui {
+        match super::deploy_tui::TuiDriver::spawn(
+            cluster_name.to_string(),
+            wave_actions.len(),
+            config.cancel.clone(),
+        ) {
+            Ok(d) => Some(d),
+            Err(e) => {
+                eprintln!(
+                    "{} {e} — falling back to plain output",
+                    output::yellow("warn: failed to start --tui renderer:"),
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let tui_observer = tui_driver.as_ref().map(|d| d.observer());
+    let observer_ref: &dyn ReconcileObserver = match &tui_observer {
+        Some(o) => o,
+        None => &cli_observer,
     };
 
     let result = kix::cluster::reconcile::reconcile(
@@ -768,9 +796,14 @@ async fn run_deploy_async(
         activation_name,
         activation_identity_hash,
         &config,
-        &observer,
+        observer_ref,
     )
     .await;
+
+    // Tear down the TUI before printing the final summary so the summary
+    // lands in the normal scrollback and isn't clobbered by the viewport.
+    drop(tui_observer);
+    drop(tui_driver);
 
     match result {
         Ok(r) => {

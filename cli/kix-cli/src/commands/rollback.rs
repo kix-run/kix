@@ -23,17 +23,180 @@ use kix::eval::store_graph::StoreGraph;
 use kix::manifest::stamp::stamp_annotations;
 use kix::manifest::types::ResourceId;
 
-use crate::cli::RollbackArgs;
+use crate::cli::{OutputFormat, RollbackArgs};
 use crate::output;
 use crate::plan;
 
 use super::CommandContext;
 
 pub fn run(args: &RollbackArgs, ctx: &mut CommandContext) -> Result<()> {
+    if args.list {
+        return ctx.runtime.block_on(run_list_async(args, ctx));
+    }
     if args.operator {
         return ctx.runtime.block_on(run_operator_async(args, ctx));
     }
     ctx.runtime.block_on(run_async(args, ctx))
+}
+
+// ── Rollback history listing (`kix rollback --list`) ────────────────
+
+/// Read-only: connect, enumerate Superseded activations, print history, exit.
+/// Works the same whether the cluster is operator-managed or direct-apply
+/// because it only inspects Activation CRs. Supports `--output json|yaml`.
+async fn run_list_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
+    let client = fetch::make_client(ctx.global.context.as_deref())
+        .await
+        .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
+
+    let discovery = fetch::discover_resources(&client)
+        .await
+        .map_err(|e| miette!("API discovery failed: {e}"))?;
+
+    let (activation_ar, _) = activation::find_activation_ar(&discovery)
+        .ok_or_else(|| miette!("Activation CRD not registered on cluster"))?
+        .clone();
+
+    // Current Active activation — optional: useful as a "you are here" marker
+    // in the history listing, but we must still print even if none exists.
+    let current = activation::find_active(&client, &activation_ar, &args.cluster)
+        .await
+        .map_err(|e| miette!("failed to find active activation: {e}"))?;
+
+    let superseded =
+        activation::list_superseded_activations(&client, &activation_ar, &args.cluster)
+            .await
+            .map_err(|e| miette!("failed to list superseded activations: {e}"))?;
+
+    let format = ctx.output_format(OutputFormat::Text);
+    match format {
+        OutputFormat::Json | OutputFormat::Yaml => {
+            let value = serde_json::json!({
+                "cluster": args.cluster,
+                "current": current.as_ref().map(|c| serde_json::json!({
+                    "name": c.name,
+                    "identity_hash": c.identity_hash,
+                    "built_via": c.built_via,
+                })),
+                "superseded": superseded.iter().map(|s| {
+                    let available = s
+                        .identity_hash
+                        .as_deref()
+                        .and_then(|h| {
+                            kix::eval::store::resolve_activation_by_hash(&args.cluster, h)
+                        })
+                        .is_some();
+                    serde_json::json!({
+                        "name": s.name,
+                        "identity_hash": s.identity_hash,
+                        "deployed_at": s.deployed_at,
+                        "built_via": s.built_via,
+                        "previous_activation": s.previous_activation,
+                        "available_locally": available,
+                    })
+                }).collect::<Vec<_>>(),
+            });
+            if matches!(format, OutputFormat::Yaml) {
+                print!("{}", serde_yml::to_string(&value).into_diagnostic()?);
+            } else {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&value).into_diagnostic()?
+                );
+            }
+        }
+        OutputFormat::Text | OutputFormat::Markdown => {
+            print_history_text(&args.cluster, current.as_ref(), &superseded);
+        }
+    }
+
+    Ok(())
+}
+
+fn print_history_text(
+    cluster: &str,
+    current: Option<&kix::cluster::activation::ActiveActivation>,
+    superseded: &[kix::cluster::activation::SupersededActivation],
+) {
+    println!(
+        "{} activation history for '{}'",
+        output::bold("Rollback:"),
+        cluster,
+    );
+    println!();
+
+    if let Some(c) = current {
+        let hash_preview = c
+            .identity_hash
+            .as_deref()
+            .map(|h| format!("{}...", &h[..8.min(h.len())]))
+            .unwrap_or_else(|| "no hash".to_string());
+        println!(
+            "  {} {} ({})  {}",
+            output::green("● active  "),
+            output::bold(&c.name),
+            hash_preview,
+            output::dim("← you are here"),
+        );
+        if let Some(path) = c.built_via.as_deref() {
+            println!("    {} {}", output::dim("source:  "), output::dim(path));
+        }
+        println!();
+    }
+
+    if superseded.is_empty() {
+        println!(
+            "  {}",
+            output::dim("No superseded activations — nothing to roll back to.")
+        );
+        return;
+    }
+
+    println!("  {}", output::bold("Superseded (most recent first):"));
+    println!();
+    for (i, s) in superseded.iter().enumerate() {
+        let hash_preview = s
+            .identity_hash
+            .as_deref()
+            .map(|h| format!("{}...", &h[..8.min(h.len())]))
+            .unwrap_or_else(|| "no hash".to_string());
+        let ts = if s.deployed_at.is_empty() {
+            output::dim("unknown").into_owned()
+        } else {
+            s.deployed_at.clone()
+        };
+        let available = s
+            .identity_hash
+            .as_deref()
+            .and_then(|h| kix::eval::store::resolve_activation_by_hash(cluster, h))
+            .is_some();
+        let availability = if available {
+            output::green("available")
+        } else {
+            output::red("store path missing")
+        };
+        println!(
+            "  {} {} ({})  deployed {}  [{}]",
+            output::bold(&format!("[{}]", i + 1)),
+            s.name,
+            hash_preview,
+            ts,
+            availability,
+        );
+        if let Some(path) = s.built_via.as_deref() {
+            println!("      {} {}", output::dim("source:  "), output::dim(path));
+        }
+        if let Some(prev) = s.previous_activation.as_deref() {
+            println!("      {} {}", output::dim("previous:"), output::dim(prev),);
+        }
+    }
+    println!();
+    println!(
+        "  {}",
+        output::dim(
+            "Run `kix rollback <cluster>` (or `--yes` for most recent) to switch activations."
+        )
+    );
 }
 
 async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
@@ -91,36 +254,7 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
     } else {
         println!();
         println!("Available activations to rollback to:");
-        for (i, act) in superseded.iter().enumerate() {
-            let hash_preview = act
-                .identity_hash
-                .as_deref()
-                .map(|h| format!("{}...", &h[..8.min(h.len())]))
-                .unwrap_or_else(|| "no hash".to_string());
-            let ts = if act.deployed_at.is_empty() {
-                "unknown".to_string()
-            } else {
-                act.deployed_at.clone()
-            };
-            let available = act
-                .identity_hash
-                .as_deref()
-                .and_then(|h| kix::eval::store::resolve_activation_by_hash(&args.cluster, h))
-                .is_some();
-            let availability = if available {
-                output::green("available")
-            } else {
-                output::red("store path missing")
-            };
-            println!(
-                "  {} {} ({}) — deployed {} [{}]",
-                output::bold(&format!("[{}]", i + 1)),
-                act.name,
-                hash_preview,
-                ts,
-                availability,
-            );
-        }
+        print_superseded_entries(&args.cluster, &superseded);
 
         print!("\nSelect activation [1]: ");
         std::io::stdout().flush().into_diagnostic()?;
@@ -476,25 +610,7 @@ async fn run_operator_async(args: &RollbackArgs, ctx: &CommandContext) -> Result
     } else {
         println!();
         println!("Available activations to rollback to:");
-        for (i, act) in superseded.iter().enumerate() {
-            let hash_preview = act
-                .identity_hash
-                .as_deref()
-                .map(|h| format!("{}...", &h[..8.min(h.len())]))
-                .unwrap_or_else(|| "no hash".to_string());
-            let ts = if act.deployed_at.is_empty() {
-                "unknown".to_string()
-            } else {
-                act.deployed_at.clone()
-            };
-            println!(
-                "  {} {} ({}) — deployed {}",
-                output::bold(&format!("[{}]", i + 1)),
-                act.name,
-                hash_preview,
-                ts,
-            );
-        }
+        print_superseded_entries(&args.cluster, &superseded);
 
         print!("\nSelect activation [1]: ");
         std::io::Write::flush(&mut std::io::stdout()).into_diagnostic()?;
@@ -625,6 +741,52 @@ async fn run_operator_async(args: &RollbackArgs, ctx: &CommandContext) -> Result
     );
 
     Ok(())
+}
+
+/// Shared formatter for a list of superseded activations — used by both the
+/// interactive rollback selector and `kix rollback --list`. Shows store path
+/// availability, source directory, and the `previousActivation` link so the
+/// operator sees exactly what each history entry points at.
+fn print_superseded_entries(
+    cluster: &str,
+    superseded: &[kix::cluster::activation::SupersededActivation],
+) {
+    for (i, act) in superseded.iter().enumerate() {
+        let hash_preview = act
+            .identity_hash
+            .as_deref()
+            .map(|h| format!("{}...", &h[..8.min(h.len())]))
+            .unwrap_or_else(|| "no hash".to_string());
+        let ts = if act.deployed_at.is_empty() {
+            "unknown".to_string()
+        } else {
+            act.deployed_at.clone()
+        };
+        let available = act
+            .identity_hash
+            .as_deref()
+            .and_then(|h| kix::eval::store::resolve_activation_by_hash(cluster, h))
+            .is_some();
+        let availability = if available {
+            output::green("available")
+        } else {
+            output::red("store path missing")
+        };
+        println!(
+            "  {} {} ({}) — deployed {} [{}]",
+            output::bold(&format!("[{}]", i + 1)),
+            act.name,
+            hash_preview,
+            ts,
+            availability,
+        );
+        if let Some(path) = act.built_via.as_deref() {
+            println!("      {} {}", output::dim("source:  "), output::dim(path));
+        }
+        if let Some(prev) = act.previous_activation.as_deref() {
+            println!("      {} {}", output::dim("previous:"), output::dim(prev),);
+        }
+    }
 }
 
 fn print_summary(r: &ReconcileResult) {

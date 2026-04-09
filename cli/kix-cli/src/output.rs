@@ -93,9 +93,13 @@ pub trait CommandResponse {
 }
 
 /// Render a CommandResponse based on the output format.
+///
+/// `Markdown` is not a generic `CommandResponse` format — only specific commands
+/// (currently `kix diff`) implement it. For other commands we fall back to
+/// `Text` so the flag remains a no-op rather than an error.
 pub fn render(response: &dyn CommandResponse, format: OutputFormat) -> miette::Result<String> {
     match format {
-        OutputFormat::Text => Ok(response.format_text()),
+        OutputFormat::Text | OutputFormat::Markdown => Ok(response.format_text()),
         OutputFormat::Json => serde_json::to_string_pretty(&response.as_json()).into_diagnostic(),
         OutputFormat::Yaml => serde_yml::to_string(&response.as_json()).into_diagnostic(),
     }

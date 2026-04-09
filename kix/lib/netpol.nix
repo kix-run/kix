@@ -80,9 +80,9 @@ let
   # `buildWorkloadCnps` which runs inside `scope.mkDeployment` — before the
   # workload resource exists — and extracts edges directly from the caller's
   # args JSON. The store-path context on the JSON is identical to what the
-  # built `rawManifest` would carry (same input attrs), so this is the only
-  # extractor we need; `processInstance` threads its edges through the
-  # workload sideband `_generatedNetpolEdges` rather than re-extracting.
+  # built `rawManifest` would carry (same input attrs). Post-fixpoint
+  # code no longer re-extracts edges: inverted ingress is emitted
+  # caller-side at scope-time (v2_discussions/83 Phase C).
   extractServiceEdgesFromJson =
     { json, serviceRegistry }:
     let
@@ -222,17 +222,6 @@ rec {
         inherit serviceRegistry;
       };
 
-      flattenedEdges = map (edge: {
-        sourceSelector = wSelector;
-        sourceNamespace = namespaceName;
-        inherit (edge)
-          service
-          ports
-          targetSelector
-          targetNamespace
-          ;
-      }) edges;
-
       serviceRules = map (
         edge:
         let
@@ -323,13 +312,70 @@ rec {
             };
           };
 
+      # ── Caller-side inverted-ingress emission (v2_discussions/83 Phase C) ──
+      #
+      # For each discovered cross-package egress edge, emit a paired ingress
+      # CNP in the *callee's* namespace via `scope.forNamespace`. The CNP's
+      # endpointSelector matches the target Service's pod selector; its
+      # fromEndpoints stamps the caller's selector plus
+      # `k8s:io.kubernetes.pod.namespace = <callerNs>`.
+      #
+      # Both CNPs (egress + paired ingress) land in the caller workload's
+      # `extraDeps` below, so the caller's readiness gate includes its
+      # ingress grant at the callee. `scope.forNamespace` preserves
+      # `instanceName` (see `scope.nix`), so the emitted CNP carries
+      # `app.kubernetes.io/instance = <caller>` — caller owns the grant.
+      #
+      # This replaces the old cluster-level `generateIngressPolicies` pass.
+      # The audit in `scripts/netpol-edge-audit.nix` verifies that the
+      # scope-time edge set equals the post-fixpoint edge set on every
+      # fixture cluster (zero misses on 12 clusters / 76 instances).
+      callerIngressCnps =
+        if hostNetwork || !doIngress then
+          [ ]
+        else
+          map (
+            edge:
+            let
+              targetScope = scope.forNamespace edge.targetNamespace;
+              fromEndpoint = {
+                matchLabels = wSelector // {
+                  "k8s:io.kubernetes.pod.namespace" = namespaceName;
+                };
+              };
+              cp = portsToCilium edge.ports;
+              ingressRule = {
+                fromEndpoints = [ fromEndpoint ];
+              }
+              // lib.optionalAttrs (cp != [ ]) { toPorts = [ { ports = cp; } ]; };
+            in
+            buildCnp {
+              inherit networkPolicyEnforcer;
+              mkResource = targetScope.mkResource;
+              extraArgs = {
+                name = "${instanceName}-${lib.toLower workloadKind}-${wName}-to-${edge.service.name}-ingress";
+                labels = {
+                  "kix.dev/derived" = "true";
+                  "kix.dev/policy-type" = "caller-ingress";
+                };
+                spec = {
+                  endpointSelector.matchLabels = edge.targetSelector;
+                  ingress = [ ingressRule ];
+                };
+                extraDeps = [ edge.service ];
+              };
+            }
+          ) edges;
+
     in
     {
-      cnps = builtins.filter (c: c != null) [
-        egressCnp
-        ingressCnp
-      ];
-      edges = flattenedEdges;
+      cnps = builtins.filter (c: c != null) (
+        [
+          egressCnp
+          ingressCnp
+        ]
+        ++ callerIngressCnps
+      );
     };
 
   # ── Per-instance processing (post-fixpoint supplements) ───────────────
@@ -355,22 +401,19 @@ rec {
   #     hostNetwork pods themselves can't be gated by CiliumNetworkPolicy.
   #     Narrowing to just LB-backing pods requires a `mkService` hook —
   #     see v2_discussions/85.
-  #   - **Edges** for the cluster-level inverted-ingress pass, threaded
-  #     through from `_generatedNetpolEdges` on each workload (already
-  #     extracted at `scope.mkDeployment` time — no re-extraction).
   #
-  # Returns { policies = [resource]; edges = [edge]; warnings = [string]; }
+  # Inverted cross-package ingress is now emitted caller-side inside
+  # `buildWorkloadCnps` via `scope.forNamespace` (v2_discussions/83
+  # Phase C), so there is no `edges` sideband to thread through here —
+  # this function no longer participates in the ingress derivation at
+  # all.
+  #
+  # Returns { policies = [resource]; warnings = [string]; }
   processInstance =
     {
       scope,
       instanceName,
       allPartResources,
-      # Flat list of edges already extracted at `scope.mkDeployment` time
-      # (see `buildWorkloadCnps.edges` and the `_generatedNetpolEdges`
-      # sideband drained in `kix/lib/eval/instance.nix`). Passed through
-      # to the cluster-level inverted-ingress pass verbatim — no
-      # re-extraction here.
-      workloadEdges,
       networkConfig,
       packageMeta,
       # Handle to the cluster-level network-policy enforcer's `out`
@@ -541,101 +584,8 @@ rec {
     in
     {
       policies = apiServerSupplementPolicies ++ externalIngressSupplementPolicies;
-      edges = workloadEdges;
       inherit warnings;
     };
-
-  # ── Cluster-level ingress pass ────────────────────────────────────────
-  #
-  # Inverts egress edges: for each target Service, generates an ingress
-  # CiliumNetworkPolicy allowing traffic from the source workloads.
-  generateIngressPolicies =
-    {
-      allEdges,
-      nsResources,
-      networkConfig,
-      networkPolicyEnforcer ? null,
-    }:
-    let
-      directions = networkConfig.directions or "both";
-      doIngress = directions == "both" || directions == "ingress";
-    in
-    if !doIngress || allEdges == [ ] then
-      [ ]
-    else
-      let
-        # Group edges by target Service (store path as key).
-        grouped = builtins.foldl' (
-          acc: edge:
-          let
-            key = builtins.unsafeDiscardStringContext edge.service.outPath;
-          in
-          acc
-          // {
-            ${key} = {
-              inherit (edge)
-                service
-                targetSelector
-                targetNamespace
-                ports
-                ;
-              sources = (acc.${key}.sources or [ ]) ++ [
-                {
-                  selector = edge.sourceSelector;
-                  namespace = edge.sourceNamespace;
-                }
-              ];
-            };
-          }
-        ) { } allEdges;
-      in
-      builtins.concatMap (
-        key:
-        let
-          entry = grouped.${key};
-          nsRes = nsResources.${entry.targetNamespace} or null;
-          cp = portsToCilium entry.ports;
-
-          fromEndpoints = map (src: {
-            matchLabels =
-              if src.namespace == entry.targetNamespace then
-                src.selector
-              else
-                src.selector
-                // {
-                  "k8s:io.kubernetes.pod.namespace" = src.namespace;
-                };
-          }) entry.sources;
-
-          ingressRule = {
-            inherit fromEndpoints;
-          }
-          // lib.optionalAttrs (cp != [ ]) { toPorts = [ { ports = cp; } ]; };
-        in
-        if nsRes == null || entry.targetSelector == { } then
-          [ ]
-        else
-          [
-            (buildCnp {
-              inherit networkPolicyEnforcer;
-              mkResource = k8s.mkResource;
-              extraArgs = {
-                name = "${entry.service.name}-ingress";
-                namespace = nsRes;
-                labels = {
-                  "kix.dev/derived" = "true";
-                  "kix.dev/policy-type" = "ingress";
-                  "app.kubernetes.io/managed-by" = "kix";
-                };
-                spec = {
-                  endpointSelector.matchLabels = entry.targetSelector;
-                  ingress = [ ingressRule ];
-                };
-                extraDeps = [ entry.service ];
-              };
-            })
-          ]
-      ) (builtins.attrNames grouped);
 
   # ── Default deny per namespace ────────────────────────────────────────
   #

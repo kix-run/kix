@@ -42,6 +42,8 @@ Automated wiring (network, RBAC, storage) derived from the dependency graph.
 |---|----------|--------|---------|
 | 35 | [CRD-derived RBAC & webhooks](35_crd_derived_rbac_webhooks.md) | Proposal | Auto-derive RBAC rules and webhooks from CRD definitions. |
 | 37 | [DI-derived NetworkPolicies](37_di_derived_network_policies.md) | Draft | Auto-generate NetworkPolicies from DI resolution and string context. |
+| 82 | [Cilium package + netpol DI wiring](82_cilium_package_and_netpol_di_wiring.md) | Draft | Follow-up to 37: declare a cilium instance and every generated CNP auto-depends on it; DI-shaped error when netpol is enabled without cilium. Threads a `ciliumInstance` resolver through netpol.nix. |
+| 83a | [Netpol via mkCRDRef + scope interception](83_netpol_via_crdref_and_scope_interception.md) | Draft | Counter-proposal to 82: use existing `mkCRDRef`/`installedBy` for "CNP → cilium", intercept `scope.mkDeployment` etc. for "workload → CNP". No new DI primitive or config option. Label-rendezvous sketch for inverted ingress. |
 | 48 | [System contracts](48_system_contracts.md) | Partial | DI for service deps + capability checks for compile-time cluster prerequisites. |
 | 62a | [Exposure compilation](archive/62a_exposure_as_composable_build_entry.md) | **Implemented** | Composable build entries for service exposure (cert-manager, ingress). Archived. |
 | 63a | [Storage as cluster concern](63a_storage_as_cluster_concern.md) | Design | Storage choice is cluster operator's concern, not package author's. |
@@ -50,6 +52,7 @@ Automated wiring (network, RBAC, storage) derived from the dependency graph.
 | 75 | [Secrets — what actually matters](75_secrets_what_actually_matters.md) | Brainstorm | Cuts through the 74 overdesign: Problem A (values) vs Problem B (contracts). SOPS default, ship contracts+values together. |
 | 76 | [Secrets design](76_secrets_design.md) | Design | Concrete API: mkSecret (SOPS, hash-verified), mkSecretRef (external), out.keyRef/mkEnv, DI override, CLI commands. |
 | 77 | [Secret access control modules](77_secret_access_control_modules.md) | Draft | Module-system layer over sops: teams contribute keys/teams/rules, generates `.sops.yaml`, build-time validation, rekey workflow. Access changes flow through `kix diff`/`kix deploy` with severity-tiered approval gates and revocation safety. |
+| 77b | [Secrets implementation plan](77_secrets_implementation_plan.md) | In progress | First end-to-end SOPS flow: deploy-time hydration in Rust CLI (scan for `kix.dev/sops-source`, decrypt, hash-verify, inject `stringData` before apply), sops/age in devenv, kind integration test. Companion to 76. |
 | 78 | [Cross-namespace secret refs](78_cross_namespace_secret_refs.md) | Brainstorm | Untying the knot in `76§10.3`: `mkSecretRef` cross-namespace consumption can't be copy-on-build and drifts on copy-on-deploy. Reframe as capability-driven (operator-native / CSI / reflector / static-copy) with compile-time error as the default. |
 | 79 | [Operator readiness edges](79_operator_readiness_edges.md) | Brainstorm | Auto-derived edges from operator-backed resources (Ingress, HTTPRoute, CRs) to their reconciler workloads so deploy ordering falls out of the DAG. Direction: build-entry DI deps become ordering edges (free for `kix.expose` users) + post-eval lint that warns when raw `mkResource` produces an operator-backed kind without an edge. Wire with kix → free; bypass kix → warning. |
 | 85 | [netpol.nix simplification](85_netpol_simplification.md) | Brainstorm | Audit of `kix/lib/netpol.nix` after 83 Phases A+B landed: dead `meta.network.*` plumbing, under-used `directions` knob, duplicate edge extraction, crude instance-wide apiserver/external-ingress heuristics. Proposes collapsing to local-signals-only emission + incorporates 83's retracted Phase C into a sequenced simplification plan. |
@@ -62,8 +65,9 @@ Activation operator, lifecycle, deployment strategies.
 |---|----------|--------|---------|
 | 28 | [GitOps deploy](28_gitops_deploy.md) | Active | Reconciliation, drift detection, health, observability. M1 complete, M2+ open. |
 | 43 | [Activation operator](43_activation_operator.md) | Active | Core design and engine complete; operationalization remaining. |
-| 44 | [Operator remaining work](44_operator_remaining_work.md) | RFC | OCI transport, drift detection, controller runtime for in-cluster operator. |
-| 46 | [Thin operator production plan](46_thin_operator_production_plan.md) | Plan | OCI artifacts, capability-based deploy, production readiness. |
+| 44 | [Operator remaining work](44_operator_remaining_work.md) | Mostly absorbed | OCI transport, drift detection, controller runtime for in-cluster operator. Drift detection + controller runtime now implemented; remainder consolidated into 62. |
+| 46 | [Thin operator production plan](46_thin_operator_production_plan.md) | Partially absorbed | OCI artifacts, capability-based deploy, production readiness. Partially consolidated into 62. |
+| 62 | [Operator production implementation plan](62_operator_production_implementation_plan.md) | Plan | Consolidates 44 + 46. Engine is functionally complete (reconcile, drift, controller, lifecycle, finalizers); remaining phases: OCI transport (`kix artifact push`, `ManifestArtifact` loader, OCI `ActivationSource`), container image, deploy manifests, health/leader/metrics, CI. |
 | 50 | [CRD upgrades](50_operator_crd_upgrades.md) | Design | Upgrade strategy via dependency ordering + content hashing. |
 | 54 | [Activation signing](54_activation_signing.md) | Design | Cryptographic signing of activation root hash for supply-chain verification. |
 | 56 | [Unified operator reconcile](archive/56_unified_operator_reconcile.md) | **Implemented** | Phase-based activation lifecycle (Queued → Deploying → Active → Superseded). Archived. |
@@ -105,6 +109,7 @@ Policy, compliance exports, scoring.
 | # | Document | Status | Summary |
 |---|----------|--------|---------|
 | 60 | [Scorecard rules design](60_scorecard_rules_design.md) | Draft | Multi-level policy framework with configurable severity and structured reporting. |
+| 83b | [Package-owned scorecard rules](83_package_owned_scorecard_rules.md) | Draft | Move capability fingerprints out of `kix/lib/rules/architecture.nix` into the owning packages via `meta.rules` (general) + `allInstances` (only-when-deployed). Extends 60. Open question: is this better than keeping rules in the cluster module system? |
 | 61 | [Compliance exports](61_compliance_exports.md) | Draft | Export formats (SARIF, SBOM, SLSA, OSCAL) for auditors/CI/compliance. |
 
 ## Tooling & CLI

@@ -13,7 +13,7 @@ pub struct Cli {
 
 #[derive(clap::Args, Debug, Clone)]
 pub struct GlobalArgs {
-    /// Output format (yaml, json, table). Default varies by command.
+    /// Output format (text, json, yaml, markdown). Default varies by command.
     #[arg(short, long, global = true)]
     pub output: Option<OutputFormat>,
 
@@ -38,11 +38,13 @@ pub struct GlobalArgs {
     pub flake: String,
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum OutputFormat {
     Text,
     Json,
     Yaml,
+    /// GitHub-flavored markdown suitable for PR comments
+    Markdown,
 }
 
 #[derive(Subcommand)]
@@ -78,6 +80,16 @@ pub enum Command {
     /// Rollback to the previous activation
     Rollback(RollbackArgs),
 
+    /// Export cluster manifests as plain Kubernetes YAML (exit-strategy / audit bundle)
+    Export(ExportArgs),
+
+    /// Tail logs for a package's primary workload
+    Logs(LogsArgs),
+
+    /// Port-forward to a package's primary workload
+    #[command(alias = "port-forward")]
+    Pf(PortForwardArgs),
+
     /// Drift detection: compare intended state vs live cluster
     Health(HealthArgs),
 
@@ -102,6 +114,9 @@ impl Command {
             Command::Gc(a) => Some(&a.cluster),
             Command::Health(a) => Some(&a.cluster),
             Command::Rollback(a) => Some(&a.cluster),
+            Command::Export(a) => Some(&a.cluster),
+            Command::Logs(a) => Some(&a.cluster),
+            Command::Pf(a) => Some(&a.cluster),
             Command::List(a) => match &a.command {
                 ListCommand::Packages(p) => p.cluster.as_deref(),
                 ListCommand::Clusters => None,
@@ -194,6 +209,12 @@ pub struct DeployArgs {
     /// silent data loss. See v2_discussions/67_stateful_migration_orchestration.md.
     #[arg(long)]
     pub accept_migrations: bool,
+
+    /// Experimental: render a live inline TUI dashboard showing the current
+    /// wave, in-flight resources, and queued work. Falls back to the standard
+    /// line-oriented output on non-interactive terminals.
+    #[arg(long)]
+    pub tui: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -235,6 +256,13 @@ pub struct RollbackArgs {
     /// Cluster name
     pub cluster: String,
 
+    /// List available Superseded activations (history) and exit — no rollback.
+    /// Shows name, identity-hash, timestamp, source store path, and the
+    /// previousActivation link so the deploy chain is easy to follow.
+    /// Respects `--output json|yaml` for machine consumption.
+    #[arg(long)]
+    pub list: bool,
+
     /// Skip confirmation prompt
     #[arg(short, long)]
     pub yes: bool,
@@ -250,6 +278,82 @@ pub struct RollbackArgs {
     /// Delegate rollback to the operator instead of applying directly
     #[arg(long)]
     pub operator: bool,
+}
+
+#[derive(clap::Args)]
+pub struct ExportArgs {
+    /// Cluster name
+    pub cluster: String,
+
+    /// Output directory (nested: `<out>/<namespace>/<Kind>-<name>.yaml`)
+    #[arg(long, default_value = "./kix-export")]
+    pub out: String,
+
+    /// Export mode: `exit` strips kix.dev/* annotations and skips kix-internal
+    /// CRs (Activation, PackageInstance) for a neutral handoff. `audit`
+    /// preserves everything for compliance evidence.
+    #[arg(long = "for", value_name = "MODE", default_value = "exit")]
+    pub for_mode: ExportMode,
+
+    /// Overwrite an existing output directory
+    #[arg(long)]
+    pub force: bool,
+}
+
+#[derive(clap::Args)]
+pub struct LogsArgs {
+    /// Cluster name
+    pub cluster: String,
+
+    /// Package instance name (e.g. `vaultwarden`) or `<namespace>/<name>`
+    /// for disambiguation when the instance name isn't unique.
+    pub package: String,
+
+    /// Stream logs (`kubectl logs -f`)
+    #[arg(short, long)]
+    pub follow: bool,
+
+    /// Number of lines to show from the tail (`kubectl logs --tail`)
+    #[arg(long)]
+    pub tail: Option<u64>,
+
+    /// Container name when the workload has multiple containers
+    #[arg(short = 'c', long)]
+    pub container: Option<String>,
+
+    /// Only show logs newer than a relative duration (`5m`, `2h`, `1h30m`)
+    #[arg(long)]
+    pub since: Option<String>,
+
+    /// Show logs from the previous terminated container (`kubectl logs --previous`)
+    #[arg(short = 'p', long)]
+    pub previous: bool,
+}
+
+#[derive(clap::Args)]
+pub struct PortForwardArgs {
+    /// Cluster name
+    pub cluster: String,
+
+    /// Package instance name (e.g. `vaultwarden`) or `<namespace>/<name>`
+    pub package: String,
+
+    /// Port specs passed straight to `kubectl port-forward`: `LOCAL:REMOTE`
+    /// or a bare `REMOTE` (e.g. `8080:80`, `5432`). One or more.
+    #[arg(required = true)]
+    pub ports: Vec<String>,
+
+    /// Address(es) to listen on locally (`kubectl port-forward --address`)
+    #[arg(long)]
+    pub address: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ExportMode {
+    /// Neutral kix-free YAML suitable for `kubectl apply` / Flux / Argo
+    Exit,
+    /// Preserve kix.dev/* provenance annotations for audit evidence
+    Audit,
 }
 
 #[derive(clap::Args)]

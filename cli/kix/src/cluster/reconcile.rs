@@ -8,6 +8,8 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
+use futures::stream::{self, StreamExt};
+
 use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
 use kube::{
     api::{Api, DynamicObject},
@@ -559,52 +561,101 @@ pub async fn reconcile(
             });
         }
 
-        // Readiness polling for this wave. Iterate hydrated_actions (not the
-        // pre-hydration `actions`) so we never poll a resource that was
-        // dropped due to hydration failure.
+        // Readiness polling for this wave.
+        //
+        // Every applied resource in the wave is polled concurrently (bounded
+        // by READINESS_CONCURRENCY). This is safe because `compute_waves`
+        // already serialized every cross-resource dependency into the wave
+        // structure — resources inside a single wave are, by construction,
+        // independent of one another, so their readiness checks can run in
+        // parallel without ordering hazards.
+        //
+        // Iterate hydrated_actions (not the pre-hydration `actions`) so we
+        // never poll a resource that was dropped due to hydration failure.
         let mut wave_had_crd_import = false;
         if !wave_failed || config.on_error == OnErrorPolicy::Continue {
+            // Early cancellation check — cheaper to bail here than to spin
+            // up the futures machinery.
+            if config.cancel.is_cancelled() {
+                observer.on_event(&ReconcileEvent::Cancelled {
+                    at: "readiness-loop",
+                });
+                return Err(ReconcileError::Cancelled {
+                    partial_result: result,
+                });
+            }
+
+            // Build the list of resources to poll. Filter out:
+            //   - non-Apply actions
+            //   - resources whose apply failed (no entry in apply_outcomes)
+            //   - immediate kinds with no import target (existence == ready)
+            //   - non-import resources whose kind isn't in discovery (a
+            //     later wave will install the CRD; we can't poll until then)
+            struct Pending {
+                rid: ResourceId,
+                import_target: Option<ImportTarget>,
+            }
+            let mut to_poll: Vec<Pending> = Vec::new();
             for action in &hydrated_actions {
-                if let ChangeAction::Apply(manifest) = action {
-                    let rid = ResourceId::from_value(manifest);
+                let ChangeAction::Apply(manifest) = action else {
+                    continue;
+                };
+                let rid = ResourceId::from_value(manifest);
+                if !apply_outcomes.contains_key(&rid) {
+                    continue;
+                }
+                let import_target = readiness::import_target_from_manifest(manifest);
+                if import_target
+                    .as_ref()
+                    .is_some_and(|t| t.kind == "CustomResourceDefinition")
+                {
+                    wave_had_crd_import = true;
+                }
+                if import_target.is_none() && readiness::is_immediate_kind(&rid.kind) {
+                    continue;
+                }
+                if import_target.is_none()
+                    && !discovery.iter().any(|(ar, _)| ar.kind == rid.kind)
+                {
+                    tracing::warn!(
+                        resource = %rid,
+                        "skipping readiness: kind not in discovery cache \
+                         (CRD likely installed in a later wave)"
+                    );
+                    continue;
+                }
+                to_poll.push(Pending { rid, import_target });
+            }
 
-                    // Cancellation point per resource — readiness waits can
-                    // be long-lived, so we need to interrupt between them.
-                    if config.cancel.is_cancelled() {
-                        observer.on_event(&ReconcileEvent::Cancelled {
-                            at: "readiness-loop",
-                        });
-                        return Err(ReconcileError::Cancelled {
-                            partial_result: result,
-                        });
-                    }
+            // Eagerly emit ReadinessWaiting for every resource. This is what
+            // lets the TUI surface the full in-flight list at once instead
+            // of one row lighting up at a time — and for non-TUI output it
+            // matches the line-oriented CliObserver's behavior.
+            for p in &to_poll {
+                observer.on_event(&ReconcileEvent::ReadinessWaiting {
+                    rid: p.rid.clone(),
+                    import_target: p.import_target.clone(),
+                });
+            }
 
-                    // Only check readiness for resources whose apply succeeded.
-                    if !apply_outcomes.contains_key(&rid) {
-                        continue;
-                    }
+            /// Max concurrent readiness polls per wave. Each poll is a
+            /// single GET roughly every second, so the network pressure is
+            /// modest — this cap exists mostly to keep kube's client
+            /// connection pool and the API server's rate limiter happy on
+            /// enormous waves.
+            const READINESS_CONCURRENCY: usize = 64;
 
-                    // Import markers (kix.dev/mode=import PackageInstances) are
-                    // handled specially: readiness is defined as "the described
-                    // external resource exists on the cluster", not the marker
-                    // itself. This path gates waves on operator-installed CRDs.
-                    let import_target = readiness::import_target_from_manifest(manifest);
-                    let is_crd_import = import_target
-                        .as_ref()
-                        .is_some_and(|t| t.kind == "CustomResourceDefinition");
-                    if is_crd_import {
-                        wave_had_crd_import = true;
-                    }
+            // Snapshot the bits the futures need so nothing ends up holding
+            // a &mut borrow of the outer scope.
+            let discovery_ref: &[(ApiResource, Scope)] = &*discovery;
+            let timeout = config.timeout;
+            let cancel = config.cancel.clone();
 
-                    if import_target.is_none() && readiness::is_immediate_kind(&rid.kind) {
-                        continue;
-                    }
-
-                    observer.on_event(&ReconcileEvent::ReadinessWaiting {
-                        rid: rid.clone(),
-                        import_target: import_target.clone(),
-                    });
-
+            let futures_iter = to_poll.into_iter().map(|p| {
+                let client = client.clone();
+                let cancel = cancel.clone();
+                async move {
+                    let Pending { rid, import_target } = p;
                     let on_status = |msg: &str| {
                         observer.on_event(&ReconcileEvent::ReadinessProgress {
                             rid: rid.clone(),
@@ -612,117 +663,137 @@ pub async fn reconcile(
                             message: msg.to_string(),
                         });
                     };
-                    let readiness_outcome = if let Some(target) = &import_target {
+                    let outcome = if let Some(target) = &import_target {
                         readiness::wait_for_import_target(
-                            client,
-                            target,
-                            config.timeout,
-                            &config.cancel,
-                            on_status,
+                            &client, target, timeout, &cancel, on_status,
                         )
                         .await
                     } else {
-                        let ar_scope = discovery.iter().find(|(ar, _)| ar.kind == rid.kind);
-                        let Some((ar, scope)) = ar_scope else {
-                            tracing::warn!(
-                                resource = %rid,
-                                "skipping readiness: kind not in discovery cache \
-                                 (CRD likely installed in a later wave)"
-                            );
-                            continue;
-                        };
+                        // Safe: filtered above to ensure kind is present.
+                        let (ar, scope) = discovery_ref
+                            .iter()
+                            .find(|(ar, _)| ar.kind == rid.kind)
+                            .expect("kind was filtered to exist in discovery cache");
                         let ns = if rid.namespace == CLUSTER_SCOPED {
                             None
                         } else {
                             Some(rid.namespace.as_str())
                         };
                         readiness::wait_for_ready(
-                            client,
-                            ar,
-                            scope,
-                            &rid.name,
-                            ns,
-                            &rid.kind,
-                            config.timeout,
-                            &config.cancel,
+                            &client, ar, scope, &rid.name, ns, &rid.kind, timeout, &cancel,
                             on_status,
                         )
                         .await
                     };
+                    (rid, import_target, outcome)
+                }
+            });
 
-                    match readiness_outcome {
-                        Ok(ReadinessResult::Ready) => {
-                            observer.on_event(&ReconcileEvent::ReadinessReady {
-                                rid: rid.clone(),
-                                import_target: import_target.clone(),
+            let mut poll_stream = stream::iter(futures_iter)
+                .buffer_unordered(READINESS_CONCURRENCY);
+
+            // First Stop-worthy error — we remember it, break out of the
+            // consume loop, and return it. Dropping `poll_stream` aborts
+            // the pending futures mid-poll; that's well-defined for
+            // `wait_for_ready` (it awaits only tokio sleeps and kube GETs,
+            // both cancel-safe on drop). We intentionally do NOT flip
+            // `config.cancel` here — that token belongs to the caller
+            // (operator supersession, etc.) and we shouldn't overload its
+            // meaning with "local drain".
+            let mut stop_error: Option<ReconcileError> = None;
+
+            while let Some((rid, import_target, outcome)) = poll_stream.next().await {
+                // External cancellation surfaces here too: if the token
+                // flipped while we were in recv, bail out the whole deploy.
+                if config.cancel.is_cancelled() {
+                    observer.on_event(&ReconcileEvent::Cancelled {
+                        at: "readiness-loop",
+                    });
+                    return Err(ReconcileError::Cancelled {
+                        partial_result: result,
+                    });
+                }
+
+                match outcome {
+                    Ok(ReadinessResult::Ready) => {
+                        observer.on_event(&ReconcileEvent::ReadinessReady {
+                            rid,
+                            import_target,
+                        });
+                    }
+                    Ok(ReadinessResult::Cancelled) => {
+                        observer.on_event(&ReconcileEvent::Cancelled {
+                            at: "readiness-poll",
+                        });
+                        return Err(ReconcileError::Cancelled {
+                            partial_result: result,
+                        });
+                    }
+                    Ok(ReadinessResult::TimedOut { elapsed, message }) => {
+                        observer.on_event(&ReconcileEvent::ReadinessTimeout {
+                            rid: rid.clone(),
+                            elapsed,
+                            message: message.clone(),
+                            import_target,
+                        });
+                        if config.on_error == OnErrorPolicy::Stop && stop_error.is_none() {
+                            stop_error = Some(ReconcileError::ReadinessTimeout {
+                                rid,
+                                partial_result: result.clone(),
                             });
-                        }
-                        Ok(ReadinessResult::Cancelled) => {
-                            observer.on_event(&ReconcileEvent::Cancelled {
-                                at: "readiness-poll",
-                            });
-                            return Err(ReconcileError::Cancelled {
-                                partial_result: result,
-                            });
-                        }
-                        Ok(ReadinessResult::TimedOut { elapsed, message }) => {
-                            observer.on_event(&ReconcileEvent::ReadinessTimeout {
-                                rid: rid.clone(),
-                                elapsed,
-                                message: message.clone(),
-                                import_target: import_target.clone(),
-                            });
-                            if config.on_error == OnErrorPolicy::Stop {
-                                return Err(ReconcileError::ReadinessTimeout {
-                                    rid,
-                                    partial_result: result,
-                                });
-                            }
-                        }
-                        Ok(ReadinessResult::Failed(msg)) => {
-                            demote_apply_to_failed(&apply_outcomes, &mut result, &rid);
-                            observer.on_event(&ReconcileEvent::ReadinessFailed {
-                                rid: rid.clone(),
-                                message: msg.clone(),
-                                import_target: import_target.clone(),
-                                missing_keys: Vec::new(),
-                            });
-                            if config.on_error == OnErrorPolicy::Stop {
-                                return Err(ReconcileError::ReadinessFailed {
-                                    rid,
-                                    message: msg,
-                                    partial_result: result,
-                                });
-                            }
-                        }
-                        Ok(ReadinessResult::ImportMismatch {
-                            missing_keys,
-                            message,
-                        }) => {
-                            // Import marker's target exists but doesn't match
-                            // the shape declared by the marker. Terminal —
-                            // never polled again. Today this only fires for
-                            // Secret imports with missing keys.
-                            demote_apply_to_failed(&apply_outcomes, &mut result, &rid);
-                            observer.on_event(&ReconcileEvent::ReadinessFailed {
-                                rid: rid.clone(),
-                                message: message.clone(),
-                                import_target: import_target.clone(),
-                                missing_keys,
-                            });
-                            if config.on_error == OnErrorPolicy::Stop {
-                                return Err(ReconcileError::ReadinessFailed {
-                                    rid,
-                                    message,
-                                    partial_result: result,
-                                });
-                            }
-                        }
-                        Err(e) => {
-                            tracing::warn!("readiness check error for {rid}: {e}");
+                            break;
                         }
                     }
+                    Ok(ReadinessResult::Failed(msg)) => {
+                        demote_apply_to_failed(&apply_outcomes, &mut result, &rid);
+                        observer.on_event(&ReconcileEvent::ReadinessFailed {
+                            rid: rid.clone(),
+                            message: msg.clone(),
+                            import_target,
+                            missing_keys: Vec::new(),
+                        });
+                        if config.on_error == OnErrorPolicy::Stop && stop_error.is_none() {
+                            stop_error = Some(ReconcileError::ReadinessFailed {
+                                rid,
+                                message: msg,
+                                partial_result: result.clone(),
+                            });
+                            break;
+                        }
+                    }
+                    Ok(ReadinessResult::ImportMismatch {
+                        missing_keys,
+                        message,
+                    }) => {
+                        // Import marker's target exists but doesn't match
+                        // the shape declared by the marker. Terminal —
+                        // never polled again. Today this only fires for
+                        // Secret imports with missing keys.
+                        demote_apply_to_failed(&apply_outcomes, &mut result, &rid);
+                        observer.on_event(&ReconcileEvent::ReadinessFailed {
+                            rid: rid.clone(),
+                            message: message.clone(),
+                            import_target,
+                            missing_keys,
+                        });
+                        if config.on_error == OnErrorPolicy::Stop && stop_error.is_none() {
+                            stop_error = Some(ReconcileError::ReadinessFailed {
+                                rid,
+                                message,
+                                partial_result: result.clone(),
+                            });
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("readiness check error for {rid}: {e}");
+                    }
                 }
+            }
+            drop(poll_stream);
+
+            if let Some(err) = stop_error {
+                return Err(err);
             }
         }
 

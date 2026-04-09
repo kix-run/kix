@@ -312,15 +312,6 @@ in
         # v2_discussions/83 → "scope-level workload interception".
         _scopeEmittedNetpolCnps = builtins.concatMap (r: r._generatedNetpol or [ ]) _partResourcesFromParts;
 
-        # Drain edges the same way — `buildWorkloadCnps` already extracted
-        # cross-package service edges from each workload's raw JSON context
-        # at `scope.mkDeployment` time. Threading them through here lets
-        # `netpol.processInstance` skip re-extraction, and the cluster-level
-        # inverted-ingress pass consumes the same list via `_networkEdges`.
-        _scopeEmittedNetpolEdges = builtins.concatMap (
-          r: r._generatedNetpolEdges or [ ]
-        ) _partResourcesFromParts;
-
         allPartResources = _partResourcesFromParts ++ _scopeEmittedNetpolCnps;
 
         # Local store-path → resource lookup for forward closure walking.
@@ -485,14 +476,12 @@ in
                 allPartResources
                 networkPolicyEnforcer
                 ;
-              workloadEdges = _scopeEmittedNetpolEdges;
               networkConfig = clusterConfig.networkPolicy;
               inherit packageMeta;
             }
           else
             {
               policies = [ ];
-              edges = [ ];
               warnings = [ ];
             };
 
@@ -764,7 +753,6 @@ in
               # `netpol.processInstance`. cluster.nix reads this via
               # `inst._networkPolicies` in `collectResources`.
               _networkPolicies = _scopeEmittedNetpolCnps ++ networkResult.policies;
-              _networkEdges = networkResult.edges;
               _scorecardFindings = scorecardFindings;
               _diagnostics = {
                 warnings = diagnostics.allWarnings;

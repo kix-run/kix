@@ -2,16 +2,21 @@ pub mod build;
 pub mod check;
 pub mod completions;
 pub mod deploy;
+pub mod deploy_tui;
 pub mod diff;
+pub mod export;
 pub mod gc;
 pub mod graph;
 pub mod health;
 pub mod inspect;
 pub mod list;
+pub mod logs;
 pub mod operator;
+pub mod pf;
 pub mod rollback;
 pub mod snapshot;
 pub mod status;
+pub mod workload;
 
 use std::path::PathBuf;
 
