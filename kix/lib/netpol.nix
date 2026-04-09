@@ -140,6 +140,12 @@ rec {
       doIngress = directions == "both" || directions == "ingress";
       networkMeta = packageMeta.network or { };
 
+      # Optional reference to the cilium package instance. When provided,
+      # every generated CNP declares cilium as an extra dep so the enforcer
+      # (and its CRDs) is guaranteed to be present before policy evaluation.
+      ciliumInstance = networkConfig.ciliumInstance or null;
+      ciliumDeps = lib.optional (ciliumInstance != null) ciliumInstance;
+
       workloads = builtins.filter isWorkload allPartResources;
 
       # --- Signal detection (derived from resource graph, no meta needed) ---
@@ -274,7 +280,7 @@ rec {
                     endpointSelector.matchLabels = wSelector;
                     egress = allRules;
                   };
-                  extraDeps = [ w ] ++ map (e: e.service) we.edges;
+                  extraDeps = [ w ] ++ map (e: e.service) we.edges ++ ciliumDeps;
                 })
               ]
           ) workloadEdges;
@@ -317,7 +323,7 @@ rec {
                     endpointSelector.matchLabels = wSelector;
                     ingress = allRules;
                   };
-                  extraDeps = [ w ];
+                  extraDeps = [ w ] ++ ciliumDeps;
                 })
               ]
           ) workloadEdges;
@@ -353,6 +359,8 @@ rec {
     let
       directions = networkConfig.directions or "both";
       doIngress = directions == "both" || directions == "ingress";
+      ciliumInstance = networkConfig.ciliumInstance or null;
+      ciliumDeps = lib.optional (ciliumInstance != null) ciliumInstance;
     in
     if !doIngress || allEdges == [ ] then
       [ ]
@@ -424,7 +432,7 @@ rec {
                 endpointSelector.matchLabels = entry.targetSelector;
                 ingress = [ ingressRule ];
               };
-              extraDeps = [ entry.service ];
+              extraDeps = [ entry.service ] ++ ciliumDeps;
             })
           ]
       ) (builtins.attrNames grouped);
@@ -437,10 +445,12 @@ rec {
       namespaceName,
       nsResource,
       directions,
+      ciliumInstance ? null,
     }:
     let
       denyIngress = directions == "both" || directions == "ingress";
       denyEgress = directions == "both" || directions == "egress";
+      ciliumDeps = lib.optional (ciliumInstance != null) ciliumInstance;
     in
     k8s.mkResource {
       apiVersion = "cilium.io/v2";
@@ -452,6 +462,7 @@ rec {
         "kix.dev/policy-type" = "default-deny";
         "app.kubernetes.io/managed-by" = "kix";
       };
+      extraDeps = ciliumDeps;
       spec = {
         endpointSelector = { };
       }

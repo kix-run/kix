@@ -321,6 +321,7 @@ in
               namespaceName = nsName;
               nsResource = nsResources.${nsName};
               directions = networkConfig.directions;
+              ciliumInstance = networkConfig.ciliumInstance or null;
             }
           ) allNsNames
         else

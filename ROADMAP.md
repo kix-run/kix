@@ -167,6 +167,7 @@
   - `cli/kix-cli/src/plan.rs`: `diff_graphs()` groups by `(namespace, instance_name)`. Python version in `tools/kix-diff/kix-diff.py`: `diff_packages()` returns grouped diffs by package key.
 - [x] Diff on resource level (individual resource changes)
   - `cli/kix-cli/src/plan.rs`: `diff_package_resources()` produces per-resource diffs via `PackageChangeDiff.resource_diffs`. Python version in `tools/kix-diff/kix-diff.py`: `diff_manifests()` with per-resource output.
+- [x] Distinguish real content changes from dependency-propagated changes — `cli/kix-cli/src/plan.rs` `diff_package_resources()` now partitions each resource's structural diffs via `partition_propagation()` / `is_propagation_path()`: diffs whose path is exactly `$.metadata.annotations.kix.dev/{identity-hash,depends-on,activations,built-via}` are propagation-only. Resources with only propagation diffs land in a new `dep_affected_resources` field on `PackageChangeDiff` (separate from `resource_diffs`). `print_package_plan`, `print_plan_summary`, and `diff` text/JSON output surface them under an "affected via dependency" section and a `Resources: N real content, M dep-affected` summary line, so hash-propagation bumps no longer drown real field changes.
 - [ ] Warnings when PVCs change or major versions change — hint on the package definition
 - [ ] Live-cluster sanity checks (resource limits, etc.)
 - [x] Content-hash-based drift detection — recompute hash and compare against live state, contrast with nix store evaluation
@@ -192,6 +193,7 @@
   - [ ] Old Activation prune policy — superseded Activations are currently warn-only during prune ("prune policy is warn-only"). They must be kept for rollback, but the message is confusing. Should either explicitly skip Activations during prune with a clear message, or have a separate `kix gc --activations` to clean old ones.
 - [x] `kix gc` — garbage-collect orphaned kix-managed resources against a cluster's expected manifest set
 - [ ] `kix gc` without cluster eval — GC purely from live Activation/PI graph (no nix eval required)
+- [x] `kix gc` shows exactly which resources will be deleted before collection. Soft GC (`print_package_plan` with forced-verbose) lists every removed resource per package. Hard GC (`print_garbage_plan` in `cli/kix-cli/src/commands/gc.rs`) groups garbage by namespace+kind and annotates each entry with identity-hash, orphaning reason (`identity-hash not in expected set` / `missing kix.dev/identity-hash` / `superseded activation`), owning package, and activation hashes pulled from `kix.dev/*` annotations. No silent bulk deletes.
 - [ ] Non-K8s side effects (e.g. Forgejo user creation) — start with execution on "ssh", later crossplane or provider plugins
 - [ ] Auto-collect readiness — custom general runtime readiness checks (also outside k8s)
 - [ ] Auto-inject package identity labels (hash?, otherwise package name + version, like helm best practice)
@@ -202,6 +204,7 @@
 - [ ] Rollout pattern as a developer choice — no magical "always works" pattern due to state; stateless deps can duplicate, stateful deps need careful management
   - The system should ideally auto-classify dependencies by statefulness, not just surface the choice
 - [ ] Consistent cluster state guarantee — a fully-evaluated, locked cluster state means the entire set of resources is known to be self-consistent. No "helm installed something with a different env var" surprises
+- [ ] systemd like features that give you the timings per stage until ready. To understanding what is slowing down deploys etc.
 
 ## Graph & observability
 

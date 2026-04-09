@@ -32,6 +32,7 @@ Package structure, composition, and dependency injection.
 | 42 | [Dep config injection](42_dep_config_injection.md) | Plan | Consumers push config requirements into dependency packages. |
 | 55 | [Shared resource ownership](55_shared_resource_ownership.md) | Open problem | CRD/Namespace ownership in multi-activation clusters; reference counting. |
 | 71 | [Library extraction](71_library_extraction.md) | Draft | Split kix framework from monorepo into standalone consumable library. |
+| 80 | [Structured diagnostics](80_structured_diagnostics.md) | Design | Structured warnings/errors/traces with src attribution via curried builders, deferred + fatal modes, sidecar JSON + stderr marker transport to CLI. Extends 25. |
 
 ## Wiring & Policies
 
@@ -66,6 +67,7 @@ Activation operator, lifecycle, deployment strategies.
 | 54 | [Activation signing](54_activation_signing.md) | Design | Cryptographic signing of activation root hash for supply-chain verification. |
 | 56 | [Unified operator reconcile](archive/56_unified_operator_reconcile.md) | **Implemented** | Phase-based activation lifecycle (Queued → Deploying → Active → Superseded). Archived. |
 | 67 | [Stateful migration orchestration](67_stateful_migration_orchestration.md) | RFC | Orchestrating stateful infra changes leveraging the full cluster DAG. |
+| 81 | [Deploy as a kind-aware lifecycle engine](81_deploy_as_lifecycle_engine.md) | RFC | Reframes deploy as a per-kind transition engine: Plan/Transition/Verdict primitives, structured readiness verdicts replacing wall-clock timeouts, planner-side Recreate, Drain as a first-class transition for smart prune, CLI/operator as thin wrappers over a shared engine. Spine for 67/79/44/50/56. |
 
 ## Infrastructure & Scheduling
 
