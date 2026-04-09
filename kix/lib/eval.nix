@@ -34,6 +34,7 @@ let
       k8s
       rbac
       crd
+      netpol
       ;
   };
   resolve = import ./eval/resolve.nix { inherit lib kixlib; };

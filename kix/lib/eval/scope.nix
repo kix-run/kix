@@ -6,6 +6,7 @@
   k8s,
   rbac,
   crd,
+  netpol,
 }:
 
 let
@@ -42,6 +43,36 @@ rec {
       selectorLabelsOverride ? null,
       clusterDomain ? "cluster.local",
       capabilities ? { },
+      # Handle to the network-policy enforcer's `out` (see
+      # kix/lib/eval/cluster.nix → enforcerOut). Exposes `cnpCrdRef` which
+      # kix/lib/netpol.nix routes every generated CiliumNetworkPolicy through
+      # so the CNP → CRD marker → enforcer root edge is installed
+      # automatically. Null when no enforcer is declared or when this scope
+      # belongs to the enforcer itself (self-dep guard). See v2_discussions/83.
+      networkPolicyEnforcer ? null,
+      # Cluster-level networkPolicy submodule (from clusterConfig). Consumed
+      # by `mkWorkload` to decide whether per-workload CNPs are emitted at
+      # resource-construction time, and by `buildWorkloadCnps` for the
+      # `directions` knob. Defaults to disabled.
+      networkConfig ? {
+        enable = false;
+      },
+      # Cross-package resources (from `resolvedDepMeta`) that participate
+      # in the per-workload Service-edge registry. `scope.mkDeployment`
+      # intersects the workload's JSON context against this registry to
+      # discover egress targets, exactly the way `processInstance` does it
+      # today — just one fixpoint layer earlier. Default empty (no deps).
+      depResourcesForNetpol ? [ ],
+      # Peeked `packageMeta` (from `meta.peekPackageMeta`) — threaded in so
+      # `mkWorkload` can honor `meta.network.{allowExternalEgress,
+      # externalEgressEntities, externalIngressEntities, extraEgress,
+      # extraIngress}` at resource-construction time without waiting for
+      # the package's `build` function to return.
+      peekedPackageMeta ? { },
+      # When true, per-workload CNP emission is disabled for this scope.
+      # Set by cluster.nix for the enforcer's own scope so the enforcer's
+      # workloads don't declare CNPs that depend on the enforcer itself.
+      skipWorkloadNetpol ? false,
     }:
     let
       selectorLabels =
@@ -729,6 +760,13 @@ rec {
               serviceName = svc.name;
             };
 
+      # Lazy cross-package Service registry (path → Service resource).
+      # Used by `mkWorkload` to discover egress edges from the workload's
+      # raw JSON context before the workload resource is constructed.
+      # Built from `depResourcesForNetpol`, which instance.nix populates
+      # from `resolvedDepMeta`. Evaluated at most once (Nix laziness).
+      _netpolServiceRegistry = netpol.mkServiceRegistry depResourcesForNetpol;
+
       mkWorkload =
         apiVersion: kind: attrs:
         let
@@ -745,6 +783,75 @@ rec {
           # template labels explicitly, validate selector ⊆ labels instead.
           userSuppliedLabels = templateMeta ? labels;
           effectiveTemplateLabels = if userSuppliedLabels then templateMeta.labels else selector;
+
+          hostNetwork = templateSpec.hostNetwork or false;
+
+          # Canonical spec that both the pre-build CNP extraction and the
+          # final mkResource call see — identical shape, identical context.
+          # This matches the structure scopeMkResource would receive in its
+          # args.spec, ensuring the JSON context we walk for service edges
+          # is the exact same context the workload resource carries.
+          finalSpec =
+            removeAttrs spec [
+              "selector"
+              "template"
+            ]
+            // {
+              selector.matchLabels = selector;
+              template = {
+                metadata = templateMeta // {
+                  labels = effectiveTemplateLabels;
+                };
+                spec = templateSpec;
+              };
+            };
+
+          baseArgs = removeAttrs attrs [ "spec" ] // {
+            inherit apiVersion kind;
+            spec = finalSpec;
+          };
+
+          # Per-workload CNP emission runs BEFORE the workload's
+          # scopeMkResource call. The JSON context of the raw spec already
+          # carries every cross-package Service reference the workload
+          # holds (envFrom/env/volume/etc.), so we can discover egress
+          # edges without first building a throw-away preliminary
+          # resource. The resulting CNPs get spliced into the workload's
+          # extraDeps so the workload's own store-path context
+          # transitively includes its policies.
+          #
+          # See v2_discussions/83 → "scope-level workload interception"
+          # for why this is structurally sound (no rebuild, no dual
+          # identity) and RFC 37 → netpol derivation for the edge model.
+          shouldGenerateNetpol = (networkConfig.enable or false) && !skipWorkloadNetpol && !hostNetwork;
+
+          netpolResult =
+            if shouldGenerateNetpol then
+              netpol.buildWorkloadCnps {
+                scope = scopeObj;
+                inherit instanceName namespaceName;
+                workloadInput = baseArgs;
+                workloadKind = kind;
+                wSelector = selector;
+                inherit hostNetwork;
+                serviceRegistry = _netpolServiceRegistry;
+                inherit networkConfig networkPolicyEnforcer;
+                packageNetworkMeta = peekedPackageMeta.network or { };
+              }
+            else
+              {
+                cnps = [ ];
+                edges = [ ];
+              };
+
+          finalExtraDeps = (attrs.extraDeps or [ ]) ++ netpolResult.cnps;
+
+          workload = scopeMkResource (
+            baseArgs
+            // {
+              extraDeps = finalExtraDeps;
+            }
+          );
         in
         builtins.seq (checkDaemonSet kind) (
           builtins.seq (checkPrivileged templateSpec) (
@@ -756,26 +863,16 @@ rec {
                     builtins.seq (checkContainerResources templateSpec) (
                       builtins.seq (checkDuplicateNames templateSpec) (
                         builtins.seq (checkFieldRefs templateSpec) (
-                          scopeMkResource (
-                            removeAttrs attrs [ "spec" ]
-                            // {
-                              inherit apiVersion kind;
-                              spec =
-                                removeAttrs spec [
-                                  "selector"
-                                  "template"
-                                ]
-                                // {
-                                  selector.matchLabels = selector;
-                                  template = {
-                                    metadata = templateMeta // {
-                                      labels = effectiveTemplateLabels;
-                                    };
-                                    spec = templateSpec;
-                                  };
-                                };
-                            }
-                          )
+                          # Attach the per-workload CNPs + edges as side-band
+                          # metadata. instance.nix drains these off every
+                          # workload in `allPartResources` after the parts
+                          # fixpoint settles and appends them to the resource
+                          # pool (replacing the old `_networkPolicies` bag).
+                          workload
+                          // {
+                            _generatedNetpol = netpolResult.cnps;
+                            _generatedNetpolEdges = netpolResult.edges;
+                          }
                         )
                       )
                     )
@@ -1143,6 +1240,7 @@ rec {
           selectorLabels
           labelStyle
           namespaces
+          networkPolicyEnforcer
           ;
         namespace = namespaceResource;
 
@@ -1162,6 +1260,11 @@ rec {
               clusterLabels
               labelStyle
               capabilities
+              networkPolicyEnforcer
+              networkConfig
+              depResourcesForNetpol
+              peekedPackageMeta
+              skipWorkloadNetpol
               ;
             namespaceName = nsName;
             namespaceResource = nsRes;

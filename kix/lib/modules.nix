@@ -500,24 +500,18 @@
             default = "both";
             description = "Which policy directions to generate.";
           };
-          ciliumInstance = lib.mkOption {
-            type = lib.types.nullOr lib.types.anything;
-            default = null;
-            description = ''
-              Optional k8s-resource reference identifying the cilium
-              enforcer that owns the generated CiliumNetworkPolicies
-              (typically the DaemonSet or the PackageInstance CR of a
-              `kix/packages/cilium` instance in `kube-system`). When set,
-              every generated CNP gets this reference injected into its
-              `extraDeps`, so the store-path DAG guarantees cilium is
-              applied before any CNP evaluates. Leave as `null` if cilium
-              is platform-provided (e.g. RKE2 / GKE dataplane-v2).
-            '';
-          };
         };
       };
       default = { };
-      description = "CiliumNetworkPolicy generation from DI graph. See v2_discussions/37.";
+      description = ''
+        CiliumNetworkPolicy generation from DI graph. See v2_discussions/37
+        and v2_discussions/83. The enforcer that CNPs depend on is looked up
+        automatically via `meta.provides ∋ "network-policy-enforcer"` (see
+        `kix/packages/cilium`) — no explicit wiring is required. When no
+        enforcer instance is declared (e.g. cilium runs out-of-band on the
+        cluster) kix still emits CNPs but without a store-path edge to an
+        in-cluster enforcer package.
+      '';
     };
   };
 }

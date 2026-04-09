@@ -16,9 +16,17 @@
 # The helm chart is deployed with `includeCrds = true`, so the
 # CiliumNetworkPolicy / CiliumClusterwideNetworkPolicy / CiliumIdentity /
 # CiliumEndpoint / CiliumBGP* CRDs are installed as part of the package.
-# Generated CNPs can express a dependency on the cilium instance through
-# `clusterConfig.networkPolicy.ciliumInstance` (see kix/lib/netpol.nix),
-# which threads this package into the CNP `extraDeps`.
+#
+# This package declares `meta.provides = [ ... "network-policy-enforcer" ]`
+# and exposes `rootOut.cnpCrdRef`, a `scope.mkCRDRef` handle for the
+# CiliumNetworkPolicy CRD with `installedBy = self.root.resource`. kix/lib
+# discovers any instance providing `"network-policy-enforcer"` at cluster
+# evaluation time and exposes its `out.cnpCrdRef` to scopes via
+# `scope.networkPolicyEnforcer`. `kix/lib/netpol.nix` emits every generated
+# CiliumNetworkPolicy through that `cnpCrdRef.out.cr` builder, so every CNP
+# transitively depends on the CRD import marker → cilium package root →
+# cilium DaemonSet + CRDs. No `networkPolicy.ciliumInstance` threading,
+# no user-facing plumbing. See v2_discussions/83.
 #
 # Chart:   https://helm.cilium.io/
 # Name:    cilium
@@ -39,6 +47,8 @@
 #       releaseName  = "cilium";
 #       includeCrds  = true;
 #       rootSelector = { kind = "DaemonSet"; name = "cilium"; };
+#       extraMeta    = ciliumPkg.meta;     # surfaces `provides`
+#       rootOut      = ciliumPkg.rootOut;  # surfaces `cnpCrdRef`
 #     };
 #     config.values = {
 #       # Cluster-specific overrides. Common knobs:
@@ -50,9 +60,8 @@
 #   };
 #
 # Pair with:
-#   networkPolicy.enable          = true;
-#   networkPolicy.ciliumInstance  = config.instances.kube-system.cilium;  # optional
-#   cluster.capabilities.cni             = "cilium";
+#   networkPolicy.enable                  = true;
+#   cluster.capabilities.cni              = "cilium";
 #   cluster.capabilities.networkPolicyAPI = "cilium";
 
 {
@@ -62,6 +71,7 @@
     provides = [
       "cni"
       "network-policy"
+      "network-policy-enforcer"
       "cilium"
     ];
     # Cilium agents run as a DaemonSet using hostNetwork + privileged
@@ -70,6 +80,26 @@
     # which is expected here.
     k8s.minVersion = "1.27";
   };
+
+  # Exposed via fromHelmChart's `rootOut` hook. The returned attrset becomes
+  # `root.out` on the cilium instance; kix/lib reads `cnpCrdRef` off
+  # `networkPolicyEnforcer.out.cnpCrdRef` and routes every generated CNP
+  # through `cnpCrdRef.out.cr` so the CRD marker → cilium root edge is
+  # installed transitively. `installedBy = self.root.resource` orders the
+  # CRD import marker AFTER the cilium chart's root (the DaemonSet, which
+  # itself depends on every helm-emitted resource including the CRDs).
+  rootOut =
+    { scope, self, ... }:
+    {
+      cnpCrdRef = scope.mkCRDRef {
+        group = "cilium.io";
+        kind = "CiliumNetworkPolicy";
+        plural = "ciliumnetworkpolicies";
+        version = "v2";
+        crdScope = "Namespaced";
+        installedBy = self.root.resource;
+      };
+    };
 
   chart = {
     repo = "https://helm.cilium.io/";

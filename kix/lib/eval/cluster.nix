@@ -111,6 +111,71 @@ in
 
       resolutionIndex = buildResolutionIndex staticMeta;
 
+      # 5a. Network-policy enforcer lookup — find an instance whose package
+      # declares `meta.provides` containing "network-policy-enforcer"
+      # (currently only `kix/packages/cilium`). If found, its `out.cnpCrdRef`
+      # is surfaced to every instance's scope via `scope.networkPolicyEnforcer`,
+      # and `kix/lib/netpol.nix` routes every generated CiliumNetworkPolicy
+      # through `cnpCrdRef.out.cr` so the CNP → CRD marker → enforcer root
+      # edge is installed transitively. When no enforcer instance is present
+      # (e.g. cilium runs out-of-band on the cluster), netpol.nix falls back
+      # to raw `mkResource` emission — the CNPs still apply, just without the
+      # store-path edge to an in-cluster enforcer. See v2_discussions/83.
+      #
+      # If two instances advertise the capability we throw — ambiguous.
+      enforcerCandidates = builtins.concatMap (
+        nsName:
+        let
+          nsInsts = mergedInstances.${nsName};
+        in
+        builtins.concatMap (
+          instName:
+          let
+            instCfg = nsInsts.${instName};
+            pkgMeta = meta.peekPackageMeta {
+              package = instCfg.package;
+              inherit kixlib;
+            };
+            provides = pkgMeta.provides or [ ];
+          in
+          if builtins.elem "network-policy-enforcer" provides then
+            [
+              {
+                ns = nsName;
+                inst = instName;
+              }
+            ]
+          else
+            [ ]
+        ) (builtins.attrNames nsInsts)
+      ) (builtins.attrNames mergedInstances);
+
+      enforcerLookup =
+        if enforcerCandidates == [ ] then
+          null
+        else if builtins.length enforcerCandidates > 1 then
+          throw (
+            "kix: multiple instances advertise `meta.provides = [\"network-policy-enforcer\"]`: "
+            + builtins.concatStringsSep ", " (map (c: "${c.ns}/${c.inst}") enforcerCandidates)
+            + ". Declare exactly one enforcer (e.g. a single cilium instance)."
+          )
+        else
+          builtins.head enforcerCandidates;
+
+      # Lazy read from the cluster fixpoint. `out` is populated by the
+      # enforcer's `rootOut` hook (see kix/packages/cilium/default.nix).
+      # Returns null when no enforcer is declared so netpol.nix can fall back.
+      enforcerOut =
+        if enforcerLookup == null then
+          null
+        else
+          clusterInstances.${enforcerLookup.ns}.${enforcerLookup.inst}.out or null;
+
+      # Self-dep guard: the enforcer's own scope must not depend on itself.
+      isSelfEnforcer =
+        nsName: instName:
+        enforcerLookup != null && enforcerLookup.ns == nsName && enforcerLookup.inst == instName;
+
       # 5b. Phase-1 pre-pass: resolve dep targets and collect config injections.
       #     Uses a minimal scope (just naming) — packages only use scope.instanceName
       #     at the top level. Build thunks are not called, only introspected.
@@ -240,6 +305,7 @@ in
               inherit resolutionIndex;
               globalPartsOverlays = cfg.globalPartsOverlays;
               configInjections = resolveInjections nsName instName;
+              networkPolicyEnforcer = if isSelfEnforcer nsName instName then null else enforcerOut;
             }
           ) nsInsts
         ) mergedInstances
@@ -309,6 +375,7 @@ in
           netpol.generateIngressPolicies {
             allEdges = allNetworkEdges;
             inherit nsResources networkConfig;
+            networkPolicyEnforcer = enforcerOut;
           }
         else
           [ ];
@@ -321,7 +388,7 @@ in
               namespaceName = nsName;
               nsResource = nsResources.${nsName};
               directions = networkConfig.directions;
-              ciliumInstance = networkConfig.ciliumInstance or null;
+              networkPolicyEnforcer = enforcerOut;
             }
           ) allNsNames
         else

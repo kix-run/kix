@@ -426,3 +426,120 @@ turns up a subtle issue during prototyping.
 - `kix/lib/helm.nix:fromHelmChart` `rootOut` hook — the already-existing
   mechanism for Helm-wrapped packages to expose DI builders (see
   architecture.md "Helm-wrapped packages can expose DI builders").
+
+  # Notes on Phase C
+
+  what are your thoughts on phase C now? Would you still use the same approach?                               
+                                                                                                              
+● Honest answer: label rendezvous was overengineered. I'd use a different approach now — and I'm less         
+  convinced Phase C is urgent.                                                                                
+                                                                                               
+  What implementing B changed my mind about                                                                   
+   
+  1. Scope-level edge discovery is trivially symmetric. Phase B already has buildWorkloadCnps extracting      
+  (targetNs, targetServiceName, ports, targetSelector) tuples from the raw JSON context. The same data is
+  available the moment any resource is built — including a Service being built, and including a workload that 
+  needs to emit policies targeting cross-package services. There's no chicken-and-egg the way I worried about
+  in RFC 83.                                   
+  2. In-package workload→service edges really don't exist. I was right about this but I hedged a lot. After B
+  I can say it with more confidence: I didn't hit a single case across 7 clusters. The convention is          
+  callee-knows-nothing; the caller's context carries everything.
+  3. generateIngressPolicies's ordering problem was specific to RFC 82's rebuild design. It doesn't exist in  
+  the Phase B shape. The cluster-level post-pass still works exactly as before, because scope-level emission  
+  on the caller side doesn't mutate any Service.
+                                                                                                              
+  So the "must kill inverted ingress" framing in RFC 83 was partly me projecting RFC 82's problems forward.   
+  They don't carry over.                       
+                                                                                                              
+  The simpler shape I'd use instead of label rendezvous                                                       
+                                               
+  Emit the ingress CNP caller-side, in the callee's namespace, via scope.forNamespace.                        
+                                                                                                
+  Inside buildWorkloadCnps, for each discovered cross-package service edge, emit two CNPs:                    
+                                                                                                
+  1. The caller's egress CNP (current Phase B behavior) — lives in caller's namespace, in the caller          
+  workload's extraDeps.                                                                         
+  2. An ingress CNP in the callee's namespace: endpointSelector = edge.targetSelector, ingress[].fromEndpoints
+   = { matchLabels = callerSelector; "k8s:io.kubernetes.pod.namespace" = callerNs; }, extraDeps = [           
+  edge.service ]. Name: ${callerInstance}-to-${callerWorkload}-${targetService}-ingress so multiple callers
+  don't collide on the same callee.                                                                           
+                                                                                                
+  Built via (scope.forNamespace targetNs).mkResource so it ends up with the right namespace and gets stamped  
+  with labels from the caller's instance context (which is correct — the caller package "owns" the permission
+  grant).                                                                                                     
+                                                                                                
+  Both CNPs go into the workload's extraDeps, so the caller workload waits for both its egress policy and the 
+  paired ingress policy to land. N callers × M targets → N·M ingress CNPs — but each is tiny, and realistic
+  clusters land ~100–200 total, same order as generateIngressPolicies emits today.                            
+                                                                                                
+  Why this beats label rendezvous              
+
+  - No hash function, no cardinality reasoning, no pod-label pollution. Reach labels on every pod always felt 
+  grubby. Pods get enough noise already.
+  - Plain Kubernetes semantics. fromEndpoints.matchLabels with explicit selectors is what operators already   
+  read and debug. A hashed kix.dev/netpol-reach/<8-hex> label is opaque.                                      
+  - Symmetric with egress emission. Both CNPs come out of the same edge loop in buildWorkloadCnps. The helper
+  barely grows.                                                                                               
+  - Cross-namespace ownership is already a solved pattern. scope.forNamespace exists and is used by e.g. the
+  reflector workflow. No new primitive.                                                                       
+  - Label rendezvous' "both sides independently compute the same hash" property turns out not to be worth 
+  much. In Phase B the caller already has the full callee identity (it's how we discovered the edge).         
+  Rendezvous was only attractive when I was imagining the callee emitting its ingress CNP without knowing
+  callers — which only matters if we're doing it at callee-build time. We're not; we're doing it at           
+  caller-build time.                                                                            
+                                               
+  What the callee side looks like                                                                             
+  
+  Nothing. scope.mkResource { kind = "Service"; ... } stays untouched. No mkService interception, no          
+  reach-label generation. The only thing that changes is: more CNPs show up in the callee's namespace, owned
+  by the caller instance.                                                                                     
+                                                                                                
+  The one wrinkle: scope.forNamespace returns a scope in the target namespace but keeps instanceName of the   
+  caller. That's what we want — labels on the emitted CNP say app.kubernetes.io/instance = <caller> which
+  correctly identifies provenance. Need to verify forNamespace preserves instanceName (it does, looking at    
+  scope.nix:1151 — inherit instanceName).                                                       
+                                               
+  Is Phase C still worth doing?
+
+  Less urgent than I argued in RFC 83. Here's what we get vs. what we keep:                                   
+  
+  Keep generateIngressPolicies (status quo after Phase B):                                                    
+  - Works. The RFC 82 P3 ordering problem never materializes.                                   
+  - Cluster-level walk reads _networkEdges from each instance, emits one ingress CNP per target Service       
+  aggregating all callers.                                                                             
+  - Compact: 1 CNP per target Service, not N·M.                                                               
+  - Downside: the callee's ingress CNPs don't gate callee readiness. Brief unenforced window when callee
+  starts before all caller-originated ingress policies land. Small and transient.                             
+                                                                                                              
+  Phase C (caller-side emission):                                                                             
+  - Deletes the cluster-level pass. Fewer moving parts; cluster.nix shrinks.                                  
+  - Per-callee readiness gate for ingress — closes the reverse window.                                        
+  - More CNPs (N·M instead of M), but each trivial.                   
+  - Per-package ownership of ingress permissions — reads naturally in kubectl describe cnp ("which package put
+   this here" = the one whose instance label is on it).                                                       
+                                                                                                              
+  Honest tradeoff: the readiness-window argument is real but quantitatively minor. The compactness argument
+  cuts in favor of status quo. The "one place that owns the cross-package edge" argument cuts in favor of     
+  Phase C.                                                                                      
+                                                                                                              
+  What I'd actually do                                                                          
+                                               
+  1. Land a small cleanup first: move per-edge ingress emission into buildWorkloadCnps, produce both CNPs, but
+   keep generateIngressPolicies running for now. Measure duplication. If they produce identical rules (which
+  they should), delete the cluster-level pass in a second PR. If there's a mismatch (e.g. default-deny        
+  fallback cases, cross-package edges that scope-level misses because the dep isn't in resolvedDepMeta), keep
+  the cluster pass as a backstop.              
+  2. Drop label rendezvous entirely from the plan. It was clever but the cleverness doesn't pay for itself.
+  3. Update RFC 83 Phase C section to reflect the caller-side-forNamespace design and tone down the urgency.  
+  The doc currently makes it sound like Phase C is the natural next step. After B, it's more like a           
+  nice-to-have refactor.                                                                                      
+                                                                                                              
+  The thing I'd want to verify before committing to even this simpler Phase C: are there edges that           
+  generateIngressPolicies catches today that scope-level edge extraction in B would miss? The _networkEdges
+  feeding the cluster pass comes from processInstance which runs against allPartResources ++ depResources — so
+   it sees in-package workload→in-package service refs that scope misses. If any package has those (even one
+  case), the cluster pass must stay or Phase B's scope-level registry has to grow to include in-package
+  resources. I haven't audited that, and I should before deleting anything.
+
+  Short version: yes to Phase C conceptually, no to label rendezvous, not urgent, and audit _networkEdges     
+  first.

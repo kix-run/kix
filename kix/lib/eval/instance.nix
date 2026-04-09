@@ -45,6 +45,12 @@ in
       globalPartsOverlays ? [ ],
       clusterConfig ? { },
       configInjections ? [ ],
+      # Lazy handle to the network-policy enforcer's `out` (currently only
+      # exposes `cnpCrdRef`). Resolved at cluster level via
+      # `meta.provides ∋ "network-policy-enforcer"`. Null when no enforcer
+      # is declared or when this instance IS the enforcer (self-dep guard).
+      # See v2_discussions/83 and `kix/lib/eval/cluster.nix` → `enforcerOut`.
+      networkPolicyEnforcer ? null,
     }@args:
 
     # Import instances take a separate evaluation path — no resource collection,
@@ -54,19 +60,72 @@ in
 
     else
       let
+        # Peek package metadata BEFORE the scope is constructed, so
+        # `mkScope` can honor `meta.provides` (self-dep guard for the
+        # enforcer) and `meta.network.*` (allowExternalEgress, extra*,
+        # etc.) at scope-level netpol emission time. `peekPackageMeta`
+        # is cheap — it invokes function packages with an empty scope and
+        # reads `.meta` without calling `build`.
+        peekedPackageMeta = meta.peekPackageMeta {
+          package = instCfg.package;
+          inherit kixlib;
+        };
+
+        # If this instance IS the enforcer (e.g. the cilium package
+        # itself), disable scope-level per-workload CNP emission: its
+        # own workloads must not declare CNPs that transitively depend on
+        # the enforcer's own CRD marker. The cluster-level lookup in
+        # `cluster.nix → isSelfEnforcer` already nullifies
+        # `networkPolicyEnforcer` for this scope, but we also suppress
+        # the `buildWorkloadCnps` call so no fallback-path CNPs are
+        # emitted either.
+        _skipWorkloadNetpol = builtins.elem "network-policy-enforcer" (peekedPackageMeta.provides or [ ]);
+
         scope' = mkScope {
           inherit
             instanceName
             namespaceName
             namespaceResource
             clusterLabels
+            networkPolicyEnforcer
+            peekedPackageMeta
             ;
           namespaces = nsResources;
           labelStyle = instCfg.labelStyle;
           selectorLabelsOverride = instCfg.selectorLabels;
           clusterDomain = clusterConfig.clusterDomain or "cluster.local";
           capabilities = clusterConfig.cluster.capabilities or { };
+          networkConfig = clusterConfig.networkPolicy or { enable = false; };
+          # Lazy: dep resources for scope-level netpol edge discovery.
+          # `resolvedDepMeta` is computed below (line ~97) in the same
+          # `let` and fully forced before the `parts` fixpoint runs
+          # `scope.mkDeployment`, so referencing it here is safe via
+          # Nix laziness.
+          depResourcesForNetpol = _depResourcesForNetpol;
+          skipWorkloadNetpol = _skipWorkloadNetpol;
         };
+
+        # Flatten every DI-resolved dep instance's raw resources into a
+        # single list. This mirrors the `depResources` computation inside
+        # `netpol.processInstance` — moved up here so `mkScope` can hand
+        # a Service registry to `buildWorkloadCnps` at workload-
+        # construction time. Lazy: only forced when the first
+        # `mkDeployment`/`mkStatefulSet`/`mkDaemonSet` runs, by which
+        # point `resolvedDepMeta` is fully settled.
+        _depResourcesForNetpol = builtins.concatMap (
+          argName:
+          let
+            depParts = resolvedDepMeta.${argName}.instance.raw or { };
+          in
+          builtins.filter (v: (v._type or "") == "k8s-resource") (
+            collectTypedAttrs {
+              excludeKeys = [
+                "root"
+                "meta"
+              ];
+            } depParts
+          )
+        ) (builtins.attrNames resolvedDepMeta);
 
         # 1. Phase 1: normalize package (function or inline attrset) with system args
         raw = callPackagePhase1 {
@@ -234,7 +293,7 @@ in
 
         # Collect all resources from parts (for the local registry).
         # Filters out null values so disabled/modal parts are excluded.
-        allPartResources = builtins.filter (v: (v._type or "") == "k8s-resource") (
+        _partResourcesFromParts = builtins.filter (v: (v._type or "") == "k8s-resource") (
           collectTypedAttrs {
             excludeKeys = [
               "root"
@@ -242,6 +301,18 @@ in
             ];
           } parts
         );
+
+        # Drain scope-emitted per-workload CNPs off every workload and
+        # fold them into the instance's resource pool. `scope.mkWorkload`
+        # constructs these at resource-construction time — the workload's
+        # own `extraDeps` already lists them, so the forward closure will
+        # reach them via the workload's store-path context, but we still
+        # need them explicitly in `allPartResources` so `collectResources`
+        # in cluster.nix can serialize them as YAML documents. See
+        # v2_discussions/83 → "scope-level workload interception".
+        _scopeEmittedNetpolCnps = builtins.concatMap (r: r._generatedNetpol or [ ]) _partResourcesFromParts;
+
+        allPartResources = _partResourcesFromParts ++ _scopeEmittedNetpolCnps;
 
         # Local store-path → resource lookup for forward closure walking.
         # TODO: potentially move the PI collection to kix-cli for faster eval
@@ -393,6 +464,7 @@ in
                 namespaceName
                 allPartResources
                 resolvedDepMeta
+                networkPolicyEnforcer
                 ;
               networkConfig = clusterConfig.networkPolicy;
               inherit packageMeta;
@@ -665,7 +737,13 @@ in
             in
             view'
             // {
-              _networkPolicies = networkResult.policies;
+              # `_networkPolicies` is the full set of CNPs owned by this
+              # instance: per-workload CNPs emitted at scope time (drained
+              # off `_generatedNetpol` on every workload) + supplementary
+              # api-server / external-ingress CNPs emitted post-fixpoint by
+              # `netpol.processInstance`. cluster.nix reads this via
+              # `inst._networkPolicies` in `collectResources`.
+              _networkPolicies = _scopeEmittedNetpolCnps ++ networkResult.policies;
               _networkEdges = networkResult.edges;
               _scorecardFindings = scorecardFindings;
               _diagnostics = {

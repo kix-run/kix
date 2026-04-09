@@ -21,6 +21,45 @@
 let
   inherit (helpers) collectTypedAttrs;
 
+  # Build a CiliumNetworkPolicy, routing through the enforcer's
+  # `cnpCrdRef.out.cr` when an enforcer is available. That builder stamps
+  # `apiVersion`/`kind` and adds the CRD import marker to `requires`, so
+  # every CNP transitively depends on the enforcer's root (via the marker's
+  # `installedBy`). When no enforcer is declared (e.g. cilium runs
+  # out-of-band on the cluster) we fall back to emitting the CNP directly
+  # via the caller's mkResource — the store-path edge to the enforcer is
+  # lost but the CNP is still generated.
+  #
+  # `mkResource` is the function used to materialize the resulting attrs
+  # (typically `scope.mkResource` for instance-level CNPs and
+  # `k8s.mkResource` for cluster-level ones).
+  #
+  # `extraArgs` carries the remaining CNP fields (name, namespace, spec,
+  # labels, extraDeps, ...).
+  buildCnp =
+    {
+      networkPolicyEnforcer,
+      mkResource,
+      extraArgs,
+    }:
+    let
+      baseArgs = extraArgs // {
+        apiVersion = "cilium.io/v2";
+        kind = "CiliumNetworkPolicy";
+      };
+    in
+    if networkPolicyEnforcer != null && networkPolicyEnforcer.cnpCrdRef or null != null then
+      mkResource (
+        networkPolicyEnforcer.cnpCrdRef.out.cr (
+          removeAttrs baseArgs [
+            "apiVersion"
+            "kind"
+          ]
+        )
+      )
+    else
+      mkResource baseArgs;
+
   workloadKinds = [
     "Deployment"
     "StatefulSet"
@@ -46,11 +85,24 @@ let
       }
     ) { } (builtins.filter isService resources);
 
-  # Extract Service edges from a workload via store-path context.
+  # Extract Service edges from a workload (built resource) via store-path context.
   extractServiceEdges =
     { workload, serviceRegistry }:
+    extractServiceEdgesFromJson {
+      json = builtins.toJSON workload.rawManifest;
+      inherit serviceRegistry;
+    };
+
+  # Same as `extractServiceEdges` but operating on a pre-built JSON string.
+  # Used by `buildWorkloadCnps` which runs inside `scope.mkDeployment` —
+  # before the workload resource exists — and extracts edges directly from
+  # the caller's args JSON. The store-path context on the JSON is identical
+  # to what the built `rawManifest` would carry (same input attrs), so this
+  # is a strictly equivalent path that avoids a throw-away `mkResource` call.
+  extractServiceEdgesFromJson =
+    { json, serviceRegistry }:
     let
-      ctx = builtins.getContext (builtins.toJSON workload.rawManifest);
+      ctx = builtins.getContext json;
       matchedPaths = builtins.filter (p: builtins.hasAttr p serviceRegistry) (builtins.attrNames ctx);
     in
     map (
@@ -120,9 +172,202 @@ let
 in
 rec {
 
-  # ── Per-instance processing ───────────────────────────────────────────
+  # Expose the helpers that scope-level interception uses.
+  inherit mkServiceRegistry isService isWorkload;
+
+  # ── Per-workload CNP builder (scope-level, pre-toFile) ────────────────
   #
-  # Called from evaluateInstance after closure computation.
+  # Called from `scope.mkWorkload` BEFORE the workload resource is built
+  # (see v2_discussions/83 "scope-level workload interception"). Takes the
+  # raw workload args (pre-mkResource), extracts cross-package Service
+  # edges directly from the args' string context, and emits the per-workload
+  # egress / self-ingress CiliumNetworkPolicies. The returned CNPs are
+  # spliced into the workload's `extraDeps` by `mkWorkload`, so the
+  # workload's store-path context transitively includes its CNPs — closing
+  # the "unenforced window" where a workload becomes ready before its
+  # policies are applied.
+  #
+  # This does NOT emit rules for `needsApiServerAccess` or
+  # `needsExternalIngress`: those require post-fixpoint signals
+  # (RBAC/CRD presence, LoadBalancer / hostNetwork detection across the
+  # whole instance) and stay in `processInstance` where they run against
+  # `allPartResources`. The supplementary CNPs emitted there depend on
+  # workloads the old way (CNP → workload), which is fine: they add
+  # permissions rather than gate readiness.
+  #
+  # Arguments:
+  #   scope           - calling scope (mkResource used for CNP construction)
+  #   instanceName    - passed through for CNP names
+  #   namespaceName   - passed through for edge source labels
+  #   workloadInput   - the user-provided `attrs` to mkWorkload, post
+  #                     spec/serviceAccount/headlessService expansion
+  #   workloadKind    - "Deployment" | "StatefulSet" | "DaemonSet"
+  #   wSelector       - spec.selector.matchLabels
+  #   hostNetwork     - spec.template.spec.hostNetwork (skip netpol if true)
+  #   serviceRegistry - path → Service resource (for cross-package edges)
+  #   networkConfig   - clusterConfig.networkPolicy (directions etc.)
+  #   packageNetworkMeta - packageMeta.network or {} (extraEgress, etc.)
+  #   networkPolicyEnforcer - handle with `cnpCrdRef` (Phase A)
+  #
+  # Returns { cnps = [resource]; edges = [edge]; } where edges feed the
+  # cluster-level inverted-ingress pass.
+  buildWorkloadCnps =
+    {
+      scope,
+      instanceName,
+      namespaceName,
+      workloadInput,
+      workloadKind,
+      wSelector,
+      hostNetwork,
+      serviceRegistry,
+      networkConfig,
+      packageNetworkMeta ? { },
+      networkPolicyEnforcer ? null,
+    }:
+    let
+      directions = networkConfig.directions or "both";
+      doEgress = directions == "both" || directions == "egress";
+      doIngress = directions == "both" || directions == "ingress";
+      networkMeta = packageNetworkMeta;
+
+      # Extract service edges directly from the raw args' JSON context —
+      # no throw-away preliminary resource, no second `builtins.toFile`.
+      edges = extractServiceEdgesFromJson {
+        json = builtins.toJSON workloadInput;
+        inherit serviceRegistry;
+      };
+
+      flattenedEdges = map (edge: {
+        sourceSelector = wSelector;
+        sourceNamespace = namespaceName;
+        inherit (edge)
+          service
+          ports
+          targetSelector
+          targetNamespace
+          ;
+      }) edges;
+
+      serviceRules = map (
+        edge:
+        let
+          sel =
+            if edge.targetNamespace == namespaceName then
+              edge.targetSelector
+            else
+              edge.targetSelector
+              // {
+                "k8s:io.kubernetes.pod.namespace" = edge.targetNamespace;
+              };
+          cp = portsToCilium edge.ports;
+        in
+        {
+          toEndpoints = [ { matchLabels = sel; } ];
+        }
+        // lib.optionalAttrs (cp != [ ]) { toPorts = [ { ports = cp; } ]; }
+      ) edges;
+
+      selfEgress = lib.optional (workloadKind == "StatefulSet") {
+        toEndpoints = [ { matchLabels = wSelector; } ];
+      };
+
+      egressRules = [
+        dnsEgressRule
+      ]
+      ++ serviceRules
+      ++ selfEgress
+      ++ lib.optional (networkMeta.allowExternalEgress or false) {
+        toEntities = networkMeta.externalEgressEntities or [ "world" ];
+      }
+      ++ (networkMeta.extraEgress or [ ]);
+
+      selfIngress = lib.optional (workloadKind == "StatefulSet") {
+        fromEndpoints = [ { matchLabels = wSelector; } ];
+      };
+
+      ingressRules = selfIngress ++ (networkMeta.extraIngress or [ ]);
+
+      # The workload name isn't stamped yet (workloadInput.name is the
+      # user's chosen name, pre-sanitization). Use it verbatim for the CNP
+      # name — same shape as `processInstance`'s old egress/ingress names.
+      wName = workloadInput.name or (throw "buildWorkloadCnps: workloadInput.name is required");
+
+      # Service refs go into the CNP's extraDeps so the CNP waits for its
+      # referenced services to exist before it's applied. NOTE: we do NOT
+      # put the workload in the CNP's extraDeps (that would create a cycle
+      # once `mkWorkload` puts the CNP in the workload's extraDeps).
+      serviceDeps = map (e: e.service) edges;
+
+      egressCnp =
+        if hostNetwork || !doEgress then
+          null
+        else
+          buildCnp {
+            inherit networkPolicyEnforcer;
+            mkResource = scope.mkResource;
+            extraArgs = {
+              name = "${instanceName}-${lib.toLower workloadKind}-${wName}-egress";
+              labels = {
+                "kix.dev/derived" = "true";
+              };
+              spec = {
+                endpointSelector.matchLabels = wSelector;
+                egress = egressRules;
+              };
+              extraDeps = serviceDeps;
+            };
+          };
+
+      ingressCnp =
+        if hostNetwork || !doIngress || ingressRules == [ ] then
+          null
+        else
+          buildCnp {
+            inherit networkPolicyEnforcer;
+            mkResource = scope.mkResource;
+            extraArgs = {
+              name = "${instanceName}-${lib.toLower workloadKind}-${wName}-ingress";
+              labels = {
+                "kix.dev/derived" = "true";
+              };
+              spec = {
+                endpointSelector.matchLabels = wSelector;
+                ingress = ingressRules;
+              };
+              extraDeps = [ ];
+            };
+          };
+
+    in
+    {
+      cnps = builtins.filter (c: c != null) [
+        egressCnp
+        ingressCnp
+      ];
+      edges = flattenedEdges;
+    };
+
+  # ── Per-instance processing (post-fixpoint supplements) ───────────────
+  #
+  # Called from evaluateInstance after closure computation. The bulk of
+  # per-workload CNP emission (DNS + cross-package service egress + self-
+  # ingress for StatefulSets + meta.network extras) has moved into
+  # `scope.mkDeployment` via `buildWorkloadCnps`, so the workload's own
+  # store-path context carries its CNPs before `builtins.toFile` runs
+  # (see v2_discussions/83).
+  #
+  # What stays here:
+  #   - **Warnings**: hostNetwork, helm opacity.
+  #   - **Supplementary CNPs** that depend on post-fixpoint signals
+  #     (api-server access derived from RBAC/CRD presence across the
+  #     whole instance; external-ingress derived from LoadBalancer Service
+  #     or hostNetwork workloads). These are additive permissions, not
+  #     gating policies — they depend on the workload the old way
+  #     (CNP → workload), which is fine.
+  #   - **Edges** for the cluster-level inverted-ingress pass. Same
+  #     extraction as before, run against `allPartResources`.
+  #
   # Returns { policies = [resource]; edges = [edge]; warnings = [string]; }
   processInstance =
     {
@@ -133,18 +378,17 @@ rec {
       resolvedDepMeta,
       networkConfig,
       packageMeta,
+      # Handle to the cluster-level network-policy enforcer's `out`
+      # (see kix/lib/eval/cluster.nix → enforcerOut). When non-null, every
+      # emitted CNP is routed through `cnpCrdRef.out.cr` to pick up the
+      # CRD marker → enforcer root edge.
+      networkPolicyEnforcer ? null,
     }:
     let
       directions = networkConfig.directions or "both";
       doEgress = directions == "both" || directions == "egress";
       doIngress = directions == "both" || directions == "ingress";
       networkMeta = packageMeta.network or { };
-
-      # Optional reference to the cilium package instance. When provided,
-      # every generated CNP declares cilium as an extra dep so the enforcer
-      # (and its CRDs) is guaranteed to be present before policy evaluation.
-      ciliumInstance = networkConfig.ciliumInstance or null;
-      ciliumDeps = lib.optional (ciliumInstance != null) ciliumInstance;
 
       workloads = builtins.filter isWorkload allPartResources;
 
@@ -215,118 +459,84 @@ rec {
         }) we.edges
       ) workloadEdges;
 
-      # --- Egress policies (per workload) ---
+      # --- Supplementary api-server / external-ingress CNPs ---
+      #
+      # Per-workload CNPs for DNS + cross-package service egress + self-
+      # communication (StatefulSet) are now emitted at `scope.mkDeployment`
+      # time and live in `_generatedNetpol` on each workload. processInstance
+      # only adds the supplementary rules whose signals require the full
+      # instance closure: api-server access (derived from RBAC/CRD presence)
+      # and external ingress (derived from LoadBalancer Services / hostNetwork
+      # workloads). These CNPs depend on the workload (not the other way
+      # around) — additive permission grants, not readiness gates.
 
-      egressPolicies =
-        if !doEgress then
+      apiServerSupplementPolicies =
+        if !doEgress || !needsApiServerAccess then
           [ ]
         else
           builtins.concatMap (
-            we:
+            w:
             let
-              w = we.workload;
               wSelector = w.rawManifest.spec.selector.matchLabels or { };
               isHostNet = w.rawManifest.spec.template.spec.hostNetwork or false;
             in
             if isHostNet then
               [ ]
             else
-              let
-                # Egress to each referenced Service
-                serviceRules = map (
-                  edge:
-                  let
-                    sel =
-                      if edge.targetNamespace == namespaceName then
-                        edge.targetSelector
-                      else
-                        edge.targetSelector
-                        // {
-                          "k8s:io.kubernetes.pod.namespace" = edge.targetNamespace;
-                        };
-                    cp = portsToCilium edge.ports;
-                  in
-                  {
-                    toEndpoints = [ { matchLabels = sel; } ];
-                  }
-                  // lib.optionalAttrs (cp != [ ]) { toPorts = [ { ports = cp; } ]; }
-                ) we.edges;
-
-                # StatefulSet self-communication (all ports — covers discovery, replication, etc.)
-                selfEgress = lib.optional (w.kind == "StatefulSet") {
-                  toEndpoints = [ { matchLabels = wSelector; } ];
-                };
-
-                allRules = [
-                  dnsEgressRule
-                ]
-                ++ serviceRules
-                ++ selfEgress
-                ++ lib.optional needsApiServerAccess apiServerEgressRule
-                ++ lib.optional (networkMeta.allowExternalEgress or false) {
-                  toEntities = networkMeta.externalEgressEntities or [ "world" ];
-                }
-                ++ (networkMeta.extraEgress or [ ]);
-              in
               [
-                (scope.mkResource {
-                  apiVersion = "cilium.io/v2";
-                  kind = "CiliumNetworkPolicy";
-                  name = "${instanceName}-${lib.toLower w.kind}-${w.name}-egress";
-                  labels = {
-                    "kix.dev/derived" = "true";
+                (buildCnp {
+                  inherit networkPolicyEnforcer;
+                  mkResource = scope.mkResource;
+                  extraArgs = {
+                    name = "${instanceName}-${lib.toLower w.kind}-${w.name}-apiserver-egress";
+                    labels = {
+                      "kix.dev/derived" = "true";
+                      "kix.dev/policy-type" = "apiserver-supplement";
+                    };
+                    spec = {
+                      endpointSelector.matchLabels = wSelector;
+                      egress = [ apiServerEgressRule ];
+                    };
+                    extraDeps = [ w ];
                   };
-                  spec = {
-                    endpointSelector.matchLabels = wSelector;
-                    egress = allRules;
-                  };
-                  extraDeps = [ w ] ++ map (e: e.service) we.edges ++ ciliumDeps;
                 })
               ]
-          ) workloadEdges;
+          ) workloads;
 
-      # --- Instance-level ingress policies (external + self-communication) ---
-
-      instanceIngressPolicies =
-        if !doIngress then
+      externalIngressSupplementPolicies =
+        if !doIngress || !needsExternalIngress then
           [ ]
         else
           builtins.concatMap (
-            we:
+            w:
             let
-              w = we.workload;
               wSelector = w.rawManifest.spec.selector.matchLabels or { };
               isHostNet = w.rawManifest.spec.template.spec.hostNetwork or false;
-
-              externalRules = lib.optional needsExternalIngress {
-                fromEntities = networkMeta.externalIngressEntities or [ "world" ];
-              };
-
-              selfIngress = lib.optional (w.kind == "StatefulSet") {
-                fromEndpoints = [ { matchLabels = wSelector; } ];
-              };
-
-              allRules = externalRules ++ selfIngress ++ (networkMeta.extraIngress or [ ]);
             in
-            if isHostNet || allRules == [ ] then
+            if isHostNet then
               [ ]
             else
               [
-                (scope.mkResource {
-                  apiVersion = "cilium.io/v2";
-                  kind = "CiliumNetworkPolicy";
-                  name = "${instanceName}-${lib.toLower w.kind}-${w.name}-ingress";
-                  labels = {
-                    "kix.dev/derived" = "true";
+                (buildCnp {
+                  inherit networkPolicyEnforcer;
+                  mkResource = scope.mkResource;
+                  extraArgs = {
+                    name = "${instanceName}-${lib.toLower w.kind}-${w.name}-external-ingress";
+                    labels = {
+                      "kix.dev/derived" = "true";
+                      "kix.dev/policy-type" = "external-ingress-supplement";
+                    };
+                    spec = {
+                      endpointSelector.matchLabels = wSelector;
+                      ingress = [
+                        { fromEntities = networkMeta.externalIngressEntities or [ "world" ]; }
+                      ];
+                    };
+                    extraDeps = [ w ];
                   };
-                  spec = {
-                    endpointSelector.matchLabels = wSelector;
-                    ingress = allRules;
-                  };
-                  extraDeps = [ w ] ++ ciliumDeps;
                 })
               ]
-          ) workloadEdges;
+          ) workloads;
 
       # --- Warnings ---
 
@@ -341,7 +551,7 @@ rec {
 
     in
     {
-      policies = egressPolicies ++ instanceIngressPolicies;
+      policies = apiServerSupplementPolicies ++ externalIngressSupplementPolicies;
       edges = allEdges;
       inherit warnings;
     };
@@ -355,12 +565,11 @@ rec {
       allEdges,
       nsResources,
       networkConfig,
+      networkPolicyEnforcer ? null,
     }:
     let
       directions = networkConfig.directions or "both";
       doIngress = directions == "both" || directions == "ingress";
-      ciliumInstance = networkConfig.ciliumInstance or null;
-      ciliumDeps = lib.optional (ciliumInstance != null) ciliumInstance;
     in
     if !doIngress || allEdges == [ ] then
       [ ]
@@ -418,21 +627,23 @@ rec {
           [ ]
         else
           [
-            (k8s.mkResource {
-              apiVersion = "cilium.io/v2";
-              kind = "CiliumNetworkPolicy";
-              name = "${entry.service.name}-ingress";
-              namespace = nsRes;
-              labels = {
-                "kix.dev/derived" = "true";
-                "kix.dev/policy-type" = "ingress";
-                "app.kubernetes.io/managed-by" = "kix";
+            (buildCnp {
+              inherit networkPolicyEnforcer;
+              mkResource = k8s.mkResource;
+              extraArgs = {
+                name = "${entry.service.name}-ingress";
+                namespace = nsRes;
+                labels = {
+                  "kix.dev/derived" = "true";
+                  "kix.dev/policy-type" = "ingress";
+                  "app.kubernetes.io/managed-by" = "kix";
+                };
+                spec = {
+                  endpointSelector.matchLabels = entry.targetSelector;
+                  ingress = [ ingressRule ];
+                };
+                extraDeps = [ entry.service ];
               };
-              spec = {
-                endpointSelector.matchLabels = entry.targetSelector;
-                ingress = [ ingressRule ];
-              };
-              extraDeps = [ entry.service ] ++ ciliumDeps;
             })
           ]
       ) (builtins.attrNames grouped);
@@ -445,28 +656,28 @@ rec {
       namespaceName,
       nsResource,
       directions,
-      ciliumInstance ? null,
+      networkPolicyEnforcer ? null,
     }:
     let
       denyIngress = directions == "both" || directions == "ingress";
       denyEgress = directions == "both" || directions == "egress";
-      ciliumDeps = lib.optional (ciliumInstance != null) ciliumInstance;
     in
-    k8s.mkResource {
-      apiVersion = "cilium.io/v2";
-      kind = "CiliumNetworkPolicy";
-      name = "${namespaceName}-default-deny";
-      namespace = nsResource;
-      labels = {
-        "kix.dev/derived" = "true";
-        "kix.dev/policy-type" = "default-deny";
-        "app.kubernetes.io/managed-by" = "kix";
+    buildCnp {
+      inherit networkPolicyEnforcer;
+      mkResource = k8s.mkResource;
+      extraArgs = {
+        name = "${namespaceName}-default-deny";
+        namespace = nsResource;
+        labels = {
+          "kix.dev/derived" = "true";
+          "kix.dev/policy-type" = "default-deny";
+          "app.kubernetes.io/managed-by" = "kix";
+        };
+        spec = {
+          endpointSelector = { };
+        }
+        // lib.optionalAttrs denyIngress { ingress = [ ]; }
+        // lib.optionalAttrs denyEgress { egress = [ ]; };
       };
-      extraDeps = ciliumDeps;
-      spec = {
-        endpointSelector = { };
-      }
-      // lib.optionalAttrs denyIngress { ingress = [ ]; }
-      // lib.optionalAttrs denyEgress { egress = [ ]; };
     };
 }
