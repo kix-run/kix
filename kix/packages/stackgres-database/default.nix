@@ -290,7 +290,7 @@ in
           "superuser-username"
           "superuser-password"
         ];
-        requires = [ postgres.raw.cluster ];
+        requires = [ (if postgres ? raw then postgres.raw.cluster else postgres.root) ];
       };
 
       # --- 4. Bootstrap Job (postgres namespace) ---------------------------

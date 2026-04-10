@@ -1,38 +1,19 @@
 # Descheduler — evicts pods to rebalance cluster utilization.
 #
-# Wraps the upstream Kubernetes Descheduler Helm chart via fromHelmChart.
+# Wraps the upstream Kubernetes Descheduler Helm chart.
 # Runs as a Deployment with periodic descheduling.
 #
 # Chart:   https://kubernetes-sigs.github.io/descheduler
 # Name:    descheduler
 # Version: 0.32.2
-#
-# Usage in cluster definition:
-#
-#   descheduler = {
-#     package = kix.fromHelmChart {
-#       chart = kix.fetchHelmChart {
-#         repo = "https://kubernetes-sigs.github.io/descheduler";
-#         name = "descheduler";
-#         version = "0.32.2";
-#         hash = "sha256-FIXME";
-#       };
-#       values = (import ./packages/descheduler).defaultValues;
-#       releaseName = "descheduler";
-#     };
-#
-#     config.values = { /* cluster-level overrides */ };
-#   };
 
-{
-  meta = {
-    version = "0.32.2";
-  };
-
-  chart = {
+{ scope, lib }:
+let
+  chart = scope.helm.fetchHelmChart {
     repo = "https://kubernetes-sigs.github.io/descheduler";
     name = "descheduler";
     version = "0.32.2";
+    hash = "sha256-ARIFySRZdUP+k79s5m11ozvGp9GgKe7dTAOQoW5X4mQ=";
   };
 
   defaultValues = {
@@ -129,4 +110,26 @@
       ];
     };
   };
+in
+{
+  meta.version = "0.32.2";
+
+  options.values = lib.mkOption {
+    type = lib.types.attrsOf lib.types.anything;
+    default = { };
+    description = "Helm values to deep-merge with the chart's package-level values.";
+  };
+
+  build =
+    { config, scope, ... }:
+    let
+      resources = scope.helm.importChart {
+        inherit chart scope;
+        values = lib.recursiveUpdate defaultValues (config.values or { });
+        releaseName = "descheduler";
+      };
+    in
+    resources.mkParts {
+      root = resources.get "Deployment" "descheduler";
+    };
 }

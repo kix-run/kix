@@ -16,7 +16,11 @@
 #   instance.nix  — evaluateInstance
 #   cluster.nix   — buildCluster
 
-{ lib, k8s }:
+{
+  lib,
+  k8s,
+  helm ? { },
+}:
 
 let
   rbac = import ./rbac.nix { inherit lib; };
@@ -35,6 +39,7 @@ let
       rbac
       crd
       netpol
+      helm
       ;
   };
   resolve = import ./eval/resolve.nix { inherit lib kixlib; };

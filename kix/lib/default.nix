@@ -12,7 +12,7 @@
 
 let
   k8s = import ./k8s.nix { inherit lib; };
-  eval = import ./eval.nix { inherit lib k8s; };
+  eval = import ./eval.nix { inherit lib k8s helm; };
   env = import ./env.nix { inherit lib; };
   fragments = import ./fragments.nix { inherit lib; };
   helm = import ./helm.nix { inherit pkgs lib; };
@@ -100,7 +100,8 @@ in
     fetchHelmChart
     helmTemplateDerivation
     wrapHelmResource
-    fromHelmChart
+    importChart
+    helmChart
     isClusterScopedKind
     ;
 

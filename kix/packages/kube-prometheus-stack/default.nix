@@ -1,40 +1,20 @@
 # kube-prometheus-stack — full-cluster Prometheus monitoring stack.
 #
-# Wraps the upstream kube-prometheus-stack Helm chart via fromHelmChart.
+# Wraps the upstream kube-prometheus-stack Helm chart via importChart.
 # Includes Prometheus, Grafana, Alertmanager, node-exporter, and
 # kube-state-metrics.
 #
-# Chart:   https://prometheus-community.github.io/helm-charts
+# Chart:   oci://ghcr.io/prometheus-community/charts
 # Name:    kube-prometheus-stack
 # Version: 71.2.0
-#
-# Usage in cluster definition:
-#
-#   kube-prometheus-stack = {
-#     package = kix.fromHelmChart {
-#       chart = kix.fetchHelmChart {
-#         repo = "https://prometheus-community.github.io/helm-charts";
-#         name = "kube-prometheus-stack";
-#         version = "71.2.0";
-#         hash = "sha256-FIXME";
-#       };
-#       values = (import ./packages/kube-prometheus-stack).defaultValues;
-#       releaseName = "kube-prometheus-stack";
-#       includeCrds = true;
-#     };
 
-#     config.values = { /* cluster-level overrides */ };
-#   };
-
-{
-  meta = {
-    version = "71.2.0";
-  };
-
-  chart = {
-    repo = "https://prometheus-community.github.io/helm-charts";
+{ scope, lib }:
+let
+  chart = scope.helm.fetchHelmChart {
+    repo = "oci://ghcr.io/prometheus-community/charts";
     name = "kube-prometheus-stack";
     version = "71.2.0";
+    hash = "sha256-TyftOI7LrTeqbU5IsVjRKb78xC1edDHwegq773QEuUM=";
   };
 
   defaultValues = {
@@ -234,4 +214,30 @@
     kubeEtcd.enabled = true;
     kubeProxy.enabled = true;
   };
+in
+{
+  meta = {
+    version = "71.2.0";
+    isHelm = true;
+  };
+
+  options.values = lib.mkOption {
+    type = lib.types.attrsOf lib.types.anything;
+    default = { };
+    description = "Helm values to deep-merge with the chart's package-level values.";
+  };
+
+  build =
+    { config, scope, ... }:
+    let
+      resources = scope.helm.importChart {
+        inherit chart scope;
+        values = lib.recursiveUpdate defaultValues (config.values or { });
+        releaseName = "prometheus";
+        includeCrds = true;
+      };
+    in
+    resources.mkParts {
+      root = resources.autoRoot;
+    };
 }

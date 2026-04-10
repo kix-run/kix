@@ -1,6 +1,6 @@
 # clusters/test-helm.nix — Tests the helm bridge with a local test chart.
 #
-# Verifies that fromHelmChart produces valid resources that pass
+# Verifies that importChart produces valid resources that pass
 # through buildCluster, dependency tracking, and validation.
 
 { kix }:
@@ -9,16 +9,38 @@ let
   # Local test chart (no network fetch needed).
   testChartPath = ../tests/helm-test-chart;
 
-  # Create a helm-bridge package from the local chart.
-  testChartPackage = kix.fromHelmChart {
-    chart = testChartPath;
-    version = "0.1.0";
-    values = {
-      replicaCount = 2;
-      image.tag = "1.27-alpine";
+  # Inline package using importChart with a local chart path.
+  testChartPackage =
+    { scope, lib }:
+    {
+      meta = {
+        version = "0.1.0";
+        isHelm = true;
+      };
+
+      options.values = lib.mkOption {
+        type = lib.types.attrsOf lib.types.anything;
+        default = { };
+      };
+
+      build =
+        { config, scope, ... }:
+        let
+          resources = scope.helm.importChart {
+            chart = testChartPath;
+            inherit scope;
+            values = {
+              replicaCount = 2;
+              image.tag = "1.27-alpine";
+            }
+            // (config.values or { });
+            releaseName = "test-app";
+          };
+        in
+        resources.mkParts {
+          root = resources.autoRoot;
+        };
     };
-    releaseName = "test-app";
-  };
 in
 
 kix.buildCluster {

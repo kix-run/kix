@@ -622,8 +622,9 @@ else null;
 | `kix.buildCluster { ... }` | **Always.** Every cluster definition uses this. | Takes `name`, `modules`, and optional `specialArgs`. Modules are NixOS-style: they set `instances`, `namespaces`, `clusterLabels`, etc. Returns `{ activation, instances, namespaces, rawManifests }`. The `activation` is the cluster root store path — pipeline derivations in flake.nix use `exportReferencesGraph` on it to produce annotated manifests and deploy graphs. |
 | `kix.mkEnv envName envConfig instanceSets` | **When the same services run in multiple environments** (e.g. myapp-prod, myapp-stage, myapp-demo). Instead of duplicating instance blocks, define the service stack once and stamp it into env-prefixed namespaces with per-env config overrides. | Stamps instance sets into `{envName}-{setName}` namespaces. |
 | `kix.mergeFragments { fragments; namespacePolicies; }` | **When multiple teams own different parts of a cluster.** Each team produces a fragment `{ namespaces, instances }` and `mergeFragments` combines them with collision detection. Don't manually merge attrsets — use this. | Deep-merges namespaces, detects instance collisions across fragments. |
-| `kix.fromHelmChart { chart; values; releaseName; includeCrds; }` | **When migrating a Helm-managed service that you don't want to rewrite in pure kix yet.** Wraps a Helm chart so its output is tracked like any other kix package. Use this as a stepping stone — pure kix packages are preferred for full control. | Renders a Helm chart and wraps each resource as a kix resource. |
-| `kix.fetchHelmChart { repo; name; version; hash; }` | **Always paired with `fromHelmChart`.** Fetches and pins a Helm chart by content hash. To get the hash, run the build once with a fake hash and Nix will tell you the correct one. | Returns a pinned chart path for `fromHelmChart`. |
+| `kix.helmChart { repo; name; version; hash; }` | **Tier 1: inline helm chart in cluster definitions.** Quick one-off, no package file needed. Auto-selects root, exposes `config.values`. | Returns a package function that renders a Helm chart via `importChart` + `mkParts`. |
+| `scope.helm.importChart { chart; scope; values; ... }` | **Tier 2: inside a package's `build` function.** Full control — explicit root via `resources.get`, CRD refs, DI builders, DAG linking. | Returns a structured resource collection with `get`/`find`/`byKind`/`workloads`/`mkParts`. |
+| `scope.helm.fetchHelmChart { repo; name; version; hash; }` | **Inside packages.** Fetches and pins a Helm chart by content hash. To get the hash, run the build once with a fake hash and Nix will tell you the correct one. | Returns a pinned chart path for `importChart`. |
 | `kix.mkImport { from?; out?; }` | **When a resource exists in the cluster but is not managed by kix.** Participates in DI (provides `out` values) but produces only a marker CR. Two modes: `from` (derives `out` lazily from a package build) or raw `out` (manual values). DI resolution prefers managed instances over imports. | Creates an import marker. Flavor modules use this for platform-provided services. |
 
 ### Useful `lib` functions for packages
@@ -760,25 +761,51 @@ Override flavor defaults with normal NixOS module priority:
 { cluster.capabilities.cni = "cilium"; }  # override flavor's default CNI
 ```
 
-### Helm charts in cluster definitions
+### Helm charts — three tiers
 
-For apps you don't want to rewrite in pure kix:
-
+**Tier 1: Inline in cluster definition** (no package file, quick one-off):
 ```nix
 my-helm-app = {
-  package = kix.fromHelmChart {
-    chart = kix.fetchHelmChart {
-      repo = "oci://registry/charts";
-      name = "chart-name";
-      version = "1.0.0";
-      hash = "sha256-...";  # use nix-prefetch or let it fail once
-    };
-    values = { ... };
-    releaseName = "my-release";
-    includeCrds = true;
+  package = kix.helmChart {
+    repo = "oci://registry/charts";
+    name = "chart-name";
+    version = "1.0.0";
+    hash = "sha256-...";  # use nix-prefetch or let it fail once
   };
+  config.values = { ... };
 };
 ```
+
+**Tier 2: Real package with `importChart`** (full control — DI, CRD refs, custom root):
+```nix
+# packages/my-app/default.nix
+{ scope, lib }:
+let
+  chart = scope.helm.fetchHelmChart {
+    repo = "oci://registry/charts";
+    name = "chart-name";
+    version = "1.0.0";
+    hash = "sha256-...";
+  };
+in
+{
+  meta.version = "1.0.0";
+  options.values = lib.mkOption { type = lib.types.attrsOf lib.types.anything; default = {}; };
+  build = { config, scope, ... }:
+    let
+      resources = scope.helm.importChart {
+        inherit chart scope;
+        values = lib.recursiveUpdate { /* defaults */ } (config.values or {});
+        releaseName = "my-release";
+      };
+    in
+    resources.mkParts {
+      root = resources.get "Deployment" "my-app";
+    };
+}
+```
+
+**Tier 3: Native package** (no helm, full DSL control). Use `scope.mkDeployment`, `scope.mkResource`, etc.
 
 ### Dependency Injection (DI)
 

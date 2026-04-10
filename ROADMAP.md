@@ -8,7 +8,7 @@
 - [x] Fragment system for separating concerns and teams (mergeFragments with collision detection)
 - [x] Content-addressed resources — mkResource produces rich objects with `.out` (name, selector, fqdn, etc.)
 - [x] Dependency tracking via Nix string context (attachCtxDeep)
-- [x] Helm integration (fetchHelmChart, fromHelmChart, wrapHelmResource)
+- [x] Helm integration v2 — `importChart` (structured resource collection with DAG linking), `helmChart` (Tier 1 inline), `scope.helm.*` for packages. Packages use `scope.helm.importChart` inside `build`. See v2_discussions/87.
 - [x] Content-hash and identity-hash annotations on resources
 - [x] depends-on annotation derived from context
 - [x] @luca Post-eval validation — catch errors at build time, not deploy time
@@ -93,7 +93,7 @@
 - [x] Cluster hardware profile — `cluster.provider`, `cluster.capabilities.*`, `cluster.network.*`, `cluster.nodes` module options. Flavor presets in `lib/flavors/` for 10 distributions. See `v2_discussions/45_cluster_hardware_profile.md`, `lib/modules.nix` (capability option definitions with TODO annotations), `lib/flavors/*.nix`.
 - [x] Capability checks at resource construction — `lib/eval/scope.nix` checks `loadBalancer` (on Service type=LoadBalancer), `daemonSets` (on DaemonSet), `privilegedContainers` (on hostNetwork/hostPID/privileged). Capabilities flow from `clusterConfig` → `lib/eval/instance.nix` → `mkScope`.
 - [ ] Auto-injected DNS dependency — post-evaluation pass (like `lib/netpol.nix`) that detects FQDN references in resources and auto-adds a store-path edge to the `dns` DI provider. Ensures correct deploy ordering and build-time error if no DNS provider exists. Packages with `meta.defaultAliases = ["dns"]` (e.g. coredns) satisfy this automatically.
-- [ ] Post-eval verification for Helm imports — scan resources from `fromHelmChart` for implied prerequisites (PVCs without `storageClasses` provider, Ingress without `ingressController`, LoadBalancer without capability). Safety net for opaque resource sets that bypass DSL-level DI wiring.
+- [ ] Post-eval verification for Helm imports — scan resources from `importChart` for implied prerequisites (PVCs without `storageClasses` provider, Ingress without `ingressController`, LoadBalancer without capability). Safety net for opaque resource sets that bypass DSL-level DI wiring.
 - [ ] Migrate capability TODOs to DI — several capabilities are marked for DI migration in `lib/modules.nix`: `ingressController` → DI dep with `out.ingressClassName`; `cni` / `networkPolicyAPI` → CNI as DI dep with `out.networkPolicyAPI`; `rwxStorage` → storage provider `out.accessModes`; `volumeSnapshots` → snapshot controller DI dep.
   - [x] **Gateway API support**: `packages/envoy-gateway/` provides GatewayClass + Gateway with `out.gatewayRef` DI contract. `kix.expose` auto-detects gateway vs ingress-nginx and emits HTTPRoute or Ingress accordingly. `httpRoute.fromService` builder in `lib/compose.nix`. ludo cluster uses Gateway API; nw1 remains on ingress-nginx. Zero app-package changes needed — `kix.expose { service = "service"; }` works with either controller. See `v2_discussions/70_gateway_api_migration.md`.
 
@@ -130,7 +130,7 @@
 - [ ] Encodable "known issues" — broken side effects should be expressible in code so a problem can't recur; capturing institutional knowledge about failure modes directly in the DSL
 - [ ] Templating parity — ensure the DSL can express everything a Helm template can, as a migration enabler
 - [ ] Helm compatibility mode for live cluster migration — a flag (per-instance or global) that makes kix produce Helm-style labels and annotations (`app.kubernetes.io/managed-by: Helm`, `meta.helm.sh/release-name`, `meta.helm.sh/release-namespace`) so that `kubectl apply` adopts existing Helm-managed resources without conflicts. Enables zero-downtime migration from Helm to kix on live clusters. `labelStyle = "helm"` partially exists but doesn't cover Helm's ownership annotations.
-  - [ ] `fromHelmChart` should preserve Helm's kind-based resource ordering (Namespace → SA → ConfigMap → RBAC → Deployment → Service → Ingress) when loading resources, so the kix deploy wave order matches what Helm would do — avoids surprises during migration where resources appear in a different apply sequence
+  - [x] `importChart` DAG linking preserves intra-chart resource ordering (SA before workloads, ConfigMaps before mounts, etc.) via inferred edges. See v2_discussions/86, v2_discussions/87.
 - [ ] allow a resource to be defined as `self.deployment = moved { new attr name, message }` to inform a consumer of changes. We could have more and more advanced of these.
 
 ## DSL improvements
@@ -275,7 +275,7 @@
 - [ ] enable platform teams and cluster operators to loop in application developers safely
 
 ### Service catalog (prebuilt packages)
-- [x] kube-prometheus-stack package — monitoring + alerting + Grafana dashboards via `fromHelmChart`. Generic `defaultValues` (sensible resources, open selectors, security context, dashboard sidecar) in `packages/kube-prometheus-stack/`. Cluster-specific overrides (ingress, storage, alertmanager receivers) in cluster definitions. Used in nw1 via `clusters/nw1/monitoring.nix` with CRD builder overlays (`mkServiceMonitor`, `mkPodMonitor`, `mkPrometheusRule`) on `root.out`.
+- [x] kube-prometheus-stack package — real package using `scope.helm.importChart`. Generic `defaultValues` (sensible resources, open selectors, security context, dashboard sidecar) in `packages/kube-prometheus-stack/`. Cluster-specific overrides via `config.values`. CRD builder overlays (`mkServiceMonitor`, `mkPodMonitor`, `mkPrometheusRule`) via `partsOverlays`.
 - [ ] Logging stack package — Loki + promtail/fluentbit as kix packages
 - [ ] external-secrets-operator package — secret management via external stores (GCP Secret Manager, Vault, AWS Secrets Manager). Standard pattern for secret injection without kix solving secret management itself
 - [ ] Prebuilt service catalog completeness — postgres (StackGres, exists), redis/valkey (exists), S3 (exists as mkImport), cert-manager (exists). Gap: no turnkey monitoring or logging

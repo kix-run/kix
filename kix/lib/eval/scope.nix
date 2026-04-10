@@ -7,6 +7,7 @@
   rbac,
   crd,
   netpol,
+  helm ? { },
 }:
 
 let
@@ -1289,7 +1290,7 @@ rec {
 
         mkClusterResource = scopeMkClusterResource;
 
-        inherit rbac;
+        inherit rbac helm;
 
         mkDeployment = mkWorkload "apps/v1" "Deployment";
         mkStatefulSet = mkWorkload "apps/v1" "StatefulSet";

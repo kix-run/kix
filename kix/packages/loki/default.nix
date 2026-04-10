@@ -1,42 +1,28 @@
 # Loki — log aggregation system.
 #
-# Provides default Helm chart values for the upstream Grafana Loki chart.
-# Cluster modules instantiate it via `kix.fromHelmChart` and pair it with a
-# sibling persistent-volume-claim instance for the underlying PVC. The PVC
-# participates in proper DI: its StorageClass comes from the flavor's
-# `storageClasses` import (kind → standard, k3s → local-path), so the same
-# cluster definition works on both without hardcoding.
-#
-# Why a value-provider and not a native kix package: the kix eval pipeline
-# only exposes `kixlib` (pure helpers) to package build functions; the helm
-# bridge (which needs `pkgs`) lives outside of eval, so a package's build
-# can't call `fromHelmChart`. Until that's threaded through (see
-# v2_discussions/), helm-wrapped services are instantiated at the
-# cluster-module level, with their PVCs declared as proper sibling
-# instances.
+# Wraps the upstream Grafana Loki Helm chart via importChart.
+# Cluster modules pair it with a sibling persistent-volume-claim instance
+# for the underlying PVC. The PVC participates in proper DI: its
+# StorageClass comes from the flavor's `storageClasses` import
+# (kind → standard, k3s → local-path), so the same cluster definition
+# works on both without hardcoding.
 #
 # Defaults: SingleBinary + filesystem object store. That's the only mode
 # that maps cleanly to a single externally-owned PVC. For HA you need
 # StatefulSet volumeClaimTemplates and a real object store — out of scope
-# for these defaults; override via `extraValues` if needed.
+# for these defaults; override via `config.values` if needed.
 #
 # Chart:   https://grafana.github.io/helm-charts
 # Name:    loki
-# Version: 6.24.0
+# Version: 6.46.0
 
-{
-  meta = {
-    version = "6.24.0";
-    description = "Loki — log aggregation system (single-binary, filesystem)";
-    # Logs are expendable — no migration pair on storage backend swaps.
-    # See v2_discussions/67_stateful_migration_orchestration.md.
-    lifecycle = "ephemeral";
-  };
-
-  chart = {
+{ scope, lib }:
+let
+  chart = scope.helm.fetchHelmChart {
     repo = "https://grafana.github.io/helm-charts";
     name = "loki";
-    version = "6.24.0";
+    version = "6.46.0";
+    hash = "sha256-KvhWWsyG9k58Wmu0Fb3fgPpRspMboGCzcN3zExDi2nA=";
   };
 
   defaultValues = {
@@ -130,4 +116,30 @@
       ];
     };
   };
+in
+{
+  meta = {
+    version = "6.46.0";
+    description = "Loki — log aggregation system (single-binary, filesystem)";
+    lifecycle = "ephemeral";
+  };
+
+  options.values = lib.mkOption {
+    type = lib.types.attrsOf lib.types.anything;
+    default = { };
+    description = "Helm values to deep-merge with the chart's package-level values.";
+  };
+
+  build =
+    { config, scope, ... }:
+    let
+      resources = scope.helm.importChart {
+        inherit chart scope;
+        values = lib.recursiveUpdate defaultValues (config.values or { });
+        releaseName = "loki";
+      };
+    in
+    resources.mkParts {
+      root = resources.get "Service" "loki-gateway";
+    };
 }

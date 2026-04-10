@@ -329,22 +329,9 @@ in
           };
         };
 
-        # ── Promtail (Helm) ────────────────────────────────────────────
+        # ── Promtail ────────────────────────────────────────────────────
         promtail = lib.mkIf cfg.promtail.enabled {
-          package = kix.fromHelmChart {
-            chart = kix.fetchHelmChart {
-              repo = "https://grafana.github.io/helm-charts";
-              name = "promtail";
-              version = "6.16.6";
-              hash = "sha256-HezE6O/HucgBrIy88PEd8llsK35ns72GztBZKSed3+4=";
-            };
-            values = (import ../../packages/promtail).defaultValues;
-            releaseName = "promtail";
-            rootSelector = {
-              kind = "DaemonSet";
-              name = "promtail";
-            };
-          };
+          package = packages.promtail;
         };
       };
 
@@ -355,38 +342,19 @@ in
     # rendering happens here at the module level (rather than inside a
     # native package) because the helm bridge isn't available to package
     # build functions — see kix/packages/loki/default.nix for the rationale.
-    instances.${cfg.loki.namespace} = lib.mkIf cfg.loki.enabled (
-      let
-        lokiPkg = import ../../packages/loki;
-        # The PVC instance is named "storage", which matches the
-        # extraVolumes claimName baked into the package's default values.
-        # Same-namespace PVC + StatefulSet → claim resolves by name.
-        pvcName = "storage";
-        values = lib.recursiveUpdate lokiPkg.defaultValues cfg.loki.extraValues;
-      in
-      {
-        ${pvcName} = {
-          package = packages."persistent-volume-claim";
-          config.size = cfg.loki.storageSize;
-        };
-        loki = {
-          package = kix.fromHelmChart {
-            chart = kix.fetchHelmChart {
-              repo = "https://grafana.github.io/helm-charts";
-              name = "loki";
-              version = "6.24.0";
-              hash = "sha256-oMXOPOZZrT+UC5ve7vSWJPsUpeTuyECBTXby7arjyIY=";
-            };
-            inherit values;
-            releaseName = "loki";
-            rootSelector = {
-              kind = "Service";
-              name = "loki-gateway";
-            };
-          };
-        };
-      }
-    );
+    instances.${cfg.loki.namespace} = lib.mkIf cfg.loki.enabled {
+      # The PVC instance is named "storage", which matches the
+      # extraVolumes claimName baked into the package's default values.
+      # Same-namespace PVC + StatefulSet → claim resolves by name.
+      storage = {
+        package = packages."persistent-volume-claim";
+        config.size = cfg.loki.storageSize;
+      };
+      loki = {
+        package = packages.loki;
+        config.values = cfg.loki.extraValues;
+      };
+    };
 
     namespaces.${cfg.loki.namespace} = lib.mkIf cfg.loki.enabled { };
   };

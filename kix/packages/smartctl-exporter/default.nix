@@ -1,39 +1,19 @@
 # Smartctl Exporter — SMART disk health metrics for Prometheus.
 #
-# Wraps the upstream prometheus-smartctl-exporter Helm chart via fromHelmChart.
+# Wraps the upstream prometheus-smartctl-exporter Helm chart.
 # Deployed as a DaemonSet with privileged access to host /dev.
 #
 # Chart:   https://prometheus-community.github.io/helm-charts
 # Name:    prometheus-smartctl-exporter
 # Version: 0.16.0
-#
-# Usage in cluster definition:
-#
-#   smartctl-exporter = {
-#     package = kix.fromHelmChart {
-#       chart = kix.fetchHelmChart {
-#         repo = "https://prometheus-community.github.io/helm-charts";
-#         name = "prometheus-smartctl-exporter";
-#         version = "0.16.0";
-#         hash = "sha256-FIXME";
-#       };
-#       values = (import ./packages/smartctl-exporter).defaultValues;
-#       releaseName = "smartctl-exporter";
-#       rootSelector = { kind = "DaemonSet"; };
-#     };
-#
-#     config.values = { /* cluster-level overrides */ };
-#   };
 
-{
-  meta = {
-    version = "0.16.0";
-  };
-
-  chart = {
+{ scope, lib }:
+let
+  chart = scope.helm.fetchHelmChart {
     repo = "https://prometheus-community.github.io/helm-charts";
     name = "prometheus-smartctl-exporter";
     version = "0.16.0";
+    hash = "sha256-YVZTmmCuNnRYeDDBLQNWib4+FBo4mjMCqM5EKyd/Gss=";
   };
 
   defaultValues = {
@@ -75,4 +55,26 @@
       enabled = true;
     };
   };
+in
+{
+  meta.version = "0.16.0";
+
+  options.values = lib.mkOption {
+    type = lib.types.attrsOf lib.types.anything;
+    default = { };
+    description = "Helm values to deep-merge with the chart's package-level values.";
+  };
+
+  build =
+    { config, scope, ... }:
+    let
+      resources = scope.helm.importChart {
+        inherit chart scope;
+        values = lib.recursiveUpdate defaultValues (config.values or { });
+        releaseName = "smartctl-exporter";
+      };
+    in
+    resources.mkParts {
+      root = builtins.head (resources.byKind "DaemonSet");
+    };
 }

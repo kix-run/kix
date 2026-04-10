@@ -1,39 +1,19 @@
 # Promtail — log shipping agent for Loki.
 #
-# Wraps the upstream Grafana Promtail Helm chart via fromHelmChart.
+# Wraps the upstream Grafana Promtail Helm chart.
 # Deployed as a DaemonSet that ships container logs to Loki.
 #
 # Chart:   https://grafana.github.io/helm-charts
 # Name:    promtail
 # Version: 6.17.1
-#
-# Usage in cluster definition:
-#
-#   promtail = {
-#     package = kix.fromHelmChart {
-#       chart = kix.fetchHelmChart {
-#         repo = "https://grafana.github.io/helm-charts";
-#         name = "promtail";
-#         version = "6.17.1";
-#         hash = "sha256-FIXME";
-#       };
-#       values = (import ./packages/promtail).defaultValues;
-#       releaseName = "promtail";
-#       rootSelector = { kind = "DaemonSet"; name = "promtail"; };
-#     };
 
-#     config.values = { /* cluster-level overrides */ };
-#   };
-
-{
-  meta = {
-    version = "6.17.1";
-  };
-
-  chart = {
+{ scope, lib }:
+let
+  chart = scope.helm.fetchHelmChart {
     repo = "https://grafana.github.io/helm-charts";
     name = "promtail";
     version = "6.17.1";
+    hash = "sha256-EhFRA6O5STJHP7OHOqZwpo2pUE4vMjwDeQJXCItHnZ8=";
   };
 
   defaultValues = {
@@ -120,4 +100,26 @@
       labels = { };
     };
   };
+in
+{
+  meta.version = "6.17.1";
+
+  options.values = lib.mkOption {
+    type = lib.types.attrsOf lib.types.anything;
+    default = { };
+    description = "Helm values to deep-merge with the chart's package-level values.";
+  };
+
+  build =
+    { config, scope, ... }:
+    let
+      resources = scope.helm.importChart {
+        inherit chart scope;
+        values = lib.recursiveUpdate defaultValues (config.values or { });
+        releaseName = "promtail";
+      };
+    in
+    resources.mkParts {
+      root = resources.get "DaemonSet" "promtail";
+    };
 }

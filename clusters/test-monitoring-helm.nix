@@ -52,17 +52,7 @@ kix.buildCluster {
             )
           ];
 
-          package = kix.fromHelmChart {
-            chart = kix.fetchHelmChart {
-              repo = "oci://ghcr.io/prometheus-community/charts";
-              name = "kube-prometheus-stack";
-              version = "71.2.0";
-              hash = "sha256-TyftOI7LrTeqbU5IsVjRKb78xC1edDHwegq773QEuUM=";
-            };
-            values = (import ../kix/packages/kube-prometheus-stack).defaultValues;
-            releaseName = "prometheus";
-            includeCrds = true;
-          };
+          package = packages.kube-prometheus-stack;
         };
       };
     }
