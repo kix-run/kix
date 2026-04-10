@@ -21,6 +21,9 @@ Core language design, evaluation model, and wiring primitives.
 | 73 | [Workloads, jobs, ad-hoc compute](73_workloads_jobs_and_ad_hoc_compute.md) | Brainstorm | Enable kix compilation of Jobs (RayJob, PyTorchJob) via dependency graph wiring. |
 | 86 | [Helm DAG reconstruction](86_helm_dag_reconstruction.md) | RFC | Reconstruct intra-chart resource DAG from `helm template` output: selector linking, RBAC edges, volume refs, compile-time validation. |
 | 87 | [Helm integration v2](87_helm_integration_v2.md) | Design | Redesign `fromHelmChart` as a build-time `importChart` helper so helm packages become real packages. Subsumes 86, addresses rootOut, root selection, annotation control, wave coupling. |
+| 88 | [Kustomize integration](88_kustomize_integration.md) | Design | `importKustomization` as build-time resource import for kustomize bases. Same resource-collection API as Helm. Overlays replaced by kix options. |
+| 88b | [Flux comparison & migration](88b_flux_comparison_and_migration.md) | Design | Why Flux has runtime reconciliation, feature-by-feature mapping to kix, concrete migration walkthrough from Flux Kustomization CRDs to kix packages. |
+| 89 | [Eval operator mode](89_eval_operator_mode.md) | RFC | In-cluster `nix eval`: operator pulls git, evals, applies. Enables pull model, no-CI deploy, team fragment self-service, compiled job submission. Closes Flux feature gap. |
 
 ## DSL — Packages & Dependencies
 

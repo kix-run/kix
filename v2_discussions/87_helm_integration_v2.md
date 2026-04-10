@@ -229,6 +229,14 @@ which resources depend on which:
   # Integrates with doc 80 structured diagnostics
   diagnostics = [ <diagnostic> ... ];
 
+  # ── Root selection ───────────────────────────────────────────
+
+  # Auto-selected root (first Service → Deployment → StatefulSet →
+  # DaemonSet → first resource). Exposed as a named attribute so the
+  # heuristic is transparent. Used by kix.helmChart (Tier 1); Tier 2
+  # packages should use `get` instead for explicit selection.
+  autoRoot = <resource>;
+
   # ── Convenience ─────────────────────────────────────────────
 
   # Build a complete parts tree for simple charts.
@@ -405,7 +413,128 @@ in
 }
 ```
 
-### What cluster definitions become
+### Three tiers of helm usage
+
+The v2 design has three tiers, each a natural graduation from the previous:
+
+#### Tier 1: Inline chart — zero package, zero friction
+
+For new users or quick one-offs. Inline in the cluster definition:
+
+```nix
+instances.monitoring.loki = {
+  package = kix.helmChart {
+    repo = "https://grafana.github.io/helm-charts";
+    name = "loki";
+    version = "6.46.0";
+    hash = "sha256-KvhWWsyG9k58Wmu0Fb3fgPpRspMboGCzcN3zExDi2nA=";
+  };
+  config.values = {
+    loki.commonConfig.replication_factor = 1;
+  };
+};
+```
+
+`kix.helmChart` is a thin convenience that:
+- Calls `fetchHelmChart` + `importChart` internally
+- Uses `mkParts` with auto-root selection (first Service → Deployment →
+  StatefulSet → DaemonSet, same heuristic as old `fromHelmChart`)
+- Returns a package function with a `values` option
+- Gets full DAG linking and annotation stripping by default
+
+No package file. No `build` function. No `resources.get`. This is the
+`helm install` equivalent — the lowest possible barrier to entry.
+
+**What you don't get:** `meta.provides`, DI surface (`root.out`), custom
+root selection, CRD ref markers. Those require a real package.
+
+#### Tier 2: Package with `importChart` — full control
+
+For maintained packages that track upstream charts. A real kix package:
+
+```nix
+# kix/packages/cilium/default.nix
+{ scope, lib }:
+# ...
+{
+  meta = { provides = [ "cni" "network-policy-enforcer" ]; ... };
+  build = { config, ... }:
+    let
+      resources = scope.helm.importChart { ... };
+    in
+    resources.mkParts {
+      root = resources.get "DaemonSet" "cilium";
+      extraParts = { cnpCrdRef = scope.mkCRDRef { ... }; };
+      out = { cnpCrdRef = ...; };
+    };
+}
+```
+
+Cluster definition is just `package = packages.cilium;`.
+
+#### Tier 3: Native package — no helm
+
+Full compiler guarantees. Every resource hand-wired. For packages where
+the helm chart is more hindrance than help, or where you need resource-level
+control that `importChart` can't provide.
+
+#### The graduation path
+
+```
+kix.helmChart { ... }              ← inline, 4 lines, zero friction
+    ↓ need DI / CRD refs / custom root / meta.provides?
+packages/foo/default.nix           ← real package, importChart + mkParts
+    ↓ need per-resource control / custom wiring?
+packages/foo/default.nix           ← native package, no helm
+```
+
+Each step up is additive — you don't throw away knowledge, you gain control.
+The inline chart and the real package produce identical YAML for the same
+inputs. The only difference is what extension points the package exposes.
+
+#### `kix.helmChart` implementation sketch
+
+```nix
+# On the kix attrset (alongside kix.fromHelmChart, kix.fetchHelmChart)
+helmChart = {
+  repo, name, version, hash,
+  releaseName ? name,
+  includeCrds ? true,
+  strip ? {},
+  patchResources ? lib.id,
+}: { scope, lib }: {
+  meta = {
+    isHelm = true;
+    inherit version;
+  };
+
+  options.values = lib.mkOption {
+    type = lib.types.attrsOf lib.types.anything;
+    default = {};
+  };
+
+  build = { config, ... }:
+    let
+      chart = scope.helm.fetchHelmChart { inherit repo name version hash; };
+      resources = scope.helm.importChart {
+        inherit chart scope releaseName includeCrds strip patchResources;
+        values = config.values;
+      };
+    in
+    # Auto-select root: first Service, then Deployment, etc.
+    # This is the one place the heuristic lives — and it's the tier
+    # where you expect it (quick inline usage, not maintained packages).
+    resources.mkParts {
+      root = resources.autoRoot;
+    };
+};
+```
+
+`resources.autoRoot` is the auto-selection heuristic, exposed as a named
+attribute so it's transparent. If the heuristic picks wrong, the user
+graduates to Tier 2 and uses `resources.get` instead.
+
+### What cluster definitions become (maintained packages)
 
 ```nix
 # Before (15+ lines of boilerplate)
@@ -574,13 +703,13 @@ preclude it.
 Provide both `importChart` (the primitive) and a `fromHelmChart` convenience
 wrapper for simple charts that don't need custom build logic.
 
-**Rejected in favor of `mkParts`.** The convenience lives inside the
-resource collection (`resources.mkParts { root = ...; }`) rather than as a
-separate package factory. This way there's one API (`importChart`) that
-returns one type (resource collection), and the convenience is a method on
-that type — not a second entry point with different semantics. Simple charts
-use `mkParts`; complex charts compose manually. No cliff when graduating
-from one to the other.
+**Evolved into the three-tier model.** `kix.helmChart` is the inline
+convenience (Tier 1) for cluster definitions. `importChart` + `mkParts` is
+the package-level API (Tier 2). They compose the same underlying primitives.
+The key difference from the original rejection: `helmChart` is explicitly
+positioned as the *onboarding ramp* with known limitations (no DI, no custom
+root), not as an alternative to `importChart` for package authors. The
+graduation path from Tier 1 → Tier 2 is clear and additive.
 
 ---
 
@@ -690,30 +819,18 @@ Leaning toward lazy import: `scope.helm` is an attrset that only imports
 `helm.nix` when accessed. Avoids paying the import cost for non-helm
 packages. Simple eager import is fine for a first iteration.
 
-### 2. Onboarding: new users pulling in their charts
+### 2. Onboarding: resolved via three-tier model
 
-A new kix user who has existing Helm charts should be able to get them into
-kix with minimal friction. Two personas:
+**(a) "I just want to deploy this chart"** → Tier 1: `kix.helmChart { ... }`
+inline in the cluster definition. Four lines, no package file.
 
-**(a) "I just want to deploy this chart"** — user has a chart, hasn't written
-a kix package before. They need a path from `helm install` to kix that
-doesn't require understanding the full package API.
+**(b) "I maintain a package tracking upstream"** → Tier 2: real package with
+`importChart` + `resources.get`. Bump `version` + `hash`, run `nix build`.
+If upstream renames a resource, `resources.get` throws immediately.
 
-**(b) "I maintain a kix package that tracks upstream"** — user bumps the
-version/hash when upstream releases. Same workflow as nixpkgs maintainers.
-
-For (a), the question is whether `mkParts` is enough or whether we need a
-one-shot CLI helper (`kix helm import <chart>`) that scaffolds a package
-file. The package file would be ~20 lines — not zero, but not scary either.
-An LLM with the `kix-migration` skill can generate it from a chart URL.
-
-For (b), the workflow is: bump `version` + `hash` in the package, run
-`nix build`, verify. Same as any Nix package update. `resources.get` will
-throw if the chart renamed a resource, which is the right behavior (forces
-the maintainer to update the package).
-
-**Unresolved:** Should `kix-migration` skill guidance include helm v2
-package scaffolding? (Yes, once implemented.)
+A CLI scaffolder (`kix helm import <chart>`) can generate a Tier 2 package
+file from a chart URL. The `kix-migration` skill should include helm v2
+scaffolding guidance once implemented.
 
 ### 3. External cilium variant
 
