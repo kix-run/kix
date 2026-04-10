@@ -614,9 +614,7 @@ pub async fn reconcile(
                 if import_target.is_none() && readiness::is_immediate_kind(&rid.kind) {
                     continue;
                 }
-                if import_target.is_none()
-                    && !discovery.iter().any(|(ar, _)| ar.kind == rid.kind)
-                {
+                if import_target.is_none() && !discovery.iter().any(|(ar, _)| ar.kind == rid.kind) {
                     tracing::warn!(
                         resource = %rid,
                         "skipping readiness: kind not in discovery cache \
@@ -689,8 +687,8 @@ pub async fn reconcile(
                 }
             });
 
-            let mut poll_stream = stream::iter(futures_iter)
-                .buffer_unordered(READINESS_CONCURRENCY);
+            let mut poll_stream =
+                stream::iter(futures_iter).buffer_unordered(READINESS_CONCURRENCY);
 
             // First Stop-worthy error — we remember it, break out of the
             // consume loop, and return it. Dropping `poll_stream` aborts
@@ -716,10 +714,7 @@ pub async fn reconcile(
 
                 match outcome {
                     Ok(ReadinessResult::Ready) => {
-                        observer.on_event(&ReconcileEvent::ReadinessReady {
-                            rid,
-                            import_target,
-                        });
+                        observer.on_event(&ReconcileEvent::ReadinessReady { rid, import_target });
                     }
                     Ok(ReadinessResult::Cancelled) => {
                         observer.on_event(&ReconcileEvent::Cancelled {

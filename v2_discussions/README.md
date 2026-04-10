@@ -19,6 +19,8 @@ Core language design, evaluation model, and wiring primitives.
 | 32 | [Volume mount DSL](32_volume_mount_dsl.md) | Partial | Mount `.path` exposure, `.mountAt` on resources, volume dedup. |
 | 65 | [Passthrough instances](65_passthrough_instances.md) | Draft | Instances that participate in DI but produce zero K8s resources (S3, databases, DNS). |
 | 73 | [Workloads, jobs, ad-hoc compute](73_workloads_jobs_and_ad_hoc_compute.md) | Brainstorm | Enable kix compilation of Jobs (RayJob, PyTorchJob) via dependency graph wiring. |
+| 86 | [Helm DAG reconstruction](86_helm_dag_reconstruction.md) | RFC | Reconstruct intra-chart resource DAG from `helm template` output: selector linking, RBAC edges, volume refs, compile-time validation. |
+| 87 | [Helm integration v2](87_helm_integration_v2.md) | Design | Redesign `fromHelmChart` as a build-time `importChart` helper so helm packages become real packages. Subsumes 86, addresses rootOut, root selection, annotation control, wave coupling. |
 
 ## DSL — Packages & Dependencies
 

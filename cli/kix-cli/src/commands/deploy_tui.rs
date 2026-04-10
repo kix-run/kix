@@ -821,12 +821,7 @@ fn draw_segmented_bar_cells(area: Rect, buf: &mut Buffer, segments: &[(u16, Colo
     for (n, color) in segments {
         let end = (col + n).min(area.width);
         while col < end {
-            buf.set_string(
-                area.x + col,
-                area.y,
-                "█",
-                Style::default().fg(*color),
-            );
+            buf.set_string(area.x + col, area.y, "█", Style::default().fg(*color));
             col += 1;
         }
         if col >= area.width {
@@ -1039,7 +1034,9 @@ fn render_footer(area: Rect, buf: &mut Buffer, state: &DeployState) {
     // whose status is Pending (we don't know their totals yet, so we just
     // count waves) plus what's left in the current wave.
     let current_remaining = match state.current_wave.and_then(|i| state.waves.get(i)) {
-        Some(w) => w.total.saturating_sub(w.done + state.in_flight.len() + w.failed),
+        Some(w) => w
+            .total
+            .saturating_sub(w.done + state.in_flight.len() + w.failed),
         None => 0,
     };
     let text = if let Some(status) = &state.last_status {
