@@ -41,52 +41,40 @@ rec {
         "app.kubernetes.io/name" = instanceName;
         "app.kubernetes.io/instance" = instanceName;
       };
+      mkRes =
+        ns:
+        {
+          labels ? { },
+          ...
+        }@args:
+        mkImportResource (
+          removeAttrs args [ "labels" ]
+          // {
+            namespace = ns;
+            labels =
+              clusterLabels
+              // {
+                "app.kubernetes.io/instance" = instanceName;
+                "app.kubernetes.io/managed-by" = "kix";
+              }
+              // labels;
+          }
+        );
+
+      scope = {
+        inherit instanceName namespaceName selectorLabels;
+        labelStyle = "kix";
+        namespace = namespaceResource;
+        mkResource = mkRes namespaceResource;
+        mkClusterResource = mkRes clusterScoped;
+        # In import mode, mkCR ignores the CRD argument (which would come
+        # from a dep proxy that throws) and delegates to mkResource.
+        # Only out values matter; dependency tracking is irrelevant for imports.
+        mkCR = _crd: args: scope.mkResource args;
+        inherit rbac;
+      };
     in
-    {
-      inherit instanceName namespaceName selectorLabels;
-      labelStyle = "kix";
-      namespace = namespaceResource;
-
-      mkResource =
-        {
-          labels ? { },
-          ...
-        }@args:
-        mkImportResource (
-          removeAttrs args [ "labels" ]
-          // {
-            namespace = namespaceResource;
-            labels =
-              clusterLabels
-              // {
-                "app.kubernetes.io/instance" = instanceName;
-                "app.kubernetes.io/managed-by" = "kix";
-              }
-              // labels;
-          }
-        );
-
-      mkClusterResource =
-        {
-          labels ? { },
-          ...
-        }@args:
-        mkImportResource (
-          removeAttrs args [ "labels" ]
-          // {
-            namespace = clusterScoped;
-            labels =
-              clusterLabels
-              // {
-                "app.kubernetes.io/instance" = instanceName;
-                "app.kubernetes.io/managed-by" = "kix";
-              }
-              // labels;
-          }
-        );
-
-      inherit rbac;
-    };
+    scope;
 
   # Evaluate an imported instance.
   # If `from` is provided, runs the real package build with import-mode scope
