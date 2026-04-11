@@ -291,7 +291,7 @@ fn pluralize_kind(kind: &str) -> String {
 }
 
 /// Default timeout for readiness polling.
-pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Default interval between readiness polls.
 const POLL_INTERVAL: Duration = Duration::from_secs(2);

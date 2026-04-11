@@ -8,6 +8,7 @@ pub mod export;
 pub mod gc;
 pub mod graph;
 pub mod health;
+pub mod images;
 pub mod inspect;
 pub mod list;
 pub mod logs;
@@ -32,7 +33,7 @@ pub struct CommandContext {
 
 impl CommandContext {
     pub fn new(global: &GlobalArgs) -> miette::Result<Self> {
-        let evaluator = create_evaluator(&global.flake)?;
+        let evaluator = create_evaluator(&global.flake, global.no_cache)?;
         let runtime = tokio::runtime::Runtime::new().into_diagnostic()?;
         Ok(Self {
             evaluator,
@@ -85,10 +86,14 @@ fn resolve_flake_path(flake: &str) -> miette::Result<PathBuf> {
 }
 
 /// Create a KixEvaluator with the CLI subprocess backend.
-fn create_evaluator(flake: &str) -> miette::Result<kix::eval::KixEvaluator> {
+fn create_evaluator(flake: &str, no_cache: bool) -> miette::Result<kix::eval::KixEvaluator> {
     let backend = kix::eval::CliNixBackend::new();
-
     let flake_path = resolve_flake_path(flake)?;
-    let cache_dir = kix::eval::store::default_cache_dir();
-    kix::eval::KixEvaluator::new(backend, &flake_path, &cache_dir).into_diagnostic()
+
+    if no_cache {
+        kix::eval::KixEvaluator::new_uncached(backend, &flake_path).into_diagnostic()
+    } else {
+        let cache_dir = kix::eval::store::default_cache_dir();
+        kix::eval::KixEvaluator::new(backend, &flake_path, &cache_dir).into_diagnostic()
+    }
 }

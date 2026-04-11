@@ -101,6 +101,9 @@ let
           + slib.optionalString (cluster.scorecardReport != null) ''
             ln -s ${builtins.toFile "kix-scorecard.json" (builtins.toJSON cluster.scorecardReport)} $out/kix-scorecard.json
           ''
+          + slib.optionalString (cluster.extraImages != null) ''
+            ln -s ${builtins.toFile "kix-extra-images.json" (builtins.toJSON cluster.extraImages)} $out/kix-extra-images.json
+          ''
         );
       }) resolvedClusters;
 

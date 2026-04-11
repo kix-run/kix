@@ -461,6 +461,34 @@ in
       allScorecardFindings =
         instanceScorecardFindings ++ namespaceScorecardFindings ++ clusterScorecardFindings;
 
+      # --- Extra images (operator-spawned, not in manifests) ---
+      #
+      # Packages that manage operators (e.g. stackgres-cluster) can declare
+      # `root.out.extraImages = [ "quay.io/..." ]` — images the operator will
+      # pull at reconciliation time that don't appear in any kix-generated
+      # manifest. Collected here so `kix images` can include them.
+      extraImages =
+        let
+          perInstance = builtins.concatMap (
+            inst:
+            let
+              imgs = inst.out.extraImages or [ ];
+              instName = inst._meta.instanceName or "<unknown>";
+              nsName = inst._meta.namespaceName or "<unknown>";
+            in
+            map (img: {
+              image = img;
+              source = {
+                kind = "PackageInstance";
+                namespace = nsName;
+                name = instName;
+                container = "<operator-managed>";
+              };
+            }) imgs
+          ) allInstancesList;
+        in
+        if perInstance == [ ] then null else perInstance;
+
       scorecardReport =
         if scorecardEnabled then
           scorecard.buildScorecardReport { findings = allScorecardFindings; }
@@ -597,7 +625,12 @@ in
 
         namespaces = nsResources;
 
-        inherit activation packageIndex info;
+        inherit
+          activation
+          packageIndex
+          info
+          extraImages
+          ;
 
         # Cluster-level diagnostics for tooling
         diagnostics = {

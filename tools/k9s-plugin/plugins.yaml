@@ -7,6 +7,7 @@ plugins:
     description: "[kix] Package info"
     scopes:
       - all
+    background: false
     command: bash
     args:
       - -c
@@ -22,7 +23,8 @@ plugins:
         printf '  %-18s %s\n' "Identity Hash:" "$HASH"
         printf '  %-18s %s\n' "Mode:" "$MODE"
         printf '  %-18s %s\n' "Depends On:" "$DEPS"
-        printf '\n'
+        printf '\nPress any key to close...\n'
+        read -n1 -s -r
 
   # ─── Package Siblings ──────────────────────────────────────────────
   # List all resources belonging to the same kix package.
@@ -31,6 +33,7 @@ plugins:
     description: "[kix] Package siblings"
     scopes:
       - all
+    background: false
     command: bash
     args:
       - -c
@@ -62,7 +65,8 @@ plugins:
             | select(.metadata.annotations["kix.dev/package"] == $pkg)
             | "  \(.kind + " " * (24 - (.kind | length) | if . < 0 then 0 else . end))  \(.metadata.name)"
           ' 2>/dev/null | sort
-        printf '\n'
+        printf '\nPress any key to close...\n'
+        read -n1 -s -r
 
   # ─── DAG Neighbors ─────────────────────────────────────────────────
   # Show direct dependencies and dependents of the selected resource.
@@ -71,6 +75,7 @@ plugins:
     description: "[kix] DAG neighbors"
     scopes:
       - all
+    background: false
     command: bash
     args:
       - -c
@@ -117,7 +122,8 @@ plugins:
         else
           echo "  (none)"
         fi
-        printf '\n'
+        printf '\nPress any key to close...\n'
+        read -n1 -s -r
 
   # ─── Blast Radius ──────────────────────────────────────────────────
   # Show all transitive dependents — everything that would break if this
@@ -127,6 +133,7 @@ plugins:
     description: "[kix] Blast radius"
     scopes:
       - all
+    background: false
     command: bash
     args:
       - -c
@@ -190,4 +197,5 @@ plugins:
             echo "  (no dependents — this is a leaf resource)"
           fi
         fi
-        printf '\n'
+        printf '\nPress any key to close...\n'
+        read -n1 -s -r

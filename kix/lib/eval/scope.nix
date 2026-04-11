@@ -846,8 +846,11 @@ rec {
 
           finalExtraDeps = (attrs.extraDeps or [ ]) ++ netpolResult.cnps;
 
+          # Strip _helmNetworkDeps before building the resource — it was
+          # only needed for store-path context in buildWorkloadCnps above.
+          # k8s.mkResource does not accept unknown fields.
           workload = scopeMkResource (
-            baseArgs
+            removeAttrs baseArgs [ "_helmNetworkDeps" ]
             // {
               extraDeps = finalExtraDeps;
             }
@@ -884,6 +887,68 @@ rec {
               )
           )
         );
+
+      # ── Helm workload wrapper (CNP generation, no validation) ───────
+      #
+      # Like mkWorkload but skips the native-package validation checks
+      # (checkNamespacedRefs, checkPrivileged, etc.) which expect DI-tracked
+      # references that helm manifests don't have. Only performs:
+      #   1. Selector / template extraction
+      #   2. Per-workload CNP generation via buildWorkloadCnps
+      #   3. _generatedNetpol sideband attachment
+      #
+      # Called from helm.nix wrapResource for Deployment/StatefulSet/DaemonSet.
+      mkHelmWorkload =
+        attrs:
+        let
+          kind = attrs.kind or (throw "mkHelmWorkload: kind is required");
+          apiVersion = attrs.apiVersion or "apps/v1";
+          rawSpec = attrs.spec or { };
+          selector =
+            rawSpec.selector.matchLabels
+              or (throw "mkHelmWorkload (${kind}): spec.selector.matchLabels is required");
+          hostNetwork = rawSpec.template.spec.hostNetwork or false;
+
+          # Keep _helmNetworkDeps in workloadInput so their store-path
+          # context is visible to extractServiceEdgesFromJson. Strip it
+          # only before passing to scopeMkResource (k8s.mkResource doesn't
+          # accept unknown fields).
+          workloadInput = attrs // {
+            inherit apiVersion kind;
+          };
+
+          shouldGenerateNetpol = (networkConfig.enable or false) && !skipWorkloadNetpol && !hostNetwork;
+
+          netpolResult =
+            if shouldGenerateNetpol then
+              netpol.buildWorkloadCnps {
+                scope = scopeObj;
+                inherit instanceName namespaceName workloadInput;
+                workloadKind = kind;
+                wSelector = selector;
+                inherit hostNetwork;
+                serviceRegistry = _netpolServiceRegistry;
+                inherit networkConfig networkPolicyEnforcer;
+                packageNetworkMeta = peekedPackageMeta.network or { };
+              }
+            else
+              {
+                cnps = [ ];
+              };
+
+          finalExtraDeps = (attrs.extraDeps or [ ]) ++ netpolResult.cnps;
+
+          workload = scopeMkResource (
+            removeAttrs workloadInput [ "_helmNetworkDeps" ]
+            // {
+              extraDeps = finalExtraDeps;
+            }
+          );
+        in
+        workload
+        // {
+          _generatedNetpol = netpolResult.cnps;
+        };
 
       scopeMkClusterResource =
         {
@@ -1295,6 +1360,7 @@ rec {
         mkDeployment = mkWorkload "apps/v1" "Deployment";
         mkStatefulSet = mkWorkload "apps/v1" "StatefulSet";
         mkDaemonSet = mkWorkload "apps/v1" "DaemonSet";
+        inherit mkHelmWorkload;
 
         inherit
           crd

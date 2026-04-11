@@ -283,6 +283,11 @@ in
         ];
         out = {
           inherit (self.service.out) serviceUrl;
+          # The Prometheus CR's image is reconciled by the operator into a
+          # StatefulSet — not directly in a kix-generated pod spec.
+          extraImages = [
+            "${config.image.repository}:${config.image.tag}"
+          ];
         };
       };
     }

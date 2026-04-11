@@ -349,10 +349,54 @@ impl NixBackend for FfiNixBackend {
             "manifests parsed"
         );
 
+        // Read extraImages from the cluster evaluation (operator-spawned images).
+        let extra_images = match self
+            .eval_state
+            .require_attrs_select(&cluster, "extraImages")
+        {
+            Ok(extra_val) => match nix_value_to_json(&mut self.eval_state, &extra_val) {
+                Ok(Value::Null) => None,
+                Ok(json_val) => {
+                    match serde_json::from_value::<Vec<super::evaluator::ExtraImage>>(json_val) {
+                        Ok(imgs) if imgs.is_empty() => None,
+                        Ok(imgs) => {
+                            tracing::debug!(
+                                cluster = cluster_name,
+                                count = imgs.len(),
+                                "extra images loaded (ffi)"
+                            );
+                            Some(imgs)
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                cluster = cluster_name,
+                                error = %e,
+                                "failed to parse extraImages"
+                            );
+                            None
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        cluster = cluster_name,
+                        error = %e,
+                        "failed to evaluate extraImages"
+                    );
+                    None
+                }
+            },
+            Err(_) => {
+                // Attribute not present — no extra images declared.
+                None
+            }
+        };
+
         Ok(ClusterOutput {
             name: cluster_name.to_string(),
             raw_manifests,
             scorecard_report: None,
+            extra_images,
         })
     }
 

@@ -22,6 +22,25 @@ pub struct ClusterOutput {
     /// Scorecard findings from Nix evaluation (None if scorecard disabled).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scorecard_report: Option<Value>,
+    /// Extra images declared by packages (operator-spawned, not in manifests).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra_images: Option<Vec<ExtraImage>>,
+}
+
+/// An extra image declared by a package via `root.out.extraImages`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtraImage {
+    pub image: String,
+    pub source: ExtraImageSource,
+}
+
+/// Where an extra image declaration came from.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtraImageSource {
+    pub kind: String,
+    pub namespace: String,
+    pub name: String,
+    pub container: String,
 }
 
 /// Version info for a package in the global registry.
@@ -99,6 +118,24 @@ impl KixEvaluator {
         let cache = SqliteCache::open(&db_path)?;
         let flake_path = super::store::resolve_symlinks(flake_path);
         tracing::debug!(flake = %flake_path.display(), "evaluator created");
+        Ok(Self {
+            backend: Box::new(backend),
+            cache,
+            flake_path,
+        })
+    }
+
+    /// Create a new evaluator that never reads from cache.
+    ///
+    /// Uses an ephemeral in-memory SQLite database, so every evaluation
+    /// goes straight to Nix. Useful for debugging stale-cache issues.
+    pub fn new_uncached(
+        backend: impl NixBackend + 'static,
+        flake_path: &Path,
+    ) -> Result<Self, KixEvalError> {
+        let cache = SqliteCache::open_in_memory()?;
+        let flake_path = super::store::resolve_symlinks(flake_path);
+        tracing::debug!(flake = %flake_path.display(), "evaluator created (no cache)");
         Ok(Self {
             backend: Box::new(backend),
             cache,

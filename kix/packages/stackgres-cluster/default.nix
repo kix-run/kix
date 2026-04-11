@@ -536,6 +536,12 @@ in
           # Handle to the operator-created credentials secret. Consumers use
           # `postgres.out.superuserSecret.out.mkEnv { DB_USER = "superuser-username"; ... }`.
           superuserSecret = superuserSecret;
+          # Images the StackGres operator will pull at reconciliation time.
+          # Not in any kix-generated manifest, so declared here for `kix images`.
+          extraImages = [
+            "quay.io/ongres/patroni:v4.1.0-pg${config.postgres.version}.13-build-6.49"
+            "quay.io/ongres/prometheus-postgres-exporter:v0.19.0-build-6.49"
+          ];
         };
       };
     };

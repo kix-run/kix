@@ -874,6 +874,12 @@ in
         # markers automatically through mkCRDBuilders.
         out = {
           crds = self.crdRefs;
+          # The operator spawns restapi and admin-ui deployments at runtime
+          # via the SGConfig CR — not in any kix-generated manifest.
+          extraImages = [
+            "${config.restapi.image.repository}:${config.restapi.image.tag}"
+            "${config.adminui.image.repository}:${config.adminui.image.tag}"
+          ];
         };
       };
     };

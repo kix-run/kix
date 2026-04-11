@@ -117,6 +117,11 @@
             mkProbe = self.crds.probes.out.mkCR;
             mkPrometheus = self.crds.prometheuses.out.mkCR;
             mkAlertmanager = self.crds.alertmanagers.out.mkCR;
+            # The operator injects a config-reloader sidecar into Prometheus
+            # and Alertmanager pods — not in any kix-generated manifest.
+            extraImages = [
+              "${config.prometheusConfigReloader.image.repository}:${config.prometheusConfigReloader.image.tag}"
+            ];
           };
         };
       }

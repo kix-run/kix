@@ -36,6 +36,10 @@ pub struct GlobalArgs {
     /// Flake reference to evaluate clusters from (default: current directory)
     #[arg(long, global = true, default_value = ".")]
     pub flake: String,
+
+    /// Skip the SQLite eval cache (always re-evaluate from Nix)
+    #[arg(long, global = true)]
+    pub no_cache: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -96,6 +100,9 @@ pub enum Command {
     /// Manage cluster snapshots for CI/offline use
     Snapshot(SnapshotArgs),
 
+    /// List all container images in a cluster activation (for airgap preloading)
+    Images(ImagesArgs),
+
     /// Generate shell completions
     Completions(CompletionsArgs),
 }
@@ -117,6 +124,7 @@ impl Command {
             Command::Export(a) => Some(&a.cluster),
             Command::Logs(a) => Some(&a.cluster),
             Command::Pf(a) => Some(&a.cluster),
+            Command::Images(a) => Some(&a.cluster),
             Command::List(a) => match &a.command {
                 ListCommand::Packages(p) => p.cluster.as_deref(),
                 ListCommand::Clusters => None,
@@ -445,6 +453,16 @@ pub struct SnapshotDiffArgs {
 
     /// Path to an existing snapshot directory
     pub dir: String,
+}
+
+#[derive(clap::Args)]
+pub struct ImagesArgs {
+    /// Cluster name
+    pub cluster: String,
+
+    /// Show which resources reference each image
+    #[arg(long)]
+    pub sources: bool,
 }
 
 fn validate_timeout(s: &str) -> Result<String, String> {

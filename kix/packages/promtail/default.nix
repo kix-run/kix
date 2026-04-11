@@ -47,7 +47,7 @@ let
 
     # --- Promtail config ---
     config = {
-      # Loki push endpoint — points to the loki-gateway Service.
+      # Loki push endpoint — overridden in build with DI-resolved URL.
       clients = [
         {
           url = "http://loki-gateway/loki/api/v1/push";
@@ -111,12 +111,28 @@ in
   };
 
   build =
-    { config, scope, ... }:
+    {
+      config,
+      scope,
+      loki,
+      ...
+    }:
     let
+      lokiValues = {
+        config.clients = [
+          {
+            url = "http://${loki.out.name}/loki/api/v1/push";
+            tenant_id = "system";
+          }
+        ];
+      };
       resources = scope.helm.importChart {
         inherit chart scope;
-        values = lib.recursiveUpdate defaultValues (config.values or { });
+        values = lib.recursiveUpdate (lib.recursiveUpdate defaultValues lokiValues) (config.values or { });
         releaseName = "promtail";
+        # Inject loki's store-path context so CNP generation discovers
+        # the promtail → loki-gateway egress edge.
+        networkDeps = [ loki.out.fqdn ];
       };
     in
     resources.mkParts {

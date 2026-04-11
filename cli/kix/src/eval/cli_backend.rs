@@ -84,6 +84,35 @@ impl NixBackend for CliNixBackend {
             None
         };
 
+        // Read extra images if present (operator-spawned images declared by packages)
+        let extra_images_path = result_dir.join("kix-extra-images.json");
+        let extra_images = if extra_images_path.exists() {
+            match std::fs::read_to_string(&extra_images_path) {
+                Ok(json_str) => {
+                    match serde_json::from_str::<Vec<super::evaluator::ExtraImage>>(&json_str) {
+                        Ok(imgs) => {
+                            tracing::debug!(
+                                cluster = cluster_name,
+                                count = imgs.len(),
+                                "extra images loaded"
+                            );
+                            Some(imgs)
+                        }
+                        Err(e) => {
+                            tracing::warn!(cluster = cluster_name, error = %e, "failed to parse extra images");
+                            None
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(cluster = cluster_name, error = %e, "failed to read extra images");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         tracing::info!(
             cluster = cluster_name,
             manifests = raw_manifests.len(),
@@ -94,6 +123,7 @@ impl NixBackend for CliNixBackend {
             name: cluster_name.to_string(),
             raw_manifests,
             scorecard_report,
+            extra_images,
         })
     }
 

@@ -15,6 +15,8 @@
 { pkgs, lib }:
 
 let
+  helmDag = import ./helm-dag.nix { inherit lib; };
+
   # Kinds that are always cluster-scoped (no namespace in metadata).
   clusterScopedKinds = [
     "Namespace"
@@ -112,234 +114,6 @@ let
     "data"
     "stringData"
   ];
-
-  # Workload kinds for the `workloads` accessor.
-  workloadKinds = [
-    "Deployment"
-    "StatefulSet"
-    "DaemonSet"
-    "Job"
-    "CronJob"
-  ];
-
-  # ── DAG linking helpers ──────────────────────────────────────────────
-  # Infer intra-chart resource dependencies from well-known K8s patterns.
-  # Returns a list of { from, to, type } edge triples.
-  inferEdges =
-    wrappedResources:
-    let
-      # Build lookup tables for efficient matching.
-      byKindName = builtins.listToAttrs (
-        map (r: {
-          name = "${r.kind}/${r.name}";
-          value = r;
-        }) wrappedResources
-      );
-
-      # Helper: get raw resource data (the manifest fields) from a wrapped resource.
-      # Wrapped resources store spec/data/labels etc. in their attributes.
-      getSpec = r: r._spec or { };
-      getLabels = r: r._labels or { };
-
-      # 1. Workload → ServiceAccount (serviceAccountName)
-      saEdges = builtins.concatMap (
-        r:
-        let
-          spec = getSpec r;
-          podSpec =
-            (spec.template or { }).spec or (
-              # Jobs have spec.template.spec
-              if r.kind == "Job" then ((spec.template or { }).spec or { }) else { }
-            );
-          saName = podSpec.serviceAccountName or null;
-          saKey = "ServiceAccount/${saName}";
-        in
-        if saName != null && byKindName ? ${saKey} then
-          [
-            {
-              from = r;
-              to = byKindName.${saKey};
-              type = "uses-sa";
-            }
-          ]
-        else
-          [ ]
-      ) (builtins.filter (r: builtins.elem r.kind workloadKinds) wrappedResources);
-
-      # 2. Workload → ConfigMap/Secret (volume mounts, envFrom)
-      volumeEdges = builtins.concatMap (
-        r:
-        let
-          spec = getSpec r;
-          podSpec = ((spec.template or { }).spec or { });
-          volumes = podSpec.volumes or [ ];
-          # Extract ConfigMap/Secret names from volumes
-          volRefs = builtins.concatMap (
-            v:
-            let
-              cmName = (v.configMap or { }).name or null;
-              secName = (v.secret or { }).secretName or null;
-            in
-            (
-              if cmName != null && byKindName ? "ConfigMap/${cmName}" then
-                [
-                  {
-                    from = r;
-                    to = byKindName."ConfigMap/${cmName}";
-                    type = "mounts";
-                  }
-                ]
-              else
-                [ ]
-            )
-            ++ (
-              if secName != null && byKindName ? "Secret/${secName}" then
-                [
-                  {
-                    from = r;
-                    to = byKindName."Secret/${secName}";
-                    type = "mounts";
-                  }
-                ]
-              else
-                [ ]
-            )
-          ) volumes;
-          # Extract envFrom refs from all containers
-          containers = (podSpec.containers or [ ]) ++ (podSpec.initContainers or [ ]);
-          envFromRefs = builtins.concatMap (
-            c:
-            builtins.concatMap (
-              ef:
-              let
-                cmRef = (ef.configMapRef or { }).name or null;
-                secRef = (ef.secretRef or { }).name or null;
-              in
-              (
-                if cmRef != null && byKindName ? "ConfigMap/${cmRef}" then
-                  [
-                    {
-                      from = r;
-                      to = byKindName."ConfigMap/${cmRef}";
-                      type = "mounts";
-                    }
-                  ]
-                else
-                  [ ]
-              )
-              ++ (
-                if secRef != null && byKindName ? "Secret/${secRef}" then
-                  [
-                    {
-                      from = r;
-                      to = byKindName."Secret/${secRef}";
-                      type = "mounts";
-                    }
-                  ]
-                else
-                  [ ]
-              )
-            ) (c.envFrom or [ ])
-          ) containers;
-        in
-        volRefs ++ envFromRefs
-      ) (builtins.filter (r: builtins.elem r.kind workloadKinds) wrappedResources);
-
-      # 3. RoleBinding/ClusterRoleBinding → ServiceAccount (subjects)
-      bindingEdges = builtins.concatMap (
-        r:
-        let
-          extra = r._extra or { };
-          subjects = extra.subjects or [ ];
-        in
-        builtins.concatMap (
-          s:
-          let
-            saKey = "ServiceAccount/${s.name or ""}";
-          in
-          if (s.kind or "") == "ServiceAccount" && byKindName ? ${saKey} then
-            [
-              {
-                from = r;
-                to = byKindName.${saKey};
-                type = "binds";
-              }
-            ]
-          else
-            [ ]
-        ) subjects
-      ) (builtins.filter (r: r.kind == "RoleBinding" || r.kind == "ClusterRoleBinding") wrappedResources);
-
-      # 4. Service → Workload (selector label subset match)
-      serviceEdges = builtins.concatMap (
-        svc:
-        let
-          spec = getSpec svc;
-          svcSelector = spec.selector or { };
-          matchingWorkloads = builtins.filter (
-            w:
-            let
-              wLabels = getLabels w;
-              podLabels = ((getSpec w).template or { }).metadata.labels or wLabels;
-            in
-            svcSelector != { }
-            && builtins.all (k: podLabels ? ${k} && podLabels.${k} == svcSelector.${k}) (
-              builtins.attrNames svcSelector
-            )
-          ) (builtins.filter (r: builtins.elem r.kind workloadKinds) wrappedResources);
-        in
-        map (w: {
-          from = svc;
-          to = w;
-          type = "selects";
-        }) matchingWorkloads
-      ) (builtins.filter (r: r.kind == "Service") wrappedResources);
-
-      # 5. HPA → Workload (scaleTargetRef)
-      hpaEdges = builtins.concatMap (
-        r:
-        let
-          spec = getSpec r;
-          targetRef = spec.scaleTargetRef or { };
-          targetKey = "${targetRef.kind or ""}/${targetRef.name or ""}";
-        in
-        if targetRef != { } && byKindName ? ${targetKey} then
-          [
-            {
-              from = r;
-              to = byKindName.${targetKey};
-              type = "scales";
-            }
-          ]
-        else
-          [ ]
-      ) (builtins.filter (r: r.kind == "HorizontalPodAutoscaler") wrappedResources);
-
-      # 6. PDB → Workload (selector match)
-      pdbEdges = builtins.concatMap (
-        r:
-        let
-          spec = getSpec r;
-          pdbSelector = (spec.selector or { }).matchLabels or { };
-          matchingWorkloads = builtins.filter (
-            w:
-            let
-              podLabels = ((getSpec w).template or { }).metadata.labels or (getLabels w);
-            in
-            pdbSelector != { }
-            && builtins.all (k: podLabels ? ${k} && podLabels.${k} == pdbSelector.${k}) (
-              builtins.attrNames pdbSelector
-            )
-          ) (builtins.filter (r: builtins.elem r.kind workloadKinds) wrappedResources);
-        in
-        map (w: {
-          from = r;
-          to = w;
-          type = "selects";
-        }) matchingWorkloads
-      ) (builtins.filter (r: r.kind == "PodDisruptionBudget") wrappedResources);
-    in
-    saEdges ++ volumeEdges ++ bindingEdges ++ serviceEdges ++ hpaEdges ++ pdbEdges;
 
 in
 
@@ -493,6 +267,15 @@ rec {
 
       # Pre-wrap resource patching (same as current patchResources)
       patchResources ? lib.id,
+
+      # Cross-package network dependencies.
+      # List of context-carrying values (e.g. loki.out.fqdn) whose
+      # store-path context should be visible to the CNP generator.
+      # Injected into helm workloads as _helmNetworkDeps so
+      # extractServiceEdgesFromJson discovers the egress edges.
+      # The DI dep must also be declared in the build function args
+      # so its Services appear in _netpolServiceRegistry.
+      networkDeps ? [ ],
     }:
     let
       # Strip configuration with defaults.
@@ -516,8 +299,13 @@ rec {
       effectiveCleanSpec = spec: if doStripStrategy then cleanSpec spec else spec;
 
       # Wrap a single resource with the effective strip settings.
+      # `requires` is a list of already-wrapped resources this resource depends on
+      # (inferred from the DAG reconstruction pass).
       wrapResource =
-        resource:
+        {
+          resource,
+          requires ? [ ],
+        }:
         let
           kind = resource.kind or (throw "helm resource missing 'kind'");
           apiVersion = resource.apiVersion or (throw "helm resource missing 'apiVersion'");
@@ -545,18 +333,44 @@ rec {
 
           hasForeignNs = resourceNs != null && resourceNs != scope.namespaceName;
           effectiveScope = if hasForeignNs then scope.forNamespace resourceNs else scope;
-          mkFn = if isClusterScopedKind kind then scope.mkClusterResource else effectiveScope.mkResource;
-        in
-        mkFn (
-          {
+
+          # Workload kinds route through scope.mkHelmWorkload for per-workload
+          # CNP generation (DNS egress, cross-package service egress,
+          # self-ingress for StatefulSets). This skips the validation checks
+          # that mkDeployment/mkStatefulSet/mkDaemonSet perform (those checks
+          # expect DI-tracked references which helm manifests don't have).
+          isWorkload = builtins.elem kind [
+            "Deployment"
+            "StatefulSet"
+            "DaemonSet"
+          ];
+          mkFn =
+            if isClusterScopedKind kind then
+              scope.mkClusterResource
+            else if isWorkload then
+              effectiveScope.mkHelmWorkload
+            else
+              effectiveScope.mkResource;
+
+          commonArgs = {
             inherit apiVersion kind name;
           }
+          // lib.optionalAttrs (requires != [ ]) { inherit requires; }
           // lib.optionalAttrs (cleanedAnnotations != { }) { annotations = cleanedAnnotations; }
           // lib.optionalAttrs (cleanedLabels != { }) { labels = cleanedLabels; }
           // lib.optionalAttrs (resource ? spec) { spec = effectiveCleanSpec resource.spec; }
           // lib.optionalAttrs (resource ? data) { data = resource.data; }
           // lib.optionalAttrs (resource ? stringData) { stringData = resource.stringData; }
-          // lib.optionalAttrs (extra != { }) { inherit extra; }
+          // lib.optionalAttrs (extra != { }) { inherit extra; };
+        in
+        mkFn (
+          commonArgs
+          # Inject cross-package network deps so their store-path context
+          # appears in the workload JSON, making extractServiceEdgesFromJson
+          # discover the egress edges.
+          // lib.optionalAttrs (isWorkload && networkDeps != [ ]) {
+            _helmNetworkDeps = networkDeps;
+          }
         );
 
       # ── Helm template + parse + filter + wrap ────────────────────────
@@ -610,13 +424,66 @@ rec {
       # Apply user-provided patches to raw resources before wrapping.
       patchedResources = patchResources filteredResources;
 
-      # Wrap each resource.
-      wrappedResources = map wrapResource patchedResources;
+      # ── DAG reconstruction (from raw JSON, before wrapping) ────────
+      #
+      # Infer edges between raw resources, then wrap each resource with
+      # its inferred dependencies as `requires`. Uses Nix laziness:
+      # wrappedResources references itself through indexByRawId, but
+      # each element only forces its dependencies (no cycles in K8s
+      # resource graphs).
+      rawEdges = helmDag.inferEdges patchedResources;
+      rawDepsMap = helmDag.buildDepsMap rawEdges;
 
-      # ── DAG linking ────────────────────────────────────────────────
-      edges = inferEdges wrappedResources;
+      # Index: rawId → position in patchedResources list.
+      indexByRawId = builtins.listToAttrs (
+        lib.imap0 (i: raw: {
+          name = helmDag.resourceId raw;
+          value = i;
+        }) patchedResources
+      );
 
-      # Build a map from resource outPath to its inferred dependencies.
+      # Wrap each resource with its DAG-inferred requires.
+      # Lazy self-reference: element i looks up its deps in wrappedResources
+      # by index. Safe because K8s resource deps are acyclic.
+      wrappedResources = lib.imap0 (
+        i: raw:
+        let
+          rawId = helmDag.resourceId raw;
+          depIds = rawDepsMap.${rawId} or [ ];
+          requires = builtins.concatMap (
+            depId:
+            if indexByRawId ? ${depId} then
+              [ (builtins.elemAt wrappedResources indexByRawId.${depId}) ]
+            else
+              [ ] # dep not in chart (external reference)
+          ) depIds;
+        in
+        wrapResource {
+          resource = raw;
+          inherit requires;
+        }
+      ) patchedResources;
+
+      # Map raw edges to wrapped resource edges for the collection API.
+      wrappedEdges = builtins.concatMap (
+        e:
+        let
+          fromId = helmDag.resourceId e.from;
+          toId = helmDag.resourceId e.to;
+        in
+        if indexByRawId ? ${fromId} && indexByRawId ? ${toId} then
+          [
+            {
+              from = builtins.elemAt wrappedResources indexByRawId.${fromId};
+              to = builtins.elemAt wrappedResources indexByRawId.${toId};
+              inherit (e) type;
+            }
+          ]
+        else
+          [ ]
+      ) rawEdges;
+
+      # Build a map from wrapped resource outPath to its inferred deps.
       depsMap = builtins.foldl' (
         acc: edge:
         let
@@ -624,7 +491,14 @@ rec {
           existing = acc.${key} or [ ];
         in
         acc // { ${key} = existing ++ [ edge.to ]; }
-      ) { } edges;
+      ) { } wrappedEdges;
+
+      # ResourceIds that are targets of edges — reachable through the DAG,
+      # so root doesn't need to directly require them.
+      depTargetIds = helmDag.dependedOnIds rawEdges;
+
+      # Diagnostics: detect orphan selectors/refs.
+      orphans = helmDag.findOrphans patchedResources rawEdges;
 
       # ── Resource collection ────────────────────────────────────────
       resourceCollection = rec {
@@ -654,7 +528,7 @@ rec {
         byKind = kind: builtins.filter (r: r.kind == kind) wrappedResources;
 
         # All workloads (Deployment, StatefulSet, DaemonSet, Job, CronJob).
-        workloads = builtins.filter (r: builtins.elem r.kind workloadKinds) wrappedResources;
+        workloads = builtins.filter (r: builtins.elem r.kind helmDag.workloadKinds) wrappedResources;
 
         # Everything except the given resources.
         excluding =
@@ -674,11 +548,14 @@ rec {
 
         # ── DAG ──────────────────────────────────────────────────────
 
-        # Inferred internal dependencies for a resource.
+        # Inferred internal dependencies for a wrapped resource.
         depsOf = resource: depsMap.${resource.outPath} or [ ];
 
-        # All link edges as { from, to, type } triples.
-        inherit edges;
+        # All link edges as { from, to, type } triples (wrapped resources).
+        edges = wrappedEdges;
+
+        # Diagnostic orphans (selectors/refs matching nothing in chart).
+        inherit orphans;
 
         # ── Root selection ────────────────────────────────────────────
 
@@ -707,6 +584,12 @@ rec {
         # ── Convenience ──────────────────────────────────────────────
 
         # Build a complete parts tree for simple charts.
+        #
+        # DAG-aware: root only directly requires resources that are NOT
+        # targets of intra-chart edges. Everything else is reachable
+        # through the DAG (each resource carries its own `requires`
+        # in kix.dev/depends-on). This gives the same forward-closure
+        # behavior as native kix packages.
         mkParts =
           {
             root, # the root resource (explicit — no heuristic)
@@ -715,12 +598,14 @@ rec {
             out ? { }, # root.out (DI builders, CRD refs, etc.)
           }:
           let
-            nonRootResources = builtins.filter (r: r.outPath != root.outPath) wrappedResources;
+            # Non-root resources that are NOT depended on by other chart
+            # resources. These are the DAG "entry points" that root must
+            # directly require — everything else is pulled in transitively.
+            dagRootRequires = builtins.filter (
+              r: r.outPath != root.outPath && !(builtins.elem "${r.kind}/${r.name}" depTargetIds)
+            ) wrappedResources;
 
-            # Order non-root resources: deps of each resource come before it.
-            # For now, we pass them all as requires (flat) — the DAG edges
-            # are available via `edges` for future wave ordering.
-            allRequires = nonRootResources ++ extraRequires;
+            allRequires = dagRootRequires ++ extraRequires;
           in
           attrs
           // extraParts
