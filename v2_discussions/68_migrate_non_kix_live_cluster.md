@@ -1,4 +1,4 @@
-# 68: Live Cluster Compatibility
+# 68: Migrating a Non-kix Live Cluster
 
 **Status:** Draft
 **Related:** `29_compiler-design.md`, `67_stateful_migration_orchestration.md`

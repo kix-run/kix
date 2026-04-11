@@ -10,184 +10,93 @@ description: >
 
 # Structured Thinking
 
-You are helping the user think through a topic in a structured way, producing a written artifact in the appropriate discussion folder. The goal is to turn loose thinking into a document that future-you (or a cofounder, investor, or engineer) can pick up and build on.
+Turn loose thinking into a short, durable document that someone can pick up later.
 
-## Step 0: Ground yourself
+## Ground yourself first (mandatory)
 
-Before anything else, ground your understanding in the actual system:
+1. Read `v2_discussions/README.md` (has Status + Relevance markers, Recently Archived, `interesting_thoughts/` index) and `ls business_discussions/`.
+2. For loose/abstract technical topics, skim `v2_discussions/29_compiler-design.md` to know what kix *is*.
+3. For technical opinions, read the relevant files in `kix/lib/` and `cli/README.md`. Opine on code, not on stale docs.
 
-1. **Read the indexes** — read `v2_discussions/README.md` and `ls business_discussions/` to see what discussions currently exist. The v2 README is a curated, themed index with status markers and one-line summaries — use it to find relevant prior art instead of raw `ls`. This is mandatory every time — don't rely on memory.
-2. **Read the compiler doc** — `v2_discussions/29_compiler-design.md` is the conceptual anchor for the whole project. If the user's topic is loose or abstract, read this to ground yourself in what kix actually *is* and *does*. Not mandatory for narrow topics, but reach for it when you need to orient.
-3. **Read code when opining on technical topics** — skim relevant files in `lib/` and read `cli/README.md` for CLI context. Your opinions in design docs must be grounded in what the code actually does today, not just what docs say it does. If you're writing about the DSL, read the relevant lib files. If you're writing about deploy, read the CLI README and relevant command source.
+## Orient, then propose
 
-## Step 1: Orient
+Answer to the user in one message:
 
-Before writing anything, figure out:
+1. **Topic** — restate in one sentence.
+2. **Destination** —
+   - `business_discussions/` — market, GTM, pricing, positioning, fundraising.
+   - `v2_discussions/` — technical, near-term, would be opened in the next 1–2 milestones.
+   - `v2_discussions/interesting_thoughts/` — technical, future/curious, no near-term driver. Signals: "at some point", "cool idea, not blocking", requires scale/hardware/customers we don't have. **Default here when in doubt.**
+3. **Existing docs on the topic** — list the leading active doc, relevant archived docs, related `interesting_thoughts/` entries.
+4. **Plan** — new doc or iteration on existing (see next section). Propose a number and name.
+5. **Mode** — Interactive (ask questions one at a time with AskUserQuestion) or First draft (write, then react). Ask the user.
 
-1. **What's the topic?** Restate it back in one sentence.
-2. **Which folder?** Route based on content:
-   - `business_discussions/` — market, strategy, GTM, pricing, positioning, business model, competitive analysis, partnerships, fundraising
-   - `v2_discussions/` — technical design, architecture, DSL features, deployment, operator, tooling, compiler
-   - If it spans both (e.g. "how do we productize feature X"), pick the one that matches the *primary question*. A technical feature's business case goes in `business_discussions/`. A business need's technical design goes in `v2_discussions/`.
-3. **What type of document?** Choose carefully — the type reflects the maturity of the idea (see Document Types below). You may consult the user on what document type they feel like describes their thought best. In case the user creates a new document type that is not listed, update this skill.
-4. **What exists already?** From the v2 README index and business_discussions listing in Step 0, identify related docs by theme and status. Surface what you find — the user may want to build on or reference existing work. Pay attention to status markers: don't build on superseded docs without checking their successors.
+As a default, wait for confirmation before writing.
 
-Tell the user what you found and propose: folder, document type, and any existing docs worth reading first. Wait for confirmation before writing.
+## Keep documents short — rotate, don't extend
 
-## Step 2: Read context
+**Discussion docs should stay under ~400 lines.** Long docs are unreadable and carry stale thinking forward. When a topic needs a new take, don't pile it onto the existing doc — **start a fresh doc and archive the old one**:
 
-Discussion documents build on each other. Before writing:
+1. Read the existing leading doc end-to-end. Note (a) what's been decided, (b) what's still undiscussed or important.
+2. Start a new numbered doc (`NN_same_topic_v2.md` or a new name). It must:
+   - Cite the predecessor in `**Supersedes:** archive/NN_old.md`.
+   - Carry forward **only** the undiscussed / still-important parts — rewritten tight, not copy-pasted.
+   - Not re-litigate settled points. A one-line "we decided X in NN_old" is enough.
+3. Move the old doc to `archive/` with `**Status:** Superseded by NN`.
+4. Update `v2_discussions/README.md`: replace the old row, add a one-line "Recently archived" entry.
 
-- In `business_discussions/`: check the `prereqs` field in frontmatter of related docs. Read those if they're relevant.
-- In `v2_discussions/`: use the README index to find docs in the same theme group, then check `Related:` links in the specific docs you read. The index shows status — prefer reading active docs over implemented/archived ones unless you need historical context.
-- Skim `ROADMAP.md` for relevant sections when the topic touches planned or built features.
-- **Check `v2_discussions/archive/`** for superseded or implemented discussions on the same topic. Archived docs aren't wrong — they represent prior thinking that may still be valid or contain important context for why something was decided.
+Variants / counter-proposals use `NN[a-z]_variant.md` naming so the relationship is obvious.
 
-Summarize key context that's relevant to the new document.
+Only genuinely new topics get a brand-new number with no predecessor.
 
-## Step 3: Ask how to write
+## Archive on ship (mandatory)
 
-Before drafting, ask the user their preferred mode:
+When a feature ships (user says "done", "landed", "merged", or a commit closes out a design doc), archive the design doc in the **same session** as the implementation:
 
-- **Interactive** — you ask questions one at a time using the AskUserQuestion tool, building the document from their answers. Better for early-stage thinking where the user wants to discover what they think.
-- **First draft** — you produce a complete draft the user can read, edit, and react to. Better when the user already has a clear picture and wants to save time.
+1. Identify the leading doc for what shipped.
+2. Split shipped content from still-open content:
+   - Actionable near-term → `ROADMAP.md § Open design questions`.
+   - Future / exploratory → new or existing `interesting_thoughts/` doc.
+3. Move the doc to `archive/` with `**Status:** Implemented`.
+4. Update the README (remove active row, add to Recently Archived with a one-line reason).
+5. Sweep sibling/child docs on the same topic that are now orphans — archive those too.
 
-You may or may not want to write multiple documents.
+Consult the user if the split is non-obvious.
 
-## Step 4: Write
+## Numbering
 
-Use the appropriate format (see Document Types below).
-
-### Numbering
-
-- `business_discussions/`: two-digit prefix, next available number. Check existing files.
-- `v2_discussions/`: two-digit prefix (three digits once we pass 99), next available number. Check the README index for the current highest number. After creating a new doc, add it to the appropriate theme group in the README.
-In case the new discussion is simply a new variant of another main document you may use <number>[a-Z]_doc-name.
+Two-digit prefix, next available number (check the README for the current highest). Variants: `NN[a-z]_name.md`. After creating a doc, add it to the appropriate theme group in the README.
 
 ## Document types
 
-The type reflects the maturity and intent of the thinking. Choose carefully — the wrong type leads to the wrong conversation.
+Pick the one that matches the maturity of the thinking. All v2_discussions docs start with:
 
-### Brainstorm (either folder)
-
-**When:** Early-stage exploration. The user has an idea or problem but hasn't committed to a direction. Capturing raw thinking.
-**Structure:** Light — a title, status line (`**Status:** Exploration`), and freeform sections. No frontmatter required for v2_discussions brainstorms. Use frontmatter for business_discussions brainstorms (keeps the prereqs chain intact).
-**Graduates to:** RFC (if a feature emerges) or Strategy Memo (if a business direction emerges).
-
-### RFC — Request for Comments (v2_discussions)
-
-**When:** Proposing that a feature or capability *should exist*. The RFC argues for the "what" and "why" — not the implementation details. It's a pitch: here's the problem, here's what the solution looks like at a high level, here's why it's worth doing.
-**Structure:**
 ```
 # NN: Title
 
-**Status:** Draft | Accepted | Rejected | Superseded by NN
-**Related:** `other_doc.md`, `another_doc.md`
-
-## Problem
-What's broken or missing, with concrete examples.
-
-## Proposal
-What the feature does, from the user's perspective. Include API sketches or usage examples.
-
-## Motivation
-Why this matters — what it enables, what pain it removes.
-
-## Open questions
-What needs to be resolved before accepting.
-```
-**Graduates to:** Design Doc (for implementation planning).
-
-### Design Doc (v2_discussions)
-
-**When:** Working out *how* an accepted feature gets implemented. Digs into the architecture, data flow, edge cases, and integration points. Must be grounded in the actual codebase — reference specific files, functions, and data structures.
-**Structure:**
-```
-# NN: Title
-
-**Status:** Draft | Open problem | Implemented | Superseded by NN
-**Related:** `other_doc.md`, `another_doc.md`
-
-## Context
-What RFC or decision this implements. Link it.
-
-## Design
-The proposed implementation. Reference actual code paths (lib/, cli/). Include code sketches where they clarify.
-
-## Alternatives considered
-What else could work and why this approach is better.
-
-## Migration / compatibility
-What changes for existing packages or clusters.
-
-## Open questions
-What's unresolved.
-```
-**Graduates to:** Implementation Plan (if the scope is large).
-
-### Implementation Plan (v2_discussions)
-
-**When:** The design is settled and the work needs to be broken into concrete steps. This is the most refined technical document — it's a sequenced work plan, not a discussion.
-**Structure:**
-```
-# NN: Title — Implementation Plan
-
-**Status:** In progress | Complete | Stalled
-**Related:** `design_doc.md`
-
-## Scope
-What's being built, with a link to the design doc.
-
-## Phases
-Sequenced work items with concrete deliverables. Each phase should be independently shippable or at least testable.
-
-## Current state
-What's done, what's next. Keep this updated as work progresses.
+**Status:** Draft | Accepted | Rejected | Implemented | Superseded by NN
+**Related:** `other_doc.md`
+**Supersedes:** archive/NN_old.md   (if replacing a predecessor)
 ```
 
-### Strategy Memo (business_discussions)
+| Type | When | Key sections |
+|---|---|---|
+| **Brainstorm** | Early exploration, no committed direction | Freeform. No frontmatter required for v2. |
+| **RFC** | Proposing a feature *should exist*. Argues what + why, not how. | Problem, Proposal, Motivation, Open questions. |
+| **Design Doc** | How an accepted feature gets implemented. References `kix/lib/` and `cli/` paths. | Context, Design, Alternatives considered, Migration, Open questions. |
+| **Implementation Plan** | Scoped work plan for a settled design. | Scope, Phases, Current state. |
+| **Strategy Memo** (business) | Business case, market, strategic direction. | Frontmatter (title, status, created, last_updated, prereqs, summary) + freeform body (context, analysis, options, recommendation). |
+| **Analysis** (business) | Research-heavy: market, pricing, competitive. | Same frontmatter as Strategy Memo. Data-driven body. |
 
-**When:** Making a business case, analyzing a market, or proposing strategic direction. Board/investor-grade documents.
-**Structure:**
-```yaml
----
-title: "Title"
-status: draft | current | superseded
-created: YYYY-MM-DD
-last_updated: YYYY-MM-DD
-prereqs: [doc_name_without_extension, ...]
-summary: >
-  2-4 sentence summary. This is what someone reads to decide
-  whether to open the full document.
----
-```
-Body is freeform but typically: context, analysis, options, recommendation.
-
-### Analysis (business_discussions)
-
-**When:** Research-heavy — market landscape, competitive positioning, pricing analysis.
-**Structure:** Same frontmatter as strategy memos. Body is data-driven: tables, comparisons, sourced claims.
-
-## Document lifecycle
-
-Ideas mature through documents:
-
-```
-Brainstorm → RFC → Design Doc → Implementation Plan
-                 ↘ Strategy Memo → Analysis
-```
-
-Not every idea goes through every stage. A brainstorm might die. An RFC might be rejected. A design doc might be written directly if the "what" is obvious and only the "how" needs discussion. Use judgment.
-
-When a document is superseded or fully implemented, move it to `v2_discussions/archive/` with a status update, and update the README index (mark as **Implemented** or **Superseded**, update the link to point to `archive/`, and add to the Archive section). Don't delete — the reasoning history matters.
-Consult the user first if you plan to move a document.
+Maturity flow: Brainstorm → RFC → Design Doc → Implementation Plan → `archive/`. Skip stages when obvious. Dead-end brainstorms go to `archive/` or `interesting_thoughts/`.
 
 ## Principles
 
-- **Build on what exists.** Don't start from scratch if there's a related doc. Reference it, extend it, or explicitly supersede it.
-- **Status is mandatory.** Every doc must say where it stands. Update status when things change.
-- **Link the chain.** Use `prereqs` (business) or `Related:` (technical) so readers can trace the reasoning.
-- **Ground in code.** Technical documents must reference actual code paths. "The evaluator does X" is worthless if you haven't checked what the evaluator actually does. Read `lib/` and `cli/` before writing technical opinions.
-- **Capture the *why*.** Decisions without rationale are useless in 6 months. Record alternatives considered and why they were rejected.
-- **One idea per document.** If the brainstorm surfaces two distinct topics, split them.
-- **Archive is not trash.** Superseded and implemented docs in `archive/` contain valid reasoning and historical context. Check them when working on related topics.
+- **Short beats long.** A 400-line doc with sharp open questions beats a 1200-line doc that re-explains settled points. When a doc grows stale, rotate it — don't extend.
+- **Archive on ship.** A shipped design doc in the active folder is a bug.
+- **Future → `interesting_thoughts/`.** The active folder is for the next 1–2 milestones only.
+- **Status is mandatory.** Every doc says where it stands.
+- **Ground in code.** Read `kix/lib/` and `cli/` before opining. Stale-doc opinions are worthless.
+- **Capture the *why*.** Rationale + rejected alternatives, not just the chosen direction.
+- **One idea per doc.** Split when two distinct topics surface.
+- **Archive is not trash.** Check `archive/` for prior thinking before writing.

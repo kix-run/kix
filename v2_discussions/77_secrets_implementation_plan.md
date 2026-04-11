@@ -1,7 +1,18 @@
 # 77: Secrets Implementation — SOPS Deploy-time Hydration
 
-**Status:** In Progress
-**Related:** `76_secrets_design.md` (design), `75_secrets_what_actually_matters.md` (strategy)
+**Status:** In Progress — implementation-only doc. The design docs below are archived but **still carry open questions**.
+
+## Secrets design corpus (archived, open questions remain)
+
+The first SOPS flow is shipping against the minimum viable design. The broader secrets story is not closed; each archived doc has unresolved items that should be consulted before expanding scope:
+
+- **`archive/74_secrets.md`** — Unified RFC: seven origin types, DI model, six concerns, provider tiers. *Open:* origin taxonomy vs. what we actually ship; whether tiering survives contact with real consumers.
+- **`archive/75_secrets_what_actually_matters.md`** — Cuts 74 down to Problem A (values) vs. Problem B (contracts). *Open:* whether SOPS-default / ship-contracts-with-values holds once a second provider lands.
+- **`archive/76_secrets_design.md`** — Concrete API (`mkSecret`, `mkSecretRef`, `out.keyRef`, DI override, CLI). *Open:* cross-namespace refs (see 78), DI override ergonomics, hash-verification failure UX.
+- **`archive/77_secret_access_control_modules.md`** — Module-system layer over SOPS (teams/keys/rules, `.sops.yaml` generation, rekey workflow, severity-tiered diff/deploy gates). *Open:* whether this lives in kix or a sibling tool; revocation safety.
+- **`archive/78_cross_namespace_secret_refs.md`** — `mkSecretRef` cross-namespace consumption can't be copy-on-build and drifts on copy-on-deploy. *Open:* capability-driven resolution (operator-native / CSI / reflector / static-copy), compile-time error as default.
+
+If you extend secrets work beyond the deploy-time hydration scope below, start by re-reading the relevant archived doc — the design is not actually settled.
 
 ---
 

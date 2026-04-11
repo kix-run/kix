@@ -1,7 +1,7 @@
 # 63a — Storage as a Cluster-Level Concern
 
 **Status:** Design exploration
-**Related:** `63_storage_compilation.md` (predecessor — good PVC helpers but wrong abstraction level), `32_volume_mount_dsl.md` (mount wiring), `62a_exposure_as_composable_build_entry.md` (same "lift the concern" principle)
+**Related:** `archive/63_storage_compilation.md` (predecessor — good PVC helpers but wrong abstraction level), `32_volume_mount_dsl.md` (mount wiring — this doc and 32 together describe the storage+mount story), `archive/62a_exposure_as_composable_build_entry.md` (same "lift the concern" principle)
 
 ---
 

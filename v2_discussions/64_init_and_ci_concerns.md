@@ -1,7 +1,9 @@
-# 64 — MVP Implementation Approach
+# 64 — Init & CI Concerns
 
 **Status:** Draft [undiscussed]
-**Related:** `58_satchel_mvp_technical_requirements.md` (requirements), `46_thin_operator_production_plan.md` (operator design), `61_compliance_exports.md` (SARIF exports), `28_gitops_deploy.md` (deploy feature parity), `60_scorecard_rules_design.md` (scorecard)
+**Related:** `58_satchel_mvp_technical_requirements.md` (requirements), `archive/46_thin_operator_production_plan.md` (operator design), `archive/61_compliance_exports.md` (SARIF exports), `archive/28_gitops_deploy.md` (deploy feature parity), `archive/60_scorecard_rules_design.md` (scorecard)
+
+> **Note:** Previously titled "MVP Implementation Approach". Renamed because the MVP framing is obsolete; the durable content here is about **project init ergonomics and CI integration concerns** — how a new kix user gets bootstrapped and how kix plugs into CI pipelines.
 
 ---
 

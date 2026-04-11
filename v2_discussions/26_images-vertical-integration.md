@@ -1,3 +1,10 @@
+# 26 — Nix-built Images (Vertical Integration)
+
+**Status:** Future direction
+**Related:** `interesting_thoughts/72_ai_cluster_recipes.md` (GPU/AI recipes that benefit most from Nix-built images)
+
+---
+
 Current state
 
   Images are opaque strings. kix has zero visibility into what's inside them:

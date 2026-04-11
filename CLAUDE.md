@@ -14,7 +14,12 @@ If you want to understand internals of kix/lib, read kix/lib/architecture.md. If
 
 ## Structured thinking
 
-When the user wants to think through, brainstorm, design, or analyze something — or is about to build something bigger that needs upfront thinking — use the `structured-thinking` skill instead of plan mode. It routes to the right folder (`business_discussions/` or `v2_discussions/`), surfaces existing discussions, and produces a durable document (RFC, design doc, strategy memo, etc.) rather than an ephemeral plan.
+Use the `structured-thinking` skill (instead of plan mode) when the user wants to think through, brainstorm, design, or analyze something. It routes to `business_discussions/`, `v2_discussions/`, or `v2_discussions/interesting_thoughts/` and produces a durable doc.
+
+Two rules the skill enforces and you should honor outside it too:
+
+- **Keep discussion docs short.** When a topic needs a new take, don't extend the old doc — start a fresh one, carry forward only the undiscussed/still-important parts, and archive the old. Target ~400 lines per doc. Future / non-blocking ideas go to `v2_discussions/interesting_thoughts/`, never the active folder.
+- **Archive on ship.** When a feature that traces back to a v2_discussions doc lands, re-invoke the skill in the same session: split shipped content from still-open questions (lift to `ROADMAP.md § Open design questions` or `interesting_thoughts/`), move the doc to `archive/`, update the README.
 
 ## Breaking changes
 

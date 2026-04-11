@@ -321,6 +321,17 @@
   - "This is what I want" — no separate argo/flux/etc setup needed
 - [ ] replacing CI/CD times
 
+## Open design questions (still-to-get-right)
+
+Things that are either "shipped but the underlying question isn't actually settled" or "deferred but important enough that we need to not forget them". Pulled from archived v2 discussion docs during the April 2026 cleanup.
+
+- [ ] **Team isolation & governance** (from `v2_discussions/archive/01_evaluateCluster_merging.md`) — preventing team A from silently modifying team B's instances is not mechanically enforced. Any module can `mkForce` anything (the Approach-B tradeoff, now in production). Probably fine for small teams with code review, but there's no mechanical boundary. If this bites, the fix is a lint pass over module provenance, not a schema change. See also `v2_discussions/45_multi_team_and_operator_models.md` for the broader context.
+- [ ] **Typo / fuzzy validation on instance references** (from 01 §9.4) — instance references to nonexistent namespaces, Levenshtein hints on misspelled package names, orphan namespace detection. `evalModules` gives exact-match errors for free but nothing fuzzy.
+- [ ] **Instance collision UX** (from 01) — with `package = types.raw`, two modules setting the same `(ns, instance).package` collide at submodule level. The error message is probably `evalModules`-generic rather than "team X and Y both defined postgres". Verify the message is good enough; if not, add a custom check.
+- [ ] **Defaults scoping — per-team vs. cluster-wide** (from 01 §4.4) — current system has global + package-level `_kixOptions`. No per-team default concept. Same governance gap as item 1.
+- [ ] **Lint pass: "could have used a typed constructor"** (from `v2_discussions/archive/38_resource_type_tags.md`) — when a user hand-rolls something that a typed constructor / scope helper already handles, emit a hint. The 38 doc's type-tag machinery is outdated, but this lint idea is the durable residue.
+- [ ] **Activation operator — user-facing workflow** (from `v2_discussions/archive/43_activation_operator.md`) — the engine is shipped, but the user-facing workflow (how a developer drives an activation, what they see, what the CLI looks like against the operator vs. direct) is the open question. `v2_discussions/62_operator_production_implementation_plan.md` covers production readiness but not the workflow UX.
+
 ## Key risks & design principles
 
 - **Nix adoption barrier** — nix has clear advantages but hasn't taken over the world; we need to actively study *why* people who know about nix's benefits still choose not to use it — not just build features. The intro tutorial and DX must be approachable for a non-nix user. Positioning: nix scales; helm and friends do not.
