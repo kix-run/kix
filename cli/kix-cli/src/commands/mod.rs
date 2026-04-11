@@ -1,6 +1,7 @@
 pub mod build;
 pub mod check;
 pub mod completions;
+pub mod compliance;
 pub mod deploy;
 pub mod deploy_tui;
 pub mod diff;

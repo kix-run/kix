@@ -89,6 +89,7 @@ fn main() -> miette::Result<()> {
         Command::Health(args) => commands::health::run(args, &mut ctx),
         Command::Images(args) => commands::images::run(args, &mut ctx),
         Command::Snapshot(args) => commands::snapshot::run(args, &mut ctx),
+        Command::Compliance(args) => commands::compliance::run(args, &mut ctx),
         Command::Completions(_) => unreachable!(),
     }
 }
