@@ -91,6 +91,7 @@ The first SOPS flow is being implemented against a minimum viable design. **All 
 | 58 | [Satchel MVP requirements](58_satchel_mvp_technical_requirements.md) | Draft | Near-term | Sam (alpha tester) requirements on GKE/Terraform; maps needs to kix gaps. |
 | 64 | [Init & CI concerns](64_init_and_ci_concerns.md) | Draft | Active | How a new user gets bootstrapped and how kix plugs into CI pipelines. (Previously "MVP implementation approach" — MVP framing obsolete, CI/init content still relevant.) |
 | 66 | [Milestone roadmap](66_milestone_roadmap.md) | Draft | Active | Five user archetypes, cumulative milestones. |
+| 90 | [Ludo as north star — ideation & prioritization](90_ludo_north_star_ideation.md) | Brainstorm | **Active** | Option space + L1–L8 stories for pushing the ludo demonstrator. Kind-only horizon (prod profile, backup contract, first migration pair, gateway switch) then on-device horizon (maintenance, upgrade cascade, CNPG swap, operator self-host). Seeds 4 spin-off sessions. |
 
 ---
 

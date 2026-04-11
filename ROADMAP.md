@@ -133,6 +133,7 @@
 - [x] Build-time error on illegal configurations — immich throws at eval time if postgres is missing required pgvecto.rs extension (`postgres.out.extensionNames`). Infra packages expose validated metadata via `main.out` for consumer-side checks.
 - [x] Compatibility checks on packages — `meta.nix` checks k8s version bounds (`meta.k8s.minVersion/maxVersion`), dep version ranges (`meta.compatibleWith`), conflict detection (`meta.conflictsWith`), and deprecation warnings (`meta.deprecated`)
 - [ ] Sanity checks on namespace resource quotas and similar
+- [ ] **Resource identity pinning / rename detection** — detect a resource rename-through-eval (same logical identity, different K8s name/namespace) at build time. In K8s a rename is fatal (new resource, orphaned old one, immutable selectors). Compiler should refuse and force the user to either opt into a migration pair (`67`) or declare an explicit `moved { ... }` on the resource (ROADMAP line 142). The rename-detection angle is the new piece — the compiler already sees the identity change via the dependency graph, it just doesn't act on it. From `v2_discussions/90_ludo_north_star_ideation.md` §G.
 - [x] Stateful resource discovery — package `meta.lifecycle = "stateful"` flags stateful packages; `meta.scope = "namespace"` prevents cross-namespace DI for namespace-bound resources (PVCs). Consumer-side validation (e.g. immich warns if PVC < 50Gi) via `builtins.trace` in build.
 - [ ] Compatibility matrix — four distinct failure phases: build, deploy, health, application. Need to know *when* things will fail, not just *if*
 - [ ] Encodable "known issues" — broken side effects should be expressible in code so a problem can't recur; capturing institutional knowledge about failure modes directly in the DSL
@@ -236,6 +237,7 @@
 - [ ] `kix init` — scaffold a new cluster definition for a given provider (`kix init --provider gke`). Generates `flake.nix`, cluster definition with flavor preset, and starter packages (ingress, monitoring, cert-manager)
 - [ ] CI/CD integration — GitHub Action / GitLab CI template for the plan/apply loop: (a) PR triggers `kix diff`, posts change summary as PR comment (packages changed, resources added/modified/removed, blast radius), (b) merge triggers `kix deploy`. The diff engine and deploy pipeline exist — this is the CI plumbing. Nix binary cache setup guide for fast CI rebuilds. See `v2_discussions/58_satchel_mvp_technical_requirements.md`
 - [ ] kix CLI working without installed nix
+- [ ] **Nightly eval-time bench** — scheduled CI job evaluates a representative cluster (e.g. ludo) and fails on > X% regression. Protects the "eval times" risk and catches content-addressing blowups early. Not ludo-specific; applies to any flagship cluster. From `v2_discussions/90_ludo_north_star_ideation.md`.
 - [ ] LSP or code smell checks for kix package definitions
 - [ ] Rust bridge to nix binary (https://github.com/nixops4/nix-bindings-rust)
 - [ ] Allow bringing a values.yaml for helm migration
