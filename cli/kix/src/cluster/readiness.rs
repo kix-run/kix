@@ -520,21 +520,22 @@ pub fn classify_pod_terminal(pod: &Value) -> Option<(TerminalReason, String)> {
                 .pointer("/state/terminated/exitCode")
                 .and_then(Value::as_i64);
             if let Some(exit_code) = terminated_exit
-                && exit_code != 0 {
-                    let restarts = cs.get("restartCount").and_then(Value::as_i64).unwrap_or(0);
-                    if restarts >= CRASHLOOP_RESTART_THRESHOLD {
-                        let term_reason = cs
-                            .pointer("/state/terminated/reason")
-                            .and_then(Value::as_str)
-                            .unwrap_or("Error");
-                        return Some((
-                            TerminalReason::CrashLoop,
-                            format!(
-                                "pod {pod_name}/{container}: terminated with {term_reason} (exit={exit_code}) after {restarts} restarts"
-                            ),
-                        ));
-                    }
+                && exit_code != 0
+            {
+                let restarts = cs.get("restartCount").and_then(Value::as_i64).unwrap_or(0);
+                if restarts >= CRASHLOOP_RESTART_THRESHOLD {
+                    let term_reason = cs
+                        .pointer("/state/terminated/reason")
+                        .and_then(Value::as_str)
+                        .unwrap_or("Error");
+                    return Some((
+                        TerminalReason::CrashLoop,
+                        format!(
+                            "pod {pod_name}/{container}: terminated with {term_reason} (exit={exit_code}) after {restarts} restarts"
+                        ),
+                    ));
                 }
+            }
         }
     }
     None
