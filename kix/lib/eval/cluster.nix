@@ -8,6 +8,7 @@
   kixlib,
   helpers,
   netpol,
+  netpolInterface,
   scorecard,
   mkNamespace,
   computeAutoInstances,
@@ -190,6 +191,22 @@ in
             + "    package = packages.\"cilium\".external;\n"
             + "  };\n"
           )
+        else
+          null;
+
+      # Validate the enforcer's `out.netpol` against the formal interface.
+      # Fires only when network policies are enabled and an enforcer is
+      # declared. The validation reads from the cluster fixpoint (lazy),
+      # so it runs at the same time as the first scope construction.
+      _netpolInterfaceAssertion =
+        if (cfg.networkPolicy.enable or false) && enforcerOut != null then
+          let
+            enforcerNetpol = enforcerOut.netpol or { };
+            enforcerName = "${enforcerLookup.ns}/${enforcerLookup.inst}";
+          in
+          netpolInterface.validateEnforcerInterface {
+            inherit enforcerNetpol enforcerName;
+          }
         else
           null;
 
@@ -390,8 +407,39 @@ in
       # at `scope.mkDeployment` time via `buildWorkloadCnps`. There is
       # no cluster-level inverted-ingress pass — v2_discussions/83
       # Phase C replaced it with caller-side `scope.forNamespace`
-      # emission. Only default-deny remains at this level.
+      # emission. Platform intents and default-deny remain at this level.
       networkConfig = cfg.networkPolicy;
+
+      # --- Platform intent materialization ---
+      #
+      # Flavors declare `networkPolicy.platformIntents` for non-kix-managed
+      # pods (CoreDNS, local-path-provisioner, etc.). The enforcer
+      # materializes each intent into a standalone CNP or CCNP routed
+      # through its CRD ref markers. See v2_discussions/92.
+      platformIntentPolicies =
+        if !networkConfig.enable || enforcerOut == null || networkConfig.platformIntents == { } then
+          [ ]
+        else
+          let
+            enforcerApi = enforcerOut.netpol;
+          in
+          lib.mapAttrsToList (
+            intentName: intent:
+            let
+              isClusterwide = (intent.scope or "namespaced") == "clusterwide";
+              nsName = intent.namespace or null;
+              namespaceResource =
+                if nsName != null && builtins.hasAttr nsName nsResources then nsResources.${nsName} else null;
+            in
+            enforcerApi.materializePlatformIntent {
+              intent = intent // {
+                name = intentName;
+              };
+              mkResource = k8s.mkResource;
+              inherit namespaceResource;
+              inherit (k8s) clusterScoped;
+            }
+          ) networkConfig.platformIntents;
 
       defaultDenyPolicies =
         if networkConfig.enable && networkConfig.defaultDeny then
@@ -509,6 +557,7 @@ in
         ++ (if ns.quota != null then [ ns.quota ] else [ ])
         ++ builtins.attrValues ns.netpols
       ) allNsNames)
+      ++ platformIntentPolicies
       ++ defaultDenyPolicies
       ++ [ activation ];
 
@@ -523,7 +572,7 @@ in
         instances = lib.mapAttrs (
           _nsName: nsInsts: lib.mapAttrs (_: inst: inst._packageInstance.out.name) nsInsts
         ) activeClusterInstances;
-        extraDeps = defaultDenyPolicies;
+        extraDeps = defaultDenyPolicies ++ platformIntentPolicies;
       };
 
       # Package index — PI store path → owned resource store paths.
@@ -616,33 +665,35 @@ in
 
     in
     builtins.seq _netpolEnforcerAssertion (
-      builtins.seq clusterDiagnostics.assertionCheck {
-        _type = "k8s-cluster-v2";
-        inherit name;
+      builtins.seq _netpolInterfaceAssertion (
+        builtins.seq clusterDiagnostics.assertionCheck {
+          _type = "k8s-cluster-v2";
+          inherit name;
 
-        inherit clusterInstances;
-        instances = clusterInstances;
+          inherit clusterInstances;
+          instances = clusterInstances;
 
-        namespaces = nsResources;
+          namespaces = nsResources;
 
-        inherit
-          activation
-          packageIndex
-          info
-          extraImages
-          ;
+          inherit
+            activation
+            packageIndex
+            info
+            extraImages
+            ;
 
-        # Cluster-level diagnostics for tooling
-        diagnostics = {
-          inherit (clusterDiagnostics) warnings assertions failedAssertions;
-        };
+          # Cluster-level diagnostics for tooling
+          diagnostics = {
+            inherit (clusterDiagnostics) warnings assertions failedAssertions;
+          };
 
-        # Scorecard report (null if disabled)
-        inherit scorecardReport;
+          # Scorecard report (null if disabled)
+          inherit scorecardReport;
 
-        rawManifests = map (
-          r: builtins.fromJSON (builtins.unsafeDiscardStringContext (builtins.toJSON r.rawManifest))
-        ) allResources;
-      }
+          rawManifests = map (
+            r: builtins.fromJSON (builtins.unsafeDiscardStringContext (builtins.toJSON r.rawManifest))
+          ) allResources;
+        }
+      )
     );
 }

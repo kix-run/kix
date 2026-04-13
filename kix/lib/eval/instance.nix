@@ -62,8 +62,8 @@ in
       let
         # Peek package metadata BEFORE the scope is constructed, so
         # `mkScope` can honor `meta.provides` (self-dep guard for the
-        # enforcer) and `meta.network.*` (allowExternalEgress, extra*,
-        # etc.) at scope-level netpol emission time. `peekPackageMeta`
+        # enforcer) and `meta.network.intents` (declared connectivity)
+        # at scope-level netpol emission time. `peekPackageMeta`
         # is cheap — it invokes function packages with an empty scope and
         # reads `.meta` without calling `build`.
         peekedPackageMeta = meta.peekPackageMeta {
@@ -81,6 +81,45 @@ in
         # emitted either.
         _skipWorkloadNetpol = builtins.elem "network-policy-enforcer" (peekedPackageMeta.provides or [ ]);
 
+        # Resolve the DNS instance via DI. The root is passed to the scope
+        # and injected into workloads that reference cross-instance Services
+        # (detected via store-path context in buildWorkloadCnps).
+        # Self-dep guard: if this instance IS the dns provider, skip.
+        _dnsResolution = resolveArg {
+          argName = "dns";
+          inherit resolutionIndex;
+          requesterNamespace = namespaceName;
+          hasDefault = true;
+          explicitOverride = null;
+        };
+        # TODO: turn this into a hard error once all cluster definitions
+        # declare a DNS instance (platform flavors already do via
+        # platform-dns). Every cluster needs DNS — a missing instance is
+        # a misconfiguration.
+        _dnsResolutionCheck =
+          if !_dnsResolution.found then
+            builtins.trace "[kix] warning: no DNS instance (alias 'dns') found in cluster — workloads will not depend on DNS readiness" null
+          else
+            null;
+        # DNS instance root resource (or null). Passed to the scope; only
+        # injected into workloads that actually reference cross-instance
+        # Services (detected by buildWorkloadCnps via store-path context).
+        _dnsRoot =
+          if !_dnsResolution.found || (_dnsResolution.direct or false) then
+            null
+          else
+            let
+              dnsInst = allInstances.${_dnsResolution.namespace}.${_dnsResolution.instanceName};
+            in
+            # Self-dep guard: the DNS provider's own workloads must not
+            # depend on its own root (that would be circular).
+            if _dnsResolution.namespace == namespaceName && _dnsResolution.instanceName == instanceName then
+              null
+            else if dnsInst ? root then
+              dnsInst.root
+            else
+              null;
+
         scope' = mkScope {
           inherit
             instanceName
@@ -90,6 +129,7 @@ in
             networkPolicyEnforcer
             peekedPackageMeta
             ;
+          dnsRoot = _dnsRoot;
           namespaces = nsResources;
           labelStyle = instCfg.labelStyle;
           selectorLabelsOverride = instCfg.selectorLabels;
@@ -728,38 +768,40 @@ in
 
       in
       builtins.seq _crossNsCheck (
-        builtins.seq diagnostics.emitWarnings (
-          builtins.seq diagnostics.emitAssertionWarnings (
-            let
-              view' = mkPackageView {
-                inherit
-                  parts
-                  instanceName
-                  namespaceName
-                  packageMeta
-                  packageInstance
-                  evaluatedConfig
-                  ;
-                rootOut = (rootRes.out or { }) // packageOut;
-                aliases = instCfg.aliases or [ ];
-              };
-            in
-            view'
-            // {
-              # `_networkPolicies` is the full set of CNPs owned by this
-              # instance: per-workload CNPs emitted at scope time (drained
-              # off `_generatedNetpol` on every workload) + supplementary
-              # api-server / external-ingress CNPs emitted post-fixpoint by
-              # `netpol.processInstance`. cluster.nix reads this via
-              # `inst._networkPolicies` in `collectResources`.
-              _networkPolicies = _scopeEmittedNetpolCnps ++ networkResult.policies;
-              _scorecardFindings = scorecardFindings;
-              _diagnostics = {
-                warnings = diagnostics.allWarnings;
-                assertions = diagnostics.allAssertions;
-                inherit (diagnostics) failedAssertions;
-              };
-            }
+        builtins.seq _dnsResolutionCheck (
+          builtins.seq diagnostics.emitWarnings (
+            builtins.seq diagnostics.emitAssertionWarnings (
+              let
+                view' = mkPackageView {
+                  inherit
+                    parts
+                    instanceName
+                    namespaceName
+                    packageMeta
+                    packageInstance
+                    evaluatedConfig
+                    ;
+                  rootOut = (rootRes.out or { }) // packageOut;
+                  aliases = instCfg.aliases or [ ];
+                };
+              in
+              view'
+              // {
+                # `_networkPolicies` is the full set of CNPs owned by this
+                # instance: per-workload CNPs emitted at scope time (drained
+                # off `_generatedNetpol` on every workload) + supplementary
+                # api-server / external-ingress CNPs emitted post-fixpoint by
+                # `netpol.processInstance`. cluster.nix reads this via
+                # `inst._networkPolicies` in `collectResources`.
+                _networkPolicies = _scopeEmittedNetpolCnps ++ networkResult.policies;
+                _scorecardFindings = scorecardFindings;
+                _diagnostics = {
+                  warnings = diagnostics.allWarnings;
+                  assertions = diagnostics.allAssertions;
+                  inherit (diagnostics) failedAssertions;
+                };
+              }
+            )
           )
         )
       );

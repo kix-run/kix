@@ -4,9 +4,11 @@
 //! Used by `kix deploy` to wait for resources to become ready after apply.
 //!
 //! Also handles "import marker" PackageInstance resources whose readiness is
-//! defined as "the described external resource exists on the cluster". Used to
-//! gate waves on CRDs installed out-of-band by operators (e.g. stackgres
-//! `INSTALL_CRDS=true`). See [`ImportTarget`] and [`wait_for_import_target`].
+//! defined as "the described external resource exists on the cluster AND passes
+//! the same per-kind readiness checks as managed resources". Used to gate waves
+//! on CRDs installed out-of-band by operators (e.g. stackgres `INSTALL_CRDS=true`)
+//! and on platform-provided workloads (e.g. coredns Deployment).
+//! See [`ImportTarget`] and [`wait_for_import_target`].
 
 use std::time::{Duration, Instant};
 
@@ -21,9 +23,10 @@ use thiserror::Error;
 use super::cancel::CancelToken;
 
 /// A resource described by an import marker. The CLI polls the cluster for
-/// this resource and blocks the wave until it's present (and, for CRDs, also
-/// `Established=True`; for Secrets with `expected_keys`, also verifies every
-/// key is present in `data`).
+/// this resource and blocks the wave until it's present and ready — using the
+/// same per-kind readiness checks as managed resources (e.g. for Deployments,
+/// waits for `readyReplicas == spec.replicas`). CRDs additionally require
+/// `Established=True`; Secrets with `expected_keys` verify every key in `data`.
 ///
 /// The marker lives in its own namespace and the described resource is
 /// expected in the same namespace (for namespaced kinds). Cross-namespace
@@ -113,9 +116,10 @@ pub fn import_target_from_manifest(manifest: &Value) -> Option<ImportTarget> {
     })
 }
 
-/// Poll the cluster for the described [`ImportTarget`] until it exists (and,
-/// for CRDs, is `Established=True`; for Secrets with declared `expected_keys`,
-/// also verifies every key is present in `data`), or the timeout elapses.
+/// Poll the cluster for the described [`ImportTarget`] until it exists and
+/// passes the same readiness checks as managed resources (e.g. Deployment
+/// replica counts, DaemonSet scheduling, CRD `Established=True`, Secret key
+/// verification), or the timeout elapses.
 ///
 /// Unlike [`wait_for_ready`] this does not need the target kind to be in the
 /// CLI's discovery cache — for `CustomResourceDefinition` targets we construct
@@ -218,8 +222,38 @@ pub async fn wait_for_import_target(
                             message,
                         });
                     }
-                } else {
+                } else if target.kind == "Service" {
+                    // Service imports must wait for at least one ready
+                    // endpoint, not just object existence. Operators (e.g.
+                    // StackGres) create the Service before the backing
+                    // StatefulSet pods are ready, so existence alone races
+                    // the workload boot sequence.
+                    //
+                    // Edge cases to revisit:
+                    //   - ExternalName Services have no selector / no
+                    //     endpoints — they'd time out here. If we ever
+                    //     import an ExternalName, add a type check.
+                    //   - Headless Services (clusterIP: None) populate
+                    //     Endpoints the same way, so this works.
+                    //   - Services with no selector (manual Endpoints)
+                    //     work if someone creates the Endpoints object.
+                    let ns = target.namespace.as_deref().unwrap_or("default");
+                    match check_service_has_ready_endpoints(client, ns, &target.name).await {
+                        Ok(true) => return Ok(ReadinessResult::Ready),
+                        Ok(false) => "Service exists, waiting for ready endpoints".into(),
+                        Err(e) => {
+                            tracing::debug!(
+                                service = %target.name,
+                                error = %e,
+                                "transient error checking endpoints, retrying"
+                            );
+                            format!("Service exists, endpoints check error: {e}")
+                        }
+                    }
+                } else if is_immediate_kind(&target.kind) || check_readiness(&obj, &target.kind) {
                     return Ok(ReadinessResult::Ready);
+                } else {
+                    readiness_message(&obj, &target.kind)
                 }
             }
             Ok(None) => "not found yet".into(),
@@ -250,6 +284,52 @@ pub async fn wait_for_import_target(
             });
         }
         tokio::time::sleep(POLL_INTERVAL).await;
+    }
+}
+
+/// Check whether a Service has at least one ready endpoint by querying the
+/// Endpoints resource (auto-managed by kube-controller-manager for Services
+/// with a selector). Returns `Ok(true)` if at least one address appears in
+/// a `ready` subset, `Ok(false)` if no ready addresses yet, or `Err` on
+/// transient API errors.
+///
+/// We use the legacy Endpoints API (v1) rather than EndpointSlice because:
+///   1. It's always available (EndpointSlice requires discovery.k8s.io/v1).
+///   2. A single GET returns all addresses — no label-selector list needed.
+///   3. The Endpoints object shares the Service's name, so the lookup is trivial.
+async fn check_service_has_ready_endpoints(
+    client: &Client,
+    namespace: &str,
+    service_name: &str,
+) -> Result<bool, kube::Error> {
+    let ar = ApiResource {
+        group: "".into(),
+        version: "v1".into(),
+        api_version: "v1".into(),
+        kind: "Endpoints".into(),
+        plural: "endpoints".into(),
+    };
+    let api: Api<DynamicObject> = Api::namespaced_with(client.clone(), namespace, &ar);
+    match api.get_opt(service_name).await? {
+        Some(ep) => {
+            // subsets[].addresses[] contains ready endpoints.
+            // subsets[].notReadyAddresses[] contains not-yet-ready endpoints.
+            // We need at least one entry in addresses.
+            let has_ready = ep
+                .data
+                .pointer("/subsets")
+                .and_then(Value::as_array)
+                .map(|subsets| {
+                    subsets.iter().any(|s| {
+                        s.pointer("/addresses")
+                            .and_then(Value::as_array)
+                            .is_some_and(|addrs| !addrs.is_empty())
+                    })
+                })
+                .unwrap_or(false);
+            Ok(has_ready)
+        }
+        None => Ok(false),
     }
 }
 
@@ -431,6 +511,30 @@ pub fn classify_pod_terminal(pod: &Value) -> Option<(TerminalReason, String)> {
                 }
                 _ => {}
             }
+
+            // Also detect containers currently in a terminated state with a
+            // non-zero exit code and enough restarts. This catches Job pods
+            // between restart attempts — the container shows terminated/Error
+            // rather than waiting/CrashLoopBackOff.
+            let terminated_exit = cs
+                .pointer("/state/terminated/exitCode")
+                .and_then(Value::as_i64);
+            if let Some(exit_code) = terminated_exit
+                && exit_code != 0 {
+                    let restarts = cs.get("restartCount").and_then(Value::as_i64).unwrap_or(0);
+                    if restarts >= CRASHLOOP_RESTART_THRESHOLD {
+                        let term_reason = cs
+                            .pointer("/state/terminated/reason")
+                            .and_then(Value::as_str)
+                            .unwrap_or("Error");
+                        return Some((
+                            TerminalReason::CrashLoop,
+                            format!(
+                                "pod {pod_name}/{container}: terminated with {term_reason} (exit={exit_code}) after {restarts} restarts"
+                            ),
+                        ));
+                    }
+                }
         }
     }
     None
@@ -747,12 +851,9 @@ pub async fn wait_for_ready(
             }
         }
 
-        if check_readiness(&obj, kind) {
-            return Ok(ReadinessResult::Ready);
-        }
-
-        // Terminal-failure scan; also returns the pods we fetched so the
-        // fingerprint below can reuse them without a second list call.
+        // Terminal-failure scan runs BEFORE readiness so that a failed Job
+        // (or any other terminal signal) is not masked by a partial success
+        // (e.g. status.succeeded >= 1 while the Job also has a Failed condition).
         let ns_for_pods = namespace.unwrap_or("default");
         let scan = scan_terminal(client, &obj.data, kind, ns_for_pods).await;
         if let Some((reason, detail)) = scan.terminal {
@@ -760,6 +861,10 @@ pub async fn wait_for_ready(
                 "{}: {detail}",
                 reason.as_str()
             )));
+        }
+
+        if check_readiness(&obj, kind) {
+            return Ok(ReadinessResult::Ready);
         }
 
         // Compute progress fingerprint and reset the idle timer on any change.
@@ -1450,6 +1555,59 @@ mod tests {
     }
 
     #[test]
+    fn pod_terminated_error_with_restarts_is_terminal() {
+        // Job pods between restart attempts show state=terminated rather than
+        // waiting/CrashLoopBackOff. This must still be caught as terminal.
+        let pod = json!({
+            "metadata": {"name": "job-pod-abc"},
+            "status": {
+                "containerStatuses": [{
+                    "name": "create",
+                    "state": {"terminated": {"reason": "Error", "exitCode": 1, "finishedAt": "2026-01-01T00:00:00Z"}},
+                    "lastState": {"terminated": {"reason": "Error", "exitCode": 1}},
+                    "restartCount": 4
+                }]
+            }
+        });
+        let (reason, msg) = classify_pod_terminal(&pod).expect("terminal");
+        assert_eq!(reason, TerminalReason::CrashLoop);
+        assert!(msg.contains("terminated with Error"));
+        assert!(msg.contains("exit=1"));
+        assert!(msg.contains("4 restarts"));
+    }
+
+    #[test]
+    fn pod_terminated_error_below_threshold_not_terminal() {
+        let pod = json!({
+            "metadata": {"name": "job-pod-abc"},
+            "status": {
+                "containerStatuses": [{
+                    "name": "create",
+                    "state": {"terminated": {"reason": "Error", "exitCode": 1}},
+                    "restartCount": 1
+                }]
+            }
+        });
+        assert!(classify_pod_terminal(&pod).is_none());
+    }
+
+    #[test]
+    fn pod_terminated_success_not_terminal() {
+        // Exit code 0 is a successful termination (normal for Jobs), not a failure.
+        let pod = json!({
+            "metadata": {"name": "job-pod-abc"},
+            "status": {
+                "containerStatuses": [{
+                    "name": "create",
+                    "state": {"terminated": {"reason": "Completed", "exitCode": 0}},
+                    "restartCount": 0
+                }]
+            }
+        });
+        assert!(classify_pod_terminal(&pod).is_none());
+    }
+
+    #[test]
     fn pod_init_container_failures_detected() {
         let pod = json!({
             "metadata": {"name": "p"},
@@ -1551,6 +1709,28 @@ mod tests {
         let (reason, msg) = classify_workload_terminal(&obj, "Job").expect("terminal");
         assert_eq!(reason, TerminalReason::JobBackoffExceeded);
         assert!(msg.contains("DeadlineExceeded"));
+    }
+
+    #[test]
+    fn job_with_succeeded_and_failed_condition_is_terminal() {
+        // A Job can have succeeded >= 1 (some pods completed) while also
+        // having a Failed condition. The terminal check must win over the
+        // readiness check so we don't report Ready for a broken Job.
+        let obj = json!({
+            "spec": {"backoffLimit": 2},
+            "status": {
+                "succeeded": 1,
+                "failed": 3,
+                "conditions": [
+                    {"type": "Failed", "status": "True", "reason": "BackoffLimitExceeded", "message": "Job has reached the specified backoff limit"}
+                ]
+            }
+        });
+        // The job IS "ready" by the succeeded check...
+        assert!(check_job_ready(&obj));
+        // ...but it IS terminal due to the failed condition.
+        let (reason, _) = classify_workload_terminal(&obj, "Job").expect("terminal");
+        assert_eq!(reason, TerminalReason::JobBackoffExceeded);
     }
 
     #[test]

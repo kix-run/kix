@@ -91,6 +91,29 @@
                   or Helm naming convention.
                 '';
               };
+              extraDeps = lib.mkOption {
+                type = lib.types.listOf lib.types.raw;
+                default = [ ];
+                description = ''
+                  Additional dependency edges for the instance's PackageInstance
+                  marker. Used to inject ordering constraints that aren't
+                  captured by store-path context (e.g. an import depending on
+                  a managed instance's root resource).
+                '';
+              };
+              platformIntents = lib.mkOption {
+                type = lib.types.attrsOf lib.types.anything;
+                default = { };
+                description = ''
+                  Platform connectivity intents for this import instance's
+                  pre-installed pods. Each intent declares enforcer-agnostic
+                  connectivity requirements (same schema as
+                  networkPolicy.platformIntents). When an enforcer is available,
+                  the intents are materialized into CNP resources and injected
+                  as extraDeps on the import's marker — establishing the
+                  dependency chain: workload → import marker → CNPs → enforcer.
+                '';
+              };
               optional = lib.mkOption {
                 type = lib.types.bool;
                 default = false;
@@ -499,6 +522,17 @@
             ];
             default = "both";
             description = "Which policy directions to generate.";
+          };
+          platformIntents = lib.mkOption {
+            type = lib.types.attrsOf lib.types.anything;
+            default = { };
+            description = ''
+              Platform connectivity intents for non-kix-managed pods (e.g.
+              CoreDNS, local-path-provisioner in kind). Each intent declares
+              enforcer-agnostic connectivity requirements; the enforcer
+              materializes them into native policy CRs. Set by flavors.
+              See v2_discussions/92_declarative_network_policy_intents.md.
+            '';
           };
         };
       };

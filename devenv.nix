@@ -38,6 +38,7 @@ in
     pkgs.tmux
     pkgs.viddy
     pkgs.k9s
+    pkgs.wf-recorder
     pkgs.jq
     pkgs.sops
     pkgs.age

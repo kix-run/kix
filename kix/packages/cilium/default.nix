@@ -2,7 +2,8 @@
 #
 # Full standalone Cilium deployment wrapping the upstream Helm chart via
 # scope.helm.importChart. Exposes `cnpCrdRef` for CiliumNetworkPolicy
-# CRD marker so kix/lib/netpol.nix can route generated CNPs through it.
+# and `ccnpCrdRef` for CiliumClusterwideNetworkPolicy CRD markers so
+# consumers can route generated CNPs/CCNPs through them.
 #
 # Also exports `external`, a small inline package for externally-managed
 # Cilium (helm-installed out-of-band). See the `external` variant below.
@@ -12,6 +13,15 @@
 # Version: 1.16.5
 
 { scope, lib }:
+
+let
+  # Shared Cilium-native network-policy rule builders.
+  # See netpol-rules.nix for the implementation and kix/lib/netpol-interface.nix
+  # for the contract.
+  ciliumNetpol = import ./netpol-rules.nix { inherit lib; };
+
+in
+
 let
   chart = scope.helm.fetchHelmChart {
     repo = "https://helm.cilium.io/";
@@ -23,7 +33,7 @@ let
   defaultValues = {
     # --- Policy enforcement ---
     policyEnforcementMode = "always";
-    policyAuditMode = true;
+    policyAuditMode = false;
 
     # --- Datapath ---
     kubeProxyReplacement = true;
@@ -132,8 +142,8 @@ in
         includeCrds = true;
       };
 
-      # CRD ref — wired against ALL workloads so the wave engine gates
-      # CNP application on the entire cilium stack being Ready.
+      # CRD refs — wired against ALL workloads so the wave engine gates
+      # CNP/CCNP application on the entire cilium stack being Ready.
       cnpCrdRef = scope.mkCRDRef {
         group = "cilium.io";
         kind = "CiliumNetworkPolicy";
@@ -142,11 +152,86 @@ in
         crdScope = "Namespaced";
         installedBy = resources.workloads;
       };
+
+      ccnpCrdRef = scope.mkCRDRef {
+        group = "cilium.io";
+        kind = "CiliumClusterwideNetworkPolicy";
+        plural = "ciliumclusterwidenetworkpolicies";
+        version = "v2";
+        crdScope = "Cluster";
+        installedBy = resources.workloads;
+      };
     in
     resources.mkParts {
       root = resources.get "DaemonSet" "cilium";
-      extraParts = { inherit cnpCrdRef; };
-      out = { inherit cnpCrdRef; };
+      extraParts = { inherit cnpCrdRef ccnpCrdRef; };
+      out = {
+        inherit cnpCrdRef ccnpCrdRef;
+        # Network-policy rule builder API — see kix/lib/netpol-interface.nix.
+        # Bind `mkPolicy` to this package's cnpCrdRef so callers don't need
+        # to thread the CRD ref separately.
+        netpol = ciliumNetpol // {
+          mkPolicy =
+            { mkResource, extraArgs }:
+            ciliumNetpol.mkPolicy {
+              crdRef = cnpCrdRef;
+              inherit mkResource extraArgs;
+            };
+
+          # Materialize a platform intent into a standalone CNP or CCNP.
+          # Used by cluster.nix for networkPolicy.platformIntents (flavor-
+          # declared connectivity for non-kix-managed pods like CoreDNS).
+          # Unlike mkPolicy (which gets namespace from the scope), this
+          # takes an explicit namespaceResource or clusterScoped sentinel
+          # because platform intents target pods outside any kix scope.
+          materializePlatformIntent =
+            {
+              intent,
+              mkResource,
+              namespaceResource ? null,
+              clusterScoped,
+            }:
+            let
+              isClusterwide = (intent.scope or "namespaced") == "clusterwide";
+              translated = ciliumNetpol.translateIntentRules {
+                intents = {
+                  _single = intent;
+                };
+              };
+              basePodSelector = intent.podSelector or { };
+              # Clusterwide policies targeting a specific namespace need the
+              # namespace stamped into the selector (Cilium convention).
+              podSelector =
+                if isClusterwide && intent ? targetNamespace then
+                  basePodSelector
+                  // {
+                    "k8s:io.kubernetes.pod.namespace" = intent.targetNamespace;
+                  }
+                else
+                  basePodSelector;
+              spec = {
+                endpointSelector.matchLabels = podSelector;
+              }
+              // lib.optionalAttrs (translated.egressRules != [ ]) { egress = translated.egressRules; }
+              // lib.optionalAttrs (translated.ingressRules != [ ]) { ingress = translated.ingressRules; };
+              crdRef = if isClusterwide then ccnpCrdRef else cnpCrdRef;
+              enriched = crdRef.out.cr {
+                name = intent.name;
+                labels = {
+                  "kix.dev/derived" = "true";
+                  "kix.dev/policy-type" = "platform-intent";
+                };
+                inherit spec;
+              };
+            in
+            mkResource (
+              enriched
+              // {
+                namespace = if isClusterwide then clusterScoped else namespaceResource;
+              }
+            );
+        };
+      };
     };
 
 }

@@ -395,6 +395,7 @@ fn apply_event(state: &mut DeployState, ev: ReconcileEvent) -> Vec<Line<'static>
             rid,
             action,
             import_target,
+            package: _,
         } => {
             let (symbol, symbol_style, label) = match action {
                 ApplyAction::Created => ("+", style_fg(Color::Green), "created"),

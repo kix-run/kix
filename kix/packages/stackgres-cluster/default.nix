@@ -290,14 +290,40 @@ in
         requires = [ self.cluster ];
       };
 
+      # Pod selector for operator-managed StackGres StatefulSet pods.
+      sgPodSelector = {
+        "app" = "StackGresCluster";
+        "stackgres.io/cluster-name" = name;
+      };
+
+      # ServiceRef for the operator-managed primary Service. The StackGres
+      # operator creates a ClusterIP Service named `${name}` whose selector
+      # matches sgPodSelector. By referencing it through mkServiceRef:
+      #   (a) the deploy engine gates consumers until the Service exists,
+      #   (b) the netpol system auto-generates caller-ingress CNPs for any
+      #       consumer whose workloadInput carries this ref's store-path
+      #       context — replacing the blanket `fromEntities = ["cluster"]`.
+      postgresService = scope.mkServiceRef {
+        inherit name;
+        selector = sgPodSelector;
+        ports = [
+          {
+            port = "5432";
+            protocol = "TCP";
+          }
+        ];
+        requires = [ self.cluster ];
+      };
+
     in
     {
 
       # Exposed in the return attrset (not just the let binding) so
       # `collectTypedAttrs` emits the import marker as a real manifest.
       # Without this, consumers that reference `postgres.out.superuserSecret`
-      # would get a context edge to a marker that never lands on the cluster.
-      inherit superuserSecret;
+      # or `postgres.out.fqdn` would get a context edge to a marker that
+      # never lands on the cluster.
+      inherit superuserSecret postgresService;
 
       # ===== SGInstanceProfile (CPU/memory sizing) =====
 
@@ -479,12 +505,10 @@ in
           };
         };
         outputs = {
-          port = "5432";
-          # StackGres creates `${name}-primary` (ExternalName alias) and
-          # `${name}-replicas` services. The auto-derived fqdn points at
-          # `${name}`, which is the real ClusterIP backing `${name}-primary`
-          # — clients can use either.
-          serviceName = "${name}.${scope.namespaceName}.svc";
+          # Use ServiceRef-backed values so consumers get the marker's
+          # store-path context for automatic netpol + wave ordering.
+          port = postgresService.out.port;
+          serviceName = postgresService.out.fqdn;
           serviceNamePrimary = "${name}-primary.${scope.namespaceName}.svc";
           serviceNameReplicas = "${name}-replicas.${scope.namespaceName}.svc";
         };
@@ -517,6 +541,84 @@ in
         else
           null;
 
+      # ===== Network policies for operator-managed pods ====================
+      #
+      # The StackGres operator creates StatefulSet pods with its own labels
+      # (app=StackGresCluster, stackgres.io/cluster-name=<name>), not the
+      # kix-standard app.kubernetes.io/* labels. These pods are invisible to
+      # kix's automatic netpol generation (buildWorkloadCnps) because they
+      # aren't created via scope.mkStatefulSet. Under default-deny, the
+      # cluster-controller can't reach the API server and patroni can't
+      # bootstrap.
+
+      sgClusterEgress =
+        if scope.networkPolicyEnforcer == null then
+          null
+        else
+          scope.networkPolicyEnforcer.netpol.mkPolicy {
+            mkResource = scope.mkResource;
+            extraArgs = {
+              name = "${name}-sgcluster-egress";
+              labels = {
+                "kix.dev/derived" = "true";
+                "kix.dev/policy-type" = "operator-managed-workload";
+              };
+              spec = {
+                endpointSelector.matchLabels = sgPodSelector;
+                egress = [
+                  scope.networkPolicyEnforcer.netpol.dnsEgressRule
+                  scope.networkPolicyEnforcer.netpol.apiServerEgressRule
+                  # Self-communication: patroni HA, replication, peer discovery.
+                  { toEndpoints = [ { matchLabels = sgPodSelector; } ]; }
+                  # External: cluster-controller downloads extensions from
+                  # extensions.stackgres.io at runtime.
+                  (scope.networkPolicyEnforcer.netpol.mkExternalEgressRule { })
+                ];
+              };
+              extraDeps = [ ];
+            };
+          };
+
+      sgClusterIngress =
+        if scope.networkPolicyEnforcer == null then
+          null
+        else
+          scope.networkPolicyEnforcer.netpol.mkPolicy {
+            mkResource = scope.mkResource;
+            extraArgs = {
+              name = "${name}-sgcluster-ingress";
+              labels = {
+                "kix.dev/derived" = "true";
+                "kix.dev/policy-type" = "operator-managed-workload";
+              };
+              spec = {
+                endpointSelector.matchLabels = sgPodSelector;
+                ingress = [
+                  # Self ingress (patroni peer traffic).
+                  { fromEndpoints = [ { matchLabels = sgPodSelector; } ]; }
+                  # Allow connections from any pod in the same namespace
+                  # (bootstrap jobs, monitoring exporters, operator probes).
+                  {
+                    fromEndpoints = [
+                      {
+                        matchLabels = {
+                          "k8s:io.kubernetes.pod.namespace" = scope.namespaceName;
+                        };
+                      }
+                    ];
+                  }
+                  # Cross-namespace consumer ingress (e.g. immich → postgres)
+                  # is now auto-generated by the netpol system via the
+                  # postgresService ServiceRef. Consumers whose workloadInput
+                  # carries the ServiceRef's store-path context get a
+                  # caller-ingress CNP targeting sgPodSelector:5432 — no
+                  # blanket fromEntities=["cluster"] needed.
+                ];
+              };
+              extraDeps = [ ];
+            };
+          };
+
       # ===== Entry point =====
 
       root = {
@@ -524,14 +626,20 @@ in
         requires = [
           self.instanceProfile
           self.pgConfig
+          self.postgresService
         ]
+        ++ lib.optional (self.sgClusterEgress != null) self.sgClusterEgress
+        ++ lib.optional (self.sgClusterIngress != null) self.sgClusterIngress
         ++ lib.optionals reflectionEnabled (lib.attrValues self.reflectorBundle)
         ++ lib.optional config.backup.enabled self.objectStorage
         ++ lib.optional config.pooling.enabled self.poolingConfig
         ++ lib.optional (config.scripts != [ ]) self.initScript;
 
-        # Package-level out: expose configured extension names for consumer validation.
         out = {
+          # ServiceRef-backed connection info. Consumers who interpolate
+          # these values automatically get netpol edges + wave ordering.
+          inherit (postgresService.out) fqdn port;
+          name = postgresService.out.name;
           extensionNames = map (e: e.name) config.extensions;
           # Handle to the operator-created credentials secret. Consumers use
           # `postgres.out.superuserSecret.out.mkEnv { DB_USER = "superuser-username"; ... }`.

@@ -60,6 +60,7 @@ impl ReconcileObserver for OperatorObserver {
                 rid,
                 action,
                 import_target,
+                package: _,
             } => {
                 let action_str = match action {
                     ApplyAction::Created => "created",

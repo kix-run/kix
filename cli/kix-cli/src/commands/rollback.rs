@@ -860,6 +860,7 @@ impl ReconcileObserver for CliObserver {
                 rid,
                 action,
                 import_target,
+                package,
             } => {
                 use kix::cluster::apply::ApplyAction;
                 let (symbol, label) = match action {
@@ -868,17 +869,22 @@ impl ReconcileObserver for CliObserver {
                     ApplyAction::Unchanged => (output::dim("="), "unchanged"),
                     ApplyAction::Skipped => (output::dim("-"), "skipped"),
                 };
+                let pkg_tag = match package {
+                    Some(p) => format!("  {}", output::dim(p)),
+                    None => String::new(),
+                };
                 if !self.quiet || !matches!(action, ApplyAction::Unchanged) {
                     if let Some(target) = import_target {
                         println!(
-                            "  {} {} {} {}",
+                            "  {} {} {} {}{}",
                             symbol,
                             output::dim("↪ import"),
                             output::dim(&format!("{}/{}", target.kind, target.name)),
                             output::dim(label),
+                            pkg_tag,
                         );
                     } else {
-                        println!("  {} {} {}", symbol, rid, output::dim(label));
+                        println!("  {} {} {}{}", symbol, rid, output::dim(label), pkg_tag);
                     }
                 }
             }

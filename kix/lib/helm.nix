@@ -268,6 +268,13 @@ rec {
       # Pre-wrap resource patching (same as current patchResources)
       patchResources ? lib.id,
 
+      # Extra intra-chart dependency edges injected before wrapping.
+      # Each element is { from = { kind; name; }; to = { kind; name; }; }
+      # meaning "from depends on to" (to is deployed before from).
+      # Useful when a chart has implicit runtime dependencies that the
+      # DAG reconstruction can't infer from K8s manifest references.
+      extraEdges ? [ ],
+
       # Cross-package network dependencies.
       # List of context-carrying values (e.g. loki.out.fqdn) whose
       # store-path context should be visible to the CNP generator.
@@ -343,6 +350,7 @@ rec {
             "Deployment"
             "StatefulSet"
             "DaemonSet"
+            "Job"
           ];
           mkFn =
             if isClusterScopedKind kind then
@@ -431,7 +439,35 @@ rec {
       # wrappedResources references itself through indexByRawId, but
       # each element only forces its dependencies (no cycles in K8s
       # resource graphs).
-      rawEdges = helmDag.inferEdges patchedResources;
+      inferredEdges = helmDag.inferEdges patchedResources;
+
+      # Resolve user-supplied extraEdges to raw resource references.
+      rawByKindName = builtins.listToAttrs (
+        map (r: {
+          name = helmDag.resourceId r;
+          value = r;
+        }) patchedResources
+      );
+      resolvedExtraEdges = map (
+        e:
+        let
+          fromId = "${e.from.kind}/${e.from.name}";
+          toId = "${e.to.kind}/${e.to.name}";
+        in
+        assert
+          rawByKindName ? ${fromId}
+          || throw "importChart: extraEdges: no resource ${fromId} in chart ${releaseName}";
+        assert
+          rawByKindName ? ${toId}
+          || throw "importChart: extraEdges: no resource ${toId} in chart ${releaseName}";
+        {
+          from = rawByKindName.${fromId};
+          to = rawByKindName.${toId};
+          type = "extra";
+        }
+      ) extraEdges;
+
+      rawEdges = inferredEdges ++ resolvedExtraEdges;
       rawDepsMap = helmDag.buildDepsMap rawEdges;
 
       # Index: rawId → position in patchedResources list.

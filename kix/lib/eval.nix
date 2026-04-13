@@ -30,6 +30,7 @@ let
   scorecard = import ./scorecard.nix { inherit lib; };
   helpers = import ./eval/helpers.nix { inherit lib; };
   netpol = import ./netpol.nix { inherit lib k8s; };
+  netpolInterface = import ./netpol-interface.nix { inherit lib; };
   view = import ./eval/view.nix { inherit lib helpers; };
   crd = import ./crd.nix { inherit lib; };
   scopeMod = import ./eval/scope.nix {
@@ -82,6 +83,7 @@ let
       kixlib
       helpers
       netpol
+      netpolInterface
       scorecard
       ;
     inherit (namespaceMod) mkNamespace;

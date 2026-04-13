@@ -20,10 +20,17 @@ rec {
     {
       from ? null,
       out ? { },
+      kind ? null,
+      apiVersion ? null,
     }:
     {
       _type = "kix-import";
-      inherit from out;
+      inherit
+        from
+        out
+        kind
+        apiVersion
+        ;
     };
 
   # Per-instance context for import mode.
@@ -88,6 +95,9 @@ rec {
       namespaceResource,
       clusterLabels,
       clusterConfig ? { },
+      # Lazy handle to the network-policy enforcer's `out`. Used to
+      # materialize platformIntents declared on the import instance.
+      networkPolicyEnforcer ? null,
       ...
     }:
     let
@@ -196,21 +206,70 @@ rec {
               }
               // lib.optionalAttrs (rootRes.apiVersion or "" != "") {
                 apiVersion = rootRes.apiVersion;
+              }
+              // lib.optionalAttrs (importDef.kind != null) {
+                kind = importDef.kind;
+              }
+              // lib.optionalAttrs (importDef.apiVersion != null) {
+                apiVersion = importDef.apiVersion;
               };
           }
         else
           {
             out = importDef.out;
-            hints = { };
+            hints =
+              lib.optionalAttrs (importDef.kind != null) {
+                kind = importDef.kind;
+              }
+              // lib.optionalAttrs (importDef.apiVersion != null) {
+                apiVersion = importDef.apiVersion;
+              };
           };
+
+      # --- Platform intent materialization ---
+      #
+      # When the import declares `platformIntents` and a network-policy
+      # enforcer is available, materialize each intent into a CNP/CCNP
+      # resource and inject them as extraDeps on the marker. This
+      # establishes: workload → import marker → CNPs → enforcer.
+      networkConfig = clusterConfig.networkPolicy or { enable = false; };
+      rawPlatformIntents = instCfg.platformIntents or { };
+
+      materializedIntentPolicies =
+        if rawPlatformIntents == { } || !networkConfig.enable || networkPolicyEnforcer == null then
+          [ ]
+        else
+          let
+            enforcerApi = networkPolicyEnforcer.netpol;
+          in
+          lib.mapAttrsToList (
+            intentName: intent:
+            let
+              isClusterwide = (intent.scope or "namespaced") == "clusterwide";
+            in
+            enforcerApi.materializePlatformIntent {
+              intent = intent // {
+                name = intentName;
+              };
+              inherit mkResource namespaceResource;
+              inherit (k8s) clusterScoped;
+            }
+          ) rawPlatformIntents;
 
       # Marker PackageInstance — deployed to mark this import in the cluster.
       # Carries import metadata so deploy tooling can verify the external resource.
+      # Instance-level extraDeps (from modules.nix) inject ordering edges
+      # that aren't captured by store-path context. Materialized platform
+      # intent CNPs are also injected so the marker transitively depends
+      # on the enforcer.
+      instanceExtraDeps = (instCfg.extraDeps or [ ]) ++ materializedIntentPolicies;
+
       markerResource = mkResource {
         apiVersion = "kix.dev/v1alpha1";
         kind = "PackageInstance";
         name = instanceName;
         namespace = namespaceResource;
+        extraDeps = instanceExtraDeps;
         annotations = {
           "kix.dev/mode" = "import";
         }
@@ -240,6 +299,7 @@ rec {
       _type = "k8s-instance";
       _isImport = true;
       _packageInstance = markerResource;
+      _networkPolicies = materializedIntentPolicies;
       root = markerResource;
       out = derived.out;
       _meta = {

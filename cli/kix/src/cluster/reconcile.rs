@@ -62,6 +62,8 @@ pub enum ReconcileEvent {
         rid: ResourceId,
         action: ApplyAction,
         import_target: Option<ImportTarget>,
+        /// Owning kix package instance name (from `kix.dev/package` annotation).
+        package: Option<String>,
     },
     /// A single resource failed to apply.
     ResourceFailed { rid: ResourceId, error: String },
@@ -529,13 +531,18 @@ pub async fn reconcile(
                         ApplyAction::Unchanged | ApplyAction::Skipped => result.unchanged += 1,
                     }
                     apply_outcomes.insert(rid.clone(), apply_result.action.clone());
-                    let import_target = manifest_by_rid
-                        .get(rid)
-                        .and_then(|m| readiness::import_target_from_manifest(m));
+                    let manifest = manifest_by_rid.get(rid);
+                    let import_target =
+                        manifest.and_then(|m| readiness::import_target_from_manifest(m));
+                    let package = manifest
+                        .and_then(|m| m.pointer("/metadata/annotations/kix.dev~1package"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
                     observer.on_event(&ReconcileEvent::ResourceApplied {
                         rid: rid.clone(),
                         action: apply_result.action.clone(),
                         import_target,
+                        package,
                     });
                 }
                 Err(e) => {

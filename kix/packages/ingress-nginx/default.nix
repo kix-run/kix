@@ -48,6 +48,42 @@ in
     ];
     defaultAliases = [ "ingressNginx" ];
     k8s.minVersion = "1.25";
+    # The ingress controller proxies external traffic to backend pods.
+    # It needs world ingress (external HTTP/HTTPS), all-pods ingress
+    # (webhook callbacks from kube-apiserver), and world egress (OCSP
+    # stapling, upstream auth endpoints, etc.).
+    network.intents = {
+      external-ingress = {
+        ingress = [
+          {
+            from = "world";
+            ports = [
+              {
+                port = 80;
+                protocol = "TCP";
+              }
+              {
+                port = 443;
+                protocol = "TCP";
+              }
+            ];
+          }
+        ];
+      };
+      webhook-ingress = {
+        ingress = [
+          {
+            from = "all-pods";
+            ports = [
+              {
+                port = 8443;
+                protocol = "TCP";
+              }
+            ];
+          }
+        ];
+      };
+    };
   };
 
   options = {
@@ -350,9 +386,7 @@ in
       };
 
       # --- Deployment ---
-      deployment = scope.mkResource {
-        apiVersion = "apps/v1";
-        kind = "Deployment";
+      deployment = scope.mkDeployment {
         name = name;
         labels = commonLabels;
         # Must deploy after admissionCreate so the ingress-nginx-admission
@@ -615,9 +649,7 @@ in
 
       # Job: generate TLS cert and store as secret ${name}-admission.
       # Runs once; Kubernetes re-creates it on next apply only if deleted.
-      admissionCreate = scope.mkResource {
-        apiVersion = "batch/v1";
-        kind = "Job";
+      admissionCreate = scope.mkJob {
         name = "${name}-admission-create";
         labels = commonLabels // {
           "app.kubernetes.io/component" = "admission-webhook";
@@ -667,9 +699,7 @@ in
       };
 
       # Job: patch ValidatingWebhookConfiguration with the generated CA bundle.
-      admissionPatch = scope.mkResource {
-        apiVersion = "batch/v1";
-        kind = "Job";
+      admissionPatch = scope.mkJob {
         name = "${name}-admission-patch";
         labels = commonLabels // {
           "app.kubernetes.io/component" = "admission-webhook";

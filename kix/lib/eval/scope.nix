@@ -65,15 +65,20 @@ rec {
       # today — just one fixpoint layer earlier. Default empty (no deps).
       depResourcesForNetpol ? [ ],
       # Peeked `packageMeta` (from `meta.peekPackageMeta`) — threaded in so
-      # `mkWorkload` can honor `meta.network.{allowExternalEgress,
-      # externalEgressEntities, externalIngressEntities, extraEgress,
-      # extraIngress}` at resource-construction time without waiting for
-      # the package's `build` function to return.
+      # `mkWorkload` can honor `meta.network.intents` (declarative
+      # connectivity) and `meta.network.externalIngressEntities` at
+      # resource-construction time without waiting for the package's
+      # `build` function to return.
       peekedPackageMeta ? { },
       # When true, per-workload CNP emission is disabled for this scope.
       # Set by cluster.nix for the enforcer's own scope so the enforcer's
       # workloads don't declare CNPs that depend on the enforcer itself.
       skipWorkloadNetpol ? false,
+      # DNS instance root resource. Passed to `buildWorkloadCnps` which
+      # injects it as an extraDep on workloads that reference cross-instance
+      # Services (detected via store-path context). Null when no DNS
+      # instance is declared or self-dep fires.
+      dnsRoot ? null,
     }:
     let
       selectorLabels =
@@ -101,6 +106,10 @@ rec {
             "app.kubernetes.io/instance" = instanceName;
             "app.kubernetes.io/managed-by" = "kix";
           };
+
+      # Whether CNP generation is enabled at scope level. Per-workload
+      # hostNetwork is checked inside buildWorkloadCnps.
+      _shouldGenerateCnps = (networkConfig.enable or false) && !skipWorkloadNetpol;
 
       # --- Capability checks (evaluated lazily via builtins.seq) ---
 
@@ -768,6 +777,12 @@ rec {
       # from `resolvedDepMeta`. Evaluated at most once (Nix laziness).
       _netpolServiceRegistry = netpol.mkServiceRegistry depResourcesForNetpol;
 
+      # ServiceRef registry (path → endpoint metadata) for operator-managed
+      # Services referenced via scope.mkServiceRef. Same source list as the
+      # Service registry — ServiceRef markers are PackageInstance resources
+      # that live alongside regular dep resources.
+      _netpolServiceRefRegistry = netpol.mkServiceRefRegistry depResourcesForNetpol;
+
       mkWorkload =
         apiVersion: kind: attrs:
         let
@@ -812,39 +827,27 @@ rec {
             spec = finalSpec;
           };
 
-          # Per-workload CNP emission runs BEFORE the workload's
-          # scopeMkResource call. The JSON context of the raw spec already
-          # carries every cross-package Service reference the workload
-          # holds (envFrom/env/volume/etc.), so we can discover egress
-          # edges without first building a throw-away preliminary
-          # resource. The resulting CNPs get spliced into the workload's
-          # extraDeps so the workload's own store-path context
-          # transitively includes its policies.
-          #
-          # See v2_discussions/83 → "scope-level workload interception"
-          # for why this is structurally sound (no rebuild, no dual
-          # identity) and RFC 37 → netpol derivation for the edge model.
-          shouldGenerateNetpol = (networkConfig.enable or false) && !skipWorkloadNetpol && !hostNetwork;
+          # Service-edge analysis + conditional CNP emission. Always runs
+          # (DNS deps are unconditional); CNPs are generated only when
+          # netpol is enabled. See v2_discussions/83 and v2_discussions/94.
+          workloadDeps = netpol.buildWorkloadCnps {
+            scope = scopeObj;
+            inherit instanceName namespaceName;
+            workloadInput = baseArgs;
+            workloadKind = kind;
+            wSelector = selector;
+            inherit hostNetwork dnsRoot;
+            serviceRegistry = _netpolServiceRegistry;
+            serviceRefRegistry = _netpolServiceRefRegistry;
+            inherit networkConfig;
+            networkPolicyEnforcer = if _shouldGenerateCnps then networkPolicyEnforcer else null;
+            packageIntents = (peekedPackageMeta.network or { }).intents or { };
+          };
 
-          netpolResult =
-            if shouldGenerateNetpol then
-              netpol.buildWorkloadCnps {
-                scope = scopeObj;
-                inherit instanceName namespaceName;
-                workloadInput = baseArgs;
-                workloadKind = kind;
-                wSelector = selector;
-                inherit hostNetwork;
-                serviceRegistry = _netpolServiceRegistry;
-                inherit networkConfig networkPolicyEnforcer;
-                packageNetworkMeta = peekedPackageMeta.network or { };
-              }
-            else
-              {
-                cnps = [ ];
-              };
-
-          finalExtraDeps = (attrs.extraDeps or [ ]) ++ netpolResult.cnps;
+          # CNPs and DNS deps are hard prerequisites — the workload must
+          # not run before its network policies exist. Use `requires` (not
+          # `extraDeps`) so kix deploy treats them as ordering constraints.
+          netpolRequires = workloadDeps.cnps ++ workloadDeps.dnsDeps;
 
           # Strip _helmNetworkDeps before building the resource — it was
           # only needed for store-path context in buildWorkloadCnps above.
@@ -852,7 +855,7 @@ rec {
           workload = scopeMkResource (
             removeAttrs baseArgs [ "_helmNetworkDeps" ]
             // {
-              extraDeps = finalExtraDeps;
+              requires = (attrs.requires or [ ]) ++ netpolRequires;
             }
           );
         in
@@ -877,7 +880,7 @@ rec {
                           # but are owned by this instance.
                           workload
                           // {
-                            _generatedNetpol = netpolResult.cnps;
+                            _generatedNetpol = workloadDeps.cnps;
                           }
                         )
                       )
@@ -885,6 +888,99 @@ rec {
                   )
                 )
               )
+          )
+        );
+
+      # ── Job workload wrapper (CNP generation + validation) ─────────
+      #
+      # Like mkWorkload but handles Job-specific differences:
+      #   - Jobs typically omit spec.selector (auto-generated by the API
+      #     server at creation time), so falls back to template labels.
+      #   - No headless service expansion.
+      #   - Skips DaemonSet capability check and selector⊆labels check.
+      #
+      # Jobs need per-workload CNPs just like Deployments — without this,
+      # a Job created via plain mkResource bypasses buildWorkloadCnps and
+      # runs before its DNS/egress/apiserver CNPs are applied.
+      mkJob =
+        attrs:
+        let
+          kind = "Job";
+          apiVersion = "batch/v1";
+          rawSpec = attrs.spec or { };
+          # Jobs typically omit spec.selector (auto-generated by the API
+          # server at creation time), so fall back to template labels.
+          selector =
+            rawSpec.selector.matchLabels or rawSpec.template.metadata.labels
+              or (throw "mkJob: spec.selector.matchLabels or spec.template.metadata.labels is required");
+          templateMeta = rawSpec.template.metadata or { };
+          rawTemplateSpec = rawSpec.template.spec or { };
+          templateSpec = _expandServiceAccount rawTemplateSpec;
+
+          hostNetwork = templateSpec.hostNetwork or false;
+
+          # Jobs don't need selector → template label copying (the API
+          # server generates the selector at creation time). Keep template
+          # labels as-is; only set them from selector if completely absent.
+          effectiveTemplateLabels = templateMeta.labels or selector;
+
+          finalSpec =
+            removeAttrs rawSpec [
+              "selector"
+              "template"
+            ]
+            // lib.optionalAttrs (rawSpec ? selector) {
+              selector.matchLabels = selector;
+            }
+            // {
+              template = {
+                metadata = templateMeta // {
+                  labels = effectiveTemplateLabels;
+                };
+                spec = templateSpec;
+              };
+            };
+
+          baseArgs = removeAttrs attrs [ "spec" ] // {
+            inherit apiVersion kind;
+            spec = finalSpec;
+          };
+
+          workloadDeps = netpol.buildWorkloadCnps {
+            scope = scopeObj;
+            inherit instanceName namespaceName;
+            workloadInput = baseArgs;
+            workloadKind = kind;
+            wSelector = selector;
+            inherit hostNetwork dnsRoot;
+            serviceRegistry = _netpolServiceRegistry;
+            serviceRefRegistry = _netpolServiceRefRegistry;
+            inherit networkConfig;
+            networkPolicyEnforcer = if _shouldGenerateCnps then networkPolicyEnforcer else null;
+            packageIntents = (peekedPackageMeta.network or { }).intents or { };
+          };
+
+          netpolRequires = workloadDeps.cnps ++ workloadDeps.dnsDeps;
+
+          workload = scopeMkResource (
+            baseArgs
+            // {
+              requires = (attrs.requires or [ ]) ++ netpolRequires;
+            }
+          );
+        in
+        builtins.seq (checkPrivileged templateSpec) (
+          builtins.seq (checkNamespacedRefs templateSpec) (
+            builtins.seq (checkContainerResources templateSpec) (
+              builtins.seq (checkDuplicateNames templateSpec) (
+                builtins.seq (checkFieldRefs templateSpec) (
+                  workload
+                  // {
+                    _generatedNetpol = workloadDeps.cnps;
+                  }
+                )
+              )
+            )
           )
         );
 
@@ -904,9 +1000,11 @@ rec {
           kind = attrs.kind or (throw "mkHelmWorkload: kind is required");
           apiVersion = attrs.apiVersion or "apps/v1";
           rawSpec = attrs.spec or { };
+          # Jobs typically omit spec.selector (auto-generated by the API
+          # server at creation time), so fall back to template labels.
           selector =
-            rawSpec.selector.matchLabels
-              or (throw "mkHelmWorkload (${kind}): spec.selector.matchLabels is required");
+            rawSpec.selector.matchLabels or rawSpec.template.metadata.labels
+              or (throw "mkHelmWorkload (${kind}): spec.selector.matchLabels or spec.template.metadata.labels is required");
           hostNetwork = rawSpec.template.spec.hostNetwork or false;
 
           # Keep _helmNetworkDeps in workloadInput so their store-path
@@ -917,37 +1015,31 @@ rec {
             inherit apiVersion kind;
           };
 
-          shouldGenerateNetpol = (networkConfig.enable or false) && !skipWorkloadNetpol && !hostNetwork;
+          workloadDeps = netpol.buildWorkloadCnps {
+            scope = scopeObj;
+            inherit instanceName namespaceName workloadInput;
+            workloadKind = kind;
+            wSelector = selector;
+            inherit hostNetwork dnsRoot;
+            serviceRegistry = _netpolServiceRegistry;
+            serviceRefRegistry = _netpolServiceRefRegistry;
+            inherit networkConfig;
+            networkPolicyEnforcer = if _shouldGenerateCnps then networkPolicyEnforcer else null;
+            packageIntents = (peekedPackageMeta.network or { }).intents or { };
+          };
 
-          netpolResult =
-            if shouldGenerateNetpol then
-              netpol.buildWorkloadCnps {
-                scope = scopeObj;
-                inherit instanceName namespaceName workloadInput;
-                workloadKind = kind;
-                wSelector = selector;
-                inherit hostNetwork;
-                serviceRegistry = _netpolServiceRegistry;
-                inherit networkConfig networkPolicyEnforcer;
-                packageNetworkMeta = peekedPackageMeta.network or { };
-              }
-            else
-              {
-                cnps = [ ];
-              };
-
-          finalExtraDeps = (attrs.extraDeps or [ ]) ++ netpolResult.cnps;
+          netpolRequires = workloadDeps.cnps ++ workloadDeps.dnsDeps;
 
           workload = scopeMkResource (
             removeAttrs workloadInput [ "_helmNetworkDeps" ]
             // {
-              extraDeps = finalExtraDeps;
+              requires = (workloadInput.requires or [ ]) ++ netpolRequires;
             }
           );
         in
         workload
         // {
-          _generatedNetpol = netpolResult.cnps;
+          _generatedNetpol = workloadDeps.cnps;
         };
 
       scopeMkClusterResource =
@@ -1314,6 +1406,70 @@ rec {
           // secretHelpers;
         };
 
+      # Reference an operator-managed Service (not created by kix).
+      #
+      # Emits a PackageInstance import marker that gates consuming waves
+      # until the Service actually exists on the cluster. The marker
+      # carries `kix.dev/service-selector` and `kix.dev/service-ports`
+      # annotations so the netpol system can generate proper per-consumer
+      # caller-ingress CNPs targeting the operator-managed pods — replacing
+      # the blanket `fromEntities = ["cluster"]` pattern.
+      #
+      # The returned `out.{name, fqdn, port}` values carry the marker's
+      # store-path context, so consumers who interpolate them automatically
+      # get: (a) a DAG edge for wave ordering, (b) a netpol edge for CNP
+      # generation, (c) a DNS dep injection.
+      #
+      # Usage:
+      #   pgService = scope.mkServiceRef {
+      #     name = "my-postgres";
+      #     selector = { app = "StackGresCluster"; "stackgres.io/cluster-name" = "my-postgres"; };
+      #     ports = [{ port = "5432"; protocol = "TCP"; }];
+      #     requires = [ self.cluster ];
+      #   };
+      #   root.out.fqdn = pgService.out.fqdn;
+      mkServiceRef =
+        {
+          name,
+          selector,
+          ports,
+          requires ? [ ],
+        }:
+        let
+          markerName = "service-ref-${instanceName}-${name}";
+
+          marker = mkImportMarker {
+            inherit markerName;
+            importKind = "Service";
+            importApiVersion = "v1";
+            importName = name;
+            extraAnnotations = {
+              "kix.dev/service-selector" = builtins.toJSON selector;
+              "kix.dev/service-ports" = builtins.toJSON ports;
+            };
+            extraRequires = requires;
+          };
+
+          resourceCtx = builtins.getContext "${marker}";
+          attachCtx = value: builtins.appendContext (toString value) resourceCtx;
+
+          # Derive the FQDN using the standard <name>.<namespace>.svc pattern.
+          fqdn = "${name}.${namespaceName}.svc";
+        in
+        marker
+        // {
+          out = {
+            name = attachCtx name;
+            fqdn = attachCtx fqdn;
+            port = attachCtx (toString (builtins.head ports).port);
+            # All ports, context-attached, for consumers needing the full list.
+            ports = ports;
+            # The pod selector that backs this service — exposed so packages
+            # can use it directly (e.g. for additional hand-rolled CNPs).
+            inherit selector;
+          };
+        };
+
       # The scope object — self-referencing via Nix laziness so mkCR can pass
       # the full scope to crd.out.mkCR.
       scopeObj = {
@@ -1360,7 +1516,7 @@ rec {
         mkDeployment = mkWorkload "apps/v1" "Deployment";
         mkStatefulSet = mkWorkload "apps/v1" "StatefulSet";
         mkDaemonSet = mkWorkload "apps/v1" "DaemonSet";
-        inherit mkHelmWorkload;
+        inherit mkJob mkHelmWorkload;
 
         inherit
           crd
@@ -1369,6 +1525,7 @@ rec {
           mkCR
           mkSecret
           mkSecretRef
+          mkServiceRef
           ;
       };
     in

@@ -356,9 +356,7 @@ in
         echo "stackgres-database bootstrap complete for ${userName}@${dbName}"
       '';
 
-      bootstrapJob = backendScope.mkResource {
-        apiVersion = "batch/v1";
-        kind = "Job";
+      bootstrapJob = backendScope.mkJob {
         name = "${name}-bootstrap-${bootstrapHash}";
         labels = labels;
         annotations = {
@@ -412,14 +410,40 @@ in
         };
       };
 
+      # --- 5. Service facade (postgres namespace) ----------------------------
+      # Re-export the postgres service as a ServiceRef owned by this package.
+      # The original postgresService marker lives in stackgres-cluster's
+      # resources; consumers only see direct deps' resources in their
+      # serviceRefRegistry, so without this facade the netpol system can't
+      # match the store-path context that flows through out.host/port.
+      #
+      # Placing bootstrapJob in `requires` means the marker (and therefore
+      # every out.* value that carries its context) transitively depends on
+      # the Job. Consumers like immich get automatic wave ordering: their
+      # Deployment won't deploy until the bootstrap Job succeeds.
+      dbService = backendScope.mkServiceRef {
+        name = builtins.unsafeDiscardStringContext clusterName;
+        selector = {
+          "app" = "StackGresCluster";
+          "stackgres.io/cluster-name" = builtins.unsafeDiscardStringContext clusterName;
+        };
+        ports = [
+          {
+            port = "5432";
+            protocol = "TCP";
+          }
+        ];
+        requires = [ bootstrapJob ];
+      };
+
       # --- Consumer-facing helper -----------------------------------------
       # Returns a list of K8s env entries with the connection info under a
       # given prefix. Saves consumers from wiring 5 fields by hand.
       mkConnectionEnv =
         prefix:
         (kix.mkEnvVars {
-          "${prefix}HOSTNAME" = clusterFqdn;
-          "${prefix}PORT" = clusterPort;
+          "${prefix}HOSTNAME" = dbService.out.fqdn;
+          "${prefix}PORT" = dbService.out.port;
           "${prefix}DATABASENAME" = dbName;
         })
         ++ (credentials.out.mkEnv {
@@ -433,6 +457,7 @@ in
         bootstrapPassword
         bootstrapJob
         superuserRef
+        dbService
         ;
 
       root = {
@@ -448,8 +473,8 @@ in
         postHooks = [ bootstrapJob ];
 
         out = {
-          host = clusterFqdn;
-          port = clusterPort;
+          host = dbService.out.fqdn;
+          port = dbService.out.port;
           database = dbName;
           username = userName;
           extensions = config.extensions;

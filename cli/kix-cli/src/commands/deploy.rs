@@ -280,6 +280,67 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
 
     if args.dry_run {
         if !ctx.global.quiet {
+            // Simulate deploy events wave-by-wave, assuming all resources
+            // are created and become ready immediately.
+            let observer = CliObserver {
+                quiet: ctx.global.quiet,
+            };
+            for (wave_idx, actions) in wave_actions.iter().enumerate() {
+                let apply_count = actions
+                    .iter()
+                    .filter(|a| matches!(a, ChangeAction::Apply(_)))
+                    .count();
+                let skip_count = actions.len() - apply_count;
+
+                if apply_count == 0 {
+                    observer.on_event(&ReconcileEvent::WaveUnchanged {
+                        wave_index: wave_idx,
+                        count: skip_count,
+                    });
+                } else {
+                    observer.on_event(&ReconcileEvent::WaveStart {
+                        wave_index: wave_idx,
+                        apply_count,
+                        total: actions.len(),
+                    });
+                }
+
+                for action in actions {
+                    match action {
+                        ChangeAction::Apply(manifest) => {
+                            let rid = ResourceId::from_value(manifest);
+                            let import_target = readiness::import_target_from_manifest(manifest);
+                            let package = manifest
+                                .pointer("/metadata/annotations/kix.dev~1package")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string());
+                            observer.on_event(&ReconcileEvent::ResourceApplied {
+                                rid: rid.clone(),
+                                action: ApplyAction::Created,
+                                import_target: import_target.clone(),
+                                package,
+                            });
+                            // Emit readiness for non-immediate kinds
+                            if import_target.is_some() || !readiness::is_immediate_kind(&rid.kind) {
+                                observer.on_event(&ReconcileEvent::ReadinessReady {
+                                    rid,
+                                    import_target,
+                                });
+                            }
+                        }
+                        ChangeAction::Skip(rid) => {
+                            observer.on_event(&ReconcileEvent::ResourceApplied {
+                                rid: rid.clone(),
+                                action: ApplyAction::Unchanged,
+                                import_target: None,
+                                package: None,
+                            });
+                        }
+                        ChangeAction::Orphan(_) => {}
+                    }
+                }
+            }
+
             if !orphan_rids.is_empty() {
                 println!();
                 println!(
@@ -536,6 +597,7 @@ impl ReconcileObserver for CliObserver {
                 rid,
                 action,
                 import_target,
+                package,
             } => {
                 let (symbol, label) = match action {
                     ApplyAction::Created => (output::green("+"), "created"),
@@ -543,19 +605,24 @@ impl ReconcileObserver for CliObserver {
                     ApplyAction::Unchanged => (output::dim("="), "unchanged"),
                     ApplyAction::Skipped => (output::dim("-"), "skipped"),
                 };
+                let pkg_tag = match package {
+                    Some(p) => format!("  {}", output::dim(p)),
+                    None => String::new(),
+                };
                 if !self.quiet || !matches!(action, ApplyAction::Unchanged) {
                     // Imports render with a discrete leading arrow and show the
                     // target they describe rather than the marker's own rid.
                     if let Some(target) = import_target {
                         println!(
-                            "  {} {} {} {}",
+                            "  {} {} {} {}{}",
                             symbol,
                             output::dim("↪ import"),
                             output::dim(&format!("{}/{}", target.kind, target.name)),
                             output::dim(label),
+                            pkg_tag,
                         );
                     } else {
-                        println!("  {} {} {}", symbol, rid, output::dim(label));
+                        println!("  {} {} {}{}", symbol, rid, output::dim(label), pkg_tag);
                     }
                 }
             }

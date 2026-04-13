@@ -20,9 +20,18 @@ in
     version = "2.10.0-cf";
     description = "Caddy reverse proxy";
     network = {
+      # Entities for auto-derived external ingress (LoadBalancer Service).
       externalIngressEntities = [ "all" ];
-      allowExternalEgress = true;
-      externalEgressEntities = [ "all" ];
+      intents = {
+        external = {
+          egress = [
+            {
+              to = "world";
+              entities = [ "all" ];
+            }
+          ];
+        };
+      };
     };
   };
 

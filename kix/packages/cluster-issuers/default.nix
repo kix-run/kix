@@ -15,13 +15,23 @@
 {
   meta = {
     version = "1.0.0";
+    # Auto-wire as `clusterIssuer` DI dep so any instance in the cluster
+    # activates TLS on packages using `kix.expose` without per-app deps.
+    defaultAliases = [ "clusterIssuer" ];
   };
 
   options = {
+    # Each issuer has a `kind` discriminator:
+    #   - "acme"       → ACME (Let's Encrypt, pebble, etc.) via DNS01 solver
+    #   - "selfSigned" → cert-manager SelfSigned issuer (no spec args). Good
+    #                    for local dev / kind demos where a padlock is
+    #                    useful but certificate chain is not.
+    # New kinds (ca, vault, venafi) slot in by extending this branch.
     issuers = lib.mkOption {
       type = lib.types.attrsOf lib.types.anything;
       default = {
         letsencrypt-production = {
+          kind = "acme";
           server = "https://acme-v02.api.letsencrypt.org/directory";
           email = "admin@example.com";
           privateKeySecretName = "tls-production";
@@ -32,6 +42,7 @@
           dnsZones = [ ];
         };
         letsencrypt-staging = {
+          kind = "acme";
           server = "https://acme-staging-v02.api.letsencrypt.org/directory";
           email = "admin@example.com";
           privateKeySecretName = "tls-staging";
@@ -61,7 +72,7 @@
       mkCert = certManager.crds.certificates.out.mkCR scope;
       mkIssuerCR = certManager.crds.clusterIssuers.out.mkCR scope;
 
-      mkIssuer =
+      mkAcmeIssuer =
         name: issuerCfg:
         let
           solver = {
@@ -92,6 +103,27 @@
             };
           };
         };
+
+      mkSelfSignedIssuer =
+        name: _issuerCfg:
+        mkIssuerCR {
+          inherit name;
+          spec = {
+            selfSigned = { };
+          };
+        };
+
+      mkIssuer =
+        name: issuerCfg:
+        let
+          kind = issuerCfg.kind or "acme";
+        in
+        if kind == "acme" then
+          mkAcmeIssuer name issuerCfg
+        else if kind == "selfSigned" then
+          mkSelfSignedIssuer name issuerCfg
+        else
+          throw "cluster-issuers (${name}): unknown issuer kind \"${kind}\" — expected acme | selfSigned";
 
       issuerResources = lib.mapAttrs mkIssuer config.issuers;
       mainResource = issuerResources.${config.mainIssuer};

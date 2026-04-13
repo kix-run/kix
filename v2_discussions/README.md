@@ -63,6 +63,12 @@ The first SOPS flow is being implemented against a minimum viable design. **All 
 |---|----------|--------|-----------|---------|
 | 77b | [Secrets implementation plan](77_secrets_implementation_plan.md) | In progress | Active | Deploy-time SOPS hydration in Rust CLI, kind integration test. Header links to archived `74`/`75`/`76`/`77a`/`78` with their open questions — re-read those before extending secrets scope. |
 
+## Flavors & Platform Ordering
+
+| # | Document | Status | Relevance | Summary |
+|---|----------|--------|-----------|---------|
+| 93 | [Flavor barrier resource](93_flavor_barrier_resource.md) | Design | Near-term | Synthetic `PlatformBarrier` DAG node so flavor-defined infrastructure instances deploy before application workloads. Single convergence point, `infrastructure` bool on instances, phantom resource approach. |
+
 ## Operator & Deploy
 
 | # | Document | Status | Relevance | Summary |
@@ -84,6 +90,17 @@ The first SOPS flow is being implemented against a minimum viable design. **All 
 
 > Helm v2 integration is **shipped** — see archived `87_helm_integration_v2.md` and `86_helm_dag_reconstruction.md` for the design record.
 
+## Network Policy
+
+| # | Document | Status | Relevance | Summary |
+|---|----------|--------|-----------|---------|
+| 92 | [Declarative network policy intents](92_declarative_network_policy_intents.md) | RFC | Near-term | Enforcer-agnostic policy intents declared by flavors/packages/cluster config, materialized by the enforcer through CRD refs. Replaces hand-rolled Cilium CRs in `kind-system-netpol` and `network-policies`. |
+| 94 | [DNS dependency chain — step 2](94_dns_dependency_chain_step2.md) | Partial | **Active** | Step 1 rework landed: DNS deps derived from per-workload service-edge detection (shared with netpol), not blanket injection. Step 2 pending: instance-level `extraDeps` for platform-dns → kind-system-netpol link. |
+| 95 | [Netpol build-time validation](95_netpol_build_time_validation.md) | Draft | Near-term | Catch missing/misconfigured network policies at eval time: intent schema validation, webhook ingress detection, uncovered port warnings. |
+| 96 | [Netpol autogeneration blindspots](96_netpol_autogeneration_blindspots.md) | RFC | **Active** | Three classes of workloads where store-path context analysis fails: Helm charts, operator-managed pods, ConfigMap indirection. Problem analysis + design space for fixes. |
+
+> Netpol auto-derivation (37, 82, 83, 85) is **shipped** — see `archive/` for the design record.
+
 ## MVP, Init, Roadmap
 
 | # | Document | Status | Relevance | Summary |
@@ -92,6 +109,7 @@ The first SOPS flow is being implemented against a minimum viable design. **All 
 | 64 | [Init & CI concerns](64_init_and_ci_concerns.md) | Draft | Active | How a new user gets bootstrapped and how kix plugs into CI pipelines. (Previously "MVP implementation approach" — MVP framing obsolete, CI/init content still relevant.) |
 | 66 | [Milestone roadmap](66_milestone_roadmap.md) | Draft | Active | Five user archetypes, cumulative milestones. |
 | 90 | [Ludo as north star — ideation & prioritization](90_ludo_north_star_ideation.md) | Brainstorm | **Active** | Option space + L1–L8 stories for pushing the ludo demonstrator. Kind-only horizon (prod profile, backup contract, first migration pair, gateway switch) then on-device horizon (maintenance, upgrade cascade, CNPG swap, operator self-host). Seeds 4 spin-off sessions. |
+| 91 | [CI/CD organizational patterns](91_cicd_organizational_patterns.md) | Design | Near-term | How CI/CD works when a compiler is the integration point. NixOS activation analogy, systemPackages model (app teams publish, operators import), compilation granularity (dependency-scoped + transaction), shift-left self-service, Flux as complementary layer. |
 
 ---
 

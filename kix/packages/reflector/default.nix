@@ -86,9 +86,7 @@ let
           ];
         };
       };
-      jobRes = mkResource {
-        apiVersion = "batch/v1";
-        kind = "Job";
+      jobRes = consumerScope.mkJob {
         name = jobName;
         inherit labels;
         annotations = capAnnotations // {

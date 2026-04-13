@@ -56,6 +56,8 @@
   instances.kube-system = {
     platform-dns = {
       package = kix.mkImport {
+        kind = "Deployment";
+        apiVersion = "apps/v1";
         out = {
           name = "kube-dns";
           fqdn = "kube-dns.kube-system.svc.cluster.local";

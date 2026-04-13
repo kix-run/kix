@@ -122,6 +122,28 @@ in
     version = "6.46.0";
     description = "Loki — log aggregation system (single-binary, filesystem)";
     lifecycle = "ephemeral";
+    # Helm chart is opaque — intra-package edges (gateway → backend) aren't
+    # visible via store-path context.  Declare them explicitly so Cilium
+    # allows the traffic under default-deny.
+    network.intents = {
+      intra-package = {
+        ingress = [
+          {
+            from = "all-pods";
+            ports = [
+              {
+                port = 3100;
+                protocol = "TCP";
+              } # Loki HTTP API
+              {
+                port = 9095;
+                protocol = "TCP";
+              } # gRPC
+            ];
+          }
+        ];
+      };
+    };
   };
 
   options.values = lib.mkOption {
@@ -137,6 +159,21 @@ in
         inherit chart scope;
         values = lib.recursiveUpdate defaultValues (config.values or { });
         releaseName = "loki";
+        # The gateway (nginx) proxies to the single-binary backend.
+        # No K8s manifest reference exists between them, so the DAG
+        # can't infer the edge — declare it explicitly.
+        extraEdges = [
+          {
+            from = {
+              kind = "Deployment";
+              name = "loki-gateway";
+            };
+            to = {
+              kind = "StatefulSet";
+              name = "loki";
+            };
+          }
+        ];
       };
     in
     resources.mkParts {

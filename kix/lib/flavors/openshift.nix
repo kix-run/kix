@@ -33,6 +33,8 @@
   instances.kube-system = {
     platform-dns = {
       package = kix.mkImport {
+        kind = "Deployment";
+        apiVersion = "apps/v1";
         out = {
           name = "coredns";
           fqdn = "dns-default.openshift-dns.svc.cluster.local";

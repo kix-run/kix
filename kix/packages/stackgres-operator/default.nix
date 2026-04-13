@@ -227,6 +227,14 @@ in
   meta = {
     version = "1.18.6";
     defaultAliases = [ "stackgresOperator" ];
+    network.intents = {
+      # The operator fetches extensions from extensions.stackgres.io at runtime.
+      external = {
+        egress = [
+          { to = "world"; }
+        ];
+      };
+    };
   };
 
   options = {
@@ -599,9 +607,7 @@ in
 
       # ===== Deployment (operator) =====
 
-      operatorDeployment = scope.mkResource {
-        apiVersion = "apps/v1";
-        kind = "Deployment";
+      operatorDeployment = scope.mkDeployment {
         name = name;
         labels = operatorLabels;
         spec = {
