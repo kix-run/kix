@@ -1,4 +1,0 @@
-# Cluster-proportional autoscaler enabled.
-# Flake package: coredns-autoscaler
-autoscaler:
-  enabled: true

@@ -1,4 +1,0 @@
-# Sentinel mode — enables sentinel with default settings.
-# Flake package: valkey-sentinel
-sentinel:
-  enabled: true

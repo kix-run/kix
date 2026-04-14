@@ -1,6 +1,0 @@
-# Default values — matches upstream Helm defaults (replication mode, no sentinel).
-# Helm values: (none, all defaults)
-# Flake package: valkey
-#
-# This is an empty file because we're testing with all upstream defaults.
-# The corresponding `helm template` invocation uses no -f flag.
