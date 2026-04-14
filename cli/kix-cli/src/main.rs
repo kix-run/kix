@@ -2,6 +2,7 @@ mod cli;
 mod commands;
 mod output;
 mod plan;
+pub mod trace_sink;
 
 use clap::Parser;
 use cli::{Cli, Command};
@@ -46,8 +47,9 @@ fn init_tracing(verbose: u8, quiet: bool) {
 
     tracing_subscriber::fmt()
         .with_env_filter(filter)
-        .with_writer(std::io::stderr)
+        .with_writer(trace_sink::make_writer)
         .with_timer(tracing_subscriber::fmt::time::uptime())
+        .with_ansi(false)
         .init();
 }
 

@@ -26,6 +26,7 @@
 //! - Activation CRD must be registered on the cluster before starting
 
 mod controller;
+mod k8s_events;
 mod observer;
 
 use std::collections::HashMap;

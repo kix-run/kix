@@ -25,8 +25,6 @@ from pathlib import Path
 import click
 import yaml
 
-# Use the C-accelerated YAML loader when available (~5-10x faster).
-_YAMLLoader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from parity.normalize import (
@@ -36,6 +34,9 @@ from parity.normalize import (
     normalize_dns_suffix,
 )
 from parity.structural_diff import structural_diff, format_diffs, DiffKind
+
+# Use the C-accelerated YAML loader when available (~5-10x faster).
+_YAMLLoader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 
 # Fields that Kubernetes auto-assigns at runtime — never present in kix output.
 # These are skipped entirely during comparison (any value is ignored).

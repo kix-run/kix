@@ -8,8 +8,8 @@ pub mod graph;
 pub mod migrate;
 pub mod normalize;
 pub mod readiness;
-pub mod reconcile;
+pub mod scheduler;
 pub mod secrets;
-pub mod waves;
+pub mod stream;
 
 pub use graph::ResourceGraph;

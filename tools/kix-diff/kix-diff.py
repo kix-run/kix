@@ -215,7 +215,7 @@ def diff_edges(old_model, new_model):
     """
     old_edges = _edge_set(old_model)
     new_edges = _edge_set(new_model)
-    old_detail = _edge_detail(old_model)
+    _old_detail = _edge_detail(old_model)
     new_detail = _edge_detail(new_model)
 
     added = sorted(new_edges - old_edges)
@@ -376,7 +376,7 @@ def print_manifest_diffs(manifest_diffs, full_diff=False):
 # ── Stateful resource warnings ────────────────────────────────────────
 
 
-def warn_stateful_changes(old_model, new_model, changed_keys):
+def warn_stateful_changes(_old_model, new_model, changed_keys):
     """Warn about changes to stateful packages (PVCs, databases, etc.)."""
     warnings = []
     for key in changed_keys:
@@ -386,7 +386,7 @@ def warn_stateful_changes(old_model, new_model, changed_keys):
             continue
         meta = new_model.packages[pi]["metadata"]
         # Check for lifecycle=stateful in annotations or labels
-        annotations = meta.get("metadata", {}).get("annotations", {})
+        _annotations = meta.get("metadata", {}).get("annotations", {})
         # Also check PI spec for well-known kinds
         name = meta.get("spec", {}).get("instanceName", "")
         # PVCs and databases are typically stateful

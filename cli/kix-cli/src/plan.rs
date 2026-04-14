@@ -615,41 +615,6 @@ pub fn print_package_plan(diff: &PackageDiff, verbose: bool) {
     }
 }
 
-/// Print a compact wave visualization.
-pub fn print_wave_summary(
-    waves: &[Vec<petgraph::graph::NodeIndex>],
-    graph: &kix::cluster::graph::ResourceGraph,
-) {
-    if waves.is_empty() {
-        return;
-    }
-
-    let wave_summaries: Vec<String> = waves
-        .iter()
-        .map(|wave| {
-            let mut kind_counts: BTreeMap<&str, usize> = BTreeMap::new();
-            for &idx in wave {
-                let kind = &graph.graph[idx].id.kind;
-                *kind_counts.entry(kind.as_str()).or_default() += 1;
-            }
-            let parts: Vec<String> = kind_counts
-                .into_iter()
-                .map(|(k, n)| {
-                    if n == 1 {
-                        k.to_string()
-                    } else {
-                        format!("{n} {k}")
-                    }
-                })
-                .collect();
-            format!("[{}]", parts.join(", "))
-        })
-        .collect();
-
-    println!();
-    println!("  {} {}", output::dim("Waves:"), wave_summaries.join(" → "),);
-}
-
 /// Print plan summary line.
 pub fn print_plan_summary(diff: &PackageDiff) {
     let updated = diff.changed.len();

@@ -48,12 +48,13 @@ use kix::cluster::activation::{
 use kix::cluster::apply::{ChangeAction, IDENTITY_HASH_ANNOTATION};
 use kix::cluster::fetch;
 use kix::cluster::graph::ResourceGraph;
-use kix::cluster::reconcile::{OnErrorPolicy, PrunePolicy, ReconcileConfig, compute_prune_order};
-use kix::cluster::waves::compute_waves;
+use kix::cluster::scheduler::{self, DeployPlan, OnErrorPolicy, PrunePolicy, SchedulerConfig};
+use kix::cluster::stream::DeployObserver;
 use kix::eval::store_graph::StoreGraph;
 use kix::manifest::stamp::stamp_annotations;
 use kix::manifest::types::ResourceId;
 
+use crate::k8s_events::{CompositeObserver, K8sEventObserver};
 use crate::observer::OperatorObserver;
 
 /// Finalizer name for operator-managed cleanup.
@@ -160,48 +161,14 @@ fn load_and_stamp(path: &Path) -> Result<(StoreGraph, Vec<Value>), OperatorError
     Ok((graph, manifests))
 }
 
-/// Build wave_actions from change detection results and resource graph.
-fn build_wave_actions(
+/// Build a streaming [`DeployPlan`] + orphan list from change detection.
+fn build_deploy_plan(
     all_actions: &[ChangeAction],
     new_manifests: &[Value],
-) -> Result<(Vec<Vec<ChangeAction>>, Vec<ResourceId>), OperatorError> {
+) -> Result<(DeployPlan, Vec<ResourceId>), OperatorError> {
     let resource_graph = ResourceGraph::from_manifests(new_manifests)
         .map_err(|e| OperatorError::GraphError(e.to_string()))?;
-    let waves = compute_waves(&resource_graph);
-
-    // Map each wave node to its change action
-    let mut new_manifest_actions = std::collections::HashMap::new();
-    for action in all_actions {
-        let k8s_id = match action {
-            ChangeAction::Apply(m) => {
-                let rid = ResourceId::from_value(m);
-                format!("{}/{}/{}", rid.kind, rid.namespace, rid.name)
-            }
-            ChangeAction::Skip(rid) => {
-                format!("{}/{}/{}", rid.kind, rid.namespace, rid.name)
-            }
-            ChangeAction::Orphan(_) => continue,
-        };
-        new_manifest_actions.insert(k8s_id, action);
-    }
-
-    let wave_actions: Vec<Vec<ChangeAction>> = waves
-        .iter()
-        .map(|wave| {
-            wave.iter()
-                .map(|&idx| {
-                    let node = &resource_graph.graph[idx];
-                    let k8s_id = format!("{}/{}/{}", node.id.kind, node.id.namespace, node.id.name);
-                    match new_manifest_actions.get(&k8s_id) {
-                        Some(ChangeAction::Apply(m)) => ChangeAction::Apply(m.clone()),
-                        Some(ChangeAction::Skip(rid)) => ChangeAction::Skip(rid.clone()),
-                        _ => ChangeAction::Skip(node.id.clone()),
-                    }
-                })
-                .collect()
-        })
-        .collect();
-
+    let plan = DeployPlan::from_graph_and_changes(&resource_graph, all_actions);
     let orphan_rids: Vec<ResourceId> = all_actions
         .iter()
         .filter_map(|a| {
@@ -212,8 +179,7 @@ fn build_wave_actions(
             }
         })
         .collect();
-
-    Ok((wave_actions, orphan_rids))
+    Ok((plan, orphan_rids))
 }
 
 // ---------------------------------------------------------------------------
@@ -380,7 +346,7 @@ async fn run_reconcile(
     }
 
     // 4. Fetch live kix-managed resources from the cluster
-    let mut discovery = fetch::discover_resources(&ctx.client)
+    let discovery = fetch::discover_resources(&ctx.client)
         .await
         .map_err(|e| OperatorError::DiscoveryError(e.to_string()))?;
 
@@ -410,19 +376,18 @@ async fn run_reconcile(
         "Live change detection complete"
     );
 
-    // 6. Build wave actions
-    let (wave_actions, orphan_rids) = build_wave_actions(&all_actions, &managed_manifests)?;
+    // 6. Build the streaming plan.
+    let (plan, orphan_rids) = build_deploy_plan(&all_actions, &managed_manifests)?;
 
-    // Find activation identity hash for annotation merging
     let act_identity_hash = identity_hash(activation);
 
-    // 7. Run reconcile engine
+    // 7. Run the DAG-streaming scheduler.
     //
     // TODO(operator-cancel): wire this token to a per-Activation supervisor
     // so a newer Activation arriving on the cluster can cancel the in-flight
-    // reconcile loop. For now this is a never-cancelled token — same
-    // semantics as before, but the plumbing is in place.
-    let config = ReconcileConfig {
+    // loop. For now this is a never-cancelled token — same semantics as
+    // before, but the plumbing is in place.
+    let config = SchedulerConfig {
         timeout: Duration::from_secs(300),
         on_error: OnErrorPolicy::Stop,
         prune: PrunePolicy::Delete,
@@ -432,28 +397,33 @@ async fn run_reconcile(
         cancel: kix::cluster::cancel::CancelToken::new(),
     };
 
-    let observer = OperatorObserver::new(name);
-
-    // For new deployments: pass activation_name to trigger lifecycle management.
-    // For drift correction: pass None to skip lifecycle changes.
+    // Compose two observers: tracing (structured logs) + K8s Events
+    // (cluster-observable audit trail on the Activation CR).
+    let observer: Arc<dyn DeployObserver> = Arc::new(CompositeObserver::new(vec![
+        Arc::new(OperatorObserver::new(name)) as Arc<dyn DeployObserver>,
+        Arc::new(K8sEventObserver::new(
+            ctx.client.clone(),
+            activation,
+            "kix.dev/v1alpha1",
+            Some(name.to_string()),
+        )) as Arc<dyn DeployObserver>,
+    ]));
     let reconcile_act_name = if manage_lifecycle { Some(name) } else { None };
-
-    // For orphan pruning, we need manifests to compute prune order.
-    // Use the live resources' data as "old manifests" for ordering.
     let old_manifest_values: Vec<Value> =
         live_resources.iter().map(|obj| obj.data.clone()).collect();
+    let discovery_shared = Arc::new(tokio::sync::RwLock::new(discovery));
 
-    let result = kix::cluster::reconcile::reconcile(
+    let result = scheduler::run_deploy(
         &ctx.client,
-        &mut discovery,
-        &wave_actions,
+        discovery_shared,
+        plan,
         &orphan_rids,
         &old_manifest_values,
         cluster,
         reconcile_act_name,
         act_identity_hash.as_deref(),
         &config,
-        &observer,
+        observer,
     )
     .await;
 
@@ -519,13 +489,27 @@ async fn handle_delete(
                 .collect();
 
             let kix_crds: &[&str] = &["activations.kix.dev", "packageinstances.kix.dev"];
-            let ordered: Vec<ResourceId> = compute_prune_order(&all_rids, &manifests)
-                .into_iter()
-                .filter(|rid| {
-                    !(rid.kind == "CustomResourceDefinition"
-                        && kix_crds.contains(&rid.name.as_str()))
-                })
+            let orphan_set: std::collections::HashSet<String> = all_rids
+                .iter()
+                .map(|rid| format!("{}/{}/{}", rid.kind, rid.namespace, rid.name))
                 .collect();
+            let orphan_manifests: Vec<Value> = manifests
+                .iter()
+                .filter(|m| {
+                    let rid = ResourceId::from_value(m);
+                    orphan_set.contains(&format!("{}/{}/{}", rid.kind, rid.namespace, rid.name))
+                })
+                .cloned()
+                .collect();
+            let ordered: Vec<ResourceId> = match ResourceGraph::from_manifests(&orphan_manifests) {
+                Ok(g) => g.reverse_topo_ids(),
+                Err(_) => all_rids.clone(),
+            }
+            .into_iter()
+            .filter(|rid| {
+                !(rid.kind == "CustomResourceDefinition" && kix_crds.contains(&rid.name.as_str()))
+            })
+            .collect();
 
             let discovery = fetch::discover_resources(&ctx.client)
                 .await

@@ -294,11 +294,48 @@ pub struct DeployArgs {
     #[arg(long)]
     pub accept_migrations: bool,
 
-    /// Experimental: render a live inline TUI dashboard showing the current
-    /// wave, in-flight resources, and queued work. Falls back to the standard
+    /// Render a live inline graph-streaming dashboard (doc 99). Falls back to
     /// line-oriented output on non-interactive terminals.
     #[arg(long)]
     pub tui: bool,
+
+    /// Group the tree view by namespace instead of kix package. Only affects
+    /// rendering; execution order is unchanged.
+    #[arg(long)]
+    pub group_by_ns: bool,
+
+    /// Cap the live viewport height in rows. Default: half the terminal
+    /// height (clamped to [10, 40]). Rows beyond the cap fold into the
+    /// scrollback history above.
+    #[arg(long, value_name = "ROWS")]
+    pub fold_height: Option<u16>,
+
+    /// How to render cross-package edges in the graph-streaming view.
+    /// `refs` (default) draws `└┄►` references; `full` duplicates the
+    /// referenced node under each consuming package.
+    #[arg(long, value_enum, default_value_t = ShowRefs::Refs)]
+    pub show_refs: ShowRefs,
+
+    /// Output format for the deploy event stream. `pretty` (default on TTY)
+    /// is the colored human stream; `line` is the nix-build-L idiom (one
+    /// line per terminal verdict, no ANSI); `json` emits NDJSON, one event
+    /// per line, suitable for CI/automation. Non-TTY stdout auto-falls-back
+    /// to `line` when `pretty` is requested.
+    #[arg(long, value_enum, default_value_t = LogFormat::Pretty)]
+    pub log_format: LogFormat,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ShowRefs {
+    Refs,
+    Full,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum LogFormat {
+    Pretty,
+    Line,
+    Json,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]

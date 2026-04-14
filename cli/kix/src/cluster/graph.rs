@@ -200,6 +200,66 @@ impl ResourceGraph {
         self.graph.edge_count()
     }
 
+    /// Reverse-topological ordering of the resource IDs: every node appears
+    /// after all of its dependents. Used for safe deletion / prune ordering
+    /// where we must remove consumers before the providers they reference.
+    ///
+    /// Falls back to the natural (kind, namespace, name) order when the
+    /// graph has a cycle — deletion is best-effort anyway, and a cycle among
+    /// orphans is not an error we want to propagate.
+    pub fn reverse_topo_ids(&self) -> Vec<ResourceId> {
+        use petgraph::Direction;
+        use std::collections::HashMap;
+
+        let dag = &self.graph;
+        // Out-degree in the ResourceGraph model = number of dependencies of a
+        // node. Reverse-topo = delete leaves (zero dependents) first, then
+        // work inward. We pop nodes with zero *incoming* edges (no dependents
+        // left) instead, since our edges point dependent → predecessor.
+        let mut in_degree: HashMap<_, usize> = dag
+            .node_indices()
+            .map(|i| (i, dag.neighbors_directed(i, Direction::Incoming).count()))
+            .collect();
+        let mut ordered = Vec::with_capacity(dag.node_count());
+        let mut next: Vec<_> = in_degree
+            .iter()
+            .filter(|(_, d)| **d == 0)
+            .map(|(i, _)| *i)
+            .collect();
+        next.sort_by(|a, b| {
+            let na = &dag[*a];
+            let nb = &dag[*b];
+            na.id
+                .kind
+                .cmp(&nb.id.kind)
+                .then_with(|| na.id.namespace.cmp(&nb.id.namespace))
+                .then_with(|| na.id.name.cmp(&nb.id.name))
+        });
+        while let Some(idx) = next.pop() {
+            ordered.push(dag[idx].id.clone());
+            for pred in dag.neighbors_directed(idx, Direction::Outgoing) {
+                if let Some(d) = in_degree.get_mut(&pred) {
+                    *d = d.saturating_sub(1);
+                    if *d == 0 {
+                        next.push(pred);
+                    }
+                }
+            }
+        }
+        // If a cycle left nodes out, append them in natural order so the
+        // caller still gets every id.
+        if ordered.len() < dag.node_count() {
+            let seen: std::collections::HashSet<_> = ordered.iter().cloned().collect();
+            for idx in dag.node_indices() {
+                let id = dag[idx].id.clone();
+                if !seen.contains(&id) {
+                    ordered.push(id);
+                }
+            }
+        }
+        ordered
+    }
+
     /// Get the direct dependencies of a resource.
     pub fn dependencies(&self, id: &ResourceId) -> Vec<&ResourceNode> {
         if let Some(&idx) = self.id_to_node.get(id) {

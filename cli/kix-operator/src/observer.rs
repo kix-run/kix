@@ -1,9 +1,16 @@
-//! Operator observer — maps reconcile events to structured tracing output.
+//! Operator observer — maps DAG-streaming [`DeployEvent`]s to structured
+//! tracing output.
+//!
+//! Every terminal verdict, prune outcome, and lifecycle transition becomes a
+//! span-tagged tracing event carrying the Activation name. The shape mirrors
+//! the JSON log format used by the CLI so consumers downstream can correlate
+//! CLI and operator logs on the same deploy.
 
 use kix::cluster::apply::ApplyAction;
-use kix::cluster::reconcile::{ReconcileEvent, ReconcileObserver};
+use kix::cluster::stream::{
+    CancelReason, DeployEvent, DeployObserver, NodeDetail, NodeId, Verdict,
+};
 
-/// Observer that logs reconcile events via `tracing`.
 pub struct OperatorObserver {
     activation_name: String,
 }
@@ -16,226 +23,177 @@ impl OperatorObserver {
     }
 }
 
-impl ReconcileObserver for OperatorObserver {
-    fn on_event(&self, event: &ReconcileEvent) {
-        let name = &self.activation_name;
+impl DeployObserver for OperatorObserver {
+    fn on_event(&self, event: &DeployEvent) {
+        let activation = self.activation_name.as_str();
         match event {
-            ReconcileEvent::WaveSkipped {
-                wave_index,
-                count,
-                reason,
-            } => {
+            DeployEvent::PlanComputed { nodes, edges } => {
                 tracing::info!(
-                    activation = name,
-                    wave = wave_index + 1,
-                    count,
-                    reason,
-                    "Wave skipped"
+                    activation,
+                    nodes = nodes.len(),
+                    edges = edges.len(),
+                    "Plan computed"
                 );
             }
-            ReconcileEvent::WaveUnchanged {
-                wave_index, count, ..
+            DeployEvent::NodeStateChanged {
+                node,
+                kind,
+                verdict,
+                detail,
             } => {
-                tracing::debug!(
-                    activation = name,
-                    wave = wave_index + 1,
-                    count,
-                    "Wave unchanged"
-                );
-            }
-            ReconcileEvent::WaveStart {
-                wave_index,
-                apply_count,
-                total,
-            } => {
-                tracing::info!(
-                    activation = name,
-                    wave = wave_index + 1,
-                    applying = apply_count,
-                    total,
-                    "Applying wave"
-                );
-            }
-            ReconcileEvent::ResourceApplied {
-                rid,
-                action,
-                import_target,
-                package: _,
-            } => {
-                let action_str = match action {
-                    ApplyAction::Created => "created",
-                    ApplyAction::Configured => "configured",
-                    ApplyAction::Unchanged => "unchanged",
-                    ApplyAction::Skipped => "skipped",
+                let resource = node_label(node);
+                let kind_str = match kind {
+                    kix::cluster::stream::TransitionKind::Apply => "apply",
+                    kix::cluster::stream::TransitionKind::Skip => "skip",
+                    kix::cluster::stream::TransitionKind::Recreate => "recreate",
+                    kix::cluster::stream::TransitionKind::Migrate => "migrate",
+                    kix::cluster::stream::TransitionKind::Drain => "drain",
+                    kix::cluster::stream::TransitionKind::Delete => "delete",
+                    kix::cluster::stream::TransitionKind::Pause => "pause",
                 };
-                tracing::info!(
-                    activation = name,
-                    resource = %rid,
-                    action = action_str,
-                    import_target = import_target.as_ref().map(|t| format!("{}/{}", t.kind, t.name)),
-                    "Resource applied"
-                );
+                match verdict {
+                    Verdict::Pending => {}
+                    Verdict::Running => match detail {
+                        Some(NodeDetail::Applied(action)) => {
+                            tracing::info!(
+                                activation,
+                                resource = %resource,
+                                kind = kind_str,
+                                action = apply_label(action),
+                                "Resource applied"
+                            );
+                        }
+                        Some(NodeDetail::SecretHydrated { keys }) => {
+                            tracing::info!(
+                                activation,
+                                resource = %resource,
+                                keys = *keys,
+                                "Secret hydrated from SOPS"
+                            );
+                        }
+                        Some(NodeDetail::ReadinessProgress(msg)) => {
+                            tracing::debug!(
+                                activation,
+                                resource = %resource,
+                                status = msg.as_str(),
+                                "Readiness progress"
+                            );
+                        }
+                        _ => {}
+                    },
+                    Verdict::Ready => match detail {
+                        Some(NodeDetail::RecreatedInPlace { reason }) => {
+                            tracing::warn!(
+                                activation,
+                                resource = %resource,
+                                reason = reason.as_str(),
+                                "Resource recreated in place due to immutable-field conflict"
+                            );
+                        }
+                        _ => {
+                            tracing::info!(
+                                activation,
+                                resource = %resource,
+                                kind = kind_str,
+                                "Resource ready"
+                            );
+                        }
+                    },
+                    Verdict::Failed { message } => {
+                        let missing_keys = if let Some(NodeDetail::ReadinessFailed {
+                            missing_keys,
+                            ..
+                        }) = detail
+                        {
+                            Some(missing_keys.clone())
+                        } else {
+                            None
+                        };
+                        tracing::error!(
+                            activation,
+                            resource = %resource,
+                            kind = kind_str,
+                            message = message.as_str(),
+                            missing_keys = ?missing_keys,
+                            "Node failed"
+                        );
+                    }
+                    Verdict::Cancelled { because } => {
+                        let reason = match because {
+                            CancelReason::PredecessorFailed(rid) => {
+                                format!("predecessor {rid} failed")
+                            }
+                            CancelReason::External => "external cancel".to_string(),
+                        };
+                        tracing::warn!(
+                            activation,
+                            resource = %resource,
+                            reason = %reason,
+                            "Node cancelled"
+                        );
+                    }
+                    Verdict::AwaitingInput { prompt } => {
+                        tracing::info!(
+                            activation,
+                            resource = %resource,
+                            prompt = prompt.as_str(),
+                            "Node awaiting input"
+                        );
+                    }
+                    Verdict::DriftDetected { message, .. } => {
+                        tracing::warn!(
+                            activation,
+                            resource = %resource,
+                            message = message.as_str(),
+                            "Drift detected"
+                        );
+                    }
+                }
             }
-            ReconcileEvent::ResourceFailed { rid, error } => {
-                tracing::error!(
-                    activation = name,
-                    resource = %rid,
-                    error,
-                    "Resource apply failed"
-                );
+            DeployEvent::CrdRediscovery => {
+                tracing::info!(activation, "Re-running API discovery after CRD");
             }
-            ReconcileEvent::ResourceRecreated { rid, reason } => {
-                tracing::warn!(
-                    activation = name,
-                    resource = %rid,
-                    reason = %reason,
-                    "Resource recreated in place due to immutable-field conflict"
-                );
+            DeployEvent::PruneStart { count } => {
+                tracing::info!(activation, count = *count, "Starting prune");
             }
-            ReconcileEvent::Cancelled { at } => {
-                tracing::warn!(
-                    activation = name,
-                    at = %at,
-                    "Reconcile cancelled"
-                );
-            }
-            ReconcileEvent::ReadinessWaiting { rid, import_target } => {
-                tracing::debug!(
-                    activation = name,
-                    resource = %rid,
-                    import_target = import_target.as_ref().map(|t| format!("{}/{}", t.kind, t.name)),
-                    "Waiting for readiness"
-                );
-            }
-            ReconcileEvent::ReadinessProgress {
-                rid,
-                import_target,
-                message,
+            DeployEvent::Finalized {
+                activation: new,
+                previous,
             } => {
-                tracing::debug!(
-                    activation = name,
-                    resource = %rid,
-                    import_target = import_target.as_ref().map(|t| format!("{}/{}", t.kind, t.name)),
-                    status = message,
-                    "Readiness progress"
-                );
-            }
-            ReconcileEvent::ReadinessReady { rid, import_target } => {
-                tracing::info!(
-                    activation = name,
-                    resource = %rid,
-                    import_target = import_target.as_ref().map(|t| format!("{}/{}", t.kind, t.name)),
-                    "Resource ready"
-                );
-            }
-            ReconcileEvent::ReadinessTimeout {
-                rid,
-                elapsed,
-                message,
-                import_target,
-            } => {
-                tracing::warn!(
-                    activation = name,
-                    resource = %rid,
-                    elapsed_secs = elapsed.as_secs(),
-                    message,
-                    import_target = import_target.as_ref().map(|t| format!("{}/{}", t.kind, t.name)),
-                    "Readiness timeout"
-                );
-            }
-            ReconcileEvent::ReadinessFailed {
-                rid,
-                message,
-                import_target,
-                missing_keys,
-            } => {
-                tracing::error!(
-                    activation = name,
-                    resource = %rid,
-                    message,
-                    import_target = import_target.as_ref().map(|t| format!("{}/{}", t.kind, t.name)),
-                    missing_keys = ?missing_keys,
-                    "Readiness failed"
-                );
-            }
-            ReconcileEvent::WaveComplete { wave_index, record } => {
-                tracing::info!(
-                    activation = name,
-                    wave = wave_index + 1,
-                    applied = record.applied,
-                    failed = record.failed,
-                    total = record.resource_count,
-                    "Wave complete"
-                );
-            }
-            ReconcileEvent::CrdRediscovery => {
-                tracing::info!(activation = name, "Re-running API discovery after CRD wave");
-            }
-            ReconcileEvent::PruneStart { count } => {
-                tracing::info!(
-                    activation = name,
-                    count,
-                    "Starting prune of orphaned resources"
-                );
-            }
-            ReconcileEvent::PruneSkipped { rid, reason } => {
-                tracing::info!(
-                    activation = name,
-                    resource = %rid,
-                    reason,
-                    "Prune skipped"
-                );
-            }
-            ReconcileEvent::PruneOk { rid } => {
-                tracing::info!(
-                    activation = name,
-                    resource = %rid,
-                    "Pruned"
-                );
-            }
-            ReconcileEvent::PruneFailed { rid, error } => {
-                tracing::error!(
-                    activation = name,
-                    resource = %rid,
-                    error,
-                    "Prune failed"
-                );
-            }
-            ReconcileEvent::Finalized { activation, old } => {
-                if let Some(old) = old {
+                if let Some(prev) = previous {
                     tracing::info!(
-                        activation = name,
-                        new = activation.as_str(),
-                        old = old.as_str(),
+                        activation,
+                        new = new.as_str(),
+                        old = prev.as_str(),
                         "Activation finalized"
                     );
                 } else {
                     tracing::info!(
-                        activation = name,
-                        new = activation.as_str(),
+                        activation,
+                        new = new.as_str(),
                         "Activation finalized (first deploy)"
                     );
                 }
             }
-            ReconcileEvent::SecretHydrated { rid, keys } => {
-                tracing::info!(
-                    activation = name,
-                    resource = %rid,
-                    keys,
-                    "Secret hydrated from SOPS"
-                );
-            }
-            ReconcileEvent::SecretHydrationFailed { rid, error } => {
-                tracing::error!(
-                    activation = name,
-                    resource = %rid,
-                    error,
-                    "Secret hydration failed"
-                );
-            }
-            ReconcileEvent::Stopped { reason } => {
-                tracing::error!(activation = name, reason, "Deploy stopped");
+            DeployEvent::Stopped { reason } => {
+                tracing::error!(activation, reason = reason.as_str(), "Deploy stopped");
             }
         }
+    }
+}
+
+fn node_label(id: &NodeId) -> String {
+    match id {
+        NodeId::Resource(rid) => rid.to_string(),
+        NodeId::Synthetic(s) => format!("⟦{s}⟧"),
+    }
+}
+
+fn apply_label(action: &ApplyAction) -> &'static str {
+    match action {
+        ApplyAction::Created => "created",
+        ApplyAction::Configured => "configured",
+        ApplyAction::Unchanged => "unchanged",
+        ApplyAction::Skipped => "skipped",
     }
 }

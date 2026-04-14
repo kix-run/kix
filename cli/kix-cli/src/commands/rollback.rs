@@ -6,6 +6,7 @@
 //! in the local Nix store.
 
 use std::io::Write;
+use std::sync::Arc;
 
 use miette::{IntoDiagnostic, Result, miette};
 use serde_json::Value;
@@ -14,11 +15,9 @@ use kix::cluster::activation;
 use kix::cluster::apply::ChangeAction;
 use kix::cluster::fetch;
 use kix::cluster::graph::ResourceGraph;
-use kix::cluster::readiness::{self, ImportTarget};
-use kix::cluster::reconcile::{
-    OnErrorPolicy, PrunePolicy, ReconcileConfig, ReconcileEvent, ReconcileObserver, ReconcileResult,
-};
-use kix::cluster::waves::compute_waves;
+use kix::cluster::readiness;
+use kix::cluster::scheduler::{self, DeployPlan, OnErrorPolicy, PrunePolicy, SchedulerConfig};
+use kix::cluster::stream::{DeployObserver, DeployResult};
 use kix::eval::store_graph::StoreGraph;
 use kix::manifest::stamp::stamp_annotations;
 use kix::manifest::types::ResourceId;
@@ -209,7 +208,7 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
         .await
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
 
-    let mut discovery = fetch::discover_resources(&client)
+    let discovery = fetch::discover_resources(&client)
         .await
         .map_err(|e| miette!("API discovery failed: {e}"))?;
 
@@ -362,43 +361,7 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
     }
 
     let resource_graph = ResourceGraph::from_manifests(&target_manifests).into_diagnostic()?;
-    let waves = compute_waves(&resource_graph);
-
-    // Map wave nodes to change actions
-    let new_manifest_actions: std::collections::HashMap<String, &ChangeAction> = {
-        let mut map = std::collections::HashMap::new();
-        for action in &all_actions {
-            let k8s_id = match action {
-                ChangeAction::Apply(m) => {
-                    let rid = ResourceId::from_value(m);
-                    format!("{}/{}/{}", rid.kind, rid.namespace, rid.name)
-                }
-                ChangeAction::Skip(rid) => {
-                    format!("{}/{}/{}", rid.kind, rid.namespace, rid.name)
-                }
-                ChangeAction::Orphan(_) => continue,
-            };
-            map.insert(k8s_id, action);
-        }
-        map
-    };
-
-    let wave_actions: Vec<Vec<ChangeAction>> = waves
-        .iter()
-        .map(|wave| {
-            wave.iter()
-                .map(|&idx| {
-                    let node = &resource_graph.graph[idx];
-                    let k8s_id = format!("{}/{}/{}", node.id.kind, node.id.namespace, node.id.name);
-                    match new_manifest_actions.get(&k8s_id) {
-                        Some(ChangeAction::Apply(m)) => ChangeAction::Apply(m.clone()),
-                        Some(ChangeAction::Skip(rid)) => ChangeAction::Skip(rid.clone()),
-                        _ => ChangeAction::Skip(node.id.clone()),
-                    }
-                })
-                .collect()
-        })
-        .collect();
+    let plan = DeployPlan::from_graph_and_changes(&resource_graph, &all_actions);
 
     // Find the target activation name and identity hash
     let activation_name = target_manifests.iter().find_map(|m| {
@@ -439,14 +402,13 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
             output::bold(&target_name),
         );
         plan::print_package_plan(&pkg_diff, ctx.global.verbose > 0);
-        plan::print_wave_summary(&waves, &resource_graph);
         plan::print_plan_summary(&pkg_diff);
     }
 
-    let total_apply = wave_actions
+    let total_apply = plan
+        .nodes
         .iter()
-        .flat_map(|w| w.iter())
-        .filter(|a| matches!(a, ChangeAction::Apply(_)))
+        .filter(|n| matches!(n.action, ChangeAction::Apply(_)))
         .count();
 
     if args.dry_run {
@@ -486,8 +448,8 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
         }
     }
 
-    // 9. Apply via reconcile engine
-    let config = ReconcileConfig {
+    // 9. Apply via DAG-streaming scheduler.
+    let config = SchedulerConfig {
         timeout: readiness::DEFAULT_TIMEOUT,
         on_error: OnErrorPolicy::Stop,
         prune: if args.prune {
@@ -495,30 +457,37 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
         } else {
             PrunePolicy::WarnOnly
         },
-        // Rollback re-applies a known-good prior activation; if a conflict
-        // surfaces, fail loudly so the operator can investigate rather than
-        // silently overwrite whatever the cluster currently has.
+        // Rollback re-applies a known-good prior activation; conflicts fail
+        // loudly rather than silently overwriting whatever the cluster has.
         force_conflicts: false,
         cancel: kix::cluster::cancel::CancelToken::new(),
     };
 
-    let observer = CliObserver {
-        quiet: ctx.global.quiet,
+    let observer: Arc<dyn DeployObserver> = if !output::is_interactive() {
+        Arc::new(super::deploy_log::LineObserver {
+            verbose: ctx.global.verbose > 0,
+        })
+    } else {
+        Arc::new(super::deploy::StreamCliObserver {
+            quiet: ctx.global.quiet,
+            verbose: ctx.global.verbose > 0,
+        })
     };
 
     let cluster_name = target_graph.cluster_name.clone();
+    let discovery = Arc::new(tokio::sync::RwLock::new(discovery));
 
-    let result = kix::cluster::reconcile::reconcile(
+    let result = scheduler::run_deploy(
         &client,
-        &mut discovery,
-        &wave_actions,
+        discovery,
+        plan,
         &orphan_rids,
         &current_manifests,
         &cluster_name,
         activation_name.as_deref(),
         activation_identity_hash.as_deref(),
         &config,
-        &observer,
+        observer,
     )
     .await;
 
@@ -537,16 +506,8 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
         }
         Err(e) => {
             let partial = match &e {
-                kix::cluster::reconcile::ReconcileError::WaveFailed { partial_result, .. } => {
-                    Some(partial_result)
-                }
-                kix::cluster::reconcile::ReconcileError::ReadinessTimeout {
-                    partial_result,
-                    ..
-                } => Some(partial_result),
-                kix::cluster::reconcile::ReconcileError::ReadinessFailed {
-                    partial_result, ..
-                } => Some(partial_result),
+                kix::cluster::scheduler::DeployError::NodesFailed { partial, .. } => Some(partial),
+                kix::cluster::scheduler::DeployError::Cancelled { partial } => Some(partial),
                 _ => None,
             };
             if let Some(r) = partial {
@@ -789,7 +750,7 @@ fn print_superseded_entries(
     }
 }
 
-fn print_summary(r: &ReconcileResult) {
+fn print_summary(r: &DeployResult) {
     let failed_str = r.failed.to_string();
     println!(
         "Rollback complete: {} created, {} configured, {} unchanged, {} failed",
@@ -802,233 +763,4 @@ fn print_summary(r: &ReconcileResult) {
             output::dim(&failed_str)
         },
     );
-}
-
-/// Build the display label for a readiness-watched resource.
-fn readiness_label(rid: &ResourceId, import_target: Option<&ImportTarget>) -> String {
-    if let Some(target) = import_target {
-        format!("↪ import {}/{}", target.kind, target.name)
-    } else {
-        rid.to_string()
-    }
-}
-
-/// CLI observer — reuse the same pattern as deploy.
-struct CliObserver {
-    quiet: bool,
-}
-
-impl ReconcileObserver for CliObserver {
-    fn on_event(&self, event: &ReconcileEvent) {
-        match event {
-            ReconcileEvent::WaveSkipped {
-                wave_index, count, ..
-            } => {
-                if !self.quiet {
-                    println!(
-                        "\n{} {} resources (already complete, skipping)",
-                        output::bold(&format!("Wave {}:", wave_index + 1)),
-                        count,
-                    );
-                }
-            }
-            ReconcileEvent::WaveUnchanged {
-                wave_index, count, ..
-            } => {
-                if !self.quiet {
-                    println!(
-                        "\n{} {} resources unchanged",
-                        output::bold(&format!("Wave {}:", wave_index + 1)),
-                        count,
-                    );
-                }
-            }
-            ReconcileEvent::WaveStart {
-                wave_index,
-                apply_count,
-                ..
-            } => {
-                if !self.quiet {
-                    println!(
-                        "\n{} applying {} resources...",
-                        output::bold(&format!("Wave {}:", wave_index + 1)),
-                        apply_count,
-                    );
-                }
-            }
-            ReconcileEvent::ResourceApplied {
-                rid,
-                action,
-                import_target,
-                package,
-            } => {
-                use kix::cluster::apply::ApplyAction;
-                let (symbol, label) = match action {
-                    ApplyAction::Created => (output::green("+"), "created"),
-                    ApplyAction::Configured => (output::yellow("~"), "configured"),
-                    ApplyAction::Unchanged => (output::dim("="), "unchanged"),
-                    ApplyAction::Skipped => (output::dim("-"), "skipped"),
-                };
-                let pkg_tag = match package {
-                    Some(p) => format!("  {}", output::dim(p)),
-                    None => String::new(),
-                };
-                if !self.quiet || !matches!(action, ApplyAction::Unchanged) {
-                    if let Some(target) = import_target {
-                        println!(
-                            "  {} {} {} {}{}",
-                            symbol,
-                            output::dim("↪ import"),
-                            output::dim(&format!("{}/{}", target.kind, target.name)),
-                            output::dim(label),
-                            pkg_tag,
-                        );
-                    } else {
-                        println!("  {} {} {}{}", symbol, rid, output::dim(label), pkg_tag);
-                    }
-                }
-            }
-            ReconcileEvent::ResourceFailed { rid, error } => {
-                eprintln!("  {} {} {}", output::red("!"), rid, output::red(error));
-            }
-            ReconcileEvent::ResourceRecreated { rid, reason } => {
-                println!(
-                    "  {} {} {} {}",
-                    output::yellow("↻"),
-                    rid,
-                    output::yellow("recreated (immutable-field conflict)"),
-                    output::dim(reason),
-                );
-            }
-            ReconcileEvent::Cancelled { at } => {
-                eprintln!("\n{} rollback cancelled at {}", output::red("✗"), at);
-            }
-            ReconcileEvent::ReadinessWaiting { rid, import_target } => {
-                if !self.quiet {
-                    let label = readiness_label(rid, import_target.as_ref());
-                    print!("\r\x1b[2K  Waiting for {} ...", output::dim(&label));
-                    std::io::stdout().flush().ok();
-                }
-            }
-            ReconcileEvent::ReadinessProgress {
-                rid,
-                import_target,
-                message,
-            } => {
-                if !self.quiet {
-                    let label = readiness_label(rid, import_target.as_ref());
-                    print!(
-                        "\r\x1b[2K  Waiting for {} — {}",
-                        output::dim(&label),
-                        output::dim(message),
-                    );
-                    std::io::stdout().flush().ok();
-                }
-            }
-            ReconcileEvent::ReadinessReady { rid, import_target } => {
-                if !self.quiet {
-                    let label = readiness_label(rid, import_target.as_ref());
-                    println!(
-                        "\r\x1b[2K  Waiting for {} ... {}",
-                        output::dim(&label),
-                        output::green("ready"),
-                    );
-                }
-            }
-            ReconcileEvent::ReadinessTimeout {
-                rid,
-                import_target,
-                elapsed,
-                message,
-            } => {
-                let label = readiness_label(rid, import_target.as_ref());
-                println!(
-                    "\r\x1b[2K  Waiting for {} ... {} ({}s): {}",
-                    output::dim(&label),
-                    output::yellow("timed out"),
-                    elapsed.as_secs(),
-                    message,
-                );
-            }
-            ReconcileEvent::ReadinessFailed {
-                rid,
-                import_target,
-                message,
-                missing_keys,
-            } => {
-                let label = readiness_label(rid, import_target.as_ref());
-                println!(
-                    "\r\x1b[2K  Waiting for {} ... {}: {}",
-                    output::dim(&label),
-                    output::red("failed"),
-                    message,
-                );
-                if !missing_keys.is_empty() {
-                    println!(
-                        "    {} missing key(s): {}",
-                        output::red("↳"),
-                        missing_keys.join(", "),
-                    );
-                }
-            }
-            ReconcileEvent::SecretHydrated { rid, keys } => {
-                if !self.quiet {
-                    println!(
-                        "  {} {} hydrated ({} keys from SOPS)",
-                        output::green("🔓"),
-                        rid,
-                        keys,
-                    );
-                }
-            }
-            ReconcileEvent::SecretHydrationFailed { rid, error } => {
-                eprintln!(
-                    "  {} {} secret hydration failed: {}",
-                    output::red("!"),
-                    rid,
-                    output::red(error),
-                );
-            }
-            ReconcileEvent::Stopped { reason } => {
-                eprintln!("\n{}", output::red(reason));
-            }
-            ReconcileEvent::CrdRediscovery => {}
-            ReconcileEvent::WaveComplete { .. } => {}
-            ReconcileEvent::PruneStart { count } => {
-                println!();
-                println!(
-                    "{} Pruning {} orphaned resources...",
-                    output::bold("Prune:"),
-                    count,
-                );
-            }
-            ReconcileEvent::PruneSkipped { rid, reason } => {
-                println!("  {} {} — {}", output::yellow("!"), rid, reason);
-            }
-            ReconcileEvent::PruneOk { rid } => {
-                println!(
-                    "  {} pruned {}/{}@{}",
-                    output::red("-"),
-                    rid.kind,
-                    rid.name,
-                    rid.namespace,
-                );
-            }
-            ReconcileEvent::PruneFailed { rid, error } => {
-                eprintln!("  {} {}: {}", output::red("!"), rid, output::red(error));
-            }
-            ReconcileEvent::Finalized { activation, old } => {
-                if !self.quiet {
-                    if let Some(old) = old {
-                        println!("  {} Activation '{}' → Superseded", output::dim("•"), old);
-                    }
-                    println!(
-                        "  {} Activation '{}' → Active",
-                        output::green("•"),
-                        activation,
-                    );
-                }
-            }
-        }
-    }
 }

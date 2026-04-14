@@ -19,7 +19,6 @@ use serde_json::Value;
 
 use kix::cluster::fetch;
 use kix::cluster::graph::ResourceGraph;
-use kix::cluster::waves::compute_waves;
 use kix::eval::build::build_cluster_activation_with_status;
 use kix::eval::store;
 use kix::eval::store_graph::{StoreGraph, store_hash};
@@ -124,19 +123,11 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         plan::print_plan_summary(&pkg_diff);
     }
 
-    // 5. Compute reverse dependency ordering for deletion
+    // 5. Reverse-topological ordering for deletion (dependents first so a
+    //    provider still exists when its consumer is torn down).
     let garbage_values: Vec<Value> = garbage_manifests.values().cloned().collect();
     let ordered_rids = match ResourceGraph::from_manifests(&garbage_values) {
-        Ok(graph) => {
-            let waves = compute_waves(&graph);
-            let mut ordered: Vec<ResourceId> = Vec::new();
-            for wave in waves.into_iter().rev() {
-                for idx in wave {
-                    ordered.push(graph.graph[idx].id.clone());
-                }
-            }
-            ordered
-        }
+        Ok(graph) => graph.reverse_topo_ids(),
         Err(_) => garbage_values.iter().map(ResourceId::from_value).collect(),
     };
 

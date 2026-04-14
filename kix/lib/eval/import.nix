@@ -9,7 +9,12 @@
 }:
 
 let
-  inherit (k8s) clusterScoped mkResource mkImportResource;
+  inherit (k8s)
+    clusterScoped
+    mkResource
+    mkImportResource
+    kixCRDs
+    ;
 in
 
 rec {
@@ -315,6 +320,7 @@ rec {
         kind = "PackageInstance";
         name = instanceName;
         namespace = namespaceResource;
+        requires = [ kixCRDs.packageInstance ];
         extraDeps = instanceExtraDeps;
         annotations = {
           "kix.dev/mode" = "import";
