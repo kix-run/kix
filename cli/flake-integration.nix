@@ -27,13 +27,7 @@
   #
   # { system, pkgs, lib, self', inputs', ... }:
 
-  mkKixPackage =
-    {
-      pkgs,
-      lib,
-      crane,
-      ...
-    }:
+  mkKixPackage = { pkgs, lib, crane, ... }:
     let
       craneLib = crane.mkLib pkgs;
 
@@ -41,42 +35,31 @@
         src = craneLib.cleanCargoSource ../cli;
         strictDeps = true;
 
-        buildInputs = [
-          pkgs.openssl
-        ]
-        ++ lib.optionals pkgs.stdenv.isLinux [ pkgs.dbus ]
-        ++ lib.optionals pkgs.stdenv.isDarwin [
-          pkgs.darwin.apple_sdk.frameworks.Security
-          pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
-        ];
+        buildInputs = [ pkgs.openssl ]
+          ++ lib.optionals pkgs.stdenv.isLinux [ pkgs.dbus ];
 
-        nativeBuildInputs = [
-          pkgs.pkg-config
-        ];
+        nativeBuildInputs = [ pkgs.pkg-config ];
       };
 
       # Build dependencies separately for caching
       cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
       # Build the kix binary
-      kix = craneLib.buildPackage (
-        commonArgs
-        // {
-          inherit cargoArtifacts;
+      kix = craneLib.buildPackage (commonArgs // {
+        inherit cargoArtifacts;
 
-          # Run cargo test during build
-          doCheck = true;
+        # Integration tests require a writable nix store (eval cache),
+        # which is unavailable inside the nix build sandbox.
+        doCheck = false;
 
-          meta = {
-            description = "Kubernetes manifest generator CLI";
-            homepage = "https://github.com/kixpkgs/kixpkgs";
-            license = lib.licenses.mit;
-            mainProgram = "kix";
-          };
-        }
-      );
-    in
-    kix;
+        meta = {
+          description = "Kubernetes manifest generator CLI";
+          homepage = "https://github.com/kixpkgs/kixpkgs";
+          license = lib.licenses.mit;
+          mainProgram = "kix";
+        };
+      });
+    in kix;
 
   # --- Outputs to merge into perSystem ---
   #
