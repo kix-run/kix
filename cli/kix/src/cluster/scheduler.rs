@@ -292,9 +292,8 @@ pub async fn run_deploy(
     let mut applied_for_checkpoint = 0usize;
     let mut failed_for_checkpoint = 0usize;
 
-    type NodeFuture = std::pin::Pin<
-        Box<dyn std::future::Future<Output = (NodeId, NodeOutcome)> + Send>,
-    >;
+    type NodeFuture =
+        std::pin::Pin<Box<dyn std::future::Future<Output = (NodeId, NodeOutcome)> + Send>>;
     let mut in_flight: FuturesUnordered<NodeFuture> = FuturesUnordered::new();
 
     // Promote all initially-ready nodes onto the queue.
