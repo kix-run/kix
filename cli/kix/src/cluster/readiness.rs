@@ -21,6 +21,43 @@ use serde_json::Value;
 use thiserror::Error;
 
 use super::cancel::CancelToken;
+use super::fetch;
+
+/// After a CRD reaches `Established=True`, the apiserver's discovery endpoint
+/// (and replicas behind an HA load balancer) may still lag by a few hundred
+/// ms before the new group/version/kind appears. Dependents that race in
+/// during that window would hit "no matches for kind" on apply. We poll
+/// discovery for up to this budget after Established.
+const CRD_DISCOVERY_PROBE_BUDGET: Duration = Duration::from_secs(5);
+const CRD_DISCOVERY_PROBE_INTERVAL: Duration = Duration::from_millis(300);
+
+/// Run a bounded discovery probe until the CRD's group/version/kind appears.
+/// Called after a freshly-applied CRD reports `Established=True`. Returns
+/// `true` if the kind was observed in discovery, `false` if the budget
+/// elapsed without it showing up (deploy still proceeds — the retry-on-miss
+/// in the scheduler will absorb residual skew).
+async fn probe_crd_discovery(client: &Client, crd: &Value) -> bool {
+    let Some(group) = crd.pointer("/spec/group").and_then(Value::as_str) else {
+        return true;
+    };
+    let Some(kind) = crd.pointer("/spec/names/kind").and_then(Value::as_str) else {
+        return true;
+    };
+    let deadline = Instant::now() + CRD_DISCOVERY_PROBE_BUDGET;
+    loop {
+        if let Ok(resources) = fetch::discover_resources(client).await
+            && resources
+                .iter()
+                .any(|(ar, _)| ar.group == group && ar.kind == kind)
+        {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(CRD_DISCOVERY_PROBE_INTERVAL).await;
+    }
+}
 
 /// A resource described by an import marker. The CLI polls the cluster for
 /// this resource and blocks the wave until it's present and ready — using the
@@ -196,6 +233,7 @@ pub async fn wait_for_import_target(
                 // actually serving requests before we advance the wave.
                 if target.kind == "CustomResourceDefinition" {
                     if check_crd_ready(&obj.data) {
+                        let _ = probe_crd_discovery(client, &obj.data).await;
                         return Ok(ReadinessResult::Ready);
                     }
                     "CRD present, waiting for Established=True".into()
@@ -371,7 +409,7 @@ fn pluralize_kind(kind: &str) -> String {
 }
 
 /// Default timeout for readiness polling.
-pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// Default interval between readiness polls.
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
@@ -865,6 +903,14 @@ pub async fn wait_for_ready(
         }
 
         if check_readiness(&obj, kind) {
+            // A CRD that reports Established=True can still be invisible to
+            // the apiserver's discovery endpoint for a few hundred ms (and
+            // longer across HA replicas). Probe discovery before declaring
+            // the CRD ready so dependents don't race.
+            if kind == "CustomResourceDefinition" {
+                on_status("CRD Established, probing discovery");
+                let _ = probe_crd_discovery(client, &obj.data).await;
+            }
             return Ok(ReadinessResult::Ready);
         }
 

@@ -142,7 +142,9 @@ impl GraphStreamDriver {
         execute!(stdout, cursor::Hide)?;
 
         let backend = CrosstermBackend::new(stdout);
-        let viewport_height = fold_height.unwrap_or_else(initial_viewport_height);
+        let viewport_height = fold_height
+            .unwrap_or_else(initial_viewport_height)
+            .saturating_add(1);
         let terminal = Terminal::with_options(
             backend,
             TerminalOptions {
@@ -600,11 +602,25 @@ fn render_once(
         let area = frame.area();
         let outer = Layout::default()
             .direction(ratatui::layout::Direction::Vertical)
-            .constraints([Constraint::Length(1), Constraint::Min(0)])
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Min(0),
+            ])
             .split(area);
-        render_header(outer[0], frame.buffer_mut(), state);
-        render_tree(outer[1], frame.buffer_mut(), state, flushed);
+        render_divider(outer[0], frame.buffer_mut());
+        render_header(outer[1], frame.buffer_mut(), state);
+        render_tree(outer[2], frame.buffer_mut(), state, flushed);
     });
+}
+
+fn render_divider(area: Rect, buf: &mut Buffer) {
+    let rule: String = "─".repeat(area.width as usize);
+    Paragraph::new(Line::from(Span::styled(
+        rule,
+        Style::default().fg(Color::DarkGray),
+    )))
+    .render(area, buf);
 }
 
 fn render_header(area: Rect, buf: &mut Buffer, state: &ViewState) {

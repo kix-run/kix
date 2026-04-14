@@ -847,41 +847,52 @@ async fn execute_node(
     };
 
     // Snapshot discovery. Dependents of a CRD don't run until the CRD has
-    // reached Ready, so by the time we execute a node whose kind exists, it
-    // will be in the cache. Import markers bypass this via their own
-    // bootstrap in readiness.
-    let (ar, scope) = {
-        let d = ctx.discovery.read().await;
-        match d.iter().find(|(ar, _)| ar.kind == rid.kind) {
-            Some((ar, scope)) => (ar.clone(), scope.clone()),
-            None => {
-                // Import markers are PackageInstance kind (always discoverable);
-                // any other missing kind is a plan bug.
-                if rid.kind == "PackageInstance" {
-                    // Fall through: PackageInstance will be discovered.
-                    let pi = d.iter().find(|(ar, _)| ar.kind == "PackageInstance");
-                    match pi {
-                        Some((ar, scope)) => (ar.clone(), scope.clone()),
-                        None => {
-                            return NodeOutcome::Failed {
-                                detail: NodeDetail::ApplyFailed(
-                                    "PackageInstance kind not discovered".into(),
-                                ),
-                                message: "PackageInstance kind not discovered".into(),
-                            };
-                        }
-                    }
-                } else {
-                    return NodeOutcome::Failed {
-                        detail: NodeDetail::ApplyFailed(format!(
-                            "kind {} not in discovery cache",
-                            rid.kind
-                        )),
-                        message: format!("kind {} not in discovery cache", rid.kind),
-                    };
+    // reached Ready (including a post-Established discovery probe in
+    // readiness.rs), so by the time we execute a node whose kind exists,
+    // it will normally be in the cache. Import markers bypass this via
+    // their own bootstrap in readiness.
+    //
+    // Safety net: HA apiservers can serve discovery from different replicas
+    // with a few hundred ms of skew, so even after our probe the local
+    // cache may briefly lack the kind. Retry-on-miss with a live refresh
+    // before failing the node.
+    let lookup_kind = if rid.kind == "PackageInstance" {
+        "PackageInstance"
+    } else {
+        rid.kind.as_str()
+    };
+    let (ar, scope) = 'resolve: {
+        const RETRIES: u32 = 4;
+        const INTERVAL: Duration = Duration::from_millis(500);
+        for attempt in 0..=RETRIES {
+            {
+                let d = ctx.discovery.read().await;
+                if let Some((ar, scope)) = d.iter().find(|(ar, _)| ar.kind == lookup_kind) {
+                    break 'resolve (ar.clone(), scope.clone());
                 }
             }
+            if attempt == RETRIES {
+                break;
+            }
+            tracing::debug!(
+                kind = %lookup_kind,
+                attempt = attempt + 1,
+                "kind missing from discovery cache, refreshing"
+            );
+            if let Ok(new) = fetch::discover_resources(&ctx.client).await {
+                *ctx.discovery.write().await = new;
+            }
+            tokio::time::sleep(INTERVAL).await;
         }
+        let msg = if lookup_kind == "PackageInstance" {
+            "PackageInstance kind not discovered".to_string()
+        } else {
+            format!("kind {} not in discovery cache", rid.kind)
+        };
+        return NodeOutcome::Failed {
+            detail: NodeDetail::ApplyFailed(msg.clone()),
+            message: msg,
+        };
     };
 
     // Apply.
