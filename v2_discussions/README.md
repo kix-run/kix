@@ -98,6 +98,7 @@ The first SOPS flow is being implemented against a minimum viable design. **All 
 | 94 | [DNS dependency chain — step 2](94_dns_dependency_chain_step2.md) | Partial | **Active** | Step 1 rework landed: DNS deps derived from per-workload service-edge detection (shared with netpol), not blanket injection. Step 2 pending: instance-level `extraDeps` for platform-dns → kind-system-netpol link. |
 | 95 | [Netpol build-time validation](95_netpol_build_time_validation.md) | Draft | Near-term | Catch missing/misconfigured network policies at eval time: intent schema validation, webhook ingress detection, uncovered port warnings. |
 | 96 | [Netpol autogeneration blindspots](96_netpol_autogeneration_blindspots.md) | RFC | **Active** | Three classes of workloads where store-path context analysis fails: Helm charts, operator-managed pods, ConfigMap indirection. Problem analysis + design space for fixes. |
+| 97 | [Service contract primitives](97_service_contract_primitives.md) | Design | **Active** | Promote the `mkServiceRef` + facade-with-`requires` patterns (prototyped in stackgres-cluster/stackgres-database) into a named `scope.provideService` contract. Closes blindspot 2 of doc 96, subsumes doc 65's passthrough-instance driver, cuts ~100 lines of boilerplate per package. |
 
 > Netpol auto-derivation (37, 82, 83, 85) is **shipped** — see `archive/` for the design record.
 

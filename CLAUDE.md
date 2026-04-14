@@ -33,9 +33,16 @@ The kix API is in active development. Breaking changes are fine — none of the 
 
 ## Build
 
+Use the ludo-kind cluster as the canonical smoke-test — it wires together
+the full package set (stackgres, cilium, cert-manager, ingress, etc.) and
+catches most regressions:
+
 ```bash
-nix build .#cluster-nw1 --extra-experimental-features pipe-operators
+nix build ludo/#cluster-ludo-kind --extra-experimental-features pipe-operators
 ```
+
+Other clusters (e.g. `.#cluster-nw1`) may need capabilities the current
+env lacks (external cilium, etc.); prefer ludo-kind for default checks.
 
 ## Diff against live cluster
 
