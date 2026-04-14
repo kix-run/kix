@@ -17,8 +17,8 @@
 #      (consumer) namespace, holding username/password/database/host/port.
 #      This is what the consuming app wires into its pod.
 #   2. A sibling `bootstrapPassword` Secret is materialized in the postgres
-#      cluster's namespace via scope.forNamespace, holding just `password`,
-#      so a Job in that namespace can mount it via secretKeyRef.
+#      cluster's namespace via `scope.forService postgres`, holding just
+#      `password`, so a Job in that namespace can mount it via secretKeyRef.
 #   3. A `bootstrapJob` runs in the postgres namespace using a postgres
 #      image, waits for the cluster to accept connections, and idempotently
 #      creates the role, the database, optional ownership, GRANTs, and
@@ -29,7 +29,7 @@
 #      password rotation).
 #
 # Same-namespace works too: if the consumer puts both the SGCluster and
-# this database instance in one namespace, scope.forNamespace returns a
+# this database instance in one namespace, `scope.forService` returns a
 # scope rooted in that same namespace and everything still works.
 #
 # root = credentials Secret (in consumer namespace).
@@ -175,29 +175,22 @@ in
           null;
 
       # --- Resolve postgres backend identity -------------------------------
-      # The dep `postgres` is a stackgres-cluster instance view. We need the
-      # cluster's namespace (so we can target it with scope.forNamespace),
-      # the cluster's resource name (which is also the operator-created
-      # superuser-secret name), and connection details.
-      #
-      # `_meta.namespaceName` is exposed by lib/eval/view.nix and is the
-      # standard handle for "the namespace this dep lives in".
-      postgresNamespace = postgres._meta.namespaceName;
-      # `postgres.out.name` carries Nix string context (a dependency edge to
-      # the SGCluster store path) — that's what we want everywhere except
-      # the few places that pipe through `builtins.toFile` (which forbids
-      # store-path references in its name argument). Strip context only at
-      # those exact sites; keep it everywhere else so the dep edges land in
-      # labels, env values, and the final manifest.
+      # `postgres.out.*` values carry Nix string context pointing at the
+      # SGCluster's postgresService ServiceRef marker (selector, ports,
+      # readiness) and transitively the SGCluster itself. We keep the
+      # context on every value — k8s.mkResource strips it only for the
+      # toFile filename, so markers and refs built below automatically
+      # pick up the SGCluster edge without any `requires` plumbing.
       clusterName = postgres.out.name;
       clusterFqdn = postgres.out.fqdn;
       clusterPort = postgres.out.port;
 
       # --- A scope rooted in the postgres namespace ------------------------
-      # Lets us emit Secret + Job resources next to the SGCluster while this
-      # package's primary scope (and credentials Secret) stay in the
-      # consumer's namespace.
-      backendScope = scope.forNamespace postgresNamespace;
+      # `scope.forService` reads the dep's `_meta.namespaceName` and hands
+      # back a scope bound to it — so Secret + Job resources land next to
+      # the SGCluster while this package's primary scope (and the
+      # consumer-facing credentials Secret) stay in the consumer's namespace.
+      backendScope = scope.forService postgres;
 
       # --- Hash for the bootstrap Job name ---------------------------------
       # K8s Jobs are immutable in many spec fields. Embedding a content
@@ -274,23 +267,21 @@ in
       # --- 3. Superuser secret reference (postgres namespace) --------------
       # The StackGres operator auto-creates a Secret named after the cluster
       # holding `superuser-username` / `superuser-password`. mkSecretRef in
-      # the backend scope lets us pull those into the Job's env without any
+      # the backend scope pulls those into the Job's env without any
       # cross-namespace shenanigans, and gives us deploy-time validation
       # that the secret actually exists before the Job runs.
       #
-      # `name` here flows through `builtins.toFile` (via the marker
-      # PackageInstance path), so we have to hand it a context-free string.
-      # Stripping the context drops the implicit dep edge to the SGCluster,
-      # so we re-establish it explicitly via `requires` — otherwise the
-      # import marker lands in wave 0 and the readiness poll times out
-      # because the operator hasn't had a chance to materialize the Secret.
+      # `clusterName` carries the SGCluster's store-path context; k8s
+      # strips it internally only for the toFile filename, while the
+      # content-side context flows through to the marker's outPath and
+      # `kix.dev/depends-on` annotation — so the wave graph correctly
+      # orders this ref after the SGCluster, no manual `requires` needed.
       superuserRef = backendScope.mkSecretRef {
-        name = builtins.unsafeDiscardStringContext clusterName;
+        name = clusterName;
         keys = [
           "superuser-username"
           "superuser-password"
         ];
-        requires = [ (if postgres ? raw then postgres.raw.cluster else postgres.root) ];
       };
 
       # --- 4. Bootstrap Job (postgres namespace) ---------------------------
@@ -410,40 +401,16 @@ in
         };
       };
 
-      # --- 5. Service facade (postgres namespace) ----------------------------
-      # Re-export the postgres service as a ServiceRef owned by this package.
-      # The original postgresService marker lives in stackgres-cluster's
-      # resources; consumers only see direct deps' resources in their
-      # serviceRefRegistry, so without this facade the netpol system can't
-      # match the store-path context that flows through out.host/port.
-      #
-      # Placing bootstrapJob in `requires` means the marker (and therefore
-      # every out.* value that carries its context) transitively depends on
-      # the Job. Consumers like immich get automatic wave ordering: their
-      # Deployment won't deploy until the bootstrap Job succeeds.
-      dbService = backendScope.mkServiceRef {
-        name = builtins.unsafeDiscardStringContext clusterName;
-        selector = {
-          "app" = "StackGresCluster";
-          "stackgres.io/cluster-name" = builtins.unsafeDiscardStringContext clusterName;
-        };
-        ports = [
-          {
-            port = "5432";
-            protocol = "TCP";
-          }
-        ];
-        requires = [ bootstrapJob ];
-      };
-
-      # --- Consumer-facing helper -----------------------------------------
+      # --- 5. Consumer-facing env helper ----------------------------------
       # Returns a list of K8s env entries with the connection info under a
-      # given prefix. Saves consumers from wiring 5 fields by hand.
+      # given prefix. Saves consumers from wiring 5 fields by hand. Reads
+      # `self.pg.*` so the forwarded markers (see `pg` below) flow through
+      # the consumer's forward closure and DI netpol registry.
       mkConnectionEnv =
         prefix:
         (kix.mkEnvVars {
-          "${prefix}HOSTNAME" = dbService.out.fqdn;
-          "${prefix}PORT" = dbService.out.port;
+          "${prefix}HOSTNAME" = self.pg.fqdn;
+          "${prefix}PORT" = self.pg.port;
           "${prefix}DATABASENAME" = dbName;
         })
         ++ (credentials.out.mkEnv {
@@ -457,24 +424,53 @@ in
         bootstrapPassword
         bootstrapJob
         superuserRef
-        dbService
         ;
+
+      # --- Forwarded postgres service ------------------------------------
+      # `scope.forwardEdges` bundles two concerns into one intent:
+      #
+      #   a) Stamp the bootstrap Job onto the postgres service edge.
+      #      `postgres.out.{fqdn,port,name}` already carry the
+      #      postgresService ServiceRef marker context (selector, ports,
+      #      readiness poll); forwardEdges packs `bootstrapJob`'s
+      #      store-path into each string value's context so consumers
+      #      traversing `database.out.host` / `.port` automatically pick
+      #      up the Job in their forward closure — no chain hop through
+      #      the Job, no duplicate selector/ports declaration, no new
+      #      marker. Wave ordering follows: the consumer's Deployment
+      #      hash includes the Job's hash → deploy gates on Job-Complete.
+      #
+      #   b) Re-expose the upstream postgres ServiceRef marker as a
+      #      folder-shaped typed child so `collectTypedAttrs` picks it
+      #      up when building the consumer's DI-direct netpol registry.
+      #      Without this re-exposure, the marker's outPath would be
+      #      present in `database.out.host`'s string context but
+      #      invisible to `buildWorkloadCnps` (which only indexes
+      #      resources from the consumer's direct deps) — and the
+      #      consumer's egress CNP would never emit a rule targeting
+      #      postgres, producing a CONNECT_TIMEOUT under default-deny.
+      #
+      # `pg` lives in `parts` as a plain attrset (no `_type`), so
+      # mkPackageView treats it as a folder and collectTypedAttrs
+      # descends one level into it to find the re-exposed marker.
+      # Consumers read `self.pg.fqdn` / `self.pg.port`.
+      pg = scope.forwardEdges postgres [ bootstrapJob ];
 
       root = {
         resource = credentials;
-        # bootstrapPassword is referenced by the Job (via secretKeyRef
-        # context), so listing it explicitly would be redundant — kix's
-        # forward closure picks it up. The Job itself is not referenced
-        # from `credentials`, so it needs to live in either `requires`
-        # (in-band, blocks readiness) or `postHooks` (runs after package
-        # is otherwise deployed). We use `postHooks` so the credentials
-        # Secret can be applied immediately and immich's wave waits on
-        # the Job's success readiness rather than coupling the two.
-        postHooks = [ bootstrapJob ];
+        ## bootstrapPassword is referenced by the Job (via secretKeyRef
+        ## context), so listing it explicitly would be redundant — kix's
+        ## forward closure picks it up. The Job itself is not referenced
+        ## from `credentials`, so it needs to live in either `requires`
+        ## (in-band, blocks readiness) or `postHooks` (runs after package
+        ## is otherwise deployed). We use `postHooks` so the credentials
+        ## Secret can be applied immediately and immich's wave waits on
+        ## the Job's success readiness rather than coupling the two.
+        #postHooks = [ bootstrapJob ];
 
         out = {
-          host = dbService.out.fqdn;
-          port = dbService.out.port;
+          host = self.pg.fqdn;
+          port = self.pg.port;
           database = dbName;
           username = userName;
           extensions = config.extensions;

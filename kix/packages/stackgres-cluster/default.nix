@@ -649,6 +649,8 @@ in
           extraImages = [
             "quay.io/ongres/patroni:v4.1.0-pg${config.postgres.version}.13-build-6.49"
             "quay.io/ongres/prometheus-postgres-exporter:v0.19.0-build-6.49"
+            "quay.io/ongres/postgres-util:v${config.postgres.version}.13-build-6.49"
+            "quay.io/stackgres/cluster-controller:1.18.6"
           ];
         };
       };

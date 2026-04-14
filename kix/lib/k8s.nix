@@ -305,12 +305,17 @@ rec {
       manifestJsonWithDeps = builtins.appendContext manifestJsonStamped depContexts;
 
       # Sanitize the name for use in store paths (colons and other special
-      # characters are not allowed in Nix store path names).
-      sanitizedName = builtins.replaceStrings [ ":" ] [ "_" ] name;
+      # characters are not allowed in Nix store path names). Strip string
+      # context because `builtins.toFile`'s first arg (the store-path
+      # filename) cannot carry references — but the content (second arg)
+      # still carries the full context, so consumers and the
+      # kix.dev/depends-on annotation keep every dep edge the name brought.
+      sanitizedName = builtins.unsafeDiscardStringContext (builtins.replaceStrings [ ":" ] [ "_" ] name);
+      sanitizedNsKey = builtins.unsafeDiscardStringContext (toString nsKey);
 
       # Content-addressed store path. Hash depends on this resource's content
       # and all referenced resources (their store paths via string context).
-      _identityPath = builtins.toFile "k8s-${kind}-${nsKey}-${sanitizedName}" manifestJsonWithDeps;
+      _identityPath = builtins.toFile "k8s-${kind}-${sanitizedNsKey}-${sanitizedName}" manifestJsonWithDeps;
 
       # Plain path string without context (for use as attr keys, comparisons)
       _identityPathPlain = builtins.unsafeDiscardStringContext _identityPath;
@@ -339,6 +344,14 @@ rec {
       }
       // lib.optionalAttrs (autoSelector != null) {
         selector = autoSelector;
+      }
+      # Expose spec.ports for Services (matches mkServiceRef's `out.ports`),
+      # so consumers can opaquely swap between a kix-managed Service and a
+      # ServiceRef over an operator-managed one. Ports list values are
+      # plain — they don't need per-leaf context (consumers of .ports
+      # don't pick up graph edges from port numbers).
+      // lib.optionalAttrs (kind == "Service" && rawManifest ? spec.ports) {
+        ports = rawManifest.spec.ports;
       };
 
       # User-defined outputs override auto-derived ones.

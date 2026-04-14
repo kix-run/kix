@@ -152,6 +152,16 @@ in
         # construction time. Lazy: only forced when the first
         # `mkDeployment`/`mkStatefulSet`/`mkDaemonSet` runs, by which
         # point `resolvedDepMeta` is fully settled.
+        #
+        # Scoped to DI-direct deps. Middle packages that forward a
+        # dep's Service edge to downstream consumers (e.g.
+        # stackgres-database forwarding postgres' ServiceRef via
+        # `scope.augmentAllEdges`) must also re-expose the upstream
+        # marker in their own build return (e.g.
+        # `inherit (postgres) postgresService;`) so the downstream
+        # consumer's registry picks it up. Forwarding context without
+        # re-exposing the marker leaves the consumer's egress CNP
+        # missing the forwarded edge.
         _depResourcesForNetpol = builtins.concatMap (
           argName:
           let

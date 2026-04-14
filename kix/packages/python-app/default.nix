@@ -406,8 +406,9 @@ in
           priorityClassName = config.priorityClassName;
         }
         // lib.optionalAttrs config.serviceAccount.enabled {
-          serviceAccountName =
-            if config.serviceAccount.name != null then config.serviceAccount.name else rName;
+          serviceAccountName = kix.untrackedRef (
+            if config.serviceAccount.name != null then config.serviceAccount.name else rName
+          );
         };
 
       # ── Probe builders ────────────────────────────────────────────

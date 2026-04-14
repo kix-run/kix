@@ -7,11 +7,13 @@
   rbac,
   crd,
   netpol,
+  helpers,
   helm ? { },
 }:
 
 let
   inherit (k8s) clusterScoped;
+  inherit (helpers) collectTypedAttrs;
 
   # Capability check helpers. Called at resource construction time.
   # `throw` for hard failures (resource will definitely not work),
@@ -1428,6 +1430,12 @@ rec {
       #     requires = [ self.cluster ];
       #   };
       #   root.out.fqdn = pgService.out.fqdn;
+      #
+      # `name` may carry Nix string context (e.g. `postgres.out.name`): the
+      # filename-strip happens inside k8s.mkResource, and the content-side
+      # context flows into the marker's outPath and kix.dev/depends-on
+      # annotation automatically. No `unsafeDiscardStringContext` needed;
+      # no redundant `requires` re-establishment needed.
       mkServiceRef =
         {
           name,
@@ -1484,6 +1492,119 @@ rec {
         namespace = namespaceResource;
 
         mkResource = scopeMkResource;
+
+        # --- Edge augmentation ------------------------------------------
+        # Stamp passenger resources' store-path context into a value that
+        # already carries its own upstream context. Consumers that read
+        # the augmented value pick up the original edge AND the
+        # passengers in their forward closure — without needing a named
+        # chain hop through any of them.
+        #
+        # Use when your package sits in the middle of an edge between
+        # consumer and producer and wants to contribute a resource
+        # (typically a readiness-providing Job) to the consumer's closure
+        # without re-declaring the producer. Contrast with mkServiceRef,
+        # which is for *originating* a service edge.
+        #
+        # `passengers` is a list of kix resources (things with outPath).
+        # `value` is any string (port number, FQDN, name).
+        augmentEdge =
+          passengers: value:
+          let
+            extraCtx = builtins.foldl' (
+              acc: p: if builtins.isAttrs p && p ? outPath then acc // builtins.getContext "${p}" else acc
+            ) { } passengers;
+          in
+          builtins.appendContext (toString value) extraCtx;
+
+        # Re-stamp every string field of an upstream's `out` attrset
+        # with additional passengers. Non-string values pass through
+        # untouched. The common case when wrapping a producer's output.
+        augmentAllEdges =
+          passengers: outAttrs:
+          lib.mapAttrs (_: v: if builtins.isString v then scopeObj.augmentEdge passengers v else v) outAttrs;
+
+        # Forward a dep's service edges into this package — the one-call
+        # pattern for pass-through packages (e.g. stackgres-database
+        # forwarding postgres). Returns a plain attrset combining:
+        #
+        #   1. `augmentAllEdges passengers dep.out` — the producer's
+        #      `out` with every string field's context merged with each
+        #      passenger's store-path, so consumers reading the
+        #      forwarded values pick up the original edge AND the
+        #      passengers in their forward closure.
+        #
+        #   2. The ServiceRef markers found in `dep.raw` — re-exposed
+        #      as typed attributes. When the package author places the
+        #      return value in `parts` under a named key (via
+        #      `self.pg = scope.forwardEdges ...;`), that key becomes a
+        #      folder (no `_type`), `collectTypedAttrs` descends one
+        #      level, and the markers auto-register in the consumer's
+        #      DI-direct netpol registry.
+        #
+        # Why both in one call: forwarding context without re-exposing
+        # the markers leaves `database.out.host` carrying the right
+        # store-path context, but the consumer's `buildWorkloadCnps`
+        # registry is built from the consumer's *direct* dep resources
+        # (not transitive), so the marker two hops upstream is invisible
+        # and no egress/ingress CNP gets emitted. Bundling both sides
+        # in `forwardEdges` means the package author's single intent
+        # statement — "I'm forwarding this dep's edges with these
+        # readiness passengers" — does the context plumbing and the
+        # marker re-exposure together.
+        #
+        # Usage:
+        #   build = { self, postgres, ... }: {
+        #     bootstrapJob = ...;
+        #     pg = scope.forwardEdges postgres [ self.bootstrapJob ];
+        #     root.out = {
+        #       host = self.pg.fqdn;
+        #       port = self.pg.port;
+        #     };
+        #   };
+        #
+        # `dep` is a DI-injected dep (instance view); requires `.out`
+        # (for edge augmentation) and `.raw` (for marker extraction).
+        # Safe from cycles: `dep` is DAG-upstream, fully evaluated by
+        # the time the consumer's build function runs.
+        forwardEdges =
+          dep: passengers:
+          let
+            augmented = scopeObj.augmentAllEdges passengers (dep.out or { });
+            depRaw = dep.raw or { };
+            # Extract ServiceRef markers from the dep's raw parts. The
+            # `excludeKeys = [ "root" "meta" ]` matches the convention in
+            # `_depResourcesForNetpol`: those aren't part of the
+            # resource surface.
+            typed = builtins.filter (v: (v._type or "") == "k8s-resource") (
+              collectTypedAttrs {
+                excludeKeys = [
+                  "root"
+                  "meta"
+                ];
+              } depRaw
+            );
+            markers = builtins.filter netpol.isServiceRef typed;
+            markerMap = builtins.listToAttrs (
+              map (m: {
+                inherit (m) name;
+                value = m;
+              }) markers
+            );
+          in
+          augmented // markerMap;
+
+        # Namespace-bound subscope derived from a dep's _meta.namespaceName.
+        # Hides the `scope.forNamespace dep._meta.namespaceName` dance and
+        # keeps `_meta` out of the package-author surface.
+        forService =
+          dep:
+          let
+            depNs =
+              dep._meta.namespaceName
+                or (throw "scope.forService: dep has no _meta.namespaceName (external/passthrough?); use scope.forNamespace explicitly");
+          in
+          scopeObj.forNamespace depNs;
 
         forNamespace =
           nsName:

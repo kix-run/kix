@@ -78,6 +78,7 @@ The first SOPS flow is being implemented against a minimum viable design. **All 
 | 68 | [Migrating a non-kix live cluster](68_migrate_non_kix_live_cluster.md) | Draft | Near-term | Adoption-safe YAML alongside existing Helm/plain workloads. |
 | 81 | [Deploy as a kind-aware lifecycle engine](81_deploy_as_lifecycle_engine.md) | RFC | Active | Reframes deploy as a per-kind transition engine: Plan/Transition/Verdict primitives, structured readiness verdicts replacing wall-clock timeouts. Spine for 67/44/50/56. |
 | 84 | [M0/M1 implementation plan](84_m0_m1_implementation_plan.md) | Plan | Active | Short-horizon milestone plan. |
+| 98 | [Deploy execution topology](98_deploy_execution_topology.md) | Draft | Active | Follow-up to 81 §L2: diff belongs in the planner, not in wave computation; proposes moving execution from wave-barrier to DAG-streaming (nix-output-monitor-style) with waves retained only as a display/grouping axis. |
 
 > User-facing operator workflow is still an open question — tracked in `ROADMAP.md § Open design questions`.
 

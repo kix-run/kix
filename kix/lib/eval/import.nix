@@ -68,6 +68,50 @@ rec {
           }
         );
 
+      # Import-mode mirrors of scope.mkServiceRef / scope.mkSecretRef. The
+      # real versions (kix/lib/eval/scope.nix:1332, 1437) emit a
+      # PackageInstance marker and attach its store-path context to each
+      # `out` field so consumers pick up the dep edge automatically. In
+      # import mode we don't emit markers (the import's own PackageInstance
+      # — created by evaluateImportInstance — is the deploy-graph edge);
+      # we only need the derived `out` shape so the imported package's
+      # build can compute its own root.out. Context-attach is therefore
+      # identity.
+      mkServiceRefImport =
+        {
+          name,
+          selector,
+          ports,
+          requires ? [ ],
+        }:
+        {
+          out = {
+            inherit selector ports;
+            inherit name;
+            fqdn = "${name}.${namespaceName}.svc";
+            port = toString (builtins.head ports).port;
+          };
+        };
+      mkSecretRefImport =
+        {
+          name,
+          keys,
+          type ? "Opaque",
+          requires ? [ ],
+          reflect ? false,
+        }:
+        {
+          out = {
+            inherit name;
+          }
+          // k8s.mkSecretHelpers {
+            inherit name keys type;
+            namespace = namespaceName;
+            attachCtx = v: v;
+            reflected = reflect;
+          };
+        };
+
       scope = {
         inherit instanceName namespaceName selectorLabels;
         labelStyle = "kix";
@@ -78,6 +122,8 @@ rec {
         # from a dep proxy that throws) and delegates to mkResource.
         # Only out values matter; dependency tracking is irrelevant for imports.
         mkCR = _crd: args: scope.mkResource args;
+        mkServiceRef = mkServiceRefImport;
+        mkSecretRef = mkSecretRefImport;
         inherit rbac;
       };
     in

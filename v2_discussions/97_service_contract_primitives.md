@@ -1,7 +1,24 @@
 # 97: Sibling Context Markers (a.k.a. "Service Contracts")
 
-**Status:** Design
+**Status:** Implemented (2026-04-14) — §3, §4, §6, §8 landed.
 **Related:** `96_netpol_autogeneration_blindspots.md`, `94_dns_dependency_chain_step2.md`, `65_passthrough_instances.md`, `29_compiler-design.md`, `archive/03_package_fixpoint_resources.md`
+
+## Implementation notes
+
+The `mkServiceRef` / `mkSecretRef` context absorption (§3.4) turned out
+to be a one-line fix at the wrong layer: the actual `builtins.toFile`
+restriction is on the **filename argument only**, not the content. So
+`kix/lib/k8s.nix:313` strips context via `unsafeDiscardStringContext`
+exclusively when building the store-path filename, while the content
+side (`manifestJsonWithDeps`) keeps full context — meaning `name`'s
+upstream edges flow into both `kix.dev/depends-on` and the `outPath`'s
+context automatically. No wrapper changes in scope.nix were needed; the
+footgun disappears for every resource type, not just `mkServiceRef` /
+`mkSecretRef`.
+
+Only one package matched the edge-augmentation pattern
+(`stackgres-database`); the rest of the tree is flat (apps consume
+deps directly) so no further adoption work is required right now.
 
 ## TL;DR
 
@@ -362,11 +379,11 @@ None of these six effects are declared by the consumer. All six are proved by th
 
 ## 12. Next steps
 
-1. Land `scope.augmentEdge` / `scope.augmentAllEdges` (§3.1). Two-line primitive. Validate by rewriting `stackgres-database` to drop the ServiceRef facade and confirming the ludo cluster's build and netpol graph are byte-identical to today's.
-2. Land `scope.forService` (§3.3). Port `stackgres-database`.
-3. Land the `mkServiceRef` / `mkSecretRef` context-absorption (§3.4). Delete `unsafeDiscardStringContext` across `kix/packages/`.
-4. Land §4 (`mkService.autoOut` exposes `ports`). Additive.
-5. Spike §6 (`fqdn-without-context`) as a warning. Count hits across `kix/packages/`. Triage.
-6. Archive this doc once the five items above ship.
+1. [x] Land `scope.augmentEdge` / `scope.augmentAllEdges` (§3.1). Two-line primitive in `kix/lib/eval/scope.nix`.
+2. [x] Land `scope.forService` (§3.3). Ported `stackgres-database`.
+3. [x] Land the `mkServiceRef` / `mkSecretRef` context-absorption (§3.4). Implemented at `kix/lib/k8s.nix:313` (strip only in `toFile` filename arg). All 3 `unsafeDiscardStringContext` callsites in `kix/packages/` removed.
+4. [x] Land §4 (`mkService.autoOut` exposes `ports`). `kix/lib/k8s.nix` autoOut now conditionally exposes `spec.ports` for `kind == "Service"`.
+5. [x] Spike §6 (`fqdn-without-context`) as a warning. Landed in `kix/lib/rules/architecture.nix` as `fqdnWithoutContext` (manifest-level, workload kinds only). Zero hits on `ludo-kind` today; fires correctly against synthetic hand-rolled `<name>.<ns>.svc` literals. v1 bar is "empty store-path context"; tightening to "context must resolve to a known ServiceRef marker" is a follow-up.
+6. [ ] Archive this doc — all shipped sections complete; lift §11 open questions (error-vs-warning flip, stricter context-resolution) to `ROADMAP.md` or `interesting_thoughts/`.
 
 No new vocabulary. No new tags. No new consumer-side declarations. `attachCtx` is the primitive; the fix is to give its real use case a real handle.

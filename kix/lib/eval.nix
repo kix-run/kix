@@ -40,6 +40,7 @@ let
       rbac
       crd
       netpol
+      helpers
       helm
       ;
   };
