@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>kix — The mechanism</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<nav class="nav">
+  <div class="container">
+    <a href="index.html" class="nav-logo">
+      <span class="logo-mark">&gt;_</span> kix
+    </a>
+    <div class="nav-toggle">
+      <a href="index.html">Overview</a>
+      <a href="executive.html">Business</a>
+      <a href="platform.html" class="active">Platform</a>
+      <a href="developer.html">Developer</a>
+    </div>
+    <a href="mailto:dev@example.com" class="nav-cta">Talk to us</a>
+  </div>
+</nav>
+
+<section class="hero">
+  <div class="container">
+    <h4>For platform engineers</h4>
+    <h1>Kubernetes doesn't need<br>a new abstraction.<br>
+      It needs <span class="accent">a compiler</span>.</h1>
+    <p class="lead">
+      Every previous attempt to make Kubernetes "easier" tried to abstract
+      away the resources. They collapsed on edge cases, because the resources
+      aren't the problem. The <em>wiring</em> is.
+    </p>
+  </div>
+</section>
+
+<section id="wiring">
+  <div class="container narrow">
+    <h4>What's actually hard about Kubernetes</h4>
+    <h2>Keeping dozens of resources in agreement.</h2>
+
+    <p>
+      Kubernetes is a remarkably general set of primitives. Every field on
+      every resource exists because some real-world case needs it. You can't
+      abstract them away without collapsing on that case.
+    </p>
+
+    <p>
+      Nobody struggles to write a Deployment. What they struggle with is
+      keeping a <em>Deployment, Service, Ingress, NetworkPolicy,
+      ServiceAccount, Role, RoleBinding, PVC, volume, volumeMount, ConfigMap,
+      Secret, and Certificate</em> all agreeing about names, labels, ports,
+      hosts, permissions, and paths. When any one of them drifts, something
+      breaks at runtime.
+    </p>
+
+    <p>
+      This is not a template problem. Templates produce text. The text is
+      fine. The problem is that the text must stay consistent across N files
+      forever, through every refactor, every team handoff, every new dep.
+      That's a <strong>compiler problem</strong>.
+    </p>
+
+    <h3 style="margin-top: 2.5rem;">The wirings, concretely</h3>
+    <table class="analogy-table">
+      <thead>
+        <tr><th>Intent</th><th>What you actually write</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>"Route to these pods"</td><td>Copy matchLabels into Service.spec.selector. Hope they match.</td></tr>
+        <tr><td>"I talk to postgres"</td><td>Hand-construct <code>host:port</code> from the service's naming convention.</td></tr>
+        <tr><td>"My app listens on 8080"</td><td>Declare 8080 four times &mdash; container, Service, Ingress, NetworkPolicy.</td></tr>
+        <tr><td>"I can read Secrets"</td><td>ServiceAccount + Role + RoleBinding. Three resources, name-matched.</td></tr>
+        <tr><td>"10Gi at /data"</td><td>PVC + volumes entry + volumeMounts entry, all sharing a name string.</td></tr>
+        <tr><td>"A &rarr; B on 5432"</td><td>NetworkPolicy allowing egress from A + ingress to B. Forget one, traffic drops silently.</td></tr>
+      </tbody>
+    </table>
+
+    <p class="dim mt-3">
+      Every one of these is information declared in one place, manually
+      repeated in another. Every one of them is a class of bug.
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="container narrow">
+    <h4>The right historical analogy</h4>
+    <h2>Kubernetes is still in the assembly era.</h2>
+
+    <p>
+      Assembly's problem was the language &mdash; registers, opcodes, stack
+      management. C replaced the language.
+    </p>
+
+    <p>
+      Kubernetes' problem is not the language. The resources are fine. You
+      could stare at a Deployment for a year and not find a better model.
+      The problem is the wiring between resources &mdash; name strings,
+      label matchers, redundant port declarations, permission triples.
+    </p>
+
+    <p>
+      <strong>You don't replace the language. You compile the wiring.</strong>
+      That's what kix is. The resources stay 1:1 with real K8s resources.
+      What changes is that you stop writing the sync-them-by-hand layer.
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="container narrow">
+    <h4>Why the Nix store</h4>
+    <h2>The IR we needed was sitting there for twenty years.</h2>
+
+    <p>
+      A compiler needs a dependency graph. Not one you ask the user to
+      declare &mdash; one that falls out of the computation. The Nix store
+      already does this, through a mechanism called <em>string context</em>.
+    </p>
+
+    <p>
+      When a kix package interpolates <code>postgres.out.fqdn</code> into an
+      environment variable, Nix embeds postgres's content hash into the
+      consumer's store path. The dependency edge isn't declared. It's a
+      <em>byproduct</em> of the resource being constructed.
+    </p>
+
+    <div class="code-header">
+      <span>consumer/deployment.nix</span>
+      <span class="dim">what you write</span>
+    </div>
+<pre class="code-block"><span class="keyword">build</span> = { <span class="fn">self</span>, <span class="fn">config</span>, <span class="fn">postgres</span>, <span class="fn">scope</span>, <span class="fn">kix</span> }: {
+  <span class="fn">root</span> = scope.<span class="fn">mkDeployment</span> {
+    spec.template.spec.containers = [{
+      env = kix.<span class="fn">mkEnv</span> {
+        <span class="comment">// postgres.out.fqdn isn't just a string &mdash;</span>
+        <span class="comment">// it carries a hash edge into postgres's store path.</span>
+        DATABASE_URL = <span class="string">"postgres://${postgres.out.fqdn}:${toString postgres.out.port}"</span>;
+      };
+    }];
+  };
+}</pre>
+
+    <p>
+      The consumer's hash <em>cannot</em> be computed without depending on
+      postgres. You couldn't fake the edge if you tried. The dependency
+      graph is always complete, always correct, and always cryptographically
+      sound.
+    </p>
+
+    <p>
+      Everything else &mdash; blast radius, drift detection, fleet diff,
+      parallel-safe deploys, rollback, compliance evidence &mdash; is
+      <strong>surfacing what the Merkle DAG already knows</strong>, not
+      building new analysis engines.
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="container">
+    <div class="section-intro">
+      <h4>What you stop writing</h4>
+      <h2>What the compiler derives.</h2>
+      <p class="lead">
+        Each of these used to be a hand-written resource set in your Helm
+        chart. Each is now a consequence of the dependency graph.
+      </p>
+    </div>
+
+    <div class="grid grid-2 stagger">
+      <div class="claim-card">
+        <div class="claim-tag">Selectors</div>
+        <h3>One source, many consumers.</h3>
+        <p>
+          Workload selectors, Service selectors, HPA target references,
+          PDB matchers &mdash; all derived from the same
+          <code>matchLabels</code>. Mismatches can't happen &mdash; there's
+          only one source.
+        </p>
+      </div>
+
+      <div class="claim-card">
+        <div class="claim-tag">NetworkPolicies</div>
+        <h3>Derived from the connection graph.</h3>
+        <p>
+          The compiler sees that service A uses <code>b.out.fqdn</code>. It
+          emits egress from A and ingress to B automatically. Add a
+          consumer, get the policy. No hand-written deny lists.
+        </p>
+      </div>
+
+      <div class="claim-card">
+        <div class="claim-tag">RBAC</div>
+        <h3>Intents, not triples.</h3>
+        <p>
+          <code>rbac.watch</code>, <code>rbac.reconcile</code>,
+          <code>rbac.own</code>. The compiler lowers these to the
+          ServiceAccount + Role + RoleBinding set. Rules merge and dedup.
+        </p>
+      </div>
+
+      <div class="claim-card">
+        <div class="claim-tag">Storage</div>
+        <h3>One declaration, three resources.</h3>
+        <p>
+          A workload declares "10Gi at /data." PVC, volume entry, volumeMount
+          entry &mdash; all emitted, all named consistently. The storage
+          class comes from the cluster's hardware profile, not the package.
+        </p>
+      </div>
+
+      <div class="claim-card">
+        <div class="claim-tag">Deploy ordering</div>
+        <h3>Waves from the DAG.</h3>
+        <p>
+          Resources with no deps deploy first. Dependents follow. You never
+          annotate a wave. The dependency structure <em>is</em> the wave
+          structure.
+        </p>
+      </div>
+
+      <div class="claim-card">
+        <div class="claim-tag">Blast radius</div>
+        <h3>A DAG traversal, not a review.</h3>
+        <p>
+          Change an input, get a new hash. Every downstream node whose hash
+          changes is in the blast radius. Every node whose hash doesn't
+          change provably isn't. <code>nix-store -q --tree</code> is the
+          audit trail.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="container narrow">
+    <h4>Under the hood</h4>
+    <h2>The compiler passes, briefly.</h2>
+
+    <p>
+      Enough that you can see this isn't hand-waving. The full walkthrough
+      lives in <code>v2_discussions/29_compiler-design.md</code> and
+      <code>kix/lib/architecture.md</code>.
+    </p>
+
+    <div class="spectrum">
+      <div class="spectrum-item">
+        <div class="spectrum-dot"></div>
+        <div class="spectrum-content">
+          <h3>1. Resolution</h3>
+          <p>Cluster modules merge. DI resolves dep arguments via DNS-like lookup. Optional deps auto-instantiate.</p>
+        </div>
+      </div>
+      <div class="spectrum-item">
+        <div class="spectrum-dot"></div>
+        <div class="spectrum-content">
+          <h3>2. Compilation</h3>
+          <p>Each package builds its resources through a per-instance scope. Labels, selectors, cross-resource wiring derive from the workload's single source of truth.</p>
+        </div>
+      </div>
+      <div class="spectrum-item">
+        <div class="spectrum-dot"></div>
+        <div class="spectrum-content">
+          <h3>3. Wiring validation</h3>
+          <p>Selector coherence, port agreement, cross-namespace reference validity, CRD schema conformance. Errors at eval time, not at apply time.</p>
+        </div>
+      </div>
+      <div class="spectrum-item">
+        <div class="spectrum-dot"></div>
+        <div class="spectrum-content">
+          <h3>4. Derivation</h3>
+          <p>NetworkPolicies from the connection graph. RBAC from access intents. Monitoring from declared capabilities. The cross-cutting resources that used to be hand-written.</p>
+        </div>
+      </div>
+      <div class="spectrum-item">
+        <div class="spectrum-dot"></div>
+        <div class="spectrum-content">
+          <h3>5. Whole-cluster analysis</h3>
+          <p>Scorecard rules (policy). Architecture rules (capability hygiene). Version compatibility. Reachability checks. Everything that requires seeing the whole cluster at once.</p>
+        </div>
+      </div>
+      <div class="spectrum-item">
+        <div class="spectrum-dot"></div>
+        <div class="spectrum-content">
+          <h3>6. Emission</h3>
+          <p>Content-addressed YAML. An Activation CR that roots the entire closure. A CLI that walks the DAG, computes waves, and applies via SSA with structured readiness verdicts.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="container narrow">
+    <div class="section-intro">
+      <h4>What happens to Helm, Argo, Backstage</h4>
+      <h2>kix absorbs. It doesn't replace.</h2>
+    </div>
+
+    <p>
+      The lesson from rig.dev is expensive and instructive: if you ask
+      platform engineers to throw away their Helm charts, they say no
+      and you die. kix doesn't ask.
+    </p>
+
+    <ul class="feature-list">
+      <li>
+        <strong>Helm charts</strong> are imported via
+        <code>importChart</code>. The compiler reconstructs their internal
+        dependency graph and treats them as first-class packages. You keep
+        your charts; you get compiler benefits on top.
+      </li>
+      <li>
+        <strong>Argo</strong> stays where it is as a runtime reconciliation
+        layer. kix replaces the <em>decision</em> of what to deploy, not the
+        mechanism of making the cluster match.
+      </li>
+      <li>
+        <strong>Backstage / your IDP</strong> stays if you like it. The kix
+        catalog is derived from the deployment and can be exposed to any
+        IDP. The catalog is always consistent because it's the same source.
+      </li>
+      <li>
+        <strong>OPA / Kyverno</strong> continue to enforce at admission as
+        defense-in-depth. kix prevents the violations at build; OPA catches
+        anything that slips through, including things kix didn't build.
+      </li>
+    </ul>
+  </div>
+</section>
+
+<section>
+  <div class="container narrow">
+    <h4>The operator experience</h4>
+    <h2>One CLI. No <code>nix</code> in your hand.</h2>
+
+    <p>
+      You don't run <code>nix build</code>. You run <code>kix</code>. The
+      CLI evaluates, diffs, plans, and deploys wave-by-wave with SSA. It
+      streams progress through a DAG-aware TUI. It rolls back by pointer
+      swap. It exports SBOM, SLSA provenance, and SOC2 / ISO / DORA / NIS2
+      evidence bundles as one command.
+    </p>
+
+    <div class="terminal">
+      <div class="terminal-bar">
+        <span class="terminal-dot"></span>
+        <span class="terminal-dot"></span>
+        <span class="terminal-dot"></span>
+        <span class="terminal-title">~/cluster</span>
+      </div>
+<pre class="terminal-body"><span class="prompt">$</span> <span class="cmd">kix deploy .#cluster-prod</span>
+<span class="output">evaluating .#cluster-prod...</span>
+<span class="output">building 247 resources... </span><span class="ok">done</span>
+<span class="output">change plan:</span>
+  <span class="ok">+</span> postgres / StatefulSet     <span class="dim">(new)</span>
+  <span class="ok">~</span> api-server / Deployment    <span class="dim">(image: v1.4.2 &rarr; v1.5.0)</span>
+  <span class="ok">~</span> api-server / Service       <span class="dim">(derived: port 8080 &rarr; 8081)</span>
+  <span class="ok">~</span> api-server / NetworkPolicy <span class="dim">(derived from connection graph)</span>
+  <span class="warn">-</span> legacy-queue / Deployment  <span class="dim">(orphan)</span>
+
+<span class="output">blast radius: 4 resources change, 243 proven unaffected.</span>
+
+<span class="info">continue? [y/N]</span> <span class="cmd">y</span>
+
+<span class="prompt">wave 1</span>  <span class="ok">&#10003;</span> postgres                   <span class="dim">ready 23s</span>
+<span class="prompt">wave 2</span>  <span class="ok">&#10003;</span> api-server + policies      <span class="dim">ready 12s</span>
+<span class="prompt">wave 3</span>  <span class="ok">&#10003;</span> legacy-queue pruned        <span class="dim">0.4s</span>
+
+<span class="ok">deploy complete in 41s. activation abc123&hellip;</span>
+</pre>
+    </div>
+
+    <p class="dim">
+      The full CLI surface &mdash; <code>deploy</code>, <code>diff</code>,
+      <code>rollback</code>, <code>health</code>, <code>gc</code>,
+      <code>export</code>, <code>compliance</code> &mdash; is documented in
+      <code>cli/README.md</code>.
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="container narrow">
+    <div class="section-intro">
+      <h4>What we'll tell you before you ask</h4>
+      <h2>The honest caveats.</h2>
+    </div>
+
+    <ul class="feature-list">
+      <li>
+        <strong>Yes, you need Nix.</strong> We don't hide it. We chose it
+        because string context is irreplaceable and we'd have to rebuild it
+        anyway. The surface area of Nix you actually write is narrow
+        &mdash; see the <a href="developer.html">developer page</a>.
+      </li>
+      <li>
+        <strong>The default demo runs on kind.</strong> It also runs on
+        GKE, EKS, AKS, OpenShift, k3s, Talos, and bare metal via the
+        flavor system. kind is how we smoke-test daily.
+      </li>
+      <li>
+        <strong>Some day-2 capabilities are roadmap.</strong> Storage
+        migration orchestration, operator swaps as refactor, cross-cluster
+        migration &mdash; the design is in <code>v2_discussions/</code>,
+        the foundation is shipped, the full experience is landing over
+        M2&ndash;M4.
+      </li>
+      <li>
+        <strong>We're pre-revenue.</strong> We are looking for design
+        partners, not early customers. If you want to be the first
+        production deployment, we want to talk. If you want an
+        SLA-backed SaaS, we aren't there yet.
+      </li>
+    </ul>
+  </div>
+</section>
+
+<section class="cta-section">
+  <div class="container narrow">
+    <h2>Try it in kind.</h2>
+    <p class="lead" style="margin-left:auto;margin-right:auto;">
+      The demo cluster is one command. The code is one flake. The thing you
+      have to believe to find this interesting is that day-2 is worth
+      compiling.
+    </p>
+    <div class="hero-ctas mt-4">
+      <a href="developer.html" class="btn btn-primary">See the experience &rarr;</a>
+      <a href="mailto:dev@example.com" class="btn btn-secondary">Talk to the team</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <p>
+      Next: <a href="developer.html">the experience</a> &middot;
+      <a href="executive.html">the business case</a> &middot;
+      <a href="index.html">back to the argument</a>
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>
