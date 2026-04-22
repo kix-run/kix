@@ -38,6 +38,7 @@ Core language, evaluation model, wiring primitives.
 | 65 | [Passthrough instances](65_passthrough_instances.md) | Draft | Near-term | Instances that participate in DI but produce zero K8s resources (S3, databases, DNS). *Use case is still fuzzy — waiting on a concrete driver.* |
 | 73 | [Workloads, jobs, ad-hoc compute](73_workloads_jobs_and_ad_hoc_compute.md) | Brainstorm | Near-term | Enable kix compilation of Jobs (RayJob, PyTorchJob) via dependency graph wiring. |
 | 80 | [Structured diagnostics](80_structured_diagnostics.md) | Design | Active | Structured warnings/errors/traces with src attribution, deferred + fatal modes, sidecar JSON + stderr marker transport to CLI. |
+| 100 | [Package DSL ergonomics survey](100_package_dsl_ergonomics_survey.md) | Brainstorm | **Active** | Cross-cutting inventory of package-authoring pain points mapped against existing `kix/lib` support. Classifies each as abstraction-vs-code-saver and proposes concrete hook points. Seeds RFCs for `scope.mkIdentity`, `scope.mkWebhookService`, `scope.mkOptional`, capability contracts, `workload.out.ports`. |
 
 ## Packages, Multi-team, Ownership
 
@@ -81,6 +82,12 @@ The first SOPS flow is being implemented against a minimum viable design. **All 
 | 98 | [Deploy execution topology](98_deploy_execution_topology.md) | Draft | Active | Follow-up to 81 §L2: diff belongs in the planner, not in wave computation; proposes moving execution from wave-barrier to DAG-streaming (nix-output-monitor-style) with waves retained only as a display/grouping axis. |
 
 > User-facing operator workflow is still an open question — tracked in `ROADMAP.md § Open design questions`.
+
+## Monitoring
+
+| # | Document | Status | Relevance | Summary |
+|---|----------|--------|-----------|---------|
+| 101 | [Monitoring provider landscape & auto-wiring](101_monitoring_provider_landscape.md) | Brainstorm | Near-term | Survey of prom-operator / kube-prom-stack / VictoriaMetrics / Alloy / OTel / annotation-fallback; common vs provider-specific shape; option space for `meta.monitoring` intent + capability-owned rendering; open questions blocking a design doc (multi-provider support, CR ownership, CRD-less providers). Spun out of doc 100 §D2. |
 
 ## Helm / Kustomize / Flux Integration
 
