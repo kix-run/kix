@@ -579,12 +579,14 @@ in
           labels = commonLabels;
           spec = {
             type = config.serviceType;
-            # Use the let-bound selectorLabels instead of
+            # Use self.deployment.rawSelector instead of
             # self.deployment.out.selector to avoid an evaluation cycle:
             # the deployment now `requires` this service (so the controller
-            # finds its --publish-service at startup), and routing the
-            # selector through self.deployment would form a cycle.
-            selector = selectorLabels;
+            # finds its --publish-service at startup). rawSelector is a
+            # cheap accessor that doesn't force the workload's manifest
+            # hash — no cycle, and the selector is coupled to the actual
+            # workload spec (unlike a hand-rolled label literal).
+            selector = self.deployment.rawSelector;
             ports = map addNodePort [
               {
                 name = "http";
@@ -629,10 +631,9 @@ in
         labels = commonLabels;
         spec = {
           minAvailable = 1;
-          # See selector comment on the Service: avoid routing through
-          # self.deployment.out to prevent an evaluation cycle now that
-          # the deployment requires the service (which requires the pdb).
-          selector.matchLabels = selectorLabels;
+          # See selector comment on the Service: rawSelector avoids the
+          # manifest-hash cycle caused by deployment requiring the service.
+          selector.matchLabels = self.deployment.rawSelector;
         };
       };
 
@@ -761,9 +762,9 @@ in
         labels = commonLabels;
         spec = {
           type = "ClusterIP";
-          # See selector comment on the main Service: routed through the
-          # let-bound selectorLabels to avoid an evaluation cycle.
-          selector = selectorLabels;
+          # See selector comment on the main Service: rawSelector avoids
+          # the cycle while staying coupled to the workload's labels.
+          selector = self.deployment.rawSelector;
           ports = [
             {
               name = "https-webhook";

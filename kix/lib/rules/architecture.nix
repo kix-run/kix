@@ -212,6 +212,47 @@ in
   # non-empty is trusted — something in the graph carries the edge.
   # Tightening to "context must resolve to a known ServiceRef marker" is
   # a follow-up once we have cross-package registry access inside rules.
+  # Services whose selector is a literal `{ ... }` attrset (no store-path
+  # context on any value) are hand-wired to the workload's label set
+  # instead of derived from the workload itself. This is fragile: changing
+  # the workload's labels silently breaks routing.
+  #
+  # The fix is `kix.service.fromWorkload` (reads workload.out.selector,
+  # which carries the workload's own store-path context) or, in cycle
+  # cases, `workload.rawSelector` (raw attrset — user must then accept
+  # loss of the DAG edge, since context is absent). This rule fires on
+  # both the raw-attrset case AND the rawSelector case; the rawSelector
+  # form should only appear as an explicit workaround and is thus a
+  # reasonable warning surface.
+  selectorCoherence = {
+    description = "Service selector should be sourced from a workload (kix.service.fromWorkload), not a literal attrset";
+    level = "manifest";
+    severity = "warning";
+    tags = [
+      "architecture"
+      "composition"
+    ];
+    appliesTo = { resource, ... }: (resource.kind or "") == "Service";
+    check =
+      { resource, ... }:
+      let
+        matchLabels = resource.spec.selector or { };
+        values = builtins.attrValues matchLabels;
+        anyWithContext = builtins.any (v: builtins.isString v && builtins.getContext v != { }) values;
+      in
+      if matchLabels == { } || anyWithContext then
+        [ ]
+      else
+        [
+          {
+            message =
+              "Service '${resource.metadata.name or "?"}' has a selector with no store-path context on any value — "
+              + "likely a hand-written `{ app = \"...\"; }` literal. "
+              + "Source the selector from a workload via `kix.service.fromWorkload` so the Service → Deployment edge is explicit.";
+          }
+        ];
+  };
+
   fqdnWithoutContext = {
     description = "Cluster-internal FQDNs (*.svc) in workloads should come from a ServiceRef/Service out.* value, not literals";
     level = "manifest";

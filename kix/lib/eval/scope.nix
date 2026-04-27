@@ -109,6 +109,25 @@ rec {
             "app.kubernetes.io/managed-by" = "kix";
           };
 
+      # Pre-baked label stacks so packages don't hand-compose the three
+      # common tiers. All three are lazy: pick the one that matches where
+      # the resource sits in the cluster (selector = pod labels for
+      # matching; common = non-selector labels added to managed resources;
+      # clusterScoped = labels for cluster-scoped resources that can't
+      # reference an instance label hierarchy).
+      #
+      # Callers that need additional keys `//` on top. This replaces
+      # the per-package `selectorLabels = { ... }; commonLabels = selectorLabels // ...`
+      # pattern seen in ingress-nginx, stackgres-operator, etc.
+      labels = {
+        selector = selectorLabels;
+        common = selectorLabels // instanceLabels;
+        clusterScoped = {
+          "app.kubernetes.io/name" = instanceName;
+          "app.kubernetes.io/managed-by" = "kix";
+        };
+      };
+
       # Whether CNP generation is enabled at scope level. Per-workload
       # hostNetwork is checked inside buildWorkloadCnps.
       _shouldGenerateCnps = (networkConfig.enable or false) && !skipWorkloadNetpol;
@@ -785,6 +804,139 @@ rec {
       # that live alongside regular dep resources.
       _netpolServiceRefRegistry = netpol.mkServiceRefRegistry depResourcesForNetpol;
 
+      # Build a webhook Service plus its {Validating,Mutating}WebhookConfiguration
+      # in one shot. Replaces the locally-reinvented `mkValidatingWebhook` /
+      # `mkMutatingWebhook` helpers in stackgres-operator, cert-manager,
+      # ingress-nginx — the boilerplate is K8s-shape, not package-shape.
+      #
+      # Arguments:
+      #   name           — stem for the Service + WebhookConfiguration names.
+      #                    Service = "${name}"; configs = "${name}-validating",
+      #                    "${name}-mutating".
+      #   selector       — pod selector for the Service (usually
+      #                    `self.operatorDeployment.rawSelector`).
+      #   port           — Service port (defaults to 443).
+      #   targetPort     — container targetPort (defaults to "webhook").
+      #   caBundle       — optional base64 CA bundle for the webhook configs.
+      #                    When null, consumers are expected to patch it in
+      #                    post-deploy (cert-manager injector, helm hook, etc.).
+      #   validating     — list of { name, path, rules, operations?,
+      #                    failurePolicy?, sideEffects?, timeoutSeconds?,
+      #                    admissionReviewVersions?, matchPolicy? }.
+      #   mutating       — same shape as validating.
+      #   extraServiceSpec — passthrough merged into Service spec (e.g.
+      #                      extra ports, type=LoadBalancer if needed).
+      #
+      # Returns an attrset `{ service, validatingConfiguration?,
+      # mutatingConfiguration? }` ready to be spread into `self`. The
+      # webhook configs carry the Service's out.name with context so the
+      # ordering edge Service→Config is automatic.
+      mkWebhookService =
+        {
+          name,
+          selector,
+          port ? 443,
+          targetPort ? "webhook",
+          caBundle ? null,
+          validating ? [ ],
+          mutating ? [ ],
+          extraServiceSpec ? { },
+        }:
+        let
+          svc = scopeMkResource {
+            apiVersion = "v1";
+            kind = "Service";
+            inherit name;
+            spec = {
+              inherit selector;
+              ports = [
+                {
+                  name = "webhook";
+                  inherit port targetPort;
+                  protocol = "TCP";
+                }
+              ];
+            }
+            // extraServiceSpec;
+          };
+
+          clientConfigFor =
+            hook:
+            {
+              service = {
+                name = svc.out.name;
+                namespace = namespaceName;
+                path = hook.path;
+                inherit port;
+              };
+            }
+            // lib.optionalAttrs (caBundle != null) { inherit caBundle; };
+
+          buildHook = hook: {
+            name = hook.name;
+            admissionReviewVersions = hook.admissionReviewVersions or [ "v1" ];
+            sideEffects = hook.sideEffects or "None";
+            failurePolicy = hook.failurePolicy or "Fail";
+            matchPolicy = hook.matchPolicy or "Equivalent";
+            timeoutSeconds = hook.timeoutSeconds or 10;
+            rules = map (rule: {
+              apiGroups = rule.apiGroups or [ "*" ];
+              apiVersions = rule.apiVersions or [ "*" ];
+              operations =
+                rule.operations or [
+                  "CREATE"
+                  "UPDATE"
+                ];
+              resources = rule.resources;
+              scope = rule.scope or "*";
+            }) (hook.rules or [ ]);
+            clientConfig = clientConfigFor hook;
+          };
+
+          validatingRes =
+            if validating == [ ] then
+              null
+            else
+              scopeMkClusterResource {
+                apiVersion = "admissionregistration.k8s.io/v1";
+                kind = "ValidatingWebhookConfiguration";
+                name = "${name}-validating";
+                extra.webhooks = map buildHook validating;
+              };
+
+          mutatingRes =
+            if mutating == [ ] then
+              null
+            else
+              scopeMkClusterResource {
+                apiVersion = "admissionregistration.k8s.io/v1";
+                kind = "MutatingWebhookConfiguration";
+                name = "${name}-mutating";
+                extra.webhooks = map buildHook mutating;
+              };
+        in
+        {
+          service = svc;
+        }
+        // lib.optionalAttrs (validatingRes != null) { validatingConfiguration = validatingRes; }
+        // lib.optionalAttrs (mutatingRes != null) { mutatingConfiguration = mutatingRes; };
+
+      # Gate an optional resource on a condition. Lazy in the resource
+      # arg: when `cond == false`, the builder is not evaluated. Returns
+      # null on the false branch — `collectTypedAttrs` in eval/helpers.nix
+      # already drops nulls, and root.requires tolerates them via
+      # `lib.optional (r != null) r`.
+      #
+      # Usage:
+      #   nodeAgent = scope.mkOptional config.nodeAgent.enabled (_: scope.mkDaemonSet { ... });
+      #
+      # Accepts either a thunk (function of one arg) or a plain value.
+      # Thunk form is preferred so the builder's side-effects (context
+      # stamping, CNP generation) stay un-evaluated when cond is false.
+      mkOptional =
+        cond: builder:
+        if cond then (if builtins.isFunction builder then builder null else builder) else null;
+
       mkWorkload =
         apiVersion: kind: attrs:
         let
@@ -883,6 +1035,18 @@ rec {
                           workload
                           // {
                             _generatedNetpol = workloadDeps.cnps;
+                            # Cheap accessor for the workload's selector
+                            # that doesn't force workload.out (and thus
+                            # doesn't hash the full manifest). Use this
+                            # from sibling resources in the same `self`
+                            # fixpoint if reading `out.selector` would
+                            # cycle through a back-reference (e.g. a
+                            # Deployment arg that references a Service's
+                            # out.name). Contrast: `out.selector` carries
+                            # the workload's store-path context, which is
+                            # what `kix.service.fromWorkload` consumes by
+                            # default.
+                            rawSelector = selector;
                           }
                         )
                       )
@@ -979,6 +1143,7 @@ rec {
                   workload
                   // {
                     _generatedNetpol = workloadDeps.cnps;
+                    rawSelector = selector;
                   }
                 )
               )
@@ -1042,6 +1207,7 @@ rec {
         workload
         // {
           _generatedNetpol = workloadDeps.cnps;
+          rawSelector = selector;
         };
 
       scopeMkClusterResource =
@@ -1485,9 +1651,11 @@ rec {
           instanceName
           namespaceName
           selectorLabels
+          labels
           labelStyle
           namespaces
           networkPolicyEnforcer
+          mkOptional
           ;
         namespace = namespaceResource;
 
@@ -1647,6 +1815,7 @@ rec {
           mkSecret
           mkSecretRef
           mkServiceRef
+          mkWebhookService
           ;
       };
     in

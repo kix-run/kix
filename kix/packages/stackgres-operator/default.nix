@@ -797,9 +797,7 @@ in
         name = name;
         spec = {
           type = "ClusterIP";
-          selector = {
-            app = name;
-          };
+          selector = self.operatorDeployment.out.selector;
           ports = [
             {
               name = "https";

@@ -326,7 +326,19 @@ rec {
       # Attach this resource's store path context to a plain value
       attachCtx = value: builtins.appendContext (toString value) _identityCtx;
 
-      # Auto-derive selector: spec.selector.matchLabels → metadata.labels → null
+      # Auto-derive selector: spec.selector.matchLabels → metadata.labels → null.
+      # `out.selector` values carry the workload's full store-path context,
+      # making readers (typically a sibling Service via
+      # `kix.service.fromWorkload`) get an explicit DAG edge to the
+      # workload. This is the intended edge direction: Service deploys
+      # after Deployment, so the Service never hits a wave with zero
+      # endpoints backing it.
+      #
+      # Cycle cases (Deployment `requires` its own Service — e.g.
+      # ingress-nginx's --publish-service startup constraint) break the
+      # cycle by consuming `workload.rawSelector` instead, which exposes
+      # the raw matchLabels without forcing the workload's manifest hash.
+      # That's a targeted escape hatch, not the default path.
       autoSelector =
         if rawManifest ? spec.selector.matchLabels then
           lib.mapAttrs (_: v: attachCtx (toString v)) rawManifest.spec.selector.matchLabels
@@ -352,6 +364,23 @@ rec {
       # don't pick up graph edges from port numbers).
       // lib.optionalAttrs (kind == "Service" && rawManifest ? spec.ports) {
         ports = rawManifest.spec.ports;
+
+        # URL builder for env-var wiring. Picks up the resource's own
+        # store-path context so consumers get automatic DAG/netpol edges.
+        # Default port: first entry in spec.ports (numeric `port` field);
+        # override with `{ port = ...; }` for multi-port Services.
+        url =
+          {
+            scheme ? "http",
+            port ? null,
+          }:
+          let
+            firstPort =
+              if rawManifest.spec.ports != [ ] then (builtins.head rawManifest.spec.ports).port or null else null;
+            effectivePort = if port != null then port else firstPort;
+            portSuffix = if effectivePort != null then ":${toString effectivePort}" else "";
+          in
+          attachCtx "${scheme}://${name}.${nsKey}.svc.${clusterDomain}${portSuffix}";
       };
 
       # User-defined outputs override auto-derived ones.

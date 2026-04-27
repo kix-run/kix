@@ -14,7 +14,8 @@
     crane.url = "github:ipetkov/crane";
   };
 
-  outputs = inputs:
+  outputs =
+    inputs:
     let
       mkFlake = import ./kix/lib/mkFlake.nix;
       lib = inputs.nixpkgs.lib;
@@ -43,31 +44,43 @@
 
       # kix CLI package (built with crane)
       mkKixPackage = (import ./cli/flake-integration.nix).mkKixPackage;
-      systems =
-        [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
-      cliPackages = lib.genAttrs systems (system:
-        let pkgs = inputs.nixpkgs.legacyPackages.${system};
-        in {
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+        "x86_64-darwin"
+        "aarch64-darwin"
+      ];
+      cliPackages = lib.genAttrs systems (
+        system:
+        let
+          pkgs = inputs.nixpkgs.legacyPackages.${system};
+        in
+        {
           kix = mkKixPackage {
             inherit pkgs;
             lib = pkgs.lib;
             crane = inputs.crane;
           };
-        });
-    in clusterOutputs // {
+        }
+      );
+    in
+    clusterOutputs
+    // {
       # Merge kix CLI into per-system packages alongside cluster outputs.
-      packages = lib.mapAttrs
-        (system: clusterPkgs: clusterPkgs // (cliPackages.${system} or { }))
-        clusterOutputs.packages;
+      packages = lib.mapAttrs (
+        system: clusterPkgs: clusterPkgs // (cliPackages.${system} or { })
+      ) clusterOutputs.packages;
 
       # Preserve the forPkgs API for external consumers.
-      lib.forPkgs = { pkgs, lib }:
+      lib.forPkgs =
+        { pkgs, lib }:
         let
           kix = import ./kix/lib { inherit pkgs lib; };
           entries = builtins.readDir ./kix/packages;
           dirs = lib.filterAttrs (_: type: type == "directory") entries;
           packages = lib.mapAttrs (name: _: import ./kix/packages/${name}) dirs;
-        in {
+        in
+        {
           inherit kix packages;
           inherit (kix) mkManifests;
         };

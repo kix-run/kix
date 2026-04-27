@@ -27,7 +27,13 @@
   #
   # { system, pkgs, lib, self', inputs', ... }:
 
-  mkKixPackage = { pkgs, lib, crane, ... }:
+  mkKixPackage =
+    {
+      pkgs,
+      lib,
+      crane,
+      ...
+    }:
     let
       craneLib = crane.mkLib pkgs;
 
@@ -35,8 +41,7 @@
         src = craneLib.cleanCargoSource ../cli;
         strictDeps = true;
 
-        buildInputs = [ pkgs.openssl ]
-          ++ lib.optionals pkgs.stdenv.isLinux [ pkgs.dbus ];
+        buildInputs = [ pkgs.openssl ] ++ lib.optionals pkgs.stdenv.isLinux [ pkgs.dbus ];
 
         nativeBuildInputs = [ pkgs.pkg-config ];
       };
@@ -45,21 +50,25 @@
       cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
       # Build the kix binary
-      kix = craneLib.buildPackage (commonArgs // {
-        inherit cargoArtifacts;
+      kix = craneLib.buildPackage (
+        commonArgs
+        // {
+          inherit cargoArtifacts;
 
-        # Integration tests require a writable nix store (eval cache),
-        # which is unavailable inside the nix build sandbox.
-        doCheck = false;
+          # Integration tests require a writable nix store (eval cache),
+          # which is unavailable inside the nix build sandbox.
+          doCheck = false;
 
-        meta = {
-          description = "Kubernetes manifest generator CLI";
-          homepage = "https://github.com/kixpkgs/kixpkgs";
-          license = lib.licenses.mit;
-          mainProgram = "kix";
-        };
-      });
-    in kix;
+          meta = {
+            description = "Kubernetes manifest generator CLI";
+            homepage = "https://github.com/kixpkgs/kixpkgs";
+            license = lib.licenses.mit;
+            mainProgram = "kix";
+          };
+        }
+      );
+    in
+    kix;
 
   # --- Outputs to merge into perSystem ---
   #

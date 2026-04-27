@@ -30,7 +30,7 @@ Entry points: `mkFlake` (flakes), `buildCluster` (raw), `mkEnv` (multi-env stamp
 | `eval/instance.nix` | `evaluateInstance` — one package → resources + PI CR. |
 | `eval/resolve.nix` | DI resolution (DNS-like lookup, two-phase calling). |
 | `eval/auto.nix` | Auto-instantiation of optional/implicit deps. |
-| `eval/scope.nix` | Per-instance context: `mkDeployment/StatefulSet/DaemonSet`, capability checks, cross-ns validation. |
+| `eval/scope.nix` | Per-instance context: `mkDeployment/StatefulSet/DaemonSet`, `mkOptional`, `mkWebhookService`, `labels.{selector,common,clusterScoped}`, capability checks, cross-ns validation. |
 | `eval/namespace.nix` | `mkNamespace` (+ ResourceQuota, NetworkPolicy). |
 | `eval/import.nix` | `mkImport` + lightweight PI for platform-provided services. |
 | `eval/view.nix` | `mkPackageView` — public projection for CLI/registry. |
@@ -66,7 +66,8 @@ Entry points: `mkFlake` (flakes), `buildCluster` (raw), `mkEnv` (multi-env stamp
 - **Scorecard severity has a precedence chain**, not a flat config. Disable and per-owner/per-namespace overrides beat the rule's own severity, which beats `ruleDefaults`.
 - **Capability ownership via `kix.dev/capability` annotation.** The `architecture.capabilityOwnership` rule detects hand-rolled resources that belong to another capability (e.g. PVCs outside a storage provider, reflector annotator bundles outside the reflector package). Capability owners declare `meta.provides = [ "storage" | "reflection" | … ]`. Consumers obtain the resources by declaring a DI dep arg and calling the owner's `out.*` builder — the builder stamps `kix.dev/capability: <name>` on every resource it returns so the rule treats them as DI-provided rather than hand-rolled. This is what lets a consumer scope (stackgres) host resources that belong to another capability (reflection) without tripping the rule. Fingerprints live in `rules/architecture.nix`; adding a new one is a data-only change.
 - **Helm packages are real packages.** Helm-backed packages use `scope.helm.importChart` inside their `build` function and return `resources.mkParts { root = resources.get "Kind" "name"; out = { ... }; }`. DI builders, CRD refs, and meta.provides are declared inline — no special `rootOut`/`extraMeta` indirection. Three tiers: `kix.helmChart { ... }` (inline, Tier 1), `importChart` + `mkParts` (package, Tier 2), native (Tier 3). See v2_discussions/87.
-- **`out` is the public surface of a resource.** `name`, `fqdn`, `selector`, `identityHash` are auto-derived and context-carrying; user `outputs = {...}` extend it. Always prefer `self.svc.out.name` over `"${self.svc}"` string interpolation.
+- **`out` is the public surface of a resource.** `name`, `fqdn`, `selector`, `identityHash` are auto-derived and context-carrying; user `outputs = {...}` extend it. Services additionally get `out.url { scheme?, port? }` and `out.ports`. Always prefer `self.svc.out.name` over `"${self.svc}"` string interpolation.
+- **`rawSelector` is a cycle escape hatch on workloads.** `workload.rawSelector` exposes the raw `spec.selector.matchLabels` without forcing the workload's store-path context. Use this from sibling resources if reading `workload.out.selector` cycles through a back-reference. Trade-off: the consuming resource loses the workload DAG edge — `scorecard:architecture.selectorCoherence` fires to keep the workaround visible.
 - **Activation CR roots the closure.** `mkActivation` references every PackageInstance via string context so `nix-store -q --tree` on the Activation derivation yields the full deploy DAG. This is the contract the CLI relies on.
 
 ## Consumer shape (for context)

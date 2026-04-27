@@ -23,6 +23,7 @@ in
 
 {
   meta = {
+    version = "external";
     description = "Cilium (externally managed) — CNP CRD ref marker only";
     provides = [
       "network-policy-enforcer"

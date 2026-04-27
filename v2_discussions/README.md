@@ -51,7 +51,7 @@ Core language, evaluation model, wiring primitives.
 
 | # | Document | Status | Relevance | Summary |
 |---|----------|--------|-----------|---------|
-| 26 | [Nix-built images (vertical integration)](26_images-vertical-integration.md) | Design | Future-leaning | dockerTools, registry push, nix-snapshotter for supply chain guarantees. Tightly linked to `interesting_thoughts/72_ai_cluster_recipes.md` — the GPU/AI path is where Nix-built images pay for themselves. |
+| 26 | [Nix-built images (vertical integration)](26_images-vertical-integration.md) | Design | Future-leaning | dockerTools, registry push, nix-snapshotter for supply chain guarantees. Now also covers BGP routing as a capability contract unlocked by node-image ownership (one `cluster.bgp` → frr/bird config + cilium/metallb CRs). Tightly linked to `interesting_thoughts/72_ai_cluster_recipes.md`. |
 | 63a | [Storage as a cluster concern](63a_storage_as_cluster_concern.md) | Design | Near-term | Storage choice is the cluster operator's concern, not the package author's. Read together with `32_volume_mount_dsl.md` for the full storage+mount story. |
 
 > Note: `45_cluster_hardware_profile.md` has been archived (built). Expect follow-up hardware/topology discussions as we touch scheduling — see also `interesting_thoughts/69_hardware_driven_scheduling.md`.
@@ -107,6 +107,7 @@ The first SOPS flow is being implemented against a minimum viable design. **All 
 | 95 | [Netpol build-time validation](95_netpol_build_time_validation.md) | Draft | Near-term | Catch missing/misconfigured network policies at eval time: intent schema validation, webhook ingress detection, uncovered port warnings. |
 | 96 | [Netpol autogeneration blindspots](96_netpol_autogeneration_blindspots.md) | RFC | **Active** | Three classes of workloads where store-path context analysis fails: Helm charts, operator-managed pods, ConfigMap indirection. Problem analysis + design space for fixes. |
 | 97 | [Service contract primitives](97_service_contract_primitives.md) | Design | **Active** | Promote the `mkServiceRef` + facade-with-`requires` patterns (prototyped in stackgres-cluster/stackgres-database) into a named `scope.provideService` contract. Closes blindspot 2 of doc 96, subsumes doc 65's passthrough-instance driver, cuts ~100 lines of boilerplate per package. |
+| 109 | [Service CIDR capacity check](109_service_cidr_capacity_check.md) | RFC/Draft | Near-term | Promote the existing `cluster.network.serviceCidr` option into an enforced budget. New scorecard rule counts ClusterIP-consuming Services against CIDR host count; fatal error at 100%, warning at 80% (configurable). Rides doc 80 diagnostics. Network-side sibling of doc 106's capacity-fit check. |
 
 > Netpol auto-derivation (37, 82, 83, 85) is **shipped** — see `archive/` for the design record.
 

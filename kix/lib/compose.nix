@@ -468,6 +468,22 @@ rec {
     let
       validMounts = builtins.filter (m: m != null) mounts;
       volumes = map (m: { inherit (m) name; } // m.source) validMounts;
+
+      # Guard against silent volume-name collisions. A collision here means
+      # the K8s API server drops one volume definition, causing a subtle
+      # runtime failure (mount points at the wrong source). Catch at eval.
+      existingVolumes = attrs.spec.template.spec.volumes or [ ];
+      existingNames = builtins.catAttrs "name" existingVolumes;
+      newNames = builtins.catAttrs "name" volumes;
+      allNames = existingNames ++ newNames;
+      seen = lib.foldl' (acc: n: acc // { ${n} = (acc.${n} or 0) + 1; }) { } allNames;
+      dupes = lib.filter (n: seen.${n} > 1) (lib.attrNames seen);
+      _dupeCheck =
+        if dupes != [ ] then
+          throw "kix.withMounts: duplicate volume name(s) [${builtins.concatStringsSep ", " dupes}]. "
+          + "Pass `name = \"...\";` to kix.mount.* to disambiguate, or drop the duplicate."
+        else
+          null;
       volumeMounts = map (
         m:
         {
@@ -492,7 +508,7 @@ rec {
         else
           throw "withMounts: multiple containers — use withMountsOn to target a specific one";
     in
-    attrs
+    builtins.seq _dupeCheck attrs
     // {
       spec = attrs.spec // {
         template = attrs.spec.template // {
