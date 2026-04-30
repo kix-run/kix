@@ -83,3 +83,53 @@ Create `clusters/test-secrets.nix`:
 - `devenv.nix` — add sops, age
 - `clusters/flake.nix` — add test-secrets cluster
 - `ROADMAP.md` — mark SOPS integration items
+
+---
+
+## Pre-deploy decryptability assertion (design note — v2_discussions/105 §B6)
+
+**Risk:** today, SOPS hydration runs lazily in `cli/kix/src/cluster/scheduler.rs`
+(see `secrets::hydrate_secrets` invoked per-wave around line 822). A missing
+or wrong age key surfaces only when the *first wave that contains a secret*
+schedules — by which point earlier waves have already applied. The deploy
+ends in a half-applied state and the operator gets a per-wave error rather
+than an upfront "you cannot decrypt your own cluster".
+
+**Proposed gate:** at the start of `kix deploy`, before any apply, walk every
+SOPS-encrypted secret referenced in the activation closure and attempt
+decryption with the operator's configured age key. If any fail, abort with a
+single structured error listing every failure (path, namespace, instance,
+SOPS error message). No wave runs.
+
+**Hooks:**
+- New function `secrets::assert_all_decryptable(manifests)` in
+  `cli/kix/src/cluster/secrets.rs`. Reuses `needs_hydration` to filter
+  candidates, calls `decrypt_sops` on each, but discards the plaintext —
+  this is purely a probe. Aggregates `SecretError`s into a single
+  `DecryptabilityReport`.
+- Call site in `cli/kix-cli/src/commands/deploy.rs::run_deploy_async`
+  (around the existing pre-flight checks; before scheduler construction).
+  On failure, render a structured diagnostic via the same channel as
+  scorecard findings (see v2_discussions/80 §5a) so `kix deploy --dry-run`
+  surfaces the same error.
+- The SOPS source paths are already available without hydration — they're
+  literal `/nix/store/...` paths in the `kix.dev/sops-source` annotation,
+  so the pre-flight only needs the manifest list, not a kubectl round-trip.
+
+**Severity & escape hatch:** structured error, blocks deploy. A
+`--skip-decryptability-check` flag on `kix deploy` is the deliberate escape
+hatch (rebuild-from-zero scenarios where the operator is intentionally
+deploying a cluster definition whose secrets they can't decrypt — rare
+enough to require a flag, never a default).
+
+**What this does NOT cover:** secret *contents* (wrong password, expired
+token). That's a runtime concern. This gate only proves "the operator
+running `kix deploy` can produce plaintext for every encrypted secret in
+the closure" — which is the smallest bar that keeps deploys from wedging
+mid-wave on a key mismatch.
+
+**Open:** how this composes with the multi-team key-split scenario
+(archived `77_secret_access_control_modules.md` and doc 104). For the
+single-operator case the gate is unambiguous; multi-team needs to decide
+whether the deploying operator must be able to decrypt *every* secret or
+only the ones they're meant to rotate.

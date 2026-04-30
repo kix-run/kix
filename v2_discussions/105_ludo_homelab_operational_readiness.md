@@ -1,9 +1,18 @@
 # 105: Ludo homelab — operational readiness for production
 
-**Status:** Brainstorm / RFC
+**Status:** Brainstorm / RFC — operator checklist; most kix-side gaps spun out.
 **Relevance:** Active
 **Related:** `90_ludo_north_star_ideation.md`, `101_monitoring_provider_landscape.md`, `102_auto_monitoring_wiring.md`, `67_stateful_migration_orchestration.md`, `104_adam_customer_migration_readiness.md`, `interesting_thoughts/49_topology_aware_monitoring.md`
 **Supersedes:** none — new angle (operator self-readiness, not demonstrator narrative).
+**Spin-outs / status of the B-list (see Part B for details):**
+- B1 → `108_backup_capability_contract.md` (RFC, Phase 0 surface defined).
+- B2/B9 → `110_alerts_as_graph_resources.md` (RFC).
+- B3 → `107_overlay_edge_exposure.md` (RFC, replaces `meta.exposure`).
+- B4 → **shipped**: `boundedResources` rule in `kix/lib/rules/reliability.nix`.
+- B5 → still open (pure docs in `cli/README.md` + `kix-migration` skill).
+- B6 → **designed**, implementation pending: addendum in `77_secrets_implementation_plan.md`.
+- B7 → **shipped**: `cluster.maintenance` + `cluster.out.maintenance` in `kix/lib/modules.nix` / `kix/lib/eval/cluster.nix`. Routing-side wiring lives in 110 §7.
+- B8 → folded into `106_ops_lifecycle_verbs_and_capacity_check.md` §1.3.
 
 ## Why this doc
 
@@ -228,17 +237,17 @@ Capture in `interesting_thoughts/` once the second node is on the horizon.
 
 Concerns from Part A that are *not* one-time operator setup but should become kix work. Ordered by leverage.
 
-| # | Gap | Source | Existing related work | Priority |
-|---|-----|--------|----------------------|----------|
-| B1 | **Backup as a capability contract** (`meta.backup` intent, flavor renders, build-time warning for unmatched stateful workloads) | A2 | `63a_storage_as_cluster_concern`, doc 95 (validation pattern), doc 97 (contracts) | **High** — blocks every other stateful migration |
-| B2 | **Baseline cluster-ops alert pack** as a kix package (the 10 alerts in A3, parameterized) | A3 | doc 101/102 monitoring | High — single biggest sleep-at-night lever |
-| B3 | **Tailscale-operator kix package** + `meta.exposure` intent | A5 | doc 87 helm v2, doc 97 contracts | High — currently the missing piece for outside access |
-| B4 | **Build-time warning for un-bounded workloads** (no requests/limits) | A9 | doc 80 diagnostics | Medium — easy, high pedagogical value |
-| B5 | **Bootstrap-from-zero documentation** in `cli/README.md` and `kix-migration` skill | A1 | skill `SECRETS.md` covers migration only | Medium — pure docs |
-| B6 | **Pre-deploy decryptability assertion** (eval-time check that operator can decrypt every referenced secret) | A1 | secrets impl plan | Medium |
-| B7 | **Maintenance-mode marker** in cluster definition (suppresses pages, surfaces in operator UI) | A6 | doc 90 §M1 | Medium |
-| B8 | **First-class "rehearse upgrade" workflow** (point at current state + target k3s version, kind dry-run) | A7 | `cluster-kind-upgrade-*.nix`, doc 67 | Medium — already half-prototyped |
-| B9 | **Alertmanager routing as kix config** (priority tree, ntfy topic, email digest) | A3 | none | Low-medium — high quality-of-life once B2 lands |
+| # | Gap | Source | Status | Where it lives now |
+|---|-----|--------|--------|---------------------|
+| B1 | **Backup as a capability contract** (`meta.backup` intent, flavor renders, build-time warning for unmatched stateful workloads) | A2 | Spun out — RFC | `108_backup_capability_contract.md` |
+| B2 | **Baseline cluster-ops alert pack** | A3 | Spun out — RFC | `110_alerts_as_graph_resources.md` (`cluster-baseline-alerts` package) |
+| B3 | **Tailscale-operator kix package** + service exposure | A5 | Spun out — RFC; `meta.exposure` rejected | `107_overlay_edge_exposure.md` (engine-side wiring on `kix.expose`) |
+| B4 | **Build-time warning for un-bounded workloads** (no requests/limits) | A9 | **Shipped** | `kix/lib/rules/reliability.nix` (`boundedResources`, scorecard-override-parameterized) |
+| B5 | **Bootstrap-from-zero documentation** in `cli/README.md` and `kix-migration` skill | A1 | Open — pure docs | not started |
+| B6 | **Pre-deploy decryptability assertion** | A1 | Designed; impl pending | `77_secrets_implementation_plan.md` (addendum) |
+| B7 | **Maintenance-mode marker** | A6 | **Shipped (surface)** — routing wiring in 110 §7 | `cluster.maintenance` + `cluster.out.maintenance` in `kix/lib/modules.nix`, `kix/lib/eval/cluster.nix` |
+| B8 | **First-class "rehearse upgrade" workflow** | A7 | Folded | `106_ops_lifecycle_verbs_and_capacity_check.md` §1.3 |
+| B9 | **Alertmanager routing as kix config** | A3 | Spun out | `110_alerts_as_graph_resources.md` §4 (`alertmanager-routing` package) |
 
 Items not in the table because they are *operator hygiene*, not kix gaps: A4 certs, A6 host UPS/upgrades, A11 NTP, A12 multi-node transition.
 
@@ -273,9 +282,9 @@ These are non-negotiable; they are what makes the difference between "running" a
 
 ## Open questions
 
-1. **Should the "10-alert pack" be one kix package or N capability-rendered alerts?** Doc 102 leans toward capability-rendered (each capability brings its own monitoring + alerts). For the homelab baseline, a single explicit package is faster and clearer. Probably both: explicit baseline package + capabilities can extend.
+1. ~~Should the "10-alert pack" be one kix package or N capability-rendered alerts?~~ — answered in doc 110: both, with `cluster-baseline-alerts` for the five rules nobody else owns and capability packages owning the rest via `scope.mkAlert` / `scope.mkAlerts.<recipe>`.
 2. **Does Tailscale-only edge let us drop cert-manager from `ludo/cluster.nix`?** Internal CA still useful for mTLS, but worth questioning whether ludo *needs* it on day 1.
-3. **Where do backup destinations live in the DSL?** Cluster-level (`cluster.storage.backup = ...`) feels right per doc `63a`. Confirm shape when starting B1.
+3. ~~Where do backup destinations live in the DSL?~~ — answered in doc 108 §4.2: `cluster.backup.destinations`, matching `63a`.
 4. **Should the operator (kix activation operator) be ludo's first "self-hosted operator" target?** Doc 90 §M3 raises this. Decoupled from this doc's day-one scope but should be revisited at D+1 quarter.
 5. **What is the SOPS-key-recovery story when keys are split across operator and customer (multi-team)?** Out of scope here, but doc 104 customer-readiness needs to coordinate.
 
