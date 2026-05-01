@@ -398,6 +398,47 @@
       };
     };
 
+    # --- Maintenance-mode marker ---
+    # Operator-declared "the cluster is in a planned maintenance window" flag.
+    # No-op for now — surfaced through `cluster.out.maintenance` so future
+    # Alertmanager routing (silence non-actionable pages) and the operator
+    # UI can read it. See v2_discussions/105 §A6 / B7.
+
+    cluster.maintenance = lib.mkOption {
+      type = lib.types.submodule {
+        options = {
+          enable = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = ''
+              Whether the cluster is in a maintenance window. When true,
+              tooling that consumes `cluster.out.maintenance` may suppress
+              non-actionable pages or surface a banner.
+            '';
+          };
+          reason = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            description = "Free-form human reason for the maintenance window.";
+          };
+          until = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            description = ''
+              Optional ISO-8601 timestamp at which the maintenance window
+              ends. Informational — kix does not auto-clear the flag.
+            '';
+          };
+        };
+      };
+      default = { };
+      description = ''
+        Maintenance-mode marker. No-op at build time; consumers read the
+        materialized form via `cluster.out.maintenance` (Alertmanager
+        routing, operator UI, dashboards).
+      '';
+    };
+
     cluster.network = {
       podCidr = lib.mkOption {
         type = lib.types.nullOr lib.types.str;

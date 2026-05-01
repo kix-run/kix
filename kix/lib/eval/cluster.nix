@@ -687,6 +687,18 @@ in
             inherit (clusterDiagnostics) warnings assertions failedAssertions;
           };
 
+          # Cluster-level out.* surface — read by tooling (Alertmanager
+          # routing, operator UI, dashboards). Today only carries the
+          # maintenance marker (v2_discussions/105 §B7); future cluster-
+          # wide metadata that doesn't belong in `info` lands here.
+          out = {
+            maintenance = {
+              enable = cfg.cluster.maintenance.enable or false;
+              reason = cfg.cluster.maintenance.reason or null;
+              until = cfg.cluster.maintenance.until or null;
+            };
+          };
+
           # Scorecard report (null if disabled)
           inherit scorecardReport;
 
