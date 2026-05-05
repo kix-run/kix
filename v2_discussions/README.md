@@ -39,6 +39,7 @@ Core language, evaluation model, wiring primitives.
 | 73 | [Workloads, jobs, ad-hoc compute](73_workloads_jobs_and_ad_hoc_compute.md) | Brainstorm | Near-term | Enable kix compilation of Jobs (RayJob, PyTorchJob) via dependency graph wiring. |
 | 80 | [Structured diagnostics](80_structured_diagnostics.md) | Design | Active | Structured warnings/errors/traces with src attribution, deferred + fatal modes, sidecar JSON + stderr marker transport to CLI. |
 | 100 | [Package DSL ergonomics survey](100_package_dsl_ergonomics_survey.md) | Brainstorm | **Active** | Cross-cutting inventory of package-authoring pain points mapped against existing `kix/lib` support. Classifies each as abstraction-vs-code-saver and proposes concrete hook points. Seeds RFCs for `scope.mkIdentity`, `scope.mkWebhookService`, `scope.mkOptional`, capability contracts, `workload.out.ports`. |
+| 115 | [Pod-spec hardening pass](115_pod_spec_hardening_pass.md) | RFC/Design | **Active** | Cluster-level `cluster.podHardening.profile = "baseline" \| "restricted"` (PSA vocab, §8). Two interception points mirror existing kix patterns: native workloads merged pre-`toFile` in `scope.mk*` (the `netpol.buildWorkloadCnps` slot), Helm-imported workloads merged pre-wrap in `importChart` (the `helm-dag.nix` slot). Author values win per-field, `architecture.hardeningWeakened` scorecard rule fires on weakening (§7 escape hatch + §6 actionable diagnostic). Rejects `meta.hardening` (§13), runtime PSA admission (§4), opt-in `kix.harden` (§11). Defers anti-affinity + resource defaults (not PSA). |
 
 ## Packages, Multi-team, Ownership
 
@@ -98,6 +99,7 @@ The first SOPS flow is being implemented against a minimum viable design. **All 
 |---|----------|--------|-----------|---------|
 | 88 | [Kustomize integration](88_kustomize_integration.md) | Design | Near-term | `importKustomization` as build-time resource import for kustomize bases. Same resource-collection API as Helm. Overlays replaced by kix options. |
 | 88b | [Flux comparison & migration](88b_flux_comparison_and_migration.md) | Design | Active | Why Flux has runtime reconciliation, feature-by-feature mapping to kix, concrete migration walkthrough from Flux Kustomization CRDs to kix packages. |
+| 116 | [Migration playbook](116_migration_playbook.md) | Draft | **Reference** | Procedural counterpart to 68. Live-K8s migration, kix-side SBOM first (not dump-driven), staged 1→2→3 source-vs-kix stance, 5 phases (SBOM → flavor+globals → flavor capabilities → diff resolution hierarchy → adoption-readiness diff → cutover). Tier 2 `importChart` is the default for helm-sourced components, not a shallow escape hatch. Anti-patterns from nw1 called out explicitly. TF appendix. |
 
 > Helm v2 integration is **shipped** — see archived `87_helm_integration_v2.md` and `86_helm_dag_reconstruction.md` for the design record.
 
