@@ -797,7 +797,9 @@ in
         name = name;
         spec = {
           type = "ClusterIP";
-          selector = self.operatorDeployment.out.selector;
+          # Match upstream chart: Service selects only on `app`, not the
+          # full Deployment selector (which also includes `group`).
+          selector.app = name;
           ports = [
             {
               name = "https";
@@ -841,10 +843,6 @@ in
         apiVersion = "admissionregistration.k8s.io/v1";
         kind = "ValidatingWebhookConfiguration";
         name = name;
-        annotations = {
-          # The operator will inject the caBundle at startup.
-          "stackgres.io/operator-version" = config.operator.image.tag;
-        };
         extra.webhooks = map (mkValidatingWebhook self.operatorService.out.name) webhookResources;
       };
 
@@ -854,9 +852,6 @@ in
         apiVersion = "admissionregistration.k8s.io/v1";
         kind = "MutatingWebhookConfiguration";
         name = name;
-        annotations = {
-          "stackgres.io/operator-version" = config.operator.image.tag;
-        };
         extra.webhooks = map (mkMutatingWebhook self.operatorService.out.name) webhookResources;
       };
 

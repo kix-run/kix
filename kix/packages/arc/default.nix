@@ -246,7 +246,12 @@ in
           replicas = config.replicaCount;
           selector.matchLabels = selectorLabels;
           template = {
-            metadata.labels = templateLabels;
+            metadata = {
+              labels = templateLabels;
+              annotations = {
+                "kubectl.kubernetes.io/default-container" = "manager";
+              };
+            };
             spec = {
               serviceAccountName = self.serviceAccount.out.name;
               terminationGracePeriodSeconds = 10;

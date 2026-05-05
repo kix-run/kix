@@ -166,14 +166,23 @@ in
               # Load kubeconfig based on whether we're running in-cluster or not
               try:
                   config.load_incluster_config()
-                  print(json.dumps({"message": "Using in-cluster configuration"}, cls=DateTimeEncoder), flush=True)
+                  print(
+                      json.dumps({"message": "Using in-cluster configuration"}, cls=DateTimeEncoder),
+                      flush=True,
+                  )
               except config.ConfigException:
                   config.load_kube_config()
-                  print(json.dumps({"message": "Using kubeconfig file"}, cls=DateTimeEncoder), flush=True)
+                  print(
+                      json.dumps({"message": "Using kubeconfig file"}, cls=DateTimeEncoder),
+                      flush=True,
+                  )
               # Create API client
               v1 = client.CoreV1Api()
               w = watch.Watch()
-              print(json.dumps({"message": "Starting to watch Kubernetes events"}, cls=DateTimeEncoder), flush=True)
+              print(
+                  json.dumps({"message": "Starting to watch Kubernetes events"}, cls=DateTimeEncoder),
+                  flush=True,
+              )
               # Watch events across all namespaces
               for event in w.stream(v1.list_event_for_all_namespaces):
                   formatted_event = format_event(event)

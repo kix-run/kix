@@ -577,6 +577,9 @@ in
           template = {
             metadata = {
               labels = operatorLabels;
+              annotations = {
+                "openshift.io/required-scc" = "restricted-v2";
+              };
             };
             spec = {
               serviceAccountName = self.serviceAccount.out.name;

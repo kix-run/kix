@@ -151,7 +151,6 @@ in
           name = "http-metrics";
           port = 9402;
           protocol = "TCP";
-          targetPort = 9402;
         }
       ];
     };

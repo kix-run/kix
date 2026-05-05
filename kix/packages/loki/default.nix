@@ -155,25 +155,63 @@ in
   build =
     { config, scope, ... }:
     let
+      mergedValues = lib.recursiveUpdate defaultValues (config.values or { });
+      isSingleBinary = (mergedValues.deploymentMode or "SingleBinary") == "SingleBinary";
       resources = scope.helm.importChart {
         inherit chart scope;
-        values = lib.recursiveUpdate defaultValues (config.values or { });
+        values = mergedValues;
         releaseName = "loki";
-        # The gateway (nginx) proxies to the single-binary backend.
-        # No K8s manifest reference exists between them, so the DAG
-        # can't infer the edge — declare it explicitly.
-        extraEdges = [
-          {
-            from = {
-              kind = "Deployment";
-              name = "loki-gateway";
-            };
-            to = {
-              kind = "StatefulSet";
-              name = "loki";
-            };
-          }
-        ];
+        # The gateway (nginx) proxies to the loki backend(s). No K8s
+        # manifest reference exists between them, so the DAG can't infer
+        # the edge — declare it explicitly. Targets depend on
+        # deploymentMode (SingleBinary vs SimpleScalable).
+        extraEdges =
+          if isSingleBinary then
+            [
+              {
+                from = {
+                  kind = "Deployment";
+                  name = "loki-gateway";
+                };
+                to = {
+                  kind = "StatefulSet";
+                  name = "loki";
+                };
+              }
+            ]
+          else
+            [
+              {
+                from = {
+                  kind = "Deployment";
+                  name = "loki-gateway";
+                };
+                to = {
+                  kind = "StatefulSet";
+                  name = "loki-write";
+                };
+              }
+              {
+                from = {
+                  kind = "Deployment";
+                  name = "loki-gateway";
+                };
+                to = {
+                  kind = "Deployment";
+                  name = "loki-read";
+                };
+              }
+              {
+                from = {
+                  kind = "Deployment";
+                  name = "loki-gateway";
+                };
+                to = {
+                  kind = "StatefulSet";
+                  name = "loki-backend";
+                };
+              }
+            ];
       };
     in
     resources.mkParts {

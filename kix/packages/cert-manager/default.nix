@@ -116,6 +116,7 @@
     ./controller.nix
     ./webhook.nix
     ./cainjector.nix
+    ./startupapicheck.nix
     (
       {
         self,
@@ -160,6 +161,10 @@
               self.cainjectorServiceAccount
               self.cainjectorService
               self.cainjectorDeployment
+            ]
+            # Startup API check (post-install verification job)
+            ++ [
+              self.startupapicheckJob
             ];
         };
       }

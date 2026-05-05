@@ -519,23 +519,30 @@ in
       null;
 
   # StorageClass for etcd local PV
+  #
+  # Matches the mayastor helm chart's localpv-storageclass.yaml: cas-type and
+  # CAS config are emitted as annotations (legacy openebs convention), no
+  # mayastorLabels are applied, and BasePath lives under
+  # /var/local/openebs/localpv-hostpath/etcd.
   etcdStorageClass =
     if config.mayastor.enabled then
       (scope.mkClusterResource {
         apiVersion = "storage.k8s.io/v1";
         kind = "StorageClass";
         name = "mayastor-etcd-localpv";
-        labels = mayastorLabels;
+        annotations = {
+          "cas.openebs.io/config" = ''
+            - name: StorageType
+              value: "hostpath"
+            - name: BasePath
+              value: "/var/local/openebs/localpv-hostpath/etcd"
+          '';
+          "openebs.io/cas-type" = "local";
+        };
         extra = {
           provisioner = "openebs.io/local";
           volumeBindingMode = "WaitForFirstConsumer";
           reclaimPolicy = "Delete";
-          parameters."cas.openebs.io/config" = ''
-            - name: StorageType
-              value: "hostpath"
-            - name: BasePath
-              value: "/var/local/openebs/mayastor-etcd"
-          '';
         };
       })
     else
@@ -1990,20 +1997,22 @@ in
       null;
 
   # --- Mayastor default StorageClass ---
+  #
+  # Matches the mayastor helm chart's storageclass.yaml: no labels, no
+  # explicit volumeBindingMode (k8s defaults to Immediate), allowVolumeExpansion
+  # enabled, and the parameter is `repl` (not `repl_count`).
   mayastorStorageClass =
     if config.mayastor.enabled then
       (scope.mkClusterResource {
         apiVersion = "storage.k8s.io/v1";
         kind = "StorageClass";
         name = "openebs-single-replica";
-        labels = mayastorLabels;
         extra = {
           provisioner = "io.openebs.csi-mayastor";
-          volumeBindingMode = "Immediate";
+          allowVolumeExpansion = true;
           parameters = {
-            ioTimeout = "30";
             protocol = "nvmf";
-            repl_count = "1";
+            repl = "1";
           };
         };
       })

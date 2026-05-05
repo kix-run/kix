@@ -133,6 +133,26 @@ in
         config = { };
       };
     };
+    upgradeCRDs = lib.mkOption {
+      type = lib.types.submodule {
+        options = {
+          enable = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = "Emit the helm-style upgrade-crds Job + ServiceAccount that runs `velero install --crds-only` on each apply. Cluster-scoped RBAC must be provided separately.";
+          };
+          kubectlImage = lib.mkOption {
+            type = lib.types.str;
+            default = "docker.io/bitnamilegacy/kubectl:1.33.4";
+          };
+          backoffLimit = lib.mkOption {
+            type = lib.types.int;
+            default = 3;
+          };
+        };
+      };
+      default = { };
+    };
   };
 
   build =
@@ -504,9 +524,16 @@ in
                 rollingUpdate.maxUnavailable = 1;
               };
               template = {
-                metadata.labels = selectorLabels // {
-                  name = "node-agent";
-                  role = "node-agent";
+                metadata = {
+                  labels = selectorLabels // {
+                    name = "node-agent";
+                    role = "node-agent";
+                  };
+                  annotations = {
+                    "prometheus.io/path" = "/metrics";
+                    "prometheus.io/port" = "8085";
+                    "prometheus.io/scrape" = "true";
+                  };
                 };
                 spec = {
                   serviceAccountName = "${name}-server";
@@ -654,6 +681,88 @@ in
         else
           null;
 
+      # --- upgrade-crds Job + ServiceAccount (helm-style pre-install hook) ---
+      # Matches the velero helm chart's `upgrade-crds` template, which runs
+      # `velero install --crds-only --dry-run -o yaml | kubectl apply -f -`.
+      # The ClusterRole/ClusterRoleBinding (cluster-scoped) are NOT emitted
+      # here — wire them in via cluster-scope converge resources.
+      upgradeCrdsServiceAccount =
+        if config.upgradeCRDs.enable then
+          scope.mkResource {
+            apiVersion = "v1";
+            kind = "ServiceAccount";
+            name = "${name}-server-upgrade-crds";
+            labels = selectorLabels;
+            extra.automountServiceAccountToken = true;
+          }
+        else
+          null;
+
+      upgradeCrdsJob =
+        if config.upgradeCRDs.enable then
+          scope.mkResource {
+            apiVersion = "batch/v1";
+            kind = "Job";
+            name = "${name}-upgrade-crds";
+            labels = selectorLabels;
+            spec = {
+              backoffLimit = config.upgradeCRDs.backoffLimit;
+              template = {
+                metadata.name = "${name}-upgrade-crds";
+                spec = {
+                  serviceAccountName = self.upgradeCrdsServiceAccount.out.name;
+                  automountServiceAccountToken = true;
+                  restartPolicy = "OnFailure";
+                  initContainers = [
+                    {
+                      name = "kubectl";
+                      image = config.upgradeCRDs.kubectlImage;
+                      imagePullPolicy = "IfNotPresent";
+                      command = [ "/bin/sh" ];
+                      args = [
+                        "-c"
+                        "cp `which sh` /tmp && cp `which kubectl` /tmp"
+                      ];
+                      volumeMounts = [
+                        {
+                          mountPath = "/tmp";
+                          name = "crds";
+                        }
+                      ];
+                    }
+                  ];
+                  containers = [
+                    {
+                      name = "velero";
+                      image = "${config.image.repository}:${config.image.tag}";
+                      imagePullPolicy = config.image.pullPolicy;
+                      command = [ "/tmp/sh" ];
+                      args = [
+                        "-c"
+                        "/velero install --crds-only --dry-run -o yaml | /tmp/kubectl apply -f -"
+                      ];
+                      volumeMounts = [
+                        {
+                          mountPath = "/tmp";
+                          name = "crds";
+                        }
+                      ];
+                    }
+                  ];
+                  volumes = [
+                    {
+                      name = "crds";
+                      emptyDir = { };
+                    }
+                  ];
+                };
+              };
+            };
+            requires = [ self.upgradeCrdsServiceAccount ];
+          }
+        else
+          null;
+
       # --- Entry point ---
       root = {
         resource = self.deployment;
@@ -669,6 +778,8 @@ in
         ++ lib.optional (self.nodeAgent != null) self.nodeAgent
         ++ lib.optional (self.secret != null) self.secret
         ++ lib.optional (self.volumeSnapshotLocation != null) self.volumeSnapshotLocation
+        ++ lib.optional (self.upgradeCrdsServiceAccount != null) self.upgradeCrdsServiceAccount
+        ++ lib.optional (self.upgradeCrdsJob != null) self.upgradeCrdsJob
         ++ (lib.attrValues scheduleResources);
 
         # Package-level out extensions — exposed via DI as velero.out.*

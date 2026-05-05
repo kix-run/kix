@@ -97,8 +97,35 @@ in
       default = {
         repository = "registry.k8s.io/ingress-nginx/controller";
         tag = "v1.14.0";
+        digest = null;
         pullPolicy = "IfNotPresent";
       };
+    };
+    webhookCertgenImage = lib.mkOption {
+      type = lib.types.anything;
+      default = {
+        repository = "registry.k8s.io/ingress-nginx/kube-webhook-certgen";
+        tag = "v1.4.4";
+        digest = null;
+      };
+    };
+    # Suffix appended to controller-bound resource names (Deployment,
+    # ConfigMap, Service, PDB, admission Service). Helm chart 4.13+
+    # uses "-controller"; older charts (4.10 and earlier) use "".
+    controllerNameSuffix = lib.mkOption {
+      type = lib.types.str;
+      default = "";
+    };
+    # Override the controller's --election-id arg. Defaults to "<name>-leader".
+    electionId = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+    };
+    # Override the controller's --ingress-class arg. Defaults to ingressClassName.
+    # (Helm chart 4.15+ defaults this to "nginx" not the resource name.)
+    controllerIngressClass = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;
@@ -109,8 +136,8 @@ in
       default = "ClusterIP";
     };
     externalTrafficPolicy = lib.mkOption {
-      type = lib.types.str;
-      default = "Cluster";
+      type = lib.types.nullOr lib.types.str;
+      default = null;
     };
     clusterIP = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
@@ -190,14 +217,36 @@ in
     let
       name = if config.namePrefix != null then config.namePrefix else scope.instanceName;
 
+      # Name used for controller-bound resources (Deployment, ConfigMap,
+      # Service, PDB, admission Service). Newer ingress-nginx charts
+      # (4.13+) suffix these with "-controller" while keeping the SA,
+      # Roles, IngressClass, ValidatingWebhookConfiguration, and
+      # admission Jobs at the bare instance name.
+      ctrlName = "${name}${config.controllerNameSuffix}";
+
       # Derived values — ingressClassName and controllerValue default to
       # instance-name-based values when not overridden.
       ingressClassName = if config.ingressClassName != null then config.ingressClassName else name;
 
+      controllerIngressClass =
+        if config.controllerIngressClass != null then config.controllerIngressClass else ingressClassName;
+
       controllerValue =
         if config.controllerValue != null then config.controllerValue else "k8s.io/${name}";
 
-      electionId = "${name}-leader";
+      electionId = if config.electionId != null then config.electionId else "${name}-leader";
+
+      controllerImage =
+        "${config.image.repository}:${config.image.tag}"
+        + lib.optionalString (
+          config.image ? digest && config.image.digest != null
+        ) "@${config.image.digest}";
+
+      certgenImage =
+        "${config.webhookCertgenImage.repository}:${config.webhookCertgenImage.tag}"
+        + lib.optionalString (
+          config.webhookCertgenImage ? digest && config.webhookCertgenImage.digest != null
+        ) "@${config.webhookCertgenImage.digest}";
 
       selectorLabels = {
         "app.kubernetes.io/name" = "ingress-nginx";
@@ -333,29 +382,54 @@ in
           };
         };
 
-      admissionNsRoles = mkRoleSet scope {
-        subjects = [
+      admissionWebhookLabels = commonLabels // {
+        "app.kubernetes.io/component" = "admission-webhook";
+      };
+      admissionHookAnnotations = {
+        "helm.sh/hook" = "pre-install,pre-upgrade,post-install,post-upgrade";
+        "helm.sh/hook-delete-policy" = "before-hook-creation,hook-succeeded";
+      };
+      admissionRole = scope.mkResource {
+        apiVersion = "rbac.authorization.k8s.io/v1";
+        kind = "Role";
+        name = "${name}-admission";
+        labels = admissionWebhookLabels;
+        annotations = admissionHookAnnotations;
+        extra.rules = [
           {
-            kind = "ServiceAccount";
-            name = self.admissionServiceAccount.out.name;
-            namespace = scope.namespaceName;
+            apiGroups = [ "" ];
+            resources = [ "secrets" ];
+            verbs = [
+              "create"
+              "get"
+            ];
           }
         ];
-        labels = commonLabels // {
-          "app.kubernetes.io/component" = "admission-webhook";
-        };
-        roles = {
-          "${name}-admission" = grant [
-            (
-              core.secrets
-              |> allow [
-                "get"
-                "create"
-                "update"
-              ]
-            )
+      };
+      admissionRoleBinding = scope.mkResource {
+        apiVersion = "rbac.authorization.k8s.io/v1";
+        kind = "RoleBinding";
+        name = "${name}-admission";
+        labels = admissionWebhookLabels;
+        annotations = admissionHookAnnotations;
+        extra = {
+          roleRef = {
+            apiGroup = "rbac.authorization.k8s.io";
+            kind = "Role";
+            name = admissionRole.out.name;
+          };
+          subjects = [
+            {
+              kind = "ServiceAccount";
+              name = self.admissionServiceAccount.out.name;
+              namespace = scope.namespaceName;
+            }
           ];
         };
+      };
+      admissionNsRoles = {
+        "${name}-admission" = admissionRole;
+        "${name}-admission-binding" = admissionRoleBinding;
       };
 
     in
@@ -376,7 +450,7 @@ in
       configmap = scope.mkResource {
         apiVersion = "v1";
         kind = "ConfigMap";
-        name = name;
+        name = ctrlName;
         labels = commonLabels;
         data =
           config.config
@@ -387,7 +461,7 @@ in
 
       # --- Deployment ---
       deployment = scope.mkDeployment {
-        name = name;
+        name = ctrlName;
         labels = commonLabels;
         # Must deploy after admissionCreate so the ingress-nginx-admission
         # secret exists before the pod tries to mount it. Controller RBAC
@@ -406,14 +480,8 @@ in
         spec = {
           replicas = config.replicaCount;
           revisionHistoryLimit = 10;
+          minReadySeconds = 0;
           selector.matchLabels = selectorLabels;
-          strategy = {
-            type = "RollingUpdate";
-            rollingUpdate = {
-              maxSurge = "25%";
-              maxUnavailable = "25%";
-            };
-          };
           template = {
             metadata = {
               labels = selectorLabels // config.podLabels;
@@ -426,14 +494,14 @@ in
               containers = [
                 {
                   name = "controller";
-                  image = "${config.image.repository}:${config.image.tag}";
+                  image = controllerImage;
                   imagePullPolicy = config.image.pullPolicy;
                   args = [
                     "/nginx-ingress-controller"
-                    "--publish-service=$(POD_NAMESPACE)/${name}"
+                    "--publish-service=$(POD_NAMESPACE)/${ctrlName}"
                     "--election-id=${electionId}"
                     "--controller-class=${controllerValue}"
-                    "--ingress-class=${ingressClassName}"
+                    "--ingress-class=${controllerIngressClass}"
                     "--configmap=$(POD_NAMESPACE)/${self.configmap.out.name}"
                     "--validating-webhook=:8443"
                     "--validating-webhook-certificate=/usr/local/certificates/cert"
@@ -575,10 +643,12 @@ in
         scope.mkResource {
           apiVersion = "v1";
           kind = "Service";
-          name = name;
+          name = ctrlName;
           labels = commonLabels;
           spec = {
             type = config.serviceType;
+            ipFamilyPolicy = "SingleStack";
+            ipFamilies = [ "IPv4" ];
             # Use self.deployment.rawSelector instead of
             # self.deployment.out.selector to avoid an evaluation cycle:
             # the deployment now `requires` this service (so the controller
@@ -604,9 +674,11 @@ in
               }
             ];
           }
-          // lib.optionalAttrs (config.serviceType == "LoadBalancer") {
-            externalTrafficPolicy = config.externalTrafficPolicy;
-          }
+          //
+            lib.optionalAttrs (config.serviceType == "LoadBalancer" && config.externalTrafficPolicy != null)
+              {
+                externalTrafficPolicy = config.externalTrafficPolicy;
+              }
           // lib.optionalAttrs (config.allocateLoadBalancerNodePorts != null) {
             allocateLoadBalancerNodePorts = config.allocateLoadBalancerNodePorts;
           }
@@ -627,7 +699,7 @@ in
       pdb = scope.mkResource {
         apiVersion = "policy/v1";
         kind = "PodDisruptionBudget";
-        name = name;
+        name = ctrlName;
         labels = commonLabels;
         spec = {
           minAvailable = 1;
@@ -645,6 +717,10 @@ in
         labels = commonLabels // {
           "app.kubernetes.io/component" = "admission-webhook";
         };
+        annotations = {
+          "helm.sh/hook" = "pre-install,pre-upgrade,post-install,post-upgrade";
+          "helm.sh/hook-delete-policy" = "before-hook-creation,hook-succeeded";
+        };
         extra.automountServiceAccountToken = true;
       };
 
@@ -660,24 +736,26 @@ in
           "helm.sh/hook-delete-policy" = "before-hook-creation,hook-succeeded";
         };
         spec = {
+          ttlSecondsAfterFinished = 0;
           template = {
-            metadata.labels = commonLabels // {
-              "app.kubernetes.io/component" = "admission-webhook";
+            metadata = {
+              name = "${name}-admission-create";
+              labels = commonLabels // {
+                "app.kubernetes.io/component" = "admission-webhook";
+              };
             };
             spec = {
               serviceAccountName = self.admissionServiceAccount.out.name;
+              automountServiceAccountToken = true;
               restartPolicy = "OnFailure";
-              securityContext.runAsNonRoot = true;
-              securityContext.runAsUser = 65532;
-              securityContext.seccompProfile.type = "RuntimeDefault";
               containers = [
                 {
                   name = "create";
-                  image = "registry.k8s.io/ingress-nginx/kube-webhook-certgen:v1.4.4";
+                  image = certgenImage;
                   imagePullPolicy = "IfNotPresent";
                   args = [
                     "create"
-                    "--host=${name}-admission,${name}-admission.$(POD_NAMESPACE).svc"
+                    "--host=${ctrlName}-admission,${ctrlName}-admission.$(POD_NAMESPACE).svc"
                     "--namespace=$(POD_NAMESPACE)"
                     "--secret-name=${name}-admission"
                   ];
@@ -687,9 +765,15 @@ in
                       valueFrom.fieldRef.fieldPath = "metadata.namespace";
                     }
                   ];
-                  securityContext.allowPrivilegeEscalation = false;
-                  securityContext.capabilities.drop = [ "ALL" ];
-                  securityContext.readOnlyRootFilesystem = true;
+                  securityContext = {
+                    allowPrivilegeEscalation = false;
+                    capabilities.drop = [ "ALL" ];
+                    readOnlyRootFilesystem = true;
+                    runAsGroup = 65532;
+                    runAsNonRoot = true;
+                    runAsUser = 65532;
+                    seccompProfile.type = "RuntimeDefault";
+                  };
                 }
               ];
               nodeSelector."kubernetes.io/os" = "linux";
@@ -710,20 +794,22 @@ in
           "helm.sh/hook-delete-policy" = "before-hook-creation,hook-succeeded";
         };
         spec = {
+          ttlSecondsAfterFinished = 0;
           template = {
-            metadata.labels = commonLabels // {
-              "app.kubernetes.io/component" = "admission-webhook";
+            metadata = {
+              name = "${name}-admission-patch";
+              labels = commonLabels // {
+                "app.kubernetes.io/component" = "admission-webhook";
+              };
             };
             spec = {
               serviceAccountName = self.admissionServiceAccount.out.name;
+              automountServiceAccountToken = true;
               restartPolicy = "OnFailure";
-              securityContext.runAsNonRoot = true;
-              securityContext.runAsUser = 65532;
-              securityContext.seccompProfile.type = "RuntimeDefault";
               containers = [
                 {
                   name = "patch";
-                  image = "registry.k8s.io/ingress-nginx/kube-webhook-certgen:v1.4.4";
+                  image = certgenImage;
                   imagePullPolicy = "IfNotPresent";
                   args = [
                     "patch"
@@ -731,7 +817,7 @@ in
                     "--namespace=$(POD_NAMESPACE)"
                     "--patch-mutating=false"
                     "--secret-name=${name}-admission"
-                    "--patch-validating=true"
+                    "--patch-failure-policy=Fail"
                   ];
                   env = [
                     {
@@ -739,9 +825,15 @@ in
                       valueFrom.fieldRef.fieldPath = "metadata.namespace";
                     }
                   ];
-                  securityContext.allowPrivilegeEscalation = false;
-                  securityContext.capabilities.drop = [ "ALL" ];
-                  securityContext.readOnlyRootFilesystem = true;
+                  securityContext = {
+                    allowPrivilegeEscalation = false;
+                    capabilities.drop = [ "ALL" ];
+                    readOnlyRootFilesystem = true;
+                    runAsGroup = 65532;
+                    runAsNonRoot = true;
+                    runAsUser = 65532;
+                    seccompProfile.type = "RuntimeDefault";
+                  };
                 }
               ];
               nodeSelector."kubernetes.io/os" = "linux";
@@ -758,7 +850,7 @@ in
       admissionService = scope.mkResource {
         apiVersion = "v1";
         kind = "Service";
-        name = "${name}-admission";
+        name = "${ctrlName}-admission";
         labels = commonLabels;
         spec = {
           type = "ClusterIP";

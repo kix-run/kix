@@ -39,6 +39,7 @@ STRIP_ANNOTATION_PREFIXES = [
     "autoscaling.alpha.kubernetes.io/",
     "endpoints.kubernetes.io/",
     "meta.helm.sh/",
+    "helm.sh/",
     "checksum/",
 ]
 
@@ -76,6 +77,7 @@ STRIP_LABEL_PREFIXES = [
 # Annotation prefixes kix adds for build metadata
 STRIP_KIX_ANNOTATION_PREFIXES = [
     "build.kix.dev/",
+    "kix.dev/",
 ]
 
 
@@ -100,6 +102,11 @@ def normalize_kix(doc: dict) -> dict:
     if not isinstance(doc, dict):
         return doc
 
+    # status is never declarative — kix occasionally ships empty stubs
+    # (e.g. CRDs with status.acceptedNames). Strip on both sides so the
+    # cluster-stripped side has nothing to diff against.
+    doc = dict(doc)
+    doc.pop("status", None)
     doc = _strip_secret_data(doc)
     doc = _strip_labels_and_annotations(doc, cluster=False)
     doc = _strip_k8s_defaults(doc)
@@ -137,12 +144,75 @@ def _strip_secret_data(doc: dict) -> dict:
     doc = dict(doc)
     doc.pop("data", None)
     doc.pop("stringData", None)
+    # type defaults to Opaque; some helm charts omit it, kix sets it
+    # explicitly. Strip when default so the formulations compare equal.
+    if doc.get("type") == "Opaque":
+        doc.pop("type", None)
     return doc
+
+
+CLUSTER_SCOPED_KINDS = {
+    # Cluster-scoped kinds: metadata.namespace, if present, is meaningless
+    # (helm charts sometimes set it anyway from {{ .Release.Namespace }}).
+    "ClusterRole",
+    "ClusterRoleBinding",
+    "Namespace",
+    "Node",
+    "PersistentVolume",
+    "StorageClass",
+    "VolumeAttachment",
+    "VolumeSnapshotClass",
+    "CSIDriver",
+    "CSINode",
+    "PriorityClass",
+    "RuntimeClass",
+    "CustomResourceDefinition",
+    "APIService",
+    "MutatingWebhookConfiguration",
+    "ValidatingWebhookConfiguration",
+    "ValidatingAdmissionPolicy",
+    "ValidatingAdmissionPolicyBinding",
+    "IngressClass",
+    "ComponentStatus",
+    # Cilium / OpenEBS / Tailscale cluster-scoped CRs
+    "CiliumClusterwideNetworkPolicy",
+    "CiliumLoadBalancerIPPool",
+    "CiliumNodeConfig",
+    "Connector",
+    "ProxyClass",
+    "DiskPool",
+    "BlockDevice",
+    "BlockDeviceClaim",
+    "StorageProfile",
+    "VolumeSnapshotContent",
+    # cert-manager
+    "ClusterIssuer",
+}
 
 
 def _strip_k8s_defaults(doc: dict) -> dict:
     """Strip fields that K8s adds as defaults and are not behaviorally meaningful."""
     kind = doc.get("kind")
+
+    # PriorityClass: globalDefault defaults to false; preemptionPolicy
+    # defaults to PreemptLowerPriority. Strip when set to defaults so
+    # explicit-vs-omitted formulations compare equal.
+    if kind == "PriorityClass":
+        doc = dict(doc)
+        if doc.get("globalDefault") is False:
+            doc.pop("globalDefault", None)
+        if doc.get("preemptionPolicy") == "PreemptLowerPriority":
+            doc.pop("preemptionPolicy", None)
+
+    # Cluster-scoped kinds: drop metadata.namespace if some helm chart
+    # erroneously rendered it. The API server ignores it on read.
+    if kind in CLUSTER_SCOPED_KINDS:
+        meta = doc.get("metadata")
+        if isinstance(meta, dict) and "namespace" in meta:
+            doc = dict(doc)
+            meta = dict(meta)
+            meta.pop("namespace", None)
+            doc["metadata"] = meta
 
     # Namespace: spec.finalizers is server-managed
     if kind == "Namespace":
@@ -223,9 +293,12 @@ def _strip_k8s_defaults(doc: dict) -> dict:
             pvcrp = spec.get("persistentVolumeClaimRetentionPolicy")
             if pvcrp == {"whenDeleted": "Retain", "whenScaled": "Retain"}:
                 spec.pop("persistentVolumeClaimRetentionPolicy")
-            # updateStrategy defaults to RollingUpdate
+            # updateStrategy defaults to RollingUpdate; type may be omitted.
             us = spec.get("updateStrategy", {})
-            if isinstance(us, dict) and us.get("type") == "RollingUpdate":
+            if (
+                isinstance(us, dict)
+                and us.get("type", "RollingUpdate") == "RollingUpdate"
+            ):
                 rolling = us.get("rollingUpdate", {})
                 if not rolling or rolling == {"partition": 0}:
                     spec.pop("updateStrategy", None)
@@ -242,7 +315,10 @@ def _strip_k8s_defaults(doc: dict) -> dict:
         if isinstance(spec, dict):
             spec = dict(spec)
             us = spec.get("updateStrategy", {})
-            if isinstance(us, dict) and us.get("type") == "RollingUpdate":
+            if (
+                isinstance(us, dict)
+                and us.get("type", "RollingUpdate") == "RollingUpdate"
+            ):
                 rolling = us.get("rollingUpdate", {})
                 if (
                     not rolling
@@ -250,6 +326,39 @@ def _strip_k8s_defaults(doc: dict) -> dict:
                     or rolling == {"maxUnavailable": 1}
                 ):
                     spec.pop("updateStrategy", None)
+            doc["spec"] = spec
+
+    # NetworkPolicy / CiliumNetworkPolicy: strip protocol: TCP defaults
+    # on ingress/egress port specs (matches the K8s default).
+    if kind in (
+        "NetworkPolicy",
+        "CiliumNetworkPolicy",
+        "CiliumClusterwideNetworkPolicy",
+    ):
+        doc = dict(doc)
+        spec = doc.get("spec")
+        if isinstance(spec, dict):
+            spec = dict(spec)
+            for direction in ("ingress", "egress"):
+                rules = spec.get(direction)
+                if not isinstance(rules, list):
+                    continue
+                new_rules = []
+                for rule in rules:
+                    if not isinstance(rule, dict):
+                        new_rules.append(rule)
+                        continue
+                    rule = dict(rule)
+                    ports = rule.get("ports")
+                    if isinstance(ports, list):
+                        rule["ports"] = [
+                            _strip_port_protocol_default(p)
+                            if isinstance(p, dict)
+                            else p
+                            for p in ports
+                        ]
+                    new_rules.append(rule)
+                spec[direction] = new_rules
             doc["spec"] = spec
 
     # PersistentVolumeClaim: strip runtime-assigned fields
@@ -550,14 +659,20 @@ def _strip_labels_and_annotations(doc: dict, cluster: bool) -> dict:
             if key in STRIP_ANNOTATIONS:
                 del annotations[key]
                 continue
-            # Server-side annotation prefixes
-            if cluster:
-                for prefix in STRIP_ANNOTATION_PREFIXES:
-                    if key.startswith(prefix):
-                        del annotations[key]
-                        break
-            # kix build metadata
-            else:
+            # Server-side / helm convention annotation prefixes — strip
+            # from both sides so kix-vs-dump diffs don't surface helm-isms
+            # that kix intentionally doesn't reproduce (meta.helm.sh/*,
+            # checksum/config, etc.).
+            stripped = False
+            for prefix in STRIP_ANNOTATION_PREFIXES:
+                if key.startswith(prefix):
+                    del annotations[key]
+                    stripped = True
+                    break
+            if stripped:
+                continue
+            # kix build metadata — only stripped on the kix side
+            if not cluster:
                 for prefix in STRIP_KIX_ANNOTATION_PREFIXES:
                     if key.startswith(prefix):
                         del annotations[key]
@@ -584,7 +699,7 @@ def _find_metadata_blocks(doc: dict) -> list[dict]:
     if isinstance(tmpl, dict):
         blocks.append(tmpl)
 
-    for vct in doc.get("spec", {}).get("volumeClaimTemplates", []):
+    for vct in (doc.get("spec") or {}).get("volumeClaimTemplates") or []:
         if isinstance(vct, dict):
             vct_meta = vct.get("metadata")
             if isinstance(vct_meta, dict):

@@ -126,6 +126,12 @@ in
       type = lib.types.listOf lib.types.str;
       default = [ ];
     };
+    # Extra env vars merged onto the manager container. Use for site-specific
+    # configuration like INFISICAL_HOST_API.
+    managerEnv = lib.mkOption {
+      type = lib.types.listOf lib.types.anything;
+      default = [ ];
+    };
   };
 
   build =
@@ -164,7 +170,8 @@ in
             name = "KUBERNETES_CLUSTER_DOMAIN";
             value = "cluster.local";
           }
-        ];
+        ]
+        ++ config.managerEnv;
         livenessProbe = {
           httpGet = {
             path = "/healthz";
@@ -189,6 +196,7 @@ in
         securityContext = {
           allowPrivilegeEscalation = false;
           capabilities.drop = [ "ALL" ];
+          readOnlyRootFilesystem = true;
         };
       }
       // lib.optionalAttrs (!config.kubeRbacProxy.enabled) {
@@ -202,11 +210,6 @@ in
             containerPort = 8081;
           }
         ];
-        securityContext = {
-          allowPrivilegeEscalation = false;
-          capabilities.drop = [ "ALL" ];
-          readOnlyRootFilesystem = true;
-        };
       };
 
       # kube-rbac-proxy sidecar container.
@@ -251,17 +254,10 @@ in
 
       allManagedCrds = config.extraManagedCrds ++ baseManagedCrds;
 
-      # Pod security context differs based on proxy mode.
-      podSecurityContext =
-        if config.kubeRbacProxy.enabled then
-          {
-            runAsNonRoot = true;
-          }
-        else
-          {
-            runAsNonRoot = true;
-            seccompProfile.type = "RuntimeDefault";
-          };
+      podSecurityContext = {
+        runAsNonRoot = true;
+        seccompProfile.type = "RuntimeDefault";
+      };
 
       # Node affinity for the deployment (matches Helm chart defaults).
       nodeAffinity = lib.optionalAttrs config.kubeRbacProxy.enabled {
@@ -346,6 +342,11 @@ in
               ]
               ++ lib.concatMap (crd: [
                 (infisical crd |> full)
+              ]) allManagedCrds
+              # Helm chart only emits /finalizers and /status rules for
+              # the base CRD set; extras (e.g. clustergenerators) appear
+              # only in the main rule.
+              ++ lib.concatMap (crd: [
                 (infisical crd |> scope.rbac.finalize)
                 (
                   infisical "${crd}/status"
@@ -355,7 +356,7 @@ in
                     "update"
                   ]
                 )
-              ]) allManagedCrds
+              ]) baseManagedCrds
             );
           };
 

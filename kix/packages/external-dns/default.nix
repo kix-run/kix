@@ -27,7 +27,7 @@
     image = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
       default = {
-        repository = "docker.io/bitnami/external-dns";
+        repository = "docker.io/bitnamilegacy/external-dns";
         tag = "0.16.1-debian-12-r1";
         pullPolicy = "IfNotPresent";
       };
@@ -389,9 +389,16 @@
         ++ lib.optionals (self.secret != null) [
           {
             name = "CF_API_EMAIL";
+            value = "";
           }
-          (self.secret.out.keyRef "cloudflare_api_key" // { name = "CF_API_KEY"; })
-          (self.secret.out.keyRef "cloudflare_api_token" // { name = "CF_API_TOKEN"; })
+          (lib.recursiveUpdate (self.secret.out.keyRef "cloudflare_api_key") {
+            name = "CF_API_KEY";
+            valueFrom.secretKeyRef.optional = true;
+          })
+          (lib.recursiveUpdate (self.secret.out.keyRef "cloudflare_api_token") {
+            name = "CF_API_TOKEN";
+            valueFrom.secretKeyRef.optional = true;
+          })
         ];
 
       # --- Mounts ---

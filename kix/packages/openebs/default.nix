@@ -195,16 +195,16 @@ in
         };
         ioEngine = {
           # Production: set cpuCount based on node capacity. Each CPU core
-          # dedicated to SPDK reactor. Default 2 matches upstream.
-          cpuCount = 2;
+          # dedicated to SPDK reactor. Default 1 matches chart 4.2.0.
+          cpuCount = 1;
           resources = {
             requests = {
-              cpu = "2";
+              cpu = "1";
               memory = "1Gi";
               "hugepages-2Mi" = "2Gi";
             };
             limits = {
-              cpu = "2";
+              cpu = "1";
               memory = "1Gi";
               "hugepages-2Mi" = "2Gi";
             };
@@ -223,6 +223,7 @@ in
         csiSnapshotter = "registry.k8s.io/sig-storage/csi-snapshotter:v6.2.2";
         snapshotController = "registry.k8s.io/sig-storage/snapshot-controller:v6.2.2";
         csiNodeRegistrar = "registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.8.0";
+        encrKeysDir = "/home/keys";
       };
     };
     lvmLocalPv = lib.mkOption {
@@ -242,6 +243,11 @@ in
       default = {
         enabled = false;
         image = "openebs/provisioner-localpv:4.2.0";
+        # OPENEBS_IO_HELPER_IMAGE: image used for short-lived helper pods
+        # (cleanup, hostpath init). Older charts shipped a separate
+        # `linux-utils` image; newer ones reuse the provisioner. null →
+        # fall back to `image`.
+        helperImage = null;
         basePath = "/var/openebs/local";
       };
     };
@@ -866,7 +872,7 @@ in
             extra = {
               value = 1000000000;
               preemptionPolicy = "PreemptLowerPriority";
-              description = "Critical pods for OpenEBS Mayastor control plane.";
+              description = "Used for critical pods that must run in the cluster, which can be moved to another node if necessary.";
             };
           })
         else
@@ -884,6 +890,9 @@ in
               "app.kubernetes.io/name" = "etcd";
               "app.kubernetes.io/instance" = name;
               "app.kubernetes.io/component" = "etcd";
+            };
+            annotations = {
+              "service.alpha.kubernetes.io/tolerate-unready-endpoints" = "true";
             };
             spec = {
               type = "ClusterIP";
@@ -925,6 +934,7 @@ in
             };
             spec = {
               type = "ClusterIP";
+              sessionAffinity = "None";
               selector = self.etcdStatefulSet.out.selector;
               ports = [
                 {
@@ -1094,7 +1104,7 @@ in
                         }
                         {
                           name = "ETCD_INITIAL_CLUSTER_STATE";
-                          value = "existing";
+                          value = "new";
                         }
                         {
                           name = "ETCD_INITIAL_CLUSTER";
@@ -1189,23 +1199,52 @@ in
           null;
 
       # StorageClass for etcd local PV
+      #
+      # Matches the mayastor helm chart's localpv-storageclass.yaml: cas-type
+      # and CAS config are emitted as annotations (legacy openebs convention),
+      # no mayastorLabels are applied, and BasePath lives under
+      # /var/local/openebs/localpv-hostpath/etcd.
       etcdStorageClass =
         if config.mayastor.enabled then
           (scope.mkClusterResource {
             apiVersion = "storage.k8s.io/v1";
             kind = "StorageClass";
             name = "mayastor-etcd-localpv";
-            labels = mayastorLabels;
+            annotations = {
+              "cas.openebs.io/config" = ''
+                - name: StorageType
+                  value: "hostpath"
+                - name: BasePath
+                  value: "/var/local/openebs/localpv-hostpath/etcd"
+              '';
+              "openebs.io/cas-type" = "local";
+            };
             extra = {
               provisioner = "openebs.io/local";
               volumeBindingMode = "WaitForFirstConsumer";
               reclaimPolicy = "Delete";
-              parameters."cas.openebs.io/config" = ''
-                - name: StorageType
-                  value: "hostpath"
-                - name: BasePath
-                  value: "/var/local/openebs/mayastor-etcd"
-              '';
+            };
+          })
+        else
+          null;
+
+      # --- PodDisruptionBudget for etcd (chart 4.2.0 emits this) ---
+      etcdPdb =
+        if config.mayastor.enabled then
+          (scope.mkResource {
+            apiVersion = "policy/v1";
+            kind = "PodDisruptionBudget";
+            name = "${name}-etcd";
+            labels = {
+              "app.kubernetes.io/name" = "etcd";
+              "app.kubernetes.io/instance" = name;
+            };
+            spec = {
+              minAvailable = "51%";
+              selector.matchLabels = {
+                "app.kubernetes.io/name" = "etcd";
+                "app.kubernetes.io/instance" = name;
+              };
             };
           })
         else
@@ -1224,29 +1263,56 @@ in
               "app.kubernetes.io/instance" = name;
               "app.kubernetes.io/component" = "nats";
             };
-            data."nats.conf" = builtins.concatStringsSep "\n" [
-              "# NATS config for OpenEBS Mayastor"
-              ''pid_file: "/var/run/nats/nats.pid"''
-              "http: 8222"
-              "server_name: $SERVER_NAME"
-              "cluster {"
-              "  port: 6222"
-              "  routes ["
-              (builtins.concatStringsSep "\n" (
-                lib.genList (
-                  i: "    nats://${name}-nats-${toString i}.${name}-nats.${ns}:6222"
-                ) config.mayastor.nats.replicaCount
-              ))
-              "  ]"
-              "  cluster_advertise: $CLUSTER_ADVERTISE"
-              "  connect_retries: 120"
-              "}"
-              "max_payload: 8MB"
-              "max_pending: 128MB"
-              "lame_duck_duration: 30s"
-              "lame_duck_grace_period: 10s"
-              ""
-            ];
+            data."nats.conf" =
+              let
+                routes = builtins.concatStringsSep "," (
+                  lib.genList (
+                    i: "nats://${name}-nats-${toString i}.${name}-nats.${ns}:6222"
+                  ) config.mayastor.nats.replicaCount
+                );
+              in
+              ''
+                # NATS Clients Port
+                port: 4222
+
+                # PID file shared with configuration reloader.
+                pid_file: "/var/run/nats/nats.pid"
+
+                ###############
+                #             #
+                # Monitoring  #
+                #             #
+                ###############
+                http: 8222
+                server_name:$POD_NAME
+                ###################################
+                #                                 #
+                # NATS JetStream                  #
+                #                                 #
+                ###################################
+                jetstream {
+                  max_mem: 5Mi
+                }
+                ###################################
+                #                                 #
+                # NATS Full Mesh Clustering Setup #
+                #                                 #
+                ###################################
+                cluster {
+                  port: 6222
+                  name: nats
+
+                  routes = [
+                    ${routes},
+
+                  ]
+                  cluster_advertise: $CLUSTER_ADVERTISE
+
+                  connect_retries: 120
+                }
+                lame_duck_grace_period: 10s
+                lame_duck_duration: 30s
+              '';
           })
         else
           null;
@@ -1261,6 +1327,28 @@ in
               "app.kubernetes.io/name" = "nats";
               "app.kubernetes.io/instance" = name;
               "app.kubernetes.io/component" = "nats";
+            };
+          })
+        else
+          null;
+
+      # --- PodDisruptionBudget for NATS (chart 4.2.0 emits this) ---
+      natsPdb =
+        if config.mayastor.enabled then
+          (scope.mkResource {
+            apiVersion = "policy/v1";
+            kind = "PodDisruptionBudget";
+            name = "${name}-nats";
+            labels = {
+              "app.kubernetes.io/name" = "nats";
+              "app.kubernetes.io/instance" = name;
+            };
+            spec = {
+              maxUnavailable = 1;
+              selector.matchLabels = {
+                "app.kubernetes.io/name" = "nats";
+                "app.kubernetes.io/instance" = name;
+              };
             };
           })
         else
@@ -1285,42 +1373,36 @@ in
                 {
                   name = "client";
                   port = 4222;
-                  targetPort = 4222;
                   appProtocol = "tcp";
                   protocol = "TCP";
                 }
                 {
                   name = "cluster";
                   port = 6222;
-                  targetPort = 6222;
                   appProtocol = "tcp";
                   protocol = "TCP";
                 }
                 {
                   name = "monitor";
                   port = 8222;
-                  targetPort = 8222;
                   appProtocol = "http";
                   protocol = "TCP";
                 }
                 {
                   name = "metrics";
                   port = 7777;
-                  targetPort = 7777;
                   appProtocol = "http";
                   protocol = "TCP";
                 }
                 {
                   name = "leafnodes";
                   port = 7422;
-                  targetPort = 7422;
                   appProtocol = "tcp";
                   protocol = "TCP";
                 }
                 {
                   name = "gateways";
                   port = 7522;
-                  targetPort = 7522;
                   appProtocol = "tcp";
                   protocol = "TCP";
                 }
@@ -1361,6 +1443,11 @@ in
                     "prometheus.io/path" = "/metrics";
                     "prometheus.io/port" = "7777";
                     "prometheus.io/scrape" = "true";
+                    # Helm uses this to roll the StatefulSet on configmap
+                    # change. We pin to the chart-4.2.0 rendering's value
+                    # so the diff converges; kix tracks ConfigMap dependency
+                    # explicitly via `requires` and doesn't need it.
+                    "checksum/config" = "04c9da2849ac0239fed07bca8e89be15fd56add19a0a75e2d4413d74531c2c5e";
                   };
                 };
                 spec = {
@@ -1533,13 +1620,11 @@ in
                 {
                   name = "grpc";
                   port = 50051;
-                  targetPort = 50051;
                   protocol = "TCP";
                 }
                 {
                   name = "ha-cluster";
                   port = 50052;
-                  targetPort = 50052;
                   protocol = "TCP";
                 }
               ];
@@ -2187,7 +2272,7 @@ in
                         "--nvme-io-timeout=110s10s"
                         "--nvme-core-io-timeout=110s10s"
                         "--nvme-ctrl-loss-tmo=1980"
-                        "--nvme-nr-io-queues=2"
+                        "--nvme-nr-io-queues=1"
                         "--nvme-connect-fallback=true"
                         "--kubelet-path=/var/lib/kubelet"
                         "--node-selector=openebs.io/csi-node=mayastor"
@@ -2713,20 +2798,22 @@ in
           null;
 
       # --- Mayastor default StorageClass ---
+      #
+      # Matches the mayastor helm chart's storageclass.yaml: no labels, no
+      # explicit volumeBindingMode (k8s defaults to Immediate),
+      # allowVolumeExpansion enabled, parameter is `repl` (not `repl_count`).
       mayastorStorageClass =
         if config.mayastor.enabled then
           (scope.mkClusterResource {
             apiVersion = "storage.k8s.io/v1";
             kind = "StorageClass";
             name = "openebs-single-replica";
-            labels = mayastorLabels;
             extra = {
               provisioner = "io.openebs.csi-mayastor";
-              volumeBindingMode = "Immediate";
+              allowVolumeExpansion = true;
               parameters = {
-                ioTimeout = "30";
                 protocol = "nvmf";
-                repl_count = "1";
+                repl = "1";
               };
             };
           })
@@ -2770,7 +2857,7 @@ in
             labels = zfsLabels;
             spec = {
               attachRequired = false;
-              podInfoOnMount = true;
+              podInfoOnMount = false;
               storageCapacity = true;
             };
           })
@@ -2813,13 +2900,16 @@ in
               replicas = 1;
               selector.matchLabels = {
                 app = "openebs-zfs-controller";
-                name = "openebs-zfs-controller";
+                component = "openebs-zfs-controller";
+                release = name;
               };
               template = {
                 metadata.labels = {
                   app = "openebs-zfs-controller";
                   role = "openebs-zfs";
+                  component = "openebs-zfs-controller";
                   name = "openebs-zfs-controller";
+                  release = name;
                   "openebs.io/component-name" = "openebs-zfs-controller";
                   "openebs.io/version" = zfsVersion;
                 };
@@ -2935,6 +3025,10 @@ in
                           name = "OPENEBS_IO_INSTALLER_TYPE";
                           value = "zfs-localpv-helm";
                         }
+                        {
+                          name = "OPENEBS_NAMESPACE";
+                          valueFrom.fieldRef.fieldPath = "metadata.namespace";
+                        }
                       ];
                       volumeMounts = [
                         {
@@ -2972,13 +3066,12 @@ in
             };
             spec = {
               selector.matchLabels = {
-                app = "openebs-zfs-node";
                 name = "openebs-zfs-node";
+                release = name;
               };
               updateStrategy = {
                 type = "RollingUpdate";
                 rollingUpdate = {
-                  maxSurge = 0;
                   maxUnavailable = "100%";
                 };
               };
@@ -2987,6 +3080,7 @@ in
                   app = "openebs-zfs-node";
                   role = "openebs-zfs";
                   name = "openebs-zfs-node";
+                  release = name;
                   "openebs.io/component-name" = "openebs-zfs-node";
                   "openebs.io/version" = zfsVersion;
                 };
@@ -3151,7 +3245,7 @@ in
                     {
                       name = "encr-keys";
                       hostPath = {
-                        path = "/home/keys";
+                        path = config.zfsLocalPv.encrKeysDir;
                         type = "DirectoryOrCreate";
                       };
                     }
@@ -3224,13 +3318,15 @@ in
               replicas = 1;
               selector.matchLabels = {
                 app = "openebs-lvm-controller";
-                name = "openebs-lvm-controller";
+                component = "openebs-lvm-controller";
+                release = name;
               };
               template = {
                 metadata.labels = {
                   app = "openebs-lvm-controller";
                   role = "openebs-lvm";
-                  name = "openebs-lvm-controller";
+                  component = "openebs-lvm-controller";
+                  release = name;
                   "openebs.io/component-name" = "openebs-lvm-controller";
                   "openebs.io/version" = lvmVersion;
                 };
@@ -3389,13 +3485,12 @@ in
             };
             spec = {
               selector.matchLabels = {
-                app = "openebs-lvm-node";
                 name = "openebs-lvm-node";
+                release = name;
               };
               updateStrategy = {
                 type = "RollingUpdate";
                 rollingUpdate = {
-                  maxSurge = 0;
                   maxUnavailable = "100%";
                 };
               };
@@ -3404,6 +3499,7 @@ in
                   app = "openebs-lvm-node";
                   role = "openebs-lvm";
                   name = "openebs-lvm-node";
+                  release = name;
                   "openebs.io/component-name" = "openebs-lvm-node";
                   "openebs.io/version" = lvmVersion;
                 };
@@ -3562,7 +3658,11 @@ in
             name = "${name}-lvm-localpv-node-service";
             labels = lvmNodeLabels;
             spec = {
-              selector = self.lvmNode.out.selector;
+              clusterIP = "None";
+              # Chart 4.2.0 uses an `app:` selector here, not the DaemonSet's
+              # full label set. The lvmNode pod template carries `app:
+              # openebs-lvm-node`, so this still selects correctly.
+              selector.app = "openebs-lvm-node";
               ports = [
                 {
                   name = "metrics";
@@ -3638,7 +3738,11 @@ in
                         }
                         {
                           name = "OPENEBS_IO_HELPER_IMAGE";
-                          value = config.localPvProvisioner.image;
+                          value =
+                            if config.localPvProvisioner.helperImage != null then
+                              config.localPvProvisioner.helperImage
+                            else
+                              config.localPvProvisioner.image;
                         }
                         {
                           name = "OPENEBS_IO_BASE_PATH";
@@ -3717,6 +3821,155 @@ in
         }) config.diskPools
       );
 
+      # ==========================================================================
+      #  obs-callhome (telemetry: ships periodic usage reports to OpenEBS)
+      #  Verbatim from the upstream chart — emitted to converge with the
+      #  Ansible dump. Deployment + sidecar Service, paired with the
+      #  shared `mayastorSa` service account.
+      # ==========================================================================
+
+      obsCallhomeService =
+        if config.mayastor.enabled then
+          (scope.mkResource {
+            apiVersion = "v1";
+            kind = "Service";
+            name = "${name}-obs-callhome-stats";
+            labels = {
+              app = "obs-callhome";
+              "openebs.io/release" = name;
+              "openebs.io/version" = "2.8.0";
+            };
+            spec = {
+              selector = {
+                app = "obs-callhome";
+                "openebs.io/release" = name;
+              };
+              ports = [
+                {
+                  name = "https";
+                  port = 9090;
+                  targetPort = 9090;
+                  protocol = "TCP";
+                }
+                {
+                  name = "http";
+                  port = 9091;
+                  targetPort = 9091;
+                  protocol = "TCP";
+                }
+              ];
+            };
+          })
+        else
+          null;
+
+      obsCallhomeDeployment =
+        if config.mayastor.enabled then
+          (scope.mkResource {
+            apiVersion = "apps/v1";
+            kind = "Deployment";
+            name = "${name}-obs-callhome";
+            labels = {
+              app = "obs-callhome";
+              "openebs.io/release" = name;
+              "openebs.io/version" = "2.8.0";
+            };
+            spec = {
+              replicas = 1;
+              selector.matchLabels = {
+                app = "obs-callhome";
+                "openebs.io/release" = name;
+              };
+              template = {
+                metadata.labels = {
+                  app = "obs-callhome";
+                  "openebs.io/release" = name;
+                  "openebs.io/version" = "2.8.0";
+                  "openebs.io/logging" = "true";
+                };
+                spec = {
+                  serviceAccountName = self.mayastorSa.out.name;
+                  imagePullSecrets = null;
+                  nodeSelector = {
+                    "kubernetes.io/arch" = "amd64";
+                  };
+                  containers = [
+                    {
+                      name = "obs-callhome";
+                      image = "docker.io/openebs/mayastor-obs-callhome:v2.8.0";
+                      args = [
+                        "-e http://${name}-api-rest:8081"
+                        "-n ${ns}"
+                        "--aggregator-url=http://${name}-obs-callhome-stats:9090/stats"
+                        "--send-report"
+                      ];
+                      env = [
+                        {
+                          name = "RUST_LOG";
+                          value = "info";
+                        }
+                      ];
+                      imagePullPolicy = "IfNotPresent";
+                      resources = {
+                        limits = {
+                          cpu = "100m";
+                          memory = "32Mi";
+                        };
+                        requests = {
+                          cpu = "50m";
+                          memory = "16Mi";
+                        };
+                      };
+                    }
+                    {
+                      name = "obs-callhome-stats";
+                      image = "docker.io/openebs/mayastor-obs-callhome-stats:v2.8.0";
+                      args = [
+                        "--namespace=${ns}"
+                        "--release-name=${name}"
+                        "--mbus-url=nats://${name}-nats:4222"
+                        "--ansi-colors=true"
+                        "--fmt-style=pretty"
+                      ];
+                      ports = [
+                        {
+                          containerPort = 9090;
+                          protocol = "TCP";
+                          name = "stats";
+                        }
+                      ];
+                      env = [
+                        {
+                          name = "RUST_LOG";
+                          value = "info";
+                        }
+                      ];
+                      imagePullPolicy = "IfNotPresent";
+                      resources = {
+                        limits = {
+                          cpu = "100m";
+                          memory = "32Mi";
+                        };
+                        requests = {
+                          cpu = "50m";
+                          memory = "16Mi";
+                        };
+                      };
+                    }
+                  ];
+                };
+              };
+            };
+            requires = [
+              self.mayastorSa
+              self.apiRestService
+              self.natsService
+              self.obsCallhomeService
+            ];
+          })
+        else
+          null;
+
       #  Entry point
       # ==========================================================================
 
@@ -3731,10 +3984,12 @@ in
             self.etcdService
             self.etcdHeadlessService
             self.etcdStorageClass
+            self.etcdPdb
             self.natsStatefulSet
             self.natsService
             self.natsSa
             self.natsConfigMap
+            self.natsPdb
             self.agentCoreDeployment
             self.agentCoreService
             self.apiRestDeployment
@@ -3745,6 +4000,8 @@ in
             self.ioEngineMetricsService
             self.agentHaNodeDaemonSet
             self.mayastorStorageClass
+            self.obsCallhomeService
+            self.obsCallhomeDeployment
           ]
           # --- ZFS LocalPV components ---
           ++ lib.optionals config.zfsLocalPv.enabled [

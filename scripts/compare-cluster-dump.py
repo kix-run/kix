@@ -37,6 +37,12 @@ from parity.structural_diff import structural_diff, format_diffs, DiffKind
 
 # Use the C-accelerated YAML loader when available (~5-10x faster).
 _YAMLLoader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+# Bare `=` in YAML is the merge-value tag; SafeLoader has no constructor for it
+# and silently throws on otherwise-valid charts (e.g. AlertmanagerConfig CRD
+# enums like ['!=', '=', '=~', '!~']). Treat as a plain scalar.
+_YAMLLoader.add_constructor(
+    "tag:yaml.org,2002:value", lambda loader, node: loader.construct_scalar(node)
+)
 
 # Fields that Kubernetes auto-assigns at runtime — never present in kix output.
 # These are skipped entirely during comparison (any value is ignored).
@@ -66,6 +72,7 @@ _RESET = "\033[0m"
 
 # Kinds that are always created by operators/controllers at runtime, never declarative.
 _RUNTIME_KINDS = {
+    "pod",  # bare Pods are never deployed declaratively (Deployments/StatefulSets/DaemonSets create them)
     "volumesnapshot",
     "virtualmachineclusterinstancetype",
     "virtualmachineclusterpreference",
@@ -364,7 +371,7 @@ def _is_controller_owned(doc: dict) -> bool:
     ):
         return True
     for field in ("annotations", "labels"):
-        entries = metadata.get(field, {})
+        entries = metadata.get(field) or {}
         if any(k.startswith("controller.") and v == "true" for k, v in entries.items()):
             return True
     return False
@@ -379,12 +386,17 @@ def load_resources(
 ) -> dict[str, dict]:
     """Load and normalize all YAML files from a directory.
 
-    Supports both layouts:
-    - Nested: {namespace}/{name}-{kind}.yaml  (dump output)
-    - Flat:   {namespace}--{name}-{kind}.yaml  (kix nix build output)
+    Supports several layouts (auto-detected; keys are derived from each
+    document's metadata, so naming conventions don't matter):
 
-    If *service* is given, only files whose stem starts with that name
-    (before the first ``-``) are included.
+    - Nested: ``{namespace}/{anything}.yaml``       (kix-dump output)
+    - Kix flat: ``{namespace}--{name}-{kind}.yaml`` (kix nix build output)
+    - Dump flat: ``NNNN-{Kind}-{namespace}-{name}.yaml`` (migration dumps)
+    - Multi-doc: any ``*.yaml`` containing multiple ``---`` separated docs
+      (e.g. helm-rendered ``*.rendered.yaml`` bundles)
+
+    If *service* is given, only documents whose ``metadata.name`` matches
+    that service (or starts with ``{service}-``) are included.
 
     If *skip_controller_owned* is True, resources with ownerReferences
     where controller=true are excluded (they are managed by a controller,
@@ -396,76 +408,75 @@ def load_resources(
     Returns dict mapping "{namespace}/{name}-{kind}" -> normalized doc.
     """
 
-    def _matches_service(stem: str) -> bool:
+    def _key_from_doc(doc: dict) -> str:
+        kind = (doc.get("kind") or "Unknown").lower()
+        meta = doc.get("metadata") or {}
+        ns = meta.get("namespace") or "_cluster"
+        name = meta.get("name") or "unknown"
+        return f"{ns}/{name}-{kind}"
+
+    def _matches_service_doc(doc: dict) -> bool:
         if service is None:
             return True
-        # stem is e.g. "coredns-deployment"; extract the name part before the kind suffix
-        name_part = stem.rsplit("-", 1)[0] if "-" in stem else stem
-        return name_part == service or name_part.startswith(service + "-")
+        name = (doc.get("metadata") or {}).get("name", "")
+        return name == service or name.startswith(service + "-")
 
-    def _process(f: Path, key: str) -> list[tuple[str, dict]]:
-        """Parse, filter, and normalize a single file. Returns [(key, doc), ...]."""
-        with open(f) as fh:
-            doc = yaml.load(fh, Loader=_YAMLLoader)
-        if doc is None:
+    def _process(f: Path) -> list[tuple[str, dict]]:
+        """Parse, filter, and normalize a file. Returns [(key, doc), ...]."""
+        try:
+            with open(f) as fh:
+                docs = list(yaml.load_all(fh, Loader=_YAMLLoader))
+        except yaml.YAMLError as e:
+            click.echo(f"WARN: failed to parse {f}: {e}", err=True)
             return []
-        # Unpack List resources (e.g. helm-generated bundled PrometheusRules)
-        # into individual items so they match cluster dump entries one-to-one.
-        if doc.get("kind") == "List" and isinstance(doc.get("items"), list):
-            items = []
-            for item in doc["items"]:
-                item_kind = item.get("kind", "Unknown").lower()
-                item_meta = item.get("metadata", {})
-                item_ns = item_meta.get("namespace", "_cluster")
-                item_name = item_meta.get("name", "unknown")
-                item_key = f"{item_ns}/{item_name}-{item_kind}"
+        out: list[tuple[str, dict]] = []
+        for doc in docs:
+            if not isinstance(doc, dict):
+                continue
+            # Unpack List resources (e.g. helm-bundled PrometheusRules) so
+            # they match cluster-dump entries one-to-one.
+            if doc.get("kind") == "List" and isinstance(doc.get("items"), list):
+                items = doc["items"]
+            else:
+                items = [doc]
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                if not _matches_service_doc(item):
+                    continue
                 if skip_controller_owned and _is_controller_owned(item):
                     continue
                 if skip_runtime and _is_runtime_resource(item):
                     continue
-                items.append((item_key, normalizer(item)))
-            return items
-        if skip_controller_owned and _is_controller_owned(doc):
-            return []
-        if skip_runtime and _is_runtime_resource(doc):
-            return []
-        return [(key, normalizer(doc))]
+                out.append((_key_from_doc(item), normalizer(item)))
+        return out
 
-    # Collect (file, key) pairs to process
-    file_list: list[tuple[Path, str]] = []
+    def _is_skip(f: Path) -> bool:
+        if f.name in ("_meta.yaml", "README.md"):
+            return True
+        if "-packageinstance.yaml" in f.name:
+            return True
+        return False
 
-    # Try nested layout first (subdirectories = namespaces)
+    # Auto-detect layout: nested if there are subdirectories, else flat.
+    file_list: list[Path] = []
     subdirs = [d for d in sorted(directory.iterdir()) if d.is_dir()]
     if subdirs:
         for ns_dir in subdirs:
-            ns = ns_dir.name
             for f in sorted(ns_dir.glob("*.yaml")):
-                if f.name == "_meta.yaml" or f.name == "README.md":
+                if _is_skip(f):
                     continue
-                if "-packageinstance.yaml" in f.name:
-                    continue
-                if not _matches_service(f.stem):
-                    continue
-                file_list.append((f, f"{ns}/{f.stem}"))
+                file_list.append(f)
     else:
-        # Flat layout: {namespace}--{name}-{kind}.yaml
         for f in sorted(directory.glob("*.yaml")):
-            if f.name == "_meta.yaml":
+            if _is_skip(f):
                 continue
-            if "-packageinstance.yaml" in f.name:
-                continue
-            stem = f.stem
-            if "--" not in stem:
-                continue
-            ns, rest = stem.split("--", 1)
-            if not _matches_service(rest):
-                continue
-            file_list.append((f, f"{ns}/{rest}"))
+            file_list.append(f)
 
     # Process files in parallel (CSafeLoader releases the GIL during C parsing)
-    resources = {}
+    resources: dict[str, dict] = {}
     with ThreadPoolExecutor() as pool:
-        for results in pool.map(lambda args: _process(*args), file_list):
+        for results in pool.map(_process, file_list):
             for key, doc in results:
                 resources[key] = doc
 
@@ -553,17 +564,46 @@ def find_rename_pairs(
         kind, _, _ = parse_resource_id(key)
         cluster_by_kind.setdefault(kind, []).append(key)
 
+    # Kinds where rename detection produces too many false positives —
+    # CNPs in particular use highly templated names that score 70%+
+    # similar across unrelated rules (egress vs ingress, create vs patch).
+    # For those we'd rather see the raw kix-only / cluster-only lists.
+    _RENAME_SKIP_KINDS = {
+        "ciliumnetworkpolicy",
+        "ciliumclusterwidenetworkpolicy",
+    }
+
+    # Pairs of substrings that indicate semantically distinct resources
+    # even when names look similar (e.g. egress and ingress policies).
+    _ANTONYM_PAIRS = [
+        ("egress", "ingress"),
+        ("-create-", "-patch-"),
+    ]
+
+    def _antonym_mismatch(a: str, b: str) -> bool:
+        for x, y in _ANTONYM_PAIRS:
+            if (x in a) != (x in b) or (y in a) != (y in b):
+                if (x in a or x in b) and (y in a or y in b):
+                    return True
+        return False
+
     # Find mutual best matches
     pairs = []
     used_cluster = set()
 
     for kix_key in kix_only:
+        kind, _, _ = parse_resource_id(kix_key)
+        if kind in _RENAME_SKIP_KINDS:
+            continue
+
         # A's best match in cluster
         match = find_best_match(kix_key, cluster_by_kind)
         if not match:
             continue
         cluster_key, ratio = match
         if cluster_key in used_cluster:
+            continue
+        if _antonym_mismatch(kix_key, cluster_key):
             continue
 
         # B's best match in kix (mutual check)
@@ -1112,7 +1152,12 @@ def _strip_sg_runtime(doc: dict) -> dict:
 
 @click.command()
 @click.argument("kix_dir", type=click.Path(exists=True, file_okay=False))
-@click.argument("cluster_dir", type=click.Path(exists=True, file_okay=False))
+@click.argument(
+    "cluster_dirs",
+    nargs=-1,
+    required=True,
+    type=click.Path(exists=True, file_okay=False),
+)
 @click.option(
     "--ignore-path",
     multiple=True,
@@ -1180,6 +1225,11 @@ def _strip_sg_runtime(doc: dict) -> dict:
     help="Skip StackGres operator-enriched fields (runtime defaults in SGCluster, SGInstanceProfile)",
 )
 @click.option(
+    "--skip-cnp/--no-skip-cnp",
+    default=False,
+    help="Skip CiliumNetworkPolicy / CiliumClusterwideNetworkPolicy (use cnp-diff.py for those instead)",
+)
+@click.option(
     "--skip-all",
     is_flag=True,
     default=False,
@@ -1214,7 +1264,7 @@ def _strip_sg_runtime(doc: dict) -> dict:
 )
 def main(
     kix_dir: str,
-    cluster_dir: str,
+    cluster_dirs: tuple[str, ...],
     ignore_path: tuple[str, ...],
     service: str | None,
     color: bool | None,
@@ -1228,21 +1278,27 @@ def main(
     skip_sg_runtime: bool,
     skip_controller_owned: bool,
     skip_runtime: bool,
+    skip_cnp: bool,
     skip_all: bool,
     files_only: bool,
     only_broken: bool,
     json_output: bool,
     output_file: str | None,
 ):
-    """Compare kix manifests against a cluster dump.
+    """Compare kix manifests against one or more cluster dump directories.
 
     KIX_DIR is the kix output directory (e.g. ./result from nix build).
-    CLUSTER_DIR is the dump directory (from kix-dump.py).
+    CLUSTER_DIRS is one or more dump directories — resources from all of
+    them are merged into a single cluster-side resource set (later
+    directories override earlier ones on key collision). This is useful
+    when a deployment is split across formats (e.g. nw1's k8s/ +
+    helm-rendered/).
 
     Output is a structured markdown report written to stdout.
     """
     kix_path = Path(kix_dir)
-    cluster_path = Path(cluster_dir)
+    cluster_paths = [Path(d) for d in cluster_dirs]
+    cluster_display = ", ".join(str(p) for p in cluster_paths)
 
     # --skip-all expands to all skip/ignore flags
     if skip_all:
@@ -1255,6 +1311,7 @@ def main(
         skip_crd_runtime = True
         skip_webhook_defaults = True
         skip_sg_runtime = True
+        skip_cnp = True
 
     ignore_paths = set(ignore_path) if ignore_path else set()
     if ignore_cluster_defaults:
@@ -1289,24 +1346,159 @@ def main(
         click.echo(f"Filtering for service: {service}", err=True)
 
     click.echo("Loading kix manifests...", err=True)
-    kix_resources = load_resources(kix_path, _with_post(normalize_kix), service)
+    kix_resources = load_resources(
+        kix_path, _with_post(normalize_kix), service, skip_runtime=skip_runtime
+    )
     click.echo(f"  {len(kix_resources)} resources", err=True)
 
     click.echo("Loading cluster dump...", err=True)
-    cluster_resources = load_resources(
-        cluster_path,
-        _with_post(normalize_cluster),
-        service,
-        skip_controller_owned=skip_controller_owned,
-        skip_runtime=skip_runtime,
-    )
-    click.echo(f"  {len(cluster_resources)} resources", err=True)
+    cluster_resources: dict[str, dict] = {}
+    for cluster_path in cluster_paths:
+        loaded = load_resources(
+            cluster_path,
+            _with_post(normalize_cluster),
+            service,
+            skip_controller_owned=skip_controller_owned,
+            skip_runtime=skip_runtime,
+        )
+        click.echo(f"  {cluster_path}: {len(loaded)} resources", err=True)
+        cluster_resources.update(loaded)
+    click.echo(f"  total: {len(cluster_resources)} resources", err=True)
+
+    if skip_cnp:
+        _CNP_KINDS = {"ciliumnetworkpolicy", "ciliumclusterwidenetworkpolicy"}
+        before_kix = len(kix_resources)
+        before_cluster = len(cluster_resources)
+        kix_resources = {
+            k: v
+            for k, v in kix_resources.items()
+            if v.get("kind", "").lower() not in _CNP_KINDS
+        }
+        cluster_resources = {
+            k: v
+            for k, v in cluster_resources.items()
+            if v.get("kind", "").lower() not in _CNP_KINDS
+        }
+        click.echo(
+            f"  --skip-cnp: dropped {before_kix - len(kix_resources)} kix + "
+            f"{before_cluster - len(cluster_resources)} cluster CNPs (use scripts/cnp-diff.py for those)",
+            err=True,
+        )
+
+    # Whole-resource ignores from scripts/nw1-diff-ignores.txt — lines of
+    # the form `resource:<ns>/<Kind>/<name>` (use _cluster for cluster-scoped).
+    # Drop matching resources from both sides so they don't appear as
+    # missing/extra in the diff.
+    _ignore_file = Path(__file__).parent / "nw1-diff-ignores.txt"
+    _resource_ignores: set[tuple[str, str, str]] = set()
+    if _ignore_file.exists():
+        for raw in _ignore_file.read_text().splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            if not line.startswith("resource:"):
+                continue
+            spec = line[len("resource:") :].strip()
+            parts = spec.split("/", 2)
+            if len(parts) != 3:
+                continue
+            ns, kind, nm = parts
+            _resource_ignores.add((ns, kind.lower(), nm))
+
+    def _matches_ignore(doc: dict) -> bool:
+        kind = doc.get("kind", "").lower()
+        name = doc.get("metadata", {}).get("name", "")
+        ns = doc.get("metadata", {}).get("namespace", "_cluster") or "_cluster"
+        if (ns, kind, name) in _resource_ignores:
+            return True
+        # Helm-rendered dump resources sometimes lack metadata.namespace
+        # (helm sets it at install time), so they end up keyed as _cluster.
+        # Allow the ignore to match by (kind, name) regardless of namespace
+        # in that case.
+        if ns == "_cluster":
+            for ins, ikind, inm in _resource_ignores:
+                if ikind == kind and inm == name:
+                    return True
+        return False
+
+    if _resource_ignores:
+        before_kix = len(kix_resources)
+        before_cluster = len(cluster_resources)
+        kix_resources = {
+            k: v for k, v in kix_resources.items() if not _matches_ignore(v)
+        }
+        cluster_resources = {
+            k: v for k, v in cluster_resources.items() if not _matches_ignore(v)
+        }
+        dropped = (before_kix - len(kix_resources)) + (
+            before_cluster - len(cluster_resources)
+        )
+        if dropped:
+            click.echo(
+                f"  nw1-diff-ignores: dropped {before_kix - len(kix_resources)} kix + "
+                f"{before_cluster - len(cluster_resources)} cluster resources",
+                err=True,
+            )
+
+    # Cross-index matching: helm-rendered manifests often omit
+    # metadata.namespace (helm sets it implicitly at install time), so a
+    # cluster-side resource ends up keyed under "_cluster/" while kix has
+    # it under its actual namespace. Reconcile by matching on (kind,
+    # name) — if exactly one resource on each side has that pair and
+    # neither was matched by the strict key, treat them as the same
+    # resource. This is the canonical (kind, ns, name) the API server
+    # would return; the dump just lacked the namespace.
+    common_strict = set(kix_resources) & set(cluster_resources)
+    kix_unmatched = set(kix_resources) - common_strict
+    cluster_unmatched = set(cluster_resources) - common_strict
+
+    def _kn(doc: dict) -> tuple[str, str]:
+        meta = doc.get("metadata") or {}
+        return (
+            (doc.get("kind") or "").lower(),
+            meta.get("name") or "",
+        )
+
+    kix_by_kn: dict[tuple[str, str], list[str]] = {}
+    for k in kix_unmatched:
+        kix_by_kn.setdefault(_kn(kix_resources[k]), []).append(k)
+    cluster_by_kn: dict[tuple[str, str], list[str]] = {}
+    for k in cluster_unmatched:
+        cluster_by_kn.setdefault(_kn(cluster_resources[k]), []).append(k)
+
+    rekeyed = 0
+    for kn, cluster_keys in cluster_by_kn.items():
+        kix_keys = kix_by_kn.get(kn, [])
+        if len(cluster_keys) == 1 and len(kix_keys) == 1:
+            old = cluster_keys[0]
+            new = kix_keys[0]
+            if new not in cluster_resources:
+                doc = cluster_resources.pop(old)
+                # Helm-rendered manifests often omit metadata.namespace
+                # because helm injects it at install time. After we've
+                # confidently re-keyed onto the kix-side namespace, sync
+                # the doc's metadata.namespace too so the structural
+                # diff doesn't flag a phantom namespace difference.
+                kix_meta = kix_resources[new].get("metadata") or {}
+                kix_ns = kix_meta.get("namespace")
+                if kix_ns:
+                    meta = doc.setdefault("metadata", {})
+                    if not meta.get("namespace"):
+                        meta["namespace"] = kix_ns
+                cluster_resources[new] = doc
+                rekeyed += 1
+    if rekeyed:
+        click.echo(
+            f"  cross-indexed {rekeyed} cluster resources by (kind, name) "
+            f"(dump-side namespace was missing or differed)",
+            err=True,
+        )
 
     if json_output:
         report_text = json.dumps(
             generate_json_report(
                 kix_path,
-                cluster_path,
+                cluster_display,
                 kix_resources,
                 cluster_resources,
                 ignore_paths,
@@ -1319,7 +1511,7 @@ def main(
         use_color = color if color is not None else sys.stdout.isatty()
         report_text = generate_report(
             kix_path,
-            cluster_path,
+            cluster_display,
             kix_resources,
             cluster_resources,
             ignore_paths,

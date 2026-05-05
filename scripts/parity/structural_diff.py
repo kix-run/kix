@@ -109,6 +109,9 @@ _LIST_KEY_EXTRACTORS: dict[str, Callable[[dict], str]] = {
     ),
     "imagePullSecrets": lambda item: item.get("name", ""),
     "ownerReferences": lambda item: f"{item.get('kind', '')}:{item.get('name', '')}",
+    "endpoints": lambda item: (
+        item.get("port", "") or item.get("targetPort", "") or item.get("path", "")
+    ),
 }
 
 
@@ -256,6 +259,11 @@ def structural_diff(
                     Difference(path, DiffKind.VALUE_MISMATCH, a, b, a_label, b_label)
                 )
             return diffs
+        # K8s IntOrString: a numeric string and an int/float that parse to the
+        # same number are semantically equal (e.g. resources.limits.cpu: '1' vs 1,
+        # targetPort: '8443' vs 8443). Named ports like 'https' still diff.
+        if _intorstring_equal(a, b):
+            return diffs
         diffs.append(Difference(path, DiffKind.TYPE_MISMATCH, a, b, a_label, b_label))
         return diffs
 
@@ -373,6 +381,14 @@ def structural_diff(
         # Check if both are equivalent K8s quantities (e.g. "1" vs "1000m", "2Gi" vs "2048Mi")
         if isinstance(a, str) and isinstance(b, str) and _quantities_equal(a, b):
             pass  # semantically equal quantities
+        elif (
+            isinstance(a, str)
+            and isinstance(b, str)
+            and "\n" in a
+            and "\n" in b
+            and _strip_comments(a) == _strip_comments(b)
+        ):
+            pass  # multi-line strings differ only in comment lines / blank lines
         else:
             diffs.append(
                 Difference(path, DiffKind.VALUE_MISMATCH, a, b, a_label, b_label)
@@ -418,6 +434,31 @@ def _parse_quantity(s: str) -> float | None:
     if suffix:
         value *= _QUANTITY_MULTIPLIERS[suffix]
     return value
+
+
+def _intorstring_equal(a, b) -> bool:
+    """K8s IntOrString fields tolerate '8443' == 8443. Named ports stay distinct."""
+    if isinstance(a, bool) or isinstance(b, bool):
+        return False
+    if isinstance(a, str) and isinstance(b, (int, float)):
+        s, n = a, b
+    elif isinstance(b, str) and isinstance(a, (int, float)):
+        s, n = b, a
+    else:
+        return False
+    try:
+        return float(s) == float(n)
+    except ValueError:
+        return False
+
+
+_COMMENT_LINE_RE = re.compile(r"^\s*#.*$", re.MULTILINE)
+
+
+def _strip_comments(s: str) -> str:
+    """Strip whole-line comments and collapse blank lines for comparison."""
+    no_comments = _COMMENT_LINE_RE.sub("", s)
+    return "\n".join(line for line in no_comments.splitlines() if line.strip())
 
 
 def _quantities_equal(a: str, b: str) -> bool:

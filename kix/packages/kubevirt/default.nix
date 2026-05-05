@@ -1503,6 +1503,9 @@ in
             metadata = {
               name = "virt-operator";
               labels = podLabels;
+              annotations = {
+                "openshift.io/required-scc" = "restricted-v2";
+              };
             };
             spec = {
               serviceAccountName = self.serviceAccount.out.name;
