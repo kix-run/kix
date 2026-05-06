@@ -229,7 +229,51 @@ abstraction; "this might be useful one day" doesn't ship.
 
 > Wait for the third caller before you abstract.
 
-### 6.5 Don't add half-finished features
+### 6.5 Override existing instances; don't re-expose their config
+
+When a shared module (e.g. `kix.modules.monitoring`) already declares an
+instance, and your cluster needs to tweak its package config, **merge into
+the instance directly** rather than adding a new module option that just
+forwards to the package. The `instances.<ns>.<name>.config` field is a
+`deferredModule` (`kix/lib/modules.nix`), so multiple modules contribute
+config to the same instance and the module system merges them — with full
+`mkDefault` / `mkForce` priority semantics.
+
+```nix
+modules = [
+  kix.modules.monitoring
+  { monitoring.enabled = true; monitoring.loki.enabled = true; }
+
+  # Pure override module — merges into the loki instance the monitoring
+  # module already declared in the monitoring-loki namespace.
+  ({ config, ... }: {
+    instances.${config.monitoring.loki.namespace}.loki.config = {
+      values = {
+        # whatever loki package config you want to merge in
+        loki.limits_config.retention_period = "168h";
+      };
+    };
+  })
+];
+```
+
+Two safety properties to lean on:
+
+- **Don't re-set `package`.** It's `types.raw`; a duplicate definition
+  errors. Override-only modules touch `config` (and `aliases` / `deps` /
+  `partsOverlays` if needed), nothing else.
+- **Reference the upstream namespace through its option** (e.g.
+  `config.monitoring.loki.namespace`) instead of hardcoding the string —
+  if the upstream module renames the namespace, your override follows.
+  A typo'd namespace creates a fresh instance with no `package`, which
+  fails eval with a clear "option ... is used but not defined" error
+  rather than silently spawning a duplicate.
+
+This pattern applies anywhere a shared module owns instances: don't widen
+its option surface to plumb every package knob through. Override the
+instance directly.
+
+### 6.6 Don't add half-finished features
 
 Bug fixes don't need surrounding cleanup; one-shot operations don't need helpers.
 Eliminate dead code and stale comments — don't leave `// removed for X` or rename
