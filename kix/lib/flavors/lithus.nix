@@ -259,12 +259,12 @@ in
     cluster.provider = lib.mkForce "lithus";
 
     cluster.capabilities = {
-      cni = mkDefault "cilium";
-      networkPolicyAPI = mkDefault "cilium";
-      loadBalancer = mkDefault true;
-      persistentStorage = mkDefault true;
+      cni = lib.mkForce "cilium";
+      networkPolicyAPI = lib.mkForce "cilium";
+      loadBalancer = lib.mkForce true;
+      persistentStorage = lib.mkForce true;
       rwxStorage = mkDefault true;
-      volumeSnapshots = mkDefault true;
+      volumeSnapshots = lib.mkForce true;
     };
 
     # Storage resource bundles — one inline-package instance per kind so
@@ -287,6 +287,22 @@ in
     instances.openebs-system = {
       lithus-disk-pools = {
         package = mkRawResources "Lithus per-worker DiskPools (Mayastor)" diskPools;
+      };
+    };
+
+    # Default storageClass alias — exposes the cluster default
+    # (lbs1-pool1-2x, mayastor) so packages depending on `storageClasses`
+    # (persistent-volume-claim, stackgres-cluster, …) resolve via DI
+    # without hardcoding. Pattern mirrors k3s flavor's platform-storage.
+    instances.kube-system = {
+      platform-storage = {
+        package = kix.mkImport {
+          out = {
+            storageClassName = "lbs1-pool1-2x";
+          };
+        };
+        aliases = [ "storageClasses" ];
+        optional = true;
       };
     };
   };

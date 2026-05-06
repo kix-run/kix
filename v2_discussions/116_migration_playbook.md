@@ -43,15 +43,31 @@ The first iteration of kix code is intentionally **trivial**: a flat list of `Pa
 
 Read the live cluster's namespaces. For each, one line: *what concern lives here* (platform / operator / tenant / system / test). This is the only artifact that comes from the dump in Phase 0; it stops you from missing whole subsystems.
 
+**Scope rule:** a namespace is in scope iff it has a Namespace declaration AND ≥1 non-policy resource. Namespaces that appear only as CNP/CCNP traces (no workload manifests) are *not* in scope — their CNPs are kix-derived netpol residue from upstream packages, not migration targets.
+
+### Step 0.1.5 — Cluster identity extraction
+
+Before SBOM mapping, extract one-liners (needed by Phase 1):
+
+- Cluster name + environment (from labels, Connector names, helm release prefixes).
+- Domain (from Ingress hosts).
+- Service / pod CIDRs (from Tailscale Connector advertiseRoutes, kube-proxy config, or a representative ClusterIP).
+- Worker node names (from DiskPools, nodeAffinity, nodeSelector).
+
 ### Step 0.2 — Match dump artifacts to existing kixpkgs
 
-For each helm release and each Ansible bundle in the dump, the AI step is: **does kixpkgs already have a package for this?**
+For each helm release and each Ansible bundle in the dump, the AI step is: **does kixpkgs already have a package for this?** Sort each artifact into one of four buckets:
+
+1. **kix-native package exists** → include as an instance. Decide: Tier-2 importChart now (diff-cleanliness, fast adoption) → native switchover later, OR native immediately (intentional divergence). **Default: importChart-first, switch later** — this separates adoption risk from package-design risk.
+2. **No kix package — write or import** → leave a `# TODO(116): no kix package — write or import` marker.
+3. **Belongs as config / extra-resource on an existing package** → stray CRs that aren't components in their own right. Examples: SGObjectStorage on `stackgres-database`, Schedule on `velero`, PriorityClass on `reloader`, VirtualMachine on `kubevirt`, Connector/ProxyClass on `tailscale`. Canonical pattern: `CRDRef.mkCR` (see `kix/packages/stackgres-database/`). Without this bucket, AI defaults to inline-authoring or pretending it's a missing package — both wrong.
+4. **Out of scope** → consciously dropped. Record in `OUT_OF_SCOPE.md` (see Step 0.3).
+
+Match heuristics:
 
 - Helm release name + chart name → grep `kix/packages/` for matching chart imports.
 - Operator CRs (SGCluster, Cilium*, ServiceMonitor, …) → match to the package that owns that CRD.
 - Native bundles (RBAC + Deployment + Service for X) → match by image, by name, by purpose.
-
-If a match exists: include the package as an instance. If not: leave a `# TODO(116): no kix package — write or import` marker.
 
 ### Step 0.3 — Write the SBOM cluster file
 
@@ -72,15 +88,9 @@ Produce a `cluster.nix` (or equivalent) that is *only*:
 
 The cluster *will not* build cleanly. That's fine. The point is to have a declarative inventory of what we *think* the cluster is, expressed in kix terms.
 
-### Step 0.4 — First diff: what's left over?
+Also produce `OUT_OF_SCOPE.md`: namespaces/components consciously dropped (bucket 4 above), with re-add criteria. Bridges to Phase 5's `MIGRATION_RESIDUE.md`. Without this artifact, dropped scope vanishes silently and re-add hooks are lost.
 
-Now run the diff. The interesting numbers aren't only-in-right (we expect lots) — they're:
-
-- **What does kix emit that the dump doesn't have?** → packages we picked wrongly, or packages that bring along scaffolding the dump doesn't.
-- **Which dump namespaces have zero kix coverage?** → known gap list, maps to "write package" or "import chart" work.
-- **Which dump resources look like operator-managed children?** → should disappear once the operator package is wired (don't migrate them as native YAML).
-
-Phase 0 exits when the SBOM is written and the gap list is enumerated. No package values have been touched yet.
+Phase 0 exits when the SBOM is written and the gap list is enumerated. No package values have been touched yet. **The first diff is deferred to end of Phase 1** — diff is impossible until `nix build` evaluates; trying earlier conflates eval errors with real diff (see Step 1.4).
 
 ### Why this beats the nw1 approach
 
@@ -138,7 +148,15 @@ Pattern matching, three ways:
 2. *Eval error → minimal stub.* "Package X requires `domain`; the dump's Ingress hosts are all under `*.nw1.example.com`; set `globals.domain = "nw1.example.com"`."
 3. *Resource cluster → instance candidate.* "These 6 resources in `arc-runners` look like a `actions-runner-controller` chart import; add an `importChart` instance, defer values."
 
-Phase 1 exits when `nix build` is green and a written list of deferred decisions exists.
+### Step 1.4 — First diff (deferred from Phase 0.4)
+
+With `nix build` green, run the diff for the first time. The interesting numbers aren't only-in-right (expected) — they're:
+
+- **What does kix emit that the dump doesn't have?** → packages picked wrongly, or packages that bring along scaffolding the dump doesn't.
+- **Which dump namespaces have zero kix coverage?** → known gap list.
+- **Which dump resources look like operator-managed children?** → should disappear once the operator package is wired (don't migrate them as native YAML).
+
+Phase 1 exits when `nix build` is green, the first diff has been read, and a written list of deferred decisions exists.
 
 ## Phase 2 — Flavor (hardware reality)
 
@@ -351,6 +369,7 @@ The nw1 migration is the cautionary tale this playbook is shaped against. Re-lis
 - **Head-through-wall iteration.** When a strategy doesn't produce the expected diff delta, escalating (more overrides, deeper patches) instead of going back to the drawing board. The mental model was wrong; layering on top of a wrong model produces the worst overfit.
 - **Inline package authoring.** Writing package-shaped logic in the cluster file because handing off felt like a delay. Ends up half-package, half-cluster, fully unreusable.
 - **Phase confusion.** Doing Phase 3 detail work while Phase 2 capabilities aren't real, or chasing label/annotation diff (level 5) while resources are still missing (level 2).
+- **Treating CNP-only namespace traces as scope.** A dump can carry 50+ CNPs referencing tenant/operator namespaces with no workload manifests. Misreading these as missing packages explodes scope. Rule: in scope iff Namespace declaration AND ≥1 non-policy resource (see Step 0.1).
 
 ## Open questions
 
