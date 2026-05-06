@@ -294,7 +294,7 @@ Rule of thumb:
 |---|---|---|
 | `config` | `deferredModule` | Tweak typed package options. Module-merged across contributors. |
 | `deps` | `attrsOf anything` | Force a specific DI provider for one build arg. Two modules setting the same dep = error. |
-| `aliases` | `listOf str` | Add extra DI resolution keys (beyond instance name + `meta.defaultAliases`). |
+| `aliases` | `listOf str` | Set DI resolution keys for this instance. When non-empty, **replaces** the package's `meta.defaultAliases`; when empty, defaults apply. Not the right tool for multi-instance disambiguation — see §8.4. |
 | `labelStyle` | `enum { kix, helm }` | Switch label scheme — for byte-level Helm parity (e.g. when `releaseName` is set). |
 | `selectorLabels` | `attrsOf str` | Override auto-generated selector labels. Escape hatch for *immutable* selectors on pre-existing StatefulSets. |
 | `partsOverlays` | `listOf (scope → self → base → attrset)` | Post-build resource transforms. Run after the package's `build` inside the same fixpoint — full access to `scope`. Can rewrite `root`, extend `out` with builders, add parts. Multiple modules concatenate. |
@@ -425,8 +425,10 @@ meta = {
 };
 ```
 
-Consumers' DI resolution matches by arg name → instance name → instance aliases →
-package's `meta.defaultAliases`. The capability ownership rule
+Consumers' DI resolution matches by arg name → instance name → instance
+aliases (when set) **or** package's `meta.defaultAliases` (when not set —
+instance aliases *replace* package defaults, they don't merge). The
+capability ownership rule
 (`scorecard.architecture`) treats DI-provided resources as legitimate (because
 the provider's builders stamp `kix.dev/capability: <name>`); hand-rolled
 equivalents trip the rule.
@@ -439,6 +441,60 @@ reflection, certificate issuance, monitoring scrape backend.
 
 It is *not* for product/feature labels. Don't write `meta.provides = ["high-performance-vector-search"]` —
 DI doesn't search on those, and the architecture rule won't gain anything.
+
+### 8.4 Disambiguating multi-instance providers
+
+When a cluster runs **multiple instances of the same package** (three
+ingress-nginx controllers, two stackgres-cluster fleets, etc.) and a
+consumer needs a *specific* one, wire the dep explicitly at the consumer
+site:
+
+```nix
+# clusters/<name>.nix or services.nix
+{ ref, ... }: {
+  instances.harbor-system.harbor = {
+    package = packages.harbor;
+    deps.ingressNginx = ref.nginx-system."private-v2";
+    config = { ... };
+  };
+}
+```
+
+`ref` is the cluster fixpoint, exposed via `specialArgs` to every
+cluster module. `ref.<namespace>.<instanceName>` is a lazy reference
+that resolves to the same value DI auto-resolution would produce —
+short-circuiting alias-based discovery entirely.
+
+**Aliases are not the right tool here.** It's tempting to disambiguate
+by giving each instance a unique alias (`ingressNginxPublic`,
+`ingressNginxPrivate`, etc.) and letting auto-resolution pick the right
+one. That ties the consumer's wiring to whichever instance happens to
+keep the package's bare default alias — coupling-by-side-effect. Use
+`deps.<argName> = ref.<ns>.<inst>` instead; it makes the dependency
+graph legible from the consumer site.
+
+**Phase-1 caveat (current limitation).** kix runs a phase-1 dep
+pre-pass (config injection / DAG seeding) with `explicitOverrides = {}`
+deliberately, to avoid `ref`-fixpoint recursion. If DNS-based
+auto-resolution is *ambiguous* in phase-1 (multiple candidates with the
+same alias), eval throws before any consumer's explicit override
+applies. Until that's lifted, multi-instance clusters need at least
+one of the instances to claim a unique alias so phase-1 has a single
+match — the consumer's explicit `deps` then takes over for the actual
+build:
+
+```nix
+instances.nginx-system = {
+  public        = { package = packages.ingress-nginx; aliases = [ "ingressNginxLegacyPublic" ]; ... };
+  public-v2     = { package = packages.ingress-nginx; aliases = [ "ingressNginxPublic" ];       ... };
+  private-v2    = { package = packages.ingress-nginx;                                            ... };  # keeps default `ingressNginx`
+};
+```
+
+The aliases here are phase-1 plumbing, not load-bearing intent — the
+consumer's `deps.ingressNginx = ref.nginx-system."private-v2"` is what
+documents the wiring. Once the phase-1 limitation is addressed, the
+aliases can be dropped.
 
 ## 9. Operational principles
 
@@ -602,10 +658,11 @@ that's the price of the workaround being visible.
 
 ### 12.7 `meta.provides` for non-capabilities
 
-`meta.provides = ["my-database"]` doesn't help DI — DI matches arg name,
-instance name, instance aliases, then package `defaultAliases`. `provides` is
-for capability *categories* the architecture rule cares about (storage,
-network-policy-enforcer, reflection, ingress, etc.).
+`meta.provides = ["my-database"]` doesn't help DI — DI matches arg name →
+instance name → instance aliases (which *replace* package `defaultAliases`
+when non-empty). `provides` is for capability *categories* the architecture
+rule cares about (storage, network-policy-enforcer, reflection, ingress,
+etc.).
 
 ### 12.8 Backwards-compatibility shims
 

@@ -37,7 +37,17 @@
               aliases = lib.mkOption {
                 type = lib.types.listOf lib.types.str;
                 default = [ ];
-                description = "Additional DI resolution keys (beyond the instance name).";
+                description = ''
+                  DI resolution keys for this instance, in addition to the
+                  instance name itself.  When non-empty, *replaces* the
+                  package's `meta.defaultAliases`; when empty (the default),
+                  the package defaults apply.
+
+                  For multi-instance disambiguation prefer `deps.<argName>
+                  = ref.<ns>.<inst>` at the consumer site — aliases are
+                  not the right tool for that case.  See BEST-PRACTICES
+                  §8.4.
+                '';
               };
               config = lib.mkOption {
                 type = lib.types.deferredModule;
