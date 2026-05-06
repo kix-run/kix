@@ -12,6 +12,8 @@ When implementing new features or completing existing ones, check `ROADMAP.md` a
 
 If you want to understand internals of kix/lib, read kix/lib/architecture.md. If you edit anything in kix/lib, you may or may not need to update the architecture.md
 
+The user-facing reference docs are `docs/BEST-PRACTICES.md` (durable, principles-first) and `docs/HANDBOOK.md` (dense, low-level mechanics). When you change user-visible API surface or durable guidance, update them. The breadth-first inventory in `docs/FEATURE-CATALOG.md` is the third sibling — keep it in sync when adding new APIs. Do not create additional top-level docs; extend these.
+
 ## Structured thinking
 
 Use the `structured-thinking` skill (instead of plan mode) when the user wants to think through, brainstorm, design, or analyze something. It routes to `business_discussions/`, `v2_discussions/`, or `v2_discussions/interesting_thoughts/` and produces a durable doc.

@@ -54,7 +54,7 @@ pre-commit:
 
     nixfmt:
       glob: "*.nix"
-      run: nix shell nixpkgs#nixfmt -c nixfmt --check {staged_files}
+      run: nix shell nixpkgs#nixfmt-rfc-style -c nixfmt --check {staged_files}
 
     format-python:
       glob: "scripts/**/*.py"

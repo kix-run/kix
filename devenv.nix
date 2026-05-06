@@ -38,12 +38,14 @@ in
     pkgs.tmux
     pkgs.viddy
     pkgs.k9s
-    pkgs.wf-recorder
     pkgs.jq
     pkgs.sops
     pkgs.age
   ]
-  ++ nixLibs;
+  ++ nixLibs
+  ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+    pkgs.wf-recorder
+  ];
 
   # Bindgen needs libclang to generate FFI bindings from the Nix C headers.
   # BINDGEN_EXTRA_CLANG_ARGS is required because the headers use C++20 features.
@@ -83,14 +85,6 @@ in
     rm -rf "$dump_dir"
     ./scripts/kix-dump.py --match-kix ./result ''${context:+--context "$context"} "$dump_dir"
     ./scripts/kix-diff.py ./result "$dump_dir"
-  '';
-
-  # Documentation: build and serve mkdocs-material site.
-  scripts.docs-serve.exec = ''
-    uv run --group docs mkdocs serve "$@"
-  '';
-  scripts.docs-build.exec = ''
-    uv run --group docs mkdocs build "$@"
   '';
 
   # kind: create/delete local cluster and deploy kix manifests.
