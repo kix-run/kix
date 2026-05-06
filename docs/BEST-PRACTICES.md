@@ -273,7 +273,80 @@ This pattern applies anywhere a shared module owns instances: don't widen
 its option surface to plumb every package knob through. Override the
 instance directly.
 
-### 6.6 Don't add half-finished features
+### 6.6 Override mechanisms — pick the narrowest
+
+`config` (§6.5) is the right knob 90% of the time. When it isn't enough,
+the instance submodule (`kix/lib/modules.nix`) and `mkResource`
+(`kix/lib/k8s.nix`) expose a layered set of override channels — each
+operating at a different stage of the build pipeline. **Prefer the
+narrowest one that does the job**, so the override stays as close as
+possible to the field it actually changes.
+
+Rule of thumb:
+
+> Reach for `partsOverlays` only when the package didn't expose a `config`
+> knob. Reach for `selectorLabels` / `labelStyle` only for parity with
+> pre-existing cluster state.
+
+**Per-instance channels** (`instances.<ns>.<name>.<channel>`):
+
+| Channel | Type | When |
+|---|---|---|
+| `config` | `deferredModule` | Tweak typed package options. Module-merged across contributors. |
+| `deps` | `attrsOf anything` | Force a specific DI provider for one build arg. Two modules setting the same dep = error. |
+| `aliases` | `listOf str` | Add extra DI resolution keys (beyond instance name + `meta.defaultAliases`). |
+| `labelStyle` | `enum { kix, helm }` | Switch label scheme — for byte-level Helm parity (e.g. when `releaseName` is set). |
+| `selectorLabels` | `attrsOf str` | Override auto-generated selector labels. Escape hatch for *immutable* selectors on pre-existing StatefulSets. |
+| `partsOverlays` | `listOf (scope → self → base → attrset)` | Post-build resource transforms. Run after the package's `build` inside the same fixpoint — full access to `scope`. Can rewrite `root`, extend `out` with builders, add parts. Multiple modules concatenate. |
+| `extraDeps` | `listOf raw` | Inject DAG edges not visible via Nix string context (e.g. "import depends on a managed root"). |
+| `optional` | `bool` | Pre-configure but only deploy if a non-optional instance transitively depends on this. |
+
+**Cluster-level channels:**
+
+| Channel | When |
+|---|---|
+| `globalPartsOverlays` | Apply a `partsOverlay`-shaped transform to **every** instance (overlay inspects `base` to decide whether to act). |
+| `availablePackages` + `autoNamespace` | Register packages for auto-instantiation when DI resolution would otherwise fail. |
+
+**Inside a single resource** (`scope.mkResource` and friends):
+
+| Channel | When |
+|---|---|
+| `extra = { ... }` | Passthrough for unmodeled K8s fields. `_extraShadowCheck` errors at build time if `extra.*` would shadow a kix-managed field — safe to use freely. |
+| `requires` | Explicit forward DAG edges for label-only references (where no other field carries the store-path context). |
+| `postHooks` | Resources that must apply *after* this one (stamps `kix.dev/post-hooks`). |
+
+#### Concrete example: `partsOverlays` to expose CRD builders
+
+`partsOverlays` is the most powerful escape hatch — runs after the
+package's `build` returns, inside the same fixpoint, with full access to
+`scope`. Use it when a Helm-wrapped or upstream package doesn't expose
+`out.*` builders the consumer needs:
+
+```nix
+# clusters/test-monitoring-helm.nix
+instances.monitoring-system.kube-prometheus-stack = {
+  package = packages.kube-prometheus-stack;
+  partsOverlays = [
+    (scope: self: base: {
+      root = base.root // {
+        out = (base.root.out or { }) // {
+          mkServiceMonitor = (scope.mkCRDRef {
+            group = "monitoring.coreos.com";
+            kind = "ServiceMonitor";
+            plural = "servicemonitors";
+          }).out.mkCR;
+        };
+      };
+    })
+  ];
+};
+```
+
+If a `partsOverlay` becomes a copy-pasted pattern across clusters, that's
+a signal to upstream it into the package's own `out` (§7.2).
+
+### 6.7 Don't add half-finished features
 
 Bug fixes don't need surrounding cleanup; one-shot operations don't need helpers.
 Eliminate dead code and stale comments — don't leave `// removed for X` or rename
