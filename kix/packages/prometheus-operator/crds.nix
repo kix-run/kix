@@ -20,10 +20,21 @@ let
     "app.kubernetes.io/version" = config.image.tag;
   };
 
+  # Mirror the chart-rendered CRD provenance annotations so kix CRDs diff
+  # cleanly against helm-managed clusters. controllerGen tracks the
+  # controller-gen version that originally generated the schemas.
+  annotations = {
+    "controller-gen.kubebuilder.io/version" = config.controllerGenVersion;
+    "operator.prometheus.io/version" = lib.removePrefix "v" config.image.tag;
+  };
+
   mkMonitoringCRD =
     attrs:
     scope.mkCRD (
-      attrs |> scope.crd.withLabels labels |> scope.crd.withCategories [ "prometheus-operator" ]
+      attrs
+      |> scope.crd.withLabels labels
+      |> scope.crd.withAnnotations annotations
+      |> scope.crd.withCategories [ "prometheus-operator" ]
     );
 in
 {

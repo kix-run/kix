@@ -38,6 +38,19 @@ in
       default = "monitoring-system";
     };
 
+    releaseName = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        If set, prefix monitoring instance names so resource names match
+        kube-prometheus-stack's helm-release naming. e.g. `releaseName =
+        "prometheus"` yields `prometheus-kube-prometheus-operator`,
+        `prometheus-grafana`, `prometheus-kube-state-metrics`, etc.
+        Use when migrating an existing helm-managed cluster and you need
+        byte-level parity with the rendered manifests.
+      '';
+    };
+
     # ── Prometheus Operator ────────────────────────────────────────────
     operator.enabled = lib.mkOption {
       type = lib.types.bool;
@@ -209,131 +222,157 @@ in
             "http://grafana.${config.cluster.domain}"
           else
             "http://grafana.localhost";
-      in
-      {
-        # ── Prometheus Operator ────────────────────────────────────────
-        prometheus-operator = lib.mkIf cfg.operator.enabled {
-          package = packages.prometheus-operator;
-        };
 
-        # ── Prometheus Server ──────────────────────────────────────────
-        prometheus-server = lib.mkIf cfg.prometheus.enabled {
-          package = packages.prometheus;
-          config = {
-            retention = cfg.prometheus.retention;
-            scrapeInterval = cfg.prometheus.scrapeInterval;
-            resources = cfg.prometheus.resources;
-          }
-          // lib.optionalAttrs (cfg.prometheus.retentionSize != null) {
-            retentionSize = cfg.prometheus.retentionSize;
-          }
-          // lib.optionalAttrs (cfg.prometheus.storage != null) {
-            storage = cfg.prometheus.storage;
-          }
-          // lib.optionalAttrs (cfg.prometheus.externalUrl != null) {
-            externalUrl = cfg.prometheus.externalUrl;
-          }
-          // lib.optionalAttrs cfg.alertmanager.enabled {
-            alerting.alertmanagers = [
-              {
-                namespace = ns;
-                name = "alertmanager";
-                port = "http-web";
-              }
-            ];
+        # Internal-key → chart-template suffix, used when releaseName is set.
+        # The prefixed instance key becomes "${releaseName}-${chartSuffix.<key>}"
+        # which mirrors kube-prometheus-stack's rendered resource names.
+        chartSuffix = {
+          prometheus-operator = "kube-prometheus-operator";
+          prometheus-server = "kube-prometheus-prometheus";
+          alertmanager = "kube-prometheus-alertmanager";
+          node-exporter = "prometheus-node-exporter";
+          kube-state-metrics = "kube-state-metrics";
+          grafana = "grafana";
+          default-rules = "kube-prometheus";
+          # NOTE: `storage` (the grafana PVC) intentionally stays unrenamed.
+          # Renaming it to `prometheus-grafana` would shadow the package's
+          # `storage` alias for grafana's DI (the alias resolver matches the
+          # named "storage" instance in the loki namespace before falling
+          # back to alias-keyed candidates). PVC name parity is a small,
+          # separate concern to fix in the package layer.
+        };
+        rename =
+          k:
+          if cfg.releaseName == null || !(chartSuffix ? ${k}) then
+            k
+          else
+            "${cfg.releaseName}-${chartSuffix.${k}}";
+        rawInstances = {
+          # ── Prometheus Operator ────────────────────────────────────────
+          prometheus-operator = lib.mkIf cfg.operator.enabled {
+            package = packages.prometheus-operator;
           };
-        };
 
-        # ── Alertmanager ───────────────────────────────────────────────
-        alertmanager = lib.mkIf cfg.alertmanager.enabled {
-          package = packages.alertmanager;
-          config = lib.optionalAttrs (cfg.alertmanager.routing != null) {
-            config = cfg.alertmanager.routing;
-          };
-        };
-
-        # ── Node Exporter ──────────────────────────────────────────────
-        node-exporter = lib.mkIf cfg.nodeExporter.enabled {
-          package = packages.node-exporter;
-        };
-
-        # ── Kube State Metrics ─────────────────────────────────────────
-        kube-state-metrics = lib.mkIf cfg.kubeStateMetrics.enabled {
-          package = packages.kube-state-metrics;
-        };
-
-        # ── Default rules & monitors ─────────────────────────────────
-        default-rules = lib.mkIf cfg.defaultRules.enabled {
-          package = packages.prometheus-default-rules;
-          config = {
-            rules = {
-              enabled = true;
+          # ── Prometheus Server ──────────────────────────────────────────
+          prometheus-server = lib.mkIf cfg.prometheus.enabled {
+            package = packages.prometheus;
+            config = {
+              retention = cfg.prometheus.retention;
+              scrapeInterval = cfg.prometheus.scrapeInterval;
+              resources = cfg.prometheus.resources;
             }
-            // cfg.defaultRules.rules;
-            monitors = {
-              enabled = true;
+            // lib.optionalAttrs (cfg.prometheus.retentionSize != null) {
+              retentionSize = cfg.prometheus.retentionSize;
             }
-            // cfg.defaultRules.monitors;
-          };
-        };
-
-        # ── Grafana persistent storage (DI sibling) ─────────────────────
-        # Storage lives as its own instance so cluster operators control
-        # size / storageClass without reaching into grafana's config. The
-        # `storage` alias auto-wires into grafana's `storage` dep arg via
-        # `persistent-volume-claim.defaultAliases`.
-        storage = lib.mkIf (cfg.grafana.enabled && cfg.grafana.persistence.enabled) {
-          package = packages."persistent-volume-claim";
-          config = {
-            size = cfg.grafana.persistence.size;
-          }
-          //
-            lib.optionalAttrs
-              (cfg.grafana.persistence ? storageClass && cfg.grafana.persistence.storageClass != null)
-              {
-                accessModes = [ "ReadWriteOnce" ];
-              };
-        };
-
-        # ── Grafana ───────────────────────────────────────────────────────
-        grafana = lib.mkIf cfg.grafana.enabled {
-          package = packages.grafana;
-          config = {
-            rootUrl = grafanaRootUrl;
-            replicas = cfg.grafana.replicas;
-            # Loki is still Helm-wrapped so doesn't expose out.serviceUrl via DI.
-            # Pass the datasource URL explicitly until Loki is migrated to native.
-            datasources =
-              lib.optional cfg.loki.enabled {
-                name = "Loki";
-                type = "loki";
-                # Loki lives in its own namespace so the sibling PVC can be
-                # called `storage` (immich pattern).
-                url = "http://loki-gateway.${cfg.loki.namespace}.svc.cluster.local";
-                access = "proxy";
-              }
-              ++ cfg.grafana.extraDatasources;
-          };
-        };
-
-        # ── Promtail priority class ───────────────────────────────────
-        # Promtail hardcodes priorityClassName = "monitoring-loki". We must
-        # create that PriorityClass before the DaemonSet can schedule pods.
-        priority-classes = lib.mkIf cfg.promtail.enabled {
-          package = packages.priority-classes;
-          config.classes = {
-            "monitoring-loki" = {
-              value = 1000000;
-              description = "Monitoring and log shipping workloads (Loki, Promtail)";
+            // lib.optionalAttrs (cfg.prometheus.storage != null) {
+              storage = cfg.prometheus.storage;
+            }
+            // lib.optionalAttrs (cfg.prometheus.externalUrl != null) {
+              externalUrl = cfg.prometheus.externalUrl;
+            }
+            // lib.optionalAttrs cfg.alertmanager.enabled {
+              alerting.alertmanagers = [
+                {
+                  namespace = ns;
+                  name = rename "alertmanager";
+                  port = "http-web";
+                }
+              ];
             };
           };
-        };
 
-        # ── Promtail ────────────────────────────────────────────────────
-        promtail = lib.mkIf cfg.promtail.enabled {
-          package = packages.promtail;
+          # ── Alertmanager ───────────────────────────────────────────────
+          alertmanager = lib.mkIf cfg.alertmanager.enabled {
+            package = packages.alertmanager;
+            config = lib.optionalAttrs (cfg.alertmanager.routing != null) {
+              config = cfg.alertmanager.routing;
+            };
+          };
+
+          # ── Node Exporter ──────────────────────────────────────────────
+          node-exporter = lib.mkIf cfg.nodeExporter.enabled {
+            package = packages.node-exporter;
+          };
+
+          # ── Kube State Metrics ─────────────────────────────────────────
+          kube-state-metrics = lib.mkIf cfg.kubeStateMetrics.enabled {
+            package = packages.kube-state-metrics;
+          };
+
+          # ── Default rules & monitors ─────────────────────────────────
+          default-rules = lib.mkIf cfg.defaultRules.enabled {
+            package = packages.prometheus-default-rules;
+            config = {
+              rules = {
+                enabled = true;
+              }
+              // cfg.defaultRules.rules;
+              monitors = {
+                enabled = true;
+              }
+              // cfg.defaultRules.monitors;
+            };
+          };
+
+          # ── Grafana persistent storage (DI sibling) ─────────────────────
+          # Storage lives as its own instance so cluster operators control
+          # size / storageClass without reaching into grafana's config. The
+          # `storage` alias auto-wires into grafana's `storage` dep arg via
+          # `persistent-volume-claim.defaultAliases`.
+          storage = lib.mkIf (cfg.grafana.enabled && cfg.grafana.persistence.enabled) {
+            package = packages."persistent-volume-claim";
+            config = {
+              size = cfg.grafana.persistence.size;
+            }
+            //
+              lib.optionalAttrs
+                (cfg.grafana.persistence ? storageClass && cfg.grafana.persistence.storageClass != null)
+                {
+                  accessModes = [ "ReadWriteOnce" ];
+                };
+          };
+
+          # ── Grafana ───────────────────────────────────────────────────────
+          grafana = lib.mkIf cfg.grafana.enabled {
+            package = packages.grafana;
+            config = {
+              rootUrl = grafanaRootUrl;
+              replicas = cfg.grafana.replicas;
+              # Loki is still Helm-wrapped so doesn't expose out.serviceUrl via DI.
+              # Pass the datasource URL explicitly until Loki is migrated to native.
+              datasources =
+                lib.optional cfg.loki.enabled {
+                  name = "Loki";
+                  type = "loki";
+                  # Loki lives in its own namespace so the sibling PVC can be
+                  # called `storage` (immich pattern).
+                  url = "http://loki-gateway.${cfg.loki.namespace}.svc.cluster.local";
+                  access = "proxy";
+                }
+                ++ cfg.grafana.extraDatasources;
+            };
+          };
+
+          # ── Promtail priority class ───────────────────────────────────
+          # Promtail hardcodes priorityClassName = "monitoring-loki". We must
+          # create that PriorityClass before the DaemonSet can schedule pods.
+          priority-classes = lib.mkIf cfg.promtail.enabled {
+            package = packages.priority-classes;
+            config.classes = {
+              "monitoring-loki" = {
+                value = 1000000;
+                description = "Monitoring and log shipping workloads (Loki, Promtail)";
+              };
+            };
+          };
+
+          # ── Promtail ────────────────────────────────────────────────────
+          promtail = lib.mkIf cfg.promtail.enabled {
+            package = packages.promtail;
+          };
         };
-      };
+      in
+      lib.mapAttrs' (k: v: lib.nameValuePair (rename k) v) rawInstances;
 
     # ── Loki (own namespace, helm-rendered + DI'd sibling PVC) ──────────
     # Lives in its own namespace so the sibling PVC can be named `storage`

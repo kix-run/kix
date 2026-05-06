@@ -32,6 +32,7 @@ let
     readWrite
     full
     allow
+    emit
     restrictTo
     mkClusterRoleSet
     mkRoleSet
@@ -63,6 +64,9 @@ let
   net = group "networking.k8s.io" [ "ingresses" ];
   coord = group "coordination.k8s.io" [ "leases" ];
   authz = group "authorization.k8s.io" [ "subjectaccessreviews" ];
+  events = group "events.k8s.io" [ "events" ];
+  storage = group "storage.k8s.io" [ "storageclasses" ];
+  discovery = group "discovery.k8s.io" [ "endpointslices" ];
 
   mkSubject = sa: [
     {
@@ -123,16 +127,17 @@ let
           ]
         )
         (core.endpoints |> full)
-        (core.pods |> watch)
-        (core.namespaces |> watch)
-        (core.nodes |> watch)
         (
-          core.events
+          core.pods
           |> allow [
-            "create"
-            "patch"
+            "list"
+            "delete"
           ]
         )
+        (core.namespaces |> watch)
+        (core.nodes |> watch)
+        (core.events |> emit)
+        (events.events |> emit)
 
         # Apps — the operator creates StatefulSets for Prometheus/Alertmanager
         (apps.statefulsets |> full)
@@ -141,6 +146,12 @@ let
 
         # Networking
         (net.ingresses |> watch)
+
+        # Storage class lookup for VolumeClaimTemplate provisioning
+        (storage.storageclasses |> allow [ "get" ])
+
+        # EndpointSlice discovery (modern target enumeration path)
+        (discovery.endpointslices |> readWrite)
 
         # Webhook validation
         (authz.subjectaccessreviews |> allow [ "create" ])
@@ -192,13 +203,18 @@ in
 {
   # ── ServiceAccount ───────────────────────────────────────────────────
 
-  operatorServiceAccount = scope.mkResource {
-    apiVersion = "v1";
-    kind = "ServiceAccount";
-    name = name;
-    inherit labels;
-    extra.automountServiceAccountToken = true;
-  };
+  operatorServiceAccount = scope.mkResource (
+    {
+      apiVersion = "v1";
+      kind = "ServiceAccount";
+      name = name;
+      inherit labels;
+      extra.automountServiceAccountToken = true;
+    }
+    // lib.optionalAttrs (config.serviceAccountAnnotations != { }) {
+      annotations = config.serviceAccountAnnotations;
+    }
+  );
 
   # ── Service ──────────────────────────────────────────────────────────
 
@@ -216,12 +232,7 @@ in
           port = 8080;
           targetPort = "http-metrics";
         }
-      ]
-      ++ lib.optional config.enableAdmissionWebhook {
-        name = "https";
-        port = 443;
-        targetPort = "https";
-      };
+      ];
     };
     outputs = {
       metricsPort = "8080";
@@ -231,10 +242,110 @@ in
   # ── Deployment ───────────────────────────────────────────────────────
 
   operatorDeployment =
-    {
-      name = name;
-      inherit labels;
-      spec = {
+    let
+      kubeletArg = lib.optional config.kubeletService.enabled (
+        "--kubelet-service=${config.kubeletService.namespace}/${config.kubeletService.name}"
+      );
+      baseArgs = kubeletArg ++ [
+        "--prometheus-config-reloader=${config.prometheusConfigReloader.image.repository}:${config.prometheusConfigReloader.image.tag}"
+      ];
+      finalArgs =
+        baseArgs
+        ++ lib.optional (
+          config.denyNamespaces != [ ]
+        ) "--deny-namespaces=${lib.concatStringsSep "," config.denyNamespaces}"
+        ++ lib.optional (
+          config.namespaces != [ ]
+        ) "--namespaces=${lib.concatStringsSep "," config.namespaces}"
+        ++ config.extraArgs;
+
+      mkProbe =
+        cfg:
+        {
+          httpGet = {
+            path = "/healthz";
+            port = "http-metrics";
+          };
+          inherit (cfg) periodSeconds failureThreshold;
+        }
+        // lib.optionalAttrs (cfg.initialDelaySeconds or null != null) {
+          inherit (cfg) initialDelaySeconds;
+        }
+        // lib.optionalAttrs (cfg.timeoutSeconds != null) {
+          inherit (cfg) timeoutSeconds;
+        }
+        // lib.optionalAttrs (cfg.successThreshold != null) {
+          inherit (cfg) successThreshold;
+        }
+        // lib.optionalAttrs (cfg.failureThreshold or null == null) {
+          # Chart leaves failureThreshold unset on readinessProbe; mirror.
+        };
+
+      container = {
+        name = "prometheus-operator";
+        image = "${config.image.repository}:${config.image.tag}";
+        imagePullPolicy = config.image.pullPolicy;
+        args = finalArgs;
+        ports = [
+          {
+            name = "http-metrics";
+            containerPort = 8080;
+          }
+        ];
+        securityContext = {
+          allowPrivilegeEscalation = false;
+          readOnlyRootFilesystem = true;
+          capabilities.drop = [ "ALL" ];
+        };
+        resources = config.resources;
+      }
+      // lib.optionalAttrs config.livenessProbe.enabled {
+        livenessProbe = mkProbe config.livenessProbe;
+      }
+      // lib.optionalAttrs config.readinessProbe.enabled {
+        readinessProbe = mkProbe config.readinessProbe;
+      }
+      // lib.optionalAttrs (config.lifecycle != null) {
+        lifecycle = config.lifecycle;
+      }
+      // lib.optionalAttrs (config.env != [ ]) { env = config.env; }
+      // lib.optionalAttrs (config.extraVolumeMounts != [ ]) {
+        volumeMounts = config.extraVolumeMounts;
+      };
+
+      podSpec = {
+        serviceAccountName = self.operatorServiceAccount.out.name;
+        automountServiceAccountToken = true;
+        securityContext = {
+          runAsNonRoot = true;
+          runAsUser = 65534;
+          runAsGroup = 65534;
+          fsGroup = 65534;
+        };
+        containers = [ container ];
+        nodeSelector = {
+          "kubernetes.io/os" = "linux";
+        }
+        // config.nodeSelector;
+      }
+      // lib.optionalAttrs (config.tolerations != [ ]) { tolerations = config.tolerations; }
+      // lib.optionalAttrs (config.affinity != { }) { affinity = config.affinity; }
+      // lib.optionalAttrs (config.priorityClassName != null) {
+        priorityClassName = config.priorityClassName;
+      }
+      // lib.optionalAttrs (config.imagePullSecrets != [ ]) {
+        imagePullSecrets = config.imagePullSecrets;
+      }
+      // lib.optionalAttrs config.hostNetwork {
+        hostNetwork = true;
+        dnsPolicy = "ClusterFirstWithHostNet";
+      }
+      // lib.optionalAttrs (config.dnsConfig != null) {
+        dnsConfig = config.dnsConfig;
+      }
+      // lib.optionalAttrs (config.extraVolumes != [ ]) { volumes = config.extraVolumes; };
+
+      baseSpec = {
         replicas = config.replicas;
         selector.matchLabels = {
           "app.kubernetes.io/name" = "prometheus-operator";
@@ -242,68 +353,16 @@ in
         };
         template = {
           metadata.labels = labels;
-          spec = {
-            serviceAccountName = self.operatorServiceAccount.out.name;
-            automountServiceAccountToken = true;
-            securityContext = {
-              runAsNonRoot = true;
-              runAsUser = 65534;
-              runAsGroup = 65534;
-              fsGroup = 65534;
-            };
-            containers = [
-              {
-                name = "prometheus-operator";
-                image = "${config.image.repository}:${config.image.tag}";
-                imagePullPolicy = config.image.pullPolicy;
-                args = [
-                  "--kubelet-service=kube-system/kubelet"
-                  "--prometheus-config-reloader=${config.prometheusConfigReloader.image.repository}:${config.prometheusConfigReloader.image.tag}"
-                ]
-                ++ lib.optional config.enableAdmissionWebhook "--web.enable-tls=true"
-                ++ lib.optional config.enableAdmissionWebhook "--web.cert-file=/etc/tls/private/tls.crt"
-                ++ lib.optional config.enableAdmissionWebhook "--web.key-file=/etc/tls/private/tls.key"
-                ++ lib.optional config.enableAdmissionWebhook "--web.listen-address=:10250";
-                ports = [
-                  {
-                    name = "http-metrics";
-                    containerPort = 8080;
-                  }
-                ]
-                ++ lib.optional config.enableAdmissionWebhook {
-                  name = "https";
-                  containerPort = 10250;
-                };
-                securityContext = {
-                  allowPrivilegeEscalation = false;
-                  readOnlyRootFilesystem = true;
-                  capabilities.drop = [ "ALL" ];
-                };
-                resources = config.resources;
-                livenessProbe = {
-                  httpGet = {
-                    path = "/healthz";
-                    port = "http-metrics";
-                  };
-                  initialDelaySeconds = 15;
-                  periodSeconds = 10;
-                  failureThreshold = 3;
-                };
-                readinessProbe = {
-                  httpGet = {
-                    path = "/healthz";
-                    port = "http-metrics";
-                  };
-                  periodSeconds = 5;
-                };
-              }
-            ];
-            nodeSelector = {
-              "kubernetes.io/os" = "linux";
-            };
-          };
+          spec = podSpec;
         };
       };
+
+      finalSpec = lib.recursiveUpdate baseSpec config.extraSpec;
+    in
+    {
+      name = name;
+      inherit labels;
+      spec = finalSpec;
     }
     |> scope.mkDeployment;
 }

@@ -69,5 +69,10 @@
     in
     {
       root = secret;
+      # Also expose under a sibling key so cluster.nix's collectResources
+      # (which drops the `root` key) sees the Secret. Without this, a
+      # secret-as-root package emits only the PackageInstance marker — not
+      # the Secret itself. Same store-path → dedup'd in the manifest writer.
+      inherit secret;
     };
 }
