@@ -862,7 +862,7 @@ modules = [
     cluster.capabilities.cni = "cilium";
     cluster.capabilities.networkPolicyAPI = "cilium";
     networkPolicy.enable = true;
-    instances.kube-system.cilium = { package = import ../kix/packages/cilium/external.nix; };
+    instances.kube-system.cilium = { package = packages.cilium-external; };
   }
 ];
 ```
@@ -898,7 +898,7 @@ If a cluster installs its own `coredns` or `storage-classes` instance, the expli
 The enforcer is auto-discovered: any package with `meta.provides ∋ "network-policy-enforcer"` becomes the cluster's enforcer. The enforcer's package exposes `out.cnpCrdRef` (a CRD marker for `CiliumNetworkPolicy`); every generated CNP is built via `cnpCrdRef.out.cr` so the CNP → CRD-ref → enforcer-root edge is wired transitively. Two enforcer packages illustrate the pattern:
 
 - `kix/packages/cilium/` — Helm-wrapped, deploys cilium fully (used by `ludo-kind`).
-- `kix/packages/cilium/external.nix` — emits only the CRD marker; cilium is installed out-of-band on the host (used by `ludo`).
+- `kix/packages/cilium-external/` — emits only the CRD marker; cilium is installed out-of-band on the host (used by `ludo`, RKE2-based clusters, etc.). Auto-discovered as `packages.cilium-external`.
 
 ### 16.4 Default-deny
 

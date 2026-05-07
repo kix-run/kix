@@ -5,8 +5,8 @@
 # and `ccnpCrdRef` for CiliumClusterwideNetworkPolicy CRD markers so
 # consumers can route generated CNPs/CCNPs through them.
 #
-# Also exports `external`, a small inline package for externally-managed
-# Cilium (helm-installed out-of-band). See the `external` variant below.
+# For externally-managed Cilium (helm-installed out-of-band) see the
+# sibling `cilium-external` package — auto-discovered alongside this one.
 #
 # Chart:   https://helm.cilium.io/
 # Name:    cilium
