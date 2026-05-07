@@ -4,6 +4,18 @@
 # Includes Prometheus, Grafana, Alertmanager, node-exporter, and
 # kube-state-metrics.
 #
+# Exposes the same out.mk* CRD builders as `prometheus-operator` so
+# consumer packages (harbor, valkey, coredns, node-exporter, …) that
+# request a `prometheus` build-arg get a working `mkPrometheusRule` /
+# `mkServiceMonitor` / `mkPodMonitor` / `mkProbe` whether the cluster
+# uses the helm-bridge stack or the native operator. See
+# kix/packages/prometheus-operator/default.nix:289-298 for the
+# canonical `out` shape.
+#
+# Defaults match prometheus-operator's defaultAliases so DI lookups
+# resolve identically — naming the instance `prometheus` claims the
+# same alias on both sides.
+#
 # Chart:   oci://ghcr.io/prometheus-community/charts
 # Name:    kube-prometheus-stack
 # Version: 71.2.0
@@ -219,6 +231,22 @@ in
   meta = {
     version = "71.2.0";
     isHelm = true;
+    provides = [
+      "monitoring"
+      "prometheus-operator"
+      "tsdb"
+      "metrics"
+    ];
+    # Match prometheus-operator's defaultAliases so DI lookups work
+    # like consumers expect — see kix/packages/prometheus-operator/
+    # default.nix:30-33. Naming the instance `prometheus` claims the
+    # same alias on both sides; consumer packages calling
+    # `prometheus.out.mkPrometheusRule scope { ... }` work without
+    # caring whether the operator is helm-bridged or native.
+    defaultAliases = [
+      "prometheus"
+      "prometheusOperator"
+    ];
   };
 
   options.values = lib.mkOption {
@@ -236,8 +264,58 @@ in
         releaseName = "prometheus";
         includeCrds = true;
       };
+
+      # CRD ref markers — point at the chart-installed CRDs so
+      # consumer-built CRs (PrometheusRule, ServiceMonitor, …) get
+      # auto-`requires` edges to the chart wave. Same group + version
+      # + scope as the prometheus-operator CRDs.
+      mkRef =
+        kind: plural:
+        scope.mkCRDRef {
+          group = "monitoring.coreos.com";
+          inherit kind plural;
+          version = "v1";
+          crdScope = "Namespaced";
+        };
+
+      ruleRef = mkRef "PrometheusRule" "prometheusrules";
+      smonRef = mkRef "ServiceMonitor" "servicemonitors";
+      pmonRef = mkRef "PodMonitor" "podmonitors";
+      probeRef = mkRef "Probe" "probes";
+
+      parts = resources.mkParts {
+        root = resources.autoRoot;
+      };
     in
-    resources.mkParts {
-      root = resources.autoRoot;
+    parts
+    // {
+      prometheusRulesRef = ruleRef;
+      serviceMonitorsRef = smonRef;
+      podMonitorsRef = pmonRef;
+      probesRef = probeRef;
+
+      root = parts.root // {
+        # Carry the CRD-ref markers as `requires` so they install
+        # before any CR consuming `out.mkPrometheusRule` etc.
+        requires = (parts.root.requires or [ ]) ++ [
+          ruleRef
+          smonRef
+          pmonRef
+          probeRef
+        ];
+
+        out = (parts.root.out or { }) // {
+          # Builder API mirrors kix/packages/prometheus-operator/
+          # default.nix:289-298. Any package consuming `prometheus`
+          # via DI works whether the operator was deployed natively
+          # (prometheus-operator) or via this helm-bridge.
+          mkPrometheusRule = ruleRef.out.mkCR;
+          mkServiceMonitor = smonRef.out.mkCR;
+          mkPodMonitor = pmonRef.out.mkCR;
+          mkProbe = probeRef.out.mkCR;
+          # mkPrometheus / mkAlertmanager are deliberately not exposed
+          # — the chart owns those CRs.
+        };
+      };
     };
 }
