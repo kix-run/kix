@@ -66,8 +66,26 @@ in
       # Explicit instances always win over auto-instances.
       mergedInstances = lib.recursiveUpdate autoResult.autoInstances cfg.instances;
 
-      # 3. Derive namespace list from merged instances ∪ explicit namespaces
+      # 3. Derive namespace list from merged instances ∪ explicit namespaces.
       allNsNames = lib.unique (builtins.attrNames cfg.namespaces ++ builtins.attrNames mergedInstances);
+
+      # Sentinel namespace keys (underscore-prefixed) — flavors may declare
+      # e.g. `instances._cluster = { … }` to group cluster-scoped resources
+      # sensibly under `_cluster/` in the build output (see
+      # kix/lib/default.nix:155's grouping by `metadata.namespace or
+      # "_cluster"`). These are *not* real Kubernetes namespaces:
+      # underscore-prefixed names violate the DNS-1123 label constraint
+      # that K8s enforces on namespace names — `kubectl apply` would
+      # reject any `Namespace _<…>` we emitted.
+      #
+      # We still build `nsResources` entries for sentinel keys (downstream
+      # instance evaluation looks up `nsResources.${nsName}` per instance,
+      # and the lookup must succeed), but we exclude sentinels from the
+      # namespace-scoped emission paths: the `Namespace`/`ResourceQuota`/
+      # per-namespace `NetworkPolicy`/default-deny CNP resources, and from
+      # namespace-rule scorecard evaluation.
+      isSentinelNs = nsName: lib.hasPrefix "_" nsName;
+      realNsNames = builtins.filter (n: !isSentinelNs n) allNsNames;
 
       # 4. Create namespace resources
       nsResources = builtins.listToAttrs (
@@ -451,7 +469,7 @@ in
               directions = networkConfig.directions;
               networkPolicyEnforcer = enforcerOut;
             }
-          ) allNsNames
+          ) realNsNames
         else
           [ ];
 
@@ -486,7 +504,7 @@ in
               ruleDefaults = scorecardConfig.ruleDefaults or { };
               ruleOverrides = scorecardConfig.ruleOverrides or { };
             }
-          ) allNsNames
+          ) realNsNames
         else
           [ ];
 
@@ -556,7 +574,7 @@ in
         [ ns.resource ]
         ++ (if ns.quota != null then [ ns.quota ] else [ ])
         ++ builtins.attrValues ns.netpols
-      ) allNsNames)
+      ) realNsNames)
       ++ platformIntentPolicies
       ++ defaultDenyPolicies
       ++ [ activation ];

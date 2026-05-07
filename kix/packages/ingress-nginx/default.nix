@@ -143,6 +143,22 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
     };
+    # Annotations stamped onto the controller's Service. Cloud-provider
+    # internal-LB tagging lives here: Hetzner uses
+    # `load-balancer.hetzner.cloud/*`, AWS `service.beta.kubernetes.io/
+    # aws-load-balancer-internal: "true"`, GCP
+    # `cloud.google.com/load-balancer-type: "Internal"`, etc. Required
+    # when `serviceType = "LoadBalancer"` and the cluster needs an
+    # internal-only LB; harmless on `ClusterIP` Services.
+    serviceAnnotations = lib.mkOption {
+      type = lib.types.attrsOf lib.types.str;
+      default = { };
+    };
+    loadBalancerIP = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = "Pinned LB IP for `serviceType = LoadBalancer` (cloud-provider-specific honour).";
+    };
     ingressClassName = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
@@ -645,6 +661,7 @@ in
           kind = "Service";
           name = ctrlName;
           labels = commonLabels;
+          annotations = config.serviceAnnotations;
           spec = {
             type = config.serviceType;
             ipFamilyPolicy = "SingleStack";
@@ -684,6 +701,9 @@ in
           }
           // lib.optionalAttrs (config.clusterIP != null) {
             clusterIP = config.clusterIP;
+          }
+          // lib.optionalAttrs (config.serviceType == "LoadBalancer" && config.loadBalancerIP != null) {
+            loadBalancerIP = config.loadBalancerIP;
           };
           requires = [
             self.ingressClass
