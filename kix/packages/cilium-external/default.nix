@@ -1,9 +1,10 @@
 # Cilium (externally managed) — CNP CRD ref marker + netpol API.
 #
-# Inline package for clusters where cilium is installed out-of-band
-# (e.g. k3s with cilium helm-installed by a bootstrap script, or kind
-# with deploy-ludo-kind.sh). Emits only the CiliumNetworkPolicy CRD ref
-# marker so kix/lib/netpol.nix can route generated CNPs through it.
+# For clusters where cilium is installed out-of-band (RKE2's bundled
+# Cilium, k3s with cilium helm-installed by a bootstrap script, kind
+# with deploy-ludo-kind.sh, etc.). Emits only the CiliumNetworkPolicy
+# CRD ref marker so kix/lib/netpol.nix can route generated CNPs through
+# it.
 #
 # Does NOT deploy cilium itself. The CLI deploy engine polls for the
 # externally-installed CRD and waits for `Established=True` before any
@@ -12,9 +13,9 @@
 # Exposes the same `out.netpol` API as the full cilium package so
 # packages can emit CNPs for operator-managed workloads.
 #
-# Usage:
+# Usage (auto-discovered as `packages.cilium-external`):
 #   instances.kube-system.cilium = {
-#     package = import ./kix/packages/cilium/external.nix;
+#     package = packages.cilium-external;
 #   };
 
 let
