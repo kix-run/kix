@@ -348,6 +348,40 @@
         gap: 14px;
       }
 
+      .outcomes-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+      }
+
+      .outcomes-grid .feature {
+        min-height: auto;
+      }
+
+      .outputs-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+      }
+
+      .output {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+        padding: 20px;
+      }
+
+      .output strong {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 16px;
+      }
+
+      .output span {
+        color: var(--muted);
+        font-size: 14px;
+      }
+
       .automation-band {
         margin-top: 14px;
         border: 1px solid var(--line);
@@ -716,7 +750,9 @@
         }
 
         .feature-grid,
-        .adoption {
+        .adoption,
+        .outcomes-grid,
+        .outputs-grid {
           grid-template-columns: 1fr 1fr;
         }
       }
@@ -748,7 +784,9 @@
         .comparison,
         .artifact-output,
         .adoption,
-        .cred-grid {
+        .cred-grid,
+        .outcomes-grid,
+        .outputs-grid {
           grid-template-columns: 1fr;
         }
 
@@ -797,27 +835,8 @@
             so teams can understand, change, and operate Kubernetes with
             confidence.
           </p>
-          <p class="audience-line">
-            For Kubernetes teams whose clusters have outgrown hand-maintained
-            wiring, scattered policy checks, and runtime-only feedback loops.
-          </p>
           <div class="hero-actions" id="try">
             <a class="button primary" href="#">Start with the demo cluster</a>
-            <a class="button" href="#workflow">See the workflow</a>
-          </div>
-          <div class="proof-strip" aria-label="Kix outcomes">
-            <div class="proof">
-              <strong>Commit-time feedback</strong>
-              <span>Broken edges and policy failures fail before deploy.</span>
-            </div>
-            <div class="proof">
-              <strong>Standard output</strong>
-              <span>Emit Kubernetes resources for your existing pipeline.</span>
-            </div>
-            <div class="proof">
-              <strong>Operational tooling</strong>
-              <span>Diff, graph, evidence, drift, deploy order, rollback.</span>
-            </div>
           </div>
         </div>
 
@@ -850,17 +869,81 @@
               </div>
             </div>
           </div>
-
-          <div class="artifact-output" aria-label="Artifact outputs">
-            <span>Standard manifests</span>
-            <span>Dependency graph</span>
-            <span>Structural diff</span>
-            <span>SARIF report</span>
-            <span>SBOM / provenance</span>
-            <span>Rollback handle</span>
-          </div>
         </aside>
       </div>
+
+      <section id="outcomes">
+        <div class="shell">
+          <div class="section-head">
+            <div>
+              <div class="section-kicker">Outcomes</div>
+              <h2>What changes when Kix is in place.</h2>
+            </div>
+            <p>
+              Feedback moves earlier, output stays standard, and operations
+              are driven by the same compiled artifact.
+            </p>
+          </div>
+
+          <div class="outcomes-grid">
+            <article class="feature">
+              <h3>Commit-time feedback</h3>
+              <p>Broken edges and policy failures fail before deploy.</p>
+            </article>
+            <article class="feature">
+              <h3>Standard output</h3>
+              <p>Emit Kubernetes resources for your existing pipeline.</p>
+            </article>
+            <article class="feature">
+              <h3>Operational tooling</h3>
+              <p>Diff, graph, evidence, drift, deploy order, rollback.</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section id="contents">
+        <div class="shell">
+          <div class="section-head">
+            <div>
+              <div class="section-kicker">Artifact contents</div>
+              <h2>One compile, six standard outputs.</h2>
+            </div>
+            <p>
+              Every compile produces the same set of inspectable outputs.
+              Each one is plain enough to plug into the rest of your delivery
+              process.
+            </p>
+          </div>
+
+          <div class="outputs-grid">
+            <div class="output">
+              <strong>Standard manifests</strong>
+              <span>Plain Kubernetes resources for any delivery pipeline.</span>
+            </div>
+            <div class="output">
+              <strong>Dependency graph</strong>
+              <span>The cluster as a system of edges, ready to inspect.</span>
+            </div>
+            <div class="output">
+              <strong>Structural diff</strong>
+              <span>Exactly what changes from one compile to the next.</span>
+            </div>
+            <div class="output">
+              <strong>SARIF report</strong>
+              <span>Policy and check results in a standard finding format.</span>
+            </div>
+            <div class="output">
+              <strong>SBOM / provenance</strong>
+              <span>Build evidence for every artifact you ship.</span>
+            </div>
+            <div class="output">
+              <strong>Rollback handle</strong>
+              <span>A concrete reference to revert a compile cleanly.</span>
+            </div>
+          </div>
+        </div>
+      </section>
 
       <section id="artifact">
         <div class="shell">
