@@ -195,6 +195,12 @@ pub struct SchedulerConfig {
     pub prune: PrunePolicy,
     pub force_conflicts: bool,
     pub cancel: CancelToken,
+    /// When true: SSA + DELETE go to the apiserver with `?dryRun=All`, the
+    /// Activation CR's `status` subresource is never patched, and readiness
+    /// short-circuits to Ready (because nothing was persisted to poll for).
+    /// The same DeployEvent stream is emitted, so the same renderer paints
+    /// dry-run output as the real path — no parallel render path.
+    pub dry_run: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -253,8 +259,15 @@ pub async fn run_deploy(
         edges: plan.edges.clone(),
     });
 
-    // Find Activation ApiResource for status updates.
-    let activation_ar = {
+    // Find Activation ApiResource for status updates. Under dry-run we leave
+    // this None so the per-batch `checkpoint` and the initial `begin_deploy`
+    // both no-op without explicit guards at each call site (begin_deploy below
+    // and checkpoint itself early-return when this is None). The `finalize`
+    // block at the end of run_deploy uses a separate `find_activation_ar`
+    // lookup, so it still needs an explicit `!config.dry_run` guard.
+    let activation_ar = if config.dry_run {
+        None
+    } else {
         let d = discovery.read().await;
         activation::find_activation_ar(&d).map(|(ar, _)| ar.clone())
     };
@@ -296,6 +309,7 @@ pub async fn run_deploy(
         cancel: config.cancel.clone(),
         timeout: config.timeout,
         orphan_set: orphan_set.clone(),
+        dry_run: config.dry_run,
     });
 
     // Batched checkpoint counter.
@@ -658,6 +672,7 @@ pub async fn run_deploy(
             };
             let dp = kube::api::DeleteParams {
                 propagation_policy: Some(kube::api::PropagationPolicy::Background),
+                dry_run: config.dry_run,
                 ..Default::default()
             };
             match api.delete(&rid.name, &dp).await {
@@ -687,10 +702,10 @@ pub async fn run_deploy(
         }
     }
 
-    // Finalize Activation lifecycle (unless pure no-op).
+    // Finalize Activation lifecycle (unless pure no-op or dry-run).
     let actually_changed =
         result.created > 0 || result.configured > 0 || result.pruned > 0 || result.failed > 0;
-    if actually_changed && let Some(act_name) = activation_name {
+    if !config.dry_run && actually_changed && let Some(act_name) = activation_name {
         let d = discovery.read().await;
         if let Some((ar, _)) = activation::find_activation_ar(&d) {
             let ar = ar.clone();
@@ -868,6 +883,7 @@ struct NodeCtx {
     cancel: CancelToken,
     timeout: Duration,
     orphan_set: HashSet<ResourceId>,
+    dry_run: bool,
 }
 
 enum NodeOutcome {
@@ -992,7 +1008,7 @@ async fn execute_node(
         &ar,
         scope.clone(),
         &manifest,
-        false,
+        ctx.dry_run,
         ctx.activation_hash.as_deref(),
         ctx.live_activations.as_ref(),
         ctx.force_conflicts,
@@ -1016,6 +1032,7 @@ async fn execute_node(
                 ctx.force_conflicts,
                 ctx.activation_hash.as_deref(),
                 ctx.live_activations.as_ref(),
+                ctx.dry_run,
             )
             .await
             {
@@ -1046,6 +1063,22 @@ async fn execute_node(
         verdict: Verdict::Running,
         detail: Some(NodeDetail::Applied(applied_action.clone())),
     });
+
+    // Under apiserver dry-run (`?dryRun=All`) the object was never persisted,
+    // so polling readiness would 404 or time out. Readiness is a runtime-cluster
+    // outcome and orthogonal to "what would this apply do", so we synthesise
+    // Ready immediately. The renderer paints the same terminal line.
+    if ctx.dry_run {
+        return match recreated_reason {
+            Some(reason) => NodeOutcome::Recreated {
+                apply_action: applied_action,
+                reason,
+            },
+            None => NodeOutcome::Ready {
+                apply_action: applied_action,
+            },
+        };
+    }
 
     // Wait for readiness.
     let import_target: Option<ImportTarget> = entry.meta.import_target.clone();
@@ -1212,6 +1245,7 @@ pub async fn recreate_in_place(
     force_conflicts: bool,
     activation_hash: Option<&str>,
     live_activations: Option<&HashSet<String>>,
+    dry_run: bool,
 ) -> Result<ApplyResult, String> {
     let Some((ar, scope)) = discovery.iter().find(|(ar, _)| ar.kind == rid.kind) else {
         return Err(format!("kind {} not in discovery cache", rid.kind));
@@ -1230,6 +1264,7 @@ pub async fn recreate_in_place(
 
     let dp = kube::api::DeleteParams {
         propagation_policy: Some(delete_propagation_for(&rid.kind)),
+        dry_run,
         ..Default::default()
     };
     api.delete(&rid.name, &dp)
@@ -1238,15 +1273,18 @@ pub async fn recreate_in_place(
 
     // Poll for deletion. Transient API errors are treated as "probably gone"
     // since the delete itself succeeded; any real problem re-surfaces on the
-    // re-apply below.
-    let deadline = std::time::Instant::now() + RECREATE_DELETE_TIMEOUT;
-    while std::time::Instant::now() < deadline {
-        match api.get_opt(&rid.name).await {
-            Ok(None) => break,
-            Ok(Some(_)) => tokio::time::sleep(Duration::from_millis(500)).await,
-            Err(e) => {
-                tracing::debug!(resource = %rid, error = %e, "transient error polling deletion; assuming gone");
-                break;
+    // re-apply below. Skip polling under dry-run — the apiserver never
+    // actually deleted anything, so the object is still there.
+    if !dry_run {
+        let deadline = std::time::Instant::now() + RECREATE_DELETE_TIMEOUT;
+        while std::time::Instant::now() < deadline {
+            match api.get_opt(&rid.name).await {
+                Ok(None) => break,
+                Ok(Some(_)) => tokio::time::sleep(Duration::from_millis(500)).await,
+                Err(e) => {
+                    tracing::debug!(resource = %rid, error = %e, "transient error polling deletion; assuming gone");
+                    break;
+                }
             }
         }
     }
@@ -1256,7 +1294,7 @@ pub async fn recreate_in_place(
         ar,
         scope.clone(),
         manifest,
-        false,
+        dry_run,
         activation_hash,
         live_activations,
         force_conflicts,

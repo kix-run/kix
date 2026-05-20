@@ -395,6 +395,7 @@ async fn run_reconcile(
         // rather than silently clobbering fields owned by other controllers.
         force_conflicts: false,
         cancel: kix::cluster::cancel::CancelToken::new(),
+        dry_run: false,
     };
 
     // Compose two observers: tracing (structured logs) + K8s Events

@@ -249,48 +249,6 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         .filter(|n| matches!(n.action, ChangeAction::Apply(_)))
         .count();
 
-    if args.dry_run {
-        if !ctx.global.quiet {
-            // Dry-run preview: enumerate plan nodes in a deterministic order
-            // and render them as if each applied cleanly. This replaces the
-            // per-wave simulation — the streaming executor has no notion of
-            // a wave, so preview mirrors the flat node list.
-            for node in &plan.nodes {
-                let rid = match &node.action {
-                    ChangeAction::Apply(m) => ResourceId::from_value(m),
-                    ChangeAction::Skip(rid) => rid.clone(),
-                    ChangeAction::Orphan(_) => continue,
-                };
-                let label = rid.to_string();
-                let (symbol, lbl) = match &node.action {
-                    ChangeAction::Apply(_) => (output::green("+"), "would create"),
-                    ChangeAction::Skip(_) => (output::dim("="), "unchanged"),
-                    ChangeAction::Orphan(_) => unreachable!(),
-                };
-                let pkg_tag = match &node.meta.package {
-                    Some(p) => format!("  {}", output::dim(p)),
-                    None => String::new(),
-                };
-                println!("  {} {} {}{}", symbol, label, output::dim(lbl), pkg_tag);
-            }
-
-            if !orphan_rids.is_empty() {
-                println!();
-                println!(
-                    "{} {} resources would be orphaned:",
-                    output::yellow("Orphans:"),
-                    orphan_rids.len(),
-                );
-                for rid in &orphan_rids {
-                    println!("  {} {}", output::red("-"), rid);
-                }
-            }
-            println!();
-            println!("{}", output::dim("Dry run — no changes applied."));
-        }
-        return Ok(());
-    }
-
     if total_apply == 0 && orphan_rids.is_empty() {
         if !ctx.global.quiet {
             match (&activation_identity_hash, &active_hash) {
@@ -305,8 +263,34 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         return Ok(());
     }
 
+    // Offline dry-run (e.g. `--current-activation --dry-run`): we don't
+    // have a cluster connection, so we can't route through SSA dry-run.
+    // Synthesise the per-node Create/Configured labels from the local
+    // identity-hash diff we already have in `old_manifests`, render through
+    // the same `apply_symbol` mapping the real path uses, and return
+    // without ever reaching for a kubeconfig. Same labels and summary line
+    // as the online dry-run path — just no admission/RBAC/conflict
+    // validation, which is the price of offline.
+    if args.dry_run && pre_client.is_none() {
+        return render_offline_dry_run(&plan, &old_manifests, &orphan_rids, &ctx.global);
+    }
+
+    // Banner so the streamed output is self-labelling. The actual dry-run
+    // semantics ride on `args.dry_run` plumbed all the way to apply_resource
+    // and api.delete — there's no parallel render path. SSA + DELETE both
+    // route through the apiserver with `?dryRun=All`, so per-resource verbs
+    // ("created" / "configured") come from the apiserver's response rather
+    // than a CLI guess. See `kix::cluster::scheduler::SchedulerConfig.dry_run`.
+    if args.dry_run && !ctx.global.quiet {
+        println!();
+        println!(
+            "{}",
+            output::dim("Dry run — no changes will be applied.")
+        );
+    }
+
     // Confirmation
-    if !args.yes {
+    if !args.yes && !args.dry_run {
         if !output::is_interactive() {
             eprintln!(
                 "{}",
@@ -943,6 +927,7 @@ async fn run_deploy_async(
         prune: prune_policy,
         force_conflicts: args.force_conflicts,
         cancel: kix::cluster::cancel::CancelToken::new(),
+        dry_run: args.dry_run,
     };
 
     // Observer selection (doc 99 §7, Stage D):
@@ -1022,7 +1007,7 @@ async fn run_deploy_async(
     match result {
         Ok(r) => {
             println!();
-            print_summary(&r);
+            print_summary(&r, args.dry_run);
             Ok(())
         }
         Err(e) => {
@@ -1032,22 +1017,112 @@ async fn run_deploy_async(
                 _ => None,
             };
             if let Some(r) = partial {
-                print_summary(r);
+                print_summary(r, args.dry_run);
             }
             std::process::exit(1);
         }
     }
 }
 
-fn print_summary(r: &DeployResult) {
+/// Offline dry-run preview — used when we don't have a cluster connection
+/// (e.g. `--current-activation --dry-run`). Walks the plan, classifies each
+/// Apply as Created/Configured by checking whether the K8s identity exists
+/// in `old_manifests`, prints lines using the same `apply_symbol` glyphs the
+/// real-deploy renderer uses, and prints the same summary line. No cluster
+/// access. The classification is bounded — it doesn't run admission
+/// webhooks or detect 409 conflicts; that's only possible with an online
+/// SSA dry-run.
+fn render_offline_dry_run(
+    plan: &DeployPlan,
+    old_manifests: &[Value],
+    orphan_rids: &[ResourceId],
+    global: &crate::cli::GlobalArgs,
+) -> Result<()> {
+    use kix::cluster::apply::ApplyAction;
+
+    if global.quiet {
+        return Ok(());
+    }
+
+    // Index old manifests by K8s identity so we can ask "did this exist?"
+    // — same shape detect_changes uses internally (apply.rs:132-188).
+    let old_by_k8s_id: std::collections::HashSet<String> = old_manifests
+        .iter()
+        .map(|m| {
+            let rid = ResourceId::from_value(m);
+            format!("{}/{}/{}", rid.kind, rid.namespace, rid.name)
+        })
+        .collect();
+
+    println!();
+    println!("{}", output::dim("Dry run — no changes will be applied."));
+
+    let mut result = DeployResult::default();
+
+    for node in &plan.nodes {
+        let (rid, action) = match &node.action {
+            ChangeAction::Apply(m) => {
+                let rid = ResourceId::from_value(m);
+                let k8s_id = format!("{}/{}/{}", rid.kind, rid.namespace, rid.name);
+                let action = if old_by_k8s_id.contains(&k8s_id) {
+                    ApplyAction::Configured
+                } else {
+                    ApplyAction::Created
+                };
+                (rid, action)
+            }
+            ChangeAction::Skip(rid) => (rid.clone(), ApplyAction::Unchanged),
+            ChangeAction::Orphan(_) => continue,
+        };
+
+        let (symbol, lbl) = apply_symbol(&action);
+        let pkg_tag = match &node.meta.package {
+            Some(p) => format!("  {}", output::dim(p)),
+            None => String::new(),
+        };
+        println!("  {} {} {}{}", symbol, rid, output::dim(lbl), pkg_tag);
+
+        match action {
+            ApplyAction::Created => result.created += 1,
+            ApplyAction::Configured => result.configured += 1,
+            ApplyAction::Unchanged => result.unchanged += 1,
+            ApplyAction::Skipped => {}
+        }
+    }
+
+    if !orphan_rids.is_empty() {
+        println!();
+        println!(
+            "{} {} resources would be orphaned:",
+            output::yellow("Orphans:"),
+            orphan_rids.len(),
+        );
+        for rid in orphan_rids {
+            println!("  {} {}", output::red("-"), rid);
+        }
+        result.pruned = orphan_rids.len();
+    }
+
+    println!();
+    print_summary(&result, true);
+    Ok(())
+}
+
+fn print_summary(r: &DeployResult, dry_run: bool) {
     let failed_str = r.failed.to_string();
     let cancelled_tail = if r.cancelled > 0 {
         format!(", {} cancelled", output::dim(&r.cancelled.to_string()),)
     } else {
         String::new()
     };
+    let prefix = if dry_run {
+        "Dry run complete"
+    } else {
+        "Deploy complete"
+    };
     println!(
-        "Deploy complete: {} created, {} configured, {} unchanged, {} failed{}",
+        "{}: {} created, {} configured, {} unchanged, {} failed{}",
+        prefix,
         output::green(&r.created.to_string()),
         output::yellow(&r.configured.to_string()),
         output::dim(&r.unchanged.to_string()),

@@ -461,6 +461,7 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
         // loudly rather than silently overwriting whatever the cluster has.
         force_conflicts: false,
         cancel: kix::cluster::cancel::CancelToken::new(),
+        dry_run: false,
     };
 
     let observer: Arc<dyn DeployObserver> = if !output::is_interactive() {

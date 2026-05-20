@@ -6,6 +6,13 @@ use predicates::prelude::*;
 fn kix() -> Command {
     let mut cmd = Command::cargo_bin("kix").unwrap();
     cmd.env("NO_COLOR", "true");
+    // Belt-and-braces: tests must never reach for the user's kubeconfig and
+    // hit a real cluster. `--current-activation --dry-run` should be
+    // entirely offline, but if any future change introduces a stray client
+    // call we'd rather fail fast against `/dev/null` than auth against
+    // whatever cluster the developer happens to be pointed at.
+    cmd.env("KUBECONFIG", "/dev/null");
+    cmd.env_remove("KUBE_CONTEXT");
     let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
