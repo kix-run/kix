@@ -205,6 +205,15 @@
         margin-top: 32px;
       }
 
+      .hero-cta {
+        margin: 32px 0 0;
+      }
+
+      .section-cta {
+        margin-top: 56px;
+        text-align: center;
+      }
+
       .proof-strip {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -236,11 +245,8 @@
         position: relative;
         display: grid;
         gap: 18px;
-        border: 1px solid #cfdcd3;
-        border-radius: 8px;
-        background: rgba(255, 255, 255, 0.62);
-        box-shadow: var(--shadow);
-        padding: 28px;
+        padding: 0 0 0 28px;
+        border-left: 1px solid var(--line);
       }
 
       .artifact-kicker {
@@ -268,10 +274,7 @@
         grid-template-columns: 108px 1fr;
         gap: 18px;
         align-items: start;
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        background: #fff;
-        padding: 16px;
+        padding: 0;
       }
 
       .stage-label {
@@ -314,12 +317,20 @@
         border-top: 1px solid rgba(220, 229, 222, 0.88);
       }
 
+      section:nth-of-type(odd) {
+        background: var(--surface);
+      }
+
       .section-head {
-        display: grid;
-        grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
-        gap: 48px;
-        align-items: end;
-        margin-bottom: 34px;
+        margin-bottom: 40px;
+      }
+
+      .section-head > div {
+        margin-bottom: 16px;
+      }
+
+      .section-head p {
+        max-width: 760px;
       }
 
       .section-kicker {
@@ -344,14 +355,14 @@
 
       .feature-grid {
         display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 14px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 36px 48px;
       }
 
       .outcomes-grid {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 14px;
+        gap: 36px;
       }
 
       .outcomes-grid .feature {
@@ -361,14 +372,11 @@
       .outputs-grid {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 14px;
+        gap: 28px 40px;
       }
 
       .output {
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        background: var(--surface);
-        padding: 20px;
+        padding: 0;
       }
 
       .output strong {
@@ -383,11 +391,9 @@
       }
 
       .automation-band {
-        margin-top: 14px;
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        background: var(--surface);
-        padding: 22px;
+        margin-top: 36px;
+        padding-top: 28px;
+        border-top: 1px solid var(--line);
       }
 
       .automation-band h3 {
@@ -402,11 +408,7 @@
       }
 
       .feature {
-        min-height: 252px;
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        background: var(--surface);
-        padding: 20px;
+        padding: 0;
       }
 
       .icon {
@@ -454,19 +456,16 @@
       .comparison {
         display: grid;
         grid-template-columns: 1fr 1fr;
-        gap: 18px;
+        gap: 56px;
       }
 
       .compare-col {
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        background: var(--surface);
-        overflow: hidden;
+        padding: 0;
       }
 
       .compare-col h3 {
-        margin: 0;
-        padding: 18px 20px;
+        margin: 0 0 8px;
+        padding: 0 0 14px;
         border-bottom: 1px solid var(--line);
         font-size: 18px;
       }
@@ -483,7 +482,7 @@
         display: grid;
         grid-template-columns: 24px 1fr;
         gap: 10px;
-        padding: 16px 20px;
+        padding: 14px 0;
         border-bottom: 1px solid var(--line);
         color: #46544c;
       }
@@ -522,24 +521,18 @@
 
       .workflow-grid {
         display: grid;
-        gap: 18px;
+        gap: 56px;
       }
 
       .workflow-card {
         display: grid;
         grid-template-columns: minmax(240px, 0.72fr) minmax(0, 1.28fr);
-        gap: 22px;
-        align-items: stretch;
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        background: var(--surface);
-        padding: 20px;
+        gap: 28px;
+        align-items: start;
+        padding: 0;
       }
 
       .workflow-copy {
-        display: grid;
-        grid-template-columns: 42px 1fr;
-        gap: 14px;
         align-content: start;
       }
 
@@ -633,14 +626,11 @@
       .adoption {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 14px;
+        gap: 36px;
       }
 
       .step {
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        background: var(--surface);
-        padding: 22px;
+        padding: 0;
       }
 
       .step small {
@@ -662,12 +652,9 @@
       .operator {
         display: grid;
         grid-template-columns: minmax(0, 1fr) minmax(280px, 380px);
-        gap: 38px;
-        align-items: center;
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        background: var(--surface);
-        padding: 34px;
+        gap: 48px;
+        align-items: start;
+        padding: 0;
       }
 
       .operator p {
@@ -678,14 +665,11 @@
       .cred-grid {
         display: grid;
         grid-template-columns: 1fr 1fr;
-        gap: 10px;
+        gap: 24px 28px;
       }
 
       .cred {
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        background: #fbfcfb;
-        padding: 14px;
+        padding: 0;
       }
 
       .cred strong {
@@ -812,7 +796,6 @@
     <header class="topbar">
       <nav class="shell nav" aria-label="Main navigation">
         <a class="brand" href="#">
-          <span class="mark">kx</span>
           <span>Kix</span>
         </a>
         <div class="navlinks">
@@ -827,20 +810,19 @@
     <main>
       <div class="shell hero">
         <div>
-          <div class="eyebrow">Kubernetes compiler</div>
           <h1>Kix is a Kubernetes compiler.</h1>
           <p class="hero-copy">
             It turns your cluster definition into a verifiable cluster artifact,
             so teams can understand, change, and operate Kubernetes with
             confidence.
           </p>
+          <div class="hero-cta">
+            <a class="button primary" href="REPLACE_WITH_GOOGLE_FORM_URL">Register interest</a>
+          </div>
         </div>
 
         <aside class="artifact" aria-label="Kix compiler artifact">
-          <div>
-            <div class="artifact-kicker">Evaluated before deploy</div>
-            <h2 class="artifact-title">A cluster definition becomes one verifiable artifact.</h2>
-          </div>
+          <h2 class="artifact-title">A cluster definition becomes one verifiable artifact.</h2>
 
           <div class="artifact-flow">
             <div class="stage">
@@ -872,7 +854,6 @@
         <div class="shell">
           <div class="section-head">
             <div>
-              <div class="section-kicker">Outcomes</div>
               <h2>What changes when Kix is in place.</h2>
             </div>
             <p>
@@ -902,7 +883,6 @@
         <div class="shell">
           <div class="section-head">
             <div>
-              <div class="section-kicker">Artifact contents</div>
               <h2>One compile, six standard outputs.</h2>
             </div>
             <p>
@@ -945,7 +925,6 @@
         <div class="shell">
           <div class="section-head">
             <div>
-              <div class="section-kicker">One evaluated cluster</div>
               <h2>Evaluate the cluster as one system.</h2>
             </div>
             <p>
@@ -957,7 +936,6 @@
 
           <div class="feature-grid">
             <article class="feature">
-              <div class="icon green">01</div>
               <h3>Verifiable cluster artifact</h3>
               <p>
                 The output is concrete: checked, diffed, reviewed, deployed,
@@ -965,7 +943,6 @@
               </p>
             </article>
             <article class="feature">
-              <div class="icon blue">02</div>
               <h3>Broken edges caught early</h3>
               <p>
                 Selectors, routes, ports, RBAC, storage, TLS, and monitoring
@@ -973,7 +950,6 @@
               </p>
             </article>
             <article class="feature">
-              <div class="icon amber">03</div>
               <h3>Compliance as build output</h3>
               <p>
                 Produce SARIF, SBOM, provenance, attestations, activation
@@ -981,7 +957,6 @@
               </p>
             </article>
             <article class="feature">
-              <div class="icon red">04</div>
               <h3>Dependency-aware operations</h3>
               <p>
                 Understand blast radius, deploy in order, reason about drift,
@@ -1006,7 +981,6 @@
         <div class="shell">
           <div class="section-head">
             <div>
-              <div class="section-kicker">Prevention first</div>
               <h2>Move failures out of production.</h2>
             </div>
             <p>
@@ -1042,7 +1016,6 @@
       <section id="workflow">
         <div class="shell">
           <div class="workflow-intro">
-            <div class="section-kicker">Workflow</div>
             <h2>Change Kubernetes with a compiler loop.</h2>
             <p>
               The important shift is not that Kubernetes resources disappear.
@@ -1054,9 +1027,8 @@
           <div class="workflow-grid">
             <article class="workflow-card">
               <div class="workflow-copy">
-                <span class="num">1</span>
                 <div>
-                  <h3>Define the change</h3>
+                  <h3>1. Define the change</h3>
                   <p>
                     Use package relationships instead of copying names,
                     selectors, ports, and policy fragments between files.
@@ -1085,9 +1057,8 @@
 
             <article class="workflow-card">
               <div class="workflow-copy">
-                <span class="num">2</span>
                 <div>
-                  <h3>Evaluate locally or in CI</h3>
+                  <h3>2. Evaluate locally or in CI</h3>
                   <p>
                     Kix resolves dependencies, runs schema and scorecard
                     checks, and emits diagnostics while the change is still in
@@ -1105,9 +1076,8 @@ WARN apps/api: backup window overlaps maintenance freeze</code></pre>
 
             <article class="workflow-card">
               <div class="workflow-copy">
-                <span class="num">3</span>
                 <div>
-                  <h3>Review the artifact</h3>
+                  <h3>3. Review the artifact</h3>
                   <p>
                     Inspect what will change, what depends on it, and which
                     evidence was produced before the deploy step is allowed to
@@ -1124,9 +1094,8 @@ $ kix compliance audit prod-eu --out ./evidence</code></pre>
 
             <article class="workflow-card">
               <div class="workflow-copy">
-                <span class="num">4</span>
                 <div>
-                  <h3>Deploy or hand off</h3>
+                  <h3>4. Deploy or hand off</h3>
                   <p>
                     Apply in dependency order with Kix, or export standard
                     Kubernetes resources for your existing delivery process.
@@ -1142,9 +1111,8 @@ $ kix export prod-eu --out ./manifests</code></pre>
 
             <article class="workflow-card">
               <div class="workflow-copy">
-                <span class="num">5</span>
                 <div>
-                  <h3>Operate the result</h3>
+                  <h3>5. Operate the result</h3>
                   <p>
                     The same artifact model supports drift checks, image
                     inventory, rollback history, and recovery after a bad
@@ -1159,6 +1127,10 @@ $ kix rollback prod-eu --list</code></pre>
               </div>
             </article>
           </div>
+
+          <div class="section-cta">
+            <a class="button primary" href="REPLACE_WITH_GOOGLE_FORM_URL">Register interest</a>
+          </div>
         </div>
       </section>
 
@@ -1166,7 +1138,6 @@ $ kix rollback prod-eu --list</code></pre>
         <div class="shell">
           <div class="section-head">
             <div>
-              <div class="section-kicker">Adoption</div>
               <h2>Start small. Keep your Kubernetes.</h2>
             </div>
             <p>
@@ -1178,7 +1149,6 @@ $ kix rollback prod-eu --list</code></pre>
 
           <div class="adoption">
             <article class="step">
-              <small>Try</small>
               <h3>Run the full demo cluster</h3>
               <p>
                 Compile a disposable cluster, inspect the graph and reports,
@@ -1186,7 +1156,6 @@ $ kix rollback prod-eu --list</code></pre>
               </p>
             </article>
             <article class="step">
-              <small>Adopt</small>
               <h3>Choose a controlled boundary</h3>
               <p>
                 Start with a new cluster, selected subsystem, or imported
@@ -1194,7 +1163,6 @@ $ kix rollback prod-eu --list</code></pre>
               </p>
             </article>
             <article class="step">
-              <small>Expand</small>
               <h3>Move structure into packages</h3>
               <p>
                 Native packages expose richer structure, which unlocks stronger
@@ -1208,7 +1176,6 @@ $ kix rollback prod-eu --list</code></pre>
       <section id="operators">
         <div class="shell operator">
           <div>
-            <div class="section-kicker">Built by operators</div>
             <h2>Created from real Kubernetes operations.</h2>
             <p>
               Kix comes from operating production Kubernetes infrastructure.
@@ -1252,6 +1219,7 @@ $ kix rollback prod-eu --list</code></pre>
             confidence.
           </p>
         </div>
+        <a class="button primary" href="REPLACE_WITH_GOOGLE_FORM_URL">Register interest</a>
       </div>
     </main>
 
