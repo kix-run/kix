@@ -3,10 +3,10 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Kix - Kubernetes Compiler</title>
+    <title>Kix — Catch Kubernetes mistakes before you commit</title>
     <meta
       name="description"
-      content="Kix is a Kubernetes compiler that turns your cluster definition into a verifiable cluster artifact before anything reaches production."
+      content="Kix is a Kubernetes compiler. It catches broken dependencies, missing references, and policy violations before you commit — not after deploy."
     >
     <style>
       :root {
@@ -524,6 +524,41 @@
         gap: 56px;
       }
 
+      .example-pair {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 22px;
+        align-items: start;
+      }
+
+      .example-block {
+        display: grid;
+        gap: 10px;
+      }
+
+      .example-label {
+        margin: 0;
+        color: var(--muted);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+          "Liberation Mono", monospace;
+        font-size: 12px;
+      }
+
+      code.inline {
+        display: inline;
+        padding: 1px 6px;
+        border-radius: 4px;
+        background: var(--surface-2);
+        color: var(--ink);
+        font-size: 0.92em;
+      }
+
+      .example-aside {
+        margin: 22px 0 0;
+        color: var(--muted);
+        font-size: 15px;
+      }
+
       .workflow-card {
         display: grid;
         grid-template-columns: minmax(240px, 0.72fr) minmax(0, 1.28fr);
@@ -723,6 +758,7 @@
         .section-head,
         .code-section,
         .workflow-card,
+        .example-pair,
         .operator,
         .final-cta {
           grid-template-columns: 1fr;
@@ -817,16 +853,16 @@
             confidence.
           </p>
           <div class="hero-cta">
-            <a class="button primary" href="REPLACE_WITH_GOOGLE_FORM_URL">Register interest</a>
+            <a class="button primary" href="REPLACE_WITH_GOOGLE_FORM_URL">Join the preview</a>
           </div>
         </div>
 
         <aside class="artifact" aria-label="Kix compiler artifact">
-          <h2 class="artifact-title">A cluster definition becomes one verifiable artifact.</h2>
+          <h2 class="artifact-title">Catch mistakes before you commit.</h2>
 
           <div class="artifact-flow">
             <div class="stage">
-              <div class="stage-label">Input</div>
+              <div class="stage-label">Define</div>
               <div>
                 <p class="stage-value">Cluster definition</p>
                 <p class="stage-note">Applications, platform services, policies, and environment choices.</p>
@@ -854,22 +890,22 @@
         <div class="shell">
           <div class="section-head">
             <div>
-              <h2>What changes when Kix is in place.</h2>
+              <h2>What compile-time Kubernetes changes.</h2>
             </div>
             <p>
-              Feedback moves earlier, output stays standard, and operations
-              are driven by the same compiled artifact.
+              Feedback moves earlier, deployments become inspectable, and
+              operations are driven by the same evaluated cluster model.
             </p>
           </div>
 
           <div class="outcomes-grid">
             <article class="feature">
-              <h3>Commit-time feedback</h3>
-              <p>Broken edges and policy failures fail before deploy.</p>
+              <h3>Pre-commit feedback</h3>
+              <p>Broken dependencies and policy violations are caught before you commit.</p>
             </article>
             <article class="feature">
-              <h3>Standard output</h3>
-              <p>Emit Kubernetes resources for your existing pipeline.</p>
+              <h3>Checked deploys</h3>
+              <p>Preview the evaluated result, then apply it in dependency order.</p>
             </article>
             <article class="feature">
               <h3>Operational tooling</h3>
@@ -879,23 +915,77 @@
         </div>
       </section>
 
+      <section id="workflow">
+        <div class="shell">
+          <div class="workflow-intro">
+            <h2>A quick example.</h2>
+            <p>
+              A developer renames the Postgres instance from
+              <code class="inline">postgres</code> to
+              <code class="inline">pg</code> and misses one reference. The
+              cluster would compile, deploy, and only fail when the app first
+              tries to read the database. Kix fails the build at commit time,
+              with the fix in the error.
+            </p>
+          </div>
+
+          <div class="example-pair">
+            <div class="example-block">
+              <p class="example-label">cluster.nix</p>
+              <pre><code>{
+  kix.instances = {
+    pg = {
+      package = pkgs.cloudnative-pg-cluster;
+      namespace = <span class="string">"data"</span>;
+    };
+
+    api = {
+      package = acmePackages.api;
+      namespace = <span class="string">"acme-prod"</span>;
+      deps.database = <span class="keyword">ref</span> <span class="string">"postgres"</span>;
+    };
+  };
+}</code></pre>
+            </div>
+            <div class="example-block">
+              <p class="example-label">$ kix check prod-eu</p>
+              <pre class="command"><code>error: api.deps.database
+  references unknown instance <span class="string">"postgres"</span>
+  did you mean <span class="string">"pg"</span>?
+
+prod-eu: 1 error
+build aborted, nothing deployed</code></pre>
+
+              <p class="example-aside">
+                You can also <strong>diff</strong> against the deployed
+                cluster, <strong>graph</strong> dependencies,
+                <strong>deploy</strong> in order, <strong>roll back</strong>,
+                and <strong>export</strong> plain Kubernetes manifests.
+              </p>
+            </div>
+          </div>
+
+          <div class="section-cta">
+            <a class="button primary" href="REPLACE_WITH_GOOGLE_FORM_URL">Join the preview</a>
+          </div>
+        </div>
+      </section>
       <section id="contents">
         <div class="shell">
           <div class="section-head">
             <div>
-              <h2>One compile, six standard outputs.</h2>
+              <h2>One compile, inspectable results.</h2>
             </div>
             <p>
-              Every compile produces the same set of inspectable outputs.
-              Each one is plain enough to plug into the rest of your delivery
-              process.
+              Every compile produces concrete information you can inspect
+              before the cluster changes.
             </p>
           </div>
 
           <div class="outputs-grid">
             <div class="output">
-              <strong>Standard manifests</strong>
-              <span>Plain Kubernetes resources for any delivery pipeline.</span>
+              <strong>Change preview</strong>
+              <span>What Kix will apply before it touches the cluster.</span>
             </div>
             <div class="output">
               <strong>Dependency graph</strong>
@@ -914,8 +1004,8 @@
               <span>Build evidence for every artifact you ship.</span>
             </div>
             <div class="output">
-              <strong>Rollback handle</strong>
-              <span>A concrete reference to revert a compile cleanly.</span>
+              <strong>Rollback history</strong>
+              <span>Concrete references to recover from a bad change.</span>
             </div>
           </div>
         </div>
@@ -977,6 +1067,7 @@
         </div>
       </section>
 
+<!--
       <section id="checks">
         <div class="shell">
           <div class="section-head">
@@ -1012,127 +1103,7 @@
           </div>
         </div>
       </section>
-
-      <section id="workflow">
-        <div class="shell">
-          <div class="workflow-intro">
-            <h2>Change Kubernetes with a compiler loop.</h2>
-            <p>
-              The important shift is not that Kubernetes resources disappear.
-              The shift is that every change goes through the same evaluate,
-              inspect, and apply loop before it can affect production.
-            </p>
-          </div>
-
-          <div class="workflow-grid">
-            <article class="workflow-card">
-              <div class="workflow-copy">
-                <div>
-                  <h3>1. Define the change</h3>
-                  <p>
-                    Use package relationships instead of copying names,
-                    selectors, ports, and policy fragments between files.
-                  </p>
-                </div>
-              </div>
-              <div class="workflow-examples">
-                <pre><code><span class="comment"># Add Acme Co.'s internal app with platform-provided Postgres.</span>
-{
-  kix.instances = {
-    postgres = {
-      package = pkgs.cloudnative-pg-cluster;
-      namespace = <span class="string">"data"</span>;
-    };
-
-    acmeApp = {
-      package = acmePackages.internalApp;
-      namespace = <span class="string">"acme-prod"</span>;
-      config.expose.host = <span class="string">"acme.internal.example.com"</span>;
-      deps.database = <span class="keyword">ref</span> <span class="string">"postgres"</span>;
-    };
-  };
-}</code></pre>
-              </div>
-            </article>
-
-            <article class="workflow-card">
-              <div class="workflow-copy">
-                <div>
-                  <h3>2. Evaluate locally or in CI</h3>
-                  <p>
-                    Kix resolves dependencies, runs schema and scorecard
-                    checks, and emits diagnostics while the change is still in
-                    review.
-                  </p>
-                </div>
-              </div>
-              <div class="workflow-examples">
-                <pre class="command"><code>$ kix check prod-eu --sarif &gt; scorecard.sarif
-
-OK selectors, RBAC, routes, scorecard
-WARN apps/api: backup window overlaps maintenance freeze</code></pre>
-              </div>
-            </article>
-
-            <article class="workflow-card">
-              <div class="workflow-copy">
-                <div>
-                  <h3>3. Review the artifact</h3>
-                  <p>
-                    Inspect what will change, what depends on it, and which
-                    evidence was produced before the deploy step is allowed to
-                    run.
-                  </p>
-                </div>
-              </div>
-              <div class="workflow-examples">
-                <pre class="command"><code>$ kix diff prod-eu --output markdown
-$ kix graph prod-eu --format tree
-$ kix compliance audit prod-eu --out ./evidence</code></pre>
-              </div>
-            </article>
-
-            <article class="workflow-card">
-              <div class="workflow-copy">
-                <div>
-                  <h3>4. Deploy or hand off</h3>
-                  <p>
-                    Apply in dependency order with Kix, or export standard
-                    Kubernetes resources for your existing delivery process.
-                  </p>
-                </div>
-              </div>
-              <div class="workflow-examples">
-                <pre class="command"><code>$ kix deploy prod-eu --dry-run
-$ kix deploy prod-eu
-$ kix export prod-eu --out ./manifests</code></pre>
-              </div>
-            </article>
-
-            <article class="workflow-card">
-              <div class="workflow-copy">
-                <div>
-                  <h3>5. Operate the result</h3>
-                  <p>
-                    The same artifact model supports drift checks, image
-                    inventory, rollback history, and recovery after a bad
-                    change.
-                  </p>
-                </div>
-              </div>
-              <div class="workflow-examples">
-                <pre class="command"><code>$ kix health prod-eu
-$ kix images prod-eu --sources
-$ kix rollback prod-eu --list</code></pre>
-              </div>
-            </article>
-          </div>
-
-          <div class="section-cta">
-            <a class="button primary" href="REPLACE_WITH_GOOGLE_FORM_URL">Register interest</a>
-          </div>
-        </div>
-      </section>
+-->
 
       <section>
         <div class="shell">
@@ -1219,15 +1190,8 @@ $ kix rollback prod-eu --list</code></pre>
             confidence.
           </p>
         </div>
-        <a class="button primary" href="REPLACE_WITH_GOOGLE_FORM_URL">Register interest</a>
+        <a class="button primary" href="REPLACE_WITH_GOOGLE_FORM_URL">Join the preview</a>
       </div>
     </main>
-
-    <footer>
-      <div class="shell footer-inner">
-        <span>Kix - Kubernetes compiler</span>
-        <span>Draft homepage, May 2026</span>
-      </div>
-    </footer>
   </body>
 </html>
