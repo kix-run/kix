@@ -35,7 +35,17 @@ fn deploy_dry_run_shows_plan() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Plan:"))
-        .stdout(predicate::str::contains("Dry run"));
+        // Offline-dry-run banner (kixpkgs#15): must lead the per-resource list.
+        .stdout(predicate::str::contains(
+            "Dry run — no changes will be applied.",
+        ))
+        // No prior activation cache for the example flake → every Apply node
+        // classifies as Created and uses the runtime "created" verb (not the
+        // pre-fix "would create"). This pins the regression on #15.
+        .stdout(predicate::str::contains("created"))
+        // The "Dry run complete:" summary line (vs "Deploy complete:") is the
+        // single most-visible signal that the path was taken.
+        .stdout(predicate::str::contains("Dry run complete:"));
 }
 
 #[test]
@@ -50,5 +60,5 @@ fn apply_alias_works() {
         ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Dry run"));
+        .stdout(predicate::str::contains("Dry run complete:"));
 }

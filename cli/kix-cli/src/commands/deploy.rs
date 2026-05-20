@@ -283,10 +283,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     // than a CLI guess. See `kix::cluster::scheduler::SchedulerConfig.dry_run`.
     if args.dry_run && !ctx.global.quiet {
         println!();
-        println!(
-            "{}",
-            output::dim("Dry run — no changes will be applied.")
-        );
+        println!("{}", output::dim("Dry run — no changes will be applied."));
     }
 
     // Confirmation
@@ -1024,6 +1021,25 @@ async fn run_deploy_async(
     }
 }
 
+/// Decide whether an offline-dry-run Apply node corresponds to a Create or
+/// a Configured action, by checking whether its K8s identity
+/// (`kind/namespace/name`) is present in the old activation. Mirrors the
+/// equivalent check that `apply_resource` does via `get_opt` against the
+/// live cluster (apply.rs:326) — but locally, against the cached old
+/// manifest set.
+fn classify_offline_apply(
+    rid: &ResourceId,
+    old_by_k8s_id: &std::collections::HashSet<String>,
+) -> kix::cluster::apply::ApplyAction {
+    use kix::cluster::apply::ApplyAction;
+    let k8s_id = format!("{}/{}/{}", rid.kind, rid.namespace, rid.name);
+    if old_by_k8s_id.contains(&k8s_id) {
+        ApplyAction::Configured
+    } else {
+        ApplyAction::Created
+    }
+}
+
 /// Offline dry-run preview — used when we don't have a cluster connection
 /// (e.g. `--current-activation --dry-run`). Walks the plan, classifies each
 /// Apply as Created/Configured by checking whether the K8s identity exists
@@ -1063,12 +1079,7 @@ fn render_offline_dry_run(
         let (rid, action) = match &node.action {
             ChangeAction::Apply(m) => {
                 let rid = ResourceId::from_value(m);
-                let k8s_id = format!("{}/{}/{}", rid.kind, rid.namespace, rid.name);
-                let action = if old_by_k8s_id.contains(&k8s_id) {
-                    ApplyAction::Configured
-                } else {
-                    ApplyAction::Created
-                };
+                let action = classify_offline_apply(&rid, &old_by_k8s_id);
                 (rid, action)
             }
             ChangeAction::Skip(rid) => (rid.clone(), ApplyAction::Unchanged),
@@ -1436,5 +1447,65 @@ mod tests {
     #[test]
     fn parse_timeout_invalid() {
         assert!(parse_timeout(Some("abc")).is_err());
+    }
+
+    // ── Offline-dry-run classification ───────────────────────────────────
+    //
+    // The dangerous regression #15 surfaced was: an in-place update
+    // mis-rendered as a Create. These tests pin the apiserver-shaped
+    // semantics that classify_offline_apply implements (mirror of
+    // apply_resource's `existed` check at apply.rs:326): when the K8s
+    // identity (kind/namespace/name) is in the old activation, it's a
+    // Configured; otherwise, it's a Created.
+
+    use kix::cluster::apply::ApplyAction;
+    use kix::manifest::types::ResourceId;
+
+    fn old_by_id(rids: &[(&str, &str, &str)]) -> std::collections::HashSet<String> {
+        rids.iter()
+            .map(|(k, ns, n)| format!("{k}/{ns}/{n}"))
+            .collect()
+    }
+
+    fn rid(kind: &str, ns: &str, name: &str) -> ResourceId {
+        ResourceId {
+            kind: kind.to_string(),
+            namespace: ns.to_string(),
+            name: name.to_string(),
+        }
+    }
+
+    #[test]
+    fn classify_offline_apply_existing_is_configured() {
+        let old = old_by_id(&[("Deployment", "lithus-system", "lithus-secret-operator")]);
+        let action = classify_offline_apply(
+            &rid("Deployment", "lithus-system", "lithus-secret-operator"),
+            &old,
+        );
+        assert!(matches!(action, ApplyAction::Configured));
+    }
+
+    #[test]
+    fn classify_offline_apply_new_is_created() {
+        let old = old_by_id(&[("Service", "default", "other")]);
+        let action = classify_offline_apply(&rid("Deployment", "default", "fresh"), &old);
+        assert!(matches!(action, ApplyAction::Created));
+    }
+
+    #[test]
+    fn classify_offline_apply_distinguishes_kind() {
+        // Same name+namespace but different kind must classify as Created —
+        // an in-cluster Service and Deployment named "foo" in "default" are
+        // genuinely distinct resources.
+        let old = old_by_id(&[("Service", "default", "foo")]);
+        let action = classify_offline_apply(&rid("Deployment", "default", "foo"), &old);
+        assert!(matches!(action, ApplyAction::Created));
+    }
+
+    #[test]
+    fn classify_offline_apply_distinguishes_namespace() {
+        let old = old_by_id(&[("Deployment", "ns-a", "foo")]);
+        let action = classify_offline_apply(&rid("Deployment", "ns-b", "foo"), &old);
+        assert!(matches!(action, ApplyAction::Created));
     }
 }

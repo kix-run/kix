@@ -705,7 +705,10 @@ pub async fn run_deploy(
     // Finalize Activation lifecycle (unless pure no-op or dry-run).
     let actually_changed =
         result.created > 0 || result.configured > 0 || result.pruned > 0 || result.failed > 0;
-    if !config.dry_run && actually_changed && let Some(act_name) = activation_name {
+    if !config.dry_run
+        && actually_changed
+        && let Some(act_name) = activation_name
+    {
         let d = discovery.read().await;
         if let Some((ar, _)) = activation::find_activation_ar(&d) {
             let ar = ar.clone();
