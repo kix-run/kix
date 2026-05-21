@@ -84,5 +84,14 @@
           inherit kix packages;
           inherit (kix) mkManifests;
         };
+
+      # mkFlake helper for external consumers — wraps cluster definitions
+      # into a complete per-system flake output.
+      #
+      #   outputs = inputs: inputs.kixpkgs.lib.mkFlake {
+      #     inherit inputs;
+      #     clusters.my-cluster = ./cluster.nix;
+      #   };
+      lib.mkFlake = mkFlake;
     };
 }
