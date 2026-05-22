@@ -1,4 +1,4 @@
 ---
-title: "First cluster from scratch"
+title: "04. First cluster from scratch"
 description: TODO
 ---

@@ -1,4 +1,4 @@
 ---
-title: "Basic dependency resolution and namespace boundaries"
+title: "08. Basic dependency resolution and namespace boundaries"
 description: TODO
 ---

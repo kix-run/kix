@@ -1,4 +1,4 @@
 ---
-title: "Monitoring from the graph"
+title: "17. Monitoring from the graph"
 description: TODO
 ---

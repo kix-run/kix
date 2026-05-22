@@ -1,4 +1,4 @@
 ---
-title: "Basic graph and deploy loop"
+title: "05. Basic graph and deploy loop"
 description: TODO
 ---
