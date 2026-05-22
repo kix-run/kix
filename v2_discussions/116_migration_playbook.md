@@ -205,7 +205,7 @@ This is where stage 1 → 2 → 3 happens. The AI is doing the heavy lifting; th
 ### Two non-negotiable rules
 
 1. **`nix build` green before any diff work.** kix has dependency injection — missing wiring shows up as eval errors, not as silent diff. Tactically fix eval first, every time. Never resolve a diff entry while the build is red.
-2. **`docs/FEATURE-CATALOG.md` is required reading.** Before reaching for a raw override or extending a package, the AI confirms there isn't already a feature that solves it. Skipping this is the #1 cause of overfitted slop.
+2. **`docs-legacy/FEATURE-CATALOG.md` is required reading.** Before reaching for a raw override or extending a package, the AI confirms there isn't already a feature that solves it. Skipping this is the #1 cause of overfitted slop.
 
 ### Traversal order
 
@@ -329,7 +329,7 @@ Diff entries that are *expected* and not migration work. The migration is done w
   - `--broken-only` — surfaces structural breakage; useful while `nix build` is green but resources are obviously malformed.
   - `--ns <ns>` — scope to one namespace.
   - `--summary` — convergence numbers (only-L / only-R / equal / diff).
-- **`docs/FEATURE-CATALOG.md`** — required reading before extending packages or adding overrides. The single biggest lever against overfit.
+- **`docs-legacy/FEATURE-CATALOG.md`** — required reading before extending packages or adding overrides. The single biggest lever against overfit.
 - **`kix.helmChart` (Tier 1)** and **`scope.helm.importChart` (Tier 2)** — see Helm imports below. The default path for any helm-sourced component.
 - **Package migration skill** — handoff target when a native (non-helm) package needs to be authored.
 - **Per-cluster wrapper script** (optional) — pins dump location, render-helm step, default flags. Worth writing once per migration; not part of the playbook itself.

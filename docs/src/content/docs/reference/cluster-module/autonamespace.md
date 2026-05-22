@@ -1,0 +1,4 @@
+---
+title: "`autoNamespace`"
+description: TODO
+---

@@ -41,6 +41,7 @@ in
     pkgs.jq
     pkgs.sops
     pkgs.age
+    pkgs.nodejs_22
   ]
   ++ nixLibs
   ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [

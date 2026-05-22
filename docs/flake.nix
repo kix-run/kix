@@ -1,0 +1,204 @@
+# Kix documentation site — Astro Starlight, built as a Nix derivation.
+#
+# Build:  nix build ./docs#site --extra-experimental-features 'nix-command flakes pipe-operators' --impure
+# Dev:    nix run  ./docs#dev  --extra-experimental-features 'nix-command flakes pipe-operators' --impure
+#
+# This is a true sibling subflake — the top-level kixpkgs flake does NOT
+# depend on it. The `kixpkgs` input below is reserved for future use
+# (reading package metadata from the parent flake).
+
+{
+  description = "Kix documentation site (Astro Starlight)";
+
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    kixpkgs.url = "path:../";
+  };
+
+  outputs =
+    { nixpkgs, ... }:
+    let
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+        "x86_64-darwin"
+        "aarch64-darwin"
+      ];
+      forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
+    in
+    {
+      packages = forAllSystems (pkgs: rec {
+        # Snippet extraction: read named `# region:NAME` blocks out of
+        # source `.nix` files and emit Markdown files with fenced code
+        # blocks. Consumed by `site` below (copied into the Starlight
+        # content tree under an underscore prefix so Starlight treats
+        # the directory as non-routable).
+        snippets =
+          let
+            snippetLib = import ./nix/snippets.nix {
+              inherit pkgs;
+              lib = pkgs.lib;
+            };
+          in
+          snippetLib.mkSnippets {
+            sources = [
+              {
+                # TODO: replace with a proper flake input once kix-examples
+                # is git-addressable here.
+                file = "/Users/adam/ghq/github.com/adamcharnock/kix-examples/examples/06-scorecards/scorecard.nix";
+                name = "06-scorecards";
+              }
+            ];
+          };
+
+        # Auto-generated per-package option reference (Markdown), produced
+        # via `nixosOptionsDoc` against each package's `options` attrset.
+        # Three packages for now; future passes will scale to all 61.
+        reference =
+          let
+            ref = import ./nix/reference.nix {
+              inherit pkgs;
+              inherit (pkgs) lib;
+            };
+          in
+          ref.mkAllReferences {
+            packages = [
+              {
+                path = ../kix/packages/echo-server;
+                name = "echo-server";
+              }
+              {
+                path = ../kix/packages/cert-manager;
+                name = "cert-manager";
+              }
+              {
+                path = ../kix/packages/cilium;
+                name = "cilium";
+              }
+            ];
+          };
+
+        site = pkgs.buildNpmPackage {
+          pname = "kix-docs";
+          version = "0.0.0";
+
+          src = ./.;
+
+          # To regenerate after dep changes: set to lib.fakeHash, rebuild,
+          # paste the "got: sha256-…" hash from the error.
+          npmDepsHash = "sha256-AW84aqCQBvnO07QMAcsc9H1m/M1tiMytz+rVS0IApy8=";
+
+          # Astro/Starlight have no install scripts we care about; keep
+          # the build hermetic.
+          npmFlags = [ "--ignore-scripts" ];
+
+          # Drop generated content into the Starlight tree BEFORE `npm run build`:
+          # - Snippets land under `_snippets/` (underscore-prefixed → not routable,
+          #   reusable via include/import from real pages).
+          # - Per-package reference Markdown lands under `reference/package-catalog/`,
+          #   overwriting any placeholder pages Phase 2A created for these names.
+          #   Generated content wins.
+          # Drop generated content into the source tree before `npm run build`:
+          # - Snippets land under `src/snippets/` (OUTSIDE the Starlight
+          #   content collection so they're not parsed as MDX and not
+          #   archived by starlight-versions). Pages reach them with
+          #   Vite `?raw` imports.
+          # - Per-package reference Markdown lands under
+          #   `src/content/docs/reference/package-catalog/`, overwriting
+          #   any placeholder pages Phase 2A wrote for these names.
+          #   Generated content wins.
+          # `--no-preserve=mode` + chmod so the copies are writable —
+          # starlight-versions writes the v0.1 archive in-tree at build
+          # time, and files from the Nix store arrive read-only.
+          preBuild = ''
+            mkdir -p src/snippets
+            cp -r --no-preserve=mode ${snippets}/. src/snippets/
+            chmod -R u+w src/snippets
+            mkdir -p src/content/docs/reference/package-catalog
+            cp -r --no-preserve=mode ${reference}/. src/content/docs/reference/package-catalog/
+            chmod -R u+w src/content/docs/reference/package-catalog
+          '';
+
+          # `npm run build` writes the static site to ./dist.
+          installPhase = ''
+            runHook preInstall
+            mkdir -p $out
+            cp -r dist/* $out/
+            runHook postInstall
+          '';
+
+          meta = {
+            description = "Kix documentation site (Astro Starlight)";
+            platforms = pkgs.lib.platforms.unix;
+          };
+        };
+
+        default = site;
+      });
+
+      devShells = forAllSystems (pkgs: {
+        default = pkgs.mkShell {
+          packages = [
+            pkgs.nodejs_22
+            pkgs.prefetch-npm-deps
+          ];
+        };
+      });
+
+      # `nix run ./docs#dev` — one-shot dev workflow:
+      #   1. Build the snippets + reference Nix derivations.
+      #   2. Sync their outputs into the writable source tree.
+      #   3. `npm install` if node_modules is missing.
+      #   4. Start the Astro dev server with HMR.
+      #
+      # Run from the kixpkgs repo root. The script expects cwd to contain
+      # the `docs/` directory.
+      apps = forAllSystems (pkgs: {
+        dev = {
+          type = "app";
+          program = toString (
+            pkgs.writeShellScript "kix-docs-dev" ''
+              set -euo pipefail
+
+              if [ ! -f docs/package.json ]; then
+                echo "error: run \`nix run ./docs#dev\` from the kixpkgs repo root" >&2
+                echo "       (cwd must contain a docs/ directory)" >&2
+                exit 1
+              fi
+
+              export PATH=${
+                pkgs.lib.makeBinPath [
+                  pkgs.nodejs_22
+                  pkgs.nix
+                  pkgs.coreutils
+                ]
+              }:$PATH
+              NIX_FLAGS="--extra-experimental-features nix-command --extra-experimental-features flakes --extra-experimental-features pipe-operators"
+
+              echo "→ building snippets pipeline"
+              snip=$(nix build ./docs#snippets $NIX_FLAGS --impure --no-link --print-out-paths)
+
+              echo "→ building reference pipeline"
+              ref=$(nix build ./docs#reference $NIX_FLAGS --no-link --print-out-paths)
+
+              echo "→ syncing generated content into docs/src"
+              mkdir -p docs/src/snippets docs/src/content/docs/reference/package-catalog
+              cp -r --no-preserve=mode "$snip"/. docs/src/snippets/
+              cp -r --no-preserve=mode "$ref"/. docs/src/content/docs/reference/package-catalog/
+              chmod -R u+w docs/src/snippets docs/src/content/docs/reference/package-catalog
+
+              cd docs
+
+              if [ ! -d node_modules ]; then
+                echo "→ installing npm dependencies (first run)"
+                npm install
+              fi
+
+              echo "→ starting Astro dev server"
+              exec npm run dev
+            ''
+          );
+        };
+      });
+    };
+}

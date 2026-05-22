@@ -1,0 +1,4 @@
+---
+title: "`mkResource`"
+description: TODO
+---
