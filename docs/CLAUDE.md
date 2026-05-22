@@ -1,0 +1,231 @@
+# Kix Docs Authoring Guidance
+
+This file is for LLMs and maintainers writing the Kix documentation site. It
+adds Kix-specific judgment on top of the Diátaxis system:
+https://diataxis.fr/
+
+Do not treat this as a generic writing guide. Assume the model already knows
+Diátaxis. The work here is keeping Kix docs approachable, correctly sequenced,
+and connected across tutorials, how-to guides, reference, and explanation.
+
+## Goal
+
+Kix docs should feel like an experienced engineer walking another engineer
+through a system that is powerful but unfamiliar. Be direct, concrete, and
+friendly. A little informal tone is fine; cleverness is not worth it if it
+makes the idea harder to grasp.
+
+The reader is expected to know Kubernetes basics, but may have little or no
+Nix experience. Nix syntax, Kix dependency wiring, and package/instance
+boundaries are the biggest places to slow down and teach deliberately.
+
+## Source of Truth
+
+- The docs site lives under `docs/src/content/docs/`.
+- The canonical planning issue is:
+  https://github.com/adamcharnock/kixpkgs/issues/20
+- The example repo guidance in `kix-examples/CLAUDE.md` applies when writing
+  tutorial/example material, especially around concept sequencing and inline
+  comments.
+- Prefer current code over older prose for reference facts. In particular,
+  check CLI facts against `cli/kix-cli/src/cli.rs` and command behavior against
+  `cli/kix-cli/src/commands/`.
+- Treat older broad docs as source material, not truth. Verify before importing
+  from `docs-legacy/`, `docs/HANDBOOK.md`, `docs/FEATURE-CATALOG.md`,
+  `ROADMAP.md`, `MAJOR_FEATURES.md`, or raw `v2_discussions/` notes.
+
+## Diátaxis Mode
+
+Each page must have one job. Do not blur modes just because the nearby concept
+is interesting.
+
+Tutorials are lessons. They build skill by leading the reader through a working
+state. Use them to introduce concepts in the planned order, one layer at a
+time.
+
+How-to guides are recipes. They assume the reader knows the concepts and wants
+to accomplish one task. Do not re-teach the mental model; link to the tutorial
+or explanation that does.
+
+Reference pages describe the machinery. Be complete, terse, and easy to scan.
+Do not teach by story. Do not bury defaults, types, flags, or edge cases in
+paragraphs when a table or list is clearer.
+
+Explanation pages build understanding. They answer why the system works this
+way, what tradeoffs are involved, and how concepts relate. Do not turn them
+into step-by-step procedures.
+
+## Build on What Came Before
+
+Never leave the reader to infer missing prerequisites.
+
+- Before writing a page, identify what the reader must already know.
+- If that knowledge is part of the tutorial path, link to the tutorial that
+  introduced it.
+- If it is conceptual background, link to the explanation page.
+- If it is a specific API, option, command, helper, or schema field, link to
+  reference.
+- If the page depends on an example file, link to the file or example heading
+  instead of repeating a large block of code.
+
+For tutorials, assume the reader is moving linearly. Do not use `deps`, `ref`,
+`out`, aliases, auto-instantiation, flavors, imports, scorecards, or deploy
+graph details before the tutorial sequence has introduced them. If a later
+concept must appear early, name it lightly and promise the later tutorial.
+
+Good pattern:
+
+> For now, treat `out` as the public interface another instance exposes. The
+> graph tutorial explains why these references also affect deploy order.
+
+Bad pattern:
+
+> This works because Nix string context propagates dependency metadata into
+> the activation DAG.
+
+That statement may be true, but it arrives too early for a beginner tutorial.
+
+## Cross-Linking
+
+Cross-linking is part of the teaching, not decoration. Each page should help a
+reader choose their next level of detail without feeling dumped into a
+different kind of doc by surprise.
+
+Use normal inline links for definitions already in the reader's path. Use a
+standard callout when the link changes Diátaxis mode.
+
+Use these labels consistently:
+
+```md
+:::tip[Try it as a tutorial]
+Work through [First local package and service-to-service dependency](../tutorials/06-first-local-package-and-service-to-service-dependency/)
+if you want to learn this by building it from scratch.
+:::
+
+:::tip[Use it in a task]
+See [Wire cross-namespace dependencies explicitly](../how-to/debug-dependency-wiring/wire-cross-namespace-dependencies-explicitly/)
+when you already know the model and just need the steps.
+:::
+
+:::note[Reference]
+See [`deps`](../reference/instance-schema/deps/) for the exact instance schema.
+:::
+
+:::note[Explanation]
+See [Dependency resolution and why explicit deps matter](../explanation/dependency-resolution-and-why-explicit-deps-matter/)
+for the design reasoning behind this rule.
+:::
+```
+
+Callout rules:
+
+- Use at most two mode-switch callouts near the point where the reader would
+  naturally ask for more.
+- Do not stack all four quadrants at the end of every page.
+- Link to the most specific page available, not a section index.
+- Make the sentence say why the reader would follow the link.
+- Keep the link text human. Avoid naked filenames unless the file itself is
+  the thing the reader needs.
+
+## Tutorials
+
+Tutorials should make progress feel steady and unsurprising.
+
+- Start with what the reader will build and what they should already know.
+- Keep each tutorial focused on one new brick.
+- Prefer small working clusters over abstract fragments.
+- Show commands the reader can run, then show how to inspect the result.
+- Introduce Nix syntax only when the page needs it.
+- When a Nix construct appears for the first time, add a one-sentence note.
+- Keep deeper mechanics out of the main flow; link to explanation/reference.
+- End by naming what the reader has learned and what the next tutorial adds.
+
+Code in tutorials should carry teaching comments where they reduce context
+switching. Preserve those comments when editing. If a snippet is imported from
+examples, do not duplicate the whole file in prose; explain what to look for
+and link to the file or rendered snippet.
+
+## How-To Guides
+
+How-to guides should help a competent reader finish a task quickly.
+
+- Title pages as tasks: "Expose a service with Ingress", not "Ingress".
+- State assumptions briefly.
+- Give the shortest reliable path first.
+- Include checks that prove the task worked.
+- Add troubleshooting only for likely failure modes.
+- Link to tutorials for learning and explanation pages for design context.
+- Avoid broad conceptual introductions.
+
+If the guide has many variants, split it. A how-to that tries to cover every
+cluster provider, every secret backend, and every deploy mode is usually three
+guides and one reference page.
+
+## Reference
+
+Reference must be accurate before it is elegant.
+
+- Verify names, defaults, flags, types, and behavior against current code.
+- Prefer tables for schema fields, CLI flags, outputs, and defaults.
+- Include compact examples only when they clarify usage.
+- Say whether content is generated or hand-maintained.
+- Do not make reference depend on tutorial order.
+- Link out to how-to guides for common tasks and explanation for rationale.
+
+When documenting generated or generated-adjacent material, prefer improving the
+generator over hand-editing pages that will drift.
+
+## Explanation
+
+Explanation pages should make the system easier to reason about.
+
+- Start from a real confusion a Kix user will have.
+- Explain tradeoffs and consequences, not just architecture.
+- Compare with familiar Kubernetes/Helm/Kustomize/GitOps ideas where useful.
+- Use diagrams or short examples when they clarify a relationship.
+- Link to reference for exact fields and to tutorials/how-to guides for action.
+- Avoid turning explanation into a dumping ground for every fact about a topic.
+
+Good explanation writing makes future tutorials shorter because the reader can
+leave the lesson, understand the model, and come back.
+
+## Examples and Snippets
+
+The docs can render snippets extracted from `kix-examples`. Prefer that for
+code that should stay tested and tied to a real example.
+
+- Use `Snippet.astro` for substantial Nix examples.
+- Keep snippets small enough to read in one screen.
+- Let code comments teach the local detail.
+- In prose, explain why the snippet matters and what changes after using it.
+- Do not repeat long code blocks that already live in an example file.
+- If a file is mostly unchanged from a prior example, say so and link back.
+
+## Voice
+
+Write for engineers, but do not make the reader prove they belong.
+
+- Prefer concrete nouns and consequences.
+- Prefer "Kix uses this to..." over "This enables powerful abstractions...".
+- Avoid unexplained jargon, even if it is precise.
+- Avoid hype, jokes that carry meaning, and cute metaphors.
+- Use contractions when they make the sentence more natural.
+- Keep paragraphs short.
+- Use bullets when the reader is scanning choices or constraints.
+
+The best tone is: clear enough for a tired reader, precise enough for a
+skeptical one.
+
+## Page Checklist
+
+Before finishing a docs page, check:
+
+- The page has one Diátaxis mode and does not drift.
+- The reader's prerequisites are stated or linked.
+- New concepts are introduced in the right order.
+- Commands, flags, schema fields, and defaults were checked against code.
+- Cross-links point to the most specific useful page.
+- Mode-switch links use the standard callout labels.
+- Code comments still teach the important local details.
+- The page does not repeat long code that should be a snippet or source link.
+- The title says what the page helps the reader do, know, or understand.
