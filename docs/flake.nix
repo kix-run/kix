@@ -50,13 +50,12 @@
               lib = pkgs.lib;
             };
           in
-          snippetLib.mkSnippets {
-            sources = [
-              {
-                file = "${kix-examples}/examples/06-scorecards/scorecard.nix";
-                name = "06-scorecards";
-              }
-            ];
+          # Auto-discovery: every `.nix` file under kix-examples/examples
+          # with at least one `# region:NAME` marker is picked up
+          # automatically. To add a snippet: add the marker. No
+          # registration step.
+          snippetLib.mkSnippetsFromTree {
+            root = "${kix-examples}/examples";
           };
 
         # Auto-generated per-package option reference (Markdown), produced

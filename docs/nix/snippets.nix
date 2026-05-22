@@ -146,9 +146,7 @@ let
       inherit files manifestEntry;
     };
 
-in
-{
-  mkSnippets =
+  mkSnippetsImpl =
     { sources }:
     let
       processed = map processSource sources;
@@ -168,4 +166,66 @@ in
       ${copyCommands}
       cp ${manifestFile} $out/manifest.json
     '';
+
+  # Auto-discover: scan a directory tree for `.nix` files containing at
+  # least one `# region:NAME` marker. Each discovered file becomes a
+  # source; the snippet output path mirrors the file's location under
+  # the tree, with `.nix` stripped from the filename component.
+  #
+  # Example: with `root = "${kix-examples}/examples"`, a marker inside
+  # `06-scorecards/scorecard.nix` lands at
+  # `$out/06-scorecards/scorecard/<region>.nix`.
+  mkSnippetsFromTreeImpl =
+    { root }:
+    let
+      # Recursively list .nix files under `dir`, returning records of
+      # { abs; rel; } where `rel` is the path relative to root.
+      listNixFiles =
+        dir: prefix:
+        let
+          entries = builtins.readDir dir;
+        in
+        lib.concatLists (
+          lib.mapAttrsToList (
+            entryName: type:
+            let
+              entryPath = dir + "/${entryName}";
+              relPath = if prefix == "" then entryName else "${prefix}/${entryName}";
+            in
+            if type == "directory" then
+              listNixFiles entryPath relPath
+            else if type == "regular" && lib.hasSuffix ".nix" entryName then
+              [
+                {
+                  abs = entryPath;
+                  rel = relPath;
+                }
+              ]
+            else
+              [ ]
+          ) entries
+        );
+
+      # File contains at least one `# region:NAME` line?
+      hasRegions =
+        file:
+        let
+          lines = lib.splitString "\n" (builtins.readFile file);
+        in
+        lib.any (line: builtins.match startRe line != null) lines;
+
+      allNixFiles = listNixFiles root "";
+      withRegions = builtins.filter (f: hasRegions f.abs) allNixFiles;
+
+      sources = map (f: {
+        file = f.abs;
+        name = lib.removeSuffix ".nix" f.rel;
+      }) withRegions;
+    in
+    mkSnippetsImpl { inherit sources; };
+
+in
+{
+  mkSnippets = mkSnippetsImpl;
+  mkSnippetsFromTree = mkSnippetsFromTreeImpl;
 }

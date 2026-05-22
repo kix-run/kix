@@ -71,25 +71,34 @@ later pass.
 
 ## Snippets
 
-The snippet pipeline extracts named regions from `.nix` source files and
-drops them into `src/snippets/<source>/<region>.nix` as raw Nix code (no
-frontmatter, no fence).
+The snippet pipeline auto-discovers `.nix` files containing `# region:NAME`
+markers under `kix-examples/examples/` and drops each region into
+`src/snippets/<relative-path-without-.nix>/<region>.nix` as raw Nix
+code (no frontmatter, no fence). No registration step.
 
 **Add a new snippet:**
 
-1. Wrap the code you want to expose with `# region:NAME` and `# endregion`
-   markers (one region per name; no nesting). Markers must be on their own line.
-2. Register the source in `docs/flake.nix`, in the `snippets` derivation's
-   `sources` list:
-   ```nix
-   sources = [
-     { file = "${kix-examples}/examples/06-scorecards/scorecard.nix"; name = "06-scorecards"; }
-     { file = "${kix-examples}/examples/04-typed-options/cluster.nix";  name = "04-typed-options"; }
-   ];
-   ```
-3. Rebuild — the pipeline emits `src/snippets/<name>/<region>.nix`.
+1. In any `.nix` file under `kix-examples/examples/`, wrap the code you
+   want to expose:
 
-**Use a snippet in a docs page** (use an `.mdx` page, not `.md`):
+   ```nix
+   # region:isProxy
+   isProxy =
+     inst:
+     builtins.elem "reverse-proxy" (inst._meta.packageMeta.provides or [ ]);
+   # endregion
+   ```
+
+   Rules: markers on their own line; one region per name per file;
+   no nesting; region name matches `[a-zA-Z][a-zA-Z0-9-]*`.
+
+2. Rebuild. The output path mirrors the source path. For example
+   `examples/06-scorecards/scorecard.nix` with a `# region:isProxy`
+   marker emits `src/snippets/06-scorecards/scorecard/isProxy.nix`.
+
+That's it — no edits to `docs/flake.nix`.
+
+**Use a snippet in a docs page** (page must be `.mdx`, not `.md`):
 
 ```mdx
 ---
@@ -98,7 +107,7 @@ description: ...
 ---
 
 import { Code } from '@astrojs/starlight/components';
-import isProxyCode from '/src/snippets/06-scorecards/isProxy.nix?raw';
+import isProxyCode from '/src/snippets/06-scorecards/scorecard/isProxy.nix?raw';
 
 Scorecard rules identify reverse-proxy packages with this helper:
 

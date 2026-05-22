@@ -3,4 +3,19 @@ title: Kix documentation
 description: Nix-evaluated Kubernetes packages and clusters
 ---
 
+import { Code } from '@astrojs/starlight/components';
+import isProxyCode from '/src/snippets/06-scorecards/scorecard/isProxy.nix?raw';
+
 Welcome. Use the sidebar to navigate.
+
+## Live snippet demo
+
+This snippet is extracted automatically from
+[`kix-examples/examples/06-scorecards/scorecard.nix`](https://github.com/kix-ops/kix-examples/blob/main/examples/06-scorecards/scorecard.nix)
+at build time. Edit the source over there, rebuild, and this block updates.
+
+<Code
+  code={isProxyCode}
+  lang="nix"
+  title="kix-examples/examples/06-scorecards/scorecard.nix → isProxy"
+/>
