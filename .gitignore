@@ -1,7 +1,12 @@
 result
 cluster-dump/
+cluster-dump.zip
 .direnv
 .cache
+
+# OS / IDE
+.DS_Store
+.idea/
 
 # Devenv
 .devenv*
