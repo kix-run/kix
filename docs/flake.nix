@@ -1,7 +1,7 @@
 # Kix documentation site — Astro Starlight, built as a Nix derivation.
 #
-# Build:  nix build ./docs#site --extra-experimental-features 'nix-command flakes pipe-operators' --impure
-# Dev:    nix run  ./docs#dev  --extra-experimental-features 'nix-command flakes pipe-operators' --impure
+# Build:  nix build ./docs#site --extra-experimental-features 'nix-command flakes pipe-operators'
+# Dev:    nix run  ./docs#dev  --extra-experimental-features 'nix-command flakes pipe-operators'
 #
 # This is a true sibling subflake — the top-level kixpkgs flake does NOT
 # depend on it. The `kixpkgs` input below is reserved for future use
@@ -13,10 +13,11 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     kixpkgs.url = "path:../";
+    kix-examples.url = "git+file:///Users/adam/ghq/github.com/adamcharnock/kix-examples";
   };
 
   outputs =
-    { nixpkgs, ... }:
+    { nixpkgs, kix-examples, ... }:
     let
       systems = [
         "x86_64-linux"
@@ -43,9 +44,7 @@
           snippetLib.mkSnippets {
             sources = [
               {
-                # TODO: replace with a proper flake input once kix-examples
-                # is git-addressable here.
-                file = "/Users/adam/ghq/github.com/adamcharnock/kix-examples/examples/06-scorecards/scorecard.nix";
+                file = "${kix-examples}/examples/06-scorecards/scorecard.nix";
                 name = "06-scorecards";
               }
             ];
@@ -176,7 +175,7 @@
               NIX_FLAGS="--extra-experimental-features nix-command --extra-experimental-features flakes --extra-experimental-features pipe-operators"
 
               echo "→ building snippets pipeline"
-              snip=$(nix build ./docs#snippets $NIX_FLAGS --impure --no-link --print-out-paths)
+              snip=$(nix build ./docs#snippets $NIX_FLAGS --no-link --print-out-paths)
 
               echo "→ building reference pipeline"
               ref=$(nix build ./docs#reference $NIX_FLAGS --no-link --print-out-paths)

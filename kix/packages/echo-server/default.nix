@@ -26,10 +26,16 @@ in
         tag = "1.27-alpine";
         pullPolicy = "IfNotPresent";
       };
+      description = ''
+        Container image used by the echo-server `Deployment`. Attrset with
+        `repository`, `tag`, and `pullPolicy` keys, applied directly to the
+        pod's container spec.
+      '';
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;
       default = 1;
+      description = "Number of `Deployment` replicas for the echo-server pods.";
     };
     service = lib.mkOption {
       type = lib.types.anything;
@@ -37,10 +43,18 @@ in
         type = "ClusterIP";
         port = 80;
       };
+      description = ''
+        `Service` exposure for the echo-server. Attrset with `type` (e.g.
+        `ClusterIP`, `NodePort`) and `port` keys.
+      '';
     };
     message = lib.mkOption {
       type = lib.types.str;
       default = "kix echo server is running";
+      description = ''
+        Plain-text response body returned by the echo-server at `/`. Useful
+        for distinguishing instances during connectivity checks.
+      '';
     };
   };
 

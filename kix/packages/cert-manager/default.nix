@@ -53,6 +53,10 @@
         tag = "v1.17.1";
         pullPolicy = "IfNotPresent";
       };
+      description = ''
+        Image for the cert-manager controller `Deployment`. Attrset with
+        `repository`, `tag`, and `pullPolicy` keys.
+      '';
     };
     webhook = lib.mkOption {
       type = lib.types.anything;
@@ -63,6 +67,11 @@
         };
         replicaCount = 1;
       };
+      description = ''
+        Webhook component config. Sets the `image` attrset and
+        `replicaCount` for the admission webhook that validates and mutates
+        cert-manager CRs.
+      '';
     };
     cainjector = lib.mkOption {
       type = lib.types.anything;
@@ -73,6 +82,11 @@
         };
         replicaCount = 1;
       };
+      description = ''
+        CA-injector component config. Sets the `image` attrset and
+        `replicaCount` for the controller that injects CA bundles into
+        webhooks, APIServices, and CRDs.
+      '';
     };
     acmesolver = lib.mkOption {
       type = lib.types.anything;
@@ -82,32 +96,60 @@
           tag = "v1.17.1";
         };
       };
+      description = ''
+        ACME-solver image used by cert-manager to spin up HTTP-01
+        challenge-response pods. Image attrset with `repository` and `tag`.
+      '';
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;
       default = 1;
+      description = "Number of replicas for the cert-manager controller `Deployment`.";
     };
     installCRDs = lib.mkOption {
       type = lib.types.bool;
       default = true;
+      description = ''
+        Whether kix should emit the cert-manager CRDs (`Certificate`,
+        `Issuer`, `Challenge`, etc.). Set to `false` when CRDs are managed
+        out-of-band.
+      '';
     };
     resources = lib.mkOption {
       type = lib.types.nullOr lib.types.anything;
       default = null;
+      description = ''
+        Optional resource requests/limits attrset applied to the controller
+        container. `null` leaves the container's resource block unset.
+      '';
     };
     dns01RecursiveNameservers = lib.mkOption {
       type = lib.types.str;
       default = "";
+      description = ''
+        Comma-separated list of recursive nameservers used to verify DNS-01
+        ACME challenges (e.g. `8.8.8.8:53,1.1.1.1:53`). Empty string falls
+        back to the system resolver.
+      '';
     };
     dns01RecursiveNameserversOnly = lib.mkOption {
       type = lib.types.bool;
       default = false;
+      description = ''
+        If `true`, only the nameservers in `dns01RecursiveNameservers` are
+        used for DNS-01 self-checks (skipping cluster DNS entirely).
+      '';
     };
     prometheus = lib.mkOption {
       type = lib.types.anything;
       default = {
         enabled = false;
       };
+      description = ''
+        Prometheus scrape config for cert-manager. When `enabled` is true,
+        kix wires up the metrics endpoint annotations on the controller
+        `Service`.
+      '';
     };
   };
 

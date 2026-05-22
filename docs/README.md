@@ -5,7 +5,7 @@ Astro Starlight site for Kix. Built as a true sibling Nix subflake.
 ## Build
 
 ```bash
-nix build ./docs#site --extra-experimental-features 'nix-command flakes pipe-operators' --impure
+nix build ./docs#site --extra-experimental-features 'nix-command flakes pipe-operators'
 ```
 
 The static site is written to `result/`. Serve it with any static file server, e.g.:
@@ -14,16 +14,12 @@ The static site is written to `result/`. Serve it with any static file server, e
 python3 -m http.server -d result 8000
 ```
 
-`--impure` is currently required because the snippet derivation hardcodes the
-absolute path to the sibling `kix-examples` repo. This will go away when
-`kix-examples` is wired up as a proper flake input.
-
 ## Dev server (live reload)
 
 One command — run from the kixpkgs repo root:
 
 ```bash
-nix run ./docs#dev --extra-experimental-features 'nix-command flakes pipe-operators' --impure
+nix run ./docs#dev --extra-experimental-features 'nix-command flakes pipe-operators'
 ```
 
 This builds the snippet + reference pipelines, syncs their output into
@@ -39,7 +35,7 @@ hot-reload without restarting.
 If `nix run ./docs#dev` isn't an option, do it by hand:
 
 ```bash
-nix build ./docs#snippets  --impure --no-link --print-out-paths   # → /nix/store/...
+nix build ./docs#snippets          --no-link --print-out-paths   # → /nix/store/...
 nix build ./docs#reference         --no-link --print-out-paths   # → /nix/store/...
 # Copy each output into the docs/src tree (see flake.nix preBuild for paths)
 nix develop ./docs

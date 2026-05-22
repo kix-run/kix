@@ -126,14 +126,18 @@ let
 
   # Per-source processing: produces a list of { path; subdir; filename; text; }
   # describing the files to emit, plus a manifest entry.
+  #
+  # `file` may be a Nix path OR a string (including a flake-store
+  # interpolation like `"${kix-examples}/examples/.../scorecard.nix"`).
+  # `builtins.readFile` accepts both, so we keep the value as-is and
+  # don't coerce.
   processSource =
     { file, name }:
     let
-      filePath = if builtins.isPath file then file else /. + file;
-      fileStr = toString filePath;
+      fileStr = toString file;
       sourceBasename = baseNameOf fileStr;
       regions = extractRegions {
-        file = filePath;
+        inherit file;
         fileLabel = fileStr;
       };
       files = map (

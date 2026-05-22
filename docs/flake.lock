@@ -15,10 +15,66 @@
         "type": "github"
       }
     },
+    "crane_2": {
+      "locked": {
+        "lastModified": 1775839657,
+        "narHash": "sha256-SPm9ck7jh3Un9nwPuMGbRU04UroFmOHjLP56T10MOeM=",
+        "owner": "ipetkov",
+        "repo": "crane",
+        "rev": "7cf72d978629469c4bd4206b95c402514c1f6000",
+        "type": "github"
+      },
+      "original": {
+        "owner": "ipetkov",
+        "repo": "crane",
+        "type": "github"
+      }
+    },
+    "kix-examples": {
+      "inputs": {
+        "kixpkgs": "kixpkgs",
+        "nixpkgs": "nixpkgs"
+      },
+      "locked": {
+        "lastModified": 1779479789,
+        "narHash": "sha256-SzwvQEXHqyfeXHKPXylR62RN5bTPX75ZtwzdFMfj8Vw=",
+        "ref": "refs/heads/main",
+        "rev": "16393633a60ef416e333e8b6e30b40ebf822064e",
+        "revCount": 11,
+        "type": "git",
+        "url": "file:///Users/adam/ghq/github.com/adamcharnock/kix-examples"
+      },
+      "original": {
+        "type": "git",
+        "url": "file:///Users/adam/ghq/github.com/adamcharnock/kix-examples"
+      }
+    },
     "kixpkgs": {
       "inputs": {
         "crane": "crane",
-        "nixpkgs": "nixpkgs"
+        "nixpkgs": [
+          "kix-examples",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1779367372,
+        "narHash": "sha256-mLT5JG9HfBdL0DpvLSdueqeOjrOcF5+AE3cTCHKUTaM=",
+        "ref": "refs/heads/main",
+        "rev": "d9d68ce3c838ecba65d7036f1b4ac13a457fd2d8",
+        "revCount": 378,
+        "type": "git",
+        "url": "file:///Users/adam/ghq/github.com/adamcharnock/kixpkgs"
+      },
+      "original": {
+        "type": "git",
+        "url": "file:///Users/adam/ghq/github.com/adamcharnock/kixpkgs"
+      }
+    },
+    "kixpkgs_2": {
+      "inputs": {
+        "crane": "crane_2",
+        "nixpkgs": "nixpkgs_2"
       },
       "locked": {
         "path": "../",
@@ -31,6 +87,22 @@
       "parent": []
     },
     "nixpkgs": {
+      "locked": {
+        "lastModified": 1779259093,
+        "narHash": "sha256-7DKWmH23hL2eYdkxCKeqj2i+yljTKuU+3Nk1UPHOnxc=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "d99b013d5d1931ad77fe3912ed218170dec5d9a4",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixpkgs-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs_2": {
       "locked": {
         "lastModified": 1772736753,
         "narHash": "sha256-au/m3+EuBLoSzWUCb64a/MZq6QUtOV8oC0D9tY2scPQ=",
@@ -46,7 +118,7 @@
         "type": "github"
       }
     },
-    "nixpkgs_2": {
+    "nixpkgs_3": {
       "locked": {
         "lastModified": 1779414690,
         "narHash": "sha256-gOTcX/9MZVMUE0Xvb4IEcv+0TQJkZFNEnL757ljU360=",
@@ -64,8 +136,9 @@
     },
     "root": {
       "inputs": {
-        "kixpkgs": "kixpkgs",
-        "nixpkgs": "nixpkgs_2"
+        "kix-examples": "kix-examples",
+        "kixpkgs": "kixpkgs_2",
+        "nixpkgs": "nixpkgs_3"
       }
     }
   },

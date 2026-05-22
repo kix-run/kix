@@ -48,14 +48,11 @@ let
     { packagePath, packageName }:
     let
       options = evalPackageOptions { inherit packagePath packageName; };
-      # `warningsAreErrors = false`: Kix packages don't yet describe every
-      # option, and a missing `description` is otherwise treated as a hard
-      # failure. We render whatever's there; the missing-description gap
-      # is a real one but should be fixed in the packages, not by failing
-      # the docs build.
+      # Strict mode: every option must declare a `description`. Missing
+      # descriptions fail the docs build so reference pages stay useful.
       optionsDoc = pkgs.nixosOptionsDoc {
         inherit options;
-        warningsAreErrors = false;
+        warningsAreErrors = true;
       };
     in
     pkgs.runCommand "kix-reference-${packageName}"
