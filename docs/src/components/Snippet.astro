@@ -1,0 +1,43 @@
+---
+// Snippet — render a region extracted by `docs/nix/snippets.nix`.
+//
+// Usage:
+//   import isProxy from '/src/snippets/06-scorecards/scorecard/isProxy.json';
+//   <Snippet {...isProxy} />
+//
+// Props match the JSON sidecar shape emitted by the snippet pipeline.
+import { Code } from '@astrojs/starlight/components';
+
+interface Props {
+  code: string;
+  source: string;
+  startLine: number;
+  endLine: number;
+  url: string | null;
+  lang?: string;
+}
+
+const { code, source, startLine, endLine, url, lang = 'nix' } = Astro.props;
+const title = `${source} (L${startLine}–L${endLine})`;
+---
+
+<Code {code} {lang} {title} />
+
+{url && (
+  <p class="snippet-source">
+    <a href={url} target="_blank" rel="noopener">
+      View source on GitHub ↗
+    </a>
+  </p>
+)}
+
+<style>
+  .snippet-source {
+    margin-top: 0.5rem;
+    text-align: right;
+    font-size: 0.85em;
+  }
+  .snippet-source a {
+    color: var(--sl-color-text-accent);
+  }
+</style>

@@ -106,29 +106,32 @@ title: "Scorecards explained"
 description: ...
 ---
 
-import { Code } from '@astrojs/starlight/components';
-import isProxyCode from '/src/snippets/06-scorecards/scorecard/isProxy.nix?raw';
+import Snippet from '/src/components/Snippet.astro';
+import isProxy from '/src/snippets/06-scorecards/scorecard/isProxy.json';
 
 Scorecard rules identify reverse-proxy packages with this helper:
 
-<Code code={isProxyCode} lang="nix" title="06-scorecards/scorecard.nix → isProxy" />
+<Snippet {...isProxy} />
 ```
 
-The `?raw` suffix is a Vite import that reads the file as a string at
-build time. `<Code>` is Starlight's syntax-highlighting code block, backed
-by Expressive Code/Shiki. Highlighting, line numbers, and copy-to-clipboard
-all work.
+`<Snippet>` (from `docs/src/components/Snippet.astro`) renders the code
+through Starlight's `<Code>` component (syntax highlighting, copy-to-clipboard,
+title showing the line range) and adds a "View source on GitHub" link
+pointing at the exact line range in the kix-examples repo at the locked
+commit. The URL is computed by the snippet pipeline from `sourceUrlBase`
+in `docs/flake.nix`, which pins to `kix-examples.rev` from `flake.lock` —
+links never rot under `main`.
 
-If you'd rather embed the snippet inline as a plain fenced block (no
-component), do this:
+**Raw code only (no link, no component):** the pipeline also emits a
+`.nix` sidecar with just the region body. Use this if you want to render
+the snippet your own way:
 
 ```mdx
-import isProxyCode from '/src/snippets/06-scorecards/isProxy.nix?raw';
+import { Code } from '@astrojs/starlight/components';
+import isProxyCode from '/src/snippets/06-scorecards/scorecard/isProxy.nix?raw';
 
-<pre><code class="language-nix">{isProxyCode}</code></pre>
+<Code code={isProxyCode} lang="nix" />
 ```
-
-— but `<Code>` is the right tool 99% of the time.
 
 ## Plugins
 

@@ -76,6 +76,10 @@ let
                 {
                   name = state.current.name;
                   body = builtins.concatStringsSep "\n" state.current.bodyLines;
+                  # Line numbers of the first/last body lines (the `# region:`
+                  # and `# endregion` lines themselves are excluded).
+                  startLine = state.current.startLine + 1;
+                  endLine = state.lineNo - 1;
                 }
               ];
               lineNo = state.lineNo + 1;
@@ -108,38 +112,69 @@ let
   # Per-source processing: produces a list of { drv; subdir; filename; }
   # describing the files to emit, plus a manifest entry.
   #
-  # Emit raw `.nix` source for each region (no frontmatter, no fence).
-  # That makes the snippet directly consumable from MDX pages via
-  # `import body from '/src/snippets/<name>/<region>.nix?raw'` and rendered
-  # with Starlight's `<Code lang="nix" code={body} />`.
+  # Emit TWO files per region:
+  # - `<region>.nix`  — raw code, importable as `?raw` for use with
+  #   Starlight's `<Code lang="nix" code={...} />`.
+  # - `<region>.json` — metadata + code: `{ code, source, startLine,
+  #   endLine, url }`. Importable directly as JSON in MDX; wrap with
+  #   the `<Snippet>` component to render code + a "View source" link.
   #
-  # `file` may be a Nix path OR a string (including a flake-store
-  # interpolation like `"${kix-examples}/examples/.../scorecard.nix"`).
-  # `builtins.readFile` accepts both, so we keep the value as-is and
-  # don't coerce.
+  # `sourceUrlBase` is optional; if null, `url` is omitted.
+  # `file` may be a Nix path OR a flake-store interpolation string —
+  # `builtins.readFile` accepts both, so we don't coerce.
   processSource =
-    { file, name }:
+    {
+      file,
+      name,
+      sourceUrlBase,
+    }:
     let
       fileStr = toString file;
       regions = extractRegions {
         inherit file;
         fileLabel = fileStr;
       };
-      files = map (
+      relPath = "${name}.nix";
+      mkUrl =
         r:
-        let
-          drv = pkgs.writeText "snippet-${name}-${r.name}.nix" r.body;
-        in
-        {
-          subdir = name;
-          filename = "${r.name}.nix";
-          drv = drv;
-        }
-      ) regions;
+        if sourceUrlBase == null then
+          null
+        else
+          "${sourceUrlBase}/${relPath}#L${toString r.startLine}-L${toString r.endLine}";
+      files = builtins.concatLists (
+        map (
+          r:
+          let
+            metadata = {
+              code = r.body;
+              source = relPath;
+              startLine = r.startLine;
+              endLine = r.endLine;
+              url = mkUrl r;
+            };
+            nixDrv = pkgs.writeText "snippet-${name}-${r.name}.nix" r.body;
+            jsonDrv = pkgs.writeText "snippet-${name}-${r.name}.json" (builtins.toJSON metadata);
+          in
+          [
+            {
+              subdir = name;
+              filename = "${r.name}.nix";
+              drv = nixDrv;
+            }
+            {
+              subdir = name;
+              filename = "${r.name}.json";
+              drv = jsonDrv;
+            }
+          ]
+        ) regions
+      );
       manifestEntry = {
         inherit name;
         file = fileStr;
-        regions = map (r: r.name) regions;
+        regions = map (r: {
+          inherit (r) name startLine endLine;
+        }) regions;
       };
     in
     {
@@ -147,9 +182,12 @@ let
     };
 
   mkSnippetsImpl =
-    { sources }:
+    {
+      sources,
+      sourceUrlBase ? null,
+    }:
     let
-      processed = map processSource sources;
+      processed = map (s: processSource (s // { inherit sourceUrlBase; })) sources;
       allFiles = builtins.concatLists (map (p: p.files) processed);
       manifest = {
         sources = map (p: p.manifestEntry) processed;
@@ -175,8 +213,16 @@ let
   # Example: with `root = "${kix-examples}/examples"`, a marker inside
   # `06-scorecards/scorecard.nix` lands at
   # `$out/06-scorecards/scorecard/<region>.nix`.
+  #
+  # `sourceUrlBase` (optional): if set, emitted JSON sidecars include
+  # a `url` pointing to the source line range. Format:
+  # `<sourceUrlBase>/<rel>#L<start>-L<end>`. Example value:
+  # `https://github.com/kix-ops/kix-examples/blob/main/examples`.
   mkSnippetsFromTreeImpl =
-    { root }:
+    {
+      root,
+      sourceUrlBase ? null,
+    }:
     let
       # Recursively list .nix files under `dir`, returning records of
       # { abs; rel; } where `rel` is the path relative to root.
@@ -222,7 +268,7 @@ let
         name = lib.removeSuffix ".nix" f.rel;
       }) withRegions;
     in
-    mkSnippetsImpl { inherit sources; };
+    mkSnippetsImpl { inherit sources sourceUrlBase; };
 
 in
 {

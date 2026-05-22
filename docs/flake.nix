@@ -54,8 +54,15 @@
           # with at least one `# region:NAME` marker is picked up
           # automatically. To add a snippet: add the marker. No
           # registration step.
+          #
+          # `sourceUrlBase` powers the "View source" link in the
+          # `<Snippet>` component. Pinned to the kix-examples commit
+          # currently locked in `flake.lock`, so links never rot under
+          # `main`. Falls back to `main` if the input has no rev (e.g.
+          # dirty working tree without a commit).
           snippetLib.mkSnippetsFromTree {
             root = "${kix-examples}/examples";
+            sourceUrlBase = "https://github.com/kix-ops/kix-examples/blob/${kix-examples.rev or "main"}/examples";
           };
 
         # Auto-generated per-package option reference (Markdown), produced
