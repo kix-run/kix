@@ -1,0 +1,227 @@
+---
+title: "02. Local setup and first run"
+description: "Run the first Kix example locally on kind and make one edit."
+---
+
+import { Steps } from '@astrojs/starlight/components';
+import CommandCwd from '/src/components/CommandCwd.astro';
+
+In this tutorial you will deploy one tiny Kix cluster to kind, port-forward to
+it, and make one config edit. The point is to feel the loop:
+
+<Steps>
+  1. **Edit** the cluster or package.
+  2. **Check** what Kix can prove before touching the cluster.
+  3. **Deploy** the checked activation.
+  4. **Verify** with `kix pf`, `curl`, or `kubectl`.
+</Steps>
+
+## Prerequisites
+
+- Read [Orientation: what Kix is and why it exists](../01-orientation/).
+- Install Nix with flakes enabled.
+- Have Docker, Colima, or OrbStack running.
+- Have `kind`, `kubectl`, and the `kix` CLI available. The next section shows
+  one way to get them.
+
+## Start From The Example Repo
+
+The runnable examples live in the public `kix-examples` repo:
+
+```sh
+git clone https://github.com/kix-ops/kix-examples.git
+cd kix-examples
+```
+<CommandCwd cwd="any parent directory" />
+
+If you already have the repo, use that checkout instead. The commands below
+assume you are at the repo root.
+
+Open the files for the first example:
+
+```text
+flake.nix
+examples/01-hello-world/cluster.nix
+examples/01-hello-world/README.md
+kind-config.yaml
+```
+
+You do not need to understand all of them yet. For now:
+
+- `flake.nix` exposes the example clusters by name;
+- `examples/01-hello-world/cluster.nix` defines the first cluster;
+- `kind-config.yaml` creates a local kind cluster named `kix-demo`.
+
+## Enter A Shell With The Tools
+
+If your machine already has `kix`, `kind`, and `kubectl` on `PATH`, you can use
+your normal shell. If you need the Kix CLI, install it from the public
+`kixpkgs` flake:
+
+```sh
+nix profile install github:kix-ops/kixpkgs#kix
+```
+
+Keep Docker, Colima, or OrbStack running separately. kind needs a
+Docker-compatible daemon to create the local cluster.
+
+Check that Kix can see the example clusters:
+
+```sh
+kix list clusters
+```
+<CommandCwd cwd="kix-examples/" />
+
+You should see `01-hello-world` in the output. If you are not in the example
+repo, point Kix at it explicitly:
+
+```sh
+kix --flake /path/to/kix-examples list clusters
+```
+
+The `--flake` flag tells Kix which flake to evaluate. Without it, Kix uses the
+current directory.
+
+:::note[Reference]
+See [Global flags](../../reference/cli/global-flags/) for the exact shared CLI
+flags, including `--flake` and `--context`.
+:::
+
+## Create The Local Cluster
+
+Start Docker, then create the kind cluster:
+
+```sh
+kind create cluster --config kind-config.yaml
+```
+<CommandCwd cwd="kix-examples/" />
+
+This creates a single-node cluster named `kix-demo` and sets your current
+`kubectl` context to `kind-kix-demo`.
+
+Check that Kubernetes is reachable:
+
+```sh
+kubectl cluster-info
+kubectl get nodes
+```
+
+If you already have this kind cluster, `kind` will say it exists. That is fine;
+continue with the deploy step.
+
+## Your First Kix Deployment
+
+Deploy the first Kix example:
+
+```sh
+kix deploy 01-hello-world -y
+```
+<CommandCwd cwd="kix-examples/" />
+
+The `-y` flag skips the confirmation prompt. On the first deploy, Kix builds the
+cluster, sees there is no previous activation, and applies the resources.
+
+List the packages installed in this Kix cluster:
+
+```sh
+kix list packages --cluster 01-hello-world
+```
+<CommandCwd cwd="kix-examples/" />
+
+You should see an installed `hello-world` instance. You can also ask Kubernetes
+directly:
+
+```sh
+kubectl get pods -n example-01
+kubectl get svc -n example-01
+```
+
+## Reach The Service
+
+The first example installs an `echo-server` package instance named
+`hello-world`. Use `kix pf` to port-forward to its primary workload:
+
+```sh
+kix pf 01-hello-world hello-world 8080:80
+```
+<CommandCwd cwd="kix-examples/" />
+
+Leave that command running. In another terminal, call the service:
+
+```sh
+curl http://localhost:8080/
+```
+
+You should get:
+
+```text
+Hello from Kix!
+```
+
+Stop the port-forward with `Ctrl-C`.
+
+`kix pf` resolves the package instance to the workload Kix built, then delegates
+to `kubectl port-forward`. The package name can also be written as
+`namespace/name` when a cluster has duplicate instance names, but this first
+cluster only has one.
+
+:::tip[Use it in a task]
+See [Use `kix pf`](../../how-to/operate-a-cluster/use-kix-pf/) when you already
+know the model and just need the command details.
+:::
+
+## Make One Edit
+
+Open `examples/01-hello-world/cluster.nix` and find this config:
+
+```nix
+config = {
+  message = "Hello from Kix!";
+};
+```
+
+Change the message:
+
+```nix
+config = {
+  message = "Hello from my laptop!";
+};
+```
+
+Deploy again:
+
+```sh
+kix deploy 01-hello-world -y
+```
+<CommandCwd cwd="kix-examples/" />
+
+Port-forward and curl again:
+
+```sh
+kix pf 01-hello-world hello-world 8080:80
+```
+<CommandCwd cwd="kix-examples/" />
+
+In another terminal:
+
+```sh
+curl http://localhost:8080/
+```
+
+The response should show your new message.
+
+That edit is small, but it proves the core loop: Kix evaluated the flake,
+rebuilt the manifests, applied the changed workload, and left you with a normal
+Kubernetes Service and Pod.
+
+## Before Moving On
+
+You have now used:
+
+- `kix list clusters` to discover cluster names;
+- `kix deploy <cluster> -y` to apply one cluster;
+- `kix list packages --cluster <cluster>` to inspect installed packages;
+- `kix pf <cluster> <package> <local>:<remote>` to reach a workload.
+
+The next tutorial steps back from the running cluster and looks at the repo
+shape that made those commands work.

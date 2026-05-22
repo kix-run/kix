@@ -22,6 +22,12 @@ boundaries are the biggest places to slow down and teach deliberately.
 ## Source of Truth
 
 - The docs site lives under `docs/src/content/docs/`.
+- Use `.mdx` for every page in `docs/src/content/docs/`, even when the page is
+  plain Markdown. This keeps Starlight components available everywhere.
+- For shell command fences, show the expected working directory with
+  `CommandCwd` immediately below the block, for example
+  `<CommandCwd cwd="kix-examples/" />`. If `cwd` names a directory, end it with
+  `/`. If the command can run from anywhere, do not add a `CommandCwd`.
 - The canonical planning issue is:
   https://github.com/adamcharnock/kixpkgs/issues/20
 - The example repo guidance in `kix-examples/CLAUDE.md` applies when writing
@@ -31,8 +37,8 @@ boundaries are the biggest places to slow down and teach deliberately.
   check CLI facts against `cli/kix-cli/src/cli.rs` and command behavior against
   `cli/kix-cli/src/commands/`.
 - Treat older broad docs as source material, not truth. Verify before importing
-  from `docs-legacy/`, `docs/HANDBOOK.md`, `docs/FEATURE-CATALOG.md`,
-  `ROADMAP.md`, `MAJOR_FEATURES.md`, or raw `v2_discussions/` notes.
+  from `docs-legacy/`, `docs-legacy/HANDBOOK.md`, `docs-legacy/FEATURE-CATALOG.md`,
+  `kix/lib/architecture.md`, `ROADMAP.md`, `MAJOR_FEATURES.md`, or raw `v2_discussions/` notes.
 
 ## Diátaxis Mode
 

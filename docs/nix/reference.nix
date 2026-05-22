@@ -2,7 +2,7 @@
 #
 # Imports a Kix package, evaluates its `options` declaration through
 # `lib.evalModules`, and runs the result through `pkgs.nixosOptionsDoc`
-# to emit a CommonMark file per package. Each file gets YAML frontmatter
+# to emit a CommonMark-derived MDX file per package. Each file gets YAML frontmatter
 # so Starlight picks it up under `reference/package-catalog/`.
 #
 # Scope: this phase generates reference for three smoke-test packages
@@ -43,7 +43,7 @@ let
     # Strip `_module` — `evalModules` injects it and it pollutes the doc.
     removeAttrs evaluated.options [ "_module" ];
 
-  # Build the Markdown reference for a single package.
+  # Build the MDX reference for a single package.
   mkPackageReference =
     { packagePath, packageName }:
     let
@@ -68,7 +68,7 @@ let
           printf 'description: Auto-generated from %s package options. Do not edit by hand.\n' '${packageName}'
           printf -- '---\n\n'
           cat "$optionsCommonMark"
-        } > "$out/${packageName}.md"
+        } > "$out/${packageName}.mdx"
       '';
 
   # Merge per-package outputs into one directory.

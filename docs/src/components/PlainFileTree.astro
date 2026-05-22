@@ -1,0 +1,19 @@
+---
+// PlainFileTree — render Starlight's file tree without file-type icons.
+//
+// Use this when the tree is teaching repo shape and the icons add more visual
+// noise than information.
+import { FileTree } from '@astrojs/starlight/components';
+---
+
+<div class="plain-file-tree">
+  <FileTree>
+    <slot />
+  </FileTree>
+</div>
+
+<style>
+  .plain-file-tree :global(starlight-file-tree svg.tree-icon) {
+    display: none;
+  }
+</style>

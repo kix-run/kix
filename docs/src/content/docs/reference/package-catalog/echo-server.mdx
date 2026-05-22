@@ -1,0 +1,95 @@
+---
+title: echo-server
+description: Auto-generated from echo-server package options. Do not edit by hand.
+---
+
+## image
+
+Container image used by the echo-server ` Deployment `\. Attrset with
+` repository `, ` tag `, and ` pullPolicy ` keys, applied directly to the
+pod’s container spec\.
+
+
+
+*Type:*
+attribute set of string
+
+
+
+*Default:*
+
+```nix
+{
+  pullPolicy = "IfNotPresent";
+  repository = "nginx";
+  tag = "1.27-alpine";
+}
+```
+
+
+
+## message
+
+
+
+Plain-text response body returned by the echo-server at ` / `\. Useful
+for distinguishing instances during connectivity checks\.
+
+
+
+*Type:*
+string
+
+
+
+*Default:*
+
+```nix
+"kix echo server is running"
+```
+
+
+
+## replicaCount
+
+
+
+Number of ` Deployment ` replicas for the echo-server pods\.
+
+
+
+*Type:*
+signed integer
+
+
+
+*Default:*
+
+```nix
+1
+```
+
+
+
+## service
+
+
+
+` Service ` exposure for the echo-server\. Attrset with ` type ` (e\.g\.
+` ClusterIP `, ` NodePort `) and ` port ` keys\.
+
+
+
+*Type:*
+anything
+
+
+
+*Default:*
+
+```nix
+{
+  port = 80;
+  type = "ClusterIP";
+}
+```

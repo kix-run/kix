@@ -1,0 +1,257 @@
+---
+title: "03. Project skeleton and flake shape"
+description: "Understand the minimal files Kix needs to discover clusters and packages."
+---
+
+import CommandCwd from '/src/components/CommandCwd.astro';
+import PlainFileTree from '/src/components/PlainFileTree.astro';
+
+You will not create a new project yet. The goal is to recognize the files Kix
+looks for and what each one contributes. The next tutorial can then start from
+an empty directory without making the Nix pieces feel like magic.
+
+## Prerequisites
+
+- Deploy `01-hello-world` from `kix-examples` in
+  [Local setup and first run](../02-local-setup-and-first-run/).
+
+## The Minimal Shape
+
+A small Kix repo usually starts like this:
+
+<PlainFileTree>
+
+- flake.nix
+- cluster.nix
+- packages/
+  - my-package.nix
+
+</PlainFileTree>
+
+The first example repo is slightly more structured because it contains many
+numbered examples:
+
+<PlainFileTree>
+
+- flake.nix
+- kind-config.yaml
+- examples/
+  - 01-hello-world/
+    - README.md
+    - cluster.nix
+
+</PlainFileTree>
+
+Both shapes use the same Kix idea:
+
+- `flake.nix` is the project entry point;
+- each `cluster.nix` file says what one cluster contains;
+- package files under `packages/` hold reusable package definitions.
+
+## The Flake Is The Entry Point
+
+A `flake.nix` file is a Nix project definition. In a Kix repo, it answers two
+basic questions:
+
+- What does this project depend on?
+- Which named clusters does this project expose?
+
+The Kix CLI reads that file so commands like `kix list clusters` and
+`kix deploy 01-hello-world` know what clusters exist.
+
+You do not need to understand every Nix construct yet. Read this example for
+three landmarks: `inputs`, `mkFlake`, and `clusters`.
+
+```nix
+{
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    kixpkgs.url = "github:kix-ops/kixpkgs";
+    kixpkgs.inputs.nixpkgs.follows = "nixpkgs";
+  };
+
+  outputs =
+    inputs:
+    inputs.kixpkgs.lib.mkFlake {
+      inherit inputs;
+      clusters = {
+        "01-hello-world" = ./examples/01-hello-world/cluster.nix;
+      };
+    };
+}
+```
+
+The first block, `inputs`, names the external Nix dependencies:
+
+- `nixpkgs` is the normal Nix package collection;
+- `kixpkgs` provides Kix itself and the package catalog used by these examples;
+- `kixpkgs.inputs.nixpkgs.follows = "nixpkgs";` keeps both inputs using the
+  same `nixpkgs`.
+
+The second block, `outputs`, says what this repo provides. Kix projects usually
+delegate that shape to `inputs.kixpkgs.lib.mkFlake`.
+
+`mkFlake` is the Kix helper that turns this small cluster map:
+
+```nix
+clusters = {
+  "01-hello-world" = ./examples/01-hello-world/cluster.nix;
+};
+```
+
+into the flake outputs the CLI knows how to read.
+
+A few Nix syntax notes, kept deliberately small:
+
+- `{ ... }` is an attrset, like a map or object.
+- Each assignment ends with `;`.
+- `inherit inputs;` means `inputs = inputs;`.
+- `outputs = inputs: ...` is a function. It receives the flake inputs and
+  returns the project outputs.
+
+:::note[Reference]
+See [Use `mkFlake` in a consuming repo](../../how-to/start-and-inspect/use-mkflake-in-a-consuming-repo/)
+when you need the exact setup steps for your own repo.
+:::
+
+## Cluster Names Come From `clusters`
+
+This is the part Kix used when you ran `kix list clusters`:
+
+```nix
+clusters = {
+  "01-hello-world" = ./examples/01-hello-world/cluster.nix;
+};
+```
+
+The attr name, `01-hello-world`, is the cluster name you pass to the CLI:
+
+```sh
+kix deploy 01-hello-world -y
+kix pf 01-hello-world hello-world 8080:80
+```
+<CommandCwd cwd="kix-examples/" />
+
+The value points at the file that builds that cluster.
+
+In a real repo you might use names like:
+
+```nix
+clusters = {
+  dev = ./clusters/dev.nix;
+  staging = ./clusters/staging.nix;
+  prod = ./clusters/prod.nix;
+};
+```
+
+The names are yours. The CLI discovers them by evaluating the flake.
+
+## `cluster.nix` Defines What Is Installed
+
+The first example's `cluster.nix` is a function:
+
+```nix
+{ kix, packages }:
+
+kix.buildCluster {
+  name = "01-hello-world";
+
+  modules = [
+    kix.flavors.kind
+
+    {
+      namespaces = {
+        example-01 = { };
+      };
+
+      instances.example-01 = {
+        hello-world = {
+          package = packages.echo-server;
+          config = {
+            message = "Hello from Kix!";
+          };
+        };
+      };
+    }
+  ];
+}
+```
+
+`mkFlake` passes two useful arguments into this function:
+
+- `kix`, the framework helpers;
+- `packages`, the package catalog from `kixpkgs`.
+
+The cluster then calls `kix.buildCluster`.
+
+Inside `modules`, the first entry, `kix.flavors.kind`, says this cluster targets
+kind. The second entry defines one namespace and one package instance:
+
+- namespace: `example-01`;
+- instance: `hello-world`;
+- package: `packages.echo-server`;
+- config: the message returned by the echo server.
+
+That is enough for Kix to build Kubernetes manifests and enough for the CLI to
+know there is a package instance named `hello-world`.
+
+## Where Packages Live
+
+There are two package sources to keep separate.
+
+**Catalog packages** come from `kixpkgs`. In the first example,
+`packages.echo-server` is a catalog package. You use it directly from the
+`packages` argument.
+
+**Local packages** live in your repo. The second example imports one:
+
+```nix
+let
+  reverseProxyPackage = import ./reverse-proxy-package.nix;
+in
+...
+```
+
+You will build a local package later in the tutorial path. For now, the rule of
+thumb is:
+
+- put cluster composition in `cluster.nix`;
+- put reusable package code in a separate package file;
+- keep shared cluster modules in their own files once `cluster.nix` gets too
+  large.
+
+That keeps "what is installed here?" separate from "how does this package build
+Kubernetes resources?"
+
+## How The CLI Uses This Shape
+
+When you run a command from the repo root:
+
+```sh
+kix list clusters
+```
+<CommandCwd cwd="kix-examples/" />
+
+Kix evaluates the current directory's flake. If you pass `--flake`, it evaluates
+that flake instead:
+
+```sh
+kix --flake /path/to/kix-examples list clusters
+```
+
+From the flake outputs, the CLI can discover:
+
+- cluster names;
+- package catalog metadata;
+- rendered manifests for a cluster;
+- installed package instances inside a cluster.
+
+That is why the command names in the previous tutorial were short. Once Kix has
+the flake and cluster name, it can find the rest.
+
+## What Comes Next
+
+You now know what `flake.nix` contributes and what `cluster.nix` contributes:
+the flake exposes clusters, and each cluster file says what to build.
+
+The next tutorial uses that shape to create the first cluster from scratch.

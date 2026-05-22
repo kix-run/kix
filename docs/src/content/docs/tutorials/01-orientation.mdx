@@ -1,0 +1,163 @@
+---
+title: "01. Orientation: what Kix is and why it exists"
+description: "Get the first mental model for Kix before running a cluster."
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+This first tutorial is a map. You won't write code yet. The goal is to give you
+enough vocabulary that the next tutorial feels like running a small system, not
+copying unfamiliar Nix into a terminal.
+
+## Prerequisites
+
+You only need basic Kubernetes familiarity for now: namespaces, Deployments,
+Services, Pods, and `kubectl`. You don't need to know Nix yet.
+
+## What Kix Is
+
+Kix is a way to describe Kubernetes systems as Nix-evaluated packages and
+cluster definitions.
+
+The output is still Kubernetes manifests. Kix does not replace the Kubernetes
+API server, `kubectl`, or the objects you already know. It gives you a more
+structured way to build those objects, connect them, check them, and deploy
+them.
+
+A small Kix cluster usually has:
+
+- a `flake.nix` that exposes one or more named clusters;
+- a `cluster.nix` that says which packages are installed where;
+- package definitions that know how to produce Kubernetes resources;
+- the `kix` CLI, which renders, checks, diffs, deploys, and inspects the result.
+
+You can think of Kix as sitting one step before YAML: it builds the YAML, keeps
+track of relationships while doing so, and gives the CLI enough structure to
+operate on the result.
+
+:::note[Explanation]
+See [Kix as a strict Kubernetes superset](../../explanation/kix-as-a-strict-kubernetes-superset/)
+for the design argument behind "the output is still Kubernetes."
+:::
+
+## Why It Exists
+
+Kubernetes teams often accumulate layers: YAML for resources, Helm for
+packaging, Kustomize for patches, CDK8s for code generation, Argo CD or Flux for
+sync, and Kargo for promotion. Each tool can be useful, but the stack can make a
+simple question feel scattered: what should this cluster look like now?
+
+Kix is trying to make the graph explicit enough that tools can use it.
+
+That matters when you want to answer practical questions:
+
+- Which service does this workload call?
+- What should be deployed first?
+- Which package owns this manifest?
+- Can we check policy before anything reaches the cluster?
+
+Once Kix has that graph, it can do more than render YAML. It can derive network
+policy from service relationships, prove more of the cluster is correct before
+deploy, and show the blast radius of a change before it lands.
+
+Kix can coexist with the tools you already use. It gets more powerful as you use
+it for more of the cluster, because more of the system becomes visible to the
+same graph.
+
+:::note[Explanation]
+See [How Kix compares with Helm, Kustomize, CDK8s, GitOps controllers, and raw YAML](../../explanation/how-kix-compares-with-helm-kustomize-cdk8s-gitops-controllers-and-raw-yaml/)
+when you want a deeper comparison.
+:::
+
+## The First Mental Model
+
+These words show up throughout the tutorials. For now, keep the definitions
+small.
+
+<CardGrid>
+  <Card title="Package">
+    A reusable Kubernetes blueprint: "how to build an echo server", "how to
+    build ingress-nginx", and so on.
+  </Card>
+  <Card title="Instance">
+    One installed copy of a package in a cluster: run this package here, with
+    this name and config.
+  </Card>
+  <Card title="Config">
+    The values passed into an instance, such as an HTTP response message, image
+    tag, storage size, or backup setting.
+  </Card>
+  <Card title="Deps">
+    Other instances this instance needs. For now, read `deps` as "the wiring
+    between instances."
+  </Card>
+  <Card title="Out">
+    The public information Kix exposes after building something: names, ports,
+    DNS names, selectors, and similar values.
+  </Card>
+  <Card title="Scope">
+    The context Kix gives a package while it builds resources: instance name,
+    namespace, helper functions, labels, and cluster facts.
+  </Card>
+  <Card title="Root">
+    The main resource for a package instance. For a service-shaped package, this
+    is usually the Service another workload should talk to.
+  </Card>
+</CardGrid>
+
+That gives you the core sentence:
+
+> A cluster installs package instances, configures them, wires deps between
+> them, and each package uses its scope to build Kubernetes resources with a
+> useful root and `out` surface.
+
+You do not need to memorize this. The next tutorial makes the first half of it
+visible with one tiny service.
+
+## Who Kix Is For
+
+Kix is mostly used by three overlapping roles.
+
+<Card title="App maintainer">
+  Package a service once, expose useful config, and avoid copying Kubernetes
+  boilerplate into every environment.
+</Card>
+
+<Card title="Platform team">
+  Publish shared packages and cluster defaults: ingress, cert-manager,
+  monitoring, storage, policy, and other platform capabilities.
+</Card>
+
+<Card title="Cluster operator">
+  Decide what is installed in a real cluster, review diffs, deploy changes, roll
+  back activations, and handle migration work.
+</Card>
+
+In a small team one person may do all three. Kix still uses the separation
+because it keeps package code, cluster composition, and operations from turning
+into one large YAML pile.
+
+## How To Use These Docs
+
+The docs are split by job.
+
+**Tutorials** are the path you are on now. They are lessons, meant to be read in
+order. They introduce one new idea at a time.
+
+**How-to guides** are recipes. Use them when you already know the model and need
+the steps for a task, like deploying to kind or using `kix pf`.
+
+**Reference** is for exact command flags, schema fields, helper names, and
+defaults.
+
+**Explanation** is for design reasoning and tradeoffs.
+
+When a tutorial links to a how-to, reference page, or explanation page, it is
+usually optional background. Stay on the tutorial path when you want the guided
+route.
+
+## What Comes Next
+
+You now have the names for the pieces. In the next tutorial you will run the
+smallest useful example: one Kix package instance deployed to a local kind
+cluster, then reached through `kix pf` and `curl`.

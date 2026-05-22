@@ -1,0 +1,34 @@
+---
+// CommandCwd — show the expected working directory for a shell command.
+//
+// Keep shell snippets as normal fenced code blocks, then place this component
+// immediately below the block:
+//
+//   ```sh
+//   kix list clusters
+//   ```
+//   <CommandCwd cwd="kix-examples/" />
+interface Props {
+  cwd: string;
+}
+
+const { cwd } = Astro.props;
+---
+
+<p class="command-cwd">
+  Run in <code>{cwd}</code>
+</p>
+
+<style>
+  .command-cwd {
+    margin-top: 0.25rem;
+    margin-bottom: 1.1rem;
+    text-align: right;
+    color: var(--sl-color-gray-3);
+    font-size: 0.85em;
+  }
+  .command-cwd code {
+    color: inherit;
+    font-size: 0.95em;
+  }
+</style>

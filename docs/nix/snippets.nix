@@ -1,5 +1,5 @@
 # Snippet extraction: pull named regions out of `.nix` source files and
-# emit each as a Markdown file with a fenced code block.
+# emit raw code plus JSON metadata for MDX docs pages.
 #
 # Marker convention:
 #   # region:NAME
