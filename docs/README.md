@@ -5,7 +5,7 @@ Astro Starlight site for Kix. Built as a true sibling Nix subflake.
 ## Build
 
 ```bash
-nix build ./docs#site --extra-experimental-features 'nix-command flakes pipe-operators'
+nix build ./docs#site
 ```
 
 The static site is written to `result/`. Serve it with any static file server, e.g.:
@@ -19,12 +19,17 @@ python3 -m http.server -d result 8000
 One command — run from the kixpkgs repo root:
 
 ```bash
-nix run ./docs#dev --extra-experimental-features 'nix-command flakes pipe-operators'
+nix run ./docs#dev
 ```
 
 This builds the snippet + reference pipelines, syncs their output into
 `docs/src/`, installs npm deps if missing, and starts the Astro dev
 server with HMR. Open the URL it prints (usually <http://localhost:4321>).
+
+> **Nix features.** This flake requires `nix-command` + `flakes` (standard on
+> nix-darwin / NixOS) and declares `pipe-operators` via `nixConfig`. Accept the
+> nix prompt on first use, or set `accept-flake-config = true` in your
+> `~/.config/nix/nix.conf`.
 
 Re-run after editing source `.nix` files (packages, kix-examples snippet
 files) to re-sync the generated content. Pure prose edits inside `docs/`
@@ -63,6 +68,58 @@ The `reference` derivation only runs when you build `nix build ./docs#site`
 `nix build ./docs#reference`. Currently only `echo-server`, `cert-manager`,
 and `cilium` are wired up; the remaining 58 packages will be added in a
 later pass.
+
+## Snippets
+
+The snippet pipeline extracts named regions from `.nix` source files and
+drops them into `src/snippets/<source>/<region>.nix` as raw Nix code (no
+frontmatter, no fence).
+
+**Add a new snippet:**
+
+1. Wrap the code you want to expose with `# region:NAME` and `# endregion`
+   markers (one region per name; no nesting). Markers must be on their own line.
+2. Register the source in `docs/flake.nix`, in the `snippets` derivation's
+   `sources` list:
+   ```nix
+   sources = [
+     { file = "${kix-examples}/examples/06-scorecards/scorecard.nix"; name = "06-scorecards"; }
+     { file = "${kix-examples}/examples/04-typed-options/cluster.nix";  name = "04-typed-options"; }
+   ];
+   ```
+3. Rebuild — the pipeline emits `src/snippets/<name>/<region>.nix`.
+
+**Use a snippet in a docs page** (use an `.mdx` page, not `.md`):
+
+```mdx
+---
+title: "Scorecards explained"
+description: ...
+---
+
+import { Code } from '@astrojs/starlight/components';
+import isProxyCode from '/src/snippets/06-scorecards/isProxy.nix?raw';
+
+Scorecard rules identify reverse-proxy packages with this helper:
+
+<Code code={isProxyCode} lang="nix" title="06-scorecards/scorecard.nix → isProxy" />
+```
+
+The `?raw` suffix is a Vite import that reads the file as a string at
+build time. `<Code>` is Starlight's syntax-highlighting code block, backed
+by Expressive Code/Shiki. Highlighting, line numbers, and copy-to-clipboard
+all work.
+
+If you'd rather embed the snippet inline as a plain fenced block (no
+component), do this:
+
+```mdx
+import isProxyCode from '/src/snippets/06-scorecards/isProxy.nix?raw';
+
+<pre><code class="language-nix">{isProxyCode}</code></pre>
+```
+
+— but `<Code>` is the right tool 99% of the time.
 
 ## Plugins
 

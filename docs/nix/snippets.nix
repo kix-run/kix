@@ -105,27 +105,13 @@ let
     else
       final.regions;
 
-  # Build the Markdown text for a single region.
-  # YAML frontmatter + fenced nix code block.
-  renderRegion =
-    {
-      name,
-      body,
-      sourceBasename,
-    }:
-    ''
-      ---
-      title: ${name}
-      source: ${sourceBasename}
-      ---
-
-      ```nix
-      ${body}
-      ```
-    '';
-
-  # Per-source processing: produces a list of { path; subdir; filename; text; }
+  # Per-source processing: produces a list of { drv; subdir; filename; }
   # describing the files to emit, plus a manifest entry.
+  #
+  # Emit raw `.nix` source for each region (no frontmatter, no fence).
+  # That makes the snippet directly consumable from MDX pages via
+  # `import body from '/src/snippets/<name>/<region>.nix?raw'` and rendered
+  # with Starlight's `<Code lang="nix" code={body} />`.
   #
   # `file` may be a Nix path OR a string (including a flake-store
   # interpolation like `"${kix-examples}/examples/.../scorecard.nix"`).
@@ -135,7 +121,6 @@ let
     { file, name }:
     let
       fileStr = toString file;
-      sourceBasename = baseNameOf fileStr;
       regions = extractRegions {
         inherit file;
         fileLabel = fileStr;
@@ -143,15 +128,11 @@ let
       files = map (
         r:
         let
-          markdown = renderRegion {
-            inherit (r) name body;
-            inherit sourceBasename;
-          };
-          drv = pkgs.writeText "snippet-${name}-${r.name}.md" markdown;
+          drv = pkgs.writeText "snippet-${name}-${r.name}.nix" r.body;
         in
         {
           subdir = name;
-          filename = "${r.name}.md";
+          filename = "${r.name}.nix";
           drv = drv;
         }
       ) regions;

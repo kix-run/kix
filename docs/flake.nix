@@ -1,14 +1,23 @@
 # Kix documentation site — Astro Starlight, built as a Nix derivation.
 #
-# Build:  nix build ./docs#site --extra-experimental-features 'nix-command flakes pipe-operators'
-# Dev:    nix run  ./docs#dev  --extra-experimental-features 'nix-command flakes pipe-operators'
+# Build:  nix build ./docs#site
+# Dev:    nix run  ./docs#dev
 #
 # This is a true sibling subflake — the top-level kixpkgs flake does NOT
 # depend on it. The `kixpkgs` input below is reserved for future use
 # (reading package metadata from the parent flake).
+#
+# Requires `nix-command` and `flakes` to be enabled in the host's Nix
+# config (standard on nix-darwin / NixOS / most setups). `pipe-operators`
+# is requested via `nixConfig` below — accept the prompt or set
+# `accept-flake-config = true` in your nix.conf.
 
 {
   description = "Kix documentation site (Astro Starlight)";
+
+  nixConfig = {
+    extra-experimental-features = [ "pipe-operators" ];
+  };
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
@@ -172,13 +181,12 @@
                   pkgs.coreutils
                 ]
               }:$PATH
-              NIX_FLAGS="--extra-experimental-features nix-command --extra-experimental-features flakes --extra-experimental-features pipe-operators"
 
               echo "→ building snippets pipeline"
-              snip=$(nix build ./docs#snippets $NIX_FLAGS --no-link --print-out-paths)
+              snip=$(nix build ./docs#snippets --no-link --print-out-paths)
 
               echo "→ building reference pipeline"
-              ref=$(nix build ./docs#reference $NIX_FLAGS --no-link --print-out-paths)
+              ref=$(nix build ./docs#reference --no-link --print-out-paths)
 
               echo "→ syncing generated content into docs/src"
               mkdir -p docs/src/snippets docs/src/content/docs/reference/package-catalog
