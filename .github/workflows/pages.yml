@@ -1,10 +1,25 @@
 name: Deploy site to GitHub Pages
 
+# Builds the homepage (static HTML in `homepage/`) and the Starlight
+# docs site (`nix build ./docs#site`), then merges them into one
+# Pages artifact:
+#
+#   kixops.dev/             ← homepage/
+#   kixops.dev/docs/        ← docs site (current tree)
+#   kixops.dev/docs/v0.1/   ← starlight-versions snapshot
+#
+# kix-examples is a separate private repo (kix-ops/kix-examples) used
+# by the snippet pipeline. CI checks it out with a PAT and overrides
+# the flake input at build time, so the docs flake's local file://
+# input stays untouched for dev workflow.
+
 on:
   push:
     branches: [main]
     paths:
       - 'homepage/**'
+      - 'docs/**'
+      - 'kix/**'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
 
@@ -24,10 +39,46 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout kixpkgs
+        uses: actions/checkout@v4
+        with:
+          path: kixpkgs
+
+      - name: Checkout kix-examples
+        uses: actions/checkout@v4
+        with:
+          repository: kix-ops/kix-examples
+          token: ${{ secrets.KIX_EXAMPLES_TOKEN }}
+          path: kix-examples
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes pipe-operators
+            accept-flake-config = true
+
+      - name: Build docs site
+        working-directory: kixpkgs
+        run: |
+          nix build ./docs#site \
+            --override-input kix-examples "git+file://${{ github.workspace }}/kix-examples" \
+            --print-build-logs
+
+      - name: Stage combined artifact
+        run: |
+          mkdir -p _site
+          cp -r kixpkgs/homepage/. _site/
+          mkdir -p _site/docs
+          cp -r --no-preserve=mode kixpkgs/result/. _site/docs/
+          # Pages artifacts must be world-readable.
+          chmod -R a+rX _site
+
       - uses: actions/configure-pages@v5
+
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: ./homepage
+          path: ./_site
+
       - id: deployment
         uses: actions/deploy-pages@v4

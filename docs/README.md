@@ -2,6 +2,11 @@
 
 Astro Starlight site for Kix. Built as a true sibling Nix subflake.
 
+Deployed at **<https://kixops.dev/docs/>** (current tree) with pinned
+version snapshots at `kixops.dev/docs/v0.1/`, etc. GitHub Pages serves
+the merged `homepage/` + `docs/` artifact — see
+`.github/workflows/pages.yml`.
+
 ## Build
 
 ```bash

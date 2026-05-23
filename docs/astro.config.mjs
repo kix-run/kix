@@ -5,7 +5,14 @@ import starlightVersions from 'starlight-versions';
 
 // https://astro.build/config
 export default defineConfig({
-  site: 'https://docs.kixops.dev',
+  // Deployed at kixops.dev/docs/ as a subdirectory of the homepage
+  // GH Pages artifact. starlight-versions stacks each pinned version
+  // under <slug>/, so the URL shape ends up:
+  //   kixops.dev/docs/           — current (unversioned) tree
+  //   kixops.dev/docs/v0.1/      — v0.1 snapshot
+  //   kixops.dev/docs/v0.2/      — v0.2 snapshot, …
+  site: 'https://kixops.dev',
+  base: '/docs',
   integrations: [
     starlight({
       title: 'Kix',

@@ -22,6 +22,10 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     kixpkgs.url = "path:../";
+    # Local sibling checkout for dev iteration. CI builds the docs site
+    # by checking kix-examples out separately and passing
+    # `--override-input kix-examples git+file://$PWD/...` to `nix build`.
+    # See `.github/workflows/pages.yml`.
     kix-examples.url = "git+file:///Users/adam/ghq/github.com/adamcharnock/kix-examples";
   };
 
