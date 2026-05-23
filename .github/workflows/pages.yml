@@ -78,8 +78,14 @@ jobs:
       - name: Build docs site
         working-directory: kixpkgs
         run: |
+          # kix-examples is a flake that itself has a `kixpkgs` input
+          # locked to a local file:// path on the maintainer's machine.
+          # Override both: the docs' direct input AND kix-examples'
+          # transitive kixpkgs input, pointing them at the runner's
+          # checkouts.
           nix build ./docs#site \
             --override-input kix-examples "git+file://${{ github.workspace }}/kix-examples" \
+            --override-input kix-examples/kixpkgs "git+file://${{ github.workspace }}/kixpkgs" \
             --print-build-logs
 
       - name: Stage combined artifact
