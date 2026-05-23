@@ -16,13 +16,13 @@ Services, Pods, and `kubectl`. You don't need to know Nix yet.
 
 ## What Kix Is
 
-Kix is a way to describe Kubernetes systems as Nix-evaluated packages and
-cluster definitions.
+Kix is a way to build, connect, check, explain, and deploy Kubernetes systems
+from one explicit model of the cluster.
 
 The output is still Kubernetes manifests. Kix does not replace the Kubernetes
 API server, `kubectl`, or the objects you already know. It gives you a more
 structured way to build those objects, connect them, check them, and deploy
-them.
+them before they reach the cluster.
 
 A small Kix cluster usually has:
 
@@ -47,18 +47,31 @@ packaging, Kustomize for patches, CDK8s for code generation, Argo CD or Flux for
 sync, and Kargo for promotion. Each tool can be useful, but the stack can make a
 simple question feel scattered: what should this cluster look like now?
 
-Kix is trying to make the graph explicit enough that tools can use it.
+Kix is trying to make the graph explicit enough that tools can use it. That is
+where the interesting parts start.
 
-That matters when you want to answer practical questions:
+<CardGrid>
+  <Card title="Know Before Deploy">
+    Evaluate, check, diff, and inspect the cluster before anything touches the
+    Kubernetes API server.
+  </Card>
+  <Card title="Derive Network Policy">
+    Use declared service relationships to generate network policy instead of
+    hand-maintaining it beside the app graph.
+  </Card>
+  <Card title="Prove Ownership And Policy">
+    Track which package owns each manifest, then run checks against the rendered
+    system before it ships.
+  </Card>
+  <Card title="See Blast Radius">
+    Ask what depends on the thing you are changing before the change lands in a
+    real cluster.
+  </Card>
+</CardGrid>
 
-- Which service does this workload call?
-- What should be deployed first?
-- Which package owns this manifest?
-- Can we check policy before anything reaches the cluster?
-
-Once Kix has that graph, it can do more than render YAML. It can derive network
-policy from service relationships, prove more of the cluster is correct before
-deploy, and show the blast radius of a change before it lands.
+Once Kix has the graph, it can do more than render YAML. It can use the same
+model for deploy order, network policy, ownership, policy checks, diffs, and
+change impact.
 
 Kix can coexist with the tools you already use. It gets more powerful as you use
 it for more of the cluster, because more of the system becomes visible to the

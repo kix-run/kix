@@ -1,10 +1,15 @@
 ---
-title: "03. Project skeleton and flake shape"
+title: "03. Project files and flake entry point"
 description: "Understand the minimal files Kix needs to discover clusters and packages."
 ---
 
 import CommandCwd from '/src/components/CommandCwd.astro';
 import PlainFileTree from '/src/components/PlainFileTree.astro';
+import Snippet from '/src/components/Snippet.astro';
+import exampleFlake from '/src/snippets/flake/exampleFlake.json';
+import clusterFrame from '/src/snippets/examples/02-hello-world/cluster/clusterFrame.json';
+import helloWorldInstance from '/src/snippets/examples/02-hello-world/cluster/helloWorldInstance.json';
+import localPackageImport from '/src/snippets/examples/06-service-dep/cluster/localPackageImport.json';
 
 You will not create a new project yet. The goal is to recognize the files Kix
 looks for and what each one contributes. The next tutorial can then start from
@@ -12,10 +17,10 @@ an empty directory without making the Nix pieces feel like magic.
 
 ## Prerequisites
 
-- Deploy `01-hello-world` from `kix-examples` in
+- Deploy `02-hello-world` from `kix-examples` in
   [Local setup and first run](../02-local-setup-and-first-run/).
 
-## The Minimal Shape
+## The Basic Files
 
 A small Kix repo usually starts like this:
 
@@ -36,13 +41,13 @@ numbered examples:
 - flake.nix
 - kind-config.yaml
 - examples/
-  - 01-hello-world/
+  - 02-hello-world/
     - README.md
     - cluster.nix
 
 </PlainFileTree>
 
-Both shapes use the same Kix idea:
+Both layouts use the same Kix idea:
 
 - `flake.nix` is the project entry point;
 - each `cluster.nix` file says what one cluster contains;
@@ -57,29 +62,12 @@ basic questions:
 - Which named clusters does this project expose?
 
 The Kix CLI reads that file so commands like `kix list clusters` and
-`kix deploy 01-hello-world` know what clusters exist.
+`kix deploy 02-hello-world` know what clusters exist.
 
 You do not need to understand every Nix construct yet. Read this example for
 three landmarks: `inputs`, `mkFlake`, and `clusters`.
 
-```nix
-{
-  inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
-    kixpkgs.url = "github:kix-ops/kixpkgs";
-    kixpkgs.inputs.nixpkgs.follows = "nixpkgs";
-  };
-
-  outputs =
-    inputs:
-    inputs.kixpkgs.lib.mkFlake {
-      inherit inputs;
-      clusters = {
-        "01-hello-world" = ./examples/01-hello-world/cluster.nix;
-      };
-    };
-}
-```
+<Snippet {...exampleFlake} />
 
 The first block, `inputs`, names the external Nix dependencies:
 
@@ -89,17 +77,11 @@ The first block, `inputs`, names the external Nix dependencies:
   same `nixpkgs`.
 
 The second block, `outputs`, says what this repo provides. Kix projects usually
-delegate that shape to `inputs.kixpkgs.lib.mkFlake`.
+delegate that output wiring to `inputs.kixpkgs.lib.mkFlake`.
 
-`mkFlake` is the Kix helper that turns this small cluster map:
-
-```nix
-clusters = {
-  "01-hello-world" = ./examples/01-hello-world/cluster.nix;
-};
-```
-
-into the flake outputs the CLI knows how to read.
+`mkFlake` is the Kix helper that turns the `clusters` map, such as
+`"02-hello-world" = ./examples/02-hello-world/cluster.nix`, into the flake
+outputs the CLI knows how to read.
 
 A few Nix syntax notes, kept deliberately small:
 
@@ -116,25 +98,15 @@ when you need the exact setup steps for your own repo.
 
 ## Cluster Names Come From `clusters`
 
-This is the part Kix used when you ran `kix list clusters`:
-
-```nix
-clusters = {
-  "01-hello-world" = ./examples/01-hello-world/cluster.nix;
-};
-```
-
-The attr name, `01-hello-world`, is the cluster name you pass to the CLI:
+The attr name, `02-hello-world`, is the cluster name you pass to the CLI:
 
 ```sh
-kix deploy 01-hello-world -y
-kix pf 01-hello-world hello-world 8080:80
+kix deploy 02-hello-world -y
+kix pf 02-hello-world hello-world 8080:80
 ```
 <CommandCwd cwd="kix-examples/" />
 
 The value points at the file that builds that cluster.
-
-In a real repo you might use names like:
 
 ```nix
 clusters = {
@@ -148,46 +120,37 @@ The names are yours. The CLI discovers them by evaluating the flake.
 
 ## `cluster.nix` Defines What Is Installed
 
-The first example's `cluster.nix` is a function:
+The flake points at `./examples/02-hello-world/cluster.nix`. That file is the
+recipe for one cluster: it names the cluster, chooses the local kind flavor, and
+declares what should exist inside the cluster.
 
-```nix
-{ kix, packages }:
+At the top level, the file has this structure:
 
-kix.buildCluster {
-  name = "01-hello-world";
-
-  modules = [
-    kix.flavors.kind
-
-    {
-      namespaces = {
-        example-01 = { };
-      };
-
-      instances.example-01 = {
-        hello-world = {
-          package = packages.echo-server;
-          config = {
-            message = "Hello from Kix!";
-          };
-        };
-      };
-    }
-  ];
-}
-```
+<Snippet
+  {...clusterFrame}
+  elide={{ helloWorldInstance: '        # package instances go here' }}
+/>
 
 `mkFlake` passes two useful arguments into this function:
 
 - `kix`, the framework helpers;
 - `packages`, the package catalog from `kixpkgs`.
 
-The cluster then calls `kix.buildCluster`.
+That first line, `{ kix, packages }:`, is Nix function syntax. For now, read it
+as "Kix gives this file the helpers and package catalog it needs."
 
-Inside `modules`, the first entry, `kix.flavors.kind`, says this cluster targets
-kind. The second entry defines one namespace and one package instance:
+The cluster then calls `kix.buildCluster`. Inside `modules`, the first entry,
+`kix.flavors.kind`, says this cluster targets [kind](https://kind.sigs.k8s.io/).
+The second entry is a small cluster module that creates one namespace and leaves room for package
+instances.
 
-- namespace: `example-01`;
+The package instance lives under `instances.tutorial-02`:
+
+<Snippet {...helloWorldInstance} />
+
+That instance defines four practical facts:
+
+- namespace: `tutorial-02`;
 - instance: `hello-world`;
 - package: `packages.echo-server`;
 - config: the message returned by the echo server.
@@ -205,12 +168,7 @@ There are two package sources to keep separate.
 
 **Local packages** live in your repo. The second example imports one:
 
-```nix
-let
-  reverseProxyPackage = import ./reverse-proxy-package.nix;
-in
-...
-```
+<Snippet {...localPackageImport} />
 
 You will build a local package later in the tutorial path. For now, the rule of
 thumb is:
@@ -223,7 +181,7 @@ thumb is:
 That keeps "what is installed here?" separate from "how does this package build
 Kubernetes resources?"
 
-## How The CLI Uses This Shape
+## How The CLI Uses These Files
 
 When you run a command from the repo root:
 
@@ -254,4 +212,4 @@ the flake and cluster name, it can find the rest.
 You now know what `flake.nix` contributes and what `cluster.nix` contributes:
 the flake exposes clusters, and each cluster file says what to build.
 
-The next tutorial uses that shape to create the first cluster from scratch.
+The next tutorial uses these files to create the first cluster from scratch.

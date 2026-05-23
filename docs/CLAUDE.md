@@ -141,6 +141,13 @@ Tutorials should make progress feel steady and unsurprising.
 - Keep each tutorial focused on one new brick.
 - Prefer small working clusters over abstract fragments.
 - Show commands the reader can run, then show how to inspect the result.
+- Give code fences a `title` with the path the snippet belongs to. In
+  tutorials, use the learner's tutorial directory for build-along code, for
+  example `title="tutorial-04/flake.nix"`. When inspecting the public examples,
+  use the real example path, for example
+  `title="kix-examples/examples/02-hello-world/cluster.nix"`.
+- Leave the title off short illustrative fragments that are not meant to be
+  copied into a specific file.
 - Introduce Nix syntax only when the page needs it.
 - When a Nix construct appears for the first time, add a one-sentence note.
 - Keep deeper mechanics out of the main flow; link to explanation/reference.
@@ -201,6 +208,19 @@ The docs can render snippets extracted from `kix-examples`. Prefer that for
 code that should stay tested and tied to a real example.
 
 - Use `Snippet.astro` for substantial Nix examples.
+- Prefer snippets for code that exists in `kix-examples`; keep inline fenced
+  code for tiny hypothetical fragments or learner-created files only.
+- Avoid snippets that expose local-only development paths or private repository
+  assumptions unless that is currently how the source example runs. When the
+  learner should create a public-facing file, write that build-along code
+  inline with the tutorial path as the title.
+- Name snippet regions after the concept they teach (`helloWorldInstance`,
+  `crossNamespaceDep`, `packageRule`), not after line numbers.
+- Close snippet regions with named end markers, such as
+  `# endregion:helloWorldInstance`.
+- Nested regions are allowed. When a tutorial needs to show an outer frame
+  before zooming into an inner detail, prefer `<Snippet elide={{ ... }} />`
+  over duplicating source code by hand.
 - Keep snippets small enough to read in one screen.
 - Let code comments teach the local detail.
 - In prose, explain why the snippet matters and what changes after using it.

@@ -36,11 +36,11 @@
         "nixpkgs": "nixpkgs"
       },
       "locked": {
-        "lastModified": 1779479789,
-        "narHash": "sha256-SzwvQEXHqyfeXHKPXylR62RN5bTPX75ZtwzdFMfj8Vw=",
+        "lastModified": 1779525611,
+        "narHash": "sha256-dzdegm454lW5uB7/gTVrha2mkV1u2D7M8V4oM4GCSUU=",
         "ref": "refs/heads/main",
-        "rev": "16393633a60ef416e333e8b6e30b40ebf822064e",
-        "revCount": 11,
+        "rev": "31620eb09d73c0a9b4e4156cf81bc6d51a35722b",
+        "revCount": 12,
         "type": "git",
         "url": "file:///Users/adam/ghq/github.com/adamcharnock/kix-examples"
       },

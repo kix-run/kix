@@ -72,13 +72,13 @@ later pass.
 ## Snippets
 
 The snippet pipeline auto-discovers `.nix` files containing `# region:NAME`
-markers under `kix-examples/examples/` and drops each region into
+markers under `kix-examples/` and drops each region into
 `src/snippets/<relative-path-without-.nix>/<region>.nix` as raw Nix
 code (no frontmatter, no fence). No registration step.
 
 **Add a new snippet:**
 
-1. In any `.nix` file under `kix-examples/examples/`, wrap the code you
+1. In any `.nix` file under `kix-examples/`, wrap the code you
    want to expose:
 
    ```nix
@@ -86,15 +86,16 @@ code (no frontmatter, no fence). No registration step.
    isProxy =
      inst:
      builtins.elem "reverse-proxy" (inst._meta.packageMeta.provides or [ ]);
-   # endregion
+   # endregion:isProxy
    ```
 
    Rules: markers on their own line; one region per name per file;
-   no nesting; region name matches `[a-zA-Z][a-zA-Z0-9-]*`.
+   region name matches `[a-zA-Z][a-zA-Z0-9-]*`; end markers must name
+   the region they close. Nested regions are allowed.
 
 2. Rebuild. The output path mirrors the source path. For example
-   `examples/06-scorecards/scorecard.nix` with a `# region:isProxy`
-   marker emits `src/snippets/06-scorecards/scorecard/isProxy.nix`.
+   `examples/19-scorecards/scorecard.nix` with a `# region:isProxy`
+   marker emits `src/snippets/examples/19-scorecards/scorecard/isProxy.nix`.
 
 That's it — no edits to `docs/flake.nix`.
 
@@ -107,7 +108,7 @@ description: ...
 ---
 
 import Snippet from '/src/components/Snippet.astro';
-import isProxy from '/src/snippets/06-scorecards/scorecard/isProxy.json';
+import isProxy from '/src/snippets/examples/19-scorecards/scorecard/isProxy.json';
 
 Scorecard rules identify reverse-proxy packages with this helper:
 
@@ -122,13 +123,23 @@ commit. The URL is computed by the snippet pipeline from `sourceUrlBase`
 in `docs/flake.nix`, which pins to `kix-examples.rev` from `flake.lock` —
 links never rot under `main`.
 
+Nested regions can be elided by the calling MDX page. This keeps the source
+file free of docs-only presentation hints:
+
+```mdx
+<Snippet
+  {...clusterFrame}
+  elide={{ helloWorldInstance: '        # package instances go here' }}
+/>
+```
+
 **Raw code only (no link, no component):** the pipeline also emits a
 `.nix` sidecar with just the region body. Use this if you want to render
 the snippet your own way:
 
 ```mdx
 import { Code } from '@astrojs/starlight/components';
-import isProxyCode from '/src/snippets/06-scorecards/scorecard/isProxy.nix?raw';
+import isProxyCode from '/src/snippets/examples/19-scorecards/scorecard/isProxy.nix?raw';
 
 <Code code={isProxyCode} lang="nix" />
 ```

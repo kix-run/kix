@@ -50,7 +50,7 @@
               lib = pkgs.lib;
             };
           in
-          # Auto-discovery: every `.nix` file under kix-examples/examples
+          # Auto-discovery: every `.nix` file under kix-examples
           # with at least one `# region:NAME` marker is picked up
           # automatically. To add a snippet: add the marker. No
           # registration step.
@@ -61,8 +61,8 @@
           # `main`. Falls back to `main` if the input has no rev (e.g.
           # dirty working tree without a commit).
           snippetLib.mkSnippetsFromTree {
-            root = "${kix-examples}/examples";
-            sourceUrlBase = "https://github.com/kix-ops/kix-examples/blob/${kix-examples.rev or "main"}/examples";
+            root = "${kix-examples}";
+            sourceUrlBase = "https://github.com/kix-ops/kix-examples/blob/${kix-examples.rev or "main"}";
           };
 
         # Auto-generated per-package option reference (Markdown), produced

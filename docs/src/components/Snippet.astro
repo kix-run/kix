@@ -2,7 +2,7 @@
 // Snippet — render a region extracted by `docs/nix/snippets.nix`.
 //
 // Usage:
-//   import isProxy from '/src/snippets/06-scorecards/scorecard/isProxy.json';
+//   import isProxy from '/src/snippets/examples/19-scorecards/scorecard/isProxy.json';
 //   <Snippet {...isProxy} />
 //
 // Props match the JSON sidecar shape emitted by the snippet pipeline.
@@ -10,6 +10,12 @@ import { Code } from '@astrojs/starlight/components';
 
 interface Props {
   code: string;
+  childRegions?: Array<{
+    name: string;
+    startLine: number;
+    endLine: number;
+  }>;
+  elide?: Record<string, string>;
   source: string;
   startLine: number;
   endLine: number;
@@ -17,11 +23,35 @@ interface Props {
   lang?: string;
 }
 
-const { code, source, startLine, endLine, url, lang = 'nix' } = Astro.props;
+const {
+  code,
+  childRegions = [],
+  elide = {},
+  source,
+  startLine,
+  endLine,
+  url,
+  lang = 'nix',
+} = Astro.props;
 const title = `${source} (L${startLine}–L${endLine})`;
+
+const childByName = new Map(childRegions.map((child) => [child.name, child]));
+const replacements = Object.entries(elide)
+  .map(([name, replacement]) => {
+    const child = childByName.get(name);
+    return child ? { ...child, replacement } : null;
+  })
+  .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+  .sort((a, b) => b.startLine - a.startLine);
+
+const codeLines = code.split('\n');
+for (const { startLine, endLine, replacement } of replacements) {
+  codeLines.splice(startLine - 1, endLine - startLine + 1, replacement);
+}
+const renderedCode = codeLines.join('\n');
 ---
 
-<Code {code} {lang} {title} />
+<Code code={renderedCode} {lang} {title} />
 
 {url && (
   <p class="snippet-source">

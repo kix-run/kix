@@ -5,6 +5,8 @@ description: "Run the first Kix example locally on kind and make one edit."
 
 import { Steps } from '@astrojs/starlight/components';
 import CommandCwd from '/src/components/CommandCwd.astro';
+import Snippet from '/src/components/Snippet.astro';
+import helloWorldInstance from '/src/snippets/examples/02-hello-world/cluster/helloWorldInstance.json';
 
 In this tutorial you will deploy one tiny Kix cluster to kind, port-forward to
 it, and make one config edit. The point is to feel the loop:
@@ -41,15 +43,15 @@ Open the files for the first example:
 
 ```text
 flake.nix
-examples/01-hello-world/cluster.nix
-examples/01-hello-world/README.md
+examples/02-hello-world/cluster.nix
+examples/02-hello-world/README.md
 kind-config.yaml
 ```
 
 You do not need to understand all of them yet. For now:
 
 - `flake.nix` exposes the example clusters by name;
-- `examples/01-hello-world/cluster.nix` defines the first cluster;
+- `examples/02-hello-world/cluster.nix` defines the first cluster;
 - `kind-config.yaml` creates a local kind cluster named `kix-demo`.
 
 ## Enter A Shell With The Tools
@@ -72,7 +74,7 @@ kix list clusters
 ```
 <CommandCwd cwd="kix-examples/" />
 
-You should see `01-hello-world` in the output. If you are not in the example
+You should see `02-hello-world` in the output. If you are not in the example
 repo, point Kix at it explicitly:
 
 ```sh
@@ -114,7 +116,7 @@ continue with the deploy step.
 Deploy the first Kix example:
 
 ```sh
-kix deploy 01-hello-world -y
+kix deploy 02-hello-world -y
 ```
 <CommandCwd cwd="kix-examples/" />
 
@@ -124,7 +126,7 @@ cluster, sees there is no previous activation, and applies the resources.
 List the packages installed in this Kix cluster:
 
 ```sh
-kix list packages --cluster 01-hello-world
+kix list packages --cluster 02-hello-world
 ```
 <CommandCwd cwd="kix-examples/" />
 
@@ -132,8 +134,8 @@ You should see an installed `hello-world` instance. You can also ask Kubernetes
 directly:
 
 ```sh
-kubectl get pods -n example-01
-kubectl get svc -n example-01
+kubectl get pods -n tutorial-02
+kubectl get svc -n tutorial-02
 ```
 
 ## Reach The Service
@@ -142,7 +144,7 @@ The first example installs an `echo-server` package instance named
 `hello-world`. Use `kix pf` to port-forward to its primary workload:
 
 ```sh
-kix pf 01-hello-world hello-world 8080:80
+kix pf 02-hello-world hello-world 8080:80
 ```
 <CommandCwd cwd="kix-examples/" />
 
@@ -172,17 +174,13 @@ know the model and just need the command details.
 
 ## Make One Edit
 
-Open `examples/01-hello-world/cluster.nix` and find this config:
+Open `examples/02-hello-world/cluster.nix` and find this instance:
 
-```nix
-config = {
-  message = "Hello from Kix!";
-};
-```
+<Snippet {...helloWorldInstance} />
 
 Change the message:
 
-```nix
+```nix title="kix-examples/examples/02-hello-world/cluster.nix"
 config = {
   message = "Hello from my laptop!";
 };
@@ -191,14 +189,14 @@ config = {
 Deploy again:
 
 ```sh
-kix deploy 01-hello-world -y
+kix deploy 02-hello-world -y
 ```
 <CommandCwd cwd="kix-examples/" />
 
 Port-forward and curl again:
 
 ```sh
-kix pf 01-hello-world hello-world 8080:80
+kix pf 02-hello-world hello-world 8080:80
 ```
 <CommandCwd cwd="kix-examples/" />
 
