@@ -43,6 +43,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: kixpkgs
+          # Nix's git fetcher needs the full history to resolve refs/revs
+          # cleanly. Default fetch-depth=1 (shallow) breaks things.
+          fetch-depth: 0
 
       - name: Checkout kix-examples
         uses: actions/checkout@v4
@@ -50,6 +53,7 @@ jobs:
           repository: kix-ops/kix-examples
           token: ${{ secrets.KIX_EXAMPLES_TOKEN }}
           path: kix-examples
+          fetch-depth: 0
 
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@main
@@ -86,7 +90,8 @@ jobs:
           nix build ./docs#site \
             --override-input kix-examples "git+file://${{ github.workspace }}/kix-examples" \
             --override-input kix-examples/kixpkgs "git+file://${{ github.workspace }}/kixpkgs" \
-            --print-build-logs
+            --print-build-logs \
+            --show-trace
 
       - name: Stage combined artifact
         run: |
