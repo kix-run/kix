@@ -4,8 +4,7 @@
 # Dev:    nix run  ./docs#dev
 #
 # This is a true sibling subflake — the top-level kixpkgs flake does NOT
-# depend on it. The `kixpkgs` input below is reserved for future use
-# (reading package metadata from the parent flake).
+# depend on it.
 #
 # Requires `nix-command` and `flakes` to be enabled in the host's Nix
 # config (standard on nix-darwin / NixOS / most setups). `pipe-operators`
@@ -21,7 +20,6 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
-    kixpkgs.url = "path:../";
     # Local sibling checkout for dev iteration. CI builds the docs site
     # by checking kix-examples out separately and passing
     # `--override-input kix-examples git+file://$PWD/...` to `nix build`.

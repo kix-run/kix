@@ -52,11 +52,28 @@ jobs:
           path: kix-examples
 
       - name: Install Nix
-        uses: cachix/install-nix-action@v27
+        uses: DeterminateSystems/nix-installer-action@main
         with:
-          extra_nix_config: |
+          extra-conf: |
             experimental-features = nix-command flakes pipe-operators
             accept-flake-config = true
+
+      # Cache /nix/store across runs so subsequent builds skip the
+      # ~10 min cold-build (Node toolchain, npm deps, Astro build).
+      # See https://github.com/nix-community/cache-nix-action
+      - name: Cache Nix store
+        uses: nix-community/cache-nix-action@v6
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('docs/flake.lock', 'docs/package-lock.json', 'docs/flake.nix', 'docs/nix/**', 'kix/packages/**') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          # Trim the cached store before saving — keeps the cache under
+          # GitHub's 10 GB-per-repo cap and avoids paying upload time
+          # for paths the next run can't use.
+          gc-max-store-size-linux: 5G
+          purge: true
+          purge-prefixes: nix-${{ runner.os }}-
+          purge-created: 0
+          purge-primary-key: never
 
       - name: Build docs site
         working-directory: kixpkgs
