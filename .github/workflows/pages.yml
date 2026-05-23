@@ -27,6 +27,8 @@ permissions:
   contents: read
   pages: write
   id-token: write
+  # Lets cache-nix-action GC stale caches at the end of the run.
+  actions: write
 
 concurrency:
   group: pages
