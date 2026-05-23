@@ -227,9 +227,14 @@ let
           ]
         ) regions
       );
+      # The manifest is metadata — keep it free of store-path
+      # references so `builtins.toFile` works even when the
+      # underlying source flake input hasn't yet been materialised
+      # in the local Nix store (this comes up in CI where overrides
+      # delay realisation).
       manifestEntry = {
         inherit name;
-        file = fileStr;
+        file = "${name}.nix";
         regions = map (r: {
           inherit (r) name startLine endLine;
         }) regions;
