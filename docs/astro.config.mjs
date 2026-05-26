@@ -33,6 +33,11 @@ export default defineConfig({
     starlight({
       title: 'Kix',
       description: 'Nix-evaluated Kubernetes packages and clusters',
+      components: {
+        // Replace the default theme dropdown (laptop icon labelled
+        // "Auto") with three explicit Light/Dark/Auto icon buttons.
+        ThemeSelect: './src/components/ThemeSelect.astro',
+      },
       plugins: [
         // Splits the sidebar into Diátaxis "topics" so only the
         // current topic's children show in the left nav. The topic
