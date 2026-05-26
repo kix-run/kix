@@ -1,11 +1,13 @@
 import { defineCollection } from 'astro:content';
 import { docsLoader } from '@astrojs/starlight/loaders';
 import { docsSchema } from '@astrojs/starlight/schema';
+import { docsVersionsLoader } from 'starlight-versions/loader';
+import { topicSchema } from './lib/sidebar-topics/schema';
 
-// Note: when starlight-versions is activated (non-empty `versions` array in
-// astro.config.mjs), this file must also wire in `docsVersionsLoader()` from
-// `starlight-versions/loader`. See:
-//   https://starlight-versions.netlify.app/getting-started/
 export const collections = {
-  docs: defineCollection({ loader: docsLoader(), schema: docsSchema() }),
+  docs: defineCollection({
+    loader: docsLoader(),
+    schema: docsSchema({ extend: topicSchema }),
+  }),
+  versions: defineCollection({ loader: docsVersionsLoader() }),
 };

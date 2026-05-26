@@ -2,9 +2,8 @@
 
 Astro Starlight site for Kix. Built as a true sibling Nix subflake.
 
-Deployed at **<https://kixops.dev/docs/>** (current tree) with pinned
-version snapshots at `kixops.dev/docs/v0.1/`, etc. GitHub Pages serves
-the merged `homepage/` + `docs/` artifact — see
+Deployed at **<https://kixops.dev/docs/>**. GitHub Pages serves the
+merged `homepage/` + `docs/` artifact — see
 `.github/workflows/pages.yml`.
 
 ## Build
@@ -152,4 +151,7 @@ import isProxyCode from '/src/snippets/examples/19-scorecards/scorecard/isProxy.
 ## Plugins
 
 - [`starlight-llms-txt`](https://github.com/delucis/starlight-llms-txt) — emits `llms.txt` and per-page `.md` for LLM ingestion.
-- [`starlight-versions`](https://github.com/HiDeoo/starlight-versions) — multi-version routing. The `versions` array in `astro.config.mjs` is empty until v0.1 is cut.
+- [`starlight-sidebar-topics`](https://starlight-sidebar-topics.netlify.app/) — splits the Diátaxis quadrants into top-level "topics", each with its own scoped sidebar.
+- [`starlight-links-validator`](https://starlight-links-validator.vercel.app/) — fails the build on broken internal links. Links must include the `/docs/` base prefix; see `docs/CLAUDE.md` for the convention.
+- [`starlight-github-alerts`](https://starlight-github-alerts.netlify.app/) — renders GitHub-style `> [!NOTE]` / `> [!WARNING]` blocks as Starlight asides.
+- [`starlight-page-actions`](https://starlight-page-actions.dlcastillop.com/) — "Copy as Markdown" + "Open in ChatGPT/Claude" + share menu in the page header.

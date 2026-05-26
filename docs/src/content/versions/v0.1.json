@@ -1,7 +1,16 @@
 {
   "sidebar": [
     {
-      "label": "Tutorials",
+      "label": "0",
+      "items": [
+        {
+          "label": "Welcome",
+          "link": "/"
+        }
+      ]
+    },
+    {
+      "label": "1",
       "items": [
         {
           "autogenerate": {
@@ -11,7 +20,7 @@
       ]
     },
     {
-      "label": "How-to guides",
+      "label": "2",
       "items": [
         {
           "label": "Start and inspect a Kix project",
@@ -96,7 +105,7 @@
       ]
     },
     {
-      "label": "Reference",
+      "label": "3",
       "items": [
         {
           "label": "Cluster module",
@@ -221,7 +230,7 @@
       ]
     },
     {
-      "label": "Explanation",
+      "label": "4",
       "items": [
         {
           "autogenerate": {

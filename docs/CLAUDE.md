@@ -102,23 +102,29 @@ standard callout when the link changes Diátaxis mode.
 
 Use these labels consistently:
 
+Cross-link paths are **always absolute, prefixed with `/docs/`** (the site's
+base path), never relative (`../`). The `starlight-links-validator` plugin
+enforces this — relative links aren't validated, and absolute links without
+the `/docs/` prefix fail validation because the validator matches against
+final URL paths.
+
 ```md
 :::tip[Try it as a tutorial]
-Work through [First local package and service-to-service dependency](../tutorials/06-first-local-package-and-service-to-service-dependency/)
+Work through [First local package and service-to-service dependency](/docs/tutorials/06-first-local-package-and-service-to-service-dependency/)
 if you want to learn this by building it from scratch.
 :::
 
 :::tip[Use it in a task]
-See [Wire cross-namespace dependencies explicitly](../how-to/debug-dependency-wiring/wire-cross-namespace-dependencies-explicitly/)
+See [Wire cross-namespace dependencies explicitly](/docs/how-to/debug-dependency-wiring/wire-cross-namespace-dependencies-explicitly/)
 when you already know the model and just need the steps.
 :::
 
 :::note[Reference]
-See [`deps`](../reference/instance-schema/deps/) for the exact instance schema.
+See [`deps`](/docs/reference/instance-schema/deps/) for the exact instance schema.
 :::
 
 :::note[Explanation]
-See [Dependency resolution and why explicit deps matter](../explanation/dependency-resolution-and-why-explicit-deps-matter/)
+See [Dependency resolution and why explicit deps matter](/docs/explanation/dependency-resolution-and-why-explicit-deps-matter/)
 for the design reasoning behind this rule.
 :::
 ```

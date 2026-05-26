@@ -102,30 +102,22 @@
 
           # To regenerate after dep changes: set to lib.fakeHash, rebuild,
           # paste the "got: sha256-…" hash from the error.
-          npmDepsHash = "sha256-AW84aqCQBvnO07QMAcsc9H1m/M1tiMytz+rVS0IApy8=";
+          npmDepsHash = "sha256-iZc+c56BhmITniDwKxrMW40KKagqHUf+RK/S8saNfMU=";
 
           # Astro/Starlight have no install scripts we care about; keep
           # the build hermetic.
           npmFlags = [ "--ignore-scripts" ];
 
-          # Drop generated content into the Starlight tree BEFORE `npm run build`:
-          # - Snippets land under `_snippets/` (underscore-prefixed → not routable,
-          #   reusable via include/import from real pages).
-          # - Per-package reference Markdown lands under `reference/package-catalog/`,
-          #   overwriting any placeholder pages Phase 2A created for these names.
-          #   Generated content wins.
           # Drop generated content into the source tree before `npm run build`:
           # - Snippets land under `src/snippets/` (OUTSIDE the Starlight
-          #   content collection so they're not parsed as MDX and not
-          #   archived by starlight-versions). Pages reach them with
-          #   Vite `?raw` imports.
+          #   content collection so they're not parsed as MDX). Pages
+          #   reach them with Vite `?raw` imports.
           # - Per-package reference Markdown lands under
           #   `src/content/docs/reference/package-catalog/`, overwriting
           #   any placeholder pages Phase 2A wrote for these names.
           #   Generated content wins.
           # `--no-preserve=mode` + chmod so the copies are writable —
-          # starlight-versions writes the v0.1 archive in-tree at build
-          # time, and files from the Nix store arrive read-only.
+          # files from the Nix store arrive read-only.
           preBuild = ''
             mkdir -p src/snippets
             cp -r --no-preserve=mode ${snippets}/. src/snippets/
