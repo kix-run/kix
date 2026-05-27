@@ -1,4 +1,195 @@
 ---
 title: "05. Basic graph and deploy loop"
-description: TODO
+description: "Check, preview, deploy, and inspect a small cluster before adding dependencies."
 ---
+
+import CommandCwd from '/src/components/CommandCwd.astro';
+
+The last tutorial created a cluster from scratch. This tutorial uses that same
+cluster to look more closely at the Kix loop:
+
+1. check the cluster before deploying;
+2. inspect what Kix will build;
+3. preview changes against the live cluster;
+4. deploy the checked result;
+5. inspect the package and resource graph.
+
+The goal is not to learn every graph detail yet. The goal is to see that Kix
+can evaluate a cluster before it touches Kubernetes.
+
+## Prerequisites
+
+- Finish the [first cluster from scratch tutorial](/docs/tutorials/04-first-cluster-from-scratch/).
+- Keep the `04-from-scratch` cluster entry in `flake.nix`.
+- Make sure the new cluster file is known to Git. New files in a Git flake are
+  invisible to Nix until they are added to the index:
+
+```sh
+git ls-files --error-unmatch tutorial-04/cluster.nix
+```
+<CommandCwd cwd="kix-examples/" />
+
+If that command fails, add the file:
+
+```sh
+git add tutorial-04/cluster.nix
+```
+<CommandCwd cwd="kix-examples/" />
+
+## Check Before Deploy
+
+Run the Kix checks first:
+
+```sh
+kix check 04-from-scratch
+```
+<CommandCwd cwd="kix-examples/" />
+
+This evaluates the cluster and runs validation before anything is applied to
+Kubernetes. For this tiny cluster, the output should be short. The important
+part is the habit: check the evaluated cluster before deploying it.
+
+If Kix fails here, fix the cluster file before moving on. A failed check means
+the deploy step should not run yet.
+
+## Inspect The Rendered Result
+
+Now render the cluster:
+
+```sh
+kix build 04-from-scratch
+```
+<CommandCwd cwd="kix-examples/" />
+
+This prints the Kubernetes resources Kix built from your cluster definition.
+You should see familiar objects such as a Namespace, Deployment, and Service.
+
+For now, use `kix build` as a window into what Kix evaluated. In normal use,
+you usually let `kix deploy` render and apply the checked result for you.
+
+:::note[Reference]
+See [`build`](/docs/reference/cli/build/) for the command shape. This tutorial
+uses it only for inspection.
+:::
+
+## Preview Against The Cluster
+
+Ask Kix what is different from the live cluster:
+
+```sh
+kix diff 04-from-scratch
+```
+<CommandCwd cwd="kix-examples/" />
+
+If your live cluster already matches the checked result, the diff should be
+empty or say there is nothing to change.
+
+Now make a visible edit in `tutorial-04/cluster.nix`:
+
+```nix title="tutorial-04/cluster.nix"
+config = {
+  message = "Preview this before deploy.";
+};
+```
+
+Check that Git sees the edit:
+
+```sh
+git status --short
+```
+<CommandCwd cwd="kix-examples/" />
+
+Because `tutorial-04/cluster.nix` is already tracked, Nix can see this dirty
+edit. You do not need to commit it.
+
+Run the diff again:
+
+```sh
+kix diff 04-from-scratch
+```
+<CommandCwd cwd="kix-examples/" />
+
+This time Kix should show the change before it applies anything. That is the
+basic preview loop: edit locally, evaluate locally, inspect the change, then
+deploy.
+
+:::tip[Use it in a task]
+See [Preview changes with `kix diff`](/docs/how-to/operate-a-cluster/preview-changes-with-kix-diff/)
+when you already know the model and just need the command steps.
+:::
+
+## Deploy The Checked Result
+
+Deploy the change:
+
+```sh
+kix deploy 04-from-scratch -y
+```
+<CommandCwd cwd="kix-examples/" />
+
+Kix evaluates the cluster, computes what needs to change, and applies the
+checked result to Kubernetes.
+
+Check the resource status:
+
+```sh
+kix status 04-from-scratch
+```
+<CommandCwd cwd="kix-examples/" />
+
+Then port-forward and verify the response:
+
+```sh
+kix pf 04-from-scratch hello-world 8080:80
+```
+<CommandCwd cwd="kix-examples/" />
+
+In another terminal:
+
+```sh
+curl http://localhost:8080/
+```
+
+You should see:
+
+```text
+Preview this before deploy.
+```
+
+Stop the port-forward with `Ctrl-C`.
+
+## See The First Graph Shape
+
+Run:
+
+```sh
+kix graph 04-from-scratch --format tree
+```
+<CommandCwd cwd="kix-examples/" />
+
+For this cluster the graph is still small. You may see Kix's own activation
+resources, the namespace, platform imports, and the `hello-world` package
+resources. The useful habit is to read the graph as "what Kix knows about this
+cluster," not as raw YAML.
+
+Do not worry about the deeper graph mechanics yet. Later tutorials add service
+dependencies, cross-namespace wiring, generated network policy, and scorecard
+rules. Each one gives the graph more useful information.
+
+:::note[Explanation]
+See [The dependency graph as the model](/docs/explanation/the-dependency-graph-as-the-model/)
+when you want the design reasoning behind the graph.
+:::
+
+## What You Learned
+
+You used the same local cluster definition through the main Kix loop:
+
+- `kix check` catches problems before deploy;
+- `kix build` shows the rendered Kubernetes resources;
+- `kix diff` previews changes against the live cluster;
+- `kix deploy` applies the evaluated result;
+- `kix status` and `kix graph` inspect what Kix knows afterward.
+
+The next tutorial adds the first real relationship: one local package depends
+on another service.

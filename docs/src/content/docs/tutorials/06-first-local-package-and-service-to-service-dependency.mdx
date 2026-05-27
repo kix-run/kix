@@ -1,4 +1,237 @@
 ---
-title: "06. First local package and service-to-service dependency"
-description: TODO
+title: "06. Use a local package and service-to-service dependency"
+description: "Run a local reverse-proxy package and inspect its dependency on a backend service."
 ---
+
+import CommandCwd from '/src/components/CommandCwd.astro';
+import Snippet from '/src/components/Snippet.astro';
+import localPackageImport from '/src/snippets/examples/06-service-dep/cluster/localPackageImport.json';
+import buildArgs from '/src/snippets/examples/06-service-dep/reverse-proxy-package/buildArgs.json';
+import configmap from '/src/snippets/examples/06-service-dep/reverse-proxy-package/configmap.json';
+
+So far, each tutorial cluster has had one service. This tutorial adds the first
+service-to-service relationship.
+
+You will run the `06-service-dep` example from `kix-examples`: an nginx
+`gateway` proxies to a backend `echo-server`. The gateway package asks Kix for a
+`backend` dependency, then uses the backend's public `out` values to build its
+nginx config. You will use and inspect the local package here; the next
+tutorial will spend more time on package anatomy.
+
+## Prerequisites
+
+- Finish the [basic graph and deploy loop tutorial](/docs/tutorials/05-basic-graph-and-deploy-loop/).
+- Keep the same `kix-examples` checkout and kind cluster.
+
+This tutorial returns to a checked-in example, so you do not need to keep the
+files from tutorial 04 staged.
+
+## What This Example Builds
+
+Open:
+
+```text
+examples/06-service-dep/cluster.nix
+examples/06-service-dep/reverse-proxy-package.nix
+```
+
+The cluster has two instances in the `tutorial-06` namespace:
+
+| Instance | Package | Job |
+|---|---|---|
+| `backend` | `packages.echo-server` | answers HTTP with a fixed message |
+| `gateway` | local `reverse-proxy-package.nix` | proxies HTTP traffic to `backend` |
+
+When you curl the gateway, the request path is:
+
+```text
+localhost:8080 -> gateway pod -> backend Service -> backend pod
+```
+
+No Ingress or LoadBalancer is involved. This is just two ClusterIP Services and
+one dependency edge.
+
+## Import A Local Package
+
+The previous tutorials used a catalog package from `kixpkgs`:
+`packages.echo-server`.
+
+This example also imports a package from the example folder:
+
+<Snippet {...localPackageImport} />
+
+`let ... in ...` creates a local binding. Here it means: evaluate
+`./reverse-proxy-package.nix` once, call it `reverseProxyPackage`, and use that
+name later in the cluster definition.
+
+This keeps cluster composition and package implementation separate:
+
+- `cluster.nix` says which package instances are installed;
+- `reverse-proxy-package.nix` says how the local package builds Kubernetes
+  resources.
+
+## Install Two Instances
+
+The cluster installs two package instances:
+
+```nix title="examples/06-service-dep/cluster.nix"
+backend = {
+  package = packages.echo-server;
+  config = {
+    message = "Hello from the backend!";
+  };
+};
+
+gateway = {
+  package = reverseProxyPackage;
+};
+```
+
+The `backend` instance is a normal `echo-server`. The `gateway` instance uses
+the local reverse-proxy package.
+
+Notice what the gateway instance does not say: it does not include a Service
+name, namespace, DNS name, or port for the backend. The package asks for a
+`backend` dependency, and Kix resolves that request to the instance named
+`backend` in the same namespace.
+
+That same-namespace name match is the first dependency resolution rule you need
+to learn. Later tutorials will make cross-namespace dependencies explicit.
+
+## Ask For A Dependency In The Package
+
+Open `examples/06-service-dep/reverse-proxy-package.nix`. The package's
+`build` function receives named arguments from Kix:
+
+<Snippet {...buildArgs} />
+
+Do not try to unpack every argument yet. The important new one is `backend`.
+That is the dependency. Inside the package,
+`backend` exposes an `out` API with values the package can use safely.
+
+For now, treat `out` as the public interface another instance exposes. It gives
+you names, DNS names, ports, selectors, and similar values without hardcoding
+them.
+
+:::note[Reference]
+See [Common resource fields](/docs/reference/out/common-resource-fields/) for
+the common fields available through `out`.
+:::
+
+## Use The Backend's `out` Values
+
+The reverse proxy writes an nginx config into a ConfigMap:
+
+<Snippet {...configmap} />
+
+The important line is the `proxy_pass` target:
+
+```nix
+proxy_pass http://${backend.out.fqdn}:${backend.out.port}/;
+```
+
+That line does two jobs:
+
+- it builds a real nginx upstream URL using the backend Service DNS name and
+  port;
+- it consumes the backend's public values instead of repeating Kubernetes names
+  by hand.
+
+You do not need to hand-copy the backend Service name into the gateway config.
+The package dependency creates the relationship; the package code reads the
+backend's public interface.
+
+## Deploy The Example
+
+Deploy the example:
+
+```sh
+kix deploy 06-service-dep -y
+```
+<CommandCwd cwd="kix-examples/" />
+
+Port-forward to the gateway:
+
+```sh
+kix pf 06-service-dep gateway 8080:80
+```
+<CommandCwd cwd="kix-examples/" />
+
+In another terminal:
+
+```sh
+curl http://localhost:8080/
+```
+
+You should see:
+
+```text
+Hello from the backend!
+```
+
+The response comes from the backend pod. The gateway only proxies the request.
+
+Stop the port-forward with `Ctrl-C`.
+
+## Inspect The Wiring
+
+Ask Kix to show the dependency graph:
+
+```sh
+kix graph 06-service-dep --format tree
+```
+<CommandCwd cwd="kix-examples/" />
+
+Look for the `gateway` instance and the backend resources it depends on.
+
+You can also render the manifests and inspect the generated nginx config:
+
+```sh
+kix build 06-service-dep
+```
+<CommandCwd cwd="kix-examples/" />
+
+In the gateway ConfigMap, the `proxy_pass` URL should contain the backend's
+cluster DNS name. The package code did not hardcode that name; it came from
+`backend.out.fqdn`.
+
+## Try Breaking The Name Match
+
+In `examples/06-service-dep/cluster.nix`, rename the `backend` instance to
+`api`:
+
+```nix title="examples/06-service-dep/cluster.nix"
+api = {
+  package = packages.echo-server;
+  config = {
+    message = "Hello from the backend!";
+  };
+};
+```
+
+Then run:
+
+```sh
+kix check 06-service-dep
+```
+<CommandCwd cwd="kix-examples/" />
+
+Kix should fail because the gateway package asks for `backend`, but there is no
+same-namespace instance with that name anymore.
+
+Change `api` back to `backend` before continuing. Later tutorials assume this
+example is back in its working state.
+
+## What You Learned
+
+You added the first real edge to the tutorial path:
+
+- a cluster can import a local package;
+- an instance installs that local package just like a catalog package;
+- a package can ask for another instance by argument name;
+- Kix resolves that argument to a matching same-namespace instance;
+- `out` lets one package use another package's public values without hardcoded
+  Service names.
+
+The next dependency tutorial puts the two services in different namespaces and
+uses `ref` to make the wiring explicit.

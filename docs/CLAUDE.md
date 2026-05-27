@@ -110,7 +110,7 @@ final URL paths.
 
 ```md
 :::tip[Try it as a tutorial]
-Work through [First local package and service-to-service dependency](/docs/tutorials/06-first-local-package-and-service-to-service-dependency/)
+Work through the [first local package and service-to-service dependency tutorial](/docs/tutorials/06-first-local-package-and-service-to-service-dependency/)
 if you want to learn this by building it from scratch.
 :::
 
@@ -138,6 +138,9 @@ Callout rules:
 - Make the sentence say why the reader would follow the link.
 - Keep the link text human. Avoid naked filenames unless the file itself is
   the thing the reader needs.
+- Prefer contextual link text over bare page titles. For example, write
+  "work through the [project files and flake entry point tutorial](/docs/tutorials/03-project-skeleton-and-flake-shape/)"
+  rather than "work through [Project files and flake entry point](/docs/tutorials/03-project-skeleton-and-flake-shape/)".
 
 ## Tutorials
 

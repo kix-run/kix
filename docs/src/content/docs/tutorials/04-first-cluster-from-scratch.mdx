@@ -1,4 +1,196 @@
 ---
 title: "04. First cluster from scratch"
-description: TODO
+description: "Create a minimal Kix cluster file, expose it through the flake, and deploy it locally."
 ---
+
+import CommandCwd from '/src/components/CommandCwd.astro';
+
+In the previous tutorial you read the files that make an example cluster work.
+Now you will create one small cluster yourself.
+
+You will add a new cluster to your `kix-examples` checkout, deploy one
+`echo-server` instance to kind, and reach it through `kix pf`.
+
+## Prerequisites
+
+- Work through the [project files and flake entry point tutorial](/docs/tutorials/03-project-skeleton-and-flake-shape/).
+- Have the `kix-examples` repo from tutorial 02. If you need a fresh copy,
+  clone it now:
+
+```sh
+git clone https://github.com/kix-ops/kix-examples.git
+cd kix-examples
+```
+<CommandCwd cwd="any parent directory" />
+
+- Keep the `kix-demo` kind cluster running, or recreate it with:
+
+```sh
+kind create cluster --config kind-config.yaml
+```
+<CommandCwd cwd="kix-examples/" />
+
+## Add A New Cluster File
+
+Create a new tutorial directory:
+
+```sh
+mkdir -p tutorial-04
+```
+<CommandCwd cwd="kix-examples/" />
+
+Create `tutorial-04/cluster.nix`:
+
+```nix title="tutorial-04/cluster.nix"
+{ kix, packages }:
+
+kix.buildCluster {
+  name = "04-from-scratch";
+
+  modules = [
+    kix.flavors.kind
+
+    {
+      namespaces = {
+        tutorial-04 = { };
+      };
+
+      instances.tutorial-04 = {
+        hello-world = {
+          package = packages.echo-server;
+          config = {
+            message = "Hello from my first Kix cluster!";
+          };
+        };
+      };
+    }
+  ];
+}
+```
+
+Most of this should look familiar from the previous tutorial:
+
+- `{ kix, packages }:` says this file receives the Kix helpers and package
+  catalog.
+- `kix.buildCluster` builds one named cluster.
+- `kix.flavors.kind` says the target is a local kind cluster.
+- `namespaces.tutorial-04 = { };` tells Kix to manage one namespace.
+- `instances.tutorial-04.hello-world` installs one package instance in that
+  namespace.
+
+The new thing is that you wrote the file yourself.
+
+## Expose The Cluster In `flake.nix`
+
+Open `flake.nix` and add one line inside the `clusters = { ... };` block:
+
+```nix title="flake.nix"
+clusters = {
+  # existing example entries...
+  "04-from-scratch" = ./tutorial-04/cluster.nix;
+};
+```
+
+The left side, `"04-from-scratch"`, is the cluster name you will pass to the
+CLI. The right side points at the file you just created.
+
+Because `kix-examples` is a Git flake, Nix only sees files known to Git. Stage
+the new file and the flake edit before running Kix:
+
+```sh
+git add flake.nix tutorial-04/cluster.nix
+```
+<CommandCwd cwd="kix-examples/" />
+
+You do not need to commit. Staging is enough for Nix to include the new file in
+the flake source.
+
+## Check That Kix Can See It
+
+List the clusters:
+
+```sh
+kix list clusters
+```
+<CommandCwd cwd="kix-examples/" />
+
+You should see `04-from-scratch` in the list.
+
+If you do not, check three things:
+
+- you added the line inside the `clusters = { ... };` block;
+- the file path is `./tutorial-04/cluster.nix`;
+- you staged both `flake.nix` and `tutorial-04/cluster.nix`.
+
+## Deploy It
+
+Deploy the cluster:
+
+```sh
+kix deploy 04-from-scratch -y
+```
+<CommandCwd cwd="kix-examples/" />
+
+Ask Kubernetes what changed:
+
+```sh
+kubectl get pods -n tutorial-04
+kubectl get svc -n tutorial-04
+```
+
+You should see one Pod and one Service for the `hello-world` instance.
+
+## Reach The Service
+
+Port-forward to the package instance:
+
+```sh
+kix pf 04-from-scratch hello-world 8080:80
+```
+<CommandCwd cwd="kix-examples/" />
+
+Leave that running. In another terminal:
+
+```sh
+curl http://localhost:8080/
+```
+
+You should see:
+
+```text
+Hello from my first Kix cluster!
+```
+
+Stop the port-forward with `Ctrl-C`.
+
+## Make One More Edit
+
+Change the message in `tutorial-04/cluster.nix`:
+
+```nix title="tutorial-04/cluster.nix"
+config = {
+  message = "Kix rebuilt this from my cluster definition.";
+};
+```
+
+Deploy again:
+
+```sh
+kix deploy 04-from-scratch -y
+```
+<CommandCwd cwd="kix-examples/" />
+
+Port-forward and curl again. The response should use your new message.
+
+## What You Learned
+
+You created the smallest useful Kix cluster from scratch:
+
+- a cluster file that calls `kix.buildCluster`;
+- a kind flavor;
+- one managed namespace;
+- one package instance;
+- one flake entry that gives the cluster a CLI name.
+
+The next tutorial slows down on the deploy loop. You will check, build, diff,
+and inspect this cluster before applying changes.
