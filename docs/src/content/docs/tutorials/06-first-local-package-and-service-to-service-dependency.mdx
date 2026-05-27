@@ -148,13 +148,6 @@ backend's public interface.
 
 Before deploying, ask Kix to evaluate and check the cluster:
 
-```sh
-kix check 06-service-dep
-```
-<CommandCwd cwd="kix-examples/" />
-
-The generated output should look like this:
-
 <CommandOutput {...checkOutput} />
 
 ## Deploy The Example
@@ -192,13 +185,6 @@ Stop the port-forward with `Ctrl-C`.
 ## Inspect The Wiring
 
 Ask Kix to show the dependency graph:
-
-```sh
-kix graph 06-service-dep --format tree
-```
-<CommandCwd cwd="kix-examples/" />
-
-This is the shape of the generated output:
 
 <CommandOutput {...graphOutput} />
 

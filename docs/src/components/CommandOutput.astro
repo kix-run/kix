@@ -1,10 +1,10 @@
 ---
-// CommandOutput — render JSON captured by docs/nix/command-outputs.nix.
+// CommandOutput — render JSON captured by docs/nix/command-outputs.nix as a
+// single terminal-style block: command first, output directly below.
 //
 // Usage:
 //   import check from '/src/command-output/tutorials/06-service-dep/check.json';
 //   <CommandOutput {...check} />
-import { Code } from '@astrojs/starlight/components';
 
 interface Props {
   command: string;
@@ -22,29 +22,96 @@ const {
   exitCode,
   stdout,
   stderr = '',
-  lang = 'text',
   title,
 } = Astro.props;
 
 const renderedOutput = [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join('\n');
-const renderedTitle = title ?? `$ ${command}`;
+const renderedExit = exitCode === 0 ? '' : `\n(exit code: ${exitCode})`;
+const terminalTitle = title ?? (cwd ? `Run in ${cwd}` : 'Terminal');
+let commandWordIndex = -1;
+const commandTokens = command.split(/(\s+)/).map((token) => {
+  if (/^\s+$/.test(token)) return { token, kind: 'space' };
+  commandWordIndex += 1;
+  return {
+    token,
+    kind: commandWordIndex === 0 || token.startsWith('-') ? 'command' : 'argument',
+  };
+});
 ---
 
-<Code code={renderedOutput} {lang} title={renderedTitle} />
-
-{exitCode !== 0 && (
-  <p class="command-output-exit">
-    Exit code: <code>{exitCode}</code>
-  </p>
-)}
-
-{cwd && <p class="command-output-source">Generated from <code>{cwd}</code>.</p>}
+<figure class="command-output">
+  <figcaption>
+    <span class="terminal-dots" aria-hidden="true">
+      <span></span>
+      <span></span>
+      <span></span>
+    </span>
+    <span>{terminalTitle}</span>
+  </figcaption>
+  <pre><code><span class="command-line"><span class="prompt">❱</span> {commandTokens.map(({ token, kind }) =>
+    kind === 'space' ? token : <span class={kind}>{token}</span>
+  )}</span>{renderedOutput && `\n${renderedOutput}`}{renderedExit}</code></pre>
+</figure>
 
 <style>
-  .command-output-exit,
-  .command-output-source {
-    margin-top: 0.5rem;
-    font-size: 0.85em;
-    color: var(--sl-color-gray-3);
+  .command-output {
+    --command-output-command-color: #82aaff;
+    --command-output-argument-color: #ecc48d;
+    margin: 1rem 0;
+    border: var(--ec-brdWd, 1px) solid var(--ec-brdCol, var(--sl-color-gray-5));
+    background: var(--ec-frm-trmTtbBg, var(--sl-color-gray-6));
+  }
+  :global(:root:not([data-theme='dark'])) .command-output {
+    --command-output-command-color: #3b61b0;
+    --command-output-argument-color: #3b61b0;
+  }
+  :global(:root[data-theme='dark']) .command-output {
+    --command-output-command-color: #82aaff;
+    --command-output-argument-color: #ecc48d;
+  }
+  .command-output figcaption {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    min-height: 2.5rem;
+    padding: 0 1rem;
+    border-bottom: var(--ec-brdWd, 1px) solid
+      var(--ec-frm-trmTtbBrdBtmCol, var(--sl-color-gray-5));
+    color: var(--ec-frm-trmTtbFg, var(--sl-color-text));
+    font-size: 0.85rem;
+  }
+  .terminal-dots {
+    display: inline-flex;
+    gap: 0.38rem;
+  }
+  .terminal-dots span {
+    width: 0.65rem;
+    height: 0.65rem;
+    border-radius: 999px;
+    background: var(--ec-frm-trmTtbDotsFg, var(--sl-color-gray-5));
+    opacity: var(--ec-frm-trmTtbDotsOpa, 0.75);
+  }
+  .command-output pre {
+    margin: 0;
+    border: 0;
+    padding: 1rem;
+    overflow-x: auto;
+    background: var(--ec-frm-trmBg, var(--sl-color-gray-7));
+    color: var(--ec-codeFg, var(--sl-color-text));
+    font-size: var(--sl-text-code);
+    line-height: 1.6;
+  }
+  .command-output code {
+    font-family: var(--__sl-font-mono);
+  }
+  .command {
+    color: var(--command-output-command-color);
+  }
+  .argument {
+    color: var(--command-output-argument-color);
+  }
+  .prompt {
+    color: var(--command-output-command-color);
   }
 </style>

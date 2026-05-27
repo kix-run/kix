@@ -30,10 +30,11 @@ boundaries are the biggest places to slow down and teach deliberately.
   `/`. If the command can run from anywhere, do not add a `CommandCwd`.
 - When showing Kix command output, prefer generated output from
   `docs/nix/command-outputs-manifest.nix` rendered with `CommandOutput.astro`
-  over hand-written output. Only generate output for non-live commands that do
-  not require a Kubernetes cluster, kubeconfig, or live API access. Keep the
-  manifest grouped by docs page or example so it stays readable as the docs
-  grow.
+  over hand-written output. `CommandOutput.astro` renders the command and its
+  output together, so do not pair it with a separate shell fence or
+  `CommandCwd`. Only generate output for non-live commands that do not require
+  a Kubernetes cluster, kubeconfig, or live API access. Keep the manifest
+  grouped by docs page or example so it stays readable as the docs grow.
 - The canonical planning issue is:
   https://github.com/adamcharnock/kixpkgs/issues/20
 - The example repo guidance in `kix-examples/CLAUDE.md` applies when writing
