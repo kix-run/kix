@@ -23,6 +23,24 @@ Two rules the skill enforces and you should honor outside it too:
 - **Keep discussion docs short.** When a topic needs a new take, don't extend the old doc — start a fresh one, carry forward only the undiscussed/still-important parts, and archive the old. Target ~400 lines per doc. Future / non-blocking ideas go to `v2_discussions/interesting_thoughts/`, never the active folder.
 - **Archive on ship.** When a feature that traces back to a v2_discussions doc lands, re-invoke the skill in the same session: split shipped content from still-open questions (lift to `ROADMAP.md § Open design questions` or `interesting_thoughts/`), move the doc to `archive/`, update the README.
 
+## Copywriting / positioning
+
+When editing homepage, README, pitch, or positioning copy, preserve strong
+existing copy unless the user explicitly asks for a full rewrite. Prefer minimal
+surgical edits over replacing concise positioning with explanatory prose.
+
+For Kix public copy:
+
+- Lead with: "Kix is a Kubernetes compiler."
+- Keep "verifiable cluster artifact" as canonical language unless the user asks
+  to test alternatives.
+- Do not lead with "emits standard Kubernetes resources"; that is an
+  interoperability reassurance, not the core pitch.
+- Default flow is: define -> evaluate/check -> preview -> deploy.
+- Local/pre-commit feedback comes before PR/CI feedback.
+- Avoid sentence-ending "with confidence"; prefer "know what will happen before
+  they change Kubernetes."
+
 ## Breaking changes
 
 The kix API is in active development. Breaking changes are fine — none of the clusters are actively deployed. Prioritize clean design over backwards compatibility.
