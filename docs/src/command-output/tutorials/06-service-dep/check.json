@@ -1,0 +1,10 @@
+{
+  "id": "tutorials/06-service-dep/check",
+  "group": "tutorials/06-service-dep",
+  "page": "/docs/tutorials/06-first-local-package-and-service-to-service-dependency/",
+  "command": "kix check 06-service-dep",
+  "cwd": "kix-examples/",
+  "exitCode": 0,
+  "stdout": " TOOL         RESULT  DETAILS                                     \n eval         pass    14 manifests evaluated                      \n kubeconform  pass    skipped (not installed)                     \n pluto        pass    skipped (not installed)                     \n kyverno      pass    skipped (not installed)                     \n scorecard    skip    scorecard not enabled in cluster definition \n",
+  "stderr": ""
+}

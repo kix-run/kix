@@ -28,6 +28,12 @@ boundaries are the biggest places to slow down and teach deliberately.
   `CommandCwd` immediately below the block, for example
   `<CommandCwd cwd="kix-examples/" />`. If `cwd` names a directory, end it with
   `/`. If the command can run from anywhere, do not add a `CommandCwd`.
+- When showing Kix command output, prefer generated output from
+  `docs/nix/command-outputs-manifest.nix` rendered with `CommandOutput.astro`
+  over hand-written output. Only generate output for non-live commands that do
+  not require a Kubernetes cluster, kubeconfig, or live API access. Keep the
+  manifest grouped by docs page or example so it stays readable as the docs
+  grow.
 - The canonical planning issue is:
   https://github.com/adamcharnock/kixpkgs/issues/20
 - The example repo guidance in `kix-examples/CLAUDE.md` applies when writing

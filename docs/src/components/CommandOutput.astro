@@ -1,0 +1,50 @@
+---
+// CommandOutput — render JSON captured by docs/nix/command-outputs.nix.
+//
+// Usage:
+//   import check from '/src/command-output/tutorials/06-service-dep/check.json';
+//   <CommandOutput {...check} />
+import { Code } from '@astrojs/starlight/components';
+
+interface Props {
+  command: string;
+  cwd?: string;
+  exitCode: number;
+  stdout: string;
+  stderr?: string;
+  lang?: string;
+  title?: string;
+}
+
+const {
+  command,
+  cwd,
+  exitCode,
+  stdout,
+  stderr = '',
+  lang = 'text',
+  title,
+} = Astro.props;
+
+const renderedOutput = [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join('\n');
+const renderedTitle = title ?? `$ ${command}`;
+---
+
+<Code code={renderedOutput} {lang} title={renderedTitle} />
+
+{exitCode !== 0 && (
+  <p class="command-output-exit">
+    Exit code: <code>{exitCode}</code>
+  </p>
+)}
+
+{cwd && <p class="command-output-source">Generated from <code>{cwd}</code>.</p>}
+
+<style>
+  .command-output-exit,
+  .command-output-source {
+    margin-top: 0.5rem;
+    font-size: 0.85em;
+    color: var(--sl-color-gray-3);
+  }
+</style>

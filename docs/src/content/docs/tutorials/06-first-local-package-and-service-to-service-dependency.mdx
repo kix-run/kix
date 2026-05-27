@@ -4,7 +4,10 @@ description: "Run a local reverse-proxy package and inspect its dependency on a 
 ---
 
 import CommandCwd from '/src/components/CommandCwd.astro';
+import CommandOutput from '/src/components/CommandOutput.astro';
 import Snippet from '/src/components/Snippet.astro';
+import checkOutput from '/src/command-output/tutorials/06-service-dep/check.json';
+import graphOutput from '/src/command-output/tutorials/06-service-dep/graph-tree.json';
 import localPackageImport from '/src/snippets/examples/06-service-dep/cluster/localPackageImport.json';
 import buildArgs from '/src/snippets/examples/06-service-dep/reverse-proxy-package/buildArgs.json';
 import configmap from '/src/snippets/examples/06-service-dep/reverse-proxy-package/configmap.json';
@@ -141,6 +144,19 @@ You do not need to hand-copy the backend Service name into the gateway config.
 The package dependency creates the relationship; the package code reads the
 backend's public interface.
 
+## Check The Example
+
+Before deploying, ask Kix to evaluate and check the cluster:
+
+```sh
+kix check 06-service-dep
+```
+<CommandCwd cwd="kix-examples/" />
+
+The generated output should look like this:
+
+<CommandOutput {...checkOutput} />
+
 ## Deploy The Example
 
 Deploy the example:
@@ -181,6 +197,10 @@ Ask Kix to show the dependency graph:
 kix graph 06-service-dep --format tree
 ```
 <CommandCwd cwd="kix-examples/" />
+
+This is the shape of the generated output:
+
+<CommandOutput {...graphOutput} />
 
 Look for the `gateway` instance and the backend resources it depends on.
 

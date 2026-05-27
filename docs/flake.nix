@@ -20,6 +20,10 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    kixpkgs = {
+      url = "path:..";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     # Local sibling checkout for dev iteration. CI builds the docs site
     # by checking kix-examples out separately and passing
     # `--override-input kix-examples git+file://$PWD/...` to `nix build`.
@@ -28,7 +32,12 @@
   };
 
   outputs =
-    { nixpkgs, kix-examples, ... }:
+    {
+      nixpkgs,
+      kixpkgs,
+      kix-examples,
+      ...
+    }:
     let
       systems = [
         "x86_64-linux"
@@ -66,6 +75,20 @@
             root = "${kix-examples}";
             sourceUrlBase = "https://github.com/kix-ops/kix-examples/blob/${kix-examples.rev or "main"}";
           };
+
+        # Captured CLI output for docs examples. Only non-live commands belong
+        # here: commands must not require a Kubernetes cluster, kubeconfig, or
+        # network access beyond what Nix already needs to realise inputs.
+        commandOutputs =
+          let
+            commandOutputLib = import ./nix/command-outputs.nix {
+              inherit pkgs;
+              inherit (pkgs) lib;
+              kix = kixpkgs.packages.${pkgs.system}.kix;
+              kixExamples = kix-examples;
+            };
+          in
+          commandOutputLib;
 
         # Auto-generated per-package option reference (Markdown), produced
         # via `nixosOptionsDoc` against each package's `options` attrset.
@@ -122,6 +145,9 @@
             mkdir -p src/snippets
             cp -r --no-preserve=mode ${snippets}/. src/snippets/
             chmod -R u+w src/snippets
+            mkdir -p src/command-output
+            cp -r --no-preserve=mode ${commandOutputs}/. src/command-output/
+            chmod -R u+w src/command-output
             mkdir -p src/content/docs/reference/package-catalog
             cp -r --no-preserve=mode ${reference}/. src/content/docs/reference/package-catalog/
             chmod -R u+w src/content/docs/reference/package-catalog
@@ -185,14 +211,18 @@
               echo "→ building snippets pipeline"
               snip=$(nix build ./docs#snippets --no-link --print-out-paths)
 
+              echo "→ building command output pipeline"
+              command_outputs=$(nix build ./docs#commandOutputs --no-link --print-out-paths)
+
               echo "→ building reference pipeline"
               ref=$(nix build ./docs#reference --no-link --print-out-paths)
 
               echo "→ syncing generated content into docs/src"
-              mkdir -p docs/src/snippets docs/src/content/docs/reference/package-catalog
+              mkdir -p docs/src/snippets docs/src/command-output docs/src/content/docs/reference/package-catalog
               cp -r --no-preserve=mode "$snip"/. docs/src/snippets/
+              cp -r --no-preserve=mode "$command_outputs"/. docs/src/command-output/
               cp -r --no-preserve=mode "$ref"/. docs/src/content/docs/reference/package-catalog/
-              chmod -R u+w docs/src/snippets docs/src/content/docs/reference/package-catalog
+              chmod -R u+w docs/src/snippets docs/src/command-output docs/src/content/docs/reference/package-catalog
 
               cd docs
 
