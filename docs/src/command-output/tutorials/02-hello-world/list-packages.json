@@ -1,0 +1,17 @@
+{
+  "id": "tutorials/02-hello-world/list-packages",
+  "group": "tutorials/02-hello-world",
+  "page": "/docs/tutorials/02-local-setup-and-first-run/",
+  "cwd": "kix-examples/",
+  "generator": "offline",
+  "commands": [
+    {
+      "command": "kix list packages --cluster 02-hello-world",
+      "stdout": " NAME              VERSION  STATUS                  \n hello-world       1.27     installed [tutorial-02] \n platform-dns      -        import [kube-system]    \n platform-storage  -        import [kube-system]    \n",
+      "stderr": "",
+      "stdoutDrift": " NAME VERSION STATUS\n hello-world 1.27 installed [tutorial-02]\n platform-dns - import [kube-system]\n platform-storage - import [kube-system]\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

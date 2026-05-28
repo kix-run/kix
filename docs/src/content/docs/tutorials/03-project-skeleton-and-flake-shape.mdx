@@ -3,7 +3,7 @@ title: "03. Project files and flake entry point"
 description: "Understand the minimal files Kix needs to discover clusters and packages."
 ---
 
-import CommandCwd from '/src/components/CommandCwd.astro';
+import Command from '/src/components/Command.astro';
 import PlainFileTree from '/src/components/PlainFileTree.astro';
 import Snippet from '/src/components/Snippet.astro';
 import exampleFlake from '/src/snippets/flake/exampleFlake.json';
@@ -100,11 +100,10 @@ when you need the exact setup steps for your own repo.
 
 The attr name, `02-hello-world`, is the cluster name you pass to the CLI:
 
-```sh
-kix deploy 02-hello-world -y
-kix pf 02-hello-world hello-world 8080:80
-```
-<CommandCwd cwd="kix-examples/" />
+<Command commands={[
+  "kix deploy 02-hello-world -y",
+  "kix pf 02-hello-world hello-world 8080:80",
+]} cwd="kix-examples/" />
 
 The value points at the file that builds that cluster.
 
@@ -185,17 +184,12 @@ Kubernetes resources?"
 
 When you run a command from the repo root:
 
-```sh
-kix list clusters
-```
-<CommandCwd cwd="kix-examples/" />
+<Command commands={["kix list clusters"]} cwd="kix-examples/" />
 
 Kix evaluates the current directory's flake. If you pass `--flake`, it evaluates
 that flake instead:
 
-```sh
-kix --flake /path/to/kix-examples list clusters
-```
+<Command commands={["kix --flake /path/to/kix-examples list clusters"]} />
 
 From the flake outputs, the CLI can discover:
 

@@ -188,6 +188,21 @@
       # Run from the kixpkgs repo root. The script expects cwd to contain
       # the `docs/` directory.
       apps = forAllSystems (pkgs: {
+        # Live command output regenerator. Spins up a dedicated kind cluster,
+        # runs the kix commands listed in `nix/live-command-outputs-manifest.nix`,
+        # sanitises through the named transforms, and updates JSON sidecars
+        # under `docs/src/command-output/`. See `nix/live-command-outputs.nix`
+        # for the trust boundary and design rationale.
+        #
+        # Run: `nix run ./docs#regen-live-docs` (or `-- --apply` / `--check`).
+        regen-live-docs =
+          (import ./nix/live-command-outputs.nix {
+            inherit pkgs;
+            inherit (pkgs) lib;
+            kix = kixpkgs.packages.${pkgs.system}.kix;
+            kixExamples = kix-examples;
+          }).app;
+
         dev = {
           type = "app";
           program = toString (

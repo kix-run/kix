@@ -3,8 +3,7 @@ title: "06. Use a local package and service-to-service dependency"
 description: "Run a local reverse-proxy package and inspect its dependency on a backend service."
 ---
 
-import CommandCwd from '/src/components/CommandCwd.astro';
-import CommandOutput from '/src/components/CommandOutput.astro';
+import Command from '/src/components/Command.astro';
 import Snippet from '/src/components/Snippet.astro';
 import checkOutput from '/src/command-output/tutorials/06-service-dep/check.json';
 import graphOutput from '/src/command-output/tutorials/06-service-dep/graph-tree.json';
@@ -148,35 +147,21 @@ backend's public interface.
 
 Before deploying, ask Kix to evaluate and check the cluster:
 
-<CommandOutput {...checkOutput} />
+<Command {...checkOutput} />
 
 ## Deploy The Example
 
 Deploy the example:
 
-```sh
-kix deploy 06-service-dep -y
-```
-<CommandCwd cwd="kix-examples/" />
+<Command commands={["kix deploy 06-service-dep -y"]} cwd="kix-examples/" />
 
 Port-forward to the gateway:
 
-```sh
-kix pf 06-service-dep gateway 8080:80
-```
-<CommandCwd cwd="kix-examples/" />
+<Command commands={["kix pf 06-service-dep gateway 8080:80"]} cwd="kix-examples/" />
 
 In another terminal:
 
-```sh
-curl http://localhost:8080/
-```
-
-You should see:
-
-```text
-Hello from the backend!
-```
+<Command commands={[{ command: "curl http://localhost:8080/", stdout: "Hello from the backend!" }]} />
 
 The response comes from the backend pod. The gateway only proxies the request.
 
@@ -186,16 +171,13 @@ Stop the port-forward with `Ctrl-C`.
 
 Ask Kix to show the dependency graph:
 
-<CommandOutput {...graphOutput} />
+<Command {...graphOutput} />
 
 Look for the `gateway` instance and the backend resources it depends on.
 
 You can also render the manifests and inspect the generated nginx config:
 
-```sh
-kix build 06-service-dep
-```
-<CommandCwd cwd="kix-examples/" />
+<Command commands={["kix build 06-service-dep"]} cwd="kix-examples/" />
 
 In the gateway ConfigMap, the `proxy_pass` URL should contain the backend's
 cluster DNS name. The package code did not hardcode that name; it came from
@@ -217,10 +199,7 @@ api = {
 
 Then run:
 
-```sh
-kix check 06-service-dep
-```
-<CommandCwd cwd="kix-examples/" />
+<Command commands={["kix check 06-service-dep"]} cwd="kix-examples/" />
 
 Kix should fail because the gateway package asks for `backend`, but there is no
 same-namespace instance with that name anymore.

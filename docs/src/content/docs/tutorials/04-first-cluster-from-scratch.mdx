@@ -3,7 +3,7 @@ title: "04. First cluster from scratch"
 description: "Create a minimal Kix cluster file, expose it through the flake, and deploy it locally."
 ---
 
-import CommandCwd from '/src/components/CommandCwd.astro';
+import Command from '/src/components/Command.astro';
 
 In the previous tutorial you read the files that make an example cluster work.
 Now you will create one small cluster yourself.
@@ -15,29 +15,22 @@ You will add a new cluster to your `kix-examples` checkout, deploy one
 
 - Work through the [project files and flake entry point tutorial](/docs/tutorials/03-project-skeleton-and-flake-shape/).
 - Have the `kix-examples` repo from tutorial 02. If you need a fresh copy,
-  clone it now:
+  clone it from any parent directory:
 
-```sh
-git clone https://github.com/kix-ops/kix-examples.git
-cd kix-examples
-```
-<CommandCwd cwd="any parent directory" />
+<Command commands={[
+  "git clone https://github.com/kix-ops/kix-examples.git",
+  "cd kix-examples",
+]} />
 
 - Keep the `kix-demo` kind cluster running, or recreate it with:
 
-```sh
-kind create cluster --config kind-config.yaml
-```
-<CommandCwd cwd="kix-examples/" />
+<Command commands={["kind create cluster --config kind-config.yaml"]} cwd="kix-examples/" />
 
 ## Add A New Cluster File
 
 Create a new tutorial directory:
 
-```sh
-mkdir -p tutorial-04
-```
-<CommandCwd cwd="kix-examples/" />
+<Command commands={["mkdir -p tutorial-04"]} cwd="kix-examples/" />
 
 Create `tutorial-04/cluster.nix`:
 
@@ -97,10 +90,7 @@ CLI. The right side points at the file you just created.
 Because `kix-examples` is a Git flake, Nix only sees files known to Git. Stage
 the new file and the flake edit before running Kix:
 
-```sh
-git add flake.nix tutorial-04/cluster.nix
-```
-<CommandCwd cwd="kix-examples/" />
+<Command commands={["git add flake.nix tutorial-04/cluster.nix"]} cwd="kix-examples/" />
 
 You do not need to commit. Staging is enough for Nix to include the new file in
 the flake source.
@@ -109,10 +99,7 @@ the flake source.
 
 List the clusters:
 
-```sh
-kix list clusters
-```
-<CommandCwd cwd="kix-examples/" />
+<Command commands={["kix list clusters"]} cwd="kix-examples/" />
 
 You should see `04-from-scratch` in the list.
 
@@ -126,17 +113,14 @@ If you do not, check three things:
 
 Deploy the cluster:
 
-```sh
-kix deploy 04-from-scratch -y
-```
-<CommandCwd cwd="kix-examples/" />
+<Command commands={["kix deploy 04-from-scratch -y"]} cwd="kix-examples/" />
 
 Ask Kubernetes what changed:
 
-```sh
-kubectl get pods -n tutorial-04
-kubectl get svc -n tutorial-04
-```
+<Command commands={[
+  "kubectl get pods -n tutorial-04",
+  "kubectl get svc -n tutorial-04",
+]} />
 
 You should see one Pod and one Service for the `hello-world` instance.
 
@@ -144,22 +128,11 @@ You should see one Pod and one Service for the `hello-world` instance.
 
 Port-forward to the package instance:
 
-```sh
-kix pf 04-from-scratch hello-world 8080:80
-```
-<CommandCwd cwd="kix-examples/" />
+<Command commands={["kix pf 04-from-scratch hello-world 8080:80"]} cwd="kix-examples/" />
 
 Leave that running. In another terminal:
 
-```sh
-curl http://localhost:8080/
-```
-
-You should see:
-
-```text
-Hello from my first Kix cluster!
-```
+<Command commands={[{ command: "curl http://localhost:8080/", stdout: "Hello from my first Kix cluster!" }]} />
 
 Stop the port-forward with `Ctrl-C`.
 
@@ -175,10 +148,7 @@ config = {
 
 Deploy again:
 
-```sh
-kix deploy 04-from-scratch -y
-```
-<CommandCwd cwd="kix-examples/" />
+<Command commands={["kix deploy 04-from-scratch -y"]} cwd="kix-examples/" />
 
 Port-forward and curl again. The response should use your new message.
 

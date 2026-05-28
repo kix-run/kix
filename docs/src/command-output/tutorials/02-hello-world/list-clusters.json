@@ -1,0 +1,17 @@
+{
+  "id": "tutorials/02-hello-world/list-clusters",
+  "group": "tutorials/02-hello-world",
+  "page": "/docs/tutorials/02-local-setup-and-first-run/",
+  "cwd": "kix-examples/",
+  "generator": "offline",
+  "commands": [
+    {
+      "command": "kix list clusters",
+      "stdout": " NAME              \n 02-hello-world    \n 06-service-dep    \n 08-namespace-deps \n 09-typed-options  \n 10-reuse-packages \n 19-scorecards     \n",
+      "stderr": "",
+      "stdoutDrift": " 02-hello-world\n 06-service-dep\n 08-namespace-deps\n 09-typed-options\n 10-reuse-packages\n 19-scorecards\n NAME\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

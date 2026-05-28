@@ -1,0 +1,394 @@
+---
+// Command — terminal-style block for one or more shell commands and their
+// captured output. Canonical way to show commands in the docs.
+//
+// API:
+//   commands: (string | Step)[]
+//     A bare string entry renders as a command line with no output.
+//     A Step object can carry stdout / stderr / exitCode captured against a
+//     real run, plus a per-step `cwd` override.
+//   cwd?: string       — working directory shown in the terminal chrome.
+//   title?: string     — overrides the chrome label (defaults to "Run in $cwd"
+//                        when `cwd` is set, otherwise no label).
+//   expandable?: boolean
+//     When set, output is collapsed inside a <details> disclosure. The
+//     command lines remain visible.
+//
+// Examples:
+//   <Command commands={["kix list clusters"]} cwd="kix-examples/" />
+//
+//   <Command commands={[
+//     "kubectl get pods -n tutorial-04",
+//     "kubectl get svc -n tutorial-04",
+//   ]} />
+//
+//   <Command {...checkOutput} />     // sidecar JSON spread directly
+//
+//   <Command expandable {...deployFirst} />
+
+import { parseAnsi, styleToCss, type Span } from '/src/lib/ansi.ts';
+
+export interface Step {
+  command: string;
+  cwd?: string;
+  stdout?: string;
+  stderr?: string;
+  exitCode?: number;
+}
+
+interface Props {
+  commands: (string | Step)[];
+  cwd?: string;
+  title?: string;
+  expandable?: boolean;
+}
+
+const { commands, cwd, title, expandable = false } = Astro.props;
+
+type NormalisedStep = Required<Pick<Step, 'command'>> &
+  Pick<Step, 'cwd' | 'stdout' | 'stderr' | 'exitCode'>;
+
+const steps: NormalisedStep[] = commands.map((entry) => {
+  if (typeof entry === 'string') return { command: entry };
+  return entry;
+});
+
+const terminalLabel = title ?? (cwd ? `Run in ${cwd}` : null);
+
+// Command line tokenization: first word + flags get the "command" colour;
+// remaining words are "argument" colour. Whitespace preserved verbatim.
+type TokenKind = 'command' | 'argument' | 'space';
+interface Token { token: string; kind: TokenKind; }
+
+function tokenizeCommandLine(line: string): Token[] {
+  let wordIndex = -1;
+  const tokens: Token[] = [];
+  for (const piece of line.split(/(\s+)/)) {
+    if (piece === '') continue;
+    if (/^\s+$/.test(piece)) {
+      tokens.push({ token: piece, kind: 'space' });
+      continue;
+    }
+    wordIndex += 1;
+    const kind: TokenKind =
+      wordIndex === 0 || piece.startsWith('-') ? 'command' : 'argument';
+    tokens.push({ token: piece, kind });
+  }
+  return tokens;
+}
+
+function tokenizeCommand(command: string): Token[][] {
+  return command.replace(/\s+$/u, '').split('\n').map(tokenizeCommandLine);
+}
+
+// Output rendering: ANSI parse → styled spans. Each span carries a stable
+// style key so we can render with classes (named colours) and inline
+// declarations only for 24-bit / 256-colour fallbacks.
+function renderOutput(stdout: string, stderr: string, exitCode: number): Span[] {
+  const stdoutClean = stdout.replace(/\s+$/u, '');
+  const stderrClean = stderr.replace(/\s+$/u, '');
+  const joined = [stdoutClean, stderrClean].filter(Boolean).join('\n');
+  const exitTail = exitCode !== 0 ? `\n(exit code: ${exitCode})` : '';
+  return parseAnsi(joined + exitTail);
+}
+
+// Pre-compute flat render-node lists. Astro's template compiler only accepts
+// expression-bodied arrow functions (no block bodies, no early returns) in
+// `{...}` expressions, so we keep the template a simple .map() chain and
+// shape everything into ready-to-render data here. See
+// https://github.com/withastro/astro/issues/6955 for the restriction.
+
+// Each step contributes one terminal "pre" (its command lines + optional
+// inline output) and, when `expandable` is set, an immediately-following
+// `<details>` carrying the output. Adjacent `pre` units render visually
+// contiguous via CSS — see the `.command-block pre + pre` rules below.
+//
+// Astro's template compiler only accepts expression-bodied arrow functions
+// in `{...}` expressions, and trips up on nested ternaries returning JSX.
+// So the pre's content is normalised in the script into a single flat shape
+// — a list of `LineItem`s, each one wrap-span (`command-line` or `output`)
+// + a sequence of `InnerSpan`s. The template walks the shape with at most
+// one ternary level (PreUnit vs DetailsUnit).
+type InnerSpan = { text: string; classes: string; style: string };
+type LineItem = {
+  wrapClass: string;       // 'command-line' or 'output'
+  leadingNewline: boolean; // emit a leading '\n' before this item's content
+  spans: InnerSpan[];
+};
+type PreUnit = { kind: 'pre'; items: LineItem[] };
+type DetailsUnit = { kind: 'details'; output: InnerSpan[] };
+type RenderUnit = PreUnit | DetailsUnit;
+
+function buildOutputSpans(stdout: string, stderr: string, exitCode: number): InnerSpan[] {
+  const parsed = renderOutput(stdout, stderr, exitCode);
+  return parsed.map((span) => {
+    const css = styleToCss(span.style);
+    return { text: span.text, classes: css.classes.join(' '), style: css.inline };
+  });
+}
+
+function commandLineToItem(tokens: Token[], leadingNewline: boolean): LineItem {
+  const spans: InnerSpan[] = [
+    { text: '❱', classes: 'prompt', style: '' },
+    { text: ' ', classes: '', style: '' },
+    ...tokens.map((t) => ({
+      text: t.token,
+      classes: t.kind === 'space' ? '' : t.kind,
+      style: '',
+    })),
+  ];
+  return { wrapClass: 'command-line', leadingNewline, spans };
+}
+
+const units: RenderUnit[] = [];
+
+for (const step of steps) {
+  const lines = tokenizeCommand(step.command);
+  const stdout = step.stdout ?? '';
+  const stderr = step.stderr ?? '';
+  const exitCode = step.exitCode ?? 0;
+  const hasOutput = Boolean(stdout || stderr) || exitCode !== 0;
+  const outputSpans = hasOutput ? buildOutputSpans(stdout, stderr, exitCode) : [];
+
+  const items: LineItem[] = lines.map((tokens, lineIdx) =>
+    commandLineToItem(tokens, lineIdx > 0),
+  );
+  if (hasOutput && !expandable) {
+    items.push({ wrapClass: 'output', leadingNewline: true, spans: outputSpans });
+  }
+  units.push({ kind: 'pre', items });
+
+  if (hasOutput && expandable) {
+    units.push({ kind: 'details', output: outputSpans });
+  }
+}
+---
+
+<figure class="command-block">
+  <figcaption>
+    <span class="terminal-dots" aria-hidden="true">
+      <span></span>
+      <span></span>
+      <span></span>
+    </span>
+    {terminalLabel && <span class="terminal-label">{terminalLabel}</span>}
+  </figcaption>
+  {units.map((unit) => (
+    unit.kind === 'pre' ? (
+      <pre><code>{unit.items.map((item) => (
+        <span class={item.wrapClass}>{item.leadingNewline ? '\n' : ''}{item.spans.map((s) => (
+          <span class={s.classes} style={s.style || undefined}>{s.text}</span>
+        ))}</span>
+      ))}</code></pre>
+    ) : (
+      <details class="command-block-disclosure">
+        <summary>Show output</summary>
+        <pre><code>{unit.output.map((s) => (
+          <span class={s.classes} style={s.style || undefined}>{s.text}</span>
+        ))}</code></pre>
+      </details>
+    )
+  ))}
+</figure>
+
+<style>
+  .command-block {
+    --command-block-command-color: #82aaff;
+    --command-block-argument-color: #ecc48d;
+    margin: 1rem 0;
+    border: var(--ec-brdWd, 1px) solid var(--ec-brdCol, var(--sl-color-gray-5));
+    background: var(--ec-frm-trmTtbBg, var(--sl-color-gray-6));
+  }
+  :global(:root:not([data-theme='dark'])) .command-block {
+    --command-block-command-color: #3b61b0;
+    --command-block-argument-color: #3b61b0;
+  }
+  :global(:root[data-theme='dark']) .command-block {
+    --command-block-command-color: #82aaff;
+    --command-block-argument-color: #ecc48d;
+  }
+  .command-block figcaption {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    min-height: 2.5rem;
+    padding: 0 1rem;
+    border-bottom: var(--ec-brdWd, 1px) solid
+      var(--ec-frm-trmTtbBrdBtmCol, var(--sl-color-gray-5));
+    color: var(--ec-frm-trmTtbFg, var(--sl-color-text));
+    font-size: 0.85rem;
+  }
+  .terminal-label {
+    font-family: var(--__sl-font-mono);
+  }
+  .terminal-dots {
+    display: inline-flex;
+    gap: 0.38rem;
+  }
+  .terminal-dots span {
+    width: 0.65rem;
+    height: 0.65rem;
+    border-radius: 999px;
+    background: var(--ec-frm-trmTtbDotsFg, var(--sl-color-gray-5));
+    opacity: var(--ec-frm-trmTtbDotsOpa, 0.75);
+  }
+  .command-block pre {
+    margin: 0;
+    border: 0;
+    padding: 1rem;
+    overflow-x: auto;
+    background: var(--ec-frm-trmBg, var(--sl-color-gray-7));
+    color: var(--ec-codeFg, var(--sl-color-text));
+    font-size: var(--sl-text-code);
+    line-height: 1.6;
+  }
+  .command-block code {
+    font-family: var(--__sl-font-mono);
+  }
+  .command {
+    color: var(--command-block-command-color);
+  }
+  .argument {
+    color: var(--command-block-argument-color);
+  }
+  .prompt {
+    color: var(--command-block-command-color);
+  }
+
+  /* Disclosure behaviour and chrome come from Starlight's markdown <details>
+     rules (left accent border, indented padding, triangle marker, rotation).
+     The figure deliberately omits `class="not-content"` so those rules apply.
+     We only override the two things that look wrong inside a terminal block:
+     the disclosure shares the terminal background instead of bleeding through
+     to the figure background, and the gap above the summary is collapsed so
+     the toggle sits flush with the command line above it. */
+  .command-block-disclosure {
+    background: var(--ec-frm-trmBg, var(--sl-color-gray-7));
+  }
+  /* Adjacent pres should look like one continuous terminal stream. The
+     standard 1rem all-around padding doubles up between sibling pres; tame
+     the bottom of an earlier pre and the top of a later pre to keep the
+     command-flow tight. The same applies when a disclosure sits between
+     pres — the disclosure replaces the bottom of the preceding pre, and
+     the next pre starts flush with the disclosure body. */
+  .command-block > pre + pre,
+  .command-block > .command-block-disclosure + pre {
+    padding-top: 0.25rem;
+  }
+  .command-block > pre:has(+ pre),
+  .command-block > pre:has(+ .command-block-disclosure) {
+    padding-bottom: 0.25rem;
+  }
+  /* Starlight applies a global adjacent-sibling `margin-top` between block
+     elements inside `.sl-markdown-content`. Cancel it on every direct child
+     of the command-block so they sit flush. Pull the disclosure slightly
+     further up (negative margin) so the toggle tucks closer to the command
+     line above — applied to the whole element so the chevron tracks with
+     the text. */
+  .command-block > pre {
+    margin-top: 0;
+  }
+  .command-block > .command-block-disclosure {
+    margin-top: -0.25rem;
+  }
+  /* Soften the summary text and shift the chevron into the command prompt
+     column. Starlight defaults summary to bold body text with a negative
+     inline-margin that pulls the marker left of the content area; we flip
+     the sign so the whole summary sits indented to match `❱` above. The
+     chevron uses `currentColor` so colouring the summary dims it too. */
+  .command-block-disclosure > summary {
+    font-weight: normal;
+    font-size: 0.8em;
+    color: var(--sl-color-gray-3);
+    margin-inline-start: 0.5rem;
+  }
+  /* Starlight adds `margin-bottom: 1rem` to an opened summary, leaving too
+     much vertical space between the toggle and the output below. Zero it
+     so the expanded output sits directly under the toggle. */
+  .command-block-disclosure[open] > summary {
+    margin-bottom: 0;
+  }
+
+  /* ANSI palette — dark theme defaults; light theme overrides below. The
+     colours are taken from a low-contrast terminal palette so they read on
+     the Starlight terminal background without clashing with the existing
+     command-line tokens. */
+  .command-block {
+    --ansi-black: #1f2230;
+    --ansi-red: #ff5f6b;
+    --ansi-green: #7fd364;
+    --ansi-yellow: #ecc48d;
+    --ansi-blue: #82aaff;
+    --ansi-magenta: #c792ea;
+    --ansi-cyan: #7fdbca;
+    --ansi-white: #d6deeb;
+    --ansi-bright-black: #4b5263;
+    --ansi-bright-red: #ff7b86;
+    --ansi-bright-green: #a3e081;
+    --ansi-bright-yellow: #f3d68f;
+    --ansi-bright-blue: #a3c4ff;
+    --ansi-bright-magenta: #d7adee;
+    --ansi-bright-cyan: #9beadc;
+    --ansi-bright-white: #ffffff;
+  }
+  :global(:root:not([data-theme='dark'])) .command-block {
+    --ansi-black: #1f2230;
+    --ansi-red: #c0394a;
+    --ansi-green: #2f8a35;
+    --ansi-yellow: #ab7706;
+    --ansi-blue: #3b61b0;
+    --ansi-magenta: #8e3aaa;
+    --ansi-cyan: #157e80;
+    --ansi-white: #4a4f63;
+    --ansi-bright-black: #4b5263;
+    --ansi-bright-red: #e15a6b;
+    --ansi-bright-green: #4ea35a;
+    --ansi-bright-yellow: #c08c0a;
+    --ansi-bright-blue: #5f81c9;
+    --ansi-bright-magenta: #a657c3;
+    --ansi-bright-cyan: #2d9ea0;
+    --ansi-bright-white: #2c2f3e;
+  }
+
+  .ansi-fg-black { color: var(--ansi-black); }
+  .ansi-fg-red { color: var(--ansi-red); }
+  .ansi-fg-green { color: var(--ansi-green); }
+  .ansi-fg-yellow { color: var(--ansi-yellow); }
+  .ansi-fg-blue { color: var(--ansi-blue); }
+  .ansi-fg-magenta { color: var(--ansi-magenta); }
+  .ansi-fg-cyan { color: var(--ansi-cyan); }
+  .ansi-fg-white { color: var(--ansi-white); }
+  .ansi-fg-bright-black { color: var(--ansi-bright-black); }
+  .ansi-fg-bright-red { color: var(--ansi-bright-red); }
+  .ansi-fg-bright-green { color: var(--ansi-bright-green); }
+  .ansi-fg-bright-yellow { color: var(--ansi-bright-yellow); }
+  .ansi-fg-bright-blue { color: var(--ansi-bright-blue); }
+  .ansi-fg-bright-magenta { color: var(--ansi-bright-magenta); }
+  .ansi-fg-bright-cyan { color: var(--ansi-bright-cyan); }
+  .ansi-fg-bright-white { color: var(--ansi-bright-white); }
+
+  .ansi-bg-black { background-color: var(--ansi-black); }
+  .ansi-bg-red { background-color: var(--ansi-red); }
+  .ansi-bg-green { background-color: var(--ansi-green); }
+  .ansi-bg-yellow { background-color: var(--ansi-yellow); }
+  .ansi-bg-blue { background-color: var(--ansi-blue); }
+  .ansi-bg-magenta { background-color: var(--ansi-magenta); }
+  .ansi-bg-cyan { background-color: var(--ansi-cyan); }
+  .ansi-bg-white { background-color: var(--ansi-white); }
+  .ansi-bg-bright-black { background-color: var(--ansi-bright-black); }
+  .ansi-bg-bright-red { background-color: var(--ansi-bright-red); }
+  .ansi-bg-bright-green { background-color: var(--ansi-bright-green); }
+  .ansi-bg-bright-yellow { background-color: var(--ansi-bright-yellow); }
+  .ansi-bg-bright-blue { background-color: var(--ansi-bright-blue); }
+  .ansi-bg-bright-magenta { background-color: var(--ansi-bright-magenta); }
+  .ansi-bg-bright-cyan { background-color: var(--ansi-bright-cyan); }
+  .ansi-bg-bright-white { background-color: var(--ansi-bright-white); }
+
+  .ansi-bold { font-weight: 700; }
+  .ansi-dim { opacity: 0.65; }
+  .ansi-italic { font-style: italic; }
+  .ansi-underline { text-decoration: underline; }
+  .ansi-strikethrough { text-decoration: line-through; }
+  .ansi-inverse { filter: invert(1); }
+</style>

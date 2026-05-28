@@ -1,0 +1,17 @@
+{
+  "id": "tutorials/02-hello-world/kubectl-get-pods",
+  "group": "tutorials/02-hello-world",
+  "page": "/docs/tutorials/02-local-setup-and-first-run/",
+  "cwd": "kix-examples/",
+  "generator": "live",
+  "commands": [
+    {
+      "command": "kubectl get pods -n tutorial-02",
+      "stdout": "NAME                           READY   STATUS    RESTARTS   AGE\nhello-world-6f4588d4c5-6xblv   1/1     Running   0          19s\n",
+      "stderr": "",
+      "stdoutDrift": "hello-world-<hash> 1/1 Running 0 <DURATION>\nNAME READY STATUS RESTARTS AGE\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

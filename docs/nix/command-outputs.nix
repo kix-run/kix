@@ -13,8 +13,28 @@
 
 let
   groups = import ./command-outputs-manifest.nix;
+  transforms = import ./output-transforms.nix { inherit lib; };
 
   sanitizeName = lib.replaceStrings [ "/" ] [ "-" ];
+
+  mkSedPipeline =
+    names:
+    if names == [ ] then
+      "cat"
+    else
+      lib.concatMapStringsSep " | " (
+        name: ''sed -E ${lib.escapeShellArg transforms.programs.${name}}''
+      ) names;
+
+  displayPipeline = mkSedPipeline transforms.displayTransforms;
+  baseDriftPipeline = mkSedPipeline transforms.driftTransforms;
+
+  # Per-entry drift pipeline. When `sortLines` is true (the default), append
+  # a `sort` stage so non-deterministic line ordering doesn't surface as
+  # drift. Opt out for output where line order carries meaning (tree views,
+  # ordered plans).
+  driftPipelineFor =
+    entry: if (entry.sortLines or true) then "${baseDriftPipeline} | sort" else baseDriftPipeline;
 
   mkDisplayCommand =
     command:
@@ -47,6 +67,7 @@ let
         "${kixExamples}"
       ]
       ++ command.args;
+      driftPipeline = driftPipelineFor command;
     in
     {
       path = "${command.id}.json";
@@ -68,16 +89,21 @@ let
             mkdir -p "$HOME" "$XDG_CACHE_HOME"
 
             cd "$TMPDIR"
-            ${lib.escapeShellArgs ([ "${kix}/bin/kix" ] ++ fullArgs)} > stdout 2> stderr
+            ${lib.escapeShellArgs ([ "${kix}/bin/kix" ] ++ fullArgs)} > stdout_raw 2> stderr_raw
             code=$?
 
-            sed -i 's#${kixExamples}#kix-examples#g' stdout stderr
+            sed -i 's#${kixExamples}#kix-examples#g' stdout_raw stderr_raw
 
             if [ "$code" -ne 0 ] && [ "${if allowFailure then "1" else "0"}" != "1" ]; then
-              cat stdout
-              cat stderr >&2
+              cat stdout_raw
+              cat stderr_raw >&2
               exit "$code"
             fi
+
+            <stdout_raw ${displayPipeline} > stdout_display
+            <stderr_raw ${displayPipeline} > stderr_display
+            <stdout_raw ${driftPipeline}   > stdout_drift
+            <stderr_raw ${driftPipeline}   > stderr_drift
 
             jq -n \
               --arg id ${lib.escapeShellArg command.id} \
@@ -86,17 +112,24 @@ let
               --arg command ${lib.escapeShellArg command.displayCommand} \
               --arg cwd ${lib.escapeShellArg command.cwd} \
               --argjson exitCode "$code" \
-              --rawfile stdout stdout \
-              --rawfile stderr stderr \
+              --rawfile stdout stdout_display \
+              --rawfile stderr stderr_display \
+              --rawfile stdoutDrift stdout_drift \
+              --rawfile stderrDrift stderr_drift \
               '{
                 id: $id,
                 group: $group,
                 page: $page,
-                command: $command,
                 cwd: $cwd,
-                exitCode: $exitCode,
-                stdout: $stdout,
-                stderr: $stderr
+                generator: "offline",
+                commands: [{
+                  command: $command,
+                  stdout: $stdout,
+                  stderr: $stderr,
+                  stdoutDrift: $stdoutDrift,
+                  stderrDrift: $stderrDrift,
+                  exitCode: $exitCode
+                }]
               }' > "$out"
           '';
     };

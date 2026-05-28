@@ -3,7 +3,7 @@ title: "05. Basic graph and deploy loop"
 description: "Check, preview, deploy, and inspect a small cluster before adding dependencies."
 ---
 
-import CommandCwd from '/src/components/CommandCwd.astro';
+import Command from '/src/components/Command.astro';
 
 The last tutorial created a cluster from scratch. This tutorial uses that same
 cluster to look more closely at the Kix loop:
@@ -24,26 +24,17 @@ can evaluate a cluster before it touches Kubernetes.
 - Make sure the new cluster file is known to Git. New files in a Git flake are
   invisible to Nix until they are added to the index:
 
-```sh
-git ls-files --error-unmatch tutorial-04/cluster.nix
-```
-<CommandCwd cwd="kix-examples/" />
+<Command commands={["git ls-files --error-unmatch tutorial-04/cluster.nix"]} cwd="kix-examples/" />
 
 If that command fails, add the file:
 
-```sh
-git add tutorial-04/cluster.nix
-```
-<CommandCwd cwd="kix-examples/" />
+<Command commands={["git add tutorial-04/cluster.nix"]} cwd="kix-examples/" />
 
 ## Check Before Deploy
 
 Run the Kix checks first:
 
-```sh
-kix check 04-from-scratch
-```
-<CommandCwd cwd="kix-examples/" />
+<Command commands={["kix check 04-from-scratch"]} cwd="kix-examples/" />
 
 This evaluates the cluster and runs validation before anything is applied to
 Kubernetes. For this tiny cluster, the output should be short. The important
@@ -56,10 +47,7 @@ the deploy step should not run yet.
 
 Now render the cluster:
 
-```sh
-kix build 04-from-scratch
-```
-<CommandCwd cwd="kix-examples/" />
+<Command commands={["kix build 04-from-scratch"]} cwd="kix-examples/" />
 
 This prints the Kubernetes resources Kix built from your cluster definition.
 You should see familiar objects such as a Namespace, Deployment, and Service.
@@ -76,10 +64,7 @@ uses it only for inspection.
 
 Ask Kix what is different from the live cluster:
 
-```sh
-kix diff 04-from-scratch
-```
-<CommandCwd cwd="kix-examples/" />
+<Command commands={["kix diff 04-from-scratch"]} cwd="kix-examples/" />
 
 If your live cluster already matches the checked result, the diff should be
 empty or say there is nothing to change.
@@ -94,20 +79,14 @@ config = {
 
 Check that Git sees the edit:
 
-```sh
-git status --short
-```
-<CommandCwd cwd="kix-examples/" />
+<Command commands={["git status --short"]} cwd="kix-examples/" />
 
 Because `tutorial-04/cluster.nix` is already tracked, Nix can see this dirty
 edit. You do not need to commit it.
 
 Run the diff again:
 
-```sh
-kix diff 04-from-scratch
-```
-<CommandCwd cwd="kix-examples/" />
+<Command commands={["kix diff 04-from-scratch"]} cwd="kix-examples/" />
 
 This time Kix should show the change before it applies anything. That is the
 basic preview loop: edit locally, evaluate locally, inspect the change, then
@@ -122,39 +101,22 @@ when you already know the model and just need the command steps.
 
 Deploy the change:
 
-```sh
-kix deploy 04-from-scratch -y
-```
-<CommandCwd cwd="kix-examples/" />
+<Command commands={["kix deploy 04-from-scratch -y"]} cwd="kix-examples/" />
 
 Kix evaluates the cluster, computes what needs to change, and applies the
 checked result to Kubernetes.
 
 Check the resource status:
 
-```sh
-kix status 04-from-scratch
-```
-<CommandCwd cwd="kix-examples/" />
+<Command commands={["kix status 04-from-scratch"]} cwd="kix-examples/" />
 
 Then port-forward and verify the response:
 
-```sh
-kix pf 04-from-scratch hello-world 8080:80
-```
-<CommandCwd cwd="kix-examples/" />
+<Command commands={["kix pf 04-from-scratch hello-world 8080:80"]} cwd="kix-examples/" />
 
 In another terminal:
 
-```sh
-curl http://localhost:8080/
-```
-
-You should see:
-
-```text
-Preview this before deploy.
-```
+<Command commands={[{ command: "curl http://localhost:8080/", stdout: "Preview this before deploy." }]} />
 
 Stop the port-forward with `Ctrl-C`.
 
@@ -162,10 +124,7 @@ Stop the port-forward with `Ctrl-C`.
 
 Run:
 
-```sh
-kix graph 04-from-scratch --format tree
-```
-<CommandCwd cwd="kix-examples/" />
+<Command commands={["kix graph 04-from-scratch --format tree"]} cwd="kix-examples/" />
 
 For this cluster the graph is still small. You may see Kix's own activation
 resources, the namespace, platform imports, and the `hello-world` package
