@@ -150,12 +150,23 @@ impl NixBackend for CliNixBackend {
     }
 
     fn list_clusters(&mut self, flake_path: &Path) -> Result<Vec<String>, KixEvalError> {
-        tracing::debug!("listing clusters via nix flake show");
+        tracing::debug!("listing clusters via nix eval");
+
+        // Query `legacyPackages.<system>.kixClusters` and take its attr
+        // names. mkFlake.nix exports that attrset specifically for this
+        // CLI path. Previously we shelled out to `nix flake show
+        // --json` and walked the packages tree, but Determinate Nix
+        // sometimes omits cluster attrs from that output when
+        // `--override-input` introduces a path: input — `nix eval` is a
+        // direct attribute query and stays stable.
+        let attr = format!(".#legacyPackages.{}.kixClusters", current_nix_system());
 
         let mut cmd = Command::new("nix");
         cmd.args([
-            "flake",
-            "show",
+            "eval",
+            &attr,
+            "--apply",
+            "builtins.attrNames",
             "--json",
             "--extra-experimental-features",
             "nix-command flakes pipe-operators",
@@ -165,40 +176,20 @@ impl NixBackend for CliNixBackend {
             cmd.current_dir(flake_path)
                 .output()
                 .map_err(|e| KixEvalError::StoreGraphError {
-                    message: format!("failed to run nix flake show: {e}"),
+                    message: format!("failed to run nix eval: {e}"),
                 })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(KixEvalError::StoreGraphError {
-                message: format!("nix flake show failed: {stderr}"),
+                message: format!("nix eval kixClusters failed: {stderr}"),
             });
         }
 
-        let flake_output: serde_json::Value =
+        let mut clusters: Vec<String> =
             serde_json::from_slice(&output.stdout).map_err(|e| KixEvalError::StoreGraphError {
-                message: format!("failed to parse nix flake show output: {e}"),
+                message: format!("failed to parse cluster names: {e}"),
             })?;
-
-        // Extract cluster names from packages.<system>.cluster-*-activation
-        // The system doesn't matter — cluster names are the same across systems.
-        let mut clusters = Vec::new();
-
-        if let Some(packages) = flake_output.get("packages") {
-            // Pick the first system we find
-            if let Some(per_system) = packages.as_object().and_then(|o| o.values().next())
-                && let Some(attrs) = per_system.as_object()
-            {
-                for key in attrs.keys() {
-                    if let Some(name) = key
-                        .strip_prefix("cluster-")
-                        .and_then(|s| s.strip_suffix("-activation"))
-                    {
-                        clusters.push(name.to_string());
-                    }
-                }
-            }
-        }
 
         clusters.sort();
         tracing::debug!(count = clusters.len(), "clusters found");
