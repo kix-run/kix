@@ -61,7 +61,7 @@ jobs:
         uses: DeterminateSystems/nix-installer-action@main
         with:
           extra-conf: |
-            experimental-features = nix-command flakes pipe-operators
+            experimental-features = nix-command flakes pipe-operators recursive-nix
             accept-flake-config = true
             # Let Nix fetch private github inputs (kix-examples'
             # kixpkgs input). GITHUB_TOKEN is auto-issued for this
@@ -71,17 +71,13 @@ jobs:
             # --override-input below.
             access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
             # The captures derivations invoke `kix`, which drives
-            # nested Nix evaluation that needs to (a) read paths
-            # across /nix/store not declared as inputs, and (b) talk
-            # to a Nix store. Under `sandbox = relaxed` + __noChroot
-            # the build still runs as the unprivileged nixbld user
-            # — the embedded nix then can't use the daemon (resets
-            # the connection) and can't use the local store either
-            # (db lock is root-owned). Disabling the sandbox lets
-            # the build run as the daemon's user with full store
-            # access, matching the macOS default (`sandbox = false`)
-            # under which local builds succeed.
-            sandbox = false
+            # nested Nix evaluation. Nix's `recursive-nix` system
+            # feature is the supported route for builds that want
+            # to call back into the daemon. Advertising it on the
+            # daemon side + having the captures derivations declare
+            # `requiredSystemFeatures = [ "recursive-nix" ]` makes
+            # the daemon hand the build a usable store handle.
+            system-features = nixos-test benchmark big-parallel kvm recursive-nix
 
       # Cache /nix/store across runs so subsequent builds skip the
       # ~10 min cold-build (Node toolchain, npm deps, Astro build).

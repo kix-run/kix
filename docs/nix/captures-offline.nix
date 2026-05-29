@@ -81,13 +81,13 @@ let
           pkgs.python3
           pkgs.nix
         ];
-        # Kix runs nix evaluation against the workspace flake; that
-        # eval transitively references derivations across nixpkgs
-        # whose outputs aren't declared as inputs to this derivation.
-        # Strict-sandboxed Linux builders can't see those paths and
-        # try to rebuild them offline. Opt out so /nix/store is
-        # readable as on the maintainer's mac (where sandbox = false
-        # by default). Requires `sandbox = relaxed` on the daemon.
+        # Kix shells out to nix from inside this build. Declare the
+        # standard system feature so the daemon hands the build a
+        # usable store handle (recursive-nix) and lets it escape the
+        # chroot so /nix/store paths beyond the declared input
+        # closure (transitively referenced during kix's eval) stay
+        # readable.
+        requiredSystemFeatures = [ "recursive-nix" ];
         __noChroot = true;
       }
       ''
@@ -96,14 +96,10 @@ let
         export HOME="$TMPDIR/home"
         export XDG_CACHE_HOME="$TMPDIR/cache"
         export NO_COLOR=1
-        # Bypass the Nix daemon: kix uses the embedded nix bindings
-        # which default to `auto` and connect to the daemon when a
-        # socket is available. On Linux CI under DeterminateSystems'
-        # installer the daemon resets connections from non-trusted
-        # builds, even with `sandbox = relaxed`. Explicit `local`
-        # makes the embedded nix operate on /nix/store directly
-        # (GHA build runs as root, so the store is writable).
-        export NIX_REMOTE=local
+        # Let kix's embedded nix use the daemon. With
+        # requiredSystemFeatures = [ "recursive-nix" ] the daemon
+        # exposes a NIX_REMOTE socket that the build can use, so
+        # nested nix calls succeed even from inside the sandbox.
         mkdir -p "$HOME" "$XDG_CACHE_HOME"
 
         workspace=$(mktemp -d)
