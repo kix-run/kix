@@ -96,6 +96,13 @@ let
         export HOME="$TMPDIR/home"
         export XDG_CACHE_HOME="$TMPDIR/cache"
         export NO_COLOR=1
+        # Bypass the Nix daemon: kix shells out to nix from inside
+        # this build, and on Linux CI the daemon refuses (or resets)
+        # connections from non-trusted builds even under `sandbox =
+        # relaxed`. With NIX_REMOTE unset, the embedded nix uses the
+        # store directly (the build runs as root in the GHA runner,
+        # so /nix/store is writable for derivation realisation).
+        unset NIX_REMOTE
         mkdir -p "$HOME" "$XDG_CACHE_HOME"
 
         workspace=$(mktemp -d)
