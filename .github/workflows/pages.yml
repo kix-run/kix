@@ -70,6 +70,16 @@ jobs:
             # separately with KIX_EXAMPLES_TOKEN and consumed via
             # --override-input below.
             access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+            # Allow specific derivations to opt out of the chroot
+            # sandbox via `__noChroot = true`. The captures pipeline
+            # invokes `kix` which then drives Nix evaluation that
+            # transitively references arbitrary derivations in
+            # /nix/store; the strict Linux sandbox can't see paths
+            # outside the declared input closure, so the eval fails
+            # trying to build stage0-stdenv from offline sources.
+            # macOS sandbox is permissive by default, hence local
+            # builds work without this.
+            sandbox = relaxed
 
       # Cache /nix/store across runs so subsequent builds skip the
       # ~10 min cold-build (Node toolchain, npm deps, Astro build).

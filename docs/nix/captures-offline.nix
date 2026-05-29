@@ -81,6 +81,14 @@ let
           pkgs.python3
           pkgs.nix
         ];
+        # Kix runs nix evaluation against the workspace flake; that
+        # eval transitively references derivations across nixpkgs
+        # whose outputs aren't declared as inputs to this derivation.
+        # Strict-sandboxed Linux builders can't see those paths and
+        # try to rebuild them offline. Opt out so /nix/store is
+        # readable as on the maintainer's mac (where sandbox = false
+        # by default). Requires `sandbox = relaxed` on the daemon.
+        __noChroot = true;
       }
       ''
         set -eu
