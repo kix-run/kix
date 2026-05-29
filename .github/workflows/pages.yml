@@ -71,13 +71,16 @@ jobs:
             # --override-input below.
             access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
             # The captures derivations invoke `kix`, which drives
-            # nested Nix evaluation. Nix's `recursive-nix` system
-            # feature is the supported route for builds that want
-            # to call back into the daemon. Advertising it on the
-            # daemon side + having the captures derivations declare
-            # `requiredSystemFeatures = [ "recursive-nix" ]` makes
-            # the daemon hand the build a usable store handle.
+            # nested Nix evaluation. Two settings cooperate:
+            # - `recursive-nix` (system + experimental) gives the
+            #   build a usable NIX_REMOTE socket the daemon will
+            #   accept for nested nix calls.
+            # - `sandbox = relaxed` permits `__noChroot = true` on
+            #   the captures derivations so they can read /nix/store
+            #   paths transitively referenced during kix's eval but
+            #   not declared as explicit inputs.
             system-features = nixos-test benchmark big-parallel kvm recursive-nix
+            sandbox = relaxed
 
       # Cache /nix/store across runs so subsequent builds skip the
       # ~10 min cold-build (Node toolchain, npm deps, Astro build).
