@@ -17,8 +17,13 @@ use super::workload::{resolve_flake_path, resolve_package_workload};
 
 pub fn run(args: &LogsArgs, ctx: &mut CommandContext) -> Result<()> {
     let flake_path = resolve_flake_path(&ctx.global.flake)?;
-    let target =
-        resolve_package_workload(&flake_path, &args.cluster, &args.package, ctx.global.quiet)?;
+    let target = resolve_package_workload(
+        &flake_path,
+        &args.cluster,
+        &args.package,
+        &ctx.global.input_overrides(),
+        ctx.global.quiet,
+    )?;
 
     if !ctx.global.quiet {
         eprintln!(

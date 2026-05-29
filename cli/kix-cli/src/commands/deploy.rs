@@ -61,8 +61,10 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
             eprint!("\r\x1b[2K  {msg}");
         }
     };
-    let result_path = build_cluster_activation_with_status(&flake_path, &args.cluster, &status)
-        .map_err(|e| miette!("failed to build cluster: {e}"))?;
+    let overrides = ctx.global.input_overrides();
+    let result_path =
+        build_cluster_activation_with_status(&flake_path, &args.cluster, &overrides, &status)
+            .map_err(|e| miette!("failed to build cluster: {e}"))?;
     let mut new_graph = StoreGraph::from_result_dir_with_status(&result_path, &status)
         .map_err(|e| miette!("failed to load store graph: {e}"))?;
     stamp_annotations(&mut new_graph);
@@ -906,8 +908,10 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
             eprint!("\r\x1b[2K  {msg}");
         }
     };
-    let result_path = build_cluster_activation_with_status(&flake_path, &args.cluster, &status)
-        .map_err(|e| miette!("failed to build cluster: {e}"))?;
+    let overrides = ctx.global.input_overrides();
+    let result_path =
+        build_cluster_activation_with_status(&flake_path, &args.cluster, &overrides, &status)
+            .map_err(|e| miette!("failed to build cluster: {e}"))?;
     let mut new_graph = StoreGraph::from_result_dir_with_status(&result_path, &status)
         .map_err(|e| miette!("failed to load store graph: {e}"))?;
     stamp_annotations(&mut new_graph);

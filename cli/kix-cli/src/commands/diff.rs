@@ -48,7 +48,8 @@ pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<()> {
 
     // Build new side
     let spinner = make_spinner(ctx, &format!("Building cluster '{}'...", args.cluster));
-    let new_graph = build_store_graph(&flake_path, &args.cluster, &spinner)?;
+    let overrides = ctx.global.input_overrides();
+    let new_graph = build_store_graph(&flake_path, &args.cluster, &overrides, &spinner)?;
     clear_spinner(&spinner);
 
     // Diff against old side
@@ -101,12 +102,14 @@ pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<()> {
 fn build_store_graph(
     flake_path: &Path,
     cluster_name: &str,
+    input_overrides: &[(String, String)],
     spinner: &Option<indicatif::ProgressBar>,
 ) -> Result<StoreGraph> {
     let status = |msg: &str| set_spinner(spinner, msg);
 
-    let result_path = build_cluster_activation_with_status(flake_path, cluster_name, &status)
-        .map_err(|e| miette!("failed to build cluster activation: {e}"))?;
+    let result_path =
+        build_cluster_activation_with_status(flake_path, cluster_name, input_overrides, &status)
+            .map_err(|e| miette!("failed to build cluster activation: {e}"))?;
 
     let mut graph = StoreGraph::from_result_dir_with_status(&result_path, &status)
         .map_err(|e| miette!("failed to load store graph: {e}"))?;

@@ -35,7 +35,7 @@ pub struct CommandContext {
 
 impl CommandContext {
     pub fn new(global: &GlobalArgs) -> miette::Result<Self> {
-        let evaluator = create_evaluator(&global.flake, global.no_cache)?;
+        let evaluator = create_evaluator(&global.flake, global.no_cache, global.input_overrides())?;
         let runtime = tokio::runtime::Runtime::new().into_diagnostic()?;
         Ok(Self {
             evaluator,
@@ -88,8 +88,12 @@ fn resolve_flake_path(flake: &str) -> miette::Result<PathBuf> {
 }
 
 /// Create a KixEvaluator with the CLI subprocess backend.
-fn create_evaluator(flake: &str, no_cache: bool) -> miette::Result<kix::eval::KixEvaluator> {
-    let backend = kix::eval::CliNixBackend::new();
+fn create_evaluator(
+    flake: &str,
+    no_cache: bool,
+    input_overrides: Vec<(String, String)>,
+) -> miette::Result<kix::eval::KixEvaluator> {
+    let backend = kix::eval::CliNixBackend::with_overrides(input_overrides);
     let flake_path = resolve_flake_path(flake)?;
 
     if no_cache {

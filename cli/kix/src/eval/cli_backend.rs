@@ -17,7 +17,12 @@ use super::error::KixEvalError;
 use super::evaluator::{ClusterOutput, ClusterPackageInfo, NixBackend, PackageInfo};
 
 /// Nix CLI subprocess backend.
-pub struct CliNixBackend;
+pub struct CliNixBackend {
+    /// Flake input overrides forwarded to every `nix` subprocess as
+    /// `--override-input <name> <url>`. Populated from the CLI's
+    /// repeated `--override-input` global flag.
+    input_overrides: Vec<(String, String)>,
+}
 
 impl Default for CliNixBackend {
     fn default() -> Self {
@@ -27,7 +32,20 @@ impl Default for CliNixBackend {
 
 impl CliNixBackend {
     pub fn new() -> Self {
-        Self
+        Self {
+            input_overrides: Vec::new(),
+        }
+    }
+
+    pub fn with_overrides(input_overrides: Vec<(String, String)>) -> Self {
+        Self { input_overrides }
+    }
+
+    /// Append `--override-input <name> <url>` flags to a `nix` command.
+    fn apply_overrides(&self, cmd: &mut Command) {
+        for (name, url) in &self.input_overrides {
+            cmd.arg("--override-input").arg(name).arg(url);
+        }
     }
 }
 
@@ -47,7 +65,11 @@ impl NixBackend for CliNixBackend {
         tracing::info!(cluster = cluster_name, "building cluster activation");
 
         // Build the activation via nix build (same path as deploy/diff/gc)
-        let result_dir = super::build::build_cluster_activation(flake_path, cluster_name)?;
+        let result_dir = super::build::build_cluster_activation(
+            flake_path,
+            cluster_name,
+            &self.input_overrides,
+        )?;
 
         // Load the StoreGraph, stamp identity-hash + package annotations,
         // then extract manifests. Without stamping, kix.dev/depends-on edges
@@ -130,19 +152,21 @@ impl NixBackend for CliNixBackend {
     fn list_clusters(&mut self, flake_path: &Path) -> Result<Vec<String>, KixEvalError> {
         tracing::debug!("listing clusters via nix flake show");
 
-        let output = Command::new("nix")
-            .args([
-                "flake",
-                "show",
-                "--json",
-                "--extra-experimental-features",
-                "nix-command flakes pipe-operators",
-            ])
-            .current_dir(flake_path)
-            .output()
-            .map_err(|e| KixEvalError::StoreGraphError {
-                message: format!("failed to run nix flake show: {e}"),
-            })?;
+        let mut cmd = Command::new("nix");
+        cmd.args([
+            "flake",
+            "show",
+            "--json",
+            "--extra-experimental-features",
+            "nix-command flakes pipe-operators",
+        ]);
+        self.apply_overrides(&mut cmd);
+        let output =
+            cmd.current_dir(flake_path)
+                .output()
+                .map_err(|e| KixEvalError::StoreGraphError {
+                    message: format!("failed to run nix flake show: {e}"),
+                })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -190,19 +214,21 @@ impl NixBackend for CliNixBackend {
 
         let attr = format!(".#legacyPackages.{}.kixPackages", current_nix_system());
 
-        let output = Command::new("nix")
-            .args([
-                "eval",
-                &attr,
-                "--json",
-                "--extra-experimental-features",
-                "nix-command flakes pipe-operators",
-            ])
-            .current_dir(flake_path)
-            .output()
-            .map_err(|e| KixEvalError::StoreGraphError {
-                message: format!("failed to run nix eval: {e}"),
-            })?;
+        let mut cmd = Command::new("nix");
+        cmd.args([
+            "eval",
+            &attr,
+            "--json",
+            "--extra-experimental-features",
+            "nix-command flakes pipe-operators",
+        ]);
+        self.apply_overrides(&mut cmd);
+        let output =
+            cmd.current_dir(flake_path)
+                .output()
+                .map_err(|e| KixEvalError::StoreGraphError {
+                    message: format!("failed to run nix eval: {e}"),
+                })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -243,19 +269,21 @@ impl NixBackend for CliNixBackend {
             cluster_name
         );
 
-        let output = Command::new("nix")
-            .args([
-                "eval",
-                &attr,
-                "--json",
-                "--extra-experimental-features",
-                "nix-command flakes pipe-operators",
-            ])
-            .current_dir(flake_path)
-            .output()
-            .map_err(|e| KixEvalError::StoreGraphError {
-                message: format!("failed to run nix eval: {e}"),
-            })?;
+        let mut cmd = Command::new("nix");
+        cmd.args([
+            "eval",
+            &attr,
+            "--json",
+            "--extra-experimental-features",
+            "nix-command flakes pipe-operators",
+        ]);
+        self.apply_overrides(&mut cmd);
+        let output =
+            cmd.current_dir(flake_path)
+                .output()
+                .map_err(|e| KixEvalError::StoreGraphError {
+                    message: format!("failed to run nix eval: {e}"),
+                })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);

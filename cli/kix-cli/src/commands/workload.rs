@@ -47,6 +47,7 @@ pub fn resolve_package_workload(
     flake_path: &Path,
     cluster: &str,
     package: &str,
+    input_overrides: &[(String, String)],
     quiet: bool,
 ) -> Result<WorkloadTarget> {
     let status = |msg: &str| {
@@ -57,8 +58,9 @@ pub fn resolve_package_workload(
     if !quiet {
         eprintln!("Building cluster '{cluster}'...");
     }
-    let result_path = build_cluster_activation_with_status(flake_path, cluster, &status)
-        .map_err(|e| miette!("failed to build cluster activation: {e}"))?;
+    let result_path =
+        build_cluster_activation_with_status(flake_path, cluster, input_overrides, &status)
+            .map_err(|e| miette!("failed to build cluster activation: {e}"))?;
 
     let mut graph = StoreGraph::from_result_dir_with_status(&result_path, &status)
         .map_err(|e| miette!("failed to load store graph: {e}"))?;

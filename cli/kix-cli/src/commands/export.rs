@@ -44,12 +44,14 @@ pub fn run(args: &ExportArgs, ctx: &mut CommandContext) -> Result<()> {
     if !ctx.global.quiet {
         eprintln!("Building cluster '{}'...", args.cluster);
     }
-    let result_path = build_cluster_activation_with_status(&flake_path, &args.cluster, &|msg| {
-        if !ctx.global.quiet {
-            eprintln!("  {msg}");
-        }
-    })
-    .map_err(|e| miette!("failed to build cluster activation: {e}"))?;
+    let overrides = ctx.global.input_overrides();
+    let result_path =
+        build_cluster_activation_with_status(&flake_path, &args.cluster, &overrides, &|msg| {
+            if !ctx.global.quiet {
+                eprintln!("  {msg}");
+            }
+        })
+        .map_err(|e| miette!("failed to build cluster activation: {e}"))?;
 
     let mut graph = StoreGraph::from_result_dir_with_status(&result_path, &|msg| {
         if !ctx.global.quiet {

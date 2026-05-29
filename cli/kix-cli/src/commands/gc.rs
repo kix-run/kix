@@ -80,8 +80,10 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
             eprint!("\r\x1b[2K  {msg}");
         }
     };
-    let new_result_dir = build_cluster_activation_with_status(&flake_path, &args.cluster, &status)
-        .map_err(|e| miette!("failed to build cluster: {e}"))?;
+    let overrides = ctx.global.input_overrides();
+    let new_result_dir =
+        build_cluster_activation_with_status(&flake_path, &args.cluster, &overrides, &status)
+            .map_err(|e| miette!("failed to build cluster: {e}"))?;
     let mut new_graph = StoreGraph::from_result_dir_with_status(&new_result_dir, &status)
         .map_err(|e| miette!("failed to load new store graph: {e}"))?;
     stamp_annotations(&mut new_graph);
@@ -168,8 +170,10 @@ fn run_hard(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         println!("Building cluster '{}'...", output::bold(&args.cluster));
     }
     let noop = |_: &str| {};
-    let result_path = build_cluster_activation_with_status(&flake_path, &args.cluster, &noop)
-        .map_err(|e| miette!("failed to build cluster: {e}"))?;
+    let overrides = ctx.global.input_overrides();
+    let result_path =
+        build_cluster_activation_with_status(&flake_path, &args.cluster, &overrides, &noop)
+            .map_err(|e| miette!("failed to build cluster: {e}"))?;
     let mut graph = StoreGraph::from_result_dir_with_status(&result_path, &noop)
         .map_err(|e| miette!("failed to load store graph: {e}"))?;
     stamp_annotations(&mut graph);

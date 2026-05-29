@@ -19,14 +19,16 @@ use super::error::KixEvalError;
 pub fn build_cluster_activation(
     flake_path: &Path,
     cluster_name: &str,
+    input_overrides: &[(String, String)],
 ) -> Result<PathBuf, KixEvalError> {
-    build_cluster_activation_with_status(flake_path, cluster_name, &|_| {})
+    build_cluster_activation_with_status(flake_path, cluster_name, input_overrides, &|_| {})
 }
 
 /// Build with a status callback for progress updates.
 pub fn build_cluster_activation_with_status(
     flake_path: &Path,
     cluster_name: &str,
+    input_overrides: &[(String, String)],
     status_fn: &dyn Fn(&str),
 ) -> Result<PathBuf, KixEvalError> {
     if !cluster_name
@@ -47,15 +49,19 @@ pub fn build_cluster_activation_with_status(
 
     status_fn(&format!("Evaluating cluster '{cluster_name}'..."));
 
-    let mut child = Command::new("nix")
-        .args([
-            "build",
-            &flake_ref,
-            "--no-link",
-            "--print-out-paths",
-            "--extra-experimental-features",
-            "nix-command flakes pipe-operators",
-        ])
+    let mut cmd = Command::new("nix");
+    cmd.args([
+        "build",
+        &flake_ref,
+        "--no-link",
+        "--print-out-paths",
+        "--extra-experimental-features",
+        "nix-command flakes pipe-operators",
+    ]);
+    for (name, url) in input_overrides {
+        cmd.arg("--override-input").arg(name).arg(url);
+    }
+    let mut child = cmd
         .current_dir(flake_path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

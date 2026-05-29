@@ -40,6 +40,30 @@ pub struct GlobalArgs {
     /// Skip the SQLite eval cache (always re-evaluate from Nix)
     #[arg(long, global = true)]
     pub no_cache: bool,
+
+    /// Override a flake input's URL. Mirrors `nix --override-input`.
+    /// Repeatable; takes a name and a URL each time:
+    ///   `--override-input kixpkgs path:/nix/store/...kixpkgs`
+    /// All overrides are forwarded to every underlying `nix` subprocess.
+    #[arg(
+        long = "override-input",
+        global = true,
+        num_args = 2,
+        value_names = ["INPUT", "URL"],
+        action = clap::ArgAction::Append,
+    )]
+    pub override_input: Vec<String>,
+}
+
+impl GlobalArgs {
+    /// Pair up the raw `--override-input NAME URL` tokens into `(name, url)`.
+    /// clap's `num_args = 2` guarantees the vector length is always even.
+    pub fn input_overrides(&self) -> Vec<(String, String)> {
+        self.override_input
+            .chunks_exact(2)
+            .map(|c| (c[0].clone(), c[1].clone()))
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
