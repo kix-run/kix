@@ -93,7 +93,7 @@ boundaries are the biggest places to slow down and teach deliberately.
   "Expected ')' but found '{'" at a phantom line position. If you need
   per-item logic, pre-compute the data in the script section and keep the
   template a plain `.map(node => <jsx/>)`. See `Command.astro` for the
-  pattern (`inlineNodes`, `disclosureNodes`) and
+  pattern (the `RenderUnit` / `PreUnit` / `DetailsUnit` shape) and
   [withastro/astro#6955](https://github.com/withastro/astro/issues/6955).
 - The canonical planning issue is:
   https://github.com/adamcharnock/kixpkgs/issues/20

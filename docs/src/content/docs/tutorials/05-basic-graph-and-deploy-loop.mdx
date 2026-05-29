@@ -4,6 +4,13 @@ description: "Check, preview, deploy, and inspect a small cluster before adding 
 ---
 
 import Command from '/src/components/Command.astro';
+import checkOutput from '/src/command-output/tutorials/04-from-scratch/check.json';
+import buildOutput from '/src/command-output/tutorials/04-from-scratch/build.json';
+import graphTreeOutput from '/src/command-output/tutorials/04-from-scratch/graph-tree.json';
+import statusOutput from '/src/command-output/tutorials/04-from-scratch/status.json';
+import diffCleanOutput from '/src/command-output/tutorials/04-from-scratch/diff-clean.json';
+import diffAfterEditOutput from '/src/command-output/tutorials/04-from-scratch/diff-after-edit.json';
+import deployAfterEditOutput from '/src/command-output/tutorials/04-from-scratch/deploy-after-edit.json';
 
 The last tutorial created a cluster from scratch. This tutorial uses that same
 cluster to look more closely at the Kix loop:
@@ -34,7 +41,7 @@ If that command fails, add the file:
 
 Run the Kix checks first:
 
-<Command commands={["kix check 04-from-scratch"]} cwd="kix-examples/" />
+<Command {...checkOutput} />
 
 This evaluates the cluster and runs validation before anything is applied to
 Kubernetes. For this tiny cluster, the output should be short. The important
@@ -47,7 +54,7 @@ the deploy step should not run yet.
 
 Now render the cluster:
 
-<Command commands={["kix build 04-from-scratch"]} cwd="kix-examples/" />
+<Command expandable {...buildOutput} />
 
 This prints the Kubernetes resources Kix built from your cluster definition.
 You should see familiar objects such as a Namespace, Deployment, and Service.
@@ -64,7 +71,7 @@ uses it only for inspection.
 
 Ask Kix what is different from the live cluster:
 
-<Command commands={["kix diff 04-from-scratch"]} cwd="kix-examples/" />
+<Command expandable {...diffCleanOutput} />
 
 If your live cluster already matches the checked result, the diff should be
 empty or say there is nothing to change.
@@ -86,7 +93,7 @@ edit. You do not need to commit it.
 
 Run the diff again:
 
-<Command commands={["kix diff 04-from-scratch"]} cwd="kix-examples/" />
+<Command expandable {...diffAfterEditOutput} />
 
 This time Kix should show the change before it applies anything. That is the
 basic preview loop: edit locally, evaluate locally, inspect the change, then
@@ -101,14 +108,14 @@ when you already know the model and just need the command steps.
 
 Deploy the change:
 
-<Command commands={["kix deploy 04-from-scratch -y"]} cwd="kix-examples/" />
+<Command expandable {...deployAfterEditOutput} />
 
 Kix evaluates the cluster, computes what needs to change, and applies the
 checked result to Kubernetes.
 
 Check the resource status:
 
-<Command commands={["kix status 04-from-scratch"]} cwd="kix-examples/" />
+<Command {...statusOutput} />
 
 Then port-forward and verify the response:
 
@@ -124,7 +131,7 @@ Stop the port-forward with `Ctrl-C`.
 
 Run:
 
-<Command commands={["kix graph 04-from-scratch --format tree"]} cwd="kix-examples/" />
+<Command expandable {...graphTreeOutput} />
 
 For this cluster the graph is still small. You may see Kix's own activation
 resources, the namespace, platform imports, and the `hello-world` package

@@ -1,0 +1,17 @@
+{
+  "id": "tutorials/04-from-scratch/deploy-after-edit",
+  "group": "tutorials/04-from-scratch",
+  "page": "/docs/tutorials/04-first-cluster-from-scratch/",
+  "cwd": "kix-examples/",
+  "generator": "live",
+  "commands": [
+    {
+      "command": "kix deploy 04-from-scratch -y",
+      "stdout": "Building cluster '\u001b[1m04-from-scratch\u001b[0m'...\nCluster \u001b[1m04-from-scratch\u001b[0m: 10 manifests\nConnecting to cluster...\nActive activation: \u001b[1m04-from-scratch-68ysmiwsllm9\u001b[0m (68ysmiws...)\n\n  \u001b[1mtutorial-04\u001b[0m\n    \u001b[33m~\u001b[39m \u001b[33mhello-world\u001b[39m 1.27 (1 changed, 2 dep-affected)\n\n  Plan: \u001b[33m1 updated\u001b[39m, \u001b[2m1 unchanged\u001b[0m\n\u001b[2m  Resources: 1 real content, 2 dep-affected\u001b[0m\n  \u001b[31m1\u001b[39m orphaned\n\u001b[2mplan:\u001b[0m 10 nodes\n  \u001b[33m~\u001b[39m ConfigMap/hello-world@tutorial-04 \u001b[2mconfigured\u001b[0m\n  \u001b[32m✔\u001b[39m ConfigMap/hello-world@tutorial-04 \u001b[2mready\u001b[0m\n  \u001b[33m~\u001b[39m Deployment/hello-world@tutorial-04 \u001b[2mconfigured\u001b[0m\n  \u001b[32m✔\u001b[39m Deployment/hello-world@tutorial-04 \u001b[2mready\u001b[0m\n  \u001b[33m~\u001b[39m Service/hello-world@tutorial-04 \u001b[2mconfigured\u001b[0m\n  \u001b[32m✔\u001b[39m Service/hello-world@tutorial-04 \u001b[2mready\u001b[0m\n  \u001b[33m~\u001b[39m PackageInstance/hello-world@tutorial-04 \u001b[2mconfigured\u001b[0m\n  \u001b[32m✔\u001b[39m PackageInstance/hello-world@tutorial-04 \u001b[2mready\u001b[0m\n  + Activation/04-from-scratch-hxqijl4ndx86 \u001b[2mcreated\u001b[0m\n  \u001b[32m✔\u001b[39m Activation/04-from-scratch-hxqijl4ndx86 \u001b[2mready\u001b[0m\n\n\u001b[1mprune:\u001b[0m pruning 1 orphaned resources...\n  \u001b[2m•\u001b[0m activation '04-from-scratch-68ysmiwsllm9' → Superseded\n  \u001b[32m•\u001b[39m activation '04-from-scratch-hxqijl4ndx86' → Active\n\nDeploy complete: \u001b[32m1\u001b[39m created, \u001b[33m4\u001b[39m configured, \u001b[2m5\u001b[0m unchanged, \u001b[2m0\u001b[0m failed\n",
+      "stderr": "",
+      "stdoutDrift": "\n\n\n\n • activation '04-from-scratch-<activation-id>' → Active\n • activation '04-from-scratch-<activation-id>' → Superseded\n ✔ Activation/04-from-scratch-<activation-id> ready\n ✔ ConfigMap/hello-world@tutorial-04 ready\n ✔ Deployment/hello-world@tutorial-04 ready\n ✔ PackageInstance/hello-world@tutorial-04 ready\n ✔ Service/hello-world@tutorial-04 ready\n + Activation/04-from-scratch-<activation-id> created\n ~ ConfigMap/hello-world@tutorial-04 configured\n ~ Deployment/hello-world@tutorial-04 configured\n ~ hello-world 1.27 (1 changed, 2 dep-affected)\n ~ PackageInstance/hello-world@tutorial-04 configured\n ~ Service/hello-world@tutorial-04 configured\n 1 orphaned\n Plan: 1 updated, 1 unchanged\n Resources: 1 real content, 2 dep-affected\n tutorial-04\nActive activation: 04-from-scratch-<activation-id> (68ysmiws...)\nBuilding cluster '04-from-scratch'...\nCluster 04-from-scratch: 10 manifests\nConnecting to cluster...\nDeploy complete: 1 created, 4 configured, 5 unchanged, 0 failed\nplan: 10 nodes\nprune: pruning 1 orphaned resources...\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

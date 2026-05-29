@@ -1,0 +1,17 @@
+{
+  "id": "tutorials/02-hello-world/kubectl-get-nodes",
+  "group": "tutorials/02-hello-world",
+  "page": "/docs/tutorials/02-local-setup-and-first-run/",
+  "cwd": "kix-examples/",
+  "generator": "live",
+  "commands": [
+    {
+      "command": "kubectl get nodes",
+      "stdout": "NAME                     STATUS     ROLES           AGE   VERSION\nkix-docs-control-plane   NotReady   control-plane   4s    v1.35.0\n",
+      "stderr": "",
+      "stdoutDrift": "kix-docs-control-plane NotReady control-plane <DURATION> v1.35.0\nNAME STATUS ROLES AGE VERSION\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

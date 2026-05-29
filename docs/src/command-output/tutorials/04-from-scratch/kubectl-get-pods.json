@@ -1,0 +1,17 @@
+{
+  "id": "tutorials/04-from-scratch/kubectl-get-pods",
+  "group": "tutorials/04-from-scratch",
+  "page": "/docs/tutorials/04-first-cluster-from-scratch/",
+  "cwd": "kix-examples/",
+  "generator": "live",
+  "commands": [
+    {
+      "command": "kubectl get pods -n tutorial-04",
+      "stdout": "NAME                           READY   STATUS    RESTARTS   AGE\nhello-world-6f4588d4c5-mvqlg   1/1     Running   0          5s\n",
+      "stderr": "",
+      "stdoutDrift": "hello-world-<hash> 1/1 Running 0 <DURATION>\nNAME READY STATUS RESTARTS AGE\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

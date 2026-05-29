@@ -76,19 +76,19 @@
             sourceUrlBase = "https://github.com/kix-ops/kix-examples/blob/${kix-examples.rev or "main"}";
           };
 
-        # Captured CLI output for docs examples. Only non-live commands belong
-        # here: commands must not require a Kubernetes cluster, kubeconfig, or
-        # network access beyond what Nix already needs to realise inputs.
-        commandOutputs =
-          let
-            commandOutputLib = import ./nix/command-outputs.nix {
-              inherit pkgs;
-              inherit (pkgs) lib;
-              kix = kixpkgs.packages.${pkgs.system}.kix;
-              kixExamples = kix-examples;
-            };
-          in
-          commandOutputLib;
+        # Captured CLI output for docs examples. The offline driver of the
+        # captures pipeline. Each manifest group becomes one runCommand
+        # that builds a workspace (kix-examples + optional overlay + setup
+        # mutations) and runs every offline step against it. The live
+        # counterpart is `apps.regen-captures` (see below). See
+        # `nix/captures.nix` for the manifest and `nix/captures-lib.nix`
+        # for the shared building blocks.
+        commandOutputs = import ./nix/captures-offline.nix {
+          inherit pkgs;
+          inherit (pkgs) lib;
+          kix = kixpkgs.packages.${pkgs.system}.kix;
+          kixExamples = kix-examples;
+        };
 
         # Auto-generated per-package option reference (Markdown), produced
         # via `nixosOptionsDoc` against each package's `options` attrset.
@@ -188,15 +188,17 @@
       # Run from the kixpkgs repo root. The script expects cwd to contain
       # the `docs/` directory.
       apps = forAllSystems (pkgs: {
-        # Live command output regenerator. Spins up a dedicated kind cluster,
-        # runs the kix commands listed in `nix/live-command-outputs-manifest.nix`,
-        # sanitises through the named transforms, and updates JSON sidecars
-        # under `docs/src/command-output/`. See `nix/live-command-outputs.nix`
-        # for the trust boundary and design rationale.
+        # Live driver for the captures pipeline. Spins up a dedicated kind
+        # cluster, runs every manifest group's live steps against it
+        # (sharing the cluster across groups so deploys accumulate), and
+        # diffs the captured sidecars against the checked-in tree before
+        # optionally writing them. See `nix/captures.nix` for the
+        # manifest and `nix/captures-live.nix` for the trust boundary
+        # and flag plumbing.
         #
-        # Run: `nix run ./docs#regen-live-docs` (or `-- --apply` / `--check`).
-        regen-live-docs =
-          (import ./nix/live-command-outputs.nix {
+        # Run: `nix run ./docs#regen-captures` (or `-- --apply` / `--check`).
+        regen-captures =
+          (import ./nix/captures-live.nix {
             inherit pkgs;
             inherit (pkgs) lib;
             kix = kixpkgs.packages.${pkgs.system}.kix;

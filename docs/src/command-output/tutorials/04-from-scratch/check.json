@@ -1,0 +1,17 @@
+{
+  "id": "tutorials/04-from-scratch/check",
+  "group": "tutorials/04-from-scratch",
+  "page": "/docs/tutorials/04-first-cluster-from-scratch/",
+  "cwd": "kix-examples/",
+  "generator": "offline",
+  "commands": [
+    {
+      "command": "kix check 04-from-scratch",
+      "stdout": " TOOL         RESULT  DETAILS                                     \n eval         pass    10 manifests evaluated                      \n kubeconform  pass    skipped (not installed)                     \n pluto        pass    skipped (not installed)                     \n kyverno      pass    skipped (not installed)                     \n scorecard    skip    scorecard not enabled in cluster definition \n",
+      "stderr": "",
+      "stdoutDrift": " TOOL RESULT DETAILS\n eval pass 10 manifests evaluated\n kubeconform pass skipped (not installed)\n kyverno pass skipped (not installed)\n pluto pass skipped (not installed)\n scorecard skip scorecard not enabled in cluster definition\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

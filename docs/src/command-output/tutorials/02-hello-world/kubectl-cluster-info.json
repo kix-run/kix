@@ -1,0 +1,17 @@
+{
+  "id": "tutorials/02-hello-world/kubectl-cluster-info",
+  "group": "tutorials/02-hello-world",
+  "page": "/docs/tutorials/02-local-setup-and-first-run/",
+  "cwd": "kix-examples/",
+  "generator": "live",
+  "commands": [
+    {
+      "command": "kubectl cluster-info",
+      "stdout": "Kubernetes control plane is running at https://127.0.0.1:53325\nCoreDNS is running at https://127.0.0.1:53325/api/v1/namespaces/kube-system/services/kube-dns:dns/proxy\n\nTo further debug and diagnose cluster problems, use 'kubectl cluster-info dump'.\n",
+      "stderr": "",
+      "stdoutDrift": "\nCoreDNS is running at https://127.0.0.1:53325/api/v1/namespaces/kube-system/services/kube-dns:dns/proxy\nKubernetes control plane is running at https://127.0.0.1:53325\nTo further debug and diagnose cluster problems, use 'kubectl cluster-info dump'.\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

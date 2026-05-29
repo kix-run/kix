@@ -1,0 +1,237 @@
+# Shared building blocks for the docs captures pipeline.
+#
+# Both the offline driver (`captures-offline.nix`, runs in a Nix sandbox)
+# and the live driver (`captures-live.nix`, runs as a host shell script
+# against kind) compose the helpers in here. The library is intentionally
+# free of pipeline-level state — it returns shell snippets parameterised
+# by group/step plus a small set of runtime expectations the caller
+# documents below.
+
+{
+  pkgs,
+  lib,
+  kix,
+  kixExamples,
+}:
+
+let
+  transforms = import ./output-transforms.nix { inherit lib; };
+
+  mkSedPipeline =
+    names:
+    if names == [ ] then
+      "cat"
+    else
+      lib.concatMapStringsSep " | " (
+        name: ''sed -E ${lib.escapeShellArg transforms.programs.${name}}''
+      ) names;
+
+  displayPipeline = mkSedPipeline transforms.displayTransforms;
+  baseDriftPipeline = mkSedPipeline transforms.driftTransforms;
+
+  driftPipelineFor =
+    step: if (step.sortLines or true) then "${baseDriftPipeline} | sort" else baseDriftPipeline;
+
+  mkDisplayCommand =
+    run: lib.concatStringsSep " " (map (arg: if lib.hasInfix " " arg then "'${arg}'" else arg) run);
+
+  # Mutate step → shell. Runs `oldString → newString` literal
+  # substitution against `$workspace/<file>`. Three preflight checks
+  # short-circuit the whole run rather than producing partial sidecars:
+  # missing file, no match, multi-match (oldString isn't unique).
+  mutateShell =
+    m:
+    let
+      fileQ = lib.escapeShellArg m.file;
+      oldQ = lib.escapeShellArg m.oldString;
+      newQ = lib.escapeShellArg m.newString;
+    in
+    ''
+            __mutate_file=${fileQ}
+            __mutate_target="$workspace/$__mutate_file"
+            __mutate_old=${oldQ}
+            __mutate_new=${newQ}
+
+            if [ ! -f "$__mutate_target" ]; then
+              echo "captures.mutate: file not found: $__mutate_file" >&2
+              exit 2
+            fi
+            __mutate_count=$(grep -F -c -- "$__mutate_old" "$__mutate_target" || true)
+            if [ "$__mutate_count" -eq 0 ]; then
+              echo "captures.mutate: oldString not found in $__mutate_file" >&2
+              exit 2
+            fi
+            if [ "$__mutate_count" -ne 1 ]; then
+              echo "captures.mutate: oldString matched $__mutate_count times in $__mutate_file (must be unique)" >&2
+              exit 2
+            fi
+            ${pkgs.python3}/bin/python3 -c '
+      import sys
+      path, old, new = sys.argv[1:]
+      with open(path, "r") as f:
+          content = f.read()
+      with open(path, "w") as f:
+          f.write(content.replace(old, new, 1))
+      ' "$__mutate_target" "$__mutate_old" "$__mutate_new"
+    '';
+
+  # Workspace setup shell. Caller is expected to have:
+  #   $workspace — empty writable directory the workspace will live in.
+  # After this snippet, $workspace contains kix-examples + (optional)
+  # overlay + applied setup mutations.
+  workspaceSetupShell =
+    group:
+    let
+      overlayCp =
+        if group ? overlay then
+          ''
+            cp -r --no-preserve=mode ${group.overlay}/. "$workspace/"
+            chmod -R u+w "$workspace"
+          ''
+        else
+          "";
+      setupSteps = group.setup or [ ];
+      mutateBlocks = lib.concatMapStringsSep "\n" (
+        s:
+        if s ? mutate then
+          mutateShell s.mutate
+        else
+          throw "captures.setup: only `mutate` steps are allowed in setup; got: ${builtins.toJSON s}"
+      ) setupSteps;
+    in
+    ''
+      cp -r --no-preserve=mode ${kixExamples}/. "$workspace/"
+      chmod -R u+w "$workspace"
+      ${overlayCp}
+      ${mutateBlocks}
+    '';
+
+  # Capture step → shell. Parameterised by:
+  #   invocation — shell string that invokes the binary with whatever
+  #     auto-flags the driver wants (PTY wrap, --context, --flake, etc.)
+  #   generator  — "offline" or "live"; baked into the sidecar JSON.
+  # Caller is expected to have on PATH or pinned: jq, sed, python3.
+  # Caller is expected to have set: $workspace, $stagingDir.
+  captureShell =
+    {
+      group,
+      step,
+      invocation,
+      generator,
+    }:
+    let
+      restArgs = lib.tail step.run;
+      id = "${group.group}/${step.capture}";
+      displayCommand = mkDisplayCommand step.run;
+      stepDriftPipeline = driftPipelineFor step;
+      allowFailure = step.allowFailure or false;
+      allowFailureGuard =
+        if allowFailure then
+          ""
+        else
+          ''
+            if [ "$__exit_code" -ne 0 ]; then
+              echo "captures.capture: command failed with exit $__exit_code: ${displayCommand}" >&2
+              echo "--- stdout ---" >&2
+              cat "$__stdout_raw" >&2
+              echo "--- stderr ---" >&2
+              cat "$__stderr_raw" >&2
+              echo "(set allowFailure = true on this step to record the failure as a sidecar)" >&2
+              exit 5
+            fi
+          '';
+    in
+    ''
+      printf '  capturing %s :: %s\n' ${lib.escapeShellArg id} ${lib.escapeShellArg displayCommand}
+
+      __stdout_raw=$(mktemp)
+      __stderr_raw=$(mktemp)
+      __stdout_display=$(mktemp)
+      __stderr_display=$(mktemp)
+      __stdout_drift=$(mktemp)
+      __stderr_drift=$(mktemp)
+
+      set +e
+      ( cd "$workspace" && \
+        ${invocation} ${lib.escapeShellArgs restArgs} \
+      ) > "$__stdout_raw" 2> "$__stderr_raw"
+      __exit_code=$?
+      set -e
+
+      ${allowFailureGuard}
+
+      # Redact workspace path so per-run tempdir names don't leak into
+      # the rendered docs.
+      sed -i "s#$workspace#kix-examples#g" "$__stdout_raw" "$__stderr_raw"
+
+      <"$__stdout_raw" ${displayPipeline} > "$__stdout_display"
+      <"$__stderr_raw" ${displayPipeline} > "$__stderr_display"
+      <"$__stdout_raw" ${stepDriftPipeline} > "$__stdout_drift"
+      <"$__stderr_raw" ${stepDriftPipeline} > "$__stderr_drift"
+
+      mkdir -p "$stagingDir/${group.group}"
+      jq -n \
+        --arg id ${lib.escapeShellArg id} \
+        --arg group ${lib.escapeShellArg group.group} \
+        --arg page ${lib.escapeShellArg group.page} \
+        --arg command ${lib.escapeShellArg displayCommand} \
+        --arg cwd ${lib.escapeShellArg group.cwd} \
+        --arg generator ${lib.escapeShellArg generator} \
+        --argjson exitCode "$__exit_code" \
+        --rawfile stdout "$__stdout_display" \
+        --rawfile stderr "$__stderr_display" \
+        --rawfile stdoutDrift "$__stdout_drift" \
+        --rawfile stderrDrift "$__stderr_drift" \
+        '{
+          id: $id,
+          group: $group,
+          page: $page,
+          cwd: $cwd,
+          generator: $generator,
+          commands: [{
+            command: $command,
+            stdout: $stdout,
+            stderr: $stderr,
+            stdoutDrift: $stdoutDrift,
+            stderrDrift: $stderrDrift,
+            exitCode: $exitCode
+          }]
+        }' > "$stagingDir/${group.group}/${step.capture}.json"
+
+      rm -f "$__stdout_raw" "$__stderr_raw" \
+            "$__stdout_display" "$__stderr_display" \
+            "$__stdout_drift" "$__stderr_drift"
+    '';
+
+  # Step dispatch. A step is either `mutate` (applied in-place) or
+  # `capture` (runs a command and writes a sidecar). Drivers loop over
+  # steps in declaration order and let the dispatch fall out.
+  mkStepShell =
+    {
+      group,
+      step,
+      invocationFor,
+      generator,
+    }:
+    if step ? mutate then
+      mutateShell step.mutate
+    else if step ? capture then
+      captureShell {
+        inherit group step generator;
+        invocation = invocationFor step;
+      }
+    else
+      throw "captures: step must have either `mutate` or `capture`; got: ${builtins.toJSON step}";
+
+  manifest = import ./captures.nix;
+in
+{
+  inherit manifest;
+  inherit
+    mkDisplayCommand
+    workspaceSetupShell
+    mutateShell
+    captureShell
+    mkStepShell
+    ;
+}

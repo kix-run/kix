@@ -41,9 +41,23 @@ interface Props {
   cwd?: string;
   title?: string;
   expandable?: boolean;
+  /**
+   * Generator tag carried by spread sidecar JSON: `"offline"` or `"live"`.
+   * When present, the author signalled "this block shows generated output" —
+   * if every step is empty we treat that as a build error rather than a
+   * silent blank box. Sidecar JSON sets this field; hand-written
+   * `<Command commands={[...]} />` invocations omit it.
+   */
+  generator?: 'offline' | 'live';
+  /**
+   * Sidecar id (e.g. `tutorials/02-hello-world/list-clusters`). Used only
+   * for diagnostics — included in any thrown error so the maintainer can
+   * trace the failing sidecar back to its manifest entry.
+   */
+  id?: string;
 }
 
-const { commands, cwd, title, expandable = false } = Astro.props;
+const { commands, cwd, title, expandable = false, generator, id } = Astro.props;
 
 type NormalisedStep = Required<Pick<Step, 'command'>> &
   Pick<Step, 'cwd' | 'stdout' | 'stderr' | 'exitCode'>;
@@ -54,6 +68,35 @@ const steps: NormalisedStep[] = commands.map((entry) => {
 });
 
 const terminalLabel = title ?? (cwd ? `Run in ${cwd}` : null);
+
+// Missing-output detection: prevent silent blank-output regressions.
+// `expandable` and spread sidecars (identified by the `generator` tag)
+// both imply the author expects output. If every step is empty, fail loud
+// at build time with a pointer to the manifest entry / call site.
+const stepHasOutput = (s: NormalisedStep): boolean =>
+  Boolean((s.stdout ?? '').length || (s.stderr ?? '').length) ||
+  (s.exitCode ?? 0) !== 0;
+
+if (expandable && !steps.some(stepHasOutput)) {
+  throw new Error(
+    `<Command expandable> requires at least one step with output, ` +
+    `but every step in this block is empty. ` +
+    (id ? `Sidecar id: ${id}. ` : '') +
+    `Either drop \`expandable\`, hardcode a step's stdout, or add the ` +
+    `command to docs/nix/{command-outputs-manifest,live-command-outputs-manifest}.nix ` +
+    `and rebuild.`,
+  );
+}
+if (generator && !steps.some(stepHasOutput)) {
+  throw new Error(
+    `<Command> was spread from a "${generator}" sidecar` +
+    (id ? ` (${id})` : '') +
+    `, but every captured step is empty. ` +
+    `If the command really produces no output, drop the sidecar and use ` +
+    `a bare \`commands={["..."]}\`. Otherwise check the manifest entry ` +
+    `under docs/nix/.`,
+  );
+}
 
 // Command line tokenization: first word + flags get the "command" colour;
 // remaining words are "argument" colour. Whitespace preserved verbatim.
@@ -98,16 +141,18 @@ function renderOutput(stdout: string, stderr: string, exitCode: number): Span[] 
 // shape everything into ready-to-render data here. See
 // https://github.com/withastro/astro/issues/6955 for the restriction.
 
-// Each step contributes one terminal "pre" (its command lines + optional
-// inline output) and, when `expandable` is set, an immediately-following
-// `<details>` carrying the output. Adjacent `pre` units render visually
-// contiguous via CSS — see the `.command-block pre + pre` rules below.
+// Each step renders as either a `<pre>` (command lines + optional inline
+// output, the default) or a `<details>` (when `expandable` is set and the
+// step has output). The `<details>` summary holds the command lines on the
+// left and a right-aligned "Show output" toggle; the output reveals below
+// the summary when open. Sibling units render visually contiguous via the
+// adjacency CSS rules below.
 //
 // Astro's template compiler only accepts expression-bodied arrow functions
 // in `{...}` expressions, and trips up on nested ternaries returning JSX.
-// So the pre's content is normalised in the script into a single flat shape
-// — a list of `LineItem`s, each one wrap-span (`command-line` or `output`)
-// + a sequence of `InnerSpan`s. The template walks the shape with at most
+// So per-step content is normalised in the script into a flat shape — a
+// list of `LineItem`s, each one wrap-span (`command-line` or `output`) +
+// a sequence of `InnerSpan`s. The template walks the shape with at most
 // one ternary level (PreUnit vs DetailsUnit).
 type InnerSpan = { text: string; classes: string; style: string };
 type LineItem = {
@@ -116,7 +161,14 @@ type LineItem = {
   spans: InnerSpan[];
 };
 type PreUnit = { kind: 'pre'; items: LineItem[] };
-type DetailsUnit = { kind: 'details'; output: InnerSpan[] };
+// Expandable step: command lines live inside the <summary> (alongside the
+// right-aligned toggle), output lives inside the <details> body. Closed
+// state shows only the command + toggle row; open state reveals the output.
+type DetailsUnit = {
+  kind: 'details';
+  commandItems: LineItem[];
+  output: InnerSpan[];
+};
 type RenderUnit = PreUnit | DetailsUnit;
 
 function buildOutputSpans(stdout: string, stderr: string, exitCode: number): InnerSpan[] {
@@ -153,13 +205,14 @@ for (const step of steps) {
   const items: LineItem[] = lines.map((tokens, lineIdx) =>
     commandLineToItem(tokens, lineIdx > 0),
   );
-  if (hasOutput && !expandable) {
-    items.push({ wrapClass: 'output', leadingNewline: true, spans: outputSpans });
-  }
-  units.push({ kind: 'pre', items });
 
   if (hasOutput && expandable) {
-    units.push({ kind: 'details', output: outputSpans });
+    units.push({ kind: 'details', commandItems: items, output: outputSpans });
+  } else {
+    if (hasOutput) {
+      items.push({ wrapClass: 'output', leadingNewline: true, spans: outputSpans });
+    }
+    units.push({ kind: 'pre', items });
   }
 }
 ---
@@ -181,8 +234,15 @@ for (const step of steps) {
         ))}</span>
       ))}</code></pre>
     ) : (
-      <details class="command-block-disclosure">
-        <summary>Show output</summary>
+      <details class="command-block-disclosure not-content">
+        <summary>
+          <span class="disclosure-command"><code>{unit.commandItems.map((item) => (
+            <span class={item.wrapClass}>{item.leadingNewline ? '\n' : ''}{item.spans.map((s) => (
+              <span class={s.classes} style={s.style || undefined}>{s.text}</span>
+            ))}</span>
+          ))}</code></span>
+          <span class="disclosure-toggle">Show output</span>
+        </summary>
         <pre><code>{unit.output.map((s) => (
           <span class={s.classes} style={s.style || undefined}>{s.text}</span>
         ))}</code></pre>
@@ -256,58 +316,96 @@ for (const step of steps) {
     color: var(--command-block-command-color);
   }
 
-  /* Disclosure behaviour and chrome come from Starlight's markdown <details>
-     rules (left accent border, indented padding, triangle marker, rotation).
-     The figure deliberately omits `class="not-content"` so those rules apply.
-     We only override the two things that look wrong inside a terminal block:
-     the disclosure shares the terminal background instead of bleeding through
-     to the figure background, and the gap above the summary is collapsed so
-     the toggle sits flush with the command line above it. */
+  /* Disclosure rendered as a single terminal row: command on the left
+     (matching the prompt styling of a regular <pre>) and a right-aligned
+     "Show output" toggle. Output reveals below the summary on open. We
+     fully override Starlight's markdown <details> chrome here because the
+     disclosure has to read as a terminal row, not as a callout. */
   .command-block-disclosure {
     background: var(--ec-frm-trmBg, var(--sl-color-gray-7));
+    border: 0;
+    padding: 0;
+    margin-top: 0;
+    color: var(--ec-codeFg, var(--sl-color-text));
   }
-  /* Adjacent pres should look like one continuous terminal stream. The
-     standard 1rem all-around padding doubles up between sibling pres; tame
-     the bottom of an earlier pre and the top of a later pre to keep the
-     command-flow tight. The same applies when a disclosure sits between
-     pres — the disclosure replaces the bottom of the preceding pre, and
-     the next pre starts flush with the disclosure body. */
+  .command-block-disclosure > summary {
+    display: flex;
+    /* Baseline alignment: the toggle and the first command line share the
+       same baseline regardless of their independent font-sizes/line-heights.
+       For multi-line commands, the toggle anchors to the first line. */
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1rem;
+    margin: 0;
+    cursor: pointer;
+    list-style: none;
+    font-weight: normal;
+    color: var(--ec-codeFg, var(--sl-color-text));
+  }
+  .command-block-disclosure > summary::-webkit-details-marker,
+  .command-block-disclosure > summary::marker {
+    display: none;
+    content: '';
+  }
+  /* Command lives in a <code> so it picks up the monospace font and
+     whitespace handling we use in <pre>. The wrapper span owns scrolling
+     so long commands don't push the toggle off-screen. */
+  .disclosure-command {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-x: auto;
+  }
+  .disclosure-command > code {
+    font-family: var(--__sl-font-mono);
+    font-size: var(--sl-text-code);
+    line-height: 1.6;
+    white-space: pre;
+    display: block;
+  }
+  /* Right-aligned toggle label. Vertical alignment is handled by the
+     summary's `align-items: baseline` so the toggle's text baseline lines
+     up with the first command-line baseline regardless of font-size. */
+  .disclosure-toggle {
+    flex: 0 0 auto;
+    font-family: var(--sl-font);
+    font-size: 0.8em;
+    color: var(--sl-color-gray-3);
+    user-select: none;
+    white-space: nowrap;
+  }
+  .disclosure-toggle::after {
+    content: '›';
+    display: inline-block;
+    margin-inline-start: 0.4ch;
+    transition: transform 0.15s ease;
+  }
+  .command-block-disclosure[open] > summary .disclosure-toggle::after {
+    transform: rotate(90deg);
+  }
+  /* Output pre inside an open details — sits flush against the summary
+     above, with the surrounding terminal padding on the sides/bottom. */
+  .command-block-disclosure > pre {
+    padding-top: 0;
+  }
+  /* Adjacency: keep consecutive step blocks (pre or disclosure) visually
+     continuous by tightening the inner edge padding to 0.25rem instead of
+     the 1rem outer padding. */
   .command-block > pre + pre,
-  .command-block > .command-block-disclosure + pre {
+  .command-block > pre + .command-block-disclosure > summary,
+  .command-block > .command-block-disclosure + pre,
+  .command-block > .command-block-disclosure + .command-block-disclosure > summary {
     padding-top: 0.25rem;
   }
   .command-block > pre:has(+ pre),
   .command-block > pre:has(+ .command-block-disclosure) {
     padding-bottom: 0.25rem;
   }
-  /* Starlight applies a global adjacent-sibling `margin-top` between block
-     elements inside `.sl-markdown-content`. Cancel it on every direct child
-     of the command-block so they sit flush. Pull the disclosure slightly
-     further up (negative margin) so the toggle tucks closer to the command
-     line above — applied to the whole element so the chevron tracks with
-     the text. */
-  .command-block > pre {
-    margin-top: 0;
+  .command-block > .command-block-disclosure:not([open]):has(+ *) > summary {
+    padding-bottom: 0.25rem;
   }
-  .command-block > .command-block-disclosure {
-    margin-top: -0.25rem;
-  }
-  /* Soften the summary text and shift the chevron into the command prompt
-     column. Starlight defaults summary to bold body text with a negative
-     inline-margin that pulls the marker left of the content area; we flip
-     the sign so the whole summary sits indented to match `❱` above. The
-     chevron uses `currentColor` so colouring the summary dims it too. */
-  .command-block-disclosure > summary {
-    font-weight: normal;
-    font-size: 0.8em;
-    color: var(--sl-color-gray-3);
-    margin-inline-start: 0.5rem;
-  }
-  /* Starlight adds `margin-bottom: 1rem` to an opened summary, leaving too
-     much vertical space between the toggle and the output below. Zero it
-     so the expanded output sits directly under the toggle. */
-  .command-block-disclosure[open] > summary {
-    margin-bottom: 0;
+  .command-block > .command-block-disclosure[open]:has(+ *) > pre {
+    padding-bottom: 0.25rem;
   }
 
   /* ANSI palette — dark theme defaults; light theme overrides below. The

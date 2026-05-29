@@ -1,0 +1,17 @@
+{
+  "id": "tutorials/04-from-scratch/status",
+  "group": "tutorials/04-from-scratch",
+  "page": "/docs/tutorials/04-first-cluster-from-scratch/",
+  "cwd": "kix-examples/",
+  "generator": "live",
+  "commands": [
+    {
+      "command": "kix status 04-from-scratch",
+      "stdout": " NAME                          NAMESPACE    KIND                      READY  STATUS  AGE \n 02-hello-world-8z5m10hda1hk   _cluster     Activation                True   Active  5s  \n 02-hello-world-kddvid7wbdpp   _cluster     Activation                True   Active  6s  \n 04-from-scratch-68ysmiwsllm9  _cluster     Activation                True   Active  2s  \n 04-from-scratch-hxqijl4ndx86  _cluster     Activation                True   Active  0s  \n activations.kix.dev           _cluster     CustomResourceDefinition  True   Active  29s \n packageinstances.kix.dev      _cluster     CustomResourceDefinition  True   Active  29s \n kube-system                   _cluster     Namespace                 True   Active  33s \n tutorial-02                   _cluster     Namespace                 True   Active  29s \n tutorial-04                   _cluster     Namespace                 True   Active  4s  \n platform-dns                  kube-system  PackageInstance           True   Active  29s \n hello-world                   tutorial-02  ConfigMap                 True   Active  29s \n hello-world                   tutorial-02  Deployment                True   1/1     29s \n hello-world                   tutorial-02  PackageInstance           True   Active  7s  \n hello-world                   tutorial-02  Service                   True   Active  7s  \n hello-world                   tutorial-04  ConfigMap                 True   Active  4s  \n hello-world                   tutorial-04  Deployment                True   1/1     4s  \n hello-world                   tutorial-04  PackageInstance           True   Active  2s  \n hello-world                   tutorial-04  Service                   True   Active  2s  \n",
+      "stderr": "",
+      "stdoutDrift": " 02-hello-world-<activation-id> _cluster Activation True Active <DURATION>\n 02-hello-world-<activation-id> _cluster Activation True Active <DURATION>\n 04-from-scratch-<activation-id> _cluster Activation True Active <DURATION>\n 04-from-scratch-<activation-id> _cluster Activation True Active <DURATION>\n activations.kix.dev _cluster CustomResourceDefinition True Active <DURATION>\n hello-world tutorial-02 ConfigMap True Active <DURATION>\n hello-world tutorial-02 Deployment True 1/1 <DURATION>\n hello-world tutorial-02 PackageInstance True Active <DURATION>\n hello-world tutorial-02 Service True Active <DURATION>\n hello-world tutorial-04 ConfigMap True Active <DURATION>\n hello-world tutorial-04 Deployment True 1/1 <DURATION>\n hello-world tutorial-04 PackageInstance True Active <DURATION>\n hello-world tutorial-04 Service True Active <DURATION>\n kube-system _cluster Namespace True Active <DURATION>\n NAME NAMESPACE KIND READY STATUS AGE\n packageinstances.kix.dev _cluster CustomResourceDefinition True Active <DURATION>\n platform-dns kube-system PackageInstance True Active <DURATION>\n tutorial-02 _cluster Namespace True Active <DURATION>\n tutorial-04 _cluster Namespace True Active <DURATION>\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

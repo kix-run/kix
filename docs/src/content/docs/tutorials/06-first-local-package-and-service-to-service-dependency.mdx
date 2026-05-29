@@ -7,9 +7,12 @@ import Command from '/src/components/Command.astro';
 import Snippet from '/src/components/Snippet.astro';
 import checkOutput from '/src/command-output/tutorials/06-service-dep/check.json';
 import graphOutput from '/src/command-output/tutorials/06-service-dep/graph-tree.json';
-import localPackageImport from '/src/snippets/examples/06-service-dep/cluster/localPackageImport.json';
-import buildArgs from '/src/snippets/examples/06-service-dep/reverse-proxy-package/buildArgs.json';
-import configmap from '/src/snippets/examples/06-service-dep/reverse-proxy-package/configmap.json';
+import buildOutput from '/src/command-output/tutorials/06-service-dep/build.json';
+import deployOutput from '/src/command-output/tutorials/06-service-dep/deploy.json';
+import checkBrokenName from '/src/command-output/tutorials/06-service-dep/check-broken-name.json';
+import localPackageImport from '/src/snippets/tutorials/06-service-dep/cluster/localPackageImport.json';
+import buildArgs from '/src/snippets/tutorials/06-service-dep/reverse-proxy-package/buildArgs.json';
+import configmap from '/src/snippets/tutorials/06-service-dep/reverse-proxy-package/configmap.json';
 
 So far, each tutorial cluster has had one service. This tutorial adds the first
 service-to-service relationship.
@@ -33,8 +36,8 @@ files from tutorial 04 staged.
 Open:
 
 ```text
-examples/06-service-dep/cluster.nix
-examples/06-service-dep/reverse-proxy-package.nix
+tutorials/06-service-dep/cluster.nix
+tutorials/06-service-dep/reverse-proxy-package.nix
 ```
 
 The cluster has two instances in the `tutorial-06` namespace:
@@ -76,7 +79,7 @@ This keeps cluster composition and package implementation separate:
 
 The cluster installs two package instances:
 
-```nix title="examples/06-service-dep/cluster.nix"
+```nix title="tutorials/06-service-dep/cluster.nix"
 backend = {
   package = packages.echo-server;
   config = {
@@ -102,7 +105,7 @@ to learn. Later tutorials will make cross-namespace dependencies explicit.
 
 ## Ask For A Dependency In The Package
 
-Open `examples/06-service-dep/reverse-proxy-package.nix`. The package's
+Open `tutorials/06-service-dep/reverse-proxy-package.nix`. The package's
 `build` function receives named arguments from Kix:
 
 <Snippet {...buildArgs} />
@@ -153,7 +156,7 @@ Before deploying, ask Kix to evaluate and check the cluster:
 
 Deploy the example:
 
-<Command commands={["kix deploy 06-service-dep -y"]} cwd="kix-examples/" />
+<Command expandable {...deployOutput} />
 
 Port-forward to the gateway:
 
@@ -171,13 +174,13 @@ Stop the port-forward with `Ctrl-C`.
 
 Ask Kix to show the dependency graph:
 
-<Command {...graphOutput} />
+<Command expandable {...graphOutput} />
 
 Look for the `gateway` instance and the backend resources it depends on.
 
 You can also render the manifests and inspect the generated nginx config:
 
-<Command commands={["kix build 06-service-dep"]} cwd="kix-examples/" />
+<Command expandable {...buildOutput} />
 
 In the gateway ConfigMap, the `proxy_pass` URL should contain the backend's
 cluster DNS name. The package code did not hardcode that name; it came from
@@ -185,10 +188,10 @@ cluster DNS name. The package code did not hardcode that name; it came from
 
 ## Try Breaking The Name Match
 
-In `examples/06-service-dep/cluster.nix`, rename the `backend` instance to
+In `tutorials/06-service-dep/cluster.nix`, rename the `backend` instance to
 `api`:
 
-```nix title="examples/06-service-dep/cluster.nix"
+```nix title="tutorials/06-service-dep/cluster.nix"
 api = {
   package = packages.echo-server;
   config = {
@@ -199,7 +202,7 @@ api = {
 
 Then run:
 
-<Command commands={["kix check 06-service-dep"]} cwd="kix-examples/" />
+<Command expandable {...checkBrokenName} />
 
 Kix should fail because the gateway package asks for `backend`, but there is no
 same-namespace instance with that name anymore.

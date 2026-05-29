@@ -1,0 +1,17 @@
+{
+  "id": "tutorials/19-scorecards/check",
+  "group": "tutorials/19-scorecards",
+  "page": "/docs/tutorials/19-scorecards-and-compile-time-policy/",
+  "cwd": "kix-examples/",
+  "generator": "offline",
+  "commands": [
+    {
+      "command": "kix check 19-scorecards",
+      "stdout": " TOOL         RESULT  DETAILS                      \n eval         pass    23 manifests evaluated       \n kubeconform  pass    skipped (not installed)      \n pluto        pass    skipped (not installed)      \n kyverno      pass    skipped (not installed)      \n scorecard    pass    0 errors, 6 warnings, 4 info \n",
+      "stderr": "",
+      "stdoutDrift": " TOOL RESULT DETAILS\n eval pass 23 manifests evaluated\n kubeconform pass skipped (not installed)\n kyverno pass skipped (not installed)\n pluto pass skipped (not installed)\n scorecard pass 0 errors, 6 warnings, 4 info\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

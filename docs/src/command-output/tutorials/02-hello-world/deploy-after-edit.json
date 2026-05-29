@@ -1,0 +1,17 @@
+{
+  "id": "tutorials/02-hello-world/deploy-after-edit",
+  "group": "tutorials/02-hello-world",
+  "page": "/docs/tutorials/02-local-setup-and-first-run/",
+  "cwd": "kix-examples/",
+  "generator": "live",
+  "commands": [
+    {
+      "command": "kix deploy 02-hello-world -y",
+      "stdout": "Building cluster '\u001b[1m02-hello-world\u001b[0m'...\nCluster \u001b[1m02-hello-world\u001b[0m: 10 manifests\nConnecting to cluster...\nActive activation: \u001b[1m02-hello-world-kddvid7wbdpp\u001b[0m (kddvid7w...)\n\n  \u001b[1mtutorial-02\u001b[0m\n    \u001b[33m~\u001b[39m \u001b[33mhello-world\u001b[39m 1.27 (1 changed, 2 dep-affected)\n\n  Plan: \u001b[33m1 updated\u001b[39m, \u001b[2m1 unchanged\u001b[0m\n\u001b[2m  Resources: 1 real content, 2 dep-affected\u001b[0m\n  \u001b[31m1\u001b[39m orphaned\n\u001b[2mplan:\u001b[0m 10 nodes\n  \u001b[33m~\u001b[39m ConfigMap/hello-world@tutorial-02 \u001b[2mconfigured\u001b[0m\n  \u001b[32m✔\u001b[39m ConfigMap/hello-world@tutorial-02 \u001b[2mready\u001b[0m\n  \u001b[33m~\u001b[39m Deployment/hello-world@tutorial-02 \u001b[2mconfigured\u001b[0m\n  \u001b[32m✔\u001b[39m Deployment/hello-world@tutorial-02 \u001b[2mready\u001b[0m\n  \u001b[33m~\u001b[39m Service/hello-world@tutorial-02 \u001b[2mconfigured\u001b[0m\n  \u001b[32m✔\u001b[39m Service/hello-world@tutorial-02 \u001b[2mready\u001b[0m\n  \u001b[33m~\u001b[39m PackageInstance/hello-world@tutorial-02 \u001b[2mconfigured\u001b[0m\n  \u001b[32m✔\u001b[39m PackageInstance/hello-world@tutorial-02 \u001b[2mready\u001b[0m\n  + Activation/02-hello-world-8z5m10hda1hk \u001b[2mcreated\u001b[0m\n  \u001b[32m✔\u001b[39m Activation/02-hello-world-8z5m10hda1hk \u001b[2mready\u001b[0m\n\n\u001b[1mprune:\u001b[0m pruning 1 orphaned resources...\n  \u001b[2m•\u001b[0m activation '02-hello-world-kddvid7wbdpp' → Superseded\n  \u001b[32m•\u001b[39m activation '02-hello-world-8z5m10hda1hk' → Active\n\nDeploy complete: \u001b[32m1\u001b[39m created, \u001b[33m4\u001b[39m configured, \u001b[2m5\u001b[0m unchanged, \u001b[2m0\u001b[0m failed\n",
+      "stderr": "",
+      "stdoutDrift": "\n\n\n\n • activation '02-hello-world-<activation-id>' → Active\n • activation '02-hello-world-<activation-id>' → Superseded\n ✔ Activation/02-hello-world-<activation-id> ready\n ✔ ConfigMap/hello-world@tutorial-02 ready\n ✔ Deployment/hello-world@tutorial-02 ready\n ✔ PackageInstance/hello-world@tutorial-02 ready\n ✔ Service/hello-world@tutorial-02 ready\n + Activation/02-hello-world-<activation-id> created\n ~ ConfigMap/hello-world@tutorial-02 configured\n ~ Deployment/hello-world@tutorial-02 configured\n ~ hello-world 1.27 (1 changed, 2 dep-affected)\n ~ PackageInstance/hello-world@tutorial-02 configured\n ~ Service/hello-world@tutorial-02 configured\n 1 orphaned\n Plan: 1 updated, 1 unchanged\n Resources: 1 real content, 2 dep-affected\n tutorial-02\nActive activation: 02-hello-world-<activation-id> (kddvid7w...)\nBuilding cluster '02-hello-world'...\nCluster 02-hello-world: 10 manifests\nConnecting to cluster...\nDeploy complete: 1 created, 4 configured, 5 unchanged, 0 failed\nplan: 10 nodes\nprune: pruning 1 orphaned resources...\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

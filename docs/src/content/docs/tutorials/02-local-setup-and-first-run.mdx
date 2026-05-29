@@ -6,10 +6,13 @@ description: "Run the first Kix example locally on kind and make one edit."
 import { Steps } from '@astrojs/starlight/components';
 import Command from '/src/components/Command.astro';
 import Snippet from '/src/components/Snippet.astro';
-import helloWorldInstance from '/src/snippets/examples/02-hello-world/cluster/helloWorldInstance.json';
+import helloWorldInstance from '/src/snippets/tutorials/02-hello-world/cluster/helloWorldInstance.json';
 import listClusters from '/src/command-output/tutorials/02-hello-world/list-clusters.json';
 import listPackages from '/src/command-output/tutorials/02-hello-world/list-packages.json';
 import deployFirst from '/src/command-output/tutorials/02-hello-world/deploy.json';
+import deployAfterEdit from '/src/command-output/tutorials/02-hello-world/deploy-after-edit.json';
+import kubectlClusterInfo from '/src/command-output/tutorials/02-hello-world/kubectl-cluster-info.json';
+import kubectlGetNodes from '/src/command-output/tutorials/02-hello-world/kubectl-get-nodes.json';
 import kubectlPods from '/src/command-output/tutorials/02-hello-world/kubectl-get-pods.json';
 import kubectlSvc from '/src/command-output/tutorials/02-hello-world/kubectl-get-svc.json';
 
@@ -47,15 +50,15 @@ Open the files for the first example:
 
 ```text
 flake.nix
-examples/02-hello-world/cluster.nix
-examples/02-hello-world/README.md
+tutorials/02-hello-world/cluster.nix
+tutorials/02-hello-world/README.md
 kind-config.yaml
 ```
 
 You do not need to understand all of them yet. For now:
 
 - `flake.nix` exposes the example clusters by name;
-- `examples/02-hello-world/cluster.nix` defines the first cluster;
+- `tutorials/02-hello-world/cluster.nix` defines the first cluster;
 - `kind-config.yaml` creates a local kind cluster named `kix-demo`.
 
 ## Enter A Shell With The Tools
@@ -97,10 +100,8 @@ This creates a single-node cluster named `kix-demo` and sets your current
 
 Check that Kubernetes is reachable:
 
-<Command commands={[
-  "kubectl cluster-info",
-  "kubectl get nodes",
-]} />
+<Command {...kubectlClusterInfo} />
+<Command {...kubectlGetNodes} />
 
 If you already have this kind cluster, `kind` will say it exists. That is fine;
 continue with the deploy step.
@@ -124,7 +125,7 @@ platform pieces (DNS, storage) Kix pulls in automatically — later tutorials
 explain them. You can also ask Kubernetes
 directly:
 
-<Command expandable commands={[...kubectlPods.commands, ...kubectlSvc.commands]} />
+<Command commands={[...kubectlPods.commands, ...kubectlSvc.commands]} />
 
 ## Reach The Service
 
@@ -151,13 +152,13 @@ syntax, see [Use `kix pf`](/docs/how-to/operate-a-cluster/use-kix-pf/).
 
 ## Make One Edit
 
-Open `examples/02-hello-world/cluster.nix` and find this instance:
+Open `tutorials/02-hello-world/cluster.nix` and find this instance:
 
 <Snippet {...helloWorldInstance} />
 
 Change the message:
 
-```nix title="kix-examples/examples/02-hello-world/cluster.nix"
+```nix title="kix-examples/tutorials/02-hello-world/cluster.nix"
 config = {
   message = "Hello from my laptop!";
 };
@@ -165,7 +166,7 @@ config = {
 
 Deploy again:
 
-<Command commands={["kix deploy 02-hello-world -y"]} cwd="kix-examples/" />
+<Command expandable {...deployAfterEdit} />
 
 Port-forward and curl again:
 
@@ -173,7 +174,7 @@ Port-forward and curl again:
 
 In another terminal:
 
-<Command commands={["curl http://localhost:8080/"]} />
+<Command commands={[{ command: "curl http://localhost:8080/", stdout: "Hello from my laptop!" }]} />
 
 The response should show your new message.
 

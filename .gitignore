@@ -1,8 +1,12 @@
 result
+result-*
 cluster-dump/
 cluster-dump.zip
 .direnv
 .cache
+
+# Playwright MCP per-session artefacts (screenshots, console logs, snapshots).
+.playwright-mcp/
 
 # OS / IDE
 .DS_Store

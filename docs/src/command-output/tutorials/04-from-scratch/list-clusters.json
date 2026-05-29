@@ -1,0 +1,17 @@
+{
+  "id": "tutorials/04-from-scratch/list-clusters",
+  "group": "tutorials/04-from-scratch",
+  "page": "/docs/tutorials/04-first-cluster-from-scratch/",
+  "cwd": "kix-examples/",
+  "generator": "offline",
+  "commands": [
+    {
+      "command": "kix list clusters",
+      "stdout": " NAME              \n 02-hello-world    \n 04-from-scratch   \n 06-service-dep    \n 08-namespace-deps \n 09-typed-options  \n 10-reuse-packages \n 19-scorecards     \n",
+      "stderr": "",
+      "stdoutDrift": " 02-hello-world\n 04-from-scratch\n 06-service-dep\n 08-namespace-deps\n 09-typed-options\n 10-reuse-packages\n 19-scorecards\n NAME\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

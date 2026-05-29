@@ -1,0 +1,17 @@
+{
+  "id": "tutorials/04-from-scratch/graph-tree",
+  "group": "tutorials/04-from-scratch",
+  "page": "/docs/tutorials/04-first-cluster-from-scratch/",
+  "cwd": "kix-examples/",
+  "generator": "offline",
+  "commands": [
+    {
+      "command": "kix graph 04-from-scratch --format tree",
+      "stdout": "CustomResourceDefinition/activations.kix.dev\n└── Activation/04-from-scratch-68ysmiwsllm9\nNamespace/tutorial-04\n├── PackageInstance/hello-world@tutorial-04\n│   └── Activation/04-from-scratch-68ysmiwsllm9\n├── ConfigMap/hello-world@tutorial-04\n│   └── Deployment/hello-world@tutorial-04\n│       └── Service/hello-world@tutorial-04\n│           └── PackageInstance/hello-world@tutorial-04\n│               └── Activation/04-from-scratch-68ysmiwsllm9\n├── Service/hello-world@tutorial-04\n│   └── PackageInstance/hello-world@tutorial-04\n│       └── Activation/04-from-scratch-68ysmiwsllm9\n└── Deployment/hello-world@tutorial-04\n    └── Service/hello-world@tutorial-04\n        └── PackageInstance/hello-world@tutorial-04\n            └── Activation/04-from-scratch-68ysmiwsllm9\nNamespace/kube-system\n└── PackageInstance/platform-dns@kube-system (import)\n    └── Activation/04-from-scratch-68ysmiwsllm9\nCustomResourceDefinition/packageinstances.kix.dev\n├── PackageInstance/hello-world@tutorial-04\n│   └── Activation/04-from-scratch-68ysmiwsllm9\n└── PackageInstance/platform-dns@kube-system (import)\n    └── Activation/04-from-scratch-68ysmiwsllm9\n",
+      "stderr": "10 resources, 13 dependencies\n",
+      "stdoutDrift": "CustomResourceDefinition/activations.kix.dev\n└── Activation/04-from-scratch-<activation-id>\nNamespace/tutorial-04\n├── PackageInstance/hello-world@tutorial-04\n│ └── Activation/04-from-scratch-<activation-id>\n├── ConfigMap/hello-world@tutorial-04\n│ └── Deployment/hello-world@tutorial-04\n│ └── Service/hello-world@tutorial-04\n│ └── PackageInstance/hello-world@tutorial-04\n│ └── Activation/04-from-scratch-<activation-id>\n├── Service/hello-world@tutorial-04\n│ └── PackageInstance/hello-world@tutorial-04\n│ └── Activation/04-from-scratch-<activation-id>\n└── Deployment/hello-world@tutorial-04\n └── Service/hello-world@tutorial-04\n └── PackageInstance/hello-world@tutorial-04\n └── Activation/04-from-scratch-<activation-id>\nNamespace/kube-system\n└── PackageInstance/platform-dns@kube-system (import)\n └── Activation/04-from-scratch-<activation-id>\nCustomResourceDefinition/packageinstances.kix.dev\n├── PackageInstance/hello-world@tutorial-04\n│ └── Activation/04-from-scratch-<activation-id>\n└── PackageInstance/platform-dns@kube-system (import)\n └── Activation/04-from-scratch-<activation-id>\n",
+      "stderrDrift": "10 resources, 13 dependencies\n",
+      "exitCode": 0
+    }
+  ]
+}

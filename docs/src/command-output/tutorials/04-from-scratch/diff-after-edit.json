@@ -1,0 +1,17 @@
+{
+  "id": "tutorials/04-from-scratch/diff-after-edit",
+  "group": "tutorials/04-from-scratch",
+  "page": "/docs/tutorials/04-first-cluster-from-scratch/",
+  "cwd": "kix-examples/",
+  "generator": "live",
+  "commands": [
+    {
+      "command": "kix diff 04-from-scratch",
+      "stdout": "\u001b[36m⠁\u001b[0m Fetching live cluster state...                                                Discovering API resources...\nFetching managed resources (41 resource types)...\nFetched 17 resources\n2 packages: 2 unchanged, 0 changed, 0 added, 0 removed\n\n17 resources: 0 identical, 0 modified, 10 kix-only, 7 cluster-only\n\n\u001b[1mOnly in kix (will be created):\u001b[0m\n  \u001b[32mActivation/04-from-scratch-hxqijl4ndx86\u001b[39m\n  \u001b[32mConfigMap/hello-world@tutorial-04\u001b[39m\n  \u001b[32mCustomResourceDefinition/activations.kix.dev\u001b[39m\n  \u001b[32mCustomResourceDefinition/packageinstances.kix.dev\u001b[39m\n  \u001b[32mDeployment/hello-world@tutorial-04\u001b[39m\n  \u001b[32mNamespace/kube-system\u001b[39m\n  \u001b[32mNamespace/tutorial-04\u001b[39m\n  \u001b[32mPackageInstance/platform-dns@kube-system\u001b[39m\n  \u001b[32mPackageInstance/hello-world@tutorial-04\u001b[39m\n  \u001b[32mService/hello-world@tutorial-04\u001b[39m\n\n\u001b[1mOnly in cluster (not managed by kix):\u001b[0m\n  \u001b[31mActivation/unknown\u001b[39m\n  \u001b[31mConfigMap/unknown\u001b[39m\n  \u001b[31mCustomResourceDefinition/unknown\u001b[39m\n  \u001b[31mDeployment/unknown\u001b[39m\n  \u001b[31mNamespace/unknown\u001b[39m\n  \u001b[31mPackageInstance/unknown\u001b[39m\n  \u001b[31mService/unknown\u001b[39m\n\n",
+      "stderr": "",
+      "stdoutDrift": "\n\n\n\n Activation/04-from-scratch-<activation-id>\n Activation/unknown\n ConfigMap/hello-world@tutorial-04\n ConfigMap/unknown\n CustomResourceDefinition/activations.kix.dev\n CustomResourceDefinition/packageinstances.kix.dev\n CustomResourceDefinition/unknown\n Deployment/hello-world@tutorial-04\n Deployment/unknown\n⠁ Fetching live cluster state... Discovering API resources...\n Namespace/kube-system\n Namespace/tutorial-04\n Namespace/unknown\n PackageInstance/hello-world@tutorial-04\n PackageInstance/platform-dns@kube-system\n PackageInstance/unknown\n Service/hello-world@tutorial-04\n Service/unknown\n17 resources: 0 identical, 0 modified, 10 kix-only, 7 cluster-only\n2 packages: 2 unchanged, 0 changed, 0 added, 0 removed\nFetched 17 resources\nFetching managed resources (41 resource types)...\nOnly in cluster (not managed by kix):\nOnly in kix (will be created):\n",
+      "stderrDrift": "",
+      "exitCode": 2
+    }
+  ]
+}

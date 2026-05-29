@@ -6,10 +6,12 @@ description: "Understand the minimal files Kix needs to discover clusters and pa
 import Command from '/src/components/Command.astro';
 import PlainFileTree from '/src/components/PlainFileTree.astro';
 import Snippet from '/src/components/Snippet.astro';
+import listClusters from '/src/command-output/tutorials/02-hello-world/list-clusters.json';
+import deployFirst from '/src/command-output/tutorials/02-hello-world/deploy.json';
 import exampleFlake from '/src/snippets/flake/exampleFlake.json';
-import clusterFrame from '/src/snippets/examples/02-hello-world/cluster/clusterFrame.json';
-import helloWorldInstance from '/src/snippets/examples/02-hello-world/cluster/helloWorldInstance.json';
-import localPackageImport from '/src/snippets/examples/06-service-dep/cluster/localPackageImport.json';
+import clusterFrame from '/src/snippets/tutorials/02-hello-world/cluster/clusterFrame.json';
+import helloWorldInstance from '/src/snippets/tutorials/02-hello-world/cluster/helloWorldInstance.json';
+import localPackageImport from '/src/snippets/tutorials/06-service-dep/cluster/localPackageImport.json';
 
 You will not create a new project yet. The goal is to recognize the files Kix
 looks for and what each one contributes. The next tutorial can then start from
@@ -40,7 +42,7 @@ numbered examples:
 
 - flake.nix
 - kind-config.yaml
-- examples/
+- tutorials/
   - 02-hello-world/
     - README.md
     - cluster.nix
@@ -80,7 +82,7 @@ The second block, `outputs`, says what this repo provides. Kix projects usually
 delegate that output wiring to `inputs.kixpkgs.lib.mkFlake`.
 
 `mkFlake` is the Kix helper that turns the `clusters` map, such as
-`"02-hello-world" = ./examples/02-hello-world/cluster.nix`, into the flake
+`"02-hello-world" = ./tutorials/02-hello-world/cluster.nix`, into the flake
 outputs the CLI knows how to read.
 
 A few Nix syntax notes, kept deliberately small:
@@ -100,10 +102,9 @@ when you need the exact setup steps for your own repo.
 
 The attr name, `02-hello-world`, is the cluster name you pass to the CLI:
 
-<Command commands={[
-  "kix deploy 02-hello-world -y",
-  "kix pf 02-hello-world hello-world 8080:80",
-]} cwd="kix-examples/" />
+<Command expandable {...deployFirst} />
+
+<Command commands={["kix pf 02-hello-world hello-world 8080:80"]} cwd="kix-examples/" />
 
 The value points at the file that builds that cluster.
 
@@ -119,7 +120,7 @@ The names are yours. The CLI discovers them by evaluating the flake.
 
 ## `cluster.nix` Defines What Is Installed
 
-The flake points at `./examples/02-hello-world/cluster.nix`. That file is the
+The flake points at `./tutorials/02-hello-world/cluster.nix`. That file is the
 recipe for one cluster: it names the cluster, chooses the local kind flavor, and
 declares what should exist inside the cluster.
 
@@ -184,7 +185,7 @@ Kubernetes resources?"
 
 When you run a command from the repo root:
 
-<Command commands={["kix list clusters"]} cwd="kix-examples/" />
+<Command {...listClusters} />
 
 Kix evaluates the current directory's flake. If you pass `--flake`, it evaluates
 that flake instead:
