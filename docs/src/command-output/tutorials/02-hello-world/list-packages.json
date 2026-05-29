@@ -9,7 +9,7 @@
       "command": "kix list packages --cluster 02-hello-world",
       "stdout": " NAME              VERSION  STATUS                  \n hello-world       1.27     installed [tutorial-02] \n platform-dns      -        import [kube-system]    \n platform-storage  -        import [kube-system]    \n",
       "stderr": "",
-      "stdoutDrift": " NAME VERSION STATUS\n hello-world 1.27 installed [tutorial-02]\n platform-dns - import [kube-system]\n platform-storage - import [kube-system]\n",
+      "stdoutDrift": "NAME VERSION STATUS\nhello-world 1.27 installed [tutorial-02]\nplatform-dns - import [kube-system]\nplatform-storage - import [kube-system]\n",
       "stderrDrift": "",
       "exitCode": 0
     }

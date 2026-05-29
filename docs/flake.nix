@@ -177,110 +177,85 @@
       #
       # Run from the kixpkgs repo root. The script expects cwd to contain
       # the `docs/` directory.
-      apps = forAllSystems (
-        pkgs:
-        let
-          # Filtered view of kixpkgs for the captures pipeline.
-          # Excludes `docs/src/command-output/` because that's where the
-          # pipeline WRITES its sidecars — feeding the unfiltered
-          # kixpkgs back in would create a loop: a fresh `--apply`
-          # changes the sidecar files, which changes the kixpkgs source
-          # hash, which changes the identity hashes the next eval
-          # produces, which makes `--check` always show drift after
-          # `--apply`. Filtering breaks that feedback so the captures
-          # eval depends only on inputs that don't move when sidecars
-          # do (cli/, kix/, lib/, packages/, nix flake metadata).
-          kixpkgsForCaptures = builtins.path {
-            name = "kixpkgs-src-for-captures";
-            path = toString kixpkgs;
-            filter =
-              path: _type:
-              let
-                relPath = pkgs.lib.removePrefix (toString kixpkgs + "/") (toString path);
-              in
-              !(pkgs.lib.hasPrefix "docs/src/command-output" relPath);
-          };
-        in
-        {
-          # Live driver for the captures pipeline. Spins up a dedicated kind
-          # cluster, runs every manifest group's live steps against it
-          # (sharing the cluster across groups so deploys accumulate), and
-          # diffs the captured sidecars against the checked-in tree before
-          # optionally writing them. See `nix/captures.nix` for the
-          # manifest and `nix/captures-live.nix` for the trust boundary
-          # and flag plumbing.
-          #
-          # Run: `nix run ./docs#regen-captures` (or `-- --apply` / `--check`).
-          regen-captures =
-            (import ./nix/captures-live.nix {
-              inherit pkgs;
-              inherit (pkgs) lib;
-              kix = kixpkgs.packages.${pkgs.system}.kix;
-              kixExamples = kix-examples;
-              kixpkgsSrc = kixpkgsForCaptures;
-            }).app;
+      apps = forAllSystems (pkgs: {
+        # Live driver for the captures pipeline. Spins up a dedicated kind
+        # cluster, runs every manifest group's live steps against it
+        # (sharing the cluster across groups so deploys accumulate), and
+        # diffs the captured sidecars against the checked-in tree before
+        # optionally writing them. See `nix/captures.nix` for the
+        # manifest and `nix/captures-live.nix` for the trust boundary
+        # and flag plumbing.
+        #
+        # Run: `nix run ./docs#regen-captures` (or `-- --apply` / `--check`).
+        regen-captures =
+          (import ./nix/captures-live.nix {
+            inherit pkgs;
+            inherit (pkgs) lib;
+            kix = kixpkgs.packages.${pkgs.system}.kix;
+            kixExamples = kix-examples;
+            kixpkgsSrc = kixpkgs;
+          }).app;
 
-          # Offline captures regen. Same shape as regen-captures but
-          # without a kind cluster — invokes `kix` against the workspace
-          # directly. See `nix/captures-offline.nix` for the trust
-          # boundary and `nix/captures.nix` for the manifest.
-          regen-captures-offline =
-            (import ./nix/captures-offline.nix {
-              inherit pkgs;
-              inherit (pkgs) lib;
-              kix = kixpkgs.packages.${pkgs.system}.kix;
-              kixExamples = kix-examples;
-              kixpkgsSrc = kixpkgsForCaptures;
-            }).app;
+        # Offline captures regen. Same shape as regen-captures but
+        # without a kind cluster — invokes `kix` against the workspace
+        # directly. See `nix/captures-offline.nix` for the trust
+        # boundary and `nix/captures.nix` for the manifest.
+        regen-captures-offline =
+          (import ./nix/captures-offline.nix {
+            inherit pkgs;
+            inherit (pkgs) lib;
+            kix = kixpkgs.packages.${pkgs.system}.kix;
+            kixExamples = kix-examples;
+            kixpkgsSrc = kixpkgs;
+          }).app;
 
-          dev = {
-            type = "app";
-            program = toString (
-              pkgs.writeShellScript "kix-docs-dev" ''
-                set -euo pipefail
+        dev = {
+          type = "app";
+          program = toString (
+            pkgs.writeShellScript "kix-docs-dev" ''
+              set -euo pipefail
 
-                if [ ! -f docs/package.json ]; then
-                  echo "error: run \`nix run ./docs#dev\` from the kixpkgs repo root" >&2
-                  echo "       (cwd must contain a docs/ directory)" >&2
-                  exit 1
-                fi
+              if [ ! -f docs/package.json ]; then
+                echo "error: run \`nix run ./docs#dev\` from the kixpkgs repo root" >&2
+                echo "       (cwd must contain a docs/ directory)" >&2
+                exit 1
+              fi
 
-                export PATH=${
-                  pkgs.lib.makeBinPath [
-                    pkgs.nodejs_22
-                    pkgs.nix
-                    pkgs.coreutils
-                  ]
-                }:$PATH
+              export PATH=${
+                pkgs.lib.makeBinPath [
+                  pkgs.nodejs_22
+                  pkgs.nix
+                  pkgs.coreutils
+                ]
+              }:$PATH
 
-                echo "→ building snippets pipeline"
-                snip=$(nix build ./docs#snippets --no-link --print-out-paths)
+              echo "→ building snippets pipeline"
+              snip=$(nix build ./docs#snippets --no-link --print-out-paths)
 
-                echo "→ building reference pipeline"
-                ref=$(nix build ./docs#reference --no-link --print-out-paths)
+              echo "→ building reference pipeline"
+              ref=$(nix build ./docs#reference --no-link --print-out-paths)
 
-                # Captures sidecars live in git (docs/src/command-output/);
-                # to refresh them run \`nix run ./docs#regen-captures-offline\`
-                # (offline) or \`nix run ./docs#regen-captures\` (live).
-                echo "→ syncing generated content into docs/src"
-                mkdir -p docs/src/snippets docs/src/content/docs/reference/package-catalog
-                cp -r --no-preserve=mode "$snip"/. docs/src/snippets/
-                cp -r --no-preserve=mode "$ref"/. docs/src/content/docs/reference/package-catalog/
-                chmod -R u+w docs/src/snippets docs/src/content/docs/reference/package-catalog
+              # Captures sidecars live in git (docs/src/command-output/);
+              # to refresh them run \`nix run ./docs#regen-captures-offline\`
+              # (offline) or \`nix run ./docs#regen-captures\` (live).
+              echo "→ syncing generated content into docs/src"
+              mkdir -p docs/src/snippets docs/src/content/docs/reference/package-catalog
+              cp -r --no-preserve=mode "$snip"/. docs/src/snippets/
+              cp -r --no-preserve=mode "$ref"/. docs/src/content/docs/reference/package-catalog/
+              chmod -R u+w docs/src/snippets docs/src/content/docs/reference/package-catalog
 
-                cd docs
+              cd docs
 
-                if [ ! -d node_modules ]; then
-                  echo "→ installing npm dependencies (first run)"
-                  npm install
-                fi
+              if [ ! -d node_modules ]; then
+                echo "→ installing npm dependencies (first run)"
+                npm install
+              fi
 
-                echo "→ starting Astro dev server"
-                exec npm run dev
-              ''
-            );
-          };
-        }
-      );
+              echo "→ starting Astro dev server"
+              exec npm run dev
+            ''
+          );
+        };
+      });
     };
 }

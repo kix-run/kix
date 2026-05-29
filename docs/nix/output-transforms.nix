@@ -53,6 +53,28 @@ let
       s/(Activation\/)?([a-z0-9][a-z0-9-]*[a-z0-9])-[a-z0-9]{11,12}\b/\1\2-<activation-id>/g
     '';
 
+    # Kix identity hashes: 32-char base32 Nix-style hashes that appear in
+    # `kix.dev/identity-hash`, `kix.dev/depends-on`, and embedded store
+    # paths in `kix build`/`kix graph` output. These are content-addressed
+    # over the kixpkgs source path, so when the source changes (e.g.
+    # because `--apply` just wrote new sidecars into
+    # docs/src/command-output/), every hash shifts. Redacting them in the
+    # drift view lets the comparison ignore that churn while still
+    # catching structural changes (new resources, missing deps, etc.).
+    redact-identity-hash = ''
+      s/\b[a-z0-9]{32}\b/<identity-hash>/g
+    '';
+
+    # Nix `narHash=sha256-…` blobs leaked into error messages when an
+    # eval fails. URL-encoded (`%2B`, `%2F`, `%3D`) or raw, 43–44 chars
+    # of base64 followed by an `=` pad. Same churn category as
+    # identity hashes — content-addressed over inputs that move when
+    # sidecars get rewritten.
+    redact-nar-hash = ''
+      s|narHash=sha256-[A-Za-z0-9+/%]+%3D|narHash=sha256-<nar-hash>|g
+      s|narHash=sha256-[A-Za-z0-9+/]+=|narHash=sha256-<nar-hash>|g
+    '';
+
     # Normalise interactive terminal output while PRESERVING SGR colour
     # codes. Steps:
     #   1. Drop backspace bytes (\b / 0x08). PTY recorders emit these to
@@ -106,6 +128,17 @@ let
     collapse-blank-lines = ''
       /^$/N;/^\n$/D
     '';
+
+    # Strip leading tree-drawing characters and whitespace. Used for
+    # drift comparison of `kix graph --format tree`: the same DAG node
+    # gets rendered at different indents depending on which parent the
+    # traversal picks for it, and that choice isn't stable across runs.
+    # After this pass `│ │ └── Foo` and `└── Foo` both become `Foo`,
+    # so `sort -u` collapses them into one line. No-op for non-tree
+    # output (no leading box-drawing chars to strip).
+    strip-tree-indent = ''
+      s/^[[:space:]│├└─]+//
+    '';
   };
 
   # Applied during capture; baked into JSON's `stdout` / `stderr` and rendered
@@ -121,8 +154,12 @@ let
     # SGR first so subsequent regexes see plain text.
     "strip-sgr"
     # Literal-content redactions: shape-preserving placeholders for values
-    # that are noise (hashes, IDs, addresses, times).
+    # that are noise (hashes, IDs, addresses, times). Activation ID first
+    # (it consumes the longer suffix); identity-hash second so it doesn't
+    # also catch the activation suffix.
     "redact-activation-id"
+    "redact-identity-hash"
+    "redact-nar-hash"
     "strip-pod-suffix"
     "redact-timestamp"
     "redact-cluster-ip"
@@ -133,6 +170,10 @@ let
     "strip-trailing-whitespace"
     "collapse-spaces"
     "collapse-blank-lines"
+    # Tree-indent strip is the very last layer — it has to run after
+    # everything else so the redactions still see their patterns at
+    # the original positions.
+    "strip-tree-indent"
   ];
 in
 {

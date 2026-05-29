@@ -37,13 +37,16 @@ let
   displayPipeline = mkSedPipeline transforms.displayTransforms;
   baseDriftPipeline = mkSedPipeline transforms.driftTransforms;
 
-  # `LC_ALL=C sort` pins to byte-order sort so drift comparisons
-  # don't shift when the host's locale changes (host-side drivers
-  # inherit the caller's LC_ALL; previously the offline runCommand
-  # had no locale set and got C by default).
+  # `LC_ALL=C sort -u` pins to byte-order sort (host locale doesn't
+  # leak into drift comparisons) and collapses duplicate lines. The
+  # dedupe is load-bearing for `kix graph --format tree`, where the
+  # same resource gets rendered N times (once per parent edge in the
+  # underlying DAG) and N moves around with traversal order. For
+  # captures whose output is unique line-by-line (YAML manifests,
+  # tables, etc.) `-u` is a no-op.
   driftPipelineFor =
     step:
-    if (step.sortLines or true) then "${baseDriftPipeline} | LC_ALL=C sort" else baseDriftPipeline;
+    if (step.sortLines or true) then "${baseDriftPipeline} | LC_ALL=C sort -u" else baseDriftPipeline;
 
   # Display-only join: produces the human-readable `❱` prompt string
   # for the rendered docs. Not shell-safe — manifest args never
