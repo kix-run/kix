@@ -24,11 +24,11 @@
       url = "path:..";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    # Local sibling checkout for dev iteration. CI builds the docs site
-    # by checking kix-examples out separately and passing
-    # `--override-input kix-examples git+file://$PWD/...` to `nix build`.
-    # See `.github/workflows/pages.yml`.
-    kix-examples.url = "git+file:///Users/adam/ghq/github.com/adamcharnock/kix-examples";
+    # Fetched via the GitHub fetcher. Both kixpkgs (above) and
+    # kix-examples are currently private; any consumer must supply
+    # `access-tokens = github.com=…` to Nix. See the project README
+    # for setup.
+    kix-examples.url = "github:kix-ops/kix-examples";
   };
 
   outputs =
@@ -88,6 +88,8 @@
           inherit (pkgs) lib;
           kix = kixpkgs.packages.${pkgs.system}.kix;
           kixExamples = kix-examples;
+          kixpkgsSrc = kixpkgs;
+          nixpkgsSrc = nixpkgs;
         };
 
         # Auto-generated per-package option reference (Markdown), produced
@@ -203,6 +205,8 @@
             inherit (pkgs) lib;
             kix = kixpkgs.packages.${pkgs.system}.kix;
             kixExamples = kix-examples;
+            kixpkgsSrc = kixpkgs;
+            nixpkgsSrc = nixpkgs;
           }).app;
 
         dev = {

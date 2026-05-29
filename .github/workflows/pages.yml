@@ -63,6 +63,13 @@ jobs:
           extra-conf: |
             experimental-features = nix-command flakes pipe-operators
             accept-flake-config = true
+            # Let Nix fetch private github inputs (kix-examples'
+            # kixpkgs input). GITHUB_TOKEN is auto-issued for this
+            # workflow and has read access to adamcharnock/kixpkgs
+            # (this repo). kix-examples itself is checked out
+            # separately with KIX_EXAMPLES_TOKEN and consumed via
+            # --override-input below.
+            access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
 
       # Cache /nix/store across runs so subsequent builds skip the
       # ~10 min cold-build (Node toolchain, npm deps, Astro build).
@@ -84,14 +91,14 @@ jobs:
       - name: Build docs site
         working-directory: kixpkgs
         run: |
-          # kix-examples is a flake that itself has a `kixpkgs` input
-          # locked to a local file:// path on the maintainer's machine.
-          # Override both: the docs' direct input AND kix-examples'
-          # transitive kixpkgs input, pointing them at the runner's
-          # checkouts.
+          # Override kix-examples to the local checkout so we pick up
+          # uncommitted/in-PR changes. Its kixpkgs input now resolves
+          # via the GitHub fetcher (using the access-tokens config on
+          # the Nix installer step), and the captures pipeline
+          # internally overrides workspace kixpkgs to a store path so
+          # the sandbox eval stays network-free.
           nix build ./docs#site \
             --override-input kix-examples "git+file://${{ github.workspace }}/kix-examples" \
-            --override-input kix-examples/kixpkgs "git+file://${{ github.workspace }}/kixpkgs" \
             --print-build-logs \
             --show-trace
 

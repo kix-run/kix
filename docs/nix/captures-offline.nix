@@ -17,6 +17,8 @@
   lib,
   kix,
   kixExamples,
+  kixpkgsSrc,
+  nixpkgsSrc,
 }:
 
 let
@@ -26,6 +28,8 @@ let
       lib
       kix
       kixExamples
+      kixpkgsSrc
+      nixpkgsSrc
       ;
   };
 

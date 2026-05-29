@@ -12,6 +12,15 @@
   lib,
   kix,
   kixExamples,
+  # Store paths of the kixpkgs + nixpkgs flake sources. Inlined into
+  # the workspace's flake.nix as `path:<store>` URLs so the eval that
+  # kix runs inside the offline captures sandbox never has to reach
+  # github. Both inputs must be substituted because nixpkgs is a
+  # transitive dependency of kix-examples' kixpkgs input (via
+  # `follows`), and the lock is regenerated from scratch each time
+  # to avoid stale-lock mismatches.
+  kixpkgsSrc,
+  nixpkgsSrc,
 }:
 
 let
@@ -75,10 +84,23 @@ let
       ' "$__mutate_target" "$__mutate_old" "$__mutate_new"
     '';
 
+  # Repoint the workspace's flake inputs at in-store source paths so
+  # the eval kix triggers next never has to reach github. Both the
+  # `url = "github:..."` line in flake.nix AND the corresponding
+  # flake.lock entry have to go — Nix's flake locking is strict
+  # about lock/source agreement, so the cleanest move is to drop the
+  # lock entirely and let `kix` regenerate it from the path-only
+  # inputs at first use.
+  rewriteWorkspaceInputs = ''
+    sed -i -E 's|kixpkgs\.url = "[^"]*";|kixpkgs.url = "path:${kixpkgsSrc}";|' "$workspace/flake.nix"
+    sed -i -E 's|nixpkgs\.url = "[^"]*";|nixpkgs.url = "path:${nixpkgsSrc}";|' "$workspace/flake.nix"
+    rm -f "$workspace/flake.lock"
+  '';
+
   # Workspace setup shell. Caller is expected to have:
   #   $workspace — empty writable directory the workspace will live in.
   # After this snippet, $workspace contains kix-examples + (optional)
-  # overlay + applied setup mutations.
+  # overlay + path-rewritten flake.nix + applied setup mutations.
   workspaceSetupShell =
     group:
     let
@@ -103,6 +125,7 @@ let
       cp -r --no-preserve=mode ${kixExamples}/. "$workspace/"
       chmod -R u+w "$workspace"
       ${overlayCp}
+      ${rewriteWorkspaceInputs}
       ${mutateBlocks}
     '';
 

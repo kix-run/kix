@@ -36,17 +36,17 @@
         "nixpkgs": "nixpkgs"
       },
       "locked": {
-        "lastModified": 1779981152,
-        "narHash": "sha256-w3f57ZPPFG6qVxfiOlIX7+sQqA5Oea/B1V8ccCi9pTE=",
-        "ref": "refs/heads/main",
-        "rev": "4e21e08cb4eda849ff3baa5a7964a8fd525d5eaa",
-        "revCount": 16,
-        "type": "git",
-        "url": "file:///Users/adam/ghq/github.com/adamcharnock/kix-examples"
+        "lastModified": 1780042294,
+        "narHash": "sha256-heNHjIPHtxt16os+VHBIDvNC29Z8UBFRvEGKMEkzjq0=",
+        "owner": "kix-ops",
+        "repo": "kix-examples",
+        "rev": "1b1ee8dcbe9b2e904ec863defd1444a3a192c67a",
+        "type": "github"
       },
       "original": {
-        "type": "git",
-        "url": "file:///Users/adam/ghq/github.com/adamcharnock/kix-examples"
+        "owner": "kix-ops",
+        "repo": "kix-examples",
+        "type": "github"
       }
     },
     "kixpkgs": {
@@ -58,17 +58,17 @@
         ]
       },
       "locked": {
-        "lastModified": 1779367372,
-        "narHash": "sha256-mLT5JG9HfBdL0DpvLSdueqeOjrOcF5+AE3cTCHKUTaM=",
-        "ref": "refs/heads/main",
-        "rev": "d9d68ce3c838ecba65d7036f1b4ac13a457fd2d8",
-        "revCount": 378,
-        "type": "git",
-        "url": "file:///Users/adam/ghq/github.com/adamcharnock/kixpkgs"
+        "lastModified": 1780036041,
+        "narHash": "sha256-OrEgd11s09gUbx0+yXcVLyd7abStxLMmsaFcGwLLMuI=",
+        "owner": "adamcharnock",
+        "repo": "kixpkgs",
+        "rev": "6cdd93098a0c27e899e3f66531db6e820cf0507e",
+        "type": "github"
       },
       "original": {
-        "type": "git",
-        "url": "file:///Users/adam/ghq/github.com/adamcharnock/kixpkgs"
+        "owner": "adamcharnock",
+        "repo": "kixpkgs",
+        "type": "github"
       }
     },
     "kixpkgs_2": {

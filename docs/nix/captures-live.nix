@@ -24,6 +24,8 @@
   lib,
   kix,
   kixExamples,
+  kixpkgsSrc,
+  nixpkgsSrc,
 }:
 
 let
@@ -33,10 +35,16 @@ let
       lib
       kix
       kixExamples
+      kixpkgsSrc
+      nixpkgsSrc
       ;
   };
 
-  inherit (capturesLib) manifest mkStepShell workspaceSetupShell;
+  inherit (capturesLib)
+    manifest
+    mkStepShell
+    workspaceSetupShell
+    ;
 
   kubeContext = "kind-kix-docs";
   kindClusterName = "kix-docs";
