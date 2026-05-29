@@ -61,7 +61,7 @@ jobs:
         uses: DeterminateSystems/nix-installer-action@v22
         with:
           extra-conf: |
-            experimental-features = nix-command flakes pipe-operators recursive-nix
+            experimental-features = nix-command flakes pipe-operators
             accept-flake-config = true
             # Let Nix fetch private github inputs. GITHUB_TOKEN is
             # auto-issued for this workflow and has read access to
@@ -72,22 +72,6 @@ jobs:
             # kix-examples ever grows a private input that escapes
             # the override, swap in an org-wide PAT.
             access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
-            # The captures derivations invoke `kix`, which drives
-            # nested Nix evaluation. Two settings cooperate:
-            # - `recursive-nix` (system + experimental) gives the
-            #   build a usable NIX_REMOTE socket the daemon will
-            #   accept for nested nix calls.
-            # - `sandbox = relaxed` permits `__noChroot = true` on
-            #   the captures derivations so they can read /nix/store
-            #   paths transitively referenced during kix's eval but
-            #   not declared as explicit inputs. Daemon-wide because
-            #   Nix has no per-derivation sandbox toggle; only the
-            #   captures-offline derivations actually exercise
-            #   __noChroot, and `site` itself stays hermetic
-            #   (`npmFlags = ["--ignore-scripts"]`, pinned
-            #   `npmDepsHash`).
-            system-features = benchmark big-parallel recursive-nix
-            sandbox = relaxed
 
       # Cache /nix/store across runs so subsequent builds skip the
       # ~10 min cold-build (Node toolchain, npm deps, Astro build).
@@ -113,15 +97,26 @@ jobs:
           purge-created: 0
           purge-primary-key: never
 
+      - name: Check offline captures are fresh
+        working-directory: kixpkgs
+        run: |
+          # Re-runs every offline capture against the workspace and
+          # diffs against the committed sidecars under
+          # docs/src/command-output/. Exits non-zero on any drift —
+          # the fix is to run `nix run ./docs#regen-captures-offline
+          # -- --apply` locally and commit the result.
+          nix run ./docs#regen-captures-offline \
+            --override-input kix-examples "git+file://${{ github.workspace }}/kix-examples" \
+            -- --check
+
       - name: Build docs site
         working-directory: kixpkgs
         run: |
           # Override kix-examples to the local checkout so we pick up
-          # uncommitted/in-PR changes. Its kixpkgs input now resolves
-          # via the GitHub fetcher (using the access-tokens config on
-          # the Nix installer step), and the captures pipeline
-          # internally overrides workspace kixpkgs to a store path so
-          # the sandbox eval stays network-free.
+          # uncommitted/in-PR changes. Its kixpkgs input resolves via
+          # the GitHub fetcher (using the access-tokens config on the
+          # Nix installer step). The captures sidecars are read from
+          # the source tree (already gated by the check step above).
           nix build ./docs#site \
             --override-input kix-examples "git+file://${{ github.workspace }}/kix-examples" \
             --print-build-logs \

@@ -193,7 +193,6 @@
           "build"
           "04-from-scratch"
         ];
-        sortLines = false;
       }
       {
         capture = "graph-tree";
@@ -204,7 +203,6 @@
           "--format"
           "tree"
         ];
-        sortLines = false;
       }
     ];
     live = [
@@ -306,7 +304,6 @@
           "build"
           "06-service-dep"
         ];
-        sortLines = false;
       }
       {
         capture = "graph-tree";
@@ -317,7 +314,6 @@
           "--format"
           "tree"
         ];
-        sortLines = false;
       }
       {
         # Tutorial 06's "Try Breaking The Name Match" section —
@@ -328,8 +324,8 @@
         # clean cluster.
         mutate = {
           file = "tutorials/06-service-dep/cluster.nix";
-          oldString = ''backend = {'';
-          newString = ''api = {'';
+          oldString = "backend = {";
+          newString = "api = {";
         };
       }
       {
@@ -344,8 +340,8 @@
       {
         mutate = {
           file = "tutorials/06-service-dep/cluster.nix";
-          oldString = ''api = {'';
-          newString = ''backend = {'';
+          oldString = "api = {";
+          newString = "backend = {";
         };
       }
     ];
@@ -382,7 +378,6 @@
           "build"
           "19-scorecards"
         ];
-        sortLines = false;
       }
     ];
   }

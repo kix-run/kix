@@ -25,7 +25,6 @@
   kix,
   kixExamples,
   kixpkgsSrc,
-  nixpkgsSrc,
 }:
 
 let
@@ -36,7 +35,6 @@ let
       kix
       kixExamples
       kixpkgsSrc
-      nixpkgsSrc
       ;
   };
 
@@ -44,6 +42,7 @@ let
     manifest
     mkStepShell
     workspaceSetupShell
+    kixOverrideArgs
     ;
 
   kubeContext = "kind-kix-docs";
@@ -53,13 +52,15 @@ let
   # so kix/kubectl produce ANSI colour even though we redirect to a
   # file (their output detects non-TTY and disables colour otherwise).
   # --context is injected uniformly to keep the trust boundary tight.
+  # `kixOverrideArgs` repoints the workspace's kixpkgs input to the
+  # in-store source.
   invocationFor =
     step:
     let
       bin = lib.head step.run;
     in
     if bin == "kix" then
-      ''script -q /dev/null kix --no-cache --context "${kubeContext}" --flake "$workspace"''
+      ''script -q /dev/null kix --no-cache --context "${kubeContext}" --flake "$workspace" ${kixOverrideArgs}''
     else if bin == "kubectl" then
       ''script -q /dev/null kubectl --context "${kubeContext}"''
     else

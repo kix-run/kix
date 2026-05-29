@@ -12,15 +12,14 @@
   lib,
   kix,
   kixExamples,
-  # Store paths of the kixpkgs + nixpkgs flake sources. Inlined into
-  # the workspace's flake.nix as `path:<store>` URLs so the eval that
-  # kix runs inside the offline captures sandbox never has to reach
-  # github. Both inputs must be substituted because nixpkgs is a
-  # transitive dependency of kix-examples' kixpkgs input (via
-  # `follows`), and the lock is regenerated from scratch each time
-  # to avoid stale-lock mismatches.
+  # Store path of the kixpkgs flake source. Forwarded to every kix
+  # invocation as `--override-input kixpkgs path:<store>` so the
+  # workspace's eval resolves against a known, already-realised
+  # source instead of re-fetching via github. The workspace's
+  # flake.lock for nixpkgs is left untouched — both drivers run
+  # host-side with network access, so the standard fetcher just
+  # works for everything else.
   kixpkgsSrc,
-  nixpkgsSrc,
 }:
 
 let
@@ -32,14 +31,19 @@ let
       "cat"
     else
       lib.concatMapStringsSep " | " (
-        name: ''sed -E ${lib.escapeShellArg transforms.programs.${name}}''
+        name: "sed -E ${lib.escapeShellArg transforms.programs.${name}}"
       ) names;
 
   displayPipeline = mkSedPipeline transforms.displayTransforms;
   baseDriftPipeline = mkSedPipeline transforms.driftTransforms;
 
+  # `LC_ALL=C sort` pins to byte-order sort so drift comparisons
+  # don't shift when the host's locale changes (host-side drivers
+  # inherit the caller's LC_ALL; previously the offline runCommand
+  # had no locale set and got C by default).
   driftPipelineFor =
-    step: if (step.sortLines or true) then "${baseDriftPipeline} | sort" else baseDriftPipeline;
+    step:
+    if (step.sortLines or true) then "${baseDriftPipeline} | LC_ALL=C sort" else baseDriftPipeline;
 
   # Display-only join: produces the human-readable `❱` prompt string
   # for the rendered docs. Not shell-safe — manifest args never
@@ -88,26 +92,12 @@ let
       ' "$__mutate_target" "$__mutate_old" "$__mutate_new"
     '';
 
-  # Repoint the workspace's flake inputs at in-store source paths.
-  # The obvious alternative — `kix … --override-input kixpkgs path:<store>`
-  # — is unavailable: kix's clap CLI doesn't accept (or forward)
-  # `--override-input`, and `kix` is what we ultimately invoke. So we
-  # mutate flake.nix in place and drop flake.lock; the next `kix` call
-  # relocks from path-only inputs against no network. `lib.recursiveUpdate`
-  # of flake.lock isn't viable either — Nix is strict about
-  # lock/source agreement, so dropping the lock is the only clean move.
-  # A `pkgs.writeText`-synthesised flake.nix would force us to mirror
-  # the full upstream input schema, worse than this surgical edit.
-  rewriteWorkspaceInputs = ''
-    sed -i -E 's|kixpkgs\.url = "[^"]*";|kixpkgs.url = "path:${kixpkgsSrc}";|' "$workspace/flake.nix"
-    sed -i -E 's|nixpkgs\.url = "[^"]*";|nixpkgs.url = "path:${nixpkgsSrc}";|' "$workspace/flake.nix"
-    rm -f "$workspace/flake.lock"
-  '';
-
   # Workspace setup shell. Caller is expected to have:
   #   $workspace — empty writable directory the workspace will live in.
   # After this snippet, $workspace contains kix-examples + (optional)
-  # overlay + path-rewritten flake.nix + applied setup mutations.
+  # overlay + applied setup mutations. The workspace's `flake.nix` and
+  # `flake.lock` are untouched; kix-side `--override-input kixpkgs
+  # path:<store>` (see `kixOverrideArgs` below) handles the repoint.
   workspaceSetupShell =
     group:
     let
@@ -135,7 +125,6 @@ let
       cp -r --no-preserve=mode ${kixExamples}/. "$workspace/"
       chmod -R u+w "$workspace"
       ${overlayCp}
-      ${rewriteWorkspaceInputs}
       ${mutateBlocks}
     '';
 
@@ -257,6 +246,13 @@ let
       throw "captures: step must have either `mutate` or `capture`; got: ${builtins.toJSON step}";
 
   manifest = import ./captures.nix;
+
+  # Shared `--override-input` snippet drivers splice into their kix
+  # invocation strings. Pins the workspace's `kixpkgs` input to the
+  # in-store source so the eval kix triggers next never has to
+  # re-fetch from github (and so the workspace's own flake.lock,
+  # which still points at a different rev, is harmless).
+  kixOverrideArgs = ''--override-input kixpkgs "path:${kixpkgsSrc}"'';
 in
 {
   inherit manifest;
@@ -266,5 +262,6 @@ in
     mutateShell
     captureShell
     mkStepShell
+    kixOverrideArgs
     ;
 }
