@@ -41,6 +41,10 @@ let
   driftPipelineFor =
     step: if (step.sortLines or true) then "${baseDriftPipeline} | sort" else baseDriftPipeline;
 
+  # Display-only join: produces the human-readable `❱` prompt string
+  # for the rendered docs. Not shell-safe — manifest args never
+  # contain single quotes, so the naive wrap-in-quotes-if-space is
+  # fine for this purpose. Don't reuse for actual shell invocation.
   mkDisplayCommand =
     run: lib.concatStringsSep " " (map (arg: if lib.hasInfix " " arg then "'${arg}'" else arg) run);
 
@@ -84,13 +88,16 @@ let
       ' "$__mutate_target" "$__mutate_old" "$__mutate_new"
     '';
 
-  # Repoint the workspace's flake inputs at in-store source paths so
-  # the eval kix triggers next never has to reach github. Both the
-  # `url = "github:..."` line in flake.nix AND the corresponding
-  # flake.lock entry have to go — Nix's flake locking is strict
-  # about lock/source agreement, so the cleanest move is to drop the
-  # lock entirely and let `kix` regenerate it from the path-only
-  # inputs at first use.
+  # Repoint the workspace's flake inputs at in-store source paths.
+  # The obvious alternative — `kix … --override-input kixpkgs path:<store>`
+  # — is unavailable: kix's clap CLI doesn't accept (or forward)
+  # `--override-input`, and `kix` is what we ultimately invoke. So we
+  # mutate flake.nix in place and drop flake.lock; the next `kix` call
+  # relocks from path-only inputs against no network. `lib.recursiveUpdate`
+  # of flake.lock isn't viable either — Nix is strict about
+  # lock/source agreement, so dropping the lock is the only clean move.
+  # A `pkgs.writeText`-synthesised flake.nix would force us to mirror
+  # the full upstream input schema, worse than this surgical edit.
   rewriteWorkspaceInputs = ''
     sed -i -E 's|kixpkgs\.url = "[^"]*";|kixpkgs.url = "path:${kixpkgsSrc}";|' "$workspace/flake.nix"
     sed -i -E 's|nixpkgs\.url = "[^"]*";|nixpkgs.url = "path:${nixpkgsSrc}";|' "$workspace/flake.nix"
@@ -106,6 +113,9 @@ let
     let
       overlayCp =
         if group ? overlay then
+          # Re-chmod after the overlay copy: overlay files come from
+          # /nix/store read-only, and the kix-examples copy's earlier
+          # chmod doesn't reach them.
           ''
             cp -r --no-preserve=mode ${group.overlay}/. "$workspace/"
             chmod -R u+w "$workspace"

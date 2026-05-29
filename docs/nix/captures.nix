@@ -155,6 +155,11 @@
     overlay = ../overlays/04-from-scratch;
     setup = [
       {
+        # NOTE: the leading whitespace on the second line must match
+        # the indentation of the `clusters = { ... };` block in
+        # kix-examples/flake.nix. If that file gets reformatted, the
+        # mutate's no-match preflight will fail and this string needs
+        # updating.
         mutate = {
           file = "flake.nix";
           oldString = ''"19-scorecards" = ./tutorials/19-scorecards/cluster.nix;'';

@@ -42,7 +42,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout kixpkgs
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: kixpkgs
           # Nix's git fetcher needs the full history to resolve refs/revs
@@ -50,7 +50,7 @@ jobs:
           fetch-depth: 0
 
       - name: Checkout kix-examples
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: kix-ops/kix-examples
           token: ${{ secrets.KIX_EXAMPLES_TOKEN }}
@@ -58,17 +58,19 @@ jobs:
           fetch-depth: 0
 
       - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@main
+        uses: DeterminateSystems/nix-installer-action@v22
         with:
           extra-conf: |
             experimental-features = nix-command flakes pipe-operators recursive-nix
             accept-flake-config = true
-            # Let Nix fetch private github inputs (kix-examples'
-            # kixpkgs input). GITHUB_TOKEN is auto-issued for this
-            # workflow and has read access to adamcharnock/kixpkgs
-            # (this repo). kix-examples itself is checked out
-            # separately with KIX_EXAMPLES_TOKEN and consumed via
-            # --override-input below.
+            # Let Nix fetch private github inputs. GITHUB_TOKEN is
+            # auto-issued for this workflow and has read access to
+            # adamcharnock/kixpkgs (this repo). It is sufficient
+            # ONLY because `--override-input kix-examples` below
+            # bypasses the one fetch this token couldn't cover
+            # (kix-ops/kix-examples is a different org). If
+            # kix-examples ever grows a private input that escapes
+            # the override, swap in an org-wide PAT.
             access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
             # The captures derivations invoke `kix`, which drives
             # nested Nix evaluation. Two settings cooperate:
@@ -78,17 +80,29 @@ jobs:
             # - `sandbox = relaxed` permits `__noChroot = true` on
             #   the captures derivations so they can read /nix/store
             #   paths transitively referenced during kix's eval but
-            #   not declared as explicit inputs.
-            system-features = nixos-test benchmark big-parallel kvm recursive-nix
+            #   not declared as explicit inputs. Daemon-wide because
+            #   Nix has no per-derivation sandbox toggle; only the
+            #   captures-offline derivations actually exercise
+            #   __noChroot, and `site` itself stays hermetic
+            #   (`npmFlags = ["--ignore-scripts"]`, pinned
+            #   `npmDepsHash`).
+            system-features = benchmark big-parallel recursive-nix
             sandbox = relaxed
 
       # Cache /nix/store across runs so subsequent builds skip the
       # ~10 min cold-build (Node toolchain, npm deps, Astro build).
       # See https://github.com/nix-community/cache-nix-action
       - name: Cache Nix store
-        uses: nix-community/cache-nix-action@v6
+        uses: nix-community/cache-nix-action@v7
         with:
-          primary-key: nix-${{ runner.os }}-${{ hashFiles('docs/flake.lock', 'docs/package-lock.json', 'docs/flake.nix', 'docs/nix/**', 'kix/packages/**') }}
+          # Hash only files that actually affect the closure the
+          # cache restores: flake/npm locks, the kix Rust workspace
+          # lock (cargo crate derivation hashes), and the pieces of
+          # docs/nix/ that contribute generator outputs the site
+          # copies in (snippets/reference). Captures-pipeline edits
+          # in docs/nix/captures*.nix don't enter the cache-relevant
+          # closure for the cargo crates, so they're omitted.
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('docs/flake.lock', 'docs/package-lock.json', 'cli/Cargo.lock', 'docs/nix/snippets.nix', 'docs/nix/reference.nix', 'kix/packages/**') }}
           restore-prefixes-first-match: nix-${{ runner.os }}-
           # Trim the cached store before saving — keeps the cache under
           # GitHub's 10 GB-per-repo cap and avoids paying upload time

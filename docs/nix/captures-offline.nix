@@ -81,28 +81,39 @@ let
           pkgs.python3
           pkgs.nix
         ];
-        # Kix shells out to nix from inside this build. Declare the
-        # standard system feature so the daemon hands the build a
-        # usable store handle (recursive-nix) and lets it escape the
-        # chroot so /nix/store paths beyond the declared input
-        # closure (transitively referenced during kix's eval) stay
-        # readable.
-        requiredSystemFeatures = [ "recursive-nix" ];
+        # Kix shells out to nix from inside this build. Two settings
+        # cooperate to make that work under the strict-sandbox model
+        # GitHub-hosted Linux runners use:
+        #   - `recursive-nix` gives the build a usable NIX_REMOTE
+        #     socket (in `$NIX_BUILD_TOP/.nix-socket`) that the daemon
+        #     will accept for nested nix calls.
+        #   - `__noChroot` lets the build read /nix/store paths kix
+        #     transitively references during eval but that aren't in
+        #     the declared input closure.
+        # See https://github.com/NixOS/nix/issues/7297 for the
+        # documented combination. On macOS the daemon ships with
+        # `sandbox = false` so neither is needed (and recursive-nix
+        # is not advertised as a system feature there) — making the
+        # requirement Linux-only.
+        requiredSystemFeatures = lib.optional pkgs.stdenv.isLinux "recursive-nix";
         __noChroot = true;
       }
       ''
-        set -eu
+        set -euo pipefail
 
-        export HOME="$TMPDIR/home"
-        export XDG_CACHE_HOME="$TMPDIR/cache"
-        export NO_COLOR=1
         # Let kix's embedded nix use the daemon. With
         # requiredSystemFeatures = [ "recursive-nix" ] the daemon
         # exposes a NIX_REMOTE socket that the build can use, so
         # nested nix calls succeed even from inside the sandbox.
+        export HOME="$TMPDIR/home"
+        export XDG_CACHE_HOME="$TMPDIR/cache"
+        export NO_COLOR=1
         mkdir -p "$HOME" "$XDG_CACHE_HOME"
 
-        workspace=$(mktemp -d)
+        # Deterministic per-build path; $TMPDIR is already a fresh
+        # per-build dir, so no `mktemp` is needed.
+        workspace="$TMPDIR/workspace"
+        mkdir -p "$workspace"
         stagingDir="$out"
         mkdir -p "$stagingDir"
 
@@ -139,7 +150,8 @@ let
     g: ''cp -r --no-preserve=mode ${g.drv}/. "$out/"''
   ) groupDrvs;
 in
-pkgs.runCommand "captures-offline" { } ''
+# Local: pure file-shuffling, not worth a binary-cache round-trip.
+pkgs.runCommandLocal "captures-offline" { } ''
   mkdir -p "$out"
   ${copyGroupsCmd}
   cp ${manifestFile} "$out/manifest.json"
