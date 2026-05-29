@@ -20,6 +20,11 @@ on:
       - 'homepage/**'
       - 'docs/**'
       - 'kix/**'
+      # kix CLI behaviour affects captured output (the offline
+      # regen invokes `kix list clusters` / `kix build` / etc.),
+      # so a CLI change can change the captured sidecars even
+      # though it doesn't touch docs/ itself.
+      - 'cli/**'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
 
