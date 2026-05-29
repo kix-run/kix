@@ -203,6 +203,7 @@ let
         --arg cwd ${lib.escapeShellArg group.cwd} \
         --arg generator ${lib.escapeShellArg generator} \
         --argjson exitCode "$__exit_code" \
+        --argjson skipDriftCheck ${if (step.skipDriftCheck or false) then "true" else "false"} \
         --rawfile stdout "$__stdout_display" \
         --rawfile stderr "$__stderr_display" \
         --rawfile stdoutDrift "$__stdout_drift" \
@@ -213,6 +214,7 @@ let
           page: $page,
           cwd: $cwd,
           generator: $generator,
+          skipDriftCheck: $skipDriftCheck,
           commands: [{
             command: $command,
             stdout: $stdout,

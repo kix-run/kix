@@ -24,12 +24,18 @@
 # Step shapes:
 #
 #   { capture = "name"; run = [ "kix" "list" "clusters" ]; sortLines = false;
-#     allowFailure = false; }
+#     allowFailure = false; skipDriftCheck = false; }
 #       runs the command in the workspace, sanitises stdout/stderr,
 #       writes docs/src/command-output/<group>/name.json. By default a
 #       non-zero exit fails the whole pipeline so regressions surface;
 #       set `allowFailure = true` to record the failure as a sidecar
 #       (used for tutorials that demonstrate an intentional error).
+#       `skipDriftCheck = true` exempts the capture from the --check
+#       drift comparison entirely. Useful when the output is dominated
+#       by environment-specific noise the drift transforms can't
+#       reasonably redact (Nix-version-specific eval-error stack
+#       traces, etc.). --apply still rewrites the sidecar; --check
+#       just doesn't gate on its content.
 #
 #   { mutate = { file = "tutorial-04/cluster.nix";
 #                oldString = "Hello"; newString = "Preview"; }; }
@@ -336,6 +342,12 @@
           "06-service-dep"
         ];
         allowFailure = true;
+        # The captured output is a Nix eval-error stack trace, and
+        # different Nix versions render it differently (line numbers,
+        # `derivationStrict` vs `drvFunc`, flake-ref display).
+        # That noise is too varied to redact, so just don't gate
+        # CI on this sidecar's content.
+        skipDriftCheck = true;
       }
       {
         mutate = {

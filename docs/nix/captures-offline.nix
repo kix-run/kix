@@ -172,6 +172,13 @@ let
         changed=$((changed + 1))
         continue
       fi
+      # Captures marked `skipDriftCheck = true` in captures.nix have
+      # environment-specific content (e.g. Nix-version-dependent
+      # error traces) that can't be cleanly redacted. --apply still
+      # rewrites them — we just don't gate CI on their content.
+      if [ "$(jq -r '.skipDriftCheck // false' "$sidecar")" = "true" ]; then
+        continue
+      fi
       fresh_view=$(drift_view "$sidecar")
       checked_view=$(drift_view "$target")
       if [ "$fresh_view" != "$checked_view" ]; then

@@ -200,6 +200,12 @@ let
         changed=$((changed + 1))
         continue
       fi
+      # Honour `skipDriftCheck = true` (see captures.nix). Same
+      # rationale as the offline driver — sidecar still gets
+      # rewritten by --apply, just isn't gated by --check.
+      if [ "$(jq -r '.skipDriftCheck // false' "$sidecar")" = "true" ]; then
+        continue
+      fi
       fresh_view=$(drift_view "$sidecar")
       checked_view=$(drift_view "$target")
       if [ "$fresh_view" != "$checked_view" ]; then
