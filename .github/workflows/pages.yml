@@ -1,10 +1,10 @@
 name: Deploy site to GitHub Pages
 
-# Builds the homepage (static HTML in `homepage/`) and the Starlight
+# Builds the landing page (React/Vite app in `web/`) and the Starlight
 # docs site (`nix build ./docs#site`), then merges them into one
 # Pages artifact:
 #
-#   kixops.dev/             ← homepage/
+#   kixops.dev/             ← web/ (Vite build)
 #   kixops.dev/docs/        ← docs site (current tree)
 #   kixops.dev/docs/v0.1/   ← starlight-versions snapshot
 #
@@ -17,7 +17,7 @@ on:
   push:
     branches: [main]
     paths:
-      - 'homepage/**'
+      - 'web/**'
       - 'docs/**'
       - 'kix/**'
       # kix CLI behaviour affects captured output (the offline
@@ -114,6 +114,19 @@ jobs:
             --override-input kix-examples "git+file://${{ github.workspace }}/kix-examples" \
             -- --check
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: kixpkgs/web/package-lock.json
+
+      - name: Build landing page
+        working-directory: kixpkgs/web
+        run: |
+          npm ci
+          npm run build
+
       - name: Build docs site
         working-directory: kixpkgs
         run: |
@@ -130,7 +143,9 @@ jobs:
       - name: Stage combined artifact
         run: |
           mkdir -p _site
-          cp -r kixpkgs/homepage/. _site/
+          cp -r kixpkgs/web/dist/. _site/
+          # Pages custom-domain marker; must live at the artifact root.
+          echo "kixops.dev" > _site/CNAME
           mkdir -p _site/docs
           cp -r --no-preserve=mode kixpkgs/result/. _site/docs/
           # Pages artifacts must be world-readable.
