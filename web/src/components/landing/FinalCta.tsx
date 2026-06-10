@@ -4,8 +4,21 @@ import { Button } from "@/components/ui/button"
 import { Container, Reveal } from "@/components/landing/primitives"
 import { cn } from "@/lib/utils"
 
-// TODO: point at the interest-capture endpoint
-const FORM_ENDPOINT = ""
+// Forminit form ID (forminit.com; form must be in "Public" mode).
+// TODO: paste the real form ID. While empty, submits short-circuit to the
+// success state so the page can be previewed end to end.
+const FORM_ID = ""
+
+declare global {
+  interface Window {
+    Forminit?: new () => {
+      submit: (
+        formId: string,
+        data: FormData,
+      ) => Promise<{ data?: unknown; redirectUrl?: string; error?: unknown }>
+    }
+  }
+}
 
 const useCaseOptions: { value: string; label: string }[] = [
   { value: "paas", label: "Moving off a PaaS (Heroku, Render, Fly, …)" },
@@ -32,6 +45,8 @@ export default function FinalCta() {
   const [notes, setNotes] = useState("")
   const [useCaseError, setUseCaseError] = useState(false)
   const [submitted, setSubmitted] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState(false)
 
   useEffect(() => {
     const handler = (e: Event) => setUseCase((e as CustomEvent<string>).detail)
@@ -45,17 +60,28 @@ export default function FinalCta() {
       setUseCaseError(true)
       return
     }
-    if (!FORM_ENDPOINT) {
+    if (!FORM_ID) {
       setSubmitted(true)
       return
     }
-    const res = await fetch(FORM_ENDPOINT, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, useCase, notes }),
-    })
-    if (res.ok) {
-      setSubmitted(true)
+    if (!window.Forminit) {
+      setSubmitError(true)
+      return
+    }
+    const formData = new FormData(e.currentTarget)
+    setSubmitting(true)
+    setSubmitError(false)
+    try {
+      const { error } = await new window.Forminit().submit(FORM_ID, formData)
+      if (error) {
+        setSubmitError(true)
+      } else {
+        setSubmitted(true)
+      }
+    } catch {
+      setSubmitError(true)
+    } finally {
+      setSubmitting(false)
     }
   }
 
@@ -113,6 +139,7 @@ export default function FinalCta() {
                     <input
                       id="cta-email"
                       type="email"
+                      name="fi-sender-email"
                       required
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
@@ -149,6 +176,16 @@ export default function FinalCta() {
                         Please pick the option closest to your situation.
                       </p>
                     )}
+                    {/* The use-case picker is custom buttons, so carry the
+                        choice into FormData via a hidden field. */}
+                    <input
+                      type="hidden"
+                      name="fi-select-useCase"
+                      value={
+                        useCaseOptions.find((o) => o.value === useCase)
+                          ?.label ?? ""
+                      }
+                    />
 
                     <label
                       htmlFor="cta-notes"
@@ -158,15 +195,25 @@ export default function FinalCta() {
                     </label>
                     <textarea
                       id="cta-notes"
+                      name="fi-text-notes"
                       rows={2}
                       value={notes}
                       onChange={(e) => setNotes(e.target.value)}
                       className="mt-2 w-full rounded-lg border border-input bg-card px-3.5 py-2.5 text-sm outline-none transition focus:border-brand focus:ring-3 focus:ring-brand/15"
                     />
 
-                    <Button size="lg" className="mt-5 w-full">
-                      Request early access
+                    <Button size="lg" className="mt-5 w-full" disabled={submitting}>
+                      {submitting ? "Sending…" : "Request early access"}
                     </Button>
+                    {submitError && (
+                      <p className="mt-3 text-center text-sm text-destructive">
+                        Something went wrong sending the form. Email{" "}
+                        <a href="mailto:hello@kixops.dev" className="underline">
+                          hello@kixops.dev
+                        </a>{" "}
+                        instead.
+                      </p>
+                    )}
                     <p className="mt-3 text-center text-xs text-muted-foreground">
                       We read every submission and reply personally.
                     </p>
