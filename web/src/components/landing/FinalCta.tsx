@@ -119,11 +119,9 @@ export default function FinalCta() {
                       You're on the list.
                     </h3>
                     <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                      We're onboarding teams in small groups and we'll email
-                      you when your spot opens. Want to skip ahead? Reply to
-                      the confirmation email with a paragraph about your
-                      stack. Teams with a concrete migration or a customer deal in
-                      flight get priority.
+                      We're onboarding teams in small groups and we'll be in
+                      touch when your spot opens. Teams with a concrete
+                      migration or a customer deal in flight get priority.
                     </p>
                   </div>
                 ) : (
@@ -205,15 +203,12 @@ export default function FinalCta() {
                     </Button>
                     {submitError && (
                       <p className="mt-3 text-center text-sm text-destructive">
-                        Something went wrong sending the form. Email{" "}
-                        <a href="mailto:hello@kixops.dev" className="underline">
-                          hello@kixops.dev
-                        </a>{" "}
-                        instead.
+                        Something went wrong sending the form. Please try
+                        again in a moment.
                       </p>
                     )}
                     <p className="mt-3 text-center text-xs text-muted-foreground">
-                      We read every submission and reply personally.
+                      We read every submission.
                     </p>
                   </form>
                 )}

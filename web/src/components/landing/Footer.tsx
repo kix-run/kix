@@ -1,10 +1,10 @@
 import { Container } from "@/components/landing/primitives"
 
+// TODO: restore a contact email link once a kixops.dev mailbox exists.
 const links = [
   { href: "#how-it-works", label: "How it works" },
   { href: "#use-cases", label: "Use cases" },
   { href: "#faq", label: "FAQ" },
-  { href: "mailto:hello@kixops.dev", label: "hello@kixops.dev" },
 ]
 
 export default function Footer() {
