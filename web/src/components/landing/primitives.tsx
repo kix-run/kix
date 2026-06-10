@@ -61,6 +61,11 @@ export function Eyebrow({ children }: { children: ReactNode }) {
   )
 }
 
+/**
+ * Section header. With a `lede` it renders as a split header on lg+
+ * (title left, lede prose right) so the full container width is used
+ * while each column keeps a readable measure.
+ */
 export function SectionHeading({
   kicker,
   title,
@@ -72,8 +77,8 @@ export function SectionHeading({
   lede?: ReactNode
   className?: string
 }) {
-  return (
-    <div className={cn("max-w-2xl", className)}>
+  const heading = (
+    <>
       <Reveal>
         <p className="font-mono text-[0.78rem] font-medium uppercase tracking-[0.12em] text-brand">
           {kicker}
@@ -84,13 +89,21 @@ export function SectionHeading({
           {title}
         </h2>
       </Reveal>
-      {lede && (
-        <Reveal delay={2}>
-          <p className="mt-5 text-lg leading-relaxed text-muted-foreground">
-            {lede}
-          </p>
-        </Reveal>
-      )}
+    </>
+  )
+
+  if (!lede) {
+    return <div className={cn("max-w-3xl", className)}>{heading}</div>
+  }
+
+  return (
+    <div className={cn("grid gap-x-16 gap-y-6 lg:grid-cols-2", className)}>
+      <div>{heading}</div>
+      <Reveal delay={2} className="lg:pt-9">
+        <div className="space-y-4 text-lg leading-relaxed text-muted-foreground">
+          {lede}
+        </div>
+      </Reveal>
     </div>
   )
 }

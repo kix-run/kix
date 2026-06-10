@@ -124,9 +124,493 @@
 }
 
 @theme inline {
-  --color-brand: #1d7a4d;
-  --color-brand-ink: #11392a;
-  --color-brand-soft: #e8f3ec;
+  --color-brand: var(--brand);
+  --color-brand-ink: var(--brand-ink);
+  --color-brand-soft: var(--brand-soft);
+}
+
+/* ---- Page themes ----------------------------------------------------
+   Selected at runtime via data-theme on <html> (see ThemeSelector).
+   Each theme sets the brand accents plus the handful of page surfaces
+   that lean on them. Forest is the default (:root).
+   Theme-only vars (no utility mapping; used via the `bg-(--var)` form):
+   --brand-on-dark  accent used on the dark inverted bands
+   --surface-tint   alternating section background
+   --hero-grid      hero background grid lines
+   --hero-fade      hero bottom gradient color
+--------------------------------------------------------------------- */
+
+:root {
+  --brand: #1d7a4d;
+  --brand-ink: #11392a;
+  --brand-soft: #e8f3ec;
+  --brand-on-dark: #34d399;
+  --surface-tint: #f7faf8;
+  --hero-grid: #eef1ef;
+  --hero-fade: #f2f7f4;
+  --band: #09090b; /* inverted dark sections (enterprise wedge, final CTA) */
+  --code-ref: #0369a1; /* cross-resource references in the hero code card */
+}
+
+/* Warm cream paper with deep forest ink. Editorial, calm, expensive. */
+[data-theme="paper"] {
+  --background: #faf8f2;
+  --card: #fefdf9;
+  --border: #e8e4d8;
+  --input: #e8e4d8;
+  --primary: #1f4d33;
+  --ring: #2f6b49;
+  --brand: #226b43;
+  --brand-ink: #173726;
+  --brand-soft: #e9efe2;
+  --brand-on-dark: #4ade80;
+  --surface-tint: #f4f2ea;
+  --hero-grid: #eae7db;
+  --hero-fade: #f1eee4;
+}
+
+/* Near-black monochrome; green appears only in terminal output, so
+   color = semantics. The Vercel register. */
+[data-theme="ink"] {
+  --primary: #18181b;
+  --ring: #52525b;
+  --brand: #27272a;
+  --brand-ink: #09090b;
+  --brand-soft: #f4f4f5;
+  --brand-on-dark: #d4d4d8;
+  --surface-tint: #fafafa;
+  --hero-grid: #f0f0f0;
+  --hero-fade: #f4f4f4;
+}
+
+/* Working blue. Enterprise trust, familiar, safe. */
+[data-theme="cobalt"] {
+  --primary: #1d4ed8;
+  --ring: #3b82f6;
+  --brand: #1d4ed8;
+  --brand-ink: #1e3a8a;
+  --brand-soft: #e8eefc;
+  --brand-on-dark: #60a5fa;
+  --surface-tint: #f6f8fc;
+  --hero-grid: #e9edf4;
+  --hero-fade: #eef2f9;
+}
+
+/* Deep teal. Between green's safety and blue's seriousness. */
+[data-theme="petrol"] {
+  --primary: #0f766e;
+  --ring: #14b8a6;
+  --brand: #0f766e;
+  --brand-ink: #134e4a;
+  --brand-soft: #e2f1ef;
+  --brand-on-dark: #2dd4bf;
+  --surface-tint: #f3f9f8;
+  --hero-grid: #e6efee;
+  --hero-fade: #ebf4f3;
+}
+
+/* Terracotta on warm white. Energetic, very un-infra, memorable. */
+[data-theme="ember"] {
+  --background: #fffcfa;
+  --card: #fffefc;
+  --primary: #c2410c;
+  --ring: #ea580c;
+  --brand: #c2410c;
+  --brand-ink: #7c2d12;
+  --brand-soft: #fcebe0;
+  --brand-on-dark: #fb923c;
+  --surface-tint: #faf4ef;
+  --hero-grid: #f2eae2;
+  --hero-fade: #f7f0e9;
+}
+
+/* Violet. The current AI-era developer-tool register. */
+[data-theme="violet"] {
+  --primary: #6d28d9;
+  --ring: #8b5cf6;
+  --brand: #6d28d9;
+  --brand-ink: #4c1d95;
+  --brand-soft: #f0e9fd;
+  --brand-on-dark: #a78bfa;
+  --surface-tint: #f8f7fc;
+  --hero-grid: #eeebf6;
+  --hero-fade: #f3f0fa;
+}
+
+/* ---- Custom palette: Lagoon (jet black slate, cerulean, teals, tea green) */
+
+[data-theme="lagoon"] {
+  --background: #fafcf8;
+  --foreground: #1f363d;
+  --border: #dfe9dc;
+  --input: #dfe9dc;
+  --muted-foreground: #54707a;
+  --primary: #40798c;
+  --primary-foreground: #f4fafc;
+  --ring: #40798c;
+  --brand: #40798c;
+  --brand-ink: #1f363d;
+  --brand-soft: #e7f0e0;
+  --brand-on-dark: #9ec1a3;
+  --surface-tint: #f1f6ec;
+  --hero-grid: #e2ece1;
+  --hero-fade: #ecf3e7;
+  --band: #1f363d;
+  --code-ref: #40798c;
+}
+
+[data-theme="lagoon-dark"] {
+  color-scheme: dark;
+  --background: #16262b;
+  --foreground: #e9f1e4;
+  --card: #1f363d;
+  --card-foreground: #e9f1e4;
+  --border: #2e4750;
+  --input: #2e4750;
+  --muted: #243d44;
+  --muted-foreground: #8fa9a3;
+  --primary: #70a9a1;
+  --primary-foreground: #0c1f1c;
+  --ring: #70a9a1;
+  --brand: #70a9a1;
+  --brand-ink: #cfe0c3;
+  --brand-soft: #1d3a37;
+  --brand-on-dark: #9ec1a3;
+  --surface-tint: #192b31;
+  --hero-grid: #223a41;
+  --hero-fade: #192b31;
+  --band: #0e191d;
+  --code-ref: #86bbd8;
+}
+
+/* ---- Custom palette: Harbor (charcoal/baltic blue, sky, honey, blaze) */
+
+[data-theme="harbor"] {
+  --background: #ffffff;
+  --foreground: #253a47;
+  --muted-foreground: #587383;
+  --primary: #f26419;
+  --primary-foreground: #fff7f2;
+  --ring: #f26419;
+  --brand: #33658a;
+  --brand-ink: #2f4858;
+  --brand-soft: #e3eef7;
+  --brand-on-dark: #f6ae2d;
+  --surface-tint: #f3f7fb;
+  --hero-grid: #e4ecf3;
+  --hero-fade: #eef4f9;
+  --band: #2f4858;
+  --code-ref: #33658a;
+}
+
+[data-theme="harbor-dark"] {
+  color-scheme: dark;
+  --background: #20333d;
+  --foreground: #e9f2f7;
+  --card: #2c4452;
+  --card-foreground: #e9f2f7;
+  --border: #3c5667;
+  --input: #3c5667;
+  --muted: #2a414d;
+  --muted-foreground: #8fb3c6;
+  --primary: #f26419;
+  --primary-foreground: #fff7f2;
+  --ring: #f6ae2d;
+  --brand: #86bbd8;
+  --brand-ink: #cfe5f2;
+  --brand-soft: #2a4456;
+  --brand-on-dark: #f6ae2d;
+  --surface-tint: #243a45;
+  --hero-grid: #314b59;
+  --hero-fade: #243a45;
+  --band: #16242b;
+  --code-ref: #86bbd8;
+}
+
+/* ---- Custom palette: Blossom (champagne, bubblegum, smoky rose, dark teal) */
+
+[data-theme="blossom"] {
+  --background: #fffaf2;
+  --foreground: #113537;
+  --card: #fffdf9;
+  --border: #f0e2cf;
+  --input: #f0e2cf;
+  --muted-foreground: #756158;
+  --primary: #f76f8e;
+  --primary-foreground: #fff5f6;
+  --ring: #f76f8e;
+  --brand: #96616b;
+  --brand-ink: #5c3a41;
+  --brand-soft: #fce8e2;
+  --brand-on-dark: #f76f8e;
+  --surface-tint: #fdf0e0;
+  --hero-grid: #f3e5d2;
+  --hero-fade: #fbeeda;
+  --band: #113537;
+  --code-ref: #37505c;
+}
+
+[data-theme="blossom-dark"] {
+  color-scheme: dark;
+  --background: #0c2628;
+  --foreground: #f7ece1;
+  --card: #113537;
+  --card-foreground: #f7ece1;
+  --border: #24484a;
+  --input: #24484a;
+  --muted: #173f41;
+  --muted-foreground: #8fb0ac;
+  --primary: #f76f8e;
+  --primary-foreground: #fff5f6;
+  --ring: #f76f8e;
+  --brand: #f76f8e;
+  --brand-ink: #ffd6de;
+  --brand-soft: #3a1f28;
+  --brand-on-dark: #f76f8e;
+  --surface-tint: #102e30;
+  --hero-grid: #1b4346;
+  --hero-fade: #102e30;
+  --band: #071a1c;
+  --code-ref: #86bbd8;
+}
+
+/* ---- Custom palette: Pacific (shadow grey, mustard, pacific blue, dim grey, platinum) */
+
+[data-theme="pacific"] {
+  --background: #ffffff;
+  --foreground: #272727;
+  --muted-foreground: #696773;
+  --primary: #fed766;
+  --primary-foreground: #272727;
+  --ring: #009fb7;
+  --brand: #007d92;
+  --brand-ink: #272727;
+  --brand-soft: #e3f4f6;
+  --brand-on-dark: #fed766;
+  --surface-tint: #eff1f3;
+  --hero-grid: #e2e6e9;
+  --hero-fade: #eef0f2;
+  --band: #272727;
+  --code-ref: #007d92;
+}
+
+[data-theme="pacific-dark"] {
+  color-scheme: dark;
+  --background: #1b1b1b;
+  --foreground: #eff1f3;
+  --card: #272727;
+  --card-foreground: #eff1f3;
+  --border: #3a3a3a;
+  --input: #3a3a3a;
+  --muted: #2f2f2f;
+  --muted-foreground: #a3a1ab;
+  --primary: #fed766;
+  --primary-foreground: #272727;
+  --ring: #fed766;
+  --brand: #25b8cd;
+  --brand-ink: #bdeef5;
+  --brand-soft: #11343b;
+  --brand-on-dark: #fed766;
+  --surface-tint: #212121;
+  --hero-grid: #2e2e2e;
+  --hero-fade: #212121;
+  --band: #101010;
+  --code-ref: #7adfee;
+}
+
+/* ---- Custom palette: Bonfire (ink black, dark slate, wheat, burnt orange, midnight violet) */
+
+[data-theme="bonfire"] {
+  --background: #fdf7ec;
+  --foreground: #04151f;
+  --card: #fffdf8;
+  --border: #ecdfc8;
+  --input: #ecdfc8;
+  --muted-foreground: #5a6a64;
+  --primary: #c44900;
+  --primary-foreground: #fff6ef;
+  --ring: #c44900;
+  --brand: #c44900;
+  --brand-ink: #432534;
+  --brand-soft: #f7e8d2;
+  --brand-on-dark: #efd6ac;
+  --surface-tint: #f8efdd;
+  --hero-grid: #eee2cb;
+  --hero-fade: #f7efdf;
+  --band: #04151f;
+  --code-ref: #183a37;
+}
+
+[data-theme="bonfire-dark"] {
+  color-scheme: dark;
+  --background: #04151f;
+  --foreground: #f3e9d8;
+  --card: #0f2733;
+  --card-foreground: #f3e9d8;
+  --border: #1f3d49;
+  --input: #1f3d49;
+  --muted: #0b2029;
+  --muted-foreground: #92a8a3;
+  --primary: #c44900;
+  --primary-foreground: #fff6ef;
+  --ring: #e05a10;
+  --brand: #efd6ac;
+  --brand-ink: #f8eeda;
+  --brand-soft: #432534;
+  --brand-on-dark: #efd6ac;
+  --surface-tint: #07202c;
+  --hero-grid: #11313f;
+  --hero-fade: #07202c;
+  --band: #021019;
+  --code-ref: #86bbd8;
+}
+
+/* ---- Custom palette: Mint (taupe grey, ash grey, frosted mints, alabaster) */
+
+[data-theme="mint"] {
+  --background: #f7fcf8;
+  --foreground: #423734;
+  --border: #dbe5dc;
+  --input: #dbe5dc;
+  --muted-foreground: #695958;
+  --primary: #695958;
+  --primary-foreground: #fff8f5;
+  --ring: #587a5e;
+  --brand: #587a5e;
+  --brand-ink: #34493a;
+  --brand-soft: #c8ead3;
+  --brand-on-dark: #cfffe5;
+  --surface-tint: #ecf5ed;
+  --hero-grid: #dfeae2;
+  --hero-fade: #ebf4ec;
+  --band: #303d34;
+  --code-ref: #4d6f74;
+}
+
+[data-theme="mint-dark"] {
+  color-scheme: dark;
+  --background: #232b26;
+  --foreground: #e6f3e9;
+  --card: #2d3830;
+  --card-foreground: #e6f3e9;
+  --border: #415045;
+  --input: #415045;
+  --muted: #2a352e;
+  --muted-foreground: #b6c8a9;
+  --primary: #c8ead3;
+  --primary-foreground: #1c2a21;
+  --ring: #b6c8a9;
+  --brand: #b6c8a9;
+  --brand-ink: #cfffe5;
+  --brand-soft: #36443a;
+  --brand-on-dark: #cfffe5;
+  --surface-tint: #273029;
+  --hero-grid: #38453c;
+  --hero-fade: #273029;
+  --band: #181f1b;
+  --code-ref: #8fd0c9;
+}
+
+/* ---- Dark themes ---- */
+
+/* Near-black with soft emerald. The dark sibling of Forest. */
+[data-theme="forest-dark"] {
+  color-scheme: dark;
+  --background: #0c0f0e;
+  --foreground: #f3f5f4;
+  --card: #131715;
+  --card-foreground: #f3f5f4;
+  --border: #242b27;
+  --input: #242b27;
+  --muted: #1a201d;
+  --muted-foreground: #9aa6a0;
+  --primary: #34d399;
+  --primary-foreground: #052e1c;
+  --ring: #34d399;
+  --brand: #34d399;
+  --brand-ink: #d1fae5;
+  --brand-soft: #11271c;
+  --brand-on-dark: #34d399;
+  --surface-tint: #101413;
+  --hero-grid: #1a201d;
+  --hero-fade: #101413;
+  --band: #050706;
+  --code-ref: #7dd3fc;
+}
+
+/* Pure monochrome dark. White buttons, gray accents. */
+[data-theme="carbon"] {
+  color-scheme: dark;
+  --background: #0a0a0a;
+  --foreground: #fafafa;
+  --card: #141414;
+  --card-foreground: #fafafa;
+  --border: #262626;
+  --input: #262626;
+  --muted: #1c1c1c;
+  --muted-foreground: #a1a1aa;
+  --primary: #fafafa;
+  --primary-foreground: #0a0a0a;
+  --ring: #71717a;
+  --brand: #d4d4d8;
+  --brand-ink: #fafafa;
+  --brand-soft: #1c1c1c;
+  --brand-on-dark: #e4e4e7;
+  --surface-tint: #101010;
+  --hero-grid: #1c1c1c;
+  --hero-fade: #111111;
+  --band: #000000;
+  --code-ref: #7dd3fc;
+}
+
+/* Deep navy with working blue. The dark sibling of Cobalt. */
+[data-theme="midnight"] {
+  color-scheme: dark;
+  --background: #0b1020;
+  --foreground: #e8ecf6;
+  --card: #121a30;
+  --card-foreground: #e8ecf6;
+  --border: #232d4a;
+  --input: #232d4a;
+  --muted: #182240;
+  --muted-foreground: #94a3c4;
+  --primary: #3b82f6;
+  --primary-foreground: #ffffff;
+  --ring: #60a5fa;
+  --brand: #60a5fa;
+  --brand-ink: #dbeafe;
+  --brand-soft: #14213f;
+  --brand-on-dark: #60a5fa;
+  --surface-tint: #0e1528;
+  --hero-grid: #1a2440;
+  --hero-fade: #0e1528;
+  --band: #060912;
+  --code-ref: #7dd3fc;
+}
+
+/* CRT phosphor green on true black. Terminal-native. */
+[data-theme="phosphor"] {
+  color-scheme: dark;
+  --background: #000000;
+  --foreground: #e2f5e9;
+  --card: #0a100b;
+  --card-foreground: #e2f5e9;
+  --border: #1d2a20;
+  --input: #1d2a20;
+  --muted: #101810;
+  --muted-foreground: #7da88c;
+  --primary: #22c55e;
+  --primary-foreground: #001a09;
+  --ring: #22c55e;
+  --brand: #22c55e;
+  --brand-ink: #bbf7d0;
+  --brand-soft: #07210f;
+  --brand-on-dark: #22c55e;
+  --surface-tint: #060a07;
+  --hero-grid: #13211780;
+  --hero-fade: #060a07;
+  --band: #0b120c;
+  --code-ref: #67e8f9;
 }
 
 @layer base {
