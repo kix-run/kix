@@ -98,8 +98,9 @@ export default function WhyKix() {
         <Reveal className="mt-16">
           <div className="mx-auto max-w-2xl text-center">
             <div className="mx-auto mb-6 h-px w-12 bg-brand" />
-            <p className="text-balance text-3xl font-medium italic tracking-tight text-foreground sm:text-4xl">
-              Kix makes Kubernetes nobody's job.
+            <p className="text-balance font-display text-4xl italic text-foreground sm:text-5xl">
+              Kix makes Kubernetes{" "}
+              <span className="text-brand">nobody's job.</span>
             </p>
           </div>
         </Reveal>
