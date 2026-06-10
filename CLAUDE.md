@@ -41,6 +41,10 @@ For Kix public copy:
 - Avoid sentence-ending "with confidence"; prefer "know what will happen before
   they change Kubernetes."
 
+Before writing ANY prose (copy, docs, blog posts), read `CLAUDE.prose.md` for
+Adam's accumulated writing corrections (no em dashes, banned words, AI-tell
+constructions, messaging constraints). Add to it when he corrects style.
+
 ## Breaking changes
 
 The kix API is in active development. Breaking changes are fine — none of the clusters are actively deployed. Prioritize clean design over backwards compatibility.
