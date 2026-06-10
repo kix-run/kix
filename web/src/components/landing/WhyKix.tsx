@@ -98,9 +98,8 @@ export default function WhyKix() {
         <Reveal className="mt-16">
           <div className="mx-auto max-w-2xl text-center">
             <div className="mx-auto mb-6 h-px w-12 bg-brand" />
-            <p className="text-balance text-2xl font-medium tracking-tight text-foreground sm:text-3xl">
-              Kubernetes stops being a job, or even part of one: it's just
-              where your software runs.
+            <p className="text-balance text-3xl font-medium italic tracking-tight text-foreground sm:text-4xl">
+              Kix makes Kubernetes nobody's job.
             </p>
           </div>
         </Reveal>
