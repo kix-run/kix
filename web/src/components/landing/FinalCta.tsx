@@ -4,10 +4,8 @@ import { Button } from "@/components/ui/button"
 import { Container, Reveal } from "@/components/landing/primitives"
 import { cn } from "@/lib/utils"
 
-// Forminit form ID (forminit.com; form must be in "Public" mode).
-// TODO: paste the real form ID. While empty, submits short-circuit to the
-// success state so the page can be previewed end to end.
-const FORM_ID = ""
+// Forminit form ID (forminit.com; the form is in "Public" mode).
+const FORM_ID = "s9vgiwj1syc"
 
 declare global {
   interface Window {
