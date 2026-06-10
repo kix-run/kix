@@ -99,8 +99,8 @@ export default function WhyKix() {
           <div className="mx-auto max-w-2xl text-center">
             <div className="mx-auto mb-6 h-px w-12 bg-brand" />
             <p className="text-balance text-2xl font-medium tracking-tight text-foreground sm:text-3xl">
-              Kubernetes becomes a one-person job, and not even that person's
-              full-time job.
+              Kubernetes stops being a job, or even part of one: it's just
+              where your software runs.
             </p>
           </div>
         </Reveal>

@@ -13,33 +13,7 @@ type Theme = { id: string; label: string; swatch: string; bg: string }
 
 const GROUPS: { label: string; themes: Theme[] }[] = [
   {
-    label: "Standard · Light",
-    themes: [
-      { id: "forest", label: "Forest", swatch: "#1d7a4d", bg: "#ffffff" },
-      { id: "paper", label: "Paper", swatch: "#226b43", bg: "#faf8f2" },
-      { id: "ink", label: "Ink", swatch: "#18181b", bg: "#ffffff" },
-      { id: "cobalt", label: "Cobalt", swatch: "#1d4ed8", bg: "#ffffff" },
-      { id: "petrol", label: "Petrol", swatch: "#0f766e", bg: "#ffffff" },
-      { id: "ember", label: "Ember", swatch: "#c2410c", bg: "#fffcfa" },
-      { id: "violet", label: "Violet", swatch: "#6d28d9", bg: "#ffffff" },
-    ],
-  },
-  {
-    label: "Standard · Dark",
-    themes: [
-      {
-        id: "forest-dark",
-        label: "Forest Dark",
-        swatch: "#34d399",
-        bg: "#0c0f0e",
-      },
-      { id: "carbon", label: "Carbon", swatch: "#fafafa", bg: "#0a0a0a" },
-      { id: "midnight", label: "Midnight", swatch: "#60a5fa", bg: "#0b1020" },
-      { id: "phosphor", label: "Phosphor", swatch: "#22c55e", bg: "#000000" },
-    ],
-  },
-  {
-    label: "Custom · Light",
+    label: "Light",
     themes: [
       { id: "lagoon", label: "Lagoon", swatch: "#40798c", bg: "#fafcf8" },
       { id: "harbor", label: "Harbor", swatch: "#f26419", bg: "#ffffff" },
@@ -50,7 +24,7 @@ const GROUPS: { label: string; themes: Theme[] }[] = [
     ],
   },
   {
-    label: "Custom · Dark",
+    label: "Dark",
     themes: [
       { id: "lagoon-dark", label: "Lagoon", swatch: "#70a9a1", bg: "#16262b" },
       { id: "harbor-dark", label: "Harbor", swatch: "#f6ae2d", bg: "#20333d" },
@@ -80,8 +54,7 @@ const GROUPS: { label: string; themes: Theme[] }[] = [
 const THEMES = GROUPS.flatMap((g) => g.themes)
 
 // Must match the data-theme preset on <html> in index.html so the first
-// paint and the React state agree. "forest" has no [data-theme] block; it
-// works by falling back to the :root values.
+// paint and the React state agree.
 const DEFAULT_THEME = "lagoon"
 const STORAGE_KEY = "kix-theme"
 
