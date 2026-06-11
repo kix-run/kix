@@ -4,16 +4,14 @@ import {
   SectionHeading,
 } from "@/components/landing/primitives"
 
-const quotes: { text: string; name: string; placeholder?: boolean }[] = [
+const quotes: { text: string; name: string }[] = [
   {
     text: "If Kix had existed, I wouldn't have lost ten months to Fargate and Lambda. We had so much pain there, and Kix would have solved it.",
     name: "Luca Dombetzki",
   },
   {
-    // PLACEHOLDER: Adam to replace with his own words.
-    text: "I've run Kubernetes for other companies for years. Kix is the tool I kept rebuilding pieces of by hand, every single time.",
+    text: "I've seen our managed Kubernetes clients get caught out time and time again by production errors that could have been stopped before they ever left the engineer's laptop.",
     name: "Adam Charnock",
-    placeholder: true,
   },
 ]
 
