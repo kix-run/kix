@@ -11,6 +11,21 @@
    - accent-low / accent / accent-high = soft fill, brand, emphasized
      text in the current mode. */
 
+/* Same fonts as the homepage. Geist is loaded via customCss in
+   astro.config.mjs; Starlight appends its system fallback stack. */
+:root {
+  --sl-font: 'Geist Variable';
+}
+
+/* Flat chrome: render the header and sidebar on the page background
+   instead of Starlight's tinted nav surface. The hairline borders
+   still separate the panes. */
+:root,
+:root[data-theme='light'] {
+  --sl-color-bg-nav: var(--sl-color-bg);
+  --sl-color-bg-sidebar: var(--sl-color-bg);
+}
+
 /* Dark mode (Starlight default). Anchors from the lagoon-dark block. */
 :root {
   --sl-color-accent-low: #1d3a37; /* brand-soft (dark) */
