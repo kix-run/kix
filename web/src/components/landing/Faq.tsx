@@ -13,6 +13,11 @@ const items: { question: string; answer: string }[] = [
       "No. The definition you write is at the level of services, databases, and domains, and the defaults are production-grade out of the box. Kubernetes knowledge helps but isn't required.",
   },
   {
+    question: "Can Claude Code or Cursor write our Kix definition?",
+    answer:
+      "Yes, and it works well today. The definition is compact and typed, and Kix checks every selector, reference, and dependency an agent writes before deploy, so agent mistakes fail the build instead of reaching production. The docs are also published in llms.txt form for agents to read.",
+  },
+  {
     question: "What does Kix actually run on?",
     answer:
       "Any conformant Kubernetes cluster: EKS, GKE, AKS, DigitalOcean, or your customer's environment. Kix compiles your definition into standard resources and deploys them; it doesn't replace your cluster. Bare metal is supported through an add-on that knows the hardware and networking of providers like Hetzner and OVH.",

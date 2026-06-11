@@ -1,5 +1,7 @@
-import { ArrowDown, ArrowRight } from "lucide-react"
+import { useState } from "react"
+import { ArrowDown, ArrowRight, Bot, Check } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { cn } from "@/lib/utils"
 import {
   Container,
   Eyebrow,
@@ -48,6 +50,52 @@ const previewLines: Line[] = [
   },
 ]
 
+// The terminal's agent-view companion: the diff produced by the Redis
+// change the AgentPane narrates. Counts stay consistent with it.
+const agentPreviewLines: Line[] = [
+  { tokens: [{ t: "$ kix diff staging", c: "p" }] },
+  {
+    tokens: [
+      { t: "  " },
+      { t: "✓", c: "ok" },
+      { t: " evaluated 51 resources across 13 packages" },
+    ],
+  },
+  {
+    tokens: [
+      { t: "  " },
+      { t: "✓", c: "ok" },
+      { t: " all selectors resolve, all references exist" },
+    ],
+  },
+  { tokens: [{ t: "  " }, { t: "✓ 0 errors", c: "ok" }] },
+  { tokens: [] },
+  { tokens: [{ t: "  " }, { t: "+", c: "ok" }, { t: " StatefulSet redis" }] },
+  { tokens: [{ t: "  " }, { t: "+", c: "ok" }, { t: " Service redis" }] },
+  { tokens: [{ t: "  " }, { t: "+", c: "ok" }, { t: " Secret redis-auth" }] },
+  { tokens: [{ t: "  " }, { t: "~", c: "wn" }, { t: " Deployment api" }] },
+  {
+    tokens: [
+      { t: "      env.REDIS_HOST → " },
+      { t: "redis.app.svc", c: "str" },
+    ],
+  },
+  { tokens: [] },
+  { tokens: [{ t: "  4 changes, 47 resources unchanged." }] },
+  {
+    tokens: [
+      { t: "$ kix deploy staging   ", c: "p" },
+      { t: "# after your review", c: "cm" },
+    ],
+  },
+  {
+    tokens: [
+      { t: "  " },
+      { t: "✓ deployed: cluster matches your definition", c: "ok" },
+    ],
+  },
+]
+
 // Token color shorthands for the hand-tokenized nix snippet.
 const K = "text-foreground/75" // keys
 const V = "text-brand" // values / strings
@@ -55,18 +103,100 @@ const P = "text-muted-foreground/70" // punctuation
 const C = "text-muted-foreground/70 italic" // comments
 const R = "text-(--code-ref)" // references
 
-function CodeCard() {
+const agentFacilities = [
+  <>MCP server for checks, schemas, and package discovery</>,
+  <>Docs available as markdown and via MCP</>,
+  <>Errors an agent can read and act on</>,
+  <>Compact, typed definitions agents write well</>,
+]
+
+function AgentPane() {
   return (
-    <div className="flex grow flex-col overflow-hidden rounded-xl border border-border bg-card shadow-xl shadow-zinc-950/5 ring-1 ring-foreground/5">
-      <div className="flex items-center gap-2 border-b border-border bg-muted/50 px-4 py-3">
-        <span className="size-3 rounded-full bg-border" />
-        <span className="size-3 rounded-full bg-border" />
-        <span className="size-3 rounded-full bg-border" />
-        <span className="ml-2 font-mono text-xs text-muted-foreground">
-          stack.nix
-        </span>
+    <div className="flex grow flex-col px-5 py-4">
+      <pre className="overflow-x-auto font-mono text-[0.8rem] leading-relaxed">
+        <code>
+          <span className="block">
+            <span className="text-muted-foreground/70">❱ </span>
+            <span className="text-foreground/90">
+              "Add a Redis cache to staging"
+            </span>
+          </span>
+          <span className="block text-muted-foreground">
+            {"  agent writes instances.app.redis"}
+          </span>
+          <span className="block text-muted-foreground">
+            {"  agent runs kix check"}
+          </span>
+          <span className="block text-destructive">
+            {"  ✗ secret redis-auth is not defined"}
+          </span>
+          <span className="block text-muted-foreground">
+            {"  agent securely adds the secret, checks again"}
+          </span>
+          <span className="block text-brand">
+            {"  ✓ 0 errors, safe to preview"}
+          </span>
+        </code>
+      </pre>
+      <div className="mt-4 border-t border-border pt-4">
+        <p className="font-mono text-[0.68rem] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+          What agents get
+        </p>
+        <ul className="mt-2.5 space-y-2 text-sm text-muted-foreground">
+          {agentFacilities.map((item, i) => (
+            <li key={i} className="flex items-start gap-2.5">
+              <Check className="mt-0.5 size-4 shrink-0 text-brand" />
+              <span>{item}</span>
+            </li>
+          ))}
+        </ul>
       </div>
-      <pre className="overflow-x-auto px-5 py-4 font-mono text-[0.8rem] leading-relaxed">
+    </div>
+  )
+}
+
+type HeroView = "code" | "agent"
+
+function CodeCard({
+  view,
+  setView,
+}: {
+  view: HeroView
+  setView: (v: HeroView) => void
+}) {
+  return (
+    <div className="flex grow flex-col">
+      <div className="flex grow flex-col overflow-hidden rounded-xl border border-border bg-card shadow-xl shadow-zinc-950/5 ring-1 ring-foreground/5">
+        <div className="flex items-center gap-2 border-b border-border bg-muted/50 px-4 py-2">
+          <span className="size-3 rounded-full bg-border" />
+          <span className="size-3 rounded-full bg-border" />
+          <span className="size-3 rounded-full bg-border" />
+          <span className="ml-2 font-mono text-xs text-muted-foreground">
+            {view === "code" ? "stack.nix" : "kix + your agent"}
+          </span>
+          <button
+            type="button"
+            aria-pressed={view === "agent"}
+            onClick={() => setView(view === "code" ? "agent" : "code")}
+            className={cn(
+              "relative ml-auto inline-flex cursor-pointer items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold transition-all",
+              view === "code"
+                ? "bg-brand text-primary-foreground shadow-md shadow-brand/30 hover:scale-[1.04]"
+                : "bg-muted text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {view === "code" && (
+              <span className="absolute -right-0.5 -top-0.5 flex size-2.5">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand opacity-70" />
+                <span className="relative inline-flex size-2.5 rounded-full bg-brand ring-2 ring-card" />
+              </span>
+            )}
+            <Bot className="size-3.5" />
+            {view === "code" ? "Using a coding agent?" : "Show the code"}
+          </button>
+        </div>
+        {view === "code" ? (
+          <pre className="overflow-x-auto px-5 py-4 font-mono text-[0.8rem] leading-relaxed">
         <code>
           <span className="block">
             <span className={K}>instances.app.api</span>
@@ -140,12 +270,22 @@ function CodeCard() {
             <span className={P}>{"};"}</span>
           </span>
         </code>
-      </pre>
+          </pre>
+        ) : (
+          <AgentPane />
+        )}
+      </div>
+      <p className="mt-3 text-center text-xs text-muted-foreground">
+        {view === "code"
+          ? "Your whole stack in one reviewable definition: app, database, ingress, TLS, backups."
+          : "Your agent writes it, Kix checks every line. You review the preview and deploy."}
+      </p>
     </div>
   )
 }
 
 export default function Hero() {
+  const [view, setView] = useState<HeroView>("code")
   return (
     <section className="relative overflow-hidden pt-20 pb-24 sm:pt-28">
       <div className="absolute inset-0 -z-10 bg-[linear-gradient(to_bottom,var(--background),var(--background)_55%,var(--hero-fade)_100%)]" />
@@ -201,17 +341,17 @@ export default function Hero() {
           <div className="pointer-events-none absolute left-1/2 -z-10 h-[300px] w-[70%] -translate-x-1/2 scale-y-75 rounded-[50%] bg-[radial-gradient(ellipse_at_center,color-mix(in_srgb,var(--brand)_16%,transparent)_10%,transparent_60%)]" />
           <div className="grid items-stretch gap-5 text-left lg:grid-cols-[5fr_6fr]">
             <Reveal delay={5} className="flex flex-col">
-              <CodeCard />
-              <p className="mt-3 text-center text-xs text-muted-foreground">
-                Your whole stack in one reviewable definition: app, database,
-                ingress, TLS, backups.
-              </p>
+              <CodeCard view={view} setView={setView} />
             </Reveal>
             <Reveal delay={6} className="flex flex-col">
-              <Terminal title="kix diff" lines={previewLines} />
+              <Terminal
+                title="kix diff"
+                lines={view === "code" ? previewLines : agentPreviewLines}
+              />
               <p className="mt-3 text-center text-xs text-muted-foreground">
-                Preview the exact changes before they happen. What you
-                previewed is what runs.
+                {view === "code"
+                  ? "Preview the exact changes before they happen. What you previewed is what runs."
+                  : "The agent's change, as an exact diff. Nothing ships until you approve it."}
               </p>
             </Reveal>
           </div>

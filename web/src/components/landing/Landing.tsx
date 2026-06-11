@@ -21,8 +21,8 @@ export default function Landing() {
         <CustomerInfra />
         <CostComparison />
         <WhyKix />
-        <StatefulServices />
         <Mechanism />
+        <StatefulServices />
         <Compliance />
         <Faq />
         <FinalCta />

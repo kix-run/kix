@@ -1,4 +1,4 @@
-import { ShieldCheck } from "lucide-react"
+import { Bot, ShieldCheck } from "lucide-react"
 import {
   Container,
   Reveal,
@@ -117,6 +117,24 @@ export default function Mechanism() {
 
         <Reveal delay={2}>
           <div className="mx-auto mt-14 max-w-3xl rounded-2xl border border-border bg-card p-7 sm:p-8">
+            <div className="flex size-9 items-center justify-center rounded-lg bg-brand-soft text-brand">
+              <Bot className="size-4.5" />
+            </div>
+            <h3 className="mt-4 font-semibold text-foreground">
+              Bring your coding agent.
+            </h3>
+            <p className="mt-2 leading-relaxed text-muted-foreground">
+              Agents write Kix well: the definition is compact and typed, and
+              kix check gives an agent the same fast, local feedback it gives
+              you. A hallucinated selector doesn't reach your cluster; it
+              fails to compile, the agent reads the error and fixes it before
+              you ever see it.
+            </p>
+          </div>
+        </Reveal>
+
+        <Reveal delay={3}>
+          <div className="mx-auto mt-4 max-w-3xl rounded-2xl border border-border bg-card p-7 sm:p-8">
             <div className="flex size-9 items-center justify-center rounded-lg bg-brand-soft text-brand">
               <ShieldCheck className="size-4.5" />
             </div>
