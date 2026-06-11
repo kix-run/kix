@@ -138,11 +138,11 @@ jobs:
         working-directory: kixpkgs
         env:
           # alt1: pre-refactor landing page ("Kubernetes any developer
-          # can run." hero).
-          ALT1_REF: c23ac31057e0be29e81ef914cf76c87fa6953637
+          # can run." hero), branch variant/pre-refactor.
+          ALT1_REF: 474e728d7e292092f22e68a9a519218ebb657ee8
           # alt2: compiler-fact H1 variant ("The Kubernetes compiler."
           # hero), branch variant/compiler-h1.
-          ALT2_REF: a18514957842acba4caf09304efcf06dbdadf32d
+          ALT2_REF: 4dcdb12ec4f58bfd9b42cb8fb0a5821c15be1a9a
         run: |
           build_alt() {
             local name="$1" ref="$2"
