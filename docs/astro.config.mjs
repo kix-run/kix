@@ -40,6 +40,8 @@ export default defineConfig({
         // Replace the default theme dropdown (laptop icon labelled
         // "Auto") with three explicit Light/Dark/Auto icon buttons.
         ThemeSelect: './src/components/ThemeSelect.astro',
+        // Homepage wordmark ("kix" + brand dot) with a "docs" suffix.
+        SiteTitle: './src/components/SiteTitle.astro',
       },
       plugins: [
         // Splits the sidebar into Diátaxis "topics" so only the

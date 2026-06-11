@@ -26,6 +26,33 @@
   --sl-color-bg-sidebar: var(--sl-color-bg);
 }
 
+/* Accent fills (current-page pill, active topic icon) use the same
+   color as the homepage's primary button in both modes: the brand
+   accent, with the button's label color as the inverted text.
+   Starlight's dark default is accent-high, which drifts pale. */
+:root {
+  --sl-color-text-accent: var(--sl-color-accent);
+  --sl-color-text-invert: #0c1f1c; /* primary-foreground (dark) */
+  --lagoon-card: #1f363d; /* card (dark) */
+}
+:root[data-theme='light'] {
+  --sl-color-text-invert: #f4fafc; /* primary-foreground */
+  --lagoon-card: #ffffff; /* card */
+}
+
+/* Prev/next cards: the homepage card recipe. 1rem radius, card
+   surface, hairline border, no resting shadow, a whisper of shadow
+   on hover. */
+.pagination-links a {
+  border-radius: 1rem;
+  background-color: var(--lagoon-card);
+  box-shadow: none;
+}
+.pagination-links a:hover {
+  border-color: var(--sl-color-gray-4);
+  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.05);
+}
+
 /* Dark mode (Starlight default). Anchors from the lagoon-dark block. */
 :root {
   --sl-color-accent-low: #1d3a37; /* brand-soft (dark) */
