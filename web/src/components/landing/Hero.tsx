@@ -161,11 +161,9 @@ export default function Hero() {
         </Reveal>
         <Reveal delay={2}>
           <p className="mx-auto mt-6 max-w-2xl text-balance text-lg text-muted-foreground sm:text-xl">
-            Kix gives your startup the control, portability, and lower costs of
-            Kubernetes, without the foot-guns, the specialist hires, or the
-            months of setup. Define your stack once; Kix checks it, previews
-            every change, and deploys it to your cloud or your customer's.
-            Broken configs don't ship.
+            Define your stack once; Kix checks it, previews every change, and
+            deploys it to your cloud or your customer's. Broken configs don't
+            ship.
           </p>
         </Reveal>
         <Reveal delay={3}>

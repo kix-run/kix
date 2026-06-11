@@ -125,11 +125,10 @@ export default function Mechanism() {
             </h3>
             <p className="mt-2 leading-relaxed text-muted-foreground">
               Kix compiles to plain Kubernetes resources on a plain Kubernetes
-              cluster: EKS, GKE, DigitalOcean, Hetzner, bare metal, or your
-              customer's VPC.
-              You can inspect every line it produces, and if you ever leave,
-              you keep a working cluster and standard manifests. Leaving Kix
-              means losing the tooling, not your infrastructure.
+              cluster, yours or your customer's. You can inspect every line it
+              produces, and if you ever leave, you keep a working cluster and
+              standard manifests. Leaving Kix means losing the tooling, not
+              your infrastructure.
             </p>
           </div>
         </Reveal>

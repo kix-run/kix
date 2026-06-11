@@ -15,7 +15,7 @@ const items: { question: string; answer: string }[] = [
   {
     question: "What does Kix actually run on?",
     answer:
-      "Any conformant Kubernetes cluster: EKS, GKE, AKS, DigitalOcean, or your customer's environment. DigitalOcean's managed Kubernetes is a cheap, simple place to start. Kix compiles your definition into standard resources and deploys them; it doesn't replace your cluster. Bare metal is supported through an add-on whose vertical integration knows the hardware and networking of providers like Hetzner and OVH, including custom network configurations where needed.",
+      "Any conformant Kubernetes cluster: EKS, GKE, AKS, DigitalOcean, or your customer's environment. Kix compiles your definition into standard resources and deploys them; it doesn't replace your cluster. Bare metal is supported through an add-on that knows the hardware and networking of providers like Hetzner and OVH.",
   },
   {
     question: "Can we deploy into a customer's VPC or data center?",
@@ -25,7 +25,7 @@ const items: { question: string; answer: string }[] = [
   {
     question: "What happens if we leave Kix?",
     answer:
-      "You keep a working cluster and standard Kubernetes manifests. Kix compiles to plain Kubernetes resources: read them, audit them, take them with you. Leaving Kix is losing a tool, not replatforming.",
+      "You keep a working cluster and standard Kubernetes manifests: leaving Kix is losing a tool, not replatforming.",
   },
   {
     question: "Is Kix open source?",

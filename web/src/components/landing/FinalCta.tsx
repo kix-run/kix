@@ -107,6 +107,13 @@ export default function FinalCta() {
                     </li>
                   ))}
                 </ul>
+                <p className="mt-7 text-sm leading-relaxed text-zinc-400">
+                  Migrating something gnarly, like years of Heroku history or
+                  a tangle of half-documented services? Mention it in the
+                  notes and we'll pair you with a Kix migration partner. The
+                  partner's job is to leave your team running it, not to stay
+                  on retainer.
+                </p>
               </div>
 
               <div className="mt-10 rounded-2xl bg-card p-6 text-foreground shadow-2xl ring-1 ring-foreground/10 sm:p-8 lg:mt-0">

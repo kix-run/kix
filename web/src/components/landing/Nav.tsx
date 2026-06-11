@@ -4,7 +4,6 @@ import { Container } from "@/components/landing/primitives"
 const links = [
   { href: "#why-kubernetes", label: "Why Kubernetes" },
   { href: "#customer-infra", label: "Customer-hosted" },
-  { href: "#use-cases", label: "Use cases" },
   { href: "#how-it-works", label: "How it works" },
   { href: "#faq", label: "FAQ" },
 ]

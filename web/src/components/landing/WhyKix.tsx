@@ -42,11 +42,8 @@ export default function WhyKix() {
             <p className="text-lg leading-relaxed text-muted-foreground">
               Kix removes that price. You describe your stack in one place,
               at a level your whole team can read: services, databases,
-              ingress, certificates. Kix checks every selector, reference,
-              and dependency before anything touches the cluster, and shows
-              you exactly what will change before it changes. The mistakes
-              that normally need a specialist to catch don't make it past
-              your laptop.
+              ingress, certificates. The mistakes that normally need a
+              specialist to catch don't make it past your laptop.
             </p>
           </Reveal>
         </div>

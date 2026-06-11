@@ -1,9 +1,7 @@
 import {
-  CircleDollarSign,
   Globe,
   SlidersHorizontal,
   TrendingUp,
-  Unlock,
   type LucideIcon,
 } from "lucide-react"
 import { Container, Reveal, SectionHeading } from "@/components/landing/primitives"
@@ -19,15 +17,9 @@ type Card = {
 const cards: Card[] = [
   {
     title: "Run anywhere, including your customer's infrastructure",
-    body: 'Kubernetes runs the same on AWS, GCP, Hetzner, and on-prem hardware. When an enterprise customer says "this has to run in our environment," you say yes instead of starting a replatforming project.',
+    body: 'Kubernetes runs the same on AWS, GCP, Hetzner, and on-prem hardware. When an enterprise customer says "this has to run in our environment," you say yes instead of starting a replatforming project. Switching clouds becomes a migration, not a rewrite.',
     icon: Globe,
-    span: "md:col-span-3",
-  },
-  {
-    title: "Cut your compute bill",
-    body: "PaaS pricing carries a heavy markup on the underlying machines. On Kubernetes you run on raw cloud instances or bare metal, and pay for compute, not convenience. The exact numbers are in the comparison below.",
-    icon: CircleDollarSign,
-    span: "md:col-span-3",
+    span: "md:col-span-2",
   },
   {
     title: "Own your stack",
@@ -39,12 +31,6 @@ const cards: Card[] = [
     title: "Scale without re-architecting",
     body: "The platform that runs your two services today runs two hundred later. Autoscaling, rolling deploys, and self-healing are built in.",
     icon: TrendingUp,
-    span: "md:col-span-2",
-  },
-  {
-    title: "Stay vendor-independent",
-    body: "Kubernetes is open source and runs everywhere. Switching clouds becomes a migration, not a rewrite: negotiating leverage today, sovereignty and compliance options later.",
-    icon: Unlock,
     span: "md:col-span-2",
   },
 ]
