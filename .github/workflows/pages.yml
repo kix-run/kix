@@ -5,8 +5,14 @@ name: Deploy site to GitHub Pages
 # Pages artifact:
 #
 #   kixops.dev/             ← web/ (Vite build)
+#   kixops.dev/alt/         ← web/ at ALT_REF (pre-refactor variant)
 #   kixops.dev/docs/        ← docs site (current tree)
 #   kixops.dev/docs/v0.1/   ← starlight-versions snapshot
+#
+# /alt/ serves an alternate landing page built from a pinned ref, for
+# A/B comparison. Vite's --base flag rewrites all asset paths, so the
+# old build works untouched under the subdirectory. Update or remove
+# the ALT_REF env on the build step to change/retire it.
 #
 # kix-examples is a separate private repo (kix-ops/kix-examples) used
 # by the snippet pipeline. CI checks it out with a PAT and overrides
@@ -127,6 +133,18 @@ jobs:
           npm ci
           npm run build
 
+      - name: Build alternate landing page (served at /alt/)
+        working-directory: kixpkgs
+        env:
+          # Pre-refactor landing page ("Kubernetes any developer can
+          # run." hero), kept live for comparison.
+          ALT_REF: c23ac31057e0be29e81ef914cf76c87fa6953637
+        run: |
+          git worktree add ../web-alt "$ALT_REF"
+          cd ../web-alt/web
+          npm ci
+          npx vite build --base=/alt/
+
       - name: Build docs site
         working-directory: kixpkgs
         run: |
@@ -144,6 +162,8 @@ jobs:
         run: |
           mkdir -p _site
           cp -r kixpkgs/web/dist/. _site/
+          mkdir -p _site/alt
+          cp -r web-alt/web/dist/. _site/alt/
           # Pages custom-domain marker; must live at the artifact root.
           echo "kixops.dev" > _site/CNAME
           mkdir -p _site/docs
