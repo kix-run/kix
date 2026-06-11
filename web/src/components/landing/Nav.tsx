@@ -2,9 +2,9 @@ import { Button } from "@/components/ui/button"
 import { Container } from "@/components/landing/primitives"
 
 const links = [
-  { href: "#why-kubernetes", label: "Why Kubernetes" },
-  { href: "#customer-infra", label: "Customer-hosted" },
+  { href: "#use-cases", label: "Use cases" },
   { href: "#how-it-works", label: "How it works" },
+  { href: "#why-we-built-it", label: "Why we built it" },
   { href: "#faq", label: "FAQ" },
 ]
 

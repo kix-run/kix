@@ -2,8 +2,8 @@ import { Container } from "@/components/landing/primitives"
 
 // TODO: restore a contact email link once a kixops.dev mailbox exists.
 const links = [
+  { href: "#use-cases", label: "Use cases" },
   { href: "#how-it-works", label: "How it works" },
-  { href: "#customer-infra", label: "Customer-hosted" },
   { href: "#faq", label: "FAQ" },
 ]
 
@@ -20,7 +20,7 @@ export default function Footer() {
               <span className="size-1.5 rounded-full bg-brand" />
             </div>
             <p className="mt-2 text-sm text-muted-foreground">
-              Kubernetes any developer can run.
+              Kix is a Kubernetes compiler.
             </p>
           </div>
           <div className="flex gap-6 text-sm text-muted-foreground">

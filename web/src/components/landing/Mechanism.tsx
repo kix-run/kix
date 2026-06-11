@@ -1,4 +1,17 @@
-import { Bot, ShieldCheck } from "lucide-react"
+import {
+  Activity,
+  ArrowLeftRight,
+  Bot,
+  Check,
+  Database,
+  DatabaseBackup,
+  FileCheck,
+  KeyRound,
+  Network,
+  ShieldCheck,
+  UserCheck,
+  type LucideIcon,
+} from "lucide-react"
 import {
   Container,
   Reveal,
@@ -57,28 +70,153 @@ const checkLines: TerminalLine[] = [
   { tokens: [{ t: "  ✓ 0 errors, safe to preview", c: "ok" }] },
 ]
 
-const steps = [
+const previewLines: TerminalLine[] = [
+  { tokens: [{ t: "$ kix diff production", c: "p" }] },
   {
-    title: "Define",
-    body: "Describe your whole stack in one declarative definition. Concise, readable, reviewable in a pull request.",
+    tokens: [
+      { t: "  " },
+      { t: "✓", c: "ok" },
+      { t: " evaluated 47 resources across 12 packages" },
+    ],
   },
+  { tokens: [{ t: "  " }, { t: "✓ 0 errors", c: "ok" }] },
+  { tokens: [] },
+  { tokens: [{ t: "  " }, { t: "~", c: "wn" }, { t: " Deployment api" }] },
   {
-    title: "Check",
-    body: "Kix evaluates the entire configuration and catches errors at compile time. Feedback in seconds, locally, before CI and before deploy.",
+    tokens: [
+      { t: "      image: registry.io/api:v1.4.2 → " },
+      { t: "v1.5.0", c: "str" },
+    ],
   },
+  { tokens: [{ t: "  " }, { t: "+", c: "ok" }, { t: " Secret stripe-keys" }] },
+  { tokens: [] },
+  { tokens: [{ t: "  2 changes, 45 resources unchanged." }] },
+  { tokens: [{ t: "$ kix deploy production", c: "p" }] },
   {
-    title: "Preview",
-    body: 'See the exact diff between your definition and the live cluster. No "apply and pray."',
-  },
-  {
-    title: "Deploy",
-    body: "Ship the verified artifact, exactly as previewed.",
+    tokens: [
+      { t: "  " },
+      { t: "✓ deployed: cluster matches your definition", c: "ok" },
+    ],
   },
 ]
 
+const steps = [
+  {
+    title: "Define",
+    body: "Describe your whole stack in one file: services, databases, domains, environments. Short enough to review in a pull request.",
+  },
+  {
+    title: "Compile",
+    body: "Kix compiles it into everything a production cluster needs: deployments, network policies, security policies, storage, backups, certificates. Mistakes fail the build on your laptop, not in production.",
+  },
+  {
+    title: "Run",
+    body: "Deploy and get a running cluster that matches your definition. Before anything changes, you see the exact diff.",
+  },
+  {
+    title: "Operate",
+    body: "Day two is the same loop. Change the file, compile, deploy. Upgrades, migrations, and scaling are edits, not projects.",
+  },
+]
+
+const features: { title: string; body: string; icon: LucideIcon }[] = [
+  {
+    title: "Backups",
+    body: "backup.enabled = true: scheduled, stored off-cluster, restorable.",
+    icon: DatabaseBackup,
+  },
+  {
+    title: "Integrated secrets",
+    body: "Defined once in your stack, injected wherever they're referenced. No hand-rolled vault setup.",
+    icon: KeyRound,
+  },
+  {
+    title: "Monitoring & alerting",
+    body: "Metrics, dashboards, and alert rules wired in from day one, not bolted on later.",
+    icon: Activity,
+  },
+  {
+    title: "Automated migrations",
+    body: "Stateful workloads move within the cluster, or to another cluster on another provider.",
+    icon: ArrowLeftRight,
+  },
+  {
+    title: "Human-in-the-loop fixes",
+    body: "When something breaks, Kix knows your whole stack and proposes the fix. You approve it, not diagnose it.",
+    icon: UserCheck,
+  },
+  {
+    title: "Managed services in-cluster",
+    body: "Production Postgres and Redis on machines you already pay for, operator-run.",
+    icon: Database,
+  },
+  {
+    title: "Network & security policies",
+    body: "Generated from what your definition says talks to what. You never write Cilium rules.",
+    icon: Network,
+  },
+  {
+    title: "Compliance evidence",
+    body: "Audit evidence as a build output: SBOM, provenance, findings mapped to your framework.",
+    icon: FileCheck,
+  },
+  {
+    title: "Agent compatible",
+    body: "MCP server, docs as markdown, errors an agent can read and act on.",
+    icon: Bot,
+  },
+]
+
+const agentFacilities = [
+  <>MCP server for checks, schemas, and package discovery</>,
+  <>Docs available as markdown and via MCP</>,
+  <>Errors an agent can read and act on</>,
+  <>Compact, typed definitions agents write well</>,
+]
+
+function AgentLoop() {
+  return (
+    <div className="overflow-hidden rounded-xl border border-border bg-card shadow-xl shadow-zinc-950/5 ring-1 ring-foreground/5">
+      <div className="flex items-center gap-2 border-b border-border bg-muted/50 px-4 py-2">
+        <span className="size-3 rounded-full bg-border" />
+        <span className="size-3 rounded-full bg-border" />
+        <span className="size-3 rounded-full bg-border" />
+        <span className="ml-2 font-mono text-xs text-muted-foreground">
+          kix + your agent
+        </span>
+      </div>
+      <pre className="overflow-x-auto px-5 py-4 font-mono text-[0.8rem] leading-relaxed">
+        <code>
+          <span className="block">
+            <span className="text-muted-foreground/70">❱ </span>
+            <span className="text-foreground/90">
+              "Add a Redis cache to staging"
+            </span>
+          </span>
+          <span className="block text-muted-foreground">
+            {"  agent writes instances.app.redis"}
+          </span>
+          <span className="block text-muted-foreground">
+            {"  agent runs kix check"}
+          </span>
+          <span className="block text-destructive">
+            {"  ✗ secret redis-auth is not defined"}
+          </span>
+          <span className="block text-muted-foreground">
+            {"  agent securely adds the secret, checks again"}
+          </span>
+          <span className="block text-brand">
+            {"  ✓ 0 errors, safe to preview"}
+          </span>
+        </code>
+      </pre>
+    </div>
+  )
+}
+
 export default function Mechanism() {
   return (
-    <section id="how-it-works" className="bg-(--surface-tint) py-24 sm:py-28">
+    <section id="how-it-works" className="py-24 sm:py-28">
       <Container>
         <SectionHeading
           kicker="How it works"
@@ -103,38 +241,88 @@ export default function Mechanism() {
           ))}
         </div>
 
-        <Reveal delay={1} className="mt-14">
-          <Terminal
-            title="kix check"
-            lines={checkLines}
-            className="mx-auto max-w-3xl"
-          />
-          <p className="mt-3 text-center text-xs text-muted-foreground">
-            The selector typo that raw kubectl ships to production, Kix refuses
-            to compile.
+        <div className="mt-14 grid items-start gap-8 lg:grid-cols-2">
+          <Reveal delay={1}>
+            <Terminal title="kix check" lines={checkLines} />
+            <p className="mt-3 text-center text-xs text-muted-foreground">
+              The selector typo that raw kubectl ships to production, Kix
+              refuses to compile.
+            </p>
+          </Reveal>
+          <Reveal delay={2}>
+            <Terminal title="kix diff" lines={previewLines} />
+            <p className="mt-3 text-center text-xs text-muted-foreground">
+              Preview the exact changes before they happen. What you previewed
+              is what runs.
+            </p>
+          </Reveal>
+        </div>
+
+        <Reveal delay={1} className="mt-20">
+          <h3 className="text-balance text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
+            Handled for you
+          </h3>
+          <p className="mt-2 max-w-2xl text-muted-foreground">
+            Somewhere in this list is the thing you never wanted to deal with
+            again.
           </p>
         </Reveal>
+        <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {features.map((feature, i) => (
+            <Reveal key={feature.title} delay={i % 3}>
+              <div className="h-full rounded-2xl border border-border bg-card p-6">
+                <div className="flex size-9 items-center justify-center rounded-lg bg-brand-soft text-brand">
+                  <feature.icon className="size-4.5" />
+                </div>
+                <h4 className="mt-4 font-semibold tracking-tight text-foreground">
+                  {feature.title}
+                </h4>
+                <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
+                  {feature.body}
+                </p>
+              </div>
+            </Reveal>
+          ))}
+        </div>
 
-        <Reveal delay={2}>
-          <div className="mx-auto mt-14 max-w-3xl rounded-2xl border border-border bg-card p-7 sm:p-8">
+        <div
+          id="agents"
+          className="mt-20 grid items-center gap-10 scroll-mt-24 lg:grid-cols-2 lg:gap-16"
+        >
+          <Reveal>
             <div className="flex size-9 items-center justify-center rounded-lg bg-brand-soft text-brand">
               <Bot className="size-4.5" />
             </div>
-            <h3 className="mt-4 font-semibold text-foreground">
+            <h3 className="mt-4 text-balance text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
               Bring your coding agent.
             </h3>
-            <p className="mt-2 leading-relaxed text-muted-foreground">
+            <p className="mt-3 leading-relaxed text-muted-foreground">
               Agents write Kix well: the definition is compact and typed, and
               kix check gives an agent the same fast, local feedback it gives
               you. A hallucinated selector doesn't reach your cluster; it
               fails to compile, the agent reads the error and fixes it before
               you ever see it.
             </p>
-          </div>
-        </Reveal>
+            <ul className="mt-5 space-y-2 text-sm text-muted-foreground">
+              {agentFacilities.map((item, i) => (
+                <li key={i} className="flex items-start gap-2.5">
+                  <Check className="mt-0.5 size-4 shrink-0 text-brand" />
+                  <span>{item}</span>
+                </li>
+              ))}
+            </ul>
+          </Reveal>
+          <Reveal delay={1}>
+            <AgentLoop />
+            <p className="mt-3 text-center text-xs text-muted-foreground">
+              Your agent writes it, Kix checks every line. You review the
+              preview and deploy.
+            </p>
+          </Reveal>
+        </div>
 
-        <Reveal delay={3}>
-          <div className="mx-auto mt-4 max-w-3xl rounded-2xl border border-border bg-card p-7 sm:p-8">
+        <Reveal delay={1}>
+          <div className="mx-auto mt-16 max-w-3xl rounded-2xl border border-border bg-card p-7 sm:p-8">
             <div className="flex size-9 items-center justify-center rounded-lg bg-brand-soft text-brand">
               <ShieldCheck className="size-4.5" />
             </div>

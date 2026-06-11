@@ -56,7 +56,7 @@ const items: { question: string; answer: string }[] = [
 
 export default function Faq() {
   return (
-    <section id="faq" className="bg-(--surface-tint) py-24 sm:py-28">
+    <section id="faq" className="py-24 sm:py-28">
       <Container className="lg:grid lg:grid-cols-12 lg:gap-16">
         <SectionHeading
           kicker="FAQ"

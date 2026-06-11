@@ -49,5 +49,12 @@ entries here whenever Adam corrects writing style.
   Scoped falsifiable claims ("broken configs don't ship", "mistakes surface
   before deploy") are fine.
 - The resonant subtraction is *specialists*, not headcount generally.
-  Current H1: "Kubernetes any developer can run." (alternates parked in a
-  comment in Hero.tsx).
+- Current H1 (per 2026-06-11 meeting with Luca and Sebi): "Getting shit done
+  with Kubernetes." with "Kix is a Kubernetes compiler." as the subheadline.
+  The H1 is the claim that filters the audience; the compiler line is the
+  intrigue hook. Prior H1s ("Kubernetes any developer can run." and friends)
+  are parked in a comment in Hero.tsx. The page <title> stays profanity-free:
+  "Kix | The Kubernetes compiler".
+- The landing page tells one storyline: we felt the pain, tried the tools,
+  built a Kubernetes compiler. New sections should serve that arc, not
+  restart it.

@@ -1,12 +1,10 @@
 import Nav from "@/components/landing/Nav"
 import Hero from "@/components/landing/Hero"
-import WhyKubernetes from "@/components/landing/WhyKubernetes"
-import CostComparison from "@/components/landing/CostComparison"
-import WhyKix from "@/components/landing/WhyKix"
-import StatefulServices from "@/components/landing/StatefulServices"
-import Compliance from "@/components/landing/Compliance"
-import CustomerInfra from "@/components/landing/CustomerInfra"
+import UseCases from "@/components/landing/UseCases"
 import Mechanism from "@/components/landing/Mechanism"
+import Ecosystem from "@/components/landing/Ecosystem"
+import FromPaas from "@/components/landing/FromPaas"
+import WhyWeBuilt from "@/components/landing/WhyWeBuilt"
 import Faq from "@/components/landing/Faq"
 import FinalCta from "@/components/landing/FinalCta"
 import Footer from "@/components/landing/Footer"
@@ -17,13 +15,11 @@ export default function Landing() {
       <Nav />
       <main>
         <Hero />
-        <WhyKubernetes />
-        <CustomerInfra />
-        <CostComparison />
-        <WhyKix />
+        <UseCases />
         <Mechanism />
-        <StatefulServices />
-        <Compliance />
+        <Ecosystem />
+        <FromPaas />
+        <WhyWeBuilt />
         <Faq />
         <FinalCta />
       </main>
