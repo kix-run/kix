@@ -1,8 +1,8 @@
 import { useState } from "react"
-import { ArrowDown, ArrowRight, Bot, Check } from "lucide-react"
+import { ArrowDown, ArrowRight, Check } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { cn } from "@/lib/utils"
 import {
+  AgentToggle,
   Container,
   Eyebrow,
   Reveal,
@@ -174,26 +174,10 @@ function CodeCard({
           <span className="ml-2 font-mono text-xs text-muted-foreground">
             {view === "code" ? "stack.nix" : "kix + your agent"}
           </span>
-          <button
-            type="button"
-            aria-pressed={view === "agent"}
+          <AgentToggle
+            active={view === "agent"}
             onClick={() => setView(view === "code" ? "agent" : "code")}
-            className={cn(
-              "relative ml-auto inline-flex cursor-pointer items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold transition-all",
-              view === "code"
-                ? "bg-brand text-primary-foreground shadow-md shadow-brand/30 hover:scale-[1.04]"
-                : "bg-muted text-muted-foreground hover:text-foreground",
-            )}
-          >
-            {view === "code" && (
-              <span className="absolute -right-0.5 -top-0.5 flex size-2.5">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand opacity-70" />
-                <span className="relative inline-flex size-2.5 rounded-full bg-brand ring-2 ring-card" />
-              </span>
-            )}
-            <Bot className="size-3.5" />
-            {view === "code" ? "Using a coding agent?" : "Show the code"}
-          </button>
+          />
         </div>
         {view === "code" ? (
           <pre className="overflow-x-auto px-5 py-4 font-mono text-[0.8rem] leading-relaxed">

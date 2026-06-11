@@ -1,4 +1,10 @@
-import { Container, Reveal, SectionHeading } from "@/components/landing/primitives"
+import { useState } from "react"
+import {
+  AgentToggle,
+  Container,
+  Reveal,
+  SectionHeading,
+} from "@/components/landing/primitives"
 
 // Token color shorthands matching the hero's hand-tokenized nix snippet.
 const K = "text-foreground/75" // keys
@@ -6,17 +12,84 @@ const V = "text-brand" // values / strings
 const P = "text-muted-foreground/70" // punctuation
 const R = "text-(--code-ref)" // references
 
-function CodeCard() {
+type PaneView = "code" | "agent"
+
+function AgentPane() {
+  return (
+    <div className="px-5 py-4">
+      <pre className="overflow-x-auto font-mono text-[0.8rem] leading-relaxed">
+        <code>
+          <span className="block">
+            <span className="text-muted-foreground/70">❱ </span>
+            <span className="text-foreground/90">
+              "Add a production database for the api"
+            </span>
+          </span>
+          <span className="block text-muted-foreground">
+            {'  agent: "Postgres or MySQL? For Postgres I'}
+          </span>
+          <span className="block text-muted-foreground">
+            {'          can use CloudNativePG or StackGres"'}
+          </span>
+          <span className="block">
+            <span className="text-muted-foreground/70">❱ </span>
+            <span className="text-foreground/90">
+              "Postgres 18 on StackGres"
+            </span>
+          </span>
+          <span className="block text-muted-foreground">
+            {"  agent writes instances.data.postgres"}
+          </span>
+          <span className="block text-muted-foreground">
+            {"  agent runs kix check"}
+          </span>
+          <span className="block text-destructive">
+            {"  ✗ production stateful service has no backup configured"}
+          </span>
+          <span className="block text-muted-foreground">
+            {"  agent sets backup.enabled = true, checks again"}
+          </span>
+          <span className="block text-brand">
+            {"  ✓ 0 errors, safe to preview"}
+          </span>
+        </code>
+      </pre>
+      <div className="mt-4 border-t border-border pt-4">
+        <p className="text-sm leading-relaxed text-muted-foreground">
+          The agent picks from Kix's package library, so it only offers
+          what it can deploy. What it writes passes the same checks as what
+          you write: storage, backups, and failover wiring are verified
+          before anything touches the cluster.
+        </p>
+      </div>
+    </div>
+  )
+}
+
+function CodeCard({
+  view,
+  setView,
+}: {
+  view: PaneView
+  setView: (v: PaneView) => void
+}) {
   return (
     <div className="overflow-hidden rounded-xl border border-border bg-card shadow-xl shadow-zinc-950/5 ring-1 ring-foreground/5">
-      <div className="flex items-center gap-2 border-b border-border bg-muted/50 px-4 py-3">
+      <div className="flex items-center gap-2 border-b border-border bg-muted/50 px-4 py-2">
         <span className="size-3 rounded-full bg-border" />
         <span className="size-3 rounded-full bg-border" />
         <span className="size-3 rounded-full bg-border" />
         <span className="ml-2 font-mono text-xs text-muted-foreground">
-          stack.nix
+          {view === "code" ? "stack.nix" : "kix + your agent"}
         </span>
+        <AgentToggle
+          active={view === "agent"}
+          onClick={() => setView(view === "code" ? "agent" : "code")}
+        />
       </div>
+      {view === "agent" ? (
+        <AgentPane />
+      ) : (
       <pre className="overflow-x-auto px-5 py-4 font-mono text-[0.8rem] leading-relaxed">
         <code>
           <span className="block">
@@ -32,6 +105,12 @@ function CodeCard() {
           <span className="block">
             <span className={K}>{"  config"}</span>
             <span className={P}>{" = {"}</span>
+          </span>
+          <span className="block">
+            <span className={K}>{"    version"}</span>
+            <span className={P}>{"                = "}</span>
+            <span className={V}>18</span>
+            <span className={P}>;</span>
           </span>
           <span className="block">
             <span className={K}>{"    instanceProfile.cpu"}</span>
@@ -85,6 +164,7 @@ function CodeCard() {
           </span>
         </code>
       </pre>
+      )}
     </div>
   )
 }
@@ -105,6 +185,7 @@ const points = [
 ]
 
 export default function StatefulServices() {
+  const [view, setView] = useState<PaneView>("code")
   return (
     <section id="stateful" className="bg-(--surface-tint) py-24 sm:py-28">
       <Container>
@@ -116,10 +197,11 @@ export default function StatefulServices() {
 
         <div className="mt-14 grid items-start gap-10 lg:grid-cols-2 lg:gap-16">
           <Reveal>
-            <CodeCard />
+            <CodeCard view={view} setView={setView} />
             <p className="mt-3 text-center text-xs text-muted-foreground">
-              A production database with scheduled backups, in one reviewable
-              block.
+              {view === "code"
+                ? "A production database with scheduled backups, in one reviewable block."
+                : "Stateful mistakes fail the check, not your database."}
             </p>
           </Reveal>
 

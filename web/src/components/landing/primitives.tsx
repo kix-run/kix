@@ -1,5 +1,6 @@
 import { type ReactNode } from "react"
 import { motion, type Variants } from "motion/react"
+import { Bot } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 export function Container({
@@ -105,6 +106,41 @@ export function SectionHeading({
         </div>
       </Reveal>
     </div>
+  )
+}
+
+/**
+ * Pane-header pill that flips a code example into its agent view.
+ * Loud (brand fill + ping dot) until activated, quiet afterwards.
+ */
+export function AgentToggle({
+  active,
+  onClick,
+}: {
+  active: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      onClick={onClick}
+      className={cn(
+        "relative ml-auto inline-flex cursor-pointer items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold transition-all",
+        active
+          ? "bg-muted text-muted-foreground hover:text-foreground"
+          : "bg-brand text-primary-foreground shadow-md shadow-brand/30 hover:scale-[1.04]",
+      )}
+    >
+      {!active && (
+        <span className="absolute -right-0.5 -top-0.5 flex size-2.5">
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand opacity-70" />
+          <span className="relative inline-flex size-2.5 rounded-full bg-brand ring-2 ring-card" />
+        </span>
+      )}
+      <Bot className="size-3.5" />
+      {active ? "Show the code" : "Using a coding agent?"}
+    </button>
   )
 }
 
