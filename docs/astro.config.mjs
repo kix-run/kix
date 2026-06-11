@@ -33,6 +33,8 @@ export default defineConfig({
     starlight({
       title: 'Kix',
       description: 'Nix-evaluated Kubernetes packages and clusters',
+      // Lagoon palette shared with the homepage (web/src/index.css).
+      customCss: ['./src/styles/lagoon.css'],
       components: {
         // Replace the default theme dropdown (laptop icon labelled
         // "Auto") with three explicit Light/Dark/Auto icon buttons.
