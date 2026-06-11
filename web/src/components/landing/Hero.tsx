@@ -188,7 +188,7 @@ export default function Hero() {
               "Kubernetes any developer can run."
               "Run Kubernetes without becoming the expert."
               "Kubernetes, no expert required." */}
-          <h1 className="bg-gradient-to-br from-foreground from-40% to-foreground/70 bg-clip-text pb-1 text-balance text-5xl font-semibold leading-[1.02] tracking-tighter text-transparent sm:text-6xl md:text-7xl">
+          <h1 className="bg-gradient-to-br from-foreground from-40% to-foreground/50 bg-clip-text pb-1 text-balance text-5xl font-semibold leading-[1.02] tracking-tighter text-transparent sm:text-6xl md:text-7xl">
             Getting shit done with Kubernetes.
           </h1>
         </Reveal>

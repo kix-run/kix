@@ -142,7 +142,7 @@ jobs:
           ALT1_REF: c23ac31057e0be29e81ef914cf76c87fa6953637
           # alt2: compiler-fact H1 variant ("The Kubernetes compiler."
           # hero), branch variant/compiler-h1.
-          ALT2_REF: 97e699ad365272e538cb6e1598e0fe96fe36554a
+          ALT2_REF: d789dba65a056f15d8f46023e9e534714aa7ae85
         run: |
           build_alt() {
             local name="$1" ref="$2"
