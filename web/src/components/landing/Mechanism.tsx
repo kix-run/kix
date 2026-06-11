@@ -84,7 +84,7 @@ const previewLines: TerminalLine[] = [
   { tokens: [{ t: "  " }, { t: "~", c: "wn" }, { t: " Deployment api" }] },
   {
     tokens: [
-      { t: "      image: registry.io/api:v1.4.2 → " },
+      { t: "      image: ghcr.io/acme-co/api:v1.4.2 → " },
       { t: "v1.5.0", c: "str" },
     ],
   },

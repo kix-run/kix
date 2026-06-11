@@ -1,59 +1,96 @@
-import { ArrowRight, Bot, RefreshCcw } from "lucide-react"
+import {
+  ArrowRight,
+  BadgeCheck,
+  Bot,
+  ChevronRight,
+  FileCode2,
+  RefreshCcw,
+  Rocket,
+  type LucideIcon,
+} from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Container, Reveal } from "@/components/landing/primitives"
 
 // Token color shorthands for the hand-tokenized nix snippet.
-const K = "text-foreground/75" // keys
-const V = "text-brand" // values / strings
-const P = "text-muted-foreground/70" // punctuation
-const C = "text-muted-foreground/70 italic" // comments
-const R = "text-(--code-ref)" // references
+// The hero card is terminal-dark in both color schemes, so these are fixed.
+const K = "text-zinc-300" // keys
+const V = "text-(--brand-on-dark)" // values / strings
+const P = "text-zinc-500" // punctuation
+const C = "text-zinc-500 italic" // comments
+const R = "text-[#86bbd8]" // references
 
-const heroSteps = ["Define your stack", "Compile & check", "Deploy, verified"]
+const heroSteps: { label: string; icon: LucideIcon }[] = [
+  { label: "Define your stack", icon: FileCode2 },
+  { label: "Compile & check", icon: BadgeCheck },
+  { label: "Deploy verified", icon: Rocket },
+]
+
+function StepConnector({ dashed = false }: { dashed?: boolean }) {
+  return (
+    <span className="hidden items-center sm:inline-flex" aria-hidden>
+      <span
+        className={
+          dashed
+            ? "w-5 border-t border-dashed border-brand/50"
+            : "h-px w-5 bg-brand/40"
+        }
+      />
+      <ChevronRight className="-ml-1.5 size-3.5 text-brand/70" />
+    </span>
+  )
+}
 
 function StepsStrip() {
   return (
-    <div>
-      <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-2 text-[0.95rem] font-medium text-foreground/90">
-        {heroSteps.map((step, i) => (
-          <span key={step} className="inline-flex items-center gap-3">
-            {i > 0 && <ArrowRight className="size-4 text-brand" />}
-            {step}
+    <div className="flex flex-wrap items-center justify-center gap-x-1.5 gap-y-3">
+      {heroSteps.map((step, i) => (
+        <span key={step.label} className="inline-flex items-center gap-x-1.5">
+          {i > 0 && <StepConnector />}
+          <span className="inline-flex items-center gap-2.5 rounded-full border border-border bg-card py-1.5 pl-2 pr-4 text-sm font-medium text-foreground shadow-sm ring-1 ring-foreground/5">
+            <span className="flex size-6.5 items-center justify-center rounded-full bg-brand-soft text-brand">
+              <step.icon className="size-3.5" />
+            </span>
+            {step.label}
           </span>
-        ))}
-        <span className="inline-flex items-center gap-3 text-muted-foreground">
-          <RefreshCcw className="size-4 text-brand" />
+        </span>
+      ))}
+      <span className="inline-flex items-center gap-x-1.5">
+        <StepConnector dashed />
+        <span className="inline-flex items-center gap-2.5 rounded-full border border-dashed border-brand/40 bg-brand-soft/40 py-1.5 pl-2 pr-4 text-sm font-medium text-foreground">
+          <span className="flex size-6.5 items-center justify-center rounded-full bg-brand-soft text-brand">
+            <RefreshCcw className="size-3.5" />
+          </span>
           Managed over time
         </span>
-      </div>
-      <p className="mx-auto mt-3 max-w-xl text-sm leading-relaxed text-muted-foreground">
-        Kix generates the parts you'd otherwise learn tool by tool:
-        deployments, network policies, security policies, storage, backups,
-        certificates.
-      </p>
+      </span>
     </div>
   )
 }
 
 function CodeCard() {
   return (
-    <div className="overflow-hidden rounded-xl border border-border bg-card text-left shadow-xl shadow-zinc-950/5 ring-1 ring-foreground/5">
-      <div className="flex items-center gap-2 border-b border-border bg-muted/50 px-4 py-2">
-        <span className="size-3 rounded-full bg-border" />
-        <span className="size-3 rounded-full bg-border" />
-        <span className="size-3 rounded-full bg-border" />
-        <span className="ml-2 font-mono text-xs text-muted-foreground">
-          stack.nix
+    <div className="relative">
+      <a
+        href="#agents"
+        className="absolute -top-3 right-4 z-10 inline-flex items-center gap-1.5 rounded-full bg-brand px-3 py-1.5 text-xs font-semibold text-primary-foreground shadow-md shadow-brand/40 transition-transform hover:scale-[1.04]"
+      >
+        <span className="absolute -right-0.5 -top-0.5 flex size-2.5">
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand opacity-70" />
+          <span className="relative inline-flex size-2.5 rounded-full bg-brand ring-2 ring-card" />
         </span>
-        <a
-          href="#agents"
-          className="ml-auto inline-flex items-center gap-1.5 rounded-full border border-brand/30 bg-brand-soft/70 px-2.5 py-1 text-xs font-semibold text-brand transition-colors hover:bg-brand-soft"
-        >
-          <Bot className="size-3.5" />
-          Agent compatible
-        </a>
-      </div>
-      <pre className="overflow-x-auto px-5 py-4 font-mono text-[0.8rem] leading-relaxed">
+        <Bot className="size-3.5" />
+        Agent compatible
+      </a>
+      <div className="overflow-hidden rounded-xl border border-zinc-800 bg-[#0b0f1a] text-left shadow-2xl shadow-emerald-950/25 ring-1 ring-white/10">
+        <div className="flex items-center gap-2 border-b border-zinc-800 bg-zinc-900/60 px-4 py-2.5">
+          <span className="size-3 rounded-full bg-zinc-700" />
+          <span className="size-3 rounded-full bg-zinc-700" />
+          <span className="size-3 rounded-full bg-zinc-700" />
+          <span className="ml-2 font-mono text-xs text-zinc-500">
+            stack.nix
+          </span>
+        </div>
+        <pre className="overflow-x-auto px-5 py-3.5 font-mono text-[0.875rem] leading-normal">
         <code>
           <span className="block">
             <span className={K}>instances.app.api</span>
@@ -72,7 +109,7 @@ function CodeCard() {
           <span className="block">
             <span className={K}>{"    image"}</span>
             <span className={P}>{"    = "}</span>
-            <span className={V}>{'"registry.io/api:v1.5.0"'}</span>
+            <span className={V}>{'"ghcr.io/acme-co/api:v1.5.0"'}</span>
             <span className={P}>;</span>
           </span>
           <span className="block">
@@ -90,7 +127,7 @@ function CodeCard() {
           <span className="block">
             <span className={K}>{"    ingress.host"}</span>
             <span className={P}>{"      = "}</span>
-            <span className={V}>{'"api.example.com"'}</span>
+            <span className={V}>{'"api.acme.co"'}</span>
             <span className={P}>;</span>
             <span className={C}>{"  # TLS handled"}</span>
           </span>
@@ -128,13 +165,20 @@ function CodeCard() {
           </span>
         </code>
       </pre>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-white/10 bg-white/[0.03] px-5 py-2.5 font-mono text-[0.72rem]">
+          <span className="text-zinc-500">$ kix check</span>
+          <span className="text-emerald-400">✓ compiled: 47 resources</span>
+          <span className="text-emerald-400">✓ 0 errors</span>
+          <span className="text-zinc-400">ready to deploy</span>
+        </div>
+      </div>
     </div>
   )
 }
 
 export default function Hero() {
   return (
-    <section className="relative overflow-hidden pt-16 pb-20 sm:pt-20">
+    <section className="relative overflow-hidden pt-14 pb-24">
       <div className="absolute inset-0 -z-10 bg-[linear-gradient(to_bottom,var(--background),var(--background)_55%,var(--hero-fade)_100%)]" />
       <div className="absolute inset-0 -z-10 h-[640px] w-full bg-[linear-gradient(to_right,var(--hero-grid)_1px,transparent_1px),linear-gradient(to_bottom,var(--hero-grid)_1px,transparent_1px)] bg-[size:6rem_5rem] opacity-70 [mask-image:radial-gradient(ellipse_80%_50%_at_50%_0%,#000_70%,transparent_110%)]" />
       <Container className="text-center">
@@ -144,7 +188,7 @@ export default function Hero() {
               "Kubernetes any developer can run."
               "Run Kubernetes without becoming the expert."
               "Kubernetes, no expert required." */}
-          <h1 className="bg-gradient-to-br from-foreground from-40% to-foreground/50 bg-clip-text pb-2 text-balance text-5xl font-semibold leading-[1.02] tracking-tighter text-transparent sm:text-6xl md:text-7xl">
+          <h1 className="bg-gradient-to-br from-foreground from-40% to-foreground/70 bg-clip-text pb-1 text-balance text-5xl font-semibold leading-[1.02] tracking-tighter text-transparent sm:text-6xl md:text-7xl">
             Getting shit done with Kubernetes.
           </h1>
         </Reveal>
@@ -157,23 +201,23 @@ export default function Hero() {
             running cluster, and keeps the cluster matching what you wrote.
           </p>
         </Reveal>
-        <Reveal delay={2} className="mt-9">
+        <Reveal delay={2} className="mt-10">
           <StepsStrip />
         </Reveal>
-        <div className="relative mx-auto mt-12 max-w-xl">
-          <div className="pointer-events-none absolute left-1/2 -z-10 h-[300px] w-[90%] -translate-x-1/2 scale-y-75 rounded-[50%] bg-[radial-gradient(ellipse_at_center,color-mix(in_srgb,var(--brand)_16%,transparent)_10%,transparent_60%)]" />
+        <div className="relative mt-12">
+          <div className="pointer-events-none absolute left-1/2 top-2 -z-10 h-[380px] w-[min(900px,96vw)] -translate-x-1/2 rounded-[50%] bg-[radial-gradient(ellipse_at_center,color-mix(in_srgb,var(--brand)_22%,transparent)_10%,transparent_60%)]" />
           <Reveal delay={3}>
-            <p className="mb-4 text-[0.95rem] font-medium text-foreground">
-              Everything it takes to deploy and run your whole stack:
-            </p>
-            <CodeCard />
-            <p className="mt-3 text-center text-xs text-muted-foreground">
-              App, database, ingress, TLS, backups. One reviewable file.
-            </p>
+            <div className="mx-auto max-w-2xl">
+              <p className="mb-4 text-[0.95rem] font-medium text-foreground">
+                Everything it takes to run this stack, in one reviewable
+                file:
+              </p>
+              <CodeCard />
+            </div>
           </Reveal>
         </div>
         <Reveal delay={4}>
-          <div className="mt-10">
+          <div className="mt-9">
             <Button size="lg" asChild>
               <a href="#early-access">
                 Get in touch
