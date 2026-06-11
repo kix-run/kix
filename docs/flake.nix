@@ -111,7 +111,7 @@
 
           # To regenerate after dep changes: set to lib.fakeHash, rebuild,
           # paste the "got: sha256-…" hash from the error.
-          npmDepsHash = "sha256-iZc+c56BhmITniDwKxrMW40KKagqHUf+RK/S8saNfMU=";
+          npmDepsHash = "sha256-ntG2bcEihgXHAReGECy9SG6Hzp3FDeZ1BA8QBzX7LN4=";
 
           # Astro/Starlight have no install scripts we care about; keep
           # the build hermetic.
