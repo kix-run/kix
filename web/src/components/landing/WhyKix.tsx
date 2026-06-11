@@ -5,7 +5,7 @@ const rawRows: string[] = [
   "Thousands of lines of hand-maintained YAML",
   "Mistakes surface in production",
   "Helm + Terraform + scripts + tribal knowledge",
-  "Platform engineers as gatekeepers",
+  "A specialist between every change and production",
   "Months to production-ready",
 ]
 
@@ -23,24 +23,23 @@ export default function WhyKix() {
       <Container>
         <SectionHeading
           kicker="Why Kix"
-          title="The usual price: a platform team you didn't plan to hire"
+          title="The usual price: becoming the Kubernetes expert"
         />
 
         <div className="mt-10 grid gap-x-16 gap-y-6 lg:grid-cols-2">
           <Reveal>
             <p className="text-lg leading-relaxed text-muted-foreground">
-              Adopting Kubernetes the normal way hands your team a long list
-              of ways to break production with a typo. A mismatched label
-              here, a missing dependency there, and you find out after
-              deploy. So companies hire platform engineers to stand between
-              developers and the cluster, and "we moved to Kubernetes"
-              becomes a headcount line. That headcount is what keeps startups
-              paying the PaaS prices in the comparison above.
+              The expensive part of Kubernetes is the expertise, not the
+              servers. A mismatched label or a missing dependency applies
+              cleanly and breaks in production. Catching it before deploy
+              takes a specialist, and a startup gets one by pulling a
+              developer off product. That barrier is what keeps startups
+              paying the PaaS prices above.
             </p>
           </Reveal>
           <Reveal delay={1}>
             <p className="text-lg leading-relaxed text-muted-foreground">
-              Kix removes that price. You describe your stack in one place,
+              Kix removes that barrier. You describe your stack in one place,
               at a level your whole team can read: services, databases,
               ingress, certificates. The mistakes that normally need a
               specialist to catch don't make it past your laptop.
@@ -96,7 +95,7 @@ export default function WhyKix() {
           <div className="mx-auto max-w-2xl text-center">
             <div className="mx-auto mb-16 h-px w-12 bg-brand" />
             <p className="text-balance font-display text-4xl italic text-foreground sm:text-5xl">
-              Kix turns Kubernetes from a team you hire into{" "}
+              Kix turns Kubernetes from a specialist skill into{" "}
               <span className="text-brand">a tool you run.</span>
             </p>
           </div>

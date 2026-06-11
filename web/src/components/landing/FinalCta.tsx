@@ -26,7 +26,7 @@ const useCaseOptions: { value: string; label: string }[] = [
   },
   {
     value: "no-platform-team",
-    label: "Adopting Kubernetes without hiring a platform team",
+    label: "Adopting Kubernetes without specialist expertise",
   },
   { value: "other", label: "Something else" },
 ]
