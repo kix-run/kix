@@ -197,8 +197,9 @@ export default function Hero() {
             Kix is a Kubernetes compiler.
           </p>
           <p className="mx-auto mt-3 max-w-2xl text-balance text-lg text-muted-foreground sm:text-xl">
-            Define your whole stack in one file. Kix compiles it into a
-            running cluster, and keeps the cluster matching what you wrote.
+            Describe your whole stack in one definition. Kix compiles it
+            into a running cluster that matches what you wrote, change
+            after change.
           </p>
         </Reveal>
         <Reveal delay={2} className="mt-10">
@@ -209,8 +210,8 @@ export default function Hero() {
           <Reveal delay={3}>
             <div className="mx-auto max-w-2xl">
               <p className="mb-4 text-[0.95rem] font-medium text-foreground">
-                Everything it takes to run this stack, in one reviewable
-                file:
+                Everything it takes to run this stack, short enough to
+                review:
               </p>
               <CodeCard />
             </div>

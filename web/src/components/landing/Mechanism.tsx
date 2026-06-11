@@ -103,7 +103,7 @@ const previewLines: TerminalLine[] = [
 const steps = [
   {
     title: "Define",
-    body: "Describe your whole stack in one file: services, databases, domains, environments. Short enough to review in a pull request.",
+    body: "Describe your whole stack in one definition: services, databases, domains, environments. Small enough to review in a pull request.",
   },
   {
     title: "Compile",
