@@ -5,14 +5,15 @@ name: Deploy site to GitHub Pages
 # Pages artifact:
 #
 #   kixops.dev/             ← web/ (Vite build)
-#   kixops.dev/alt/         ← web/ at ALT_REF (pre-refactor variant)
+#   kixops.dev/alt1/        ← web/ at ALT1_REF (pre-refactor variant)
+#   kixops.dev/alt2/        ← web/ at ALT2_REF (compiler-H1 variant)
 #   kixops.dev/docs/        ← docs site (current tree)
 #   kixops.dev/docs/v0.1/   ← starlight-versions snapshot
 #
-# /alt/ serves an alternate landing page built from a pinned ref, for
-# A/B comparison. Vite's --base flag rewrites all asset paths, so the
-# old build works untouched under the subdirectory. Update or remove
-# the ALT_REF env on the build step to change/retire it.
+# /alt1/ and /alt2/ serve alternate landing pages built from pinned
+# refs, for A/B comparison. Vite's --base flag rewrites all asset
+# paths, so each build works untouched under its subdirectory. Update
+# or remove the ALT*_REF envs on the build step to change/retire them.
 #
 # kix-examples is a separate private repo (kix-ops/kix-examples) used
 # by the snippet pipeline. CI checks it out with a PAT and overrides
@@ -133,17 +134,23 @@ jobs:
           npm ci
           npm run build
 
-      - name: Build alternate landing page (served at /alt/)
+      - name: Build alternate landing pages (served at /alt1/, /alt2/)
         working-directory: kixpkgs
         env:
-          # Pre-refactor landing page ("Kubernetes any developer can
-          # run." hero), kept live for comparison.
-          ALT_REF: c23ac31057e0be29e81ef914cf76c87fa6953637
+          # alt1: pre-refactor landing page ("Kubernetes any developer
+          # can run." hero).
+          ALT1_REF: c23ac31057e0be29e81ef914cf76c87fa6953637
+          # alt2: compiler-fact H1 variant ("The Kubernetes compiler."
+          # hero), branch variant/compiler-h1.
+          ALT2_REF: 97e699ad365272e538cb6e1598e0fe96fe36554a
         run: |
-          git worktree add ../web-alt "$ALT_REF"
-          cd ../web-alt/web
-          npm ci
-          npx vite build --base=/alt/
+          build_alt() {
+            local name="$1" ref="$2"
+            git worktree add "../web-$name" "$ref"
+            (cd "../web-$name/web" && npm ci && npx vite build --base="/$name/")
+          }
+          build_alt alt1 "$ALT1_REF"
+          build_alt alt2 "$ALT2_REF"
 
       - name: Build docs site
         working-directory: kixpkgs
@@ -162,8 +169,12 @@ jobs:
         run: |
           mkdir -p _site
           cp -r kixpkgs/web/dist/. _site/
+          mkdir -p _site/alt1 _site/alt2
+          cp -r web-alt1/web/dist/. _site/alt1/
+          cp -r web-alt2/web/dist/. _site/alt2/
+          # /alt/ briefly served the pre-refactor variant; redirect it.
           mkdir -p _site/alt
-          cp -r web-alt/web/dist/. _site/alt/
+          printf '<!doctype html><meta http-equiv="refresh" content="0; url=/alt1/">' > _site/alt/index.html
           # Pages custom-domain marker; must live at the artifact root.
           echo "kixops.dev" > _site/CNAME
           mkdir -p _site/docs
