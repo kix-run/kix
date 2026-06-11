@@ -305,8 +305,8 @@ export default function Hero() {
         <Reveal delay={2}>
           <p className="mx-auto mt-6 max-w-2xl text-balance text-lg text-muted-foreground sm:text-xl">
             Define your stack once; Kix checks it, previews every change, and
-            deploys it to your cloud or your customer's. Broken configs don't
-            ship.
+            deploys it to your cloud or your customer's. If it doesn't
+            compile, it can't deploy.
           </p>
         </Reveal>
         <Reveal delay={3}>

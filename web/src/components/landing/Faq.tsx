@@ -13,6 +13,11 @@ const items: { question: string; answer: string }[] = [
       "No. The definition you write is at the level of services, databases, and domains, and the defaults are production-grade out of the box. Kubernetes knowledge helps but isn't required.",
   },
   {
+    question: "What if we need a Kubernetes setting Kix doesn't expose?",
+    answer:
+      "You can always drop down. Definitions provide useful abstractions, but Kix works with standard Kubernetes manifest fields underneath. Any resource or field you would set by hand can be set in your definition too.",
+  },
+  {
     question: "Can Claude Code or Cursor write our Kix definition?",
     answer:
       "Yes, and it works well today. The definition is compact and typed, and Kix checks every selector, reference, and dependency an agent writes before deploy, so agent mistakes fail the build instead of reaching production. The docs are also published in llms.txt form for agents to read.",
@@ -20,7 +25,7 @@ const items: { question: string; answer: string }[] = [
   {
     question: "What does Kix actually run on?",
     answer:
-      "Any conformant Kubernetes cluster: EKS, GKE, AKS, DigitalOcean, or your customer's environment. Kix compiles your definition into standard resources and deploys them; it doesn't replace your cluster. Bare metal is supported through an add-on that knows the hardware and networking of providers like Hetzner and OVH.",
+      "Any conformant Kubernetes cluster: EKS, GKE, AKS, DigitalOcean, or your customer's environment. Kix compiles your definition into standard resources and deploys them to clusters in your accounts or your customers' accounts, never ours. Bare metal is supported through an add-on that knows the hardware and networking of providers like Hetzner and OVH, and of hardware from Dell, HPE, Supermicro, and Lenovo.",
   },
   {
     question: "Can we deploy into a customer's VPC or data center?",
@@ -40,7 +45,7 @@ const items: { question: string; answer: string }[] = [
   {
     question: "What does it cost?",
     answer:
-      "Priced per environment, self-service, with bare-metal support as a paid add-on. Kix plus your own infrastructure should cost well under the PaaS bill it replaces. Final numbers ship with early access, and teams joining now lock in founding rates.",
+      "Pricing scales with the size of your deployment, with bare-metal support as a paid add-on. Kix plus your own infrastructure should cost well under the PaaS bill it replaces. Final numbers ship with early access, and teams joining now lock in founding rates.",
   },
   {
     question: "Is Kix in our runtime data path?",

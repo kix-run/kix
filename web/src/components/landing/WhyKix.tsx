@@ -32,9 +32,9 @@ export default function WhyKix() {
               The expensive part of Kubernetes is the expertise, not the
               servers. A mismatched label or a missing dependency applies
               cleanly and breaks in production. Catching it before deploy
-              takes a specialist, and a startup gets one by pulling a
-              developer off product. That barrier is what keeps startups
-              paying the PaaS prices above.
+              takes a specialist. A startup gets one by pulling a developer
+              off product, and the whole team ships slower. That barrier is
+              what keeps startups paying the PaaS prices above.
             </p>
           </Reveal>
           <Reveal delay={1}>
