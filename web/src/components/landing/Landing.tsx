@@ -10,7 +10,6 @@ import Mechanism from "@/components/landing/Mechanism"
 import Faq from "@/components/landing/Faq"
 import FinalCta from "@/components/landing/FinalCta"
 import Footer from "@/components/landing/Footer"
-import ThemeSelector from "@/components/landing/ThemeSelector"
 
 export default function Landing() {
   return (
@@ -29,7 +28,6 @@ export default function Landing() {
         <FinalCta />
       </main>
       <Footer />
-      <ThemeSelector />
     </div>
   )
 }
