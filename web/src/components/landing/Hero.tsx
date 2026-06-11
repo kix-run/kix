@@ -155,8 +155,11 @@ export default function Hero() {
           <Eyebrow>Early access: now onboarding startup teams</Eyebrow>
         </Reveal>
         <Reveal delay={1}>
+          {/* H1 alternates to test later:
+              "Run Kubernetes without becoming the expert."
+              "Kubernetes, no expert required." */}
           <h1 className="mt-6 bg-gradient-to-br from-foreground from-40% to-foreground/50 bg-clip-text pb-2 text-balance text-5xl font-semibold leading-[1.02] tracking-tighter text-transparent sm:text-6xl md:text-7xl">
-            Kubernetes, minus the platform team.
+            Kubernetes any developer can run.
           </h1>
         </Reveal>
         <Reveal delay={2}>

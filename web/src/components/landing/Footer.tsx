@@ -20,7 +20,7 @@ export default function Footer() {
               <span className="size-1.5 rounded-full bg-brand" />
             </div>
             <p className="mt-2 text-sm text-muted-foreground">
-              Kubernetes, minus the platform team.
+              Kubernetes any developer can run.
             </p>
           </div>
           <div className="flex gap-6 text-sm text-muted-foreground">

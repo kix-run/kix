@@ -42,3 +42,12 @@ entries here whenever Adam corrects writing style.
   "leaving kix means losing the tooling, not your infrastructure";
   "no proprietary runtime" is acceptable only when clearly about what runs in
   the cluster.
+- **No "don't worry about Kubernetes" framing** (e.g. "nobody's job",
+  "without making it your job"). Users should expect to pay attention to
+  their infrastructure, like on any normal cloud. The honest claim: Kix makes
+  Kubernetes much easier to manage and maintain, and no specialist is needed.
+  Scoped falsifiable claims ("broken configs don't ship", "mistakes surface
+  before deploy") are fine.
+- The resonant subtraction is *specialists*, not headcount generally.
+  Current H1: "Kubernetes any developer can run." (alternates parked in a
+  comment in Hero.tsx).
