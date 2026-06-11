@@ -185,7 +185,7 @@ function AgentLoop() {
           kix + your agent
         </span>
       </div>
-      <pre className="overflow-x-auto px-5 py-4 font-mono text-[0.8rem] leading-relaxed">
+      <pre className="overflow-x-auto px-4 py-3 font-mono text-[0.74rem] leading-relaxed sm:px-5 sm:py-4 sm:text-[0.8rem]">
         <code>
           <span className="block">
             <span className="text-zinc-500">❱ </span>
@@ -242,14 +242,14 @@ export default function Mechanism() {
         </div>
 
         <div className="mt-14 grid items-start gap-8 lg:grid-cols-2">
-          <Reveal delay={1}>
+          <Reveal delay={1} className="min-w-0">
             <Terminal title="kix check" lines={checkLines} />
             <p className="mt-3 text-center text-xs text-muted-foreground">
               The selector typo that raw kubectl ships to production, Kix
               refuses to compile.
             </p>
           </Reveal>
-          <Reveal delay={2}>
+          <Reveal delay={2} className="min-w-0">
             <Terminal title="kix diff" lines={previewLines} />
             <p className="mt-3 text-center text-xs text-muted-foreground">
               Preview the exact changes before they happen. What you previewed
@@ -312,7 +312,7 @@ export default function Mechanism() {
               ))}
             </ul>
           </Reveal>
-          <Reveal delay={1}>
+          <Reveal delay={1} className="min-w-0">
             <AgentLoop />
             <p className="mt-3 text-center text-xs text-muted-foreground">
               Your agent writes it, Kix checks every line. You review the

@@ -142,7 +142,7 @@ export function Terminal({
         <span className="size-3 rounded-full bg-zinc-700" />
         <span className="ml-2 font-mono text-xs text-zinc-500">{title}</span>
       </div>
-      <pre className="overflow-x-auto px-5 py-4 font-mono text-[0.82rem] leading-relaxed">
+      <pre className="overflow-x-auto px-4 py-3 font-mono text-[0.74rem] leading-relaxed sm:px-5 sm:py-4 sm:text-[0.82rem]">
         <code>
           {lines.map((line, i) => (
             <motion.span

@@ -69,7 +69,7 @@ function StepsStrip() {
 
 function CodeCard() {
   return (
-    <div className="relative">
+    <div className="relative -mx-2 sm:mx-0">
       <a
         href="#agents"
         className="absolute -top-3 right-4 z-10 inline-flex items-center gap-1.5 rounded-full bg-brand px-3 py-1.5 text-xs font-semibold text-primary-foreground shadow-md shadow-brand/40 transition-transform hover:scale-[1.04]"
@@ -90,7 +90,7 @@ function CodeCard() {
             stack.nix
           </span>
         </div>
-        <pre className="overflow-x-auto px-5 py-3.5 font-mono text-[0.875rem] leading-normal">
+        <pre className="overflow-x-auto px-4 py-3 font-mono text-[0.78rem] leading-normal sm:px-5 sm:py-3.5 sm:text-[0.875rem]">
         <code>
           <span className="block">
             <span className={K}>instances.app.api</span>
@@ -108,7 +108,9 @@ function CodeCard() {
           </span>
           <span className="block">
             <span className={K}>{"    image"}</span>
-            <span className={P}>{"    = "}</span>
+            {/* Column-alignment padding; dropped on phones for width. */}
+            <span className="hidden sm:inline">{"   "}</span>
+            <span className={P}>{" = "}</span>
             <span className={V}>{'"ghcr.io/acme-co/api:v1.5.0"'}</span>
             <span className={P}>;</span>
           </span>
@@ -126,10 +128,11 @@ function CodeCard() {
           </span>
           <span className="block">
             <span className={K}>{"    ingress.host"}</span>
-            <span className={P}>{"      = "}</span>
+            <span className="hidden sm:inline">{"     "}</span>
+            <span className={P}>{" = "}</span>
             <span className={V}>{'"api.acme.co"'}</span>
             <span className={P}>;</span>
-            <span className={C}>{"  # TLS handled"}</span>
+            <span className={`${C} hidden sm:inline`}>{"  # TLS handled"}</span>
           </span>
           <span className="block">
             <span className={P}>{"  };"}</span>
@@ -150,7 +153,8 @@ function CodeCard() {
           </span>
           <span className="block">
             <span className={K}>{"  config.storage.size"}</span>
-            <span className={P}>{"   = "}</span>
+            <span className="hidden sm:inline">{"  "}</span>
+            <span className={P}>{" = "}</span>
             <span className={V}>{'"20Gi"'}</span>
             <span className={P}>;</span>
           </span>
