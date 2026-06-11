@@ -13,6 +13,11 @@ const items: { question: string; answer: string }[] = [
       "No. The definition you write is at the level of services, databases, and domains, and the defaults are production-grade out of the box. Kubernetes knowledge helps but isn't required.",
   },
   {
+    question: "The definition is a .nix file. Do we need to learn Nix?",
+    answer:
+      "No. A Kix definition is declarative settings in Nix syntax: typed options you fill in, not a program you write. If you can read the snippet at the top of this page, you can write one. The compiler checks what you wrote and its errors point at your settings, not at language internals, and coding agents write the format fluently. The full power of Nix is underneath if you ever want it, and ignorable if you don't.",
+  },
+  {
     question: "What if we need a Kubernetes setting Kix doesn't expose?",
     answer:
       "You can always drop down. Definitions provide useful abstractions, but Kix works with standard Kubernetes manifest fields underneath. Any resource or field you would set by hand can be set in your definition too.",

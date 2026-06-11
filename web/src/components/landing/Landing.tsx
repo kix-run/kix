@@ -17,8 +17,8 @@ export default function Landing() {
         <Hero />
         <UseCases />
         <Mechanism />
-        <Ecosystem />
         <FromPaas />
+        <Ecosystem />
         <WhyWeBuilt />
         <Faq />
         <FinalCta />

@@ -92,7 +92,7 @@ export default function FinalCta() {
             <div className="relative lg:grid lg:grid-cols-2 lg:items-center lg:gap-14">
               <div>
                 <h2 className="text-balance text-3xl font-semibold tracking-tight sm:text-4xl">
-                  Get on Kubernetes without making it a full-time job
+                  Get on Kubernetes without hiring the specialist
                 </h2>
                 <p className="mt-5 text-lg leading-relaxed text-zinc-400">
                   Kix is onboarding early-access teams now. Tell us what you're

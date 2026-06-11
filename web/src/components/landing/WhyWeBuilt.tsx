@@ -33,7 +33,7 @@ export default function WhyWeBuilt() {
                   "{quote.text}"
                 </blockquote>
                 <figcaption className="mt-5 text-sm font-medium text-muted-foreground">
-                  — {quote.name}, Kix
+                  {quote.name}, Kix
                 </figcaption>
               </figure>
             </Reveal>

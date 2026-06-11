@@ -34,7 +34,7 @@ const tools = [
 
 export default function Ecosystem() {
   return (
-    <section id="ecosystem" className="bg-(--surface-tint) py-24 sm:py-28">
+    <section id="ecosystem" className="py-24 sm:py-28">
       <Container>
         <SectionHeading
           kicker="The alternative"
@@ -64,20 +64,21 @@ export default function Ecosystem() {
             </div>
           </Reveal>
           <Reveal delay={1}>
-            <div className="flex h-full flex-col rounded-2xl border border-brand/25 bg-brand/[0.04] p-7 shadow-[0_2px_24px_color-mix(in_srgb,var(--brand)_7%,transparent)]">
-              <h3 className="text-sm font-semibold text-foreground">
+            <div className="relative flex h-full flex-col overflow-hidden rounded-2xl bg-(--band) p-7 text-white ring-1 ring-white/10">
+              <div className="pointer-events-none absolute -top-20 left-1/2 h-48 w-[80%] -translate-x-1/2 bg-[radial-gradient(ellipse_at_center,color-mix(in_srgb,var(--brand)_35%,transparent),transparent_60%)]" />
+              <h3 className="relative text-sm font-semibold text-white">
                 With Kix
               </h3>
-              <div className="my-auto py-8">
-                <p className="flex flex-wrap items-center gap-3 font-mono text-lg text-foreground">
+              <div className="relative my-auto py-8">
+                <p className="flex flex-wrap items-center gap-3 font-mono text-lg text-white">
                   stack.nix
-                  <ArrowRight className="size-4 text-brand" />
-                  <span className="text-brand">kix deploy</span>
+                  <ArrowRight className="size-4 text-(--brand-on-dark)" />
+                  <span className="text-(--brand-on-dark)">kix deploy</span>
                 </p>
-                <p className="mt-4 text-sm leading-relaxed text-muted-foreground">
+                <p className="mt-4 text-sm leading-relaxed text-zinc-400">
                   One definition, one command. The same production-grade
                   components underneath, chosen and configured to work
-                  together. You don't learn them; you compile.
+                  together. You compile instead of learning them.
                 </p>
               </div>
             </div>

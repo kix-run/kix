@@ -176,36 +176,36 @@ const agentFacilities = [
 
 function AgentLoop() {
   return (
-    <div className="overflow-hidden rounded-xl border border-border bg-card shadow-xl shadow-zinc-950/5 ring-1 ring-foreground/5">
-      <div className="flex items-center gap-2 border-b border-border bg-muted/50 px-4 py-2">
-        <span className="size-3 rounded-full bg-border" />
-        <span className="size-3 rounded-full bg-border" />
-        <span className="size-3 rounded-full bg-border" />
-        <span className="ml-2 font-mono text-xs text-muted-foreground">
+    <div className="overflow-hidden rounded-xl border border-zinc-800 bg-[#0b0f1a] shadow-2xl shadow-emerald-950/20 ring-1 ring-white/5">
+      <div className="flex items-center gap-2 border-b border-zinc-800 bg-zinc-900/60 px-4 py-3">
+        <span className="size-3 rounded-full bg-zinc-700" />
+        <span className="size-3 rounded-full bg-zinc-700" />
+        <span className="size-3 rounded-full bg-zinc-700" />
+        <span className="ml-2 font-mono text-xs text-zinc-500">
           kix + your agent
         </span>
       </div>
       <pre className="overflow-x-auto px-5 py-4 font-mono text-[0.8rem] leading-relaxed">
         <code>
           <span className="block">
-            <span className="text-muted-foreground/70">❱ </span>
-            <span className="text-foreground/90">
+            <span className="text-zinc-500">❱ </span>
+            <span className="text-zinc-100">
               "Add a Redis cache to staging"
             </span>
           </span>
-          <span className="block text-muted-foreground">
+          <span className="block text-zinc-400">
             {"  agent writes instances.app.redis"}
           </span>
-          <span className="block text-muted-foreground">
+          <span className="block text-zinc-400">
             {"  agent runs kix check"}
           </span>
-          <span className="block text-destructive">
+          <span className="block text-rose-400">
             {"  ✗ secret redis-auth is not defined"}
           </span>
-          <span className="block text-muted-foreground">
+          <span className="block text-zinc-400">
             {"  agent securely adds the secret, checks again"}
           </span>
-          <span className="block text-brand">
+          <span className="block text-emerald-400">
             {"  ✓ 0 errors, safe to preview"}
           </span>
         </code>
@@ -221,7 +221,7 @@ export default function Mechanism() {
         <SectionHeading
           kicker="How it works"
           title="Under the hood, Kix is a Kubernetes compiler"
-          lede="Kix is not a dashboard over the same old YAML. You define your stack declaratively; Kix compiles it into standard Kubernetes resources, and like a compiler, it refuses to build a definition that doesn't hold together. Structural checks and hard-won per-tool sanity checks all run at compile time, on your laptop, not in production."
+          lede="Kix is not a dashboard over the same old YAML. You define your stack; Kix compiles it into standard Kubernetes resources, and like a compiler, it refuses to build a definition that doesn't hold together. Mistakes fail on your laptop, not in production."
         />
 
         <div className="mt-14 grid gap-8 md:grid-cols-4">

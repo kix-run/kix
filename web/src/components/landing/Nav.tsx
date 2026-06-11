@@ -31,7 +31,7 @@ export default function Nav() {
             ))}
           </nav>
           <Button asChild>
-            <a href="#early-access">Get in touch</a>
+            <a href="#early-access">Get early access</a>
           </Button>
         </div>
       </Container>

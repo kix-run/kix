@@ -1,7 +1,16 @@
 import { type ReactNode } from "react"
 import { Accordion } from "radix-ui"
 import { motion } from "motion/react"
-import { ArrowRight, ChevronDown } from "lucide-react"
+import {
+  ArrowRight,
+  ChevronDown,
+  Cloud,
+  FileCheck,
+  MessageCircle,
+  SlidersHorizontal,
+  TrendingDown,
+  type LucideIcon,
+} from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   Container,
@@ -132,9 +141,16 @@ function CostBars() {
 
 // ── Use cases ───────────────────────────────────────────────────────────────
 
-const items: { title: string; body: ReactNode }[] = [
+const items: {
+  title: string
+  teaser: string
+  icon: LucideIcon
+  body: ReactNode
+}[] = [
   {
     title: "Deploy into your customer's cloud",
+    teaser: "The enterprise-deal question, answered with one definition.",
+    icon: Cloud,
     body: (
       <>
         <p>
@@ -143,10 +159,10 @@ const items: { title: string; body: ReactNode }[] = [
           no. With Kix, your product is a verifiable cluster artifact: the
           same definition that runs your SaaS deploys into a customer's AWS
           account, their data center, or their private cloud. Everything is
-          checked and previewed before it touches their cluster, which is
-          exactly what their security review wants to see. When the next
-          customer asks, it's the same definition with different settings,
-          not another project.
+          checked and previewed before it touches their cluster, so their
+          security team reviews a concrete artifact instead of a black box.
+          When the next customer asks, it's the same definition with
+          different settings, not another project.
         </p>
         <p className="mt-4 font-medium text-foreground">
           One stack definition. Your cloud, their cloud, their basement.
@@ -160,44 +176,37 @@ const items: { title: string; body: ReactNode }[] = [
   },
   {
     title: "Cut the infrastructure bill",
+    teaser: "The same hardware, three very different price tags.",
+    icon: TrendingDown,
     body: (
       <>
         <p className="mb-7">
-          Most startups never see what they pay for convenience. Here is
-          roughly the same compute, 96 vCPUs and 256 GB of memory, per month
-          at public list prices:
+          Most startups never see what the hardware underneath them costs.
+          Here is roughly the same compute, 96 vCPUs and 256 GB of memory,
+          per month at public list prices:
         </p>
         <CostBars />
-        <p className="mt-6 text-xs text-muted-foreground/80">
-          Illustrative monthly list prices, checked against published pricing
-          in June 2026. Exact costs vary by workload and provider; the
-          relative gap between the tiers is consistent.
+        <p className="mt-6 max-w-xl text-sm leading-relaxed">
+          Managed databases carry the same markup: RDS-class services charge
+          several times the cost of the compute they run on. On your
+          cluster, Postgres runs on machines you already pay for.
         </p>
-      </>
-    ),
-  },
-  {
-    title: "Run Postgres and Redis without the managed-database bill",
-    body: (
-      <>
-        <p>
-          RDS-class services charge several times the cost of the compute
-          they run on. Kix packages the operator work that makes stateful
-          services safe on Kubernetes: storage, failover, and scheduled
-          backups to object storage. A production Postgres is a few lines in
-          your definition, on machines you already pay for, and
-          backup.enabled = true is the whole backup setup.
+        <p className="mt-5 max-w-xl text-xs leading-relaxed text-muted-foreground/80">
+          Raw compute at published list prices, checked June 2026. This is
+          the hardware gap, not an all-in bill: redundancy, storage, and
+          traffic are extra on every tier, and bare metal support is a paid
+          Kix add-on. Kix pricing is settling during early access, with one
+          aim fixed: Kix plus your own infrastructure should cost well under
+          the PaaS bill it replaces.
         </p>
-        <p className="mt-4">
-          Prefer a managed database? Kix connects to RDS or Cloud SQL just
-          the same. Running state on the cluster is a choice Kix makes safe,
-          not a requirement.
-        </p>
+        <UseCaseCta label="I want off the PaaS bill" preselect="paas" />
       </>
     ),
   },
   {
     title: "Own your stack, and scale it",
+    teaser: "No platform limits, and no re-architecture to grow.",
+    icon: SlidersHorizontal,
     body: (
       <>
         <p>
@@ -213,6 +222,8 @@ const items: { title: string; body: ReactNode }[] = [
   },
   {
     title: "Compliance without the scramble",
+    teaser: "SBOM, provenance, and findings from the same build.",
+    icon: FileCheck,
     body: (
       <>
         <p>
@@ -229,6 +240,8 @@ const items: { title: string; body: ReactNode }[] = [
   },
   {
     title: "Don't see your use case?",
+    teaser: "We're onboarding early teams one conversation at a time.",
+    icon: MessageCircle,
     body: (
       <>
         <p>
@@ -253,7 +266,7 @@ export default function UseCases() {
         />
 
         <Reveal delay={1} className="mt-12">
-          <Accordion.Root type="single" collapsible>
+          <Accordion.Root type="single" collapsible defaultValue="usecase-1">
             {items.map((item, i) => (
               <Accordion.Item
                 key={item.title}
@@ -261,13 +274,25 @@ export default function UseCases() {
                 className="border-b border-border"
               >
                 <Accordion.Header asChild>
-                  <Accordion.Trigger className="group flex w-full cursor-pointer items-center justify-between gap-6 py-6 text-left text-lg font-medium tracking-tight text-foreground transition-colors hover:text-brand">
-                    {item.title}
+                  <Accordion.Trigger className="group flex w-full cursor-pointer items-center gap-4 py-5 text-left">
+                    <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-brand-soft text-brand">
+                      <item.icon className="size-4.5" />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-lg font-medium tracking-tight text-foreground transition-colors group-hover:text-brand">
+                        {item.title}
+                      </span>
+                      <span className="mt-0.5 block text-sm text-muted-foreground">
+                        {item.teaser}
+                      </span>
+                    </span>
                     <ChevronDown className="size-5 shrink-0 text-muted-foreground transition-transform duration-200 group-data-[state=open]:rotate-180" />
                   </Accordion.Trigger>
                 </Accordion.Header>
                 <Accordion.Content className="overflow-hidden leading-relaxed text-muted-foreground data-[state=open]:animate-accordion-down data-[state=closed]:animate-accordion-up">
-                  <div className="max-w-3xl pb-8 pr-8">{item.body}</div>
+                  <div className="max-w-3xl pb-8 pl-[3.25rem] pr-8">
+                    {item.body}
+                  </div>
                 </Accordion.Content>
               </Accordion.Item>
             ))}

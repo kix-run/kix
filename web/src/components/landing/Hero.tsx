@@ -81,7 +81,7 @@ function CodeCard() {
         <Bot className="size-3.5" />
         Agent compatible
       </a>
-      <div className="overflow-hidden rounded-xl border border-zinc-800 bg-[#0b0f1a] text-left shadow-2xl shadow-emerald-950/25 ring-1 ring-white/10">
+      <div className="overflow-hidden rounded-xl border border-zinc-800 bg-[#0b0f1a] text-left shadow-2xl shadow-emerald-950/25 ring-1 ring-white/10 dark:ring-white/20">
         <div className="flex items-center gap-2 border-b border-zinc-800 bg-zinc-900/60 px-4 py-2.5">
           <span className="size-3 rounded-full bg-zinc-700" />
           <span className="size-3 rounded-full bg-zinc-700" />
@@ -220,7 +220,7 @@ export default function Hero() {
           <div className="mt-9">
             <Button size="lg" asChild>
               <a href="#early-access">
-                Get in touch
+                Get early access
                 <ArrowRight className="size-4" />
               </a>
             </Button>
