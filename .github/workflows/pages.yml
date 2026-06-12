@@ -140,9 +140,10 @@ jobs:
           # alt1: pre-refactor landing page ("Kubernetes any developer
           # can run." hero), branch variant/pre-refactor.
           ALT1_REF: 474e728d7e292092f22e68a9a519218ebb657ee8
-          # alt2: compiler-fact H1 variant ("The Kubernetes compiler."
-          # hero), branch variant/compiler-h1.
-          ALT2_REF: 4dcdb12ec4f58bfd9b42cb8fb0a5821c15be1a9a
+          # alt2: compiler-fact H1 variant ("Kix is a Kubernetes
+          # compiler." hero, restructured stack), branch
+          # variant/compiler-h1.
+          ALT2_REF: 95e112603d96bef0884d503af96e2d10ea3507c0
         run: |
           build_alt() {
             local name="$1" ref="$2"
