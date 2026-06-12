@@ -49,6 +49,7 @@ Before restructuring the landing-page hero (layer order, CTA placement, what
 belongs above the fold), read `CLAUDE.hero-design.md` for the researched
 consensus on dev-tool hero anatomy.
 
+
 ## Breaking changes
 
 The kix API is in active development. Breaking changes are fine — none of the clusters are actively deployed. Prioritize clean design over backwards compatibility.
