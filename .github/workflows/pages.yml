@@ -4,9 +4,9 @@ name: Deploy site to GitHub Pages
 # docs site (`nix build ./docs#site`), then merges them into one
 # Pages artifact:
 #
-#   kixops.dev/             ← web/ (Vite build)
+#   kixops.dev/             ← web/ (Vite build; compiler-H1 hero)
 #   kixops.dev/alt1/        ← web/ at ALT1_REF (pre-refactor variant)
-#   kixops.dev/alt2/        ← web/ at ALT2_REF (compiler-H1 variant)
+#   kixops.dev/alt2/        ← web/ at ALT2_REF (get-shit-done hero)
 #   kixops.dev/docs/        ← docs site (current tree)
 #   kixops.dev/docs/v0.1/   ← starlight-versions snapshot
 #
@@ -140,10 +140,11 @@ jobs:
           # alt1: pre-refactor landing page ("Kubernetes any developer
           # can run." hero), branch variant/pre-refactor.
           ALT1_REF: 474e728d7e292092f22e68a9a519218ebb657ee8
-          # alt2: compiler-fact H1 variant ("Kix is a Kubernetes
-          # compiler." hero, restructured stack), branch
-          # variant/compiler-h1.
-          ALT2_REF: 95e112603d96bef0884d503af96e2d10ea3507c0
+          # alt2: the previous root site ("Getting shit done with
+          # Kubernetes." hero). The compiler-H1 hero that used to live
+          # here was promoted to the root `web/`; this pins the old
+          # root for comparison.
+          ALT2_REF: 0c128cd0a15a7d3a494326570b3ad0e82c25f871
         run: |
           build_alt() {
             local name="$1" ref="$2"

@@ -2,8 +2,8 @@ import Nav from "@/components/landing/Nav"
 import Hero from "@/components/landing/Hero"
 import UseCases from "@/components/landing/UseCases"
 import Mechanism from "@/components/landing/Mechanism"
+import Example from "@/components/landing/Example"
 import Ecosystem from "@/components/landing/Ecosystem"
-import FromPaas from "@/components/landing/FromPaas"
 import WhyWeBuilt from "@/components/landing/WhyWeBuilt"
 import Faq from "@/components/landing/Faq"
 import FinalCta from "@/components/landing/FinalCta"
@@ -17,7 +17,7 @@ export default function Landing() {
         <Hero />
         <UseCases />
         <Mechanism />
-        <FromPaas />
+        <Example />
         <Ecosystem />
         <WhyWeBuilt />
         <Faq />

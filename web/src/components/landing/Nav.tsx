@@ -4,6 +4,7 @@ import { Container } from "@/components/landing/primitives"
 const links = [
   { href: "#use-cases", label: "Use cases" },
   { href: "#how-it-works", label: "How it works" },
+  { href: "#example", label: "Example" },
   { href: "#why-we-built-it", label: "Why we built it" },
   { href: "#faq", label: "FAQ" },
 ]

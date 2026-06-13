@@ -1,14 +1,17 @@
 import {
   Activity,
   ArrowLeftRight,
+  BadgeCheck,
   Bot,
   Check,
   Database,
   DatabaseBackup,
   FileCheck,
+  FileCode2,
   KeyRound,
   Network,
-  ShieldCheck,
+  RefreshCcw,
+  Rocket,
   UserCheck,
   type LucideIcon,
 } from "lucide-react"
@@ -100,21 +103,27 @@ const previewLines: TerminalLine[] = [
   },
 ]
 
-const steps = [
+// Titles and icons carry the hero's former chip-pipeline labels;
+// this grid is now the page's single 4-step flow.
+const steps: { title: string; body: string; icon: LucideIcon }[] = [
   {
-    title: "Define",
+    title: "Define your stack",
+    icon: FileCode2,
     body: "Describe your whole stack in one definition: services, databases, domains, environments. Small enough to review in a pull request.",
   },
   {
-    title: "Compile",
-    body: "Kix compiles it into everything a production cluster needs: deployments, network policies, security policies, storage, backups, certificates. Mistakes fail the build on your laptop, not in production.",
+    title: "Compile & check",
+    icon: BadgeCheck,
+    body: "Kix compiles your definition into everything a production cluster needs: deployments, network policies, security policies, storage, backups, certificates.",
   },
   {
-    title: "Run",
+    title: "Deploy verified",
+    icon: Rocket,
     body: "Deploy and get a running cluster that matches your definition. Before anything changes, you see the exact diff.",
   },
   {
-    title: "Operate",
+    title: "Managed over time",
+    icon: RefreshCcw,
     body: "Day two is the same loop. Change the file, compile, deploy. Upgrades, migrations, and scaling are edits, not projects.",
   },
 ]
@@ -159,11 +168,6 @@ const features: { title: string; body: string; icon: LucideIcon }[] = [
     title: "Compliance evidence",
     body: "Audit evidence as a build output: SBOM, provenance, findings mapped to your framework.",
     icon: FileCheck,
-  },
-  {
-    title: "Agent compatible",
-    body: "MCP server, docs as markdown, errors an agent can read and act on.",
-    icon: Bot,
   },
 ]
 
@@ -220,8 +224,8 @@ export default function Mechanism() {
       <Container>
         <SectionHeading
           kicker="How it works"
-          title="Under the hood, Kix is a Kubernetes compiler"
-          lede="Kix is not a dashboard over the same old YAML. You define your stack; Kix compiles it into standard Kubernetes resources, and like a compiler, it refuses to build a definition that doesn't hold together. Mistakes fail on your laptop, not in production."
+          title="A compiler refuses to build a broken stack"
+          lede="Kix is not a dashboard over the same old YAML. It compiles your definition into standard Kubernetes resources, and it refuses to build one that doesn't hold together: a mismatched selector, a missing secret, or a dependency nothing provides stops the build before anything deploys."
         />
 
         <div className="mt-14 grid gap-8 md:grid-cols-4">
@@ -230,8 +234,8 @@ export default function Mechanism() {
               {i < steps.length - 1 && (
                 <div className="absolute top-4.5 left-12 right-0 hidden h-px bg-gradient-to-r from-brand/30 to-transparent md:block" />
               )}
-              <div className="flex size-9 items-center justify-center rounded-full border border-brand/30 bg-brand/5 font-mono text-sm font-semibold text-brand">
-                {i + 1}
+              <div className="flex size-9 items-center justify-center rounded-full border border-brand/30 bg-brand/5 text-brand">
+                <step.icon className="size-4" />
               </div>
               <h3 className="mt-4 font-semibold">{step.title}</h3>
               <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
@@ -321,23 +325,6 @@ export default function Mechanism() {
           </Reveal>
         </div>
 
-        <Reveal delay={1}>
-          <div className="mx-auto mt-16 max-w-3xl rounded-2xl border border-border bg-card p-7 sm:p-8">
-            <div className="flex size-9 items-center justify-center rounded-lg bg-brand-soft text-brand">
-              <ShieldCheck className="size-4.5" />
-            </div>
-            <h3 className="mt-4 font-semibold text-foreground">
-              Standard Kubernetes underneath.
-            </h3>
-            <p className="mt-2 leading-relaxed text-muted-foreground">
-              Kix compiles to plain Kubernetes resources on a plain Kubernetes
-              cluster, yours or your customer's. You can inspect every line it
-              produces, and if you ever leave, you keep a working cluster and
-              standard manifests. Leaving Kix means losing the tooling, not
-              your infrastructure.
-            </p>
-          </div>
-        </Reveal>
       </Container>
     </section>
   )

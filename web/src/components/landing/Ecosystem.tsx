@@ -39,7 +39,7 @@ export default function Ecosystem() {
         <SectionHeading
           kicker="The alternative"
           title="Learn all of this, or just use Kix"
-          lede="Running Kubernetes the usual way means assembling a stack of tools, each with its own config language, upgrade cycle, and failure modes. That stack is what the specialist is for. Kix chooses production-grade components, configures them, and wires them together from your definition."
+          lede="Running Kubernetes the usual way means assembling a stack of tools, each with its own config language, upgrade cycle, and failure modes. That stack is what the specialist is for."
         />
 
         <div className="mt-14 grid items-stretch gap-4 lg:grid-cols-[3fr_2fr]">

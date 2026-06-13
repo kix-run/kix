@@ -158,8 +158,7 @@ const items: {
           question that stalls enterprise deals. With a PaaS, the answer is
           no. With Kix, your product is a verifiable cluster artifact: the
           same definition that runs your SaaS deploys into a customer's AWS
-          account, their data center, or their private cloud. Everything is
-          checked and previewed before it touches their cluster, so their
+          account, their data center, or their private cloud, and their
           security team reviews a concrete artifact instead of a black box.
           When the next customer asks, it's the same definition with
           different settings, not another project.
@@ -190,6 +189,10 @@ const items: {
           Managed databases carry the same markup: RDS-class services charge
           several times the cost of the compute they run on. On your
           cluster, Postgres runs on machines you already pay for.
+        </p>
+        <p className="mt-4 max-w-xl text-sm leading-relaxed">
+          And moving off is a migration, not a rewrite. Your containers stay
+          your containers; they just land on infrastructure you own.
         </p>
         <p className="mt-5 max-w-xl text-xs leading-relaxed text-muted-foreground/80">
           Raw compute at published list prices, checked June 2026. This is
