@@ -116,6 +116,7 @@ in
     gke = ./flavors/gke.nix;
     gke-autopilot = ./flavors/gke-autopilot.nix;
     aks = ./flavors/aks.nix;
+    ovh = ./flavors/ovh.nix;
     openshift = ./flavors/openshift.nix;
     rke2 = ./flavors/rke2.nix;
     lithus = ./flavors/lithus.nix;
