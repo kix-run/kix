@@ -460,6 +460,29 @@ rec {
           // lib.optionalAttrs (medium != null) { inherit medium; }
           // lib.optionalAttrs (sizeLimit != null) { inherit sizeLimit; };
       };
+
+    # HostPath mount (no resource — name + hostPath required). Node-local
+    # storage for single-node clusters; data does NOT survive node loss and a
+    # workload using it is pinned to wherever the path exists. `type` defaults to
+    # DirectoryOrCreate so the kubelet creates the dir if absent.
+    hostPath =
+      {
+        mountPath,
+        name,
+        hostPath,
+        type ? "DirectoryOrCreate",
+        readOnly ? false,
+        subPath ? null,
+      }:
+      {
+        _type = "kix-mount";
+        inherit name mountPath readOnly;
+        ${if subPath != null then "subPath" else null} = subPath;
+        source.hostPath = {
+          path = hostPath;
+          inherit type;
+        };
+      };
   };
 
   # Shared implementation for mount injection.
