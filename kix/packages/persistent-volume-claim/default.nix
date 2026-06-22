@@ -5,10 +5,19 @@
 # packages. This ensures PVCs are visible in the dependency graph
 # and get lifecycle protection from kix-diff.
 #
-# Dependencies:
-#   storageClasses — required, provides the StorageClass name
+# The StorageClass is resolved one of two ways:
+#   - set `storageClassName` explicitly (lets one cluster use several classes
+#     at once, e.g. block RWO for a DB and File Storage RWX for blobs), OR
+#   - leave it null and let the optional `storageClasses` dep supply it (the
+#     flavor's platform-storage default class).
 #
-# root = PersistentVolumeClaim.
+# Dependencies:
+#   storageClasses — optional, provides the default StorageClass name when
+#                    config.storageClassName is null.
+#
+# root = the PVC (via the `claim` part — the renderable resource must live
+# under a non-`root` key, since collectResources drops the `root` key; see the
+# `secret` package for the same pattern, and kixpkgs#25).
 
 {
   scope,
@@ -26,6 +35,16 @@
   };
 
   options = {
+    storageClassName = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "scw-bssd-retain";
+      description = ''
+        StorageClass name. When set, overrides the class from the
+        `storageClasses` dep — lets one cluster use several classes at once.
+        When null, the class is taken from the optional `storageClasses` dep.
+      '';
+    };
     size = lib.mkOption {
       type = lib.types.str;
       default = "10Gi";
@@ -43,15 +62,24 @@
       self,
       config,
       clusterConfig,
-      storageClasses,
+      # Optional: only consulted when config.storageClassName is null. Default
+      # null so the package works with an explicit class and no dep wired.
+      storageClasses ? null,
     }:
-    {
-      root = scope.mkResource {
+    let
+      storageClassName =
+        if config.storageClassName != null then
+          config.storageClassName
+        else if storageClasses != null then
+          storageClasses.out.storageClassName
+        else
+          throw "persistent-volume-claim: set the `storageClassName` option or wire a `storageClasses` dependency.";
+      claim = scope.mkResource {
         apiVersion = "v1";
         kind = "PersistentVolumeClaim";
         name = scope.instanceName;
         spec = {
-          storageClassName = storageClasses.out.storageClassName;
+          inherit storageClassName;
           accessModes = config.accessModes;
           resources.requests.storage = config.size;
         };
@@ -59,5 +87,12 @@
           size = config.size;
         };
       };
+    in
+    {
+      # NB: resource lives under `claim` (rendered); `root` only points at it
+      # (same store path → dedup'd by the manifest writer). collectResources
+      # drops the `root` key, so a PVC-as-root would never render. See kixpkgs#25.
+      inherit claim;
+      root = claim;
     };
 }
