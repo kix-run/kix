@@ -1433,6 +1433,32 @@ rec {
             else
               throw "mkSecret \"${name}\": either 'keys' or 'stringData' must be provided";
 
+          # Realize `source` as its own store path so the encrypted file is
+          # present in the Nix store regardless of how its path-string context
+          # survives `toString`/`toJSON`. Without this, a source whose store root
+          # is not otherwise realized fails at build/deploy time with
+          #   error: path '/nix/store/…-source' is not valid
+          # The common cases:
+          #   • a self-relative `./secrets/x.enc.yaml` — nothing forces the flake
+          #     source to be copied to the store, so the reference dangles;
+          #   • a strict build sandbox (Linux CI) — the referenced path is not a
+          #     declared input of the manifest build.
+          # macOS's loose sandbox happens to tolerate the unrealized reference,
+          # which is why this only bites in CI. `builtins.path` force-copies just
+          # this file (with proper context), so the path always resolves. Secret
+          # CHANGE detection is unaffected — that is the `hash` option's job, not
+          # this path's — so we deliberately do NOT make the ciphertext a manifest
+          # DAG edge (which would redeploy on every re-encryption).
+          realizedSource =
+            if source == null then
+              null
+            else
+              builtins.path {
+                path = source;
+                # `name` cannot carry string context; baseNameOf preserves it.
+                name = baseNameOf (builtins.unsafeDiscardStringContext (toString source));
+              };
+
           resource = scopeMkResource {
             apiVersion = "v1";
             kind = "Secret";
@@ -1447,7 +1473,7 @@ rec {
                 "kix.dev/secret-keys" = builtins.concatStringsSep "," effectiveKeys;
               }
               // lib.optionalAttrs (source != null) {
-                "kix.dev/sops-source" = toString source;
+                "kix.dev/sops-source" = toString realizedSource;
               }
               // lib.optionalAttrs (hash != null) {
                 "kix.dev/content-hash" = hash;
@@ -1504,13 +1530,13 @@ rec {
           type ? "Opaque",
           requires ? [ ],
           reflect ? false,
-          # When `reflect = true`, the secret is expected to be mirrored
-          # cross-namespace by the emberstack reflector controller. Helpers
-          # produced from this ref get a `_kix.reflected = true` marker, which
-          # tells `checkNamespacedRefs` to permit consumption from any
-          # namespace. The producer is still responsible for ensuring the
-          # source secret carries reflector annotations (typically by
-          # emitting a one-shot annotator Job alongside this ref).
+        # When `reflect = true`, the secret is expected to be mirrored
+        # cross-namespace by the emberstack reflector controller. Helpers
+        # produced from this ref get a `_kix.reflected = true` marker, which
+        # tells `checkNamespacedRefs` to permit consumption from any
+        # namespace. The producer is still responsible for ensuring the
+        # source secret carries reflector annotations (typically by
+        # emitting a one-shot annotator Job alongside this ref).
         }:
         let
           # Guard the shape of `keys`. Empty list is intentionally allowed:
