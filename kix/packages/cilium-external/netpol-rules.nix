@@ -59,8 +59,18 @@ rec {
   };
 
   # API server egress — Cilium identity entity.
+  # `host`/`remote-node` alongside `kube-apiserver`: when the apiserver is
+  # host-networked (e.g. single-node k3s), its IP is the node IP, which
+  # Cilium resolves to the reserved `host` identity (or `remote-node` for
+  # other nodes) rather than `kube-apiserver`. Without these, a
+  # default-deny CNP drops pod→apiserver traffic on such clusters
+  # ("Policy denied" to host in `cilium monitor`).
   apiServerEgressRule = {
-    toEntities = [ "kube-apiserver" ];
+    toEntities = [
+      "kube-apiserver"
+      "remote-node"
+      "host"
+    ];
   };
 
   # External ingress (world / custom entities).

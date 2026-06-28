@@ -144,6 +144,9 @@ in
 
       # CRD refs — wired against ALL workloads so the wave engine gates
       # CNP/CCNP application on the entire cilium stack being Ready.
+      # Phase 3 auto-discovery doesn't apply here: the cilium chart
+      # installs its CRDs at runtime via INSTALL_CRDS, so they don't
+      # appear in `helm template --include-crds` output.
       cnpCrdRef = scope.mkCRDRef {
         group = "cilium.io";
         kind = "CiliumNetworkPolicy";

@@ -30,7 +30,7 @@ let
 in
 {
   meta = {
-    version = "v2.7.2";
+    version = "v2.7.5";
     description = "Immich — self-hosted photo management";
     owner = "app-team";
     provides = [
@@ -124,7 +124,7 @@ in
       type = lib.types.anything;
       default = {
         repository = "ghcr.io/immich-app/immich-server";
-        tag = "v2.7.2";
+        tag = "v2.7.5";
         pullPolicy = "IfNotPresent";
       };
     };

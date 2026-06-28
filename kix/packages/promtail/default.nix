@@ -130,9 +130,10 @@ in
         inherit chart scope;
         values = lib.recursiveUpdate (lib.recursiveUpdate defaultValues lokiValues) (config.values or { });
         releaseName = "promtail";
-        # Inject loki's store-path context so CNP generation discovers
-        # the promtail → loki-gateway egress edge.
-        networkDeps = [ loki.out.fqdn ];
+        # Auto-collect loki.out.* context so CNP generation discovers
+        # the promtail → loki-gateway egress edge — replaces the
+        # explicit `networkDeps = [ loki.out.fqdn ]` from before.
+        deps = [ loki ];
       };
     in
     resources.mkParts {
