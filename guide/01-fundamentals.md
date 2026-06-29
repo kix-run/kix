@@ -6,19 +6,13 @@ Sections: [Overview & mental model](#overview--mental-model) · [Package anatomy
 
 ## Overview & mental model
 
-Authoring reference for kix packages. Grounded in `kix/lib/k8s.nix`, `kix/lib/eval/cluster.nix`, `kix/lib/architecture.md`.
-
-### What kix is
-
-- Kubernetes manifest compiler written in Nix.
-- Input: resources as Nix data. Output: directory of plain YAML. Deploy: separate Rust CLI, in dependency order.
-- Two file kinds per cluster:
-  - **package** (`kix/packages/<name>/default.nix`) - reusable, parameterized set of related K8s resources (e.g. ConfigMap + Deployment + Service).
-  - **cluster** (`clusters/<name>.nix`) - wires packages into namespaces, sets config, calls `kix.buildCluster`.
+The minimum to know before authoring. kix is a Kubernetes manifest compiler: a package is Nix data, kix evaluates it to plain YAML, a separate CLI deploys in dependency order. The full eval pipeline, string-context machinery, and Activation/closure model are compiler internals - see 03-advanced.md#store-path-context-and-closure-internals (and `kix/lib/architecture.md` for the pipeline); none of it is needed to write a package.
 
 ### What a package is
 
-Function (or plain attrset "inline" form when no outer args):
+- A function (or inline attrset) at `kix/packages/<name>/default.nix` returning `{ meta?, options?, deps?, build }`.
+- `build` returns a "self" attrset of named resources; `root` is the entry point.
+- Reusable + parameterized: one package, many instances with different `config` (see 01-fundamentals.md#options--config).
 
 ```nix
 { scope, lib, kix, ... }:
@@ -31,69 +25,18 @@ Function (or plain attrset "inline" form when no outer args):
 }
 ```
 
-Keys:
+Full shape: 01-fundamentals.md#package-anatomy.
 
-| Key | Required | Purpose | Ref |
-|-----|----------|---------|-----|
-| `meta` | optional | version, description, `provides`, default aliases | 03-advanced.md#networking--package-meta |
-| `options` | optional | typed config schema via `lib.mkOption` | 01-fundamentals.md#options--config |
-| `deps` | optional | dependency enrichment hooks | 02-authoring.md#dependency-injection |
-| `build` | required | function (or list of functions) returning "self" attrset of named resources | - |
+### The one idea: store-path = DAG edge
 
-- `build` args: `self` (lazy fixpoint of this package's resources), `config` (evaluated option values), named dependency args (e.g. `{ self, config, postgres ? null, ... }`).
-- Returned attrset keys: `root` = entry point; siblings `service`, `ingress`, `configmap`, etc.
-- Reference package: `kix/packages/echo-server/default.nix` returns `configmap`, `deployment`, `service`, `root = self.service`.
+kix has no `dependsOn` field. Deploy ordering falls out of how you reference other resources.
 
-### Evaluation pipeline
+- A resource's public values (`self.x.out.name`, `.out.fqdn`, `.out.selector`) are real strings carrying that resource's Nix store-path context.
+- Embed one resource's `out.*` in another's manifest -> kix reads the context back off the JSON and stamps a `kix.dev/depends-on` edge. The CLI walks that graph for deploy order and waves.
+- A hardcoded `"echo-server"` carries no context -> no edge -> unordered deploy. Always reference `self.x.out.name` (or `"${self.x}"`), never a literal name.
+- When no value flows between two resources, add the edge explicitly with `requires` / `extraDeps` (see 02-authoring.md#resources-and-the-out-surface).
 
-`kix.buildCluster` (`kix/lib/eval/cluster.nix`) orchestrates. Stages:
-
-1. **Flake to buildCluster.** `mkFlake` (or raw `buildCluster`) hands module list to cluster builder.
-2. **evalModules.** `lib.evalModules` merges cluster config (instances, namespaces, `cluster.*`, scorecard, networkPolicy). Values lazy; `ref` fixpoint exposed via `specialArgs`, not forced.
-3. **Auto-instantiate.** `computeAutoInstances` activates optional deps + implicit instances. Explicit instances win over auto.
-4. **Resolution index.** `buildResolutionIndex` = DNS-like map of instance names + aliases for resolving dep args.
-5. **Phase-1 pre-pass.** Each package called with minimal scope (naming only). kix introspects `build` signature for dep args, resolves targets, lets deps inject config (e.g. prometheus dep adds ServiceMonitor). `build` inspected, NOT executed.
-6. **Per-instance fixpoint.** `lib.fix` over instances. `evaluateInstance` per instance: builds per-instance `scope`, binds resolved dep instances, runs `build()`, collects resources, derives network policies, runs scorecard rules. Fixpoint => `self.x` and cross-instance refs resolve lazily.
-7. **Aggregate.** Collect all resources across active instances; build `PackageInstance` CR per instance; build one cluster-level `Activation` CR referencing every PackageInstance.
-8. **YAML.** Render aggregated manifests to directory of YAML.
-
-- Phase-2a "config-only" fixpoint between 5 and 6 resolves function-shaped config injections without build cycles. Ignore until writing a dep that projects consumer config into a dependency; see 03-advanced.md#overrides.
-
-### Store-path = DAG edge (core idea)
-
-- No `dependsOn` field. Dependencies fall out of how you reference other resources.
-- Every resource built by `mkResource` (`kix/lib/k8s.nix`) writes manifest JSON to content-addressed store path via `builtins.toFile`.
-- Resource public values (`out.name`, `out.fqdn`, `out.selector`, `out.identityHash`) = real string (e.g. `"echo-server"`) with the resource's store-path **Nix string context** attached.
-- Embedding another resource's `out.name` => referencing manifest's JSON inherits that string context.
-- `mkResource` reads context back off JSON:
-
-```nix
-implicitCtxPaths = builtins.filter (p: lib.hasPrefix "/nix/store/" p) (
-  builtins.attrNames (builtins.getContext manifestJson)
-);
-```
-
-- Stamps each referenced store hash into `kix.dev/depends-on` annotation. Referencing `self.configmap.out.name` from a volume mount => real DAG edge (Deployment depends on ConfigMap). CLI walks store DAG for deploy order + waves.
-- Prefer `self.svc.out.name` (or `"${self.svc}"` interpolation, embeds store path) over hardcoded string. Hardcoded `"echo-server"` carries no context => no edge => unconstrained deploy order.
-
-`k8s.nix` helpers:
-
-- `attachCtxDeep ctx value` - recursively attach store-path context to every string leaf; used for `self.x.manifest` field access.
-- `extractStoreHash path` - pull 32-char hash from store path for depends-on annotation.
-- `requires` / `extraDeps` - explicit edges when no value flows between resources (dep contributes context without appearing in manifest body).
-
-### Manifests keep real names; context rides alongside
-
-- Emitted YAML contains plain K8s names (`metadata.name: echo-server`), never store paths.
-- Dependency info travels next to strings via Nix string-context, not inside them.
-- `mkResource` sanitizes context off store-path filename (cannot carry references) but keeps full context on file content => every dep edge survives. Manifests stay human-readable and `kubectl apply`-able while encoding full graph.
-- `_kix.*` reserved keys carry internal metadata (cross-namespace validation, provenance). `stripKixMeta` removes them before serialization; no marker leaks into YAML.
-
-### Activation CR roots the closure
-
-- `mkActivation` (`k8s.nix`) builds single cluster-scoped `Activation` CR. `spec.instances` references every `PackageInstance` by name, each ref carrying that PI's store-path context.
-- Every PI references its resources => `nix-store -q --tree` (or `exportReferencesGraph`) on Activation derivation yields entire cluster deploy DAG.
-- Contract for CLI: Activation = single root, whole closure reachable. Each `PackageInstance` = per-package sub-root (stamps `kix.dev/root`, inverse-deps, package-level requires).
+That is the whole authoring model. How context is parsed and how the closure is rooted is internals (see 03-advanced.md#store-path-context-and-closure-internals).
 
 ### End-to-end: one package, one instance
 
@@ -123,7 +66,7 @@ Single-resource package emitting one ConfigMap:
 }
 ```
 
-Wire into a cluster instance (same shape as `clusters/example.nix`):
+Wire into a cluster instance (shape of `clusters/example.nix`):
 
 ```nix
 { kix, packages }:
@@ -139,23 +82,14 @@ kix.buildCluster {
 }
 ```
 
-- `buildCluster` emits: `ConfigMap/banner` in ns `apps`, `PackageInstance/banner`, two kix CRDs, the namespace, one `Activation`.
-- `scope.instanceName` resolves to `banner` (instance key); resource named by cluster wiring, not hardcoded.
-
-Next:
-
-- Package shape, `self`, `root`, warnings - 01-fundamentals.md#package-anatomy.
-- Options and config flow - 01-fundamentals.md#options--config.
-- `scope.mkResource` / `mkClusterResource` and `out` API - 02-authoring.md#resources-and-the-out-surface.
-- Dependency injection, two-phase calling model - 02-authoring.md#dependency-injection.
+- Emits `ConfigMap/banner` in ns `apps`, plus kix bookkeeping (a `PackageInstance`, the cluster `Activation`, two kix CRDs, the namespace).
+- `scope.instanceName` = the instance key (`banner`); the cluster wiring names the resource, not the package.
 
 ### Gotchas
 
-- **Hardcoded names break ordering.** Literal `"echo-server"` carries no store-path context => no edge. Reference `self.x.out.name` / `"${self.x}"`.
-- **Non-string manifest leaves not tracked.** `attachCtxDeep` traces a warning for int/bool leaves (context cannot ride on them). Dep tracking flows only through strings; use `requires`/`extraDeps` when no string flows.
-- **`extra.*` cannot shadow managed fields.** `mkResource` throws if `extra` sets `spec`, `data`, `stringData`, or `metadata.{name,namespace}` (dedicated args carry DI tracking). `extra` is only for sibling K8s fields kix does not model.
-- **`_type` marks a leaf.** Resource collection stops descending at any attrset carrying `_type` (e.g. `k8s-resource`); flattens nested resources in `self` without eating into the resource.
-- **Activation must reach everything.** A resource not transitively referenced from a PackageInstance (referenced by Activation) is outside the closure; CLI won't see it. Edges come from references => unreferenced resource is an orphan.
+- **Hardcoded names break ordering.** Literal `"echo-server"` carries no context -> no edge. Reference `self.x.out.name` / `"${self.x}"`.
+- **Non-string leaves are not tracked.** Context cannot ride on an int/bool; if a dep "should" flow through one, use `requires`/`extraDeps` instead.
+- **`extra.*` cannot shadow managed fields.** `mkResource` throws if `extra` sets `spec`, `data`, `stringData`, or `metadata.{name,namespace}`. Use `extra` only for sibling K8s fields kix does not model.
 
 ## Package anatomy
 

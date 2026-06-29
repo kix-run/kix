@@ -2,7 +2,7 @@
 
 Secrets/CRDs/RBAC, derived networking + meta, Helm packages, scorecard, and cluster-side overrides.
 
-Sections: [Secrets, CRDs, RBAC](#secrets-crds-rbac) · [Networking & package meta](#networking--package-meta) · [Helm-backed packages](#helm-backed-packages) · [Scorecard & rules](#scorecard--rules) · [Overrides](#overrides)
+Sections: [Secrets, CRDs, RBAC](#secrets-crds-rbac) · [Networking & package meta](#networking--package-meta) · [Helm-backed packages](#helm-backed-packages) · [Scorecard & rules](#scorecard--rules) · [Overrides](#overrides) · [Store-path context internals](#store-path-context-and-closure-internals)
 
 ## Secrets, CRDs, RBAC
 
@@ -1060,3 +1060,38 @@ Gotcha: override merge is shallow `//`, unlike instance `config` deep-merge. `ov
 | Run the same stack in dev/stage/prod namespaces | `kix.mkEnv` (or hand-written prefixed instances) |
 | Add an extra ordering edge to the deploy graph | `extraDeps` |
 | Override the version on the PackageInstance marker | `version` |
+
+## Store-path context and closure internals
+
+How the dependency graph is encoded. You rarely type this; it matters when writing a custom builder, debugging a missing edge, or wrapping opaque manifests. Full pipeline in `kix/lib/architecture.md`.
+
+### Context = the edge carrier
+
+- Every `mkResource` (`kix/lib/k8s.nix`) writes manifest JSON to a content-addressed store path via `builtins.toFile`.
+- A resource's `out.*` values are plain strings (`"echo-server"`) with that store path attached as Nix **string context**.
+- Embedding one resource's `out.*` in another's manifest makes the consuming JSON inherit the context. `mkResource` reads it back:
+
+```nix
+implicitCtxPaths = builtins.filter (p: lib.hasPrefix "/nix/store/" p) (
+  builtins.attrNames (builtins.getContext manifestJson)
+);
+```
+
+- Each referenced store hash is stamped into `kix.dev/depends-on`. The CLI walks the store DAG for deploy order and waves (see 01-fundamentals.md#overview--mental-model).
+
+### Helpers (`kix/lib/k8s.nix`)
+
+- `attachCtxDeep ctx value` - recursively attach store-path context to every string leaf (used for `self.x.manifest` field access).
+- `extractStoreHash path` - pull the 32-char hash from a store path for the depends-on annotation.
+
+### Names stay real, context rides alongside
+
+- Emitted YAML carries plain K8s names (`metadata.name: echo-server`), never store paths.
+- `mkResource` strips context off the store-path filename (filenames cannot carry references) but keeps full context on file content, so every edge survives. Manifests stay `kubectl apply`-able while encoding the graph.
+- `_kix.*` reserved keys carry internal metadata (cross-namespace validation, provenance); `stripKixMeta` removes them before serialization, so nothing leaks into YAML.
+
+### Activation roots the closure
+
+- `mkActivation` builds one cluster-scoped `Activation` CR; `spec.instances` references every `PackageInstance` by name, each carrying that PI's context.
+- Every PI references its resources, so `nix-store -q --tree` on the Activation derivation yields the entire deploy DAG. The CLI's contract: Activation = single root, whole closure reachable.
+- Each `PackageInstance` is a per-package sub-root (stamps `kix.dev/root`, inverse-deps, package-level requires).

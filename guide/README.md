@@ -8,9 +8,10 @@ Package = `kix/packages/<name>/default.nix`, a function producing K8s resources.
 
 | File | Sections |
 |------|----------|
+| [00-ideas.md](00-ideas.md) | The *why* behind the authoring API (design principles). Read before the reference. |
 | [01-fundamentals.md](01-fundamentals.md) | Overview & mental model · Package anatomy · Options & config |
 | [02-authoring.md](02-authoring.md) | Resources & `out` · Workloads · Composition helpers (`kix.*`) · Dependency injection |
-| [03-advanced.md](03-advanced.md) | Secrets/CRDs/RBAC · Networking & meta · Helm packages · Scorecard · Overrides |
+| [03-advanced.md](03-advanced.md) | Secrets/CRDs/RBAC · Networking & meta · Helm packages · Scorecard · Overrides · Context/closure internals |
 
 New: read 01 top-to-bottom, then sample 02/03.
 
