@@ -1,3 +1,4 @@
+import type { ReactNode } from "react"
 import { Tabs } from "radix-ui"
 import { ShieldCheck } from "lucide-react"
 import {
@@ -89,7 +90,7 @@ const controlLines: CodeLine[] = [
   [k("    package"), p(" = "), r("packages.postgres"), p(";")],
   [k("    config"), p(" = {")],
   [k("      extensions"), p("       = [ "), v('"vector"'), p(" ];")],
-  [k("      postgres.version"), p(" = "), v('"18"'), p(";")],
+  [k("      postgres.version"), p(" = "), v('"18"'), p(";"), c("  # pin the major; opt in to upgrades")],
   [k("      instances"), p("        = "), v("2"), p(";"), c("  # HA pair")],
   [k("      storage.size"), p("     = "), v('"200Gi"'), p(";"), c("  # was 20Gi")],
   [
@@ -138,15 +139,21 @@ const manifestLines: CodeLine[] = [
   [],
   [c("      # Rewrite the chart's generated resources before they ship:")],
   [k("      patchResources"), p(" = map (r:")],
-  [p("        if "), k("r.kind"), p(" == "), v('"Service"')],
+  [p("        if "), k("r.kind"), p(" == "), v('"StatefulSet"')],
+  [p("        then r // { "), k("spec"), p(" = r.spec // {")],
+  [k("          persistentVolumeClaimRetentionPolicy"), p(" = {")],
   [
-    p("        then r // { "),
-    k("spec"),
-    p(" = r.spec // { "),
-    k("clusterIP"),
+    k("            whenDeleted"),
     p(" = "),
-    v('"None"'),
-    p("; }; }")],
+    v('"Delete"'),
+    p("; "),
+    k("whenScaled"),
+    p(" = "),
+    v('"Retain"'),
+    p(";"),
+  ],
+  [p("          };")],
+  [p("        }; }")],
   [p("        else r);")],
   [p("    };")],
   [p("  };")],
@@ -160,28 +167,48 @@ const tabs: {
   value: string
   label: string
   lines: CodeLine[]
-  caption: string
+  caption: ReactNode
 }[] = [
   {
     value: "stack",
     label: "1 · The whole stack",
     lines: stackLines,
-    caption:
-      "Four instances, wired by reference. Services, network policies, storage, backups, and certificates are derived from this; there is no hand-rolled glue to forget about.",
+    caption: (
+      <>
+        <strong className="text-foreground">Four instances, wired by reference.</strong> Services,
+        network policies, storage, backups, and certificates are{" "}
+        <strong className="text-foreground">derived from this</strong>; there is no hand-rolled glue
+        to forget about.
+      </>
+    ),
   },
   {
     value: "control",
     label: "2 · Take control",
     lines: controlLines,
-    caption:
-      "The same four instances after production turned the defaults into decisions: pinned versions, an HA pair, resource limits, encrypted secrets. Every setting is a typed option the compiler checks.",
+    caption: (
+      <>
+        The same four instances after production{" "}
+        <strong className="text-foreground">turned the defaults into decisions</strong>: pinned
+        versions, an HA pair, resource limits, encrypted secrets. Every setting is a{" "}
+        <strong className="text-foreground">typed option the compiler checks</strong>.
+      </>
+    ),
   },
   {
     value: "manifests",
     label: "3 · Down to the manifests",
     lines: manifestLines,
-    caption:
-      "The same stack gains a fifth instance from a Helm chart, its generated resources rewritten in place. If you would set it by hand in Kubernetes, you can set it in your definition.",
+    caption: (
+      <>
+        The same stack gains a{" "}
+        <strong className="text-foreground">fifth instance from a Helm chart</strong>, its{" "}
+        <strong className="text-foreground">generated resources rewritten in place</strong>.{" "}
+        <strong className="text-foreground">
+          If you would set it by hand in Kubernetes, you can set it in your definition.
+        </strong>
+      </>
+    ),
   },
 ]
 
@@ -238,10 +265,10 @@ export default function Example() {
             </Tabs.List>
             {tabs.map((tab) => (
               <Tabs.Content key={tab.value} value={tab.value} className="-mx-2 sm:mx-0">
-                <CodePane lines={tab.lines} />
-                <p className="mx-auto mt-4 max-w-2xl text-center text-sm leading-relaxed text-muted-foreground">
+                <p className="mx-auto mb-4 max-w-2xl text-center text-sm leading-relaxed text-muted-foreground">
                   {tab.caption}
                 </p>
+                <CodePane lines={tab.lines} />
               </Tabs.Content>
             ))}
           </Tabs.Root>
