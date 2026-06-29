@@ -4,11 +4,11 @@ name: Deploy site to GitHub Pages
 # docs site (`nix build ./docs#site`), then merges them into one
 # Pages artifact:
 #
-#   kixops.dev/             ← web/ (Vite build; compiler-H1 hero)
-#   kixops.dev/alt1/        ← web/ at ALT1_REF (pre-refactor variant)
-#   kixops.dev/alt2/        ← web/ at ALT2_REF (get-shit-done hero)
-#   kixops.dev/docs/        ← docs site (current tree)
-#   kixops.dev/docs/v0.1/   ← starlight-versions snapshot
+#   kix.run/             ← web/ (Vite build; compiler-H1 hero)
+#   kix.run/alt1/        ← web/ at ALT1_REF (pre-refactor variant)
+#   kix.run/alt2/        ← web/ at ALT2_REF (get-shit-done hero)
+#   kix.run/docs/        ← docs site (current tree)
+#   kix.run/docs/v0.1/   ← starlight-versions snapshot
 #
 # /alt1/ and /alt2/ serve alternate landing pages built from pinned
 # refs, for A/B comparison. Vite's --base flag rewrites all asset
@@ -178,7 +178,7 @@ jobs:
           mkdir -p _site/alt
           printf '<!doctype html><meta http-equiv="refresh" content="0; url=/alt1/">' > _site/alt/index.html
           # Pages custom-domain marker; must live at the artifact root.
-          echo "kixops.dev" > _site/CNAME
+          echo "kix.run" > _site/CNAME
           mkdir -p _site/docs
           cp -r --no-preserve=mode kixpkgs/result/. _site/docs/
           # Pages artifacts must be world-readable.

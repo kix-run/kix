@@ -25,9 +25,9 @@ import starlightVersions from 'starlight-versions';
 
 // https://astro.build/config
 export default defineConfig({
-  // Deployed at kixops.dev/docs/ as a subdirectory of the homepage
+  // Deployed at kix.run/docs/ as a subdirectory of the homepage
   // GH Pages artifact.
-  site: 'https://kixops.dev',
+  site: 'https://kix.run',
   base: '/docs',
   integrations: [
     starlight({

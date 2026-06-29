@@ -54,7 +54,7 @@ entries here whenever Adam corrects writing style.
   states the category fact; the subline makes the benefit claim. An earlier
   cut led with "Getting shit done with Kubernetes." as the H1 and the compiler
   line as subheadline (per the 2026-06-11 meeting with Luca and Sebi); that
-  version is parked at kixops.dev/alt2/, and older H1s ("Kubernetes any
+  version is parked at kix.run/alt2/, and older H1s ("Kubernetes any
   developer can run." and friends) live in a comment in Hero.tsx. The page
   <title> is "Kix | The Kubernetes compiler".
 - The landing page tells one storyline: we felt the pain, tried the tools,
