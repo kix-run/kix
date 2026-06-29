@@ -1,6 +1,6 @@
 import { Container } from "@/components/landing/primitives"
 
-// TODO: restore a contact email link once a kixops.dev mailbox exists.
+// TODO: restore a contact email link once a kix.run mailbox exists.
 const links = [
   { href: "#use-cases", label: "Use cases" },
   { href: "#how-it-works", label: "How it works" },
