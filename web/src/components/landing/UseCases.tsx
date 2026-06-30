@@ -182,7 +182,7 @@ const items: {
   },
   {
     title: "Cut the infrastructure bill",
-    teaser: "Gain true flexability over where you deploy.",
+    teaser: "Gain true flexibility over where you deploy.",
     icon: TrendingDown,
     body: (
       <>
@@ -204,7 +204,7 @@ const items: {
   },
   {
     title: "Own & scale your stack",
-    teaser: "No platform limits or lockin.",
+    teaser: "No platform limits or lock-in.",
     icon: SlidersHorizontal,
     body: (
       <>
@@ -255,7 +255,7 @@ export default function UseCases() {
         <SectionHeading
           kicker="Use cases"
           title="Why teams use Kix"
-          lede="Sooner or later we out grow our initial deployment. There can be various triggers: bills crossing five figures, big customers asking for on-prem, or simply needing more control than a PaaS allows."
+          lede="Sooner or later we outgrow our initial deployment. There can be various triggers: bills crossing five figures, big customers asking for on-prem, or simply needing more control than a PaaS allows."
         />
 
         <Reveal delay={1} className="mt-12">
