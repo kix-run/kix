@@ -107,22 +107,22 @@ const steps: { title: string; body: string; icon: LucideIcon }[] = [
   {
     title: "Define your stack",
     icon: FileCode2,
-    body: "Describe your whole stack in one definition: services, databases, domains, environments. Small enough to review in a pull request.",
+    body: "Describe your deployment stack in a single definition.",
   },
   {
     title: "Compile & check",
     icon: BadgeCheck,
-    body: "Kix compiles your definition into everything a production cluster needs: deployments, network policies, security policies, storage, backups, certificates.",
+    body: "Kix verifies your definition compiles, and generates everything your cluster needs (network policies, storage, backups, certificates...).",
   },
   {
     title: "Deploy verified",
     icon: Rocket,
-    body: "Deploy and get a running cluster that matches your definition. Before anything changes, you see the exact diff.",
+    body: "Deploy your signed and verifiable build. See the diff before anything changes.",
   },
   {
-    title: "Managed over time",
+    title: "Iterate",
     icon: RefreshCcw,
-    body: "Day two is the same loop. Change the file, compile, deploy. Upgrades, migrations, and scaling are edits, not projects.",
+    body: "Day two is the same fast-feedback loop. Ideal for both humans and agents.",
   },
 ];
 
@@ -223,7 +223,7 @@ export default function Mechanism() {
         <SectionHeading
           kicker="How it works"
           title="The compiler refuses to build a broken stack"
-          lede="Kix is not a dashboard over the same old YAML. It compiles your definition into standard Kubernetes resources, and it refuses to build one that doesn't hold together. Mismatched selectors, missing secrets, or a dependency nothing provides, all will stop the build before anything deploys."
+          lede="Kix compiles your definition into standard Kubernetes resources, and refuses to build one that doesn't hold together. Mismatched selectors, missing secrets, or a dependency nothing provides, all will stop the build before anything deploys."
         />
 
         <div className="mt-14 grid gap-8 md:grid-cols-4">
