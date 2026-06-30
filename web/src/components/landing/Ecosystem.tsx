@@ -71,7 +71,7 @@ export default function Ecosystem() {
               </h3>
               <div className="relative my-auto py-8">
                 <p className="flex flex-wrap items-center gap-3 font-mono text-lg text-white">
-                  stack.nix
+                  cluster.nix
                   <ArrowRight className="size-4 text-(--brand-on-dark)" />
                   <span className="text-(--brand-on-dark)">kix deploy</span>
                 </p>

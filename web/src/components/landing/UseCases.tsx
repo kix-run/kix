@@ -264,7 +264,7 @@ export default function UseCases() {
       <Container>
         <SectionHeading
           kicker="Use cases"
-          title="Why teams come to Kix"
+          title="Why teams use Kix"
           lede="Sooner or later the starter platforms stop fitting: the bill crosses five figures, a big customer asks to host your product themselves, or the architecture outgrows what a PaaS allows. Growing into proper infrastructure is the hard step. These are the jobs teams bring to Kix."
         />
 

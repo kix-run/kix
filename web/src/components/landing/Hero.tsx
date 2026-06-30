@@ -1,29 +1,31 @@
-import { useState } from "react"
-import { ArrowDown, ArrowRight, Bot, Check } from "lucide-react"
-import { cn } from "@/lib/utils"
-import { Button } from "@/components/ui/button"
-import { Container, Eyebrow, Reveal } from "@/components/landing/primitives"
+import { useState } from "react";
+import { ArrowDown, ArrowRight, Bot, Check } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { Container, Eyebrow, Reveal } from "@/components/landing/primitives";
 
 // Token color shorthands for the hand-tokenized nix snippet.
 // The hero card is terminal-dark in both color schemes, so these are fixed.
-const K = "text-zinc-300" // keys
-const V = "text-(--brand-on-dark)" // values / strings
-const P = "text-zinc-500" // punctuation
-const C = "text-zinc-500 italic" // comments
-const R = "text-[#86bbd8]" // references
+const K = "text-zinc-300"; // keys
+const V = "text-(--brand-on-dark)"; // values / strings
+const P = "text-zinc-500"; // punctuation
+const C = "text-zinc-500 italic"; // comments
+const R = "text-[#86bbd8]"; // references
 
-type HeroView = "code" | "agent"
+type HeroView = "code" | "agent";
 
 /**
  * Pane-header pill that flips the code example into its agent view.
  * Loud (brand fill + ping dot) until activated, quiet afterwards.
  */
-function AgentToggle({
+export function AgentToggle({
   active,
   onClick,
+  activeLabel = "Show the code",
 }: {
-  active: boolean
-  onClick: () => void
+  active: boolean;
+  onClick: () => void;
+  activeLabel?: string;
 }) {
   return (
     <button
@@ -39,14 +41,14 @@ function AgentToggle({
     >
       {!active && (
         <span className="absolute -right-0.5 -top-0.5 flex size-2.5">
-          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-(--brand-on-dark) opacity-70" />
+          <span className="absolute inline-flex h-full w-full animate-[agent-ripple_2.6s_ease-out_infinite] rounded-full bg-(--brand-on-dark)" />
           <span className="relative inline-flex size-2.5 rounded-full bg-(--brand-on-dark) ring-2 ring-zinc-900" />
         </span>
       )}
       <Bot className="size-3.5" />
-      {active ? "Show the code" : "Using a coding agent?"}
+      {active ? activeLabel : "Using a coding agent?"}
     </button>
-  )
+  );
 }
 
 const agentFacilities = [
@@ -54,7 +56,7 @@ const agentFacilities = [
   "Docs available as markdown and via MCP",
   "Errors an agent can read and act on",
   "Compact, typed definitions agents write well",
-]
+];
 
 function AgentPane() {
   return (
@@ -63,20 +65,18 @@ function AgentPane() {
         <code>
           <span className="block">
             <span className="text-zinc-500">❱ </span>
-            <span className="text-zinc-100">
-              "Upgrade Postgres to 18"
-            </span>
+            <span className="text-zinc-100">"Upgrade Postgres to 18"</span>
           </span>
-          <span className="block text-zinc-400">
+          <span className="block italic text-zinc-400">
             {"  agent bumps postgres.config.version to 18"}
           </span>
-          <span className="block text-zinc-400">
+          <span className="block italic text-zinc-400">
             {"  agent runs kix check"}
           </span>
           <span className="block text-rose-400">
             {"  ✗ major upgrade requires a fresh pre-upgrade backup"}
           </span>
-          <span className="block text-zinc-400">
+          <span className="block italic text-zinc-400">
             {"  agent schedules the backup, checks again"}
           </span>
           <span className="block text-emerald-400">
@@ -98,11 +98,11 @@ function AgentPane() {
         </ul>
       </div>
     </div>
-  )
+  );
 }
 
 function CodeCard() {
-  const [view, setView] = useState<HeroView>("code")
+  const [view, setView] = useState<HeroView>("code");
   return (
     <div className="relative -mx-2 sm:mx-0">
       <div className="overflow-hidden rounded-xl border border-zinc-800 bg-[#0b0f1a] text-left shadow-2xl shadow-emerald-950/25 ring-1 ring-white/10 dark:ring-white/20">
@@ -111,107 +111,88 @@ function CodeCard() {
           <span className="size-3 rounded-full bg-zinc-700" />
           <span className="size-3 rounded-full bg-zinc-700" />
           <span className="ml-2 font-mono text-xs text-zinc-500">
-            {view === "code" ? "stack.nix" : "kix + your agent"}
+            {view === "code" ? "kix check + deploy" : "kix + your agent"}
           </span>
           <AgentToggle
             active={view === "agent"}
             onClick={() => setView(view === "code" ? "agent" : "code")}
+            activeLabel="Kix CLI"
           />
         </div>
         {view === "agent" ? (
           <AgentPane />
         ) : (
           <>
-        <pre className="overflow-x-auto px-4 py-3 font-mono text-[0.78rem] leading-normal sm:px-5 sm:py-3.5 sm:text-[0.875rem]">
-        <code>
-          <span className="block">
-            <span className={K}>instances.app.api</span>
-            <span className={P}>{" = {"}</span>
-          </span>
-          <span className="block">
-            <span className={K}>{"  package"}</span>
-            <span className={P}>{" = "}</span>
-            <span className={R}>packages.app</span>
-            <span className={P}>;</span>
-          </span>
-          <span className="block">
-            <span className={K}>{"  config"}</span>
-            <span className={P}>{" = {"}</span>
-          </span>
-          <span className="block">
-            <span className={K}>{"    image"}</span>
-            {/* Column-alignment padding; dropped on phones for width. */}
-            <span className="hidden sm:inline">{"   "}</span>
-            <span className={P}>{" = "}</span>
-            <span className={V}>{'"ghcr.io/acme-co/api:v1.5.0"'}</span>
-            <span className={P}>;</span>
-          </span>
-          <span className="block">
-            <span className={K}>{"    replicas"}</span>
-            <span className={P}>{" = "}</span>
-            <span className={V}>3</span>
-            <span className={P}>;</span>
-          </span>
-          <span className="block">
-            <span className={K}>{"    env.DATABASE_HOST"}</span>
-            <span className={P}>{" = "}</span>
-            <span className={R}>postgres.out.fqdn</span>
-            <span className={P}>;</span>
-          </span>
-          <span className="block">
-            <span className={K}>{"    ingress.host"}</span>
-            <span className="hidden sm:inline">{"     "}</span>
-            <span className={P}>{" = "}</span>
-            <span className={V}>{'"api.acme.co"'}</span>
-            <span className={P}>;</span>
-            <span className={`${C} hidden sm:inline`}>{"  # TLS handled"}</span>
-          </span>
-          <span className="block">
-            <span className={P}>{"  };"}</span>
-          </span>
-          <span className="block">
-            <span className={P}>{"};"}</span>
-          </span>
-          <span className="block"> </span>
-          <span className="block">
-            <span className={K}>instances.app.postgres</span>
-            <span className={P}>{" = {"}</span>
-          </span>
-          <span className="block">
-            <span className={K}>{"  package"}</span>
-            <span className={P}>{" = "}</span>
-            <span className={R}>packages.postgres</span>
-            <span className={P}>;</span>
-          </span>
-          <span className="block">
-            <span className={K}>{"  config.storage.size"}</span>
-            <span className="hidden sm:inline">{"  "}</span>
-            <span className={P}>{" = "}</span>
-            <span className={V}>{'"20Gi"'}</span>
-            <span className={P}>;</span>
-          </span>
-          <span className="block">
-            <span className={K}>{"  config.backup.enabled"}</span>
-            <span className={P}>{" = "}</span>
-            <span className={V}>true</span>
-            <span className={P}>;</span>
-          </span>
-          <span className="block">
-            <span className={P}>{"};"}</span>
-          </span>
-        </code>
-      </pre>
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-white/10 bg-white/[0.03] px-5 py-2.5 font-mono text-[0.72rem]">
-          <span className="text-zinc-500">$ kix check</span>
-          <span className="text-emerald-400">✓ compiled: 47 resources</span>
-          <span className="text-emerald-400">✓ 0 errors</span>
-          <span className="text-zinc-400">ready to deploy</span>
-        </div>
+            <pre className="overflow-x-auto px-4 py-3 font-mono text-[0.78rem] leading-normal sm:px-5 sm:py-3.5 sm:text-[0.875rem]">
+              <code>
+                <span className="block">
+                  <span className="text-zinc-500">❱ </span>
+                  <span className="text-zinc-100">kix check acme</span>
+                </span>
+                <span className="block">
+                  <span className={K}>{"  eval         "}</span>
+                  <span className="text-emerald-400">pass</span>
+                  <span className={P}>{"   47 manifests evaluated"}</span>
+                </span>
+                <span className="block">
+                  <span className={K}>{"  kubeconform  "}</span>
+                  <span className="text-emerald-400">pass</span>
+                  <span className={P}>{"   no schema errors"}</span>
+                </span>
+                <span className="block">
+                  <span className={K}>{"  scorecard    "}</span>
+                  <span className="text-emerald-400">pass</span>
+                  <span className={P}>{"   0 errors, 0 warnings"}</span>
+                </span>
+                <span className="block">
+                  <span className="text-emerald-400">{"  ✓ ready to deploy"}</span>
+                </span>
+                <span className="block"> </span>
+                <span className="block">
+                  <span className="text-zinc-500">❱ </span>
+                  <span className="text-zinc-100">kix deploy acme</span>
+                </span>
+                <span className="block">
+                  <span className={P}>{"  Plan: "}</span>
+                  <span className="text-emerald-400">47 added</span>
+                  <span className={P}>{", 4 instances"}</span>
+                </span>
+                <span className="block">
+                  <span className="text-emerald-400">{"  ✔ "}</span>
+                  <span className={K}>{"Namespace/app"}</span>
+                  <span className={P}>{"              ready"}</span>
+                </span>
+                <span className="block">
+                  <span className="text-emerald-400">{"  ✔ "}</span>
+                  <span className={K}>{"Deployment/api@app"}</span>
+                  <span className={P}>{"         ready"}</span>
+                </span>
+                <span className="block">
+                  <span className="text-emerald-400">{"  ✔ "}</span>
+                  <span className={K}>{"Service/api@app"}</span>
+                  <span className={P}>{"            ready"}</span>
+                </span>
+                <span className="block">
+                  <span className="text-emerald-400">{"  ✔ "}</span>
+                  <span className={K}>{"StatefulSet/postgres@app"}</span>
+                  <span className={P}>{"   ready"}</span>
+                </span>
+                <span className="block">
+                  <span className="text-emerald-400">{"  • "}</span>
+                  <span className={P}>{"activation 'acme-vp4b2qcq' → Active"}</span>
+                </span>
+                <span className="block">
+                  <span className="text-emerald-400">
+                    {"  ✓ Deploy complete: 47 created, 0 failed"}
+                  </span>
+                </span>
+              </code>
+            </pre>
           </>
         )}
       </div>
     </div>
-  )
+  );
 }
 
 export default function Hero() {
@@ -234,9 +215,11 @@ export default function Hero() {
         </Reveal>
         <Reveal delay={2}>
           <p className="mx-auto mt-6 max-w-2xl text-balance text-lg text-muted-foreground sm:text-xl">
-            Your whole stack in one definition, with less to learn than
-            Kubernetes itself. Changes ship at startup speed because
-            mistakes fail the build on your laptop, not in production.
+            Compile your whole cluster from one definition, locally or in CI.
+            <br />
+            If it compiles, it will deploy safely.
+            <br />
+            Easier to learn than Kubernetes itself.
           </p>
         </Reveal>
         <Reveal delay={3}>
@@ -262,10 +245,6 @@ export default function Hero() {
               id="stack-definition"
               className="mx-auto max-w-2xl scroll-mt-24"
             >
-              <p className="mb-4 text-[0.95rem] font-medium text-foreground">
-                Everything it takes to run this stack, short enough to
-                review:
-              </p>
               <CodeCard />
               <p className="mt-4 text-sm text-muted-foreground">
                 This is the short version.{" "}
@@ -281,5 +260,5 @@ export default function Hero() {
         </div>
       </Container>
     </section>
-  )
+  );
 }
