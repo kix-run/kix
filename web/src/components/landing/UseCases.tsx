@@ -1,6 +1,6 @@
-import { type ReactNode } from "react"
-import { Accordion } from "radix-ui"
-import { motion } from "motion/react"
+import { type ReactNode } from "react";
+import { Accordion } from "radix-ui";
+import { motion } from "motion/react";
 import {
   ArrowRight,
   ChevronDown,
@@ -10,27 +10,27 @@ import {
   SlidersHorizontal,
   TrendingDown,
   type LucideIcon,
-} from "lucide-react"
-import { Button } from "@/components/ui/button"
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
 import {
   Container,
   Reveal,
   SectionHeading,
-} from "@/components/landing/primitives"
-import { cn } from "@/lib/utils"
+} from "@/components/landing/primitives";
+import { cn } from "@/lib/utils";
 
 function preselectUseCase(value: string) {
   window.dispatchEvent(
     new CustomEvent("kix:preselect-usecase", { detail: value }),
-  )
+  );
 }
 
 function UseCaseCta({
   label,
   preselect,
 }: {
-  label: string
-  preselect: string
+  label: string;
+  preselect: string;
 }) {
   return (
     <Button asChild className="mt-6">
@@ -39,21 +39,23 @@ function UseCaseCta({
         <ArrowRight className="size-4" />
       </a>
     </Button>
-  )
+  );
 }
 
 // ── Cost bars (folded in from the old CostComparison section) ──────────────
 
 type CostRow = {
-  name: string
-  providers: string
-  price: string
-  multiple?: string
+  name: string;
+  providers: string;
+  price: string;
+  multiple?: string;
   /** Bar width as % of the track; longest bar is 72% so the price fits inline. */
-  pct: number
-  note: string
-  highlight?: boolean
-}
+  pct: number;
+  note: string;
+  highlight?: boolean;
+  /** Muted brand tint, between the highlight bar and the grey bars. */
+  mid?: boolean;
+};
 
 const costRows: CostRow[] = [
   {
@@ -71,6 +73,7 @@ const costRows: CostRow[] = [
     multiple: "~12x",
     pct: 40,
     note: "Equivalent on-demand instances. Cheaper machines, but the operating burden is now yours.",
+    mid: true,
   },
   {
     name: "Bare metal",
@@ -80,7 +83,7 @@ const costRows: CostRow[] = [
     note: "A single dedicated EPYC machine. The same compute your PaaS rents you, at cost.",
     highlight: true,
   },
-]
+];
 
 function CostBars() {
   return (
@@ -103,7 +106,11 @@ function CostBars() {
               <motion.div
                 className={cn(
                   "h-7 min-w-1.5 self-center rounded-md",
-                  row.highlight ? "bg-brand" : "bg-foreground/[0.18]",
+                  row.highlight
+                    ? "bg-brand"
+                    : row.mid
+                      ? "bg-brand/40"
+                      : "bg-foreground/[0.18]",
                 )}
                 style={{ width: `${row.pct}%`, originX: 0 }}
                 initial={{ scaleX: 0 }}
@@ -136,16 +143,16 @@ function CostBars() {
         </div>
       ))}
     </div>
-  )
+  );
 }
 
 // ── Use cases ───────────────────────────────────────────────────────────────
 
 const items: {
-  title: string
-  teaser: string
-  icon: LucideIcon
-  body: ReactNode
+  title: string;
+  teaser: string;
+  icon: LucideIcon;
+  body: ReactNode;
 }[] = [
   {
     title: "Deploy into your customer's cloud",
@@ -155,13 +162,13 @@ const items: {
       <>
         <p>
           For B2B startups, "can you deploy into our environment?" is the
-          question that stalls enterprise deals. With a PaaS, the answer is
-          no. With Kix, your product is a verifiable cluster artifact: the
-          same definition that runs your SaaS deploys into a customer's AWS
-          account, their data center, or their private cloud, and their
-          security team reviews a concrete artifact instead of a black box.
-          When the next customer asks, it's the same definition with
-          different settings, not another project.
+          question that stalls enterprise deals. With a PaaS, the answer is no.
+          With Kix, your product is a verifiable cluster artifact: the same
+          definition that runs your SaaS deploys into a customer's AWS account,
+          their data center, or their private cloud, and their security team
+          reviews a concrete artifact instead of a black box. When the next
+          customer asks, it's the same definition with different settings, not
+          another project.
         </p>
         <p className="mt-4 font-medium text-foreground">
           One stack definition. Your cloud, their cloud, their basement.
@@ -175,68 +182,51 @@ const items: {
   },
   {
     title: "Cut the infrastructure bill",
-    teaser: "The same hardware, three very different price tags.",
+    teaser: "Gain true flexability over where you deploy.",
     icon: TrendingDown,
     body: (
       <>
         <p className="mb-7">
-          Most startups never see what the hardware underneath them costs.
-          Here is roughly the same compute, 96 vCPUs and 256 GB of memory,
-          per month at public list prices:
+          Kix understands the various flavours of Kubernetes, both managed and
+          unmanaged. This gives you flexibility in where you deploy.
         </p>
         <CostBars />
         <p className="mt-6 max-w-xl text-sm leading-relaxed">
-          Managed databases carry the same markup: RDS-class services charge
-          several times the cost of the compute they run on. On your
-          cluster, Postgres runs on machines you already pay for.
-        </p>
-        <p className="mt-4 max-w-xl text-sm leading-relaxed">
-          And moving off is a migration, not a rewrite. Your containers stay
-          your containers; they just land on infrastructure you own.
+          Kix also helps you safely operate your stateful workloads in-cluster,
+          providing both more control to you, and potential cost savings.
         </p>
         <p className="mt-5 max-w-xl text-xs leading-relaxed text-muted-foreground/80">
-          Raw compute at published list prices, checked June 2026. This is
-          the hardware gap, not an all-in bill: redundancy, storage, and
-          traffic are extra on every tier, and bare metal support is a paid
-          Kix add-on. Kix pricing is settling during early access, with one
-          aim fixed: Kix plus your own infrastructure should cost well under
-          the PaaS bill it replaces.
+          Raw compute at published list prices, checked June 2026.
         </p>
-        <UseCaseCta label="I want off the PaaS bill" preselect="paas" />
+        <UseCaseCta label="Try it out" preselect="paas" />
       </>
     ),
   },
   {
-    title: "Own your stack, and scale it",
-    teaser: "No platform limits, and no re-architecture to grow.",
+    title: "Own & scale your stack",
+    teaser: "No platform limits or lockin.",
     icon: SlidersHorizontal,
     body: (
       <>
         <p>
-          No platform-imposed limits on processes, networking, background
-          jobs, or runtime versions. Your architecture is your decision, not
-          a tier on someone's pricing page. And the cluster that runs your
-          two services today runs two hundred later: autoscaling, rolling
-          deploys, and self-healing are built in, so growth is more replicas,
-          not a re-architecture.
+          No platform-imposed limits on processes, networking, background jobs,
+          or runtime versions. Your architecture is your decision. The cluster
+          that runs your two services today can run two hundred later.
         </p>
       </>
     ),
   },
   {
-    title: "Compliance without the scramble",
+    title: "Compliance reporting built-in",
     teaser: "SBOM, provenance, and findings from the same build.",
     icon: FileCheck,
     body: (
       <>
         <p>
-          Because Kix compiles your whole stack, it knows every image,
-          package, and setting in production. One command produces the bundle
-          your auditor asked for: a software bill of materials, build
-          provenance, and findings mapped to SOC 2, ISO 27001, DORA, or NIS2.
-          The evidence is derived from the same build that produced your
-          cluster, so it is current by construction: regenerate it on any
-          commit and it describes exactly what is running.
+          Because Kix compiles your whole stack, it knows every image, package,
+          and setting in production. One command can produce: a software bill of
+          materials, build provenance, and findings mapped to SOC 2, ISO 27001,
+          DORA, or NIS2.
         </p>
       </>
     ),
@@ -249,14 +239,14 @@ const items: {
       <>
         <p>
           Tell us what you're trying to do. We're onboarding early teams one
-          conversation at a time, and the use cases beyond the obvious ones
-          are the ones we most want to hear about.
+          conversation at a time, and the use cases beyond the obvious ones are
+          the ones we most want to hear about.
         </p>
         <UseCaseCta label="Tell us about it" preselect="other" />
       </>
     ),
   },
-]
+];
 
 export default function UseCases() {
   return (
@@ -265,7 +255,7 @@ export default function UseCases() {
         <SectionHeading
           kicker="Use cases"
           title="Why teams use Kix"
-          lede="Sooner or later the starter platforms stop fitting: the bill crosses five figures, a big customer asks to host your product themselves, or the architecture outgrows what a PaaS allows. Growing into proper infrastructure is the hard step. These are the jobs teams bring to Kix."
+          lede="Sooner or later we out grow our initial deployment. There can be various triggers: bills crossing five figures, big customers asking for on-prem, or simply needing more control than a PaaS allows."
         />
 
         <Reveal delay={1} className="mt-12">
@@ -303,5 +293,5 @@ export default function UseCases() {
         </Reveal>
       </Container>
     </section>
-  )
+  );
 }

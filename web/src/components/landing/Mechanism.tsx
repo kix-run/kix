@@ -14,17 +14,17 @@ import {
   Rocket,
   UserCheck,
   type LucideIcon,
-} from "lucide-react"
+} from "lucide-react";
 import {
   Container,
   Reveal,
   SectionHeading,
   Terminal,
-} from "@/components/landing/primitives"
+} from "@/components/landing/primitives";
 
 type TerminalLine = {
-  tokens: { t: string; c?: "p" | "ok" | "err" | "wn" | "cm" | "str" }[]
-}
+  tokens: { t: string; c?: "p" | "ok" | "err" | "wn" | "cm" | "str" }[];
+};
 
 const checkLines: TerminalLine[] = [
   { tokens: [{ t: "$ kix check", c: "p" }] },
@@ -66,12 +66,10 @@ const checkLines: TerminalLine[] = [
     ],
   },
   {
-    tokens: [
-      { t: "  ✓ all selectors resolve, all references exist", c: "ok" },
-    ],
+    tokens: [{ t: "  ✓ all selectors resolve, all references exist", c: "ok" }],
   },
   { tokens: [{ t: "  ✓ 0 errors, safe to preview", c: "ok" }] },
-]
+];
 
 const previewLines: TerminalLine[] = [
   { tokens: [{ t: "$ kix diff production", c: "p" }] },
@@ -101,7 +99,7 @@ const previewLines: TerminalLine[] = [
       { t: "✓ deployed: cluster matches your definition", c: "ok" },
     ],
   },
-]
+];
 
 // Titles and icons carry the hero's former chip-pipeline labels;
 // this grid is now the page's single 4-step flow.
@@ -126,7 +124,7 @@ const steps: { title: string; body: string; icon: LucideIcon }[] = [
     icon: RefreshCcw,
     body: "Day two is the same loop. Change the file, compile, deploy. Upgrades, migrations, and scaling are edits, not projects.",
   },
-]
+];
 
 const features: { title: string; body: string; icon: LucideIcon }[] = [
   {
@@ -169,14 +167,14 @@ const features: { title: string; body: string; icon: LucideIcon }[] = [
     body: "Audit evidence as a build output: SBOM, provenance, findings mapped to your framework.",
     icon: FileCheck,
   },
-]
+];
 
 const agentFacilities = [
   <>MCP server for checks, schemas, and package discovery</>,
   <>Docs available as markdown and via MCP</>,
   <>Errors an agent can read and act on</>,
   <>Compact, typed definitions agents write well</>,
-]
+];
 
 function AgentLoop() {
   return (
@@ -215,7 +213,7 @@ function AgentLoop() {
         </code>
       </pre>
     </div>
-  )
+  );
 }
 
 export default function Mechanism() {
@@ -224,8 +222,8 @@ export default function Mechanism() {
       <Container>
         <SectionHeading
           kicker="How it works"
-          title="A compiler refuses to build a broken stack"
-          lede="Kix is not a dashboard over the same old YAML. It compiles your definition into standard Kubernetes resources, and it refuses to build one that doesn't hold together: a mismatched selector, a missing secret, or a dependency nothing provides stops the build before anything deploys."
+          title="The compiler refuses to build a broken stack"
+          lede="Kix is not a dashboard over the same old YAML. It compiles your definition into standard Kubernetes resources, and it refuses to build one that doesn't hold together. Mismatched selectors, missing secrets, or a dependency nothing provides, all will stop the build before anything deploys."
         />
 
         <div className="mt-14 grid gap-8 md:grid-cols-4">
@@ -303,9 +301,9 @@ export default function Mechanism() {
             <p className="mt-3 leading-relaxed text-muted-foreground">
               Agents write Kix well: the definition is compact and typed, and
               kix check gives an agent the same fast, local feedback it gives
-              you. A hallucinated selector doesn't reach your cluster; it
-              fails to compile, the agent reads the error and fixes it before
-              you ever see it.
+              you. A hallucinated selector doesn't reach your cluster; it fails
+              to compile, the agent reads the error and fixes it before you ever
+              see it.
             </p>
             <ul className="mt-5 space-y-2 text-sm text-muted-foreground">
               {agentFacilities.map((item, i) => (
@@ -324,8 +322,7 @@ export default function Mechanism() {
             </p>
           </Reveal>
         </div>
-
       </Container>
     </section>
-  )
+  );
 }
