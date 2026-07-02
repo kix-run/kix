@@ -47,6 +47,7 @@ Core language, evaluation model, wiring primitives.
 |---|----------|--------|-----------|---------|
 | 45 | [Multi-team & operator models](45_multi_team_and_operator_models.md) | RFC | Active | Monorepo vs. federated flakes vs. managed services. **Supersedes the archived `01_evaluateCluster_merging.md` cluster-merging direction.** Open governance questions from 01 are captured in `ROADMAP.md § Open design questions`. |
 | 55 | [Shared resource ownership](55_shared_resource_ownership.md) | Open problem | Active | CRD/Namespace ownership in multi-activation clusters; reference counting. |
+| 117 | [Self-service platform interface](117_self_service_platform_interface.md) | RFC | Near-term | Self-service on a compiler: schemas compiled from module options (no second type system), golden paths as partially-applied packages, JSON instance files + `loadInstances`, request lifecycle = PR lifecycle, agents consume the same exported schema as tools. First Kro treatment in the corpus; versioning dissolves into repo-atomic commits; day-2 status read-back named as the honest gap. |
 
 ## Storage, Images, Hardware
 
