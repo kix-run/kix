@@ -32,3 +32,6 @@ __pycache__/
 
 # insta snapshot pending review files
 *.snap.new
+
+# Local symlink to the ludo node NixOS config (machine-specific)
+ludo/node

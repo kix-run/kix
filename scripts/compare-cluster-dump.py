@@ -14,9 +14,11 @@ Produces a structured markdown report with:
 Output is designed for both human reading and LLM consumption.
 """
 
+import fnmatch
 import json
 import re
 import sys
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
@@ -377,10 +379,48 @@ def _is_controller_owned(doc: dict) -> bool:
     return False
 
 
+def group_key(doc: dict) -> str:
+    """Compute a logical group key for a resource.
+
+    Groups resources by the chart/release/app they belong to so the diff
+    can be filtered or sliced by component. Falls back gracefully when
+    labels are absent.
+
+    Priority:
+      1. `helm:{release-namespace}/{release-name}` from Helm 3 annotations
+      2. `app:{namespace}/{instance}` from app.kubernetes.io/instance label
+      3. `app:{namespace}/{name}` from app.kubernetes.io/name label
+      4. `ns:{namespace}` for namespaced resources without app labels
+      5. `_cluster` for cluster-scoped resources without app labels
+    """
+    metadata = doc.get("metadata") or {}
+    labels = metadata.get("labels") or {}
+    annotations = metadata.get("annotations") or {}
+    ns = metadata.get("namespace") or "_cluster"
+
+    rel_name = annotations.get("meta.helm.sh/release-name")
+    if rel_name:
+        rel_ns = annotations.get("meta.helm.sh/release-namespace") or ns
+        return f"helm:{rel_ns}/{rel_name}"
+
+    instance = labels.get("app.kubernetes.io/instance")
+    if instance:
+        return f"app:{ns}/{instance}"
+
+    app_name = labels.get("app.kubernetes.io/name")
+    if app_name:
+        return f"app:{ns}/{app_name}"
+
+    if ns == "_cluster":
+        return "_cluster"
+    return f"ns:{ns}"
+
+
 def load_resources(
     directory: Path,
     normalizer,
     service: str | None = None,
+    group: str | None = None,
     skip_controller_owned: bool = False,
     skip_runtime: bool = False,
 ) -> dict[str, dict]:
@@ -421,6 +461,11 @@ def load_resources(
         name = (doc.get("metadata") or {}).get("name", "")
         return name == service or name.startswith(service + "-")
 
+    def _matches_group(gk: str) -> bool:
+        if group is None:
+            return True
+        return fnmatch.fnmatchcase(gk, group)
+
     def _process(f: Path) -> list[tuple[str, dict]]:
         """Parse, filter, and normalize a file. Returns [(key, doc), ...]."""
         try:
@@ -444,11 +489,19 @@ def load_resources(
                     continue
                 if not _matches_service_doc(item):
                     continue
+                # Compute group key from the *raw* doc — the normalizer
+                # strips helm annotations and app.kubernetes.io labels,
+                # which would collapse everything to ns: groups.
+                gk = group_key(item)
+                if not _matches_group(gk):
+                    continue
                 if skip_controller_owned and _is_controller_owned(item):
                     continue
                 if skip_runtime and _is_runtime_resource(item):
                     continue
-                out.append((_key_from_doc(item), normalizer(item)))
+                normalized = normalizer(item)
+                normalized["__group__"] = gk
+                out.append((_key_from_doc(item), normalized))
         return out
 
     def _is_skip(f: Path) -> bool:
@@ -1169,6 +1222,18 @@ def _strip_sg_runtime(doc: dict) -> dict:
     help="Only compare resources whose name matches this service (e.g. 'coredns')",
 )
 @click.option(
+    "--group",
+    default=None,
+    help="Only compare resources matching this group key (glob ok, e.g. 'helm:monitoring/*'). Use --list-groups to discover keys.",
+)
+@click.option(
+    "--list-groups",
+    "list_groups",
+    is_flag=True,
+    default=False,
+    help="List all discovered resource groups (helm release / app / namespace) with kix and cluster counts, then exit.",
+)
+@click.option(
     "--color/--no-color",
     default=None,
     help="Colorize diff output (default: auto-detect TTY)",
@@ -1267,6 +1332,8 @@ def main(
     cluster_dirs: tuple[str, ...],
     ignore_path: tuple[str, ...],
     service: str | None,
+    group: str | None,
+    list_groups: bool,
     color: bool | None,
     ignore_cluster_defaults: bool,
     full_diff: bool,
@@ -1316,6 +1383,10 @@ def main(
     ignore_paths = set(ignore_path) if ignore_path else set()
     if ignore_cluster_defaults:
         ignore_paths |= CLUSTER_DEFAULT_PATHS
+    # The loader stashes the pre-normalization group key on each doc as
+    # __group__ so --list-groups can read it after normalization stripped
+    # helm/app labels. Hide it from the structural diff.
+    ignore_paths.add("$.__group__")
     ignore_paths = ignore_paths or None
 
     # Build post-normalization pipeline from flags
@@ -1344,10 +1415,20 @@ def main(
 
     if service:
         click.echo(f"Filtering for service: {service}", err=True)
+    if group and not list_groups:
+        click.echo(f"Filtering for group: {group}", err=True)
+
+    # --list-groups loads everything unfiltered (ignoring --group) and
+    # prints a discovery summary so the user can pick a key to filter on.
+    load_group = None if list_groups else group
 
     click.echo("Loading kix manifests...", err=True)
     kix_resources = load_resources(
-        kix_path, _with_post(normalize_kix), service, skip_runtime=skip_runtime
+        kix_path,
+        _with_post(normalize_kix),
+        service,
+        group=load_group,
+        skip_runtime=skip_runtime,
     )
     click.echo(f"  {len(kix_resources)} resources", err=True)
 
@@ -1358,12 +1439,35 @@ def main(
             cluster_path,
             _with_post(normalize_cluster),
             service,
+            group=load_group,
             skip_controller_owned=skip_controller_owned,
             skip_runtime=skip_runtime,
         )
         click.echo(f"  {cluster_path}: {len(loaded)} resources", err=True)
         cluster_resources.update(loaded)
     click.echo(f"  total: {len(cluster_resources)} resources", err=True)
+
+    if list_groups:
+        kix_counts = Counter(
+            d.get("__group__", group_key(d)) for d in kix_resources.values()
+        )
+        cluster_counts = Counter(
+            d.get("__group__", group_key(d)) for d in cluster_resources.values()
+        )
+        all_groups = sorted(set(kix_counts) | set(cluster_counts))
+        width = max((len(g) for g in all_groups), default=10)
+        header = f"{'GROUP'.ljust(width)}  {'KIX':>6}  {'CLUSTER':>8}"
+        click.echo(header)
+        click.echo("-" * len(header))
+        for g in all_groups:
+            click.echo(
+                f"{g.ljust(width)}  {kix_counts.get(g, 0):>6}  {cluster_counts.get(g, 0):>8}"
+            )
+        click.echo("-" * len(header))
+        click.echo(
+            f"{'TOTAL'.ljust(width)}  {sum(kix_counts.values()):>6}  {sum(cluster_counts.values()):>8}"
+        )
+        return
 
     if skip_cnp:
         _CNP_KINDS = {"ciliumnetworkpolicy", "ciliumclusterwidenetworkpolicy"}
