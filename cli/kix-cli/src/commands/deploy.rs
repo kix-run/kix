@@ -544,19 +544,19 @@ impl StreamCliObserver {
             Verdict::Pending => {}
             Verdict::Running => match detail {
                 Some(NodeDetail::Applied(action))
-                    if (!self.quiet || !matches!(action, ApplyAction::Unchanged)) => {
-                        let (symbol, lbl) = apply_symbol(action);
-                        println!("  {} {}{} {}", symbol, tag, label, output::dim(lbl));
-                    }
-                Some(NodeDetail::SecretHydrated { keys })
-                    if !self.quiet => {
-                        println!(
-                            "  {} {} hydrated ({} keys from SOPS)",
-                            output::green("🔓"),
-                            label,
-                            keys,
-                        );
-                    }
+                    if (!self.quiet || !matches!(action, ApplyAction::Unchanged)) =>
+                {
+                    let (symbol, lbl) = apply_symbol(action);
+                    println!("  {} {}{} {}", symbol, tag, label, output::dim(lbl));
+                }
+                Some(NodeDetail::SecretHydrated { keys }) if !self.quiet => {
+                    println!(
+                        "  {} {} hydrated ({} keys from SOPS)",
+                        output::green("🔓"),
+                        label,
+                        keys,
+                    );
+                }
                 Some(NodeDetail::ReadinessProgress(_)) => {}
                 _ => {}
             },
