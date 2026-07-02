@@ -199,6 +199,18 @@ This puts three requirements on Kix, all extensions of planned work rather than 
 
 Two properties fall out. First, submitted content is data, not code: evaluating a hostile JSON file through the loader executes nothing, which is why the input side can be exposed to low-trust requesters at all. Second, this one endpoint is the whole integration surface: the web form, the agent loop (propose, check, fix), CI on the PR, and any ticketing-system integration all speak the same "here is a candidate spec, what is wrong with it" call. Preview is the same service asked to go one step further and return the diff instead of just the verdict.
 
+Only eval is needed for validation: all Kix checks fire at evaluation time, and "build" for a Kix cluster is little more than writing the manifest files (preview needs that build step; it is milliseconds on top of the eval). The one blur is `importChart`, which renders charts during eval; its cache key is chart + values text, so a form field only pays a re-render when it actually feeds a chart's values.
+
+### 3.7 Hosting note: the validation service is the tenant worker
+
+Running this service for multiple customers has one non-negotiable and one remembered trick.
+
+The non-negotiable: **Nix eval is not a tenant boundary.** Pure-eval mode is good defense in depth, but the evaluator was never designed to contain hostile code, and a shared writable store would put every tenant's manifests (topology, hostnames, images) in one world-readable directory. The floor is one worker (container or microVM) plus one Nix store per tenant, with the store mounted at the canonical `/nix` as a detachable volume. Requests themselves are data and were never the risk; the tenant's own package code is what the boundary contains.
+
+SaaS economics then come from around the worker, not inside it: a shared pool of pre-warmed *blank* workers that attach a tenant volume on demand (pool sized to concurrent demand, not tenant count), scale-to-zero per tenant, and a shared **read-only binary cache** all tenants substitute from, which gets better as tenants converge on the same stdlib and charts. The trick to remember: Nix's experimental **local-overlay store** takes this further, a shared read-only lower store holding the common paths with a per-tenant writable upper layer, giving disk dedup across tenants without a shared writable store. Replit runs this pattern at large scale. Start with the plain per-tenant volume; adopt the overlay when disk or cold-start substitution starts to hurt.
+
+The same worker image is the on-prem product: SaaS runs many workers densely, enterprise runs one inside their own walls, and the deployment topology is the pricing tier. The worker must therefore stay self-contained and never assume the shared cache or control plane is nearby.
+
 ## 4. Versioning: mostly becomes git state
 
 Runtime platforms need a versioning protocol (served versions, storage versions, conversion webhooks) because the intent store is decoupled in time from its interpreters. Live CRs must survive an RGD upgrade underneath them.
