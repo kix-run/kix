@@ -185,6 +185,20 @@ Two observations follow, and both affect how existing work is prioritized:
 
 For a form-based portal, Kix competes with mature incumbents. For agent-driven self-service, a typed repo that can be compiled and previewed is a better foundation than a live API. Runtime tools cannot retrofit that compile step. This is likely where the interface actually gets used.
 
+### 3.6 Validation: schema for speed, eval for truth
+
+The exported schema (§3.1) is deliberately not the real validator. It covers what JSON Schema can express: types, required fields, enums, ranges. That tier lives in the browser (or in the agent's tool definition), fires per keystroke, and exists to make the interface responsive.
+
+The authoritative tier is the compiler itself, used the way an IDE uses a language server: nobody reimplements the compiler's rules for the editor; a service runs the real compiler and maps its diagnostics back onto source positions. Here the source positions are form fields. A validation service holds a warm checkout of the repo, writes the candidate spec in as an instance file, evaluates the cluster, and returns structured diagnostics. Everything a schema cannot express comes for free, because it is the same eval that gates the PR: DI resolution, port existence, cross-instance ingress collisions, budget and policy checks.
+
+This puts three requirements on Kix, all extensions of planned work rather than new machinery:
+
+1. **Field-level attribution.** Diagnostics (doc 80) must attribute errors down to instance file plus option path. An option path maps one-to-one onto a JSON pointer, and a JSON pointer onto a form field. Cluster-level errors with no single field render as form-level errors.
+2. **Batch reporting.** Nix stops at the first throw; a form (or an agent) wants all errors in one round. Doc 120 §3.4's recovery points get a second consumer here.
+3. **A warm service.** Whole-cluster eval takes seconds on current clusters, which is fine on submit but not per keystroke. This wants a long-running `kix serve --validate` process, not a cold build per request.
+
+Two properties fall out. First, submitted content is data, not code: evaluating a hostile JSON file through the loader executes nothing, which is why the input side can be exposed to low-trust requesters at all. Second, this one endpoint is the whole integration surface: the web form, the agent loop (propose, check, fix), CI on the PR, and any ticketing-system integration all speak the same "here is a candidate spec, what is wrong with it" call. Preview is the same service asked to go one step further and return the diff instead of just the verdict.
+
 ## 4. Versioning: mostly becomes git state
 
 Runtime platforms need a versioning protocol (served versions, storage versions, conversion webhooks) because the intent store is decoupled in time from its interpreters. Live CRs must survive an RGD upgrade underneath them.
@@ -198,11 +212,13 @@ In the git-mediated model, instance files and the schema that interprets them ar
 
 Federated topologies (instances in team repos, package set pinned as a flake input) reintroduce skew across the pin, but they do so explicitly. Upgrading the pin is itself a compile-checked PR in the consuming repo.
 
-## 5. The honest weakness: day-2 read-back
+## 5. Day-2 read-back: an assembly gap, not an architecture gap
 
-Kro writes status onto the CR instance: your bucket's ARN, your app's health. A portal reads it with one GET. Compilation answers "what will this change do"; it cannot answer "what state is my thing in now."
+Compilation answers "what will this change do"; it cannot answer "what state is my thing in now." A portal needs the second answer too.
 
-The Kix answer has to be assembled from several pieces: the activation CR (deployed generation, content hashes), `kix health` (per-package live status), and a compiled catalog artifact. That catalog would include per-instance endpoints, owners, and dashboards, emitted as data inside the cluster artifact so a portal can key live status by identifiers the compiler embedded. The pieces exist or are on the roadmap (docs 62, 106, business 11 Pillar 1), but nothing joins them into a "status of my request" endpoint today. This is the largest genuine gap between this proposal and the runtime model. The recommendation is to treat catalog export plus status join as its own design doc once §3.1 and §3.3 exist.
+Kro writes status onto the CR instance, and a portal reads it with one GET. Two honest qualifiers on that convenience: the status is shallow (resources created and became ready, not "your app is healthy"), and it is paid for with watch churn on the API server. Nothing architectural stops Kix from matching and exceeding it: the operator already watches deployed state for drift and health.
+
+The gap is assembly. The pieces are the activation CR (deployed generation, content hashes), `kix health` (per-package live status), and a compiled catalog artifact carrying per-instance endpoints, owners, and dashboards as data inside the cluster artifact, so a portal can key live status by identifiers the compiler embedded. All of these exist or are on the roadmap (docs 62, 106, business 11 Pillar 1), but nothing joins them into a "status of my request" endpoint today. This is the part of the proposal with the least existing machinery. The recommendation is to treat catalog export plus status join as its own design doc once §3.1 and §3.3 exist.
 
 ## 6. Verdict vs. Kro
 
@@ -218,8 +234,9 @@ Same UX ceiling: both converge on a schema-driven form (or agent tool) in front 
 | Request lifecycle | PR lifecycle, policy auto-merge | Build your own around the API server |
 | Agent safety | Propose/compile/iterate before anything is live | Mistakes are live on apply |
 | Runtime footprint | Inert manifests + thin operator | Controller with broad write permissions |
+| Control-plane load | None added at request time; the work happens at build | Generated CRDs, per-RGD controllers, watch churn on the API server |
 | Latency (blessed path) | Seconds-to-low-minutes via auto-merge | Seconds |
-| Day-2 status read-back | Assembled from activation + health (gap, §5) | On the CR, built in |
+| Day-2 status read-back | Pieces exist, not yet joined (§5) | Built in, but shallow (CR status) |
 | Adoption cost | Nix, a repo, CI | Install controller, write RGD |
 | Ecosystem gravity | None yet | K8s SIG subproject |
 
@@ -230,7 +247,7 @@ Better or worse: for form-portal self-service today, Kro is faster to first wow.
 - **Portal-owned database as intent store, git as derived output.** Rejected: this recreates the drift problem between the platform's database and the repo, forfeits PR review as the approval mechanism, and makes the compiler a downstream consumer instead of the gate.
 - **Hand-authored JSON Schemas per golden path.** Rejected per §3.1: a second type system that drifts from the module options interpreting the data.
 - **Compile Kix packages into Kro RGDs.** Technically conceivable (both are resource graphs), but strategically wrong. It discards whole-cluster verification, the single property this RFC is built on, to inherit a runtime we do not control.
-- **CRs as compiler inputs (runtime front door, compile-time core).** An operator mode could watch a request CRD, feed instances into the eval as JSON input, recompile the cluster, and apply. This would give Kro's UX with Kix's verification: the compile becomes the admission check. Not rejected, but deferred; it needs in-cluster eval (interesting_thoughts/89) and reopens doc 55's ownership questions. Revisit if a customer needs the K8s API as the request channel.
+- **CRs as compiler inputs (runtime front door, compile-time core).** An operator mode could watch a request CRD, feed instances into the eval as JSON input, recompile the cluster, and apply. This would give Kro's UX with Kix's verification: the compile becomes the admission check. Deferred rather than rejected: it needs in-cluster eval (interesting_thoughts/89) and reopens doc 55's ownership questions. It has since been proposed independently a second time (as "manage requests via the operator instead of git"), which is usually the signal to take an idea seriously; promoted to open question 6.
 
 ## 8. Open questions
 
@@ -239,3 +256,4 @@ Better or worse: for form-portal self-service today, Kro is faster to first wow.
 3. **Limits vocabulary.** `limits.replicas.max` in §3.2 is ad hoc. Should golden-path limits reuse the scorecard rules engine instead of growing a parallel constraint language?
 4. **Identity in the auto-merge lane.** Team ownership via directory + CODEOWNERS covers humans; what identity does an agent's proposal carry, and does the policy lane need to distinguish it? (Suspicion from §3.5: it should not, but secrets and budget attribution may force it.)
 5. **Catalog/status join (§5).** This needs its own design doc: what exactly does the compiled catalog artifact contain, and what serves the "status of my request" query?
+6. **The operator as request channel (§7).** For organizations where requesters must not touch git at all, the operator could accept requests directly as CRs fed into the compile. What is the minimum version: does it require in-cluster eval (interesting_thoughts/89), or can the operator delegate compilation to CI and only gate on the result?
