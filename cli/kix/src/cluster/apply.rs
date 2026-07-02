@@ -529,7 +529,10 @@ async fn update_activations_annotation(
     hashes.insert(activation_hash);
     let merged = hashes.into_iter().collect::<Vec<_>>().join(",");
 
-    // Patch with strategic merge (not SSA — we only want to touch this one annotation)
+    // Patch with strategic merge (not SSA — we only want to touch this one annotation).
+    // Name the field manager explicitly: kube's default would record this write
+    // under manager "unknown" in managedFields, which pollutes ownership-based
+    // drift attribution (doc 122).
     let patch = serde_json::json!({
         "metadata": {
             "annotations": {
@@ -537,8 +540,11 @@ async fn update_activations_annotation(
             }
         }
     });
-    api.patch(name, &PatchParams::default(), &Patch::Merge(&patch))
-        .await?;
+    let pp = PatchParams {
+        field_manager: Some(FIELD_MANAGER.to_string()),
+        ..PatchParams::default()
+    };
+    api.patch(name, &pp, &Patch::Merge(&patch)).await?;
 
     Ok(())
 }

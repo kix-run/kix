@@ -994,6 +994,20 @@ pub fn check_readiness(obj: &DynamicObject, kind: &str) -> bool {
         "CiliumNetworkPolicy" | "CiliumClusterwideNetworkPolicy" => {
             has_condition(&obj.data, "Valid", "True")
         }
+        // StackGres clusters never surface a Ready/Available condition;
+        // they report Bootstrapped=True once the primary is initialized
+        // and accepting connections — which is exactly what dependents
+        // (stackgres-database bootstrap jobs) need. Without this they fall
+        // through to check_generic_ready, which waits forever for a
+        // Ready/Available=True that never comes, times out, and cancels
+        // everything downstream (e.g. the whole immich stack).
+        "SGCluster" | "SGShardedCluster" => has_condition(&obj.data, "Bootstrapped", "True"),
+        // Gateway API kinds use their own condition vocabulary, not
+        // Ready/Available: a GatewayClass is usable once Accepted=True, a
+        // Gateway once Programmed=True. Without these they fall through to
+        // check_generic_ready and time out.
+        "GatewayClass" => has_condition(&obj.data, "Accepted", "True"),
+        "Gateway" => has_condition(&obj.data, "Programmed", "True"),
         _ => check_generic_ready(&obj.data),
     }
 }

@@ -543,14 +543,13 @@ impl StreamCliObserver {
         match verdict {
             Verdict::Pending => {}
             Verdict::Running => match detail {
-                Some(NodeDetail::Applied(action)) => {
-                    if !self.quiet || !matches!(action, ApplyAction::Unchanged) {
+                Some(NodeDetail::Applied(action))
+                    if (!self.quiet || !matches!(action, ApplyAction::Unchanged)) => {
                         let (symbol, lbl) = apply_symbol(action);
                         println!("  {} {}{} {}", symbol, tag, label, output::dim(lbl));
                     }
-                }
-                Some(NodeDetail::SecretHydrated { keys }) => {
-                    if !self.quiet {
+                Some(NodeDetail::SecretHydrated { keys })
+                    if !self.quiet => {
                         println!(
                             "  {} {} hydrated ({} keys from SOPS)",
                             output::green("🔓"),
@@ -558,7 +557,6 @@ impl StreamCliObserver {
                             keys,
                         );
                     }
-                }
                 Some(NodeDetail::ReadinessProgress(_)) => {}
                 _ => {}
             },
