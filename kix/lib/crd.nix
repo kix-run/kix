@@ -145,4 +145,12 @@ rec {
     // {
       inherit labels;
     };
+
+  # Set annotations on the CRD resource itself (metadata.annotations).
+  withAnnotations =
+    annotations: attrs:
+    attrs
+    // {
+      annotations = (attrs.annotations or { }) // annotations;
+    };
 }

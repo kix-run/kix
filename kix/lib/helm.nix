@@ -10,6 +10,19 @@
 #       let resources = scope.helm.importChart { chart = ...; scope = ...; };
 #       in resources.mkParts { root = resources.get "Deployment" "foo"; };
 #
+# `mkParts` auto-derives a public `out` surface for downstream consumers:
+#
+#   • `out.byKind.<Kind>.<name>` — flat lookup of every wrapped chart
+#     resource. Lets a consumer reach a non-root chart resource without
+#     the producer having to hand-roll `out` overrides.
+#
+#   • For workload roots (Deployment/StatefulSet/DaemonSet/Job) with
+#     exactly one Service that selects them, the Service's
+#     `out.{name, fqdn, selector, ports, url}` is promoted onto the
+#     package's rootOut so `pkg.out.fqdn` is the public Service FQDN
+#     rather than the workload's synthetic one. Skipped silently when
+#     0 or >1 Services match.
+#
 # See v2_discussions/87_helm_integration_v2.md for design rationale.
 
 { pkgs, lib }:
@@ -164,7 +177,15 @@ rec {
       extraFlags ? [ ],
     }:
     let
-      valuesFile = pkgs.writeText "helm-values.json" (builtins.toJSON values);
+      # Dep-derived values (e.g. `loki.out.fqdn`) carry store-path context
+      # that would make this derivation depend on those manifests and
+      # re-render the chart whenever a dep changes, even though helm only
+      # reads the text. Context never survives the readFile after IFD anyway
+      # (cross-package edges are re-established via `deps`/`networkDeps`),
+      # so drop it: the render is cached purely by chart + values + flags.
+      valuesFile = pkgs.writeText "helm-values.json" (
+        builtins.unsafeDiscardStringContext (builtins.toJSON values)
+      );
 
       flagList = [
         "--namespace"
@@ -191,6 +212,63 @@ rec {
           | yq eval-all -o=json '[.]' \
           > $out
       '';
+
+  # ── importChartCrds — CRD-only chart templating ─────────────────────
+  #
+  # Render only the CRDs from a chart and wrap them as cluster-scoped
+  # kix resources. Use from a *native* kix package that wraps a charted
+  # upstream (cert-manager, velero, infisical-operator, arc, tailscale,
+  # openebs LVM/ZFS, kubevirt-extras, …) so the package automatically
+  # ships the chart's CRDs without re-authoring each one via
+  # `scope.crd.fromKind`.
+  #
+  # Returns a list of wrapped resources (cluster-scoped). Add them to
+  # `extraParts` / requires of your package's root.
+  importChartCrds =
+    {
+      chart,
+      scope,
+      releaseName ? "release",
+      values ? { },
+    }:
+    let
+      drv =
+        pkgs.runCommand "helm-crds-${releaseName}"
+          {
+            nativeBuildInputs = [
+              pkgs.kubernetes-helm
+              pkgs.yq-go
+            ];
+          }
+          ''
+            export HOME=$(mktemp -d)
+            # `helm template --include-crds` interleaves CRDs with regular
+            # resources. Filter to kind=CustomResourceDefinition only.
+            valuesFile=${
+              # Same context-drop as helmTemplateDerivation: cache the render
+              # by values text, not by whatever manifests the values reference.
+              pkgs.writeText "helm-values.json" (builtins.unsafeDiscardStringContext (builtins.toJSON values))
+            }
+            helm template "${releaseName}" "${chart}" \
+              --values "$valuesFile" \
+              --include-crds \
+              --no-hooks \
+              --kube-version "1.32.0" \
+              | yq eval-all -o=json '[. | select(.kind == "CustomResourceDefinition")]' \
+              > $out
+          '';
+      raw = builtins.fromJSON (builtins.readFile drv);
+      crds = builtins.filter (
+        r: r != null && builtins.isAttrs r && (r.kind or "") == "CustomResourceDefinition"
+      ) raw;
+    in
+    map (
+      r:
+      wrapHelmResource {
+        inherit scope;
+        resource = r;
+      }
+    ) crds;
 
   # Wraps a single parsed JSON K8s resource into a kix resource via scope.
   wrapHelmResource =
@@ -282,7 +360,19 @@ rec {
       # extractServiceEdgesFromJson discovers the egress edges.
       # The DI dep must also be declared in the build function args
       # so its Services appear in _netpolServiceRegistry.
+      #
+      # Use this for context that auto-discovery (`deps`) misses —
+      # values nested inside `dep.out.byKind` or hand-built strings
+      # that don't appear at `dep.out.*`.
       networkDeps ? [ ],
+
+      # Cross-package DI dependencies the chart's manifests reference.
+      # Each entry is a dep package instance (the same value the build
+      # function receives as an arg). Phase 2: every context-carrying
+      # string at `dep.out.*` is auto-collected and merged into
+      # `networkDeps`, so manual `networkDeps = [ dep.out.fqdn ]`
+      # plumbing is unnecessary for the common case.
+      deps ? [ ],
     }:
     let
       # Strip configuration with defaults.
@@ -304,6 +394,25 @@ rec {
       effectiveStripLabels = labels: if !doStripLabels then labels else stripHelmLabels labels;
 
       effectiveCleanSpec = spec: if doStripStrategy then cleanSpec spec else spec;
+
+      # Auto-collect context-carrying string values from each DI dep's
+      # top-level `out` attrs. Anything bearing Nix string context here
+      # is a candidate egress edge — a chart that interpolates the
+      # value (FQDN, name, host) into a manifest gives the netpol
+      # generator a hook to discover the cross-package edge. Nested
+      # values (e.g. `dep.out.byKind.Service.x.out.fqdn`) are NOT
+      # collected; pass them via `networkDeps` if needed.
+      depContextValues = builtins.concatMap (
+        dep:
+        let
+          outAttrs = dep.out or { };
+        in
+        builtins.filter (v: builtins.isString v && builtins.getContext v != { }) (
+          builtins.attrValues outAttrs
+        )
+      ) deps;
+
+      effectiveNetworkDeps = networkDeps ++ depContextValues;
 
       # Wrap a single resource with the effective strip settings.
       # `requires` is a list of already-wrapped resources this resource depends on
@@ -376,8 +485,8 @@ rec {
           # Inject cross-package network deps so their store-path context
           # appears in the workload JSON, making extractServiceEdgesFromJson
           # discover the egress edges.
-          // lib.optionalAttrs (isWorkload && networkDeps != [ ]) {
-            _helmNetworkDeps = networkDeps;
+          // lib.optionalAttrs (isWorkload && effectiveNetworkDeps != [ ]) {
+            _helmNetworkDeps = effectiveNetworkDeps;
           }
         );
 
@@ -537,122 +646,341 @@ rec {
       orphans = helmDag.findOrphans patchedResources rawEdges;
 
       # ── Resource collection ────────────────────────────────────────
-      resourceCollection = rec {
-        # All wrapped resources as a flat list.
-        all = wrappedResources;
+      #
+      # Built recursively to support `replaceResource`: substituting a
+      # chart resource with a kix-native one returns a new collection
+      # with the swap applied to all lookups, mkParts, and DAG-aware
+      # operations.
+      mkResourceCollection =
+        replacements:
+        let
+          # `replacements` is an attrset keyed by "Kind/name", where each
+          # value is the substitute kix resource.
+          isReplacedKey = key: replacements ? ${key};
+          isReplaced = r: isReplacedKey "${r.kind}/${r.name}";
 
-        # Lookup by kind + name (throws if not found).
-        get =
-          kind: name:
-          let
-            matches = builtins.filter (r: r.kind == kind && r.name == name) wrappedResources;
-          in
-          if matches == [ ] then
-            throw "importChart: no resource found with kind=${kind} name=${name} in chart ${releaseName}"
-          else
-            builtins.head matches;
+          effectiveResources =
+            (builtins.filter (r: !(isReplaced r)) wrappedResources) ++ (builtins.attrValues replacements);
 
-        # Lookup by kind + name (returns null if not found).
-        find =
-          kind: name:
-          let
-            matches = builtins.filter (r: r.kind == kind && r.name == name) wrappedResources;
-          in
-          if matches == [ ] then null else builtins.head matches;
+          # Edges where neither endpoint has been replaced — chart-internal
+          # DAG that the substitution preserves untouched. Edges touching a
+          # replaced resource are dropped; the caller must wire the new
+          # resource's `requires` themselves.
+          effectiveEdges = builtins.filter (e: !(isReplaced e.from) && !(isReplaced e.to)) wrappedEdges;
 
-        # Filter by kind.
-        byKind = kind: builtins.filter (r: r.kind == kind) wrappedResources;
+          effectiveDepsMap = builtins.foldl' (
+            acc: edge:
+            let
+              key = edge.from.outPath;
+              existing = acc.${key} or [ ];
+            in
+            acc // { ${key} = existing ++ [ edge.to ]; }
+          ) { } effectiveEdges;
 
-        # All workloads (Deployment, StatefulSet, DaemonSet, Job, CronJob).
-        workloads = builtins.filter (r: builtins.elem r.kind helmDag.workloadKinds) wrappedResources;
+          effectiveDepTargetIds = lib.unique (map (e: "${e.to.kind}/${e.to.name}") effectiveEdges);
 
-        # Everything except the given resources.
-        excluding =
-          resources:
-          let
-            excludePaths = map (r: r.outPath) resources;
-          in
-          builtins.filter (r: !(builtins.elem r.outPath excludePaths)) wrappedResources;
+          # ── Auto-derived CRD builders (Phase 3) ────────────────────
+          #
+          # For every CustomResourceDefinition the chart ships, emit a
+          # builder pair { cr, mkCR } so consumer packages can construct
+          # CRs without hand-rolling `scope.mkCRDRef`. The builder adds
+          # the CRD itself plus every chart workload to `requires`, so a
+          # consumer CR's wave is gated on:
+          #   1. the CRD being Established, and
+          #   2. every controller workload being Ready (any of them
+          #      could be the admission/conversion webhook).
+          chartCrds = builtins.filter (r: r.kind == "CustomResourceDefinition") effectiveResources;
 
-        # As an attrset keyed by "${toLower kind}-${name}".
-        attrs = builtins.listToAttrs (
-          map (r: {
-            name = "${lib.toLower r.kind}-${r.name}";
-            value = r;
-          }) wrappedResources
-        );
+          chartWorkloads = builtins.filter (r: builtins.elem r.kind helmDag.workloadKinds) effectiveResources;
 
-        # ── DAG ──────────────────────────────────────────────────────
+          mkCrdBuilder =
+            crdRes:
+            let
+              spec = crdRes.rawManifest.spec or { };
+              group = spec.group or null;
+              crKind = spec.names.kind or null;
+              crdScope = spec.scope or "Namespaced";
+              versions = spec.versions or [ ];
+              storage = builtins.filter (v: (v.storage or false) == true) versions;
+              version =
+                if storage != [ ] then
+                  (builtins.head storage).name
+                else if versions != [ ] then
+                  (builtins.head versions).name
+                else
+                  null;
+            in
+            if group == null || crKind == null || version == null then
+              null
+            else
+              let
+                crApiVersion = "${group}/${version}";
+                cr =
+                  args:
+                  args
+                  // {
+                    apiVersion = crApiVersion;
+                    kind = crKind;
+                    requires = (args.requires or [ ]) ++ [ crdRes ] ++ chartWorkloads;
+                  };
+                mkCR =
+                  consumerScope: args:
+                  let
+                    enriched = cr args;
+                  in
+                  if crdScope == "Cluster" then
+                    consumerScope.mkClusterResource enriched
+                  else
+                    consumerScope.mkResource enriched;
+              in
+              {
+                inherit cr mkCR;
+              };
 
-        # Inferred internal dependencies for a wrapped resource.
-        depsOf = resource: depsMap.${resource.outPath} or [ ];
+          crdBuilders = builtins.foldl' (
+            acc: crdRes:
+            let
+              builder = mkCrdBuilder crdRes;
+              kindName = crdRes.rawManifest.spec.names.kind or null;
+            in
+            if builder == null || kindName == null then acc else acc // { ${kindName} = builder; }
+          ) { } chartCrds;
+        in
+        rec {
+          # All effective resources as a flat list.
+          all = effectiveResources;
 
-        # All link edges as { from, to, type } triples (wrapped resources).
-        edges = wrappedEdges;
+          # Lookup by kind + name (throws if not found).
+          get =
+            kind: name:
+            let
+              matches = builtins.filter (r: r.kind == kind && r.name == name) effectiveResources;
+            in
+            if matches == [ ] then
+              throw "importChart: no resource found with kind=${kind} name=${name} in chart ${releaseName}"
+            else
+              builtins.head matches;
 
-        # Diagnostic orphans (selectors/refs matching nothing in chart).
-        inherit orphans;
+          # Lookup by kind + name (returns null if not found).
+          find =
+            kind: name:
+            let
+              matches = builtins.filter (r: r.kind == kind && r.name == name) effectiveResources;
+            in
+            if matches == [ ] then null else builtins.head matches;
 
-        # ── Root selection ────────────────────────────────────────────
+          # Filter by kind.
+          byKind = kind: builtins.filter (r: r.kind == kind) effectiveResources;
 
-        # Auto-selected root (first Service → Deployment → StatefulSet →
-        # DaemonSet → first resource).
-        autoRoot =
-          let
-            services = builtins.filter (r: r.kind == "Service") wrappedResources;
-            deployments = builtins.filter (r: r.kind == "Deployment") wrappedResources;
-            statefulsets = builtins.filter (r: r.kind == "StatefulSet") wrappedResources;
-            daemonsets = builtins.filter (r: r.kind == "DaemonSet") wrappedResources;
-          in
-          if services != [ ] then
-            builtins.head services
-          else if deployments != [ ] then
-            builtins.head deployments
-          else if statefulsets != [ ] then
-            builtins.head statefulsets
-          else if daemonsets != [ ] then
-            builtins.head daemonsets
-          else if wrappedResources != [ ] then
-            builtins.head wrappedResources
-          else
-            throw "importChart: chart ${releaseName} produced no resources";
+          # All workloads (Deployment, StatefulSet, DaemonSet, Job, CronJob).
+          workloads = builtins.filter (r: builtins.elem r.kind helmDag.workloadKinds) effectiveResources;
 
-        # ── Convenience ──────────────────────────────────────────────
+          # Everything except the given resources.
+          excluding =
+            resources:
+            let
+              excludePaths = map (r: r.outPath) resources;
+            in
+            builtins.filter (r: !(builtins.elem r.outPath excludePaths)) effectiveResources;
 
-        # Build a complete parts tree for simple charts.
-        #
-        # DAG-aware: root only directly requires resources that are NOT
-        # targets of intra-chart edges. Everything else is reachable
-        # through the DAG (each resource carries its own `requires`
-        # in kix.dev/depends-on). This gives the same forward-closure
-        # behavior as native kix packages.
-        mkParts =
-          {
-            root, # the root resource (explicit — no heuristic)
-            extraParts ? { }, # additional parts to merge (CRD refs, etc.)
-            extraRequires ? [ ], # additional root.requires beyond chart resources
-            out ? { }, # root.out (DI builders, CRD refs, etc.)
-          }:
-          let
-            # Non-root resources that are NOT depended on by other chart
-            # resources. These are the DAG "entry points" that root must
-            # directly require — everything else is pulled in transitively.
-            dagRootRequires = builtins.filter (
-              r: r.outPath != root.outPath && !(builtins.elem "${r.kind}/${r.name}" depTargetIds)
-            ) wrappedResources;
+          # As an attrset keyed by "${toLower kind}-${name}".
+          attrs = builtins.listToAttrs (
+            map (r: {
+              name = "${lib.toLower r.kind}-${r.name}";
+              value = r;
+            }) effectiveResources
+          );
 
-            allRequires = dagRootRequires ++ extraRequires;
-          in
-          attrs
-          // extraParts
-          // {
-            root = {
-              resource = root;
-              requires = allRequires;
-            }
-            // lib.optionalAttrs (out != { }) { inherit out; };
-          };
-      };
+          # ── DAG ──────────────────────────────────────────────────────
+
+          # Inferred internal dependencies for a wrapped resource.
+          # Returns [] for replacement resources — the caller is
+          # responsible for setting the new resource's own `requires`.
+          depsOf = resource: effectiveDepsMap.${resource.outPath} or [ ];
+
+          # All link edges as { from, to, type } triples (wrapped resources).
+          edges = effectiveEdges;
+
+          # Diagnostic orphans (selectors/refs matching nothing in chart).
+          inherit orphans;
+
+          # ── CRD builders (Phase 3) ───────────────────────────────────
+          # Auto-derived `{ cr, mkCR }` builder pair for every CRD the
+          # chart ships, keyed by CR kind. See mkCrdBuilder above.
+          crds = crdBuilders;
+
+          # ── Substitution ─────────────────────────────────────────────
+
+          # Replace a chart resource with a kix-native one, returning a
+          # new collection. Use case: a chart ships an Ingress, but kix
+          # wants to decide per-cluster whether to materialize as
+          # Ingress, HTTPRoute, or nothing. Build the replacement up
+          # front (e.g. via `scope.expose.mk { ... }`) and substitute.
+          #
+          # Caller responsibility — DAG edges INTO the original (other
+          # chart resources that depended on it) are dropped; the
+          # replacement must declare its own `requires` if it needs to
+          # wait for chart resources to come up. For leaf resources
+          # (Ingress, ServiceMonitor, etc.) this is usually nothing.
+          #
+          # Edges OUT of the original (resources the original depended
+          # on) are still in the chart DAG via `mkParts`'s
+          # `dagRootRequires` — the replacement doesn't have to thread
+          # them through.
+          replaceResource =
+            kind: name: newResource:
+            let
+              key = "${kind}/${name}";
+            in
+            if !(builtins.any (r: r.kind == kind && r.name == name) wrappedResources) then
+              throw "importChart: replaceResource: no resource ${key} in chart ${releaseName}"
+            else
+              mkResourceCollection (replacements // { ${key} = newResource; });
+
+          # ── Root selection ────────────────────────────────────────────
+
+          # Auto-selected root (first Service → Deployment → StatefulSet →
+          # DaemonSet → first resource).
+          autoRoot =
+            let
+              services = builtins.filter (r: r.kind == "Service") effectiveResources;
+              deployments = builtins.filter (r: r.kind == "Deployment") effectiveResources;
+              statefulsets = builtins.filter (r: r.kind == "StatefulSet") effectiveResources;
+              daemonsets = builtins.filter (r: r.kind == "DaemonSet") effectiveResources;
+            in
+            if services != [ ] then
+              builtins.head services
+            else if deployments != [ ] then
+              builtins.head deployments
+            else if statefulsets != [ ] then
+              builtins.head statefulsets
+            else if daemonsets != [ ] then
+              builtins.head daemonsets
+            else if effectiveResources != [ ] then
+              builtins.head effectiveResources
+            else
+              throw "importChart: chart ${releaseName} produced no resources";
+
+          # ── Convenience ──────────────────────────────────────────────
+
+          # Build a complete parts tree for simple charts.
+          #
+          # DAG-aware: root only directly requires resources that are NOT
+          # targets of intra-chart edges. Everything else is reachable
+          # through the DAG (each resource carries its own `requires`
+          # in kix.dev/depends-on). This gives the same forward-closure
+          # behavior as native kix packages.
+          #
+          # Auto-derived `out` (Phase 1a):
+          #
+          #   • out.byKind.<Kind>.<name> = wrapped resource — always emitted,
+          #     gives downstream packages a stable lookup into the chart.
+          #     Example: `redis.out.byKind.Service.redis-master.out.fqdn`.
+          #
+          #   • When `root` is a workload (Deployment/StatefulSet/DaemonSet/
+          #     Job) and exactly one Service in the chart selects it, that
+          #     Service's `out.{name, fqdn, selector, ports, url}` are
+          #     promoted onto rootOut so consumers reading
+          #     `pkg.out.fqdn` get the Service FQDN, not the workload's
+          #     synthetic one. Skipped when 0 or >1 Services match (caller
+          #     should override via the `out` arg).
+          #
+          #   • When `root.kind == "Service"`, no promotion is needed —
+          #     k8s.mkResource already auto-derives the right outs on the
+          #     root itself. Only `byKind` is added.
+          #
+          #   • `out.crds.<Kind> = { cr, mkCR }` (Phase 3) — for every
+          #     CustomResourceDefinition the chart ships. Builders inject
+          #     the CRD plus all chart workloads as `requires` so a
+          #     consumer's CR waits for both the CRD's Establishment and
+          #     every controller workload's readiness.
+          #
+          # User-supplied `out = {...}` shallow-merges over auto-derived
+          # values (user wins on collisions).
+          mkParts =
+            {
+              root, # the root resource (explicit — no heuristic)
+              extraParts ? { }, # additional parts to merge (CRD refs, etc.)
+              extraRequires ? [ ], # additional root.requires beyond chart resources
+              out ? { }, # root.out overrides (DI builders, CRD refs, etc.)
+            }:
+            let
+              # Non-root resources that are NOT depended on by other
+              # chart resources. These are the DAG "entry points" that
+              # root must directly require — everything else is pulled
+              # in transitively.
+              dagRootRequires = builtins.filter (
+                r: r.outPath != root.outPath && !(builtins.elem "${r.kind}/${r.name}" effectiveDepTargetIds)
+              ) effectiveResources;
+
+              allRequires = dagRootRequires ++ extraRequires;
+
+              # ── Auto-derived out ──────────────────────────────────────
+
+              # byKind.<Kind>.<name> = wrapped resource.
+              byKindLookup = builtins.foldl' (
+                acc: r:
+                acc
+                // {
+                  ${r.kind} = (acc.${r.kind} or { }) // {
+                    ${r.name} = r;
+                  };
+                }
+              ) { } effectiveResources;
+
+              # Services that select this workload root, via the existing
+              # DAG `selects` edges. For Service roots, this is empty
+              # (k8s.mkResource already produced the right outs on root).
+              matchingServices =
+                if helmDag.isWorkloadKind root.kind then
+                  map (e: e.from) (
+                    builtins.filter (
+                      e: e.type == "selects" && e.from.kind == "Service" && e.to.outPath == root.outPath
+                    ) effectiveEdges
+                  )
+                else
+                  [ ];
+
+              # Promote a unique matching Service's outs onto a workload
+              # root. Skipped when 0 or >1 Services match (caller should
+              # override via the explicit `out` arg).
+              promotedServiceOut =
+                if root.kind == "Service" then
+                  { }
+                else if builtins.length matchingServices == 1 then
+                  builtins.intersectAttrs {
+                    name = null;
+                    fqdn = null;
+                    selector = null;
+                    ports = null;
+                    url = null;
+                  } (builtins.head matchingServices).out
+                else
+                  { };
+
+              autoOut =
+                promotedServiceOut
+                // {
+                  byKind = byKindLookup;
+                }
+                // lib.optionalAttrs (crdBuilders != { }) {
+                  crds = crdBuilders;
+                };
+
+              effectiveOut = autoOut // out;
+            in
+            attrs
+            // extraParts
+            // {
+              root = {
+                resource = root;
+                requires = allRequires;
+                out = effectiveOut;
+              };
+            };
+        };
+
+      resourceCollection = mkResourceCollection { };
     in
     resourceCollection;
 

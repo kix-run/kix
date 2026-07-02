@@ -1245,6 +1245,7 @@ rec {
         let
           crdSpec = attrs.spec or (throw "mkCRD: spec is required");
           labels = attrs.labels or { };
+          annotations = attrs.annotations or { };
           crKind = crdSpec.names.kind;
           group = crdSpec.group;
           plural = crdSpec.names.plural;
@@ -1256,7 +1257,12 @@ rec {
             kind = "CustomResourceDefinition";
             name = "${plural}.${group}";
             inherit labels;
-            extra.spec = crdSpec;
+            extra = {
+              spec = crdSpec;
+            }
+            // lib.optionalAttrs (annotations != { }) {
+              metadata = { inherit annotations; };
+            };
           };
 
           builders = k8s.mkCRDBuilders {
@@ -1530,13 +1536,13 @@ rec {
           type ? "Opaque",
           requires ? [ ],
           reflect ? false,
-        # When `reflect = true`, the secret is expected to be mirrored
-        # cross-namespace by the emberstack reflector controller. Helpers
-        # produced from this ref get a `_kix.reflected = true` marker, which
-        # tells `checkNamespacedRefs` to permit consumption from any
-        # namespace. The producer is still responsible for ensuring the
-        # source secret carries reflector annotations (typically by
-        # emitting a one-shot annotator Job alongside this ref).
+          # When `reflect = true`, the secret is expected to be mirrored
+          # cross-namespace by the emberstack reflector controller. Helpers
+          # produced from this ref get a `_kix.reflected = true` marker, which
+          # tells `checkNamespacedRefs` to permit consumption from any
+          # namespace. The producer is still responsible for ensuring the
+          # source secret carries reflector annotations (typically by
+          # emitting a one-shot annotator Job alongside this ref).
         }:
         let
           # Guard the shape of `keys`. Empty list is intentionally allowed:
@@ -1680,9 +1686,16 @@ rec {
           labels
           labelStyle
           namespaces
-          networkPolicyEnforcer
           mkOptional
           ;
+        # Gate the enforcer a package's `build` sees on whether CNP
+        # generation is on. Without this, packages that emit their own
+        # lockdown CNPs (e.g. stackgres-cluster's sgcluster-ingress) keep
+        # doing so even when networkPolicy.enable=false — but the
+        # cluster-level consumer-allows that would let dependents through
+        # are NOT generated, so workloads get locked out of their own
+        # dependencies (e.g. immich → postgres CONNECT_TIMEOUT).
+        networkPolicyEnforcer = if _shouldGenerateCnps then networkPolicyEnforcer else null;
         namespace = namespaceResource;
 
         mkResource = scopeMkResource;

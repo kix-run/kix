@@ -101,6 +101,7 @@ in
     helmTemplateDerivation
     wrapHelmResource
     importChart
+    importChartCrds
     helmChart
     isClusterScopedKind
     ;
