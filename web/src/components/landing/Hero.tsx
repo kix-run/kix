@@ -7,10 +7,7 @@ import { Container, Eyebrow, Reveal } from "@/components/landing/primitives";
 // Token color shorthands for the hand-tokenized nix snippet.
 // The hero card is terminal-dark in both color schemes, so these are fixed.
 const K = "text-zinc-300"; // keys
-const V = "text-(--brand-on-dark)"; // values / strings
 const P = "text-zinc-500"; // punctuation
-const C = "text-zinc-500 italic"; // comments
-const R = "text-[#86bbd8]"; // references
 
 type HeroView = "code" | "agent";
 
