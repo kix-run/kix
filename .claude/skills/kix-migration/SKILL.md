@@ -419,6 +419,16 @@ in {
 }
 ```
 
+`mkParts` auto-derives a public `out`:
+- `out.byKind.<Kind>.<name>` — flat lookup of every wrapped chart resource. Consumers reach non-root chart resources via `pkg.out.byKind.Service.foo.out.fqdn` instead of forcing the producer to hand-roll overrides.
+- For a workload root (Deployment/StatefulSet/DaemonSet/Job) with exactly one Service that selects it, that Service's `out.{name, fqdn, selector, ports, url}` is promoted onto `pkg.out` so consumers reading `pkg.out.fqdn` get the public Service FQDN. Skipped silently when 0 or >1 Services match — pass `out = { fqdn = ...; }` explicitly to override.
+- For Service roots, no promotion is needed (`k8s.mkResource` already auto-derives correct outs); only `byKind` is added.
+- `out.crds.<Kind> = { cr, mkCR }` for every CRD the chart ships in its `helm template --include-crds` output. Builders inject the CRD plus all chart workloads as `requires`, so a consumer's CR waits for both Establishment and controller readiness. Charts that install CRDs at runtime (like cilium's `INSTALL_CRDS`) won't expose anything here — fall back to `scope.mkCRDRef`.
+
+`importChart` parameters worth knowing:
+- `deps = [ depA depB ];` — auto-collects every context-carrying string at `dep.out.*` and threads them through netpol generation (replaces the manual `networkDeps = [ dep.out.fqdn ]` plumbing). Use `networkDeps` only for context buried in nested values like `dep.out.byKind.Service.x.out.fqdn`.
+- `replaceResource` (method on the returned collection) — substitute a chart resource with a kix-native one: `resources.replaceResource "Ingress" "foo" myKixIngress`. Use when a chart ships e.g. an Ingress but you want `kix.expose` to decide per-cluster how to materialize it. The replacement must declare its own `requires` if it needs to wait for chart resources; edges INTO the original are dropped.
+
 **Tier 3: Native package** (no Helm, full DSL control).
 
 ### Dependency Injection (DI)
