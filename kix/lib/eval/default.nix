@@ -50,6 +50,7 @@ let
       meta
       kixlib
       resolve
+      roles
       ;
   };
   instance = import ./instance.nix {

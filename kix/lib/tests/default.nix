@@ -329,6 +329,34 @@ let
       };
   };
 
+  # Stock-catalog fixtures: a role-claiming shelf package and a consumer
+  # whose storageClasses dep is OPTIONAL (like persistent-volume-claim).
+  stockStorage = mkCmPackage {
+    name = "stock-sc";
+    metaExtra.roles = [ "storageClasses" ];
+    out.storageClassName = "stock-sc-name";
+  };
+
+  optionalScConsumer = {
+    meta.version = "test";
+    build =
+      {
+        self,
+        scope,
+        storageClasses ? null,
+        ...
+      }:
+      {
+        cm = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          name = "sc-consumer";
+          extra.data.sc = if storageClasses == null then "missing" else storageClasses.out.storageClassName;
+        };
+        root = self.cm;
+      };
+  };
+
   baseInstances = {
     instances.dns.dns = {
       package = dnsPackage;
@@ -695,6 +723,92 @@ let
       in
       (probe != null && probe.data.sc == "stub-sc")
       || throw "role-as-alias resolution failed: ${builtins.toJSON probe}";
+
+    # --- stock catalogs / weak role demand (doc 127 §5) ---
+
+    # An OPTIONAL dep on a role name pulls the role provider from
+    # availablePackages when nothing else provides it.
+    t20-weak-role-demand-pulls-stock =
+      let
+        ms = manifests (mkCluster [
+          baseInstances
+          {
+            availablePackages.stock-storage.package = stockStorage;
+            instances.appns.consumer.package = optionalScConsumer;
+          }
+        ]);
+        probe = byName "sc-consumer" (ofKind "ConfigMap" ms);
+      in
+      (hasName "stock-sc" (ofKind "ConfigMap" ms) && probe != null && probe.data.sc == "stock-sc-name")
+      || throw "stock not pulled by weak role demand: ${builtins.toJSON probe}";
+
+    # No demand → the catalog entry stays on the shelf (demand-rooted
+    # closure: nothing is installed because a flavor bundled it).
+    t21-no-demand-no-stock =
+      let
+        ms = manifests (mkCluster [
+          baseInstances
+          { availablePackages.stock-storage.package = stockStorage; }
+        ]);
+      in
+      !(hasName "stock-sc" (ofKind "ConfigMap" ms)) || throw "stock instantiated without any demand";
+
+    # An optional platform import providing the role suppresses the stock
+    # pull — existing environment-provided resolution stays unchanged
+    # (the ludo-kind case).
+    t22-import-suppresses-stock =
+      let
+        ms = manifests (mkCluster [
+          baseInstances
+          {
+            availablePackages.stock-storage.package = stockStorage;
+            instances.platform.storage = {
+              package = eval.mkImport {
+                roles = [ "storageClasses" ];
+                out.storageClassName = "import-sc";
+              };
+              optional = true;
+            };
+            instances.appns.consumer.package = optionalScConsumer;
+          }
+        ]);
+        probe = byName "sc-consumer" (ofKind "ConfigMap" ms);
+      in
+      (!(hasName "stock-sc" (ofKind "ConfigMap" ms)) && probe != null && probe.data.sc == "import-sc")
+      || throw "import did not suppress stock pull: ${builtins.toJSON probe}";
+
+    # The real lithus flavor: preset + catalog. A PVC-shaped demand pulls
+    # the whole OpenEBS stock (StorageClasses, per-worker DiskPools) and
+    # the consumer resolves the default class through the role.
+    t23-lithus-stock-on-demand =
+      let
+        ms = manifests (mkCluster [
+          ../flavors/lithus.nix
+          { cluster.flavor.lithus.workers = [ "w1" ]; }
+          { instances.appns.consumer.package = optionalScConsumer; }
+        ]);
+        probe = byName "sc-consumer" (ofKind "ConfigMap" ms);
+      in
+      (
+        hasName "lbs1-pool1-2x" (ofKind "StorageClass" ms)
+        && hasName "w1-pool1" (ofKind "DiskPool" ms)
+        && probe != null
+        && probe.data.sc == "lbs1-pool1-2x"
+      )
+      || throw "lithus stock not pulled on demand: ${builtins.toJSON (namesOf ms)}";
+
+    # lithus with no storage demand compiles WITHOUT OpenEBS in the
+    # artifact — the doc-127 proof case.
+    t24-lithus-no-demand-no-openebs =
+      let
+        ms = manifests (mkCluster [
+          ../flavors/lithus.nix
+          { cluster.flavor.lithus.workers = [ "w1" ]; }
+          { instances.appns.probe.package = probePackage; }
+        ]);
+      in
+      (ofKind "StorageClass" ms == [ ] && ofKind "DiskPool" ms == [ ])
+      || throw "lithus emitted storage stock without demand: ${builtins.toJSON (namesOf ms)}";
   };
 
   failures = lib.filterAttrs (

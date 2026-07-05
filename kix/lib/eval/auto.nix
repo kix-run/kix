@@ -3,6 +3,7 @@
   meta,
   kixlib,
   resolve,
+  roles,
 }:
 
 let
@@ -62,6 +63,30 @@ rec {
       builtins.filter (name: !(discoveredDeps.${name}.optional or false)) (
         builtins.attrNames discoveredDeps
       )
+    else
+      [ ];
+
+  # Weak role demand (doc 127 §5): an OPTIONAL dep whose arg name is a
+  # registry role still demands that role — optional only means "compile
+  # even when nothing provides it", not "don't pull curated stock". These
+  # deps seed auto-instantiation, but only as a last resort: an existing
+  # instance or platform import providing the role always wins (the seed
+  # is filtered out at the call site when the key resolves elsewhere).
+  getWeakRoleDeps =
+    pkg:
+    let
+      raw = resolve.normalizePackage {
+        package = pkg;
+        scope = { };
+      };
+    in
+    if raw ? build then
+      let
+        discoveredDeps = discoverBuildDeps raw.build;
+      in
+      builtins.filter (
+        name: (discoveredDeps.${name}.optional or false) && builtins.elem name roles.roleNames
+      ) (builtins.attrNames discoveredDeps)
     else
       [ ];
 
@@ -157,6 +182,14 @@ rec {
           let
             instCfg = mandatory.${ns}.${instName};
             reqDeps = getRequiredDeps instCfg.package;
+            # Weak role demand: only when the role resolves nowhere else —
+            # an explicit instance or (possibly inactive) platform import
+            # providing the role suppresses the stock pull entirely, so
+            # existing clusters keep their resolution unchanged.
+            weakDeps = builtins.filter (
+              depName:
+              !(mandatoryKeys ? ${depName}) && !(optionalByKey ? ${depName}) && availableByKey ? ${depName}
+            ) (getWeakRoleDeps instCfg.package);
           in
           builtins.concatMap (
             depName:
@@ -170,7 +203,7 @@ rec {
                   requesterNs = ns;
                 }
               ]
-          ) reqDeps
+          ) (reqDeps ++ weakDeps)
         ) (builtins.attrNames (mandatory.${ns} or { }))
       ) (builtins.attrNames mandatory);
 
