@@ -3,7 +3,9 @@
 pub mod activation;
 pub mod apply;
 pub mod cancel;
+pub mod drift;
 pub mod fetch;
+pub mod fieldsv1;
 pub mod graph;
 pub mod migrate;
 pub mod normalize;

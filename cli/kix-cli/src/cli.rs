@@ -118,8 +118,11 @@ pub enum Command {
     #[command(alias = "port-forward")]
     Pf(PortForwardArgs),
 
-    /// Drift detection: compare intended state vs live cluster
+    /// Cluster integrity walk: dependency-presence check via identity-hashes
     Health(HealthArgs),
+
+    /// Content drift check via applied-hash stamps (cluster-only, no build)
+    Drift(DriftArgs),
 
     /// Manage cluster snapshots for CI/offline use
     Snapshot(SnapshotArgs),
@@ -161,7 +164,7 @@ impl Command {
                 ComplianceCommand::Attest(s) => Some(&s.cluster),
                 ComplianceCommand::Audit(s) => Some(&s.cluster),
             },
-            Command::Snapshot(_) | Command::Completions(_) => None,
+            Command::Snapshot(_) | Command::Completions(_) | Command::Drift(_) => None,
         }
     }
 }
@@ -506,6 +509,13 @@ pub struct HealthArgs {
     /// Cluster name
     pub cluster: String,
 }
+
+/// Deliberately no cluster/flake argument: the check compares live objects
+/// against the `kix.dev/applied-hash` stamps written at deploy time, so it
+/// runs from any kubeconfig-only context (doc 122). Uses the global
+/// `--context` and `--output` flags.
+#[derive(clap::Args)]
+pub struct DriftArgs {}
 
 #[derive(clap::Args)]
 pub struct StatusArgs {

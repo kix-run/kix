@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use super::fieldsv1;
 use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
 use kube::{
     api::{Api, DynamicObject, Patch, PatchParams},
@@ -73,9 +74,9 @@ pub enum ApplyError {
     },
 
     #[error(
-        "failed to update kix.dev/activations annotation on {resource} after {attempts} attempts: {source}"
+        "failed to update kix bookkeeping annotations (activations, applied-hash) on {resource} after {attempts} attempts: {source}"
     )]
-    ActivationsAnnotationFailed {
+    BookkeepingAnnotationsFailed {
         resource: String,
         attempts: usize,
         #[source]
@@ -328,9 +329,27 @@ pub async fn apply_resource(
     // Apply with retry on transient errors (5xx, network). 409 conflicts are
     // permanent and surface immediately as ApplyError::Conflict so the user
     // sees an actionable error pointing at --force-conflicts.
-    apply_patch_with_retry(&api, &name, &pp, manifest, &rid).await?;
+    let echo = apply_patch_with_retry(&api, &name, &pp, manifest, &rid).await?;
 
-    // Update kix.dev/activations annotation (merge current activation into set).
+    // Compute the applied-content hash from the SSA response echo (doc 122):
+    // the echo IS the committed, canonicalized server representation, so a
+    // hash of its kix-owned projection is directly comparable to a hash of
+    // the live object at any later check.
+    let applied_hash = if dry_run {
+        None
+    } else {
+        let h = fieldsv1::applied_content_hash(&echo);
+        if h.is_none() {
+            tracing::warn!(
+                resource = %rid.display_id(),
+                "SSA response has no kix managedFields entry; skipping applied-hash stamp"
+            );
+        }
+        h
+    };
+
+    // Update kix bookkeeping annotations: merge the current activation into
+    // `kix.dev/activations` and stamp `kix.dev/applied-hash`.
     //
     // This is a SEPARATE patch from the SSA above because we need read-modify-write
     // semantics to merge into the existing comma-separated set without clobbering
@@ -340,10 +359,15 @@ pub async fn apply_resource(
     // hard failure if it still doesn't succeed — silently dropping this update
     // would corrupt reference counting and cause GC to delete the resource on the
     // next deploy.
-    if let Some(act_hash) = activation_hash
-        && !dry_run
-    {
-        update_activations_annotation_with_retry(&api, &name, act_hash, &rid).await?;
+    if !dry_run && (activation_hash.is_some() || applied_hash.is_some()) {
+        update_bookkeeping_annotations_with_retry(
+            &api,
+            &name,
+            activation_hash,
+            applied_hash.as_deref(),
+            &rid,
+        )
+        .await?;
     }
 
     let action = if existed {
@@ -363,44 +387,46 @@ pub async fn apply_resource(
 /// Retry an SSA patch on transient errors (5xx, network), surface 409 conflicts
 /// as [`ApplyError::Conflict`] so the user gets an actionable message instead
 /// of silently clobbering field ownership.
+///
+/// Returns the SSA response echo — the committed, server-canonicalized object,
+/// used to compute the applied-content hash (doc 122).
 async fn apply_patch_with_retry(
     api: &Api<DynamicObject>,
     name: &str,
     pp: &PatchParams,
     manifest: &Value,
     rid: &ResourceId,
-) -> Result<(), ApplyError> {
+) -> Result<DynamicObject, ApplyError> {
     let attempt_label = "applying resource";
     retry_kube_op(rid, attempt_label, |attempt| async move {
         let _ = attempt;
-        api.patch(name, pp, &Patch::Apply(manifest))
-            .await
-            .map(|_| ())
+        api.patch(name, pp, &Patch::Apply(manifest)).await
     })
     .await
     .map_err(|e| classify_apply_error(rid, e))
 }
 
-/// Wrapper around [`update_activations_annotation`] that retries transient
+/// Wrapper around [`update_bookkeeping_annotations`] that retries transient
 /// failures (e.g. validating-webhook pod rolling) with capped exponential
 /// backoff. Permanent errors (4xx, parse, auth) bail immediately.
 /// After exhausting attempts the failure is surfaced as a hard
-/// [`ApplyError::ActivationsAnnotationFailed`] so the deploy halts under
+/// [`ApplyError::BookkeepingAnnotationsFailed`] so the deploy halts under
 /// `on_error=stop` instead of silently corrupting `kix.dev/activations`
 /// reference counting.
-async fn update_activations_annotation_with_retry(
+async fn update_bookkeeping_annotations_with_retry(
     api: &Api<DynamicObject>,
     name: &str,
-    activation_hash: &str,
+    activation_hash: Option<&str>,
+    applied_hash: Option<&str>,
     rid: &ResourceId,
 ) -> Result<(), ApplyError> {
-    let attempt_label = "updating activations annotation";
+    let attempt_label = "updating bookkeeping annotations";
     retry_kube_op(rid, attempt_label, |attempt| async move {
         let _ = attempt;
-        update_activations_annotation(api, name, activation_hash).await
+        update_bookkeeping_annotations(api, name, activation_hash, applied_hash).await
     })
     .await
-    .map_err(|e| ApplyError::ActivationsAnnotationFailed {
+    .map_err(|e| ApplyError::BookkeepingAnnotationsFailed {
         resource: rid.display_id(),
         attempts: PATCH_RETRY_ATTEMPTS,
         source: e,
@@ -412,21 +438,21 @@ async fn update_activations_annotation_with_retry(
 /// returns true. Returns the final `kube::Error` (transient-exhausted or
 /// permanent on first hit) so the caller can wrap it in an `ApplyError`
 /// variant of its choice.
-async fn retry_kube_op<F, Fut>(
+async fn retry_kube_op<T, F, Fut>(
     rid: &ResourceId,
     label: &'static str,
     mut op: F,
-) -> Result<(), kube::Error>
+) -> Result<T, kube::Error>
 where
     F: FnMut(usize) -> Fut,
-    Fut: std::future::Future<Output = Result<(), kube::Error>>,
+    Fut: std::future::Future<Output = Result<T, kube::Error>>,
 {
     let mut backoff = PATCH_RETRY_INITIAL_BACKOFF;
     let mut last_err: Option<kube::Error> = None;
 
     for attempt in 1..=PATCH_RETRY_ATTEMPTS {
         match op(attempt).await {
-            Ok(()) => return Ok(()),
+            Ok(v) => return Ok(v),
             Err(e) => {
                 if !is_transient_kube_error(&e) {
                     return Err(e);
@@ -504,40 +530,60 @@ fn is_transient_kube_error(err: &kube::Error) -> bool {
     }
 }
 
-/// Read-modify-write the `kix.dev/activations` annotation on a resource.
-/// Merges `activation_hash` into the comma-separated set of activation hashes.
-async fn update_activations_annotation(
+/// Write kix's bookkeeping annotations in ONE merge patch (no extra round
+/// trips): read-modify-write `kix.dev/activations` (merge `activation_hash`
+/// into the comma-separated set) and overwrite `kix.dev/applied-hash` with
+/// the hash computed from the SSA response echo.
+async fn update_bookkeeping_annotations(
     api: &Api<DynamicObject>,
     name: &str,
-    activation_hash: &str,
+    activation_hash: Option<&str>,
+    applied_hash: Option<&str>,
 ) -> Result<(), kube::Error> {
-    // Read current annotation
-    let current = api.get(name).await?;
-    let existing = current
-        .data
-        .pointer("/metadata/annotations")
-        .and_then(|a| a.get(ACTIVATIONS_ANNOTATION))
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let mut annotations = serde_json::Map::new();
 
-    // Build the merged set
-    let mut hashes: std::collections::BTreeSet<&str> = existing
-        .split(',')
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .collect();
-    hashes.insert(activation_hash);
-    let merged = hashes.into_iter().collect::<Vec<_>>().join(",");
+    if let Some(activation_hash) = activation_hash {
+        // Read current annotation so we merge instead of clobbering entries
+        // written by other activations.
+        let current = api.get(name).await?;
+        let existing = current
+            .metadata
+            .annotations
+            .as_ref()
+            .and_then(|a| a.get(ACTIVATIONS_ANNOTATION))
+            .map(String::as_str)
+            .unwrap_or("");
 
-    // Patch with strategic merge (not SSA — we only want to touch this one annotation).
+        // Build the merged set
+        let mut hashes: std::collections::BTreeSet<&str> = existing
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect();
+        hashes.insert(activation_hash);
+        let merged = hashes.into_iter().collect::<Vec<_>>().join(",");
+        annotations.insert(ACTIVATIONS_ANNOTATION.to_string(), Value::String(merged));
+    }
+
+    if let Some(applied_hash) = applied_hash {
+        annotations.insert(
+            fieldsv1::APPLIED_HASH_ANNOTATION.to_string(),
+            Value::String(applied_hash.to_string()),
+        );
+    }
+
+    if annotations.is_empty() {
+        return Ok(());
+    }
+
+    // Patch with strategic merge (not SSA — we only want to touch these
+    // annotations, without disturbing kix's Apply fieldset).
     // Name the field manager explicitly: kube's default would record this write
     // under manager "unknown" in managedFields, which pollutes ownership-based
     // drift attribution (doc 122).
     let patch = serde_json::json!({
         "metadata": {
-            "annotations": {
-                ACTIVATIONS_ANNOTATION: merged,
-            }
+            "annotations": annotations,
         }
     });
     let pp = PatchParams {

@@ -67,6 +67,12 @@ fn main() -> miette::Result<()> {
         return commands::completions::run(args, &cli.global);
     }
 
+    // Drift is cluster-only by design (doc 122): no flake, no Nix backend —
+    // it must work from a bare kubeconfig outside any kix repo.
+    if let Command::Drift(args) = &cli.command {
+        return commands::drift::run(args, &cli.global);
+    }
+
     // Validate cluster names before initializing the Nix backend (which is slow).
     if let Some(name) = cli.command.cluster_name() {
         validate_cluster_name(name)?;
@@ -92,6 +98,6 @@ fn main() -> miette::Result<()> {
         Command::Images(args) => commands::images::run(args, &mut ctx),
         Command::Snapshot(args) => commands::snapshot::run(args, &mut ctx),
         Command::Compliance(args) => commands::compliance::run(args, &mut ctx),
-        Command::Completions(_) => unreachable!(),
+        Command::Completions(_) | Command::Drift(_) => unreachable!(),
     }
 }

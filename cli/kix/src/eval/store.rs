@@ -35,11 +35,39 @@ fn activations_dir() -> PathBuf {
 
 /// Save the activation result directory path after a successful deploy.
 /// Next deploy / GC can load this as the "old" activation.
+///
+/// Also registers a Nix GC root for the result dir so `nix-collect-garbage`
+/// cannot delete the store path the active deploy resolves to (builds run
+/// with `--no-link`, so nothing else pins it). One root per cluster,
+/// re-pointed on each deploy/rollback; deleting the `.root` link releases it.
 pub fn save_activation_path(cluster: &str, result_dir: &Path) -> std::io::Result<()> {
     let dir = activations_dir();
     std::fs::create_dir_all(&dir)?;
     let file = dir.join(format!("{cluster}.path"));
-    std::fs::write(&file, result_dir.to_string_lossy().as_bytes())
+    std::fs::write(&file, result_dir.to_string_lossy().as_bytes())?;
+
+    // Best-effort GC root — a missing nix-store binary or a store path that
+    // is already gone should not fail the deploy bookkeeping.
+    let root_link = dir.join(format!("{cluster}.root"));
+    let _ = std::fs::remove_file(&root_link);
+    match std::process::Command::new("nix-store")
+        .arg("--add-root")
+        .arg(&root_link)
+        .arg("--realise")
+        .arg(result_dir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+    {
+        Ok(status) if status.success() => {}
+        Ok(status) => {
+            tracing::warn!(cluster, ?result_dir, %status, "failed to register GC root for activation");
+        }
+        Err(e) => {
+            tracing::warn!(cluster, ?result_dir, error = %e, "failed to run nix-store --add-root");
+        }
+    }
+    Ok(())
 }
 
 /// Load the previously saved activation result directory path.
