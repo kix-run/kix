@@ -117,10 +117,12 @@ in
   meta = {
     version = "1.16.5";
     description = "Cilium — eBPF CNI, load balancer, and CiliumNetworkPolicy enforcer";
-    provides = [
+    roles = [
       "cni"
-      "network-policy"
       "network-policy-enforcer"
+    ];
+    provides = [
+      "network-policy"
       "cilium"
     ];
     k8s.minVersion = "1.27";

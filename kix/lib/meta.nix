@@ -86,21 +86,26 @@ rec {
       in
       result.meta or { };
 
+  # Role names are package-intrinsic DI aliases: a role provider is always
+  # resolvable under its role name, regardless of instance-level alias
+  # overrides (which only replace defaultAliases).
   effectiveAliases =
     { instanceAliases, packageMeta }:
-    if instanceAliases != [ ] then instanceAliases else packageMeta.defaultAliases or [ ];
+    lib.unique (
+      (packageMeta.roles or [ ])
+      ++ (if instanceAliases != [ ] then instanceAliases else packageMeta.defaultAliases or [ ])
+    );
 
   peekPackageAliases =
     { availEntry, kixlib }:
     let
       explicitAliases = availEntry.aliases or [ ];
-      metaAliases =
-        (peekPackageMeta {
-          package = availEntry.package;
-          inherit kixlib;
-        }).defaultAliases or [ ];
+      packageMeta = peekPackageMeta {
+        package = availEntry.package;
+        inherit kixlib;
+      };
     in
-    lib.unique (explicitAliases ++ metaAliases);
+    lib.unique (explicitAliases ++ (packageMeta.roles or [ ]) ++ (packageMeta.defaultAliases or [ ]));
 
   checkMetaStatic =
     {

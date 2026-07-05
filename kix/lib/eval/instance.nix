@@ -84,10 +84,10 @@ in
               null;
 
         _enforcerProvider =
-          if !(clusterCtx ? findCapabilityProvider) then
+          if !(clusterCtx ? findRoleProvider) then
             null
           else
-            clusterCtx.findCapabilityProvider "network-policy-enforcer";
+            clusterCtx.findRoleProvider "network-policy-enforcer";
 
         # Self-dep guard: the enforcer's own scope must not depend on itself.
         _isSelfEnforcer =

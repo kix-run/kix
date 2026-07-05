@@ -13,7 +13,7 @@
 {
   meta = {
     version = "1.0.0";
-    defaultAliases = [ "storageClasses" ];
+    roles = [ "storageClasses" ];
   };
 
   options = {

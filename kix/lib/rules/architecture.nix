@@ -181,7 +181,9 @@ in
         ...
       }:
       let
-        providedCaps = meta.provides or [ ];
+        # Ownership vocabulary: compiler roles (meta.roles, registry-validated)
+        # plus the open scorecard vocabulary (meta.provides, free-form).
+        providedCaps = (meta.roles or [ ]) ++ (meta.provides or [ ]);
         ownsCapability = cap: builtins.elem cap providedCaps;
 
         offendingFor =

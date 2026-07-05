@@ -6,6 +6,7 @@
   helpers,
   scorecard,
   hooks,
+  roles,
   mkNamespace,
   computeAutoInstances,
   buildResolutionIndex,
@@ -96,25 +97,41 @@ in
 
       resolutionIndex = buildResolutionIndex staticMeta;
 
-      providesIndex = hooks.buildProvidesIndex mergedInstances;
+      rolesIndex = hooks.buildRolesIndex mergedInstances;
 
-      # `out` reads from the cluster fixpoint lazily — must not be forced during module merge.
-      findCapabilityProvider =
-        capability:
+      # `out` reads from the cluster fixpoint lazily — must not be forced during
+      # module merge. The shallow role out-contract is checked at the same lazy
+      # point (first consumer force), never eagerly.
+      findRoleProvider =
+        role:
         let
-          lookup = hooks.findCapabilityProvider { inherit capability providesIndex; };
+          lookup = hooks.findRoleProvider {
+            inherit role rolesIndex;
+            clusterRoles = cfg.cluster.roles;
+          };
         in
         if lookup == null then
           null
         else
           lookup
           // {
-            out = clusterInstances.${lookup.ns}.${lookup.inst}.out or null;
+            out = roles.checkOutContract {
+              inherit role;
+              providerLabel = "${lookup.ns}/${lookup.inst}";
+              out = clusterInstances.${lookup.ns}.${lookup.inst}.out or null;
+            };
           };
+
+      # Eager refusal pass: exclusive-binding conflicts and duplicate strong
+      # providers must throw even when no consumer looks the role up.
+      _roleBindingsCheck = hooks.checkRoleBindings {
+        clusterRoles = cfg.cluster.roles;
+        inherit rolesIndex;
+      };
 
       clusterCtx = {
         config = cfg;
-        inherit findCapabilityProvider;
+        inherit findRoleProvider;
       };
 
       workloadInterceptors = hooks.collectHooks cfg "workloadInterceptors";
@@ -467,41 +484,43 @@ in
       _clusterHookChecksRun = hooks.runChecks clusterHookChecks;
 
     in
-    builtins.seq _clusterHookChecksRun (
-      builtins.seq clusterDiagnostics.assertionCheck {
-        _type = "k8s-cluster-v2";
-        inherit name;
+    builtins.seq _roleBindingsCheck (
+      builtins.seq _clusterHookChecksRun (
+        builtins.seq clusterDiagnostics.assertionCheck {
+          _type = "k8s-cluster-v2";
+          inherit name;
 
-        inherit clusterInstances;
-        instances = clusterInstances;
+          inherit clusterInstances;
+          instances = clusterInstances;
 
-        namespaces = nsResources;
+          namespaces = nsResources;
 
-        inherit
-          activation
-          packageIndex
-          info
-          extraImages
-          ;
+          inherit
+            activation
+            packageIndex
+            info
+            extraImages
+            ;
 
-        diagnostics = {
-          warnings = clusterDiagnostics.warnings ++ clusterHookWarnings;
-          inherit (clusterDiagnostics) assertions failedAssertions;
-        };
-
-        out = {
-          maintenance = {
-            enable = cfg.cluster.maintenance.enable or false;
-            reason = cfg.cluster.maintenance.reason or null;
-            until = cfg.cluster.maintenance.until or null;
+          diagnostics = {
+            warnings = clusterDiagnostics.warnings ++ clusterHookWarnings;
+            inherit (clusterDiagnostics) assertions failedAssertions;
           };
-        };
 
-        inherit scorecardReport;
+          out = {
+            maintenance = {
+              enable = cfg.cluster.maintenance.enable or false;
+              reason = cfg.cluster.maintenance.reason or null;
+              until = cfg.cluster.maintenance.until or null;
+            };
+          };
 
-        rawManifests = map (
-          r: builtins.fromJSON (builtins.unsafeDiscardStringContext (builtins.toJSON r.rawManifest))
-        ) allResources;
-      }
+          inherit scorecardReport;
+
+          rawManifests = map (
+            r: builtins.fromJSON (builtins.unsafeDiscardStringContext (builtins.toJSON r.rawManifest))
+          ) allResources;
+        }
+      )
     );
 }

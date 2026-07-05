@@ -219,19 +219,69 @@
       '';
     };
 
-    # --- Cluster hardware profile ---
-    # Describes the cluster's physical/provider reality and pre-existing
-    # capabilities. Packages query capabilities for conditional logic;
-    # the flavor system sets defaults via mkDefault.
-    # See v2_discussions/45_cluster_hardware_profile.md for design rationale.
+    # --- Cluster target model (v2_discussions/127) ---
+    # The target description splits into:
+    #   cluster.roles         — binding modes for environment-owned roles
+    #   cluster.capabilities  — substrate axioms (facts below the compilation
+    #                           boundary; three-valued: null = unknown)
+    # Role-backed capability bools (cni, networkPolicyAPI, loadBalancer,
+    # persistentStorage, ...) are gone: the compiler derives role providers
+    # from `meta.roles` + platform imports (see eval/roles.nix).
 
     cluster.provider = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = ''
         Kubernetes distribution or provider (e.g. "k3s", "kind", "kubeadm",
-        "eks", "talos"). Informational — packages should query
-        cluster.capabilities, not branch on provider names.
+        "eks", "talos"). The vendor field: carried for display/telemetry only.
+        Nothing in the compiler may branch on it — branch on cluster.roles,
+        cluster.capabilities, or resolved role providers instead.
+      '';
+    };
+
+    cluster.roles = lib.mkOption {
+      type = lib.types.attrsOf (
+        lib.types.submodule {
+          options = {
+            binding = lib.mkOption {
+              type = lib.types.nullOr (
+                lib.types.enum [
+                  "absent"
+                  "shadowable"
+                  "exclusive"
+                ]
+              );
+              default = null;
+              description = ''
+                How the environment claims this role (linker semantics):
+                - null: unknown — relying consumers warn.
+                - "absent": role vacant; a managed instance fills it, a
+                  consumer without one gets a link error.
+                - "shadowable": environment provides a default (weak symbol,
+                  usually paired with a platform import declaring the role);
+                  a managed instance overrides cleanly.
+                - "exclusive": environment owns the role (strong symbol);
+                  a managed instance claiming it is an eval error pointing
+                  at this axiom (e.g. kindnet on stock kind).
+              '';
+            };
+            provider = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              description = ''
+                Display name of the environment's implementation (e.g.
+                "kindnet", "flannel"). Informational only — never branched on.
+              '';
+            };
+          };
+        }
+      );
+      default = { };
+      description = ''
+        Binding modes for environment-provided roles. Keys must be registry
+        roles (kix/lib/eval/roles.nix). Managed packages never declare
+        binding modes — a managed instance is strong by nature; modes exist
+        only for the environment's claim on a role.
       '';
     };
 
@@ -240,146 +290,59 @@
       # --- Topology ---
 
       multiNode = lib.mkOption {
-        type = lib.types.bool;
-        default = true;
+        type = lib.types.nullOr lib.types.bool;
+        default = null;
         description = ''
           Whether the cluster has multiple schedulable nodes. When false,
           pod anti-affinity and topology spread constraints are meaningless.
+          null = unknown.
         '';
       };
 
       availabilityZones = lib.mkOption {
-        type = lib.types.listOf lib.types.str;
-        default = [ ];
-        description = "Known availability zones. Empty = single-zone or unknown.";
+        type = lib.types.nullOr (lib.types.listOf lib.types.str);
+        default = null;
+        description = "Known availability zones. null = unknown; [ ] = known single-zone.";
       };
 
       nodeAutoscaling = lib.mkOption {
-        type = lib.types.bool;
-        default = false;
+        type = lib.types.nullOr lib.types.bool;
+        default = null;
         description = ''
           Whether the cluster has built-in node autoscaling (cloud autoscaler,
           Karpenter, GKE Autopilot). When true, cluster.nodes is a snapshot
-          and the actual node count may vary.
+          and the actual node count may vary. null = unknown.
         '';
       };
 
       managedControlPlane = lib.mkOption {
-        type = lib.types.bool;
-        default = false;
+        type = lib.types.nullOr lib.types.bool;
+        default = null;
         description = ''
           Whether the control plane is managed by a provider (EKS, GKE, AKS).
           When true, kube-system components like CoreDNS/etcd are not user-managed,
-          and deploying replacements will conflict.
-        '';
-      };
-
-      # --- Networking ---
-
-      loadBalancer = lib.mkOption {
-        type = lib.types.bool;
-        default = false;
-        description = ''
-          Whether Services of type LoadBalancer can obtain an external IP.
-          Requires a LoadBalancer controller (cloud provider, MetalLB, etc.).
-        '';
-      };
-
-      # TODO: CNI could become a DI dep — packages that need specific CNI
-      # features (e.g. Cilium's eBPF, Calico's BGP) could take the CNI as
-      # a dep and query its capabilities via out.*.
-      cni = lib.mkOption {
-        type = lib.types.nullOr lib.types.str;
-        default = null;
-        description = ''
-          CNI plugin name (e.g. 'cilium', 'calico', 'flannel', 'aws-vpc-cni',
-          'gke-native', 'azure-cni', 'ovn-kubernetes', 'canal', 'kindnet').
-          null = unknown or not yet installed.
-        '';
-      };
-
-      # TODO: Should be derived from the CNI DI dep once CNI becomes DI.
-      # The CNI provider would expose out.networkPolicyAPI.
-      networkPolicyAPI = lib.mkOption {
-        type = lib.types.enum [
-          "k8s"
-          "cilium"
-          "calico"
-          "none"
-        ];
-        default = "none";
-        description = ''
-          Which network policy API is enforced. "none" means NetworkPolicy
-          resources are accepted but not enforced (e.g. flannel, kindnet).
-        '';
-      };
-
-      # TODO: Will be replaced by DI. Ingress controller should be a DI dep
-      # with alias "ingressController", exposing out.ingressClassName. Packages
-      # that create Ingress resources take it as a dep. This capability remains
-      # as informational metadata for the flavor but is not checked at build time.
-      ingressController = lib.mkOption {
-        type = lib.types.nullOr lib.types.str;
-        default = null;
-        description = ''
-          Built-in ingress controller, if any (e.g. "traefik", "gce", "openshift-router").
-          null = bring your own.
-        '';
-      };
-
-      # --- Storage ---
-
-      # TODO: Storage is handled via DI (storageClasses dep). This capability
-      # is informational only — used for warnings (e.g. "PVC data is ephemeral
-      # on kind"), not build errors. The actual storage provisioner presence is
-      # verified through DI resolution of storageClasses.
-      persistentStorage = lib.mkOption {
-        type = lib.types.bool;
-        default = true;
-        description = ''
-          Whether PVC data survives cluster restarts. False for kind/ephemeral
-          clusters where volumes are backed by container filesystems.
-        '';
-      };
-
-      # TODO: Could become a DI property — the storage provider import could
-      # expose out.accessModes = ["ReadWriteOnce" "ReadWriteMany"] and PVC
-      # packages validate against it at build time.
-      rwxStorage = lib.mkOption {
-        type = lib.types.bool;
-        default = false;
-        description = "Whether ReadWriteMany PVCs are supported (NFS, EFS, Longhorn, etc.).";
-      };
-
-      # TODO: Could become DI — a snapshot controller provider with alias
-      # "volumeSnapshots" that packages creating VolumeSnapshot resources
-      # take as a dep. Similar to how CRD operators work via mkCRDRef.
-      volumeSnapshots = lib.mkOption {
-        type = lib.types.bool;
-        default = false;
-        description = ''
-          Whether VolumeSnapshot CRDs and a snapshot controller are available.
-          Requires CSI driver with snapshot support.
+          and deploying replacements will conflict. null = unknown.
         '';
       };
 
       # --- Compute ---
 
       gpu = lib.mkOption {
-        type = lib.types.bool;
-        default = false;
-        description = "Whether GPU scheduling (nvidia.com/gpu) is available.";
+        type = lib.types.nullOr lib.types.bool;
+        default = null;
+        description = "Whether GPU scheduling (nvidia.com/gpu) is available. null = unknown.";
       };
 
       # --- Security ---
 
       privilegedContainers = lib.mkOption {
-        type = lib.types.bool;
-        default = true;
+        type = lib.types.nullOr lib.types.bool;
+        default = null;
         description = ''
           Whether pods can run privileged, use hostNetwork, hostPID, etc.
           False on GKE Autopilot (hard platform restriction) and effectively
-          false on OpenShift (SCC restricted by default).
+          false on OpenShift (SCC restricted by default). null = unknown —
+          relying workloads warn instead of failing.
         '';
       };
 
@@ -401,11 +364,11 @@
       };
 
       daemonSets = lib.mkOption {
-        type = lib.types.bool;
-        default = true;
+        type = lib.types.nullOr lib.types.bool;
+        default = null;
         description = ''
           Whether DaemonSets can be deployed. False on GKE Autopilot where
-          the platform manages all node-level daemons.
+          the platform manages all node-level daemons. null = unknown.
         '';
       };
     };

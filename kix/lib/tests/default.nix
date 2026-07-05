@@ -181,7 +181,7 @@ let
   stubEnforcer = {
     meta = {
       version = "test";
-      provides = [ "network-policy-enforcer" ];
+      roles = [ "network-policy-enforcer" ];
     };
     build =
       { scope, ... }:
@@ -268,6 +268,64 @@ let
           resource = crdRef;
           out.netpol = netpolApi;
         };
+      };
+  };
+
+  # Minimal role claimants for the role-model tests.
+  mkCmPackage =
+    {
+      name,
+      metaExtra ? { },
+      out ? null,
+    }:
+    {
+      meta = {
+        version = "test";
+      }
+      // metaExtra;
+      build =
+        { self, scope, ... }:
+        {
+          cm = scope.mkResource {
+            apiVersion = "v1";
+            kind = "ConfigMap";
+            inherit name;
+          };
+          root =
+            if out == null then
+              self.cm
+            else
+              {
+                resource = self.cm;
+                inherit out;
+              };
+        };
+    };
+
+  dsPackage = {
+    meta.version = "test";
+    build =
+      { self, scope, ... }:
+      {
+        ds = scope.mkDaemonSet {
+          name = "agent";
+          spec = {
+            selector.matchLabels = scope.selectorLabels;
+            template = {
+              metadata.labels = scope.selectorLabels;
+              spec.containers = [
+                (
+                  {
+                    name = "agent";
+                    image = "example/agent:1";
+                  }
+                  // containerBase
+                )
+              ];
+            };
+          };
+        };
+        root = self.ds;
       };
   };
 
@@ -537,6 +595,106 @@ let
       in
       (!(hasName "_cluster" (ofKind "Namespace" ms)) && hasName "enforcer-probe" (ofKind "ConfigMap" ms))
       || throw "sentinel namespace emitted a Namespace resource";
+
+    # --- role model (v2_discussions/127) ---
+
+    # A typo'd role name throws at eval instead of silently never matching.
+    t14-unknown-role-throws = evalFails (mkCluster [
+      baseInstances
+      {
+        instances.infra.bad.package = mkCmPackage {
+          name = "bad-role";
+          metaExtra.roles = [ "storag" ];
+        };
+      }
+    ]);
+
+    # Two managed instances claiming the same role throw eagerly — even
+    # with nothing looking the role up (netpol stays disabled here).
+    t15-duplicate-role-throws = evalFails (mkCluster [
+      baseInstances
+      {
+        instances.infra.cilium.package = stubEnforcer;
+        instances.infra2.cilium2.package = stubEnforcer;
+      }
+    ]);
+
+    # A managed instance claiming a role the environment owns exclusively
+    # (stock kind's kindnet) is a duplicate-symbol error at eval.
+    t16-exclusive-binding-throws = evalFails (mkCluster [
+      baseInstances
+      {
+        cluster.roles.cni = {
+          binding = "exclusive";
+          provider = "kindnet";
+        };
+        instances.infra.cni.package = mkCmPackage {
+          name = "managed-cni";
+          metaExtra.roles = [ "cni" ];
+        };
+      }
+    ]);
+
+    # Substrate axiom declared false → hard error (three-valued gate).
+    t17-substrate-false-throws = evalFails (mkCluster [
+      baseInstances
+      {
+        cluster.capabilities.daemonSets = false;
+        instances.agents.agent.package = dsPackage;
+      }
+    ]);
+
+    # Substrate axiom unknown (null, the default) → warning only; the
+    # cluster still evaluates.
+    t18-substrate-null-passes =
+      let
+        ms = manifests (mkCluster [
+          baseInstances
+          { instances.agents.agent.package = dsPackage; }
+        ]);
+      in
+      hasName "agent" (ofKind "DaemonSet" ms) || throw "DaemonSet missing under unknown substrate axiom";
+
+    # A role name is a DI alias: a package declaring meta.roles resolves
+    # for consumers taking the role name as a dep arg — no instance-level
+    # aliases needed.
+    t19-role-is-di-alias =
+      let
+        storageStub = mkCmPackage {
+          name = "storage-stub";
+          metaExtra.roles = [ "storageClasses" ];
+          out.storageClassName = "stub-sc";
+        };
+        consumer = {
+          meta.version = "test";
+          build =
+            {
+              self,
+              scope,
+              storageClasses,
+              ...
+            }:
+            {
+              cm = scope.mkResource {
+                apiVersion = "v1";
+                kind = "ConfigMap";
+                name = "sc-consumer";
+                extra.data.sc = storageClasses.out.storageClassName;
+              };
+              root = self.cm;
+            };
+        };
+        ms = manifests (mkCluster [
+          baseInstances
+          {
+            instances.storage.provider.package = storageStub;
+            instances.appns.consumer.package = consumer;
+          }
+        ]);
+        probe = byName "sc-consumer" (ofKind "ConfigMap" ms);
+      in
+      (probe != null && probe.data.sc == "stub-sc")
+      || throw "role-as-alias resolution failed: ${builtins.toJSON probe}";
   };
 
   failures = lib.filterAttrs (

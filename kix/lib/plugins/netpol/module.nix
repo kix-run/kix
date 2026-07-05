@@ -10,7 +10,7 @@ let
   interface = import ./interface.nix { inherit lib; };
   derive = import ./derive.nix { inherit lib; };
 
-  enforcerCapability = "network-policy-enforcer";
+  enforcerRole = "network-policy-enforcer";
 
   resolveEnforcerOut =
     {
@@ -19,7 +19,7 @@ let
       namespaceName,
     }:
     let
-      provider = cluster.findCapabilityProvider enforcerCapability;
+      provider = cluster.findRoleProvider enforcerRole;
     in
     # Self-dep guard: the enforcer's own instance must not depend on itself.
     if provider == null || (provider.ns == namespaceName && provider.inst == instanceName) then
@@ -67,7 +67,7 @@ in
     description = ''
       CiliumNetworkPolicy generation from DI graph. See v2_discussions/37
       and v2_discussions/83. The enforcer that CNPs depend on is looked up
-      automatically via `meta.provides ∋ "network-policy-enforcer"` (see
+      automatically via `meta.roles ∋ "network-policy-enforcer"` (see
       `kix/packages/cilium`) — no explicit wiring is required, but an
       enforcer instance MUST be declared when `enable = true`. kix throws
       at cluster eval time if no enforcer is resolved: without the
@@ -126,7 +126,7 @@ in
     hooks.clusterProcessors.netpol =
       ctx:
       let
-        provider = ctx.cluster.findCapabilityProvider enforcerCapability;
+        provider = ctx.cluster.findRoleProvider enforcerRole;
         enforcerOut = if provider == null then null else provider.out;
 
         defaultDenyPolicies =
@@ -158,7 +158,7 @@ in
             if provider == null then
               throw (
                 "kix: `networkPolicy.enable = true` but no instance declares "
-                + "`meta.provides = [\"network-policy-enforcer\"]`. Declare a cilium "
+                + "`meta.roles = [\"network-policy-enforcer\"]`. Declare a cilium "
                 + "instance in the cluster. For externally-managed cilium (k3s with "
                 + "--flannel-backend=none, kind with helm-installed cilium, RKE2's "
                 + "bundled cilium, etc.) use the external variant that emits only "

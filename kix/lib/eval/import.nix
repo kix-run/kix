@@ -22,6 +22,10 @@ rec {
       out ? { },
       kind ? null,
       apiVersion ? null,
+      # Registry roles this environment-provided service fills (weak symbols;
+      # a managed instance with the same role shadows it). The role name is
+      # also the import's DI alias — no instance-level `aliases` needed.
+      roles ? [ ],
     }:
     {
       _type = "kix-import";
@@ -31,6 +35,9 @@ rec {
         kind
         apiVersion
         ;
+      meta = {
+        inherit roles;
+      };
     };
 
   mkImportScope =
@@ -248,10 +255,10 @@ rec {
 
       # Fallback materializer path (v2_discussions/121): intents must be extraDeps on the marker, sealed at mkResource time — instanceProcessors run too late.
       intentProvider =
-        if rawPlatformIntents == { } || !networkConfig.enable || !(clusterCtx ? findCapabilityProvider) then
+        if rawPlatformIntents == { } || !networkConfig.enable || !(clusterCtx ? findRoleProvider) then
           null
         else
-          clusterCtx.findCapabilityProvider "network-policy-enforcer";
+          clusterCtx.findRoleProvider "network-policy-enforcer";
 
       intentProviderOut =
         if

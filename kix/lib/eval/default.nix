@@ -12,7 +12,15 @@ let
   scorecard = import ../scorecard.nix { inherit lib; };
   helpers = import ./helpers.nix { inherit lib; };
   edgeAnalysis = import ./edges.nix { inherit k8s; };
-  hooks = import ./hooks.nix { inherit lib meta kixlib; };
+  roles = import ./roles.nix { inherit lib; };
+  hooks = import ./hooks.nix {
+    inherit
+      lib
+      meta
+      kixlib
+      roles
+      ;
+  };
   view = import ./view.nix { inherit lib helpers; };
   crd = import ../vocab/crd.nix { inherit lib; };
   scopeMod = import ../scope/default.nix {
@@ -66,6 +74,7 @@ let
       helpers
       scorecard
       hooks
+      roles
       ;
     inherit (namespaceMod) mkNamespace;
     inherit (auto) computeAutoInstances;

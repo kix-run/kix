@@ -258,13 +258,18 @@ in
   config = {
     cluster.provider = lib.mkForce "lithus";
 
-    cluster.capabilities = {
-      cni = lib.mkForce "cilium";
-      networkPolicyAPI = lib.mkForce "cilium";
-      loadBalancer = lib.mkForce true;
-      persistentStorage = lib.mkForce true;
-      rwxStorage = mkDefault true;
-      volumeSnapshots = lib.mkForce true;
+    # Overrides on top of rke2: this RKE2 is configured with external
+    # Cilium instead of Canal (still environment-owned — kix does not
+    # deploy the CNI here; the cilium-external package only emits the CRD
+    # ref marker and claims the enforcer role, not cni). Storage is
+    # provided by the OpenEBS stack this flavor ships.
+    cluster.roles = {
+      cni.provider = lib.mkForce "cilium (rke2-managed)";
+      storageClasses.binding = lib.mkForce "shadowable";
+      loadBalancer = {
+        binding = lib.mkForce "shadowable";
+        provider = lib.mkForce "cilium lb-ipam";
+      };
     };
 
     # Storage resource bundles — one inline-package instance per kind so
@@ -297,11 +302,13 @@ in
     instances.kube-system = {
       platform-storage = {
         package = kix.mkImport {
+          roles = [ "storageClasses" ];
           out = {
             storageClassName = "lbs1-pool1-2x";
+            rwx = true; # Mayastor NVMe-oF replicated volumes
+            snapshots = true;
           };
         };
-        aliases = [ "storageClasses" ];
         optional = true;
       };
     };

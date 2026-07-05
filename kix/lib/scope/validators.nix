@@ -77,17 +77,30 @@ in
       instanceName,
       namespaceName,
       capabilities,
+      roleStatus ? (_: "unknown"),
     }:
     let
+      # Three-valued substrate gates (v2_discussions/127 §3): declared-false
+      # is an error, unknown (null) is a warning naming the axiom to declare,
+      # true passes. The `capabilities == { }` escape keeps standalone scopes
+      # (tests, subscope stubs) silent.
       checkCapability =
         {
           cap,
           message,
         }:
+        let
+          value = capabilities.${cap} or null;
+        in
         if capabilities == { } then
           null
-        else if !(capabilities.${cap} or true) then
+        else if value == false then
           throw message
+        else if value == null then
+          builtins.trace (
+            "[kix] warning: [${instanceName}] relies on unknown axiom "
+            + "cluster.capabilities.${cap} — declare it in the target (null means unknown, not false)"
+          ) null
         else
           null;
     in
@@ -96,16 +109,26 @@ in
         args:
         let
           specType = args.spec.type or (args.extra.spec.type or null);
+          status = roleStatus "loadBalancer";
+          serviceDesc = "[${instanceName}] Service '${args.name or "unknown"}' uses type=LoadBalancer";
         in
-        if (args.kind or "") == "Service" && specType == "LoadBalancer" then
-          checkCapability {
-            cap = "loadBalancer";
-            message =
-              "[${instanceName}] Service '${args.name or "unknown"}' uses type=LoadBalancer "
-              + "but cluster.capabilities.loadBalancer is false. "
-              + "Use type=ClusterIP or NodePort, install a LoadBalancer controller, "
-              + "or set cluster.capabilities.loadBalancer = true.";
-          }
+        if (args.kind or "") == "Service" && specType == "LoadBalancer" && capabilities != { } then
+          if status == "absent" then
+            throw (
+              serviceDesc
+              + " but the loadBalancer role is vacant (cluster.roles.loadBalancer.binding = \"absent\", "
+              + "no managed provider). Use type=ClusterIP or NodePort, add a provider instance, "
+              + "or declare the environment binding on the target."
+            )
+          else if status == "unknown" then
+            builtins.trace (
+              "[kix] warning: "
+              + serviceDesc
+              + " but the loadBalancer role is unknown on this target — declare "
+              + "cluster.roles.loadBalancer.binding or add a provider"
+            ) null
+          else
+            null
         else
           null;
 
