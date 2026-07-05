@@ -1,14 +1,11 @@
-# Instance evaluation — evaluates a single package instance within a namespace.
-# Handles DI, fixpoint, closure computation, diagnostics, and view construction.
-
 {
   lib,
   k8s,
   meta,
   helpers,
-  netpol,
   kixlib,
   scorecard,
+  edgeAnalysis,
   scope,
   view,
   resolve,
@@ -31,7 +28,6 @@ let
 in
 
 {
-  # Evaluate a single instance.
   evaluateInstance =
     {
       instanceName,
@@ -45,46 +41,21 @@ in
       globalPartsOverlays ? [ ],
       clusterConfig ? { },
       configInjections ? [ ],
-      # Lazy handle to the network-policy enforcer's `out` (currently only
-      # exposes `cnpCrdRef`). Resolved at cluster level via
-      # `meta.provides ∋ "network-policy-enforcer"`. Null when no enforcer
-      # is declared or when this instance IS the enforcer (self-dep guard).
-      # See v2_discussions/83 and `kix/lib/eval/cluster.nix` → `enforcerOut`.
-      networkPolicyEnforcer ? null,
+      workloadInterceptors ? [ ],
+      instanceProcessors ? [ ],
+      clusterCtx ? { },
     }@args:
 
-    # Import instances take a separate evaluation path — no resource collection,
-    # no closure computation, just out derivation + marker CR.
     if (instCfg.package._type or "") == "kix-import" then
       evaluateImportInstance args
 
     else
       let
-        # Peek package metadata BEFORE the scope is constructed, so
-        # `mkScope` can honor `meta.provides` (self-dep guard for the
-        # enforcer) and `meta.network.intents` (declared connectivity)
-        # at scope-level netpol emission time. `peekPackageMeta`
-        # is cheap — it invokes function packages with an empty scope and
-        # reads `.meta` without calling `build`.
         peekedPackageMeta = meta.peekPackageMeta {
           package = instCfg.package;
           inherit kixlib;
         };
 
-        # If this instance IS the enforcer (e.g. the cilium package
-        # itself), disable scope-level per-workload CNP emission: its
-        # own workloads must not declare CNPs that transitively depend on
-        # the enforcer's own CRD marker. The cluster-level lookup in
-        # `cluster.nix → isSelfEnforcer` already nullifies
-        # `networkPolicyEnforcer` for this scope, but we also suppress
-        # the `buildWorkloadCnps` call so no fallback-path CNPs are
-        # emitted either.
-        _skipWorkloadNetpol = builtins.elem "network-policy-enforcer" (peekedPackageMeta.provides or [ ]);
-
-        # Resolve the DNS instance via DI. The root is passed to the scope
-        # and injected into workloads that reference cross-instance Services
-        # (detected via store-path context in buildWorkloadCnps).
-        # Self-dep guard: if this instance IS the dns provider, skip.
         _dnsResolution = resolveArg {
           argName = "dns";
           inherit resolutionIndex;
@@ -92,18 +63,11 @@ in
           hasDefault = true;
           explicitOverride = null;
         };
-        # TODO: turn this into a hard error once all cluster definitions
-        # declare a DNS instance (platform flavors already do via
-        # platform-dns). Every cluster needs DNS — a missing instance is
-        # a misconfiguration.
         _dnsResolutionCheck =
           if !_dnsResolution.found then
             builtins.trace "[kix] warning: no DNS instance (alias 'dns') found in cluster — workloads will not depend on DNS readiness" null
           else
             null;
-        # DNS instance root resource (or null). Passed to the scope; only
-        # injected into workloads that actually reference cross-instance
-        # Services (detected by buildWorkloadCnps via store-path context).
         _dnsRoot =
           if !_dnsResolution.found || (_dnsResolution.direct or false) then
             null
@@ -111,8 +75,7 @@ in
             let
               dnsInst = allInstances.${_dnsResolution.namespace}.${_dnsResolution.instanceName};
             in
-            # Self-dep guard: the DNS provider's own workloads must not
-            # depend on its own root (that would be circular).
+            # Self-dep guard: the DNS provider's own workloads must not depend on their own root.
             if _dnsResolution.namespace == namespaceName && _dnsResolution.instanceName == instanceName then
               null
             else if dnsInst ? root then
@@ -120,49 +83,67 @@ in
             else
               null;
 
+        _enforcerProvider =
+          if !(clusterCtx ? findCapabilityProvider) then
+            null
+          else
+            clusterCtx.findCapabilityProvider "network-policy-enforcer";
+
+        # Self-dep guard: the enforcer's own scope must not depend on itself.
+        _isSelfEnforcer =
+          _enforcerProvider != null
+          && _enforcerProvider.ns == namespaceName
+          && _enforcerProvider.inst == instanceName;
+
+        # The package-facing handle contract (`scope.networkPolicyEnforcer`):
+        # null unless policy generation is enabled cluster-wide, an enforcer
+        # is declared, and this instance is not the enforcer itself. Packages
+        # (e.g. stackgres-cluster) branch on this handle to decide whether to
+        # emit their own policies — with `networkPolicy.enable = false` they
+        # must see null even when an enforcer instance exists. The option is
+        # declared by the netpol plugin, hence the `or false` read.
+        _netpolEnabled = (clusterConfig.networkPolicy or { }).enable or false;
+
+        _networkPolicyEnforcer =
+          if !_netpolEnabled || _enforcerProvider == null || _isSelfEnforcer then
+            null
+          else
+            _enforcerProvider.out;
+
+        _edgeAnalysis = rec {
+          serviceRegistry = edgeAnalysis.mkServiceRegistry _depResourcesForEdges;
+          serviceRefRegistry = edgeAnalysis.mkServiceRefRegistry _depResourcesForEdges;
+          inherit (edgeAnalysis) isServiceRef;
+          dnsRoot = _dnsRoot;
+          edgesFor =
+            workloadInput:
+            edgeAnalysis.extractServiceEdgesFromJson {
+              json = builtins.toJSON workloadInput;
+              inherit serviceRegistry serviceRefRegistry;
+            };
+        };
+
         scope' = mkScope {
           inherit
             instanceName
             namespaceName
             namespaceResource
             clusterLabels
-            networkPolicyEnforcer
             peekedPackageMeta
+            workloadInterceptors
+            clusterCtx
             ;
-          dnsRoot = _dnsRoot;
+          networkPolicyEnforcer = _networkPolicyEnforcer;
           namespaces = nsResources;
           labelStyle = instCfg.labelStyle;
           selectorLabelsOverride = instCfg.selectorLabels;
           clusterDomain = clusterConfig.clusterDomain or "cluster.local";
           capabilities = clusterConfig.cluster.capabilities or { };
-          networkConfig = clusterConfig.networkPolicy or { enable = false; };
-          # Lazy: dep resources for scope-level netpol edge discovery.
-          # `resolvedDepMeta` is computed below (line ~97) in the same
-          # `let` and fully forced before the `parts` fixpoint runs
-          # `scope.mkDeployment`, so referencing it here is safe via
-          # Nix laziness.
-          depResourcesForNetpol = _depResourcesForNetpol;
-          skipWorkloadNetpol = _skipWorkloadNetpol;
+          # Lazy: settled by the outer fixpoint before the first mkWorkload forces it.
+          edgeAnalysis = _edgeAnalysis;
         };
 
-        # Flatten every DI-resolved dep instance's raw resources into a
-        # single list. This mirrors the `depResources` computation inside
-        # `netpol.processInstance` — moved up here so `mkScope` can hand
-        # a Service registry to `buildWorkloadCnps` at workload-
-        # construction time. Lazy: only forced when the first
-        # `mkDeployment`/`mkStatefulSet`/`mkDaemonSet` runs, by which
-        # point `resolvedDepMeta` is fully settled.
-        #
-        # Scoped to DI-direct deps. Middle packages that forward a
-        # dep's Service edge to downstream consumers (e.g.
-        # stackgres-database forwarding postgres' ServiceRef via
-        # `scope.augmentAllEdges`) must also re-expose the upstream
-        # marker in their own build return (e.g.
-        # `inherit (postgres) postgresService;`) so the downstream
-        # consumer's registry picks it up. Forwarding context without
-        # re-exposing the marker leaves the consumer's egress CNP
-        # missing the forwarded edge.
-        _depResourcesForNetpol = builtins.concatMap (
+        _depResourcesForEdges = builtins.concatMap (
           argName:
           let
             depParts = resolvedDepMeta.${argName}.instance.raw or { };
@@ -177,24 +158,18 @@ in
           )
         ) (builtins.attrNames resolvedDepMeta);
 
-        # 1. Phase 1: normalize package (function or inline attrset) with system args
         raw = callPackagePhase1 {
           package = instCfg.package;
           scope = scope';
         };
 
-        # Package-declared metadata (lifecycle, scope, etc.)
         packageMeta = raw.meta or { };
 
-        # 2. Discover deps from build function args
         discoveredDeps = discoverBuildDeps raw.build;
-        # Merge with optional deps enrichment (assertions/warnings per dep)
         depsEnrichment = raw.deps or { };
-        # All dep names come from build args — enrichment only adds metadata
         depArgNames = builtins.attrNames discoveredDeps;
         deps = instCfg.deps or { };
 
-        # 3. Resolve deps
         resolvedDeps = resolveDeclaredDeps {
           declaredDeps = discoveredDeps;
           inherit resolutionIndex allInstances;
@@ -202,7 +177,6 @@ in
           explicitOverrides = deps;
         };
 
-        # Resolve dep metadata for cross-checks
         resolvedDepMeta = builtins.foldl' (
           acc: argName:
           let
@@ -227,7 +201,6 @@ in
             acc
         ) { } depArgNames;
 
-        # --- Cross-namespace scope validation ---
         _crossNsCheck =
           let
             crossNsDeps = lib.filterAttrs (
@@ -243,7 +216,6 @@ in
             throw "instance '${instanceName}' (namespace '${namespaceName}') depends on '${depInfo.resolution.instanceName}' (namespace '${depInfo.resolution.namespace}') which declares meta.scope = \"namespace\" — cross-namespace reference not allowed"
           ) null crossNsDeps;
 
-        # --- Meta-derived assertions and warnings (static, before build) ---
         metaResult = meta.checkMetaStatic {
           inherit
             packageMeta
@@ -255,20 +227,14 @@ in
             ;
         };
 
-        # 2. Evaluate typed config: package options + instance config + dep injections
         evaluatedConfig = evaluateInstanceConfig {
           packageOptions = raw.options or { };
           inherit instCfg clusterConfig configInjections;
         };
 
-        # 3. Combine global + instance overlays (signature: scope → self → base → attrset)
         allOverlays = globalPartsOverlays ++ (instCfg.partsOverlays or [ ]);
         boundOverlays = map (o: o scope') allOverlays;
 
-        # 4. Build the inner fixpoint — build receives { self, config, clusterConfig }
-        #    build can be a function (single-file) or a list of paths/functions (multi-file).
-        #    Paths are imported; all entries are called with { self, config, clusterConfig }
-        #    and optionally { scope, lib } if the function accepts them (arg introspection).
         rawBuildEntries =
           if builtins.isList raw.build then
             map (entry: if builtins.isPath entry then import entry else entry) raw.build
@@ -288,7 +254,6 @@ in
               // lib.optionalAttrs (args ? lib) { inherit lib; }
               // lib.optionalAttrs (args ? kix) { kix = kixlib; }
               // lib.optionalAttrs (args ? deps) { deps = resolvedDeps; };
-            # Pass resolved DI deps by name — build entries request what they need
             depArgs = lib.intersectAttrs args resolvedDeps;
           in
           fn (base // extra // depArgs);
@@ -304,12 +269,10 @@ in
             merged
         );
 
-        # --- Resolve root resource and package-level requires ---
         rawRoot =
           parts.root
             or (throw "Instance '${instanceName}' in namespace '${namespaceName}' must define 'root'");
 
-        # root can be either { resource = ...; requires = [...]; postHooks = [...]; } or a resource directly
         rootRes =
           if rawRoot ? resource then
             rawRoot.resource
@@ -318,31 +281,12 @@ in
           else
             throw "Instance '${instanceName}': root must be a resource or { resource, requires, postHooks }";
 
-        # Package-level requires come from the root's explicit `requires`
-        # (set by the package author via `root = { resource = ...; requires = [...]; }`).
-        # Cross-package edges from other sources (DI-resolved deps referenced
-        # in manifest string context) are handled by the CLI wave computation,
-        # which collapses any cross-package edge onto the target package's
-        # PackageInstance marker — see `cli/kix/src/cluster/graph.rs` Phase 2b.
         packageRequires = if rawRoot ? resource then rawRoot.requires or [ ] else [ ];
 
-        # Post-hooks: resources deployed AFTER all other package resources complete.
-        # Must depend on forward-closure resources (typically root or its descendants)
-        # so wave ordering places them after the main package resources.
-        # The PackageInstance CR depends on them, so the package isn't "done" until
-        # post-hooks finish. Jobs use readiness = status.succeeded >= 1.
         postHooks = if rawRoot ? resource then rawRoot.postHooks or [ ] else [ ];
 
-        # Package-level out extensions (functions, complex types beyond string outputs).
-        # Merged on top of the root resource's auto-derived out.
         packageOut = if rawRoot ? resource then rawRoot.out or { } else { };
 
-        # --- Forward closure computation ---
-        # Follows both store-path references in manifests AND explicit `requires`.
-        # `requires` are structural forward deps (SA needed by Deployment, etc.).
-
-        # Collect all resources from parts (for the local registry).
-        # Filters out null values so disabled/modal parts are excluded.
         _partResourcesFromParts = builtins.filter (v: (v._type or "") == "k8s-resource") (
           collectTypedAttrs {
             excludeKeys = [
@@ -352,20 +296,13 @@ in
           } parts
         );
 
-        # Drain scope-emitted per-workload CNPs off every workload and
-        # fold them into the instance's resource pool. `scope.mkWorkload`
-        # constructs these at resource-construction time — the workload's
-        # own `extraDeps` already lists them, so the forward closure will
-        # reach them via the workload's store-path context, but we still
-        # need them explicitly in `allPartResources` so `collectResources`
-        # in cluster.nix can serialize them as YAML documents. See
-        # v2_discussions/83 → "scope-level workload interception".
-        _scopeEmittedNetpolCnps = builtins.concatMap (r: r._generatedNetpol or [ ]) _partResourcesFromParts;
+        # Sideband drain: interceptor-emitted resources ride workloads' _injectedResources, attached pre-seal by scope.mkWorkload.
+        _scopeInjectedResources = builtins.concatMap (
+          r: r._injectedResources or [ ]
+        ) _partResourcesFromParts;
 
-        allPartResources = _partResourcesFromParts ++ _scopeEmittedNetpolCnps;
+        allPartResources = _partResourcesFromParts ++ _scopeInjectedResources;
 
-        # Local store-path → resource lookup for forward closure walking.
-        # TODO: potentially move the PI collection to kix-cli for faster eval
         localRegistry = builtins.foldl' (
           acc: r:
           acc
@@ -376,16 +313,6 @@ in
           }
         ) { } allPartResources;
 
-        # Get forward deps: store-path refs in manifest + explicit requires
-        # + extraDeps. `extraDeps` are folded into the resource's own
-        # store-path context (see k8s.nix `manifestJsonWithDeps`) so they
-        # influence content addressing, but they don't appear in the raw
-        # manifest JSON's context — which means the walker won't find them
-        # unless we list them here explicitly. Critical for scope-level
-        # per-workload CNPs that are attached via extraDeps from
-        # `scope.mkWorkload` (see v2_discussions/83): without this edge
-        # the workload's CNPs would show up as orphans in the instance
-        # forward closure.
         getForwardDeps =
           resource:
           let
@@ -401,7 +328,6 @@ in
           in
           manifestDeps ++ requiresDeps ++ extraDepsDeps;
 
-        # Compute the forward closure from rootRes + packageRequires + postHooks
         forwardRoots = [ rootRes ] ++ packageRequires ++ postHooks;
         forwardClosure =
           let
@@ -446,12 +372,6 @@ in
           }) forwardClosure
         );
 
-        # --- Inverse dependency detection ---
-        # Find resources NOT in the forward closure whose manifest references
-        # a resource that IS in the forward closure. Only tracks the actual
-        # inverse deps — not their forward expansions (e.g. a ClusterRoleBinding
-        # that references a SA is an inverse dep, but the ClusterRole it binds is
-        # just a forward dep of the binding, not an inverse dep itself).
         inverseDeps =
           let
             nonForward = builtins.filter (
@@ -463,12 +383,6 @@ in
               let
                 ctx = builtins.getContext (builtins.toJSON r.rawManifest);
                 ctxPaths = builtins.attrNames ctx;
-                # Explicit `requires` entries count as forward references too:
-                # they're declared dependencies on forward-closure resources,
-                # even if the dependency isn't expressed via string context in
-                # the manifest body. Without this, resources that only use
-                # requires (e.g. `scope.mkCRDRef { installedBy = ...; }`) would
-                # be flagged as orphans instead of classified as inverse deps.
                 requiresPaths = map (dep: builtins.unsafeDiscardStringContext dep.outPath) (
                   builtins.filter (dep: builtins.isAttrs dep && (dep._type or "") == "k8s-resource") (
                     r.requires or [ ]
@@ -479,7 +393,6 @@ in
           in
           builtins.filter referencesForward nonForward;
 
-        # Deduplicate inverse deps
         uniqueInverseDeps =
           let
             go =
@@ -516,26 +429,20 @@ in
             queue = inverseDeps;
           };
 
-        # --- Network policy generation ---
-        networkResult =
-          if (clusterConfig.networkPolicy or { }).enable or false then
-            netpol.processInstance {
-              scope = scope';
-              inherit
-                instanceName
-                allPartResources
-                networkPolicyEnforcer
-                ;
-              networkConfig = clusterConfig.networkPolicy;
-              inherit packageMeta;
-            }
-          else
-            {
-              policies = [ ];
-              warnings = [ ];
-            };
+        processorCtx = {
+          emit = scope'._emit;
+          inherit
+            instanceName
+            namespaceName
+            allPartResources
+            packageMeta
+            ;
+          cluster = clusterCtx;
+        };
+        processorResults = map (p: p processorCtx) instanceProcessors;
+        processorResources = builtins.concatMap (r: r.resources or [ ]) processorResults;
+        processorWarnings = builtins.concatMap (r: r.warnings or [ ]) processorResults;
 
-        # --- Scorecard rule evaluation (manifest + package level) ---
         scorecardConfig = clusterConfig.scorecard or { };
         scorecardEnabled = (scorecardConfig.enable or false) && (scorecardConfig.rules or { }) != { };
         owner = packageMeta.owner or null;
@@ -581,16 +488,12 @@ in
         scorecardFindings = scorecardManifestFindings ++ scorecardPackageFindings;
         scorecardDiag = scorecard.scorecardToWarnings scorecardFindings;
 
-        # --- Create PackageInstance CRD (Phase 5) ---
-        # Lists root.requires as package-requires and true inverse deps.
-        # Structural deps (via `requires`) are tracked by the cluster-level
-        # closure which also follows `requires`.
         packageInstance = mkPackageInstance {
           inherit instanceName namespaceName;
           namespace = namespaceResource;
           mainResource = rootRes;
           inherit packageRequires postHooks;
-          inverseDeps = inverseDeps ++ networkResult.policies;
+          inverseDeps = inverseDeps ++ processorResources;
           lifecycle = packageMeta.lifecycle or null;
           version =
             let
@@ -610,9 +513,6 @@ in
             };
         };
 
-        # --- Eval-time warnings ---
-
-        # 1. Redundant requires: resource has requires on something already in its manifest context
         redundantRequiresWarnings = builtins.concatMap (
           resource:
           let
@@ -635,7 +535,6 @@ in
           ) (builtins.filter (r: builtins.isAttrs r && (r._type or "") == "k8s-resource") reqs)
         ) allPartResources;
 
-        # 2. Duplicate requires: same resource required multiple times
         duplicateRequiresWarnings = builtins.concatMap (
           resource:
           let
@@ -686,7 +585,6 @@ in
           }
         ) allPartResources;
 
-        # 3. Orphaned resources: defined in parts but not reachable from root
         reachablePaths =
           let
             inverseSet = builtins.listToAttrs (
@@ -709,11 +607,8 @@ in
           r: !(builtins.hasAttr (builtins.unsafeDiscardStringContext r.outPath) reachablePaths)
         ) allPartResources;
 
-        # 4. Post-hooks without forward-closure dependencies: would not be ordered
-        # after root in the deploy graph — likely a bug.
         postHookWarnings =
           let
-            # Forward paths excluding the post-hooks themselves
             nonPostHookForwardPaths = builtins.removeAttrs forwardPaths (
               map (r: builtins.unsafeDiscardStringContext r.outPath) postHooks
             );
@@ -727,7 +622,6 @@ in
           in
           builtins.filter hookMissingDep postHooks;
 
-        # --- Package-declared warnings and assertions (post-build) ---
         packageResultRaw = meta.evaluatePackageDiagnostics {
           inherit
             raw
@@ -738,13 +632,11 @@ in
             resolvedDeps
             ;
         };
-        # Merge scorecard error-level findings as assertions
         packageResult = {
           warnings = packageResultRaw.warnings;
           assertions = packageResultRaw.assertions ++ scorecardDiag.assertions;
         };
 
-        # --- Combine all diagnostics ---
         structuralWarnings =
           let
             res = r: "${r.kind}/${r.name}";
@@ -763,7 +655,7 @@ in
               r:
               "post-hook '${res r}' does not depend on any forward-closure resource — it won't be ordered after root in the deploy graph"
             ) postHookWarnings)
-            networkResult.warnings
+            processorWarnings
             scorecardDiag.warnings
           ];
 
@@ -797,13 +689,7 @@ in
               in
               view'
               // {
-                # `_networkPolicies` is the full set of CNPs owned by this
-                # instance: per-workload CNPs emitted at scope time (drained
-                # off `_generatedNetpol` on every workload) + supplementary
-                # api-server / external-ingress CNPs emitted post-fixpoint by
-                # `netpol.processInstance`. cluster.nix reads this via
-                # `inst._networkPolicies` in `collectResources`.
-                _networkPolicies = _scopeEmittedNetpolCnps ++ networkResult.policies;
+                _hookResources = _scopeInjectedResources ++ processorResources;
                 _scorecardFindings = scorecardFindings;
                 _diagnostics = {
                   warnings = diagnostics.allWarnings;

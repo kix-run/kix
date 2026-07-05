@@ -1,84 +1,96 @@
 # kix/lib architecture
 
-Index + the non-obvious bits. Read a file directly once you know where to go.
+Internals map for editing the compiler. The tree is organized by the ring model (v2_discussions/119): the deeper the ring, the higher the bar for changes. For *authoring packages*, read `guide/` instead. The pre-rewrite implementation is frozen at `kix/libv1/` as a reference until deleted; behavior is byte-identical (same manifest store path on ludo-kind).
+
+## Layout by ring
+
+```
+core/     Ring 0 — the artifact. Sealant + context machinery, PI/Activation CRs.
+eval/     Ring 1 — the pipeline. Module eval, DI, fixpoints, edge analysis, hooks.
+scope/    Ring 1 — the authoring surface. Builders, validators, labels.
+vocab/    Open vocabulary — pure helper libraries, importable without the core.
+plugins/  Ring 2 — cross-cutting layers attached via hooks. First: netpol.
+```
+
+Root files: `default.nix` (entry + YAML emission), `modules.nix` (option schema + hook options + plugin imports), `mkFlake.nix`, `meta.nix`, `env.nix`, `scorecard.nix`, `rules/`, `flavors/`, `modules/`, `helm.nix` + `helm-dag.nix` (own track, untouched by the rewrite).
 
 ## Pipeline
 
 ```
 flake.nix → mkFlake.nix → buildCluster (eval/cluster.nix)
-  → evalModules (modules.nix)            # merge cluster config
-  → auto-instantiate (eval/auto.nix)     # activate optionals + implicit deps
-  → resolution index (eval/resolve.nix)  # DNS-like DI map
-  → phase-1 pre-pass                     # introspect packages, inject config
-  → nested fixpoint: evaluateInstance (eval/instance.nix)
-      → scope (eval/scope.nix) → build() → collect → closure
-      → netpol.processInstance, scorecard
-  → aggregate manifests, stamp deps, build PackageInstance + Activation CRs
-  → mkManifests → YAML dir
+  1. evalModules (modules.nix, imports plugins/netpol/module.nix)
+  2. computeAutoInstances (eval/auto.nix)      # explicit wins
+  3. namespaces: real vs sentinel (`_`-prefixed)
+  4. resolution index (eval/resolve.nix)       # DNS-like DI map
+  5. phase-1 pre-pass                          # introspect, resolve dep targets, config injections
+  ── three fixpoints ──
+  6. instanceConfigs fixpoint                  # config-only; breaks function-injection cycles
+  7. clusterInstances fixpoint: evaluateInstance (eval/instance.nix)
+       mkScope (scope/) → build entries folded (parts fixpoint + overlays)
+       → sealWorkload: edges → dnsDeps → workloadInterceptors → pre-seal requires splice
+       → collect → closure diagnostics → instanceProcessors → PI CR → view
+  8. clusterProcessors (default-deny, platform intents, enforcer assertions)
+     → aggregate, Activation CR, package index, extraImages
+  → mkManifests → YAML dir (default.nix)
 ```
-
-Entry points: `mkFlake` (flakes), `buildCluster` (raw), `mkEnv` (multi-env stamping).
 
 ## File index
 
 | File | Role |
 |---|---|
-| `default.nix` | Re-exports everything. Start here to find a symbol. |
-| `mkFlake.nix` | Flake boilerplate: runs `buildCluster`, wires `kixChecks`/`piChecks`. |
-| `eval.nix` | Thin facade re-exporting `eval/*`. |
-| `eval/cluster.nix` | `buildCluster` — the big orchestrator + fixpoint. |
-| `eval/instance.nix` | `evaluateInstance` — one package → resources + PI CR. |
-| `eval/resolve.nix` | DI resolution (DNS-like lookup, two-phase calling). |
-| `eval/auto.nix` | Auto-instantiation of optional/implicit deps. |
-| `eval/scope.nix` | Per-instance context: `mkDeployment/StatefulSet/DaemonSet`, `mkOptional`, `mkWebhookService`, `labels.{selector,common,clusterScoped}`, capability checks, cross-ns validation. |
-| `eval/namespace.nix` | `mkNamespace` (+ ResourceQuota, NetworkPolicy). |
-| `eval/import.nix` | `mkImport` + lightweight PI for platform-provided services. |
-| `eval/view.nix` | `mkPackageView` — public projection for CLI/registry. |
-| `eval/helpers.nix` | `mergeCollide`, `collectTypedAttrs` (stops at `_type`). |
-| `modules.nix` | NixOS module schema: `instances`, `namespaces`, `cluster.{provider,capabilities,network}`, `clusterLabels`, `scorecard`, `networkPolicy`, `globalPartsOverlays`. |
-| `modules/` | Reusable cluster features (e.g. `monitoring.nix` auto-wires prometheus stack). |
-| `flavors/` | Platform profiles: k3s, kind, kubeadm, eks, gke, gke-autopilot, aks, openshift, rke2, talos. Set capabilities, provide shadowable platform imports. |
-| `k8s.nix` | `mkResource`, `mkImportResource`, `mkPackageInstance`, `mkActivation`, `mkSecretHelpers`, `attachCtxDeep`, `extractStoreHash`. The store-path-as-DAG machinery lives here. |
-| `compose.nix` | `kixlib` passed to packages: `service.fromWorkload`, `ingress.fromService`, `httpRoute.fromService`, `mount.{pvc,configMap,secret,emptyDir}`, `withMounts[On]`, `expose`, `monitor`. |
-| `helm.nix` | `fetchHelmChart`, `importChart` (IFD `helm template` → structured resource collection with get/find/byKind/workloads/mkParts + DAG linking), `helmChart` (Tier 1 inline convenience). Exposed to packages via `scope.helm`. |
-| `helm-dag.nix` | Helm DAG reconstruction: infers intra-chart resource dependencies from well-known K8s patterns (SA mounts, volumes, envFrom, RBAC bindings, Service selectors, HPA/PDB targets, Ingress/HTTPRoute backends, ServiceMonitor selectors). Runs on raw JSON pre-wrapping; edges become `requires` on wrapped resources for proper `kix.dev/depends-on` annotation stamping. |
-| `crd.nix` | Pipeable CRD builders: `fromKind`, `clusterScoped`, `withShortNames`, `withSchema`. Instantiated via `scope.mkCRD`/`mkCRDRef`. |
-| `netpol.nix` | Derives CiliumNetworkPolicy from store-path graph. `buildWorkloadCnps` (scope-level per-workload egress + self-ingress + caller-side paired ingress CNPs in the callee namespace via `scope.forNamespace`, runs inside `scope.mkDeployment` before the workload's `builtins.toFile` — workload ends up depending on all of its own CNPs via `extraDeps`), `processInstance` (post-fixpoint supplements: precise api-server egress via SA→Binding walk, LoadBalancer external-ingress, warnings), `generateDefaultDeny`. Every CNP is routed through the enforcer's `cnpCrdRef.out.cr` when one is declared, so the CNP → CRD marker → enforcer root edge falls out of DI automatically (see v2_discussions/83). There is no cluster-level inverted-ingress pass — Phase C eliminated it. |
-| `rbac.nix` | Pipe DSL: `group`, `watch`, `reconcile`, `allow`, `restrictTo`, `sub`. |
-| `scorecard.nix` | Rule engine. Levels: manifest/package/namespace/cluster. Severity override chain: rule disable → byOwner → byNamespace → rule → ruleDefaults. |
-| `rules/` | Built-in rule library (security, reliability, governance, architecture). `architecture.nix` catches DI hygiene smells — packages hand-rolling resources that belong to another capability. |
-| `meta.nix` | `peekPackageMeta` (introspect without building). |
-| `env.nix` | `mkEnv` — stamp instance sets into env-prefixed namespaces. |
-| `fragments.nix` | Small reusable manifest fragments. |
+| `core/resource.nix` | `mkResource` (sealing: `builtins.toFile` over manifest JSON + folded dep context), `mkImportResource`, `out.*` derivation, tagged `kix.dev/depends-on` (bare / `requires:` / `extra:`), `attachCtxDeep`, `extractStoreHash`, `stripKixMeta`, `mkSecretHelpers`, `kixCRDs`. |
+| `core/activation.nix` | `mkPackageInstance` (lifecycle, inverse deps, post-hooks), `mkActivation` (closure root — the CLI contract). |
+| `eval/cluster.nix` | `buildCluster`: the three fixpoints, hook running, aggregation. Invariant comments at the fixpoint split points are load-bearing. |
+| `eval/instance.nix` | `evaluateInstance`: DI binding, parts fixpoint, overlays, `_injectedResources` drain, instanceProcessors call site, diagnostics. |
+| `eval/resolve.nix` | Resolution index, `resolveArg` ladder, phase-1 calling, config injections, `mkLocked`. |
+| `eval/auto.nix` | Auto-instantiation over `availablePackages`. |
+| `eval/edges.nix` | Service-edge analysis: registries, JSON-context intersection, ServiceRef markers. Shared by DNS injection (core) and the netpol plugin (via ctx.edges). |
+| `eval/hooks.nix` | `findCapabilityProvider` (uniqueness throw), `collectHooks` (priority-sorted, result-shape-validated), `runChecks`. |
+| `tests/` | Evaluation-only regression matrix (14 synthetic clusters: netpol off/on/missing-enforcer, hostNetwork, directions, defaultDeny off, hook priorities/contract violations, emit facade, enforcer-handle gating, sentinel ns). Run: `nix eval --extra-experimental-features 'nix-command flakes pipe-operators' --impure --expr '(import ./kix/lib/tests { }).result'`. |
+| `eval/import.nix` | `mkImport` + lightweight PI. Note: still materializes platform intents in core (as libv1 did) — a clean plugin move needs an import-marker hook channel that does not exist yet. |
+| `eval/namespace.nix` / `view.nix` / `helpers.nix` | `mkNamespace` (+ per-ns `netpols` config), `mkPackageView`, `collectTypedAttrs`/`mergeCollide`. |
+| `scope/default.nix` | `mkScope`: assembles labels/validators/builders into the scopeObj (surface attr-identical to v1); `forNamespace`/`forService` subscopes. |
+| `scope/builders.nix` | All resource builders with ONE `sealWorkload` pipeline: compute edges once → derive dnsDeps (core, unconditional) → run workloadInterceptors → splice requires before `mkResource` seals → attach `_injectedResources` + `rawSelector`. |
+| `scope/validators.nix` | The validator catalog (pure spec checks: cross-ns refs, selector subset, ports, resources, capability gates). |
+| `scope/labels.nix` | Label stack (kix/helm styles, selector labels). |
+| `plugins/netpol/module.nix` | NixOS-style module: declares `networkPolicy.*` options, registers `hooks.{workloadInterceptors,instanceProcessors,clusterProcessors}.netpol` under `mkIf cfg.enable`. |
+| `plugins/netpol/derive.nix` | CNP construction from ctx.edges: per-workload egress/self-ingress, caller-side ingress via `ctx.scope.forNamespace`, `processInstance` supplements (SA→Binding api-server walk, LB ingress), default-deny, platform intents. |
+| `plugins/netpol/interface.nix` | Enforcer contract (13 required `out.netpol` attrs). Still carries `portsToCilium` — envelope repair (doc 121 §5) deliberately deferred to avoid touching the cilium package. |
+| `vocab/` | `compose.nix` (kixlib: service/ingress/httpRoute/mounts/expose/monitor), `rbac.nix` (pipe DSL), `crd.nix` (pipeable builders), `fragments.nix` (multi-team merge). |
+| `modules.nix` | Option schema; `hooks.*` options (`attrsOf raw`, run in name-sorted order); imports the netpol plugin module. |
+
+## The hook contract
+
+Plugins attach through three module options; the netpol plugin is the reference implementation and doc 115 (hardening) is the intended second consumer.
+
+A hook is a function `ctx → result` or `{ priority ? 1000; fn; }`. Execution order is **(priority ascending, then name)** — never bare attr-name order; declare a priority instead of encoding order into names. Results are shape-checked per channel (unknown keys throw with the hook's full name, `eval/hooks.nix`).
+
+- `hooks.workloadInterceptors.<name> :: ctx → { requires?, resources?, warnings? }` — runs inside `sealWorkload` **before** `builtins.toFile` seals the workload (the only point where a dep can be added; post-pass is impossible under content addressing). `requires` splice pre-seal (earlier-wave guarantee); `resources` ride the `_injectedResources` sideband, drained after the parts fixpoint. ctx carries `workloadInput` (raw, context intact), `workloadKind`, `selector` (raw labels — never `out.selector` of the resource under construction), `hostNetwork`, `edges` (precomputed), registries, `instanceName`/`namespaceName`/`packageMeta`, `emit`, `cluster` (`{ config, findCapabilityProvider }`).
+- `hooks.instanceProcessors.<name> :: ctx → { resources?, warnings? }` — post-parts-fixpoint per instance. ctx carries `emit`, `allPartResources`, names, `packageMeta`, `cluster`.
+- `hooks.clusterProcessors.<name> :: ctx → { resources?, checks?, warnings? }` — cluster aggregation. `resources` become the Activation extraDeps AND the manifest-list tail in hook execution order (one canonical order; content-addressed, so priorities are part of the output contract). A **check** is any lazy value that throws its own error message on failure; all checks are seq-forced before the cluster result is returned (no assertion/message pairs — validators keep authorship of their messages).
+
+**Hooks emit through `ctx.emit`, never a scope.** The facade (`scope/builders.nix`) is sealing capability only: `mkResource` (instance-labeled, validator-checked, own namespace), `mkClusterResource`, `inNamespace nsName → { mkResource }` (foreign-namespace parenting, e.g. caller-side ingress CNPs). If a plugin needs more, extend the facade deliberately (design doc first) — handing hooks the authoring scope would make every plugin a de-facto core change.
+
+Fixpoint safety: a hook may read `workloadInput` and outer-fixpoint data (DI deps, cluster config); it must not force the resource under construction, and returned resources must not close a cycle into the current parts fixpoint.
+
+What stays core regardless of plugins: edge analysis + DNS dep injection (unconditional — workloads referencing cross-instance Services wait on the DNS root even with netpol disabled), the pre-seal splice, the sideband drain, `findCapabilityProvider`, `forNamespace` parenting. Also core: the `scope.networkPolicyEnforcer` **handle contract** — null unless `networkPolicy.enable` is on, an enforcer is declared, and the instance is not the enforcer itself. Packages (stackgres-cluster) branch on this handle; the enable-gate is load-bearing (`eval/instance.nix`).
 
 ## Non-obvious patterns
 
-- **Store-path = DAG edge.** Resources never declare deps explicitly. `mkResource` parses Nix string context on the manifest JSON and stamps `kix.dev/depends-on` annotations. The CLI later walks the store DAG (rooted at the Activation CR) to order deploys. → `k8s.nix`.
-- **Manifests keep real names, not store paths.** Names in YAML are plain strings; store-path context rides alongside via Nix's context system. `attachCtxDeep`/`extractStoreHash` in `k8s.nix`.
-- **Two-phase package calling.** Phase 1 (pre-fixpoint) introspects the function signature, resolves DI targets, and lets deps inject config (e.g. prometheus adds a ServiceMonitor). Phase 2 (inside `builtins.fix`) binds real instances via `ref` and calls `build`. → `eval/resolve.nix`, `eval/instance.nix`.
-- **DNS-like DI.** Packages request deps by arg name (`{ vault, ... }`). Resolver: explicit override → same-namespace match → other-namespace (managed > import) → arg default → error. Aliases participate in the index. → `eval/resolve.nix`.
-- **Platform imports are shadowable.** Flavors declare e.g. `platform-dns` via `kix.mkImport`. If the cluster installs its own coredns, the explicit instance wins. Breaks what would otherwise be circular build deps.
-- **`self` convention.** Packages return resources in `self` with conventional names (`root`, `service`, `ingress`). Build functions may be a *list* of functions — later entries (e.g. `kix.expose`, `kix.monitor`) declare their own DI args, which the evaluator auto-discovers.
-- **`_type` marker = leaf.** `collectTypedAttrs` stops descending when it sees `_type` (k8s-resource, k8s-import, etc.). That's how nested attrsets in `self` get flattened without eating the resources themselves.
-- **`_kix.*` internal metadata.** Stripped before serialization. Used for cross-namespace validation (`_kix.namespace` on secret/volume refs), provenance (`_kix.source`), and reflected-secret markers.
-- **Netpol is derived, not declared.** Egress policies come from the same store-path context used for dep ordering. Ingress policies are the inverse. StatefulSets get self-egress; RBAC/CRD presence opens API-server egress. Per-workload DNS + cross-package service egress CNPs are emitted *inside* `scope.mkDeployment/mkStatefulSet/mkDaemonSet` (before `builtins.toFile` runs on the workload), discovered by intersecting the raw spec's JSON string context against a Service registry built from the package's DI deps. The resulting CNPs are spliced into the workload's `extraDeps`, so the workload's own store-path context transitively includes its policies — closing the "unenforced window" without rebuilding the workload. Post-fixpoint signals (RBAC/CRD presence, LB Service detection) stay in `processInstance` as supplementary CNPs that depend on workloads the old way. The enforcer (`meta.provides ∋ "network-policy-enforcer"`) is auto-discovered at cluster level; each CNP is built via its `cnpCrdRef.out.cr` so the CNP → CRD marker → enforcer root edge is wired transitively. See v2_discussions/83.
-- **Helm integration is lossy on purpose.** `importChart` strips helm.sh/meta.helm.sh annotations, `app.kubernetes.io/managed-by`, default `strategy` fields, and empty/test-hook resources so kix owns the labels/ordering cleanly. Configurable via `strip` + `preserveAnnotationPrefixes`.
-- **Scorecard severity has a precedence chain**, not a flat config. Disable and per-owner/per-namespace overrides beat the rule's own severity, which beats `ruleDefaults`.
-- **Capability ownership via `kix.dev/capability` annotation.** The `architecture.capabilityOwnership` rule detects hand-rolled resources that belong to another capability (e.g. PVCs outside a storage provider, reflector annotator bundles outside the reflector package). Capability owners declare `meta.provides = [ "storage" | "reflection" | … ]`. Consumers obtain the resources by declaring a DI dep arg and calling the owner's `out.*` builder — the builder stamps `kix.dev/capability: <name>` on every resource it returns so the rule treats them as DI-provided rather than hand-rolled. This is what lets a consumer scope (stackgres) host resources that belong to another capability (reflection) without tripping the rule. Fingerprints live in `rules/architecture.nix`; adding a new one is a data-only change.
-- **Helm packages are real packages.** Helm-backed packages use `scope.helm.importChart` inside their `build` function and return `resources.mkParts { root = resources.get "Kind" "name"; out = { ... }; }`. DI builders, CRD refs, and meta.provides are declared inline — no special `rootOut`/`extraMeta` indirection. Three tiers: `kix.helmChart { ... }` (inline, Tier 1), `importChart` + `mkParts` (package, Tier 2), native (Tier 3). See v2_discussions/87.
-- **`out` is the public surface of a resource.** `name`, `fqdn`, `selector`, `identityHash` are auto-derived and context-carrying; user `outputs = {...}` extend it. Services additionally get `out.url { scheme?, port? }` and `out.ports`. Always prefer `self.svc.out.name` over `"${self.svc}"` string interpolation.
-- **`rawSelector` is a cycle escape hatch on workloads.** `workload.rawSelector` exposes the raw `spec.selector.matchLabels` without forcing the workload's store-path context. Use this from sibling resources if reading `workload.out.selector` cycles through a back-reference. Trade-off: the consuming resource loses the workload DAG edge — `scorecard:architecture.selectorCoherence` fires to keep the workaround visible.
-- **Activation CR roots the closure.** `mkActivation` references every PackageInstance via string context so `nix-store -q --tree` on the Activation derivation yields the full deploy DAG. This is the contract the CLI relies on.
-
-## Consumer shape (for context)
-
-- **Cluster** (`clusters/*.nix`): `{ kix, packages }: kix.buildCluster { modules = [ kix.flavors.k3s { instances.ns.foo = { package = packages.foo; config = {...}; }; } ]; }`
-- **Package** (`kix/packages/*/default.nix`): `{ scope, lib, kix, ... }: { options = {...}; build = { self, config, scope, kix, ... }: { root = scope.mkDeployment {...}; service = self.root |> kix.service.fromWorkload {...} |> scope.mkResource; }; }`
-- **Flake**: `inputs.kix.lib.mkFlake { inherit inputs; clusters = { prod = ./clusters/prod.nix; }; }`
+- **Store-path = DAG edge.** Resources never declare deps explicitly; `mkResource` reads Nix string context off the manifest JSON and stamps `kix.dev/depends-on`. Manifests keep real names; context rides alongside. The CLI walks the store DAG rooted at the Activation CR. → `core/resource.nix`.
+- **Sealing is one-way.** After `toFile`, a resource's identity is fixed; every consumer reference carries it as context. Anything that must influence a workload's dep list goes through the pre-seal pipeline, never a rewrite pass.
+- **Three fixpoints, not one.** Phase-1 pre-pass (introspection), config-only fixpoint (lets function-shaped dep injections read consumer config without cycling), full instance fixpoint. → `eval/cluster.nix`.
+- **DNS-like DI.** Explicit override → managed-over-import filter → unique same-ns → unique other-ns → arg default → throw; ambiguity always throws; aliases participate. `mkLocked` freezes config keys against injections. → `eval/resolve.nix`.
+- **Self-enforcer skip is identity-based.** The netpol plugin nulls the enforcer for the enforcer's own instance by exact provider-instance match (ns + name), not by `meta.provides` membership — the peeked-index semantics v1 had.
+- **Secrets carry provenance.** `mkSecret` realizes `source` (SOPS) as its own store path and stamps `kix.dev/{secret-keys,sops-source,content-hash,...}`; `mkSecretRef`/`mkServiceRef` emit PI import markers polled at deploy time; `reflect = true` sets `_kix.reflected`. → `scope/builders.nix`.
+- **`out` is the public surface**; `rawSelector` and `kix.untrackedRef` are the deliberate context escape hatches, each policed by an architecture scorecard rule.
+- **Helm is lossy on purpose** and its workloads route through `scope.mkHelmWorkload`, so chart workloads get the same interceptor treatment as native ones. → `helm.nix` (own track).
+- **A resource living only at `parts.root` is dropped from the manifest set.** `collectResources` excludes the `root` key; every production package aliases root to a named part (`root = self.service`), which is why this never bites. A root-only resource also never gets its `_injectedResources` sideband drained. Latent footgun — worth a diagnostic eventually.
 
 ## When editing lib/
 
-- Touching resource construction, context handling, or PI/Activation shape → you may or may not want to check `cli/` (reads the DAG).
-- Touching module options or instance schema → update `modules.nix` types; packages consume via `config`.
-- Adding a flavor/module → register in `default.nix` re-exports.
-- If a change invalidates a "non-obvious pattern" above, update this file.
+- `core/` changes touch the CLI contract (Activation closure, depends-on format, PI fields) — coordinate with `cli/`.
+- Authoring-surface changes (scope builders, vocab, DI semantics) → update `guide/` and the `kix-migration` skill.
+- A new cross-cutting concern should be a plugin registering hooks, not new calls inside `eval/`/`scope/`. If the three hook channels don't fit (see the import-marker gap in `eval/import.nix`), extend the contract deliberately — in a design doc first.
+- Refactors must keep the manifest store path identical on `nix build ludo/#cluster-ludo-kind`; intentional output changes ship separately.
+- If a change invalidates a pattern above, update this file.

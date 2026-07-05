@@ -1,0 +1,364 @@
+{ lib }:
+
+let
+  core = import ../../core/default.nix { inherit lib; };
+
+  inherit (import ../../eval/edges.nix { k8s = core; })
+    isWorkload
+    getWorkloadSelector
+    isService
+    ;
+in
+{
+  buildWorkloadCnps =
+    {
+      emit,
+      instanceName,
+      namespaceName,
+      workloadInput,
+      workloadKind,
+      wSelector,
+      hostNetwork,
+      edges,
+      networkConfig,
+      packageIntents ? { },
+      networkPolicyEnforcer ? null,
+    }:
+    let
+      cnps =
+        if networkPolicyEnforcer == null || hostNetwork then
+          [ ]
+        else
+          let
+            enforcerApi = networkPolicyEnforcer.netpol;
+
+            directions = networkConfig.directions or "both";
+            doEgress = directions == "both" || directions == "egress";
+            doIngress = directions == "both" || directions == "ingress";
+
+            intentRules =
+              if packageIntents != { } then
+                enforcerApi.translateIntentRules { intents = packageIntents; }
+              else
+                {
+                  egressRules = [ ];
+                  ingressRules = [ ];
+                };
+
+            serviceRules = map (
+              edge:
+              enforcerApi.mkServiceEgressRule {
+                selector = edge.targetSelector;
+                namespace = edge.targetNamespace;
+                sourceNamespace = namespaceName;
+                ports = edge.ports;
+              }
+            ) edges;
+
+            selfRules = enforcerApi.mkSelfRules { selector = wSelector; };
+            selfEgress = lib.optional (workloadKind == "StatefulSet") (builtins.head selfRules.egress);
+
+            egressRules = [
+              enforcerApi.dnsEgressRule
+            ]
+            ++ serviceRules
+            ++ selfEgress
+            ++ intentRules.egressRules;
+
+            selfIngress = lib.optional (workloadKind == "StatefulSet") (builtins.head selfRules.ingress);
+
+            ingressRules = selfIngress ++ intentRules.ingressRules;
+
+            wName = workloadInput.name or (throw "buildWorkloadCnps: workloadInput.name is required");
+
+            serviceDeps = map (e: e.service) edges;
+
+            egressCnp =
+              if !doEgress then
+                null
+              else
+                enforcerApi.mkPolicy {
+                  mkResource = emit.mkResource;
+                  extraArgs = {
+                    name = "${instanceName}-${lib.toLower workloadKind}-${wName}-egress";
+                    labels = {
+                      "kix.dev/derived" = "true";
+                    };
+                    spec = {
+                      endpointSelector.matchLabels = wSelector;
+                      egress = egressRules;
+                    };
+                    extraDeps = serviceDeps;
+                  };
+                };
+
+            ingressCnp =
+              if !doIngress || ingressRules == [ ] then
+                null
+              else
+                enforcerApi.mkPolicy {
+                  mkResource = emit.mkResource;
+                  extraArgs = {
+                    name = "${instanceName}-${lib.toLower workloadKind}-${wName}-ingress";
+                    labels = {
+                      "kix.dev/derived" = "true";
+                    };
+                    spec = {
+                      endpointSelector.matchLabels = wSelector;
+                      ingress = ingressRules;
+                    };
+                    extraDeps = [ ];
+                  };
+                };
+
+            callerIngressCnps =
+              if !doIngress then
+                [ ]
+              else
+                map (
+                  edge:
+                  let
+                    targetEmit = emit.inNamespace edge.targetNamespace;
+                    ingressRule = enforcerApi.mkCallerIngressRule {
+                      callerSelector = wSelector;
+                      callerNamespace = namespaceName;
+                      ports = edge.ports;
+                    };
+                  in
+                  enforcerApi.mkPolicy {
+                    mkResource = targetEmit.mkResource;
+                    extraArgs = {
+                      name = "${instanceName}-${lib.toLower workloadKind}-${wName}-to-${edge.service.name}-ingress";
+                      labels = {
+                        "kix.dev/derived" = "true";
+                        "kix.dev/policy-type" = "caller-ingress";
+                      };
+                      spec = {
+                        endpointSelector.matchLabels = edge.targetSelector;
+                        ingress = [ ingressRule ];
+                      };
+                      extraDeps = [ edge.service ];
+                    };
+                  }
+                ) edges;
+
+          in
+          builtins.filter (c: c != null) (
+            [
+              egressCnp
+              ingressCnp
+            ]
+            ++ callerIngressCnps
+          );
+
+    in
+    {
+      inherit cnps;
+    };
+
+  processInstance =
+    {
+      emit,
+      instanceName,
+      allPartResources,
+      networkConfig,
+      packageMeta,
+      networkPolicyEnforcer ? null,
+    }:
+    let
+      # left lazy: self-enforcer instances arrive with a null enforcer but must still produce warnings
+      enforcerApi = networkPolicyEnforcer.netpol;
+
+      directions = networkConfig.directions or "both";
+      doEgress = directions == "both" || directions == "egress";
+      doIngress = directions == "both" || directions == "ingress";
+
+      workloads = builtins.filter isWorkload allPartResources;
+
+      hostNetworkWorkloads = builtins.filter (
+        w: w.rawManifest.spec.template.spec.hostNetwork or false
+      ) workloads;
+
+      bindings = builtins.filter (
+        r:
+        builtins.elem (r.kind or "") [
+          "RoleBinding"
+          "ClusterRoleBinding"
+        ]
+      ) allPartResources;
+
+      boundSAKeys = builtins.concatMap (
+        b:
+        let
+          subjects = b.rawManifest.subjects or [ ];
+          bindingNs = b.rawManifest.metadata.namespace or null;
+        in
+        builtins.filter (k: k != null) (
+          map (
+            s:
+            if (s.kind or "") == "ServiceAccount" then
+              let
+                ns = s.namespace or bindingNs;
+                saName = s.name or null;
+              in
+              if ns == null || saName == null then null else "${ns}/${saName}"
+            else
+              null
+          ) subjects
+        )
+      ) bindings;
+
+      workloadNeedsApiserver =
+        w:
+        let
+          saName = w.rawManifest.spec.template.spec.serviceAccountName or "default";
+          wNs = w.rawManifest.metadata.namespace or null;
+        in
+        wNs != null && builtins.elem "${wNs}/${saName}" boundSAKeys;
+
+      needsExternalIngress = builtins.any (
+        r: isService r && (r.rawManifest.spec.type or "") == "LoadBalancer"
+      ) allPartResources;
+
+      apiServerSupplementPolicies =
+        if !doEgress then
+          [ ]
+        else
+          builtins.concatMap (
+            w:
+            let
+              wSelector = getWorkloadSelector w;
+              isHostNet = w.rawManifest.spec.template.spec.hostNetwork or false;
+            in
+            if isHostNet || !(workloadNeedsApiserver w) then
+              [ ]
+            else
+              [
+                (enforcerApi.mkPolicy {
+                  mkResource = emit.mkResource;
+                  extraArgs = {
+                    name = "${instanceName}-${lib.toLower w.kind}-${w.name}-apiserver-egress";
+                    labels = {
+                      "kix.dev/derived" = "true";
+                      "kix.dev/policy-type" = "apiserver-supplement";
+                    };
+                    spec = {
+                      endpointSelector.matchLabels = wSelector;
+                      egress = [ enforcerApi.apiServerEgressRule ];
+                    };
+                    extraDeps = [ ];
+                  };
+                })
+              ]
+          ) workloads;
+
+      externalIngressSupplementPolicies =
+        if !doIngress || !needsExternalIngress then
+          [ ]
+        else
+          builtins.concatMap (
+            w:
+            let
+              wSelector = getWorkloadSelector w;
+              isHostNet = w.rawManifest.spec.template.spec.hostNetwork or false;
+            in
+            if isHostNet then
+              [ ]
+            else
+              [
+                (enforcerApi.mkPolicy {
+                  mkResource = emit.mkResource;
+                  extraArgs = {
+                    name = "${instanceName}-${lib.toLower w.kind}-${w.name}-external-ingress";
+                    labels = {
+                      "kix.dev/derived" = "true";
+                      "kix.dev/policy-type" = "external-ingress-supplement";
+                    };
+                    spec = {
+                      endpointSelector.matchLabels = wSelector;
+                      ingress = [
+                        (enforcerApi.mkExternalIngressRule {
+                          entities = packageMeta.network.externalIngressEntities or [ "world" ];
+                        })
+                      ];
+                    };
+                    extraDeps = [ ];
+                  };
+                })
+              ]
+          ) workloads;
+
+      warnings =
+        map (
+          w:
+          "[${instanceName}] workload '${w.kind}/${w.name}' uses hostNetwork — CiliumNetworkPolicy has no effect"
+        ) hostNetworkWorkloads
+        ++
+          lib.optional (packageMeta.isHelm or false)
+            "[${instanceName}] Helm-wrapped package: intra-package network policies may be incomplete — review or add manual policies";
+
+    in
+    {
+      policies = apiServerSupplementPolicies ++ externalIngressSupplementPolicies;
+      inherit warnings;
+    };
+
+  generateDefaultDeny =
+    {
+      namespaceName,
+      nsResource,
+      directions,
+      networkPolicyEnforcer ? null,
+    }:
+    let
+      enforcerApi = networkPolicyEnforcer.netpol;
+      denyIngress = directions == "both" || directions == "ingress";
+      denyEgress = directions == "both" || directions == "egress";
+    in
+    enforcerApi.mkPolicy {
+      mkResource = core.mkResource;
+      extraArgs = {
+        name = "${namespaceName}-default-deny";
+        namespace = nsResource;
+        labels = {
+          "kix.dev/derived" = "true";
+          "kix.dev/policy-type" = "default-deny";
+          "app.kubernetes.io/managed-by" = "kix";
+        };
+        spec = enforcerApi.mkDefaultDenySpec {
+          inherit denyIngress denyEgress;
+        };
+      };
+    };
+
+  materializePlatformIntents =
+    {
+      networkConfig,
+      networkPolicyEnforcer ? null,
+      nsResources,
+    }:
+    if
+      !networkConfig.enable || networkPolicyEnforcer == null || networkConfig.platformIntents == { }
+    then
+      [ ]
+    else
+      let
+        enforcerApi = networkPolicyEnforcer.netpol;
+      in
+      lib.mapAttrsToList (
+        intentName: intent:
+        let
+          nsName = intent.namespace or null;
+          namespaceResource =
+            if nsName != null && builtins.hasAttr nsName nsResources then nsResources.${nsName} else null;
+        in
+        enforcerApi.materializePlatformIntent {
+          intent = intent // {
+            name = intentName;
+          };
+          mkResource = core.mkResource;
+          inherit namespaceResource;
+          inherit (core) clusterScoped;
+        }
+      ) networkConfig.platformIntents;
+}

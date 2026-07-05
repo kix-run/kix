@@ -1,17 +1,6 @@
-# Scorecard rule engine — multi-level policy evaluation for kix clusters.
-#
-# Rules are declaratively defined with configurable severity, evaluated at
-# four levels (manifest, package, namespace, cluster), and reported as
-# structured findings.
-#
-# See v2_discussions/60_scorecard_rules_design.md for design rationale.
-
 { lib }:
 
 let
-  # ---------------------------------------------------------------------------
-  # Severity ordering for override resolution
-  # ---------------------------------------------------------------------------
   severityLevels = {
     "info" = 0;
     "warning" = 1;
@@ -28,9 +17,6 @@ let
       "cluster"
     ];
 
-  # ---------------------------------------------------------------------------
-  # Glob-style pattern matching (prefix* or exact match)
-  # ---------------------------------------------------------------------------
   matchPattern =
     pattern: value:
     if pattern == "*" then
@@ -40,10 +26,6 @@ let
     else
       pattern == value;
 
-  # ---------------------------------------------------------------------------
-  # flattenRules — convert nested attrset { category.ruleName = rule } into
-  # a flat list of { name = "category.ruleName"; rule = { ... }; }.
-  # ---------------------------------------------------------------------------
   flattenRules =
     rules:
     lib.concatLists (
@@ -59,16 +41,6 @@ let
       ) rules
     );
 
-  # ---------------------------------------------------------------------------
-  # resolveEffectiveSeverity — apply override chain to determine final severity.
-  #
-  # Override resolution order (most specific wins):
-  # 1. Per-rule disable (byRule.X.enabled = false)
-  # 2. Per-owner override
-  # 3. Per-namespace override
-  # 4. Rule's own default severity
-  # 5. Cluster-wide ruleDefaults.severity
-  # ---------------------------------------------------------------------------
   resolveEffectiveSeverity =
     {
       ruleName,
@@ -81,7 +53,6 @@ let
     let
       baseSeverity = rule.severity or ruleDefaults.severity or "warning";
 
-      # Per-namespace overrides
       nsSeverity =
         if namespaceName == null then
           null
@@ -102,7 +73,6 @@ let
           in
           if matchingRules == [ ] then null else (builtins.head matchingRules).severity or null;
 
-      # Per-owner overrides
       ownerSeverity =
         if owner == null then
           null
@@ -123,7 +93,6 @@ let
           in
           if matchingRules == [ ] then null else (builtins.head matchingRules).severity or null;
 
-      # Per-rule overrides (disable or severity)
       byRuleMatch =
         let
           byRule = ruleOverrides.byRule or { };
@@ -134,7 +103,7 @@ let
       ruleSeverity = if byRuleMatch != null then byRuleMatch.severity or null else null;
     in
     if ruleDisabled then
-      null # null = skip this rule entirely
+      null
     else if ruleSeverity != null then
       ruleSeverity
     else if ownerSeverity != null then
@@ -144,15 +113,9 @@ let
     else
       baseSeverity;
 
-  # ---------------------------------------------------------------------------
-  # checkAppliesTo — evaluate the appliesTo predicate if present.
-  # ---------------------------------------------------------------------------
   checkAppliesTo =
     rule: ctx: if rule ? appliesTo && rule.appliesTo != null then rule.appliesTo ctx else true;
 
-  # ---------------------------------------------------------------------------
-  # mkFinding — construct a structured finding from a rule check result.
-  # ---------------------------------------------------------------------------
   mkFinding =
     {
       ruleName,
@@ -178,11 +141,6 @@ in
 rec {
   inherit flattenRules resolveEffectiveSeverity;
 
-  # ---------------------------------------------------------------------------
-  # evaluateManifestRules — run level="manifest" rules against a single resource.
-  #
-  # Returns a list of findings.
-  # ---------------------------------------------------------------------------
   evaluateManifestRules =
     {
       rules,
@@ -229,11 +187,6 @@ rec {
       ) findings
     ) manifestRules;
 
-  # ---------------------------------------------------------------------------
-  # evaluatePackageRules — run level="package" rules against a package instance.
-  #
-  # Returns a list of findings.
-  # ---------------------------------------------------------------------------
   evaluatePackageRules =
     {
       rules,
@@ -289,12 +242,6 @@ rec {
       ) findings
     ) packageRules;
 
-  # ---------------------------------------------------------------------------
-  # evaluateNamespaceRules — run level="namespace" rules against all resources
-  # in a namespace.
-  #
-  # Returns a list of findings.
-  # ---------------------------------------------------------------------------
   evaluateNamespaceRules =
     {
       rules,
@@ -338,11 +285,6 @@ rec {
       ) findings
     ) nsRules;
 
-  # ---------------------------------------------------------------------------
-  # evaluateClusterRules — run level="cluster" rules against the entire cluster.
-  #
-  # Returns a list of findings.
-  # ---------------------------------------------------------------------------
   evaluateClusterRules =
     {
       rules,
@@ -380,9 +322,6 @@ rec {
       ) findings
     ) clusterRules;
 
-  # ---------------------------------------------------------------------------
-  # buildScorecardReport — aggregate findings into a structured report.
-  # ---------------------------------------------------------------------------
   buildScorecardReport =
     {
       findings,
@@ -415,11 +354,6 @@ rec {
       };
     };
 
-  # ---------------------------------------------------------------------------
-  # scorecardToWarnings — convert scorecard findings into kix diagnostic warnings.
-  # Error-severity findings become assertions (block build).
-  # Warning/info findings become trace warnings.
-  # ---------------------------------------------------------------------------
   scorecardToWarnings =
     findings:
     let

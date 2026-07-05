@@ -6,6 +6,8 @@
 
 { lib, ... }:
 {
+  imports = [ ./plugins/netpol/module.nix ];
+
   options = {
 
     clusterLabels = lib.mkOption {
@@ -552,55 +554,54 @@
       description = "Scorecard policy evaluation. See v2_discussions/60_scorecard_rules_design.md.";
     };
 
-    networkPolicy = lib.mkOption {
-      type = lib.types.submodule {
-        options = {
-          enable = lib.mkOption {
-            type = lib.types.bool;
-            default = false;
-            description = "Generate CiliumNetworkPolicies from DI graph.";
-          };
-          defaultDeny = lib.mkOption {
-            type = lib.types.bool;
-            default = true;
-            description = "Generate deny-all CiliumNetworkPolicy per namespace.";
-          };
-          directions = lib.mkOption {
-            type = lib.types.enum [
-              "ingress"
-              "egress"
-              "both"
-            ];
-            default = "both";
-            description = "Which policy directions to generate.";
-          };
-          platformIntents = lib.mkOption {
-            type = lib.types.attrsOf lib.types.anything;
-            default = { };
-            description = ''
-              Platform connectivity intents for non-kix-managed pods (e.g.
-              CoreDNS, local-path-provisioner in kind). Each intent declares
-              enforcer-agnostic connectivity requirements; the enforcer
-              materializes them into native policy CRs. Set by flavors.
-              See v2_discussions/92_declarative_network_policy_intents.md.
-            '';
-          };
-        };
+    # Each hook is a function `ctx -> result` or `{ priority ? 1000; fn; }`.
+    # Execution order is (priority ascending, then name) — declare a priority
+    # instead of encoding order into hook names. Results are shape-checked;
+    # unknown keys throw at the call site.
+    hooks = {
+      workloadInterceptors = lib.mkOption {
+        type = lib.types.attrsOf lib.types.raw;
+        default = { };
+        description = ''
+          Named workload interceptors, run inside scope.mkDeployment/
+          mkStatefulSet/mkDaemonSet/mkJob/mkHelmWorkload BEFORE
+          builtins.toFile seals the workload.
+          fn :: ctx -> { requires ? [ ]; resources ? [ ]; warnings ? [ ]; }
+          `requires` is spliced into the workload pre-seal (earlier-wave
+          guarantee); `resources` ride the `_injectedResources` sideband
+          into the instance's part resources. Interceptors read the raw
+          workload input and outer-fixpoint data only — they must never
+          force the resource under construction. Resource emission goes
+          through ctx.emit (sealing capability only), not the authoring
+          scope.
+        '';
       };
-      default = { };
-      description = ''
-        CiliumNetworkPolicy generation from DI graph. See v2_discussions/37
-        and v2_discussions/83. The enforcer that CNPs depend on is looked up
-        automatically via `meta.provides ∋ "network-policy-enforcer"` (see
-        `kix/packages/cilium`) — no explicit wiring is required, but an
-        enforcer instance MUST be declared when `enable = true`. kix throws
-        at cluster eval time if no enforcer is resolved: without the
-        store-path edge to cilium, CNPs would race the operator at apply
-        time. For externally-managed cilium (k3s with cilium helm-installed,
-        kind with bootstrap-installed cilium, RKE2's bundled cilium, etc.)
-        use `packages."cilium".external`, which emits only the CNP CRD ref
-        marker without deploying cilium itself.
-      '';
+      instanceProcessors = lib.mkOption {
+        type = lib.types.attrsOf lib.types.raw;
+        default = { };
+        description = ''
+          Named per-instance processors, run after the instance's parts
+          fixpoint settles.
+          fn :: ctx -> { resources ? [ ]; warnings ? [ ]; }
+          Returned resources join the instance's owned resource set and its
+          PackageInstance inverse deps. Resource emission goes through
+          ctx.emit.
+        '';
+      };
+      clusterProcessors = lib.mkOption {
+        type = lib.types.attrsOf lib.types.raw;
+        default = { };
+        description = ''
+          Named cluster-level processors, run during cluster aggregation.
+          fn :: ctx -> { resources ? [ ]; checks ? [ ]; warnings ? [ ]; }
+          Returned resources join the cluster resource set and become the
+          Activation CR's extraDeps in hook execution order — that order is
+          content-addressed into the manifest set, so priorities are part
+          of the output contract. A check is any lazy value that throws its
+          own error message on failure; all checks are forced before the
+          cluster result is returned.
+        '';
+      };
     };
   };
 }

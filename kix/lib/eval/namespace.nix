@@ -1,5 +1,3 @@
-# Namespace builder — Namespace resource + quota + network policies.
-
 { lib, k8s }:
 
 let
@@ -7,7 +5,6 @@ let
 in
 
 {
-  # Namespace as a small inner fixpoint — Namespace resource + policies.
   mkNamespace =
     {
       name,
@@ -36,7 +33,7 @@ in
             apiVersion = "v1";
             kind = "ResourceQuota";
             name = "${name}-quota";
-            namespace = name; # plain string — internal to namespace package
+            namespace = name;
             spec.hard = resourceQuota;
           }
         else

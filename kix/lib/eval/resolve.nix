@@ -1,6 +1,3 @@
-# Resolution and dependency injection — index building, DNS-like arg resolution,
-# config evaluation, and two-phase package calling.
-
 { lib, kixlib }:
 
 let
@@ -10,7 +7,6 @@ let
     "kix"
   ];
 
-  # Args that are passed to build functions by the eval system (not deps).
   systemBuildArgNames = [
     "self"
     "config"
@@ -23,9 +19,6 @@ let
 in
 
 rec {
-  # Build the resolution index from static metadata.
-  # Returns { byKey = { argName = [ { namespace, instanceName, ... } ]; }; }
-  # Only uses _meta — no inner fixpoint evaluation triggered.
   buildResolutionIndex =
     staticMeta:
     let
@@ -60,8 +53,6 @@ rec {
       inherit byKey;
     };
 
-  # DNS-like dependency resolution.
-  # Returns { found, namespace?, instanceName? } — caller looks up actual instance from fixpoint.
   resolveArg =
     {
       argName,
@@ -70,7 +61,6 @@ rec {
       hasDefault,
       explicitOverride,
     }:
-    # 1. Explicit override always wins
     if explicitOverride != null then
       {
         found = true;
@@ -78,22 +68,16 @@ rec {
         direct = true;
       }
 
-    # 2. DNS-like resolution
     else
       let
         candidates = resolutionIndex.byKey.${argName} or [ ];
 
-        # Prefer managed instances over imports — if both exist for the same
-        # key, the managed instance wins. This lets flavors provide fallback
-        # imports for platform services (DNS, storage, ingress) that are
-        # automatically shadowed when the cluster installs its own package.
         managed = builtins.filter (c: !(c.meta.isImport or false)) candidates;
         effectiveCandidates = if managed != [ ] then managed else candidates;
 
         sameNs = builtins.filter (c: c.namespace == requesterNamespace) effectiveCandidates;
         otherNs = builtins.filter (c: c.namespace != requesterNamespace) effectiveCandidates;
       in
-      # Same namespace, exactly one → use it
       if builtins.length sameNs == 1 then
         let
           c = builtins.head sameNs;
@@ -105,11 +89,9 @@ rec {
           direct = false;
         }
 
-      # Same namespace, multiple → ambiguous
       else if builtins.length sameNs > 1 then
         throw "ambiguous auto-resolution for '${argName}' in namespace '${requesterNamespace}': multiple matches"
 
-      # No same-ns, one cluster-wide → use it
       else if sameNs == [ ] && builtins.length otherNs == 1 then
         let
           c = builtins.head otherNs;
@@ -121,21 +103,15 @@ rec {
           direct = false;
         }
 
-      # Multiple cluster-wide → ambiguous
       else if builtins.length otherNs > 1 then
         throw "ambiguous auto-resolution for '${argName}': found in multiple namespaces — specify explicitly"
 
-      # No candidates, has Nix default → let Nix handle it
       else if hasDefault then
         { found = false; }
 
-      # No candidates, no default → error
       else
         throw "no '${argName}' found in cluster for namespace '${requesterNamespace}'";
 
-  # Extract raw config attrsets from a deferredModule value.
-  # deferredModuleWith wraps each definition as { _file = "..."; imports = [ actualValue ]; }.
-  # This unwraps that structure to get the actual config values.
   extractDeferredValues =
     deferredConfig:
     let
@@ -143,7 +119,6 @@ rec {
       extractOne =
         m:
         if builtins.isAttrs m && m ? _file && m ? imports then
-          # deferredModuleWith wrapper — unwrap
           builtins.concatMap extractOne m.imports
         else if builtins.isAttrs m then
           [ m ]
@@ -154,15 +129,6 @@ rec {
     in
     builtins.concatMap extractOne modules;
 
-  # Evaluate instance config using the package's typed options.
-  # Runs evalModules with the package's option declarations, global defaults,
-  # and instance config (a deferredModule from the cluster module system).
-  #
-  # After evaluation, deep-merges the option defaults onto the result.
-  # This preserves nested defaults for `lib.types.anything` options, which
-  # don't deep-merge user values with defaults (a user setting `backend.image`
-  # would otherwise drop `backend.hpa` from the default).  This matches the
-  # deep-merge semantics of the old `scope.defaults` pattern.
   evaluateInstanceConfig =
     {
       packageOptions,
@@ -174,8 +140,6 @@ rec {
       deferredConfig = instCfg.config;
       configValues = extractDeferredValues deferredConfig;
 
-      # --- mkLocked support ---
-      # Scan instance config values for locked fields (top-level only).
       findLockedInAttrs =
         attrs:
         if builtins.isAttrs attrs then
@@ -187,7 +151,6 @@ rec {
         acc: m: if builtins.isAttrs m then acc // findLockedInAttrs m else acc
       ) { } configValues;
 
-      # Check dep injections against locked fields
       lockedConflicts = builtins.concatMap (
         injection:
         let
@@ -209,7 +172,6 @@ rec {
         else
           null;
 
-      # Unwrap locked values before feeding into evalModules
       unwrapLocked = v: if builtins.isAttrs v && (v._type or "") == "locked" then v.value else v;
 
       unwrapLockedAttrs =
@@ -219,9 +181,6 @@ rec {
         v: if builtins.isFunction v then v else { config = unwrapLockedAttrs v; }
       ) configValues;
 
-      # Dep injection modules — merged at same priority as instance config.
-      # For listOf types: concatenates with instance config.
-      # For scalar types: errors on conflict (user must resolve).
       injectionModules = map (injection: { config = injection.config; }) configInjections;
 
       evaluated =
@@ -236,28 +195,19 @@ rec {
           }).config
           [ "_module" ];
 
-      # Collect option defaults for deep merge.
       optionDefaults = lib.filterAttrs (_: v: v != null) (
         lib.mapAttrs (_: opt: if opt ? default then opt.default else null) packageOptions
       );
     in
     builtins.seq _lockedCheck (lib.recursiveUpdate optionDefaults evaluated);
 
-  # Normalize a package value to its phase-1 result.
-  # Accepts: function (traditional), attrset with `build` (inline), or kix-import.
-  # Returns { meta?, options?, deps?, build, assertions?, warnings? }.
-  #
-  # This is the SINGLE place that knows about package shapes — all other code
-  # calls this instead of doing its own detection.
   normalizePackage =
     { package, scope }:
     if builtins.isAttrs package && package ? build then
-      # Inline package — already a { meta?, options?, deps?, build } attrset
       package
     else if (package._type or "") == "kix-import" then
       package
     else
-      # Function package — call with system args only
       let
         fnArgs = builtins.functionArgs package;
       in
@@ -268,11 +218,8 @@ rec {
         // lib.optionalAttrs (fnArgs ? kix) { kix = kixlib; }
       );
 
-  # Convenience alias — same as normalizePackage but named for clarity at call sites.
   callPackagePhase1 = normalizePackage;
 
-  # Discover deps by introspecting build function args.
-  # Returns { depName = { optional = bool; }; } for each discovered dep.
   discoverBuildDeps =
     rawBuild:
     let
@@ -281,14 +228,10 @@ rec {
           map (entry: if builtins.isPath entry then import entry else entry) rawBuild
         else
           [ rawBuild ];
-      # Union all build function args across entries.
-      # For deps declared by multiple entries: required wins over optional
-      # (both must have a default for the result to be optional).
       allBuildArgs = builtins.foldl' (
         acc: fn:
         let
           fnArgs = builtins.functionArgs fn;
-          # For deps in both: AND optionality (required wins)
           overrides = lib.mapAttrs (n: v: acc.${n} && v) (lib.intersectAttrs acc fnArgs);
         in
         acc // fnArgs // overrides
@@ -297,8 +240,6 @@ rec {
     in
     lib.mapAttrs (name: hasDefault: { optional = hasDefault; }) depArgs;
 
-  # Resolve discovered deps against the cluster.
-  # Returns attrset of resolved dep instances (by name).
   resolveDeclaredDeps =
     {
       declaredDeps,
@@ -329,11 +270,9 @@ rec {
               allInstances.${resolution.namespace}.${resolution.instanceName};
         }
       else
-        acc # optional dep, not found — will get null via Nix default
+        acc
     ) { } (builtins.attrNames declaredDeps);
 
-  # Resolve deps to coordinates only — no instance lookup needed.
-  # Used by the phase-1 pre-pass to build the config injection map.
   resolveDepTargets =
     {
       declaredDeps,
@@ -367,18 +306,6 @@ rec {
         { found = false; }
     ) declaredDeps;
 
-  # Build the config injection map from phase-1 pre-pass results.
-  # Inverts "consumer X wants to inject config into dep Y" into
-  # "target Y receives config injections from [X1, X2, ...]".
-  #
-  # An injection's `config` may be either a static attrset or a function
-  # `consumerConfig: { ... }`. Function-shaped injections are kept as-is
-  # here; cluster.nix resolves them lazily against the consumer's
-  # evaluated config when constructing the cluster fixpoint, so a
-  # consumer can forward parts of its own evaluated config into a dep
-  # (e.g. stackgres-database forwarding `extensions` into postgres).
-  #
-  # Returns { ns.inst = [ { config, source, consumerNs, consumerInst } ]; }
   buildConfigInjections =
     phase1Map:
     let
@@ -435,10 +362,6 @@ rec {
       }
     ) { } entries;
 
-  # Lock a config field against dep config injection.
-  # Cluster authors wrap a field value with mkLocked to prevent any
-  # consumer from injecting into it. Injections targeting a locked
-  # field produce a build-time error with source attribution.
   mkLocked = value: {
     _type = "locked";
     inherit value;

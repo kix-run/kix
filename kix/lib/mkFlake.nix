@@ -1,28 +1,8 @@
-# kix/lib/mkFlake.nix — Generate a complete flake output from a cluster spec.
-#
-# Encapsulates all the boilerplate: package discovery, cluster evaluation,
-# manifest generation, checks, and legacyPackages for the CLI.
-#
-# Usage (in a consuming flake.nix):
-#
-#   outputs = inputs: inputs.kix.lib.mkFlake {
-#     inherit inputs;
-#     clusters.my-cluster = ./cluster.nix;
-#   };
-#
-# Cluster values can be:
-#   - A path       → imported, then called with auto-detected args (kix, packages)
-#   - A function   → called with auto-detected args
-#   - An attrset   → used as-is (already-evaluated cluster)
-
 {
-  # inputs must include nixpkgs; kix framework is resolved via relative paths.
   inputs,
 
-  # Cluster definitions: name → path | function | attrset.
   clusters ? { },
 
-  # Target systems.
   systems ? [
     "x86_64-linux"
     "aarch64-linux"
@@ -34,7 +14,6 @@
 let
   lib = inputs.nixpkgs.lib;
 
-  # Package catalog from the kix framework tree (kix/packages/).
   catalogPackages =
     let
       entries = builtins.readDir ../packages;
@@ -66,7 +45,6 @@ let
       };
       piChecks = import ../pi-checks.nix { lib = slib; };
 
-      # Resolve cluster definitions: path → import → callPackage-style arg injection.
       resolvedClusters = lib.mapAttrs (
         name: clusterDef:
         let

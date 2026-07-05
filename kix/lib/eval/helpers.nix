@@ -1,9 +1,6 @@
-# Shared helpers: collision-checking merge, typed-attr collector, known folders.
-
 { lib }:
 
 rec {
-  # Merge two attrsets, throwing on key collision.
   mergeCollide =
     context: a: b:
     let
@@ -14,9 +11,6 @@ rec {
     else
       throw "${context}: key collision on ${builtins.concatStringsSep ", " (builtins.attrNames collisions)}";
 
-  # Collect all typed objects (anything with _type) from nested attrsets,
-  # up to maxDepth levels deep. Stops at _type boundaries — never descends
-  # into typed objects. Plain attrsets without _type are treated as folders.
   collectTypedAttrs =
     {
       excludeKeys ? [ ],
@@ -45,7 +39,6 @@ rec {
     in
     go 0 attrs;
 
-  # Well-known folders that get content-type validation warnings.
   knownFolders = {
     secrets = {
       expectedTypes = [ "k8s-resource" ];

@@ -1,16 +1,6 @@
-# Package meta system — structured metadata, warnings, assertions, compatibility.
-#
-# Packages declare `meta` (static constraints), `warnings` and `assertions`
-# (evaluated with config/deps context). The evaluator calls into this module
-# to validate constraints and collect diagnostics.
-#
-# See v2_discussions/25_package_meta_warnings.md for design rationale.
-
 { lib }:
 
 let
-  # --- Version comparison (semver-ish: major.minor[.patch]) ---
-
   parseVersion = v: map lib.toIntBase10 (lib.splitString "." v);
 
   compareVersions =
@@ -38,8 +28,6 @@ let
   versionAtLeast = a: b: compareVersions a b >= 0;
   versionAtMost = a: b: compareVersions a b <= 0;
 
-  # --- Assertion/warning constructors ---
-
   fail = message: {
     assertion = false;
     inherit message;
@@ -63,8 +51,6 @@ let
       ))
     ];
 
-  # --- Helpers ---
-
   emitTraces = prefix: items: lib.foldl' (acc: msg: builtins.trace "${prefix}${msg}" acc) null items;
 
   noDiagnostics = {
@@ -77,24 +63,15 @@ in
 rec {
   inherit versionAtLeast versionAtMost compareVersions;
 
-  # ---------------------------------------------------------------------------
-  # peekPackageMeta — extract meta from a package without full evaluation.
-  #
-  # Accepts function packages, inline attrset packages, and kix-imports.
-  # Uses the same shape detection as resolve.normalizePackage.
-  # ---------------------------------------------------------------------------
   peekPackageMeta =
     { package, kixlib }:
     if builtins.isAttrs package && package ? build then
-      # Inline attrset package
       package.meta or { }
     else if (package._type or "") == "kix-import" then
       package.meta or { }
     else if builtins.isAttrs package && package ? meta then
-      # Plain attrset with meta (e.g. helm chart data packages)
       package.meta
     else if builtins.isAttrs package && !(builtins.isFunction package) then
-      # Other attrset without meta — nothing to extract
       { }
     else
       let
@@ -109,18 +86,10 @@ rec {
       in
       result.meta or { };
 
-  # ---------------------------------------------------------------------------
-  # effectiveAliases — instance aliases win, fall back to package defaults.
-  # ---------------------------------------------------------------------------
   effectiveAliases =
     { instanceAliases, packageMeta }:
     if instanceAliases != [ ] then instanceAliases else packageMeta.defaultAliases or [ ];
 
-  # ---------------------------------------------------------------------------
-  # peekPackageAliases — extract resolution aliases from an available package
-  # entry, combining explicit aliases with peekPackageMeta-derived defaults.
-  # Works even for packages with required deps (falls back to explicit aliases).
-  # ---------------------------------------------------------------------------
   peekPackageAliases =
     { availEntry, kixlib }:
     let
@@ -133,11 +102,6 @@ rec {
     in
     lib.unique (explicitAliases ++ metaAliases);
 
-  # ---------------------------------------------------------------------------
-  # checkMetaStatic — meta-derived assertions and warnings (before build).
-  #
-  # Returns { assertions = [...]; warnings = [...]; }
-  # ---------------------------------------------------------------------------
   checkMetaStatic =
     {
       packageMeta,
@@ -151,7 +115,6 @@ rec {
       k8s = packageMeta.k8s or { };
       clusterK8s = clusterConfig.k8sVersion or null;
 
-      # K8s version bounds
       k8sAssertions =
         if clusterK8s == null then
           [ ]
@@ -165,7 +128,6 @@ rec {
             ))
           ];
 
-      # Dependency version compatibility
       compat = packageMeta.compatibleWith or { };
       compatAssertions = builtins.concatMap (
         depName:
@@ -183,7 +145,6 @@ rec {
           }
       ) (builtins.attrNames compat);
 
-      # Conflict detection
       conflictAssertions = builtins.concatMap (
         conflict:
         let
@@ -202,7 +163,6 @@ rec {
         lib.optional (matching != [ ]) (fail "conflicts with '${name}' ${scope} — instances: ${instances}")
       ) (packageMeta.conflictsWith or [ ]);
 
-      # Deprecation
       deprecated = packageMeta.deprecated or null;
       deprecationWarnings =
         if deprecated == null then
@@ -224,12 +184,6 @@ rec {
       warnings = deprecationWarnings;
     };
 
-  # ---------------------------------------------------------------------------
-  # evaluatePackageDiagnostics — call package-declared warnings/assertions fns
-  # and per-dep diagnostics from deps enrichment.
-  #
-  # Returns { warnings = [...]; assertions = [...]; }
-  # ---------------------------------------------------------------------------
   evaluatePackageDiagnostics =
     {
       raw,
@@ -246,7 +200,6 @@ rec {
         deps = lib.mapAttrs (_: di: di.instance) resolvedDepMeta;
       };
 
-      # Per-dep diagnostics from deps enrichment
       depDiagnostics =
         lib.foldlAttrs
           (
@@ -273,11 +226,6 @@ rec {
       assertions = (if raw ? assertions then raw.assertions ctx else [ ]) ++ depDiagnostics.assertions;
     };
 
-  # ---------------------------------------------------------------------------
-  # combineDiagnostics — merge structural, meta, and package diagnostics.
-  #
-  # Returns { allWarnings, allAssertions, failedAssertions, emitWarnings, emitAssertionWarnings }
-  # ---------------------------------------------------------------------------
   combineDiagnostics =
     {
       instanceName,
@@ -303,9 +251,6 @@ rec {
       emitAssertionWarnings = emitTraces "ASSERTION FAILED: " (map (a: a.message) failedAssertions);
     };
 
-  # ---------------------------------------------------------------------------
-  # collectClusterDiagnostics — gather from all instances, throw on failures.
-  # ---------------------------------------------------------------------------
   collectClusterDiagnostics =
     { clusterName, allInstancesList }:
     let

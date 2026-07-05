@@ -1,7 +1,3 @@
-# Auto-instantiation — normalise available packages and compute which
-# instances need to be auto-created (or which optionals need activation).
-# See v2_discussions/27_auto_instantiation.md for design rationale.
-
 {
   lib,
   meta,
@@ -14,14 +10,12 @@ let
 in
 
 rec {
-  # Normalize mixed availablePackages entries (raw functions vs attrsets).
-  # Skips entries that aren't valid packages (e.g. Helm chart specs).
   isPackageEntry =
     value:
     builtins.isFunction value
     || (value._type or "") == "kix-import"
     || (builtins.isAttrs value && value ? package)
-    || (builtins.isAttrs value && value ? build); # inline attrset package
+    || (builtins.isAttrs value && value ? build);
 
   normalizeAvailablePackages =
     raw:
@@ -40,7 +34,6 @@ rec {
           aliases = [ ];
         }
       else if builtins.isAttrs value && value ? build then
-        # Inline attrset package
         {
           package = value;
           namespace = null;
@@ -54,8 +47,6 @@ rec {
         }
     ) (lib.filterAttrs (_: isPackageEntry) raw);
 
-  # Get required dep names from a package. Uses normalizePackage to handle
-  # both function packages and inline attrset packages.
   getRequiredDeps =
     pkg:
     let
@@ -74,10 +65,6 @@ rec {
     else
       [ ];
 
-  # Compute auto-instantiated instances and activated optionals.
-  # Uses builtins.genericClosure for transitive reachability over required deps.
-  #
-  # Returns { autoInstances = { ns.instName = instCfg; }; activatedOptionals = { "ns/instName" = true; }; }
   computeAutoInstances =
     {
       explicitInstances,
@@ -87,9 +74,6 @@ rec {
     let
       normalizedAvail = normalizeAvailablePackages availablePackages;
 
-      # --- Build lookup indexes ---
-
-      # availableByKey: depName → canonical availablePackages key
       availableByKey =
         let
           entries = builtins.concatMap (
@@ -111,7 +95,6 @@ rec {
         in
         builtins.listToAttrs (map (e: lib.nameValuePair e.key e.name) entries);
 
-      # Partition explicit instances into mandatory and optional
       mandatory = lib.mapAttrs (
         _ns: nsInsts: lib.filterAttrs (_: inst: !(inst.optional or false)) nsInsts
       ) explicitInstances;
@@ -120,7 +103,6 @@ rec {
         _ns: nsInsts: lib.filterAttrs (_: inst: inst.optional or false) nsInsts
       ) explicitInstances;
 
-      # mandatoryKeys: set of resolution keys from mandatory instances
       mandatoryKeysList = builtins.concatMap (
         ns:
         builtins.concatMap (
@@ -142,7 +124,6 @@ rec {
 
       mandatoryKeys = builtins.listToAttrs (map (k: lib.nameValuePair k true) mandatoryKeysList);
 
-      # optionalByKey: depName → { ns, instName }
       optionalByKeyList = builtins.concatMap (
         ns:
         builtins.concatMap (
@@ -169,7 +150,6 @@ rec {
         map (e: lib.nameValuePair e.key { inherit (e) ns instName; }) optionalByKeyList
       );
 
-      # --- Seed: required deps from mandatory instances ---
       seeds = builtins.concatMap (
         ns:
         builtins.concatMap (
@@ -181,7 +161,7 @@ rec {
           builtins.concatMap (
             depName:
             if mandatoryKeys ? ${depName} then
-              [ ] # already satisfied by a mandatory instance
+              [ ]
             else
               [
                 {
@@ -194,7 +174,6 @@ rec {
         ) (builtins.attrNames (mandatory.${ns} or { }))
       ) (builtins.attrNames mandatory);
 
-      # --- genericClosure: transitive reachability ---
       closure = builtins.genericClosure {
         startSet = seeds;
         operator =
@@ -203,7 +182,6 @@ rec {
             depName = item.depName;
             requesterNs = item.requesterNs;
           in
-          # A) Check optional instances first
           if optionalByKey ? ${depName} then
             let
               opt = optionalByKey.${depName};
@@ -224,7 +202,6 @@ rec {
                 [ ]
             ) newDeps
 
-          # B) Check availablePackages
           else if availableByKey ? ${depName} then
             let
               canonicalName = availableByKey.${depName};
@@ -252,12 +229,10 @@ rec {
                 ]
             ) newDeps
 
-          # C) Neither found — will error in resolveArg later
           else
             [ ];
       };
 
-      # --- Collect activated optionals ---
       activatedOptionals = builtins.listToAttrs (
         builtins.concatMap (
           item:
@@ -271,7 +246,6 @@ rec {
         ) closure
       );
 
-      # --- Collect auto-instances ---
       autoInstanceList = builtins.concatMap (
         item:
         if !(optionalByKey ? ${item.depName}) && availableByKey ? ${item.depName} then
@@ -311,7 +285,6 @@ rec {
           [ ]
       ) closure;
 
-      # Group by namespace, dedup by instName (first wins)
       autoInstances = builtins.foldl' (
         acc: item:
         let

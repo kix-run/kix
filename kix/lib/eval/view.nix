@@ -1,5 +1,3 @@
-# Package view — consumer-facing shape of an evaluated instance.
-
 { lib, helpers }:
 
 let
@@ -7,14 +5,6 @@ let
 in
 
 {
-  # Build the consumer-facing view of a package instance.
-  #
-  # Three layers, all merged with collision detection:
-  #   1. folders  — plain attrsets from parts (no _type), excluding "root"
-  #   2. autoKeys — auto-copied from root.out (fqdn, name, selector, etc.)
-  #   3. system   — evaluator plumbing (_type, _meta, root, out, raw)
-  #
-  # Root-level resources (typed values) live only in raw, not on the surface.
   mkPackageView =
     {
       parts,
@@ -24,24 +14,17 @@ in
       packageMeta,
       namespaceName,
       aliases,
-      # Evaluated config for this instance — exposed via _meta so the
-      # cluster fixpoint can resolve function-shaped dep config injections
-      # against the consumer's own config (e.g. stackgres-database
-      # forwarding its `extensions` list into postgres).
       evaluatedConfig ? { },
     }:
     let
       ctx = "instance '${instanceName}'";
 
-      # Layer 1: folders — only plain attrsets (no _type), excluding "root"
       folders = lib.filterAttrs (
         n: v: n != "root" && v != null && builtins.isAttrs v && !(v ? _type)
       ) parts;
 
-      # Layer 2: auto-copied root.out (fqdn, name, selector, etc.)
       autoKeys = rootOut;
 
-      # Layer 3: system/evaluator plumbing
       system = {
         _type = "k8s-instance";
         _packageInstance = packageInstance;
@@ -56,15 +39,10 @@ in
             packageMeta
             ;
           namespace = namespaceName;
-          # The instance's fully-resolved config (option defaults +
-          # cluster overrides + dep config injections). Read by
-          # cluster.nix when resolving function-shaped injections
-          # contributed by THIS instance into one of its deps.
           config = evaluatedConfig;
         };
       };
 
-      # Known-folder structure check: resource directly on a known folder key → error
       _folderStructureChecks = builtins.foldl' (
         acc: folderName:
         let
@@ -76,7 +54,6 @@ in
           acc
       ) null (builtins.attrNames knownFolders);
 
-      # Known-folder content warnings: wrong _type inside a known folder → trace warning
       _folderContentChecks = builtins.foldl' (
         acc: folderName:
         let

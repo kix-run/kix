@@ -1,5 +1,3 @@
-# Import system — lightweight import markers and import-mode evaluation.
-
 {
   lib,
   k8s,
@@ -18,9 +16,6 @@ let
 in
 
 rec {
-  # Create an import marker — used as the `package` field for imported instances.
-  # `from`: optional package function to derive out from (via lazy eval).
-  # `out`: manual out overrides, merged on top of derived values.
   mkImport =
     {
       from ? null,
@@ -38,9 +33,6 @@ rec {
         ;
     };
 
-  # Per-instance context for import mode.
-  # Swaps mkResource/mkClusterResource for lightweight ref constructors
-  # that compute out without creating store paths or manifests.
   mkImportScope =
     {
       instanceName,
@@ -73,15 +65,6 @@ rec {
           }
         );
 
-      # Import-mode mirrors of scope.mkServiceRef / scope.mkSecretRef. The
-      # real versions (kix/lib/eval/scope.nix:1332, 1437) emit a
-      # PackageInstance marker and attach its store-path context to each
-      # `out` field so consumers pick up the dep edge automatically. In
-      # import mode we don't emit markers (the import's own PackageInstance
-      # — created by evaluateImportInstance — is the deploy-graph edge);
-      # we only need the derived `out` shape so the imported package's
-      # build can compute its own root.out. Context-attach is therefore
-      # identity.
       mkServiceRefImport =
         {
           name,
@@ -123,9 +106,6 @@ rec {
         namespace = namespaceResource;
         mkResource = mkRes namespaceResource;
         mkClusterResource = mkRes clusterScoped;
-        # In import mode, mkCR ignores the CRD argument (which would come
-        # from a dep proxy that throws) and delegates to mkResource.
-        # Only out values matter; dependency tracking is irrelevant for imports.
         mkCR = _crd: args: scope.mkResource args;
         mkServiceRef = mkServiceRefImport;
         mkSecretRef = mkSecretRefImport;
@@ -134,10 +114,6 @@ rec {
     in
     scope;
 
-  # Evaluate an imported instance.
-  # If `from` is provided, runs the real package build with import-mode scope
-  # (lightweight mkResource) and extracts out via laziness. Otherwise uses
-  # raw out directly. Creates a marker PackageInstance CR for the deploy graph.
   evaluateImportInstance =
     {
       instanceName,
@@ -146,15 +122,12 @@ rec {
       namespaceResource,
       clusterLabels,
       clusterConfig ? { },
-      # Lazy handle to the network-policy enforcer's `out`. Used to
-      # materialize platformIntents declared on the import instance.
-      networkPolicyEnforcer ? null,
+      clusterCtx ? { },
       ...
     }:
     let
-      importDef = instCfg.package; # { _type = "kix-import"; from, out }
+      importDef = instCfg.package;
 
-      # Derive out: from package build (lazy) + manual overrides
       derived =
         if importDef.from != null then
           let
@@ -167,9 +140,6 @@ rec {
                 ;
             };
 
-            # Call the package function with proxy deps that throw clear errors.
-            # Laziness ensures only out-relevant code paths are forced;
-            # if the package tries to access a dep, the proxy explains why it fails.
             fnArgs = builtins.functionArgs importDef.from;
             depArgNames = builtins.attrNames (
               removeAttrs fnArgs [
@@ -196,14 +166,11 @@ rec {
               // nullDeps
             );
 
-            # Evaluate typed config (same as normal path)
             evaluatedConfig = evaluateInstanceConfig {
               packageOptions = raw.options or { };
               inherit instCfg clusterConfig;
             };
 
-            # Run fixpoint — only out will be forced.
-            # Proxy deps: imports run in isolation, deps aren't resolved.
             buildEntries =
               if builtins.isList raw.build then
                 map (entry: if builtins.isPath entry then import entry else entry) raw.build
@@ -238,7 +205,6 @@ rec {
               )
             );
 
-            # Extract root's out
             rawRoot =
               parts.root or (throw "Import instance '${instanceName}': package build must define 'root'");
             rootRes =
@@ -277,27 +243,34 @@ rec {
               };
           };
 
-      # --- Platform intent materialization ---
-      #
-      # When the import declares `platformIntents` and a network-policy
-      # enforcer is available, materialize each intent into a CNP/CCNP
-      # resource and inject them as extraDeps on the marker. This
-      # establishes: workload → import marker → CNPs → enforcer.
       networkConfig = clusterConfig.networkPolicy or { enable = false; };
       rawPlatformIntents = instCfg.platformIntents or { };
 
+      # Fallback materializer path (v2_discussions/121): intents must be extraDeps on the marker, sealed at mkResource time — instanceProcessors run too late.
+      intentProvider =
+        if rawPlatformIntents == { } || !networkConfig.enable || !(clusterCtx ? findCapabilityProvider) then
+          null
+        else
+          clusterCtx.findCapabilityProvider "network-policy-enforcer";
+
+      intentProviderOut =
+        if
+          intentProvider == null
+          || (intentProvider.ns == namespaceName && intentProvider.inst == instanceName)
+        then
+          null
+        else
+          intentProvider.out;
+
       materializedIntentPolicies =
-        if rawPlatformIntents == { } || !networkConfig.enable || networkPolicyEnforcer == null then
+        if intentProviderOut == null then
           [ ]
         else
           let
-            enforcerApi = networkPolicyEnforcer.netpol;
+            enforcerApi = intentProviderOut.netpol;
           in
           lib.mapAttrsToList (
             intentName: intent:
-            let
-              isClusterwide = (intent.scope or "namespaced") == "clusterwide";
-            in
             enforcerApi.materializePlatformIntent {
               intent = intent // {
                 name = intentName;
@@ -307,12 +280,6 @@ rec {
             }
           ) rawPlatformIntents;
 
-      # Marker PackageInstance — deployed to mark this import in the cluster.
-      # Carries import metadata so deploy tooling can verify the external resource.
-      # Instance-level extraDeps (from modules.nix) inject ordering edges
-      # that aren't captured by store-path context. Materialized platform
-      # intent CNPs are also injected so the marker transitively depends
-      # on the enforcer.
       instanceExtraDeps = (instCfg.extraDeps or [ ]) ++ materializedIntentPolicies;
 
       markerResource = mkResource {
@@ -351,7 +318,7 @@ rec {
       _type = "k8s-instance";
       _isImport = true;
       _packageInstance = markerResource;
-      _networkPolicies = materializedIntentPolicies;
+      _hookResources = materializedIntentPolicies;
       root = markerResource;
       out = derived.out;
       _meta = {

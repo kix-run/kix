@@ -1,15 +1,11 @@
-# Cluster builder — top-level entry point that composes modules, runs
-# auto-instantiation, builds the nested fixpoint, and collects resources.
-
 {
   lib,
   k8s,
   meta,
   kixlib,
   helpers,
-  netpol,
-  netpolInterface,
   scorecard,
+  hooks,
   mkNamespace,
   computeAutoInstances,
   buildResolutionIndex,
@@ -27,10 +23,6 @@ let
 in
 
 {
-  # The top-level cluster builder.
-  # Uses lib.evalModules to compose cluster definitions from modules.
-  # Each module can declare options and set instances, namespaces, etc.
-  # `ref` (the lazy fixpoint of all instances) is available via specialArgs.
   buildCluster =
     {
       name ? "cluster",
@@ -38,56 +30,33 @@ in
       specialArgs ? { },
     }:
     let
-      # 1. Evaluate modules — produces merged config lazily.
-      #    ref thunks in config values are NOT forced during merge
-      #    (config fields are deferredModule — stored as-is).
+      # Module merge stays lazy: ref thunks in config values are not forced here.
       evaluated = lib.evalModules {
         modules = [ (import ../modules.nix) ] ++ modules;
         specialArgs = {
-          ref = clusterInstances; # lazy — resolved during fixpoint
-          # Expose mkImport to all modules (especially flavors) so they can
-          # declare platform-provided imports without requiring the caller to
-          # pass the full kix library via specialArgs.
-          kix = { inherit mkImport; };
+          ref = clusterInstances;
+          kix = {
+            inherit mkImport;
+          };
         }
         // specialArgs;
       };
 
       cfg = evaluated.config;
 
-      # 2. Auto-instantiation: compute auto-instances and activated optionals.
-      #    See v2_discussions/27_auto_instantiation.md for design rationale.
       autoResult = computeAutoInstances {
         explicitInstances = cfg.instances;
         availablePackages = cfg.availablePackages;
         autoNamespace = cfg.autoNamespace;
       };
 
-      # Explicit instances always win over auto-instances.
       mergedInstances = lib.recursiveUpdate autoResult.autoInstances cfg.instances;
 
-      # 3. Derive namespace list from merged instances ∪ explicit namespaces.
       allNsNames = lib.unique (builtins.attrNames cfg.namespaces ++ builtins.attrNames mergedInstances);
 
-      # Sentinel namespace keys (underscore-prefixed) — flavors may declare
-      # e.g. `instances._cluster = { … }` to group cluster-scoped resources
-      # sensibly under `_cluster/` in the build output (see
-      # kix/lib/default.nix:155's grouping by `metadata.namespace or
-      # "_cluster"`). These are *not* real Kubernetes namespaces:
-      # underscore-prefixed names violate the DNS-1123 label constraint
-      # that K8s enforces on namespace names — `kubectl apply` would
-      # reject any `Namespace _<…>` we emitted.
-      #
-      # We still build `nsResources` entries for sentinel keys (downstream
-      # instance evaluation looks up `nsResources.${nsName}` per instance,
-      # and the lookup must succeed), but we exclude sentinels from the
-      # namespace-scoped emission paths: the `Namespace`/`ResourceQuota`/
-      # per-namespace `NetworkPolicy`/default-deny CNP resources, and from
-      # namespace-rule scorecard evaluation.
       isSentinelNs = nsName: lib.hasPrefix "_" nsName;
       realNsNames = builtins.filter (n: !isSentinelNs n) allNsNames;
 
-      # 4. Create namespace resources
       nsResources = builtins.listToAttrs (
         map (nsName: {
           name = nsName;
@@ -100,9 +69,6 @@ in
         }) allNsNames
       );
 
-      # 5. Build static metadata for DI resolution (instance name + aliases)
-      #    defaultAliases from package meta are used when the cluster definition
-      #    doesn't set instance-level aliases.
       staticMeta = lib.mapAttrs (
         nsName: nsInsts:
         lib.mapAttrs (
@@ -130,119 +96,32 @@ in
 
       resolutionIndex = buildResolutionIndex staticMeta;
 
-      # 5a. Network-policy enforcer lookup — find an instance whose package
-      # declares `meta.provides` containing "network-policy-enforcer"
-      # (currently only `kix/packages/cilium`). If found, its `out.cnpCrdRef`
-      # is surfaced to every instance's scope via `scope.networkPolicyEnforcer`,
-      # and `kix/lib/netpol.nix` routes every generated CiliumNetworkPolicy
-      # through `cnpCrdRef.out.cr` so the CNP → CRD marker → enforcer root
-      # edge is installed transitively. When `networkPolicy.enable = true`
-      # and no enforcer instance is declared we throw below — there is no
-      # silent fallback, because an unrouted CNP has no store-path edge to
-      # cilium and will race the operator at apply time. Externally-managed
-      # cilium should be declared via an import-style package that only
-      # emits the CRD ref marker (see `kix/packages/cilium` → `external`).
-      # See v2_discussions/83.
-      #
-      # If two instances advertise the capability we throw — ambiguous.
-      enforcerCandidates = builtins.concatMap (
-        nsName:
+      providesIndex = hooks.buildProvidesIndex mergedInstances;
+
+      # `out` reads from the cluster fixpoint lazily — must not be forced during module merge.
+      findCapabilityProvider =
+        capability:
         let
-          nsInsts = mergedInstances.${nsName};
+          lookup = hooks.findCapabilityProvider { inherit capability providesIndex; };
         in
-        builtins.concatMap (
-          instName:
-          let
-            instCfg = nsInsts.${instName};
-            pkgMeta = meta.peekPackageMeta {
-              package = instCfg.package;
-              inherit kixlib;
-            };
-            provides = pkgMeta.provides or [ ];
-          in
-          if builtins.elem "network-policy-enforcer" provides then
-            [
-              {
-                ns = nsName;
-                inst = instName;
-              }
-            ]
-          else
-            [ ]
-        ) (builtins.attrNames nsInsts)
-      ) (builtins.attrNames mergedInstances);
-
-      enforcerLookup =
-        if enforcerCandidates == [ ] then
-          null
-        else if builtins.length enforcerCandidates > 1 then
-          throw (
-            "kix: multiple instances advertise `meta.provides = [\"network-policy-enforcer\"]`: "
-            + builtins.concatStringsSep ", " (map (c: "${c.ns}/${c.inst}") enforcerCandidates)
-            + ". Declare exactly one enforcer (e.g. a single cilium instance)."
-          )
-        else
-          builtins.head enforcerCandidates;
-
-      # Lazy read from the cluster fixpoint. `out` is populated by the
-      # enforcer's `rootOut` hook (see kix/packages/cilium/default.nix).
-      # Null when no enforcer instance is declared.
-      enforcerOut =
-        if enforcerLookup == null then
+        if lookup == null then
           null
         else
-          clusterInstances.${enforcerLookup.ns}.${enforcerLookup.inst}.out or null;
+          lookup
+          // {
+            out = clusterInstances.${lookup.ns}.${lookup.inst}.out or null;
+          };
 
-      # Eager assertion: `networkPolicy.enable = true` requires a resolved
-      # enforcer. Throws at cluster eval time with an actionable message,
-      # before any per-instance scope is constructed. See v2_discussions/83.
-      _netpolEnforcerAssertion =
-        if (cfg.networkPolicy.enable or false) && enforcerLookup == null then
-          throw (
-            "kix: `networkPolicy.enable = true` but no instance declares "
-            + "`meta.provides = [\"network-policy-enforcer\"]`. Declare a cilium "
-            + "instance in the cluster. For externally-managed cilium (k3s with "
-            + "--flannel-backend=none, kind with helm-installed cilium, RKE2's "
-            + "bundled cilium, etc.) use the external variant that emits only "
-            + "the CRD ref marker, e.g.:\n\n"
-            + "  instances.kube-system.cilium = {\n"
-            + "    package = packages.\"cilium\".external;\n"
-            + "  };\n"
-          )
-        else
-          null;
+      clusterCtx = {
+        config = cfg;
+        inherit findCapabilityProvider;
+      };
 
-      # Validate the enforcer's `out.netpol` against the formal interface.
-      # Fires only when network policies are enabled and an enforcer is
-      # declared. The validation reads from the cluster fixpoint (lazy),
-      # so it runs at the same time as the first scope construction.
-      _netpolInterfaceAssertion =
-        if (cfg.networkPolicy.enable or false) && enforcerOut != null then
-          let
-            enforcerNetpol = enforcerOut.netpol or { };
-            enforcerName = "${enforcerLookup.ns}/${enforcerLookup.inst}";
-          in
-          netpolInterface.validateEnforcerInterface {
-            inherit enforcerNetpol enforcerName;
-          }
-        else
-          null;
+      workloadInterceptors = hooks.collectHooks cfg "workloadInterceptors";
+      instanceProcessors = hooks.collectHooks cfg "instanceProcessors";
+      clusterProcessors = hooks.collectHooks cfg "clusterProcessors";
 
-      # Self-dep guard: the enforcer's own scope must not depend on itself.
-      isSelfEnforcer =
-        nsName: instName:
-        enforcerLookup != null && enforcerLookup.ns == nsName && enforcerLookup.inst == instName;
-
-      # 5b. Phase-1 pre-pass: resolve dep targets and collect config injections.
-      #     Uses a minimal scope (just naming) — packages only use scope.instanceName
-      #     at the top level. Build thunks are not called, only introspected.
-      #     See v2_discussions/42_dep_config_injection.md for design rationale.
-      #
-      #     NOTE: explicitOverrides is {} — we deliberately skip instCfg.deps because
-      #     it may reference `ref` (the cluster fixpoint), which would cause infinite
-      #     recursion. DNS resolution via resolutionIndex handles resolution for the
-      #     pre-pass. If a cluster author uses explicit dep overrides to re-target a
-      #     dep, config injection uses DNS resolution as a best-effort fallback.
+      # explicitOverrides stays {} — instCfg.deps may reference the cluster fixpoint and must not be forced here
       phase1Instances = lib.mapAttrs (
         nsName: nsInsts:
         lib.mapAttrs (
@@ -281,9 +160,6 @@ in
 
       configInjections = buildConfigInjections phase1Instances;
 
-      # Force function-shaped injection configs against a consumer-config
-      # lookup (phase 2a `instanceConfigs` or its own self-reference).
-      # Literal-shaped injection configs pass through unchanged.
       resolveInjectionsAgainst =
         configMap: nsName: instName:
         map (
@@ -297,28 +173,7 @@ in
             inj
         ) (configInjections.${nsName}.${instName} or [ ]);
 
-      # Phase 2a: config-only fixpoint.
-      #
-      # Some dep config injections are function-shaped — they read parts
-      # of the *consumer's* evaluated config and project them into the
-      # dep's config (e.g. stackgres-database taking its own
-      # `extensions = ["vector"]` and forwarding it as
-      # `[{ name = "vector"; }]` to its underlying postgres cluster).
-      #
-      # Resolving such an injection requires the consumer's evaluated
-      # config — but we can't reach for the full instance view via `self`
-      # in the main `clusterInstances` fixpoint, because that view also
-      # depends on the consumer's *build*, which depends on its DI deps,
-      # which (for a database) loops back to the postgres being injected
-      # into. Stack overflow.
-      #
-      # The trick: split eval into two fixpoints. Phase 2a only computes
-      # `evaluatedConfig` for every instance, with no build, no parts,
-      # no deps. The function-injection resolver reads from this map
-      # instead of from the full view, so the cycle disappears.
-      # Phase 2b (`clusterInstances`) then runs the normal full eval
-      # using the *resolved* injection list from phase 2a — by that
-      # point every injection's `config` is a plain attrset.
+      # config-only fixpoint: consumer→dep injection must not cycle through the full view
       instanceConfigs = lib.fix (
         selfCfg:
         lib.mapAttrs (
@@ -338,13 +193,9 @@ in
         ) mergedInstances
       );
 
-      # Same resolver, run against phase-2a results, used to feed the
-      # full eval below an injection list whose `config` fields are
-      # plain attrsets (regardless of whether the package author wrote
-      # a function or a literal).
       resolveInjections = resolveInjectionsAgainst instanceConfigs;
 
-      # 6. Build nested fixpoint (phase 2b — full evaluation).
+      # Phase 2b: full-evaluation fixpoint — every injection's config is a plain attrset by now.
       clusterInstances = lib.fix (
         self:
         lib.mapAttrs (
@@ -362,16 +213,12 @@ in
               inherit resolutionIndex;
               globalPartsOverlays = cfg.globalPartsOverlays;
               configInjections = resolveInjections nsName instName;
-              networkPolicyEnforcer = if isSelfEnforcer nsName instName then null else enforcerOut;
+              inherit workloadInterceptors instanceProcessors clusterCtx;
             }
           ) nsInsts
         ) mergedInstances
       );
 
-      # --- Resource collection (filters inactive optionals) ---
-
-      # An instance is active if it's not optional, or if it was activated
-      # by the auto-instantiation pass (a non-optional instance needs it).
       isActive =
         nsName: instName:
         let
@@ -416,75 +263,29 @@ in
           } raw
         )
         ++ (if inst ? _packageInstance then [ inst._packageInstance ] else [ ])
-        ++ (inst._networkPolicies or [ ]);
+        ++ (inst._hookResources or [ ]);
 
-      # --- Network policy generation (cluster-level) ---
-      #
-      # Per-workload egress/ingress CNPs (including the caller-side
-      # paired ingress grants in the callee's namespace) are all emitted
-      # at `scope.mkDeployment` time via `buildWorkloadCnps`. There is
-      # no cluster-level inverted-ingress pass — v2_discussions/83
-      # Phase C replaced it with caller-side `scope.forNamespace`
-      # emission. Platform intents and default-deny remain at this level.
-      networkConfig = cfg.networkPolicy;
+      clusterHookCtx = {
+        cluster = clusterCtx;
+        inherit nsResources realNsNames;
+      };
+      clusterHookResults = map (p: p clusterHookCtx) clusterProcessors;
+      # Canonical order: hook execution order (priority, then name), used for
+      # BOTH the Activation extraDeps and the manifest list. This order is
+      # content-addressed into the output.
+      clusterHookResources = builtins.concatMap (r: r.resources or [ ]) clusterHookResults;
+      clusterHookChecks = builtins.concatMap (r: r.checks or [ ]) clusterHookResults;
+      clusterHookWarnings = builtins.concatMap (r: r.warnings or [ ]) clusterHookResults;
 
-      # --- Platform intent materialization ---
-      #
-      # Flavors declare `networkPolicy.platformIntents` for non-kix-managed
-      # pods (CoreDNS, local-path-provisioner, etc.). The enforcer
-      # materializes each intent into a standalone CNP or CCNP routed
-      # through its CRD ref markers. See v2_discussions/92.
-      platformIntentPolicies =
-        if !networkConfig.enable || enforcerOut == null || networkConfig.platformIntents == { } then
-          [ ]
-        else
-          let
-            enforcerApi = enforcerOut.netpol;
-          in
-          lib.mapAttrsToList (
-            intentName: intent:
-            let
-              isClusterwide = (intent.scope or "namespaced") == "clusterwide";
-              nsName = intent.namespace or null;
-              namespaceResource =
-                if nsName != null && builtins.hasAttr nsName nsResources then nsResources.${nsName} else null;
-            in
-            enforcerApi.materializePlatformIntent {
-              intent = intent // {
-                name = intentName;
-              };
-              mkResource = k8s.mkResource;
-              inherit namespaceResource;
-              inherit (k8s) clusterScoped;
-            }
-          ) networkConfig.platformIntents;
-
-      defaultDenyPolicies =
-        if networkConfig.enable && networkConfig.defaultDeny then
-          map (
-            nsName:
-            netpol.generateDefaultDeny {
-              namespaceName = nsName;
-              nsResource = nsResources.${nsName};
-              directions = networkConfig.directions;
-              networkPolicyEnforcer = enforcerOut;
-            }
-          ) realNsNames
-        else
-          [ ];
-
-      # --- Scorecard evaluation (namespace + cluster level) ---
       scorecardConfig = cfg.scorecard or { };
       scorecardEnabled = (scorecardConfig.enable or false) && (scorecardConfig.rules or { }) != { };
 
-      # Collect per-instance findings from the fixpoint
       instanceScorecardFindings =
         if scorecardEnabled then
           builtins.concatMap (inst: inst._scorecardFindings or [ ]) allInstancesList
         else
           [ ];
 
-      # Namespace-level rules
       namespaceScorecardFindings =
         if scorecardEnabled then
           builtins.concatMap (
@@ -508,7 +309,6 @@ in
         else
           [ ];
 
-      # Cluster-level rules
       clusterScorecardFindings =
         if scorecardEnabled then
           scorecard.evaluateClusterRules {
@@ -527,12 +327,6 @@ in
       allScorecardFindings =
         instanceScorecardFindings ++ namespaceScorecardFindings ++ clusterScorecardFindings;
 
-      # --- Extra images (operator-spawned, not in manifests) ---
-      #
-      # Packages that manage operators (e.g. stackgres-cluster) can declare
-      # `root.out.extraImages = [ "quay.io/..." ]` — images the operator will
-      # pull at reconciliation time that don't appear in any kix-generated
-      # manifest. Collected here so `kix images` can include them.
       extraImages =
         let
           perInstance = builtins.concatMap (
@@ -575,12 +369,9 @@ in
         ++ (if ns.quota != null then [ ns.quota ] else [ ])
         ++ builtins.attrValues ns.netpols
       ) realNsNames)
-      ++ platformIntentPolicies
-      ++ defaultDenyPolicies
+      ++ clusterHookResources
       ++ [ activation ];
 
-      # Activation CRD — cluster-level root of the Nix store DAG.
-      # Only includes active instances (excludes inactive optionals).
       activeClusterInstances = lib.mapAttrs (
         nsName: nsInsts: lib.filterAttrs (instName: _: isActive nsName instName) nsInsts
       ) clusterInstances;
@@ -590,13 +381,9 @@ in
         instances = lib.mapAttrs (
           _nsName: nsInsts: lib.mapAttrs (_: inst: inst._packageInstance.out.name) nsInsts
         ) activeClusterInstances;
-        extraDeps = defaultDenyPolicies ++ platformIntentPolicies;
+        extraDeps = clusterHookResources;
       };
 
-      # Package index — PI store path → owned resource store paths.
-      # Used by the Rust CLI to build the in-memory store graph.
-      # toString on store paths discards string context intentionally —
-      # we want stable path strings in the JSON, not context-carrying values.
       packageIndex = builtins.toFile "kix-packages.json" (
         builtins.toJSON {
           cluster = name;
@@ -609,15 +396,11 @@ in
         }
       );
 
-      # --- Collect cluster-wide diagnostics ---
       clusterDiagnostics = meta.collectClusterDiagnostics {
         clusterName = name;
         inherit allInstancesList;
       };
 
-      # --- Lightweight metadata for CLI tooling (no manifest generation) ---
-
-      # Detect inline attrset packages (have `build` but aren't kix-imports).
       isInlinePackage = v: builtins.isAttrs v && v ? build && (v._type or "") != "kix-import";
 
       isPackageEntry =
@@ -681,49 +464,44 @@ in
         availablePackages = availablePackagesInfo;
       };
 
+      _clusterHookChecksRun = hooks.runChecks clusterHookChecks;
+
     in
-    builtins.seq _netpolEnforcerAssertion (
-      builtins.seq _netpolInterfaceAssertion (
-        builtins.seq clusterDiagnostics.assertionCheck {
-          _type = "k8s-cluster-v2";
-          inherit name;
+    builtins.seq _clusterHookChecksRun (
+      builtins.seq clusterDiagnostics.assertionCheck {
+        _type = "k8s-cluster-v2";
+        inherit name;
 
-          inherit clusterInstances;
-          instances = clusterInstances;
+        inherit clusterInstances;
+        instances = clusterInstances;
 
-          namespaces = nsResources;
+        namespaces = nsResources;
 
-          inherit
-            activation
-            packageIndex
-            info
-            extraImages
-            ;
+        inherit
+          activation
+          packageIndex
+          info
+          extraImages
+          ;
 
-          # Cluster-level diagnostics for tooling
-          diagnostics = {
-            inherit (clusterDiagnostics) warnings assertions failedAssertions;
+        diagnostics = {
+          warnings = clusterDiagnostics.warnings ++ clusterHookWarnings;
+          inherit (clusterDiagnostics) assertions failedAssertions;
+        };
+
+        out = {
+          maintenance = {
+            enable = cfg.cluster.maintenance.enable or false;
+            reason = cfg.cluster.maintenance.reason or null;
+            until = cfg.cluster.maintenance.until or null;
           };
+        };
 
-          # Cluster-level out.* surface — read by tooling (Alertmanager
-          # routing, operator UI, dashboards). Today only carries the
-          # maintenance marker (v2_discussions/105 §B7); future cluster-
-          # wide metadata that doesn't belong in `info` lands here.
-          out = {
-            maintenance = {
-              enable = cfg.cluster.maintenance.enable or false;
-              reason = cfg.cluster.maintenance.reason or null;
-              until = cfg.cluster.maintenance.until or null;
-            };
-          };
+        inherit scorecardReport;
 
-          # Scorecard report (null if disabled)
-          inherit scorecardReport;
-
-          rawManifests = map (
-            r: builtins.fromJSON (builtins.unsafeDiscardStringContext (builtins.toJSON r.rawManifest))
-          ) allResources;
-        }
-      )
+        rawManifests = map (
+          r: builtins.fromJSON (builtins.unsafeDiscardStringContext (builtins.toJSON r.rawManifest))
+        ) allResources;
+      }
     );
 }
