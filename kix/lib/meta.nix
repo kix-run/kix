@@ -2,6 +2,7 @@
 
 let
   unsafe = import ./unsafe.nix { inherit lib; };
+  roles = import ./eval/roles.nix { inherit lib; };
 
   parseVersion = v: map lib.toIntBase10 (lib.splitString "." v);
 
@@ -99,15 +100,23 @@ rec {
     );
 
   peekPackageAliases =
-    { availEntry, kixlib }:
+    {
+      availEntry,
+      kixlib,
+      context ? "availablePackages entry",
+    }:
     let
       explicitAliases = availEntry.aliases or [ ];
       packageMeta = peekPackageMeta {
         package = availEntry.package;
         inherit kixlib;
       };
+      # Shelf packages bypass buildRolesIndex until instantiated — validate
+      # meta.roles here so a typo'd role on a catalog entry throws instead
+      # of silently never matching a weak demand.
+      shelfRoles = map (roles.assertKnownRole "meta.roles of ${context}") (packageMeta.roles or [ ]);
     in
-    lib.unique (explicitAliases ++ (packageMeta.roles or [ ]) ++ (packageMeta.defaultAliases or [ ]));
+    lib.unique (explicitAliases ++ shelfRoles ++ (packageMeta.defaultAliases or [ ]));
 
   checkMetaStatic =
     {

@@ -247,8 +247,6 @@ let
           requires = rest;
           out = {
             storageClassName = "lbs1-pool1-2x";
-            rwx = true;
-            snapshots = true;
           };
         };
       };

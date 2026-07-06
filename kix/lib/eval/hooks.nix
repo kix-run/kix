@@ -1,7 +1,5 @@
 {
   lib,
-  meta,
-  kixlib,
   roles,
 }:
 
@@ -35,24 +33,15 @@ rec {
   # typo'd `meta.roles` entry throws with the declaring instance named
   # instead of silently never matching (the meta.provides failure mode).
   buildRolesIndex =
-    instances:
+    { instances, peekedMetas }:
     lib.mapAttrs (
       nsName: nsInsts:
-      lib.mapAttrs (
-        instName: instCfg:
-        let
-          packageMeta = meta.peekPackageMeta {
-            package = instCfg.package;
-            inherit kixlib;
-          };
-        in
-        {
-          roles = map (roles.assertKnownRole "meta.roles of instance ${nsName}/${instName}") (
-            packageMeta.roles or [ ]
-          );
-          isImport = (instCfg.package._type or "") == "kix-import";
-        }
-      ) nsInsts
+      lib.mapAttrs (instName: instCfg: {
+        roles = map (roles.assertKnownRole "meta.roles of instance ${nsName}/${instName}") (
+          (peekedMetas.${nsName}.${instName}).roles or [ ]
+        );
+        isImport = (instCfg.package._type or "") == "kix-import";
+      }) nsInsts
     ) instances;
 
   # domain → { ns, inst }, built from peeked `meta.annotationDomains`
@@ -65,53 +54,54 @@ rec {
   # registry. Two declarers of one domain is a duplicate-symbol error
   # (eagerly forced by buildCluster, same spirit as checkRoleBindings).
   buildAnnotationDomainIndex =
-    instances:
-    builtins.foldl' (
-      acc: entry:
-      builtins.foldl' (
-        acc': domain:
-        let
-          _shape =
-            if !(lib.hasInfix "." domain) || lib.hasInfix "/" domain then
+    { instances, peekedMetas }:
+    builtins.foldl'
+      (
+        acc: entry:
+        builtins.foldl' (
+          acc': domain:
+          let
+            _shape =
+              if !(lib.hasInfix "." domain) || lib.hasInfix "/" domain then
+                throw (
+                  "kix: meta.annotationDomains of instance ${entry.ns}/${entry.inst} contains "
+                  + "'${domain}', which is not a DNS-domain-shaped annotation prefix "
+                  + "(expected e.g. \"reflector.v1.k8s.emberstack.com\")"
+                )
+              else
+                null;
+            existing = acc'.${domain} or null;
+          in
+          builtins.seq _shape (
+            if existing != null then
               throw (
-                "kix: meta.annotationDomains of instance ${entry.ns}/${entry.inst} contains "
-                + "'${domain}', which is not a DNS-domain-shaped annotation prefix "
-                + "(expected e.g. \"reflector.v1.k8s.emberstack.com\")"
+                "kix: annotation domain '${domain}' is declared by two instances: "
+                + "${existing.ns}/${existing.inst} and ${entry.ns}/${entry.inst}. "
+                + "Exactly one package owns an annotation domain."
               )
             else
-              null;
-          existing = acc'.${domain} or null;
-        in
-        builtins.seq _shape (
-          if existing != null then
-            throw (
-              "kix: annotation domain '${domain}' is declared by two instances: "
-              + "${existing.ns}/${existing.inst} and ${entry.ns}/${entry.inst}. "
-              + "Exactly one package owns an annotation domain."
-            )
-          else
-            acc'
-            // {
-              ${domain} = {
-                inherit (entry) ns inst;
-              };
-            }
-        )
-      ) acc entry.domains
-    ) { } (annotationDomainDeclarers instances);
+              acc'
+              // {
+                ${domain} = {
+                  inherit (entry) ns inst;
+                };
+              }
+          )
+        ) acc entry.domains
+      )
+      { }
+      (annotationDomainDeclarers {
+        inherit instances peekedMetas;
+      });
 
   annotationDomainDeclarers =
-    instances:
+    { instances, peekedMetas }:
     builtins.concatMap (
       nsName:
       builtins.concatMap (
         instName:
         let
-          packageMeta = meta.peekPackageMeta {
-            package = instances.${nsName}.${instName}.package;
-            inherit kixlib;
-          };
-          domains = packageMeta.annotationDomains or [ ];
+          domains = (peekedMetas.${nsName}.${instName}).annotationDomains or [ ];
         in
         if domains == [ ] then
           [ ]

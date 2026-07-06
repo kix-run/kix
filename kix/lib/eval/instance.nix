@@ -484,9 +484,23 @@ in
               # "ns/inst" identities of this instance's resolved DI deps —
               # the annotationDomainOwnership rule checks declarers against
               # these. Names only; deps are resolved before rules run.
-              resolvedDepTargets = lib.mapAttrsToList (
-                _: depInfo: "${depInfo.resolution.namespace}/${depInfo.resolution.instanceName}"
-              ) resolvedDepMeta;
+              # Directly wired deps (deps.X = ref...) skip resolvedDepMeta,
+              # so their identity is recovered from the target's own _meta —
+              # explicit wiring must count as linking against the operator.
+              resolvedDepTargets =
+                lib.mapAttrsToList (
+                  _: depInfo: "${depInfo.resolution.namespace}/${depInfo.resolution.instanceName}"
+                ) resolvedDepMeta
+                ++ builtins.concatMap (
+                  v:
+                  let
+                    m = if builtins.isAttrs v then v._meta or null else null;
+                  in
+                  if builtins.isAttrs m && m ? namespaceName && m ? instanceName then
+                    [ "${m.namespaceName}/${m.instanceName}" ]
+                  else
+                    [ ]
+                ) (builtins.attrValues deps);
               knownAnnotationDomains = scorecardConfig.knownAnnotationDomains or [ ];
               ruleDefaults = scorecardConfig.ruleDefaults or { };
               ruleOverrides = scorecardConfig.ruleOverrides or { };

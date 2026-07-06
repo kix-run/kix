@@ -62,8 +62,6 @@
           # csi-cinder-* classes, or for a hostPath/local-path provisioner on a
           # single-node minimal cluster.
           storageClassName = "csi-cinder-high-speed";
-          rwx = false; # Cinder is RWO block storage
-          snapshots = true; # Cinder CSI supports snapshots
         };
       };
       optional = true;

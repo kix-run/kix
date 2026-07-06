@@ -424,6 +424,47 @@ let
       };
   };
 
+  # Transitive weak-demand fixtures: a shelf package with its own weak
+  # storageClasses demand, and a consumer whose REQUIRED dep pulls it.
+  weakMiddlePackage = {
+    meta.version = "test";
+    build =
+      {
+        self,
+        scope,
+        storageClasses ? null,
+        ...
+      }:
+      {
+        cm = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          name = "middle";
+          extra.data.sc = if storageClasses == null then "missing" else storageClasses.out.storageClassName;
+        };
+        root = self.cm;
+      };
+  };
+
+  weakMiddleConsumer = {
+    meta.version = "test";
+    build =
+      {
+        self,
+        scope,
+        middle,
+        ...
+      }:
+      {
+        cm = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          name = "top-consumer";
+        };
+        root = self.cm;
+      };
+  };
+
   baseInstances = {
     instances.dns.dns = {
       package = dnsPackage;
@@ -1020,6 +1061,154 @@ let
         && knownFindings == [ ]
       )
       || throw "unknown-domain lint wrong: unknown=${builtins.toJSON unknownFindings} known=${builtins.toJSON knownFindings}";
+
+    # --- weak-role wiring (PR 29 review findings 2-5) ---
+
+    # Role providers are cluster-scoped: weak demand from two namespaces
+    # shares ONE stock instance instead of instantiating two strong
+    # providers of the same role (which would be a duplicate-role error).
+    t32-weak-role-multi-namespace-shares-stock =
+      let
+        ms = manifests (mkCluster [
+          baseInstances
+          {
+            availablePackages.stock-storage.package = stockStorage;
+            instances.ns1.consumer1.package = optionalScConsumer;
+            instances.ns2.consumer2.package = optionalScConsumer;
+          }
+        ]);
+        stockCms = builtins.filter (m: (m.metadata.name or "") == "stock-sc") (ofKind "ConfigMap" ms);
+        probes = builtins.filter (m: (m.metadata.name or "") == "sc-consumer") (ofKind "ConfigMap" ms);
+      in
+      (
+        builtins.length stockCms == 1
+        && builtins.length probes == 2
+        && builtins.all (p: p.data.sc == "stock-sc-name") probes
+      )
+      || throw "multi-namespace weak demand not deduped: stock=${toString (builtins.length stockCms)} probes=${
+        builtins.toJSON (map (p: p.data.sc) probes)
+      }";
+
+    # An environment binding suppresses the stock pull even without an
+    # import instance — flavors declare `cni` exclusively this way. The
+    # compiler must not instantiate stock and then refuse its own work.
+    t33-env-exclusive-binding-suppresses-stock =
+      let
+        ms = manifests (mkCluster [
+          baseInstances
+          {
+            cluster.roles.storageClasses.binding = "exclusive";
+            availablePackages.stock-storage.package = stockStorage;
+            instances.appns.consumer.package = optionalScConsumer;
+          }
+        ]);
+        probe = byName "sc-consumer" (ofKind "ConfigMap" ms);
+      in
+      (!(hasName "stock-sc" (ofKind "ConfigMap" ms)) && probe != null && probe.data.sc == "missing")
+      || throw "exclusive binding did not suppress stock pull: ${builtins.toJSON probe}";
+
+    # Shadowable: the environment default is the provider — pulling stock
+    # would silently shadow it, so the shelf entry stays untouched.
+    t34-env-shadowable-binding-suppresses-stock =
+      let
+        ms = manifests (mkCluster [
+          baseInstances
+          {
+            cluster.roles.storageClasses.binding = "shadowable";
+            availablePackages.stock-storage.package = stockStorage;
+            instances.appns.consumer.package = optionalScConsumer;
+          }
+        ]);
+      in
+      !(hasName "stock-sc" (ofKind "ConfigMap" ms))
+      || throw "shadowable binding did not suppress stock pull";
+
+    # A never-activated optional instance claiming a role a mandatory
+    # instance also provides is NOT a conflict — it emits nothing this
+    # eval, so it must neither win the role nor trip the eager check.
+    t35-inactive-optional-role-is-not-a-conflict =
+      let
+        ms = manifests (mkCluster [
+          baseInstances
+          {
+            instances.storage.provider.package = stockStorage;
+            instances.shelf.spare = {
+              package = stockStorage;
+              optional = true;
+            };
+            instances.appns.consumer.package = optionalScConsumer;
+          }
+        ]);
+        stockCms = builtins.filter (m: (m.metadata.name or "") == "stock-sc") (ofKind "ConfigMap" ms);
+        probe = byName "sc-consumer" (ofKind "ConfigMap" ms);
+      in
+      (builtins.length stockCms == 1 && probe != null && probe.data.sc == "stock-sc-name")
+      || throw "inactive optional treated as role conflict: stock=${toString (builtins.length stockCms)} probe=${builtins.toJSON probe}";
+
+    # Weak role demand propagates transitively: a catalog package pulled in
+    # by a REQUIRED dep has its own weak storageClasses demand honored.
+    t36-weak-role-demand-transitive =
+      let
+        ms = manifests (mkCluster [
+          baseInstances
+          {
+            availablePackages.middle.package = weakMiddlePackage;
+            availablePackages.stock-storage.package = stockStorage;
+            instances.appns.top.package = weakMiddleConsumer;
+          }
+        ]);
+        middleCm = byName "middle" (ofKind "ConfigMap" ms);
+      in
+      (
+        hasName "stock-sc" (ofKind "ConfigMap" ms)
+        && middleCm != null
+        && middleCm.data.sc == "stock-sc-name"
+      )
+      || throw "transitive weak demand not honored: ${builtins.toJSON middleCm}";
+
+    # A typo'd role on a shelf entry throws (same closed vocabulary as
+    # instantiated meta.roles) instead of silently never matching.
+    t37-catalog-role-typo-throws = evalFails (mkCluster [
+      baseInstances
+      {
+        availablePackages.bad-storage.package = mkCmPackage {
+          name = "bad";
+          metaExtra.roles = [ "storageClases" ];
+        };
+        instances.appns.consumer.package = optionalScConsumer;
+      }
+    ]);
+
+    # Directly wired deps (deps.operator = ref...) count as linking against
+    # the declarer — the domain lint must not false-warn on explicit wiring.
+    t38-annotation-domain-direct-dep-satisfies =
+      let
+        cluster = mkCluster [
+          baseInstances
+          scorecardOn
+          {
+            instances.infra.operator.package = mkCmPackage {
+              name = "operator-cm";
+              metaExtra.annotationDomains = [ "example.io" ];
+            };
+          }
+          (
+            { ref, ... }:
+            {
+              instances.appns.writer = {
+                package = mkAnnotatedCmPackage {
+                  key = "example.io/managed";
+                  withOperatorDep = true;
+                };
+                deps.operator = ref.infra.operator;
+              };
+            }
+          )
+        ];
+        findings = domainFindings cluster;
+      in
+      findings == [ ]
+      || throw "direct-wired dep did not satisfy domain lint: ${builtins.toJSON findings}";
   };
 
   failures = lib.filterAttrs (

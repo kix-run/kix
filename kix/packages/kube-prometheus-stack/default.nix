@@ -231,6 +231,9 @@ in
   meta = {
     version = "71.2.0";
     isHelm = true;
+    # The chart renders grafana's PVC itself (persistence.enabled above) —
+    # the raw-PVC refusal needs an explicit escape here.
+    unsafe = [ "raw-pvc" ];
     # Match prometheus-operator's defaultAliases so DI lookups work
     # like consumers expect — see kix/packages/prometheus-operator/
     # default.nix:30-33. Naming the instance `prometheus` claims the

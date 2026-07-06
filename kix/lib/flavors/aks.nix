@@ -52,8 +52,6 @@
         roles = [ "storageClasses" ];
         out = {
           storageClassName = "managed-csi";
-          rwx = false; # Azure Disk is RWO; RWX needs Azure Files
-          snapshots = true; # pre-installed since AKS 1.20+
         };
       };
       optional = true;

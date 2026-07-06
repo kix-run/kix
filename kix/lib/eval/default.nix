@@ -13,14 +13,7 @@ let
   helpers = import ./helpers.nix { inherit lib; };
   edgeAnalysis = import ./edges.nix { inherit k8s; };
   roles = import ./roles.nix { inherit lib; };
-  hooks = import ./hooks.nix {
-    inherit
-      lib
-      meta
-      kixlib
-      roles
-      ;
-  };
+  hooks = import ./hooks.nix { inherit lib roles; };
   view = import ./view.nix { inherit lib helpers; };
   crd = import ../vocab/crd.nix { inherit lib; };
   scopeMod = import ../scope/default.nix {

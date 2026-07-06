@@ -52,8 +52,6 @@
         roles = [ "storageClasses" ];
         out = {
           storageClassName = "gp3";
-          rwx = false; # EBS is RWO block storage; RWX needs EFS
-          snapshots = false; # requires manual snapshot-controller install
         };
       };
       optional = true;

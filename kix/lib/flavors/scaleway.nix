@@ -75,8 +75,6 @@
           # class (sfs-standard, RWX — needs a BASIC3+ node + the
           # scw-filestorage-csi cluster tag).
           storageClassName = "sbs-default";
-          rwx = false; # block CSI is RWO; RWX needs the File Storage CSI (see header)
-          snapshots = true; # Block CSI supports snapshots
         };
       };
       optional = true;

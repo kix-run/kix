@@ -64,8 +64,6 @@
         roles = [ "storageClasses" ];
         out = {
           storageClassName = "standard-rwo";
-          rwx = false; # requires Filestore CSI addon
-          snapshots = true; # snapshot CRDs + controller pre-installed
         };
       };
       optional = true;

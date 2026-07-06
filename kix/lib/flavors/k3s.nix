@@ -51,8 +51,6 @@
         roles = [ "storageClasses" ];
         out = {
           storageClassName = "local-path";
-          rwx = false;
-          snapshots = false; # local-path has no snapshot support
         };
       };
       optional = true;

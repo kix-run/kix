@@ -63,8 +63,6 @@
         roles = [ "storageClasses" ];
         out = {
           storageClassName = "premium-rwo";
-          rwx = false;
-          snapshots = true;
         };
       };
       optional = true;

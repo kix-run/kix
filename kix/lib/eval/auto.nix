@@ -48,8 +48,8 @@ rec {
         }
     ) (lib.filterAttrs (_: isPackageEntry) raw);
 
-  getRequiredDeps =
-    pkg:
+  getDepsWhere =
+    pred: pkg:
     let
       raw = resolve.normalizePackage {
         package = pkg;
@@ -60,41 +60,32 @@ rec {
       let
         discoveredDeps = discoverBuildDeps raw.build;
       in
-      builtins.filter (name: !(discoveredDeps.${name}.optional or false)) (
-        builtins.attrNames discoveredDeps
-      )
+      builtins.filter (name: pred name discoveredDeps.${name}) (builtins.attrNames discoveredDeps)
     else
       [ ];
+
+  getRequiredDeps = getDepsWhere (_name: spec: !(spec.optional or false));
 
   # Weak role demand (doc 127 §5): an OPTIONAL dep whose arg name is a
   # registry role still demands that role — optional only means "compile
   # even when nothing provides it", not "don't pull curated stock". These
   # deps seed auto-instantiation, but only as a last resort: an existing
-  # instance or platform import providing the role always wins (the seed
-  # is filtered out at the call site when the key resolves elsewhere).
-  getWeakRoleDeps =
-    pkg:
-    let
-      raw = resolve.normalizePackage {
-        package = pkg;
-        scope = { };
-      };
-    in
-    if raw ? build then
-      let
-        discoveredDeps = discoverBuildDeps raw.build;
-      in
-      builtins.filter (
-        name: (discoveredDeps.${name}.optional or false) && builtins.elem name roles.roleNames
-      ) (builtins.attrNames discoveredDeps)
-    else
-      [ ];
+  # instance, platform import, or environment binding providing the role
+  # always wins (see weakStockDemands below).
+  getWeakRoleDeps = getDepsWhere (
+    name: spec: (spec.optional or false) && builtins.elem name roles.roleNames
+  );
 
   computeAutoInstances =
     {
       explicitInstances,
       availablePackages,
       autoNamespace,
+      # cluster.roles binding modes — an environment-bound role (exclusive
+      # or shadowable) is provided by the platform, so weak demand must not
+      # pull stock for it (stock would either fight the environment CNI or
+      # silently shadow the platform default).
+      clusterRoles ? { },
     }:
     let
       normalizedAvail = normalizeAvailablePackages availablePackages;
@@ -110,6 +101,7 @@ rec {
                 ++ meta.peekPackageAliases {
                   availEntry = entry;
                   inherit kixlib;
+                  context = "availablePackages.${name}";
                 }
               );
             in
@@ -175,35 +167,50 @@ rec {
         map (e: lib.nameValuePair e.key { inherit (e) ns instName; }) optionalByKeyList
       );
 
+      # Roles the environment itself provides. "absent" and null (unknown)
+      # leave the role vacant — stock may fill it.
+      isEnvBoundRole =
+        role:
+        builtins.elem ((clusterRoles.${role} or { }).binding or null) [
+          "exclusive"
+          "shadowable"
+        ];
+
+      # Role providers are cluster-scoped: a stock pull for a role-named dep
+      # is keyed by the role itself, never per requesting namespace — two
+      # consumers in two namespaces share one provider instead of
+      # instantiating two strong symbols of the same role.
+      mkItem = depName: requesterNs: {
+        key =
+          if builtins.elem depName roles.roleNames then "role:${depName}" else "${depName}@${requesterNs}";
+        inherit depName requesterNs;
+      };
+
+      # Weak demands that actually pull stock: the role resolves nowhere
+      # else — no explicit instance, no (possibly inactive) platform import,
+      # no environment binding — and the catalog has a provider. Applied to
+      # explicit instances AND to every package the closure discovers, so
+      # demand propagates transitively (an auto-instantiated package's own
+      # weak role deps still pull their stock).
+      weakStockDemands =
+        pkg:
+        builtins.filter (
+          role:
+          !(mandatoryKeys ? ${role})
+          && !(optionalByKey ? ${role})
+          && !(isEnvBoundRole role)
+          && availableByKey ? ${role}
+        ) (getWeakRoleDeps pkg);
+
       seeds = builtins.concatMap (
         ns:
         builtins.concatMap (
           instName:
           let
             instCfg = mandatory.${ns}.${instName};
-            reqDeps = getRequiredDeps instCfg.package;
-            # Weak role demand: only when the role resolves nowhere else —
-            # an explicit instance or (possibly inactive) platform import
-            # providing the role suppresses the stock pull entirely, so
-            # existing clusters keep their resolution unchanged.
-            weakDeps = builtins.filter (
-              depName:
-              !(mandatoryKeys ? ${depName}) && !(optionalByKey ? ${depName}) && availableByKey ? ${depName}
-            ) (getWeakRoleDeps instCfg.package);
+            reqDeps = builtins.filter (d: !(mandatoryKeys ? ${d})) (getRequiredDeps instCfg.package);
           in
-          builtins.concatMap (
-            depName:
-            if mandatoryKeys ? ${depName} then
-              [ ]
-            else
-              [
-                {
-                  key = "${depName}@${ns}";
-                  inherit depName;
-                  requesterNs = ns;
-                }
-              ]
-          ) (reqDeps ++ weakDeps)
+          map (d: mkItem d ns) (reqDeps ++ weakStockDemands instCfg.package)
         ) (builtins.attrNames (mandatory.${ns} or { }))
       ) (builtins.attrNames mandatory);
 
@@ -219,21 +226,11 @@ rec {
             let
               opt = optionalByKey.${depName};
               optPkg = optional.${opt.ns}.${opt.instName};
-              newDeps = getRequiredDeps optPkg.package;
+              newReq = builtins.filter (
+                d: mandatoryKeys ? ${d} || optionalByKey ? ${d} || availableByKey ? ${d}
+              ) (getRequiredDeps optPkg.package);
             in
-            builtins.concatMap (
-              d:
-              if mandatoryKeys ? ${d} || optionalByKey ? ${d} || availableByKey ? ${d} then
-                [
-                  {
-                    key = "${d}@${opt.ns}";
-                    depName = d;
-                    requesterNs = opt.ns;
-                  }
-                ]
-              else
-                [ ]
-            ) newDeps
+            map (d: mkItem d opt.ns) (newReq ++ weakStockDemands optPkg.package)
 
           else if availableByKey ? ${depName} then
             let
@@ -246,21 +243,11 @@ rec {
                   autoNamespace
                 else
                   requesterNs;
-              newDeps = getRequiredDeps avPkg.package;
+              newReq = builtins.filter (d: !(mandatoryKeys ? ${d}) && !(optionalByKey ? ${d})) (
+                getRequiredDeps avPkg.package
+              );
             in
-            builtins.concatMap (
-              d:
-              if mandatoryKeys ? ${d} || optionalByKey ? ${d} then
-                [ ]
-              else
-                [
-                  {
-                    key = "${d}@${targetNs}";
-                    depName = d;
-                    requesterNs = targetNs;
-                  }
-                ]
-            ) newDeps
+            map (d: mkItem d targetNs) (newReq ++ weakStockDemands avPkg.package)
 
           else
             [ ];
@@ -302,6 +289,7 @@ rec {
                 aliases = meta.peekPackageAliases {
                   availEntry = avPkg;
                   inherit kixlib;
+                  context = "availablePackages.${canonicalName}";
                 };
                 config = { };
                 deps = { };
