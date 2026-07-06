@@ -199,6 +199,12 @@ rec {
       ruleDefaults ? { },
       ruleOverrides ? { },
       owner ? null,
+      # v2_discussions/128: cluster-wide domain → declarer index, this
+      # instance's resolved dep identities ("ns/inst"), and operator-declared
+      # known domains — consumed by architecture.annotationDomainOwnership.
+      annotationDomainIndex ? { },
+      resolvedDepTargets ? [ ],
+      knownAnnotationDomains ? [ ],
     }:
     let
       packageRules = builtins.filter (r: (r.rule.level or "") == "package") (flattenRules rules);
@@ -224,6 +230,9 @@ rec {
             meta
             instanceName
             namespaceName
+            annotationDomainIndex
+            resolvedDepTargets
+            knownAnnotationDomains
             ;
         };
         applies = checkAppliesTo rule ctx;

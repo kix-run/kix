@@ -42,10 +42,6 @@ in
   meta = {
     version = "v1.14.0";
     description = "NGINX Ingress Controller for Kubernetes";
-    provides = [
-      "ingress"
-      "ingress-controller"
-    ];
     defaultAliases = [ "ingressNginx" ];
     k8s.minVersion = "1.25";
     # The ingress controller proxies external traffic to backend pods.

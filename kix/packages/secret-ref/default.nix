@@ -16,7 +16,6 @@
     version = "1.0.0";
     description = "Reference to an externally-managed secret";
     scope = "namespace";
-    provides = [ "secret" ];
     defaultAliases = [ "secret" ];
   };
 

@@ -5,10 +5,13 @@
 # and binding-mode conflicts against environment-provided roles
 # (`cluster.roles.<name>.binding`) are refused at eval.
 #
-# The vocabulary is closed on purpose: `meta.provides` was free-form, so a
-# typo'd capability silently never matched. Adding a role here requires a
-# consumer (doc 119's demand test). `meta.provides` still exists, but only
-# as scorecard/ownership vocabulary — nothing in the compiler branches on it.
+# The vocabulary is closed on purpose: the old `meta.provides` was
+# free-form, so a typo'd capability silently never matched. Adding a role
+# here requires a consumer (doc 119's demand test). `meta.provides` is gone.
+# Two sibling declared vocabularies (v2_discussions/128) are not roles:
+# `meta.unsafe` (closed, kix/lib/unsafe.nix — structural-rule escapes) and
+# `meta.annotationDomains` (open, eval/hooks.nix — operator-owned annotation
+# prefixes for the scorecard's domain-ownership lint).
 #
 # Out-contracts are shallow (attribute presence on the provider's `out`).
 # They are enforced lazily on the findRoleProvider path — eager checking

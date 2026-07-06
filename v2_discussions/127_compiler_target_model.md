@@ -392,7 +392,8 @@ early because it is both the adoption feature and the data pipeline.
 packages claim roles with `meta.roles`, validated against a closed registry
 (`kix/lib/eval/roles.nix`: network-policy-enforcer, dns, storageClasses, cni,
 loadBalancer) with shallow out-contracts; the role name doubles as the DI
-alias; `meta.provides` survives as scorecard-only vocabulary. Binding modes
+alias; `meta.provides` is deleted (the scorecard ownership check is
+annotation-only: `kix.dev/capability` provenance on the resource). Binding modes
 live in `cluster.roles.<role>.binding` (absent/shadowable/exclusive), declared
 by target presets only — managed instances are strong by nature; exclusive +
 managed claimant throws eagerly. Substrate capabilities went three-valued

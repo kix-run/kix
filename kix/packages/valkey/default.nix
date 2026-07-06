@@ -23,10 +23,6 @@
     version = "8.1.1";
     description = "Valkey — Redis-compatible in-memory data store";
     lifecycle = "stateful";
-    provides = [
-      "cache"
-      "key-value-store"
-    ];
     defaultAliases = [
       "valkey"
       "redis"

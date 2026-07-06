@@ -2,7 +2,14 @@
 
 ## Status
 
-Draft (2026-04-09). Follows from the `architecture.capabilityOwnership`
+Superseded by `128_capability_ownership_decomposition.md` (2026-07-06).
+128 resolved the driving case more sharply than `meta.rules` would have: the
+fingerprints moved into the owning packages as *declarations*
+(`meta.annotationDomains` + DI-edge lint for reflector; `meta.unsafe` +
+eval-time raw-PVC error for storage) instead of package-shipped rule code.
+A general package-owned-rules mechanism has no remaining driver.
+
+Original status: Draft (2026-04-09). Follows from the `architecture.capabilityOwnership`
 rule shipped alongside the grafana / stackgres DI-hygiene migration.
 Design settled on `meta.rules` (general) + `allInstances` (only-when-deployed);
 the open question is whether this is actually valuable in practice or

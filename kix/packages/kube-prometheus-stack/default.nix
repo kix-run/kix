@@ -231,12 +231,6 @@ in
   meta = {
     version = "71.2.0";
     isHelm = true;
-    provides = [
-      "monitoring"
-      "prometheus-operator"
-      "tsdb"
-      "metrics"
-    ];
     # Match prometheus-operator's defaultAliases so DI lookups work
     # like consumers expect — see kix/packages/prometheus-operator/
     # default.nix:30-33. Naming the instance `prometheus` claims the

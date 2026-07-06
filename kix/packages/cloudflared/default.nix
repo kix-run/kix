@@ -23,7 +23,6 @@ in
     version = "0.1.0";
     description = "Cloudflare Tunnel connector (cloudflared)";
     lifecycle = "stateless";
-    provides = [ "cloudflare-tunnel" ];
     defaultAliases = [ "tunnel" ];
   };
 

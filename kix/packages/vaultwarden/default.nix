@@ -24,7 +24,6 @@ in
   meta = {
     version = "1.35.4";
     description = "Vaultwarden — Bitwarden-compatible password manager";
-    provides = [ "password-manager" ];
   };
 
   options = {

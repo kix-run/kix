@@ -55,6 +55,77 @@ rec {
       ) nsInsts
     ) instances;
 
+  # domain → { ns, inst }, built from peeked `meta.annotationDomains`
+  # (v2_discussions/128 mechanism 2). An operator package declares the
+  # annotation domains it manages (e.g. reflector declares
+  # "reflector.v1.k8s.emberstack.com"); the scorecard's
+  # `architecture.annotationDomainOwnership` rule lints consumers against
+  # this index. Unlike roles the vocabulary is open — domains are foreign
+  # identifiers owned by upstream operators, so the declarer itself is the
+  # registry. Two declarers of one domain is a duplicate-symbol error
+  # (eagerly forced by buildCluster, same spirit as checkRoleBindings).
+  buildAnnotationDomainIndex =
+    instances:
+    builtins.foldl' (
+      acc: entry:
+      builtins.foldl' (
+        acc': domain:
+        let
+          _shape =
+            if !(lib.hasInfix "." domain) || lib.hasInfix "/" domain then
+              throw (
+                "kix: meta.annotationDomains of instance ${entry.ns}/${entry.inst} contains "
+                + "'${domain}', which is not a DNS-domain-shaped annotation prefix "
+                + "(expected e.g. \"reflector.v1.k8s.emberstack.com\")"
+              )
+            else
+              null;
+          existing = acc'.${domain} or null;
+        in
+        builtins.seq _shape (
+          if existing != null then
+            throw (
+              "kix: annotation domain '${domain}' is declared by two instances: "
+              + "${existing.ns}/${existing.inst} and ${entry.ns}/${entry.inst}. "
+              + "Exactly one package owns an annotation domain."
+            )
+          else
+            acc'
+            // {
+              ${domain} = {
+                inherit (entry) ns inst;
+              };
+            }
+        )
+      ) acc entry.domains
+    ) { } (annotationDomainDeclarers instances);
+
+  annotationDomainDeclarers =
+    instances:
+    builtins.concatMap (
+      nsName:
+      builtins.concatMap (
+        instName:
+        let
+          packageMeta = meta.peekPackageMeta {
+            package = instances.${nsName}.${instName}.package;
+            inherit kixlib;
+          };
+          domains = packageMeta.annotationDomains or [ ];
+        in
+        if domains == [ ] then
+          [ ]
+        else
+          [
+            {
+              ns = nsName;
+              inst = instName;
+              inherit domains;
+            }
+          ]
+      ) (builtins.attrNames instances.${nsName})
+    ) (builtins.attrNames instances);
+
   roleCandidates =
     {
       role,

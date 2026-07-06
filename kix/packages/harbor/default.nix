@@ -35,6 +35,10 @@ in
 {
   meta = {
     version = "v2.12.2";
+    # registry/jobservice claims are hand-rolled; the preferred path is
+    # `storage` deps + sibling persistent-volume-claim instances. Grant kept
+    # until refactored (audited by unsafeGrants).
+    unsafe = [ "raw-pvc" ];
   };
 
   options = {

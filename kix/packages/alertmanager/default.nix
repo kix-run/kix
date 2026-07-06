@@ -21,7 +21,6 @@ in
   meta = {
     version = "v0.28.1";
     description = "Alertmanager — alert routing and deduplication";
-    provides = [ "alerting" ];
     defaultAliases = [ "alertmanager" ];
     k8s.minVersion = "1.25";
     # Silences and notification state are recoverable — expendable on

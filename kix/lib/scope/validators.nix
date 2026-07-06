@@ -78,6 +78,8 @@ in
       namespaceName,
       capabilities,
       roleStatus ? (_: "unknown"),
+      # Validated unsafe grants from peeked package meta (kix/lib/unsafe.nix).
+      unsafeGrants ? [ ],
     }:
     let
       # Three-valued substrate gates (v2_discussions/127 §3): declared-false
@@ -105,6 +107,28 @@ in
           null;
     in
     {
+      # Structural authoring rule (v2_discussions/128 mechanism 1): raw PVCs
+      # are a cluster-operator concern — packages request storage via DI and
+      # the `persistent-volume-claim` package is the canonical claim author.
+      # Unlike the capability gates above this is target-independent, so it
+      # has no `capabilities == { }` escape: the only way out is the explicit
+      # `meta.unsafe = [ "raw-pvc" ]` grant, which the scorecard audits.
+      # Helm-imported chart resources route through the wrapping package's
+      # mkResource, so charts with persistence enabled need the same grant.
+      checkRawPvc =
+        args:
+        if (args.kind or "") == "PersistentVolumeClaim" && !(builtins.elem "raw-pvc" unsafeGrants) then
+          throw (
+            "[${instanceName}] PersistentVolumeClaim '${args.name or "unknown"}' is built directly by this package. "
+            + "Storage is the cluster operator's concern: declare a `storage` dep and mount it via "
+            + "`kix.mount.pvc storage { mountPath = ...; }`, provisioning the claim as a sibling "
+            + "`persistent-volume-claim` instance in the cluster definition. Packages that must author "
+            + "claims themselves (the canonical storage package, helm charts with persistence) declare "
+            + "`meta.unsafe = [ \"raw-pvc\" ]` — the grant is listed by the scorecard unsafe-grant audit."
+          )
+        else
+          null;
+
       checkLoadBalancer =
         args:
         let

@@ -20,6 +20,10 @@ in
 {
   meta = {
     version = "v2.0.0";
+    # persistence.enabled hand-rolls the model-cache claim; the preferred
+    # path is a `storage` dep + sibling persistent-volume-claim instance.
+    # Grant kept until refactored (audited by unsafeGrants).
+    unsafe = [ "raw-pvc" ];
   };
 
   options = {

@@ -1,6 +1,8 @@
 { lib }:
 
 let
+  unsafe = import ./unsafe.nix { inherit lib; };
+
   parseVersion = v: map lib.toIntBase10 (lib.splitString "." v);
 
   compareVersions =
@@ -168,6 +170,16 @@ rec {
         lib.optional (matching != [ ]) (fail "conflicts with '${name}' ${scope} — instances: ${instances}")
       ) (packageMeta.conflictsWith or [ ]);
 
+      # Closed unsafe vocabulary (kix/lib/unsafe.nix): validate here so a
+      # typo'd grant fails the cluster even when the escaped rule never
+      # fires (e.g. `raw-pvc` granted but no PVC built this eval).
+      unsafeAssertions = builtins.concatMap (
+        grant:
+        lib.optional (!(unsafe.registry ? ${grant})) (
+          fail "meta.unsafe contains unknown grant '${grant}'. ${unsafe.knownGrantsHint}"
+        )
+      ) (packageMeta.unsafe or [ ]);
+
       deprecated = packageMeta.deprecated or null;
       deprecationWarnings =
         if deprecated == null then
@@ -185,6 +197,7 @@ rec {
         k8sAssertions
         compatAssertions
         conflictAssertions
+        unsafeAssertions
       ];
       warnings = deprecationWarnings;
     };

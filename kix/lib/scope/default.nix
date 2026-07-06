@@ -13,6 +13,7 @@ let
   labelsMod = import ./labels.nix;
   validatorsMod = import ./validators.nix { inherit lib; };
   buildersMod = import ./builders.nix { inherit lib k8s; };
+  unsafe = import ../unsafe.nix { inherit lib; };
 
   emptyEdgeAnalysis = {
     edgesFor = _: [ ];
@@ -75,6 +76,11 @@ rec {
           capabilities
           roleStatus
           ;
+        # Closed vocabulary — a typo'd grant throws here, at scope
+        # construction, naming the declaring instance.
+        unsafeGrants = map (unsafe.assertKnownGrant "meta.unsafe of instance ${instanceName}") (
+          peekedPackageMeta.unsafe or [ ]
+        );
       };
 
       builders = buildersMod.mkBuilders {

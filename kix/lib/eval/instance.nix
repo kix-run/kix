@@ -44,6 +44,7 @@ in
       workloadInterceptors ? [ ],
       instanceProcessors ? [ ],
       clusterCtx ? { },
+      annotationDomainIndex ? { },
     }@args:
 
     if (instCfg.package._type or "") == "kix-import" then
@@ -476,9 +477,17 @@ in
                 instanceName
                 namespaceName
                 owner
+                annotationDomainIndex
                 ;
               config = evaluatedConfig;
               meta = packageMeta;
+              # "ns/inst" identities of this instance's resolved DI deps —
+              # the annotationDomainOwnership rule checks declarers against
+              # these. Names only; deps are resolved before rules run.
+              resolvedDepTargets = lib.mapAttrsToList (
+                _: depInfo: "${depInfo.resolution.namespace}/${depInfo.resolution.instanceName}"
+              ) resolvedDepMeta;
+              knownAnnotationDomains = scorecardConfig.knownAnnotationDomains or [ ];
               ruleDefaults = scorecardConfig.ruleDefaults or { };
               ruleOverrides = scorecardConfig.ruleOverrides or { };
             }

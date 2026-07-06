@@ -22,15 +22,15 @@
   meta = {
     version = "v0.82.0";
     description = "Prometheus Operator — monitoring.coreos.com CRD controller";
-    provides = [
-      "monitoring"
-      "prometheus-operator"
-    ];
     defaultAliases = [
       "prometheus"
       "prometheusOperator"
     ];
     k8s.minVersion = "1.25";
+    # This package owns the operator.prometheus.io annotation domain (it
+    # stamps its CRDs with it); declared for the
+    # architecture.annotationDomainOwnership lint (v2_discussions/128).
+    annotationDomains = [ "operator.prometheus.io" ];
   };
 
   options = {

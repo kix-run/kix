@@ -99,6 +99,12 @@ in
 
       rolesIndex = hooks.buildRolesIndex mergedInstances;
 
+      # domain → declarer, for the annotationDomainOwnership lint. Eagerly
+      # forced below: a duplicate declarer or malformed domain must throw
+      # even when the scorecard is disabled.
+      annotationDomainIndex = hooks.buildAnnotationDomainIndex mergedInstances;
+      _annotationDomainsCheck = builtins.deepSeq annotationDomainIndex null;
+
       # `out` reads from the cluster fixpoint lazily — must not be forced during
       # module merge. The shallow role out-contract is checked at the same lazy
       # point (first consumer force), never eagerly.
@@ -231,6 +237,7 @@ in
               globalPartsOverlays = cfg.globalPartsOverlays;
               configInjections = resolveInjections nsName instName;
               inherit workloadInterceptors instanceProcessors clusterCtx;
+              inherit annotationDomainIndex;
             }
           ) nsInsts
         ) mergedInstances
@@ -485,42 +492,44 @@ in
 
     in
     builtins.seq _roleBindingsCheck (
-      builtins.seq _clusterHookChecksRun (
-        builtins.seq clusterDiagnostics.assertionCheck {
-          _type = "k8s-cluster-v2";
-          inherit name;
+      builtins.seq _annotationDomainsCheck (
+        builtins.seq _clusterHookChecksRun (
+          builtins.seq clusterDiagnostics.assertionCheck {
+            _type = "k8s-cluster-v2";
+            inherit name;
 
-          inherit clusterInstances;
-          instances = clusterInstances;
+            inherit clusterInstances;
+            instances = clusterInstances;
 
-          namespaces = nsResources;
+            namespaces = nsResources;
 
-          inherit
-            activation
-            packageIndex
-            info
-            extraImages
-            ;
+            inherit
+              activation
+              packageIndex
+              info
+              extraImages
+              ;
 
-          diagnostics = {
-            warnings = clusterDiagnostics.warnings ++ clusterHookWarnings;
-            inherit (clusterDiagnostics) assertions failedAssertions;
-          };
-
-          out = {
-            maintenance = {
-              enable = cfg.cluster.maintenance.enable or false;
-              reason = cfg.cluster.maintenance.reason or null;
-              until = cfg.cluster.maintenance.until or null;
+            diagnostics = {
+              warnings = clusterDiagnostics.warnings ++ clusterHookWarnings;
+              inherit (clusterDiagnostics) assertions failedAssertions;
             };
-          };
 
-          inherit scorecardReport;
+            out = {
+              maintenance = {
+                enable = cfg.cluster.maintenance.enable or false;
+                reason = cfg.cluster.maintenance.reason or null;
+                until = cfg.cluster.maintenance.until or null;
+              };
+            };
 
-          rawManifests = map (
-            r: builtins.fromJSON (builtins.unsafeDiscardStringContext (builtins.toJSON r.rawManifest))
-          ) allResources;
-        }
+            inherit scorecardReport;
+
+            rawManifests = map (
+              r: builtins.fromJSON (builtins.unsafeDiscardStringContext (builtins.toJSON r.rawManifest))
+            ) allResources;
+          }
+        )
       )
     );
 }

@@ -511,6 +511,18 @@
               byRule."ruleName" = { enabled = false; };
             '';
           };
+          knownAnnotationDomains = lib.mkOption {
+            type = lib.types.listOf lib.types.str;
+            default = [ ];
+            example = [ "eks.amazonaws.com" ];
+            description = ''
+              Annotation domains consumed by something outside kix — a cloud
+              control plane, org-convention metadata. Exempted from the
+              architecture.annotationDomainOwnership lint alongside the
+              reserved Kubernetes domains and domains declared by in-cluster
+              packages via meta.annotationDomains (v2_discussions/128).
+            '';
+          };
         };
       };
       default = { };

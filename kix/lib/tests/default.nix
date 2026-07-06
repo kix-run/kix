@@ -302,6 +302,73 @@ let
         };
     };
 
+  # v2_discussions/128 fixtures: a package hand-rolling a PVC, and a package
+  # writing annotations under a given domain (optionally linking the
+  # `operator` dep — dep args are discovered from literal functionArgs, so
+  # the with-dep variant hardcodes the arg name).
+  mkPvcPackage =
+    {
+      metaExtra ? { },
+    }:
+    {
+      meta = {
+        version = "test";
+      }
+      // metaExtra;
+      build =
+        { self, scope, ... }:
+        {
+          pvc = scope.mkResource {
+            apiVersion = "v1";
+            kind = "PersistentVolumeClaim";
+            name = "data";
+            spec = {
+              accessModes = [ "ReadWriteOnce" ];
+              resources.requests.storage = "1Gi";
+            };
+          };
+          root = self.pvc;
+        };
+    };
+
+  mkAnnotatedCmPackage =
+    {
+      key,
+      name ? "writer-cm",
+      withOperatorDep ? false,
+      metaExtra ? { },
+    }:
+    let
+      body =
+        { self, scope, ... }:
+        {
+          cm = scope.mkResource {
+            apiVersion = "v1";
+            kind = "ConfigMap";
+            inherit name;
+            annotations.${key} = "true";
+          };
+          root = self.cm;
+        };
+    in
+    {
+      meta = {
+        version = "test";
+      }
+      // metaExtra;
+      build =
+        if withOperatorDep then
+          {
+            self,
+            scope,
+            operator,
+            ...
+          }@args:
+          body args
+        else
+          body;
+    };
+
   dsPackage = {
     meta.version = "test";
     build =
@@ -399,6 +466,19 @@ let
   dependsOn = m: (m.metadata.annotations or { })."kix.dev/depends-on" or "";
 
   evalFails = cluster: !(builtins.tryEval (builtins.deepSeq (manifests cluster) true)).success;
+
+  scorecardOn = {
+    scorecard = {
+      enable = true;
+      rules.architecture = import ../rules/architecture.nix { inherit lib; };
+    };
+  };
+
+  domainFindings =
+    cluster:
+    builtins.filter (f: lib.hasSuffix "annotationDomainOwnership" (f.rule or "")) (
+      (cluster.scorecardReport or { findings = [ ]; }).findings
+    );
 
   # ------------------------------------------------------------------- tests
 
@@ -809,6 +889,137 @@ let
       in
       (ofKind "StorageClass" ms == [ ] && ofKind "DiskPool" ms == [ ])
       || throw "lithus emitted storage stock without demand: ${builtins.toJSON (namesOf ms)}";
+
+    # --- capability-ownership decomposition (v2_discussions/128) ---
+
+    # A raw PersistentVolumeClaim from a package build is an eval error.
+    t25-raw-pvc-throws = evalFails (mkCluster [
+      baseInstances
+      { instances.appns.claims.package = mkPvcPackage { }; }
+    ]);
+
+    # The explicit meta.unsafe grant is the only way through.
+    t26-raw-pvc-unsafe-grant-passes =
+      let
+        ms = manifests (mkCluster [
+          baseInstances
+          {
+            instances.appns.claims.package = mkPvcPackage {
+              metaExtra.unsafe = [ "raw-pvc" ];
+            };
+          }
+        ]);
+      in
+      hasName "data" (ofKind "PersistentVolumeClaim" ms)
+      || throw "granted raw-pvc package did not emit its claim";
+
+    # The unsafe vocabulary is closed: a typo'd grant fails the cluster
+    # even though the package never builds a PVC (mkCmPackage builds none).
+    t27-unknown-unsafe-grant-throws = evalFails (mkCluster [
+      baseInstances
+      {
+        instances.appns.bad.package = mkCmPackage {
+          name = "bad-grant";
+          metaExtra.unsafe = [ "raw-pvcs" ];
+        };
+      }
+    ]);
+
+    # Two packages declaring the same annotation domain is an eager
+    # duplicate-symbol error, scorecard on or off.
+    t28-duplicate-annotation-domain-throws = evalFails (mkCluster [
+      baseInstances
+      {
+        instances.infra.op1.package = mkCmPackage {
+          name = "op1";
+          metaExtra.annotationDomains = [ "example.io" ];
+        };
+        instances.infra2.op2.package = mkCmPackage {
+          name = "op2";
+          metaExtra.annotationDomains = [ "example.io" ];
+        };
+      }
+    ]);
+
+    # Annotations under a declared domain without a DI dep on the declarer
+    # warn; every other resource in the cluster (all stamped with reserved
+    # kix.dev annotations) stays silent.
+    t29-annotation-domain-missing-dep-warns =
+      let
+        cluster = mkCluster [
+          baseInstances
+          scorecardOn
+          {
+            instances.infra.operator.package = mkCmPackage {
+              name = "operator-cm";
+              metaExtra.annotationDomains = [ "example.io" ];
+            };
+            instances.appns.writer.package = mkAnnotatedCmPackage {
+              key = "example.io/managed";
+            };
+          }
+        ];
+        findings = domainFindings cluster;
+      in
+      (
+        builtins.length findings == 1
+        && (builtins.head findings).instance == "writer"
+        && lib.hasInfix "example.io" (builtins.head findings).message
+        && lib.hasInfix "infra/operator" (builtins.head findings).message
+      )
+      || throw "expected exactly one missing-dep finding for writer, got: ${builtins.toJSON findings}";
+
+    # A DI dep on the declarer satisfies the lint, and the declarer's own
+    # resources may carry its domain freely (self-exemption).
+    t30-annotation-domain-dep-satisfies =
+      let
+        cluster = mkCluster [
+          baseInstances
+          scorecardOn
+          {
+            # The declarer itself writes under its domain — must not warn.
+            instances.infra.operator.package = mkAnnotatedCmPackage {
+              key = "example.io/managed";
+              name = "operator-cm";
+              metaExtra.annotationDomains = [ "example.io" ];
+            };
+            # The consumer links the operator via DI — must not warn.
+            instances.appns.writer.package = mkAnnotatedCmPackage {
+              key = "example.io/managed";
+              withOperatorDep = true;
+            };
+          }
+        ];
+        findings = domainFindings cluster;
+      in
+      findings == [ ] || throw "dep/self exemptions failed: ${builtins.toJSON findings}";
+
+    # A domain nobody declares is a dead annotation and warns — unless the
+    # operator lists it in scorecard.knownAnnotationDomains.
+    t31-annotation-domain-unknown-warns =
+      let
+        mkGhost =
+          extraScorecard:
+          mkCluster [
+            baseInstances
+            (lib.recursiveUpdate scorecardOn extraScorecard)
+            {
+              instances.appns.writer.package = mkAnnotatedCmPackage {
+                key = "ghost.example.com/x";
+              };
+            }
+          ];
+        unknownFindings = domainFindings (mkGhost { });
+        knownFindings = domainFindings (mkGhost {
+          scorecard.knownAnnotationDomains = [ "ghost.example.com" ];
+        });
+      in
+      (
+        builtins.length unknownFindings == 1
+        && lib.hasInfix "no package in this cluster declares" (builtins.head unknownFindings).message
+        && knownFindings == [ ]
+      )
+      || throw "unknown-domain lint wrong: unknown=${builtins.toJSON unknownFindings} known=${builtins.toJSON knownFindings}";
   };
 
   failures = lib.filterAttrs (

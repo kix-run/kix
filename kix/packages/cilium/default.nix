@@ -121,10 +121,6 @@ in
       "cni"
       "network-policy-enforcer"
     ];
-    provides = [
-      "network-policy"
-      "cilium"
-    ];
     k8s.minVersion = "1.27";
   };
 
