@@ -23,10 +23,6 @@ in
   meta = {
     version = "v3.1.0";
     description = "Prometheus time-series database";
-    provides = [
-      "tsdb"
-      "metrics"
-    ];
     defaultAliases = [
       "prometheusServer"
       "promServer"

@@ -13,6 +13,7 @@ let
   labelsMod = import ./labels.nix;
   validatorsMod = import ./validators.nix { inherit lib; };
   buildersMod = import ./builders.nix { inherit lib k8s; };
+  unsafe = import ../unsafe.nix { inherit lib; };
 
   emptyEdgeAnalysis = {
     edgesFor = _: [ ];
@@ -41,7 +42,7 @@ rec {
       edgeAnalysis ? emptyEdgeAnalysis,
       clusterCtx ? {
         config = { };
-        findCapabilityProvider = _: null;
+        findRoleProvider = _: null;
       },
     }:
     let
@@ -50,8 +51,36 @@ rec {
       };
       inherit (scopeLabels) selectorLabels instanceLabels labels;
 
+      # Role satisfaction for validator gates: "provided" (managed provider
+      # or environment binding), "absent" (declared vacant), "unknown"
+      # (axiom never declared). Lazy — findRoleProvider only peeks meta.
+      roleStatus =
+        role:
+        let
+          binding = (((clusterCtx.config or { }).cluster or { }).roles or { }).${role}.binding or null;
+          provider = (clusterCtx.findRoleProvider or (_: null)) role;
+        in
+        if provider != null then
+          "provided"
+        else if binding == "shadowable" || binding == "exclusive" then
+          "provided"
+        else if binding == "absent" then
+          "absent"
+        else
+          "unknown";
+
       validators = validatorsMod.mkValidators {
-        inherit instanceName namespaceName capabilities;
+        inherit
+          instanceName
+          namespaceName
+          capabilities
+          roleStatus
+          ;
+        # Closed vocabulary — a typo'd grant throws here, at scope
+        # construction, naming the declaring instance.
+        unsafeGrants = map (unsafe.assertKnownGrant "meta.unsafe of instance ${instanceName}") (
+          peekedPackageMeta.unsafe or [ ]
+        );
       };
 
       builders = buildersMod.mkBuilders {

@@ -61,7 +61,6 @@ in
     description = "Logical database + role provisioned on a StackGres cluster";
     lifecycle = "stateful"; # other packages depend on this database existing
     scope = "namespace";
-    provides = [ "sql-database" ];
     defaultAliases = [ "database" ];
     maintainer = "platform";
   };

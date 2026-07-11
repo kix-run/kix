@@ -30,8 +30,11 @@
     description = "Persistent Volume Claim — operator-managed storage";
     lifecycle = "stateful";
     scope = "namespace";
-    provides = [ "storage" ];
     defaultAliases = [ "storage" ];
+    # The canonical PVC author: raw claims are an eval-time error everywhere
+    # else (v2_discussions/128). The grant is listed by the scorecard's
+    # unsafeGrants audit.
+    unsafe = [ "raw-pvc" ];
   };
 
   options = {

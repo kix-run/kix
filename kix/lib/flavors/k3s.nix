@@ -1,7 +1,9 @@
 # Flavor: k3s — lightweight K8s distribution by Rancher.
 #
 # Pre-installs: flannel CNI, local-path StorageClass, servicelb, traefik.
-# Flannel does NOT enforce NetworkPolicy — replace with Cilium or Calico if needed.
+# Flannel does NOT enforce NetworkPolicy — to replace it with Cilium, run
+# k3s with `--flannel-backend=none --disable-network-policy` and override
+# `cluster.roles.cni.binding = "absent"` (see ludo/cluster.nix).
 #
 # Platform imports: DNS (coredns, bundled), storage (local-path).
 
@@ -9,13 +11,24 @@
 {
   cluster.provider = lib.mkDefault "k3s";
 
+  cluster.roles = {
+    cni = {
+      binding = lib.mkDefault "exclusive";
+      provider = lib.mkDefault "flannel";
+    };
+    dns.binding = lib.mkDefault "shadowable";
+    storageClasses.binding = lib.mkDefault "shadowable";
+    loadBalancer = {
+      binding = lib.mkDefault "exclusive";
+      provider = lib.mkDefault "servicelb (klipper)";
+    };
+  };
+
   cluster.capabilities = {
-    loadBalancer = lib.mkDefault true; # servicelb / klipper
-    cni = lib.mkDefault "flannel";
-    networkPolicyAPI = lib.mkDefault "none"; # flannel has no enforcement
-    ingressController = lib.mkDefault "traefik";
-    persistentStorage = lib.mkDefault true; # local-path-provisioner
-    volumeSnapshots = lib.mkDefault false; # local-path has no snapshot support
+    managedControlPlane = lib.mkDefault false;
+    nodeAutoscaling = lib.mkDefault false;
+    privilegedContainers = lib.mkDefault true;
+    daemonSets = lib.mkDefault true;
   };
 
   # Platform-provided imports.
@@ -24,22 +37,22 @@
       package = kix.mkImport {
         kind = "Deployment";
         apiVersion = "apps/v1";
+        roles = [ "dns" ];
         out = {
           name = "coredns";
           fqdn = "kube-dns.kube-system.svc.cluster.local";
         };
       };
-      aliases = [ "dns" ];
       optional = true;
     };
 
     platform-storage = {
       package = kix.mkImport {
+        roles = [ "storageClasses" ];
         out = {
           storageClassName = "local-path";
         };
       };
-      aliases = [ "storageClasses" ];
       optional = true;
     };
   };

@@ -17,7 +17,6 @@
     description = "Standalone secret instance (kix-managed)";
     lifecycle = "stateful";
     scope = "namespace";
-    provides = [ "secret" ];
     defaultAliases = [ "secret" ];
   };
 

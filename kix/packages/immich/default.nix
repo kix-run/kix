@@ -33,10 +33,6 @@ in
     version = "v2.7.5";
     description = "Immich — self-hosted photo management";
     owner = "app-team";
-    provides = [
-      "photo-management"
-      "media-server"
-    ];
     compatibleWith.database = {
       reason = "immich requires the VectorChord (vchord) extension plus uuid-ossp, cube, earthdistance, unaccent, pg_trgm on its postgres backend";
     };

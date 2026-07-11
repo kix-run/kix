@@ -365,7 +365,7 @@ Each module file receives `{ config, lib, ref, packages, ... }` and can declare 
 
 ### Instance-level options
 
-- **`aliases`** — DI resolution matches arg names to instance names *or* aliases.
+- **`aliases`** — DI resolution matches arg names to instance names *or* aliases. Packages that fill an infrastructure role (`meta.roles = [ "storageClasses" ]`, validated against the registry in `kix/lib/eval/roles.nix`) get the role name as an alias automatically — no instance-level alias needed.
 - **`labelStyle = "helm"`** — emit Helm-compatible labels (for migration).
 - **`selectorLabels`** — override auto-generated selector labels per-instance. Use when the cluster has immutable selectors (e.g. StatefulSet).
 - **`optional = true`** — instance only activates if something depends on it.
@@ -376,7 +376,8 @@ Each module file receives `{ config, lib, ref, packages, ... }` and can declare 
 - **`clusterDomain`** — DNS domain (default `"cluster.local"`). Affects all `resource.out.fqdn` values.
 - **`availablePackages`** — package registry for auto-instantiation into `autoNamespace` when transitively required.
 - **`namespaces`** — per-namespace `labels`, `annotations`, `resourceQuota`, `networkPolicies` (directions, defaultDeny).
-- **`cluster.capabilities`** — 15 flags (e.g. `loadBalancer`, `privilegedContainers`, `daemonSets`, `gpu`). Packages guard on these via `checkCapability`. Read `kix/lib/modules.nix` for the full list.
+- **`cluster.roles`** — binding modes for environment-owned roles (`cni`, `dns`, `storageClasses`, `loadBalancer`, `network-policy-enforcer`): `absent` (vacant, a managed instance fills it), `shadowable` (environment default, managed instance overrides), `exclusive` (environment owns it — a managed instance claiming it is an eval error). Set by flavors; override per-cluster (e.g. `cluster.roles.cni.binding = "absent"` on kind created with `disableDefaultCNI`).
+- **`cluster.capabilities`** — substrate axioms (`multiNode`, `privilegedContainers`, `daemonSets`, `gpu`, ...), three-valued: `null` = unknown (relying workloads warn), `false` = hard error, `true` = pass. Read `kix/lib/modules.nix` for the full list. The old role-backed bools (`cni`, `networkPolicyAPI`, `loadBalancer`, `persistentStorage`, `rwxStorage`, `volumeSnapshots`, `ingressController`) no longer exist — role providers are derived from `meta.roles`; rwx/snapshot facts live on the storage provider's `out`.
 - **`cluster.network`** — `podCidr`, `serviceCidr`, `dnsUpstream`.
 - **`ref`** — module arg for referencing other instances by path (e.g. `ref.instances.kube-system.coredns`).
 - **`mkLocked`** — marks a config field as immutable; blocks dep injection overrides.
@@ -384,9 +385,9 @@ Each module file receives `{ config, lib, ref, packages, ... }` and can declare 
 
 **Network policy:** CiliumNetworkPolicy is auto-derived from the DI graph — no package authoring needed. Egress rules for API server access, DNS, and cross-package services are generated automatically. Default-deny is per-namespace. Read `kix/lib/netpol.nix` for details. If hitting blindspots (Helm chart opacity, operator-managed pods), see `v2_discussions/96_netpol_autogeneration_blindspots.md`.
 
-### Flavors (cluster hardware profiles)
+### Flavors (target presets)
 
-Flavors set `cluster.provider`, `cluster.capabilities`, and platform-provided DI imports. Use as the first module in `buildCluster`:
+Flavors set `cluster.provider`, `cluster.roles` bindings, `cluster.capabilities` substrate axioms, and platform-provided DI imports. Use as the first module in `buildCluster`:
 
 ```nix
 kix.buildCluster {
@@ -395,13 +396,13 @@ kix.buildCluster {
 }
 ```
 
-Available: `k3s`, `kind`, `kubeadm`, `eks`, `gke`, `gke-autopilot`, `aks`, `openshift`, `rke2`, `talos`.
+Available: `k3s`, `kind`, `kubeadm`, `eks`, `gke`, `gke-autopilot`, `aks`, `openshift`, `ovh`, `scaleway`, `rke2`, `lithus`, `talos`.
 
-Flavors provide `optional = true` imports for platform-managed services:
-- **DNS** (`platform-dns`, alias `dns`) — all flavors.
-- **Storage** (`platform-storage`, alias `storageClasses`) — flavors with built-in storage.
+Flavors provide `optional = true` imports for platform-managed services, declared via `kix.mkImport { roles = [ ... ]; out = { ... }; }`:
+- **DNS** (`platform-dns`, role `dns`) — all flavors.
+- **Storage** (`platform-storage`, role `storageClasses`, with `rwx`/`snapshots` facts on `out`) — flavors with built-in storage.
 
-If the cluster installs its own managed package (e.g. `storage-classes`), it automatically takes priority over the flavor import.
+If the cluster installs its own managed package (e.g. `storage-classes`), it automatically takes priority over the flavor import (managed shadows import) — unless the flavor declares the role binding `exclusive`, in which case the managed instance is refused at eval (e.g. a managed CNI on stock kind/k3s; override the binding to `"absent"` when the cluster genuinely runs without the environment's default).
 
 ### Helm charts — three tiers
 
@@ -447,6 +448,8 @@ DI resolution priority: (1) explicit dep overrides, (2) same-namespace match, (3
 
 **Storage DI:** Persistent storage uses first-class PVC instances, not config-based `existingClaim` strings. Short version: `storage` is a DI dep, use `kix.mount.pvc storage { mountPath = ...; }`. **Read `STORAGE.md` for the full pattern, cluster definition example, and design rationale.**
 
+**Raw PVCs are an eval error.** A package building `kind: PersistentVolumeClaim` directly throws at build time — including PVCs emitted by an imported helm chart with persistence enabled. The escape is an explicit grant in package meta: `meta.unsafe = [ "raw-pvc" ]` (closed vocabulary, `kix/lib/unsafe.nix`; every grant is listed by the `architecture.unsafeGrants` scorecard audit). Prefer restructuring to the `storage` DI dep; grant `raw-pvc` only for chart-emitted claims or genuinely inline multi-component claims.
+
 ### Package Meta
 
 ```nix
@@ -468,6 +471,8 @@ meta = {
 - All enforced by `kix/lib/eval.nix` at build time.
 
 **Scorecard:** Packages are automatically scored against built-in policy rules at build time. Rules check for: resource requests/limits, liveness+readiness probes, non-root containers, no `:latest` tags, `meta.owner`, `meta.description`, PDBs for multi-replica deployments, network policies, and more. Violations surface as warnings or errors. Read `kix/lib/rules/` and `kix/lib/scorecard.nix` for the full rule set and override mechanism.
+
+**Annotation domains (v2_discussions/128):** operator packages declare the annotation prefixes they manage via `meta.annotationDomains = [ "reflector.v1.k8s.emberstack.com" ]` (reflector, prometheus-operator do). The `architecture.annotationDomainOwnership` rule warns when a package's resources carry `metadata.annotations` keys under a declared domain without a DI dep on the declarer, and when a domain-shaped annotation has no declarer anywhere (dead annotation — the operator is probably missing). Reserved suffixes (`kubernetes.io`, `k8s.io`, `kix.dev`, `helm.sh`, `kubebuilder.io`) are exempt; by-convention domains consumed outside kix (e.g. `prometheus.io` scrape annotations) go in the cluster's `scorecard.knownAnnotationDomains`. There is no `kix.dev/capability` stamping anymore — the dep edge is the legitimacy marker.
 
 ## Multi-Component Packages
 

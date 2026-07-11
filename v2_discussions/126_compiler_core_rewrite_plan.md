@@ -1,6 +1,6 @@
 # 126: Compiler core rewrite — making the ring model physical
 
-**Status:** Draft (Design Doc / Plan)
+**Status:** In progress — Phases 0/2/3 landed 2026-07-05 (see Current state)
 **Related:** `119_core_surface_audit.md` (what core *is* — ring model, cut list), `120_compiler_theory_mapping.md` (what to borrow — priorities 3.1/3.4), `121_netpol_as_plugin.md` (hook mechanics, migration steps 1–5), `80_structured_diagnostics.md` (the diagnostics channel this rides), `29_compiler-design.md` (anchor, settled)
 
 Docs 119/120/121 each answer one question: what the core is, what the field
@@ -153,11 +153,38 @@ netpol lifted to a separate flake (121 step 5, waits for OSS packaging).
   non-kix-authored eval errors.
 - `architecture.md` + guide updated; 119/121 archived per ship rule.
 
-## 7. Open questions
+## 7. Current state (2026-07-05)
 
-- **Hook registry shape:** named attrset (`hooks.workloadInterceptors.netpol`)
-  vs list — named merges better and enables `skipHooks` targeting (121 §9
-  leans named; confirm before Phase 2).
+Executed in one multi-agent pass; old lib frozen at `kix/libv1/`, new tree at
+`kix/lib/` builds ludo-kind to the **same manifest store path** (content-address
+equality — the §2.1 invariant held).
+
+- **Landed:** Phase 0 (baseline diff, ad hoc — no persisted `kixChecks` snapshot
+  yet), Phase 2 (three hook options, one `sealWorkload` splice site, netpol as
+  `plugins/netpol/` module with `networkPolicy.*` options moved in), Phase 3
+  (scope split into builders/validators/labels; edge analysis in
+  `eval/edges.nix`; `findCapabilityProvider` in `eval/hooks.nix`; decomment
+  across core/eval/scope/vocab).
+- **Deliberately deferred:** Phase 1 envelope repair (interface still carries
+  `portsToCilium`; renaming touches the cilium package outside lib), Phase 4
+  (recovery points, error codes, always-on essence rules), Phase 5 (cut list —
+  zero-usage surfaces were rewritten, not removed).
+- **Known residuals:** platform-intent materialization for imports stays in
+  core (`eval/import.nix`) exactly as v1 had it — a clean plugin move needs an
+  import-marker hook channel (new §8 question). Hook registry shipped as the
+  named-attrset shape (resolves that open question). Self-enforcer skip is
+  exact provider-instance identity, matching v1 semantics.
+- Snapshot harness as a persistent `kixChecks` entry is still open (Phase 0's
+  durable half).
+
+## 8. Open questions
+
+- **Import-marker hook channel:** platform-intent policies must be `extraDeps`
+  on the import marker at seal time, which none of the three channels can
+  reach — does a fourth (import interceptor) channel clear the grammar bar, or
+  does intent materialization just stay core?
+- ~~**Hook registry shape**~~ — resolved: shipped as named attrset
+  (`hooks.workloadInterceptors.netpol`).
 - **Transform-vs-append interceptor ordering** (121 §9) — decide in Phase 2;
   proposal on the table: transforms run first, in a separate hook.
 - **Always-on severity** for the promoted essence rules: warning or error?

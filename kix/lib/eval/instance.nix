@@ -44,6 +44,7 @@ in
       workloadInterceptors ? [ ],
       instanceProcessors ? [ ],
       clusterCtx ? { },
+      annotationDomainIndex ? { },
     }@args:
 
     if (instCfg.package._type or "") == "kix-import" then
@@ -84,10 +85,10 @@ in
               null;
 
         _enforcerProvider =
-          if !(clusterCtx ? findCapabilityProvider) then
+          if !(clusterCtx ? findRoleProvider) then
             null
           else
-            clusterCtx.findCapabilityProvider "network-policy-enforcer";
+            clusterCtx.findRoleProvider "network-policy-enforcer";
 
         # Self-dep guard: the enforcer's own scope must not depend on itself.
         _isSelfEnforcer =
@@ -476,9 +477,31 @@ in
                 instanceName
                 namespaceName
                 owner
+                annotationDomainIndex
                 ;
               config = evaluatedConfig;
               meta = packageMeta;
+              # "ns/inst" identities of this instance's resolved DI deps —
+              # the annotationDomainOwnership rule checks declarers against
+              # these. Names only; deps are resolved before rules run.
+              # Directly wired deps (deps.X = ref...) skip resolvedDepMeta,
+              # so their identity is recovered from the target's own _meta —
+              # explicit wiring must count as linking against the operator.
+              resolvedDepTargets =
+                lib.mapAttrsToList (
+                  _: depInfo: "${depInfo.resolution.namespace}/${depInfo.resolution.instanceName}"
+                ) resolvedDepMeta
+                ++ builtins.concatMap (
+                  v:
+                  let
+                    m = if builtins.isAttrs v then v._meta or null else null;
+                  in
+                  if builtins.isAttrs m && m ? namespaceName && m ? instanceName then
+                    [ "${m.namespaceName}/${m.instanceName}" ]
+                  else
+                    [ ]
+                ) (builtins.attrValues deps);
+              knownAnnotationDomains = scorecardConfig.knownAnnotationDomains or [ ];
               ruleDefaults = scorecardConfig.ruleDefaults or { };
               ruleOverrides = scorecardConfig.ruleOverrides or { };
             }

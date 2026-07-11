@@ -26,18 +26,20 @@ in
           labels ? { },
           ...
         }@args:
-        builtins.seq (validators.checkLoadBalancer args) (
-          k8s.mkResource (
-            removeAttrs args [ "labels" ]
+        builtins.seq (validators.checkRawPvc args) (
+          builtins.seq (validators.checkLoadBalancer args) (
+            k8s.mkResource (
+              removeAttrs args [ "labels" ]
+              // {
+                namespace = namespaceResource;
+                inherit clusterDomain;
+                labels = clusterLabels // instanceLabels // labels;
+              }
+            )
             // {
-              namespace = namespaceResource;
-              inherit clusterDomain;
-              labels = clusterLabels // instanceLabels // labels;
+              packageLabels = labels;
             }
           )
-          // {
-            packageLabels = labels;
-          }
         );
 
       scopeMkClusterResource =

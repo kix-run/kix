@@ -1000,6 +1000,9 @@ rec {
       includeCrds ? true,
       strip ? { },
       patchResources ? lib.id,
+      # Extra meta merged over the defaults — e.g. `metaExtra.unsafe =
+      # [ "raw-pvc" ]` for charts that render their own PVCs.
+      metaExtra ? { },
     }:
     {
       scope,
@@ -1010,7 +1013,8 @@ rec {
       meta = {
         isHelm = true;
         inherit version;
-      };
+      }
+      // metaExtra;
 
       options.values = lib.mkOption {
         type = lib.types.attrsOf lib.types.anything;

@@ -30,9 +30,12 @@ in
   meta = {
     version = "11.6.1";
     description = "Grafana — observability and data visualization";
-    provides = [ "dashboards" ];
     defaultAliases = [ "grafana" ];
     k8s.minVersion = "1.25";
+    # persistence.inlinePvc hand-rolls a claim; the preferred path is the
+    # `storage` dep + sibling persistent-volume-claim instance. Grant kept
+    # until the inline option is removed (audited by unsafeGrants).
+    unsafe = [ "raw-pvc" ];
   };
 
   options = {

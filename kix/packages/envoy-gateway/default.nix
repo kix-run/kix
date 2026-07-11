@@ -20,10 +20,6 @@
   meta = {
     version = "1.0.0";
     description = "Gateway API resources (GatewayClass + Gateway)";
-    provides = [
-      "gateway"
-      "ingress-controller"
-    ];
     defaultAliases = [ "gateway" ];
     k8s.minVersion = "1.26";
   };

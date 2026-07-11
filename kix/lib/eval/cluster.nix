@@ -6,6 +6,7 @@
   helpers,
   scorecard,
   hooks,
+  roles,
   mkNamespace,
   computeAutoInstances,
   buildResolutionIndex,
@@ -48,6 +49,7 @@ in
         explicitInstances = cfg.instances;
         availablePackages = cfg.availablePackages;
         autoNamespace = cfg.autoNamespace;
+        clusterRoles = cfg.cluster.roles;
       };
 
       mergedInstances = lib.recursiveUpdate autoResult.autoInstances cfg.instances;
@@ -69,15 +71,42 @@ in
         }) allNsNames
       );
 
+      # Peek every package's meta exactly once per instance — staticMeta,
+      # the roles/annotation indexes, and instanceInfo all read this map
+      # instead of re-applying the package function.
+      peekedMetas = lib.mapAttrs (
+        _nsName: nsInsts:
+        lib.mapAttrs (
+          _instName: instCfg:
+          meta.peekPackageMeta {
+            package = instCfg.package;
+            inherit kixlib;
+          }
+        ) nsInsts
+      ) mergedInstances;
+
+      # Instances that participate in symbol resolution (DI, roles,
+      # annotation domains): everything that can appear in the artifact —
+      # mandatory instances plus optionals the demand closure activated —
+      # and platform imports. An import's out and role claims are
+      # environment facts, valid whether or not its marker was activated;
+      # a never-activated managed optional emits nothing, so resolving it
+      # would hand consumers outputs of resources that don't exist.
+      isResolvable =
+        nsName: instName:
+        isActive nsName instName
+        || (mergedInstances.${nsName}.${instName}.package._type or "") == "kix-import";
+
+      resolvableInstances = lib.mapAttrs (
+        nsName: nsInsts: lib.filterAttrs (instName: _: isResolvable nsName instName) nsInsts
+      ) mergedInstances;
+
       staticMeta = lib.mapAttrs (
         nsName: nsInsts:
         lib.mapAttrs (
           instName: instCfg:
           let
-            packageMeta = meta.peekPackageMeta {
-              package = instCfg.package;
-              inherit kixlib;
-            };
+            packageMeta = peekedMetas.${nsName}.${instName};
           in
           {
             _meta = {
@@ -92,29 +121,71 @@ in
             };
           }
         ) nsInsts
-      ) mergedInstances;
+      ) resolvableInstances;
 
       resolutionIndex = buildResolutionIndex staticMeta;
 
-      providesIndex = hooks.buildProvidesIndex mergedInstances;
+      # Built over ALL merged instances so a typo'd role on an inactive
+      # optional still throws (deepSeq-forced below); role RESOLUTION uses
+      # the resolvable-filtered view.
+      rolesIndexAll = hooks.buildRolesIndex {
+        instances = mergedInstances;
+        inherit peekedMetas;
+      };
+      _rolesValidation = builtins.deepSeq rolesIndexAll null;
 
-      # `out` reads from the cluster fixpoint lazily — must not be forced during module merge.
-      findCapabilityProvider =
-        capability:
+      rolesIndex = lib.mapAttrs (
+        nsName: nsInsts: lib.filterAttrs (instName: _: isResolvable nsName instName) nsInsts
+      ) rolesIndexAll;
+
+      # domain → declarer, for the annotationDomainOwnership lint. Eagerly
+      # forced below: a duplicate declarer or malformed domain must throw
+      # even when the scorecard is disabled.
+      annotationDomainIndex = hooks.buildAnnotationDomainIndex {
+        instances = resolvableInstances;
+        inherit peekedMetas;
+      };
+      _annotationDomainsCheck = builtins.deepSeq annotationDomainIndex null;
+
+      # `out` reads from the cluster fixpoint lazily — must not be forced during
+      # module merge. The shallow role out-contract is checked at the same lazy
+      # point (first consumer force), never eagerly. One memoized lookup per
+      # role — findRoleProvider is called per consumer instance and per
+      # LoadBalancer Service, so the instance scan must not repeat.
+      roleProviders = lib.genAttrs roles.roleNames (
+        role:
         let
-          lookup = hooks.findCapabilityProvider { inherit capability providesIndex; };
+          lookup = hooks.findRoleProvider {
+            inherit role rolesIndex;
+            clusterRoles = cfg.cluster.roles;
+          };
         in
         if lookup == null then
           null
         else
           lookup
           // {
-            out = clusterInstances.${lookup.ns}.${lookup.inst}.out or null;
-          };
+            out = roles.checkOutContract {
+              inherit role;
+              providerLabel = "${lookup.ns}/${lookup.inst}";
+              out = clusterInstances.${lookup.ns}.${lookup.inst}.out or null;
+            };
+          }
+      );
+
+      findRoleProvider =
+        role: builtins.seq (roles.assertKnownRole "findRoleProvider" role) roleProviders.${role};
+
+      # Eager refusal pass: exclusive-binding conflicts and duplicate strong
+      # providers must throw even when no consumer looks the role up.
+      _roleBindingsCheck = hooks.checkRoleBindings {
+        clusterRoles = cfg.cluster.roles;
+        inherit rolesIndex;
+      };
 
       clusterCtx = {
         config = cfg;
-        inherit findCapabilityProvider;
+        inherit findRoleProvider;
       };
 
       workloadInterceptors = hooks.collectHooks cfg "workloadInterceptors";
@@ -214,6 +285,7 @@ in
               globalPartsOverlays = cfg.globalPartsOverlays;
               configInjections = resolveInjections nsName instName;
               inherit workloadInterceptors instanceProcessors clusterCtx;
+              inherit annotationDomainIndex;
             }
           ) nsInsts
         ) mergedInstances
@@ -422,14 +494,11 @@ in
           v.package;
 
       instanceInfo = lib.mapAttrs (
-        _nsName: nsInsts:
+        nsName: nsInsts:
         lib.mapAttrs (
-          _instName: instCfg:
+          instName: instCfg:
           let
-            pkgMeta = meta.peekPackageMeta {
-              package = instCfg.package;
-              inherit kixlib;
-            };
+            pkgMeta = peekedMetas.${nsName}.${instName};
           in
           {
             version = pkgMeta.version or null;
@@ -467,41 +536,47 @@ in
       _clusterHookChecksRun = hooks.runChecks clusterHookChecks;
 
     in
-    builtins.seq _clusterHookChecksRun (
-      builtins.seq clusterDiagnostics.assertionCheck {
-        _type = "k8s-cluster-v2";
-        inherit name;
+    builtins.seq _rolesValidation (
+      builtins.seq _roleBindingsCheck (
+        builtins.seq _annotationDomainsCheck (
+          builtins.seq _clusterHookChecksRun (
+            builtins.seq clusterDiagnostics.assertionCheck {
+              _type = "k8s-cluster-v2";
+              inherit name;
 
-        inherit clusterInstances;
-        instances = clusterInstances;
+              inherit clusterInstances;
+              instances = clusterInstances;
 
-        namespaces = nsResources;
+              namespaces = nsResources;
 
-        inherit
-          activation
-          packageIndex
-          info
-          extraImages
-          ;
+              inherit
+                activation
+                packageIndex
+                info
+                extraImages
+                ;
 
-        diagnostics = {
-          warnings = clusterDiagnostics.warnings ++ clusterHookWarnings;
-          inherit (clusterDiagnostics) assertions failedAssertions;
-        };
+              diagnostics = {
+                warnings = clusterDiagnostics.warnings ++ clusterHookWarnings;
+                inherit (clusterDiagnostics) assertions failedAssertions;
+              };
 
-        out = {
-          maintenance = {
-            enable = cfg.cluster.maintenance.enable or false;
-            reason = cfg.cluster.maintenance.reason or null;
-            until = cfg.cluster.maintenance.until or null;
-          };
-        };
+              out = {
+                maintenance = {
+                  enable = cfg.cluster.maintenance.enable or false;
+                  reason = cfg.cluster.maintenance.reason or null;
+                  until = cfg.cluster.maintenance.until or null;
+                };
+              };
 
-        inherit scorecardReport;
+              inherit scorecardReport;
 
-        rawManifests = map (
-          r: builtins.fromJSON (builtins.unsafeDiscardStringContext (builtins.toJSON r.rawManifest))
-        ) allResources;
-      }
+              rawManifests = map (
+                r: builtins.fromJSON (builtins.unsafeDiscardStringContext (builtins.toJSON r.rawManifest))
+              ) allResources;
+            }
+          )
+        )
+      )
     );
 }

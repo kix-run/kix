@@ -1,11 +1,18 @@
 # Flavor: Lithus — RKE2 + external Cilium + OpenEBS (LocalPV-ZFS + Mayastor).
 #
-# Extends rke2.nix with the Lithus-specific cluster shape: Cilium for both
-# CNI and NetworkPolicy enforcement, OpenEBS for both block (LocalPV-ZFS)
-# and replicated NVMe-oF (Mayastor) storage. Storage is shipped verbatim
-# from this flavor — every Lithus cluster gets the same StorageClasses,
-# StorageProfiles, DiskPools, VolumeSnapshotClasses, and the mayastor
-# CSIDriver.
+# Decomposed per doc 127 §5 into:
+#
+#   - Target preset (this module's `config`): rke2 axioms + Lithus role
+#     bindings. RKE2 here is configured with external Cilium instead of
+#     Canal (still environment-owned — kix does not deploy the CNI; the
+#     cilium-external package only emits the CRD ref marker and claims the
+#     enforcer role, not cni).
+#   - Stock catalog (`availablePackages.lithus-storage`): the OpenEBS
+#     storage surface — StorageClasses, StorageProfiles, DiskPools,
+#     VolumeSnapshotClasses, the mayastor CSIDriver — as ONE package that
+#     claims the `storageClasses` role and is instantiated only when the
+#     graph demands storage. A cluster with no PVC-bearing workload
+#     compiles on lithus without OpenEBS in the artifact.
 #
 # DiskPool node names + disk path are read from `globals.<cluster>` so
 # the flavor itself stays cluster-shape-agnostic. Pass them in via
@@ -23,47 +30,11 @@
 {
   config,
   lib,
-  kix,
   ...
 }:
 
 let
-  inherit (lib) mkDefault mkOption types;
-
-  # Inline package: emits a list of raw resources (each given as
-  # `{ apiVersion, kind, name, ?namespace, spec/extra }`) through
-  # scope.mkResource / mkClusterResource. Same pattern as
-  # nw1/storage-stubs.nix — copy here so flavors stay self-contained.
-  mkRawResources = description: resources: {
-    meta = {
-      version = "lithus-flavor";
-      inherit description;
-    };
-
-    build =
-      { scope, ... }:
-      let
-        built = builtins.listToAttrs (
-          map (r: {
-            name = "${r.kind}-${r.name}";
-            value =
-              let
-                args = removeAttrs r [ "clusterScoped" ];
-                fn = if (r.clusterScoped or false) then scope.mkClusterResource else scope.mkResource;
-              in
-              fn args;
-          }) resources
-        );
-        firstKey = builtins.head (builtins.attrNames built);
-        rest = builtins.attrValues (builtins.removeAttrs built [ firstKey ]);
-      in
-      built
-      // {
-        root = built.${firstKey} // {
-          requires = (built.${firstKey}.requires or [ ]) ++ rest;
-        };
-      };
-  };
+  inherit (lib) mkOption types;
 
   # Resource recipes ----------------------------------------------------
 
@@ -239,6 +210,48 @@ let
     };
   }) workers;
 
+  # Stock catalog package: the whole OpenEBS storage surface as one
+  # instance. Claims the `storageClasses` role, so it is pulled in by
+  # auto-instantiation when the graph demands storage (weak role demand —
+  # PVC-bearing packages take `storageClasses` as an optional dep) and
+  # its out satisfies the role contract for consumers.
+  lithusStorage = {
+    meta = {
+      version = "lithus-flavor";
+      description = "Lithus OpenEBS storage stock — StorageClasses, StorageProfiles, DiskPools, VolumeSnapshotClasses, mayastor CSIDriver";
+      roles = [ "storageClasses" ];
+    };
+
+    build =
+      { scope, ... }:
+      let
+        allRecipes = storageClasses ++ volumeSnapshotClasses ++ csiDrivers ++ storageProfiles ++ diskPools;
+        built = builtins.listToAttrs (
+          map (r: {
+            name = "${r.kind}-${r.name}";
+            value =
+              let
+                args = removeAttrs r [ "clusterScoped" ];
+                fn = if (r.clusterScoped or false) then scope.mkClusterResource else scope.mkResource;
+              in
+              fn args;
+          }) allRecipes
+        );
+        firstKey = builtins.head (builtins.attrNames built);
+        rest = builtins.attrValues (builtins.removeAttrs built [ firstKey ]);
+      in
+      built
+      // {
+        root = {
+          resource = built.${firstKey};
+          requires = rest;
+          out = {
+            storageClassName = "lbs1-pool1-2x";
+          };
+        };
+      };
+  };
+
 in
 {
   imports = [ ./rke2.nix ];
@@ -258,52 +271,21 @@ in
   config = {
     cluster.provider = lib.mkForce "lithus";
 
-    cluster.capabilities = {
-      cni = lib.mkForce "cilium";
-      networkPolicyAPI = lib.mkForce "cilium";
-      loadBalancer = lib.mkForce true;
-      persistentStorage = lib.mkForce true;
-      rwxStorage = mkDefault true;
-      volumeSnapshots = lib.mkForce true;
-    };
-
-    # Storage resource bundles — one inline-package instance per kind so
-    # the build output groups them sensibly under openebs-system / _cluster.
-    instances._cluster = {
-      lithus-storage-classes = {
-        package = mkRawResources "Lithus StorageClasses" storageClasses;
-      };
-      lithus-volume-snapshot-classes = {
-        package = mkRawResources "Lithus VolumeSnapshotClasses" volumeSnapshotClasses;
-      };
-      lithus-csi-drivers = {
-        package = mkRawResources "Lithus CSIDrivers" csiDrivers;
-      };
-      lithus-storage-profiles = {
-        package = mkRawResources "Lithus StorageProfiles (CDI)" storageProfiles;
+    # Target-preset overrides on top of rke2. storageClasses inherits
+    # rke2's "absent" binding: the role is vacant until the stock catalog
+    # below fills it on demand.
+    cluster.roles = {
+      cni.provider = lib.mkForce "cilium (rke2-managed)";
+      loadBalancer = {
+        binding = lib.mkForce "shadowable";
+        provider = lib.mkForce "cilium lb-ipam";
       };
     };
 
-    instances.openebs-system = {
-      lithus-disk-pools = {
-        package = mkRawResources "Lithus per-worker DiskPools (Mayastor)" diskPools;
-      };
-    };
-
-    # Default storageClass alias — exposes the cluster default
-    # (lbs1-pool1-2x, mayastor) so packages depending on `storageClasses`
-    # (persistent-volume-claim, stackgres-cluster, …) resolve via DI
-    # without hardcoding. Pattern mirrors k3s flavor's platform-storage.
-    instances.kube-system = {
-      platform-storage = {
-        package = kix.mkImport {
-          out = {
-            storageClassName = "lbs1-pool1-2x";
-          };
-        };
-        aliases = [ "storageClasses" ];
-        optional = true;
-      };
+    # Stock catalog: on the shelf, instantiated only when demanded.
+    availablePackages.lithus-storage = {
+      package = lithusStorage;
+      namespace = "openebs-system";
     };
   };
 }

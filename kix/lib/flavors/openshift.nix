@@ -4,11 +4,13 @@
 # restricted-v2 by default — all containers run as random non-root UIDs.
 # Images that hardcode USER root will fail without explicit SCC grants.
 #
-# Uses OVN-Kubernetes CNI, HAProxy-based Router (not Ingress) for external
-# access, and cri-o (not containerd) as container runtime.
+# Uses OVN-Kubernetes CNI (environment-owned, exclusive), HAProxy-based
+# Router (not Ingress) for external access, and cri-o (not containerd) as
+# container runtime.
 #
-# On cloud providers: LoadBalancer and persistent storage work via cloud CSI.
-# On bare metal: no default LoadBalancer or StorageClass.
+# On cloud providers: LoadBalancer and persistent storage work via cloud
+# CSI — override the role bindings for cloud installs. On bare metal
+# (this preset's default): both roles vacant.
 #
 # Platform imports: DNS (coredns, managed by OpenShift).
 
@@ -16,13 +18,20 @@
 {
   cluster.provider = lib.mkDefault "openshift";
 
+  cluster.roles = {
+    cni = {
+      binding = lib.mkDefault "exclusive";
+      provider = lib.mkDefault "ovn-kubernetes";
+    };
+    dns.binding = lib.mkDefault "shadowable";
+    storageClasses.binding = lib.mkDefault "absent"; # cloud installs override
+    loadBalancer.binding = lib.mkDefault "absent"; # cloud installs override
+  };
+
   cluster.capabilities = {
-    loadBalancer = lib.mkDefault false; # true on cloud, false on bare metal — override as needed
-    cni = lib.mkDefault "ovn-kubernetes";
-    networkPolicyAPI = lib.mkDefault "k8s"; # OVN-Kubernetes enforces k8s NetworkPolicy
-    ingressController = lib.mkDefault "openshift-router"; # HAProxy-based, uses Route objects
-    persistentStorage = lib.mkDefault false; # depends on platform — override for cloud
-    volumeSnapshots = lib.mkDefault false; # available on cloud with CSI, not on bare metal
+    managedControlPlane = lib.mkDefault false;
+    nodeAutoscaling = lib.mkDefault false;
+    daemonSets = lib.mkDefault true;
 
     # OpenShift's defining characteristic: restricted security by default
     privilegedContainers = lib.mkDefault false;
@@ -35,12 +44,12 @@
       package = kix.mkImport {
         kind = "Deployment";
         apiVersion = "apps/v1";
+        roles = [ "dns" ];
         out = {
           name = "coredns";
           fqdn = "dns-default.openshift-dns.svc.cluster.local";
         };
       };
-      aliases = [ "dns" ];
       optional = true;
     };
   };

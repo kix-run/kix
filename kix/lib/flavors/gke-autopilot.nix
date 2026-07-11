@@ -8,6 +8,9 @@
 # - Baseline PSA enforcement
 # - Mutating admission webhooks have restrictions
 #
+# cni and loadBalancer are environment-owned exclusively — Autopilot does
+# not permit user-run network infrastructure.
+#
 # Platform imports: DNS (kube-dns), storage (premium-rwo via PD CSI).
 # Note: kube-system imports use gke-managed namespace since Autopilot
 # blocks user deployments to kube-system.
@@ -16,15 +19,22 @@
 {
   cluster.provider = lib.mkDefault "gke-autopilot";
 
+  cluster.roles = {
+    cni = {
+      binding = lib.mkDefault "exclusive";
+      provider = lib.mkDefault "gke-native (dataplane v2)";
+    };
+    dns.binding = lib.mkDefault "shadowable";
+    storageClasses.binding = lib.mkDefault "shadowable";
+    loadBalancer = {
+      binding = lib.mkDefault "exclusive";
+      provider = lib.mkDefault "gcp-network-lb";
+    };
+  };
+
   cluster.capabilities = {
     managedControlPlane = lib.mkDefault true;
     nodeAutoscaling = lib.mkDefault true; # fully automatic, not configurable
-    loadBalancer = lib.mkDefault true;
-    cni = lib.mkDefault "gke-native";
-    networkPolicyAPI = lib.mkDefault "k8s"; # CiliumNetworkPolicy not available
-    ingressController = lib.mkDefault "gce";
-    persistentStorage = lib.mkDefault true;
-    volumeSnapshots = lib.mkDefault true;
 
     # Hard restrictions
     privilegedContainers = lib.mkDefault false;
@@ -39,22 +49,22 @@
       package = kix.mkImport {
         kind = "Deployment";
         apiVersion = "apps/v1";
+        roles = [ "dns" ];
         out = {
           name = "kube-dns";
           fqdn = "kube-dns.kube-system.svc.cluster.local";
         };
       };
-      aliases = [ "dns" ];
       optional = true;
     };
 
     platform-storage = {
       package = kix.mkImport {
+        roles = [ "storageClasses" ];
         out = {
           storageClassName = "premium-rwo";
         };
       };
-      aliases = [ "storageClasses" ];
       optional = true;
     };
   };

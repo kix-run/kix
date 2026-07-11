@@ -25,7 +25,6 @@ in
   meta = {
     version = "0.7.26";
     description = "Firezone — self-hosted WireGuard VPN";
-    provides = [ "vpn" ];
   };
 
   options = {

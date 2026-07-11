@@ -99,16 +99,17 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     // 3. Resolve old activation
     //    Default: connect to cluster, fetch Active Activation, resolve to local store graph
     //    --current-activation: use local cache (no cluster connection yet)
-    let (old_graph, old_manifests, pre_client) = if args.current_activation {
+    let (old_graph, old_manifests, pre_client, active_hash) = if args.current_activation {
         // Local cache mode — no cluster connection
         let (og, om) = load_old_from_cache(&args.cluster, &ctx.global);
-        (og, om, None)
+        let hash = find_activation_identity_hash(&om);
+        (og, om, None, hash)
     } else {
         // Cluster-aware mode — connect and fetch Active Activation
-        let (og, om, client) = ctx
+        let (og, om, client, hash) = ctx
             .runtime
             .block_on(load_old_from_cluster(&args.cluster, &ctx.global))?;
-        (og, om, client)
+        (og, om, client, hash)
     };
 
     // 4. Local DAG diff: old vs new
@@ -291,6 +292,16 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     }
 
     if total_apply == 0 && orphan_rids.is_empty() {
+        if !ctx.global.quiet {
+            match (&activation_identity_hash, &active_hash) {
+                (Some(new), Some(old)) if new == old => println!(
+                    "{} activation identical to active ({}...) — nothing to apply.",
+                    output::dim("="),
+                    &new[..8.min(new.len())],
+                ),
+                _ => println!("Nothing to apply."),
+            }
+        }
         return Ok(());
     }
 
@@ -379,11 +390,32 @@ fn load_old_from_cache(
     }
 }
 
+/// Extract the `kix.dev/identity-hash` annotation from the Activation
+/// manifest in a manifest set, if present.
+fn find_activation_identity_hash(manifests: &[Value]) -> Option<String> {
+    manifests
+        .iter()
+        .find(|m| m.get("kind").and_then(|v| v.as_str()) == Some("Activation"))
+        .and_then(|m| {
+            m.pointer("/metadata/annotations")
+                .and_then(|a| a.get("kix.dev/identity-hash"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
+}
+
 /// Connect to cluster, fetch Active Activation, resolve to local store graph.
+/// The final tuple element is the active activation's identity hash, used to
+/// report a no-op deploy as "activation identical".
 async fn load_old_from_cluster(
     cluster: &str,
     global: &crate::cli::GlobalArgs,
-) -> Result<(Option<StoreGraph>, Vec<Value>, Option<kube::Client>)> {
+) -> Result<(
+    Option<StoreGraph>,
+    Vec<Value>,
+    Option<kube::Client>,
+    Option<String>,
+)> {
     if !global.quiet {
         println!("Connecting to cluster...");
     }
@@ -440,13 +472,13 @@ async fn load_old_from_cluster(
                                 .values()
                                 .map(|r| r.manifest.clone())
                                 .collect();
-                            Ok((Some(old_graph), manifests, Some(client)))
+                            Ok((Some(old_graph), manifests, Some(client), Some(hash.clone())))
                         }
                         Err(e) => {
                             tracing::warn!(
                                 "failed to load old activation store graph: {e}, treating as first deploy"
                             );
-                            Ok((None, vec![], Some(client)))
+                            Ok((None, vec![], Some(client), Some(hash.clone())))
                         }
                     }
                 }
@@ -458,7 +490,7 @@ async fn load_old_from_cluster(
                         );
                     }
                     let old_manifests = reconstruct_old_from_live(&client, &discovery).await;
-                    Ok((None, old_manifests, Some(client)))
+                    Ok((None, old_manifests, Some(client), Some(hash.clone())))
                 }
             }
         }
@@ -466,7 +498,7 @@ async fn load_old_from_cluster(
             if !global.quiet {
                 println!("No previous activation on cluster — first deploy.");
             }
-            Ok((None, vec![], Some(client)))
+            Ok((None, vec![], Some(client), None))
         }
     }
 }
@@ -1150,7 +1182,7 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
             ctx.runtime
                 .block_on(load_old_from_cluster(&args.cluster, &ctx.global))
                 .ok()
-                .and_then(|(og, _, _)| og)
+                .and_then(|(og, _, _, _)| og)
         };
 
         let pkg_diff = match &old_graph {

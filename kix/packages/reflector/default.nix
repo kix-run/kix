@@ -35,23 +35,18 @@ let
     let
       jobName = "${secretName}-reflect";
       labels = consumerScope.selectorLabels or { };
-      capAnnotations = {
-        "kix.dev/capability" = "reflection";
-      };
       mkResource = consumerScope.mkResource;
       saRes = mkResource {
         apiVersion = "v1";
         kind = "ServiceAccount";
         name = jobName;
         inherit labels;
-        annotations = capAnnotations;
       };
       roleRes = mkResource {
         apiVersion = "rbac.authorization.k8s.io/v1";
         kind = "Role";
         name = jobName;
         inherit labels;
-        annotations = capAnnotations;
         extra.rules = [
           {
             apiGroups = [ "" ];
@@ -70,7 +65,6 @@ let
         kind = "RoleBinding";
         name = jobName;
         inherit labels;
-        annotations = capAnnotations;
         extra = {
           roleRef = {
             apiGroup = "rbac.authorization.k8s.io";
@@ -89,7 +83,7 @@ let
       jobRes = consumerScope.mkJob {
         name = jobName;
         inherit labels;
-        annotations = capAnnotations // {
+        annotations = {
           "kix.dev/hook" = "post-deploy";
           "kix.dev/hook-delete-policy" = "before-hook-creation,hook-succeeded";
         };
@@ -146,8 +140,11 @@ in
 {
   meta = {
     version = "10.0.28";
-    provides = [ "reflection" ];
     defaultAliases = [ "reflector" ];
+    # This package owns the reflector annotation domain: resources carrying
+    # annotations under it without a DI dep on this instance trip the
+    # architecture.annotationDomainOwnership lint (v2_discussions/128).
+    annotationDomains = [ "reflector.v1.k8s.emberstack.com" ];
   };
 
   options.values = lib.mkOption {

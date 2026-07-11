@@ -1,6 +1,9 @@
 { lib }:
 
 let
+  unsafe = import ./unsafe.nix { inherit lib; };
+  roles = import ./eval/roles.nix { inherit lib; };
+
   parseVersion = v: map lib.toIntBase10 (lib.splitString "." v);
 
   compareVersions =
@@ -86,21 +89,34 @@ rec {
       in
       result.meta or { };
 
+  # Role names are package-intrinsic DI aliases: a role provider is always
+  # resolvable under its role name, regardless of instance-level alias
+  # overrides (which only replace defaultAliases).
   effectiveAliases =
     { instanceAliases, packageMeta }:
-    if instanceAliases != [ ] then instanceAliases else packageMeta.defaultAliases or [ ];
+    lib.unique (
+      (packageMeta.roles or [ ])
+      ++ (if instanceAliases != [ ] then instanceAliases else packageMeta.defaultAliases or [ ])
+    );
 
   peekPackageAliases =
-    { availEntry, kixlib }:
+    {
+      availEntry,
+      kixlib,
+      context ? "availablePackages entry",
+    }:
     let
       explicitAliases = availEntry.aliases or [ ];
-      metaAliases =
-        (peekPackageMeta {
-          package = availEntry.package;
-          inherit kixlib;
-        }).defaultAliases or [ ];
+      packageMeta = peekPackageMeta {
+        package = availEntry.package;
+        inherit kixlib;
+      };
+      # Shelf packages bypass buildRolesIndex until instantiated — validate
+      # meta.roles here so a typo'd role on a catalog entry throws instead
+      # of silently never matching a weak demand.
+      shelfRoles = map (roles.assertKnownRole "meta.roles of ${context}") (packageMeta.roles or [ ]);
     in
-    lib.unique (explicitAliases ++ metaAliases);
+    lib.unique (explicitAliases ++ shelfRoles ++ (packageMeta.defaultAliases or [ ]));
 
   checkMetaStatic =
     {
@@ -163,6 +179,16 @@ rec {
         lib.optional (matching != [ ]) (fail "conflicts with '${name}' ${scope} — instances: ${instances}")
       ) (packageMeta.conflictsWith or [ ]);
 
+      # Closed unsafe vocabulary (kix/lib/unsafe.nix): validate here so a
+      # typo'd grant fails the cluster even when the escaped rule never
+      # fires (e.g. `raw-pvc` granted but no PVC built this eval).
+      unsafeAssertions = builtins.concatMap (
+        grant:
+        lib.optional (!(unsafe.registry ? ${grant})) (
+          fail "meta.unsafe contains unknown grant '${grant}'. ${unsafe.knownGrantsHint}"
+        )
+      ) (packageMeta.unsafe or [ ]);
+
       deprecated = packageMeta.deprecated or null;
       deprecationWarnings =
         if deprecated == null then
@@ -180,6 +206,7 @@ rec {
         k8sAssertions
         compatAssertions
         conflictAssertions
+        unsafeAssertions
       ];
       warnings = deprecationWarnings;
     };

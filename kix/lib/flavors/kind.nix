@@ -1,9 +1,16 @@
 # Flavor: kind — Kubernetes in Docker, for local development and CI.
 #
-# Pre-installs: kindnet CNI, standard StorageClass (local, ephemeral).
-# Volumes do not survive container restarts. No LoadBalancer support.
+# Pre-installs: kindnet CNI, standard StorageClass (local, ephemeral —
+# volumes do not survive container restarts). No LoadBalancer support.
 #
-# Platform imports: DNS (coredns, bundled), storage (standard, ephemeral).
+# Role bindings (v2_discussions/127): kindnet owns the pod network
+# EXCLUSIVELY — deploying a managed CNI on stock kind breaks the cluster,
+# so it is refused at eval. A kind cluster created with the default CNI
+# disabled overrides `cluster.roles.cni.binding = "absent"` and fills the
+# role with a managed instance (this is what ludo-kind does with cilium).
+# DNS and storage are weak (shadowable) environment defaults, declared as
+# platform imports below.
+#
 # Platform intents: when networkPolicy.enable = true, declares connectivity
 # for kind's non-kix-managed system pods so they aren't blocked by Cilium's
 # `always` enforcement mode. CoreDNS intents live on the platform-dns
@@ -20,14 +27,22 @@
 {
   cluster.provider = lib.mkDefault "kind";
 
+  cluster.roles = {
+    cni = {
+      binding = lib.mkDefault "exclusive";
+      provider = lib.mkDefault "kindnet";
+    };
+    dns.binding = lib.mkDefault "shadowable";
+    storageClasses.binding = lib.mkDefault "shadowable";
+    loadBalancer.binding = lib.mkDefault "absent";
+  };
+
   cluster.capabilities = {
     multiNode = lib.mkDefault false;
-    loadBalancer = lib.mkDefault false;
-    cni = lib.mkDefault "kindnet";
-    networkPolicyAPI = lib.mkDefault "none"; # kindnet has no enforcement
-    persistentStorage = lib.mkDefault false; # volumes are ephemeral (docker container FS)
-    rwxStorage = lib.mkDefault false;
-    volumeSnapshots = lib.mkDefault false;
+    managedControlPlane = lib.mkDefault false;
+    nodeAutoscaling = lib.mkDefault false;
+    privilegedContainers = lib.mkDefault true;
+    daemonSets = lib.mkDefault true;
   };
 
   # Platform-provided imports.
@@ -36,12 +51,12 @@
       package = kix.mkImport {
         kind = "Deployment";
         apiVersion = "apps/v1";
+        roles = [ "dns" ];
         out = {
           name = "coredns";
           fqdn = "kube-dns.kube-system.svc.cluster.local";
         };
       };
-      aliases = [ "dns" ];
 
       # Platform intents for CoreDNS. Materialized into CNPs and injected
       # as extraDeps on the import marker, establishing:
@@ -102,11 +117,13 @@
 
     platform-storage = {
       package = kix.mkImport {
+        roles = [ "storageClasses" ];
         out = {
+          # Ephemeral: backed by the docker container FS, does not survive
+          # container restarts.
           storageClassName = "standard";
         };
       };
-      aliases = [ "storageClasses" ];
       optional = true;
     };
   };

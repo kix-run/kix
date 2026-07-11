@@ -527,10 +527,10 @@ in
       # the source manifest (the operator does). The reflector package owns
       # this wiring: when a reflector instance is resolved via DI, we call
       # `reflector.out.reflectSecret scope { ... }` which returns the
-      # annotator bundle (SA + Role + RoleBinding + one-shot Job). These
-      # resources are stamped with `kix.dev/capability: reflection` so the
-      # architecture scorecard treats them as DI-provided rather than
-      # hand-rolled.
+      # annotator bundle (SA + Role + RoleBinding + one-shot Job). The
+      # `reflector` dep edge is what marks this as DI-provided — reflector
+      # declares the annotation domain, and the architecture scorecard lints
+      # hand-written reflector annotations against that edge.
 
       reflectorBundle =
         if reflectionEnabled then
