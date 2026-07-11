@@ -448,6 +448,8 @@ DI resolution priority: (1) explicit dep overrides, (2) same-namespace match, (3
 
 **Storage DI:** Persistent storage uses first-class PVC instances, not config-based `existingClaim` strings. Short version: `storage` is a DI dep, use `kix.mount.pvc storage { mountPath = ...; }`. **Read `STORAGE.md` for the full pattern, cluster definition example, and design rationale.**
 
+**Raw PVCs are an eval error.** A package building `kind: PersistentVolumeClaim` directly throws at build time — including PVCs emitted by an imported helm chart with persistence enabled. The escape is an explicit grant in package meta: `meta.unsafe = [ "raw-pvc" ]` (closed vocabulary, `kix/lib/unsafe.nix`; every grant is listed by the `architecture.unsafeGrants` scorecard audit). Prefer restructuring to the `storage` DI dep; grant `raw-pvc` only for chart-emitted claims or genuinely inline multi-component claims.
+
 ### Package Meta
 
 ```nix
@@ -469,6 +471,8 @@ meta = {
 - All enforced by `kix/lib/eval.nix` at build time.
 
 **Scorecard:** Packages are automatically scored against built-in policy rules at build time. Rules check for: resource requests/limits, liveness+readiness probes, non-root containers, no `:latest` tags, `meta.owner`, `meta.description`, PDBs for multi-replica deployments, network policies, and more. Violations surface as warnings or errors. Read `kix/lib/rules/` and `kix/lib/scorecard.nix` for the full rule set and override mechanism.
+
+**Annotation domains (v2_discussions/128):** operator packages declare the annotation prefixes they manage via `meta.annotationDomains = [ "reflector.v1.k8s.emberstack.com" ]` (reflector, prometheus-operator do). The `architecture.annotationDomainOwnership` rule warns when a package's resources carry `metadata.annotations` keys under a declared domain without a DI dep on the declarer, and when a domain-shaped annotation has no declarer anywhere (dead annotation — the operator is probably missing). Reserved suffixes (`kubernetes.io`, `k8s.io`, `kix.dev`, `helm.sh`, `kubebuilder.io`) are exempt; by-convention domains consumed outside kix (e.g. `prometheus.io` scrape annotations) go in the cluster's `scorecard.knownAnnotationDomains`. There is no `kix.dev/capability` stamping anymore — the dep edge is the legitimacy marker.
 
 ## Multi-Component Packages
 
