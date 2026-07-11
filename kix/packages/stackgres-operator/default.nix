@@ -235,6 +235,21 @@ in
         ];
       };
     };
+    # SGCluster CRs terminate endpoint facts: addresses embedded in the spec
+    # (directly, or conducted through SGObjectStorage — e.g. an S3 backup
+    # endpoint sourced from a Service's out.url) are dialed by the operand
+    # StatefulSet pods the operator spawns, not by whoever references the
+    # CR. netpol derives operand egress + caller-ingress from this. The
+    # baseline operand policies (apiserver, patroni self-traffic, extension
+    # downloads) are not endpoint-derived and stay hand-rolled in
+    # stackgres-cluster.
+    factBehavior.SGCluster = {
+      endpoint = "terminate";
+      podSelector = cr: {
+        app = "StackGresCluster";
+        "stackgres.io/cluster-name" = cr.metadata.name;
+      };
+    };
   };
 
   options = {
