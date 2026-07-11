@@ -59,6 +59,21 @@ let
         "CREATE"
         "UPDATE"
       ];
+      # SGCluster CRs terminate endpoint facts: addresses embedded in the
+      # spec (directly, or conducted through SGObjectStorage — e.g. an S3
+      # backup endpoint sourced from a Service's out.url) are dialed by the
+      # operand StatefulSet pods the operator spawns, not by whoever
+      # references the CR. netpol derives operand egress + caller-ingress
+      # from this. The baseline operand policies (apiserver, patroni
+      # self-traffic, extension downloads) are not endpoint-derived and
+      # stay hand-rolled in stackgres-cluster.
+      factBehavior = {
+        endpoint = "terminate";
+        podSelector = cr: {
+          app = "StackGresCluster";
+          "stackgres.io/cluster-name" = cr.metadata.name;
+        };
+      };
     };
     sgInstanceProfile = {
       kind = "SGInstanceProfile";
@@ -233,21 +248,6 @@ in
         egress = [
           { to = "world"; }
         ];
-      };
-    };
-    # SGCluster CRs terminate endpoint facts: addresses embedded in the spec
-    # (directly, or conducted through SGObjectStorage — e.g. an S3 backup
-    # endpoint sourced from a Service's out.url) are dialed by the operand
-    # StatefulSet pods the operator spawns, not by whoever references the
-    # CR. netpol derives operand egress + caller-ingress from this. The
-    # baseline operand policies (apiserver, patroni self-traffic, extension
-    # downloads) are not endpoint-derived and stay hand-rolled in
-    # stackgres-cluster.
-    factBehavior.SGCluster = {
-      endpoint = "terminate";
-      podSelector = cr: {
-        app = "StackGresCluster";
-        "stackgres.io/cluster-name" = cr.metadata.name;
       };
     };
   };
@@ -845,6 +845,7 @@ in
           kind = def.kind;
           plural = resolvedNames.${attr}.plural;
           version = "v1";
+          factBehavior = def.factBehavior or null;
           # Tie markers to the operator Deployment: the CLI readiness check
           # won't poll for each CRD until the operator pod is Running and
           # has had a chance to install its built-in CRD schemas.

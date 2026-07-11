@@ -202,14 +202,24 @@ let
       };
   };
 
-  # CRD-owning operator: declares that TestCluster CRs terminate endpoint
-  # facts — the controller dials them via operand pods it spawns.
+  # CRD-owning operator: declares TestCluster's fact behavior ON THE CRD
+  # REF (behavior is a property of the kind, delivered through the typed
+  # builder chain — mkCRDRef → out.crds → consumer's scope.mkCR).
+  testClusterBehavior = {
+    endpoint = "terminate";
+    podSelector = cr: {
+      "test.io/cluster" = cr.metadata.name;
+    };
+  };
+
   mkOperatorPackage =
-    { factBehavior }:
+    {
+      factBehavior ? null,
+    }:
     {
       meta = {
         version = "test";
-        inherit factBehavior;
+        defaultAliases = [ "testOperator" ];
       };
       build =
         { self, scope, ... }:
@@ -219,22 +229,69 @@ let
             kind = "ConfigMap";
             name = "test-operator";
           };
-          root = self.cm;
+          crdRef = scope.mkCRDRef {
+            group = "test.io";
+            kind = "TestCluster";
+            plural = "testclusters";
+            inherit factBehavior;
+          };
+          root = {
+            resource = self.cm;
+            requires = [ self.crdRef ];
+            out.crds.testCluster = self.crdRef;
+          };
         };
     };
 
-  testClusterBehavior = {
-    TestCluster = {
-      endpoint = "terminate";
-      podSelector = cr: {
-        "test.io/cluster" = cr.metadata.name;
+  # consumer: builds a TestCluster CR via the operator's typed builder,
+  # embedding db's address; plus a deployment that only NAMES the CR (no
+  # address flows to the workload)
+  crConsumerPackage = {
+    meta.version = "test";
+    build =
+      {
+        self,
+        scope,
+        db,
+        testOperator,
+        ...
+      }:
+      {
+        cluster = scope.mkCR testOperator.out.crds.testCluster {
+          name = "mycluster";
+          spec.connection = db.out.fqdn;
+        };
+        deployment = scope.mkDeployment {
+          name = "consumer";
+          spec = {
+            selector.matchLabels = scope.selectorLabels;
+            template = {
+              metadata.labels = scope.selectorLabels;
+              spec.containers = [
+                (
+                  {
+                    name = "consumer";
+                    image = "example/consumer:1";
+                    env = [
+                      {
+                        name = "CLUSTER_NAME";
+                        value = self.cluster.out.name;
+                      }
+                    ];
+                  }
+                  // containerBase
+                )
+              ];
+            };
+          };
+        };
+        root = self.deployment;
       };
-    };
   };
 
-  # consumer: creates a TestCluster CR embedding db's address, plus a
-  # deployment that only NAMES the CR (no address flows to the workload)
-  crConsumerPackage = {
+  # same consumer but builder-less: raw mkResource with a kind string —
+  # no behavior arrives unless cluster.factBehavior supplies it
+  rawCrConsumerPackage = {
     meta.version = "test";
     build =
       {
@@ -1441,7 +1498,7 @@ let
     t43-undeclared-cr-conducts =
       let
         withCr = {
-          instances.appns.app.package = lib.mkForce crConsumerPackage;
+          instances.appns.app.package = lib.mkForce rawCrConsumerPackage;
         };
         ms = manifests (mkCluster [
           baseInstances
@@ -1453,14 +1510,27 @@ let
       hasName "app-deployment-consumer-to-db-ingress" cnps
       || throw "undeclared CR should conduct the fact to the workload; CNPs: ${builtins.toJSON (namesOf cnps)}";
 
-    # Two packages declaring the same kind = duplicate-symbol error.
-    t44-duplicate-fact-behavior-throws = evalFails (mkCluster [
-      baseInstances
-      {
-        instances.opns.op-a.package = mkOperatorPackage { factBehavior = testClusterBehavior; };
-        instances.opns.op-b.package = mkOperatorPackage { factBehavior = testClusterBehavior; };
-      }
-    ]);
+    # cluster.factBehavior (keyed "group/Kind") covers builder-less CRs and
+    # overrides CRD declarations: the raw-built CR terminates, operand CNPs
+    # appear, and the workload edge from conduction disappears.
+    t44-cluster-fact-behavior-override =
+      let
+        withCr = {
+          instances.appns.app.package = lib.mkForce rawCrConsumerPackage;
+          cluster.factBehavior."test.io/TestCluster" = testClusterBehavior;
+        };
+        ms = manifests (mkCluster [
+          baseInstances
+          netpolOn
+          withCr
+        ]);
+        cnps = ofKind "CiliumNetworkPolicy" ms;
+      in
+      (
+        hasName "app-testcluster-mycluster-egress" cnps
+        && !(hasName "app-deployment-consumer-to-db-ingress" cnps)
+      )
+      || throw "cluster override should terminate the raw CR; CNPs: ${builtins.toJSON (namesOf cnps)}";
   };
 
   failures = lib.filterAttrs (

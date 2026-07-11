@@ -17,7 +17,10 @@ in
       workloadInterceptors,
       peekedPackageMeta,
       clusterCtx,
-      factBehaviorIndex ? { },
+      # cluster.factBehavior, keyed "group/Kind": operator override (wins
+      # over the CRD-declared behavior arriving via mkCR) and fallback for
+      # builder-less CRs (helm-rendered, raw mkResource)
+      factBehaviorOverrides ? { },
       # scopeObj is the enclosing mkScope fixpoint — only consume lazily (interceptor ctx, mkCR); forcing it while default.nix constructs it would recurse
       scopeObj,
     }:
@@ -28,7 +31,7 @@ in
           ...
         }@args:
         let
-          behavior = factBehaviorIndex.${args.kind or ""} or null;
+          behavior = resolveFactBehavior args;
           # a terminate-declared CR dials out (via its operands) — it waits
           # on DNS like any dialing workload would. Conservative: spliced
           # even when this particular CR absorbed no endpoint (harmless).
@@ -54,6 +57,19 @@ in
           )
         );
 
+      # Behavior is a property of the CRD: it normally arrives in args via
+      # the typed builder chain (mkCRD/mkCRDRef → mkCRDBuilders.cr → mkCR).
+      # The cluster override (keyed "group/Kind") wins; it also covers
+      # builder-less CRs (helm-rendered, raw mkResource by kind string).
+      resolveFactBehavior =
+        args:
+        let
+          apiVersion = args.apiVersion or "";
+          group = if lib.hasInfix "/" apiVersion then builtins.head (lib.splitString "/" apiVersion) else "";
+          key = "${group}/${args.kind or ""}";
+        in
+        factBehaviorOverrides.${key} or (args.factBehavior or null);
+
       scopeMkClusterResource =
         {
           labels ? { },
@@ -65,7 +81,7 @@ in
             namespace = clusterScoped;
             inherit clusterDomain;
             labels = clusterLabels // instanceLabels // labels;
-            factBehavior = factBehaviorIndex.${args.kind or ""} or null;
+            factBehavior = resolveFactBehavior args;
           }
         )
         // {
@@ -443,6 +459,11 @@ in
           plural = crdSpec.names.plural;
           version = (builtins.head crdSpec.versions).name;
           crdScope = crdSpec.scope or "Namespaced";
+          factBehavior =
+            if attrs ? factBehavior && attrs.factBehavior != null then
+              k8s.facts.validateBehavior "mkCRD ${instanceName}" "${group}/${crKind}" attrs.factBehavior
+            else
+              null;
 
           crdResource = scopeMkClusterResource {
             apiVersion = "apiextensions.k8s.io/v1";
@@ -461,7 +482,7 @@ in
             crdOrRef = crdResource;
             group = group;
             kind = crKind;
-            inherit version crdScope;
+            inherit version crdScope factBehavior;
           };
         in
         crdResource
@@ -505,8 +526,18 @@ in
           version ? "v1",
           crdScope ? "Namespaced",
           installedBy ? null,
+          # controller semantics of this kind (see core/facts.nix): declared
+          # here because behavior is a property of the CRD, and this is where
+          # the CRD-owning package reifies the kind. Threads through mkCR
+          # into every CR's seal.
+          factBehavior ? null,
         }:
         let
+          _validatedBehavior =
+            if factBehavior != null then
+              k8s.facts.validateBehavior "mkCRDRef ${instanceName}" "${group}/${kind}" factBehavior
+            else
+              null;
           crdName = "${plural}.${group}";
           groupSlug = builtins.replaceStrings [ "." ] [ "-" ] group;
           markerName = "crd-ref-${plural}-${groupSlug}";
@@ -529,6 +560,7 @@ in
 
           crdBuilders = k8s.mkCRDBuilders {
             crdOrRef = marker;
+            factBehavior = _validatedBehavior;
             inherit
               group
               kind

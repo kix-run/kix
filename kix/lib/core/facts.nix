@@ -78,10 +78,48 @@ rec {
 
   conducts = kind: !(builtins.elem kind terminatorKinds);
 
+  # Shape check for a factBehavior declaration ({ endpoint; podSelector? }),
+  # shared by the CRD-declaration site (mkCRD/mkCRDRef args) and the
+  # cluster.factBehavior override. `source` names the declarer in errors.
+  validateBehavior =
+    source: kindKey: entry:
+    let
+      endpoint =
+        entry.endpoint
+          or (throw "kix: factBehavior for '${kindKey}' (${source}) must set `endpoint` to \"terminate\" or \"conduct\"");
+      _enum =
+        if
+          !(builtins.elem endpoint [
+            "terminate"
+            "conduct"
+          ])
+        then
+          throw "kix: factBehavior for '${kindKey}' (${source}): endpoint must be \"terminate\" or \"conduct\", got '${toString endpoint}'"
+        else
+          null;
+      _sel =
+        if
+          endpoint == "terminate"
+          && !(
+            builtins.isFunction (entry.podSelector or null) || builtins.isAttrs (entry.podSelector or null)
+          )
+        then
+          throw (
+            "kix: factBehavior for '${kindKey}' (${source}) declares endpoint = \"terminate\" "
+            + "but no `podSelector` — termination-by-CR opens holes for the OPERAND pods, "
+            + "and only the CRD owner can name them (a function `cr: { ... }` over the raw "
+            + "manifest, or a static label attrset)."
+          )
+        else
+          null;
+    in
+    builtins.seq _enum (builtins.seq _sel entry);
+
   # A "foreign" apiVersion group is CRD territory: kix's core table can't
   # know whether the kind's controller dials absorbed endpoints — the
-  # CRD-owning package declares it via meta.factBehavior. Builtin groups
-  # (no dot, or *.k8s.io) and kix's own CRs are exempt.
+  # CRD-owning package declares it on the CRD (mkCRD/mkCRDRef factBehavior
+  # arg), or the cluster overrides per "group/Kind". Builtin groups (no
+  # dot, or *.k8s.io) and kix's own CRs are exempt.
   isForeignGroup =
     apiVersion:
     let

@@ -309,12 +309,13 @@ rec {
           && facts.isForeignGroup apiVersion
           && facts.factsOfKind "endpoint" manifestJson != [ ]
         then
-          "kix: ${kind}/${name} (${apiVersion}) absorbed endpoint fact(s) but no package "
-          + "declares `meta.factBehavior.${kind}` — kix assumes \"conduct\" (the resource "
-          + "carries the address onward). If this kind's controller DIALS the endpoint "
-          + "(operator-managed pods), the CRD-owning package must declare "
-          + "`meta.factBehavior.${kind} = { endpoint = \"terminate\"; podSelector = cr: { ... }; }` "
-          + "or netpol will not open holes for the operand pods."
+          "kix: ${kind}/${name} (${apiVersion}) absorbed endpoint fact(s) but carries no "
+          + "fact behavior — kix assumes \"conduct\" (the resource carries the address "
+          + "onward). If this kind's controller DIALS the endpoint (operator-managed "
+          + "pods): build the CR via the typed builder (`scope.mkCR <owner>.out.crds.…`) "
+          + "and declare `factBehavior = { endpoint = \"terminate\"; podSelector = cr: "
+          + "{ ... }; }` on the owner's mkCRD/mkCRDRef — or, for builder-less CRs (helm, "
+          + "raw kind strings), set `cluster.factBehavior.\"<group>/${kind}\"`."
         else
           null;
 
@@ -431,8 +432,10 @@ rec {
         # hatch (stamp dialing intent onto a value that lacks it)
         factTokens = lib.optionalAttrs _isEndpointProducer { endpoint = _ownFactCtx; };
 
-        # endpoint payloads absorbed by a terminate-declared CR — consumed
-        # by the netpol instance processor (operand CNPs)
+        # the resolved behavior + endpoint payloads absorbed by a
+        # terminate-declared CR — consumed by the netpol instance processor
+        # (operand CNPs read podSelector straight off the resource)
+        inherit factBehavior;
         absorbedEndpointFacts = _absorbedEndpointFacts;
 
         rawManifest = rawManifestStamped;
@@ -582,6 +585,12 @@ rec {
       kind,
       version,
       crdScope,
+      # fact behavior of this kind's controller (validated at the
+      # declaration site): threaded into every CR built via mkCR, so the
+      # seal knows terminate/conduct without any registry — behavior is a
+      # property of the CRD, delivered along the same chain as the kind
+      # name and the CRD-before-CR ordering edge.
+      factBehavior ? null,
     }:
     let
       crApiVersion = "${group}/${version}";
@@ -594,7 +603,8 @@ rec {
           apiVersion = crApiVersion;
           kind = crKind;
           requires = (args.requires or [ ]) ++ [ crdOrRef ];
-        };
+        }
+        // lib.optionalAttrs (factBehavior != null) { inherit factBehavior; };
 
       mkCR =
         consumerScope: args:

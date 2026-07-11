@@ -167,7 +167,6 @@ in
       allPartResources,
       networkConfig,
       packageMeta,
-      factBehaviorIndex ? { },
       networkPolicyEnforcer ? null,
     }:
     let
@@ -297,6 +296,9 @@ in
       # endpoints absorbed by the CR spec, so the holes open for the OPERAND
       # pods named by the declaration's podSelector — the CR has no pods of
       # its own and never went through sealWorkload.
+      # the resolved behavior rides on the resource itself (threaded through
+      # the CRD builder chain, or the cluster override, at seal time) — no
+      # index lookup needed here
       terminatingCrs =
         # self-enforcer instances arrive with a null enforcer — no policies
         if networkPolicyEnforcer == null then
@@ -304,16 +306,15 @@ in
         else
           builtins.filter (
             r:
-            let
-              beh = factBehaviorIndex.${r.kind or ""} or null;
-            in
-            beh != null && (beh.endpoint or "") == "terminate" && (r.absorbedEndpointFacts or [ ]) != [ ]
+            ((r.factBehavior or null) != null)
+            && (r.factBehavior.endpoint or "") == "terminate"
+            && (r.absorbedEndpointFacts or [ ]) != [ ]
           ) allPartResources;
 
       operandPolicies = builtins.concatMap (
         r:
         let
-          beh = factBehaviorIndex.${r.kind};
+          beh = r.factBehavior;
           operandSelector =
             if builtins.isFunction beh.podSelector then beh.podSelector r.rawManifest else beh.podSelector;
           crNamespace = core.nsOf r;

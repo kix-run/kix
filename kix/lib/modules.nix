@@ -243,15 +243,19 @@
       type = lib.types.attrsOf lib.types.anything;
       default = { };
       description = ''
-        Per-kind override of the fact terminate/conduct table (escape hatch
-        for broken or missing third-party declarations — normally the
-        CRD-owning package declares this via `meta.factBehavior`). Shape:
-        `{ <Kind> = { endpoint = "terminate" | "conduct"; podSelector =
-        cr: { ... }; }; }`. "terminate" means the kind's controller dials
-        the endpoints embedded in the resource — netpol opens egress for
-        the operand pods named by `podSelector`. "conduct" means the
-        resource merely carries the values onward. Cluster entries win over
-        package declarations. Validated eagerly at cluster eval.
+        Per-kind override of the fact terminate/conduct table, keyed
+        "group/Kind" (bare kinds collide across API groups). Normally the
+        CRD-owning package declares behavior on the CRD itself (the
+        `factBehavior` arg of `scope.mkCRD` / `scope.mkCRDRef`, delivered
+        to every CR built via `scope.mkCR`); this option is the cluster
+        operator's escape hatch — it wins over the CRD declaration and
+        also covers builder-less CRs (helm-rendered, raw kind strings).
+        Shape: `{ "stackgres.io/SGCluster" = { endpoint = "terminate" |
+        "conduct"; podSelector = cr: { ... }; }; }`. "terminate" means the
+        kind's controller dials the endpoints embedded in the resource —
+        netpol opens egress for the operand pods named by `podSelector`.
+        "conduct" means the resource merely carries the values onward.
+        Validated eagerly at cluster eval.
       '';
     };
 

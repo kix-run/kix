@@ -44,7 +44,7 @@ rec {
       networkPolicyEnforcer ? null,
       peekedPackageMeta ? { },
       workloadInterceptors ? [ ],
-      factBehaviorIndex ? { },
+      factBehaviorOverrides ? { },
       edgeAnalysis ? emptyEdgeAnalysis,
       clusterCtx ? {
         config = { };
@@ -102,7 +102,7 @@ rec {
           workloadInterceptors
           peekedPackageMeta
           clusterCtx
-          factBehaviorIndex
+          factBehaviorOverrides
           scopeObj
           ;
       };
