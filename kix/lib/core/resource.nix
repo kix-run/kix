@@ -2,6 +2,8 @@
 
 rec {
 
+  facts = import ./facts.nix { inherit lib; };
+
   clusterScoped = {
     _type = "k8s-cluster-scoped";
     __toString = _: "";
@@ -91,15 +93,32 @@ rec {
         else
           null;
 
+      # imported Services are endpoint producers too — no seal exists, but
+      # the fact is pure payload, so a reference can mint it all the same.
+      # This closes an old blindspot: dialing an imported Service now
+      # produces a netpol edge instead of silently nothing.
+      _importFactCtx =
+        if kind == "Service" && (spec.selector or { }) != { } then
+          facts.mkFact "endpoint" {
+            inherit name;
+            namespace = toString nsKey;
+            selector = spec.selector;
+            ports = spec.ports or [ ];
+          }
+        else
+          { };
+
+      attachFactCtx = value: builtins.appendContext (toString value) _importFactCtx;
+
       autoOut = {
         inherit name;
-        fqdn = if isClusterScoped then name else "${name}.${nsKey}.svc.${clusterDomain}";
+        fqdn = attachFactCtx (if isClusterScoped then name else "${name}.${nsKey}.svc.${clusterDomain}");
       }
       // lib.optionalAttrs (autoSelector != null) {
         selector = autoSelector;
       };
 
-      userOut = lib.mapAttrs (_: v: toString v) outputs;
+      userOut = lib.mapAttrs (_: v: attachFactCtx (toString v)) outputs;
     in
     {
       _type = "k8s-resource-ref";
@@ -110,6 +129,7 @@ rec {
         apiVersion
         ;
       out = autoOut // userOut;
+      factTokens = lib.optionalAttrs (_importFactCtx != { }) { endpoint = _importFactCtx; };
       requires = [ ];
     };
 
@@ -212,7 +232,9 @@ rec {
 
       manifestJson = builtins.toJSON rawManifest;
 
-      implicitCtxPaths = builtins.filter (p: lib.hasPrefix "/nix/store/" p) (
+      # fact tokens ride the same context channel but are semantic claims,
+      # not derivation edges — they never become depends-on entries
+      implicitCtxPaths = builtins.filter (p: lib.hasPrefix "/nix/store/" p && !facts.isFactPath p) (
         builtins.attrNames (builtins.getContext manifestJson)
       );
       implicitEntries = map extractStoreHash implicitCtxPaths;
@@ -242,17 +264,64 @@ rec {
 
       manifestJsonWithDeps = builtins.appendContext manifestJsonStamped depContexts;
 
+      # Split the context channels at the seal boundary: identity paths
+      # become store references of the sealed file; fact tokens are harvested
+      # for re-emission on out.* (conduction) and stripped so they never
+      # enter the store DAG — facts live in eval-time context only.
+      #
+      # Harvest from manifestJson (pre-stamp), NOT manifestJsonWithDeps:
+      # facts only ever arrive embedded in VALUES; the requires/extraDeps
+      # fold contributes identity context only. Reading the withDeps string
+      # here would force every dep's seal whenever any out.* field is
+      # touched — a fixpoint hazard (e.g. service.out.name inside a webhook
+      # config whose consumer the service itself requires).
+      _forwardedFactCtx =
+        if facts.conducts kind then (facts.partitionCtx (builtins.getContext manifestJson)).facts else { };
+
+      manifestJsonSealed = builtins.appendContext (builtins.unsafeDiscardStringContext manifestJsonWithDeps) (facts.partitionCtx (
+        builtins.getContext manifestJsonWithDeps
+      )).rest;
+
       # toFile's filename cannot carry references — content keeps full context
       sanitizedName = builtins.unsafeDiscardStringContext (builtins.replaceStrings [ ":" ] [ "_" ] name);
       sanitizedNsKey = builtins.unsafeDiscardStringContext (toString nsKey);
 
-      _identityPath = builtins.toFile "k8s-${kind}-${sanitizedNsKey}-${sanitizedName}" manifestJsonWithDeps;
+      _identityPath = builtins.toFile "k8s-${kind}-${sanitizedNsKey}-${sanitizedName}" manifestJsonSealed;
 
       _identityPathPlain = builtins.unsafeDiscardStringContext _identityPath;
 
       _identityCtx = builtins.getContext "${_identityPath}";
 
-      attachCtx = value: builtins.appendContext (toString value) _identityCtx;
+      # Services with a selector are endpoint producers: dialing their
+      # address reaches pods. The fact is pure payload — no reference to
+      # this seal — so it only changes when the semantics (selector, ports,
+      # namespace) change, not on every content churn.
+      _isEndpointProducer =
+        kind == "Service"
+        && (rawManifest.spec.selector or { }) != { }
+        && (rawManifest.spec.type or "ClusterIP") != "ExternalName";
+
+      _ownFactCtx =
+        if _isEndpointProducer then
+          facts.mkFact "endpoint" {
+            name = builtins.unsafeDiscardStringContext name;
+            namespace = builtins.unsafeDiscardStringContext (toString nsKey);
+            selector = rawManifest.spec.selector;
+            ports = rawManifest.spec.ports or [ ];
+          }
+        else
+          { };
+
+      # Two attach flavors, one semantic difference:
+      #   attachCtx        identity + conducted facts. "This value was
+      #                    computed from me (and carries what I carry)."
+      #   attachConnectCtx additionally stamps my own endpoint fact:
+      #                    "using this value means dialing me."
+      # name/selector are structural (naming ≠ dialing); fqdn/url and user
+      # outputs are address-shaped. `facts.refOnly` is the per-use escape.
+      attachCtx = value: builtins.appendContext (toString value) (_identityCtx // _forwardedFactCtx);
+      attachConnectCtx =
+        value: builtins.appendContext (toString value) (_identityCtx // _forwardedFactCtx // _ownFactCtx);
 
       autoSelector =
         if rawManifest ? spec.selector.matchLabels then
@@ -265,7 +334,10 @@ rec {
       autoOut = {
         name = attachCtx name;
         fqdn =
-          if isClusterScoped then attachCtx name else attachCtx "${name}.${nsKey}.svc.${clusterDomain}";
+          if isClusterScoped then
+            attachConnectCtx name
+          else
+            attachConnectCtx "${name}.${nsKey}.svc.${clusterDomain}";
         identityHash = attachCtx (extractStoreHash _identityPathPlain);
       }
       // lib.optionalAttrs (autoSelector != null) {
@@ -285,10 +357,10 @@ rec {
             effectivePort = if port != null then port else firstPort;
             portSuffix = if effectivePort != null then ":${toString effectivePort}" else "";
           in
-          attachCtx "${scheme}://${name}.${nsKey}.svc.${clusterDomain}${portSuffix}";
+          attachConnectCtx "${scheme}://${name}.${nsKey}.svc.${clusterDomain}${portSuffix}";
       };
 
-      userOut = lib.mapAttrs (_: v: if v == null then null else attachCtx (toString v)) outputs;
+      userOut = lib.mapAttrs (_: v: if v == null then null else attachConnectCtx (toString v)) outputs;
 
       mergedOut =
         let
@@ -311,9 +383,13 @@ rec {
 
         out = mergedOut;
 
+        # fact tokens this resource mints, for the `facts.connect` escape
+        # hatch (stamp dialing intent onto a value that lacks it)
+        factTokens = lib.optionalAttrs _isEndpointProducer { endpoint = _ownFactCtx; };
+
         rawManifest = rawManifestStamped;
 
-        manifest = attachCtxDeep _identityCtx rawManifestStamped;
+        manifest = attachCtxDeep (_identityCtx // _forwardedFactCtx) rawManifestStamped;
       };
     in
     self;

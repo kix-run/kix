@@ -29,6 +29,23 @@ with that resource's own store path.** So the moment you *use* another resource'
 name/address/selector, you are invisibly carrying a pointer to it. Hold onto
 that — it is the entire game.
 
+Since the typed-facts rework the channel carries TWO kinds of path:
+
+```
+   identity path   /nix/store/…-k8s-Service-db-postgres     the derivation record
+                   "this value was computed from postgres"   → ordering, depends-on
+   fact token      /nix/store/…-kix-fact-endpoint            a typed claim
+                   content: {selector, ports, ns, name}      → netpol edges, DNS
+```
+
+A fact token is a tiny self-describing file (`readFile` it, no registry).
+Address-shaped fields (`out.fqdn`, `out.url`, user outputs) carry both;
+structural fields (`out.name`) carry identity only — *naming* a resource and
+*dialing* it are different claims. Non-workload seals conduct absorbed facts
+onward (a ConfigMap carrying postgres's fqdn hands the claim to whoever mounts
+it); workloads terminate them (their pods dial). Facts are stripped before
+sealing — they exist only at eval time, never in the store DAG.
+
 ---
 
 ## 1. Sealing: a manifest becomes an identity
@@ -166,29 +183,33 @@ Two distinct return channels, and the distinction matters:
 
 ---
 
-## 5. Service edges: who-talks-to-whom, for free
+## 5. Service edges: who-dials-whom, read back from facts
 
-An "edge" is the same context trick as §2, but now we care about the *meaning*:
-an application-level "this pod initiates a connection to that Service."
+An "edge" is no longer inferred from identity presence — it is *stated* by the
+endpoint fact riding the address the workload embedded:
 
 ```
-   Service registry  (built from THIS instance's resolved dependencies):
-       P_svc1 → postgres Service   { selector, ports, namespace }
-       P_svc2 → redis    Service   { selector, ports, namespace }
+   postgres Service seals →  out.fqdn ⟨ P_svc(identity), F_ep(fact) ⟩
+                                          F_ep content: {selector, ports, ns, name}
 
-   workload manifest context:  ⟨ P_svc1 ⟩        ◀ it used postgres.out.fqdn
+   workload embeds the fqdn (directly, or via a ConfigMap that conducted it)
                                    │
-                       intersect context ∩ registry
+       getContext(workload JSON) → filter kix-fact-* → readFile each
                                    ▼
-   edges = [ { service = postgres, targetSelector, targetNamespace, ports } ]
+   edges = [ { name, targetSelector, targetNamespace, ports, service? } ]
 
-   Meaning captured: "app → postgres".  Two independent consumers:
+   Meaning captured: "app DIALS postgres" (not merely "app mentions postgres").
+   Two independent consumers:
        • core   → order the pod after DNS (it needs name resolution to connect)
        • netpol → open a firewall path  app → postgres   (§7)
 ```
 
-Same detection mechanism, computed once in `sealWorkload`, shared. Core uses it
-even with netpol *off* (that's why DNS ordering is unconditional).
+Identity hits keep three demoted roles: DNS ordering stays conservative
+(naming is weak dial-evidence, an extra wait is harmless), helm workloads keep
+identity-derived edges (the chart pipeline loses address values), and identity-
+without-fact triggers the observed-vs-declared lint (`facts.refOnly` to
+acknowledge a structural use). Same detection, computed once in `sealWorkload`,
+shared. Core uses it even with netpol *off* (DNS ordering is unconditional).
 
 ---
 

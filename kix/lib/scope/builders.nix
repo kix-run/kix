@@ -130,8 +130,15 @@ in
           hostNetwork,
         }:
         let
-          edges = edgeAnalysis.edgesFor workloadInput;
-          dnsDeps = if edges != [ ] && edgeAnalysis.dnsRoot != null then [ edgeAnalysis.dnsRoot ] else [ ];
+          edgeReport = edgeAnalysis.edgesFor workloadInput;
+          edges = edgeReport.edges;
+          # DNS ordering uses the conservative edge set: naming a Service is
+          # weak dial evidence, and a spurious DNS wait is harmless
+          dnsDeps =
+            if edgeReport.dnsEdges != [ ] && edgeAnalysis.dnsRoot != null then
+              [ edgeAnalysis.dnsRoot ]
+            else
+              [ ];
           interceptorResults = map (
             interceptor:
             interceptor {
@@ -164,13 +171,21 @@ in
             }
           );
         in
-        builtins.foldl' (acc: warning: builtins.trace warning acc) (
-          workload
-          // {
-            _injectedResources = interceptorResources;
-            rawSelector = selector;
-          }
-        ) interceptorWarnings;
+        # Trace warnings anchored on outPath, NOT on the whole attrset:
+        # edge-lint warnings force toJSON(workloadInput) — serializing
+        # `requires` whose sealed manifests may reference this workload's
+        # rawSelector (e.g. a webhook config embedding the admission
+        # Service's out.name, whose selector reads rawSelector). rawSelector
+        # must stay reachable without forcing edge analysis; outPath is
+        # forced at every embedding anyway, so no warning is lost.
+        workload
+        // {
+          outPath = builtins.foldl' (acc: warning: builtins.trace warning acc) workload.outPath (
+            interceptorWarnings ++ map (w: "[${instanceName}] ${w}") edgeReport.warnings
+          );
+          _injectedResources = interceptorResources;
+          rawSelector = selector;
+        };
 
       mkWorkload =
         apiVersion: kind: attrs:
@@ -670,14 +685,25 @@ in
           resourceCtx = builtins.getContext "${marker}";
           attachCtx = value: builtins.appendContext (toString value) resourceCtx;
 
+          # the ref knows selector+ports explicitly — mint the endpoint fact
+          # from the declaration, same channel as a managed Service's seal
+          endpointFactCtx = k8s.facts.mkFact "endpoint" {
+            inherit name selector ports;
+            namespace = namespaceName;
+          };
+          attachConnectCtx = value: builtins.appendContext (toString value) (resourceCtx // endpointFactCtx);
+
           fqdn = "${name}.${namespaceName}.svc";
         in
         marker
         // {
+          factTokens = {
+            endpoint = endpointFactCtx;
+          };
           out = {
             name = attachCtx name;
-            fqdn = attachCtx fqdn;
-            port = attachCtx (toString (builtins.head ports).port);
+            fqdn = attachConnectCtx fqdn;
+            port = attachConnectCtx (toString (builtins.head ports).port);
             ports = ports;
             inherit selector;
           };

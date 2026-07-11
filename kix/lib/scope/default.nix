@@ -16,10 +16,15 @@ let
   unsafe = import ../unsafe.nix { inherit lib; };
 
   emptyEdgeAnalysis = {
-    edgesFor = _: [ ];
+    edgesFor = _: {
+      edges = [ ];
+      dnsEdges = [ ];
+      warnings = [ ];
+    };
     dnsRoot = null;
     serviceRegistry = { };
     serviceRefRegistry = { };
+    serviceIndex = { };
     isServiceRef = _: false;
   };
 in
@@ -140,7 +145,12 @@ rec {
           passengers: value:
           let
             extraCtx = builtins.foldl' (
-              acc: p: if builtins.isAttrs p && p ? outPath then acc // builtins.getContext "${p}" else acc
+              acc: p:
+              acc
+              # identity: the derivation record (ordering)
+              // (if builtins.isAttrs p && p ? outPath then builtins.getContext "${p}" else { })
+              # facts: the semantic claims (netpol edges ride along too)
+              // (builtins.foldl' (a: fc: a // fc) { } (builtins.attrValues (p.factTokens or { })))
             ) { } passengers;
           in
           builtins.appendContext (toString value) extraCtx;

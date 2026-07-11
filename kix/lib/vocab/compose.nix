@@ -38,6 +38,14 @@ in
 
 rec {
 
+  # Typed-fact escape hatches (core/facts.nix), re-exported for package
+  # authors: `kix.facts.refOnly svc.out.fqdn` (name it, don't dial it),
+  # `kix.facts.connect svc.factTokens.endpoint value` (dial by a value
+  # that lacks the claim, e.g. a bare intra-namespace name).
+  facts = {
+    inherit (import ../core/facts.nix { inherit lib; }) refOnly connect;
+  };
+
   port = name: containerPort: {
     inherit name containerPort;
     protocol = "TCP";

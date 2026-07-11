@@ -116,6 +116,9 @@ let
   mkAppPackage =
     {
       hostNetwork ? false,
+      # how the app wires the db address: fqdn = dialing (carries the
+      # endpoint fact); out.name alone is structural and derives no edge
+      wireDb ? (db: db.out.fqdn),
     }:
     {
       meta.version = "test";
@@ -144,7 +147,7 @@ let
                         env = [
                           {
                             name = "DB_HOST";
-                            value = db.out.name;
+                            value = wireDb db;
                           }
                         ];
                       }
@@ -157,6 +160,47 @@ let
           };
         };
     };
+
+  # dials db through a ConfigMap: the endpoint fact must conduct through the
+  # carrier's seal — indirection is the default case, not a special one
+  indirectAppPackage = {
+    meta.version = "test";
+    build =
+      {
+        self,
+        scope,
+        db,
+        ...
+      }:
+      {
+        cm = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          name = "app-config";
+          data.DB_HOST = db.out.fqdn;
+        };
+        deployment = scope.mkDeployment {
+          name = "app";
+          spec = {
+            selector.matchLabels = scope.selectorLabels;
+            template = {
+              metadata.labels = scope.selectorLabels;
+              spec.containers = [
+                (
+                  {
+                    name = "app";
+                    image = "example/app:1";
+                    envFrom = [ { configMapRef.name = self.cm.out.name; } ];
+                  }
+                  // containerBase
+                )
+              ];
+            };
+          };
+        };
+        root = self.deployment;
+      };
+  };
 
   # Reports whether the package-facing enforcer handle is set.
   probePackage = {
@@ -1209,6 +1253,81 @@ let
       in
       findings == [ ]
       || throw "direct-wired dep did not satisfy domain lint: ${builtins.toJSON findings}";
+
+    # ---- typed-facts edge semantics (core/facts.nix) ----------------------
+
+    # out.name alone is structural: no endpoint fact flows, so netpol derives
+    # NO edge to db (no caller-ingress CNP) — but the identity hit keeps the
+    # conservative DNS-ordering dep, and the derivation record (depends-on)
+    # is untouched.
+    t39-name-only-no-netpol-edge =
+      let
+        nameOnly = {
+          instances.appns.app.package = lib.mkForce (mkAppPackage {
+            wireDb = db: db.out.name;
+          });
+        };
+        cluster = mkCluster [
+          baseInstances
+          netpolOn
+          nameOnly
+        ];
+        ms = manifests cluster;
+        cnps = ofKind "CiliumNetworkPolicy" ms;
+        appDeployment = byName "app" (ofKind "Deployment" ms);
+        dnsHash = k8s.extractStoreHash cluster.instances.dns.dns.root.outPath;
+        annot = dependsOn appDeployment;
+      in
+      (
+        !(hasName "app-deployment-app-to-db-ingress" cnps)
+        && hasName "app-deployment-app-egress" cnps
+        && lib.hasInfix dnsHash annot
+      )
+      || throw "name-only wiring should drop the netpol edge but keep DNS dep; CNPs: ${builtins.toJSON (namesOf cnps)}, depends-on: ${annot}";
+
+    # db.out.fqdn embedded in a ConfigMap, workload only references the CM:
+    # the endpoint fact conducts through the carrier's seal, so the full CNP
+    # set appears exactly as if the workload dialed directly.
+    t40-configmap-indirection-edge =
+      let
+        indirect = {
+          instances.appns.app.package = lib.mkForce indirectAppPackage;
+        };
+        ms = manifests (mkCluster [
+          baseInstances
+          netpolOn
+          indirect
+        ]);
+        cnps = ofKind "CiliumNetworkPolicy" ms;
+        callerIngress = byName "app-deployment-app-to-db-ingress" cnps;
+      in
+      (callerIngress != null && callerIngress.metadata.namespace == "dbns")
+      || throw "endpoint fact did not conduct through ConfigMap; CNPs: ${builtins.toJSON (namesOf cnps)}";
+
+    # facts.refOnly is the per-use escape hatch: identity (ordering) kept,
+    # dialing claim stripped — fqdn used as a display string derives no edge.
+    t41-refonly-strips-edge =
+      let
+        refOnlyWired = {
+          instances.appns.app.package = lib.mkForce (mkAppPackage {
+            wireDb = db: k8s.facts.refOnly db.out.fqdn;
+          });
+        };
+        cluster = mkCluster [
+          baseInstances
+          netpolOn
+          refOnlyWired
+        ];
+        ms = manifests cluster;
+        cnps = ofKind "CiliumNetworkPolicy" ms;
+        appDeployment = byName "app" (ofKind "Deployment" ms);
+        dbSvcHash = k8s.extractStoreHash cluster.instances.dbns.db.raw.service.outPath;
+      in
+      (
+        !(hasName "app-deployment-app-to-db-ingress" cnps)
+        && lib.hasInfix dbSvcHash (dependsOn appDeployment)
+      )
+      || throw "refOnly should strip the edge but keep the identity dep; CNPs: ${builtins.toJSON (namesOf cnps)}";
   };
 
   failures = lib.filterAttrs (

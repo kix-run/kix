@@ -114,13 +114,17 @@ in
         _edgeAnalysis = rec {
           serviceRegistry = edgeAnalysis.mkServiceRegistry _depResourcesForEdges;
           serviceRefRegistry = edgeAnalysis.mkServiceRefRegistry _depResourcesForEdges;
+          serviceIndex = edgeAnalysis.mkServiceIndex _depResourcesForEdges;
           inherit (edgeAnalysis) isServiceRef;
           dnsRoot = _dnsRoot;
           edgesFor =
             workloadInput:
-            edgeAnalysis.extractServiceEdgesFromJson {
+            edgeAnalysis.analyzeEdges {
               json = builtins.toJSON workloadInput;
-              inherit serviceRegistry serviceRefRegistry;
+              # helm workloads: address values rarely survive the chart
+              # pipeline — identity hits stay netpol edges (conservative)
+              conservative = workloadInput ? _helmNetworkDeps;
+              inherit serviceRegistry serviceRefRegistry serviceIndex;
             };
         };
 

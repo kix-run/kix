@@ -71,7 +71,11 @@ in
 
             wName = workloadInput.name or (throw "buildWorkloadCnps: workloadInput.name is required");
 
-            serviceDeps = map (e: e.service) edges;
+            # edges discovered through indirection or import-mode refs have
+            # no producing resource in scope (service = null); the CNP's
+            # ordering after the Service still holds via store-DAG
+            # transitivity where a resource exists at all
+            serviceDeps = builtins.filter (s: s != null) (map (e: e.service) edges);
 
             egressCnp =
               if !doEgress then
@@ -128,7 +132,7 @@ in
                   enforcerApi.mkPolicy {
                     mkResource = targetEmit.mkResource;
                     extraArgs = {
-                      name = "${instanceName}-${lib.toLower workloadKind}-${wName}-to-${edge.service.name}-ingress";
+                      name = "${instanceName}-${lib.toLower workloadKind}-${wName}-to-${edge.name}-ingress";
                       labels = {
                         "kix.dev/derived" = "true";
                         "kix.dev/policy-type" = "caller-ingress";
@@ -137,7 +141,7 @@ in
                         endpointSelector.matchLabels = edge.targetSelector;
                         ingress = [ ingressRule ];
                       };
-                      extraDeps = [ edge.service ];
+                      extraDeps = lib.optional (edge.service != null) edge.service;
                     };
                   }
                 ) edges;
