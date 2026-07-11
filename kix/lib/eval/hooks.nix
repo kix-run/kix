@@ -116,6 +116,116 @@ rec {
       ) (builtins.attrNames instances.${nsName})
     ) (builtins.attrNames instances);
 
+  # kind → { endpoint, podSelector?, declaredBy }, built from peeked
+  # `meta.factBehavior`. The terminate/conduct table for CRDs: core K8s
+  # kinds are hardcoded in core/facts.nix (spec facts, universal), but a
+  # CR's behavior — does its controller dial the endpoints embedded in the
+  # spec? — is knowable only by the package that owns the CRD, so that
+  # package declares it (same ownership shape as meta.annotationDomains).
+  # Two declarers of one kind is a duplicate-symbol error. Cluster operators
+  # override per-kind via `cluster.factBehavior` (escape hatch for broken
+  # third-party declarations — cluster wins, no duplicate error).
+  buildFactBehaviorIndex =
+    {
+      instances,
+      peekedMetas,
+      clusterFactBehavior ? { },
+    }:
+    let
+      validateEntry =
+        source: kind: entry:
+        let
+          endpoint =
+            entry.endpoint
+              or (throw "kix: factBehavior for kind '${kind}' (${source}) must set `endpoint` to \"terminate\" or \"conduct\"");
+          _enum =
+            if
+              !(builtins.elem endpoint [
+                "terminate"
+                "conduct"
+              ])
+            then
+              throw "kix: factBehavior for kind '${kind}' (${source}): endpoint must be \"terminate\" or \"conduct\", got '${toString endpoint}'"
+            else
+              null;
+          _sel =
+            if
+              endpoint == "terminate"
+              && !(
+                builtins.isFunction (entry.podSelector or null) || builtins.isAttrs (entry.podSelector or null)
+              )
+            then
+              throw (
+                "kix: factBehavior for kind '${kind}' (${source}) declares endpoint = \"terminate\" "
+                + "but no `podSelector` — termination-by-CR opens holes for the OPERAND pods, "
+                + "and only the CRD owner can name them (a function `cr: { ... }` over the raw "
+                + "manifest, or a static label attrset)."
+              )
+            else
+              null;
+        in
+        builtins.seq _enum (
+          builtins.seq _sel (
+            entry
+            // {
+              declaredBy = source;
+            }
+          )
+        );
+
+      packageIndex =
+        builtins.foldl'
+          (
+            acc: entry:
+            builtins.foldl' (
+              acc': kind:
+              let
+                existing = acc'.${kind} or null;
+              in
+              if existing != null then
+                throw (
+                  "kix: factBehavior for kind '${kind}' is declared by two instances: "
+                  + "${existing.declaredBy} and ${entry.ns}/${entry.inst}. Exactly one "
+                  + "package (the CRD owner) declares a kind's fact behavior."
+                )
+              else
+                acc'
+                // {
+                  ${kind} = validateEntry "${entry.ns}/${entry.inst}" kind entry.behaviors.${kind};
+                }
+            ) acc (builtins.attrNames entry.behaviors)
+          )
+          { }
+          (factBehaviorDeclarers {
+            inherit instances peekedMetas;
+          });
+    in
+    # cluster override wins per-kind — the operator staring at a blocked pod
+    # must not need an upstream PR
+    packageIndex // lib.mapAttrs (validateEntry "cluster") clusterFactBehavior;
+
+  factBehaviorDeclarers =
+    { instances, peekedMetas }:
+    builtins.concatMap (
+      nsName:
+      builtins.concatMap (
+        instName:
+        let
+          behaviors = (peekedMetas.${nsName}.${instName}).factBehavior or { };
+        in
+        if behaviors == { } then
+          [ ]
+        else
+          [
+            {
+              ns = nsName;
+              inst = instName;
+              inherit behaviors;
+            }
+          ]
+      ) (builtins.attrNames instances.${nsName})
+    ) (builtins.attrNames instances);
+
   roleCandidates =
     {
       role,

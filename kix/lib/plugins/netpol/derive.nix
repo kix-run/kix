@@ -167,6 +167,7 @@ in
       allPartResources,
       networkConfig,
       packageMeta,
+      factBehaviorIndex ? { },
       networkPolicyEnforcer ? null,
     }:
     let
@@ -292,6 +293,102 @@ in
               ]
           ) workloads;
 
+      # terminate-declared CRs (meta.factBehavior): the controller dials the
+      # endpoints absorbed by the CR spec, so the holes open for the OPERAND
+      # pods named by the declaration's podSelector — the CR has no pods of
+      # its own and never went through sealWorkload.
+      terminatingCrs =
+        # self-enforcer instances arrive with a null enforcer — no policies
+        if networkPolicyEnforcer == null then
+          [ ]
+        else
+          builtins.filter (
+            r:
+            let
+              beh = factBehaviorIndex.${r.kind or ""} or null;
+            in
+            beh != null && (beh.endpoint or "") == "terminate" && (r.absorbedEndpointFacts or [ ]) != [ ]
+          ) allPartResources;
+
+      operandPolicies = builtins.concatMap (
+        r:
+        let
+          beh = factBehaviorIndex.${r.kind};
+          operandSelector =
+            if builtins.isFunction beh.podSelector then beh.podSelector r.rawManifest else beh.podSelector;
+          crNamespace = core.nsOf r;
+
+          crEdges = map (f: {
+            inherit (f.payload) name ports;
+            targetSelector = f.payload.selector;
+            targetNamespace = f.payload.namespace;
+          }) r.absorbedEndpointFacts;
+
+          egressCnp =
+            if !doEgress then
+              [ ]
+            else
+              [
+                (enforcerApi.mkPolicy {
+                  mkResource = emit.mkResource;
+                  extraArgs = {
+                    name = "${instanceName}-${lib.toLower r.kind}-${r.name}-egress";
+                    labels = {
+                      "kix.dev/derived" = "true";
+                      "kix.dev/policy-type" = "cr-operand";
+                    };
+                    spec = {
+                      endpointSelector.matchLabels = operandSelector;
+                      egress = [
+                        enforcerApi.dnsEgressRule
+                      ]
+                      ++ map (
+                        edge:
+                        enforcerApi.mkServiceEgressRule {
+                          selector = edge.targetSelector;
+                          namespace = edge.targetNamespace;
+                          sourceNamespace = crNamespace;
+                          ports = edge.ports;
+                        }
+                      ) crEdges;
+                    };
+                    extraDeps = [ r ];
+                  };
+                })
+              ];
+
+          callerIngressCnps =
+            if !doIngress then
+              [ ]
+            else
+              map (
+                edge:
+                enforcerApi.mkPolicy {
+                  mkResource = (emit.inNamespace edge.targetNamespace).mkResource;
+                  extraArgs = {
+                    name = "${instanceName}-${lib.toLower r.kind}-${r.name}-to-${edge.name}-ingress";
+                    labels = {
+                      "kix.dev/derived" = "true";
+                      "kix.dev/policy-type" = "caller-ingress";
+                    };
+                    spec = {
+                      endpointSelector.matchLabels = edge.targetSelector;
+                      ingress = [
+                        (enforcerApi.mkCallerIngressRule {
+                          callerSelector = operandSelector;
+                          callerNamespace = crNamespace;
+                          ports = edge.ports;
+                        })
+                      ];
+                    };
+                    extraDeps = [ r ];
+                  };
+                }
+              ) crEdges;
+        in
+        egressCnp ++ callerIngressCnps
+      ) terminatingCrs;
+
       warnings =
         map (
           w:
@@ -303,7 +400,7 @@ in
 
     in
     {
-      policies = apiServerSupplementPolicies ++ externalIngressSupplementPolicies;
+      policies = apiServerSupplementPolicies ++ externalIngressSupplementPolicies ++ operandPolicies;
       inherit warnings;
     };
 

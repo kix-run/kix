@@ -239,6 +239,22 @@
       '';
     };
 
+    cluster.factBehavior = lib.mkOption {
+      type = lib.types.attrsOf lib.types.anything;
+      default = { };
+      description = ''
+        Per-kind override of the fact terminate/conduct table (escape hatch
+        for broken or missing third-party declarations — normally the
+        CRD-owning package declares this via `meta.factBehavior`). Shape:
+        `{ <Kind> = { endpoint = "terminate" | "conduct"; podSelector =
+        cr: { ... }; }; }`. "terminate" means the kind's controller dials
+        the endpoints embedded in the resource — netpol opens egress for
+        the operand pods named by `podSelector`. "conduct" means the
+        resource merely carries the values onward. Cluster entries win over
+        package declarations. Validated eagerly at cluster eval.
+      '';
+    };
+
     cluster.roles = lib.mkOption {
       type = lib.types.attrsOf (
         lib.types.submodule {

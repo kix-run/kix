@@ -45,6 +45,7 @@ in
       instanceProcessors ? [ ],
       clusterCtx ? { },
       annotationDomainIndex ? { },
+      factBehaviorIndex ? { },
     }@args:
 
     if (instCfg.package._type or "") == "kix-import" then
@@ -144,6 +145,7 @@ in
           selectorLabelsOverride = instCfg.selectorLabels;
           clusterDomain = clusterConfig.clusterDomain or "cluster.local";
           capabilities = clusterConfig.cluster.capabilities or { };
+          inherit factBehaviorIndex;
           # Lazy: settled by the outer fixpoint before the first mkWorkload forces it.
           edgeAnalysis = _edgeAnalysis;
         };
@@ -441,6 +443,7 @@ in
             namespaceName
             allPartResources
             packageMeta
+            factBehaviorIndex
             ;
           cluster = clusterCtx;
         };

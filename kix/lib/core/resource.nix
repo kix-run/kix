@@ -149,6 +149,10 @@ rec {
       extraDeps ? [ ],
       extra ? { },
       clusterDomain ? "cluster.local",
+      # per-kind terminate/conduct override from the factBehavior index
+      # (CRD-owner declared via meta.factBehavior, or cluster override).
+      # null = fall back to the core K8s table (facts.conducts).
+      factBehavior ? null,
     }:
     let
       isClusterScoped = builtins.isAttrs namespace && (namespace._type or "") == "k8s-cluster-scoped";
@@ -275,8 +279,44 @@ rec {
       # here would force every dep's seal whenever any out.* field is
       # touched — a fixpoint hazard (e.g. service.out.name inside a webhook
       # config whose consumer the service itself requires).
+      _conducts =
+        if factBehavior != null then
+          (factBehavior.endpoint or "conduct") == "conduct"
+        else
+          facts.conducts kind;
+
       _forwardedFactCtx =
-        if facts.conducts kind then (facts.partitionCtx (builtins.getContext manifestJson)).facts else { };
+        if _conducts then (facts.partitionCtx (builtins.getContext manifestJson)).facts else { };
+
+      # terminate-declared CRs: the absorbed endpoint payloads, for the
+      # instance-phase projection (netpol opens holes for the OPERAND pods
+      # named by the declaration's podSelector — the resource itself has no
+      # pods). Read lazily; only forced when a processor consumes it.
+      _absorbedEndpointFacts =
+        if factBehavior != null && (factBehavior.endpoint or "") == "terminate" then
+          facts.factsOfKind "endpoint" manifestJson
+        else
+          [ ];
+
+      # undeclared foreign kind (CRD) absorbing endpoint facts: kix cannot
+      # know whether the controller dials them (terminate) or the resource
+      # merely carries them (conduct — the current default). Warn, three-
+      # valued style: declared-terminate/conduct pass silently, unknown
+      # warns naming the fix. Anchored on outPath (forced at embedding).
+      _undeclaredCrWarning =
+        if
+          factBehavior == null
+          && facts.isForeignGroup apiVersion
+          && facts.factsOfKind "endpoint" manifestJson != [ ]
+        then
+          "kix: ${kind}/${name} (${apiVersion}) absorbed endpoint fact(s) but no package "
+          + "declares `meta.factBehavior.${kind}` — kix assumes \"conduct\" (the resource "
+          + "carries the address onward). If this kind's controller DIALS the endpoint "
+          + "(operator-managed pods), the CRD-owning package must declare "
+          + "`meta.factBehavior.${kind} = { endpoint = \"terminate\"; podSelector = cr: { ... }; }` "
+          + "or netpol will not open holes for the operand pods."
+        else
+          null;
 
       manifestJsonSealed = builtins.appendContext (builtins.unsafeDiscardStringContext manifestJsonWithDeps) (facts.partitionCtx (
         builtins.getContext manifestJsonWithDeps
@@ -379,13 +419,21 @@ rec {
           extraDeps
           ;
 
-        outPath = _identityPath;
+        outPath =
+          if _undeclaredCrWarning != null then
+            builtins.trace _undeclaredCrWarning _identityPath
+          else
+            _identityPath;
 
         out = mergedOut;
 
         # fact tokens this resource mints, for the `facts.connect` escape
         # hatch (stamp dialing intent onto a value that lacks it)
         factTokens = lib.optionalAttrs _isEndpointProducer { endpoint = _ownFactCtx; };
+
+        # endpoint payloads absorbed by a terminate-declared CR — consumed
+        # by the netpol instance processor (operand CNPs)
+        absorbedEndpointFacts = _absorbedEndpointFacts;
 
         rawManifest = rawManifestStamped;
 

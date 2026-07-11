@@ -251,6 +251,10 @@ exist:
                                                           egress to kube-apiserver
                                                         • LoadBalancer Svc present →
                                                           allow ingress from "world"
+                                                        • terminate-declared CR
+                                                          (meta.factBehavior) → operand
+                                                          egress + caller-ingress from
+                                                          its absorbed endpoint facts
 
    cluster          ALL instances + namespaces exist    the default-deny walls
    (processor)                                          themselves; platform intents

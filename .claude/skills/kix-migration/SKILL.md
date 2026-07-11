@@ -251,6 +251,21 @@ edge but NO netpol hole. Consequences when authoring:
 - Dialing by bare `out.name` (intra-namespace short name) will NOT open a
   netpol hole — use `out.fqdn`, or stamp intent with
   `k8s.facts.connect svc.factTokens.endpoint value`.
+- **Operator packages that own CRDs** declare per-kind fact behavior when
+  their controller dials endpoints embedded in CR specs (e.g. a database
+  operator connecting operand pods to an address in the CR):
+
+  ```nix
+  meta.factBehavior.MyCluster = {
+    endpoint = "terminate";            # controller dials; "conduct" = CR merely carries
+    podSelector = cr: { "my.io/cluster" = cr.metadata.name; };  # the OPERAND pods
+  };
+  ```
+
+  netpol then opens egress for the operand pods + caller-ingress into the
+  target namespace. Undeclared CR kinds absorbing an endpoint fact warn at
+  eval time (conduct is assumed). Cluster operators can override per-kind
+  via `cluster.factBehavior` (e.g. to fix a broken upstream declaration).
 
 ### Composition helpers (kix.*)
 

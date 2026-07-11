@@ -17,6 +17,7 @@ in
       workloadInterceptors,
       peekedPackageMeta,
       clusterCtx,
+      factBehaviorIndex ? { },
       # scopeObj is the enclosing mkScope fixpoint — only consume lazily (interceptor ctx, mkCR); forcing it while default.nix constructs it would recurse
       scopeObj,
     }:
@@ -26,6 +27,15 @@ in
           labels ? { },
           ...
         }@args:
+        let
+          behavior = factBehaviorIndex.${args.kind or ""} or null;
+          # a terminate-declared CR dials out (via its operands) — it waits
+          # on DNS like any dialing workload would. Conservative: spliced
+          # even when this particular CR absorbed no endpoint (harmless).
+          dnsRequires = lib.optional (
+            behavior != null && behavior.endpoint == "terminate" && edgeAnalysis.dnsRoot != null
+          ) edgeAnalysis.dnsRoot;
+        in
         builtins.seq (validators.checkRawPvc args) (
           builtins.seq (validators.checkLoadBalancer args) (
             k8s.mkResource (
@@ -34,6 +44,8 @@ in
                 namespace = namespaceResource;
                 inherit clusterDomain;
                 labels = clusterLabels // instanceLabels // labels;
+                factBehavior = behavior;
+                requires = (args.requires or [ ]) ++ dnsRequires;
               }
             )
             // {
@@ -53,6 +65,7 @@ in
             namespace = clusterScoped;
             inherit clusterDomain;
             labels = clusterLabels // instanceLabels // labels;
+            factBehavior = factBehaviorIndex.${args.kind or ""} or null;
           }
         )
         // {

@@ -78,6 +78,17 @@ rec {
 
   conducts = kind: !(builtins.elem kind terminatorKinds);
 
+  # A "foreign" apiVersion group is CRD territory: kix's core table can't
+  # know whether the kind's controller dials absorbed endpoints — the
+  # CRD-owning package declares it via meta.factBehavior. Builtin groups
+  # (no dot, or *.k8s.io) and kix's own CRs are exempt.
+  isForeignGroup =
+    apiVersion:
+    let
+      group = if lib.hasInfix "/" apiVersion then builtins.head (lib.splitString "/" apiVersion) else "";
+    in
+    lib.hasInfix "." group && !(lib.hasSuffix ".k8s.io" group) && group != "kix.dev";
+
   # /nix/store/ = 11 chars, hash = 32, "-" = 1 → name starts at offset 44
   pathName = p: builtins.substring 44 (builtins.stringLength p) p;
 

@@ -114,6 +114,7 @@ in
             allPartResources
             packageMeta
             ;
+          factBehaviorIndex = ctx.factBehaviorIndex or { };
           networkConfig = cfg;
           networkPolicyEnforcer = resolveEnforcerOut { inherit (ctx) cluster instanceName namespaceName; };
         };

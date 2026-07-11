@@ -202,6 +202,82 @@ let
       };
   };
 
+  # CRD-owning operator: declares that TestCluster CRs terminate endpoint
+  # facts — the controller dials them via operand pods it spawns.
+  mkOperatorPackage =
+    { factBehavior }:
+    {
+      meta = {
+        version = "test";
+        inherit factBehavior;
+      };
+      build =
+        { self, scope, ... }:
+        {
+          cm = scope.mkResource {
+            apiVersion = "v1";
+            kind = "ConfigMap";
+            name = "test-operator";
+          };
+          root = self.cm;
+        };
+    };
+
+  testClusterBehavior = {
+    TestCluster = {
+      endpoint = "terminate";
+      podSelector = cr: {
+        "test.io/cluster" = cr.metadata.name;
+      };
+    };
+  };
+
+  # consumer: creates a TestCluster CR embedding db's address, plus a
+  # deployment that only NAMES the CR (no address flows to the workload)
+  crConsumerPackage = {
+    meta.version = "test";
+    build =
+      {
+        self,
+        scope,
+        db,
+        ...
+      }:
+      {
+        cluster = scope.mkResource {
+          apiVersion = "test.io/v1";
+          kind = "TestCluster";
+          name = "mycluster";
+          spec.connection = db.out.fqdn;
+        };
+        deployment = scope.mkDeployment {
+          name = "consumer";
+          spec = {
+            selector.matchLabels = scope.selectorLabels;
+            template = {
+              metadata.labels = scope.selectorLabels;
+              spec.containers = [
+                (
+                  {
+                    name = "consumer";
+                    image = "example/consumer:1";
+                    env = [
+                      {
+                        name = "CLUSTER_NAME";
+                        value = self.cluster.out.name;
+                      }
+                    ];
+                  }
+                  // containerBase
+                )
+              ];
+            };
+          };
+        };
+        root = self.deployment;
+      };
+  };
+
   # Reports whether the package-facing enforcer handle is set.
   probePackage = {
     meta.version = "test";
@@ -1328,6 +1404,63 @@ let
         && lib.hasInfix dbSvcHash (dependsOn appDeployment)
       )
       || throw "refOnly should strip the edge but keep the identity dep; CNPs: ${builtins.toJSON (namesOf cnps)}";
+
+    # ---- meta.factBehavior (terminate/conduct table for CRDs) -------------
+
+    # A terminate-declared CR absorbing an endpoint fact: netpol opens holes
+    # for the OPERAND pods (podSelector over the raw manifest), from the
+    # instance phase — egress in the CR's namespace, caller-ingress into the
+    # target's. The consumer deployment (which only names the CR) gets none.
+    t42-cr-terminate-operand-cnps =
+      let
+        withCr = {
+          instances.opns.test-operator.package = mkOperatorPackage { factBehavior = testClusterBehavior; };
+          instances.appns.app.package = lib.mkForce crConsumerPackage;
+        };
+        ms = manifests (mkCluster [
+          baseInstances
+          netpolOn
+          withCr
+        ]);
+        cnps = ofKind "CiliumNetworkPolicy" ms;
+        operandEgress = byName "app-testcluster-mycluster-egress" cnps;
+        callerIngress = byName "app-testcluster-mycluster-to-db-ingress" cnps;
+      in
+      (
+        operandEgress != null
+        && operandEgress.spec.endpointSelector.matchLabels."test.io/cluster" == "mycluster"
+        && callerIngress != null
+        && callerIngress.metadata.namespace == "dbns"
+        && !(hasName "app-deployment-consumer-to-db-ingress" cnps)
+      )
+      || throw "operand CNPs wrong; CNPs: ${builtins.toJSON (namesOf cnps)}";
+
+    # Without a declaration, an unknown CR kind conducts (default): the fact
+    # flows through the CR's out.* to the deployment that references it, so
+    # the WORKLOAD gets the db edge. (An eval-time warning names the gap.)
+    t43-undeclared-cr-conducts =
+      let
+        withCr = {
+          instances.appns.app.package = lib.mkForce crConsumerPackage;
+        };
+        ms = manifests (mkCluster [
+          baseInstances
+          netpolOn
+          withCr
+        ]);
+        cnps = ofKind "CiliumNetworkPolicy" ms;
+      in
+      hasName "app-deployment-consumer-to-db-ingress" cnps
+      || throw "undeclared CR should conduct the fact to the workload; CNPs: ${builtins.toJSON (namesOf cnps)}";
+
+    # Two packages declaring the same kind = duplicate-symbol error.
+    t44-duplicate-fact-behavior-throws = evalFails (mkCluster [
+      baseInstances
+      {
+        instances.opns.op-a.package = mkOperatorPackage { factBehavior = testClusterBehavior; };
+        instances.opns.op-b.package = mkOperatorPackage { factBehavior = testClusterBehavior; };
+      }
+    ]);
   };
 
   failures = lib.filterAttrs (

@@ -145,7 +145,21 @@ in
         instances = resolvableInstances;
         inherit peekedMetas;
       };
-      _annotationDomainsCheck = builtins.deepSeq annotationDomainIndex null;
+      # (also rides the same eager-force point as the factBehavior check)
+      _annotationDomainsCheck = builtins.seq (builtins.deepSeq annotationDomainIndex null) _factBehaviorCheck;
+
+      # kind → fact behavior, from CRD-owning packages' meta.factBehavior +
+      # cluster overrides. Eagerly validated: duplicate declarers and
+      # malformed entries must throw even if no CR of the kind exists.
+      # (seq per entry, not deepSeq — podSelector may be a function.)
+      factBehaviorIndex = hooks.buildFactBehaviorIndex {
+        instances = resolvableInstances;
+        inherit peekedMetas;
+        clusterFactBehavior = cfg.cluster.factBehavior or { };
+      };
+      _factBehaviorCheck = builtins.foldl' (acc: e: builtins.seq e.declaredBy acc) null (
+        builtins.attrValues factBehaviorIndex
+      );
 
       # `out` reads from the cluster fixpoint lazily — must not be forced during
       # module merge. The shallow role out-contract is checked at the same lazy
@@ -285,7 +299,7 @@ in
               globalPartsOverlays = cfg.globalPartsOverlays;
               configInjections = resolveInjections nsName instName;
               inherit workloadInterceptors instanceProcessors clusterCtx;
-              inherit annotationDomainIndex;
+              inherit annotationDomainIndex factBehaviorIndex;
             }
           ) nsInsts
         ) mergedInstances
