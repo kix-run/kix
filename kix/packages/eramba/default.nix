@@ -35,11 +35,24 @@
 # ── Divergence 2: SECURITY_SALT is mandatory ─────────────────────────────
 # Upstream generates the salt into app/upgrade/config/app_local.php on first
 # boot and persists it via the `app` volume. With that volume gone the file
-# is regenerated every start, so the salt MUST be injected. `env('SECURITY_SALT')`
-# takes precedence over the generated value (src/Console/Installer.php), so
-# supplying it here is both supported and stable. A changed salt makes
-# already-encrypted DB columns unreadable, so this is a build-time error
-# rather than a runtime surprise (PRINCIPLES §6).
+# is regenerated every start, so the salt MUST be injected. The generated
+# file writes the salt as `env('SECURITY_SALT', '<generated>')` (see the
+# rendered app_local.php, and config/app.php), so the env var wins over the
+# generated value — supplying it here is both supported and stable. A changed
+# salt makes already-encrypted DB columns unreadable, so this is a build-time
+# error rather than a runtime surprise (PRINCIPLES §6).
+#
+# ── A note on reading upstream ───────────────────────────────────────────
+# github.com/eramba/docker is NOT a reliable reference for this package.
+# Compose bind-mounts that repo's docker-entrypoint.sh, docker-cron-entrypoint.sh
+# and crontab over the copies baked into the image; without those mounts the
+# image runs its own, materially different, versions. Verify behaviour against
+# the image, not the repo.
+#
+# Not carried over from compose (deliberate): the `triggers_caddy` service and
+# TRIGGER_RUNNER_SHARED_SECRET, so the 3.x automation-trigger feature does not
+# work here — it needs a second image and NET_ADMIN. Also LDAPTLS_REQCERT,
+# which only matters for LDAP over TLS with self-signed certs.
 
 {
   scope,
@@ -58,29 +71,54 @@ let
   appMountPath = "/var/www/eramba";
   cakeRoot = "${appMountPath}/app/upgrade";
 
-  # Upstream's crontab, minus the dead `@daily` entry and with logs sent to
-  # the container's stdout instead of /var/log/cron.log (invisible to k8s).
+  # Upstream's crontab, minus the dead `@daily` entry, with logs sent to the
+  # container's stdout instead of /var/log/cron.log (invisible to k8s), and
+  # in /etc/cron.d format so `cron` reads it directly.
   #
   # `@daily` is dead code upstream: CronJobCommand refuses a direct `daily`
   # run ("Directly running daily type of CRON Job has been disabled") and
   # then returns success, so it fails silently. The hourly job self-triggers
   # the daily work at the tenant's local midnight.
   #
+  # Every line is shaped by three constraints that interlock — change one and
+  # you break another:
+  #
+  #   1. The `root` field. Files under /etc/cron.d are system crontabs and
+  #      need a user field; without one cron rejects every line as a bad
+  #      username and silently runs nothing.
+  #   2. `su … www-data` INSIDE. Jobs must not run as root: they parse
+  #      user-controlled data (imports, templates, PDF generation). The
+  #      image's own baked crontab does exactly this.
+  #   3. The redirect OUTSIDE the `su`. /proc/1/fd/1 is owned by root, so
+  #      www-data cannot open it — redirecting inside the `su` makes every
+  #      job die at the redirect and produce no output at all. Root's shell
+  #      opens the fd; only the payload drops privileges.
+  #
   # cron does not inherit the container environment, so each entry sources a
   # file the container writes at startup. Upstream uses `export $(cat ...)`,
   # which word-splits and breaks on any value containing whitespace; sourcing
   # `export -p` output quotes correctly regardless of the password's contents.
+  cronJob =
+    schedule: cmd:
+    "${schedule} root su -s /bin/bash -c '. /var/www/docker.env && ${cmd}' www-data >> /proc/1/fd/1 2>&1";
+
   crontab = ''
-    @hourly . /var/www/docker.env && /bin/sh ${cakeRoot}/bin/cake cron job hourly >> /proc/1/fd/1 2>&1
-    @yearly . /var/www/docker.env && /bin/sh ${cakeRoot}/bin/cake cron job yearly >> /proc/1/fd/1 2>&1
-    * * * * * . /var/www/docker.env && /bin/sh ${cakeRoot}/bin/cake queue run -v >> /proc/1/fd/1 2>&1
+    ${cronJob "@hourly" "/bin/sh ${cakeRoot}/bin/cake cron job hourly"}
+    ${cronJob "@yearly" "/bin/sh ${cakeRoot}/bin/cake cron job yearly"}
+    ${cronJob "* * * * *" "/bin/sh ${cakeRoot}/bin/cake queue run -v"}
   '';
 
   # Upstream's apache/vhost.conf verbatim (the plain-HTTP variant). Compose
   # mounts the *-ssl* variant and terminates TLS in-container with a bundled
-  # self-signed dev cert; behind an ingress we want the plain one. Mounted
-  # rather than relying on the image's baked default so the served config is
-  # explicit and diffable.
+  # self-signed dev cert; behind an ingress we want the plain one.
+  #
+  # This is currently byte-identical to the image's baked 000-default.conf, so
+  # mounting it is a no-op today. It is kept deliberately: the baked config is
+  # exactly the kind of thing that changes under us on an image bump (the
+  # baked entrypoints already differ from upstream's repo), and Apache's
+  # DocumentRoot + AllowOverride are load-bearing — .htaccess is what routes
+  # / to app/upgrade/webroot. Pinning it makes the served config explicit,
+  # diffable, and immune to that drift.
   vhostConf = ''
     <VirtualHost *:80 *:8080>
     	DocumentRoot "${appMountPath}"
@@ -225,11 +263,15 @@ in
 
     appSizeLimit = lib.mkOption {
       type = lib.types.str;
-      default = "2Gi";
+      default = "3Gi";
       description = ''
         sizeLimit for the emptyDir holding the seeded application directory.
-        The webroot is ~500Mi; the rest is headroom for CakePHP's file cache,
-        which is only used when `cacheUrl` is null.
+
+        The seeded webroot measures 765Mi (558M app + 203M laravel), not the
+        ~500Mi the compressed image size suggests. The remainder is headroom
+        for CakePHP's file cache and tmp/sessions, which are only used when
+        `cacheUrl` is null. Exceeding sizeLimit gets the pod EVICTED, so this
+        wants slack rather than precision.
       '';
     };
 
@@ -252,6 +294,13 @@ in
       };
     };
 
+    # The limit must exceed php.ini's `memory_limit = 4096M` (= 4Gi), not
+    # equal it: a single queue job — PDF render, report, import — may legally
+    # allocate the full 4096M, and PHP's own limit is per-request on top of
+    # interpreter overhead. A 4Gi container limit means the job that PHP
+    # considers legal is the job the kernel OOMKills, which restarts cron in
+    # a loop against a live, serving webroot. 5Gi leaves headroom; requests
+    # stay low so this is burstable, not reserved.
     cronResources = lib.mkOption {
       type = lib.types.anything;
       default = {
@@ -261,7 +310,7 @@ in
         };
         limits = {
           cpu = "1";
-          memory = "4Gi";
+          memory = "5Gi";
         };
       };
     };
@@ -455,12 +504,14 @@ in
           ];
         };
 
-        # The image's entrypoint runs composer post-install (generating
-        # app_local.php), rsyncs data_template/ into data/, and then runs
-        # `database initialize` — CakePHP migrations — aborting the container
-        # on a broken migration history. Migrations therefore run on every
-        # app start; at one replica that is safe, and it is what makes an
-        # image bump a real upgrade.
+        # Keeps the image's baked entrypoint (unlike the cron container): it
+        # runs composer post-install (generating app_local.php), rsyncs
+        # data_template/ into data/, and then runs `database initialize` —
+        # CakePHP migrations — aborting the container on a broken migration
+        # history. Migrations therefore run on every app start; at one replica
+        # that is safe, and it is what makes an image bump a real upgrade.
+        # This container is the ONLY writer of app_local.php — see the cron
+        # container for why that matters.
         erambaContainer = {
           name = "eramba";
           inherit image;
@@ -503,10 +554,32 @@ in
           ];
         };
 
-        # cron does not inherit the container environment, so dump it to the
-        # file the crontab sources. `export -p` emits correctly quoted
-        # `export k='v'` lines. Then hand over to the vendor's cron
-        # entrypoint, which installs the crontab as www-data.
+        # Deliberately does NOT use the image's /docker-cron-entrypoint.sh.
+        #
+        # The scripts baked into the image are not the ones in upstream's git
+        # repo — compose bind-mounts the repo copies over them, so the repo
+        # is a misleading reference for what a plain `docker run` executes.
+        # The baked cron entrypoint does three things we must avoid:
+        #
+        #   - `crontab -u root <file>`, which would run every job as root
+        #     (its own baked crontab compensates with an inner `su`; ours
+        #     does that itself — see `cronJob`).
+        #   - `composer run-script post-install-cmd`, which regenerates
+        #     config/app_local.php. The app container's entrypoint does the
+        #     same, into the SAME shared emptyDir, at the same moment — and
+        #     the writes are plain copy()/file_put_contents(), not atomic. A
+        #     torn read takes the pod down. Upstream has no such race because
+        #     its cron container never runs composer. Only the app container
+        #     writes app_local.php here.
+        #   - `env >> /etc/environment`, unquoted, appended again on EVERY
+        #     restart — an unbounded file that also mangles any value
+        #     containing whitespace.
+        #
+        # All we actually need is the crontab installed and cron running.
+        # /etc/cron.d is read natively, so nothing needs installing: dump the
+        # environment for the jobs to source, then exec cron as PID 1 (which
+        # is what makes the /proc/1/fd/1 redirect resolve to container
+        # stdout).
         cronContainer = {
           name = "cron";
           inherit image;
@@ -514,7 +587,7 @@ in
           command = [
             "/bin/sh"
             "-c"
-            "export -p > /var/www/docker.env && exec /docker-cron-entrypoint.sh cron -f"
+            "export -p > /var/www/docker.env && exec cron -f"
           ];
           env = appEnv;
           resources = config.cronResources;

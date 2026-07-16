@@ -127,7 +127,23 @@ in
 
         `username` must match the `user` option — the entrypoint reads
         MYSQL_USER from config, and the key exists so consumers of the
-        `sql-database` contract can read it from the Secret.
+        `sql-database` contract can read it from the Secret. Nothing
+        validates that at build time: the value lives in the external store.
+
+        ROTATION IS NOT SUPPORTED, and this mode makes that dangerous.
+        MySQL bakes these credentials into the datadir on first init and
+        never revisits them; nothing here runs ALTER USER. If the controller
+        behind this Secret re-syncs a rotated value, the running pod keeps
+        working (env is resolved at container start) and then fails on its
+        NEXT restart — node drain, OOM, deploy — because the new password no
+        longer matches the datadir. The startup probe fails and the pod
+        CrashLoops on a perfectly healthy database. Rotating the app password
+        breaks the consuming app the same way.
+
+        So: rotate by running ALTER USER against the server yourself, in the
+        same change as the secret-store update. If the controller polls (most
+        do), a rotation you forget about lands as a time-bomb at the next
+        unrelated restart.
       '';
     };
 
@@ -146,6 +162,27 @@ in
       default = 3306;
     };
 
+    binlog = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Enable binary logging. Off by default: this package is single-instance
+        (see `replicas`), so a binlog buys no replication and no PITR, while
+        costing a second write of every row plus unbounded datadir growth
+        (`binlog_expire_logs_seconds` defaults to 30 days).
+
+        Off is enforced on the server's argv (`--disable-log-bin`), NOT via
+        config, and that is deliberate: `log_bin` takes a *basename*, not a
+        boolean, so a `myCnf` containing the plausible-looking `log_bin=OFF`
+        silently ENABLES binlogging with basename "OFF" — filling the datadir
+        with OFF.000001, OFF.000002, … Upstream Eramba's own custom.cnf has
+        exactly that line and is saved only because its compose stack passes
+        `command: ["mysqld", "--disable-log-bin"]`. Args are parsed after
+        config files and win, so doing the same here makes the footgun
+        unreachable no matter what `myCnf` says.
+      '';
+    };
+
     myCnf = lib.mkOption {
       type = lib.types.lines;
       default = "";
@@ -159,13 +196,33 @@ in
       '';
     };
 
+    grants = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      example = [ "PROCESS" ];
+      description = ''
+        Global privileges (`ON *.*`) granted to `user`, on top of the ALL
+        PRIVILEGES on `database` that the image's entrypoint already grants.
+
+        Prefer this over hand-writing the GRANT in `initSql`: it is rendered
+        against `user`, so the username cannot drift from the grant. That
+        drift is a nasty trap — MySQL 8 never auto-creates a user on GRANT,
+        so a mismatched username fails only the FIRST boot; the entrypoint
+        marks the datadir initialised *before* running init files, so the
+        restart succeeds and the privilege is missing forever, with nothing
+        in any log newer than that first boot.
+      '';
+    };
+
     initSql = lib.mkOption {
       type = lib.types.lines;
       default = "";
       description = ''
-        SQL run once, on first initialisation of an empty datadir, via
-        /docker-entrypoint-initdb.d. Ignored on an existing volume — it is
-        not a migration mechanism.
+        Extra SQL run once, on first initialisation of an empty datadir, via
+        /docker-entrypoint-initdb.d, after `grants`. Ignored on an existing
+        volume — it is not a migration mechanism, and a statement that fails
+        here aborts the first boot but is skipped silently on every restart
+        thereafter.
       '';
     };
 
@@ -198,6 +255,16 @@ in
         enabled = false;
         schedule = "0 2 * * *";
         retentionDays = 7;
+        # A hung dump would otherwise block every later run forever:
+        # concurrencyPolicy is Forbid, and mysqldump's client read timeout is
+        # infinite by default, so a half-open TCP connection (conntrack
+        # expiry, node partition) parks the Job indefinitely and silently
+        # stops all backups. Bound the Job instead.
+        timeoutSeconds = 3600;
+        # Floor below which a dump is treated as failed rather than kept.
+        # An empty-but-valid .sql.gz is ~350 bytes; a real schema dump is
+        # orders of magnitude larger.
+        minBytes = 4096;
         resources = {
           requests = {
             cpu = "100m";
@@ -217,6 +284,11 @@ in
         Consistency does NOT extend to MyISAM/Aria tables. A volume snapshot
         of a running server is only crash-consistent, so this is what makes
         a restore trustworthy.
+
+        The dump is verified (gzip integrity, a size floor, and mysqldump's
+        terminating marker) before it replaces the previous one. Nothing here
+        alerts on backup *age*, though — a permanently failing CronJob is
+        still only visible in Job history. Monitor it.
       '';
     };
   };
@@ -330,6 +402,19 @@ in
             };
           };
 
+      # Rendered against `userName`, so the grant cannot drift from the user
+      # it is meant for — see the `grants` option for why that matters.
+      grantSql = lib.concatMapStringsSep "\n" (
+        priv: "GRANT ${priv} ON *.* TO '${userName}'@'%';"
+      ) config.grants;
+
+      effectiveInitSql = lib.concatStringsSep "\n" (
+        builtins.filter (s: s != "") [
+          grantSql
+          config.initSql
+        ]
+      );
+
       configMap = scope.mkResource {
         apiVersion = "v1";
         kind = "ConfigMap";
@@ -339,13 +424,13 @@ in
           lib.optionalAttrs (config.myCnf != "") {
             "custom.cnf" = config.myCnf;
           }
-          // lib.optionalAttrs (config.initSql != "") {
-            "init.sql" = config.initSql;
+          // lib.optionalAttrs (effectiveInitSql != "") {
+            "init.sql" = effectiveInitSql;
           };
       };
 
       hasConfig = config.myCnf != "";
-      hasInitSql = config.initSql != "";
+      hasInitSql = effectiveInitSql != "";
 
       serverEnv =
         credentials.out.mkEnv {
@@ -372,6 +457,10 @@ in
         name = "mysql";
         image = "${config.image.repository}:${config.image.tag}";
         imagePullPolicy = config.image.pullPolicy;
+        # Overrides the image's CMD (`mysqld`). Args beat config files, so
+        # this is what makes `binlog = false` hold regardless of `myCnf` —
+        # see the `binlog` option.
+        args = [ "mysqld" ] ++ lib.optional (!config.binlog) "--disable-log-bin";
         ports = [ (kix.port "mysql" config.port) ];
         env = serverEnv;
         inherit (config) resources;
@@ -427,10 +516,25 @@ in
 
       # mysqldump over the network — it never mounts the datadir, so it is
       # unaffected by the RWO/same-node constraints a physical backup has.
+      #
+      # `pipefail` is load-bearing, not hygiene: without it the exit status of
+      # `mysqldump | gzip` is *gzip's*, so a failed dump (server restart
+      # mid-run, auth failure, table corruption) exits 0, gets renamed to a
+      # good-looking backup, and `retentionDays` later deletes the last real
+      # one. Verified: a dump of a nonexistent database still produced a
+      # 372-byte "successful" .sql.gz. The dump is therefore also verified
+      # (gzip integrity + a floor on size + the terminating marker mysqldump
+      # only writes on success) before it is allowed to take a real name.
       backupScript = ''
-        set -eu
+        set -euo pipefail
         stamp="$(date -u +%Y-%m-%dT%H-%M-%SZ)"
         out="/backup/${dbName}-$stamp.sql.gz"
+
+        # Stale .tmp files from a killed run would otherwise accumulate
+        # forever: they never match the prune pattern below.
+        find /backup -name '${dbName}-*.sql.gz.tmp' -type f -mmin +${
+          toString (config.backup.timeoutSeconds / 60 + 60)
+        } -print -delete || true
 
         echo "dumping ${dbName} -> $out"
         # Password comes from MYSQL_PWD, not --password=, to keep it out of
@@ -446,10 +550,26 @@ in
           "${dbName}" \
           | gzip -c > "$out.tmp"
 
-        # Rename only after a clean dump, so a failed run can never leave a
-        # truncated file that looks like a valid backup.
+        echo "verifying $out.tmp"
+        gzip -t "$out.tmp"
+
+        size="$(stat -c %s "$out.tmp")"
+        if [ "$size" -lt ${toString config.backup.minBytes} ]; then
+          echo "dump is $size bytes, below the ${toString config.backup.minBytes}-byte floor — refusing to keep it" >&2
+          rm -f "$out.tmp"
+          exit 1
+        fi
+
+        # mysqldump writes this marker as its final line only on a clean run,
+        # so its presence rules out a dump truncated mid-stream.
+        if ! gzip -dc "$out.tmp" | tail -5 | grep -q 'Dump completed'; then
+          echo "dump has no 'Dump completed' marker — treating as truncated" >&2
+          rm -f "$out.tmp"
+          exit 1
+        fi
+
         mv "$out.tmp" "$out"
-        echo "wrote $out ($(stat -c %s "$out") bytes)"
+        echo "wrote $out ($size bytes)"
 
         echo "pruning dumps older than ${toString config.backup.retentionDays} days"
         find /backup -name '${dbName}-*.sql.gz' -type f -mtime +${toString config.backup.retentionDays} -print -delete
@@ -468,6 +588,9 @@ in
           failedJobsHistoryLimit = 3;
           jobTemplate.spec = {
             backoffLimit = 2;
+            # Bounds a hung dump so `concurrencyPolicy = Forbid` cannot wedge
+            # every future run behind it.
+            activeDeadlineSeconds = config.backup.timeoutSeconds;
             template = {
               metadata.labels = labels;
               spec = {
@@ -477,8 +600,9 @@ in
                     name = "mysqldump";
                     image = "${config.image.repository}:${config.image.tag}";
                     imagePullPolicy = config.image.pullPolicy;
+                    # bash, not sh: the script relies on `pipefail`.
                     command = [
-                      "/bin/sh"
+                      "/bin/bash"
                       "-c"
                     ];
                     args = [ backupScript ];
@@ -544,7 +668,19 @@ in
               replicas = 1;
               selector.matchLabels = labels;
               template = {
-                metadata.labels = labels;
+                metadata = {
+                  inherit labels;
+                  # Without this the ConfigMap has a stable name and no
+                  # content in the pod template, so editing `myCnf` updates
+                  # the ConfigMap and triggers no rollout — the change
+                  # "deploys" successfully and the running server never sees
+                  # it. (The mounts use subPath, which kubelet never
+                  # live-updates either.) Hashing the ConfigMap into the
+                  # template makes a config edit roll the pod.
+                  annotations = lib.optionalAttrs (hasConfig || hasInitSql) {
+                    "checksum/config" = self.config.out.identityHash;
+                  };
+                };
                 spec = {
                   containers = [ serverContainer ];
                   # The image's entrypoint starts as root and drops to the
