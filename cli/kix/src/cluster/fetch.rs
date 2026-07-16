@@ -267,6 +267,25 @@ pub fn normalize_for_diff(obj: &mut DynamicObject) {
     }
 }
 
+/// Serialise a fetched object into a whole-manifest `Value`.
+///
+/// `DynamicObject` keeps `metadata` in a typed field and puts only the
+/// *remaining* keys (`spec`, `data`, …) in `.data`. Serialising `.data`
+/// alone therefore yields a manifest with no `metadata` — and so no
+/// name or namespace — which silently degrades every `ResourceId` built
+/// from it to `Kind/unknown`. Every live object of the same kind then
+/// collapses onto one id, matches nothing on the kix side, and the diff
+/// reports the whole cluster as "will be created".
+///
+/// `kind`/`apiVersion` come from `.data` (injected by `fetch_parallel`,
+/// since LIST responses omit them per item) rather than from `.types`.
+pub fn to_manifest_value(obj: &DynamicObject) -> serde_json::Value {
+    serde_json::to_value(obj).unwrap_or_else(|e| {
+        // ObjectMeta + a JSON Value cannot fail to serialise.
+        unreachable!("DynamicObject failed to serialise: {e}")
+    })
+}
+
 /// Internal: run parallel LIST calls across all discovered resource types.
 async fn fetch_parallel(
     client: &Client,
@@ -402,6 +421,68 @@ mod tests {
 
         // spec preserved
         assert!(data.contains_key("spec"));
+    }
+
+    /// A LIST item as the apiserver actually returns it: no per-item
+    /// `apiVersion`/`kind`, and `metadata` alongside `spec`.
+    fn list_item() -> DynamicObject {
+        let mut obj: DynamicObject = serde_json::from_value(json!({
+            "metadata": { "name": "lithus-secret-operator", "namespace": "lithus-system" },
+            "spec": { "replicas": 1 },
+        }))
+        .unwrap();
+        // What fetch_parallel does, because LIST omits these per item.
+        let map = obj.data.as_object_mut().unwrap();
+        map.insert("kind".into(), json!("Deployment"));
+        map.insert("apiVersion".into(), json!("apps/v1"));
+        obj
+    }
+
+    /// Pins the shape the whole bug turned on: kube-rs parses `metadata`
+    /// into the typed field and leaves it OUT of `.data`. The hand-built
+    /// fixtures above put `metadata` inside `.data`, which the apiserver
+    /// never does — so anything reading `.data["metadata"]` reads nothing.
+    #[test]
+    fn deserialized_object_keeps_metadata_out_of_data() {
+        let obj = list_item();
+        assert_eq!(obj.metadata.name.as_deref(), Some("lithus-secret-operator"));
+        assert!(
+            obj.data.get("metadata").is_none(),
+            "metadata must live on the typed field, not in .data"
+        );
+    }
+
+    /// Regression: serialising `.data` alone drops metadata, so every live
+    /// object of a kind degrades to the same `Kind/unknown` id, matches
+    /// nothing, and `kix diff` reports an unchanged cluster as fully new.
+    #[test]
+    fn to_manifest_value_yields_a_matchable_resource_id() {
+        let mut obj = list_item();
+        normalize_for_diff(&mut obj);
+
+        let broken = crate::manifest::types::ResourceId::from_value(&obj.data);
+        assert_eq!(broken.name, "unknown", "the old .data-only path");
+
+        let id = crate::manifest::types::ResourceId::from_value(&to_manifest_value(&obj));
+        assert_eq!(id.kind, "Deployment");
+        assert_eq!(id.name, "lithus-secret-operator");
+        assert_eq!(id.namespace, "lithus-system");
+    }
+
+    /// normalize_for_diff clears the TYPED metadata fields; that only has
+    /// any effect if the typed metadata is what gets serialised.
+    #[test]
+    fn to_manifest_value_drops_normalized_server_fields() {
+        let mut obj = list_item();
+        obj.metadata.uid = Some("abc-123".into());
+        obj.metadata.resource_version = Some("12345".into());
+        normalize_for_diff(&mut obj);
+
+        let value = to_manifest_value(&obj);
+        let meta = value.pointer("/metadata").unwrap().as_object().unwrap();
+        assert!(!meta.contains_key("uid"));
+        assert!(!meta.contains_key("resourceVersion"));
+        assert_eq!(value.pointer("/spec/replicas").unwrap(), &json!(1));
     }
 
     #[test]

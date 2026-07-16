@@ -167,27 +167,9 @@ pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
     // 4. Parse live resources and build identity-hash index
     let mut live_by_hash: HashMap<String, LiveResource> = HashMap::new();
 
-    for mut obj in resources {
-        // Merge typed metadata back into raw data (LIST responses may omit it)
-        if let Some(map) = obj.data.as_object_mut() {
-            let meta = map
-                .entry("metadata")
-                .or_insert_with(|| serde_json::json!({}));
-            if let Some(meta_obj) = meta.as_object_mut() {
-                if let Some(name) = &obj.metadata.name {
-                    meta_obj
-                        .entry("name")
-                        .or_insert_with(|| serde_json::Value::String(name.clone()));
-                }
-                if let Some(ns) = &obj.metadata.namespace {
-                    meta_obj
-                        .entry("namespace")
-                        .or_insert_with(|| serde_json::Value::String(ns.clone()));
-                }
-            }
-        }
-
-        let rid = ResourceId::from_value(&obj.data);
+    for obj in resources {
+        // Whole object: metadata lives on the typed field, not in `.data`.
+        let rid = ResourceId::from_value(&fetch::to_manifest_value(&obj));
 
         // Read annotations from typed metadata (more reliable than raw data)
         let annotations = obj.metadata.annotations.as_ref();

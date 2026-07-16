@@ -255,7 +255,9 @@ async fn fetch_live_manifests(global: &crate::cli::GlobalArgs) -> Result<Vec<(Re
     let mut resources = Vec::new();
     for mut obj in objects {
         fetch::normalize_for_diff(&mut obj);
-        let value = serde_json::to_value(&obj.data).into_diagnostic()?;
+        // Whole object, not `obj.data`: metadata lives on the typed field,
+        // and without it every id degrades to `Kind/unknown`.
+        let value = fetch::to_manifest_value(&obj);
         let id = ResourceId::from_value(&value);
         resources.push((id, value));
     }

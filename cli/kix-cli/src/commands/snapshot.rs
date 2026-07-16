@@ -73,7 +73,10 @@ fn run_save(args: &SnapshotSaveArgs, ctx: &mut CommandContext) -> Result<()> {
         let mut resources: Vec<(ResourceId, Value)> = Vec::new();
         for mut obj in objects {
             fetch::normalize_for_diff(&mut obj);
-            let value = serde_json::to_value(&obj.data).into_diagnostic()?;
+            // Whole object, not `obj.data`: metadata lives on the typed
+            // field. Serialising `.data` alone wrote snapshots with no
+            // name or namespace, which then diffed against nothing.
+            let value = fetch::to_manifest_value(&obj);
             let id = ResourceId::from_value(&value);
             resources.push((id, value));
         }
