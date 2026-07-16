@@ -11,18 +11,31 @@
 { kix, packages }:
 
 let
+  # NB: each package puts its resource under a named part with `root`
+  # aliased to it. Assigning the resource straight to `root` renders NOTHING
+  # but the PackageInstance marker — collectResources excludes the `root`
+  # key (kixpkgs#25). These fixtures previously did exactly that, so the
+  # ConfigMaps they exist to assert on were silently absent while the
+  # clusters still built green.
+
   # Minimal test package that requires valkey as a hard dependency.
   testAppPackage = {
     meta.version = "0.0.0";
     build =
-      { scope, valkey, ... }:
       {
-        root = scope.mkResource {
+        self,
+        scope,
+        valkey,
+        ...
+      }:
+      {
+        configMap = scope.mkResource {
           apiVersion = "v1";
           kind = "ConfigMap";
           name = "test-app";
           data.REDIS_HOST = valkey.out.fqdn;
         };
+        root = self.configMap;
       };
   };
 
@@ -30,14 +43,15 @@ let
   # that are NOT needed don't produce resources.
   unusedOptionalPackage = {
     build =
-      { scope, ... }:
+      { self, scope, ... }:
       {
-        root = scope.mkResource {
+        configMap = scope.mkResource {
           apiVersion = "v1";
           kind = "ConfigMap";
           name = "unused";
           data.placeholder = "true";
         };
+        root = self.configMap;
       };
   };
 
@@ -45,14 +59,20 @@ let
   needsCorednsPackage = {
     meta.version = "0.0.0";
     build =
-      { scope, coredns, ... }:
       {
-        root = scope.mkResource {
+        self,
+        scope,
+        coredns,
+        ...
+      }:
+      {
+        configMap = scope.mkResource {
           apiVersion = "v1";
           kind = "ConfigMap";
           name = "needs-coredns";
           data.DNS_SERVICE = coredns.out.fqdn;
         };
+        root = self.configMap;
       };
   };
 in

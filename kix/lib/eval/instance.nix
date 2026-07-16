@@ -302,7 +302,41 @@ in
           r: r._injectedResources or [ ]
         ) _partResourcesFromParts;
 
-        allPartResources = _partResourcesFromParts ++ _scopeInjectedResources;
+        # --- Silent-drop guard (kixpkgs#25) ---------------------------------
+        # `collectTypedAttrs` above excludes the `root` key, so a package
+        # whose only k8s-resource lives *at* `root` contributes nothing to
+        # the manifests — it still emits a PackageInstance marker, so the
+        # cluster builds green and the resource simply never exists. The
+        # convention is a named part with `root` pointing at it (same store
+        # path, dedup'd by the manifest writer):
+        #
+        #   claim = scope.mkResource { ... };
+        #   root  = claim;
+        #
+        # persistent-volume-claim shipped exactly this bug; the review that
+        # fixed it warned "nothing prevents the next package from tripping
+        # it", and the next package duly did. This turns that silence into a
+        # build error that names the offender (PRINCIPLES §6).
+        _rootRendersCheck =
+          let
+            plainPath = r: builtins.unsafeDiscardStringContext r.outPath;
+            partPaths = map plainPath _partResourcesFromParts;
+          in
+          if builtins.elem (plainPath rootRes) partPaths then
+            null
+          else
+            throw (
+              "Instance '${instanceName}' in namespace '${namespaceName}': `root` points at "
+              + "${rootRes.kind or "a resource"}/${rootRes.name or "?"}, which is not assigned to "
+              + "any named part — it would render no manifest at all, while still emitting a "
+              + "PackageInstance, so the cluster would build green with the resource simply "
+              + "absent. Assign it to a part and alias root to it, e.g. "
+              + "`myPart = scope.mkResource { ... }; root = self.myPart;`. See kixpkgs#25."
+            );
+
+        allPartResources = builtins.seq _rootRendersCheck (
+          _partResourcesFromParts ++ _scopeInjectedResources
+        );
 
         localRegistry = builtins.foldl' (
           acc: r:
