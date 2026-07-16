@@ -157,6 +157,28 @@ in
       '';
     };
 
+    existingSaltSecret = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = ''kix.untrackedRef "eramba-salt"'';
+      description = ''
+        Name of an existing Secret holding the salt, used instead of this
+        package creating one. Mutually exclusive with securitySalt /
+        securitySaltSource.
+
+        Pass `kix.untrackedRef "..."` when the Secret is created outside kix
+        (e.g. materialised by a secrets-manager controller): a raw string
+        literal is rejected, since nothing in the graph would then guarantee
+        the Secret exists.
+      '';
+    };
+
+    existingSaltSecretKey = lib.mkOption {
+      type = lib.types.str;
+      default = "security-salt";
+      description = "Key within `existingSaltSecret` holding the salt.";
+    };
+
     trustProxy = lib.mkOption {
       type = lib.types.bool;
       default = true;
@@ -268,18 +290,25 @@ in
           else
             null;
 
+        saltSources = lib.count (x: x != null) [
+          config.securitySalt
+          config.securitySaltSource
+          config.existingSaltSecret
+        ];
+
         # Losing the salt silently corrupts every encrypted column, and the
         # app emptyDir cannot carry it across restarts — so refuse to build
         # rather than let it be discovered after the first pod recycle.
         _saltCheck =
-          if config.securitySalt == null && config.securitySaltSource == null then
+          if saltSources == 0 then
             throw (
-              "eramba '${name}': either `securitySalt` or `securitySaltSource` must be set. "
-              + "The app directory is an emptyDir seeded from the image, so a generated salt "
-              + "would change on every restart and make already-encrypted database columns unreadable."
+              "eramba '${name}': set exactly one of `securitySalt`, `securitySaltSource` or "
+              + "`existingSaltSecret`. The app directory is an emptyDir seeded from the image, so a "
+              + "generated salt would change on every restart and make already-encrypted database "
+              + "columns unreadable."
             )
-          else if config.securitySalt != null && config.securitySaltSource != null then
-            throw "eramba '${name}': set `securitySalt` OR `securitySaltSource`, not both."
+          else if saltSources > 1 then
+            throw "eramba '${name}': set exactly one of `securitySalt`, `securitySaltSource` or `existingSaltSecret`."
           else if publicAddress == null then
             throw (
               "eramba '${name}': set `ingress.host` or `publicAddress`. Eramba requires an "
@@ -288,19 +317,29 @@ in
           else
             null;
 
-        saltSecret = scope.mkSecret {
-          name = "${name}-salt";
-          keys = [ "security-salt" ];
-          stringData = lib.optionalAttrs (config.securitySalt != null) {
-            security-salt = config.securitySalt;
-          };
-          source = config.securitySaltSource;
-          labels = scope.selectorLabels;
-          meta = {
-            classification = "credential";
-            rotationPolicy = "manual";
-          };
-        };
+        saltKey =
+          if config.existingSaltSecret != null then config.existingSaltSecretKey else "security-salt";
+
+        saltSecret =
+          if config.existingSaltSecret != null then
+            scope.mkSecretRef {
+              name = config.existingSaltSecret;
+              keys = [ saltKey ];
+            }
+          else
+            scope.mkSecret {
+              name = "${name}-salt";
+              keys = [ "security-salt" ];
+              stringData = lib.optionalAttrs (config.securitySalt != null) {
+                security-salt = config.securitySalt;
+              };
+              source = config.securitySaltSource;
+              labels = scope.selectorLabels;
+              meta = {
+                classification = "credential";
+                rotationPolicy = "manual";
+              };
+            };
 
         # Eramba wants DB_HOST/DB_DATABASE; the sql-database contract's
         # `connectionEnv` helper emits DB_HOSTNAME/DB_DATABASENAME, so the
@@ -319,7 +358,7 @@ in
             DB_PASSWORD = "password";
           })
           ++ (saltSecret.out.mkEnv {
-            SECURITY_SALT = "security-salt";
+            SECURITY_SALT = saltKey;
           });
 
         appEnv =

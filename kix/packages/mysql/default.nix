@@ -110,6 +110,27 @@ in
       description = "Path to a SOPS-encrypted file containing a `root-password` key.";
     };
 
+    existingSecret = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = ''kix.untrackedRef "mysql-credentials"'';
+      description = ''
+        Name of an existing Secret carrying `username`, `password` and
+        `root-password`, used instead of this package creating one. Suits
+        clusters where a controller materialises Secrets from an external
+        secrets manager. Mutually exclusive with password / rootPassword and
+        their *Source variants.
+
+        Pass `kix.untrackedRef "..."` when the Secret is created outside kix:
+        a raw string literal is rejected, since nothing in the graph would
+        then guarantee the Secret exists.
+
+        `username` must match the `user` option — the entrypoint reads
+        MYSQL_USER from config, and the key exists so consumers of the
+        `sql-database` contract can read it from the Secret.
+      '';
+    };
+
     replicas = lib.mkOption {
       type = lib.types.int;
       default = 1;
@@ -228,13 +249,29 @@ in
         else
           null;
 
+      usesExistingSecret = config.existingSecret != null;
+
       _passwordCheck =
-        if config.password == null && config.passwordSource == null then
-          throw "mysql '${name}': either `password` (literal) or `passwordSource` (SOPS path) must be set."
+        if usesExistingSecret then
+          if
+            config.password != null
+            || config.passwordSource != null
+            || config.rootPassword != null
+            || config.rootPasswordSource != null
+          then
+            throw (
+              "mysql '${name}': `existingSecret` is set, so password / rootPassword (and their "
+              + "*Source variants) must all be null — the existing Secret is the only source of "
+              + "credentials."
+            )
+          else
+            null
+        else if config.password == null && config.passwordSource == null then
+          throw "mysql '${name}': set `password` (literal), `passwordSource` (SOPS path), or `existingSecret`."
         else if config.password != null && config.passwordSource != null then
           throw "mysql '${name}': set `password` OR `passwordSource`, not both."
         else if config.rootPassword == null && config.rootPasswordSource == null then
-          throw "mysql '${name}': either `rootPassword` (literal) or `rootPasswordSource` (SOPS path) must be set."
+          throw "mysql '${name}': set `rootPassword` (literal), `rootPasswordSource` (SOPS path), or `existingSecret`."
         else if config.rootPassword != null && config.rootPasswordSource != null then
           throw "mysql '${name}': set `rootPassword` OR `rootPasswordSource`, not both."
         else
@@ -262,27 +299,36 @@ in
       # package's own Service, which is reachable from the StatefulSet that
       # consumes this Secret — putting them here would invert that edge into
       # a cycle. Non-secret connection details are published on `out` instead.
-      credentials = scope.mkSecret {
-        name = "${name}-credentials";
-        keys = [
-          "username"
-          "password"
-          "root-password"
-        ];
-        stringData = {
-          username = userName;
-        }
-        // lib.optionalAttrs (config.password != null) { password = config.password; }
-        // lib.optionalAttrs (config.rootPassword != null) { root-password = config.rootPassword; };
-        # Both passwords are hydrated from the same SOPS file when sourced,
-        # keyed `password` / `root-password`.
-        source = if config.passwordSource != null then config.passwordSource else config.rootPasswordSource;
-        inherit labels;
-        meta = {
-          classification = "credential";
-          rotationPolicy = "manual";
-        };
-      };
+      credentialKeys = [
+        "username"
+        "password"
+        "root-password"
+      ];
+
+      credentials =
+        if usesExistingSecret then
+          scope.mkSecretRef {
+            name = config.existingSecret;
+            keys = credentialKeys;
+          }
+        else
+          scope.mkSecret {
+            name = "${name}-credentials";
+            keys = credentialKeys;
+            stringData = {
+              username = userName;
+            }
+            // lib.optionalAttrs (config.password != null) { password = config.password; }
+            // lib.optionalAttrs (config.rootPassword != null) { root-password = config.rootPassword; };
+            # Both passwords are hydrated from the same SOPS file when sourced,
+            # keyed `password` / `root-password`.
+            source = if config.passwordSource != null then config.passwordSource else config.rootPasswordSource;
+            inherit labels;
+            meta = {
+              classification = "credential";
+              rotationPolicy = "manual";
+            };
+          };
 
       configMap = scope.mkResource {
         apiVersion = "v1";
@@ -560,12 +606,14 @@ in
 
         root = {
           resource = self.service;
-          # `service` reaches statefulSet (derived from it), and statefulSet
-          # reaches config + headlessService through its volume/serviceName
-          # refs. A secretKeyRef does not produce the same context edge, so
-          # the credentials Secret is declared explicitly or it falls out of
-          # the PI closure (kix/pi-checks.nix invariant 4). valkey does the
-          # same for its auth secret.
+          # `service` is derived from the StatefulSet, which in turn reaches
+          # config and headlessService through its volume / serviceName refs.
+          # The credentials Secret is *not* otherwise reachable from the PI
+          # closure (kix/pi-checks.nix invariant 4 fails without this), so it
+          # is declared explicitly — the same thing valkey does for its auth
+          # secret. Required in both modes: when `existingSecret` is set this
+          # is a mkSecretRef, whose marker still has to be in the closure for
+          # the deploy CLI to verify the Secret exists.
           requires = [ self.credentials ];
           # The `sql-database` contract, matching stackgres-database.
           out = {
