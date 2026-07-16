@@ -1,1 +1,4 @@
 /target/
+# devenv builds here instead (devenv.nix sets CARGO_TARGET_DIR), so its
+# rustc and a host rustup toolchain stop invalidating each other's cache.
+/target-devenv/

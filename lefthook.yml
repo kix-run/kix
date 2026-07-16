@@ -24,6 +24,7 @@ post-commit:
         fi
 
 pre-push:
+  parallel: true
   commands:
     verify-signatures:
       run: |
@@ -41,13 +42,35 @@ pre-push:
         fi
 
 pre-commit:
+  parallel: true
+  skip:
+    - merge
+    - rebase
   commands:
+    # rustfmt does no compilation, so it needs neither devenv nor the Nix
+    # FFI libs — running it on the host keeps this well under a second.
     format-rust:
       glob: "cli/**/*.rs"
-      run: devenv shell -- bash -c 'cd cli && cargo fmt --check'
+      run: bash -c 'cd cli && cargo fmt --check'
 
-    # Clippy must run inside devenv shell because the FFI crates need
-    # Nix C libraries (nix-expr-c, etc.) available via PKG_CONFIG_PATH.
+    # Clippy compiles, so it does need devenv shell: the FFI crates find
+    # the Nix C libraries (nix-expr-c, etc.) via PKG_CONFIG_PATH.
+    #
+    # This is affordable only because of two things, and it goes back to
+    # being unusable if either regresses:
+    #   1. Every package in `packages` must actually build. Nix does not
+    #      cache failed builds, so one broken package (this was `wrangler`
+    #      on aarch64-darwin) makes EVERY shell entry re-attempt it — 60-105s
+    #      each, twice per commit, and the hook then fails without ever
+    #      running clippy.
+    #   2. devenv.nix sets CARGO_TARGET_DIR to its own directory. Sharing
+    #      cli/target/ with a host rustup toolchain makes the two compiler
+    #      versions invalidate each other's fingerprints, so every run is a
+    #      cold build.
+    # With both holding: ~6s shell entry + ~3s warm clippy.
+    #
+    # Nothing else covers this — the only CI workflow (pages.yml) builds the
+    # site and never lints — so it must not simply be dropped.
     clippy-rust:
       glob: "cli/**/*.rs"
       run: devenv shell -- bash -c 'cd cli && cargo clippy --workspace --all-targets -- -D warnings'

@@ -30,7 +30,6 @@ in
     pkgs.pkg-config
     pkgs.nixfmt-rfc-style
     pkgs.ruff
-    pkgs.wrangler
     pkgs.kind
     pkgs.kubectl
     pkgs.cilium-cli
@@ -47,6 +46,15 @@ in
   ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [
     pkgs.wf-recorder
   ];
+
+  # devenv's rustc and a host rustup toolchain are rarely the same version.
+  # Cargo fingerprints include the compiler version, so if both write to
+  # cli/target/ each one invalidates the other's cache and every build from
+  # either side starts from scratch — the shared target dir is precisely what
+  # keeps it cold. A separate dir costs disk once and lets both stay warm,
+  # and (unlike pinning the two toolchains to match) does not silently
+  # re-break the next time either side moves.
+  env.CARGO_TARGET_DIR = "${config.devenv.root}/cli/target-devenv";
 
   # Bindgen needs libclang to generate FFI bindings from the Nix C headers.
   # BINDGEN_EXTRA_CLANG_ARGS is required because the headers use C++20 features.
