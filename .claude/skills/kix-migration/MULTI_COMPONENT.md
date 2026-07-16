@@ -48,7 +48,7 @@ Reference implementation: `packages/harbor/`.
 
 5. **Manual volumes for multi-container pods** — when two containers share volumes (harbor's registry + registryctl), wire volumes manually instead of using `kix.withMounts` (which only works for single-container pods unless you use `kix.withMountsOn`).
 
-6. **`root` with explicit `requires`** — in multi-component packages, many resources aren't reachable via transitive `self.*` references from the entry point. List them in `root.requires`:
+6. **`root` with explicit `requires`** — in multi-component packages, many resources aren't reachable via transitive `self.*` references from the entry point. List them in `root.requires`. As with a bare `root`, `resource` *aliases* a named part — never construct a resource inside `root` itself, or it renders nothing at all (see "root must alias a named part" in SKILL.md):
    ```nix
    root = {
      resource = if config.ingress.enabled then self.ingress else self.coreService;

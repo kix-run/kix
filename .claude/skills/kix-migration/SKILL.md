@@ -153,6 +153,8 @@ in
         |> scope.mkResource;
 
       # root — entry point. Resources reachable via self.* refs are auto-tracked.
+      # Note root *aliases* a named part; it never constructs a resource
+      # itself. See "root must alias a named part" below.
       root = self.service;
     })
 
@@ -164,6 +166,32 @@ in
 ```
 
 **Inline attrset package** (for test fixtures and simple inline definitions in cluster files): a plain attrset `{ build, meta?, options?, deps? }` — no function wrapper needed. Use function packages for `packages/` directory files.
+
+### `root` must alias a named part
+
+**Every resource must live under its own key. `root` only ever points at one — it never constructs a resource itself.**
+
+```nix
+# Right
+claim = scope.mkResource { apiVersion = "v1"; kind = "PersistentVolumeClaim"; ... };
+root  = claim;                      # same store path → dedup'd by the manifest writer
+
+# Wrong — renders nothing
+root = scope.mkResource { apiVersion = "v1"; kind = "PersistentVolumeClaim"; ... };
+```
+
+Why: `collectResources` gathers renderable resources from the package's parts with `excludeKeys = [ "root" "meta" ]`. A resource reachable *only* through `root` is therefore never collected — the package emits its `PackageInstance` marker and nothing else. The cluster builds green and the resource simply does not exist.
+
+kix now throws at eval time when `root`'s store path appears under no other part, so this fails the build rather than shipping (kixpkgs#25). The rule is worth knowing anyway: the error tells you at the end, the convention costs nothing at the start.
+
+Both forms of `root` are fine as long as the resource itself is a named part:
+
+```nix
+root = self.service;                                   # bare alias
+root = { resource = self.deployment; requires = [ self.sa ]; out = { ... }; };  # wrapper
+```
+
+This bit `persistent-volume-claim` (it shipped root-only and rendered no PVC), and later a package that produced zero CustomResources with no error. Both fixed by naming the part.
 
 ### `self` and dependency tracking
 

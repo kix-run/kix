@@ -1,10 +1,10 @@
 # kixpkgs root flake — aggregates all clusters.
 #
-# Prefer using the per-directory flakes (nw1/, ludo/, clusters/) directly.
+# Prefer using the per-directory flakes (ludo/, clusters/) directly.
 # This root flake exists for backwards compatibility and CI.
 #
 # Build a cluster:
-#   nix build .#cluster-nw1 --extra-experimental-features pipe-operators
+#   nix build .#cluster-ludo --extra-experimental-features pipe-operators
 
 {
   description = "kixpkgs - Kubernetes packages built with Nix";
@@ -38,7 +38,6 @@
           monitoring-native = ./clusters/test-monitoring-native.nix;
 
           # Production clusters
-          nw1 = ./nw1/cluster.nix;
           ludo = ./ludo/cluster.nix;
         };
       };
