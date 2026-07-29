@@ -1531,6 +1531,31 @@ let
         && !(hasName "app-deployment-consumer-to-db-ingress" cnps)
       )
       || throw "cluster override should terminate the raw CR; CNPs: ${builtins.toJSON (namesOf cnps)}";
+
+    # untrackedRef's marker is proof of a deliberate opt-out, not a resource.
+    # Stamping it into depends-on yields a hash nothing can ever resolve, and
+    # `kix health` reports the consumer as depending on a MISSING resource
+    # forever. The marker's context must reach the validators and stop there.
+    t45-untracked-ref-not-a-dep =
+      let
+        secretName = k8s.markers.mkUntrackedRef "operator-minted-certs";
+        markerHash = k8s.extractStoreHash (
+          builtins.head (builtins.attrNames (builtins.getContext secretName))
+        );
+        deployment = k8s.mkResource {
+          apiVersion = "apps/v1";
+          kind = "Deployment";
+          name = "consumer";
+          namespace = {
+            name = "appns";
+            outPath = "/nix/store/${builtins.substring 0 32 (builtins.hashString "sha256" "ns")}-ns";
+          };
+          spec.template.spec.volumes = [ { secret = { inherit secretName; }; } ];
+        };
+        annot = dependsOn deployment.rawManifest;
+      in
+      (builtins.getContext secretName != { } && !(lib.hasInfix markerHash annot))
+      || throw "untracked-ref marker ${markerHash} leaked into depends-on: '${annot}'";
   };
 
   failures = lib.filterAttrs (

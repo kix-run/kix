@@ -23,6 +23,8 @@ const DEPENDS_ON: &str = "kix.dev/depends-on";
 const PACKAGE: &str = "kix.dev/package";
 const PACKAGE_NAMESPACE: &str = "kix.dev/package-namespace";
 const IMPORT_MODE: &str = "kix.dev/mode";
+// Both spellings mean the same thing; helm-imported hooks carry the helm one.
+const HOOK_DELETE_POLICY: [&str; 2] = ["kix.dev/hook-delete-policy", "helm.sh/hook-delete-policy"];
 
 /// A live resource with its parsed annotations.
 #[allow(dead_code)]
@@ -45,6 +47,10 @@ enum ResourceHealth {
     External,
     /// Referenced in depends-on but not found in live resources.
     Missing { expected_by: String },
+    /// Run-to-completion resource that declared its own deletion (a hook Job
+    /// with `hook-succeeded` delete policy, or `ttlSecondsAfterFinished`) and
+    /// is gone. Absence is the success path, not a fault.
+    Reaped { expected_by: String },
     /// Resource itself is OK, but depends on something unhealthy.
     AtRisk { reason: String },
 }
@@ -69,9 +75,15 @@ impl PackageHealth {
             .resources
             .iter()
             .any(|(_, h)| matches!(h, ResourceHealth::AtRisk { .. }));
+        let all_reaped = self
+            .resources
+            .iter()
+            .all(|(_, h)| matches!(h, ResourceHealth::Reaped { .. }));
 
         if all_external {
             "external"
+        } else if all_reaped {
+            "completed"
         } else if has_missing {
             "DEGRADED"
         } else if has_at_risk {
@@ -84,14 +96,31 @@ impl PackageHealth {
     fn healthy_count(&self) -> usize {
         self.resources
             .iter()
-            .filter(|(_, h)| matches!(h, ResourceHealth::Healthy | ResourceHealth::External))
+            .filter(|(_, h)| {
+                matches!(
+                    h,
+                    ResourceHealth::Healthy
+                        | ResourceHealth::External
+                        | ResourceHealth::Reaped { .. }
+                )
+            })
             .count()
     }
 
     fn is_healthy(&self) -> bool {
+        self.resources.iter().all(|(_, h)| {
+            matches!(
+                h,
+                ResourceHealth::Healthy | ResourceHealth::External | ResourceHealth::Reaped { .. }
+            )
+        })
+    }
+
+    fn reaped_count(&self) -> usize {
         self.resources
             .iter()
-            .all(|(_, h)| matches!(h, ResourceHealth::Healthy | ResourceHealth::External))
+            .filter(|(_, h)| matches!(h, ResourceHealth::Reaped { .. }))
+            .count()
     }
 }
 
@@ -250,6 +279,24 @@ fn walk_graph(
 ) -> BTreeMap<String, ResourceHealth> {
     let mut health: BTreeMap<String, ResourceHealth> = BTreeMap::new();
     let mut missing_hashes: BTreeMap<String, String> = BTreeMap::new(); // hash → expected_by
+    let mut reaped_hashes: BTreeMap<String, String> = BTreeMap::new(); // hash → expected_by
+
+    // Pre-pass: an absent dependency is only a fault if it was supposed to
+    // still be there. Hook Jobs delete themselves on success (delete policy)
+    // or are reaped by the TTL controller, so their absence is the success
+    // path. The manifest is not on the cluster to ask, but the seal that
+    // minted the hash is in the local nix store — that is what
+    // `resolve_hash_to_rid` already reads to name missing resources.
+    let reaped: std::collections::HashSet<String> = live_by_hash
+        .values()
+        .filter(|r| !r.is_import)
+        .flat_map(|r| r.depends_on.iter())
+        .filter(|dep| !live_by_hash.contains_key(*dep))
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .filter(|dep| read_seal(dep).is_some_and(|m| declares_own_deletion(&m)))
+        .cloned()
+        .collect();
 
     // First pass: check each resource's direct dependencies
     for (hash, resource) in live_by_hash {
@@ -272,21 +319,38 @@ fn walk_graph(
         let mut broken_dep: Option<String> = None;
 
         for dep_hash in &resource.depends_on {
-            if !live_by_hash.contains_key(dep_hash) {
-                all_deps_ok = false;
-                let dep_label = &dep_hash[..8.min(dep_hash.len())];
-                missing_hashes
+            if live_by_hash.contains_key(dep_hash) {
+                continue;
+            }
+            let dep_label = &dep_hash[..8.min(dep_hash.len())];
+
+            if reaped.contains(dep_hash) {
+                reaped_hashes
                     .entry(dep_hash.clone())
                     .or_insert_with(|| format!("{}", resource.rid));
-                broken_dep = Some(format!("hash {}... (MISSING)", dep_label));
 
                 if verbose > 1 {
                     println!(
-                        "    {} dependency {}... MISSING",
-                        output::red("✗"),
+                        "    {} dependency {}... completed and reaped",
+                        output::green("✓"),
                         dep_label,
                     );
                 }
+                continue;
+            }
+
+            all_deps_ok = false;
+            missing_hashes
+                .entry(dep_hash.clone())
+                .or_insert_with(|| format!("{}", resource.rid));
+            broken_dep = Some(format!("hash {}... (MISSING)", dep_label));
+
+            if verbose > 1 {
+                println!(
+                    "    {} dependency {}... MISSING",
+                    output::red("✗"),
+                    dep_label,
+                );
             }
         }
 
@@ -333,7 +397,38 @@ fn walk_graph(
             .or_insert(ResourceHealth::Missing { expected_by });
     }
 
+    // Record reaped run-to-completion resources
+    for (hash, expected_by) in reaped_hashes {
+        health
+            .entry(hash)
+            .or_insert(ResourceHealth::Reaped { expected_by });
+    }
+
     health
+}
+
+/// Does this manifest declare that it removes itself once it succeeds?
+///
+/// Two independent declarations, either of which makes absence expected:
+///   * `kix.dev/hook-delete-policy` containing `hook-succeeded` — kix deletes
+///     the hook after it completes.
+///   * a Job's `spec.ttlSecondsAfterFinished` — Kubernetes' TTL controller
+///     deletes it some time after completion.
+fn declares_own_deletion(manifest: &serde_json::Value) -> bool {
+    let annotations = manifest.pointer("/metadata/annotations");
+    let deletes_on_success = HOOK_DELETE_POLICY.iter().any(|key| {
+        annotations
+            .and_then(|a| a.get(*key))
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|p| p.split(',').any(|s| s.trim() == "hook-succeeded"))
+    });
+
+    let ttl_reaped = manifest.get("kind").and_then(serde_json::Value::as_str) == Some("Job")
+        && manifest
+            .pointer("/spec/ttlSecondsAfterFinished")
+            .is_some_and(serde_json::Value::is_number);
+
+    deletes_on_success || ttl_reaped
 }
 
 /// BFS from a root hash to find all transitively reachable identity hashes.
@@ -383,17 +478,22 @@ fn group_by_package(
             .push((resource.rid.clone(), health));
     }
 
-    // Add missing resources (no live resource, just a hash)
+    // Add resources that exist only as a hash: never applied (missing) or
+    // applied, completed and removed on purpose (reaped).
     for (hash, health) in health_map {
-        if let ResourceHealth::Missing { .. } = health
-            && !live_by_hash.contains_key(hash)
-        {
-            let rid = resolve_hash_to_rid(hash);
-            pkg_map
-                .entry(("_cluster".to_string(), "_missing".to_string()))
-                .or_default()
-                .push((rid, health.clone()));
+        if live_by_hash.contains_key(hash) {
+            continue;
         }
+        let bucket = match health {
+            ResourceHealth::Missing { .. } => "_missing",
+            ResourceHealth::Reaped { .. } => "_reaped",
+            _ => continue,
+        };
+        let rid = resolve_hash_to_rid(hash);
+        pkg_map
+            .entry(("_cluster".to_string(), bucket.to_string()))
+            .or_default()
+            .push((rid, health.clone()));
     }
 
     pkg_map
@@ -403,6 +503,8 @@ fn group_by_package(
             let display_name = if namespace == "_cluster" {
                 if instance_name == "_missing" {
                     "(missing resources)".to_string()
+                } else if instance_name == "_reaped" {
+                    "(completed hooks)".to_string()
                 } else if instance_name == "_cluster" {
                     "(cluster-level)".to_string()
                 } else {
@@ -434,6 +536,7 @@ fn display_results(packages: &[PackageHealth], verbose: u8, quiet: bool) {
         let status_colored = match status {
             "healthy" => output::green("✓"),
             "external" => output::dim("→"),
+            "completed" => output::dim("✓"),
             "DEGRADED" => output::red("✗"),
             "AT RISK" => output::yellow("!"),
             _ => output::dim("?"),
@@ -444,7 +547,10 @@ fn display_results(packages: &[PackageHealth], verbose: u8, quiet: bool) {
             .iter()
             .filter(|(_, h)| matches!(h, ResourceHealth::External))
             .count();
-        let counts = if external_count == total {
+        let reaped_count = pkg.reaped_count();
+        let counts = if reaped_count == total {
+            format!("{} completed, then removed", total)
+        } else if external_count == total {
             format!("{} imported", total)
         } else if external_count > 0 {
             format!(
@@ -456,7 +562,9 @@ fn display_results(packages: &[PackageHealth], verbose: u8, quiet: bool) {
         } else {
             format!("{}/{} resources healthy", healthy, total)
         };
-        let counts_colored = if healthy == total {
+        let counts_colored = if status == "completed" {
+            output::dim(&counts)
+        } else if healthy == total {
             output::green(&counts)
         } else if healthy == 0 {
             output::red(&counts)
@@ -485,16 +593,25 @@ fn display_results(packages: &[PackageHealth], verbose: u8, quiet: bool) {
         }
     }
 
-    // Detailed resource-level output for unhealthy packages
-    let unhealthy_packages: Vec<&PackageHealth> =
-        packages.iter().filter(|p| !p.is_healthy()).collect();
+    // Detailed resource-level output for anything not plainly in-sync.
+    // Reaped hooks are named too: they used to read as MISSING, so saying
+    // which ones completed is the point of the section.
+    let detailed_packages: Vec<&PackageHealth> = packages
+        .iter()
+        .filter(|p| !p.is_healthy() || p.reaped_count() > 0)
+        .collect();
 
-    if !unhealthy_packages.is_empty() {
+    if !detailed_packages.is_empty() {
         println!();
 
-        for pkg in &unhealthy_packages {
+        for pkg in &detailed_packages {
             println!("{}", output::bold(&format!("{}:", pkg.display_name)));
 
+            let reaped: Vec<_> = pkg
+                .resources
+                .iter()
+                .filter(|(_, h)| matches!(h, ResourceHealth::Reaped { .. }))
+                .collect();
             let missing: Vec<_> = pkg
                 .resources
                 .iter()
@@ -505,6 +622,23 @@ fn display_results(packages: &[PackageHealth], verbose: u8, quiet: bool) {
                 .iter()
                 .filter(|(_, h)| matches!(h, ResourceHealth::AtRisk { .. }))
                 .collect();
+
+            if !reaped.is_empty() {
+                for (rid, health) in &reaped {
+                    if let ResourceHealth::Reaped { expected_by } = health {
+                        println!(
+                            "  {} {} {} {}",
+                            output::dim("✓"),
+                            output::dim("COMPLETED"),
+                            rid,
+                            output::dim(&format!(
+                                "(ran, then removed itself; required by {})",
+                                expected_by
+                            )),
+                        );
+                    }
+                }
+            }
 
             if !missing.is_empty() {
                 for (rid, health) in &missing {
@@ -571,16 +705,21 @@ fn display_results(packages: &[PackageHealth], verbose: u8, quiet: bool) {
         .flat_map(|p| &p.resources)
         .filter(|(_, h)| matches!(h, ResourceHealth::AtRisk { .. }))
         .count();
+    let total_reaped: usize = packages.iter().map(|p| p.reaped_count()).sum();
 
     let healthy_str = total_healthy.to_string();
     let external_str = total_external.to_string();
     let missing_str = total_missing.to_string();
     let at_risk_str = total_at_risk.to_string();
+    let reaped_str = total_reaped.to_string();
 
     println!();
     print!("Health: {} in-sync", output::green(&healthy_str));
     if total_external > 0 {
         print!(", {} imported", output::dim(&external_str));
+    }
+    if total_reaped > 0 {
+        print!(", {} completed", output::dim(&reaped_str));
     }
     if total_missing > 0 {
         print!(", {} missing", output::red(&missing_str));
@@ -594,51 +733,53 @@ fn display_results(packages: &[PackageHealth], verbose: u8, quiet: bool) {
     println!();
 }
 
-/// Try to resolve a nix store hash to a ResourceId via `nix-store -q --outputs`.
+/// Locate the seal that minted an identity hash in the local nix store.
+///
+/// A hash names exactly one store path, so a directory scan for the
+/// `{hash}-` prefix is the whole lookup. Returns `None` when the store does
+/// not have it — e.g. health run from a machine that never built this
+/// activation, or after a `nix-collect-garbage`.
+fn store_path_for_hash(hash: &str) -> Option<std::path::PathBuf> {
+    let prefix = format!("{}-", hash);
+    std::fs::read_dir("/nix/store")
+        .ok()?
+        .filter_map(Result::ok)
+        .find(|e| e.file_name().to_string_lossy().starts_with(&prefix))
+        .map(|e| e.path())
+}
+
+/// Read the sealed manifest behind an identity hash from the local nix store.
+/// The seal is the manifest JSON as it was at eval time, which is how health
+/// can still reason about a resource that is no longer on the cluster.
+fn read_seal(hash: &str) -> Option<serde_json::Value> {
+    let path = store_path_for_hash(hash)?;
+    let contents = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&contents).ok()
+}
+
+/// Try to resolve a nix store hash to a ResourceId.
 /// Store paths follow the convention: /nix/store/{hash}-k8s-{Kind}-{namespace}-{name}
 fn resolve_hash_to_rid(hash: &str) -> ResourceId {
-    // Use nix-store --query to resolve the hash to a path
-    if let Ok(output) = std::process::Command::new("nix-store")
-        .args(["--query", "--outputs", &format!("/nix/store/{}", hash)])
-        .output()
+    if let Some(path) = store_path_for_hash(hash)
+        && let Some(filename) = path.file_name()
     {
-        // nix-store --query fails if the path doesn't exist, but the error message
-        // contains the attempted path. Instead, just try to stat the store path prefix.
-        let _ = output; // nix-store --query --outputs needs a full path, not a hash prefix
-    }
-
-    // Direct approach: nix store paths are addressable by hash.
-    // Try to find the path with a shell glob via ls.
-    if let Ok(output) = std::process::Command::new("bash")
-        .args([
-            "-c",
-            &format!("ls -d /nix/store/{}-* 2>/dev/null | head -1", hash),
-        ])
-        .output()
-        && output.status.success()
-    {
-        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if !path.is_empty()
-            && let Some(filename) = std::path::Path::new(&path).file_name()
-        {
-            let name_str = filename.to_string_lossy();
-            let prefix = format!("{}-", hash);
-            if let Some(rest) = name_str.strip_prefix(&prefix) {
-                let parts: Vec<&str> = rest.splitn(4, '-').collect();
-                if parts.len() == 4 && parts[0] == "k8s" {
-                    let kind = parts[1].to_string();
-                    let namespace = if parts[2] == "_cluster_" {
-                        "_cluster".to_string()
-                    } else {
-                        parts[2].to_string()
-                    };
-                    let name = parts[3].to_string();
-                    return ResourceId {
-                        kind,
-                        namespace,
-                        name,
-                    };
-                }
+        let name_str = filename.to_string_lossy();
+        let prefix = format!("{}-", hash);
+        if let Some(rest) = name_str.strip_prefix(&prefix) {
+            let parts: Vec<&str> = rest.splitn(4, '-').collect();
+            if parts.len() == 4 && parts[0] == "k8s" {
+                let kind = parts[1].to_string();
+                let namespace = if parts[2] == "_cluster_" {
+                    "_cluster".to_string()
+                } else {
+                    parts[2].to_string()
+                };
+                let name = parts[3].to_string();
+                return ResourceId {
+                    kind,
+                    namespace,
+                    name,
+                };
             }
         }
     }
@@ -670,4 +811,90 @@ fn summarize_issues(resources: &[(ResourceId, ResourceHealth)]) -> String {
         parts.push(format!("{} at risk", at_risk));
     }
     parts.join(", ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn ttl_job_declares_own_deletion() {
+        assert!(declares_own_deletion(&json!({
+            "kind": "Job",
+            "metadata": { "name": "postgres-reflect" },
+            "spec": { "ttlSecondsAfterFinished": 600 },
+        })));
+    }
+
+    #[test]
+    fn zero_ttl_still_counts() {
+        // ingress-nginx admission hooks use ttlSecondsAfterFinished: 0
+        assert!(declares_own_deletion(&json!({
+            "kind": "Job",
+            "spec": { "ttlSecondsAfterFinished": 0 },
+        })));
+    }
+
+    #[test]
+    fn hook_succeeded_policy_declares_own_deletion() {
+        for key in HOOK_DELETE_POLICY {
+            assert!(
+                declares_own_deletion(&json!({
+                    "kind": "Job",
+                    "metadata": { "annotations": { key: "before-hook-creation,hook-succeeded" } },
+                })),
+                "{key} should be honored"
+            );
+        }
+    }
+
+    #[test]
+    fn before_hook_creation_alone_does_not() {
+        // Deleted before the NEXT run, not after this one — a job that is
+        // absent now is still a job that never ran.
+        assert!(!declares_own_deletion(&json!({
+            "kind": "Job",
+            "metadata": { "annotations": { "kix.dev/hook-delete-policy": "before-hook-creation" } },
+        })));
+    }
+
+    #[test]
+    fn plain_workload_does_not_declare_own_deletion() {
+        assert!(!declares_own_deletion(&json!({
+            "kind": "Deployment",
+            "metadata": { "name": "immich-server" },
+            "spec": { "replicas": 1 },
+        })));
+    }
+
+    #[test]
+    fn non_job_with_ttl_field_does_not() {
+        // ttlSecondsAfterFinished is a Job field; anything else carrying it
+        // is not making the same promise.
+        assert!(!declares_own_deletion(&json!({
+            "kind": "ConfigMap",
+            "spec": { "ttlSecondsAfterFinished": 600 },
+        })));
+    }
+
+    #[test]
+    fn reaped_counts_as_healthy() {
+        let pkg = PackageHealth {
+            display_name: "(completed hooks)".to_string(),
+            resources: vec![(
+                ResourceId {
+                    kind: "Job".to_string(),
+                    namespace: "data".to_string(),
+                    name: "postgres-reflect".to_string(),
+                },
+                ResourceHealth::Reaped {
+                    expected_by: "PackageInstance/postgres@data".to_string(),
+                },
+            )],
+        };
+        assert!(pkg.is_healthy());
+        assert_eq!(pkg.status_label(), "completed");
+        assert_eq!(pkg.reaped_count(), 1);
+    }
 }

@@ -19,7 +19,7 @@ let
 in
 {
   meta = {
-    version = "v0.28.1";
+    version = "v0.33.1";
     description = "Alertmanager — alert routing and deduplication";
     defaultAliases = [ "alertmanager" ];
     k8s.minVersion = "1.25";
@@ -33,7 +33,7 @@ in
       type = lib.types.anything;
       default = {
         repository = "quay.io/prometheus/alertmanager";
-        tag = "v0.28.1";
+        tag = "v0.33.1";
       };
     };
     replicas = lib.mkOption {

@@ -30,7 +30,7 @@ let
 in
 {
   meta = {
-    version = "v2.7.5";
+    version = "v3.0.3";
     description = "Immich — self-hosted photo management";
     owner = "app-team";
     compatibleWith.database = {
@@ -120,7 +120,7 @@ in
       type = lib.types.anything;
       default = {
         repository = "ghcr.io/immich-app/immich-server";
-        tag = "v2.7.5";
+        tag = "v3.0.3";
         pullPolicy = "IfNotPresent";
       };
     };
@@ -319,6 +319,15 @@ in
       service = "service";
       defaultAnnotations = {
         "nginx.ingress.kubernetes.io/proxy-body-size" = "0";
+      };
+      # The mobile app's /api/sync/stream is a long-lived streaming endpoint;
+      # a fresh session's initial full sync exceeds Envoy Gateway's default 15s
+      # request timeout (observed UT cuts), which stalls the album backfill and
+      # blocks photo backup. Disable the request timeout so the stream can run
+      # to completion (the app's own 60s socket timeout remains the bound).
+      timeouts = {
+        request = "0s";
+        backendRequest = "0s";
       };
     })
   ];

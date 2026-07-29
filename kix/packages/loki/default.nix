@@ -14,15 +14,15 @@
 #
 # Chart:   https://grafana.github.io/helm-charts
 # Name:    loki
-# Version: 6.46.0
+# Version: 7.1.0
 
 { scope, lib }:
 let
   chart = scope.helm.fetchHelmChart {
     repo = "https://grafana.github.io/helm-charts";
     name = "loki";
-    version = "6.46.0";
-    hash = "sha256-KvhWWsyG9k58Wmu0Fb3fgPpRspMboGCzcN3zExDi2nA=";
+    version = "7.1.0";
+    hash = "sha256-NDYcyiu7b6l1/RruxPnV4rkeLJmvfdb5wU73/mRkk9E=";
   };
 
   defaultValues = {
@@ -119,7 +119,7 @@ let
 in
 {
   meta = {
-    version = "6.46.0";
+    version = "7.1.0";
     description = "Loki — log aggregation system (single-binary, filesystem)";
     lifecycle = "ephemeral";
     # Helm chart is opaque — intra-package edges (gateway → backend) aren't

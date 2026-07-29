@@ -20,7 +20,7 @@ let
 in
 {
   meta = {
-    version = "v2.32.0";
+    version = "v2.63.18";
     description = "Filebrowser — web-based file manager";
   };
 
@@ -29,7 +29,7 @@ in
       type = lib.types.anything;
       default = {
         repository = "filebrowser/filebrowser";
-        tag = "v2.32.0";
+        tag = "v2.63.18";
       };
     };
     ingress = kix.options.ingress;

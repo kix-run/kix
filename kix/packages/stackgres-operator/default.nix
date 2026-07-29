@@ -1,4 +1,4 @@
-# StackGres Operator package — stackgres.io/operator v1.18.6.
+# StackGres Operator package — stackgres.io/operator v1.19.0.
 #
 # PostgreSQL operator that manages SGCluster, SGInstanceProfile,
 # SGPostgresConfig, SGPoolingConfig, SGObjectStorage, SGBackupConfig,
@@ -240,7 +240,7 @@ let
 in
 {
   meta = {
-    version = "1.18.6";
+    version = "1.19.0";
     defaultAliases = [ "stackgresOperator" ];
     network.intents = {
       # The operator fetches extensions from extensions.stackgres.io at runtime.
@@ -259,7 +259,7 @@ in
     };
     operator.image.tag = lib.mkOption {
       type = lib.types.str;
-      default = "1.18.6";
+      default = "1.19.0";
     };
     restapi.image.repository = lib.mkOption {
       type = lib.types.str;
@@ -267,7 +267,7 @@ in
     };
     restapi.image.tag = lib.mkOption {
       type = lib.types.str;
-      default = "1.18.6";
+      default = "1.19.0";
     };
     adminui.image.repository = lib.mkOption {
       type = lib.types.str;
@@ -275,7 +275,7 @@ in
     };
     adminui.image.tag = lib.mkOption {
       type = lib.types.str;
-      default = "1.18.6";
+      default = "1.19.0";
     };
     operator.resources = lib.mkOption {
       type = lib.types.anything;

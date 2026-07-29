@@ -10,15 +10,15 @@
 #
 # Chart:   https://emberstack.github.io/helm-charts
 # Name:    reflector
-# Version: 10.0.28
+# Version: 10.0.60
 
 { scope, lib }:
 let
   chart = scope.helm.fetchHelmChart {
     repo = "https://emberstack.github.io/helm-charts";
     name = "reflector";
-    version = "10.0.28";
-    hash = "sha256-2ar5gmDn9UiOO7URtPTD47yIGtvoRfkgOZKrjO1OXEI=";
+    version = "10.0.60";
+    hash = "sha256-UdCVcUqJogyUYmGo1HnQ1fMxY7ZEV56+9wQSJfWOhVM=";
   };
 
   # Builder factory: returns a function the consumer calls with their own
@@ -99,7 +99,7 @@ let
               containers = [
                 {
                   name = "annotate";
-                  image = "bitnamilegacy/kubectl:1.30";
+                  image = "bitnamilegacy/kubectl:1.33";
                   command = [
                     "/bin/sh"
                     "-c"
@@ -139,7 +139,7 @@ let
 in
 {
   meta = {
-    version = "10.0.28";
+    version = "10.0.60";
     defaultAliases = [ "reflector" ];
     # This package owns the reflector annotation domain: resources carrying
     # annotations under it without a DI dep on this instance trip the

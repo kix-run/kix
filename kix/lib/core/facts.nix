@@ -37,6 +37,10 @@
 
 { lib }:
 
+let
+  markers = import ./markers.nix { inherit lib; };
+in
+
 rec {
   # ---- vocabulary ---------------------------------------------------------
   # Closed set, validated at mint. One kind today; api-surface (webhook
@@ -127,10 +131,7 @@ rec {
     in
     lib.hasInfix "." group && !(lib.hasSuffix ".k8s.io" group) && group != "kix.dev";
 
-  # /nix/store/ = 11 chars, hash = 32, "-" = 1 → name starts at offset 44
-  pathName = p: builtins.substring 44 (builtins.stringLength p) p;
-
-  isFactPath = p: lib.hasPrefix factPrefix (pathName p);
+  isFactPath = p: lib.hasPrefix factPrefix (markers.pathName p);
 
   # ---- minting ------------------------------------------------------------
 

@@ -492,7 +492,7 @@ The `kix` arg to packages comes from `compose.nix` (`kixlib`).
 | `kix.mkEnvVars { K = "v"; OPT = null; }` | `→ [{ name, value }]`. Null values filtered (`lib.optionalAttrs` plays nicely). |
 | `kix.mkEnv attrs rawList` | `(mkEnvVars attrs) ++ rawList`. Combines named env vars with raw entries (e.g. `valueFrom.secretKeyRef`) |
 | `kix.parseGi "50Gi"` | `→ 50` (number). Supports `Ti`/`Gi`/`Mi`. Strips Nix string context so it works on `dep.out.size` |
-| `kix.untrackedRef "name"` | Escape hatch: a string carrying an "untracked" context marker. Use when referring to resource names not managed by kix (Helm hook secrets, cert-manager-issued secrets, etc.). Bypasses the DI-tracking check in `mkDeployment` |
+| `kix.untrackedRef "name"` | Escape hatch: a string carrying an "untracked" context marker. Use when referring to resource names not managed by kix (Helm hook secrets, cert-manager-issued secrets, etc.). Bypasses the DI-tracking check in `mkDeployment`. The marker is inert: it satisfies the ref check and is filtered out of `kix.dev/depends-on`, so it never becomes a deploy-ordering edge |
 
 ### 9.2 Mounts
 

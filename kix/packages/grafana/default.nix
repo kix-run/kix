@@ -28,7 +28,7 @@ let
 in
 {
   meta = {
-    version = "11.6.1";
+    version = "13.1.1";
     description = "Grafana — observability and data visualization";
     defaultAliases = [ "grafana" ];
     k8s.minVersion = "1.25";
@@ -43,7 +43,7 @@ in
       type = lib.types.anything;
       default = {
         repository = "docker.io/grafana/grafana";
-        tag = "11.6.1";
+        tag = "13.1.1";
         pullPolicy = "IfNotPresent";
       };
     };
@@ -51,7 +51,7 @@ in
       type = lib.types.anything;
       default = {
         repository = "quay.io/kiwigrid/k8s-sidecar";
-        tag = "1.30.0";
+        tag = "2.8.1";
         pullPolicy = "IfNotPresent";
       };
     };
@@ -884,7 +884,7 @@ in
               initContainers = [
                 {
                   name = "init-chown-data";
-                  image = "docker.io/library/busybox:1.37.0";
+                  image = "docker.io/library/busybox:1.38.0";
                   command = [
                     "chown"
                     "-R"

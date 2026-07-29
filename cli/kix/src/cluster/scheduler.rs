@@ -269,6 +269,16 @@ pub async fn run_deploy(
         }
     }
 
+    // Which activations still exist, for pruning `kix.dev/activations`. Read
+    // once up front: activations do not appear mid-deploy (the new one is
+    // applied in the last wave and is kept unconditionally), and the alternative
+    // is a LIST per stamped resource. `None` when it cannot be established —
+    // callers must then merge without pruning.
+    let live_activations: Option<HashSet<String>> = match &activation_ar {
+        Some(ar) => activation::live_activation_hashes(client, ar).await,
+        None => None,
+    };
+
     // Preauthorized delete set for immutable-conflict recovery.
     let orphan_set: HashSet<ResourceId> = orphan_rids.iter().cloned().collect();
     let mut consumed_orphans: HashSet<ResourceId> = HashSet::new();
@@ -281,6 +291,7 @@ pub async fn run_deploy(
         client: client.clone(),
         discovery: discovery.clone(),
         activation_hash: activation_identity_hash.map(|s| s.to_string()),
+        live_activations: live_activations.clone(),
         force_conflicts: config.force_conflicts,
         cancel: config.cancel.clone(),
         timeout: config.timeout,
@@ -301,6 +312,11 @@ pub async fn run_deploy(
 
     let mut halting = false; // Set when stop-worthy failure under on_error=Stop.
     let mut halting_reason: Option<String> = None;
+
+    // Unchanged resources still belong to this activation; they just have
+    // nothing to apply. Collected here, stamped in one pass once every node is
+    // terminal (see `record_activation_on_skipped`).
+    let mut skipped: Vec<ResourceId> = Vec::new();
 
     loop {
         // External cancellation check — cheapest at loop top.
@@ -334,6 +350,9 @@ pub async fn run_deploy(
                     detail: Some(NodeDetail::Applied(ApplyAction::Unchanged)),
                 });
                 result.unchanged += 1;
+                if let NodeId::Resource(rid) = &node_id {
+                    skipped.push(rid.clone());
+                }
                 state.mark_terminal(&node_id, true);
                 terminals_since_checkpoint += 1;
                 continue;
@@ -523,6 +542,73 @@ pub async fn run_deploy(
             count: result.failed,
             partial: result,
         });
+    }
+
+    // Stamp this activation onto the resources we skipped. They were skipped
+    // because their content already matches, not because they left the
+    // activation — without this the annotation only ever records the deploys
+    // that happened to change a resource, and stable leaves (ServiceAccounts,
+    // ConfigMaps, import markers) drift arbitrarily far behind.
+    //
+    // Best-effort by design, unlike the applied path: nothing was written to
+    // these resources, so a failure here leaves the cluster exactly as it was
+    // and cannot corrupt the applied state. Failures are counted and reported
+    // rather than halting a deploy that otherwise succeeded.
+    if let Some(act_hash) = activation_identity_hash
+        && !skipped.is_empty()
+    {
+        let d = discovery.read().await;
+        let ar_by_kind: HashMap<String, (ApiResource, Scope)> = d
+            .iter()
+            .map(|(ar, scope)| (ar.kind.clone(), (ar.clone(), scope.clone())))
+            .collect();
+        drop(d);
+
+        let live = live_activations.clone().map(Arc::new);
+        let mut failures = 0usize;
+        for chunk in skipped.chunks(CONCURRENCY) {
+            let mut set = tokio::task::JoinSet::new();
+            for rid in chunk {
+                let Some((ar, scope)) = ar_by_kind.get(&rid.kind).cloned() else {
+                    // A skipped resource is by definition live, so its kind
+                    // should be in discovery. If it isn't, say so rather than
+                    // quietly dropping it from the count.
+                    failures += 1;
+                    tracing::warn!(resource = %rid.display_id(), "kind not in discovery cache; cannot record activation");
+                    continue;
+                };
+                let client = client.clone();
+                let rid = rid.clone();
+                let act_hash = act_hash.to_string();
+                let live = live.clone();
+                set.spawn(async move {
+                    apply::record_activation_on_skipped(
+                        &client,
+                        &ar,
+                        scope,
+                        &rid,
+                        &act_hash,
+                        live.as_deref(),
+                    )
+                    .await
+                    .map_err(|e| (rid, e))
+                });
+            }
+            while let Some(joined) = set.join_next().await {
+                if let Ok(Err((rid, e))) = joined {
+                    failures += 1;
+                    tracing::warn!(resource = %rid.display_id(), error = %e, "could not record activation on unchanged resource");
+                }
+            }
+        }
+        if failures > 0 {
+            tracing::warn!(
+                failures,
+                total = skipped.len(),
+                "kix.dev/activations is incomplete for some unchanged resources; \
+                 the deploy itself is unaffected and the next deploy retries"
+            );
+        }
     }
 
     // Prune orphans (after all nodes terminal).
@@ -775,6 +861,9 @@ struct NodeCtx {
     client: Client,
     discovery: Arc<RwLock<Vec<(ApiResource, Scope)>>>,
     activation_hash: Option<String>,
+    /// Identity hashes of every Activation CR on the cluster, used to prune
+    /// dead entries out of `kix.dev/activations`. `None` = do not prune.
+    live_activations: Option<HashSet<String>>,
     force_conflicts: bool,
     cancel: CancelToken,
     timeout: Duration,
@@ -905,6 +994,7 @@ async fn execute_node(
         &manifest,
         false,
         ctx.activation_hash.as_deref(),
+        ctx.live_activations.as_ref(),
         ctx.force_conflicts,
     )
     .await
@@ -925,6 +1015,7 @@ async fn execute_node(
                 &manifest,
                 ctx.force_conflicts,
                 ctx.activation_hash.as_deref(),
+                ctx.live_activations.as_ref(),
             )
             .await
             {
@@ -1120,6 +1211,7 @@ pub async fn recreate_in_place(
     manifest: &Value,
     force_conflicts: bool,
     activation_hash: Option<&str>,
+    live_activations: Option<&HashSet<String>>,
 ) -> Result<ApplyResult, String> {
     let Some((ar, scope)) = discovery.iter().find(|(ar, _)| ar.kind == rid.kind) else {
         return Err(format!("kind {} not in discovery cache", rid.kind));
@@ -1166,6 +1258,7 @@ pub async fn recreate_in_place(
         manifest,
         false,
         activation_hash,
+        live_activations,
         force_conflicts,
     )
     .await

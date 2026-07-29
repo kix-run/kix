@@ -4,7 +4,7 @@
 //! Change detection diffs two sets of stamped manifests locally by comparing
 //! identity-hashes, without querying the live cluster.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use super::fieldsv1;
@@ -281,25 +281,14 @@ pub fn detect_changes_live(
     actions
 }
 
-/// Apply a single resource via server-side apply.
-///
-/// If `activation_hash` is provided, the resource's `kix.dev/activations`
-/// annotation is updated to include this activation (read-modify-write).
-pub async fn apply_resource(
+/// Build the typed API handle for a resource, honoring cluster scope.
+fn api_for(
     client: &Client,
     ar: &ApiResource,
     scope: Scope,
-    manifest: &Value,
-    dry_run: bool,
-    activation_hash: Option<&str>,
-    force_conflicts: bool,
-) -> Result<ApplyResult, ApplyError> {
-    let rid = ResourceId::from_value(manifest);
-    let name = rid.name.clone();
-
-    tracing::info!(resource = %rid.display_id(), "applying resource");
-
-    let api: Api<DynamicObject> = match scope {
+    rid: &ResourceId,
+) -> Api<DynamicObject> {
+    match scope {
         Scope::Namespaced => {
             let ns = if rid.namespace == CLUSTER_SCOPED {
                 "default"
@@ -309,7 +298,63 @@ pub async fn apply_resource(
             Api::namespaced_with(client.clone(), ns, ar)
         }
         Scope::Cluster => Api::all_with(client.clone(), ar),
-    };
+    }
+}
+
+/// Record this activation on a resource the deploy did NOT apply.
+///
+/// An unchanged resource is skipped — its identity hash already matches, so
+/// there is nothing to send. But it is still part of THIS activation, and
+/// `kix.dev/activations` is the record of that. Without this, any resource
+/// whose identity hash does not churn between deploys (ServiceAccounts,
+/// ConfigMaps, import markers, leaf Services) freezes its activation set at
+/// the last deploy that happened to change it, and the annotation silently
+/// under-counts — it cannot be used for reference-counted GC.
+///
+/// Deliberately does not touch `kix.dev/applied-hash`: nothing was applied, so
+/// the existing stamp is still the truth about the content on the cluster.
+/// Writes nothing when the annotation already says the right thing.
+pub async fn record_activation_on_skipped(
+    client: &Client,
+    ar: &ApiResource,
+    scope: Scope,
+    rid: &ResourceId,
+    activation_hash: &str,
+    live_activations: Option<&HashSet<String>>,
+) -> Result<(), ApplyError> {
+    let api = api_for(client, ar, scope, rid);
+    update_bookkeeping_annotations_with_retry(
+        &api,
+        &rid.name,
+        Some(activation_hash),
+        None,
+        live_activations,
+        rid,
+    )
+    .await
+}
+
+/// Apply a single resource via server-side apply.
+///
+/// If `activation_hash` is provided, the resource's `kix.dev/activations`
+/// annotation is updated to include this activation (read-modify-write).
+#[allow(clippy::too_many_arguments)]
+pub async fn apply_resource(
+    client: &Client,
+    ar: &ApiResource,
+    scope: Scope,
+    manifest: &Value,
+    dry_run: bool,
+    activation_hash: Option<&str>,
+    live_activations: Option<&HashSet<String>>,
+    force_conflicts: bool,
+) -> Result<ApplyResult, ApplyError> {
+    let rid = ResourceId::from_value(manifest);
+    let name = rid.name.clone();
+
+    tracing::info!(resource = %rid.display_id(), "applying resource");
+
+    let api: Api<DynamicObject> = api_for(client, ar, scope, &rid);
 
     // Build patch params. We default to NON-force SSA: conflicts surface as 409
     // with the conflicting field paths and current owner, instead of silently
@@ -365,6 +410,7 @@ pub async fn apply_resource(
             &name,
             activation_hash,
             applied_hash.as_deref(),
+            live_activations,
             &rid,
         )
         .await?;
@@ -418,12 +464,14 @@ async fn update_bookkeeping_annotations_with_retry(
     name: &str,
     activation_hash: Option<&str>,
     applied_hash: Option<&str>,
+    live_activations: Option<&HashSet<String>>,
     rid: &ResourceId,
 ) -> Result<(), ApplyError> {
     let attempt_label = "updating bookkeeping annotations";
     retry_kube_op(rid, attempt_label, |attempt| async move {
         let _ = attempt;
-        update_bookkeeping_annotations(api, name, activation_hash, applied_hash).await
+        update_bookkeeping_annotations(api, name, activation_hash, applied_hash, live_activations)
+            .await
     })
     .await
     .map_err(|e| ApplyError::BookkeepingAnnotationsFailed {
@@ -530,15 +578,48 @@ fn is_transient_kube_error(err: &kube::Error) -> bool {
     }
 }
 
+/// Fold `activation_hash` into the comma-separated `kix.dev/activations` set,
+/// dropping entries that name an activation no longer on the cluster.
+///
+/// The activation being deployed is always kept, even when `live` does not
+/// list it: its CR is applied in the last wave, so it is legitimately absent
+/// while its own resources are being stamped.
+///
+/// `live == None` means "could not establish the set" and disables pruning
+/// entirely — keeping a dead reference is recoverable, dropping a live one is
+/// not. Output is sorted and deduplicated so a re-run is byte-identical and
+/// the caller can compare against `existing` to decide whether to write.
+fn merge_activation_set(
+    existing: &str,
+    activation_hash: &str,
+    live: Option<&HashSet<String>>,
+) -> String {
+    let mut hashes: std::collections::BTreeSet<&str> = existing
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .filter(|s| live.is_none_or(|live| live.contains(*s)))
+        .collect();
+    hashes.insert(activation_hash);
+    hashes.into_iter().collect::<Vec<_>>().join(",")
+}
+
 /// Write kix's bookkeeping annotations in ONE merge patch (no extra round
 /// trips): read-modify-write `kix.dev/activations` (merge `activation_hash`
-/// into the comma-separated set) and overwrite `kix.dev/applied-hash` with
-/// the hash computed from the SSA response echo.
+/// into the comma-separated set, drop entries naming activations that no
+/// longer exist) and overwrite `kix.dev/applied-hash` with the hash computed
+/// from the SSA response echo.
+///
+/// `live_activations`, when `Some`, is the set of identity hashes of every
+/// Activation CR currently on the cluster. `None` means the set could not be
+/// established, in which case nothing is pruned — a dead reference is a lesser
+/// evil than dropping a live one.
 async fn update_bookkeeping_annotations(
     api: &Api<DynamicObject>,
     name: &str,
     activation_hash: Option<&str>,
     applied_hash: Option<&str>,
+    live_activations: Option<&HashSet<String>>,
 ) -> Result<(), kube::Error> {
     let mut annotations = serde_json::Map::new();
 
@@ -554,15 +635,13 @@ async fn update_bookkeeping_annotations(
             .map(String::as_str)
             .unwrap_or("");
 
-        // Build the merged set
-        let mut hashes: std::collections::BTreeSet<&str> = existing
-            .split(',')
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .collect();
-        hashes.insert(activation_hash);
-        let merged = hashes.into_iter().collect::<Vec<_>>().join(",");
-        annotations.insert(ACTIVATIONS_ANNOTATION.to_string(), Value::String(merged));
+        let merged = merge_activation_set(existing, activation_hash, live_activations);
+
+        // Nothing to say: skip the write rather than bump resourceVersion on
+        // every unchanged resource, every deploy.
+        if merged != existing || applied_hash.is_some() {
+            annotations.insert(ACTIVATIONS_ANNOTATION.to_string(), Value::String(merged));
+        }
     }
 
     if let Some(applied_hash) = applied_hash {
@@ -649,6 +728,7 @@ pub async fn apply_wave(
                         &manifest,
                         dry_run,
                         act_hash.as_deref(),
+                        None,
                         force_conflicts,
                     )
                     .await;
@@ -701,6 +781,68 @@ mod tests {
     use super::*;
     use kube::api::ObjectMeta;
     use serde_json::json;
+
+    fn live(hashes: &[&str]) -> HashSet<String> {
+        hashes.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn merges_into_an_existing_set() {
+        assert_eq!(
+            merge_activation_set("bbb,ccc", "aaa", Some(&live(&["bbb", "ccc"]))),
+            "aaa,bbb,ccc"
+        );
+    }
+
+    #[test]
+    fn first_activation_on_a_bare_resource() {
+        assert_eq!(merge_activation_set("", "aaa", Some(&live(&[]))), "aaa");
+    }
+
+    #[test]
+    fn drops_activations_that_no_longer_exist() {
+        // `dead` names an Activation CR that has been garbage-collected.
+        assert_eq!(
+            merge_activation_set("bbb,dead", "aaa", Some(&live(&["bbb"]))),
+            "aaa,bbb"
+        );
+    }
+
+    #[test]
+    fn keeps_the_current_activation_even_when_not_yet_on_cluster() {
+        // The Activation CR is applied in the last wave, so it is absent from
+        // the live set while its own resources are being stamped.
+        assert_eq!(
+            merge_activation_set("bbb", "aaa", Some(&live(&["bbb"]))),
+            "aaa,bbb"
+        );
+    }
+
+    #[test]
+    fn unknown_live_set_never_prunes() {
+        assert_eq!(
+            merge_activation_set("bbb,dead", "aaa", None),
+            "aaa,bbb,dead"
+        );
+    }
+
+    #[test]
+    fn is_idempotent_and_order_insensitive() {
+        let l = live(&["aaa", "bbb"]);
+        let once = merge_activation_set("bbb,aaa", "aaa", Some(&l));
+        assert_eq!(once, merge_activation_set(&once, "aaa", Some(&l)));
+        assert_eq!(once, merge_activation_set("aaa,bbb", "aaa", Some(&l)));
+        // Unchanged output is how the caller decides to skip the write.
+        assert_eq!(once, "aaa,bbb");
+    }
+
+    #[test]
+    fn tolerates_whitespace_and_empty_entries() {
+        assert_eq!(
+            merge_activation_set(" bbb , , ccc ", "aaa", Some(&live(&["bbb", "ccc"]))),
+            "aaa,bbb,ccc"
+        );
+    }
 
     fn manifest(kind: &str, name: &str, ns: &str, identity_hash: &str) -> Value {
         json!({

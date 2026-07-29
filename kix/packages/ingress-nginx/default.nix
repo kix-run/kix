@@ -40,7 +40,7 @@ let
 in
 {
   meta = {
-    version = "v1.14.0";
+    version = "v1.15.1";
     description = "NGINX Ingress Controller for Kubernetes";
     defaultAliases = [ "ingressNginx" ];
     k8s.minVersion = "1.25";
@@ -92,7 +92,7 @@ in
       type = lib.types.anything;
       default = {
         repository = "registry.k8s.io/ingress-nginx/controller";
-        tag = "v1.14.0";
+        tag = "v1.15.1";
         digest = null;
         pullPolicy = "IfNotPresent";
       };
@@ -101,7 +101,7 @@ in
       type = lib.types.anything;
       default = {
         repository = "registry.k8s.io/ingress-nginx/kube-webhook-certgen";
-        tag = "v1.4.4";
+        tag = "v1.6.9";
         digest = null;
       };
     };

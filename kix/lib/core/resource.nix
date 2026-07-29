@@ -4,6 +4,8 @@ rec {
 
   facts = import ./facts.nix { inherit lib; };
 
+  markers = import ./markers.nix { inherit lib; };
+
   clusterScoped = {
     _type = "k8s-cluster-scoped";
     __toString = _: "";
@@ -236,11 +238,17 @@ rec {
 
       manifestJson = builtins.toJSON rawManifest;
 
-      # fact tokens ride the same context channel but are semantic claims,
-      # not derivation edges — they never become depends-on entries
-      implicitCtxPaths = builtins.filter (p: lib.hasPrefix "/nix/store/" p && !facts.isFactPath p) (
-        builtins.attrNames (builtins.getContext manifestJson)
-      );
+      # Two kinds of path ride the same context channel without being
+      # derivation edges, and neither may become a depends-on entry:
+      #   fact tokens          semantic claims, not identity
+      #   untracked-ref marker inert proof that a name was deliberately
+      #                        opted out of tracking — there is no resource
+      #                        behind it, so stamping it yields a hash the
+      #                        deploy DAG can never resolve and `kix health`
+      #                        reports as permanently MISSING
+      implicitCtxPaths = builtins.filter (
+        p: lib.hasPrefix "/nix/store/" p && !facts.isFactPath p && !markers.isUntrackedRefPath p
+      ) (builtins.attrNames (builtins.getContext manifestJson));
       implicitEntries = map extractStoreHash implicitCtxPaths;
 
       requiresResources = builtins.filter (dep: builtins.isAttrs dep && dep ? outPath) requires;
