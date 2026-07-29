@@ -568,8 +568,13 @@ pub async fn run_deploy(
     // these resources, so a failure here leaves the cluster exactly as it was
     // and cannot corrupt the applied state. Failures are counted and reported
     // rather than halting a deploy that otherwise succeeded.
+    //
+    // Gated on !dry_run: `record_activation_on_skipped` is a real merge
+    // patch (there is no server-side dry-run round trip to route it through),
+    // and the activation it would stamp was never persisted under dry-run.
     if let Some(act_hash) = activation_identity_hash
         && !skipped.is_empty()
+        && !config.dry_run
     {
         let d = discovery.read().await;
         let ar_by_kind: HashMap<String, (ApiResource, Scope)> = d
@@ -1240,6 +1245,7 @@ pub fn delete_propagation_for(kind: &str) -> kube::api::PropagationPolicy {
 /// Delete the live resource identified by `rid`, wait for it to disappear,
 /// then re-apply `manifest`. The caller must have already verified the rid
 /// is authorized for deletion (i.e. present in the orphan set).
+#[allow(clippy::too_many_arguments)]
 pub async fn recreate_in_place(
     client: &Client,
     discovery: &[(ApiResource, Scope)],
