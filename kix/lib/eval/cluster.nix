@@ -145,7 +145,34 @@ in
         instances = resolvableInstances;
         inherit peekedMetas;
       };
-      _annotationDomainsCheck = builtins.deepSeq annotationDomainIndex null;
+      # (also rides the same eager-force point as the factBehavior check)
+      _annotationDomainsCheck = builtins.seq (builtins.deepSeq annotationDomainIndex null) _factBehaviorCheck;
+
+      # cluster.factBehavior: per-kind override of CRD-declared behavior
+      # (and fallback for builder-less CRs). Keys are "group/Kind" — bare
+      # kinds would collide across API groups (CNPG and Cluster API both
+      # ship kind "Cluster"). Package-side declarations live on the CRD
+      # itself (mkCRD/mkCRDRef factBehavior arg), validated there.
+      # Eagerly validated: malformed entries throw even if no CR exists.
+      factBehaviorOverrides = cfg.cluster.factBehavior or { };
+      _factBehaviorCheck = builtins.foldl' (
+        acc: key:
+        let
+          _shape =
+            if !(lib.hasInfix "/" key) then
+              throw (
+                "kix: cluster.factBehavior key '${key}' must be \"group/Kind\" "
+                + "(e.g. \"stackgres.io/SGCluster\") — bare kinds collide across API groups."
+              )
+            else
+              null;
+        in
+        builtins.seq _shape (
+          builtins.seq (k8s.facts.validateBehavior "cluster.factBehavior" key
+            factBehaviorOverrides.${key}
+          ) acc
+        )
+      ) null (builtins.attrNames factBehaviorOverrides);
 
       # `out` reads from the cluster fixpoint lazily — must not be forced during
       # module merge. The shallow role out-contract is checked at the same lazy
@@ -285,7 +312,7 @@ in
               globalPartsOverlays = cfg.globalPartsOverlays;
               configInjections = resolveInjections nsName instName;
               inherit workloadInterceptors instanceProcessors clusterCtx;
-              inherit annotationDomainIndex;
+              inherit annotationDomainIndex factBehaviorOverrides;
             }
           ) nsInsts
         ) mergedInstances

@@ -22,7 +22,7 @@ let
 in
 {
   meta = {
-    version = "1.35.4";
+    version = "1.36.0";
     description = "Vaultwarden — Bitwarden-compatible password manager";
   };
 
@@ -31,7 +31,7 @@ in
       type = lib.types.anything;
       default = {
         repository = "vaultwarden/server";
-        tag = "1.35.4-alpine";
+        tag = "1.36.0-alpine";
       };
     };
     domain = lib.mkOption {

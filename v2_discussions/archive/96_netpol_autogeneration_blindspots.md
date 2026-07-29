@@ -1,6 +1,6 @@
 # 96: Network Policy Auto-Generation Blindspots
 
-**Status:** RFC
+**Status:** Superseded by archive/130 (implemented via PR #31 — ConfigMap-indirection and import-ref blindspots closed by fact conduction; operator-operand blindspot partially closed by factBehavior terminate).
 **Related:** `92_declarative_network_policy_intents.md`, `94_dns_dependency_chain_step2.md`, `archive/83_netpol*`, `archive/85_netpol_simplification.md`
 
 ## Problem statement

@@ -238,6 +238,43 @@ pub async fn list_superseded(
     Ok(superseded)
 }
 
+/// Identity hashes of every Activation CR on the cluster, across all clusters
+/// and all phases.
+///
+/// This is the authority for pruning `kix.dev/activations`: a hash in that set
+/// that names no Activation here is a reference to something that no longer
+/// exists. Deliberately NOT filtered by cluster label — one resource can be
+/// referenced by activations of more than one cluster, and pruning another
+/// cluster's live reference would be worse than keeping a dead one.
+///
+/// Returns `None` when the set cannot be established (CRD not yet registered,
+/// list failed). Callers must treat `None` as "do not prune" rather than as an
+/// empty set.
+pub async fn live_activation_hashes(
+    client: &Client,
+    ar: &ApiResource,
+) -> Option<std::collections::HashSet<String>> {
+    let api: Api<DynamicObject> = Api::all_with(client.clone(), ar);
+    let list = api
+        .list(&ListParams::default())
+        .await
+        .map_err(|e| tracing::warn!("could not list activations, skipping prune: {e}"))
+        .ok()?;
+
+    Some(
+        list.items
+            .iter()
+            .filter_map(|item| {
+                item.metadata
+                    .annotations
+                    .as_ref()?
+                    .get(IDENTITY_HASH_ANNOTATION)
+                    .cloned()
+            })
+            .collect(),
+    )
+}
+
 /// Annotation key for the activation result dir store path.
 pub const BUILT_VIA_ANNOTATION: &str = "kix.dev/built-via";
 

@@ -1,4 +1,4 @@
-# StackGres Operator package — stackgres.io/operator v1.18.6.
+# StackGres Operator package — stackgres.io/operator v1.19.0.
 #
 # PostgreSQL operator that manages SGCluster, SGInstanceProfile,
 # SGPostgresConfig, SGPoolingConfig, SGObjectStorage, SGBackupConfig,
@@ -59,6 +59,21 @@ let
         "CREATE"
         "UPDATE"
       ];
+      # SGCluster CRs terminate endpoint facts: addresses embedded in the
+      # spec (directly, or conducted through SGObjectStorage — e.g. an S3
+      # backup endpoint sourced from a Service's out.url) are dialed by the
+      # operand StatefulSet pods the operator spawns, not by whoever
+      # references the CR. netpol derives operand egress + caller-ingress
+      # from this. The baseline operand policies (apiserver, patroni
+      # self-traffic, extension downloads) are not endpoint-derived and
+      # stay hand-rolled in stackgres-cluster.
+      factBehavior = {
+        endpoint = "terminate";
+        podSelector = cr: {
+          app = "StackGresCluster";
+          "stackgres.io/cluster-name" = cr.metadata.name;
+        };
+      };
     };
     sgInstanceProfile = {
       kind = "SGInstanceProfile";
@@ -225,7 +240,7 @@ let
 in
 {
   meta = {
-    version = "1.18.6";
+    version = "1.19.0";
     defaultAliases = [ "stackgresOperator" ];
     network.intents = {
       # The operator fetches extensions from extensions.stackgres.io at runtime.
@@ -244,7 +259,7 @@ in
     };
     operator.image.tag = lib.mkOption {
       type = lib.types.str;
-      default = "1.18.6";
+      default = "1.19.0";
     };
     restapi.image.repository = lib.mkOption {
       type = lib.types.str;
@@ -252,7 +267,7 @@ in
     };
     restapi.image.tag = lib.mkOption {
       type = lib.types.str;
-      default = "1.18.6";
+      default = "1.19.0";
     };
     adminui.image.repository = lib.mkOption {
       type = lib.types.str;
@@ -260,7 +275,7 @@ in
     };
     adminui.image.tag = lib.mkOption {
       type = lib.types.str;
-      default = "1.18.6";
+      default = "1.19.0";
     };
     operator.resources = lib.mkOption {
       type = lib.types.anything;
@@ -830,6 +845,7 @@ in
           kind = def.kind;
           plural = resolvedNames.${attr}.plural;
           version = "v1";
+          factBehavior = def.factBehavior or null;
           # Tie markers to the operator Deployment: the CLI readiness check
           # won't poll for each CRD until the operator pod is Running and
           # has had a chance to install its built-in CRD schemas.

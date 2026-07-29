@@ -71,7 +71,11 @@ in
 
             wName = workloadInput.name or (throw "buildWorkloadCnps: workloadInput.name is required");
 
-            serviceDeps = map (e: e.service) edges;
+            # edges discovered through indirection or import-mode refs have
+            # no producing resource in scope (service = null); the CNP's
+            # ordering after the Service still holds via store-DAG
+            # transitivity where a resource exists at all
+            serviceDeps = builtins.filter (s: s != null) (map (e: e.service) edges);
 
             egressCnp =
               if !doEgress then
@@ -128,7 +132,7 @@ in
                   enforcerApi.mkPolicy {
                     mkResource = targetEmit.mkResource;
                     extraArgs = {
-                      name = "${instanceName}-${lib.toLower workloadKind}-${wName}-to-${edge.service.name}-ingress";
+                      name = "${instanceName}-${lib.toLower workloadKind}-${wName}-to-${edge.name}-ingress";
                       labels = {
                         "kix.dev/derived" = "true";
                         "kix.dev/policy-type" = "caller-ingress";
@@ -137,7 +141,7 @@ in
                         endpointSelector.matchLabels = edge.targetSelector;
                         ingress = [ ingressRule ];
                       };
-                      extraDeps = [ edge.service ];
+                      extraDeps = lib.optional (edge.service != null) edge.service;
                     };
                   }
                 ) edges;
@@ -288,6 +292,104 @@ in
               ]
           ) workloads;
 
+      # terminate-declared CRs (meta.factBehavior): the controller dials the
+      # endpoints absorbed by the CR spec, so the holes open for the OPERAND
+      # pods named by the declaration's podSelector — the CR has no pods of
+      # its own and never went through sealWorkload.
+      # the resolved behavior rides on the resource itself (threaded through
+      # the CRD builder chain, or the cluster override, at seal time) — no
+      # index lookup needed here
+      terminatingCrs =
+        # self-enforcer instances arrive with a null enforcer — no policies
+        if networkPolicyEnforcer == null then
+          [ ]
+        else
+          builtins.filter (
+            r:
+            ((r.factBehavior or null) != null)
+            && (r.factBehavior.endpoint or "") == "terminate"
+            && (r.absorbedEndpointFacts or [ ]) != [ ]
+          ) allPartResources;
+
+      operandPolicies = builtins.concatMap (
+        r:
+        let
+          beh = r.factBehavior;
+          operandSelector =
+            if builtins.isFunction beh.podSelector then beh.podSelector r.rawManifest else beh.podSelector;
+          crNamespace = core.nsOf r;
+
+          crEdges = map (f: {
+            inherit (f.payload) name ports;
+            targetSelector = f.payload.selector;
+            targetNamespace = f.payload.namespace;
+          }) r.absorbedEndpointFacts;
+
+          egressCnp =
+            if !doEgress then
+              [ ]
+            else
+              [
+                (enforcerApi.mkPolicy {
+                  mkResource = emit.mkResource;
+                  extraArgs = {
+                    name = "${instanceName}-${lib.toLower r.kind}-${r.name}-egress";
+                    labels = {
+                      "kix.dev/derived" = "true";
+                      "kix.dev/policy-type" = "cr-operand";
+                    };
+                    spec = {
+                      endpointSelector.matchLabels = operandSelector;
+                      egress = [
+                        enforcerApi.dnsEgressRule
+                      ]
+                      ++ map (
+                        edge:
+                        enforcerApi.mkServiceEgressRule {
+                          selector = edge.targetSelector;
+                          namespace = edge.targetNamespace;
+                          sourceNamespace = crNamespace;
+                          ports = edge.ports;
+                        }
+                      ) crEdges;
+                    };
+                    extraDeps = [ r ];
+                  };
+                })
+              ];
+
+          callerIngressCnps =
+            if !doIngress then
+              [ ]
+            else
+              map (
+                edge:
+                enforcerApi.mkPolicy {
+                  mkResource = (emit.inNamespace edge.targetNamespace).mkResource;
+                  extraArgs = {
+                    name = "${instanceName}-${lib.toLower r.kind}-${r.name}-to-${edge.name}-ingress";
+                    labels = {
+                      "kix.dev/derived" = "true";
+                      "kix.dev/policy-type" = "caller-ingress";
+                    };
+                    spec = {
+                      endpointSelector.matchLabels = edge.targetSelector;
+                      ingress = [
+                        (enforcerApi.mkCallerIngressRule {
+                          callerSelector = operandSelector;
+                          callerNamespace = crNamespace;
+                          ports = edge.ports;
+                        })
+                      ];
+                    };
+                    extraDeps = [ r ];
+                  };
+                }
+              ) crEdges;
+        in
+        egressCnp ++ callerIngressCnps
+      ) terminatingCrs;
+
       warnings =
         map (
           w:
@@ -299,7 +401,7 @@ in
 
     in
     {
-      policies = apiServerSupplementPolicies ++ externalIngressSupplementPolicies;
+      policies = apiServerSupplementPolicies ++ externalIngressSupplementPolicies ++ operandPolicies;
       inherit warnings;
     };
 

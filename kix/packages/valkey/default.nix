@@ -35,7 +35,7 @@
       type = lib.types.anything;
       default = {
         repository = "docker.io/bitnamilegacy/valkey";
-        tag = "8.1.1-debian-12-r0";
+        tag = "8.1.3-debian-12-r3";
         pullPolicy = "IfNotPresent";
       };
     };
@@ -65,7 +65,7 @@
         enabled = true;
         image = {
           repository = "docker.io/bitnamilegacy/valkey-sentinel";
-          tag = "8.1.1-debian-12-r0";
+          tag = "8.1.3-debian-12-r3";
           pullPolicy = "IfNotPresent";
         };
         quorum = 2;
@@ -112,7 +112,7 @@
         enabled = false;
         image = {
           repository = "docker.io/bitnamilegacy/redis-exporter";
-          tag = "1.70.0-debian-12-r2";
+          tag = "1.76.0-debian-12-r0";
           pullPolicy = "IfNotPresent";
         };
         resources = {

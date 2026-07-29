@@ -20,7 +20,7 @@
 
 {
   meta = {
-    version = "v0.82.0";
+    version = "v0.92.1";
     description = "Prometheus Operator — monitoring.coreos.com CRD controller";
     defaultAliases = [
       "prometheus"
@@ -38,7 +38,7 @@
       type = lib.types.anything;
       default = {
         repository = "quay.io/prometheus-operator/prometheus-operator";
-        tag = "v0.82.0";
+        tag = "v0.92.1";
         pullPolicy = "IfNotPresent";
       };
     };
@@ -47,7 +47,7 @@
       default = {
         image = {
           repository = "quay.io/prometheus-operator/prometheus-config-reloader";
-          tag = "v0.82.0";
+          tag = "v0.92.1";
         };
       };
     };

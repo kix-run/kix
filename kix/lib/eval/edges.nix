@@ -1,16 +1,34 @@
+# Edge analysis: who dials whom, read back from typed facts.
+#
+# The primary signal is the `endpoint` fact (core/facts.nix): a Service's
+# address-shaped out fields carry a self-describing token whose payload is
+# {name, namespace, selector, ports}. Whatever a workload's manifest JSON
+# still holds in context at seal time — directly referenced, or conducted
+# through ConfigMaps/Secrets — IS the set of endpoints its pods dial.
+# `readFile` on the token replaces the old registry intersection, so edges
+# work across instances and through indirection with no collectibility or
+# fixpoint constraints.
+#
+# Identity hits (a Service's *store path* in context, the pre-fact signal)
+# are kept for three demoted roles:
+#   1. DNS conservatism — naming a Service is weak evidence of dialing it;
+#      an extra DNS-ordering dep is harmless, a missing one breaks startup.
+#   2. Helm workloads — the lossy chart pipeline can't always flow address
+#      values, so `_helmNetworkDeps` workloads keep identity-derived netpol
+#      edges (conservative = extra holes, never missing ones).
+#   3. The observed-vs-declared lint — identity without a matching fact
+#      means "you name it but no address flowed": either a structural use
+#      (fine, silence with facts.refOnly) or a missed dial (netpol will NOT
+#      open a hole — use out.fqdn/out.url or facts.connect).
+
 { k8s }:
 
 let
-  workloadKinds = [
-    "Deployment"
-    "StatefulSet"
-    "DaemonSet"
-    "Job"
-  ];
+  inherit (k8s) facts;
 in
 
 rec {
-  isWorkload = r: builtins.elem (r.kind or "") workloadKinds;
+  isWorkload = r: builtins.elem (r.kind or "") facts.terminatorKinds;
 
   getWorkloadSelector =
     w:
@@ -32,6 +50,7 @@ rec {
     && (r.rawManifest.metadata.annotations."kix.dev/mode" or "") == "import"
     && (r.rawManifest.metadata.annotations."kix.dev/import-kind" or "") == "Service";
 
+  # identity-keyed: store path → Service resource (identity hits, lint)
   mkServiceRegistry =
     resources:
     builtins.foldl' (
@@ -53,6 +72,9 @@ rec {
       // {
         ${builtins.unsafeDiscardStringContext r.outPath} = {
           marker = r;
+          # the IMPORTED service's name, not the marker's — edge identity
+          # must match what the ref's endpoint fact claims
+          name = annotations."kix.dev/import-name" or r.name;
           targetSelector = builtins.fromJSON (annotations."kix.dev/service-selector" or "{}");
           targetNamespace = k8s.nsOf r;
           ports = builtins.fromJSON (annotations."kix.dev/service-ports" or "[]");
@@ -60,44 +82,113 @@ rec {
       }
     ) { } (builtins.filter isServiceRef resources);
 
-  extractServiceEdgesFromJson =
+  # "ns/name"-keyed: enrichment map from fact payload back to the producing
+  # resource, when it exists in this instance's resolved deps. Only used to
+  # hand netpol a `service` for CNP extraDeps — edges through indirection or
+  # import-mode refs have service = null, and wave ordering still holds via
+  # store-DAG transitivity.
+  mkServiceIndex =
+    resources:
+    # ref markers first, real Services second (a real Service wins the key)
+    builtins.foldl' (
+      acc: r:
+      acc
+      // {
+        "${k8s.nsOf r}/${(r.rawManifest.metadata.annotations or { })."kix.dev/import-name" or r.name}" = r;
+      }
+    ) { } (builtins.filter isServiceRef resources)
+    // builtins.foldl' (
+      acc: r:
+      acc
+      // {
+        "${k8s.nsOf r}/${r.name}" = r;
+      }
+    ) { } (builtins.filter isService resources);
+
+  # One edge shape for every source:
+  #   { name, targetSelector, targetNamespace, ports, service (nullable) }
+  analyzeEdges =
     {
       json,
-      serviceRegistry,
+      serviceRegistry ? { },
       serviceRefRegistry ? { },
+      serviceIndex ? { },
+      # helm-sourced workloads: identity hits stay netpol edges (lossy
+      # pipeline — conservative beats broken)
+      conservative ? false,
     }:
     let
-      ctx = builtins.getContext json;
+      endpointFacts = facts.factsOfKind "endpoint" json;
 
-      serviceMatchedPaths = builtins.filter (p: builtins.hasAttr p serviceRegistry) (
-        builtins.attrNames ctx
-      );
-      serviceEdges = map (
-        p:
-        let
-          svc = serviceRegistry.${p};
-        in
-        {
-          service = svc;
-          ports = svc.rawManifest.spec.ports or [ ];
-          targetSelector = svc.rawManifest.spec.selector or { };
-          targetNamespace = k8s.nsOf svc;
-        }
-      ) serviceMatchedPaths;
+      factEdges = map (f: {
+        inherit (f.payload) name ports;
+        targetSelector = f.payload.selector;
+        targetNamespace = f.payload.namespace;
+        service = serviceIndex."${f.payload.namespace}/${f.payload.name}" or null;
+      }) endpointFacts;
 
-      refMatchedPaths = builtins.filter (p: builtins.hasAttr p serviceRefRegistry) (
-        builtins.attrNames ctx
-      );
-      serviceRefEdges = map (
-        p:
-        let
-          ref = serviceRefRegistry.${p};
-        in
-        {
-          service = ref.marker;
-          inherit (ref) targetSelector targetNamespace ports;
-        }
-      ) refMatchedPaths;
+      ctxPaths = builtins.attrNames (builtins.getContext json);
+
+      identityEdges =
+        map (
+          p:
+          let
+            svc = serviceRegistry.${p};
+          in
+          {
+            inherit (svc) name;
+            service = svc;
+            ports = svc.rawManifest.spec.ports or [ ];
+            targetSelector = svc.rawManifest.spec.selector or { };
+            targetNamespace = k8s.nsOf svc;
+          }
+        ) (builtins.filter (p: builtins.hasAttr p serviceRegistry) ctxPaths)
+        ++ map (
+          p:
+          let
+            ref = serviceRefRegistry.${p};
+          in
+          {
+            inherit (ref)
+              name
+              targetSelector
+              targetNamespace
+              ports
+              ;
+            service = ref.marker;
+          }
+        ) (builtins.filter (p: builtins.hasAttr p serviceRefRegistry) ctxPaths);
+
+      edgeKey = e: "${e.targetNamespace}/${e.name}";
+      factKeys = map edgeKey factEdges;
+
+      # deliberate non-dials, declared at the use site via facts.refOnly
+      ackedKeys = map (f: "${f.payload.namespace}/${f.payload.name}") (facts.factsOfKind "refonly" json);
+
+      # identity present, no address flowed, not acknowledged
+      unmatchedIdentity = builtins.filter (
+        e: !(builtins.elem (edgeKey e) (factKeys ++ ackedKeys))
+      ) identityEdges;
+
+      # deterministic by ns/name — context sets are ordered by token hash,
+      # which churns whenever a payload changes; CNP rule order must not
+      bySortedKey = builtins.sort (a: b: edgeKey a < edgeKey b);
     in
-    serviceEdges ++ serviceRefEdges;
+    {
+      edges = bySortedKey (if conservative then factEdges ++ unmatchedIdentity else factEdges);
+
+      # DNS ordering is always conservative: fact edges ∪ identity hits
+      dnsEdges = factEdges ++ unmatchedIdentity;
+
+      warnings =
+        if conservative then
+          [ ]
+        else
+          map (
+            e:
+            "workload references Service '${edgeKey e}' by identity but no address value flowed — "
+            + "no netpol edge derived. Dial via out.fqdn/out.url (or facts.connect); "
+            + "if the use is structural (label, display), silence with facts.refOnly."
+          ) unmatchedIdentity;
+    };
 }

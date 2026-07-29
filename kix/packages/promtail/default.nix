@@ -17,6 +17,11 @@ let
   };
 
   defaultValues = {
+    # Chart 6.17.1 is the final promtail chart (deprecated upstream in
+    # favor of Alloy); it bundles promtail 3.5.1. Pin the newer image
+    # explicitly since the chart will not be updated again.
+    image.tag = "3.6.11";
+
     # --- DaemonSet configuration ---
     resources = {
       requests = {

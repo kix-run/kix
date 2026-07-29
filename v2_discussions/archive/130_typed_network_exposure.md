@@ -1,6 +1,6 @@
 # 130: Typed Network Exposure
 
-**Status:** RFC
+**Status:** Implemented (S1 core + operand termination) — generalized by the typed-facts channel (PR #31, `kix/lib/core/facts.nix`). Remainders carried to 131.
 **Related:** `96_netpol_autogeneration_blindspots.md`, `97_service_contract_primitives.md`, `92_declarative_network_policy_intents.md`, `95_netpol_build_time_validation.md`, `121_netpol_as_plugin.md`, `119_core_surface_audit.md`, `120_compiler_theory_mapping.md`, `107_overlay_edge_exposure.md`, `127_compiler_target_model.md` (role registry), `126_compiler_core_rewrite_plan.md` (empty-diff invariant)
 **Supersedes (design-space of):** `96` — its problem statement stands; its unresolved §Design-space A/B/C is replaced by this direction. Archive 96 when this is Accepted.
 **Revision note:** hardened against an 18-agent adversarial pressure-test (2026-07). The taxonomy-first framing and the §1 diagnosis survived; the §5 safety claim, the §3.1 API surface, and the taxonomy's axes did not, and are rewritten below. Where the pressure-test found a genuinely open design choice (not just an error), it is flagged in §9 rather than silently resolved.

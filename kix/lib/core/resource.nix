@@ -2,6 +2,10 @@
 
 rec {
 
+  facts = import ./facts.nix { inherit lib; };
+
+  markers = import ./markers.nix { inherit lib; };
+
   clusterScoped = {
     _type = "k8s-cluster-scoped";
     __toString = _: "";
@@ -91,15 +95,32 @@ rec {
         else
           null;
 
+      # imported Services are endpoint producers too — no seal exists, but
+      # the fact is pure payload, so a reference can mint it all the same.
+      # This closes an old blindspot: dialing an imported Service now
+      # produces a netpol edge instead of silently nothing.
+      _importFactCtx =
+        if kind == "Service" && (spec.selector or { }) != { } then
+          facts.mkFact "endpoint" {
+            inherit name;
+            namespace = toString nsKey;
+            selector = spec.selector;
+            ports = spec.ports or [ ];
+          }
+        else
+          { };
+
+      attachFactCtx = value: builtins.appendContext (toString value) _importFactCtx;
+
       autoOut = {
         inherit name;
-        fqdn = if isClusterScoped then name else "${name}.${nsKey}.svc.${clusterDomain}";
+        fqdn = attachFactCtx (if isClusterScoped then name else "${name}.${nsKey}.svc.${clusterDomain}");
       }
       // lib.optionalAttrs (autoSelector != null) {
         selector = autoSelector;
       };
 
-      userOut = lib.mapAttrs (_: v: toString v) outputs;
+      userOut = lib.mapAttrs (_: v: attachFactCtx (toString v)) outputs;
     in
     {
       _type = "k8s-resource-ref";
@@ -110,6 +131,7 @@ rec {
         apiVersion
         ;
       out = autoOut // userOut;
+      factTokens = lib.optionalAttrs (_importFactCtx != { }) { endpoint = _importFactCtx; };
       requires = [ ];
     };
 
@@ -129,6 +151,10 @@ rec {
       extraDeps ? [ ],
       extra ? { },
       clusterDomain ? "cluster.local",
+      # per-kind terminate/conduct override from the factBehavior index
+      # (CRD-owner declared via meta.factBehavior, or cluster override).
+      # null = fall back to the core K8s table (facts.conducts).
+      factBehavior ? null,
     }:
     let
       isClusterScoped = builtins.isAttrs namespace && (namespace._type or "") == "k8s-cluster-scoped";
@@ -212,9 +238,17 @@ rec {
 
       manifestJson = builtins.toJSON rawManifest;
 
-      implicitCtxPaths = builtins.filter (p: lib.hasPrefix "/nix/store/" p) (
-        builtins.attrNames (builtins.getContext manifestJson)
-      );
+      # Two kinds of path ride the same context channel without being
+      # derivation edges, and neither may become a depends-on entry:
+      #   fact tokens          semantic claims, not identity
+      #   untracked-ref marker inert proof that a name was deliberately
+      #                        opted out of tracking — there is no resource
+      #                        behind it, so stamping it yields a hash the
+      #                        deploy DAG can never resolve and `kix health`
+      #                        reports as permanently MISSING
+      implicitCtxPaths = builtins.filter (
+        p: lib.hasPrefix "/nix/store/" p && !facts.isFactPath p && !markers.isUntrackedRefPath p
+      ) (builtins.attrNames (builtins.getContext manifestJson));
       implicitEntries = map extractStoreHash implicitCtxPaths;
 
       requiresResources = builtins.filter (dep: builtins.isAttrs dep && dep ? outPath) requires;
@@ -242,17 +276,101 @@ rec {
 
       manifestJsonWithDeps = builtins.appendContext manifestJsonStamped depContexts;
 
+      # Split the context channels at the seal boundary: identity paths
+      # become store references of the sealed file; fact tokens are harvested
+      # for re-emission on out.* (conduction) and stripped so they never
+      # enter the store DAG — facts live in eval-time context only.
+      #
+      # Harvest from manifestJson (pre-stamp), NOT manifestJsonWithDeps:
+      # facts only ever arrive embedded in VALUES; the requires/extraDeps
+      # fold contributes identity context only. Reading the withDeps string
+      # here would force every dep's seal whenever any out.* field is
+      # touched — a fixpoint hazard (e.g. service.out.name inside a webhook
+      # config whose consumer the service itself requires).
+      _conducts =
+        if factBehavior != null then
+          (factBehavior.endpoint or "conduct") == "conduct"
+        else
+          facts.conducts kind;
+
+      _forwardedFactCtx =
+        if _conducts then (facts.partitionCtx (builtins.getContext manifestJson)).facts else { };
+
+      # terminate-declared CRs: the absorbed endpoint payloads, for the
+      # instance-phase projection (netpol opens holes for the OPERAND pods
+      # named by the declaration's podSelector — the resource itself has no
+      # pods). Read lazily; only forced when a processor consumes it.
+      _absorbedEndpointFacts =
+        if factBehavior != null && (factBehavior.endpoint or "") == "terminate" then
+          facts.factsOfKind "endpoint" manifestJson
+        else
+          [ ];
+
+      # undeclared foreign kind (CRD) absorbing endpoint facts: kix cannot
+      # know whether the controller dials them (terminate) or the resource
+      # merely carries them (conduct — the current default). Warn, three-
+      # valued style: declared-terminate/conduct pass silently, unknown
+      # warns naming the fix. Anchored on outPath (forced at embedding).
+      _undeclaredCrWarning =
+        if
+          factBehavior == null
+          && facts.isForeignGroup apiVersion
+          && facts.factsOfKind "endpoint" manifestJson != [ ]
+        then
+          "kix: ${kind}/${name} (${apiVersion}) absorbed endpoint fact(s) but carries no "
+          + "fact behavior — kix assumes \"conduct\" (the resource carries the address "
+          + "onward). If this kind's controller DIALS the endpoint (operator-managed "
+          + "pods): build the CR via the typed builder (`scope.mkCR <owner>.out.crds.…`) "
+          + "and declare `factBehavior = { endpoint = \"terminate\"; podSelector = cr: "
+          + "{ ... }; }` on the owner's mkCRD/mkCRDRef — or, for builder-less CRs (helm, "
+          + "raw kind strings), set `cluster.factBehavior.\"<group>/${kind}\"`."
+        else
+          null;
+
+      manifestJsonSealed = builtins.appendContext (builtins.unsafeDiscardStringContext manifestJsonWithDeps) (facts.partitionCtx (
+        builtins.getContext manifestJsonWithDeps
+      )).rest;
+
       # toFile's filename cannot carry references — content keeps full context
       sanitizedName = builtins.unsafeDiscardStringContext (builtins.replaceStrings [ ":" ] [ "_" ] name);
       sanitizedNsKey = builtins.unsafeDiscardStringContext (toString nsKey);
 
-      _identityPath = builtins.toFile "k8s-${kind}-${sanitizedNsKey}-${sanitizedName}" manifestJsonWithDeps;
+      _identityPath = builtins.toFile "k8s-${kind}-${sanitizedNsKey}-${sanitizedName}" manifestJsonSealed;
 
       _identityPathPlain = builtins.unsafeDiscardStringContext _identityPath;
 
       _identityCtx = builtins.getContext "${_identityPath}";
 
-      attachCtx = value: builtins.appendContext (toString value) _identityCtx;
+      # Services with a selector are endpoint producers: dialing their
+      # address reaches pods. The fact is pure payload — no reference to
+      # this seal — so it only changes when the semantics (selector, ports,
+      # namespace) change, not on every content churn.
+      _isEndpointProducer =
+        kind == "Service"
+        && (rawManifest.spec.selector or { }) != { }
+        && (rawManifest.spec.type or "ClusterIP") != "ExternalName";
+
+      _ownFactCtx =
+        if _isEndpointProducer then
+          facts.mkFact "endpoint" {
+            name = builtins.unsafeDiscardStringContext name;
+            namespace = builtins.unsafeDiscardStringContext (toString nsKey);
+            selector = rawManifest.spec.selector;
+            ports = rawManifest.spec.ports or [ ];
+          }
+        else
+          { };
+
+      # Two attach flavors, one semantic difference:
+      #   attachCtx        identity + conducted facts. "This value was
+      #                    computed from me (and carries what I carry)."
+      #   attachConnectCtx additionally stamps my own endpoint fact:
+      #                    "using this value means dialing me."
+      # name/selector are structural (naming ≠ dialing); fqdn/url and user
+      # outputs are address-shaped. `facts.refOnly` is the per-use escape.
+      attachCtx = value: builtins.appendContext (toString value) (_identityCtx // _forwardedFactCtx);
+      attachConnectCtx =
+        value: builtins.appendContext (toString value) (_identityCtx // _forwardedFactCtx // _ownFactCtx);
 
       autoSelector =
         if rawManifest ? spec.selector.matchLabels then
@@ -265,7 +383,10 @@ rec {
       autoOut = {
         name = attachCtx name;
         fqdn =
-          if isClusterScoped then attachCtx name else attachCtx "${name}.${nsKey}.svc.${clusterDomain}";
+          if isClusterScoped then
+            attachConnectCtx name
+          else
+            attachConnectCtx "${name}.${nsKey}.svc.${clusterDomain}";
         identityHash = attachCtx (extractStoreHash _identityPathPlain);
       }
       // lib.optionalAttrs (autoSelector != null) {
@@ -285,10 +406,10 @@ rec {
             effectivePort = if port != null then port else firstPort;
             portSuffix = if effectivePort != null then ":${toString effectivePort}" else "";
           in
-          attachCtx "${scheme}://${name}.${nsKey}.svc.${clusterDomain}${portSuffix}";
+          attachConnectCtx "${scheme}://${name}.${nsKey}.svc.${clusterDomain}${portSuffix}";
       };
 
-      userOut = lib.mapAttrs (_: v: if v == null then null else attachCtx (toString v)) outputs;
+      userOut = lib.mapAttrs (_: v: if v == null then null else attachConnectCtx (toString v)) outputs;
 
       mergedOut =
         let
@@ -307,13 +428,27 @@ rec {
           extraDeps
           ;
 
-        outPath = _identityPath;
+        outPath =
+          if _undeclaredCrWarning != null then
+            builtins.trace _undeclaredCrWarning _identityPath
+          else
+            _identityPath;
 
         out = mergedOut;
 
+        # fact tokens this resource mints, for the `facts.connect` escape
+        # hatch (stamp dialing intent onto a value that lacks it)
+        factTokens = lib.optionalAttrs _isEndpointProducer { endpoint = _ownFactCtx; };
+
+        # the resolved behavior + endpoint payloads absorbed by a
+        # terminate-declared CR — consumed by the netpol instance processor
+        # (operand CNPs read podSelector straight off the resource)
+        inherit factBehavior;
+        absorbedEndpointFacts = _absorbedEndpointFacts;
+
         rawManifest = rawManifestStamped;
 
-        manifest = attachCtxDeep _identityCtx rawManifestStamped;
+        manifest = attachCtxDeep (_identityCtx // _forwardedFactCtx) rawManifestStamped;
       };
     in
     self;
@@ -458,6 +593,12 @@ rec {
       kind,
       version,
       crdScope,
+      # fact behavior of this kind's controller (validated at the
+      # declaration site): threaded into every CR built via mkCR, so the
+      # seal knows terminate/conduct without any registry — behavior is a
+      # property of the CRD, delivered along the same chain as the kind
+      # name and the CRD-before-CR ordering edge.
+      factBehavior ? null,
     }:
     let
       crApiVersion = "${group}/${version}";
@@ -470,7 +611,8 @@ rec {
           apiVersion = crApiVersion;
           kind = crKind;
           requires = (args.requires or [ ]) ++ [ crdOrRef ];
-        };
+        }
+        // lib.optionalAttrs (factBehavior != null) { inherit factBehavior; };
 
       mkCR =
         consumerScope: args:

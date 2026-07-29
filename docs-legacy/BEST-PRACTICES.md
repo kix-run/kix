@@ -88,7 +88,7 @@ question?" If it doesn't, you're probably reinventing a side-channel.
 | Network policy | Same edges → `netpol.nix` derives CNPs |
 | RBAC | SA → Binding walk over the same graph |
 | Monitoring | DI dep → `kix.monitor` build entry |
-| Capability ownership | `meta.provides ∋ "storage"` + `kix.dev/capability` annotation |
+| Capability ownership | Raw-PVC eval error + `meta.unsafe` grants; `meta.annotationDomains` + DI-edge lint |
 | GC | Diff old vs new activation closures |
 | Drift detection | Identity-hash compare against live state |
 
@@ -151,7 +151,7 @@ operators, dashboards, security tools) is a feature.
 | kix-only annotation for SemVer | Standard `app.kubernetes.io/version` |
 
 The annotations kix *does* add (`kix.dev/identity-hash`, `kix.dev/depends-on`,
-`kix.dev/capability`, `kix.dev/mode`) are about kix-internal bookkeeping, never
+`kix.dev/mode`) are about kix-internal bookkeeping, never
 about expressing K8s intent.
 
 ### 5.2 Standard K8s vocabulary over invented vocabulary
@@ -427,11 +427,12 @@ meta = {
 
 Consumers' DI resolution matches by arg name → instance name → instance
 aliases (when set) **or** package's `meta.defaultAliases` (when not set —
-instance aliases *replace* package defaults, they don't merge). The
-capability ownership rule
-(`scorecard.architecture`) treats DI-provided resources as legitimate (because
-the provider's builders stamp `kix.dev/capability: <name>`); hand-rolled
-equivalents trip the rule.
+instance aliases *replace* package defaults, they don't merge). Capability
+ownership is enforced by declared invariants, not provenance stamps
+(v2_discussions/128): raw PVCs are an eval error unless the package holds
+`meta.unsafe = [ "raw-pvc" ]`, and annotations under an operator-declared
+domain (`meta.annotationDomains`) without a DI dep on the declarer trip
+`architecture.annotationDomainOwnership`.
 
 ### 8.3 What does NOT go on `meta.provides`
 

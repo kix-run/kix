@@ -10,7 +10,7 @@
 #
 # Chart:   https://helm.cilium.io/
 # Name:    cilium
-# Version: 1.16.5
+# Version: 1.19.6
 
 { scope, lib }:
 
@@ -26,8 +26,8 @@ let
   chart = scope.helm.fetchHelmChart {
     repo = "https://helm.cilium.io/";
     name = "cilium";
-    version = "1.16.5";
-    hash = "sha256-GCA1rnws+NGUkOzs9hj2oRrcRg7R59vTiyMGXwLxi00=";
+    version = "1.19.6";
+    hash = "sha256-IcQ89ThB+asDdQR9lapMZAUepSu9LGeUFuZAj18ckXk=";
   };
 
   defaultValues = {
@@ -111,11 +111,12 @@ let
       install = true;
       exclusive = true;
     };
+
   };
 in
 {
   meta = {
-    version = "1.16.5";
+    version = "1.19.6";
     description = "Cilium — eBPF CNI, load balancer, and CiliumNetworkPolicy enforcer";
     roles = [
       "cni"
@@ -133,9 +134,22 @@ in
   build =
     { config, scope, ... }:
     let
+      # Since 1.17 the chart defaults `tls.secretsNamespace` to a dedicated
+      # `cilium-secrets` Namespace (plus a Role/RoleBinding inside it) for
+      # TLS-aware CiliumNetworkPolicies and ingress/gateway TLS interception.
+      # We use none of that, and a foreign namespace would have to exist in
+      # every cluster scope — so keep the (unused) secrets namespace pointed
+      # at the instance's own namespace and don't create anything.
+      nsValues = {
+        tls.secretsNamespace = {
+          create = false;
+          name = scope.namespaceName;
+        };
+      };
+
       resources = scope.helm.importChart {
         inherit chart scope;
-        values = lib.recursiveUpdate defaultValues (config.values or { });
+        values = lib.recursiveUpdate (lib.recursiveUpdate defaultValues nsValues) (config.values or { });
         releaseName = "cilium";
         includeCrds = true;
       };

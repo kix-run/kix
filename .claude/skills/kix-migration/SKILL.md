@@ -263,6 +263,46 @@ Every resource exposes:
 - `resource.out.fqdn` — full DNS name (e.g. `my-svc.my-ns.svc.cluster.local`). Domain suffix configurable via `clusterDomain` cluster option.
 - `resource.out.<key>` — named outputs from the `outputs` field, with dependency context
 
+**Naming vs. dialing (typed facts).** Address-shaped outputs (`out.fqdn`,
+`out.url`, `outputs.*`) additionally carry an *endpoint fact*: using them in a
+workload means "my pods dial this Service", which is what derives the netpol
+edge and DNS ordering. `out.name` is structural — it creates the dependency
+edge but NO netpol hole. Consequences when authoring:
+
+- To **connect** to a Service, wire `out.fqdn`/`out.url` into the workload
+  (directly or via a ConfigMap/Secret — the fact conducts through carriers,
+  so indirection works).
+- Referencing a Service's identity without any address flowing produces a
+  lint (`workload references Service X by identity but no address value
+  flowed`). If the use is genuinely structural (label, display string), wrap
+  it: `kix.facts.refOnly svc.out.fqdn` (available as `k8s.facts.refOnly`).
+- Dialing by bare `out.name` (intra-namespace short name) will NOT open a
+  netpol hole — use `out.fqdn`, or stamp intent with
+  `k8s.facts.connect svc.factTokens.endpoint value`.
+- **Operator packages that own CRDs** declare per-kind fact behavior on the
+  CRD itself when their controller dials endpoints embedded in CR specs
+  (e.g. a database operator connecting operand pods to an address in the
+  CR). The declaration rides the typed builder chain — consumers building
+  CRs via `scope.mkCR owner.out.crds.<kind>` get it automatically:
+
+  ```nix
+  # in the CRD-owning package (mkCRD works the same way)
+  crdRef = scope.mkCRDRef {
+    group = "my.io"; kind = "MyCluster"; plural = "myclusters";
+    factBehavior = {
+      endpoint = "terminate";          # controller dials; "conduct" = CR merely carries
+      podSelector = cr: { "my.io/cluster" = cr.metadata.name; };  # the OPERAND pods
+    };
+  };
+  ```
+
+  netpol then opens egress for the operand pods + caller-ingress into the
+  target namespace. Undeclared CR kinds absorbing an endpoint fact warn at
+  eval time (conduct is assumed). For CRs not built via the typed builder
+  (helm-rendered, raw kind strings) — or to fix a broken upstream
+  declaration — cluster operators set
+  `cluster.factBehavior."<group>/<Kind>"` (it wins over CRD declarations).
+
 ### Composition helpers (kix.*)
 
 #### Mount helpers
@@ -411,7 +451,7 @@ Each module file receives `{ config, lib, ref, packages, ... }` and can declare 
 - **`mkLocked`** — marks a config field as immutable; blocks dep injection overrides.
 - **Monitoring module** — declarative Prometheus/Grafana/Loki stack. Read `kix/lib/modules/monitoring.nix`.
 
-**Network policy:** CiliumNetworkPolicy is auto-derived from the DI graph — no package authoring needed. Egress rules for API server access, DNS, and cross-package services are generated automatically. Default-deny is per-namespace. Read `kix/lib/netpol.nix` for details. If hitting blindspots (Helm chart opacity, operator-managed pods), see `v2_discussions/96_netpol_autogeneration_blindspots.md`.
+**Network policy:** CiliumNetworkPolicy is auto-derived from endpoint facts — no package authoring needed. Egress rules for API server access, DNS, and cross-package services are generated automatically; a workload gets an edge to exactly the Services whose *address values* (`out.fqdn`/`out.url`, possibly via ConfigMap/Secret indirection) reached its manifest. Default-deny is per-namespace. Read `kix/lib/plugins/netpol/` and `kix/lib/core/facts.nix` for details. If hitting blindspots (Helm chart opacity, operator-managed pods), see `v2_discussions/96_netpol_autogeneration_blindspots.md`.
 
 ### Flavors (target presets)
 

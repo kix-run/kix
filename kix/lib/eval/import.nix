@@ -79,12 +79,24 @@ rec {
           ports,
           requires ? [ ],
         }:
+        let
+          # import-mode refs have no store resource at all — facts are the
+          # first channel that lets them participate in edge detection
+          endpointFactCtx = k8s.facts.mkFact "endpoint" {
+            inherit name selector ports;
+            namespace = namespaceName;
+          };
+          attachConnectCtx = value: builtins.appendContext (toString value) endpointFactCtx;
+        in
         {
+          factTokens = {
+            endpoint = endpointFactCtx;
+          };
           out = {
             inherit selector ports;
             inherit name;
-            fqdn = "${name}.${namespaceName}.svc";
-            port = toString (builtins.head ports).port;
+            fqdn = attachConnectCtx "${name}.${namespaceName}.svc";
+            port = attachConnectCtx (toString (builtins.head ports).port);
           };
         };
       mkSecretRefImport =

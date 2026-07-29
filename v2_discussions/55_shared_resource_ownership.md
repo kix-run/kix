@@ -80,7 +80,11 @@ The Nix evaluation currently produces one DAG per cluster. If multiple activatio
 
 ## 5. Implementation Notes
 
-The `kix.dev/activations` annotation (set by `update_activations_annotation` in `apply.rs`) already tracks which activations reference each resource. This is the foundation for reference-counted cleanup — the finalizer just needs to check whether other activations still reference a resource before deleting it.
+The `kix.dev/activations` annotation (set by `update_bookkeeping_annotations` in `apply.rs`) tracks which activations reference each resource. This is the foundation for reference-counted cleanup: the finalizer checks whether other activations still reference a resource before deleting it.
+
+**Reliability status (corrected 2026-07-26).** Until that date the annotation was NOT reliable, so step 2 above was blocked without anyone noticing. Skipped (unchanged) resources never received the bookkeeping patch, so any resource whose identity hash did not churn froze its activation set at the last deploy that happened to change it: 28 of 53 kix-stamped resources on ludo were missing the active activation, and several named an activation that no longer existed. Both directions are fixed (see `interesting_thoughts/133_cluster_readback_surface.md` §0).
+
+**One gap remains before cleanup can be built on this.** Pruning is keyed on "does this hash name a live Activation CR", not "does that activation still list this resource". In the Team A / Team B scenario above, if A stops referencing the CRDs but A's activation stays alive, A's hash is never removed, because no deploy touches a resource the activation no longer contains. The set is therefore an *upper bound* on referencing activations, not an exact count. It fails safe (over-retain, never delete-while-referenced) but ref-counted cleanup on top of it would leak. See `133` §3.
 
 The operator currently hard-codes skip lists for its own CRDs. This should evolve into a general mechanism, not a growing list of special cases.
 

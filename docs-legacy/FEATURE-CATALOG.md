@@ -133,13 +133,21 @@ Auto-derives CiliumNetworkPolicy from the DI graph:
 - `hasDescription` — meta.description recommended (info).
 - `labelStandards` — Standard K8s labels on workloads (info).
 
+**Architecture** (v2_discussions/128):
+- `annotationDomainOwnership` — annotations under an operator-declared domain (`meta.annotationDomains`) require a DI dep on the declarer; undeclared domains warn as dead annotations (warning).
+- `unsafeGrants` — audit listing every `meta.unsafe` grant (info).
+- `selectorCoherence` — Service selectors must carry store-path context (warning).
+- `fqdnWithoutContext` — `*.svc` FQDNs in workloads must carry store-path context (warning).
+
 ### Package Metadata & Diagnostics (`meta.nix`)
 
 - **Version system:** `parseVersion`, `compareVersions`, `versionAtLeast`, `versionAtMost`.
 - **`peekPackageMeta`** — Extract meta without full evaluation (function, inline, import).
 - **`peekPackageAliases`** — Get resolution aliases from available entry.
 - **`effectiveAliases`** — Instance aliases override package defaults.
-- **`checkMetaStatic`** — Pre-build assertions: K8s version compat, dependency version compat, conflicts.
+- **`checkMetaStatic`** — Pre-build assertions: K8s version compat, dependency version compat, conflicts, unknown `meta.unsafe` grants.
+- **Unsafe grants** (`unsafe.nix`) — closed vocabulary of structural-rule escapes (`raw-pvc`); raw PVCs outside a granted package are an eval error (`scope/validators.nix#checkRawPvc`).
+- **Annotation domains** — `meta.annotationDomains` declares operator-owned annotation prefixes; duplicate declarers are an eager eval error (`eval/hooks.nix#buildAnnotationDomainIndex`).
 - **Conflict detection:** `conflictsWith` (same namespace) and `cluster:conflictsWith` (cluster-wide).
 - **`evaluatePackageDiagnostics`** — Call package-declared warnings/assertions functions.
 - **`combineDiagnostics`** / **`collectClusterDiagnostics`** — Merge and enforce diagnostics.
@@ -163,7 +171,7 @@ Auto-derives CiliumNetworkPolicy from the DI graph:
 - `cluster.capabilities` — 15 flags: multiNode, availabilityZones, nodeAutoscaling, managedControlPlane, loadBalancer, cni, networkPolicyAPI, ingressController, persistentStorage, rwxStorage, volumeSnapshots, gpu, privilegedContainers, podSecurityEnforcement, daemonSets.
 - `cluster.network` — podCidr, serviceCidr, dnsUpstream.
 - `cluster.nodes` — Static node inventory (roles, cpu, memory, labels, taints).
-- `scorecard` — enable, rules, ruleDefaults, ruleOverrides.
+- `scorecard` — enable, rules, ruleDefaults, ruleOverrides, knownAnnotationDomains.
 - `networkPolicy` — enable, defaultDeny, directions.
 
 ### Cluster Flavors (`flavors/`)

@@ -492,7 +492,7 @@ The `kix` arg to packages comes from `compose.nix` (`kixlib`).
 | `kix.mkEnvVars { K = "v"; OPT = null; }` | `→ [{ name, value }]`. Null values filtered (`lib.optionalAttrs` plays nicely). |
 | `kix.mkEnv attrs rawList` | `(mkEnvVars attrs) ++ rawList`. Combines named env vars with raw entries (e.g. `valueFrom.secretKeyRef`) |
 | `kix.parseGi "50Gi"` | `→ 50` (number). Supports `Ti`/`Gi`/`Mi`. Strips Nix string context so it works on `dep.out.size` |
-| `kix.untrackedRef "name"` | Escape hatch: a string carrying an "untracked" context marker. Use when referring to resource names not managed by kix (Helm hook secrets, cert-manager-issued secrets, etc.). Bypasses the DI-tracking check in `mkDeployment` |
+| `kix.untrackedRef "name"` | Escape hatch: a string carrying an "untracked" context marker. Use when referring to resource names not managed by kix (Helm hook secrets, cert-manager-issued secrets, etc.). Bypasses the DI-tracking check in `mkDeployment`. The marker is inert: it satisfies the ref check and is filtered out of `kix.dev/depends-on`, so it never becomes a deploy-ordering edge |
 
 ### 9.2 Mounts
 
@@ -969,13 +969,11 @@ Configure via `scorecard.{enable, rules, ruleDefaults, ruleOverrides}`.
 
 **Architecture** (`kix.rules.architecture`):
 
-DI-hygiene rules. Each rule is a fingerprint that catches a package hand-rolling resources that belong to a different *capability owner*. Examples:
+DI-hygiene rules (v2_discussions/128 replaced the old fingerprint-based capabilityOwnership rule):
 
-- A package builds a PVC inline instead of using DI to a `storage`-capability provider.
-- A package writes `reflector.v1.k8s.emberstack.com/reflection-allowed` annotations directly instead of using the reflector capability's builder.
-- Workload selector labels don't match the workload's own labels (selectorCoherence).
-
-The architecture rule treats DI-provided resources as legitimate (they're stamped `kix.dev/capability: <name>` by the provider's builder); hand-rolled equivalents trip the rule.
+- `annotationDomainOwnership` — a package's `metadata.annotations` keys under an operator-declared domain (`meta.annotationDomains`, e.g. reflector's `reflector.v1.k8s.emberstack.com`) require a DI dep on the declarer; a domain nobody declares warns as a dead annotation. Reserved suffixes (`kubernetes.io`, `k8s.io`, `kix.dev`, `helm.sh`, `kubebuilder.io`) and the cluster's `scorecard.knownAnnotationDomains` are exempt.
+- `unsafeGrants` — info-level audit listing every `meta.unsafe` grant (currently only `raw-pvc`, whose absence is enforced as an eval *error* in `scope/validators.nix`, not a scorecard rule).
+- `selectorCoherence` / `fqdnWithoutContext` — selectors and `*.svc` FQDNs must carry store-path context from the owning workload/service.
 
 ### 17.3 Output
 
@@ -1160,7 +1158,6 @@ Every kix-managed resource gets:
 | `kix.dev/package` | Package instance name |
 | `kix.dev/package-namespace` | Package namespace |
 | `kix.dev/mode` | `"import"` for external resources |
-| `kix.dev/capability` | Capability owner name (set by capability-builder helpers) |
 | `kix.dev/cluster` (label) | Cluster name |
 | `app.kubernetes.io/managed-by: kix` (label) | Always |
 
@@ -1201,7 +1198,8 @@ Diff features:
 | Symptom | Fix |
 |---|---|
 | Reading `out.selector` cycles through a back-reference | Use `workload.rawSelector`. Trade-off: `architecture.selectorCoherence` warns; live with it |
-| Architecture rule complains about a hand-rolled PVC/annotation/etc. | Use the capability owner's builder (e.g. `storage.out.<...>`, `reflector.out.annotateForReflection`) — those stamp `kix.dev/capability` |
+| Raw PVC throws at eval | Provision via a sibling `persistent-volume-claim` instance + `storage` dep; only canonical/chart-persistence packages hold `meta.unsafe = [ "raw-pvc" ]` |
+| `annotationDomainOwnership` warns about an operator's annotations | Declare the DI dep on the operator (e.g. `reflector`) and use its builder; for domains consumed outside kix add `scorecard.knownAnnotationDomains` |
 | Cross-namespace mount or secret-ref errors at build | Either move the resource to the right ns, use `scope.forNamespace`, or set `reflected = true` if reflector mirrors it |
 | Dep injection overrides a value you want to pin | Wrap with `mkLocked` |
 | Reflected secret looks unhealthy | Reflector controller copies on schedule; `reflected = true` relaxes ns-check but does not guarantee the copy exists. Order via DI on the reflector |

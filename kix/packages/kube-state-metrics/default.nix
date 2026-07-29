@@ -14,7 +14,7 @@ let
 in
 {
   meta = {
-    version = "v2.15.0";
+    version = "v2.19.1";
     description = "kube-state-metrics — Kubernetes object state exporter";
     defaultAliases = [ "kubeStateMetrics" ];
     k8s.minVersion = "1.25";
@@ -25,7 +25,7 @@ in
       type = lib.types.anything;
       default = {
         repository = "registry.k8s.io/kube-state-metrics/kube-state-metrics";
-        tag = "v2.15.0";
+        tag = "v2.19.1";
         pullPolicy = "IfNotPresent";
       };
     };

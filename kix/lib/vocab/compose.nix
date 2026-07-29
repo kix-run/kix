@@ -1,6 +1,8 @@
 { lib }:
 
 let
+  markers = import ../core/markers.nix { inherit lib; };
+
   resourceNamespace =
     resource:
     let
@@ -37,6 +39,14 @@ let
 in
 
 rec {
+
+  # Typed-fact escape hatches (core/facts.nix), re-exported for package
+  # authors: `kix.facts.refOnly svc.out.fqdn` (name it, don't dial it),
+  # `kix.facts.connect svc.factTokens.endpoint value` (dial by a value
+  # that lacks the claim, e.g. a bare intra-namespace name).
+  facts = {
+    inherit (import ../core/facts.nix { inherit lib; }) refOnly connect;
+  };
 
   port = name: containerPort: {
     inherit name containerPort;
@@ -197,6 +207,10 @@ rec {
         path ? "/",
         pathType ? "PathPrefix",
         port ? null,
+        # Gateway API HTTPRoute per-rule timeouts, e.g.
+        # { request = "0s"; backendRequest = "0s"; } to disable (needed for
+        # long-lived streaming backends). null → omit (Envoy's 15s default).
+        timeouts ? null,
         ...
       }@cfg:
       svc:
@@ -209,6 +223,7 @@ rec {
           "path"
           "pathType"
           "port"
+          "timeouts"
         ];
       in
       {
@@ -226,22 +241,25 @@ rec {
           ];
           hostnames = [ host ];
           rules = [
-            {
-              matches = [
-                {
-                  path = {
-                    type = pathType;
-                    value = path;
-                  };
-                }
-              ];
-              backendRefs = [
-                {
-                  name = svc.out.name;
-                  port = servicePort;
-                }
-              ];
-            }
+            (
+              {
+                matches = [
+                  {
+                    path = {
+                      type = pathType;
+                      value = path;
+                    };
+                  }
+                ];
+                backendRefs = [
+                  {
+                    name = svc.out.name;
+                    port = servicePort;
+                  }
+                ];
+              }
+              // lib.optionalAttrs (timeouts != null) { inherit timeouts; }
+            )
           ];
         };
       }
@@ -418,12 +436,7 @@ rec {
 
   withMountsOn = containerName: _injectMounts containerName;
 
-  untrackedRef =
-    name:
-    let
-      marker = builtins.toFile "kix-untracked-ref" name;
-    in
-    builtins.appendContext name (builtins.getContext "${marker}");
+  untrackedRef = markers.mkUntrackedRef;
 
   options = {
     ingress = {
@@ -463,6 +476,10 @@ rec {
       tlsSecretName ? null,
       tlsSecret ? null,
       tlsSecretPart ? null,
+      # Gateway API mode only: per-rule HTTPRoute timeouts, e.g.
+      # { request = "0s"; } to disable the default 15s request timeout for
+      # long-lived streaming backends. Ignored in Ingress (nginx) mode.
+      timeouts ? null,
     }:
     {
       self,
@@ -596,6 +613,7 @@ rec {
                 parentRef = gateway.out.gatewayRef;
               }
               // lib.optionalAttrs (port != null) { inherit port; }
+              // lib.optionalAttrs (timeouts != null) { inherit timeouts; }
             )
             |> scope.mkResource
 

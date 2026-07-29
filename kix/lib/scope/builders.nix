@@ -17,6 +17,10 @@ in
       workloadInterceptors,
       peekedPackageMeta,
       clusterCtx,
+      # cluster.factBehavior, keyed "group/Kind": operator override (wins
+      # over the CRD-declared behavior arriving via mkCR) and fallback for
+      # builder-less CRs (helm-rendered, raw mkResource)
+      factBehaviorOverrides ? { },
       # scopeObj is the enclosing mkScope fixpoint — only consume lazily (interceptor ctx, mkCR); forcing it while default.nix constructs it would recurse
       scopeObj,
     }:
@@ -26,6 +30,15 @@ in
           labels ? { },
           ...
         }@args:
+        let
+          behavior = resolveFactBehavior args;
+          # a terminate-declared CR dials out (via its operands) — it waits
+          # on DNS like any dialing workload would. Conservative: spliced
+          # even when this particular CR absorbed no endpoint (harmless).
+          dnsRequires = lib.optional (
+            behavior != null && behavior.endpoint == "terminate" && edgeAnalysis.dnsRoot != null
+          ) edgeAnalysis.dnsRoot;
+        in
         builtins.seq (validators.checkRawPvc args) (
           builtins.seq (validators.checkLoadBalancer args) (
             k8s.mkResource (
@@ -34,6 +47,8 @@ in
                 namespace = namespaceResource;
                 inherit clusterDomain;
                 labels = clusterLabels // instanceLabels // labels;
+                factBehavior = behavior;
+                requires = (args.requires or [ ]) ++ dnsRequires;
               }
             )
             // {
@@ -41,6 +56,19 @@ in
             }
           )
         );
+
+      # Behavior is a property of the CRD: it normally arrives in args via
+      # the typed builder chain (mkCRD/mkCRDRef → mkCRDBuilders.cr → mkCR).
+      # The cluster override (keyed "group/Kind") wins; it also covers
+      # builder-less CRs (helm-rendered, raw mkResource by kind string).
+      resolveFactBehavior =
+        args:
+        let
+          apiVersion = args.apiVersion or "";
+          group = if lib.hasInfix "/" apiVersion then builtins.head (lib.splitString "/" apiVersion) else "";
+          key = "${group}/${args.kind or ""}";
+        in
+        factBehaviorOverrides.${key} or (args.factBehavior or null);
 
       scopeMkClusterResource =
         {
@@ -53,6 +81,7 @@ in
             namespace = clusterScoped;
             inherit clusterDomain;
             labels = clusterLabels // instanceLabels // labels;
+            factBehavior = resolveFactBehavior args;
           }
         )
         // {
@@ -130,8 +159,15 @@ in
           hostNetwork,
         }:
         let
-          edges = edgeAnalysis.edgesFor workloadInput;
-          dnsDeps = if edges != [ ] && edgeAnalysis.dnsRoot != null then [ edgeAnalysis.dnsRoot ] else [ ];
+          edgeReport = edgeAnalysis.edgesFor workloadInput;
+          edges = edgeReport.edges;
+          # DNS ordering uses the conservative edge set: naming a Service is
+          # weak dial evidence, and a spurious DNS wait is harmless
+          dnsDeps =
+            if edgeReport.dnsEdges != [ ] && edgeAnalysis.dnsRoot != null then
+              [ edgeAnalysis.dnsRoot ]
+            else
+              [ ];
           interceptorResults = map (
             interceptor:
             interceptor {
@@ -164,13 +200,21 @@ in
             }
           );
         in
-        builtins.foldl' (acc: warning: builtins.trace warning acc) (
-          workload
-          // {
-            _injectedResources = interceptorResources;
-            rawSelector = selector;
-          }
-        ) interceptorWarnings;
+        # Trace warnings anchored on outPath, NOT on the whole attrset:
+        # edge-lint warnings force toJSON(workloadInput) — serializing
+        # `requires` whose sealed manifests may reference this workload's
+        # rawSelector (e.g. a webhook config embedding the admission
+        # Service's out.name, whose selector reads rawSelector). rawSelector
+        # must stay reachable without forcing edge analysis; outPath is
+        # forced at every embedding anyway, so no warning is lost.
+        workload
+        // {
+          outPath = builtins.foldl' (acc: warning: builtins.trace warning acc) workload.outPath (
+            interceptorWarnings ++ map (w: "[${instanceName}] ${w}") edgeReport.warnings
+          );
+          _injectedResources = interceptorResources;
+          rawSelector = selector;
+        };
 
       mkWorkload =
         apiVersion: kind: attrs:
@@ -415,6 +459,11 @@ in
           plural = crdSpec.names.plural;
           version = (builtins.head crdSpec.versions).name;
           crdScope = crdSpec.scope or "Namespaced";
+          factBehavior =
+            if attrs ? factBehavior && attrs.factBehavior != null then
+              k8s.facts.validateBehavior "mkCRD ${instanceName}" "${group}/${crKind}" attrs.factBehavior
+            else
+              null;
 
           crdResource = scopeMkClusterResource {
             apiVersion = "apiextensions.k8s.io/v1";
@@ -433,7 +482,7 @@ in
             crdOrRef = crdResource;
             group = group;
             kind = crKind;
-            inherit version crdScope;
+            inherit version crdScope factBehavior;
           };
         in
         crdResource
@@ -477,8 +526,18 @@ in
           version ? "v1",
           crdScope ? "Namespaced",
           installedBy ? null,
+          # controller semantics of this kind (see core/facts.nix): declared
+          # here because behavior is a property of the CRD, and this is where
+          # the CRD-owning package reifies the kind. Threads through mkCR
+          # into every CR's seal.
+          factBehavior ? null,
         }:
         let
+          _validatedBehavior =
+            if factBehavior != null then
+              k8s.facts.validateBehavior "mkCRDRef ${instanceName}" "${group}/${kind}" factBehavior
+            else
+              null;
           crdName = "${plural}.${group}";
           groupSlug = builtins.replaceStrings [ "." ] [ "-" ] group;
           markerName = "crd-ref-${plural}-${groupSlug}";
@@ -501,6 +560,7 @@ in
 
           crdBuilders = k8s.mkCRDBuilders {
             crdOrRef = marker;
+            factBehavior = _validatedBehavior;
             inherit
               group
               kind
@@ -670,14 +730,25 @@ in
           resourceCtx = builtins.getContext "${marker}";
           attachCtx = value: builtins.appendContext (toString value) resourceCtx;
 
+          # the ref knows selector+ports explicitly — mint the endpoint fact
+          # from the declaration, same channel as a managed Service's seal
+          endpointFactCtx = k8s.facts.mkFact "endpoint" {
+            inherit name selector ports;
+            namespace = namespaceName;
+          };
+          attachConnectCtx = value: builtins.appendContext (toString value) (resourceCtx // endpointFactCtx);
+
           fqdn = "${name}.${namespaceName}.svc";
         in
         marker
         // {
+          factTokens = {
+            endpoint = endpointFactCtx;
+          };
           out = {
             name = attachCtx name;
-            fqdn = attachCtx fqdn;
-            port = attachCtx (toString (builtins.head ports).port);
+            fqdn = attachConnectCtx fqdn;
+            port = attachConnectCtx (toString (builtins.head ports).port);
             ports = ports;
             inherit selector;
           };

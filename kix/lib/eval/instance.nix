@@ -45,6 +45,7 @@ in
       instanceProcessors ? [ ],
       clusterCtx ? { },
       annotationDomainIndex ? { },
+      factBehaviorOverrides ? { },
     }@args:
 
     if (instCfg.package._type or "") == "kix-import" then
@@ -114,13 +115,17 @@ in
         _edgeAnalysis = rec {
           serviceRegistry = edgeAnalysis.mkServiceRegistry _depResourcesForEdges;
           serviceRefRegistry = edgeAnalysis.mkServiceRefRegistry _depResourcesForEdges;
+          serviceIndex = edgeAnalysis.mkServiceIndex _depResourcesForEdges;
           inherit (edgeAnalysis) isServiceRef;
           dnsRoot = _dnsRoot;
           edgesFor =
             workloadInput:
-            edgeAnalysis.extractServiceEdgesFromJson {
+            edgeAnalysis.analyzeEdges {
               json = builtins.toJSON workloadInput;
-              inherit serviceRegistry serviceRefRegistry;
+              # helm workloads: address values rarely survive the chart
+              # pipeline — identity hits stay netpol edges (conservative)
+              conservative = workloadInput ? _helmNetworkDeps;
+              inherit serviceRegistry serviceRefRegistry serviceIndex;
             };
         };
 
@@ -140,6 +145,7 @@ in
           selectorLabelsOverride = instCfg.selectorLabels;
           clusterDomain = clusterConfig.clusterDomain or "cluster.local";
           capabilities = clusterConfig.cluster.capabilities or { };
+          inherit factBehaviorOverrides;
           # Lazy: settled by the outer fixpoint before the first mkWorkload forces it.
           edgeAnalysis = _edgeAnalysis;
         };

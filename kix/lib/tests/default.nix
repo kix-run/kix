@@ -116,6 +116,9 @@ let
   mkAppPackage =
     {
       hostNetwork ? false,
+      # how the app wires the db address: fqdn = dialing (carries the
+      # endpoint fact); out.name alone is structural and derives no edge
+      wireDb ? (db: db.out.fqdn),
     }:
     {
       meta.version = "test";
@@ -144,7 +147,7 @@ let
                         env = [
                           {
                             name = "DB_HOST";
-                            value = db.out.name;
+                            value = wireDb db;
                           }
                         ];
                       }
@@ -157,6 +160,180 @@ let
           };
         };
     };
+
+  # dials db through a ConfigMap: the endpoint fact must conduct through the
+  # carrier's seal — indirection is the default case, not a special one
+  indirectAppPackage = {
+    meta.version = "test";
+    build =
+      {
+        self,
+        scope,
+        db,
+        ...
+      }:
+      {
+        cm = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          name = "app-config";
+          data.DB_HOST = db.out.fqdn;
+        };
+        deployment = scope.mkDeployment {
+          name = "app";
+          spec = {
+            selector.matchLabels = scope.selectorLabels;
+            template = {
+              metadata.labels = scope.selectorLabels;
+              spec.containers = [
+                (
+                  {
+                    name = "app";
+                    image = "example/app:1";
+                    envFrom = [ { configMapRef.name = self.cm.out.name; } ];
+                  }
+                  // containerBase
+                )
+              ];
+            };
+          };
+        };
+        root = self.deployment;
+      };
+  };
+
+  # CRD-owning operator: declares TestCluster's fact behavior ON THE CRD
+  # REF (behavior is a property of the kind, delivered through the typed
+  # builder chain — mkCRDRef → out.crds → consumer's scope.mkCR).
+  testClusterBehavior = {
+    endpoint = "terminate";
+    podSelector = cr: {
+      "test.io/cluster" = cr.metadata.name;
+    };
+  };
+
+  mkOperatorPackage =
+    {
+      factBehavior ? null,
+    }:
+    {
+      meta = {
+        version = "test";
+        defaultAliases = [ "testOperator" ];
+      };
+      build =
+        { self, scope, ... }:
+        {
+          cm = scope.mkResource {
+            apiVersion = "v1";
+            kind = "ConfigMap";
+            name = "test-operator";
+          };
+          crdRef = scope.mkCRDRef {
+            group = "test.io";
+            kind = "TestCluster";
+            plural = "testclusters";
+            inherit factBehavior;
+          };
+          root = {
+            resource = self.cm;
+            requires = [ self.crdRef ];
+            out.crds.testCluster = self.crdRef;
+          };
+        };
+    };
+
+  # consumer: builds a TestCluster CR via the operator's typed builder,
+  # embedding db's address; plus a deployment that only NAMES the CR (no
+  # address flows to the workload)
+  crConsumerPackage = {
+    meta.version = "test";
+    build =
+      {
+        self,
+        scope,
+        db,
+        testOperator,
+        ...
+      }:
+      {
+        cluster = scope.mkCR testOperator.out.crds.testCluster {
+          name = "mycluster";
+          spec.connection = db.out.fqdn;
+        };
+        deployment = scope.mkDeployment {
+          name = "consumer";
+          spec = {
+            selector.matchLabels = scope.selectorLabels;
+            template = {
+              metadata.labels = scope.selectorLabels;
+              spec.containers = [
+                (
+                  {
+                    name = "consumer";
+                    image = "example/consumer:1";
+                    env = [
+                      {
+                        name = "CLUSTER_NAME";
+                        value = self.cluster.out.name;
+                      }
+                    ];
+                  }
+                  // containerBase
+                )
+              ];
+            };
+          };
+        };
+        root = self.deployment;
+      };
+  };
+
+  # same consumer but builder-less: raw mkResource with a kind string —
+  # no behavior arrives unless cluster.factBehavior supplies it
+  rawCrConsumerPackage = {
+    meta.version = "test";
+    build =
+      {
+        self,
+        scope,
+        db,
+        ...
+      }:
+      {
+        cluster = scope.mkResource {
+          apiVersion = "test.io/v1";
+          kind = "TestCluster";
+          name = "mycluster";
+          spec.connection = db.out.fqdn;
+        };
+        deployment = scope.mkDeployment {
+          name = "consumer";
+          spec = {
+            selector.matchLabels = scope.selectorLabels;
+            template = {
+              metadata.labels = scope.selectorLabels;
+              spec.containers = [
+                (
+                  {
+                    name = "consumer";
+                    image = "example/consumer:1";
+                    env = [
+                      {
+                        name = "CLUSTER_NAME";
+                        value = self.cluster.out.name;
+                      }
+                    ];
+                  }
+                  // containerBase
+                )
+              ];
+            };
+          };
+        };
+        root = self.deployment;
+      };
+  };
 
   # Reports whether the package-facing enforcer handle is set.
   probePackage = {
@@ -1209,6 +1386,176 @@ let
       in
       findings == [ ]
       || throw "direct-wired dep did not satisfy domain lint: ${builtins.toJSON findings}";
+
+    # ---- typed-facts edge semantics (core/facts.nix) ----------------------
+
+    # out.name alone is structural: no endpoint fact flows, so netpol derives
+    # NO edge to db (no caller-ingress CNP) — but the identity hit keeps the
+    # conservative DNS-ordering dep, and the derivation record (depends-on)
+    # is untouched.
+    t39-name-only-no-netpol-edge =
+      let
+        nameOnly = {
+          instances.appns.app.package = lib.mkForce (mkAppPackage {
+            wireDb = db: db.out.name;
+          });
+        };
+        cluster = mkCluster [
+          baseInstances
+          netpolOn
+          nameOnly
+        ];
+        ms = manifests cluster;
+        cnps = ofKind "CiliumNetworkPolicy" ms;
+        appDeployment = byName "app" (ofKind "Deployment" ms);
+        dnsHash = k8s.extractStoreHash cluster.instances.dns.dns.root.outPath;
+        annot = dependsOn appDeployment;
+      in
+      (
+        !(hasName "app-deployment-app-to-db-ingress" cnps)
+        && hasName "app-deployment-app-egress" cnps
+        && lib.hasInfix dnsHash annot
+      )
+      || throw "name-only wiring should drop the netpol edge but keep DNS dep; CNPs: ${builtins.toJSON (namesOf cnps)}, depends-on: ${annot}";
+
+    # db.out.fqdn embedded in a ConfigMap, workload only references the CM:
+    # the endpoint fact conducts through the carrier's seal, so the full CNP
+    # set appears exactly as if the workload dialed directly.
+    t40-configmap-indirection-edge =
+      let
+        indirect = {
+          instances.appns.app.package = lib.mkForce indirectAppPackage;
+        };
+        ms = manifests (mkCluster [
+          baseInstances
+          netpolOn
+          indirect
+        ]);
+        cnps = ofKind "CiliumNetworkPolicy" ms;
+        callerIngress = byName "app-deployment-app-to-db-ingress" cnps;
+      in
+      (callerIngress != null && callerIngress.metadata.namespace == "dbns")
+      || throw "endpoint fact did not conduct through ConfigMap; CNPs: ${builtins.toJSON (namesOf cnps)}";
+
+    # facts.refOnly is the per-use escape hatch: identity (ordering) kept,
+    # dialing claim stripped — fqdn used as a display string derives no edge.
+    t41-refonly-strips-edge =
+      let
+        refOnlyWired = {
+          instances.appns.app.package = lib.mkForce (mkAppPackage {
+            wireDb = db: k8s.facts.refOnly db.out.fqdn;
+          });
+        };
+        cluster = mkCluster [
+          baseInstances
+          netpolOn
+          refOnlyWired
+        ];
+        ms = manifests cluster;
+        cnps = ofKind "CiliumNetworkPolicy" ms;
+        appDeployment = byName "app" (ofKind "Deployment" ms);
+        dbSvcHash = k8s.extractStoreHash cluster.instances.dbns.db.raw.service.outPath;
+      in
+      (
+        !(hasName "app-deployment-app-to-db-ingress" cnps)
+        && lib.hasInfix dbSvcHash (dependsOn appDeployment)
+      )
+      || throw "refOnly should strip the edge but keep the identity dep; CNPs: ${builtins.toJSON (namesOf cnps)}";
+
+    # ---- meta.factBehavior (terminate/conduct table for CRDs) -------------
+
+    # A terminate-declared CR absorbing an endpoint fact: netpol opens holes
+    # for the OPERAND pods (podSelector over the raw manifest), from the
+    # instance phase — egress in the CR's namespace, caller-ingress into the
+    # target's. The consumer deployment (which only names the CR) gets none.
+    t42-cr-terminate-operand-cnps =
+      let
+        withCr = {
+          instances.opns.test-operator.package = mkOperatorPackage { factBehavior = testClusterBehavior; };
+          instances.appns.app.package = lib.mkForce crConsumerPackage;
+        };
+        ms = manifests (mkCluster [
+          baseInstances
+          netpolOn
+          withCr
+        ]);
+        cnps = ofKind "CiliumNetworkPolicy" ms;
+        operandEgress = byName "app-testcluster-mycluster-egress" cnps;
+        callerIngress = byName "app-testcluster-mycluster-to-db-ingress" cnps;
+      in
+      (
+        operandEgress != null
+        && operandEgress.spec.endpointSelector.matchLabels."test.io/cluster" == "mycluster"
+        && callerIngress != null
+        && callerIngress.metadata.namespace == "dbns"
+        && !(hasName "app-deployment-consumer-to-db-ingress" cnps)
+      )
+      || throw "operand CNPs wrong; CNPs: ${builtins.toJSON (namesOf cnps)}";
+
+    # Without a declaration, an unknown CR kind conducts (default): the fact
+    # flows through the CR's out.* to the deployment that references it, so
+    # the WORKLOAD gets the db edge. (An eval-time warning names the gap.)
+    t43-undeclared-cr-conducts =
+      let
+        withCr = {
+          instances.appns.app.package = lib.mkForce rawCrConsumerPackage;
+        };
+        ms = manifests (mkCluster [
+          baseInstances
+          netpolOn
+          withCr
+        ]);
+        cnps = ofKind "CiliumNetworkPolicy" ms;
+      in
+      hasName "app-deployment-consumer-to-db-ingress" cnps
+      || throw "undeclared CR should conduct the fact to the workload; CNPs: ${builtins.toJSON (namesOf cnps)}";
+
+    # cluster.factBehavior (keyed "group/Kind") covers builder-less CRs and
+    # overrides CRD declarations: the raw-built CR terminates, operand CNPs
+    # appear, and the workload edge from conduction disappears.
+    t44-cluster-fact-behavior-override =
+      let
+        withCr = {
+          instances.appns.app.package = lib.mkForce rawCrConsumerPackage;
+          cluster.factBehavior."test.io/TestCluster" = testClusterBehavior;
+        };
+        ms = manifests (mkCluster [
+          baseInstances
+          netpolOn
+          withCr
+        ]);
+        cnps = ofKind "CiliumNetworkPolicy" ms;
+      in
+      (
+        hasName "app-testcluster-mycluster-egress" cnps
+        && !(hasName "app-deployment-consumer-to-db-ingress" cnps)
+      )
+      || throw "cluster override should terminate the raw CR; CNPs: ${builtins.toJSON (namesOf cnps)}";
+
+    # untrackedRef's marker is proof of a deliberate opt-out, not a resource.
+    # Stamping it into depends-on yields a hash nothing can ever resolve, and
+    # `kix health` reports the consumer as depending on a MISSING resource
+    # forever. The marker's context must reach the validators and stop there.
+    t45-untracked-ref-not-a-dep =
+      let
+        secretName = k8s.markers.mkUntrackedRef "operator-minted-certs";
+        markerHash = k8s.extractStoreHash (
+          builtins.head (builtins.attrNames (builtins.getContext secretName))
+        );
+        deployment = k8s.mkResource {
+          apiVersion = "apps/v1";
+          kind = "Deployment";
+          name = "consumer";
+          namespace = {
+            name = "appns";
+            outPath = "/nix/store/${builtins.substring 0 32 (builtins.hashString "sha256" "ns")}-ns";
+          };
+          spec.template.spec.volumes = [ { secret = { inherit secretName; }; } ];
+        };
+        annot = dependsOn deployment.rawManifest;
+      in
+      (builtins.getContext secretName != { } && !(lib.hasInfix markerHash annot))
+      || throw "untracked-ref marker ${markerHash} leaked into depends-on: '${annot}'";
   };
 
   failures = lib.filterAttrs (

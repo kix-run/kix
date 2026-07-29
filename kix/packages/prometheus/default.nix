@@ -21,7 +21,7 @@ let
 in
 {
   meta = {
-    version = "v3.1.0";
+    version = "v3.13.1";
     description = "Prometheus time-series database";
     defaultAliases = [
       "prometheusServer"
@@ -38,7 +38,7 @@ in
       type = lib.types.anything;
       default = {
         repository = "quay.io/prometheus/prometheus";
-        tag = "v3.1.0";
+        tag = "v3.13.1";
       };
     };
     replicas = lib.mkOption {

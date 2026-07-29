@@ -13,7 +13,7 @@ let
 in
 {
   meta = {
-    version = "v1.9.0";
+    version = "v1.12.1";
     description = "Prometheus Node Exporter — host-level metrics";
     defaultAliases = [ "nodeExporter" ];
     k8s.minVersion = "1.25";
@@ -24,7 +24,7 @@ in
       type = lib.types.anything;
       default = {
         repository = "quay.io/prometheus/node-exporter";
-        tag = "v1.9.0";
+        tag = "v1.12.1";
         pullPolicy = "IfNotPresent";
       };
     };
