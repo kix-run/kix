@@ -4,6 +4,7 @@
   "page": "/docs/tutorials/02-local-setup-and-first-run/",
   "cwd": "kix-examples/",
   "generator": "offline",
+  "skipDriftCheck": false,
   "commands": [
     {
       "command": "kix list clusters",

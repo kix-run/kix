@@ -4,6 +4,7 @@
   "page": "/docs/tutorials/19-scorecards-and-compile-time-policy/",
   "cwd": "kix-examples/",
   "generator": "offline",
+  "skipDriftCheck": false,
   "commands": [
     {
       "command": "kix check 19-scorecards",

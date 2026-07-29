@@ -4,6 +4,7 @@
   "page": "/docs/tutorials/04-first-cluster-from-scratch/",
   "cwd": "kix-examples/",
   "generator": "offline",
+  "skipDriftCheck": false,
   "commands": [
     {
       "command": "kix check 04-from-scratch",

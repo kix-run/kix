@@ -4,6 +4,7 @@
   "page": "/docs/tutorials/06-first-local-package-and-service-to-service-dependency/",
   "cwd": "kix-examples/",
   "generator": "offline",
+  "skipDriftCheck": false,
   "commands": [
     {
       "command": "kix check 06-service-dep",
