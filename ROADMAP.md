@@ -366,3 +366,4 @@ Things that are either "shipped but the underlying question isn't actually settl
 - **"Composability and cohesion over capability and completeness"** — the platform will grow by itself, but composability and cohesion must be actively protected.
 - **Show value in weeks** — don't over-engineer. Find immediate MVPs and GTM opportunities. The demo must be compelling quickly, not after all features are built.
 - **IaC as readable, long-lived intent** — "express ideas in a language you can re-read a year ago". This is a core reason to use nix over YAML/templating: the configuration is human-readable code, not opaque generated output.
+
