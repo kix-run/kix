@@ -32,7 +32,6 @@
           auto = ./clusters/test-auto.nix;
           auto2 = ./clusters/test-auto2.nix;
           immich = ./clusters/test-immich.nix;
-          eramba = ./clusters/test-eramba.nix;
           kind = ./clusters/test-kind.nix;
           monitoring-helm = ./clusters/test-monitoring-helm.nix;
           monitoring-native = ./clusters/test-monitoring-native.nix;
