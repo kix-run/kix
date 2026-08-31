@@ -413,17 +413,24 @@ build = { self, config, postgres, storage, machineLearning ? null, prometheus ? 
 `machineLearning` and `prometheus` are optional capabilities — the package
 gracefully omits resources when they're absent.
 
-### 8.2 What goes on `meta.provides`
+### 8.2 What goes on `meta.roles`
 
-Capability owners declare the capability they own:
+Infrastructure-role owners claim their role from the closed registry in
+`kix/lib/eval/roles.nix` (currently: `network-policy-enforcer`, `dns`,
+`storageClasses`, `cni`, `loadBalancer`):
 
 ```nix
-# kix/packages/persistent-volume-claim/default.nix
+# kix/packages/storage-classes/default.nix
 meta = {
-  provides = [ "storage" ];
-  defaultAliases = [ "storage" ];
+  roles = [ "storageClasses" ];
 };
 ```
+
+The role name doubles as a DI alias automatically, and binding-mode
+conflicts against environment-provided roles (`cluster.roles.<name>.binding`,
+`absent` | `shadowable` | `exclusive`) are refused at eval. Everything that
+isn't a registry role resolves through ordinary aliases — e.g.
+`persistent-volume-claim` declares `meta.defaultAliases = [ "storage" ]`.
 
 Consumers' DI resolution matches by arg name → instance name → instance
 aliases (when set) **or** package's `meta.defaultAliases` (when not set —
@@ -434,14 +441,16 @@ ownership is enforced by declared invariants, not provenance stamps
 domain (`meta.annotationDomains`) without a DI dep on the declarer trip
 `architecture.annotationDomainOwnership`.
 
-### 8.3 What does NOT go on `meta.provides`
+### 8.3 What does NOT go on `meta.roles`
 
-`meta.provides` is for **architectural capabilities** that other packages can
-ask for via DI: storage, ingress controller, gateway, network-policy-enforcer,
-reflection, certificate issuance, monitoring scrape backend.
+The registry is closed on purpose: the old free-form `meta.provides` let a
+typo'd capability silently never match, so it was removed
+(v2_discussions/127). An unknown role is an eval error, and adding a role
+to the registry requires a demonstrated consumer.
 
-It is *not* for product/feature labels. Don't write `meta.provides = ["high-performance-vector-search"]` —
-DI doesn't search on those, and the architecture rule won't gain anything.
+Services that other packages consume (a database, a cache, a metrics
+backend) are not roles — they resolve via plain alias-based DI
+(`meta.defaultAliases`, instance names, instance aliases).
 
 ### 8.4 Disambiguating multi-instance providers
 
@@ -657,13 +666,14 @@ When `out.selector` cycles, the answer isn't to push the cycle into runtime —
 it's `rawSelector`. Live with the `architecture.selectorCoherence` warning;
 that's the price of the workaround being visible.
 
-### 12.7 `meta.provides` for non-capabilities
+### 12.7 Claiming a role when an alias is what you mean
 
-`meta.provides = ["my-database"]` doesn't help DI — DI matches arg name →
-instance name → instance aliases (which *replace* package `defaultAliases`
-when non-empty). `provides` is for capability *categories* the architecture
-rule cares about (storage, network-policy-enforcer, reflection, ingress,
-etc.).
+`meta.roles = [ "my-database" ]` is an eval error — the role registry
+(`kix/lib/eval/roles.nix`) is closed. Services other packages consume
+resolve via arg name → instance name → instance aliases (which *replace*
+package `defaultAliases` when non-empty). Roles are only for the registry's
+infrastructure slots (network-policy-enforcer, dns, storageClasses, cni,
+loadBalancer).
 
 ### 12.8 Backwards-compatibility shims
 

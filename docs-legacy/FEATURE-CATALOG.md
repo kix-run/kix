@@ -168,7 +168,8 @@ Auto-derives CiliumNetworkPolicy from the DI graph:
 - `global` — Cluster-wide configuration.
 - `k8sVersion` — Target K8s version for meta compatibility.
 - `cluster.provider` — Distribution identifier.
-- `cluster.capabilities` — 15 flags: multiNode, availabilityZones, nodeAutoscaling, managedControlPlane, loadBalancer, cni, networkPolicyAPI, ingressController, persistentStorage, rwxStorage, volumeSnapshots, gpu, privilegedContainers, podSecurityEnforcement, daemonSets.
+- `cluster.capabilities` — 8 three-valued substrate axioms: multiNode, availabilityZones, nodeAutoscaling, managedControlPlane, gpu, privilegedContainers, podSecurityEnforcement, daemonSets.
+- `cluster.roles` — environment binding modes per registry role (`kix/lib/eval/roles.nix`): absent | shadowable | exclusive.
 - `cluster.network` — podCidr, serviceCidr, dnsUpstream.
 - `cluster.nodes` — Static node inventory (roles, cpu, memory, labels, taints).
 - `scorecard` — enable, rules, ruleDefaults, ruleOverrides, knownAnnotationDomains.

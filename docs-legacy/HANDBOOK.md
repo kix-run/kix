@@ -248,7 +248,7 @@ in
     owner         = "team-name";              # used by scorecard governance.hasOwner
     lifecycle     = "stateless";              # "stateless" (default) | "stateful" | "durable" | "ephemeral"
     scope         = "namespace";              # "cluster" (default) | "namespace"
-    provides      = [ "photo-management" ];   # capability list — capability ownership uses these
+    roles         = [ "storageClasses" ];     # infra-role claim — closed registry (kix/lib/eval/roles.nix); role name doubles as a DI alias. Infra packages only.
     defaultAliases = [ "storage" ];           # DI aliases when no instance-level aliases set
     conflictsWith         = [ "alt-pkg" ];    # same-namespace mutual exclusion
     "cluster:conflictsWith" = [ "alt-cni" ];  # cluster-wide mutual exclusion
@@ -813,7 +813,8 @@ Set at the top level of the cluster module (or under `config.*` in module form).
 | `global` | `attrsOf anything` | `{}` | Cluster-wide configuration accessed via `_kixOptions` |
 | `k8sVersion` | `nullOr str` | `null` | Target K8s version — used for meta version-compat checks |
 | `cluster.provider` | `nullOr str` | flavor-set | Distribution name (informational) |
-| `cluster.capabilities.*` | various | flavor-set | 15 flags — see §15 |
+| `cluster.roles` | `attrsOf submodule` | flavor-set | Environment role bindings per registry role: `{ binding = "absent" | "shadowable" | "exclusive"; provider? }` (§15) |
+| `cluster.capabilities.*` | various | flavor-set | 8 substrate axioms — see §15 |
 | `cluster.maintenance` | submodule | `{}` | `{ enable, reason?, until? }` — maintenance window marker |
 | `cluster.network` | submodule | – | `{ podCidr, serviceCidr, dnsUpstream }` |
 | `cluster.nodes` | attrset | `{}` | Static node inventory: `{ nodeName: { roles, cpu?, memory?, labels, taints? } }` |
@@ -824,7 +825,7 @@ Set at the top level of the cluster module (or under `config.*` in module form).
 
 ## 15. Flavors and capability matrix
 
-Flavors set `cluster.provider`, `cluster.capabilities`, and platform-provided DI imports. Use as the first module in `buildCluster`:
+Flavors set `cluster.provider`, `cluster.roles` bindings, `cluster.capabilities` substrate axioms, and platform-provided DI imports. Use as the first module in `buildCluster`:
 
 ```nix
 modules = [
@@ -848,9 +849,13 @@ modules = [
 | `talos` | talos | yes | no | no | yes | yes | yes | (none) | minimal |
 | `lithus` | lithus | varies | varies | varies | varies | varies | varies | varies | isolated node-local |
 
-**Capability flags** (full list, all on `cluster.capabilities`): `multiNode`, `availabilityZones` (list), `nodeAutoscaling`, `managedControlPlane`, `loadBalancer`, `cni` (str), `networkPolicyAPI` (`"k8s" | "cilium" | "calico" | "none"`), `ingressController` (str), `persistentStorage`, `rwxStorage`, `volumeSnapshots`, `gpu`, `privilegedContainers`, `podSecurityEnforcement` (`"privileged" | "baseline" | "restricted" | null`), `daemonSets`.
+**Capability flags** (full list, all on `cluster.capabilities`): `multiNode`, `availabilityZones` (list), `nodeAutoscaling`, `managedControlPlane`, `gpu`, `privilegedContainers`, `podSecurityEnforcement` (`"privileged" | "baseline" | "restricted" | null`), `daemonSets`. Flags are three-valued substrate axioms: `null` = unknown (relying workloads warn), `false` = hard error, `true` = pass.
 
-**Override flavor defaults** when reality differs (e.g. ludo's `cluster.cni = "cilium"` despite using k3s — flannel is disabled and Cilium is installed out-of-band):
+The old role-backed bools (`cni`, `networkPolicyAPI`, `loadBalancer`, `persistentStorage`, `rwxStorage`, `volumeSnapshots`, `ingressController`) are gone (v2_discussions/127): role providers derive from `meta.roles`, the environment's claim on a role is a `cluster.roles.<name>.binding`, and rwx/snapshot facts live on the storage provider's `out`. The CNI/LB/storage columns in the table above describe role bindings and platform imports, not capability flags.
+
+**Override flavor defaults** when reality differs (e.g. ludo runs k3s with
+flannel disabled, so the k3s flavor's exclusive `cni` binding doesn't hold and
+a managed cilium instance fills the vacant role):
 
 ```nix
 # ludo/cluster.nix
@@ -859,10 +864,9 @@ modules = [
   ./base.nix
   {
     cluster.capabilities.multiNode = false;
-    cluster.capabilities.cni = "cilium";
-    cluster.capabilities.networkPolicyAPI = "cilium";
-    networkPolicy.enable = true;
-    instances.kube-system.cilium = { package = packages.cilium-external; };
+    # flannel is disabled on the node, so the environment's claim on the
+    # cni role is genuinely vacant; the managed cilium instance fills it.
+    cluster.roles.cni = { binding = "absent"; provider = null; };
   }
 ];
 ```
@@ -895,7 +899,7 @@ If a cluster installs its own `coredns` or `storage-classes` instance, the expli
 
 ### 16.3 Cluster-side wiring
 
-The enforcer is auto-discovered: any package with `meta.provides ∋ "network-policy-enforcer"` becomes the cluster's enforcer. The enforcer's package exposes `out.cnpCrdRef` (a CRD marker for `CiliumNetworkPolicy`); every generated CNP is built via `cnpCrdRef.out.cr` so the CNP → CRD-ref → enforcer-root edge is wired transitively. Two enforcer packages illustrate the pattern:
+The enforcer is auto-discovered: any package with `meta.roles ∋ "network-policy-enforcer"` becomes the cluster's enforcer. The enforcer's package exposes `out.cnpCrdRef` (a CRD marker for `CiliumNetworkPolicy`); every generated CNP is built via `cnpCrdRef.out.cr` so the CNP → CRD-ref → enforcer-root edge is wired transitively. Two enforcer packages illustrate the pattern:
 
 - `kix/packages/cilium/` — Helm-wrapped, deploys cilium fully (used by `ludo-kind`).
 - `kix/packages/cilium-external/` — emits only the CRD marker; cilium is installed out-of-band on the host (used by `ludo`, RKE2-based clusters, etc.). Auto-discovered as `packages.cilium-external`.
@@ -1028,8 +1032,7 @@ Storage is first-class via DI: `app → PVC → StorageClass`. Deep dive: [`.cla
 ```nix
 # Cluster definition:
 instances.kube-system.storage-classes = {
-  package = packages.storage-classes;
-  aliases = [ "storageClasses" ];
+  package = packages.storage-classes;   # claims the storageClasses role — the role name auto-aliases
 };
 instances.my-app.storage = {
   package = packages."persistent-volume-claim";
@@ -1048,7 +1051,7 @@ instances.my-app.app = { package = packages.my-app; };  # storage resolves via D
 }
 ```
 
-The `persistent-volume-claim` package declares `meta.provides = [ "storage" ]` and `meta.defaultAliases = [ "storage" ]`, so consumers get DI resolution by arg name. `meta.lifecycle = "stateful"` triggers PVC-deletion protection in `kix-diff`.
+The `persistent-volume-claim` package declares `meta.defaultAliases = [ "storage" ]`, so consumers get DI resolution by arg name. `meta.lifecycle = "stateful"` triggers PVC-deletion protection in `kix-diff`.
 
 ## 21. Secrets
 
