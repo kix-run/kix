@@ -72,6 +72,8 @@ and [`FEATURE-CATALOG.md`](FEATURE-CATALOG.md) (breadth-first inventory).
 # Filter null env vars:                               kix.mkEnvVars { OPT = config.opt or null; }
 # Combine env + raw entries:                          kix.mkEnv { K=v; } [ rawEntry ]
 # Conditional resource:                               if cond then ... else null    (collectTypedAttrs strips null)
+# Intentional empty value (emptyDir, selectors):      emptyDir = { };   (literal empties render; all-null containers collapse, see §7)
+# Constructor-built maybe-empty container:            kix.keep { medium = config.medium; sizeLimit = config.sizeLimit; }
 ```
 
 ## 2. Project layout
@@ -450,6 +452,8 @@ scope.mkResource {
 
 **Namespace handling.** `mkResource` doesn't take a namespace arg directly — it comes from `scope`. `mkClusterResource` sets the cluster-scoped sentinel, which omits `metadata.namespace`.
 
+**Manifest normalization (the collapse rule).** Rendering strips nulls bottom-up. A container that had members and lost them all collapses to null and is omitted, and the collapse cascades upward through wrappers. A container written literally empty (`emptyDir = { };`, `ingress = [ ];`) renders as `{}`/`[]`: empty values are meaningful to Kubernetes (an empty volume source selects `emptyDir`; an empty label selector matches everything; `subresources.status = { };` enables the subresource). Null list elements are dropped, and an element that collapses entirely leaves its list. The one trap: a constructor that builds a presence-meaningful container from optional arguments that are all null collapses, and the field disappears without an error. Such constructors must either filter their own nulls (`lib.optionalAttrs`, as `kix.mount.emptyDir` does) or wrap the result in `kix.keep` (§9.1). The `volumeHasSource` scorecard rule (severity error) catches the volume case at build time.
+
 ## 8. Resource `out` reference
 
 Every resource exposes `out.*` carrying the resource's store-path context, so reading any `out` field creates a DAG edge.
@@ -493,6 +497,7 @@ The `kix` arg to packages comes from `compose.nix` (`kixlib`).
 | `kix.mkEnv attrs rawList` | `(mkEnvVars attrs) ++ rawList`. Combines named env vars with raw entries (e.g. `valueFrom.secretKeyRef`) |
 | `kix.parseGi "50Gi"` | `→ 50` (number). Supports `Ti`/`Gi`/`Mi`. Strips Nix string context so it works on `dep.out.size` |
 | `kix.untrackedRef "name"` | Escape hatch: a string carrying an "untracked" context marker. Use when referring to resource names not managed by kix (Helm hook secrets, cert-manager-issued secrets, etc.). Bypasses the DI-tracking check in `mkDeployment`. The marker is inert: it satisfies the ref check and is filtered out of `kix.dev/depends-on`, so it never becomes a deploy-ordering edge |
+| `kix.keep container` | Marks an attrset "never collapse to absent": it renders as `{}` even when every member is null, and the protection survives later merges that introduce fresh nulls (additive `_kixKeep` marker, resolved at `mkResource`, never rendered). Lists are normalized eagerly instead, since merges replace lists whole. Use in constructors of presence-meaningful fields (`emptyDir`, selectors) built from optional arguments; a hand-written empty needs no keep, a literal `{ }` renders as-is (§7) |
 
 ### 9.2 Mounts
 

@@ -318,6 +318,16 @@ Create `{ volume, volumeMount }` pairs from resources. Returns null when resourc
 
 Names auto-derive from `resource.out.name` when not specified.
 
+#### Empty values and `kix.keep`
+
+Rendering follows the collapse rule: literal empties (`emptyDir = { };`, `ingress = [ ];`) survive to the output, while a container whose members are all null (the shape merged unset options produce) collapses and the field is omitted. When migrating a manifest, paste `emptyDir: {}` and similar as-is; they render correctly. The one trap is a constructor that builds a presence-meaningful container from optional arguments: if all of them are null, the container collapses and the field silently disappears. Filter nulls with `lib.optionalAttrs`, or wrap the result:
+
+| Function | Description |
+|----------|-------------|
+| `kix.keep container` | Attrset: never collapses to absent, renders `{}` even when every member is null; survives later merges. List: normalized eagerly to `[ ]`. |
+
+The `volumeHasSource` scorecard rule (severity error) fails the build on any volume that would render without a source.
+
 | Function | Description |
 |----------|-------------|
 | `kix.withMounts [ mount1 mount2 ... ]` | Inject mounts into a single-container pod spec. Nulls filtered. Errors if multiple containers. |

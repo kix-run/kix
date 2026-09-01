@@ -1,4 +1,38 @@
 ---
 title: "Built-in reliability rules"
-description: TODO
+description: "The reliability rule set: resource bounds, probes, PDBs, graceful shutdown, and volume source validation."
 ---
+
+{/* Maintainer note: this page currently documents only volumeHasSource,
+    added with the collapse-rule normalization work (kixpkgs#9). The rest of
+    the reliability rules (boundedResources, probes, PDB, gracefulShutdown,
+    ...) still need writing up; restructure this page when the scorecard
+    reference section gets its real authoring pass. Rule source:
+    kix/lib/rules/reliability.nix. */}
+
+The reliability rule set lives in `kix.rules.reliability`. This page is
+incomplete: it currently documents one rule, and the rest of the set is
+listed in `kix/lib/rules/reliability.nix` until this section is written up.
+
+## volumeHasSource
+
+| | |
+|---|---|
+| Level | `manifest` |
+| Severity | `error` (fails the build) |
+| Applies to | Deployment, StatefulSet, DaemonSet |
+| Tags | `reliability`, `correctness` |
+
+Every pod volume must carry a source (`emptyDir`, `configMap`, `secret`,
+`persistentVolumeClaim`, ...). A volume with a name and no source is
+rejected by the Kubernetes apiserver, so this rule turns an apply-time
+failure into a build-time one.
+
+The check normalizes each volume the same way the renderer will. That
+matters for the one case that is invisible in package source: a volume
+source built by a constructor whose optional arguments are all null
+collapses to absent at render time. The rule sees the collapsed result and
+reports the volume by name. The message states the fixes in order of
+likelihood: add a source, write a literal `{ }` for an intentionally empty
+source, or wrap helper output in
+[`kix.keep`](/docs/reference/kix-helpers/keep/).

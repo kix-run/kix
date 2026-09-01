@@ -46,6 +46,7 @@ Complete inventory of kix/lib (Nix library) and CLI features. Breadth-first — 
 ### Composition Helpers (`compose.nix` — the `kix` argument)
 
 - **`port`** — Shorthand: `port "http" 8080` → `{ name, containerPort, protocol }`.
+- **`keep`** — Mark a constructor-built container "never collapse to absent": renders `{}` even when every member is null, survives later merges. Backed by collapse-rule normalization (`kix/lib/core/normalize.nix`): literal empties render, all-null containers collapse.
 - **`mkEnvVars`** — Attrset → K8s `[{ name, value }]` list. Null values filtered.
 - **`mkEnv`** — Combine named env vars with raw K8s env entries (e.g. valueFrom.secretKeyRef).
 - **`parseGi`** — Parse K8s resource quantity string (Ti/Gi/Mi) to GiB number.

@@ -3,6 +3,8 @@
 let
   markers = import ../core/markers.nix { inherit lib; };
 
+  normalize = import ../core/normalize.nix { inherit lib; };
+
   resourceNamespace =
     resource:
     let
@@ -265,6 +267,8 @@ rec {
       }
       // passthrough;
   };
+
+  inherit (normalize) keep;
 
   mount = {
     pvc =

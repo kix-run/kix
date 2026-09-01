@@ -6,6 +6,8 @@ rec {
 
   markers = import ./markers.nix { inherit lib; };
 
+  normalize = import ./normalize.nix { inherit lib; };
+
   clusterScoped = {
     _type = "k8s-cluster-scoped";
     __toString = _: "";
@@ -217,22 +219,27 @@ rec {
         else
           null;
 
+      # resolveKeeps runs here so rawManifest (and the identity JSON derived
+      # from it) never carries the _kixKeep marker, and so rawManifest
+      # consumers see keep-built containers the way they will render.
       rawManifest = builtins.seq _extraShadowCheck (
-        stripKixMeta (
-          lib.recursiveUpdate (
-            {
-              inherit apiVersion kind;
-              metadata = {
-                inherit name;
+        normalize.resolveKeeps (
+          stripKixMeta (
+            lib.recursiveUpdate (
+              {
+                inherit apiVersion kind;
+                metadata = {
+                  inherit name;
+                }
+                // lib.optionalAttrs (nsName != null) { namespace = nsName; }
+                // lib.optionalAttrs (labels != { }) { inherit labels; }
+                // lib.optionalAttrs (annotations != { }) { inherit annotations; };
               }
-              // lib.optionalAttrs (nsName != null) { namespace = nsName; }
-              // lib.optionalAttrs (labels != { }) { inherit labels; }
-              // lib.optionalAttrs (annotations != { }) { inherit annotations; };
-            }
-            // lib.optionalAttrs (spec != { }) { inherit spec; }
-            // lib.optionalAttrs (data != { }) { inherit data; }
-            // lib.optionalAttrs (stringData != { }) { inherit stringData; }
-          ) extra
+              // lib.optionalAttrs (spec != { }) { inherit spec; }
+              // lib.optionalAttrs (data != { }) { inherit data; }
+              // lib.optionalAttrs (stringData != { }) { inherit stringData; }
+            ) extra
+          )
         )
       );
 

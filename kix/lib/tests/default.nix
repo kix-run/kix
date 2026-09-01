@@ -1556,6 +1556,206 @@ let
       in
       (builtins.getContext secretName != { } && !(lib.hasInfix markerHash annot))
       || throw "untracked-ref marker ${markerHash} leaked into depends-on: '${annot}'";
+
+    # ------------------------------------------------------------------
+    # Collapse-rule normalization + kix.keep (kixpkgs#9).
+
+    # A literal `{ }`/`[ ]` is an intentional Kubernetes value (emptyDir
+    # volume source, select-everything selector, default-deny rule list)
+    # and must reach the output.
+    t46-collapse-keeps-literal-empties =
+      let
+        m = k8s.normalize.normalizeManifest {
+          volumes = [
+            {
+              name = "tmp";
+              emptyDir = { };
+            }
+          ];
+          ingress = [ ];
+        };
+      in
+      (
+        m.volumes == [
+          {
+            name = "tmp";
+            emptyDir = { };
+          }
+        ]
+        && m.ingress == [ ]
+      )
+      || throw "literal empties must survive normalization: ${builtins.toJSON m}";
+
+    # A container whose members are all null is the shape merged unset
+    # options produce. It collapses to absent, and the collapse cascades
+    # upward through wrapper attrsets.
+    t47-collapse-drops-null-containers =
+      let
+        m = k8s.normalize.normalizeManifest {
+          resources = {
+            limits = null;
+            requests = null;
+          };
+          metadata = {
+            annotations = {
+              a = null;
+            };
+          };
+          kind = "Pod";
+        };
+      in
+      (m == { kind = "Pod"; })
+      || throw "all-null containers must collapse to absent: ${builtins.toJSON m}";
+
+    # kix.keep protects a constructor whose optional arguments are all
+    # null: the container renders as an empty shell instead of vanishing.
+    t48-keep-protects-all-null-constructor =
+      let
+        m = k8s.normalize.normalizeManifest {
+          emptyDir = k8s.normalize.keep {
+            medium = null;
+            sizeLimit = null;
+          };
+          matchExprs = k8s.normalize.keep [
+            null
+            null
+          ];
+        };
+      in
+      (m.emptyDir == { } && m.matchExprs == [ ])
+      || throw "keep must render the empty shell: ${builtins.toJSON m}";
+
+    # The marker survives a later merge that introduces fresh nulls; the
+    # eager form of keep lost this case (a kept { } re-filled with nulls
+    # collapsed again).
+    t49-keep-survives-null-merge =
+      let
+        merged = lib.recursiveUpdate {
+          emptyDir = k8s.normalize.keep { sizeLimit = null; };
+        } { emptyDir.medium = null; };
+        m = k8s.normalize.normalizeManifest merged;
+      in
+      (m.emptyDir or null == { })
+      || throw "keep must survive a null-introducing merge: ${builtins.toJSON m}";
+
+    # The marker never reaches the output. Schema subtrees (attrsets with a
+    # `type` key) are normalized like everything else: there is no field-name
+    # carve-out passing them verbatim, because the collapse rule already
+    # keeps the literal empties such a shield would exist to protect.
+    t50-keep-marker-never-leaks =
+      let
+        m = k8s.normalize.normalizeManifest {
+          a = k8s.normalize.keep { x = 1; };
+          schema = k8s.normalize.keep { type = "object"; };
+          crdSchema = {
+            type = "object";
+            properties.spec = {
+              type = "object";
+              properties = { };
+              default = null;
+            };
+          };
+        };
+        json = builtins.toJSON m;
+      in
+      (
+        !(lib.hasInfix "_kixKeep" json)
+        && m.a == { x = 1; }
+        && m.schema == { type = "object"; }
+        &&
+          m.crdSchema.properties.spec == {
+            type = "object";
+            properties = { };
+          }
+      )
+      || throw "keep marker leaked or schema subtree mishandled: ${json}";
+
+    # mkResource resolves keeps at the boundary: rawManifest carries no
+    # marker and is byte-identical to the literal form, so switching a
+    # constructor to keep cannot churn resource identity hashes.
+    t51-mkresource-resolves-keeps =
+      let
+        mk =
+          src:
+          k8s.mkResource {
+            apiVersion = "apps/v1";
+            kind = "Deployment";
+            name = "kept";
+            namespace = {
+              name = "appns";
+              outPath = "/nix/store/${builtins.substring 0 32 (builtins.hashString "sha256" "ns")}-ns";
+            };
+            spec.template.spec.volumes = [
+              {
+                name = "tmp";
+                emptyDir = src;
+              }
+            ];
+          };
+        viaKeep = (mk (k8s.normalize.keep { medium = null; })).rawManifest;
+        viaLiteral = (mk { }).rawManifest;
+      in
+      (
+        viaKeep == viaLiteral
+        &&
+          viaKeep.spec.template.spec.volumes == [
+            {
+              name = "tmp";
+              emptyDir = { };
+            }
+          ]
+      )
+      || throw "mkResource must resolve keeps to the literal form: ${builtins.toJSON viaKeep}";
+
+    # Lists: null elements are dropped, and an element that collapses
+    # entirely is removed from its list.
+    t52-collapse-list-semantics =
+      let
+        m = k8s.normalize.normalizeManifest {
+          containers = [
+            { name = "app"; }
+            { env = null; }
+          ];
+          args = [
+            null
+            "x"
+            null
+          ];
+        };
+      in
+      (m.containers == [ { name = "app"; } ] && m.args == [ "x" ])
+      || throw "list normalization wrong: ${builtins.toJSON m}";
+
+    # The volumeHasSource rule sees volumes the way the renderer will: a
+    # source that collapses (all-null members) is flagged, a literal { }
+    # passes.
+    t53-volume-source-rule =
+      let
+        rules = import ../rules { inherit lib; };
+        rule = rules.reliability.volumeHasSource;
+        bad = {
+          kind = "Deployment";
+          spec.template.spec.volumes = [
+            {
+              name = "b";
+              emptyDir = {
+                medium = null;
+              };
+            }
+          ];
+        };
+        good = {
+          kind = "Deployment";
+          spec.template.spec.volumes = [
+            {
+              name = "g";
+              emptyDir = { };
+            }
+          ];
+        };
+      in
+      (rule.check { resource = bad; } != [ ] && rule.check { resource = good; } == [ ])
+      || throw "volumeHasSource rule misjudged: bad=${builtins.toJSON (rule.check { resource = bad; })}";
   };
 
   failures = lib.filterAttrs (

@@ -1,0 +1,104 @@
+---
+title: "Keep intentionally empty values"
+description: "Make sure an empty map or list survives to the rendered manifest, and protect helpers that build one from optional arguments."
+---
+
+{/* Maintainer note: this page was written ahead of the how-to section being
+    properly built out (most sibling pages are still stubs). Revisit its
+    structure, prerequisites, and cross-links once the
+    author-packages-and-clusters section gets its real authoring pass. */}
+
+Some Kubernetes values are meaningful precisely because they are empty.
+`emptyDir: {}` selects a volume source. An empty label selector matches
+everything. `subresources.status: {}` enables a CRD subresource. Kix keeps
+these, but it also removes the empty leftovers that appear when every field
+inside a container is unset. This guide shows how to stay on the right side
+of that line.
+
+## Write literal empties as-is
+
+A container you write empty renders exactly as written. No wrapper, no
+special syntax:
+
+```nix
+spec.template.spec.volumes = [
+  {
+    name = "tmp";
+    emptyDir = { };
+  }
+];
+```
+
+This renders `emptyDir: {}` in the output. The same holds for lists:
+`ingress = [ ];` renders `ingress: []`. Pasting a standard Kubernetes
+manifest into a package works without changes.
+
+## What gets removed instead
+
+A container whose members are all `null` is treated as unset and omitted,
+along with any wrappers that end up empty because of it:
+
+```nix
+resources = {
+  limits = null;
+  requests = null;
+};
+# renders nothing: the container collapses and the field is absent
+```
+
+This is the shape merged, unset options produce, and removing it is what
+keeps rendered manifests free of `resources: {}` noise.
+
+## Protect a constructor with `kix.keep`
+
+The trap sits between those two cases: a helper that builds a
+presence-meaningful container out of optional arguments. When every argument
+is null, the result is a container of nulls, and it collapses. The field
+disappears from the manifest without an error.
+
+Wrap the result in `kix.keep` to pin it:
+
+```nix
+source.emptyDir = kix.keep {
+  medium = config.medium;       # may be null
+  sizeLimit = config.sizeLimit; # may be null
+};
+# renders emptyDir: {} when both are null,
+# emptyDir: { sizeLimit = "1Gi"; } when one is set
+```
+
+Filtering the nulls yourself works too, and is what `kix.mount.emptyDir`
+does internally:
+
+```nix
+source.emptyDir =
+  { }
+  // lib.optionalAttrs (medium != null) { inherit medium; }
+  // lib.optionalAttrs (sizeLimit != null) { inherit sizeLimit; };
+```
+
+Prefer `kix.keep` when the container is assembled across several places or
+merged after construction: the protection travels with the value, so a later
+merge that introduces fresh nulls cannot collapse it.
+
+## Verify
+
+Render the cluster and check the field survived:
+
+```nix
+# in the rendered YAML for the workload:
+volumes:
+- name: tmp
+  emptyDir: {}
+```
+
+The `volumeHasSource` scorecard rule (severity error) backs this up for the
+volume case: a volume that would render without a source fails the build
+with a message naming the volume and the fix.
+
+:::note[Reference]
+See [`kix.keep`](/docs/reference/kix-helpers/keep/) for exact semantics,
+including merge behavior and edge cases, and
+[built-in reliability rules](/docs/reference/scorecard/built-in-reliability-rules/)
+for the `volumeHasSource` rule.
+:::

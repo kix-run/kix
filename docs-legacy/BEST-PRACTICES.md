@@ -107,6 +107,8 @@ reconciler, and no runbook should need to.
 |---|---|
 | Mismatched selector vs template labels | `mkDeployment` etc. copy `spec.selector.matchLabels` to `template.metadata.labels` |
 | Dangling resource refs | All refs are Nix-typed; `null` resources are stripped, not silently dropped |
+| Meaningful empty value deleted (`emptyDir: {}`, empty selectors) | Collapse-rule normalization: literal empties render; only containers that lost every member to null-stripping collapse. `kix.keep` protects constructor-built containers |
+| Sourceless volume shipped to the apiserver | `volumeHasSource` scorecard rule (severity error) checks volumes as they will render |
 | Missing deps | DI resolution errors with an actionable message |
 | Cross-namespace mounts/secret-refs | `_kix.namespace` markers + `checkNamespacedRefs` |
 | `extra.*` shadowing managed fields | `mkResource` `_extraShadowCheck` |

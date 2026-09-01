@@ -12,26 +12,9 @@ let
   scorecard = import ./scorecard.nix { inherit lib; };
   rules = import ./rules { inherit lib; };
 
-  removeNulls =
-    attrs:
-    builtins.mapAttrs
-      (
-        _: v:
-        if builtins.isAttrs v && !(lib.isDerivation v) && !(v ? type) then
-          removeNulls v
-        else if builtins.isList v then
-          builtins.map (x: if builtins.isAttrs x && !(lib.isDerivation x) then removeNulls x else x) v
-        else
-          v
-      )
-      (
-        lib.filterAttrs (
-          _: v:
-          v != null
-          && !(builtins.isAttrs v && !(lib.isDerivation v) && !(v ? type) && v == { })
-          && !(builtins.isList v && v == [ ])
-        ) attrs
-      );
+  normalize = import ./core/normalize.nix { inherit lib; };
+
+  inherit (normalize) normalizeManifest;
 in
 
 {
@@ -110,7 +93,7 @@ in
     manifest:
     let
       yamlFormat = pkgs.formats.yaml { };
-      cleaned = removeNulls manifest;
+      cleaned = normalizeManifest manifest;
       name = manifest.metadata.name or "unnamed";
       kind = manifest.kind or "resource";
     in
@@ -127,7 +110,7 @@ in
         manifest:
         let
           yamlFormat = pkgs.formats.yaml { };
-          cleaned = removeNulls manifest;
+          cleaned = normalizeManifest manifest;
           name = manifest.metadata.name or "unnamed";
           kind = manifest.kind or "resource";
         in

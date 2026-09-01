@@ -7,6 +7,8 @@
 { lib }:
 
 let
+  normalize = import ../core/normalize.nix { inherit lib; };
+
   getContainers =
     resource:
     let
@@ -193,5 +195,46 @@ in
         [ { message = "terminationGracePeriodSeconds is not set or is 0"; } ]
       else
         [ ];
+  };
+
+  # kixpkgs#9 family: a Volume with a name but no source is rejected by the
+  # apiserver. The dangerous path is a constructor that builds the source
+  # from optional arguments that are all null: under collapse-rule
+  # normalization the source vanishes at render time while the rawManifest
+  # this rule receives still shows the key. So the check normalizes each
+  # volume exactly the way the renderer will and inspects the result,
+  # catching the constructor trap at build time instead of at apply time.
+  # Severity is "error": the manifest is unconditionally invalid.
+  volumeHasSource = {
+    description = "Every pod volume must carry a source (emptyDir, configMap, secret, ...)";
+    level = "manifest";
+    severity = "error";
+    tags = [
+      "reliability"
+      "correctness"
+    ];
+    appliesTo = { resource, ... }: isWorkload resource;
+    check =
+      { resource, ... }:
+      let
+        volumes = (resource.spec.template.spec or { }).volumes or [ ];
+        rendered =
+          let
+            n = normalize.normalizeValue volumes;
+          in
+          if builtins.isList n then n else [ ];
+        sourceless = builtins.filter (
+          v: builtins.isAttrs v && builtins.attrNames (removeAttrs v [ "name" ]) == [ ]
+        ) rendered;
+      in
+      map (v: {
+        message =
+          "volume '${v.name or "unnamed"}' has no source, so the Kubernetes "
+          + "apiserver will reject this manifest. Give the volume a source "
+          + "such as emptyDir, configMap, secret, or persistentVolumeClaim. "
+          + "If you did set a source, its value was null or contained only "
+          + "nulls, so Kix removed it as unset: write a literal `{ }` for an "
+          + "intentionally empty source, or wrap helper output in `kix.keep`.";
+      }) sourceless;
   };
 }
