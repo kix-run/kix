@@ -2,15 +2,4 @@
 source: kix-cli/tests/snapshot_test.rs
 expression: stdout
 ---
- NAME           
- auto           
- auto2          
- example        
- example-import 
- full           
- helm           
- immich         
- nw1            
- kind           
- ludo           
- minimal
+

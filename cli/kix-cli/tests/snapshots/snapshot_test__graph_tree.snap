@@ -2,566 +2,1653 @@
 source: kix-cli/tests/snapshot_test.rs
 expression: stdout
 ---
+CustomResourceDefinition/activations.kix.dev
+└── Activation/example-jw7q2ly337a9
+CustomResourceDefinition/certificaterequests.cert-manager.io
+└── PackageInstance/cert-manager@cert-manager
+    └── Activation/example-jw7q2ly337a9
+CustomResourceDefinition/certificates.cert-manager.io
+└── PackageInstance/cert-manager@cert-manager
+    └── Activation/example-jw7q2ly337a9
+CustomResourceDefinition/challenges.acme.cert-manager.io
+└── PackageInstance/cert-manager@cert-manager
+    └── Activation/example-jw7q2ly337a9
+CustomResourceDefinition/clusterissuers.cert-manager.io
+└── PackageInstance/cert-manager@cert-manager
+    └── Activation/example-jw7q2ly337a9
+CustomResourceDefinition/issuers.cert-manager.io
+└── PackageInstance/cert-manager@cert-manager
+    └── Activation/example-jw7q2ly337a9
+CustomResourceDefinition/orders.acme.cert-manager.io
+└── PackageInstance/cert-manager@cert-manager
+    └── Activation/example-jw7q2ly337a9
+CustomResourceDefinition/packageinstances.kix.dev
+├── PackageInstance/stackgres-operator@stackgres-system
+│   └── Activation/example-jw7q2ly337a9
+├── PackageInstance/crd-ref-sgstreams-stackgres-io@stackgres-system (import)
+│   └── PackageInstance/stackgres-operator@stackgres-system
+│       └── Activation/example-jw7q2ly337a9
+├── PackageInstance/crd-ref-sgshardeddbops-stackgres-io@stackgres-system (import)
+│   └── PackageInstance/stackgres-operator@stackgres-system
+│       └── Activation/example-jw7q2ly337a9
+├── PackageInstance/crd-ref-sgshardedclusters-stackgres-io@stackgres-system (import)
+│   └── PackageInstance/stackgres-operator@stackgres-system
+│       └── Activation/example-jw7q2ly337a9
+├── PackageInstance/crd-ref-sgshardedbackups-stackgres-io@stackgres-system (import)
+│   └── PackageInstance/stackgres-operator@stackgres-system
+│       └── Activation/example-jw7q2ly337a9
+├── PackageInstance/crd-ref-sgscripts-stackgres-io@stackgres-system (import)
+│   └── PackageInstance/stackgres-operator@stackgres-system
+│       └── Activation/example-jw7q2ly337a9
+├── PackageInstance/crd-ref-sgpoolconfigs-stackgres-io@stackgres-system (import)
+│   └── PackageInstance/stackgres-operator@stackgres-system
+│       └── Activation/example-jw7q2ly337a9
+├── PackageInstance/crd-ref-sgpgconfigs-stackgres-io@stackgres-system (import)
+│   ├── SGPostgresConfig/postgres-pg16-config@immich
+│   │   ├── SGCluster/postgres@immich
+│   │   │   ├── PackageInstance/service-ref-postgres-postgres@immich (import)
+│   │   │   │   ├── Secret/immich-db-credentials@immich
+│   │   │   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   │   └── Deployment/immich-server@immich
+│   │   │   │   │       └── Service/immich-server@immich
+│   │   │   │   │           └── PackageInstance/immich@immich
+│   │   │   │   │               └── Activation/example-jw7q2ly337a9
+│   │   │   │   ├── Secret/immich-db-bootstrap-password@immich
+│   │   │   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   │   └── Job/immich-db-bootstrap-55078afb92@immich
+│   │   │   │   │       ├── PackageInstance/immich-db@immich
+│   │   │   │   │       │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   │       └── Deployment/immich-server@immich
+│   │   │   │   │           └── Service/immich-server@immich
+│   │   │   │   │               └── PackageInstance/immich@immich
+│   │   │   │   │                   └── Activation/example-jw7q2ly337a9
+│   │   │   │   ├── PackageInstance/secret-ref-immich-db-postgres@immich (import)
+│   │   │   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   │   └── Job/immich-db-bootstrap-55078afb92@immich
+│   │   │   │   │       ├── PackageInstance/immich-db@immich
+│   │   │   │   │       │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   │       └── Deployment/immich-server@immich
+│   │   │   │   │           └── Service/immich-server@immich
+│   │   │   │   │               └── PackageInstance/immich@immich
+│   │   │   │   │                   └── Activation/example-jw7q2ly337a9
+│   │   │   │   ├── PackageInstance/postgres@immich
+│   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   ├── Job/immich-db-bootstrap-55078afb92@immich
+│   │   │   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   │   └── Deployment/immich-server@immich
+│   │   │   │   │       └── Service/immich-server@immich
+│   │   │   │   │           └── PackageInstance/immich@immich
+│   │   │   │   │               └── Activation/example-jw7q2ly337a9
+│   │   │   │   └── Deployment/immich-server@immich
+│   │   │   │       └── Service/immich-server@immich
+│   │   │   │           └── PackageInstance/immich@immich
+│   │   │   │               └── Activation/example-jw7q2ly337a9
+│   │   │   ├── PackageInstance/secret-ref-postgres-postgres@immich (import)
+│   │   │   │   ├── PackageInstance/postgres@immich
+│   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   └── PackageInstance/immich-db@immich
+│   │   │   │       └── Activation/example-jw7q2ly337a9
+│   │   │   └── PackageInstance/postgres@immich
+│   │   │       └── Activation/example-jw7q2ly337a9
+│   │   └── PackageInstance/postgres@immich
+│   │       └── Activation/example-jw7q2ly337a9
+│   └── PackageInstance/stackgres-operator@stackgres-system
+│       └── Activation/example-jw7q2ly337a9
+├── PackageInstance/crd-ref-sgobjectstorages-stackgres-io@stackgres-system (import)
+│   └── PackageInstance/stackgres-operator@stackgres-system
+│       └── Activation/example-jw7q2ly337a9
+├── PackageInstance/crd-ref-sginstanceprofiles-stackgres-io@stackgres-system (import)
+│   ├── SGInstanceProfile/postgres-profile@immich
+│   │   ├── SGCluster/postgres@immich
+│   │   │   ├── PackageInstance/service-ref-postgres-postgres@immich (import)
+│   │   │   │   ├── Secret/immich-db-credentials@immich
+│   │   │   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   │   └── Deployment/immich-server@immich
+│   │   │   │   │       └── Service/immich-server@immich
+│   │   │   │   │           └── PackageInstance/immich@immich
+│   │   │   │   │               └── Activation/example-jw7q2ly337a9
+│   │   │   │   ├── Secret/immich-db-bootstrap-password@immich
+│   │   │   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   │   └── Job/immich-db-bootstrap-55078afb92@immich
+│   │   │   │   │       ├── PackageInstance/immich-db@immich
+│   │   │   │   │       │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   │       └── Deployment/immich-server@immich
+│   │   │   │   │           └── Service/immich-server@immich
+│   │   │   │   │               └── PackageInstance/immich@immich
+│   │   │   │   │                   └── Activation/example-jw7q2ly337a9
+│   │   │   │   ├── PackageInstance/secret-ref-immich-db-postgres@immich (import)
+│   │   │   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   │   └── Job/immich-db-bootstrap-55078afb92@immich
+│   │   │   │   │       ├── PackageInstance/immich-db@immich
+│   │   │   │   │       │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   │       └── Deployment/immich-server@immich
+│   │   │   │   │           └── Service/immich-server@immich
+│   │   │   │   │               └── PackageInstance/immich@immich
+│   │   │   │   │                   └── Activation/example-jw7q2ly337a9
+│   │   │   │   ├── PackageInstance/postgres@immich
+│   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   ├── Job/immich-db-bootstrap-55078afb92@immich
+│   │   │   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   │   └── Deployment/immich-server@immich
+│   │   │   │   │       └── Service/immich-server@immich
+│   │   │   │   │           └── PackageInstance/immich@immich
+│   │   │   │   │               └── Activation/example-jw7q2ly337a9
+│   │   │   │   └── Deployment/immich-server@immich
+│   │   │   │       └── Service/immich-server@immich
+│   │   │   │           └── PackageInstance/immich@immich
+│   │   │   │               └── Activation/example-jw7q2ly337a9
+│   │   │   ├── PackageInstance/secret-ref-postgres-postgres@immich (import)
+│   │   │   │   ├── PackageInstance/postgres@immich
+│   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   └── PackageInstance/immich-db@immich
+│   │   │   │       └── Activation/example-jw7q2ly337a9
+│   │   │   └── PackageInstance/postgres@immich
+│   │   │       └── Activation/example-jw7q2ly337a9
+│   │   └── PackageInstance/postgres@immich
+│   │       └── Activation/example-jw7q2ly337a9
+│   └── PackageInstance/stackgres-operator@stackgres-system
+│       └── Activation/example-jw7q2ly337a9
+├── PackageInstance/crd-ref-sgdistributedlogs-stackgres-io@stackgres-system (import)
+│   └── PackageInstance/stackgres-operator@stackgres-system
+│       └── Activation/example-jw7q2ly337a9
+├── PackageInstance/crd-ref-sgdbops-stackgres-io@stackgres-system (import)
+│   └── PackageInstance/stackgres-operator@stackgres-system
+│       └── Activation/example-jw7q2ly337a9
+├── PackageInstance/crd-ref-sgclusters-stackgres-io@stackgres-system (import)
+│   ├── SGCluster/postgres@immich
+│   │   ├── PackageInstance/service-ref-postgres-postgres@immich (import)
+│   │   │   ├── Secret/immich-db-credentials@immich
+│   │   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   └── Deployment/immich-server@immich
+│   │   │   │       └── Service/immich-server@immich
+│   │   │   │           └── PackageInstance/immich@immich
+│   │   │   │               └── Activation/example-jw7q2ly337a9
+│   │   │   ├── Secret/immich-db-bootstrap-password@immich
+│   │   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   └── Job/immich-db-bootstrap-55078afb92@immich
+│   │   │   │       ├── PackageInstance/immich-db@immich
+│   │   │   │       │   └── Activation/example-jw7q2ly337a9
+│   │   │   │       └── Deployment/immich-server@immich
+│   │   │   │           └── Service/immich-server@immich
+│   │   │   │               └── PackageInstance/immich@immich
+│   │   │   │                   └── Activation/example-jw7q2ly337a9
+│   │   │   ├── PackageInstance/secret-ref-immich-db-postgres@immich (import)
+│   │   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   └── Job/immich-db-bootstrap-55078afb92@immich
+│   │   │   │       ├── PackageInstance/immich-db@immich
+│   │   │   │       │   └── Activation/example-jw7q2ly337a9
+│   │   │   │       └── Deployment/immich-server@immich
+│   │   │   │           └── Service/immich-server@immich
+│   │   │   │               └── PackageInstance/immich@immich
+│   │   │   │                   └── Activation/example-jw7q2ly337a9
+│   │   │   ├── PackageInstance/postgres@immich
+│   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   ├── Job/immich-db-bootstrap-55078afb92@immich
+│   │   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   └── Deployment/immich-server@immich
+│   │   │   │       └── Service/immich-server@immich
+│   │   │   │           └── PackageInstance/immich@immich
+│   │   │   │               └── Activation/example-jw7q2ly337a9
+│   │   │   └── Deployment/immich-server@immich
+│   │   │       └── Service/immich-server@immich
+│   │   │           └── PackageInstance/immich@immich
+│   │   │               └── Activation/example-jw7q2ly337a9
+│   │   ├── PackageInstance/secret-ref-postgres-postgres@immich (import)
+│   │   │   ├── PackageInstance/postgres@immich
+│   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   └── PackageInstance/immich-db@immich
+│   │   │       └── Activation/example-jw7q2ly337a9
+│   │   └── PackageInstance/postgres@immich
+│   │       └── Activation/example-jw7q2ly337a9
+│   └── PackageInstance/stackgres-operator@stackgres-system
+│       └── Activation/example-jw7q2ly337a9
+├── PackageInstance/crd-ref-sgbackups-stackgres-io@stackgres-system (import)
+│   └── PackageInstance/stackgres-operator@stackgres-system
+│       └── Activation/example-jw7q2ly337a9
+├── PackageInstance/storage-classes@kube-system
+│   └── Activation/example-jw7q2ly337a9
+├── PackageInstance/coredns@kube-system
+│   └── Activation/example-jw7q2ly337a9
+├── PackageInstance/storage@immich
+│   └── Activation/example-jw7q2ly337a9
+├── PackageInstance/service-ref-postgres-postgres@immich (import)
+│   ├── Secret/immich-db-credentials@immich
+│   │   ├── PackageInstance/immich-db@immich
+│   │   │   └── Activation/example-jw7q2ly337a9
+│   │   └── Deployment/immich-server@immich
+│   │       └── Service/immich-server@immich
+│   │           └── PackageInstance/immich@immich
+│   │               └── Activation/example-jw7q2ly337a9
+│   ├── Secret/immich-db-bootstrap-password@immich
+│   │   ├── PackageInstance/immich-db@immich
+│   │   │   └── Activation/example-jw7q2ly337a9
+│   │   └── Job/immich-db-bootstrap-55078afb92@immich
+│   │       ├── PackageInstance/immich-db@immich
+│   │       │   └── Activation/example-jw7q2ly337a9
+│   │       └── Deployment/immich-server@immich
+│   │           └── Service/immich-server@immich
+│   │               └── PackageInstance/immich@immich
+│   │                   └── Activation/example-jw7q2ly337a9
+│   ├── PackageInstance/secret-ref-immich-db-postgres@immich (import)
+│   │   ├── PackageInstance/immich-db@immich
+│   │   │   └── Activation/example-jw7q2ly337a9
+│   │   └── Job/immich-db-bootstrap-55078afb92@immich
+│   │       ├── PackageInstance/immich-db@immich
+│   │       │   └── Activation/example-jw7q2ly337a9
+│   │       └── Deployment/immich-server@immich
+│   │           └── Service/immich-server@immich
+│   │               └── PackageInstance/immich@immich
+│   │                   └── Activation/example-jw7q2ly337a9
+│   ├── PackageInstance/postgres@immich
+│   │   └── Activation/example-jw7q2ly337a9
+│   ├── PackageInstance/immich-db@immich
+│   │   └── Activation/example-jw7q2ly337a9
+│   ├── Job/immich-db-bootstrap-55078afb92@immich
+│   │   ├── PackageInstance/immich-db@immich
+│   │   │   └── Activation/example-jw7q2ly337a9
+│   │   └── Deployment/immich-server@immich
+│   │       └── Service/immich-server@immich
+│   │           └── PackageInstance/immich@immich
+│   │               └── Activation/example-jw7q2ly337a9
+│   └── Deployment/immich-server@immich
+│       └── Service/immich-server@immich
+│           └── PackageInstance/immich@immich
+│               └── Activation/example-jw7q2ly337a9
+├── PackageInstance/secret-ref-postgres-postgres@immich (import)
+│   ├── PackageInstance/postgres@immich
+│   │   └── Activation/example-jw7q2ly337a9
+│   └── PackageInstance/immich-db@immich
+│       └── Activation/example-jw7q2ly337a9
+├── PackageInstance/secret-ref-immich-db-postgres@immich (import)
+│   ├── PackageInstance/immich-db@immich
+│   │   └── Activation/example-jw7q2ly337a9
+│   └── Job/immich-db-bootstrap-55078afb92@immich
+│       ├── PackageInstance/immich-db@immich
+│       │   └── Activation/example-jw7q2ly337a9
+│       └── Deployment/immich-server@immich
+│           └── Service/immich-server@immich
+│               └── PackageInstance/immich@immich
+│                   └── Activation/example-jw7q2ly337a9
+├── PackageInstance/postgres@immich
+│   └── Activation/example-jw7q2ly337a9
+├── PackageInstance/machineLearning@immich
+│   └── Activation/example-jw7q2ly337a9
+├── PackageInstance/immich-db@immich
+│   └── Activation/example-jw7q2ly337a9
+├── PackageInstance/immich@immich
+│   └── Activation/example-jw7q2ly337a9
+├── PackageInstance/cert-manager@cert-manager
+│   └── Activation/example-jw7q2ly337a9
+└── PackageInstance/valkey@cache
+    └── Activation/example-jw7q2ly337a9
+ClusterRole/cert-manager-cainjector
+└── ClusterRoleBinding/cert-manager-cainjector
+    └── PackageInstance/cert-manager@cert-manager
+        └── Activation/example-jw7q2ly337a9
+ClusterRole/cert-manager-cluster-view
+└── PackageInstance/cert-manager@cert-manager
+    └── Activation/example-jw7q2ly337a9
+ClusterRole/cert-manager-controller-approve:cert-manager-io
+└── ClusterRoleBinding/cert-manager-controller-approve:cert-manager-io
+    └── PackageInstance/cert-manager@cert-manager
+        └── Activation/example-jw7q2ly337a9
 ClusterRole/cert-manager-controller-certificates
 └── ClusterRoleBinding/cert-manager-controller-certificates
     └── PackageInstance/cert-manager@cert-manager
-        └── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/orders.acme.cert-manager.io
-└── PackageInstance/cert-manager@cert-manager
-    └── Activation/example-yybkqrrnqkpi
-Namespace/stackgres-system
-├── PackageInstance/stackgres-operator@stackgres-system
-│   └── Activation/example-yybkqrrnqkpi
-├── Deployment/stackgres-operator@stackgres-system
-│   └── PackageInstance/stackgres-operator@stackgres-system
-│       └── Activation/example-yybkqrrnqkpi
-├── ServiceAccount/stackgres-operator@stackgres-system
-│   ├── PackageInstance/stackgres-operator@stackgres-system
-│   │   └── Activation/example-yybkqrrnqkpi
-│   ├── Deployment/stackgres-operator@stackgres-system
-│   │   └── PackageInstance/stackgres-operator@stackgres-system
-│   │       └── Activation/example-yybkqrrnqkpi
-│   └── ClusterRoleBinding/stackgres-operator
-│       └── PackageInstance/stackgres-operator@stackgres-system
-│           └── Activation/example-yybkqrrnqkpi
-└── Service/stackgres-operator@stackgres-system
-    ├── PackageInstance/stackgres-operator@stackgres-system
-    │   └── Activation/example-yybkqrrnqkpi
-    ├── ValidatingWebhookConfiguration/stackgres-operator
-    │   └── PackageInstance/stackgres-operator@stackgres-system
-    │       └── Activation/example-yybkqrrnqkpi
-    └── MutatingWebhookConfiguration/stackgres-operator
-        └── PackageInstance/stackgres-operator@stackgres-system
-            └── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/certificaterequests.cert-manager.io
-└── PackageInstance/cert-manager@cert-manager
-    └── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/sgstreams.stackgres.io
-└── PackageInstance/stackgres-operator@stackgres-system
-    └── Activation/example-yybkqrrnqkpi
-ClusterRole/cert-manager-edit
-└── PackageInstance/cert-manager@cert-manager
-    └── Activation/example-yybkqrrnqkpi
-ClusterRole/cert-manager-controller-ingress-shim
-└── ClusterRoleBinding/cert-manager-controller-ingress-shim
+        └── Activation/example-jw7q2ly337a9
+ClusterRole/cert-manager-controller-certificatesigningrequests
+└── ClusterRoleBinding/cert-manager-controller-certificatesigningrequests
     └── PackageInstance/cert-manager@cert-manager
-        └── Activation/example-yybkqrrnqkpi
-Namespace/immich
-├── SGCluster/postgres@immich
-│   ├── PackageInstance/postgres@immich
-│   │   └── Activation/example-yybkqrrnqkpi
-│   └── Deployment/immich-server@immich
-│       └── Service/immich-server@immich
-│           └── PackageInstance/immich@immich
-│               └── Activation/example-yybkqrrnqkpi
-├── Service/machineLearning@immich
-│   ├── Deployment/immich-server@immich
-│   │   └── Service/immich-server@immich
-│   │       └── PackageInstance/immich@immich
-│   │           └── Activation/example-yybkqrrnqkpi
-│   └── PackageInstance/machineLearning@immich
-│       └── Activation/example-yybkqrrnqkpi
-├── SGPostgresConfig/postgres-pg16-config@immich
-│   ├── SGCluster/postgres@immich
-│   │   ├── PackageInstance/postgres@immich
-│   │   │   └── Activation/example-yybkqrrnqkpi
-│   │   └── Deployment/immich-server@immich
-│   │       └── Service/immich-server@immich
-│   │           └── PackageInstance/immich@immich
-│   │               └── Activation/example-yybkqrrnqkpi
-│   └── PackageInstance/postgres@immich
-│       └── Activation/example-yybkqrrnqkpi
-├── PackageInstance/immich@immich
-│   └── Activation/example-yybkqrrnqkpi
-├── Service/immich-server@immich
-│   └── PackageInstance/immich@immich
-│       └── Activation/example-yybkqrrnqkpi
-├── PackageInstance/postgres@immich
-│   └── Activation/example-yybkqrrnqkpi
-├── SGInstanceProfile/postgres-profile@immich
-│   ├── SGCluster/postgres@immich
-│   │   ├── PackageInstance/postgres@immich
-│   │   │   └── Activation/example-yybkqrrnqkpi
-│   │   └── Deployment/immich-server@immich
-│   │       └── Service/immich-server@immich
-│   │           └── PackageInstance/immich@immich
-│   │               └── Activation/example-yybkqrrnqkpi
-│   └── PackageInstance/postgres@immich
-│       └── Activation/example-yybkqrrnqkpi
-├── Deployment/machineLearning@immich
-│   └── Service/machineLearning@immich
-│       ├── Deployment/immich-server@immich
-│       │   └── Service/immich-server@immich
-│       │       └── PackageInstance/immich@immich
-│       │           └── Activation/example-yybkqrrnqkpi
-│       └── PackageInstance/machineLearning@immich
-│           └── Activation/example-yybkqrrnqkpi
-├── PersistentVolumeClaim/storage@immich
-│   ├── Deployment/immich-server@immich
-│   │   └── Service/immich-server@immich
-│   │       └── PackageInstance/immich@immich
-│   │           └── Activation/example-yybkqrrnqkpi
-│   └── PackageInstance/storage@immich
-│       └── Activation/example-yybkqrrnqkpi
-├── Deployment/immich-server@immich
-│   └── Service/immich-server@immich
-│       └── PackageInstance/immich@immich
-│           └── Activation/example-yybkqrrnqkpi
-├── PackageInstance/storage@immich
-│   └── Activation/example-yybkqrrnqkpi
-└── PackageInstance/machineLearning@immich
-    └── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/sgconfigs.stackgres.io
-└── PackageInstance/stackgres-operator@stackgres-system
-    └── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/activations.kix.dev
-└── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/sgshardedbackups.stackgres.io
-└── PackageInstance/stackgres-operator@stackgres-system
-    └── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/clusterissuers.cert-manager.io
-└── PackageInstance/cert-manager@cert-manager
-    └── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/packageinstances.kix.dev
-├── PackageInstance/stackgres-operator@stackgres-system
-│   └── Activation/example-yybkqrrnqkpi
-├── PackageInstance/storage-classes@kube-system
-│   └── Activation/example-yybkqrrnqkpi
-├── PackageInstance/immich@immich
-│   └── Activation/example-yybkqrrnqkpi
-├── PackageInstance/cert-manager@cert-manager
-│   └── Activation/example-yybkqrrnqkpi
-├── PackageInstance/coredns@kube-system
-│   └── Activation/example-yybkqrrnqkpi
-├── PackageInstance/postgres@immich
-│   └── Activation/example-yybkqrrnqkpi
-├── PackageInstance/valkey@cache
-│   └── Activation/example-yybkqrrnqkpi
-├── PackageInstance/storage@immich
-│   └── Activation/example-yybkqrrnqkpi
-└── PackageInstance/machineLearning@immich
-    └── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/sginstanceprofiles.stackgres.io
-└── PackageInstance/stackgres-operator@stackgres-system
-    └── Activation/example-yybkqrrnqkpi
-ClusterRole/stackgres-operator
-├── PackageInstance/stackgres-operator@stackgres-system
-│   └── Activation/example-yybkqrrnqkpi
-└── ClusterRoleBinding/stackgres-operator
-    └── PackageInstance/stackgres-operator@stackgres-system
-        └── Activation/example-yybkqrrnqkpi
-ClusterRole/cert-manager-controller-issuers
-└── ClusterRoleBinding/cert-manager-controller-issuers
+        └── Activation/example-jw7q2ly337a9
+ClusterRole/cert-manager-controller-challenges
+└── ClusterRoleBinding/cert-manager-controller-challenges
     └── PackageInstance/cert-manager@cert-manager
-        └── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/certificates.cert-manager.io
-└── PackageInstance/cert-manager@cert-manager
-    └── Activation/example-yybkqrrnqkpi
-StorageClass/localzfs-retain
-└── PackageInstance/storage-classes@kube-system
-    └── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/sgclusters.stackgres.io
-└── PackageInstance/stackgres-operator@stackgres-system
-    └── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/sgdistributedlogs.stackgres.io
-└── PackageInstance/stackgres-operator@stackgres-system
-    └── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/sgdbops.stackgres.io
-└── PackageInstance/stackgres-operator@stackgres-system
-    └── Activation/example-yybkqrrnqkpi
+        └── Activation/example-jw7q2ly337a9
 ClusterRole/cert-manager-controller-clusterissuers
 └── ClusterRoleBinding/cert-manager-controller-clusterissuers
     └── PackageInstance/cert-manager@cert-manager
-        └── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/sgbackupconfigs.stackgres.io
-└── PackageInstance/stackgres-operator@stackgres-system
-    └── Activation/example-yybkqrrnqkpi
-ClusterRole/cert-manager-webhook:subjectaccessreviews
-└── ClusterRoleBinding/cert-manager-webhook:subjectaccessreviews
+        └── Activation/example-jw7q2ly337a9
+ClusterRole/cert-manager-controller-ingress-shim
+└── ClusterRoleBinding/cert-manager-controller-ingress-shim
     └── PackageInstance/cert-manager@cert-manager
-        └── Activation/example-yybkqrrnqkpi
-StorageClass/lbs1-pool1-2x
-├── SGCluster/postgres@immich
-│   ├── PackageInstance/postgres@immich
-│   │   └── Activation/example-yybkqrrnqkpi
-│   └── Deployment/immich-server@immich
-│       └── Service/immich-server@immich
-│           └── PackageInstance/immich@immich
-│               └── Activation/example-yybkqrrnqkpi
-├── PackageInstance/storage-classes@kube-system
-│   └── Activation/example-yybkqrrnqkpi
-└── PersistentVolumeClaim/storage@immich
-    ├── Deployment/immich-server@immich
-    │   └── Service/immich-server@immich
-    │       └── PackageInstance/immich@immich
-    │           └── Activation/example-yybkqrrnqkpi
-    └── PackageInstance/storage@immich
-        └── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/sgshardeddbops.stackgres.io
-└── PackageInstance/stackgres-operator@stackgres-system
-    └── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/sgbackups.stackgres.io
-└── PackageInstance/stackgres-operator@stackgres-system
-    └── Activation/example-yybkqrrnqkpi
-Namespace/cert-manager
-├── Role/cert-manager-tokenrequest@cert-manager
-│   ├── PackageInstance/cert-manager@cert-manager
-│   │   └── Activation/example-yybkqrrnqkpi
-│   └── RoleBinding/cert-manager-cert-manager-tokenrequest@cert-manager
-│       └── PackageInstance/cert-manager@cert-manager
-│           └── Activation/example-yybkqrrnqkpi
-├── RoleBinding/cert-manager-cainjector:leaderelection@cert-manager
-│   └── PackageInstance/cert-manager@cert-manager
-│       └── Activation/example-yybkqrrnqkpi
-├── Role/cert-manager-webhook:dynamic-serving@cert-manager
-│   └── RoleBinding/cert-manager-webhook:dynamic-serving@cert-manager
-│       └── PackageInstance/cert-manager@cert-manager
-│           └── Activation/example-yybkqrrnqkpi
-├── ServiceAccount/cert-manager-cainjector@cert-manager
-│   ├── RoleBinding/cert-manager-cainjector:leaderelection@cert-manager
-│   │   └── PackageInstance/cert-manager@cert-manager
-│   │       └── Activation/example-yybkqrrnqkpi
-│   ├── PackageInstance/cert-manager@cert-manager
-│   │   └── Activation/example-yybkqrrnqkpi
-│   ├── ClusterRoleBinding/cert-manager-cainjector
-│   │   └── PackageInstance/cert-manager@cert-manager
-│   │       └── Activation/example-yybkqrrnqkpi
-│   └── Deployment/cert-manager-cainjector@cert-manager
-│       ├── PackageInstance/cert-manager@cert-manager
-│       │   └── Activation/example-yybkqrrnqkpi
-│       └── Service/cert-manager-cainjector@cert-manager
-│           └── PackageInstance/cert-manager@cert-manager
-│               └── Activation/example-yybkqrrnqkpi
-├── PackageInstance/cert-manager@cert-manager
-│   └── Activation/example-yybkqrrnqkpi
-├── Deployment/cert-manager@cert-manager
-│   ├── PackageInstance/cert-manager@cert-manager
-│   │   └── Activation/example-yybkqrrnqkpi
-│   └── Service/cert-manager@cert-manager
-│       └── PackageInstance/cert-manager@cert-manager
-│           └── Activation/example-yybkqrrnqkpi
-├── Service/cert-manager@cert-manager
-│   └── PackageInstance/cert-manager@cert-manager
-│       └── Activation/example-yybkqrrnqkpi
-├── RoleBinding/cert-manager-cert-manager-tokenrequest@cert-manager
-│   └── PackageInstance/cert-manager@cert-manager
-│       └── Activation/example-yybkqrrnqkpi
-├── Role/cert-manager:leaderelection@cert-manager
-│   └── RoleBinding/cert-manager:leaderelection@cert-manager
-│       └── PackageInstance/cert-manager@cert-manager
-│           └── Activation/example-yybkqrrnqkpi
-├── Deployment/cert-manager-webhook@cert-manager
-│   ├── PackageInstance/cert-manager@cert-manager
-│   │   └── Activation/example-yybkqrrnqkpi
-│   └── Service/cert-manager-webhook@cert-manager
-│       ├── PackageInstance/cert-manager@cert-manager
-│       │   └── Activation/example-yybkqrrnqkpi
-│       ├── MutatingWebhookConfiguration/cert-manager-webhook
-│       │   └── PackageInstance/cert-manager@cert-manager
-│       │       └── Activation/example-yybkqrrnqkpi
-│       └── ValidatingWebhookConfiguration/cert-manager-webhook
-│           └── PackageInstance/cert-manager@cert-manager
-│               └── Activation/example-yybkqrrnqkpi
-├── RoleBinding/cert-manager-webhook:dynamic-serving@cert-manager
-│   └── PackageInstance/cert-manager@cert-manager
-│       └── Activation/example-yybkqrrnqkpi
-├── Service/cert-manager-webhook@cert-manager
-│   ├── PackageInstance/cert-manager@cert-manager
-│   │   └── Activation/example-yybkqrrnqkpi
-│   ├── MutatingWebhookConfiguration/cert-manager-webhook
-│   │   └── PackageInstance/cert-manager@cert-manager
-│   │       └── Activation/example-yybkqrrnqkpi
-│   └── ValidatingWebhookConfiguration/cert-manager-webhook
-│       └── PackageInstance/cert-manager@cert-manager
-│           └── Activation/example-yybkqrrnqkpi
-├── ServiceAccount/cert-manager@cert-manager
-│   ├── Role/cert-manager-tokenrequest@cert-manager
-│   │   ├── PackageInstance/cert-manager@cert-manager
-│   │   │   └── Activation/example-yybkqrrnqkpi
-│   │   └── RoleBinding/cert-manager-cert-manager-tokenrequest@cert-manager
-│   │       └── PackageInstance/cert-manager@cert-manager
-│   │           └── Activation/example-yybkqrrnqkpi
-│   ├── ClusterRoleBinding/cert-manager-controller-orders
-│   │   └── PackageInstance/cert-manager@cert-manager
-│   │       └── Activation/example-yybkqrrnqkpi
-│   ├── ClusterRoleBinding/cert-manager-controller-certificatesigningrequests
-│   │   └── PackageInstance/cert-manager@cert-manager
-│   │       └── Activation/example-yybkqrrnqkpi
-│   ├── ClusterRoleBinding/cert-manager-controller-approve:cert-manager-io
-│   │   └── PackageInstance/cert-manager@cert-manager
-│   │       └── Activation/example-yybkqrrnqkpi
-│   ├── PackageInstance/cert-manager@cert-manager
-│   │   └── Activation/example-yybkqrrnqkpi
-│   ├── Deployment/cert-manager@cert-manager
-│   │   ├── PackageInstance/cert-manager@cert-manager
-│   │   │   └── Activation/example-yybkqrrnqkpi
-│   │   └── Service/cert-manager@cert-manager
-│   │       └── PackageInstance/cert-manager@cert-manager
-│   │           └── Activation/example-yybkqrrnqkpi
-│   ├── RoleBinding/cert-manager-cert-manager-tokenrequest@cert-manager
-│   │   └── PackageInstance/cert-manager@cert-manager
-│   │       └── Activation/example-yybkqrrnqkpi
-│   ├── ClusterRoleBinding/cert-manager-controller-ingress-shim
-│   │   └── PackageInstance/cert-manager@cert-manager
-│   │       └── Activation/example-yybkqrrnqkpi
-│   ├── RoleBinding/cert-manager:leaderelection@cert-manager
-│   │   └── PackageInstance/cert-manager@cert-manager
-│   │       └── Activation/example-yybkqrrnqkpi
-│   ├── ClusterRoleBinding/cert-manager-controller-issuers
-│   │   └── PackageInstance/cert-manager@cert-manager
-│   │       └── Activation/example-yybkqrrnqkpi
-│   ├── ClusterRoleBinding/cert-manager-controller-certificates
-│   │   └── PackageInstance/cert-manager@cert-manager
-│   │       └── Activation/example-yybkqrrnqkpi
-│   ├── ClusterRoleBinding/cert-manager-controller-challenges
-│   │   └── PackageInstance/cert-manager@cert-manager
-│   │       └── Activation/example-yybkqrrnqkpi
-│   └── ClusterRoleBinding/cert-manager-controller-clusterissuers
-│       └── PackageInstance/cert-manager@cert-manager
-│           └── Activation/example-yybkqrrnqkpi
-├── Service/cert-manager-cainjector@cert-manager
-│   └── PackageInstance/cert-manager@cert-manager
-│       └── Activation/example-yybkqrrnqkpi
-├── Deployment/cert-manager-cainjector@cert-manager
-│   ├── PackageInstance/cert-manager@cert-manager
-│   │   └── Activation/example-yybkqrrnqkpi
-│   └── Service/cert-manager-cainjector@cert-manager
-│       └── PackageInstance/cert-manager@cert-manager
-│           └── Activation/example-yybkqrrnqkpi
-├── RoleBinding/cert-manager:leaderelection@cert-manager
-│   └── PackageInstance/cert-manager@cert-manager
-│       └── Activation/example-yybkqrrnqkpi
-├── Role/cert-manager-cainjector:leaderelection@cert-manager
-│   └── RoleBinding/cert-manager-cainjector:leaderelection@cert-manager
-│       └── PackageInstance/cert-manager@cert-manager
-│           └── Activation/example-yybkqrrnqkpi
-└── ServiceAccount/cert-manager-webhook@cert-manager
-    ├── PackageInstance/cert-manager@cert-manager
-    │   └── Activation/example-yybkqrrnqkpi
-    ├── ClusterRoleBinding/cert-manager-webhook:subjectaccessreviews
-    │   └── PackageInstance/cert-manager@cert-manager
-    │       └── Activation/example-yybkqrrnqkpi
-    ├── Deployment/cert-manager-webhook@cert-manager
-    │   ├── PackageInstance/cert-manager@cert-manager
-    │   │   └── Activation/example-yybkqrrnqkpi
-    │   └── Service/cert-manager-webhook@cert-manager
-    │       ├── PackageInstance/cert-manager@cert-manager
-    │       │   └── Activation/example-yybkqrrnqkpi
-    │       ├── MutatingWebhookConfiguration/cert-manager-webhook
-    │       │   └── PackageInstance/cert-manager@cert-manager
-    │       │       └── Activation/example-yybkqrrnqkpi
-    │       └── ValidatingWebhookConfiguration/cert-manager-webhook
-    │           └── PackageInstance/cert-manager@cert-manager
-    │               └── Activation/example-yybkqrrnqkpi
-    └── RoleBinding/cert-manager-webhook:dynamic-serving@cert-manager
-        └── PackageInstance/cert-manager@cert-manager
-            └── Activation/example-yybkqrrnqkpi
+        └── Activation/example-jw7q2ly337a9
+ClusterRole/cert-manager-controller-issuers
+└── ClusterRoleBinding/cert-manager-controller-issuers
+    └── PackageInstance/cert-manager@cert-manager
+        └── Activation/example-jw7q2ly337a9
 ClusterRole/cert-manager-controller-orders
 └── ClusterRoleBinding/cert-manager-controller-orders
     └── PackageInstance/cert-manager@cert-manager
-        └── Activation/example-yybkqrrnqkpi
-ClusterRole/cert-manager-cluster-view
+        └── Activation/example-jw7q2ly337a9
+ClusterRole/cert-manager-edit
 └── PackageInstance/cert-manager@cert-manager
-    └── Activation/example-yybkqrrnqkpi
+    └── Activation/example-jw7q2ly337a9
+ClusterRole/cert-manager-view
+└── PackageInstance/cert-manager@cert-manager
+    └── Activation/example-jw7q2ly337a9
+ClusterRole/cert-manager-webhook:subjectaccessreviews
+└── ClusterRoleBinding/cert-manager-webhook:subjectaccessreviews
+    └── PackageInstance/cert-manager@cert-manager
+        └── Activation/example-jw7q2ly337a9
+ClusterRole/coredns
+└── ClusterRoleBinding/coredns
+    └── PackageInstance/coredns@kube-system
+        └── Activation/example-jw7q2ly337a9
+ClusterRole/stackgres-operator
+├── ClusterRoleBinding/stackgres-operator
+│   └── PackageInstance/stackgres-operator@stackgres-system
+│       └── Activation/example-jw7q2ly337a9
+└── PackageInstance/stackgres-operator@stackgres-system
+    └── Activation/example-jw7q2ly337a9
+StorageClass/lbs1-pool1-2x
+├── PersistentVolumeClaim/storage@immich
+│   ├── PackageInstance/storage@immich
+│   │   └── Activation/example-jw7q2ly337a9
+│   └── Deployment/immich-server@immich
+│       └── Service/immich-server@immich
+│           └── PackageInstance/immich@immich
+│               └── Activation/example-jw7q2ly337a9
+├── SGCluster/postgres@immich
+│   ├── PackageInstance/service-ref-postgres-postgres@immich (import)
+│   │   ├── Secret/immich-db-credentials@immich
+│   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   └── Deployment/immich-server@immich
+│   │   │       └── Service/immich-server@immich
+│   │   │           └── PackageInstance/immich@immich
+│   │   │               └── Activation/example-jw7q2ly337a9
+│   │   ├── Secret/immich-db-bootstrap-password@immich
+│   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   └── Job/immich-db-bootstrap-55078afb92@immich
+│   │   │       ├── PackageInstance/immich-db@immich
+│   │   │       │   └── Activation/example-jw7q2ly337a9
+│   │   │       └── Deployment/immich-server@immich
+│   │   │           └── Service/immich-server@immich
+│   │   │               └── PackageInstance/immich@immich
+│   │   │                   └── Activation/example-jw7q2ly337a9
+│   │   ├── PackageInstance/secret-ref-immich-db-postgres@immich (import)
+│   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   └── Job/immich-db-bootstrap-55078afb92@immich
+│   │   │       ├── PackageInstance/immich-db@immich
+│   │   │       │   └── Activation/example-jw7q2ly337a9
+│   │   │       └── Deployment/immich-server@immich
+│   │   │           └── Service/immich-server@immich
+│   │   │               └── PackageInstance/immich@immich
+│   │   │                   └── Activation/example-jw7q2ly337a9
+│   │   ├── PackageInstance/postgres@immich
+│   │   │   └── Activation/example-jw7q2ly337a9
+│   │   ├── PackageInstance/immich-db@immich
+│   │   │   └── Activation/example-jw7q2ly337a9
+│   │   ├── Job/immich-db-bootstrap-55078afb92@immich
+│   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   └── Deployment/immich-server@immich
+│   │   │       └── Service/immich-server@immich
+│   │   │           └── PackageInstance/immich@immich
+│   │   │               └── Activation/example-jw7q2ly337a9
+│   │   └── Deployment/immich-server@immich
+│   │       └── Service/immich-server@immich
+│   │           └── PackageInstance/immich@immich
+│   │               └── Activation/example-jw7q2ly337a9
+│   ├── PackageInstance/secret-ref-postgres-postgres@immich (import)
+│   │   ├── PackageInstance/postgres@immich
+│   │   │   └── Activation/example-jw7q2ly337a9
+│   │   └── PackageInstance/immich-db@immich
+│   │       └── Activation/example-jw7q2ly337a9
+│   └── PackageInstance/postgres@immich
+│       └── Activation/example-jw7q2ly337a9
+└── PackageInstance/storage-classes@kube-system
+    └── Activation/example-jw7q2ly337a9
 StorageClass/localzfs
 └── PackageInstance/storage-classes@kube-system
-    └── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/sgobjectstorages.stackgres.io
-└── PackageInstance/stackgres-operator@stackgres-system
-    └── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/sgpgconfigs.stackgres.io
-└── PackageInstance/stackgres-operator@stackgres-system
-    └── Activation/example-yybkqrrnqkpi
+    └── Activation/example-jw7q2ly337a9
+StorageClass/localzfs-retain
+└── PackageInstance/storage-classes@kube-system
+    └── Activation/example-jw7q2ly337a9
+Namespace/cache
+├── ServiceAccount/valkey@cache
+│   ├── PackageInstance/valkey@cache
+│   │   └── Activation/example-jw7q2ly337a9
+│   └── StatefulSet/valkey-node@cache
+│       ├── Service/valkey-metrics@cache
+│       │   └── PackageInstance/valkey@cache
+│       │       └── Activation/example-jw7q2ly337a9
+│       ├── Service/valkey-headless@cache
+│       │   └── PackageInstance/valkey@cache
+│       │       └── Activation/example-jw7q2ly337a9
+│       ├── Service/valkey@cache
+│       │   ├── PackageInstance/valkey@cache
+│       │   │   └── Activation/example-jw7q2ly337a9
+│       │   └── Deployment/immich-server@immich
+│       │       └── Service/immich-server@immich
+│       │           └── PackageInstance/immich@immich
+│       │               └── Activation/example-jw7q2ly337a9
+│       └── PackageInstance/valkey@cache
+│           └── Activation/example-jw7q2ly337a9
+├── Service/valkey-metrics@cache
+│   └── PackageInstance/valkey@cache
+│       └── Activation/example-jw7q2ly337a9
+├── Service/valkey-headless@cache
+│   └── PackageInstance/valkey@cache
+│       └── Activation/example-jw7q2ly337a9
+├── Service/valkey@cache
+│   ├── PackageInstance/valkey@cache
+│   │   └── Activation/example-jw7q2ly337a9
+│   └── Deployment/immich-server@immich
+│       └── Service/immich-server@immich
+│           └── PackageInstance/immich@immich
+│               └── Activation/example-jw7q2ly337a9
+├── ConfigMap/valkey-scripts@cache
+│   ├── PackageInstance/valkey@cache
+│   │   └── Activation/example-jw7q2ly337a9
+│   └── StatefulSet/valkey-node@cache
+│       ├── Service/valkey-metrics@cache
+│       │   └── PackageInstance/valkey@cache
+│       │       └── Activation/example-jw7q2ly337a9
+│       ├── Service/valkey-headless@cache
+│       │   └── PackageInstance/valkey@cache
+│       │       └── Activation/example-jw7q2ly337a9
+│       ├── Service/valkey@cache
+│       │   ├── PackageInstance/valkey@cache
+│       │   │   └── Activation/example-jw7q2ly337a9
+│       │   └── Deployment/immich-server@immich
+│       │       └── Service/immich-server@immich
+│       │           └── PackageInstance/immich@immich
+│       │               └── Activation/example-jw7q2ly337a9
+│       └── PackageInstance/valkey@cache
+│           └── Activation/example-jw7q2ly337a9
+├── ConfigMap/valkey-health@cache
+│   ├── PackageInstance/valkey@cache
+│   │   └── Activation/example-jw7q2ly337a9
+│   └── StatefulSet/valkey-node@cache
+│       ├── Service/valkey-metrics@cache
+│       │   └── PackageInstance/valkey@cache
+│       │       └── Activation/example-jw7q2ly337a9
+│       ├── Service/valkey-headless@cache
+│       │   └── PackageInstance/valkey@cache
+│       │       └── Activation/example-jw7q2ly337a9
+│       ├── Service/valkey@cache
+│       │   ├── PackageInstance/valkey@cache
+│       │   │   └── Activation/example-jw7q2ly337a9
+│       │   └── Deployment/immich-server@immich
+│       │       └── Service/immich-server@immich
+│       │           └── PackageInstance/immich@immich
+│       │               └── Activation/example-jw7q2ly337a9
+│       └── PackageInstance/valkey@cache
+│           └── Activation/example-jw7q2ly337a9
+├── ConfigMap/valkey-configuration@cache
+│   ├── PackageInstance/valkey@cache
+│   │   └── Activation/example-jw7q2ly337a9
+│   └── StatefulSet/valkey-node@cache
+│       ├── Service/valkey-metrics@cache
+│       │   └── PackageInstance/valkey@cache
+│       │       └── Activation/example-jw7q2ly337a9
+│       ├── Service/valkey-headless@cache
+│       │   └── PackageInstance/valkey@cache
+│       │       └── Activation/example-jw7q2ly337a9
+│       ├── Service/valkey@cache
+│       │   ├── PackageInstance/valkey@cache
+│       │   │   └── Activation/example-jw7q2ly337a9
+│       │   └── Deployment/immich-server@immich
+│       │       └── Service/immich-server@immich
+│       │           └── PackageInstance/immich@immich
+│       │               └── Activation/example-jw7q2ly337a9
+│       └── PackageInstance/valkey@cache
+│           └── Activation/example-jw7q2ly337a9
+├── PodDisruptionBudget/valkey-node@cache
+│   └── PackageInstance/valkey@cache
+│       └── Activation/example-jw7q2ly337a9
+├── NetworkPolicy/valkey@cache
+│   └── PackageInstance/valkey@cache
+│       └── Activation/example-jw7q2ly337a9
+├── PackageInstance/valkey@cache
+│   └── Activation/example-jw7q2ly337a9
+└── StatefulSet/valkey-node@cache
+    ├── Service/valkey-metrics@cache
+    │   └── PackageInstance/valkey@cache
+    │       └── Activation/example-jw7q2ly337a9
+    ├── Service/valkey-headless@cache
+    │   └── PackageInstance/valkey@cache
+    │       └── Activation/example-jw7q2ly337a9
+    ├── Service/valkey@cache
+    │   ├── PackageInstance/valkey@cache
+    │   │   └── Activation/example-jw7q2ly337a9
+    │   └── Deployment/immich-server@immich
+    │       └── Service/immich-server@immich
+    │           └── PackageInstance/immich@immich
+    │               └── Activation/example-jw7q2ly337a9
+    └── PackageInstance/valkey@cache
+        └── Activation/example-jw7q2ly337a9
+Namespace/cert-manager
+├── ServiceAccount/cert-manager-webhook@cert-manager
+│   ├── RoleBinding/cert-manager-webhook:dynamic-serving@cert-manager
+│   │   └── PackageInstance/cert-manager@cert-manager
+│   │       └── Activation/example-jw7q2ly337a9
+│   ├── ClusterRoleBinding/cert-manager-webhook:subjectaccessreviews
+│   │   └── PackageInstance/cert-manager@cert-manager
+│   │       └── Activation/example-jw7q2ly337a9
+│   ├── PackageInstance/cert-manager@cert-manager
+│   │   └── Activation/example-jw7q2ly337a9
+│   └── Deployment/cert-manager-webhook@cert-manager
+│       ├── Service/cert-manager-webhook@cert-manager
+│       │   ├── PackageInstance/cert-manager@cert-manager
+│       │   │   └── Activation/example-jw7q2ly337a9
+│       │   ├── ValidatingWebhookConfiguration/cert-manager-webhook
+│       │   │   └── PackageInstance/cert-manager@cert-manager
+│       │   │       └── Activation/example-jw7q2ly337a9
+│       │   └── MutatingWebhookConfiguration/cert-manager-webhook
+│       │       └── PackageInstance/cert-manager@cert-manager
+│       │           └── Activation/example-jw7q2ly337a9
+│       └── PackageInstance/cert-manager@cert-manager
+│           └── Activation/example-jw7q2ly337a9
+├── ServiceAccount/cert-manager-startupapicheck@cert-manager
+│   ├── RoleBinding/cert-manager-startupapicheck:create-cert@cert-manager
+│   │   └── PackageInstance/cert-manager@cert-manager
+│   │       └── Activation/example-jw7q2ly337a9
+│   ├── Job/cert-manager-startupapicheck@cert-manager
+│   │   └── PackageInstance/cert-manager@cert-manager
+│   │       └── Activation/example-jw7q2ly337a9
+│   └── Job/cert-manager-startupapicheck@cert-manager
+│       └── PackageInstance/cert-manager@cert-manager
+│           └── Activation/example-jw7q2ly337a9
+├── ServiceAccount/cert-manager-cainjector@cert-manager
+│   ├── RoleBinding/cert-manager-cainjector:leaderelection@cert-manager
+│   │   └── PackageInstance/cert-manager@cert-manager
+│   │       └── Activation/example-jw7q2ly337a9
+│   ├── ClusterRoleBinding/cert-manager-cainjector
+│   │   └── PackageInstance/cert-manager@cert-manager
+│   │       └── Activation/example-jw7q2ly337a9
+│   ├── PackageInstance/cert-manager@cert-manager
+│   │   └── Activation/example-jw7q2ly337a9
+│   └── Deployment/cert-manager-cainjector@cert-manager
+│       ├── Service/cert-manager-cainjector@cert-manager
+│       │   └── PackageInstance/cert-manager@cert-manager
+│       │       └── Activation/example-jw7q2ly337a9
+│       └── PackageInstance/cert-manager@cert-manager
+│           └── Activation/example-jw7q2ly337a9
+├── ServiceAccount/cert-manager@cert-manager
+│   ├── RoleBinding/cert-manager:leaderelection@cert-manager
+│   │   └── PackageInstance/cert-manager@cert-manager
+│   │       └── Activation/example-jw7q2ly337a9
+│   ├── RoleBinding/cert-manager-cert-manager-tokenrequest@cert-manager
+│   │   └── PackageInstance/cert-manager@cert-manager
+│   │       └── Activation/example-jw7q2ly337a9
+│   ├── Role/cert-manager-tokenrequest@cert-manager
+│   │   ├── RoleBinding/cert-manager-cert-manager-tokenrequest@cert-manager
+│   │   │   └── PackageInstance/cert-manager@cert-manager
+│   │   │       └── Activation/example-jw7q2ly337a9
+│   │   └── PackageInstance/cert-manager@cert-manager
+│   │       └── Activation/example-jw7q2ly337a9
+│   ├── ClusterRoleBinding/cert-manager-controller-orders
+│   │   └── PackageInstance/cert-manager@cert-manager
+│   │       └── Activation/example-jw7q2ly337a9
+│   ├── ClusterRoleBinding/cert-manager-controller-issuers
+│   │   └── PackageInstance/cert-manager@cert-manager
+│   │       └── Activation/example-jw7q2ly337a9
+│   ├── ClusterRoleBinding/cert-manager-controller-ingress-shim
+│   │   └── PackageInstance/cert-manager@cert-manager
+│   │       └── Activation/example-jw7q2ly337a9
+│   ├── ClusterRoleBinding/cert-manager-controller-clusterissuers
+│   │   └── PackageInstance/cert-manager@cert-manager
+│   │       └── Activation/example-jw7q2ly337a9
+│   ├── ClusterRoleBinding/cert-manager-controller-challenges
+│   │   └── PackageInstance/cert-manager@cert-manager
+│   │       └── Activation/example-jw7q2ly337a9
+│   ├── ClusterRoleBinding/cert-manager-controller-certificatesigningrequests
+│   │   └── PackageInstance/cert-manager@cert-manager
+│   │       └── Activation/example-jw7q2ly337a9
+│   ├── ClusterRoleBinding/cert-manager-controller-certificates
+│   │   └── PackageInstance/cert-manager@cert-manager
+│   │       └── Activation/example-jw7q2ly337a9
+│   ├── ClusterRoleBinding/cert-manager-controller-approve:cert-manager-io
+│   │   └── PackageInstance/cert-manager@cert-manager
+│   │       └── Activation/example-jw7q2ly337a9
+│   ├── PackageInstance/cert-manager@cert-manager
+│   │   └── Activation/example-jw7q2ly337a9
+│   └── Deployment/cert-manager@cert-manager
+│       ├── Service/cert-manager@cert-manager
+│       │   └── PackageInstance/cert-manager@cert-manager
+│       │       └── Activation/example-jw7q2ly337a9
+│       └── PackageInstance/cert-manager@cert-manager
+│           └── Activation/example-jw7q2ly337a9
+├── Service/cert-manager-webhook@cert-manager
+│   ├── PackageInstance/cert-manager@cert-manager
+│   │   └── Activation/example-jw7q2ly337a9
+│   ├── ValidatingWebhookConfiguration/cert-manager-webhook
+│   │   └── PackageInstance/cert-manager@cert-manager
+│   │       └── Activation/example-jw7q2ly337a9
+│   └── MutatingWebhookConfiguration/cert-manager-webhook
+│       └── PackageInstance/cert-manager@cert-manager
+│           └── Activation/example-jw7q2ly337a9
+├── Service/cert-manager-cainjector@cert-manager
+│   └── PackageInstance/cert-manager@cert-manager
+│       └── Activation/example-jw7q2ly337a9
+├── Service/cert-manager@cert-manager
+│   └── PackageInstance/cert-manager@cert-manager
+│       └── Activation/example-jw7q2ly337a9
+├── RoleBinding/cert-manager:leaderelection@cert-manager
+│   └── PackageInstance/cert-manager@cert-manager
+│       └── Activation/example-jw7q2ly337a9
+├── RoleBinding/cert-manager-webhook:dynamic-serving@cert-manager
+│   └── PackageInstance/cert-manager@cert-manager
+│       └── Activation/example-jw7q2ly337a9
+├── RoleBinding/cert-manager-startupapicheck:create-cert@cert-manager
+│   └── PackageInstance/cert-manager@cert-manager
+│       └── Activation/example-jw7q2ly337a9
+├── RoleBinding/cert-manager-cert-manager-tokenrequest@cert-manager
+│   └── PackageInstance/cert-manager@cert-manager
+│       └── Activation/example-jw7q2ly337a9
+├── RoleBinding/cert-manager-cainjector:leaderelection@cert-manager
+│   └── PackageInstance/cert-manager@cert-manager
+│       └── Activation/example-jw7q2ly337a9
+├── Role/cert-manager:leaderelection@cert-manager
+│   └── RoleBinding/cert-manager:leaderelection@cert-manager
+│       └── PackageInstance/cert-manager@cert-manager
+│           └── Activation/example-jw7q2ly337a9
+├── Role/cert-manager-webhook:dynamic-serving@cert-manager
+│   └── RoleBinding/cert-manager-webhook:dynamic-serving@cert-manager
+│       └── PackageInstance/cert-manager@cert-manager
+│           └── Activation/example-jw7q2ly337a9
+├── Role/cert-manager-tokenrequest@cert-manager
+│   ├── RoleBinding/cert-manager-cert-manager-tokenrequest@cert-manager
+│   │   └── PackageInstance/cert-manager@cert-manager
+│   │       └── Activation/example-jw7q2ly337a9
+│   └── PackageInstance/cert-manager@cert-manager
+│       └── Activation/example-jw7q2ly337a9
+├── Role/cert-manager-startupapicheck:create-cert@cert-manager
+│   └── RoleBinding/cert-manager-startupapicheck:create-cert@cert-manager
+│       └── PackageInstance/cert-manager@cert-manager
+│           └── Activation/example-jw7q2ly337a9
+├── Role/cert-manager-cainjector:leaderelection@cert-manager
+│   └── RoleBinding/cert-manager-cainjector:leaderelection@cert-manager
+│       └── PackageInstance/cert-manager@cert-manager
+│           └── Activation/example-jw7q2ly337a9
+├── PackageInstance/cert-manager@cert-manager
+│   └── Activation/example-jw7q2ly337a9
+├── Job/cert-manager-startupapicheck@cert-manager
+│   └── PackageInstance/cert-manager@cert-manager
+│       └── Activation/example-jw7q2ly337a9
+├── Deployment/cert-manager-webhook@cert-manager
+│   ├── Service/cert-manager-webhook@cert-manager
+│   │   ├── PackageInstance/cert-manager@cert-manager
+│   │   │   └── Activation/example-jw7q2ly337a9
+│   │   ├── ValidatingWebhookConfiguration/cert-manager-webhook
+│   │   │   └── PackageInstance/cert-manager@cert-manager
+│   │   │       └── Activation/example-jw7q2ly337a9
+│   │   └── MutatingWebhookConfiguration/cert-manager-webhook
+│   │       └── PackageInstance/cert-manager@cert-manager
+│   │           └── Activation/example-jw7q2ly337a9
+│   └── PackageInstance/cert-manager@cert-manager
+│       └── Activation/example-jw7q2ly337a9
+├── Deployment/cert-manager-cainjector@cert-manager
+│   ├── Service/cert-manager-cainjector@cert-manager
+│   │   └── PackageInstance/cert-manager@cert-manager
+│   │       └── Activation/example-jw7q2ly337a9
+│   └── PackageInstance/cert-manager@cert-manager
+│       └── Activation/example-jw7q2ly337a9
+└── Deployment/cert-manager@cert-manager
+    ├── Service/cert-manager@cert-manager
+    │   └── PackageInstance/cert-manager@cert-manager
+    │       └── Activation/example-jw7q2ly337a9
+    └── PackageInstance/cert-manager@cert-manager
+        └── Activation/example-jw7q2ly337a9
+Namespace/immich
+├── Service/machineLearning@immich
+│   ├── PackageInstance/machineLearning@immich
+│   │   └── Activation/example-jw7q2ly337a9
+│   └── Deployment/immich-server@immich
+│       └── Service/immich-server@immich
+│           └── PackageInstance/immich@immich
+│               └── Activation/example-jw7q2ly337a9
+├── Service/immich-server@immich
+│   └── PackageInstance/immich@immich
+│       └── Activation/example-jw7q2ly337a9
+├── Secret/immich-db-credentials@immich
+│   ├── PackageInstance/immich-db@immich
+│   │   └── Activation/example-jw7q2ly337a9
+│   └── Deployment/immich-server@immich
+│       └── Service/immich-server@immich
+│           └── PackageInstance/immich@immich
+│               └── Activation/example-jw7q2ly337a9
+├── Secret/immich-db-bootstrap-password@immich
+│   ├── PackageInstance/immich-db@immich
+│   │   └── Activation/example-jw7q2ly337a9
+│   └── Job/immich-db-bootstrap-55078afb92@immich
+│       ├── PackageInstance/immich-db@immich
+│       │   └── Activation/example-jw7q2ly337a9
+│       └── Deployment/immich-server@immich
+│           └── Service/immich-server@immich
+│               └── PackageInstance/immich@immich
+│                   └── Activation/example-jw7q2ly337a9
+├── PersistentVolumeClaim/storage@immich
+│   ├── PackageInstance/storage@immich
+│   │   └── Activation/example-jw7q2ly337a9
+│   └── Deployment/immich-server@immich
+│       └── Service/immich-server@immich
+│           └── PackageInstance/immich@immich
+│               └── Activation/example-jw7q2ly337a9
+├── SGPostgresConfig/postgres-pg16-config@immich
+│   ├── SGCluster/postgres@immich
+│   │   ├── PackageInstance/service-ref-postgres-postgres@immich (import)
+│   │   │   ├── Secret/immich-db-credentials@immich
+│   │   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   └── Deployment/immich-server@immich
+│   │   │   │       └── Service/immich-server@immich
+│   │   │   │           └── PackageInstance/immich@immich
+│   │   │   │               └── Activation/example-jw7q2ly337a9
+│   │   │   ├── Secret/immich-db-bootstrap-password@immich
+│   │   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   └── Job/immich-db-bootstrap-55078afb92@immich
+│   │   │   │       ├── PackageInstance/immich-db@immich
+│   │   │   │       │   └── Activation/example-jw7q2ly337a9
+│   │   │   │       └── Deployment/immich-server@immich
+│   │   │   │           └── Service/immich-server@immich
+│   │   │   │               └── PackageInstance/immich@immich
+│   │   │   │                   └── Activation/example-jw7q2ly337a9
+│   │   │   ├── PackageInstance/secret-ref-immich-db-postgres@immich (import)
+│   │   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   └── Job/immich-db-bootstrap-55078afb92@immich
+│   │   │   │       ├── PackageInstance/immich-db@immich
+│   │   │   │       │   └── Activation/example-jw7q2ly337a9
+│   │   │   │       └── Deployment/immich-server@immich
+│   │   │   │           └── Service/immich-server@immich
+│   │   │   │               └── PackageInstance/immich@immich
+│   │   │   │                   └── Activation/example-jw7q2ly337a9
+│   │   │   ├── PackageInstance/postgres@immich
+│   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   ├── Job/immich-db-bootstrap-55078afb92@immich
+│   │   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   └── Deployment/immich-server@immich
+│   │   │   │       └── Service/immich-server@immich
+│   │   │   │           └── PackageInstance/immich@immich
+│   │   │   │               └── Activation/example-jw7q2ly337a9
+│   │   │   └── Deployment/immich-server@immich
+│   │   │       └── Service/immich-server@immich
+│   │   │           └── PackageInstance/immich@immich
+│   │   │               └── Activation/example-jw7q2ly337a9
+│   │   ├── PackageInstance/secret-ref-postgres-postgres@immich (import)
+│   │   │   ├── PackageInstance/postgres@immich
+│   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   └── PackageInstance/immich-db@immich
+│   │   │       └── Activation/example-jw7q2ly337a9
+│   │   └── PackageInstance/postgres@immich
+│   │       └── Activation/example-jw7q2ly337a9
+│   └── PackageInstance/postgres@immich
+│       └── Activation/example-jw7q2ly337a9
+├── SGInstanceProfile/postgres-profile@immich
+│   ├── SGCluster/postgres@immich
+│   │   ├── PackageInstance/service-ref-postgres-postgres@immich (import)
+│   │   │   ├── Secret/immich-db-credentials@immich
+│   │   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   └── Deployment/immich-server@immich
+│   │   │   │       └── Service/immich-server@immich
+│   │   │   │           └── PackageInstance/immich@immich
+│   │   │   │               └── Activation/example-jw7q2ly337a9
+│   │   │   ├── Secret/immich-db-bootstrap-password@immich
+│   │   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   └── Job/immich-db-bootstrap-55078afb92@immich
+│   │   │   │       ├── PackageInstance/immich-db@immich
+│   │   │   │       │   └── Activation/example-jw7q2ly337a9
+│   │   │   │       └── Deployment/immich-server@immich
+│   │   │   │           └── Service/immich-server@immich
+│   │   │   │               └── PackageInstance/immich@immich
+│   │   │   │                   └── Activation/example-jw7q2ly337a9
+│   │   │   ├── PackageInstance/secret-ref-immich-db-postgres@immich (import)
+│   │   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   └── Job/immich-db-bootstrap-55078afb92@immich
+│   │   │   │       ├── PackageInstance/immich-db@immich
+│   │   │   │       │   └── Activation/example-jw7q2ly337a9
+│   │   │   │       └── Deployment/immich-server@immich
+│   │   │   │           └── Service/immich-server@immich
+│   │   │   │               └── PackageInstance/immich@immich
+│   │   │   │                   └── Activation/example-jw7q2ly337a9
+│   │   │   ├── PackageInstance/postgres@immich
+│   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   ├── Job/immich-db-bootstrap-55078afb92@immich
+│   │   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   └── Deployment/immich-server@immich
+│   │   │   │       └── Service/immich-server@immich
+│   │   │   │           └── PackageInstance/immich@immich
+│   │   │   │               └── Activation/example-jw7q2ly337a9
+│   │   │   └── Deployment/immich-server@immich
+│   │   │       └── Service/immich-server@immich
+│   │   │           └── PackageInstance/immich@immich
+│   │   │               └── Activation/example-jw7q2ly337a9
+│   │   ├── PackageInstance/secret-ref-postgres-postgres@immich (import)
+│   │   │   ├── PackageInstance/postgres@immich
+│   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   └── PackageInstance/immich-db@immich
+│   │   │       └── Activation/example-jw7q2ly337a9
+│   │   └── PackageInstance/postgres@immich
+│   │       └── Activation/example-jw7q2ly337a9
+│   └── PackageInstance/postgres@immich
+│       └── Activation/example-jw7q2ly337a9
+├── SGCluster/postgres@immich
+│   ├── PackageInstance/service-ref-postgres-postgres@immich (import)
+│   │   ├── Secret/immich-db-credentials@immich
+│   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   └── Deployment/immich-server@immich
+│   │   │       └── Service/immich-server@immich
+│   │   │           └── PackageInstance/immich@immich
+│   │   │               └── Activation/example-jw7q2ly337a9
+│   │   ├── Secret/immich-db-bootstrap-password@immich
+│   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   └── Job/immich-db-bootstrap-55078afb92@immich
+│   │   │       ├── PackageInstance/immich-db@immich
+│   │   │       │   └── Activation/example-jw7q2ly337a9
+│   │   │       └── Deployment/immich-server@immich
+│   │   │           └── Service/immich-server@immich
+│   │   │               └── PackageInstance/immich@immich
+│   │   │                   └── Activation/example-jw7q2ly337a9
+│   │   ├── PackageInstance/secret-ref-immich-db-postgres@immich (import)
+│   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   └── Job/immich-db-bootstrap-55078afb92@immich
+│   │   │       ├── PackageInstance/immich-db@immich
+│   │   │       │   └── Activation/example-jw7q2ly337a9
+│   │   │       └── Deployment/immich-server@immich
+│   │   │           └── Service/immich-server@immich
+│   │   │               └── PackageInstance/immich@immich
+│   │   │                   └── Activation/example-jw7q2ly337a9
+│   │   ├── PackageInstance/postgres@immich
+│   │   │   └── Activation/example-jw7q2ly337a9
+│   │   ├── PackageInstance/immich-db@immich
+│   │   │   └── Activation/example-jw7q2ly337a9
+│   │   ├── Job/immich-db-bootstrap-55078afb92@immich
+│   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   └── Deployment/immich-server@immich
+│   │   │       └── Service/immich-server@immich
+│   │   │           └── PackageInstance/immich@immich
+│   │   │               └── Activation/example-jw7q2ly337a9
+│   │   └── Deployment/immich-server@immich
+│   │       └── Service/immich-server@immich
+│   │           └── PackageInstance/immich@immich
+│   │               └── Activation/example-jw7q2ly337a9
+│   ├── PackageInstance/secret-ref-postgres-postgres@immich (import)
+│   │   ├── PackageInstance/postgres@immich
+│   │   │   └── Activation/example-jw7q2ly337a9
+│   │   └── PackageInstance/immich-db@immich
+│   │       └── Activation/example-jw7q2ly337a9
+│   └── PackageInstance/postgres@immich
+│       └── Activation/example-jw7q2ly337a9
+├── PackageInstance/storage@immich
+│   └── Activation/example-jw7q2ly337a9
+├── PackageInstance/service-ref-postgres-postgres@immich (import)
+│   ├── Secret/immich-db-credentials@immich
+│   │   ├── PackageInstance/immich-db@immich
+│   │   │   └── Activation/example-jw7q2ly337a9
+│   │   └── Deployment/immich-server@immich
+│   │       └── Service/immich-server@immich
+│   │           └── PackageInstance/immich@immich
+│   │               └── Activation/example-jw7q2ly337a9
+│   ├── Secret/immich-db-bootstrap-password@immich
+│   │   ├── PackageInstance/immich-db@immich
+│   │   │   └── Activation/example-jw7q2ly337a9
+│   │   └── Job/immich-db-bootstrap-55078afb92@immich
+│   │       ├── PackageInstance/immich-db@immich
+│   │       │   └── Activation/example-jw7q2ly337a9
+│   │       └── Deployment/immich-server@immich
+│   │           └── Service/immich-server@immich
+│   │               └── PackageInstance/immich@immich
+│   │                   └── Activation/example-jw7q2ly337a9
+│   ├── PackageInstance/secret-ref-immich-db-postgres@immich (import)
+│   │   ├── PackageInstance/immich-db@immich
+│   │   │   └── Activation/example-jw7q2ly337a9
+│   │   └── Job/immich-db-bootstrap-55078afb92@immich
+│   │       ├── PackageInstance/immich-db@immich
+│   │       │   └── Activation/example-jw7q2ly337a9
+│   │       └── Deployment/immich-server@immich
+│   │           └── Service/immich-server@immich
+│   │               └── PackageInstance/immich@immich
+│   │                   └── Activation/example-jw7q2ly337a9
+│   ├── PackageInstance/postgres@immich
+│   │   └── Activation/example-jw7q2ly337a9
+│   ├── PackageInstance/immich-db@immich
+│   │   └── Activation/example-jw7q2ly337a9
+│   ├── Job/immich-db-bootstrap-55078afb92@immich
+│   │   ├── PackageInstance/immich-db@immich
+│   │   │   └── Activation/example-jw7q2ly337a9
+│   │   └── Deployment/immich-server@immich
+│   │       └── Service/immich-server@immich
+│   │           └── PackageInstance/immich@immich
+│   │               └── Activation/example-jw7q2ly337a9
+│   └── Deployment/immich-server@immich
+│       └── Service/immich-server@immich
+│           └── PackageInstance/immich@immich
+│               └── Activation/example-jw7q2ly337a9
+├── PackageInstance/secret-ref-postgres-postgres@immich (import)
+│   ├── PackageInstance/postgres@immich
+│   │   └── Activation/example-jw7q2ly337a9
+│   └── PackageInstance/immich-db@immich
+│       └── Activation/example-jw7q2ly337a9
+├── PackageInstance/secret-ref-immich-db-postgres@immich (import)
+│   ├── PackageInstance/immich-db@immich
+│   │   └── Activation/example-jw7q2ly337a9
+│   └── Job/immich-db-bootstrap-55078afb92@immich
+│       ├── PackageInstance/immich-db@immich
+│       │   └── Activation/example-jw7q2ly337a9
+│       └── Deployment/immich-server@immich
+│           └── Service/immich-server@immich
+│               └── PackageInstance/immich@immich
+│                   └── Activation/example-jw7q2ly337a9
+├── PackageInstance/postgres@immich
+│   └── Activation/example-jw7q2ly337a9
+├── PackageInstance/machineLearning@immich
+│   └── Activation/example-jw7q2ly337a9
+├── PackageInstance/immich-db@immich
+│   └── Activation/example-jw7q2ly337a9
+├── PackageInstance/immich@immich
+│   └── Activation/example-jw7q2ly337a9
+├── Job/immich-db-bootstrap-55078afb92@immich
+│   ├── PackageInstance/immich-db@immich
+│   │   └── Activation/example-jw7q2ly337a9
+│   └── Deployment/immich-server@immich
+│       └── Service/immich-server@immich
+│           └── PackageInstance/immich@immich
+│               └── Activation/example-jw7q2ly337a9
+├── Deployment/machineLearning@immich
+│   └── Service/machineLearning@immich
+│       ├── PackageInstance/machineLearning@immich
+│       │   └── Activation/example-jw7q2ly337a9
+│       └── Deployment/immich-server@immich
+│           └── Service/immich-server@immich
+│               └── PackageInstance/immich@immich
+│                   └── Activation/example-jw7q2ly337a9
+└── Deployment/immich-server@immich
+    └── Service/immich-server@immich
+        └── PackageInstance/immich@immich
+            └── Activation/example-jw7q2ly337a9
 Namespace/kube-system
-├── PackageInstance/storage-classes@kube-system
-│   └── Activation/example-yybkqrrnqkpi
-├── Service/coredns-metrics@kube-system
-│   └── Service/coredns@kube-system
-│       └── PackageInstance/coredns@kube-system
-│           └── Activation/example-yybkqrrnqkpi
-├── Service/coredns@kube-system
-│   └── PackageInstance/coredns@kube-system
-│       └── Activation/example-yybkqrrnqkpi
-├── PackageInstance/coredns@kube-system
-│   └── Activation/example-yybkqrrnqkpi
 ├── ServiceAccount/coredns@kube-system
 │   ├── ClusterRoleBinding/coredns
 │   │   └── PackageInstance/coredns@kube-system
-│   │       └── Activation/example-yybkqrrnqkpi
+│   │       └── Activation/example-jw7q2ly337a9
 │   └── Deployment/coredns@kube-system
 │       ├── Service/coredns-metrics@kube-system
 │       │   └── Service/coredns@kube-system
 │       │       └── PackageInstance/coredns@kube-system
-│       │           └── Activation/example-yybkqrrnqkpi
+│       │           └── Activation/example-jw7q2ly337a9
 │       └── Service/coredns@kube-system
 │           └── PackageInstance/coredns@kube-system
-│               └── Activation/example-yybkqrrnqkpi
+│               └── Activation/example-jw7q2ly337a9
+├── Service/coredns-metrics@kube-system
+│   └── Service/coredns@kube-system
+│       └── PackageInstance/coredns@kube-system
+│           └── Activation/example-jw7q2ly337a9
+├── Service/coredns@kube-system
+│   └── PackageInstance/coredns@kube-system
+│       └── Activation/example-jw7q2ly337a9
 ├── ConfigMap/coredns@kube-system
 │   └── Deployment/coredns@kube-system
 │       ├── Service/coredns-metrics@kube-system
 │       │   └── Service/coredns@kube-system
 │       │       └── PackageInstance/coredns@kube-system
-│       │           └── Activation/example-yybkqrrnqkpi
+│       │           └── Activation/example-jw7q2ly337a9
 │       └── Service/coredns@kube-system
 │           └── PackageInstance/coredns@kube-system
-│               └── Activation/example-yybkqrrnqkpi
+│               └── Activation/example-jw7q2ly337a9
+├── PackageInstance/storage-classes@kube-system
+│   └── Activation/example-jw7q2ly337a9
+├── PackageInstance/coredns@kube-system
+│   └── Activation/example-jw7q2ly337a9
 └── Deployment/coredns@kube-system
     ├── Service/coredns-metrics@kube-system
     │   └── Service/coredns@kube-system
     │       └── PackageInstance/coredns@kube-system
-    │           └── Activation/example-yybkqrrnqkpi
+    │           └── Activation/example-jw7q2ly337a9
     └── Service/coredns@kube-system
         └── PackageInstance/coredns@kube-system
-            └── Activation/example-yybkqrrnqkpi
-Namespace/cache
-├── ConfigMap/valkey-configuration@cache
-│   ├── StatefulSet/valkey-node@cache
-│   │   ├── Service/valkey-metrics@cache
-│   │   │   └── PackageInstance/valkey@cache
-│   │   │       └── Activation/example-yybkqrrnqkpi
-│   │   ├── PackageInstance/valkey@cache
-│   │   │   └── Activation/example-yybkqrrnqkpi
-│   │   ├── Service/valkey@cache
-│   │   │   ├── PackageInstance/valkey@cache
-│   │   │   │   └── Activation/example-yybkqrrnqkpi
+            └── Activation/example-jw7q2ly337a9
+Namespace/stackgres-system
+├── ServiceAccount/stackgres-operator@stackgres-system
+│   ├── ClusterRoleBinding/stackgres-operator
+│   │   └── PackageInstance/stackgres-operator@stackgres-system
+│   │       └── Activation/example-jw7q2ly337a9
+│   ├── PackageInstance/stackgres-operator@stackgres-system
+│   │   └── Activation/example-jw7q2ly337a9
+│   └── Deployment/stackgres-operator@stackgres-system
+│       ├── PackageInstance/stackgres-operator@stackgres-system
+│       │   └── Activation/example-jw7q2ly337a9
+│       ├── PackageInstance/crd-ref-sgstreams-stackgres-io@stackgres-system (import)
+│       │   └── PackageInstance/stackgres-operator@stackgres-system
+│       │       └── Activation/example-jw7q2ly337a9
+│       ├── PackageInstance/crd-ref-sgshardeddbops-stackgres-io@stackgres-system (import)
+│       │   └── PackageInstance/stackgres-operator@stackgres-system
+│       │       └── Activation/example-jw7q2ly337a9
+│       ├── PackageInstance/crd-ref-sgshardedclusters-stackgres-io@stackgres-system (import)
+│       │   └── PackageInstance/stackgres-operator@stackgres-system
+│       │       └── Activation/example-jw7q2ly337a9
+│       ├── PackageInstance/crd-ref-sgshardedbackups-stackgres-io@stackgres-system (import)
+│       │   └── PackageInstance/stackgres-operator@stackgres-system
+│       │       └── Activation/example-jw7q2ly337a9
+│       ├── PackageInstance/crd-ref-sgscripts-stackgres-io@stackgres-system (import)
+│       │   └── PackageInstance/stackgres-operator@stackgres-system
+│       │       └── Activation/example-jw7q2ly337a9
+│       ├── PackageInstance/crd-ref-sgpoolconfigs-stackgres-io@stackgres-system (import)
+│       │   └── PackageInstance/stackgres-operator@stackgres-system
+│       │       └── Activation/example-jw7q2ly337a9
+│       ├── PackageInstance/crd-ref-sgpgconfigs-stackgres-io@stackgres-system (import)
+│       │   ├── SGPostgresConfig/postgres-pg16-config@immich
+│       │   │   ├── SGCluster/postgres@immich
+│       │   │   │   ├── PackageInstance/service-ref-postgres-postgres@immich (import)
+│       │   │   │   │   ├── Secret/immich-db-credentials@immich
+│       │   │   │   │   │   ├── PackageInstance/immich-db@immich
+│       │   │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│       │   │   │   │   │   └── Deployment/immich-server@immich
+│       │   │   │   │   │       └── Service/immich-server@immich
+│       │   │   │   │   │           └── PackageInstance/immich@immich
+│       │   │   │   │   │               └── Activation/example-jw7q2ly337a9
+│       │   │   │   │   ├── Secret/immich-db-bootstrap-password@immich
+│       │   │   │   │   │   ├── PackageInstance/immich-db@immich
+│       │   │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│       │   │   │   │   │   └── Job/immich-db-bootstrap-55078afb92@immich
+│       │   │   │   │   │       ├── PackageInstance/immich-db@immich
+│       │   │   │   │   │       │   └── Activation/example-jw7q2ly337a9
+│       │   │   │   │   │       └── Deployment/immich-server@immich
+│       │   │   │   │   │           └── Service/immich-server@immich
+│       │   │   │   │   │               └── PackageInstance/immich@immich
+│       │   │   │   │   │                   └── Activation/example-jw7q2ly337a9
+│       │   │   │   │   ├── PackageInstance/secret-ref-immich-db-postgres@immich (import)
+│       │   │   │   │   │   ├── PackageInstance/immich-db@immich
+│       │   │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│       │   │   │   │   │   └── Job/immich-db-bootstrap-55078afb92@immich
+│       │   │   │   │   │       ├── PackageInstance/immich-db@immich
+│       │   │   │   │   │       │   └── Activation/example-jw7q2ly337a9
+│       │   │   │   │   │       └── Deployment/immich-server@immich
+│       │   │   │   │   │           └── Service/immich-server@immich
+│       │   │   │   │   │               └── PackageInstance/immich@immich
+│       │   │   │   │   │                   └── Activation/example-jw7q2ly337a9
+│       │   │   │   │   ├── PackageInstance/postgres@immich
+│       │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│       │   │   │   │   ├── PackageInstance/immich-db@immich
+│       │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│       │   │   │   │   ├── Job/immich-db-bootstrap-55078afb92@immich
+│       │   │   │   │   │   ├── PackageInstance/immich-db@immich
+│       │   │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│       │   │   │   │   │   └── Deployment/immich-server@immich
+│       │   │   │   │   │       └── Service/immich-server@immich
+│       │   │   │   │   │           └── PackageInstance/immich@immich
+│       │   │   │   │   │               └── Activation/example-jw7q2ly337a9
+│       │   │   │   │   └── Deployment/immich-server@immich
+│       │   │   │   │       └── Service/immich-server@immich
+│       │   │   │   │           └── PackageInstance/immich@immich
+│       │   │   │   │               └── Activation/example-jw7q2ly337a9
+│       │   │   │   ├── PackageInstance/secret-ref-postgres-postgres@immich (import)
+│       │   │   │   │   ├── PackageInstance/postgres@immich
+│       │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│       │   │   │   │   └── PackageInstance/immich-db@immich
+│       │   │   │   │       └── Activation/example-jw7q2ly337a9
+│       │   │   │   └── PackageInstance/postgres@immich
+│       │   │   │       └── Activation/example-jw7q2ly337a9
+│       │   │   └── PackageInstance/postgres@immich
+│       │   │       └── Activation/example-jw7q2ly337a9
+│       │   └── PackageInstance/stackgres-operator@stackgres-system
+│       │       └── Activation/example-jw7q2ly337a9
+│       ├── PackageInstance/crd-ref-sgobjectstorages-stackgres-io@stackgres-system (import)
+│       │   └── PackageInstance/stackgres-operator@stackgres-system
+│       │       └── Activation/example-jw7q2ly337a9
+│       ├── PackageInstance/crd-ref-sginstanceprofiles-stackgres-io@stackgres-system (import)
+│       │   ├── SGInstanceProfile/postgres-profile@immich
+│       │   │   ├── SGCluster/postgres@immich
+│       │   │   │   ├── PackageInstance/service-ref-postgres-postgres@immich (import)
+│       │   │   │   │   ├── Secret/immich-db-credentials@immich
+│       │   │   │   │   │   ├── PackageInstance/immich-db@immich
+│       │   │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│       │   │   │   │   │   └── Deployment/immich-server@immich
+│       │   │   │   │   │       └── Service/immich-server@immich
+│       │   │   │   │   │           └── PackageInstance/immich@immich
+│       │   │   │   │   │               └── Activation/example-jw7q2ly337a9
+│       │   │   │   │   ├── Secret/immich-db-bootstrap-password@immich
+│       │   │   │   │   │   ├── PackageInstance/immich-db@immich
+│       │   │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│       │   │   │   │   │   └── Job/immich-db-bootstrap-55078afb92@immich
+│       │   │   │   │   │       ├── PackageInstance/immich-db@immich
+│       │   │   │   │   │       │   └── Activation/example-jw7q2ly337a9
+│       │   │   │   │   │       └── Deployment/immich-server@immich
+│       │   │   │   │   │           └── Service/immich-server@immich
+│       │   │   │   │   │               └── PackageInstance/immich@immich
+│       │   │   │   │   │                   └── Activation/example-jw7q2ly337a9
+│       │   │   │   │   ├── PackageInstance/secret-ref-immich-db-postgres@immich (import)
+│       │   │   │   │   │   ├── PackageInstance/immich-db@immich
+│       │   │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│       │   │   │   │   │   └── Job/immich-db-bootstrap-55078afb92@immich
+│       │   │   │   │   │       ├── PackageInstance/immich-db@immich
+│       │   │   │   │   │       │   └── Activation/example-jw7q2ly337a9
+│       │   │   │   │   │       └── Deployment/immich-server@immich
+│       │   │   │   │   │           └── Service/immich-server@immich
+│       │   │   │   │   │               └── PackageInstance/immich@immich
+│       │   │   │   │   │                   └── Activation/example-jw7q2ly337a9
+│       │   │   │   │   ├── PackageInstance/postgres@immich
+│       │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│       │   │   │   │   ├── PackageInstance/immich-db@immich
+│       │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│       │   │   │   │   ├── Job/immich-db-bootstrap-55078afb92@immich
+│       │   │   │   │   │   ├── PackageInstance/immich-db@immich
+│       │   │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│       │   │   │   │   │   └── Deployment/immich-server@immich
+│       │   │   │   │   │       └── Service/immich-server@immich
+│       │   │   │   │   │           └── PackageInstance/immich@immich
+│       │   │   │   │   │               └── Activation/example-jw7q2ly337a9
+│       │   │   │   │   └── Deployment/immich-server@immich
+│       │   │   │   │       └── Service/immich-server@immich
+│       │   │   │   │           └── PackageInstance/immich@immich
+│       │   │   │   │               └── Activation/example-jw7q2ly337a9
+│       │   │   │   ├── PackageInstance/secret-ref-postgres-postgres@immich (import)
+│       │   │   │   │   ├── PackageInstance/postgres@immich
+│       │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│       │   │   │   │   └── PackageInstance/immich-db@immich
+│       │   │   │   │       └── Activation/example-jw7q2ly337a9
+│       │   │   │   └── PackageInstance/postgres@immich
+│       │   │   │       └── Activation/example-jw7q2ly337a9
+│       │   │   └── PackageInstance/postgres@immich
+│       │   │       └── Activation/example-jw7q2ly337a9
+│       │   └── PackageInstance/stackgres-operator@stackgres-system
+│       │       └── Activation/example-jw7q2ly337a9
+│       ├── PackageInstance/crd-ref-sgdistributedlogs-stackgres-io@stackgres-system (import)
+│       │   └── PackageInstance/stackgres-operator@stackgres-system
+│       │       └── Activation/example-jw7q2ly337a9
+│       ├── PackageInstance/crd-ref-sgdbops-stackgres-io@stackgres-system (import)
+│       │   └── PackageInstance/stackgres-operator@stackgres-system
+│       │       └── Activation/example-jw7q2ly337a9
+│       ├── PackageInstance/crd-ref-sgclusters-stackgres-io@stackgres-system (import)
+│       │   ├── SGCluster/postgres@immich
+│       │   │   ├── PackageInstance/service-ref-postgres-postgres@immich (import)
+│       │   │   │   ├── Secret/immich-db-credentials@immich
+│       │   │   │   │   ├── PackageInstance/immich-db@immich
+│       │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│       │   │   │   │   └── Deployment/immich-server@immich
+│       │   │   │   │       └── Service/immich-server@immich
+│       │   │   │   │           └── PackageInstance/immich@immich
+│       │   │   │   │               └── Activation/example-jw7q2ly337a9
+│       │   │   │   ├── Secret/immich-db-bootstrap-password@immich
+│       │   │   │   │   ├── PackageInstance/immich-db@immich
+│       │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│       │   │   │   │   └── Job/immich-db-bootstrap-55078afb92@immich
+│       │   │   │   │       ├── PackageInstance/immich-db@immich
+│       │   │   │   │       │   └── Activation/example-jw7q2ly337a9
+│       │   │   │   │       └── Deployment/immich-server@immich
+│       │   │   │   │           └── Service/immich-server@immich
+│       │   │   │   │               └── PackageInstance/immich@immich
+│       │   │   │   │                   └── Activation/example-jw7q2ly337a9
+│       │   │   │   ├── PackageInstance/secret-ref-immich-db-postgres@immich (import)
+│       │   │   │   │   ├── PackageInstance/immich-db@immich
+│       │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│       │   │   │   │   └── Job/immich-db-bootstrap-55078afb92@immich
+│       │   │   │   │       ├── PackageInstance/immich-db@immich
+│       │   │   │   │       │   └── Activation/example-jw7q2ly337a9
+│       │   │   │   │       └── Deployment/immich-server@immich
+│       │   │   │   │           └── Service/immich-server@immich
+│       │   │   │   │               └── PackageInstance/immich@immich
+│       │   │   │   │                   └── Activation/example-jw7q2ly337a9
+│       │   │   │   ├── PackageInstance/postgres@immich
+│       │   │   │   │   └── Activation/example-jw7q2ly337a9
+│       │   │   │   ├── PackageInstance/immich-db@immich
+│       │   │   │   │   └── Activation/example-jw7q2ly337a9
+│       │   │   │   ├── Job/immich-db-bootstrap-55078afb92@immich
+│       │   │   │   │   ├── PackageInstance/immich-db@immich
+│       │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│       │   │   │   │   └── Deployment/immich-server@immich
+│       │   │   │   │       └── Service/immich-server@immich
+│       │   │   │   │           └── PackageInstance/immich@immich
+│       │   │   │   │               └── Activation/example-jw7q2ly337a9
+│       │   │   │   └── Deployment/immich-server@immich
+│       │   │   │       └── Service/immich-server@immich
+│       │   │   │           └── PackageInstance/immich@immich
+│       │   │   │               └── Activation/example-jw7q2ly337a9
+│       │   │   ├── PackageInstance/secret-ref-postgres-postgres@immich (import)
+│       │   │   │   ├── PackageInstance/postgres@immich
+│       │   │   │   │   └── Activation/example-jw7q2ly337a9
+│       │   │   │   └── PackageInstance/immich-db@immich
+│       │   │   │       └── Activation/example-jw7q2ly337a9
+│       │   │   └── PackageInstance/postgres@immich
+│       │   │       └── Activation/example-jw7q2ly337a9
+│       │   └── PackageInstance/stackgres-operator@stackgres-system
+│       │       └── Activation/example-jw7q2ly337a9
+│       └── PackageInstance/crd-ref-sgbackups-stackgres-io@stackgres-system (import)
+│           └── PackageInstance/stackgres-operator@stackgres-system
+│               └── Activation/example-jw7q2ly337a9
+├── Service/stackgres-operator@stackgres-system
+│   ├── PackageInstance/stackgres-operator@stackgres-system
+│   │   └── Activation/example-jw7q2ly337a9
+│   ├── ValidatingWebhookConfiguration/stackgres-operator
+│   │   └── PackageInstance/stackgres-operator@stackgres-system
+│   │       └── Activation/example-jw7q2ly337a9
+│   └── MutatingWebhookConfiguration/stackgres-operator
+│       └── PackageInstance/stackgres-operator@stackgres-system
+│           └── Activation/example-jw7q2ly337a9
+├── PackageInstance/stackgres-operator@stackgres-system
+│   └── Activation/example-jw7q2ly337a9
+├── PackageInstance/crd-ref-sgstreams-stackgres-io@stackgres-system (import)
+│   └── PackageInstance/stackgres-operator@stackgres-system
+│       └── Activation/example-jw7q2ly337a9
+├── PackageInstance/crd-ref-sgshardeddbops-stackgres-io@stackgres-system (import)
+│   └── PackageInstance/stackgres-operator@stackgres-system
+│       └── Activation/example-jw7q2ly337a9
+├── PackageInstance/crd-ref-sgshardedclusters-stackgres-io@stackgres-system (import)
+│   └── PackageInstance/stackgres-operator@stackgres-system
+│       └── Activation/example-jw7q2ly337a9
+├── PackageInstance/crd-ref-sgshardedbackups-stackgres-io@stackgres-system (import)
+│   └── PackageInstance/stackgres-operator@stackgres-system
+│       └── Activation/example-jw7q2ly337a9
+├── PackageInstance/crd-ref-sgscripts-stackgres-io@stackgres-system (import)
+│   └── PackageInstance/stackgres-operator@stackgres-system
+│       └── Activation/example-jw7q2ly337a9
+├── PackageInstance/crd-ref-sgpoolconfigs-stackgres-io@stackgres-system (import)
+│   └── PackageInstance/stackgres-operator@stackgres-system
+│       └── Activation/example-jw7q2ly337a9
+├── PackageInstance/crd-ref-sgpgconfigs-stackgres-io@stackgres-system (import)
+│   ├── SGPostgresConfig/postgres-pg16-config@immich
+│   │   ├── SGCluster/postgres@immich
+│   │   │   ├── PackageInstance/service-ref-postgres-postgres@immich (import)
+│   │   │   │   ├── Secret/immich-db-credentials@immich
+│   │   │   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   │   └── Deployment/immich-server@immich
+│   │   │   │   │       └── Service/immich-server@immich
+│   │   │   │   │           └── PackageInstance/immich@immich
+│   │   │   │   │               └── Activation/example-jw7q2ly337a9
+│   │   │   │   ├── Secret/immich-db-bootstrap-password@immich
+│   │   │   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   │   └── Job/immich-db-bootstrap-55078afb92@immich
+│   │   │   │   │       ├── PackageInstance/immich-db@immich
+│   │   │   │   │       │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   │       └── Deployment/immich-server@immich
+│   │   │   │   │           └── Service/immich-server@immich
+│   │   │   │   │               └── PackageInstance/immich@immich
+│   │   │   │   │                   └── Activation/example-jw7q2ly337a9
+│   │   │   │   ├── PackageInstance/secret-ref-immich-db-postgres@immich (import)
+│   │   │   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   │   └── Job/immich-db-bootstrap-55078afb92@immich
+│   │   │   │   │       ├── PackageInstance/immich-db@immich
+│   │   │   │   │       │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   │       └── Deployment/immich-server@immich
+│   │   │   │   │           └── Service/immich-server@immich
+│   │   │   │   │               └── PackageInstance/immich@immich
+│   │   │   │   │                   └── Activation/example-jw7q2ly337a9
+│   │   │   │   ├── PackageInstance/postgres@immich
+│   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   ├── Job/immich-db-bootstrap-55078afb92@immich
+│   │   │   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   │   └── Deployment/immich-server@immich
+│   │   │   │   │       └── Service/immich-server@immich
+│   │   │   │   │           └── PackageInstance/immich@immich
+│   │   │   │   │               └── Activation/example-jw7q2ly337a9
+│   │   │   │   └── Deployment/immich-server@immich
+│   │   │   │       └── Service/immich-server@immich
+│   │   │   │           └── PackageInstance/immich@immich
+│   │   │   │               └── Activation/example-jw7q2ly337a9
+│   │   │   ├── PackageInstance/secret-ref-postgres-postgres@immich (import)
+│   │   │   │   ├── PackageInstance/postgres@immich
+│   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   └── PackageInstance/immich-db@immich
+│   │   │   │       └── Activation/example-jw7q2ly337a9
+│   │   │   └── PackageInstance/postgres@immich
+│   │   │       └── Activation/example-jw7q2ly337a9
+│   │   └── PackageInstance/postgres@immich
+│   │       └── Activation/example-jw7q2ly337a9
+│   └── PackageInstance/stackgres-operator@stackgres-system
+│       └── Activation/example-jw7q2ly337a9
+├── PackageInstance/crd-ref-sgobjectstorages-stackgres-io@stackgres-system (import)
+│   └── PackageInstance/stackgres-operator@stackgres-system
+│       └── Activation/example-jw7q2ly337a9
+├── PackageInstance/crd-ref-sginstanceprofiles-stackgres-io@stackgres-system (import)
+│   ├── SGInstanceProfile/postgres-profile@immich
+│   │   ├── SGCluster/postgres@immich
+│   │   │   ├── PackageInstance/service-ref-postgres-postgres@immich (import)
+│   │   │   │   ├── Secret/immich-db-credentials@immich
+│   │   │   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   │   └── Deployment/immich-server@immich
+│   │   │   │   │       └── Service/immich-server@immich
+│   │   │   │   │           └── PackageInstance/immich@immich
+│   │   │   │   │               └── Activation/example-jw7q2ly337a9
+│   │   │   │   ├── Secret/immich-db-bootstrap-password@immich
+│   │   │   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   │   └── Job/immich-db-bootstrap-55078afb92@immich
+│   │   │   │   │       ├── PackageInstance/immich-db@immich
+│   │   │   │   │       │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   │       └── Deployment/immich-server@immich
+│   │   │   │   │           └── Service/immich-server@immich
+│   │   │   │   │               └── PackageInstance/immich@immich
+│   │   │   │   │                   └── Activation/example-jw7q2ly337a9
+│   │   │   │   ├── PackageInstance/secret-ref-immich-db-postgres@immich (import)
+│   │   │   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   │   └── Job/immich-db-bootstrap-55078afb92@immich
+│   │   │   │   │       ├── PackageInstance/immich-db@immich
+│   │   │   │   │       │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   │       └── Deployment/immich-server@immich
+│   │   │   │   │           └── Service/immich-server@immich
+│   │   │   │   │               └── PackageInstance/immich@immich
+│   │   │   │   │                   └── Activation/example-jw7q2ly337a9
+│   │   │   │   ├── PackageInstance/postgres@immich
+│   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   ├── Job/immich-db-bootstrap-55078afb92@immich
+│   │   │   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   │   └── Deployment/immich-server@immich
+│   │   │   │   │       └── Service/immich-server@immich
+│   │   │   │   │           └── PackageInstance/immich@immich
+│   │   │   │   │               └── Activation/example-jw7q2ly337a9
+│   │   │   │   └── Deployment/immich-server@immich
+│   │   │   │       └── Service/immich-server@immich
+│   │   │   │           └── PackageInstance/immich@immich
+│   │   │   │               └── Activation/example-jw7q2ly337a9
+│   │   │   ├── PackageInstance/secret-ref-postgres-postgres@immich (import)
+│   │   │   │   ├── PackageInstance/postgres@immich
+│   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   └── PackageInstance/immich-db@immich
+│   │   │   │       └── Activation/example-jw7q2ly337a9
+│   │   │   └── PackageInstance/postgres@immich
+│   │   │       └── Activation/example-jw7q2ly337a9
+│   │   └── PackageInstance/postgres@immich
+│   │       └── Activation/example-jw7q2ly337a9
+│   └── PackageInstance/stackgres-operator@stackgres-system
+│       └── Activation/example-jw7q2ly337a9
+├── PackageInstance/crd-ref-sgdistributedlogs-stackgres-io@stackgres-system (import)
+│   └── PackageInstance/stackgres-operator@stackgres-system
+│       └── Activation/example-jw7q2ly337a9
+├── PackageInstance/crd-ref-sgdbops-stackgres-io@stackgres-system (import)
+│   └── PackageInstance/stackgres-operator@stackgres-system
+│       └── Activation/example-jw7q2ly337a9
+├── PackageInstance/crd-ref-sgclusters-stackgres-io@stackgres-system (import)
+│   ├── SGCluster/postgres@immich
+│   │   ├── PackageInstance/service-ref-postgres-postgres@immich (import)
+│   │   │   ├── Secret/immich-db-credentials@immich
+│   │   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   └── Deployment/immich-server@immich
+│   │   │   │       └── Service/immich-server@immich
+│   │   │   │           └── PackageInstance/immich@immich
+│   │   │   │               └── Activation/example-jw7q2ly337a9
+│   │   │   ├── Secret/immich-db-bootstrap-password@immich
+│   │   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   └── Job/immich-db-bootstrap-55078afb92@immich
+│   │   │   │       ├── PackageInstance/immich-db@immich
+│   │   │   │       │   └── Activation/example-jw7q2ly337a9
+│   │   │   │       └── Deployment/immich-server@immich
+│   │   │   │           └── Service/immich-server@immich
+│   │   │   │               └── PackageInstance/immich@immich
+│   │   │   │                   └── Activation/example-jw7q2ly337a9
+│   │   │   ├── PackageInstance/secret-ref-immich-db-postgres@immich (import)
+│   │   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   └── Job/immich-db-bootstrap-55078afb92@immich
+│   │   │   │       ├── PackageInstance/immich-db@immich
+│   │   │   │       │   └── Activation/example-jw7q2ly337a9
+│   │   │   │       └── Deployment/immich-server@immich
+│   │   │   │           └── Service/immich-server@immich
+│   │   │   │               └── PackageInstance/immich@immich
+│   │   │   │                   └── Activation/example-jw7q2ly337a9
+│   │   │   ├── PackageInstance/postgres@immich
+│   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   ├── Job/immich-db-bootstrap-55078afb92@immich
+│   │   │   │   ├── PackageInstance/immich-db@immich
+│   │   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   │   └── Deployment/immich-server@immich
+│   │   │   │       └── Service/immich-server@immich
+│   │   │   │           └── PackageInstance/immich@immich
+│   │   │   │               └── Activation/example-jw7q2ly337a9
 │   │   │   └── Deployment/immich-server@immich
 │   │   │       └── Service/immich-server@immich
 │   │   │           └── PackageInstance/immich@immich
-│   │   │               └── Activation/example-yybkqrrnqkpi
-│   │   └── Service/valkey-headless@cache
-│   │       └── PackageInstance/valkey@cache
-│   │           └── Activation/example-yybkqrrnqkpi
-│   └── PackageInstance/valkey@cache
-│       └── Activation/example-yybkqrrnqkpi
-├── StatefulSet/valkey-node@cache
-│   ├── Service/valkey-metrics@cache
-│   │   └── PackageInstance/valkey@cache
-│   │       └── Activation/example-yybkqrrnqkpi
-│   ├── PackageInstance/valkey@cache
-│   │   └── Activation/example-yybkqrrnqkpi
-│   ├── Service/valkey@cache
-│   │   ├── PackageInstance/valkey@cache
-│   │   │   └── Activation/example-yybkqrrnqkpi
-│   │   └── Deployment/immich-server@immich
-│   │       └── Service/immich-server@immich
-│   │           └── PackageInstance/immich@immich
-│   │               └── Activation/example-yybkqrrnqkpi
-│   └── Service/valkey-headless@cache
-│       └── PackageInstance/valkey@cache
-│           └── Activation/example-yybkqrrnqkpi
-├── Service/valkey-metrics@cache
-│   └── PackageInstance/valkey@cache
-│       └── Activation/example-yybkqrrnqkpi
-├── PodDisruptionBudget/valkey-node@cache
-│   └── PackageInstance/valkey@cache
-│       └── Activation/example-yybkqrrnqkpi
-├── ConfigMap/valkey-health@cache
-│   ├── StatefulSet/valkey-node@cache
-│   │   ├── Service/valkey-metrics@cache
-│   │   │   └── PackageInstance/valkey@cache
-│   │   │       └── Activation/example-yybkqrrnqkpi
-│   │   ├── PackageInstance/valkey@cache
-│   │   │   └── Activation/example-yybkqrrnqkpi
-│   │   ├── Service/valkey@cache
-│   │   │   ├── PackageInstance/valkey@cache
-│   │   │   │   └── Activation/example-yybkqrrnqkpi
-│   │   │   └── Deployment/immich-server@immich
-│   │   │       └── Service/immich-server@immich
-│   │   │           └── PackageInstance/immich@immich
-│   │   │               └── Activation/example-yybkqrrnqkpi
-│   │   └── Service/valkey-headless@cache
-│   │       └── PackageInstance/valkey@cache
-│   │           └── Activation/example-yybkqrrnqkpi
-│   └── PackageInstance/valkey@cache
-│       └── Activation/example-yybkqrrnqkpi
-├── ConfigMap/valkey-scripts@cache
-│   ├── StatefulSet/valkey-node@cache
-│   │   ├── Service/valkey-metrics@cache
-│   │   │   └── PackageInstance/valkey@cache
-│   │   │       └── Activation/example-yybkqrrnqkpi
-│   │   ├── PackageInstance/valkey@cache
-│   │   │   └── Activation/example-yybkqrrnqkpi
-│   │   ├── Service/valkey@cache
-│   │   │   ├── PackageInstance/valkey@cache
-│   │   │   │   └── Activation/example-yybkqrrnqkpi
-│   │   │   └── Deployment/immich-server@immich
-│   │   │       └── Service/immich-server@immich
-│   │   │           └── PackageInstance/immich@immich
-│   │   │               └── Activation/example-yybkqrrnqkpi
-│   │   └── Service/valkey-headless@cache
-│   │       └── PackageInstance/valkey@cache
-│   │           └── Activation/example-yybkqrrnqkpi
-│   └── PackageInstance/valkey@cache
-│       └── Activation/example-yybkqrrnqkpi
-├── NetworkPolicy/valkey@cache
-│   └── PackageInstance/valkey@cache
-│       └── Activation/example-yybkqrrnqkpi
-├── PackageInstance/valkey@cache
-│   └── Activation/example-yybkqrrnqkpi
-├── ServiceAccount/valkey@cache
-│   ├── StatefulSet/valkey-node@cache
-│   │   ├── Service/valkey-metrics@cache
-│   │   │   └── PackageInstance/valkey@cache
-│   │   │       └── Activation/example-yybkqrrnqkpi
-│   │   ├── PackageInstance/valkey@cache
-│   │   │   └── Activation/example-yybkqrrnqkpi
-│   │   ├── Service/valkey@cache
-│   │   │   ├── PackageInstance/valkey@cache
-│   │   │   │   └── Activation/example-yybkqrrnqkpi
-│   │   │   └── Deployment/immich-server@immich
-│   │   │       └── Service/immich-server@immich
-│   │   │           └── PackageInstance/immich@immich
-│   │   │               └── Activation/example-yybkqrrnqkpi
-│   │   └── Service/valkey-headless@cache
-│   │       └── PackageInstance/valkey@cache
-│   │           └── Activation/example-yybkqrrnqkpi
-│   └── PackageInstance/valkey@cache
-│       └── Activation/example-yybkqrrnqkpi
-├── Service/valkey@cache
-│   ├── PackageInstance/valkey@cache
-│   │   └── Activation/example-yybkqrrnqkpi
-│   └── Deployment/immich-server@immich
-│       └── Service/immich-server@immich
-│           └── PackageInstance/immich@immich
-│               └── Activation/example-yybkqrrnqkpi
-└── Service/valkey-headless@cache
-    └── PackageInstance/valkey@cache
-        └── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/sgscripts.stackgres.io
-└── PackageInstance/stackgres-operator@stackgres-system
-    └── Activation/example-yybkqrrnqkpi
-ClusterRole/cert-manager-controller-approve:cert-manager-io
-└── ClusterRoleBinding/cert-manager-controller-approve:cert-manager-io
-    └── PackageInstance/cert-manager@cert-manager
-        └── Activation/example-yybkqrrnqkpi
-ClusterRole/cert-manager-controller-certificatesigningrequests
-└── ClusterRoleBinding/cert-manager-controller-certificatesigningrequests
-    └── PackageInstance/cert-manager@cert-manager
-        └── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/sgshardedclusters.stackgres.io
-└── PackageInstance/stackgres-operator@stackgres-system
-    └── Activation/example-yybkqrrnqkpi
-ClusterRole/cert-manager-controller-challenges
-└── ClusterRoleBinding/cert-manager-controller-challenges
-    └── PackageInstance/cert-manager@cert-manager
-        └── Activation/example-yybkqrrnqkpi
-ClusterRole/cert-manager-cainjector
-└── ClusterRoleBinding/cert-manager-cainjector
-    └── PackageInstance/cert-manager@cert-manager
-        └── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/issuers.cert-manager.io
-└── PackageInstance/cert-manager@cert-manager
-    └── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/challenges.acme.cert-manager.io
-└── PackageInstance/cert-manager@cert-manager
-    └── Activation/example-yybkqrrnqkpi
-CustomResourceDefinition/sgpoolconfigs.stackgres.io
-└── PackageInstance/stackgres-operator@stackgres-system
-    └── Activation/example-yybkqrrnqkpi
-ClusterRole/cert-manager-view
-└── PackageInstance/cert-manager@cert-manager
-    └── Activation/example-yybkqrrnqkpi
-ClusterRole/coredns
-└── ClusterRoleBinding/coredns
-    └── PackageInstance/coredns@kube-system
-        └── Activation/example-yybkqrrnqkpi
+│   │   │               └── Activation/example-jw7q2ly337a9
+│   │   ├── PackageInstance/secret-ref-postgres-postgres@immich (import)
+│   │   │   ├── PackageInstance/postgres@immich
+│   │   │   │   └── Activation/example-jw7q2ly337a9
+│   │   │   └── PackageInstance/immich-db@immich
+│   │   │       └── Activation/example-jw7q2ly337a9
+│   │   └── PackageInstance/postgres@immich
+│   │       └── Activation/example-jw7q2ly337a9
+│   └── PackageInstance/stackgres-operator@stackgres-system
+│       └── Activation/example-jw7q2ly337a9
+├── PackageInstance/crd-ref-sgbackups-stackgres-io@stackgres-system (import)
+│   └── PackageInstance/stackgres-operator@stackgres-system
+│       └── Activation/example-jw7q2ly337a9
+└── Deployment/stackgres-operator@stackgres-system
+    ├── PackageInstance/stackgres-operator@stackgres-system
+    │   └── Activation/example-jw7q2ly337a9
+    ├── PackageInstance/crd-ref-sgstreams-stackgres-io@stackgres-system (import)
+    │   └── PackageInstance/stackgres-operator@stackgres-system
+    │       └── Activation/example-jw7q2ly337a9
+    ├── PackageInstance/crd-ref-sgshardeddbops-stackgres-io@stackgres-system (import)
+    │   └── PackageInstance/stackgres-operator@stackgres-system
+    │       └── Activation/example-jw7q2ly337a9
+    ├── PackageInstance/crd-ref-sgshardedclusters-stackgres-io@stackgres-system (import)
+    │   └── PackageInstance/stackgres-operator@stackgres-system
+    │       └── Activation/example-jw7q2ly337a9
+    ├── PackageInstance/crd-ref-sgshardedbackups-stackgres-io@stackgres-system (import)
+    │   └── PackageInstance/stackgres-operator@stackgres-system
+    │       └── Activation/example-jw7q2ly337a9
+    ├── PackageInstance/crd-ref-sgscripts-stackgres-io@stackgres-system (import)
+    │   └── PackageInstance/stackgres-operator@stackgres-system
+    │       └── Activation/example-jw7q2ly337a9
+    ├── PackageInstance/crd-ref-sgpoolconfigs-stackgres-io@stackgres-system (import)
+    │   └── PackageInstance/stackgres-operator@stackgres-system
+    │       └── Activation/example-jw7q2ly337a9
+    ├── PackageInstance/crd-ref-sgpgconfigs-stackgres-io@stackgres-system (import)
+    │   ├── SGPostgresConfig/postgres-pg16-config@immich
+    │   │   ├── SGCluster/postgres@immich
+    │   │   │   ├── PackageInstance/service-ref-postgres-postgres@immich (import)
+    │   │   │   │   ├── Secret/immich-db-credentials@immich
+    │   │   │   │   │   ├── PackageInstance/immich-db@immich
+    │   │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+    │   │   │   │   │   └── Deployment/immich-server@immich
+    │   │   │   │   │       └── Service/immich-server@immich
+    │   │   │   │   │           └── PackageInstance/immich@immich
+    │   │   │   │   │               └── Activation/example-jw7q2ly337a9
+    │   │   │   │   ├── Secret/immich-db-bootstrap-password@immich
+    │   │   │   │   │   ├── PackageInstance/immich-db@immich
+    │   │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+    │   │   │   │   │   └── Job/immich-db-bootstrap-55078afb92@immich
+    │   │   │   │   │       ├── PackageInstance/immich-db@immich
+    │   │   │   │   │       │   └── Activation/example-jw7q2ly337a9
+    │   │   │   │   │       └── Deployment/immich-server@immich
+    │   │   │   │   │           └── Service/immich-server@immich
+    │   │   │   │   │               └── PackageInstance/immich@immich
+    │   │   │   │   │                   └── Activation/example-jw7q2ly337a9
+    │   │   │   │   ├── PackageInstance/secret-ref-immich-db-postgres@immich (import)
+    │   │   │   │   │   ├── PackageInstance/immich-db@immich
+    │   │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+    │   │   │   │   │   └── Job/immich-db-bootstrap-55078afb92@immich
+    │   │   │   │   │       ├── PackageInstance/immich-db@immich
+    │   │   │   │   │       │   └── Activation/example-jw7q2ly337a9
+    │   │   │   │   │       └── Deployment/immich-server@immich
+    │   │   │   │   │           └── Service/immich-server@immich
+    │   │   │   │   │               └── PackageInstance/immich@immich
+    │   │   │   │   │                   └── Activation/example-jw7q2ly337a9
+    │   │   │   │   ├── PackageInstance/postgres@immich
+    │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+    │   │   │   │   ├── PackageInstance/immich-db@immich
+    │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+    │   │   │   │   ├── Job/immich-db-bootstrap-55078afb92@immich
+    │   │   │   │   │   ├── PackageInstance/immich-db@immich
+    │   │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+    │   │   │   │   │   └── Deployment/immich-server@immich
+    │   │   │   │   │       └── Service/immich-server@immich
+    │   │   │   │   │           └── PackageInstance/immich@immich
+    │   │   │   │   │               └── Activation/example-jw7q2ly337a9
+    │   │   │   │   └── Deployment/immich-server@immich
+    │   │   │   │       └── Service/immich-server@immich
+    │   │   │   │           └── PackageInstance/immich@immich
+    │   │   │   │               └── Activation/example-jw7q2ly337a9
+    │   │   │   ├── PackageInstance/secret-ref-postgres-postgres@immich (import)
+    │   │   │   │   ├── PackageInstance/postgres@immich
+    │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+    │   │   │   │   └── PackageInstance/immich-db@immich
+    │   │   │   │       └── Activation/example-jw7q2ly337a9
+    │   │   │   └── PackageInstance/postgres@immich
+    │   │   │       └── Activation/example-jw7q2ly337a9
+    │   │   └── PackageInstance/postgres@immich
+    │   │       └── Activation/example-jw7q2ly337a9
+    │   └── PackageInstance/stackgres-operator@stackgres-system
+    │       └── Activation/example-jw7q2ly337a9
+    ├── PackageInstance/crd-ref-sgobjectstorages-stackgres-io@stackgres-system (import)
+    │   └── PackageInstance/stackgres-operator@stackgres-system
+    │       └── Activation/example-jw7q2ly337a9
+    ├── PackageInstance/crd-ref-sginstanceprofiles-stackgres-io@stackgres-system (import)
+    │   ├── SGInstanceProfile/postgres-profile@immich
+    │   │   ├── SGCluster/postgres@immich
+    │   │   │   ├── PackageInstance/service-ref-postgres-postgres@immich (import)
+    │   │   │   │   ├── Secret/immich-db-credentials@immich
+    │   │   │   │   │   ├── PackageInstance/immich-db@immich
+    │   │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+    │   │   │   │   │   └── Deployment/immich-server@immich
+    │   │   │   │   │       └── Service/immich-server@immich
+    │   │   │   │   │           └── PackageInstance/immich@immich
+    │   │   │   │   │               └── Activation/example-jw7q2ly337a9
+    │   │   │   │   ├── Secret/immich-db-bootstrap-password@immich
+    │   │   │   │   │   ├── PackageInstance/immich-db@immich
+    │   │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+    │   │   │   │   │   └── Job/immich-db-bootstrap-55078afb92@immich
+    │   │   │   │   │       ├── PackageInstance/immich-db@immich
+    │   │   │   │   │       │   └── Activation/example-jw7q2ly337a9
+    │   │   │   │   │       └── Deployment/immich-server@immich
+    │   │   │   │   │           └── Service/immich-server@immich
+    │   │   │   │   │               └── PackageInstance/immich@immich
+    │   │   │   │   │                   └── Activation/example-jw7q2ly337a9
+    │   │   │   │   ├── PackageInstance/secret-ref-immich-db-postgres@immich (import)
+    │   │   │   │   │   ├── PackageInstance/immich-db@immich
+    │   │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+    │   │   │   │   │   └── Job/immich-db-bootstrap-55078afb92@immich
+    │   │   │   │   │       ├── PackageInstance/immich-db@immich
+    │   │   │   │   │       │   └── Activation/example-jw7q2ly337a9
+    │   │   │   │   │       └── Deployment/immich-server@immich
+    │   │   │   │   │           └── Service/immich-server@immich
+    │   │   │   │   │               └── PackageInstance/immich@immich
+    │   │   │   │   │                   └── Activation/example-jw7q2ly337a9
+    │   │   │   │   ├── PackageInstance/postgres@immich
+    │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+    │   │   │   │   ├── PackageInstance/immich-db@immich
+    │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+    │   │   │   │   ├── Job/immich-db-bootstrap-55078afb92@immich
+    │   │   │   │   │   ├── PackageInstance/immich-db@immich
+    │   │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+    │   │   │   │   │   └── Deployment/immich-server@immich
+    │   │   │   │   │       └── Service/immich-server@immich
+    │   │   │   │   │           └── PackageInstance/immich@immich
+    │   │   │   │   │               └── Activation/example-jw7q2ly337a9
+    │   │   │   │   └── Deployment/immich-server@immich
+    │   │   │   │       └── Service/immich-server@immich
+    │   │   │   │           └── PackageInstance/immich@immich
+    │   │   │   │               └── Activation/example-jw7q2ly337a9
+    │   │   │   ├── PackageInstance/secret-ref-postgres-postgres@immich (import)
+    │   │   │   │   ├── PackageInstance/postgres@immich
+    │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+    │   │   │   │   └── PackageInstance/immich-db@immich
+    │   │   │   │       └── Activation/example-jw7q2ly337a9
+    │   │   │   └── PackageInstance/postgres@immich
+    │   │   │       └── Activation/example-jw7q2ly337a9
+    │   │   └── PackageInstance/postgres@immich
+    │   │       └── Activation/example-jw7q2ly337a9
+    │   └── PackageInstance/stackgres-operator@stackgres-system
+    │       └── Activation/example-jw7q2ly337a9
+    ├── PackageInstance/crd-ref-sgdistributedlogs-stackgres-io@stackgres-system (import)
+    │   └── PackageInstance/stackgres-operator@stackgres-system
+    │       └── Activation/example-jw7q2ly337a9
+    ├── PackageInstance/crd-ref-sgdbops-stackgres-io@stackgres-system (import)
+    │   └── PackageInstance/stackgres-operator@stackgres-system
+    │       └── Activation/example-jw7q2ly337a9
+    ├── PackageInstance/crd-ref-sgclusters-stackgres-io@stackgres-system (import)
+    │   ├── SGCluster/postgres@immich
+    │   │   ├── PackageInstance/service-ref-postgres-postgres@immich (import)
+    │   │   │   ├── Secret/immich-db-credentials@immich
+    │   │   │   │   ├── PackageInstance/immich-db@immich
+    │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+    │   │   │   │   └── Deployment/immich-server@immich
+    │   │   │   │       └── Service/immich-server@immich
+    │   │   │   │           └── PackageInstance/immich@immich
+    │   │   │   │               └── Activation/example-jw7q2ly337a9
+    │   │   │   ├── Secret/immich-db-bootstrap-password@immich
+    │   │   │   │   ├── PackageInstance/immich-db@immich
+    │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+    │   │   │   │   └── Job/immich-db-bootstrap-55078afb92@immich
+    │   │   │   │       ├── PackageInstance/immich-db@immich
+    │   │   │   │       │   └── Activation/example-jw7q2ly337a9
+    │   │   │   │       └── Deployment/immich-server@immich
+    │   │   │   │           └── Service/immich-server@immich
+    │   │   │   │               └── PackageInstance/immich@immich
+    │   │   │   │                   └── Activation/example-jw7q2ly337a9
+    │   │   │   ├── PackageInstance/secret-ref-immich-db-postgres@immich (import)
+    │   │   │   │   ├── PackageInstance/immich-db@immich
+    │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+    │   │   │   │   └── Job/immich-db-bootstrap-55078afb92@immich
+    │   │   │   │       ├── PackageInstance/immich-db@immich
+    │   │   │   │       │   └── Activation/example-jw7q2ly337a9
+    │   │   │   │       └── Deployment/immich-server@immich
+    │   │   │   │           └── Service/immich-server@immich
+    │   │   │   │               └── PackageInstance/immich@immich
+    │   │   │   │                   └── Activation/example-jw7q2ly337a9
+    │   │   │   ├── PackageInstance/postgres@immich
+    │   │   │   │   └── Activation/example-jw7q2ly337a9
+    │   │   │   ├── PackageInstance/immich-db@immich
+    │   │   │   │   └── Activation/example-jw7q2ly337a9
+    │   │   │   ├── Job/immich-db-bootstrap-55078afb92@immich
+    │   │   │   │   ├── PackageInstance/immich-db@immich
+    │   │   │   │   │   └── Activation/example-jw7q2ly337a9
+    │   │   │   │   └── Deployment/immich-server@immich
+    │   │   │   │       └── Service/immich-server@immich
+    │   │   │   │           └── PackageInstance/immich@immich
+    │   │   │   │               └── Activation/example-jw7q2ly337a9
+    │   │   │   └── Deployment/immich-server@immich
+    │   │   │       └── Service/immich-server@immich
+    │   │   │           └── PackageInstance/immich@immich
+    │   │   │               └── Activation/example-jw7q2ly337a9
+    │   │   ├── PackageInstance/secret-ref-postgres-postgres@immich (import)
+    │   │   │   ├── PackageInstance/postgres@immich
+    │   │   │   │   └── Activation/example-jw7q2ly337a9
+    │   │   │   └── PackageInstance/immich-db@immich
+    │   │   │       └── Activation/example-jw7q2ly337a9
+    │   │   └── PackageInstance/postgres@immich
+    │   │       └── Activation/example-jw7q2ly337a9
+    │   └── PackageInstance/stackgres-operator@stackgres-system
+    │       └── Activation/example-jw7q2ly337a9
+    └── PackageInstance/crd-ref-sgbackups-stackgres-io@stackgres-system (import)
+        └── PackageInstance/stackgres-operator@stackgres-system
+            └── Activation/example-jw7q2ly337a9

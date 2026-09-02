@@ -546,15 +546,16 @@ mod tests {
     }
 
     #[test]
-    fn cross_package_edge_is_collapsed_to_pi() {
-        // Package A: pi_a, workload_a (workload depends on nothing — it's
-        // the upstream that the consumer needs Ready).
-        // Package B: pi_b, consumer_b. consumer_b has a direct edge to
-        // workload_a (cross-package). We expect an extra edge
-        // consumer_b → pi_a to be synthesized.
+    fn cross_package_edge_is_not_collapsed_to_pi() {
+        // Package A: pi_a, workload_a. Package B: pi_b, consumer_b, where
+        // consumer_b has a direct edge to workload_a (cross-package).
         //
-        // pi_a depends on workload_a (via kix.dev/root annotation context
-        // in real Nix evaluation; here we model it directly).
+        // The graph keeps that direct edge as written and synthesizes no
+        // consumer_b → pi_a edge. The PI collapse is disabled (phase 2b): it
+        // produced cycles whenever two packages referenced each other. The
+        // "wait for the whole package" semantics will come back as a wave
+        // gate, not as a DAG edge. This test pins the current contract so
+        // the disabled block cannot silently come back half-way.
         let manifests = vec![
             pkg_manifest("Deployment", "controller", "ns-a", "h_wa", "", "pkg-a"),
             pkg_manifest("PackageInstance", "pkg-a", "ns-a", "h_pia", "h_wa", "pkg-a"),
@@ -575,15 +576,13 @@ mod tests {
         let deps = graph.dependencies(&consumer_id);
         let dep_names: Vec<&str> = deps.iter().map(|n| n.id.name.as_str()).collect();
 
-        // Both the direct cross-package edge and the synthesized PI edge
-        // must be present.
         assert!(
             dep_names.contains(&"controller"),
             "direct cross-package edge should be preserved"
         );
         assert!(
-            dep_names.contains(&"pkg-a"),
-            "cross-package edge should also gate on target package's PI (added edge)"
+            !dep_names.contains(&"pkg-a"),
+            "no PI edge is synthesized while the phase 2b collapse is disabled"
         );
     }
 

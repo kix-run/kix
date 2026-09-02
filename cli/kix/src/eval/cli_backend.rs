@@ -77,11 +77,15 @@ impl NixBackend for CliNixBackend {
         let mut graph = super::store_graph::StoreGraph::from_result_dir(&result_dir)?;
         crate::manifest::stamp::stamp_annotations(&mut graph);
 
-        let raw_manifests: Vec<serde_json::Value> = graph
+        let mut raw_manifests: Vec<serde_json::Value> = graph
             .resources
             .values()
             .map(|r| r.manifest.clone())
             .collect();
+        // StoreGraph.resources is a HashMap, so its iteration order changes
+        // from one run to the next. Sort so that `kix build` and `kix graph`
+        // print the same order every time.
+        raw_manifests.sort_by_cached_key(manifest_sort_key);
 
         // Read scorecard report if present
         let scorecard_path = result_dir.join("kix-scorecard.json");
@@ -317,4 +321,21 @@ fn current_nix_system() -> &'static str {
     } else {
         "x86_64-linux"
     }
+}
+
+/// Stable ordering for manifests: apiVersion, kind, namespace, name.
+fn manifest_sort_key(manifest: &serde_json::Value) -> (String, String, String, String) {
+    let field = |pointer: &str| {
+        manifest
+            .pointer(pointer)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+    (
+        field("/apiVersion"),
+        field("/kind"),
+        field("/metadata/namespace"),
+        field("/metadata/name"),
+    )
 }

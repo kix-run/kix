@@ -23,7 +23,7 @@ fn kix() -> Command {
 #[test]
 fn list_clusters() {
     kix()
-        .arg("list")
+        .args(["list", "clusters"])
         .assert()
         .success()
         .stdout(predicate::str::contains("example"));
