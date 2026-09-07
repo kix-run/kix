@@ -153,8 +153,13 @@ impl DeployObserver for OperatorObserver {
             DeployEvent::CrdRediscovery => {
                 tracing::info!(activation, "Re-running API discovery after CRD");
             }
-            DeployEvent::PruneStart { count } => {
-                tracing::info!(activation, count = *count, "Starting prune");
+            DeployEvent::PruneStart {
+                count,
+                resources,
+                delete,
+            } => {
+                let names: Vec<String> = resources.iter().map(|r| r.display_id()).collect();
+                tracing::info!(activation, count = *count, delete = *delete, resources = ?names, "Starting prune");
             }
             DeployEvent::Finalized {
                 activation: new,

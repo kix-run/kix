@@ -22,6 +22,7 @@ use kix::cluster::graph::ResourceGraph;
 use kix::eval::build::build_cluster_activation_with_status;
 use kix::eval::store;
 use kix::eval::store_graph::{StoreGraph, store_hash};
+use kix::manifest::lifecycle;
 use kix::manifest::stamp::stamp_annotations;
 use kix::manifest::types::{CLUSTER_SCOPED, ResourceId};
 
@@ -93,15 +94,10 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
 
     // 3. Diff: identity hashes in old but not in new = garbage
     let new_hashes: HashSet<String> = new_graph.resources.keys().map(|p| store_hash(p)).collect();
-
-    // Collect garbage manifests (from old graph, for kind/name/ns info)
-    let mut garbage_manifests: HashMap<String, Value> = HashMap::new();
-    for (path, res) in &old_graph.resources {
-        let hash = store_hash(path);
-        if !new_hashes.contains(&hash) {
-            garbage_manifests.insert(hash, res.manifest.clone());
-        }
-    }
+    let garbage_manifests = soft_garbage(
+        old_graph.resources.iter().map(|(p, r)| (p, &r.manifest)),
+        &new_hashes,
+    );
 
     if garbage_manifests.is_empty() {
         if !ctx.global.quiet {
@@ -244,13 +240,9 @@ async fn run_hard_async(
     // Skip Activation CRs here — they're handled separately below.
     let mut garbage: Vec<GarbageEntry> = Vec::new();
     for obj in &live {
-        let obj_kind = obj
-            .data
-            .get("kind")
-            .and_then(|v| v.as_str())
-            .or_else(|| obj.types.as_ref().map(|t| t.kind.as_str()))
-            .unwrap_or("");
-        if obj_kind == "Activation" {
+        if kix::manifest::lifecycle::lifecycle_of_live(obj)
+            == kix::manifest::lifecycle::Lifecycle::Record
+        {
             continue; // handled in the stale-activation block below
         }
 
@@ -322,7 +314,7 @@ async fn run_hard_async(
         for name in superseded {
             garbage.push(GarbageEntry {
                 id: ResourceId {
-                    kind: "Activation".to_string(),
+                    kind: kix::manifest::lifecycle::RECORD_KIND.to_string(),
                     namespace: CLUSTER_SCOPED.to_string(),
                     name,
                 },
@@ -708,5 +700,52 @@ fn resolve_flake_path(flake: &str) -> Result<PathBuf> {
             let cwd = std::env::current_dir().into_diagnostic()?;
             Ok(cwd.join(path))
         }
+    }
+}
+
+/// Old manifests whose store hash is absent from the new build, keyed by
+/// hash. The deploy record is never garbage here: its store hash changes on
+/// every build, so without this filter soft gc listed the currently Active
+/// Activation and `--yes` deleted it (kixpkgs#59, found in review of #63).
+/// Records are retired by `--hard` and `--operator`, which supersede rather
+/// than diff.
+fn soft_garbage<'a>(
+    old: impl IntoIterator<Item = (&'a PathBuf, &'a Value)>,
+    new_hashes: &HashSet<String>,
+) -> HashMap<String, Value> {
+    let mut garbage = HashMap::new();
+    for (path, manifest) in old {
+        if lifecycle::is_record(manifest) {
+            continue;
+        }
+        let hash = store_hash(path);
+        if !new_hashes.contains(&hash) {
+            garbage.insert(hash, manifest.clone());
+        }
+    }
+    garbage
+}
+
+#[cfg(test)]
+mod soft_garbage_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn path(hash32: &str, name: &str) -> PathBuf {
+        PathBuf::from(format!("/nix/store/{hash32}-{name}"))
+    }
+
+    #[test]
+    fn a_rebuilt_record_is_not_garbage_but_a_removed_configmap_is() {
+        let record = json!({"kind": lifecycle::RECORD_KIND, "metadata": {"name": "stage1-aaaa"}});
+        let cm = json!({"kind": "ConfigMap", "metadata": {"name": "old", "namespace": "d"}});
+        let old_record_path = path("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "activation");
+        let old_cm_path = path("cccccccccccccccccccccccccccccccc", "configmap");
+        let old = vec![(&old_record_path, &record), (&old_cm_path, &cm)];
+        // The new build has a different record hash and no ConfigMap.
+        let new_hashes: HashSet<String> = ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string()].into();
+        let garbage = soft_garbage(old, &new_hashes);
+        assert_eq!(garbage.len(), 1, "{garbage:?}");
+        assert!(garbage.contains_key("cccccccccccccccccccccccccccccccc"));
     }
 }

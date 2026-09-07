@@ -213,9 +213,15 @@ pub enum DeployEvent {
     /// CRDs applied; re-ran API discovery. Rendered as a subtle banner so the
     /// user knows later rows may reference newly-known kinds.
     CrdRediscovery,
-    /// About to start pruning orphans. `count` is the number that will be
-    /// attempted (excluding Namespaces and kinds outside discovery).
-    PruneStart { count: usize },
+    /// About to consider the orphans. `resources` names them, in prune
+    /// order. `delete` says whether this run deletes them (`--prune`) or
+    /// only reports them (the default, warn-only). Namespaces and kinds
+    /// outside discovery are listed but never deleted.
+    PruneStart {
+        count: usize,
+        resources: Vec<ResourceId>,
+        delete: bool,
+    },
     /// Activation lifecycle finalized — new CR marked Active (or Degraded),
     /// old one Superseded.
     Finalized {

@@ -34,10 +34,6 @@ use crate::output;
 
 use super::CommandContext;
 
-/// Kix-internal CRs that an "exit" export should drop — they only make sense
-/// to a live kix deployment and would be garbage in a neutral handoff.
-const KIX_INTERNAL_KINDS: &[&str] = &["Activation", "PackageInstance"];
-
 pub fn run(args: &ExportArgs, ctx: &mut CommandContext) -> Result<()> {
     let flake_path = resolve_flake_path(&ctx.global.flake)?;
 
@@ -84,9 +80,11 @@ pub fn run(args: &ExportArgs, ctx: &mut CommandContext) -> Result<()> {
         let manifest = &node.manifest;
         let rid = ResourceId::from_value(manifest);
 
-        // Exit mode: drop kix-internal CRs wholesale. Audit mode keeps them.
+        // Exit mode: drop kix-internal CRs wholesale (they only make sense to
+        // a live kix deployment and would be garbage in a neutral handoff).
+        // Audit mode keeps them.
         if matches!(args.for_mode, ExportMode::Exit)
-            && KIX_INTERNAL_KINDS.contains(&rid.kind.as_str())
+            && kix::manifest::lifecycle::is_kix_internal_kind(&rid.kind)
         {
             skipped_internal += 1;
             continue;

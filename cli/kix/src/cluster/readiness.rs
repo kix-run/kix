@@ -97,15 +97,10 @@ pub struct ImportTarget {
 /// it to `None`. There is no `kix.dev/import-namespace` annotation: an import
 /// always describes a resource in the marker's own namespace.
 pub fn import_target_from_manifest(manifest: &Value) -> Option<ImportTarget> {
-    let kind = manifest.get("kind").and_then(Value::as_str)?;
-    if kind != "PackageInstance" {
+    if !crate::manifest::lifecycle::is_marker(manifest) {
         return None;
     }
     let annotations = manifest.pointer("/metadata/annotations")?;
-    let mode = annotations.get("kix.dev/mode").and_then(Value::as_str)?;
-    if mode != "import" {
-        return None;
-    }
 
     let import_kind = annotations
         .get("kix.dev/import-kind")
@@ -972,8 +967,8 @@ pub fn is_immediate_kind(kind: &str) -> bool {
             | "HorizontalPodAutoscaler"
             | "ServiceMonitor"
             | "PriorityClass"
-            | "PackageInstance"
-            | "Activation"
+            | crate::manifest::lifecycle::PACKAGE_INSTANCE_KIND
+            | crate::manifest::lifecycle::RECORD_KIND
             | "StorageClass"
     )
 }

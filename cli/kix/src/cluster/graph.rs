@@ -115,7 +115,7 @@ impl ResourceGraph {
             let mut package_to_pi: HashMap<String, NodeIndex> = HashMap::new();
             for idx in graph.node_indices() {
                 let node = &graph[idx];
-                if node.id.kind == "PackageInstance"
+                if node.id.kind == crate::manifest::lifecycle::PACKAGE_INSTANCE_KIND
                     && let Some(pkg) = get_annotation(&node.manifest, "kix.dev/package")
                 {
                     package_to_pi.insert(pkg, idx);
@@ -301,9 +301,7 @@ impl ResourceGraph {
         for idx in self.graph.node_indices() {
             let node = &self.graph[idx];
             let label = node.id.display_id();
-            let is_import =
-                get_annotation(&node.manifest, "kix.dev/mode").as_deref() == Some("import");
-            if is_import {
+            if crate::manifest::lifecycle::is_marker(&node.manifest) {
                 dot.push_str(&format!(
                     "  \"{}\" [label=\"{} (import)\" style=dashed color=gray];\n",
                     idx.index(),
@@ -379,8 +377,11 @@ impl ResourceGraph {
         };
 
         let node = &self.graph[idx];
-        let is_import = get_annotation(&node.manifest, "kix.dev/mode").as_deref() == Some("import");
-        let suffix = if is_import { " (import)" } else { "" };
+        let suffix = if crate::manifest::lifecycle::is_marker(&node.manifest) {
+            " (import)"
+        } else {
+            ""
+        };
         output.push_str(&format!(
             "{}{}{}{}\n",
             prefix,
@@ -418,8 +419,7 @@ impl ResourceGraph {
             .node_indices()
             .map(|idx| {
                 let node = &self.graph[idx];
-                let is_import =
-                    get_annotation(&node.manifest, "kix.dev/mode").as_deref() == Some("import");
+                let is_import = crate::manifest::lifecycle::is_marker(&node.manifest);
                 serde_json::json!({
                     "id": node.id.display_id(),
                     "kind": node.id.kind,

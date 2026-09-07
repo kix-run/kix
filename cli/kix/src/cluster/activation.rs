@@ -66,9 +66,9 @@ pub struct ActiveActivation {
 
 /// Find the Activation ApiResource from discovery results.
 pub fn find_activation_ar(discovery: &[(ApiResource, Scope)]) -> Option<&(ApiResource, Scope)> {
-    discovery
-        .iter()
-        .find(|(ar, _)| ar.kind == "Activation" && ar.group == "kix.dev")
+    discovery.iter().find(|(ar, _)| {
+        crate::manifest::lifecycle::is_record_kind(&ar.kind) && ar.group == "kix.dev"
+    })
 }
 
 /// Find the current Active activation for a given cluster.

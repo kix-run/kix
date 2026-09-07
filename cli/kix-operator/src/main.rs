@@ -48,7 +48,7 @@ fn activation_api_resource() -> ApiResource {
         group: "kix.dev".into(),
         version: "v1alpha1".into(),
         api_version: "kix.dev/v1alpha1".into(),
-        kind: "Activation".into(),
+        kind: kix::manifest::lifecycle::RECORD_KIND.into(),
         plural: "activations".into(),
     }
 }

@@ -25,7 +25,7 @@ pub fn activation_api_resource() -> ApiResource {
         group: "kix.dev".into(),
         version: "v1alpha1".into(),
         api_version: "kix.dev/v1alpha1".into(),
-        kind: "Activation".into(),
+        kind: kix::manifest::lifecycle::RECORD_KIND.into(),
         plural: "activations".into(),
     }
 }
@@ -91,7 +91,7 @@ pub async fn apply_activation(
 
     let patch = json!({
         "apiVersion": "kix.dev/v1alpha1",
-        "kind": "Activation",
+        "kind": kix::manifest::lifecycle::RECORD_KIND,
         "metadata": {
             "name": activation_name,
             "labels": {

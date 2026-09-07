@@ -8,6 +8,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::errors::FailureClass;
 use super::fieldsv1;
+use crate::manifest::lifecycle::{lifecycle_of, lifecycle_of_live};
 use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
 use kube::{
     api::{Api, DynamicObject, Patch, PatchParams},
@@ -124,7 +125,10 @@ fn manifest_identity_hash(manifest: &Value) -> Option<&str> {
 }
 
 pub fn detect_changes(new_manifests: &[Value], old_manifests: &[Value]) -> Vec<ChangeAction> {
-    // Index old manifests by K8s identity (kind/ns/name) → identity-hash
+    // Index old manifests by K8s identity (kind/ns/name) → identity-hash.
+    // The previous deploy's record stays in this index so an unchanged
+    // build (same record name, same hash) still comes out as Skip and the
+    // deploy can short-circuit; it is only kept out of the orphan set below.
     let old_by_k8s_id: HashMap<String, &str> = old_manifests
         .iter()
         .filter_map(|m| {
@@ -174,8 +178,14 @@ pub fn detect_changes(new_manifests: &[Value], old_manifests: &[Value]) -> Vec<C
     // came from live reconstruction of something kix never applied (a
     // controller child that inherited the label, a kubectl-applied render),
     // and kix only ever deletes what it stamped.
+    //
+    // The previous deploy's record is never an orphan: it is superseded by
+    // finalize, not pruned, and its name differs from the new record's on
+    // every changed deploy, so treating it like desired state would invent
+    // an orphan that `--prune` then deleted (kixpkgs#59).
     for old_manifest in old_manifests {
-        if manifest_identity_hash(old_manifest).is_none() {
+        if manifest_identity_hash(old_manifest).is_none() || !lifecycle_of(old_manifest).prunable()
+        {
             continue;
         }
         let rid = ResourceId::from_value(old_manifest);
@@ -204,9 +214,12 @@ pub fn detect_changes_live(
     desired_manifests: &[Value],
     live_resources: &[DynamicObject],
 ) -> Vec<ChangeAction> {
-    // Index live resources by K8s identity → identity-hash
+    // Index live resources by K8s identity → identity-hash. Live records
+    // stay in the index so an unchanged record comes out as Skip; they are
+    // kept out of the orphan set below.
     let mut live_by_k8s_id: HashMap<String, Option<&str>> = HashMap::new();
     let mut live_rids: HashMap<String, ResourceId> = HashMap::new();
+    let mut live_prunable: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for obj in live_resources {
         let kind = obj
@@ -231,6 +244,9 @@ pub fn detect_changes_live(
             .map(|s| s.as_str());
 
         live_by_k8s_id.insert(k8s_id.clone(), hash);
+        if lifecycle_of_live(obj).prunable() {
+            live_prunable.insert(k8s_id.clone());
+        }
         live_rids.insert(
             k8s_id,
             ResourceId {
@@ -273,10 +289,13 @@ pub fn detect_changes_live(
 
     // Find orphans: live resources not matched by any desired manifest.
     // Unstamped live objects are never orphans: kix did not apply them, so
-    // kix does not delete them (see detect_changes).
+    // kix does not delete them (see detect_changes). Neither are live
+    // records: the operator strips the record from the desired side and
+    // prunes with `PrunePolicy::Delete`, so a live record that reached this
+    // loop would be deleted on every reconcile (kixpkgs#59).
     for (k8s_id, rid) in &live_rids {
         let stamped = live_by_k8s_id.get(k8s_id).copied().flatten().is_some();
-        if stamped && !matched_live_ids.contains(k8s_id) {
+        if stamped && live_prunable.contains(k8s_id) && !matched_live_ids.contains(k8s_id) {
             actions.push(ChangeAction::Orphan(rid.clone()));
         }
     }
@@ -1065,5 +1084,219 @@ mod tests {
         assert_eq!(skips, 1);
         assert_eq!(applies, 2);
         assert_eq!(orphans, 1);
+    }
+
+    // ---- kixpkgs#59: the deploy record never takes part in change detection
+
+    fn record(name: &str, hash: &str) -> Value {
+        json!({
+            "apiVersion": "kix.dev/v1alpha1",
+            "kind": "Activation",
+            "metadata": {
+                "name": name,
+                "annotations": { IDENTITY_HASH_ANNOTATION: hash, "kix.dev/package": "_cluster" }
+            }
+        })
+    }
+
+    fn live_record(name: &str, hash: &str) -> DynamicObject {
+        serde_json::from_value(record(name, hash)).unwrap()
+    }
+
+    fn orphan_ids(actions: &[ChangeAction]) -> Vec<String> {
+        let mut v: Vec<String> = actions
+            .iter()
+            .filter_map(|a| match a {
+                ChangeAction::Orphan(rid) => Some(rid.display_id()),
+                _ => None,
+            })
+            .collect();
+        v.sort();
+        v
+    }
+
+    fn apply_ids(actions: &[ChangeAction]) -> Vec<String> {
+        let mut v: Vec<String> = actions
+            .iter()
+            .filter_map(|a| match a {
+                ChangeAction::Apply(m) => Some(ResourceId::from_value(m).display_id()),
+                _ => None,
+            })
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// Invariant 1: two builds that differ only in the record produce no
+    /// orphan. The only apply is the new record itself, which is how it
+    /// reaches the cluster.
+    #[test]
+    fn record_rename_is_not_an_orphan() {
+        let shared = manifest(
+            "ConfigMap",
+            "grafana-datasources",
+            "monitoring-system",
+            "same",
+        );
+        let old = vec![
+            record("stage1-0f3g4dhhzqfd", "0f3g4dhhzqfd0xvgwfw987lf0s8xhmkb"),
+            shared.clone(),
+        ];
+        let new = vec![
+            record("stage1-680afyh7g9kd", "680afyh7g9kd5vdqk3p5kzgs5ymyyyzi"),
+            shared,
+        ];
+        let actions = detect_changes(&new, &old);
+        assert!(
+            orphan_ids(&actions).is_empty(),
+            "{:?}",
+            orphan_ids(&actions)
+        );
+        assert_eq!(apply_ids(&actions), vec!["Activation/stage1-680afyh7g9kd"]);
+    }
+
+    /// An unchanged build keeps the same record name and hash. It must come
+    /// out as Skip on both paths, so `total_apply == 0` and the deploy can
+    /// short-circuit on "activation identical". Removing records from the
+    /// old side before matching (the first cut of this fix) broke that: the
+    /// record was Apply on every deploy and the short-circuit was dead code.
+    #[test]
+    fn unchanged_record_is_skip_not_apply() {
+        let dep = manifest("Deployment", "web", "default", "d1");
+        let same = record("stage1-0f3g4dhhzqfd", "0f3g4dhhzqfd0xvgwfw987lf0s8xhmkb");
+        let actions = detect_changes(&[same.clone(), dep.clone()], &[same.clone(), dep.clone()]);
+        assert!(apply_ids(&actions).is_empty(), "{:?}", apply_ids(&actions));
+        assert!(orphan_ids(&actions).is_empty());
+        assert_eq!(
+            actions
+                .iter()
+                .filter(|a| matches!(a, ChangeAction::Skip(_)))
+                .count(),
+            2
+        );
+
+        let live = vec![
+            live_object(
+                "Activation",
+                "stage1-0f3g4dhhzqfd",
+                CLUSTER_SCOPED,
+                "0f3g4dhhzqfd0xvgwfw987lf0s8xhmkb",
+            ),
+            live_object("Deployment", "web", "default", "d1"),
+        ];
+        let actions = detect_changes_live(&[same, dep], &live);
+        assert!(apply_ids(&actions).is_empty(), "{:?}", apply_ids(&actions));
+        assert!(orphan_ids(&actions).is_empty());
+    }
+
+    /// Markers and plain PackageInstances are ordinary desired state for
+    /// orphan detection: one that left the build is an orphan. Pins
+    /// `Lifecycle::prunable()` against a mutant that only prunes `Desired`.
+    #[test]
+    fn markers_and_plain_package_instances_can_be_orphans() {
+        let mut marker = manifest("PackageInstance", "pi-import", "ns", "m1");
+        marker["metadata"]["annotations"]["kix.dev/mode"] = serde_json::json!("import");
+        let plain = manifest("PackageInstance", "pi-plain", "ns", "p1");
+        let keep = manifest("Deployment", "web", "default", "d1");
+        let old = vec![marker, plain, keep.clone()];
+        let actions = detect_changes(std::slice::from_ref(&keep), &old);
+        let mut orphans = orphan_ids(&actions);
+        orphans.sort();
+        assert_eq!(
+            orphans,
+            vec![
+                "PackageInstance/pi-import@ns",
+                "PackageInstance/pi-plain@ns"
+            ]
+        );
+    }
+
+    /// Invariant 2: no orphan action ever names a record, whatever the
+    /// shapes of the two sets.
+    #[test]
+    fn records_are_never_orphans() {
+        let dep = manifest("Deployment", "web", "default", "d1");
+        let cases: Vec<(Vec<Value>, Vec<Value>)> = vec![
+            // old has a record, new has none
+            (vec![dep.clone()], vec![record("c-a", "a"), dep.clone()]),
+            // old has two records (a stale one and the active one)
+            (
+                vec![record("c-c", "c"), dep.clone()],
+                vec![record("c-a", "a"), record("c-b", "b"), dep.clone()],
+            ),
+            // old is only a record
+            (vec![dep.clone()], vec![record("c-a", "a")]),
+            // a real orphan alongside a record: the real one is still found
+            (
+                vec![record("c-b", "b")],
+                vec![record("c-a", "a"), dep.clone()],
+            ),
+        ];
+        for (new, old) in cases {
+            let actions = detect_changes(&new, &old);
+            for id in orphan_ids(&actions) {
+                assert!(
+                    !id.starts_with("Activation/"),
+                    "record reported as orphan: {id}"
+                );
+            }
+        }
+        // The last case must still report the Deployment.
+        let actions = detect_changes(&[record("c-b", "b")], &[record("c-a", "a"), dep]);
+        assert_eq!(orphan_ids(&actions), vec!["Deployment/web@default"]);
+    }
+
+    /// Invariant 3: the store path and the live path agree on the orphan
+    /// set for the same previous state, records included.
+    #[test]
+    fn store_and_live_paths_agree_on_orphans() {
+        let desired = vec![
+            record("c-new", "new"),
+            manifest("Deployment", "keep", "default", "k1"),
+        ];
+        let old = vec![
+            record("c-old", "old"),
+            manifest("Deployment", "keep", "default", "k1"),
+            manifest("Deployment", "gone", "default", "g1"),
+        ];
+        let live = vec![
+            live_record("c-old", "old"),
+            live_object("Deployment", "keep", "default", "k1"),
+            live_object("Deployment", "gone", "default", "g1"),
+        ];
+        let via_store = orphan_ids(&detect_changes(&desired, &old));
+        let via_live = orphan_ids(&detect_changes_live(&desired, &live));
+        assert_eq!(via_store, vec!["Deployment/gone@default"]);
+        assert_eq!(via_store, via_live);
+        // Both paths still apply the new record.
+        assert!(
+            apply_ids(&detect_changes(&desired, &old))
+                .iter()
+                .any(|id| id.starts_with("Activation/")),
+            "store path drops the new record"
+        );
+        assert!(
+            apply_ids(&detect_changes_live(&desired, &live))
+                .iter()
+                .any(|id| id.starts_with("Activation/")),
+            "live path drops the new record"
+        );
+    }
+
+    /// The operator strips the record from the desired side and prunes with
+    /// delete. Before #59 that made every live record an orphan.
+    #[test]
+    fn operator_shape_live_record_is_not_an_orphan() {
+        let desired = vec![manifest("Deployment", "web", "default", "d1")];
+        let live = vec![
+            live_record("c-active", "act"),
+            live_object("Deployment", "web", "default", "d1"),
+        ];
+        let actions = detect_changes_live(&desired, &live);
+        assert!(
+            orphan_ids(&actions).is_empty(),
+            "{:?}",
+            orphan_ids(&actions)
+        );
     }
 }

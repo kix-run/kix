@@ -1,0 +1,278 @@
+//! What kind of thing a manifest is, decided once.
+//!
+//! A kix build contains three kinds of object that look alike on the wire
+//! and are nothing alike in how kix treats them:
+//!
+//! - **Desired** state: the workloads and their supporting resources. Change
+//!   detection diffs them, the scheduler applies them, prune deletes the
+//!   ones that vanished from the build.
+//! - **Markers**: PackageInstance objects with `kix.dev/mode: import`. They
+//!   describe a resource kix does not render (a StorageClass installed by
+//!   hand, a Secret created out of band). Readiness polls for the described
+//!   object instead of the marker.
+//! - **Records**: the Activation, one per deploy. It records which build is
+//!   live. Its lifecycle is supersede-managed by finalize and by `kix gc`,
+//!   never by prune. It changes name on every deploy (the identity-hash
+//!   suffix), so change detection matches it like any other resource (an
+//!   unchanged build is still a Skip) but never lists it as an orphan:
+//!   before this module `--prune` deleted last deploy's record before
+//!   finalize could mark it Superseded (kixpkgs#59).
+//!
+//! Before this module the distinction lived in eleven `kind == "Activation"`
+//! comparisons across three crates, each a private copy of the same rule,
+//! and the store-graph path in deploy had forgotten it. This is the one
+//! table. Nothing outside it may compare a kind string to `"Activation"`
+//! (a test in this module enforces that).
+
+use kube::api::DynamicObject;
+use serde_json::Value;
+
+/// The kind of the deploy record.
+pub const RECORD_KIND: &str = "Activation";
+/// The kind that carries import markers (and, without the mode annotation,
+/// ordinary package instance records that are desired state like any other).
+pub const PACKAGE_INSTANCE_KIND: &str = "PackageInstance";
+/// The annotation that turns a PackageInstance into an import marker.
+pub const MODE_ANNOTATION: &str = "kix.dev/mode";
+/// The mode value that marks an import.
+pub const IMPORT_MODE: &str = "import";
+
+/// How kix treats a manifest. See the module docs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Lifecycle {
+    /// Diffed, applied, pruned.
+    Desired,
+    /// Applied; readiness verifies the object it describes; never pruned
+    /// by content (it has no content of its own).
+    Marker,
+    /// Applied once at the end of a deploy; superseded, never pruned.
+    Record,
+}
+
+impl Lifecycle {
+    /// Can this thing be an orphan, that is, deleted because it left the
+    /// build? Only desired state and markers. Records never.
+    pub fn prunable(self) -> bool {
+        !matches!(self, Lifecycle::Record)
+    }
+}
+
+/// Classify from a kind and an annotation lookup. The one place the rule
+/// is written; the public functions below adapt manifests and live objects
+/// to it.
+fn classify(kind: &str, mode: Option<&str>) -> Lifecycle {
+    if kind == RECORD_KIND {
+        Lifecycle::Record
+    } else if kind == PACKAGE_INSTANCE_KIND && mode == Some(IMPORT_MODE) {
+        Lifecycle::Marker
+    } else {
+        Lifecycle::Desired
+    }
+}
+
+/// Is this kind the record kind? For call sites that hold only a
+/// `ResourceId`, not the manifest.
+pub fn is_record_kind(kind: &str) -> bool {
+    kind == RECORD_KIND
+}
+
+/// Classify a rendered manifest.
+pub fn lifecycle_of(manifest: &Value) -> Lifecycle {
+    let kind = manifest.get("kind").and_then(Value::as_str).unwrap_or("");
+    let mode = manifest
+        .pointer("/metadata/annotations")
+        .and_then(|a| a.get(MODE_ANNOTATION))
+        .and_then(Value::as_str);
+    classify(kind, mode)
+}
+
+/// Classify a live object. LIST responses put the kind either in `.data`
+/// (kix injects it there) or in `.types`; annotations live on the typed
+/// metadata.
+pub fn lifecycle_of_live(obj: &DynamicObject) -> Lifecycle {
+    let kind = obj
+        .data
+        .get("kind")
+        .and_then(Value::as_str)
+        .or_else(|| obj.types.as_ref().map(|t| t.kind.as_str()))
+        .unwrap_or("");
+    let mode = obj
+        .metadata
+        .annotations
+        .as_ref()
+        .and_then(|a| a.get(MODE_ANNOTATION))
+        .map(String::as_str);
+    classify(kind, mode)
+}
+
+/// Is this manifest the deploy record?
+pub fn is_record(manifest: &Value) -> bool {
+    lifecycle_of(manifest) == Lifecycle::Record
+}
+
+/// Is this manifest an import marker?
+pub fn is_marker(manifest: &Value) -> bool {
+    lifecycle_of(manifest) == Lifecycle::Marker
+}
+
+/// The deploy record in a manifest set, if present. A build carries at most
+/// one; the first is returned.
+pub fn record_of(manifests: &[Value]) -> Option<&Value> {
+    manifests.iter().find(|m| is_record(m))
+}
+
+/// Kinds that only make sense inside a live kix deployment. An "exit"
+/// export drops them; they would be garbage in a neutral handoff.
+pub fn is_kix_internal_kind(kind: &str) -> bool {
+    kind == RECORD_KIND || kind == PACKAGE_INSTANCE_KIND
+}
+
+/// [`is_kix_internal_kind`] for a manifest.
+pub fn is_kix_internal(manifest: &Value) -> bool {
+    is_kix_internal_kind(manifest.get("kind").and_then(Value::as_str).unwrap_or(""))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn m(kind: &str, mode: Option<&str>) -> Value {
+        let mut v = json!({ "apiVersion": "v1", "kind": kind, "metadata": { "name": "x" } });
+        if let Some(mode) = mode {
+            v["metadata"]["annotations"] = json!({ MODE_ANNOTATION: mode });
+        }
+        v
+    }
+
+    #[test]
+    fn table() {
+        assert_eq!(lifecycle_of(&m("Activation", None)), Lifecycle::Record);
+        assert_eq!(
+            lifecycle_of(&m("Activation", Some("import"))),
+            Lifecycle::Record
+        );
+        assert_eq!(
+            lifecycle_of(&m("PackageInstance", Some("import"))),
+            Lifecycle::Marker
+        );
+        assert_eq!(
+            lifecycle_of(&m("PackageInstance", None)),
+            Lifecycle::Desired
+        );
+        assert_eq!(
+            lifecycle_of(&m("PackageInstance", Some("normal"))),
+            Lifecycle::Desired
+        );
+        assert_eq!(
+            lifecycle_of(&m("Deployment", Some("import"))),
+            Lifecycle::Desired
+        );
+        assert_eq!(lifecycle_of(&json!({})), Lifecycle::Desired);
+        assert!(!Lifecycle::Record.prunable());
+        assert!(Lifecycle::Marker.prunable());
+        assert!(Lifecycle::Desired.prunable());
+    }
+
+    #[test]
+    fn live_objects_classify_the_same_way() {
+        let mut obj: DynamicObject = serde_json::from_value(json!({
+            "apiVersion": "kix.dev/v1alpha1",
+            "kind": "Activation",
+            "metadata": { "name": "stage1-abc" }
+        }))
+        .unwrap();
+        assert_eq!(lifecycle_of_live(&obj), Lifecycle::Record);
+        // Kind injected into .data by the sweep, types absent.
+        obj.types = None;
+        obj.data = json!({ "kind": "PackageInstance" });
+        obj.metadata.annotations =
+            Some([(MODE_ANNOTATION.to_string(), "import".to_string())].into());
+        assert_eq!(lifecycle_of_live(&obj), Lifecycle::Marker);
+        obj.metadata.annotations = None;
+        assert_eq!(lifecycle_of_live(&obj), Lifecycle::Desired);
+    }
+
+    #[test]
+    fn split_and_find() {
+        let set = vec![
+            m("Deployment", None),
+            m("Activation", None),
+            m("PackageInstance", Some("import")),
+        ];
+        assert_eq!(
+            record_of(&set).map(|r| r["kind"].as_str().unwrap()),
+            Some("Activation")
+        );
+        assert_eq!(set.iter().filter(|m| is_record(m)).count(), 1);
+        assert!(is_kix_internal(&m("PackageInstance", None)));
+        assert!(!is_kix_internal(&m("Deployment", None)));
+    }
+
+    /// Invariant 7 from kixpkgs#59: the kind strings of the record and the
+    /// marker are written in exactly one place. Any other non-test line in
+    /// the three crates that spells `"Activation"` or `"PackageInstance"` is
+    /// a private copy of the rule (a comparison, a match arm, a constructed
+    /// object), which is how the phantom orphan happened. Use `RECORD_KIND`
+    /// and `PACKAGE_INSTANCE_KIND` instead. Test modules (everything after
+    /// the first `#[cfg(test)]` in a file) may use the literals as fixtures.
+    #[test]
+    fn no_other_file_spells_the_record_or_marker_kind() {
+        let lib_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let workspace = lib_src.parent().unwrap().parent().unwrap();
+        let roots = [
+            lib_src.clone(),
+            workspace.join("kix-cli").join("src"),
+            workspace.join("kix-operator").join("src"),
+        ];
+        let mut offenders = Vec::new();
+        let mut scanned = 0usize;
+        for root in roots {
+            assert!(root.is_dir(), "scan root missing: {}", root.display());
+            for path in rust_files(&root) {
+                if path.ends_with("lifecycle.rs") {
+                    continue;
+                }
+                scanned += 1;
+                let text = std::fs::read_to_string(&path).unwrap();
+                for (i, line) in text.lines().enumerate() {
+                    if line.trim_start().starts_with("#[cfg(test)]") {
+                        break;
+                    }
+                    let trimmed = line.trim_start();
+                    if trimmed.starts_with("//") {
+                        continue;
+                    }
+                    if line.contains("\"Activation\"") || line.contains("\"PackageInstance\"") {
+                        offenders.push(format!("{}:{}: {}", path.display(), i + 1, line.trim()));
+                    }
+                }
+            }
+        }
+        assert!(
+            scanned > 50,
+            "scan reached only {scanned} files; roots misresolved?"
+        );
+        assert!(
+            offenders.is_empty(),
+            "the record or marker kind is spelled outside manifest/lifecycle.rs:\n{}",
+            offenders.join("\n")
+        );
+    }
+
+    fn rust_files(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let mut out = Vec::new();
+        let Ok(entries) = std::fs::read_dir(root) else {
+            return out;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                out.extend(rust_files(&path));
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(path);
+            }
+        }
+        out
+    }
+}

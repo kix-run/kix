@@ -366,24 +366,14 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
     let plan = DeployPlan::from_graph_and_changes(&resource_graph, &all_actions);
 
     // Find the target activation name and identity hash
-    let activation_name = target_manifests.iter().find_map(|m| {
-        let kind = m.get("kind")?.as_str()?;
-        if kind == "Activation" {
-            m.pointer("/metadata/name")?.as_str().map(|s| s.to_string())
-        } else {
-            None
-        }
-    });
-    let activation_identity_hash = target_manifests.iter().find_map(|m| {
-        let kind = m.get("kind")?.as_str()?;
-        if kind == "Activation" {
-            m.pointer("/metadata/annotations")
-                .and_then(|a| a.get("kix.dev/identity-hash"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-        } else {
-            None
-        }
+    let record = kix::manifest::lifecycle::record_of(&target_manifests);
+    let activation_name =
+        record.and_then(|m| m.pointer("/metadata/name")?.as_str().map(|s| s.to_string()));
+    let activation_identity_hash = record.and_then(|m| {
+        m.pointer("/metadata/annotations")
+            .and_then(|a| a.get("kix.dev/identity-hash"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
     });
 
     // 7. Display plan

@@ -100,8 +100,21 @@ impl DeployObserver for LineObserver {
                     println!("crd> re-running API discovery");
                 }
             }
-            DeployEvent::PruneStart { count } => {
-                println!("prune> {count} orphaned resources");
+            DeployEvent::PruneStart {
+                count,
+                resources,
+                delete,
+            } => {
+                if *delete {
+                    println!("prune> deleting {count} orphaned resources");
+                } else {
+                    println!(
+                        "prune> {count} orphaned resources kept (warn-only; pass --prune to delete)"
+                    );
+                }
+                for rid in resources {
+                    println!("{}> orphan", rid.display_id());
+                }
             }
             DeployEvent::Finalized {
                 activation,
@@ -205,10 +218,16 @@ impl DeployObserver for JsonObserver {
                 "type": "crd_rediscovery",
                 "elapsed_ms": elapsed_ms,
             }),
-            DeployEvent::PruneStart { count } => json!({
+            DeployEvent::PruneStart {
+                count,
+                resources,
+                delete,
+            } => json!({
                 "type": "prune_start",
                 "elapsed_ms": elapsed_ms,
                 "count": count,
+                "delete": delete,
+                "resources": resources.iter().map(|r| r.display_id()).collect::<Vec<_>>(),
             }),
             DeployEvent::Finalized {
                 activation,

@@ -22,7 +22,6 @@ const IDENTITY_HASH: &str = "kix.dev/identity-hash";
 const DEPENDS_ON: &str = "kix.dev/depends-on";
 const PACKAGE: &str = "kix.dev/package";
 const PACKAGE_NAMESPACE: &str = "kix.dev/package-namespace";
-const IMPORT_MODE: &str = "kix.dev/mode";
 // Both spellings mean the same thing; helm-imported hooks carry the helm one.
 const HOOK_DELETE_POLICY: [&str; 2] = ["kix.dev/hook-delete-policy", "helm.sh/hook-delete-policy"];
 
@@ -185,9 +184,8 @@ pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
             .and_then(|a| a.get(PACKAGE_NAMESPACE))
             .cloned()
             .unwrap_or_else(|| "_cluster".to_string());
-        let is_import = annotations
-            .and_then(|a| a.get(IMPORT_MODE))
-            .is_some_and(|v| v == "import");
+        let is_import = kix::manifest::lifecycle::lifecycle_of_live(&obj)
+            == kix::manifest::lifecycle::Lifecycle::Marker;
         let depends_on_str = annotations
             .and_then(|a| a.get(DEPENDS_ON))
             .cloned()

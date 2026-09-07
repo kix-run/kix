@@ -832,8 +832,23 @@ pub async fn run_deploy(
         .collect();
     if !effective_orphans.is_empty() && config.prune != PrunePolicy::Skip {
         let ordered = prune_order(&effective_orphans, old_manifests);
+        let delete = config.prune == PrunePolicy::Delete;
+        // Namespaces are never deleted automatically, so when deleting, the
+        // announced list is what will actually go. Under warn-only they are
+        // still worth naming.
+        let announced: Vec<ResourceId> = if delete {
+            ordered
+                .iter()
+                .filter(|r| r.kind != "Namespace")
+                .cloned()
+                .collect()
+        } else {
+            ordered.clone()
+        };
         emit(DeployEvent::PruneStart {
-            count: ordered.len(),
+            count: announced.len(),
+            resources: announced,
+            delete,
         });
 
         for rid in &ordered {
@@ -1689,6 +1704,22 @@ mod engine_tests {
                 .collect()
         }
 
+        fn prune_starts(&self) -> Vec<(usize, Vec<ResourceId>, bool)> {
+            self.0
+                .lock()
+                .unwrap()
+                .iter()
+                .filter_map(|e| match e {
+                    DeployEvent::PruneStart {
+                        count,
+                        resources,
+                        delete,
+                    } => Some((*count, resources.clone(), *delete)),
+                    _ => None,
+                })
+                .collect()
+        }
+
         fn best_effort_failures(&self) -> Vec<String> {
             self.0
                 .lock()
@@ -2339,6 +2370,12 @@ mod engine_tests {
             .filter(|c| matches!(c, Call::Delete(_)))
             .collect();
         assert_eq!(delete_calls, vec![Call::Delete(rid("ConfigMap", "old"))]);
+        // The announced prune list matches what is acted on: the Namespace
+        // is never deleted, so it is not announced as a deletion.
+        assert_eq!(
+            rec.prune_starts(),
+            vec![(1, vec![rid("ConfigMap", "old")], true)]
+        );
         let failed: Vec<(NodeId, Verdict)> = rec
             .terminals()
             .into_iter()

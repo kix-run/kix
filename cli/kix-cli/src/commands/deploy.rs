@@ -39,6 +39,7 @@ use kix::cluster::stream::{
 use kix::cluster::watchdog::StallPolicy;
 use kix::eval::build::build_cluster_activation_with_status;
 use kix::eval::store_graph::StoreGraph;
+use kix::manifest::lifecycle;
 use kix::manifest::stamp::stamp_annotations;
 use kix::manifest::types::ResourceId;
 
@@ -197,11 +198,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     let plan = DeployPlan::from_graph_and_changes(&resource_graph, &all_actions);
 
     // Find the Activation resource name and identity-hash from the new manifests
-    let activation_manifest = new_manifests.iter().find(|m| {
-        m.get("kind")
-            .and_then(|v| v.as_str())
-            .is_some_and(|k| k == "Activation")
-    });
+    let activation_manifest = lifecycle::record_of(&new_manifests);
     let activation_name = activation_manifest.and_then(|m| {
         m.pointer("/metadata/name")
             .and_then(|v| v.as_str())
@@ -237,7 +234,17 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
 
         if !orphan_rids.is_empty() {
             let orphan_str = orphan_rids.len().to_string();
-            println!("  {} orphaned", output::red(&orphan_str),);
+            let fate = if args.prune_mode == Some(PruneMode::No) {
+                "kept (--prune-mode=no)"
+            } else if prune_flag_requested(args) {
+                "will be deleted"
+            } else {
+                "kept; pass --prune to delete"
+            };
+            println!("  {} orphaned ({fate})", output::red(&orphan_str));
+            for rid in &orphan_rids {
+                println!("    {} {}", output::red("-"), rid.display_id());
+            }
         }
     }
 
@@ -351,7 +358,7 @@ fn load_old_from_cache(
             match StoreGraph::from_result_dir_with_status(&old_result_dir, &noop) {
                 Ok(mut old_graph) => {
                     stamp_annotations(&mut old_graph);
-                    let manifests = old_graph
+                    let manifests: Vec<Value> = old_graph
                         .resources
                         .values()
                         .map(|r| r.manifest.clone())
@@ -376,15 +383,12 @@ fn load_old_from_cache(
 /// Extract the `kix.dev/identity-hash` annotation from the Activation
 /// manifest in a manifest set, if present.
 fn find_activation_identity_hash(manifests: &[Value]) -> Option<String> {
-    manifests
-        .iter()
-        .find(|m| m.get("kind").and_then(|v| v.as_str()) == Some("Activation"))
-        .and_then(|m| {
-            m.pointer("/metadata/annotations")
-                .and_then(|a| a.get("kix.dev/identity-hash"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-        })
+    lifecycle::record_of(manifests).and_then(|m| {
+        m.pointer("/metadata/annotations")
+            .and_then(|a| a.get("kix.dev/identity-hash"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    })
 }
 
 /// Connect to cluster, fetch Active Activation, resolve to local store graph.
@@ -450,7 +454,7 @@ async fn load_old_from_cluster(
                     match StoreGraph::from_result_dir_with_status(&result_dir, &noop) {
                         Ok(mut old_graph) => {
                             stamp_annotations(&mut old_graph);
-                            let manifests = old_graph
+                            let manifests: Vec<Value> = old_graph
                                 .resources
                                 .values()
                                 .map(|r| r.manifest.clone())
@@ -495,6 +499,22 @@ async fn load_old_from_cluster(
     }
 }
 
+/// The prune policy the flags ask for. `--prune-mode=no` skips, plain
+/// `deploy` reports orphans without deleting (warn-only), `--prune` or
+/// `--prune-mode=eager` deletes.
+fn prune_policy_for(args: &DeployArgs) -> PrunePolicy {
+    match args.prune_mode.unwrap_or(PruneMode::Default) {
+        PruneMode::No => PrunePolicy::Skip,
+        PruneMode::Default if !args.prune => PrunePolicy::WarnOnly,
+        PruneMode::Default | PruneMode::Eager => PrunePolicy::Delete,
+    }
+}
+
+/// Will this run delete orphans? Used to word the plan honestly.
+fn prune_flag_requested(args: &DeployArgs) -> bool {
+    prune_policy_for(args) == PrunePolicy::Delete
+}
+
 /// Reconstruct the previous deploy's manifest set from live cluster state.
 ///
 /// Fallback for when the old activation's store path is gone (garbage-
@@ -523,15 +543,7 @@ async fn reconstruct_old_from_live(
         })?;
     Ok(objects
         .into_iter()
-        .filter(|obj| {
-            let kind = obj
-                .data
-                .get("kind")
-                .and_then(|v| v.as_str())
-                .or_else(|| obj.types.as_ref().map(|t| t.kind.as_str()))
-                .unwrap_or("");
-            kind != "Activation"
-        })
+        .filter(|obj| lifecycle::lifecycle_of_live(obj).prunable())
         .map(|mut obj| {
             fetch::normalize_for_diff(&mut obj);
             kix::cluster::fieldsv1::merge_typed_metadata(&obj)
@@ -564,7 +576,7 @@ fn synthesize_old_graph(old_manifests: &[Value], new_graph: &StoreGraph) -> Stor
     // "ns/instance" → version, from live PackageInstance manifests.
     let mut version_by_key: HashMap<String, String> = HashMap::new();
     for m in old_manifests {
-        if m.get("kind").and_then(Value::as_str) != Some("PackageInstance") {
+        if m.get("kind").and_then(Value::as_str) != Some(lifecycle::PACKAGE_INSTANCE_KIND) {
             continue;
         }
         let ns = m
@@ -708,13 +720,28 @@ impl DeployObserver for StreamCliObserver {
                     eprintln!("{} re-running API discovery", output::dim("crd:"));
                 }
             }
-            DeployEvent::PruneStart { count } => {
+            DeployEvent::PruneStart {
+                count,
+                resources,
+                delete,
+            } => {
                 println!();
-                println!(
-                    "{} pruning {} orphaned resources...",
-                    output::bold("prune:"),
-                    count,
-                );
+                if *delete {
+                    println!(
+                        "{} deleting {} orphaned resources...",
+                        output::bold("prune:"),
+                        count,
+                    );
+                } else {
+                    println!(
+                        "{} {} orphaned resources kept (warn-only; pass --prune to delete)",
+                        output::bold("prune:"),
+                        count,
+                    );
+                }
+                for rid in resources {
+                    println!("  {} {}", output::dim("-"), rid.display_id());
+                }
             }
             DeployEvent::Finalized {
                 activation,
@@ -938,12 +965,7 @@ async fn run_deploy_async(
         .map_err(|e| miette!("API discovery failed: {e}"))?;
     let discovery = Arc::new(tokio::sync::RwLock::new(discovery));
 
-    let prune_mode = args.prune_mode.unwrap_or(PruneMode::Default);
-    let prune_policy = match prune_mode {
-        PruneMode::No => PrunePolicy::Skip,
-        PruneMode::Default if !args.prune => PrunePolicy::WarnOnly,
-        PruneMode::Default | PruneMode::Eager => PrunePolicy::Delete,
-    };
+    let prune_policy = prune_policy_for(args);
     let on_error = match args.on_error {
         OnError::Stop => OnErrorPolicy::Stop,
         OnError::Continue => OnErrorPolicy::Continue,
@@ -1155,11 +1177,14 @@ fn render_offline_dry_run(
 
 fn print_summary(r: &DeployResult, dry_run: bool) {
     let failed_str = r.failed.to_string();
-    let cancelled_tail = if r.cancelled > 0 {
+    let mut cancelled_tail = if r.cancelled > 0 {
         format!(", {} cancelled", output::dim(&r.cancelled.to_string()),)
     } else {
         String::new()
     };
+    if r.pruned > 0 {
+        cancelled_tail.push_str(&format!(", {} pruned", output::red(&r.pruned.to_string())));
+    }
     let prefix = if dry_run {
         "Dry run complete"
     } else {
@@ -1274,11 +1299,7 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     }
 
     // 2. Find activation name and identity hash from manifests
-    let activation_manifest = new_manifests.iter().find(|m| {
-        m.get("kind")
-            .and_then(|v| v.as_str())
-            .is_some_and(|k| k == "Activation")
-    });
+    let activation_manifest = lifecycle::record_of(&new_manifests);
     let activation_name = activation_manifest
         .and_then(|m| {
             m.pointer("/metadata/name")
@@ -1541,5 +1562,45 @@ mod tests {
         let old = old_by_id(&[("Deployment", "ns-a", "foo")]);
         let action = classify_offline_apply(&rid("Deployment", "ns-b", "foo"), &old);
         assert!(matches!(action, ApplyAction::Created));
+    }
+}
+
+#[cfg(test)]
+mod prune_flag_tests {
+    use super::*;
+    use crate::cli::{Cli, Command};
+    use clap::Parser;
+
+    fn deploy_args(extra: &[&str]) -> DeployArgs {
+        let mut argv = vec!["kix", "deploy", "x"];
+        argv.extend_from_slice(extra);
+        match Cli::try_parse_from(argv).expect("args parse").command {
+            Command::Deploy(args) => args,
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn prune_policy_follows_the_flags() {
+        assert_eq!(prune_policy_for(&deploy_args(&[])), PrunePolicy::WarnOnly);
+        assert!(!prune_flag_requested(&deploy_args(&[])));
+        assert_eq!(
+            prune_policy_for(&deploy_args(&["--prune"])),
+            PrunePolicy::Delete
+        );
+        assert!(prune_flag_requested(&deploy_args(&["--prune"])));
+        assert_eq!(
+            prune_policy_for(&deploy_args(&["--prune-mode", "eager"])),
+            PrunePolicy::Delete
+        );
+        assert_eq!(
+            prune_policy_for(&deploy_args(&["--prune", "--prune-mode", "no"])),
+            PrunePolicy::Skip
+        );
+        assert!(!prune_flag_requested(&deploy_args(&[
+            "--prune",
+            "--prune-mode",
+            "no"
+        ])));
     }
 }

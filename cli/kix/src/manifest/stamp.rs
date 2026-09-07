@@ -75,9 +75,8 @@ pub fn stamp_annotations(graph: &mut StoreGraph) {
         //   (enabling supersede/rollback lifecycle).
         // - Add kix.dev/built-via annotation with the activation result dir path
         //   so rollback can find manifests without a nix build.
-        let is_activation =
-            res.manifest.pointer("/kind").and_then(|v| v.as_str()) == Some("Activation");
-        if is_activation {
+        let is_record = crate::manifest::lifecycle::is_record(&res.manifest);
+        if is_record {
             let hash_prefix = &entry.identity_hash[..12.min(entry.identity_hash.len())];
             if let Some(meta) = res
                 .manifest
@@ -98,7 +97,7 @@ pub fn stamp_annotations(graph: &mut StoreGraph) {
 
         let mut new_anns = serde_json::Map::new();
 
-        if is_activation {
+        if is_record {
             // Store the activation result dir path so rollback/deploy can
             // load manifests directly from the nix store without rebuilding.
             new_anns.insert(

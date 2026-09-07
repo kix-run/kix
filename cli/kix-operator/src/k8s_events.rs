@@ -45,7 +45,7 @@ impl K8sEventObserver {
         instance: Option<String>,
     ) -> Self {
         let reference = ObjectReference {
-            kind: Some("Activation".to_string()),
+            kind: Some(kix::manifest::lifecycle::RECORD_KIND.to_string()),
             api_version: Some(activation_api_version.to_string()),
             name: activation.metadata.name.clone(),
             namespace: activation.metadata.namespace.clone(),
@@ -113,10 +113,25 @@ fn to_k8s_event(event: &DeployEvent) -> Option<KEvent> {
             action: "Rediscovered".into(),
             secondary: None,
         }),
-        DeployEvent::PruneStart { count } => Some(KEvent {
+        DeployEvent::PruneStart {
+            count, resources, ..
+        } => Some(KEvent {
             type_: EventType::Normal,
             reason: "PruneStart".into(),
-            note: Some(format!("Pruning {count} orphaned resources")),
+            // Event notes are capped at 1 KiB by the apiserver; a note over
+            // the cap is rejected and the event vanishes. Name a few.
+            note: Some({
+                const SHOWN: usize = 10;
+                let mut names: Vec<String> = resources
+                    .iter()
+                    .take(SHOWN)
+                    .map(|r| r.display_id())
+                    .collect();
+                if resources.len() > SHOWN {
+                    names.push(format!("and {} more", resources.len() - SHOWN));
+                }
+                format!("Pruning {count} orphaned resources: {}", names.join(", "))
+            }),
             action: "Pruning".into(),
             secondary: None,
         }),

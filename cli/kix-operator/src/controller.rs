@@ -335,10 +335,12 @@ async fn run_reconcile(
     //    CRDs: re-applying triggers API watch restarts.
     //    Activation CRs: the Activation is the control input — applying the
     //    Nix-generated manifest would overwrite spec.source via SSA.
-    let skip_kinds: &[&str] = &["CustomResourceDefinition", "Activation"];
     let managed_manifests: Vec<Value> = new_manifests
         .iter()
-        .filter(|m| !skip_kinds.contains(&ResourceId::from_value(m).kind.as_str()))
+        .filter(|m| {
+            ResourceId::from_value(m).kind != "CustomResourceDefinition"
+                && !kix::manifest::lifecycle::is_record(m)
+        })
         .cloned()
         .collect();
 
@@ -497,7 +499,7 @@ async fn handle_delete(
             let all_rids: Vec<ResourceId> = manifests
                 .iter()
                 .map(ResourceId::from_value)
-                .filter(|rid| rid.kind != "Activation")
+                .filter(|rid| !kix::manifest::lifecycle::is_record_kind(&rid.kind))
                 .collect();
 
             let kix_crds: &[&str] = &["activations.kix.dev", "packageinstances.kix.dev"];
