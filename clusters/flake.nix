@@ -29,6 +29,7 @@
         monitoring-helm = ./test-monitoring-helm.nix;
         monitoring-native = ./test-monitoring-native.nix;
         test-secrets = ./test-secrets.nix;
+        victoria-metrics = ./test-victoria-metrics.nix;
         satchel-dev = ./satchel/dev.nix;
         satchel-prod = ./satchel/prod.nix;
       };

@@ -81,7 +81,7 @@ env lacks (external cilium, etc.); prefer ludo-kind for default checks.
 
 ```bash
 ./scripts/kix-dump.py --all [--context <ctx>] cluster-dump/
-./scripts/kix-diff.py ./result cluster-dump/
+./scripts/compare-cluster-dump.py ./result cluster-dump/
 ```
 
 ## Subagent guidelines

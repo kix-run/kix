@@ -21,6 +21,11 @@ in
   };
 
   options = {
+    nodeSelector = lib.mkOption {
+      type = lib.types.attrsOf lib.types.str;
+      default = { };
+      description = "Merged over the default kubernetes.io/os=linux selector.";
+    };
     image = lib.mkOption {
       type = lib.types.anything;
       default = {
@@ -214,7 +219,8 @@ in
               ];
               nodeSelector = {
                 "kubernetes.io/os" = "linux";
-              };
+              }
+              // config.nodeSelector;
             };
           };
         }
