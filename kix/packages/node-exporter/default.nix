@@ -223,7 +223,10 @@ in
           mkServiceMonitor {
             name = "${name}-monitor";
             spec = {
-              selector.matchLabels = self.daemonset.out.selector;
+              # ServiceMonitors match SERVICE labels, not pod labels — the
+              # daemonset selector never matched the Service and this job
+              # was silently unscraped (caught live on stage1, 2026-08-31).
+              selector.matchLabels = self.service.out.selector;
               endpoints = [
                 {
                   port = "http-metrics";
