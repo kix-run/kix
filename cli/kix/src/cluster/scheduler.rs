@@ -1021,28 +1021,7 @@ async fn execute_node(
         let msg = if lookup_kind == "PackageInstance" {
             "PackageInstance kind not discovered".to_string()
         } else {
-            // Distinguish "the cluster doesn't serve this kind" from "kix
-            // itself refuses to know it" — a skip-listed kind in a rendered
-            // manifest is a kix bug or skip-list bug, and retrying can
-            // never fix it.
-            let group_name = manifest
-                .pointer("/apiVersion")
-                .and_then(|v| v.as_str())
-                .map(|av| {
-                    if av.contains('/') {
-                        av.split('/').next().unwrap_or("")
-                    } else {
-                        ""
-                    }
-                })
-                .unwrap_or("");
-            match fetch::skip_listed_reason(&ctx.client, group_name, lookup_kind).await {
-                Some(fqn) => format!(
-                    "kind {} is served by the cluster but excluded by kix's SKIP_RESOURCES                      list ({fqn}) — a skip-listed kind cannot be deployed; remove it from                      the skip list in cli/kix/src/cluster/fetch.rs",
-                    rid.kind
-                ),
-                None => format!("kind {} not in discovery cache", rid.kind),
-            }
+            format!("kind {} not in discovery cache", rid.kind)
         };
         return NodeOutcome::Failed {
             detail: NodeDetail::ApplyFailed(msg.clone()),

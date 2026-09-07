@@ -130,6 +130,15 @@ pub enum ChangeAction {
 ///
 /// Returns actions for the new manifests (Apply or Skip) plus Orphan actions
 /// for resources in old but not in new.
+/// The `kix.dev/identity-hash` a rendered or live-reconstructed manifest
+/// carries, if kix ever applied it.
+fn manifest_identity_hash(manifest: &Value) -> Option<&str> {
+    manifest
+        .pointer("/metadata/annotations")
+        .and_then(|a| a.get(IDENTITY_HASH_ANNOTATION))
+        .and_then(Value::as_str)
+}
+
 pub fn detect_changes(new_manifests: &[Value], old_manifests: &[Value]) -> Vec<ChangeAction> {
     // Index old manifests by K8s identity (kind/ns/name) → identity-hash
     let old_by_k8s_id: HashMap<String, &str> = old_manifests
@@ -176,8 +185,15 @@ pub fn detect_changes(new_manifests: &[Value], old_manifests: &[Value]) -> Vec<C
         }
     }
 
-    // Find orphans: old resources not matched by any new resource
+    // Find orphans: old resources not matched by any new resource. Only
+    // stamped resources qualify: an old manifest without an identity hash
+    // came from live reconstruction of something kix never applied (a
+    // controller child that inherited the label, a kubectl-applied render),
+    // and kix only ever deletes what it stamped.
     for old_manifest in old_manifests {
+        if manifest_identity_hash(old_manifest).is_none() {
+            continue;
+        }
         let rid = ResourceId::from_value(old_manifest);
         let k8s_id = format!("{}/{}/{}", rid.kind, rid.namespace, rid.name);
         if !matched_old_ids.contains(&k8s_id) {
@@ -271,9 +287,12 @@ pub fn detect_changes_live(
         }
     }
 
-    // Find orphans: live resources not matched by any desired manifest
+    // Find orphans: live resources not matched by any desired manifest.
+    // Unstamped live objects are never orphans: kix did not apply them, so
+    // kix does not delete them (see detect_changes).
     for (k8s_id, rid) in &live_rids {
-        if !matched_live_ids.contains(k8s_id) {
+        let stamped = live_by_k8s_id.get(k8s_id).copied().flatten().is_some();
+        if stamped && !matched_live_ids.contains(k8s_id) {
             actions.push(ChangeAction::Orphan(rid.clone()));
         }
     }
@@ -842,6 +861,47 @@ mod tests {
             merge_activation_set(" bbb , , ccc ", "aaa", Some(&live(&["bbb", "ccc"]))),
             "aaa,bbb,ccc"
         );
+    }
+
+    #[test]
+    fn unstamped_old_manifest_is_never_an_orphan() {
+        let mut inherited = manifest("EndpointSlice", "web-abc", "default", "unused");
+        inherited["metadata"]
+            .as_object_mut()
+            .unwrap()
+            .remove("annotations");
+        let old = vec![
+            inherited,
+            manifest("Deployment", "gone", "default", "id-gone"),
+        ];
+        let actions = detect_changes(&[], &old);
+        let orphans: Vec<_> = actions
+            .iter()
+            .filter_map(|a| match a {
+                ChangeAction::Orphan(rid) => Some(rid.name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(orphans, vec!["gone"]);
+    }
+
+    #[test]
+    fn unstamped_live_object_is_never_an_orphan() {
+        let mut inherited = live_object("EndpointSlice", "web-abc", "default", "unused");
+        inherited.metadata.annotations = None;
+        let live = vec![
+            inherited,
+            live_object("Deployment", "gone", "default", "id-gone"),
+        ];
+        let actions = detect_changes_live(&[], &live);
+        let orphans: Vec<_> = actions
+            .iter()
+            .filter_map(|a| match a {
+                ChangeAction::Orphan(rid) => Some(rid.name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(orphans, vec!["gone"]);
     }
 
     fn manifest(kind: &str, name: &str, ns: &str, identity_hash: &str) -> Value {

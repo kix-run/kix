@@ -36,75 +36,7 @@ pub enum FetchError {
 /// The managed-by label value that kix sets on all resources.
 pub const MANAGED_BY_LABEL: &str = "app.kubernetes.io/managed-by=kix";
 
-/// Resource types to skip — ephemeral, derived, or runtime-only.
-/// Not useful for comparing declared vs actual state.
-pub const SKIP_RESOURCES: &[&str] = &[
-    // Ephemeral / runtime state
-    "events",
-    "events.events.k8s.io",
-    "pods",
-    "replicasets.apps",
-    "controllerrevisions.apps",
-    "endpointslices.discovery.k8s.io",
-    "endpoints",
-    "leases.coordination.k8s.io",
-    "componentstatuses",
-    // Node / cluster inventory (not declarative)
-    "nodes",
-    "nodes.metrics.k8s.io",
-    "pods.metrics.k8s.io",
-    "csinodes.storage.k8s.io",
-    "csidrivers.storage.k8s.io",
-    "csistoragecapacities.storage.k8s.io",
-    "volumeattachments.storage.k8s.io",
-    "runtimeclasses.node.k8s.io",
-    // API machinery
-    "apiservices.apiregistration.k8s.io",
-    "flowschemas.flowcontrol.apiserver.k8s.io",
-    "prioritylevelconfigurations.flowcontrol.apiserver.k8s.io",
-    // Cilium runtime state
-    "ciliumidentities.cilium.io",
-    "ciliumendpoints.cilium.io",
-    "ciliumnodes.cilium.io",
-    // Backup runtime state (Velero)
-    "backups.velero.io",
-    "datadownloads.velero.io",
-    "datauploads.velero.io",
-    "podvolumebackups.velero.io",
-    "podvolumerestores.velero.io",
-    "backuprepositories.velero.io",
-    // StackGres operational state
-    "sgbackups.stackgres.io",
-    "sgdbops.stackgres.io",
-    // cert-manager transient state
-    "orders.acme.cert-manager.io",
-    "challenges.acme.cert-manager.io",
-    "certificaterequests.cert-manager.io",
-    // KubeVirt runtime
-    "virtualmachineinstances.kubevirt.io",
-    // Persistent volumes (dynamically provisioned)
-    "persistentvolumes",
-    // GitHub Actions runner ephemeral resources
-    "ephemeralrunners.actions.github.com",
-    "ephemeralrunnersets.actions.github.com",
-    // CDI runtime
-    "storageprofiles.cdi.kubevirt.io",
-    // K3s/RKE2 internal. NOTE: helmchartconfigs.helm.cattle.io does NOT
-    // belong here — it's user-declared configuration that the cilium-rke2
-    // package emits, and this list feeds discover_resources, so skipping a
-    // kind makes it undeployable ("kind HelmChartConfig not in discovery
-    // cache"; first hit on stage1, the first rke2 cluster kix ever deployed).
-    "etcdsnapshotfiles.k3s.cattle.io",
-    "addons.k3s.cattle.io",
-    "helmcharts.helm.cattle.io",
-    // ZFS runtime state
-    "zfsvolumes.zfs.openebs.io",
-    "zfsnodes.zfs.openebs.io",
-    "zfssnapshots.zfs.openebs.io",
-    "volumesnapshotcontents.snapshot.storage.k8s.io",
-];
-
-/// Fully qualified resource name for skip-list matching (e.g. "pods" or "deployments.apps").
+/// Fully qualified resource name for logging (e.g. "pods" or "deployments.apps").
 fn resource_fqn(ar: &ApiResource) -> String {
     if ar.group.is_empty() {
         ar.plural.clone()
@@ -136,8 +68,6 @@ pub async fn make_client(context: Option<&str>) -> Result<Client, FetchError> {
 
 /// Run API discovery and return all listable resources with their scope.
 pub async fn discover_resources(client: &Client) -> Result<Vec<(ApiResource, Scope)>, FetchError> {
-    let skip_set: HashSet<&str> = SKIP_RESOURCES.iter().copied().collect();
-
     let discovery = Discovery::new(client.clone())
         .run()
         .await
@@ -145,7 +75,7 @@ pub async fn discover_resources(client: &Client) -> Result<Vec<(ApiResource, Sco
 
     let mut resources = Vec::new();
     for group in discovery.groups() {
-        resources.extend(collect_group_resources(group, &skip_set));
+        resources.extend(collect_group_resources(group));
     }
     tracing::debug!(count = resources.len(), "API resources discovered");
     Ok(resources)
@@ -159,10 +89,7 @@ pub async fn discover_resources(client: &Client) -> Result<Vec<(ApiResource, Sco
 /// non-preferred kind from the deploy scheduler ("kind X not in discovery
 /// cache"). Walk every version, preferred first, and keep the first
 /// ApiResource seen per kind.
-fn collect_group_resources(
-    group: &kube::discovery::ApiGroup,
-    skip_set: &HashSet<&str>,
-) -> Vec<(ApiResource, Scope)> {
+fn collect_group_resources(group: &kube::discovery::ApiGroup) -> Vec<(ApiResource, Scope)> {
     let mut resources = Vec::new();
     let mut seen_kinds = std::collections::HashSet::new();
     let preferred = group.preferred_version_or_latest();
@@ -177,30 +104,10 @@ fn collect_group_resources(
             if !caps.supports_operation("list") {
                 continue;
             }
-            // Skip ephemeral types
-            if skip_set.contains(resource_fqn(&ar).as_str()) {
-                continue;
-            }
             resources.push((ar, caps.scope));
         }
     }
     resources
-}
-
-/// Does the cluster serve `kind` in `group` only behind the skip list?
-/// Diagnostic for the apply path: a manifest whose kind is SKIP_RESOURCES-
-/// filtered would otherwise fail with an opaque "not in discovery cache"
-/// after minutes of retries (stage1's HelmChartConfig, 2026-08-31). Fetches
-/// the single group unfiltered and reports the skip-list fqn on a match.
-pub async fn skip_listed_reason(client: &Client, group: &str, kind: &str) -> Option<String> {
-    let ag = kube::discovery::group(client, group).await.ok()?;
-    let empty: HashSet<&str> = HashSet::new();
-    let unfiltered = collect_group_resources(&ag, &empty);
-    let skip_set: HashSet<&str> = SKIP_RESOURCES.iter().copied().collect();
-    unfiltered
-        .iter()
-        .find(|(ar, _)| ar.kind == kind && skip_set.contains(resource_fqn(ar).as_str()))
-        .map(|(ar, _)| resource_fqn(ar))
 }
 
 /// Targeted single-group discovery — the reliable fallback when the full
@@ -213,11 +120,10 @@ pub async fn discover_group(
     client: &Client,
     group: &str,
 ) -> Result<Vec<(ApiResource, Scope)>, FetchError> {
-    let skip_set: HashSet<&str> = SKIP_RESOURCES.iter().copied().collect();
     let ag = kube::discovery::group(client, group)
         .await
         .map_err(FetchError::DiscoveryError)?;
-    Ok(collect_group_resources(&ag, &skip_set))
+    Ok(collect_group_resources(&ag))
 }
 
 /// Merge a fresh discovery result into an existing cache, unioned by
@@ -246,7 +152,19 @@ pub fn merge_discovery(
     merged
 }
 
-/// Fetch all resources with the `managed-by=kix` label, in parallel.
+/// What the managed sweep found.
+pub struct ManagedSweep {
+    /// Objects kix applied: each carries `kix.dev/identity-hash`.
+    pub managed: Vec<DynamicObject>,
+    /// Objects that carry the kix label but no identity hash and no owner.
+    /// kix never applied them (someone `kubectl apply`ed a kix render, or a
+    /// pre-hash kix did). `kix gc --hard` reports them; nothing deletes them
+    /// unless asked.
+    pub unstamped: Vec<DynamicObject>,
+}
+
+/// Fetch every resource kix applied, in parallel: one LIST per discovered
+/// kind with the `managed-by=kix` label selector, then [`partition_sweep`].
 ///
 /// RBAC errors on individual resource types are logged and skipped
 /// (the cluster may have CRDs the user can't list).
@@ -254,8 +172,86 @@ pub async fn fetch_managed_resources(
     client: &Client,
     discovery: &[(ApiResource, Scope)],
 ) -> Result<Vec<DynamicObject>, FetchError> {
+    Ok(sweep_managed(client, discovery).await?.managed)
+}
+
+/// The full sweep: kix-applied objects plus the unstamped label carriers.
+pub async fn sweep_managed(
+    client: &Client,
+    discovery: &[(ApiResource, Scope)],
+) -> Result<ManagedSweep, FetchError> {
     let lp = ListParams::default().labels(MANAGED_BY_LABEL);
-    fetch_parallel(client, discovery, &lp).await
+    let objects = fetch_parallel(client, discovery, &lp).await?;
+    Ok(partition_sweep(objects))
+}
+
+/// Decide what the label sweep really found.
+///
+/// The label only finds candidates; it does not prove kix applied an object.
+/// Controllers copy labels onto what they derive: the EndpointSlice
+/// controller mirrors a Service's labels, ReplicaSets and Pods carry their
+/// template's labels. Proof that kix applied something is its
+/// `kix.dev/identity-hash` annotation, which the apply step stamps and no
+/// controller copies. So:
+///
+/// - stamped: kix's, whatever its owner references say (`managed`);
+/// - unstamped and owned: a controller child, judged through its owner and
+///   dropped here;
+/// - unstamped and unowned: kept apart in `unstamped` for gc to report;
+/// - unstamped `Endpoints` named after a managed Service in the same
+///   namespace: that Service's mirror. Endpoints are the pre-EndpointSlice
+///   mirror; the endpoints controller copies the Service's labels and sets
+///   no owner reference, so ownership alone cannot tell them apart. Dropped.
+///
+/// These rules replace the old hand-maintained list of "ephemeral" kinds,
+/// which also made every listed kind undeployable because the same
+/// discovery cache resolved kinds on the apply path (kixpkgs#41).
+pub fn partition_sweep(objects: Vec<DynamicObject>) -> ManagedSweep {
+    let (managed, rest): (Vec<DynamicObject>, Vec<DynamicObject>) =
+        objects.into_iter().partition(is_stamped);
+    let managed_services: HashSet<(String, String)> = managed
+        .iter()
+        .filter(|o| object_kind(o) == "Service")
+        .map(|o| (namespace_of(o), o.metadata.name.clone().unwrap_or_default()))
+        .collect();
+    let unstamped = rest
+        .into_iter()
+        .filter(|o| !is_owned(o))
+        .filter(|o| {
+            !(object_kind(o) == "Endpoints"
+                && managed_services
+                    .contains(&(namespace_of(o), o.metadata.name.clone().unwrap_or_default())))
+        })
+        .collect();
+    ManagedSweep { managed, unstamped }
+}
+
+/// Did kix's apply step stamp this object?
+pub fn is_stamped(obj: &DynamicObject) -> bool {
+    obj.metadata
+        .annotations
+        .as_ref()
+        .is_some_and(|a| a.contains_key(super::apply::IDENTITY_HASH_ANNOTATION))
+}
+
+/// Does a controller own this object?
+pub fn is_owned(obj: &DynamicObject) -> bool {
+    obj.metadata
+        .owner_references
+        .as_ref()
+        .is_some_and(|owners| !owners.is_empty())
+}
+
+fn object_kind(obj: &DynamicObject) -> &str {
+    obj.data
+        .get("kind")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| obj.types.as_ref().map(|t| t.kind.as_str()))
+        .unwrap_or("")
+}
+
+fn namespace_of(obj: &DynamicObject) -> String {
+    obj.metadata.namespace.clone().unwrap_or_default()
 }
 
 /// Fetch specific resources by kind/name/namespace.
@@ -573,15 +569,106 @@ mod tests {
         assert_eq!(value.pointer("/spec/replicas").unwrap(), &json!(1));
     }
 
+    fn swept(kind: &str, ns: &str, name: &str, stamped: bool, owned: bool) -> DynamicObject {
+        use k8s_openapi::apimachinery::pkg::apis::meta::v1::OwnerReference;
+        let mut obj = DynamicObject {
+            types: None,
+            metadata: ObjectMeta {
+                name: Some(name.into()),
+                namespace: Some(ns.into()),
+                ..Default::default()
+            },
+            data: json!({ "kind": kind }),
+        };
+        if stamped {
+            obj.metadata.annotations = Some(
+                [(
+                    super::super::apply::IDENTITY_HASH_ANNOTATION.to_string(),
+                    "h".to_string(),
+                )]
+                .into_iter()
+                .collect(),
+            );
+        }
+        if owned {
+            obj.metadata.owner_references = Some(vec![OwnerReference {
+                api_version: "v1".into(),
+                kind: "Service".into(),
+                name: name.into(),
+                uid: "abc".into(),
+                controller: Some(true),
+                block_owner_deletion: None,
+            }]);
+        }
+        obj
+    }
+
+    fn names(objs: &[DynamicObject]) -> Vec<String> {
+        let mut v: Vec<String> = objs
+            .iter()
+            .map(|o| {
+                format!(
+                    "{}/{}/{}",
+                    o.metadata.namespace.as_deref().unwrap_or(""),
+                    o.data["kind"].as_str().unwrap(),
+                    o.metadata.name.as_deref().unwrap()
+                )
+            })
+            .collect();
+        v.sort();
+        v
+    }
+
     #[test]
-    fn skip_list_contains_expected() {
-        let skip_set: HashSet<&str> = SKIP_RESOURCES.iter().copied().collect();
-        assert!(skip_set.contains("pods"));
-        assert!(skip_set.contains("replicasets.apps"));
-        assert!(skip_set.contains("events.events.k8s.io"));
-        assert!(skip_set.contains("leases.coordination.k8s.io"));
-        assert!(skip_set.contains("ciliumendpoints.cilium.io"));
-        assert!(!skip_set.contains("deployments.apps"));
-        assert!(!skip_set.contains("services"));
+    fn sweep_keeps_stamped_objects_whoever_owns_them() {
+        let sweep = partition_sweep(vec![
+            swept("Deployment", "ns", "web", true, false),
+            swept("Job", "ns", "adopted", true, true),
+        ]);
+        assert_eq!(
+            names(&sweep.managed),
+            ["ns/Deployment/web", "ns/Job/adopted"]
+        );
+        assert!(sweep.unstamped.is_empty());
+    }
+
+    #[test]
+    fn sweep_drops_owned_unstamped_children() {
+        let sweep = partition_sweep(vec![
+            swept("Service", "ns", "web", true, false),
+            swept("EndpointSlice", "ns", "web-abc12", false, true),
+            swept("ReplicaSet", "ns", "web-7d9f", false, true),
+        ]);
+        assert_eq!(names(&sweep.managed), ["ns/Service/web"]);
+        assert!(sweep.unstamped.is_empty());
+    }
+
+    #[test]
+    fn sweep_reports_unowned_unstamped_label_carriers() {
+        let sweep = partition_sweep(vec![swept(
+            "ConfigMap",
+            "ns",
+            "kubectl-applied",
+            false,
+            false,
+        )]);
+        assert!(sweep.managed.is_empty());
+        assert_eq!(names(&sweep.unstamped), ["ns/ConfigMap/kubectl-applied"]);
+    }
+
+    #[test]
+    fn sweep_treats_endpoints_named_after_a_managed_service_as_its_mirror() {
+        let sweep = partition_sweep(vec![
+            swept("Service", "ns", "web", true, false),
+            swept("Endpoints", "ns", "web", false, false),
+            swept("Endpoints", "ns", "stray", false, false),
+            swept("Endpoints", "other", "web", false, false),
+        ]);
+        assert_eq!(names(&sweep.managed), ["ns/Service/web"]);
+        assert_eq!(
+            names(&sweep.unstamped),
+            ["ns/Endpoints/stray", "other/Endpoints/web"],
+            "only the same-namespace mirror is dropped"
+        );
     }
 }

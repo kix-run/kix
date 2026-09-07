@@ -397,6 +397,11 @@ pub struct GcArgs {
     /// Delegate garbage collection to the operator (deletes superseded Activation CRs)
     #[arg(long)]
     pub operator: bool,
+
+    /// Also delete resources that carry the kix label but no kix.dev/identity-hash.
+    /// kix never applied those, so by default --hard only reports them.
+    #[arg(long)]
+    pub include_unstamped: bool,
 }
 
 #[derive(clap::Args)]

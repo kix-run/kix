@@ -226,13 +226,18 @@ async fn run_hard_async(
     let discovery = fetch::discover_resources(&client)
         .await
         .map_err(|e| miette!("API discovery failed: {e}"))?;
-    let live = fetch::fetch_managed_resources(&client, &discovery)
+    let sweep = fetch::sweep_managed(&client, &discovery)
         .await
         .map_err(|e| miette!("failed to fetch live resources: {e}"))?;
 
     if !global.quiet {
-        println!("Found {} live kix-managed resources", live.len());
+        println!(
+            "Found {} live kix-managed resources ({} unstamped label carriers)",
+            sweep.managed.len(),
+            sweep.unstamped.len()
+        );
     }
+    let live: Vec<_> = sweep.managed.into_iter().chain(sweep.unstamped).collect();
 
     // Find resources with identity-hash not in expected set.
     // Skip Activation CRs here — they're handled separately below.
@@ -329,6 +334,16 @@ async fn run_hard_async(
         }
     }
 
+    // Unstamped resources carry the kix label but no identity hash: kix never
+    // applied them (a controller child that inherited the label, a render
+    // someone kubectl-applied). Report them, but delete only on request.
+    let (unstamped, garbage): (Vec<GarbageEntry>, Vec<GarbageEntry>) = garbage
+        .into_iter()
+        .partition(|g| g.reason == GarbageReason::NoIdentityHash && !args.include_unstamped);
+    if !unstamped.is_empty() && !global.quiet {
+        print_unstamped(&unstamped);
+    }
+
     if garbage.is_empty() {
         if !global.quiet {
             println!("{}", output::green("No garbage found."));
@@ -395,6 +410,33 @@ struct GarbageEntry {
     package_namespace: Option<String>,
     activations: Option<String>,
     reason: GarbageReason,
+}
+
+/// List resources that carry the kix label but were never stamped, and say
+/// why gc leaves them alone.
+fn print_unstamped(unstamped: &[GarbageEntry]) {
+    println!();
+    println!(
+        "{} {} resources carry the kix label but no kix.dev/identity-hash:",
+        output::bold("Unstamped:"),
+        unstamped.len(),
+    );
+    for entry in unstamped {
+        println!(
+            "    {} {}/{}/{}",
+            output::dim("?"),
+            entry.id.namespace,
+            entry.id.kind,
+            entry.id.name,
+        );
+    }
+    println!(
+        "  {}",
+        output::dim(
+            "kix never applied these, so gc does not delete them. \
+             Pass --include-unstamped to delete them too."
+        ),
+    );
 }
 
 /// Print grouped, per-resource garbage plan with reasons and owning activation.
