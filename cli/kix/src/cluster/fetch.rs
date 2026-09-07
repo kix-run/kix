@@ -404,7 +404,24 @@ enum ListOutcome {
     Forbidden(String),
 }
 
-/// Internal: run parallel LIST calls across all discovered resource types.
+/// How many LISTs the sweep keeps in flight. One per kind is over a hundred
+/// on a real cluster, and the apiserver's priority-and-fairness answers
+/// that burst with 429s. Bounded here, on spawned tasks the runtime always
+/// polls, rather than in the transport layer, where a permit held inside a
+/// future its owner had parked deadlocked `kix deploy` (see
+/// `cluster::client`). Override with `KIX_SWEEP_CONCURRENCY`.
+pub const DEFAULT_SWEEP_CONCURRENCY: usize = 16;
+/// Env var for [`DEFAULT_SWEEP_CONCURRENCY`].
+pub const SWEEP_CONCURRENCY_ENV: &str = "KIX_SWEEP_CONCURRENCY";
+
+fn sweep_concurrency() -> usize {
+    super::client::env_number(SWEEP_CONCURRENCY_ENV)
+        .map(|n| n.max(1) as usize)
+        .unwrap_or(DEFAULT_SWEEP_CONCURRENCY)
+}
+
+/// Internal: run parallel LIST calls across all discovered resource types,
+/// at most [`DEFAULT_SWEEP_CONCURRENCY`] at a time.
 ///
 /// The transport layer already retried each LIST on 429, 5xx and
 /// connection errors, so an error here is one that outlasted the budget.
@@ -418,8 +435,20 @@ async fn fetch_parallel(
     lp: &ListParams,
 ) -> Result<Listed, FetchError> {
     let mut set = JoinSet::new();
+    let mut listed = Listed {
+        objects: Vec::new(),
+        forbidden: Vec::new(),
+    };
+    let limit = sweep_concurrency();
 
     for (ar, scope) in discovery {
+        // Keep the number in flight bounded: drain one before adding one.
+        while set.len() >= limit {
+            match set.join_next().await {
+                Some(outcome) => absorb(&mut listed, outcome)?,
+                None => break,
+            }
+        }
         let api: Api<DynamicObject> = match scope {
             Scope::Namespaced => {
                 // List across all namespaces
@@ -468,22 +497,28 @@ async fn fetch_parallel(
         });
     }
 
-    let mut listed = Listed {
-        objects: Vec::new(),
-        forbidden: Vec::new(),
-    };
     while let Some(join_result) = set.join_next().await {
-        match join_result {
-            Ok(Ok(ListOutcome::Items(items))) => listed.objects.extend(items),
-            Ok(Ok(ListOutcome::Forbidden(fqn))) => listed.forbidden.push(fqn),
-            Ok(Err(e)) => return Err(e),
-            Err(e) => {
-                return Err(FetchError::ClientError(Box::new(e)));
-            }
-        }
+        absorb(&mut listed, join_result)?;
     }
     listed.forbidden.sort();
     Ok(listed)
+}
+
+/// Fold one finished LIST task into the result, or stop on its error.
+// FetchError carries a kube::Error; boxing it here would only move the
+// size to every caller's match arms.
+#[allow(clippy::result_large_err)]
+fn absorb(
+    listed: &mut Listed,
+    join_result: Result<Result<ListOutcome, FetchError>, tokio::task::JoinError>,
+) -> Result<(), FetchError> {
+    match join_result {
+        Ok(Ok(ListOutcome::Items(items))) => listed.objects.extend(items),
+        Ok(Ok(ListOutcome::Forbidden(fqn))) => listed.forbidden.push(fqn),
+        Ok(Err(e)) => return Err(e),
+        Err(e) => return Err(FetchError::ClientError(Box::new(e))),
+    }
+    Ok(())
 }
 
 #[cfg(test)]

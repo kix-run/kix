@@ -1,18 +1,25 @@
-//! Cancellation primitive for the reconcile engine.
+//! Cancellation primitive for the deploy engine.
 //!
-//! A tiny local type rather than `tokio_util::sync::CancellationToken` —
-//! we only need a cloneable boolean flag checked at poll boundaries, not
-//! the full watcher/futures integration that tokio-util provides.
+//! A thin wrapper over `tokio_util::sync::CancellationToken`. The engine's
+//! supervisor loop selects on [`CancelToken::cancelled`] so a cancel from the
+//! caller (Ctrl-C, operator supersession) or from the progress watchdog is
+//! observed even while every node is in flight. Readiness polls keep checking
+//! the flag between polls as before.
+//!
+//! The token also carries the *reason* for the cancel, when the canceller
+//! has one. The watchdog uses this to say "no progress for 10m" instead of
+//! the bare "cancelled".
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
-/// Clone-safe cancellation flag. Checked at wave boundaries and inside the
-/// readiness poll loop so a long-running reconcile can be interrupted
-/// cleanly — the operator needs this to abort a superseded deploy without
-/// waiting out the current readiness timeout.
+use tokio_util::sync::CancellationToken;
+
+/// Clone-safe cancellation flag.
 #[derive(Clone, Default, Debug)]
-pub struct CancelToken(Arc<AtomicBool>);
+pub struct CancelToken {
+    inner: CancellationToken,
+    reason: Arc<Mutex<Option<String>>>,
+}
 
 impl CancelToken {
     /// A fresh, un-cancelled token.
@@ -22,11 +29,69 @@ impl CancelToken {
 
     /// Signal cancellation. Idempotent.
     pub fn cancel(&self) {
-        self.0.store(true, Ordering::Release);
+        self.inner.cancel();
+    }
+
+    /// Signal cancellation and record why. The first reason wins.
+    pub fn cancel_with_reason(&self, reason: impl Into<String>) {
+        if let Ok(mut slot) = self.reason.lock()
+            && slot.is_none()
+        {
+            *slot = Some(reason.into());
+        }
+        self.inner.cancel();
     }
 
     /// Check whether cancellation has been requested.
     pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Acquire)
+        self.inner.is_cancelled()
+    }
+
+    /// The reason given to [`cancel_with_reason`](Self::cancel_with_reason),
+    /// if any.
+    pub fn reason(&self) -> Option<String> {
+        self.reason.lock().ok().and_then(|r| r.clone())
+    }
+
+    /// Resolves when the token is cancelled. Resolves at once if it already
+    /// is.
+    pub async fn cancelled(&self) {
+        self.inner.cancelled().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[tokio::test(start_paused = true)]
+    async fn cancelled_wakes_a_waiter() {
+        let token = CancelToken::new();
+        let waiter = token.clone();
+        let handle = tokio::spawn(async move {
+            waiter.cancelled().await;
+            waiter.reason()
+        });
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert!(!handle.is_finished());
+        token.cancel_with_reason("test");
+        let reason = tokio::time::timeout(Duration::from_secs(1), handle)
+            .await
+            .expect("waiter must wake")
+            .unwrap();
+        assert_eq!(reason.as_deref(), Some("test"));
+        assert!(token.is_cancelled());
+    }
+
+    #[test]
+    fn first_reason_wins() {
+        let token = CancelToken::new();
+        token.cancel_with_reason("first");
+        token.cancel_with_reason("second");
+        assert_eq!(token.reason().as_deref(), Some("first"));
+        let plain = CancelToken::new();
+        plain.cancel();
+        assert!(plain.reason().is_none());
     }
 }

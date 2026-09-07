@@ -15,20 +15,30 @@
 //! - **Deadlines.** A connect timeout on the transport, and a per-attempt
 //!   deadline for every request that is not a watch. Watches are long-lived
 //!   by design and keep kube's own idle read timeout.
-//! - **A concurrency cap.** The managed-resource sweep fires one LIST per
-//!   kind, over a hundred at once on a real cluster. The apiserver's
-//!   priority-and-fairness answers that burst with 429s. A bounded number
-//!   in flight costs nothing in wall time and removes the self-inflicted
-//!   part. Watches bypass the cap so a long-lived stream never holds a slot.
 //!
-//! What this layer does not do: turn a failure into an empty result. When
-//! the budget is spent the last response or error is returned as is, and
-//! kube maps it to the same `kube::Error` the caller would have seen with
-//! no retries at all. Callers decide what a failure means; see
-//! [`super::errors`].
+//! Two things this layer deliberately does not do.
+//!
+//! - **Cap requests in flight.** The first version held a semaphore permit
+//!   for the duration of each request. That deadlocked `kix deploy`: the
+//!   scheduler of the day drove its apply futures from a `FuturesUnordered`
+//!   in one task, and after a CRD apply it awaited API rediscovery inline,
+//!   without polling those futures. Sixteen CRD applies held every permit
+//!   while parked, rediscovery waited for a permit, and nothing moved. Not
+//!   even the per-attempt deadline fired, because a future nobody polls
+//!   cannot time out. The scheduler now spawns its work (doc 134), but the
+//!   rule stands: a permit that lives inside a future is only safe when
+//!   every owner keeps polling, and a transport layer cannot know its
+//!   callers.
+//!   Burst control belongs where the burst is made: the managed sweep in
+//!   [`super::fetch`] bounds its own parallel LISTs, on spawned tasks the
+//!   runtime always polls.
+//! - **Turn a failure into an empty result.** When the budget is spent the
+//!   last response or error is returned as is, and kube maps it to the same
+//!   `kube::Error` the caller would have seen with no retries at all.
+//!   Callers decide what a failure means; see [`super::errors`].
 //!
 //! Every knob has an environment override for debugging (`KIX_RETRY_ATTEMPTS`,
-//! `KIX_MAX_IN_FLIGHT`, `KIX_REQUEST_TIMEOUT`, `KIX_CONNECT_TIMEOUT`); see
+//! `KIX_REQUEST_TIMEOUT`, `KIX_CONNECT_TIMEOUT`); see
 //! [`ResiliencePolicy::from_env`].
 
 use std::{
@@ -49,7 +59,6 @@ use kube::{
     Client, Config,
     client::{Body, ClientBuilder},
 };
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tower::{BoxError, Layer, Service, ServiceExt, buffer::Buffer};
 
 use super::errors::{FailureClass, classify_status, error_chain_find};
@@ -79,8 +88,6 @@ pub struct ResiliencePolicy {
     /// Per-attempt deadline for requests that are not watches. `None`
     /// leaves only kube's own idle read timeout.
     pub request_timeout: Option<Duration>,
-    /// Maximum non-watch requests in flight at once through this client.
-    pub max_in_flight: usize,
     /// TCP connect timeout, applied on kube's connector.
     pub connect_timeout: Duration,
 }
@@ -94,7 +101,6 @@ impl Default for ResiliencePolicy {
             retry_after_cap: Duration::from_secs(30),
             budget: Duration::from_secs(60),
             request_timeout: Some(Duration::from_secs(120)),
-            max_in_flight: 16,
             connect_timeout: Duration::from_secs(15),
         }
     }
@@ -102,8 +108,6 @@ impl Default for ResiliencePolicy {
 
 /// Env var: total attempts per request (`1` disables retries).
 pub const RETRY_ATTEMPTS_ENV: &str = "KIX_RETRY_ATTEMPTS";
-/// Env var: maximum non-watch requests in flight.
-pub const MAX_IN_FLIGHT_ENV: &str = "KIX_MAX_IN_FLIGHT";
 /// Env var: per-attempt deadline in whole seconds (`0` = none).
 pub const REQUEST_TIMEOUT_ENV: &str = "KIX_REQUEST_TIMEOUT";
 /// Env var: TCP connect timeout in whole seconds.
@@ -117,9 +121,6 @@ impl ResiliencePolicy {
         if let Some(n) = env_number(RETRY_ATTEMPTS_ENV) {
             policy.max_attempts = n.max(1) as usize;
         }
-        if let Some(n) = env_number(MAX_IN_FLIGHT_ENV) {
-            policy.max_in_flight = n.max(1) as usize;
-        }
         if let Some(n) = env_number(REQUEST_TIMEOUT_ENV) {
             policy.request_timeout = (n > 0).then(|| Duration::from_secs(n));
         }
@@ -132,7 +133,8 @@ impl ResiliencePolicy {
     }
 }
 
-fn env_number(name: &str) -> Option<u64> {
+/// Read a whole-number environment variable, warning on garbage.
+pub fn env_number(name: &str) -> Option<u64> {
     let raw = std::env::var(name).ok()?;
     match raw.trim().parse::<u64>() {
         Ok(n) => Some(n),
@@ -181,16 +183,13 @@ impl Stats {
 #[derive(Clone)]
 pub struct ResilienceLayer {
     policy: Arc<ResiliencePolicy>,
-    limiter: Arc<Semaphore>,
     stats: Arc<Stats>,
 }
 
 impl ResilienceLayer {
     pub fn new(policy: ResiliencePolicy) -> Self {
-        let limiter = Arc::new(Semaphore::new(policy.max_in_flight));
         Self {
             policy: Arc::new(policy),
-            limiter,
             stats: Arc::new(Stats::default()),
         }
     }
@@ -210,14 +209,10 @@ where
 
     fn layer(&self, inner: S) -> Self::Service {
         // The bound only limits how many requests can queue for the worker
-        // before callers see backpressure; the real cap is the semaphore.
+        // before callers see backpressure. It is not a concurrency cap and
+        // this layer has none (see the module docs).
         let buffered = Buffer::new(inner, 1024);
-        Resilience::with_shared(
-            buffered,
-            self.policy.clone(),
-            self.limiter.clone(),
-            self.stats.clone(),
-        )
+        Resilience::with_shared(buffered, self.policy.clone(), self.stats.clone())
     }
 }
 
@@ -226,27 +221,19 @@ where
 pub struct Resilience<S> {
     inner: S,
     policy: Arc<ResiliencePolicy>,
-    limiter: Arc<Semaphore>,
     stats: Arc<Stats>,
 }
 
 impl<S> Resilience<S> {
-    /// Wrap `inner` with a fresh semaphore and counters.
+    /// Wrap `inner` with fresh counters.
     pub fn new(inner: S, policy: ResiliencePolicy) -> Self {
-        let limiter = Arc::new(Semaphore::new(policy.max_in_flight));
-        Self::with_shared(inner, Arc::new(policy), limiter, Arc::new(Stats::default()))
+        Self::with_shared(inner, Arc::new(policy), Arc::new(Stats::default()))
     }
 
-    fn with_shared(
-        inner: S,
-        policy: Arc<ResiliencePolicy>,
-        limiter: Arc<Semaphore>,
-        stats: Arc<Stats>,
-    ) -> Self {
+    fn with_shared(inner: S, policy: Arc<ResiliencePolicy>, stats: Arc<Stats>) -> Self {
         Self {
             inner,
             policy,
-            limiter,
             stats,
         }
     }
@@ -277,9 +264,8 @@ where
         let clone = self.inner.clone();
         let inner = std::mem::replace(&mut self.inner, clone);
         let policy = self.policy.clone();
-        let limiter = self.limiter.clone();
         let stats = self.stats.clone();
-        Box::pin(run(inner, req, policy, limiter, stats))
+        Box::pin(run(inner, req, policy, stats))
     }
 }
 
@@ -457,7 +443,6 @@ async fn run<S, B>(
     mut inner: S,
     req: Request<Body>,
     policy: Arc<ResiliencePolicy>,
-    limiter: Arc<Semaphore>,
     stats: Arc<Stats>,
 ) -> Result<Response<B>, BoxError>
 where
@@ -478,9 +463,7 @@ where
     loop {
         attempt += 1;
         stats.attempts.fetch_add(1, Ordering::Relaxed);
-        let permit = acquire_slot(&limiter, shape.is_watch).await?;
         let outcome = send_once(&mut inner, &shape, bytes.clone(), &policy).await;
-        drop(permit);
 
         let observed = match &outcome {
             Ok(resp) => Observed::Status(resp.status(), resp.headers()),
@@ -536,21 +519,6 @@ where
     }
 }
 
-async fn acquire_slot(
-    limiter: &Arc<Semaphore>,
-    is_watch: bool,
-) -> Result<Option<OwnedSemaphorePermit>, BoxError> {
-    if is_watch {
-        return Ok(None);
-    }
-    let permit = limiter
-        .clone()
-        .acquire_owned()
-        .await
-        .map_err(BoxError::from)?;
-    Ok(Some(permit))
-}
-
 async fn send_once<S, B>(
     inner: &mut S,
     shape: &RequestShape,
@@ -588,7 +556,6 @@ mod tests {
             retry_after_cap: Duration::from_millis(10),
             budget: Duration::from_secs(5),
             request_timeout: Some(Duration::from_millis(500)),
-            max_in_flight: 16,
             connect_timeout: Duration::from_secs(1),
         }
     }
@@ -922,58 +889,58 @@ mod tests {
         assert_eq!(resp.status(), 200);
     }
 
+    /// Regression for the deploy deadlock: a request whose future its owner
+    /// stops polling must not hold anything another request needs. The
+    /// scheduler parks its apply futures in a `FuturesUnordered` while it
+    /// awaits rediscovery inline; with a shared limiter, sixteen parked
+    /// applies starved the rediscovery of permits and the deploy hung with
+    /// every thread idle.
     #[tokio::test]
-    async fn in_flight_cap_serialises_requests_but_not_watches() {
-        let mut p = policy();
-        p.max_in_flight = 1;
-        let hang = Duration::from_millis(80);
-        let (svc, _log) = harness(
-            vec![Step::Hang(hang), Step::Hang(hang), Step::Hang(hang)],
-            p,
-        );
-        let started = Instant::now();
-        let mut a = svc.clone();
-        let mut b = svc.clone();
-        let mut w = svc.clone();
-        let (ra, rb, rw) = tokio::join!(
-            async {
-                a.ready()
+    async fn unpolled_requests_never_block_another() {
+        // As many parked requests as the scheduler can have in flight.
+        let parked_count = 64;
+        let mut steps: Vec<Step> = (0..parked_count)
+            .map(|_| Step::Hang(Duration::from_secs(3600)))
+            .collect();
+        steps.push(Step::Reply(200));
+        let (svc, _log) = harness(steps, policy());
+        let waker = futures::task::noop_waker();
+        let mut cx = Context::from_waker(&waker);
+        let mut parked = Vec::new();
+        for i in 0..parked_count {
+            let mut s = svc.clone();
+            let path = format!("/apis/apiextensions.k8s.io/v1/customresourcedefinitions/crd-{i}");
+            let mut fut = Box::pin(async move {
+                s.ready()
                     .await
                     .unwrap()
-                    .call(request(Method::GET, "/api/v1/pods", ""))
+                    .call(
+                        Request::builder()
+                            .method(Method::PATCH)
+                            .uri(path)
+                            .body(Body::from(Bytes::from_static(b"{}")))
+                            .unwrap(),
+                    )
                     .await
-                    .unwrap()
-            },
-            async {
-                b.ready()
-                    .await
-                    .unwrap()
-                    .call(request(Method::GET, "/api/v1/services", ""))
-                    .await
-                    .unwrap()
-            },
-            async {
-                w.ready()
-                    .await
-                    .unwrap()
-                    .call(request(Method::GET, "/api/v1/pods?watch=true", ""))
-                    .await
-                    .unwrap()
-            },
-        );
-        assert_eq!(
-            (
-                ra.status().as_u16(),
-                rb.status().as_u16(),
-                rw.status().as_u16()
-            ),
-            (200, 200, 200)
-        );
-        let elapsed = started.elapsed();
-        // Two capped requests run one after the other (>= 2 hangs); the
-        // watch runs alongside, so the total stays under three hangs.
-        assert!(elapsed >= hang * 2, "elapsed {elapsed:?}");
-        assert!(elapsed < hang * 3, "elapsed {elapsed:?}");
+            });
+            // Poll exactly once so it is dispatched, then never again.
+            assert!(fut.as_mut().poll(&mut cx).is_pending());
+            parked.push(fut);
+        }
+
+        let mut live = svc.clone();
+        let resp = tokio::time::timeout(Duration::from_secs(2), async {
+            live.ready()
+                .await
+                .unwrap()
+                .call(request(Method::GET, "/apis", ""))
+                .await
+                .unwrap()
+        })
+        .await
+        .expect("a parked request must not block a live one");
+        assert_eq!(resp.status(), 200);
+        drop(parked);
     }
 
     #[test]
@@ -1102,18 +1069,15 @@ mod tests {
         // Serialised through the env: run the cases in one test.
         unsafe {
             std::env::set_var(RETRY_ATTEMPTS_ENV, "1");
-            std::env::set_var(MAX_IN_FLIGHT_ENV, "3");
             std::env::set_var(REQUEST_TIMEOUT_ENV, "0");
             std::env::set_var(CONNECT_TIMEOUT_ENV, "7");
         }
         let p = ResiliencePolicy::from_env();
         assert_eq!(p.max_attempts, 1);
-        assert_eq!(p.max_in_flight, 3);
         assert_eq!(p.request_timeout, None);
         assert_eq!(p.connect_timeout, Duration::from_secs(7));
         unsafe {
             std::env::set_var(RETRY_ATTEMPTS_ENV, "many");
-            std::env::remove_var(MAX_IN_FLIGHT_ENV);
             std::env::remove_var(REQUEST_TIMEOUT_ENV);
             std::env::remove_var(CONNECT_TIMEOUT_ENV);
         }

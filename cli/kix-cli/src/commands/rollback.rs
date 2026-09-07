@@ -15,9 +15,11 @@ use kix::cluster::activation;
 use kix::cluster::apply::ChangeAction;
 use kix::cluster::fetch;
 use kix::cluster::graph::ResourceGraph;
+use kix::cluster::ops::{ClusterOps, KubeOps, KubeOpsConfig};
 use kix::cluster::readiness;
 use kix::cluster::scheduler::{self, DeployPlan, OnErrorPolicy, PrunePolicy, SchedulerConfig};
 use kix::cluster::stream::{DeployObserver, DeployResult};
+use kix::cluster::watchdog::StallPolicy;
 use kix::eval::store_graph::StoreGraph;
 use kix::manifest::stamp::stamp_annotations;
 use kix::manifest::types::ResourceId;
@@ -457,11 +459,10 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
         } else {
             PrunePolicy::WarnOnly
         },
-        // Rollback re-applies a known-good prior activation; conflicts fail
-        // loudly rather than silently overwriting whatever the cluster has.
-        force_conflicts: false,
         cancel: kix::cluster::cancel::CancelToken::new(),
         dry_run: false,
+        concurrency: scheduler::CONCURRENCY,
+        stall: StallPolicy::from_env(),
     };
 
     let observer: Arc<dyn DeployObserver> = if !output::is_interactive() {
@@ -477,16 +478,26 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
 
     let cluster_name = target_graph.cluster_name.clone();
     let discovery = Arc::new(tokio::sync::RwLock::new(discovery));
+    let ops: Arc<dyn ClusterOps> = Arc::new(KubeOps::new(
+        client.clone(),
+        discovery,
+        KubeOpsConfig {
+            cluster_name,
+            activation_name: activation_name.clone(),
+            activation_identity_hash: activation_identity_hash.clone(),
+            // Rollback re-applies a known-good prior activation; conflicts
+            // fail loudly rather than silently overwriting whatever the
+            // cluster has.
+            force_conflicts: false,
+            dry_run: false,
+        },
+    ));
 
     let result = scheduler::run_deploy(
-        &client,
-        discovery,
+        ops,
         plan,
         &orphan_rids,
         &current_manifests,
-        &cluster_name,
-        activation_name.as_deref(),
-        activation_identity_hash.as_deref(),
         &config,
         observer,
     )
@@ -506,11 +517,7 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
             Ok(())
         }
         Err(e) => {
-            let partial = match &e {
-                kix::cluster::scheduler::DeployError::NodesFailed { partial, .. } => Some(partial),
-                kix::cluster::scheduler::DeployError::Cancelled { partial } => Some(partial),
-                _ => None,
-            };
+            let partial = e.partial();
             if let Some(r) = partial {
                 print_summary(r);
             }

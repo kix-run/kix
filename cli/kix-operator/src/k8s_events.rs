@@ -140,6 +140,28 @@ fn to_k8s_event(event: &DeployEvent) -> Option<KEvent> {
             action: "Stopped".into(),
             secondary: None,
         }),
+        DeployEvent::Stalled {
+            idle,
+            in_flight,
+            aborting,
+        } => Some(KEvent {
+            type_: EventType::Warning,
+            reason: if *aborting {
+                "DeployStallAbort".into()
+            } else {
+                "DeployStalled".into()
+            },
+            note: Some(kix::cluster::watchdog::describe(*idle, in_flight)),
+            action: "Stalled".into(),
+            secondary: None,
+        }),
+        DeployEvent::BestEffortFailed { what, message } => Some(KEvent {
+            type_: EventType::Warning,
+            reason: "BestEffortFailed".into(),
+            note: Some(format!("{what} failed: {message}")),
+            action: "Degraded".into(),
+            secondary: None,
+        }),
     }
 }
 

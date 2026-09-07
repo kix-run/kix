@@ -53,7 +53,12 @@ rand = "0.8"
 
 # Async
 tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
 futures = "0.3"
+# The engine's cluster-operations seam (cluster::ops) is a dyn trait with
+# async methods; async-trait boxes the futures so Arc<dyn ClusterOps> works.
+async-trait = "0.1"
+proptest = "1"
 
 # DAG
 petgraph = "0.7"

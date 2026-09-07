@@ -223,6 +223,11 @@ struct ViewState {
     finished: bool,
     stop_reason: Option<String>,
     finalized: Option<(String, Option<String>)>,
+    /// The watchdog's latest "no progress" line, shown under the tree while
+    /// the stall lasts; cleared by the next node event.
+    stall: Option<String>,
+    /// Best-effort writes that failed, listed in the footer at the end.
+    warnings: Vec<String>,
     /// All nodes we know about, keyed by NodeId.
     nodes: HashMap<NodeId, NodeView>,
     /// Plan-time ordering, so the tree renders deterministically even before
@@ -284,6 +289,8 @@ impl ViewState {
             finished: false,
             stop_reason: None,
             finalized: None,
+            stall: None,
+            warnings: Vec::new(),
             nodes: HashMap::new(),
             plan_order: Vec::new(),
             dependents: HashMap::new(),
@@ -370,6 +377,8 @@ impl ViewState {
                 verdict,
                 detail,
             } => {
+                // Progress resumed; the watchdog stops repeating and so do we.
+                self.stall = None;
                 // For prune-phase synthetic Delete events, the node might not
                 // be in plan_order. Insert it on demand so the renderer can
                 // show it.
@@ -441,6 +450,21 @@ impl ViewState {
             DeployEvent::Stopped { reason } => {
                 self.finished = true;
                 self.stop_reason = Some(reason);
+            }
+            DeployEvent::Stalled {
+                idle,
+                in_flight,
+                aborting,
+            } => {
+                let line = kix::cluster::watchdog::describe(idle, &in_flight);
+                self.stall = Some(if aborting {
+                    format!("{line}; giving up")
+                } else {
+                    line
+                });
+            }
+            DeployEvent::BestEffortFailed { what, message } => {
+                self.warnings.push(format!("{what} failed: {message}"));
             }
         }
     }
@@ -741,8 +765,21 @@ fn build_tree_lines(state: &ViewState, flushed: &HashSet<NodeId>) -> Vec<Line<'s
     }
 
     // Footer (doc 99 §2 example).
+    if let Some(stall) = &state.stall {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![Span::styled(
+            format!("⚠ {stall}"),
+            Style::default().fg(Color::Yellow),
+        )]));
+    }
     if state.finished {
         lines.push(Line::from(""));
+        for warning in &state.warnings {
+            lines.push(Line::from(vec![Span::styled(
+                format!("⚠ {warning}"),
+                Style::default().fg(Color::Yellow),
+            )]));
+        }
         if let Some(reason) = &state.stop_reason {
             lines.push(Line::from(vec![Span::styled(
                 format!("✗ {reason}"),

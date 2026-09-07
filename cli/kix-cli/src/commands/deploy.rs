@@ -29,12 +29,14 @@ use kix::cluster::apply::{ApplyAction, ChangeAction};
 use kix::cluster::fetch;
 use kix::cluster::graph::ResourceGraph;
 use kix::cluster::migrate::{MigrationPair, detect_migration_pairs};
+use kix::cluster::ops::{ClusterOps, KubeOps, KubeOpsConfig};
 use kix::cluster::readiness;
 use kix::cluster::scheduler::{self, DeployPlan, OnErrorPolicy, PrunePolicy, SchedulerConfig};
 use kix::cluster::stream::{
     CancelReason, DeployEvent, DeployObserver, DeployResult, NodeDetail, NodeId, TransitionKind,
     Verdict,
 };
+use kix::cluster::watchdog::StallPolicy;
 use kix::eval::build::build_cluster_activation_with_status;
 use kix::eval::store_graph::StoreGraph;
 use kix::manifest::stamp::stamp_annotations;
@@ -732,6 +734,21 @@ impl DeployObserver for StreamCliObserver {
             DeployEvent::Stopped { reason } => {
                 eprintln!("\n{} {}", output::red("✗"), output::red(reason));
             }
+            DeployEvent::Stalled {
+                idle,
+                in_flight,
+                aborting,
+            } => {
+                let line = kix::cluster::watchdog::describe(*idle, in_flight);
+                if *aborting {
+                    eprintln!("{} {line}; giving up", output::red("stalled:"));
+                } else {
+                    eprintln!("{} {line}", output::yellow("stalled:"));
+                }
+            }
+            DeployEvent::BestEffortFailed { what, message } => {
+                eprintln!("{} {what} failed: {message}", output::yellow("warn:"),);
+            }
         }
     }
 }
@@ -936,10 +953,22 @@ async fn run_deploy_async(
         timeout,
         on_error,
         prune: prune_policy,
-        force_conflicts: args.force_conflicts,
         cancel: kix::cluster::cancel::CancelToken::new(),
         dry_run: args.dry_run,
+        concurrency: scheduler::CONCURRENCY,
+        stall: StallPolicy::from_env(),
     };
+    let ops: Arc<dyn ClusterOps> = Arc::new(KubeOps::new(
+        client.clone(),
+        discovery,
+        KubeOpsConfig {
+            cluster_name: cluster_name.to_string(),
+            activation_name: activation_name.map(str::to_string),
+            activation_identity_hash: activation_identity_hash.map(str::to_string),
+            force_conflicts: args.force_conflicts,
+            dry_run: args.dry_run,
+        },
+    ));
 
     // Observer selection (doc 99 §7, Stage D):
     //   --tui            → graph_stream TUI (requires interactive stdout)
@@ -997,19 +1026,8 @@ async fn run_deploy_async(
         }
     };
 
-    let result = scheduler::run_deploy(
-        &client,
-        discovery,
-        plan,
-        orphan_rids,
-        old_manifests,
-        cluster_name,
-        activation_name,
-        activation_identity_hash,
-        &config,
-        observer,
-    )
-    .await;
+    let result =
+        scheduler::run_deploy(ops, plan, orphan_rids, old_manifests, &config, observer).await;
 
     // Tear down the TUI before the summary prints so it lands in normal
     // scrollback below the history lines.
@@ -1022,13 +1040,15 @@ async fn run_deploy_async(
             Ok(())
         }
         Err(e) => {
-            let partial = match &e {
-                kix::cluster::scheduler::DeployError::NodesFailed { partial, .. } => Some(partial),
-                kix::cluster::scheduler::DeployError::Cancelled { partial } => Some(partial),
-                _ => None,
-            };
-            if let Some(r) = partial {
+            if let Some(r) = e.partial() {
                 print_summary(r, args.dry_run);
+            }
+            if matches!(
+                e,
+                kix::cluster::scheduler::DeployError::DiscoveryFailed { .. }
+                    | kix::cluster::scheduler::DeployError::Internal { .. }
+            ) {
+                eprintln!("{} {e}", output::red("error:"));
             }
             std::process::exit(1);
         }

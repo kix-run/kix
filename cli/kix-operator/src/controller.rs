@@ -48,8 +48,10 @@ use kix::cluster::activation::{
 use kix::cluster::apply::{ChangeAction, IDENTITY_HASH_ANNOTATION};
 use kix::cluster::fetch;
 use kix::cluster::graph::ResourceGraph;
+use kix::cluster::ops::{ClusterOps, KubeOps, KubeOpsConfig};
 use kix::cluster::scheduler::{self, DeployPlan, OnErrorPolicy, PrunePolicy, SchedulerConfig};
 use kix::cluster::stream::DeployObserver;
+use kix::cluster::watchdog::StallPolicy;
 use kix::eval::store_graph::StoreGraph;
 use kix::manifest::stamp::stamp_annotations;
 use kix::manifest::types::ResourceId;
@@ -391,11 +393,10 @@ async fn run_reconcile(
         timeout: Duration::from_secs(300),
         on_error: OnErrorPolicy::Stop,
         prune: PrunePolicy::Delete,
-        // The operator runs unattended; surface conflicts in Activation status
-        // rather than silently clobbering fields owned by other controllers.
-        force_conflicts: false,
         cancel: kix::cluster::cancel::CancelToken::new(),
         dry_run: false,
+        concurrency: scheduler::CONCURRENCY,
+        stall: StallPolicy::from_env(),
     };
 
     // Compose two observers: tracing (structured logs) + K8s Events
@@ -413,16 +414,26 @@ async fn run_reconcile(
     let old_manifest_values: Vec<Value> =
         live_resources.iter().map(|obj| obj.data.clone()).collect();
     let discovery_shared = Arc::new(tokio::sync::RwLock::new(discovery));
+    let ops: Arc<dyn ClusterOps> = Arc::new(KubeOps::new(
+        ctx.client.clone(),
+        discovery_shared,
+        KubeOpsConfig {
+            cluster_name: cluster.to_string(),
+            activation_name: reconcile_act_name.map(str::to_string),
+            activation_identity_hash: act_identity_hash.clone(),
+            // The operator runs unattended; surface conflicts in Activation
+            // status rather than silently clobbering fields owned by other
+            // controllers.
+            force_conflicts: false,
+            dry_run: false,
+        },
+    ));
 
     let result = scheduler::run_deploy(
-        &ctx.client,
-        discovery_shared,
+        ops,
         plan,
         &orphan_rids,
         &old_manifest_values,
-        cluster,
-        reconcile_act_name,
-        act_identity_hash.as_deref(),
         &config,
         observer,
     )

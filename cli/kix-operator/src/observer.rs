@@ -178,6 +178,26 @@ impl DeployObserver for OperatorObserver {
             DeployEvent::Stopped { reason } => {
                 tracing::error!(activation, reason = reason.as_str(), "Deploy stopped");
             }
+            DeployEvent::Stalled {
+                idle,
+                in_flight,
+                aborting,
+            } => {
+                let waiting_on = kix::cluster::watchdog::describe(*idle, in_flight);
+                if *aborting {
+                    tracing::error!(activation, idle_s = idle.as_secs(), %waiting_on, "Deploy stalled; giving up");
+                } else {
+                    tracing::warn!(activation, idle_s = idle.as_secs(), %waiting_on, "Deploy stalled");
+                }
+            }
+            DeployEvent::BestEffortFailed { what, message } => {
+                tracing::warn!(
+                    activation,
+                    what = what.as_str(),
+                    message = message.as_str(),
+                    "Best-effort write failed"
+                );
+            }
         }
     }
 }

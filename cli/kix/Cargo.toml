@@ -32,7 +32,9 @@ owo-colors.workspace = true
 kube.workspace = true
 k8s-openapi = { workspace = true, features = ["latest"] }
 tokio.workspace = true
+tokio-util.workspace = true
 futures.workspace = true
+async-trait.workspace = true
 tower.workspace = true
 http.workspace = true
 http-body-util.workspace = true
@@ -81,3 +83,6 @@ test-util = []
 [dev-dependencies]
 tempfile.workspace = true
 insta.workspace = true
+proptest.workspace = true
+# Paused-clock tests for the deploy engine (start_paused, time::advance).
+tokio = { workspace = true, features = ["test-util"] }

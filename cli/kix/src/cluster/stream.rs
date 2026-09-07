@@ -225,6 +225,54 @@ pub enum DeployEvent {
     /// Scheduler bailed — either caller cancellation or a halting failure
     /// under `halt-on-first-failure`.
     Stopped { reason: String },
+    /// Nothing has happened for `idle`. Names every node in flight, what it
+    /// is doing and for how long, so a stuck run is never silent. Emitted by
+    /// the progress watchdog (`cluster::watchdog`), repeated while the stall
+    /// lasts. `aborting` is true on the last one: the watchdog is cancelling
+    /// the run.
+    Stalled {
+        idle: Duration,
+        in_flight: Vec<InFlight>,
+        aborting: bool,
+    },
+    /// A best-effort write failed. These are writes that cannot corrupt
+    /// applied state and that the next deploy redoes (checkpoint, stamping
+    /// unchanged resources, finalizing the Activation). They used to be
+    /// `tracing::warn` lines the user never saw.
+    BestEffortFailed { what: String, message: String },
+}
+
+/// What a node in flight is doing. Reported by the watchdog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Phase {
+    /// Decrypting SOPS secrets before apply.
+    Hydrate,
+    /// Server-side apply request outstanding (including transport retries).
+    Apply,
+    /// Polling the object for readiness.
+    Readiness,
+    /// Not a node: the API discovery refresh behind a CRD barrier.
+    Discovery,
+}
+
+impl Phase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Phase::Hydrate => "hydrate",
+            Phase::Apply => "apply",
+            Phase::Readiness => "readiness",
+            Phase::Discovery => "discovery",
+        }
+    }
+}
+
+/// One node in flight, as the watchdog saw it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InFlight {
+    pub node: NodeId,
+    pub phase: Phase,
+    /// How long the node has been in this phase.
+    pub since: Duration,
 }
 
 /// A node in the plan, handed to observers in `PlanComputed` so the renderer

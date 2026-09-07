@@ -115,6 +115,21 @@ impl DeployObserver for LineObserver {
             DeployEvent::Stopped { reason } => {
                 eprintln!("stopped> {reason}");
             }
+            DeployEvent::Stalled {
+                idle,
+                in_flight,
+                aborting,
+            } => {
+                let line = kix::cluster::watchdog::describe(*idle, in_flight);
+                if *aborting {
+                    eprintln!("stalled> {line}; giving up");
+                } else {
+                    eprintln!("stalled> {line}");
+                }
+            }
+            DeployEvent::BestEffortFailed { what, message } => {
+                eprintln!("warn> {what} failed: {message}");
+            }
         }
         // Line format is unbuffered so CI logs land promptly.
         let _ = io::stdout().flush();
@@ -208,6 +223,30 @@ impl DeployObserver for JsonObserver {
                 "type": "stopped",
                 "elapsed_ms": elapsed_ms,
                 "reason": reason,
+            }),
+            DeployEvent::Stalled {
+                idle,
+                in_flight,
+                aborting,
+            } => json!({
+                "type": "stalled",
+                "elapsed_ms": elapsed_ms,
+                "idle_ms": idle.as_millis() as u64,
+                "aborting": aborting,
+                "in_flight": in_flight
+                    .iter()
+                    .map(|f| json!({
+                        "node": node_label(&f.node),
+                        "phase": f.phase.as_str(),
+                        "since_ms": f.since.as_millis() as u64,
+                    }))
+                    .collect::<Vec<_>>(),
+            }),
+            DeployEvent::BestEffortFailed { what, message } => json!({
+                "type": "best_effort_failed",
+                "elapsed_ms": elapsed_ms,
+                "what": what,
+                "message": message,
             }),
         };
         println!("{obj}");

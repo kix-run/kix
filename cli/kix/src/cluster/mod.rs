@@ -11,9 +11,11 @@ pub mod fieldsv1;
 pub mod graph;
 pub mod migrate;
 pub mod normalize;
+pub mod ops;
 pub mod readiness;
 pub mod scheduler;
 pub mod secrets;
 pub mod stream;
+pub mod watchdog;
 
 pub use graph::ResourceGraph;
