@@ -4,12 +4,13 @@
   "page": "/docs/tutorials/04-first-cluster-from-scratch/",
   "cwd": "kix-examples/",
   "generator": "live",
+  "skipDriftCheck": false,
   "commands": [
     {
       "command": "kubectl get svc -n tutorial-04",
-      "stdout": "NAME          TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)   AGE\nhello-world   ClusterIP   10.96.27.235   <none>        80/TCP    3s\n",
+      "stdout": "NAME          TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)   AGE\nhello-world   ClusterIP   10.96.228.89   <none>        80/TCP    7s\n",
       "stderr": "",
-      "stdoutDrift": "hello-world ClusterIP <CLUSTER-IP> <none> 80/TCP <DURATION>\nNAME TYPE CLUSTER-IP EXTERNAL-IP PORT(S) AGE\n",
+      "stdoutDrift": "NAME TYPE CLUSTER-IP EXTERNAL-IP PORT(S) AGE\nhello-world ClusterIP <CLUSTER-IP> <none> 80/TCP <DURATION>\n",
       "stderrDrift": "",
       "exitCode": 0
     }

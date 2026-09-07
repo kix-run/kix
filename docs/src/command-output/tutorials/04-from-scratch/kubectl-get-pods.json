@@ -4,12 +4,13 @@
   "page": "/docs/tutorials/04-first-cluster-from-scratch/",
   "cwd": "kix-examples/",
   "generator": "live",
+  "skipDriftCheck": false,
   "commands": [
     {
       "command": "kubectl get pods -n tutorial-04",
-      "stdout": "NAME                           READY   STATUS    RESTARTS   AGE\nhello-world-6f4588d4c5-mvqlg   1/1     Running   0          5s\n",
+      "stdout": "NAME                           READY   STATUS    RESTARTS   AGE\nhello-world-6f4588d4c5-wc7gx   1/1     Running   0          9s\n",
       "stderr": "",
-      "stdoutDrift": "hello-world-<hash> 1/1 Running 0 <DURATION>\nNAME READY STATUS RESTARTS AGE\n",
+      "stdoutDrift": "NAME READY STATUS RESTARTS AGE\nhello-world-<hash> 1/1 Running 0 <DURATION>\n",
       "stderrDrift": "",
       "exitCode": 0
     }
