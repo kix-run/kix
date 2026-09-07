@@ -192,6 +192,92 @@ in
       }) (meta.unsafe or [ ]);
   };
 
+  # kixpkgs#46, producer side: two same-kind resources in one instance with
+  # indistinguishable labels cannot be told apart by ANY label-selecting
+  # consumer — present or future. This fires on the ambiguity itself, not
+  # on a consumer tripping over it (monitorSelectorMatchesService covers
+  # that, including cross-instance), so a package is forced to give each
+  # Service its own identity the moment it grows a second one.
+  #
+  # "Indistinguishable" is subset-or-equal, both directions: label matching
+  # means "has at least these labels", so if A's labels are a subset of
+  # B's, a selector built from A's full label set still matches B. Each
+  # resource must carry at least one (key, value) the other lacks.
+  #
+  # Kinds checked: only those discovered BY label selector in practice.
+  # Extending to every kind would error on harmless twins (two ConfigMaps
+  # in one instance are label-identical everywhere and selected by name).
+  distinctSameKindLabels = {
+    description = "Same-kind label-selectable resources in one instance must be label-distinguishable";
+    level = "package";
+    severity = "error";
+    tags = [
+      "architecture"
+      "monitoring"
+      "identity"
+    ];
+    check =
+      { resources, instanceName, ... }:
+      let
+        labelSelectedKinds = [ "Service" ];
+        subsetOf =
+          needle: hay: builtins.all (k: (hay.${k} or null) == needle.${k}) (builtins.attrNames needle);
+        rid = r: "${r.kind or "?"}/${r.metadata.name or "?"}";
+        # The first sentence of the finding states the exact relationship,
+        # because the reader's fix differs slightly: identical label sets
+        # mean neither can be picked out; a one-way subset means the
+        # smaller set can never be selected without also hitting the
+        # larger.
+        relationship =
+          a: b:
+          let
+            la = a.metadata.labels or { };
+            lb = b.metadata.labels or { };
+          in
+          if la == lb then
+            "${rid a} and ${rid b} carry exactly the same labels, so nothing that finds ${a.kind or "?"}s by labels can pick one without the other"
+          else if subsetOf la lb then
+            "${rid a} carries a subset of ${rid b}'s labels, so any selector that finds ${rid a} also finds ${rid b}"
+          else if subsetOf lb la then
+            "${rid b} carries a subset of ${rid a}'s labels, so any selector that finds ${rid b} also finds ${rid a}"
+          else
+            null;
+        checkKind =
+          kind:
+          let
+            rs = builtins.filter (r: (r.kind or "") == kind) resources;
+            n = builtins.length rs;
+            pairFindings = builtins.concatMap (
+              i:
+              builtins.concatMap (
+                j:
+                let
+                  a = builtins.elemAt rs i;
+                  b = builtins.elemAt rs j;
+                  rel = relationship a b;
+                in
+                if rel != null then
+                  [
+                    {
+                      message =
+                        "In instance '${instanceName}': ${rel}. "
+                        + "To fix it, give each ${kind} in this instance its own label: the same key with a "
+                        + "different value on each, for example `labels.\"app.kubernetes.io/component\"`. "
+                        + "Each one needs its own value. A label selector matches anything that has at "
+                        + "least the selected labels, so adding a label to only one of them leaves the "
+                        + "other still matching both.";
+                    }
+                  ]
+                else
+                  [ ]
+              ) (lib.range (i + 1) (n - 1))
+            ) (lib.range 0 (n - 1));
+          in
+          if n < 2 then [ ] else pairFindings;
+      in
+      builtins.concatMap checkKind labelSelectedKinds;
+  };
+
   # v2_discussions/97 §6: cluster-internal FQDNs should originate from a
   # ServiceRef/Service `out.*` value so store-path context carries netpol,
   # DNS, and wave-ordering edges. Hand-rolled `"${name}.${ns}.svc"` strings
@@ -271,7 +357,7 @@ in
   # `annotations."kix.dev/monitors-external-service" = "true"` — the claim
   # then rides the resource into the cluster, where it documents itself.
   monitorSelectorMatchesService = {
-    description = "ServiceMonitor/VMServiceScrape selectors must match some Service's metadata labels";
+    description = "ServiceMonitor/VMServiceScrape selectors must match exactly one scrapable Service's metadata labels";
     level = "cluster";
     severity = "error";
     tags = [
@@ -321,6 +407,39 @@ in
           else
             [ ];
 
+        # ── Over-match detection (the silent half of the bug class) ──────
+        # A selector matching MORE than one Service double-scrapes every
+        # pod behind both. But label-matching alone over-counts: a monitor
+        # also names the port it scrapes, and a matched Service without
+        # that port produces no targets. So a Service only counts if one
+        # of the monitor's endpoints can hit one of its ports. Comparison
+        # stays within the monitor's target kind (Services) — no
+        # cross-kind counting.
+        endpointHitsService =
+          ep: svc:
+          let
+            svcPorts = svc.spec.ports or [ ];
+            epPort = ep.port or null;
+            epTarget = ep.targetPort or null;
+          in
+          if epPort != null then
+            builtins.any (p: (p.name or null) == epPort) svcPorts
+          else if epTarget != null then
+            builtins.any (
+              p: (p.targetPort or p.port or null) == epTarget || (p.name or null) == epTarget
+            ) svcPorts
+          else
+            # No port named at all: prometheus-operator scrapes every
+            # endpoint port — any Service counts.
+            true;
+
+        scrapesService =
+          mon: svc:
+          let
+            endpoints = mon.spec.endpoints or [ ];
+          in
+          endpoints == [ ] || builtins.any (ep: endpointHitsService ep svc) endpoints;
+
         checkMonitor =
           mon:
           let
@@ -330,17 +449,20 @@ in
             allTargetsManaged =
               targets != null && targets != [ ] && builtins.all (ns: builtins.elem ns managedNamespaces) targets;
             candidates = builtins.filter (svc: builtins.elem (svc.metadata.namespace or null) targets) services;
-            anyMatch = builtins.any (svc: subsetOf matchLabels (svc.metadata.labels or { })) candidates;
+            matched = builtins.filter (svc: subsetOf matchLabels (svc.metadata.labels or { })) candidates;
+            scraped = builtins.filter (scrapesService mon) matched;
             external = ((mon.metadata.annotations or { })."kix.dev/monitors-external-service" or "") == "true";
             skip = external || sel ? matchExpressions || matchLabels == { } || !allTargetsManaged;
+            monId = "${mon.kind or "?"}/${mon.metadata.name or "?"}";
+            svcId = svc: "${svc.metadata.namespace or "?"}/${svc.metadata.name or "?"}";
           in
-          if skip || anyMatch then
+          if skip then
             [ ]
-          else
+          else if matched == [ ] then
             [
               {
                 namespace = mon.metadata.namespace or null;
-                resource = "${mon.kind or "?"}/${mon.metadata.name or "?"}";
+                resource = monId;
                 message =
                   "${mon.kind or "?"} '${mon.metadata.name or "?"}' selects "
                   + "{ ${lib.concatStringsSep ", " (lib.mapAttrsToList (k: v: "${k}=${toString v}") matchLabels)} }, "
@@ -351,7 +473,25 @@ in
                   + "Build the selector from the target Service's labels: `self.<service>.out.selector`, "
                   + "or use `kix.monitor`, which does this for you.";
               }
-            ];
+            ]
+          else if builtins.length scraped > 1 then
+            [
+              {
+                namespace = mon.metadata.namespace or null;
+                resource = monId;
+                message =
+                  "${mon.kind or "?"} '${mon.metadata.name or "?"}' matches ${toString (builtins.length scraped)} Services "
+                  + "on its scrape port: ${lib.concatStringsSep ", " (map svcId scraped)}. "
+                  + "A pod behind more than one of them is scraped once per Service, so its metrics are "
+                  + "counted more than once. "
+                  + "Narrow the selector so it matches only the intended Service: select on a label that "
+                  + "only that Service carries. If the matched Services come from one package, first give "
+                  + "each its own label (the same key with a different value on each), then build the "
+                  + "selector from the intended Service's labels: `self.<service>.out.selector`.";
+              }
+            ]
+          else
+            [ ];
       in
       builtins.concatMap checkMonitor monitors;
   };

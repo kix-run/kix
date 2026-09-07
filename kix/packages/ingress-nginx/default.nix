@@ -867,7 +867,12 @@ in
         apiVersion = "v1";
         kind = "Service";
         name = "${ctrlName}-admission";
-        labels = commonLabels;
+        # Distinct identity vs the main controller Service
+        # (distinctSameKindLabels) — the upstream chart uses the same
+        # component value for its admission resources.
+        labels = commonLabels // {
+          "app.kubernetes.io/component" = "admission-webhook";
+        };
         spec = {
           type = "ClusterIP";
           # See selector comment on the main Service: rawSelector avoids

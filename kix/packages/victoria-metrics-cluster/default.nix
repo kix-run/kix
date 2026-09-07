@@ -279,6 +279,10 @@ in
         apiVersion = "v1";
         kind = "Service";
         name = "${name}-select";
+        # Distinct per-Service identity (distinctSameKindLabels): without
+        # it, no label selector can tell the select and insert Services
+        # apart.
+        labels."app.kubernetes.io/component" = "vmselect";
         requires = [ self.vmCluster ];
         spec = {
           type = "ClusterIP";
@@ -301,6 +305,7 @@ in
         apiVersion = "v1";
         kind = "Service";
         name = "${name}-insert";
+        labels."app.kubernetes.io/component" = "vminsert";
         requires = [ self.vmCluster ];
         spec = {
           type = "ClusterIP";

@@ -175,6 +175,16 @@
 
       commonLabels = selectorLabels // componentLabel;
 
+      # Distinct metadata identity for the headless twin
+      # (distinctSameKindLabels): without it the headless Service's labels
+      # are a subset of the main Service's, so no label selector can single
+      # either out.
+      headlessComponentLabel =
+        if scope.labelStyle == "helm" then
+          { component = "headless"; }
+        else
+          { "app.kubernetes.io/component" = "headless"; };
+
       # Auth-related helpers.
       credentialsSecretName =
         if config.auth.existingSecret != null then config.auth.existingSecret else "${name}-credentials";
@@ -1317,7 +1327,7 @@
         apiVersion = "v1";
         kind = "Service";
         name = "${name}-headless";
-        labels = selectorLabels;
+        labels = selectorLabels // headlessComponentLabel;
         spec = {
           type = "ClusterIP";
           clusterIP = "None";

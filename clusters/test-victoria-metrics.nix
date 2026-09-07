@@ -41,10 +41,26 @@ let
           apiVersion = "v1";
           kind = "Service";
           name = "test-consumer";
+          labels."app.kubernetes.io/component" = "consumer";
           spec.ports = [
             {
               name = "metrics";
               port = 9100;
+            }
+          ];
+        };
+
+        # PROBE: second Service, identical labels, same port name — the
+        # over-match rule must fail this build.
+        probeService = scope.mkResource {
+          apiVersion = "v1";
+          kind = "Service";
+          name = "test-consumer-probe";
+          labels."app.kubernetes.io/component" = "probe";
+          spec.ports = [
+            {
+              name = "metrics";
+              port = 9101;
             }
           ];
         };
@@ -80,7 +96,10 @@ let
         # for the prometheus-absent case.)
         root = {
           resource = self.serviceMonitor;
-          requires = [ self.alertRule ];
+          requires = [
+            self.alertRule
+            self.probeService
+          ];
         };
       };
   };

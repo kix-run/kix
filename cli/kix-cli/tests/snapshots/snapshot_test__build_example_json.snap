@@ -3921,9 +3921,9 @@ expression: stable
     "kind": "Activation",
     "metadata": {
       "annotations": {
-        "kix.dev/built-via": "/nix/store/gyh9q3yqmf9d2kmddn9vnsa4jphfdrmc-k8s-activation-example",
-        "kix.dev/depends-on": "0ya8s6z84k3l14jz1mxh5li8dhapab4w,3ckd9j1v1aispj7zlvx7dqmvl16dmw4m,54kjhc0vfr5sf7h4lyw2za97g9xyfj18,6i29aji5fdn305lxbb1c8dihlbnn36zs,gwy8i92bf6v1x4vbm94xabd7z5xsz2zm,n10ixmgdp0z2y67vz7blsgsyjmnqia6a,rm9hgnz3l8rbkiqqxm5237nfv0sg8sj2,vjqclmrgjf26r4x0di8vlr90a7crbjph,wga9qmdvzv23a1nfkff1dd7fgfaszy6y,wr53rnayc1l4qlx40a2d364sywywz0yr,requires:r5xi4rysn205nn15cjbjaxii4cpcv5g9",
-        "kix.dev/identity-hash": "jw7q2ly337a9dyc9sa8zqmk7zpspbn37",
+        "kix.dev/built-via": "/nix/store/51bj99rq4jj6nf7a0rczdi826f8826ld-k8s-activation-example",
+        "kix.dev/depends-on": "0ya8s6z84k3l14jz1mxh5li8dhapab4w,3ckd9j1v1aispj7zlvx7dqmvl16dmw4m,54kjhc0vfr5sf7h4lyw2za97g9xyfj18,6i29aji5fdn305lxbb1c8dihlbnn36zs,6ldjangqda2p0w66zb5sa1g3lg53p7gv,n10ixmgdp0z2y67vz7blsgsyjmnqia6a,rm9hgnz3l8rbkiqqxm5237nfv0sg8sj2,vjqclmrgjf26r4x0di8vlr90a7crbjph,wga9qmdvzv23a1nfkff1dd7fgfaszy6y,wr53rnayc1l4qlx40a2d364sywywz0yr,requires:r5xi4rysn205nn15cjbjaxii4cpcv5g9",
+        "kix.dev/identity-hash": "6ay8fg561jgz151p2vcnnmhk0hxy1ndd",
         "kix.dev/package": "_cluster",
         "kix.dev/package-namespace": "_cluster"
       },
@@ -3931,7 +3931,7 @@ expression: stable
         "app.kubernetes.io/managed-by": "kix",
         "kix.dev/cluster": "example"
       },
-      "name": "example-jw7q2ly337a9"
+      "name": "example-6ay8fg561jgz"
     },
     "spec": {
       "instances": {
@@ -3963,8 +3963,8 @@ expression: stable
     "kind": "PackageInstance",
     "metadata": {
       "annotations": {
-        "kix.dev/depends-on": "0daiyyc3hzspzlja8dkdcy3lk9532aha,6d0a44nqqwwv27qciwy6bfiayy951k76,6v1fz2pyq1p8fz1r96fl77m9lyx8hl31,dhp3bgii0yr7qc8g1n6vcid5bskk32zw,flkypj7d9bl6j16jcd7b0zzbnzm1vhkv,fvlljpz1m5jkma9lhaq54gcavq71c73c,hifs44xgqw881qx1sjf0r9h995h6vsr9,r9mwhpnzi2i4bwpmijc8gr76axf785ax,vzbj53ihqdzf4jha911ajy0divh0xpwf,ym8ki03aldzjxf3d83fa56542pg6c64r,yyxdsl2i1bhsznym0prawg7xjkfnhacv,requires:n9n2qwqvxz9dsm5pq7yfsy8q2xp2f8r9",
-        "kix.dev/identity-hash": "gwy8i92bf6v1x4vbm94xabd7z5xsz2zm",
+        "kix.dev/depends-on": "0daiyyc3hzspzlja8dkdcy3lk9532aha,47vsiws5idn5pa80f0p3ncizz2175xv7,6d0a44nqqwwv27qciwy6bfiayy951k76,6v1fz2pyq1p8fz1r96fl77m9lyx8hl31,dhp3bgii0yr7qc8g1n6vcid5bskk32zw,flkypj7d9bl6j16jcd7b0zzbnzm1vhkv,fvlljpz1m5jkma9lhaq54gcavq71c73c,hifs44xgqw881qx1sjf0r9h995h6vsr9,r9mwhpnzi2i4bwpmijc8gr76axf785ax,ym8ki03aldzjxf3d83fa56542pg6c64r,yyxdsl2i1bhsznym0prawg7xjkfnhacv,requires:n9n2qwqvxz9dsm5pq7yfsy8q2xp2f8r9",
+        "kix.dev/identity-hash": "6ldjangqda2p0w66zb5sa1g3lg53p7gv",
         "kix.dev/package": "_cluster",
         "kix.dev/package-namespace": "_cluster",
         "kix.dev/package-requires": "ServiceAccount/valkey,ConfigMap/valkey-scripts,ConfigMap/valkey-health,ConfigMap/valkey-configuration,StatefulSet/valkey-node,Service/valkey-headless,Service/valkey-metrics,NetworkPolicy/valkey,PodDisruptionBudget/valkey-node",
@@ -7721,12 +7721,13 @@ expression: stable
     "metadata": {
       "annotations": {
         "kix.dev/depends-on": "6d0a44nqqwwv27qciwy6bfiayy951k76,requires:0daiyyc3hzspzlja8dkdcy3lk9532aha",
-        "kix.dev/identity-hash": "vzbj53ihqdzf4jha911ajy0divh0xpwf",
+        "kix.dev/identity-hash": "47vsiws5idn5pa80f0p3ncizz2175xv7",
         "kix.dev/lifecycle": "stateful",
         "kix.dev/package": "valkey",
         "kix.dev/package-namespace": "cache"
       },
       "labels": {
+        "app.kubernetes.io/component": "headless",
         "app.kubernetes.io/instance": "valkey",
         "app.kubernetes.io/managed-by": "kix",
         "app.kubernetes.io/name": "valkey",
