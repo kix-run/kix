@@ -566,6 +566,44 @@ meta = {
 
 For packages with multiple sub-services (harbor-style), keep everything in **one package** — not split into separate packages. **Read `MULTI_COMPONENT.md` for patterns**: shared let bindings, per-component selectors, inline PVCs, `root.requires`, `root.postHooks`. Reference: `packages/harbor/`.
 
+## Operator-Managed Stacks (VictoriaMetrics reference)
+
+Some stacks are not Deployments you render but custom resources an operator
+turns into pods at runtime. The VictoriaMetrics packages are the reference
+for that shape (design: `v2_discussions/133`, shipped 2026-09-07):
+
+- `packages/victoria-metrics-operator/` owns the CRDs (`crds.nix`, typed
+  builder chain with `readiness` and `factBehavior`), the kinds table
+  (`kinds.nix`) and the controller (`operator.nix`). It answers the
+  `prometheus` alias and ships the prometheus-operator compat CRDs
+  (ServiceMonitor, PodMonitor, PrometheusRule, Probe) with the same
+  builder surface (`out.mkServiceMonitor`, `out.mkPrometheusRule`, ...),
+  so every `kix.monitor` call and app-package ServiceMonitor works
+  unchanged; the operator converts them. It also exposes CR builders such
+  as `out.mkVMCluster scope { ... }`.
+- `packages/victoria-metrics-cluster/` (VMCluster, aliases
+  `prometheusServer` and `vmCluster`), `victoria-metrics-agent/` (VMAgent)
+  and `victoria-metrics-alert/` (VMAlert + VMAlertmanager) each build one CR
+  through the operator's builder, never a raw kind string. The cluster
+  package also owns a `-select` and an `-insert` Service whose selectors
+  match the labels the operator stamps on operand pods. They exist for
+  stable names and for `out.serviceUrl` / `out.insertUrl` with dependency
+  context (same pattern as `packages/prometheus`). Two Services of one kind
+  in one package need `distinctSameKindLabels` so a selector can tell them
+  apart.
+- Trial posture: `lifecycle = "ephemeral"` on the cluster package means
+  historical metrics are expendable on a storage swap. Revisit before VM
+  becomes a long-term store.
+- The StorageClass arrives as an import marker (`kix.mkImport { out.storageClassName = ...; }`
+  under the `storageClasses` alias), so the substrate stays outside kix.
+
+When migrating a cluster from kube-prometheus-stack: keep the
+`prometheus` alias on the operator package and the `prometheusServer` alias
+on the cluster package, and existing packages (grafana datasource,
+`kix.monitor` users) rewire themselves. A whole-stack example with an
+optional node-pin module lives in the lithus monorepo at
+`client/lithus/clusters/shared/monitoring-stack.nix`.
+
 ## Migration Tips
 
 - **Read the Ansible role first.** Understand what the role creates — which Deployments, Services, ConfigMaps, RBAC, etc. Don't reverse-engineer from the cluster dump alone.
@@ -582,3 +620,4 @@ For packages with multiple sub-services (harbor-style), keep everything in **one
   - `packages/harbor/` — complex multi-component (read `MULTI_COMPONENT.md`)
   - `packages/valkey/` — complex multi-resource package
   - `packages/storage-classes/` — `lib.mapAttrs` to generate resources from config
+  - `packages/victoria-metrics-*/` — operator + operand CRs, compat CRDs behind an alias (see "Operator-Managed Stacks")
