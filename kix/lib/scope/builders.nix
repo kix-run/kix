@@ -464,8 +464,13 @@ in
               k8s.facts.validateBehavior "mkCRD ${instanceName}" "${group}/${crKind}" attrs.factBehavior
             else
               null;
+          # Forced via the seq below so a malformed declaration fails HERE,
+          # at the declaring package's eval — not at the first CR build.
+          readiness = k8s.validateReadiness "mkCRD ${instanceName}" "${group}/${crKind}" (
+            attrs.readiness or null
+          );
 
-          crdResource = scopeMkClusterResource {
+          crdResource = builtins.seq readiness (scopeMkClusterResource {
             apiVersion = "apiextensions.k8s.io/v1";
             kind = "CustomResourceDefinition";
             name = "${plural}.${group}";
@@ -476,13 +481,18 @@ in
             // lib.optionalAttrs (annotations != { }) {
               metadata = { inherit annotations; };
             };
-          };
+          });
 
           crdBuilders = k8s.mkCRDBuilders {
             crdOrRef = crdResource;
             group = group;
             kind = crKind;
-            inherit version crdScope factBehavior;
+            inherit
+              version
+              crdScope
+              factBehavior
+              readiness
+              ;
           };
         in
         crdResource
@@ -531,8 +541,14 @@ in
           # the CRD-owning package reifies the kind. Threads through mkCR
           # into every CR's seal.
           factBehavior ? null,
+          # readiness convention of this kind's controller — see
+          # mkCRDBuilders in core/resource.nix. Stamped on every CR built
+          # via mkCR as the `kix.dev/readiness` annotation. Validated
+          # eagerly (seq'd into the marker) like factBehavior.
+          readiness ? null,
         }:
         let
+          _validatedReadiness = k8s.validateReadiness "mkCRDRef ${instanceName}" "${group}/${kind}" readiness;
           _validatedBehavior =
             if factBehavior != null then
               k8s.facts.validateBehavior "mkCRDRef ${instanceName}" "${group}/${kind}" factBehavior
@@ -550,17 +566,18 @@ in
             else
               [ installedBy ];
 
-          marker = mkImportMarker {
+          marker = builtins.seq _validatedReadiness (mkImportMarker {
             inherit markerName;
             importKind = "CustomResourceDefinition";
             importApiVersion = "apiextensions.k8s.io/v1";
             importName = crdName;
             extraRequires = installedByList;
-          };
+          });
 
           crdBuilders = k8s.mkCRDBuilders {
             crdOrRef = marker;
             factBehavior = _validatedBehavior;
+            readiness = _validatedReadiness;
             inherit
               group
               kind

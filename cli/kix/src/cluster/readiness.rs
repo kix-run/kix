@@ -977,12 +977,64 @@ pub fn is_immediate_kind(kind: &str) -> bool {
     )
 }
 
+/// A readiness convention declared by the CRD-owning package and stamped on
+/// the CR as the `kix.dev/readiness` annotation (JSON: `{"path": "/status/...",
+/// "equals": "<value>"}`). The CR is ready when the string at `path` equals
+/// `equals`.
+struct DeclaredReadiness {
+    path: String,
+    equals: String,
+}
+
+/// Parse the `kix.dev/readiness` annotation, if present and well-formed.
+/// Malformed declarations are ignored (fall through to kind-based checks)
+/// rather than treated as never-ready: the annotation is kix-authored, and a
+/// shape mismatch means a version skew between the CLI and the library, not
+/// an unhealthy resource.
+///
+/// Be honest about what the fallthrough means for a CR with NO annotation
+/// (manifests built by a pre-declaration library): check_generic_ready
+/// treats a status-less CR as READY, so a freshly-created CR races its
+/// operator instead of waiting — strictly worse than a timeout. The
+/// information simply isn't in old manifests; rebuild them with a library
+/// that stamps the annotation. (Old CLI + new manifests is safe: the
+/// annotation is inert there.)
+fn declared_readiness(obj: &DynamicObject) -> Option<DeclaredReadiness> {
+    let raw = obj
+        .metadata
+        .annotations
+        .as_ref()?
+        .get("kix.dev/readiness")?;
+    let v: Value = serde_json::from_str(raw).ok()?;
+    Some(DeclaredReadiness {
+        path: v.get("path")?.as_str()?.to_string(),
+        equals: v.get("equals")?.as_str()?.to_string(),
+    })
+}
+
 /// Synchronous readiness check for a single resource.
 ///
 /// Returns `true` if the resource is considered ready based on its kind.
 pub fn check_readiness(obj: &DynamicObject, kind: &str) -> bool {
     if is_immediate_kind(kind) {
         return true;
+    }
+
+    // A CRD-owning package can declare its kinds' readiness convention on
+    // the CRD builder (readiness = { path; equals; }); kix stamps it on
+    // every CR built through the typed chain as the `kix.dev/readiness`
+    // annotation. Honoring it here keeps controller vocabulary out of the
+    // CLI: the VictoriaMetrics operator's status.updateStatus ==
+    // "operational" convention (15 kinds) used to be a hardcoded list in
+    // this match. The SGCluster / Gateway arms below predate the
+    // annotation and are candidates to migrate when their packages gain
+    // typed CRD builders.
+    if let Some(rule) = declared_readiness(obj) {
+        return obj
+            .data
+            .pointer(&rule.path)
+            .and_then(Value::as_str)
+            .is_some_and(|v| v == rule.equals);
     }
 
     match kind {
@@ -1154,6 +1206,21 @@ fn has_condition(data: &Value, condition_type: &str, expected_status: &str) -> b
 /// Build a human-readable message about why a resource isn't ready.
 fn readiness_message(obj: &DynamicObject, kind: &str) -> String {
     let name = obj.metadata.name.as_deref().unwrap_or("unknown");
+    if let Some(rule) = declared_readiness(obj) {
+        // Render the truth about what sits at the path: a present but
+        // non-string value silently never matches (comparison is string
+        // equality), and calling it "<absent>" sent operators hunting for
+        // a field that exists.
+        let current = match obj.data.pointer(&rule.path) {
+            None => "<absent>".to_string(),
+            Some(Value::String(v)) => format!("\"{v}\""),
+            Some(other) => format!("{other} (non-string; declared readiness compares strings)"),
+        };
+        return format!(
+            "{kind}/{name}: declared readiness {}=\"{}\", currently {current}",
+            rule.path, rule.equals
+        );
+    }
     match kind {
         "Deployment" | "StatefulSet" => {
             let desired = obj
@@ -1246,8 +1313,16 @@ fn readiness_message(obj: &DynamicObject, kind: &str) -> String {
                 format!("{kind}/{name}: not ready")
             } else {
                 format!(
-                    "{kind}/{name}: no Ready/Available condition; controller reports [{}] —                      if this vocabulary is healthy for this kind, it needs a readiness rule                      in check_readiness",
-                    seen.join(", ")
+                    concat!(
+                        "{kind}/{name}: no Ready/Available condition; controller reports [{seen}] — ",
+                        "if this vocabulary is healthy for this kind, declare its readiness ",
+                        "convention on the owning package's CRD builder (readiness = {{ path; ",
+                        "equals; }}, stamped as the kix.dev/readiness annotation) or add a ",
+                        "rule in check_readiness"
+                    ),
+                    kind = kind,
+                    name = name,
+                    seen = seen.join(", ")
                 )
             }
         }
@@ -1286,6 +1361,120 @@ mod tests {
             types: None,
             data,
         }
+    }
+
+    /// Like make_obj but with a kix.dev/readiness annotation, mirroring what
+    /// the nix typed CRD chain stamps on every CR.
+    fn make_annotated_obj(annotation: &str, data: Value) -> DynamicObject {
+        let mut annotations = std::collections::BTreeMap::new();
+        annotations.insert("kix.dev/readiness".to_string(), annotation.to_string());
+        DynamicObject {
+            metadata: ObjectMeta {
+                name: Some("test".into()),
+                annotations: Some(annotations),
+                ..Default::default()
+            },
+            types: None,
+            data,
+        }
+    }
+
+    const VM_RULE: &str = r#"{"path":"/status/updateStatus","equals":"operational"}"#;
+
+    #[test]
+    fn declared_readiness_parses_valid_annotation() {
+        let obj = make_annotated_obj(VM_RULE, json!({}));
+        let rule = declared_readiness(&obj).expect("should parse");
+        assert_eq!(rule.path, "/status/updateStatus");
+        assert_eq!(rule.equals, "operational");
+    }
+
+    #[test]
+    fn declared_readiness_ignores_malformed_annotations() {
+        for bad in [
+            "not json",
+            r#"{"path":"/status/x"}"#,               // missing equals
+            r#"{"equals":"ok"}"#,                    // missing path
+            r#"{"path":42,"equals":"ok"}"#,          // non-string path
+            r#"{"path":"/status/x","equals":true}"#, // non-string equals
+        ] {
+            let obj = make_annotated_obj(bad, json!({}));
+            assert!(declared_readiness(&obj).is_none(), "should reject: {bad}");
+        }
+        // No annotation at all.
+        assert!(declared_readiness(&make_obj(json!({}))).is_none());
+    }
+
+    #[test]
+    fn declared_readiness_gates_check_readiness() {
+        let ready = make_annotated_obj(VM_RULE, json!({"status": {"updateStatus": "operational"}}));
+        assert!(check_readiness(&ready, "VMCluster"));
+
+        let expanding =
+            make_annotated_obj(VM_RULE, json!({"status": {"updateStatus": "expanding"}}));
+        assert!(!check_readiness(&expanding, "VMCluster"));
+
+        // No status yet: declared readiness waits (unlike generic ready-on-empty).
+        let fresh = make_annotated_obj(VM_RULE, json!({}));
+        assert!(!check_readiness(&fresh, "VMCluster"));
+    }
+
+    #[test]
+    fn declared_readiness_beats_kind_rules() {
+        // SGCluster has a hardcoded Bootstrapped-condition arm; a declared
+        // rule must take precedence over it.
+        let obj = make_annotated_obj(
+            VM_RULE,
+            json!({"status": {
+                "updateStatus": "operational",
+                "conditions": [{"type": "Bootstrapped", "status": "False"}]
+            }}),
+        );
+        assert!(check_readiness(&obj, "SGCluster"));
+    }
+
+    #[test]
+    fn malformed_annotation_falls_through_to_kind_rules() {
+        // Deliberate design: version skew is not unhealthiness. A CR whose
+        // annotation is garbage falls to check_generic_ready — which treats
+        // an empty status as READY (documented on declared_readiness).
+        let no_status = make_annotated_obj("not json", json!({}));
+        assert!(check_readiness(&no_status, "VMCluster"));
+
+        // ...and unrecognized condition vocabulary as not-ready.
+        let stamped = make_annotated_obj(
+            "not json",
+            json!({"status": {"conditions": [
+                {"type": "x.example.com/Applied", "status": "True"}
+            ]}}),
+        );
+        assert!(!check_readiness(&stamped, "VMCluster"));
+    }
+
+    #[test]
+    fn declared_readiness_non_string_value_never_matches() {
+        let rule = r#"{"path":"/status/replicas","equals":"3"}"#;
+        let obj = make_annotated_obj(rule, json!({"status": {"replicas": 3}}));
+        assert!(!check_readiness(&obj, "VMCluster"));
+        let msg = readiness_message(&obj, "VMCluster");
+        assert!(msg.contains("non-string"), "got: {msg}");
+        assert!(!msg.contains("<absent>"), "got: {msg}");
+    }
+
+    #[test]
+    fn declared_readiness_message_shapes() {
+        let waiting = make_annotated_obj(VM_RULE, json!({"status": {"updateStatus": "expanding"}}));
+        let msg = readiness_message(&waiting, "VMCluster");
+        assert!(
+            msg.contains(
+                r#"declared readiness /status/updateStatus="operational", currently "expanding""#
+            ),
+            "got: {msg}"
+        );
+
+        let absent = make_annotated_obj(VM_RULE, json!({}));
+        let msg = readiness_message(&absent, "VMCluster");
+        assert!(msg.contains("<absent>"), "got: {msg}");
     }
 
     #[test]

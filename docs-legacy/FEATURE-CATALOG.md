@@ -36,7 +36,7 @@ Complete inventory of kix/lib (Nix library) and CLI features. Breadth-first — 
 - **`evaluateInstance`** (`eval/instance.nix`) — Full single-instance pipeline: normalize → discover deps → resolve → meta checks → config eval → overlays → fixpoint → closure → validation → netpol → scorecard → diagnostics → PackageView → PackageInstance CR.
 - **`evaluateImportInstance`** (`eval/import.nix`) — Lightweight path for imports: runs package with null-throwing proxy deps, extracts root's `out`, creates marker PI CR.
 - **`mkImport`** — Import marker: `{ from?, out? }`. `from` = optional package function for lazy out derivation.
-- **`mkScope`** (`eval/scope.nix`) — Per-instance context. Provides: mkResource, mkClusterResource, mkDeployment, mkStatefulSet, mkDaemonSet, forNamespace, mkCRD, mkCRDRef, mkCR, full RBAC DSL. Supports kix and helm label styles via `labelStyle`.
+- **`mkScope`** (`eval/scope.nix`) — Per-instance context. Provides: mkResource, mkClusterResource, mkDeployment, mkStatefulSet, mkDaemonSet, forNamespace, mkCRD, mkCRDRef, mkCR, full RBAC DSL. Supports kix and helm label styles via `labelStyle`. mkCRD/mkCRDRef accept per-kind controller declarations that ride into every mkCR-built CR: `factBehavior` (netpol) and `readiness = { path; equals; }` (health convention, stamped as the `kix.dev/readiness` annotation and evaluated by `kix deploy`).
 - **`selectorLabelsOverride`** — Override auto-derived selector labels (for immutable selectors on existing workloads).
 - **Capability checks** — Lazy checks: `checkCapability`. Guards for loadBalancer, privilegedContainers, daemonSets.
 - **`mkNamespace`** (`eval/namespace.nix`) — Creates Namespace resource + optional ResourceQuota + NetworkPolicy resources.

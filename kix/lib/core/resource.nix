@@ -593,6 +593,36 @@ rec {
 
   resourceId = r: "${r.kind}/${r.name}@${nsOf r}";
 
+  # Validate a readiness declaration (or pass null through). Throws with a
+  # named context on shape violations. Exposed so mkCRD/mkCRDRef can force
+  # it EAGERLY at the declaration site — a bad declaration must fail the
+  # declaring package's eval, not detonate at the first CR construction
+  # months later (same principle as cluster.factBehavior validation).
+  validateReadiness =
+    context: groupKind: readiness:
+    if readiness == null then
+      null
+    else if
+      !(builtins.isAttrs readiness)
+      || !(readiness ? path)
+      || !(readiness ? equals)
+      || !(builtins.isString readiness.path)
+      || !(lib.hasPrefix "/" readiness.path)
+      || !(builtins.isString readiness.equals)
+      ||
+        builtins.attrNames readiness != [
+          "equals"
+          "path"
+        ]
+    then
+      throw ''
+        ${context}: readiness declaration for ${groupKind} must be
+        { path = "/status/..."; equals = "<value>"; }
+        (path: a JSON pointer string starting with "/"; equals: a string; no other keys)
+      ''
+    else
+      readiness;
+
   mkCRDBuilders =
     {
       crdOrRef,
@@ -606,10 +636,23 @@ rec {
       # property of the CRD, delivered along the same chain as the kind
       # name and the CRD-before-CR ordering edge.
       factBehavior ? null,
+      # readiness convention of this kind's controller — like factBehavior,
+      # a property of the CRD, delivered along the typed chain. Stamped on
+      # every CR built via mkCR as the `kix.dev/readiness` annotation
+      # (JSON), which the kix CLI evaluates at deploy time instead of
+      # falling back to the generic Ready/Available condition check (many
+      # operators never stamp those; the VictoriaMetrics operator, for
+      # one, uses status.updateStatus == "operational"). Shape:
+      #   readiness = { path = "/status/updateStatus"; equals = "operational"; }
+      # `path` is a JSON pointer into the live object; the CR is ready
+      # when the value at `path` equals `equals`.
+      readiness ? null,
     }:
     let
       crApiVersion = "${group}/${version}";
       crKind = kind;
+
+      _validatedReadiness = validateReadiness "mkCRDBuilders" "${group}/${kind}" readiness;
 
       cr =
         args:
@@ -619,7 +662,12 @@ rec {
           kind = crKind;
           requires = (args.requires or [ ]) ++ [ crdOrRef ];
         }
-        // lib.optionalAttrs (factBehavior != null) { inherit factBehavior; };
+        // lib.optionalAttrs (factBehavior != null) { inherit factBehavior; }
+        // lib.optionalAttrs (_validatedReadiness != null) {
+          annotations = (args.annotations or { }) // {
+            "kix.dev/readiness" = builtins.toJSON _validatedReadiness;
+          };
+        };
 
       mkCR =
         consumerScope: args:

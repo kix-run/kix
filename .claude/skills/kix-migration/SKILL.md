@@ -303,6 +303,16 @@ edge but NO netpol hole. Consequences when authoring:
   declaration — cluster operators set
   `cluster.factBehavior."<group>/<Kind>"` (it wins over CRD declarations).
 
+- **Readiness rides the same chain.** If the operator never stamps
+  Ready/Available conditions, declare its health convention on the CRD
+  builder: `readiness = { path = "/status/updateStatus"; equals =
+  "operational"; }` (mkCRD and mkCRDRef both accept it). kix stamps it on
+  every typed-chain CR as the `kix.dev/readiness` annotation and
+  `kix deploy` evaluates it instead of the generic condition check —
+  without it, deploys time out waiting on healthy CRs (the
+  VictoriaMetrics operator's `updateStatus` convention is the canonical
+  example; see `victoria-metrics-operator/crds.nix`).
+
 ### Composition helpers (kix.*)
 
 #### Mount helpers

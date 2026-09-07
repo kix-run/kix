@@ -102,6 +102,26 @@ let
     VMAlertmanager.factBehavior = operandFactBehavior "vmalertmanager";
   };
 
+  # The operator's uniform health convention, declared once for the whole
+  # group: every VM CR is ready when status.updateStatus == "operational"
+  # (conditions are consumer-prefixed, never Ready/Available — a generic
+  # condition check waits forever; observed live on stage1 with
+  # VMServiceScrape). Rides the typed chain into every CR as the
+  # `kix.dev/readiness` annotation, which the kix CLI evaluates at deploy
+  # time — no kind list in the CLI to keep in sync.
+  #
+  # The claim is VERIFIED only for the consumer kinds (observed live on
+  # kind/stage1/stage2); the parked kinds (VTCluster, VLAgent, ...) inherit it
+  # on the operator's convention alone. If the operator never writes
+  # updateStatus for some kind, a CR of it waits until timeout — the
+  # visible, self-diagnosing failure, preferred over generic
+  # ready-on-empty racing the operator. Re-verify per-kind when adding
+  # out.mk* builders for parked kinds.
+  vmReadiness = {
+    path = "/status/updateStatus";
+    equals = "operational";
+  };
+
   mkVMKindCRD =
     def:
     let
@@ -116,6 +136,9 @@ let
     in
     mkVMOperatorCRD (
       base
+      // {
+        readiness = vmReadiness;
+      }
       // lib.optionalAttrs (extras ? factBehavior) {
         inherit (extras) factBehavior;
       }

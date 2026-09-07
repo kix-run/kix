@@ -1135,6 +1135,11 @@ in {
 
 `scope.mkCRDRef` creates a CRD marker (no actual CRD resource) — use when the CRD is owned by an external package that you depend on.
 
+Both `mkCRD` and `mkCRDRef` accept two per-kind controller-semantics declarations that ride the typed chain into every CR built via `mkCR`:
+
+- `factBehavior = { endpoint = "terminate"|"conduct"; podSelector = cr: {...}; }` — netpol semantics (§facts).
+- `readiness = { path = "/status/updateStatus"; equals = "operational"; }` — the controller's health convention, stamped on each CR as the `kix.dev/readiness` annotation; `kix deploy` evaluates it instead of the generic Ready/Available condition check. Declare it whenever the operator never stamps Ready/Available (the VictoriaMetrics operator's `updateStatus` convention is the canonical example) — without it, deploys time out waiting on healthy CRs.
+
 ## 23. Imports
 
 `kix.mkImport` marks a resource as existing-but-unmanaged. DI resolution prefers managed > import, so a `mkImport` is the lowest-priority candidate.
