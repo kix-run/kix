@@ -89,11 +89,14 @@ pub const SKIP_RESOURCES: &[&str] = &[
     "ephemeralrunnersets.actions.github.com",
     // CDI runtime
     "storageprofiles.cdi.kubevirt.io",
-    // K3s/RKE2 internal
+    // K3s/RKE2 internal. NOTE: helmchartconfigs.helm.cattle.io does NOT
+    // belong here — it's user-declared configuration that the cilium-rke2
+    // package emits, and this list feeds discover_resources, so skipping a
+    // kind makes it undeployable ("kind HelmChartConfig not in discovery
+    // cache"; first hit on stage1, the first rke2 cluster kix ever deployed).
     "etcdsnapshotfiles.k3s.cattle.io",
     "addons.k3s.cattle.io",
     "helmcharts.helm.cattle.io",
-    "helmchartconfigs.helm.cattle.io",
     // ZFS runtime state
     "zfsvolumes.zfs.openebs.io",
     "zfsnodes.zfs.openebs.io",
@@ -142,7 +145,34 @@ pub async fn discover_resources(client: &Client) -> Result<Vec<(ApiResource, Sco
 
     let mut resources = Vec::new();
     for group in discovery.groups() {
-        for (ar, caps) in group.recommended_resources() {
+        resources.extend(collect_group_resources(group, &skip_set));
+    }
+    tracing::debug!(count = resources.len(), "API resources discovered");
+    Ok(resources)
+}
+
+/// Walk one ApiGroup's resources across EVERY served version.
+///
+/// recommended_resources() only covers the group's PREFERRED version. A
+/// group mixing versions (e.g. operator.victoriametrics.com ships v1beta1
+/// kinds plus a v1 kind, making v1 preferred) would hide every
+/// non-preferred kind from the deploy scheduler ("kind X not in discovery
+/// cache"). Walk every version, preferred first, and keep the first
+/// ApiResource seen per kind.
+fn collect_group_resources(
+    group: &kube::discovery::ApiGroup,
+    skip_set: &HashSet<&str>,
+) -> Vec<(ApiResource, Scope)> {
+    let mut resources = Vec::new();
+    let mut seen_kinds = std::collections::HashSet::new();
+    let preferred = group.preferred_version_or_latest();
+    let mut versions: Vec<&str> = vec![preferred];
+    versions.extend(group.versions().filter(|v| *v != preferred));
+    for ver in versions {
+        for (ar, caps) in group.versioned_resources(ver) {
+            if !seen_kinds.insert(ar.kind.clone()) {
+                continue;
+            }
             // Only include listable resources
             if !caps.supports_operation("list") {
                 continue;
@@ -154,8 +184,66 @@ pub async fn discover_resources(client: &Client) -> Result<Vec<(ApiResource, Sco
             resources.push((ar, caps.scope));
         }
     }
-    tracing::debug!(count = resources.len(), "API resources discovered");
-    Ok(resources)
+    resources
+}
+
+/// Does the cluster serve `kind` in `group` only behind the skip list?
+/// Diagnostic for the apply path: a manifest whose kind is SKIP_RESOURCES-
+/// filtered would otherwise fail with an opaque "not in discovery cache"
+/// after minutes of retries (stage1's HelmChartConfig, 2026-08-31). Fetches
+/// the single group unfiltered and reports the skip-list fqn on a match.
+pub async fn skip_listed_reason(client: &Client, group: &str, kind: &str) -> Option<String> {
+    let ag = kube::discovery::group(client, group).await.ok()?;
+    let empty: HashSet<&str> = HashSet::new();
+    let unfiltered = collect_group_resources(&ag, &empty);
+    let skip_set: HashSet<&str> = SKIP_RESOURCES.iter().copied().collect();
+    unfiltered
+        .iter()
+        .find(|(ar, _)| ar.kind == kind && skip_set.contains(resource_fqn(ar).as_str()))
+        .map(|(ar, _)| resource_fqn(ar))
+}
+
+/// Targeted single-group discovery — the reliable fallback when the full
+/// sweep misses a kind. A bulk Discovery::run() under deploy load can
+/// transiently drop whole groups (observed live on stage1: helm.cattle.io
+/// absent from every refresh during a deploy while kubectl saw it fine);
+/// fetching exactly one group is a single small request and doesn't share
+/// that failure mode. `group` is "" for the core group.
+pub async fn discover_group(
+    client: &Client,
+    group: &str,
+) -> Result<Vec<(ApiResource, Scope)>, FetchError> {
+    let skip_set: HashSet<&str> = SKIP_RESOURCES.iter().copied().collect();
+    let ag = kube::discovery::group(client, group)
+        .await
+        .map_err(FetchError::DiscoveryError)?;
+    Ok(collect_group_resources(&ag, &skip_set))
+}
+
+/// Merge a fresh discovery result into an existing cache, unioned by
+/// (group, kind) with the fresh entry winning. Kubernetes' aggregated
+/// discovery document is rebuilt after CRD writes and can transiently
+/// omit whole unrelated groups (observed live on rke2 1.33 right after a
+/// deploy applied 25 CRDs: helm.cattle.io vanished for a while, failing
+/// every later HelmChartConfig apply with "kind not in discovery cache").
+/// A refresh must therefore never *forget* kinds the cluster already
+/// proved it serves — stale entries for genuinely deleted CRDs are
+/// harmless by comparison (their applies would fail anyway).
+pub fn merge_discovery(
+    existing: &[(ApiResource, Scope)],
+    fresh: Vec<(ApiResource, Scope)>,
+) -> Vec<(ApiResource, Scope)> {
+    let mut merged = fresh;
+    let known: HashSet<(String, String)> = merged
+        .iter()
+        .map(|(ar, _)| (ar.group.clone(), ar.kind.clone()))
+        .collect();
+    for (ar, scope) in existing {
+        if !known.contains(&(ar.group.clone(), ar.kind.clone())) {
+            merged.push((ar.clone(), scope.clone()));
+        }
+    }
+    merged
 }
 
 /// Fetch all resources with the `managed-by=kix` label, in parallel.

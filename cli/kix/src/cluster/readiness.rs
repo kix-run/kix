@@ -986,8 +986,8 @@ pub fn check_readiness(obj: &DynamicObject, kind: &str) -> bool {
     }
 
     match kind {
-        "Deployment" | "StatefulSet" => check_deployment_ready(&obj.data),
-        "DaemonSet" => check_daemonset_ready(&obj.data),
+        "Deployment" | "StatefulSet" => check_deployment_ready(obj.metadata.generation, &obj.data),
+        "DaemonSet" => check_daemonset_ready(obj.metadata.generation, &obj.data),
         "Job" => check_job_ready(&obj.data),
         "PersistentVolumeClaim" => check_pvc_ready(&obj.data),
         "CustomResourceDefinition" => check_crd_ready(&obj.data),
@@ -1014,11 +1014,13 @@ pub fn check_readiness(obj: &DynamicObject, kind: &str) -> bool {
 
 /// Deployment/StatefulSet: readyReplicas == spec.replicas && updatedReplicas == spec.replicas
 /// && observedGeneration >= generation
-fn check_deployment_ready(data: &Value) -> bool {
-    let generation = data
-        .pointer("/metadata/generation")
-        .and_then(Value::as_i64)
-        .unwrap_or(0);
+fn check_deployment_ready(generation: Option<i64>, data: &Value) -> bool {
+    // `generation` comes from the TYPED ObjectMeta: kube-rs's DynamicObject
+    // consumes the `metadata` key into its named field, so
+    // data.pointer("/metadata/...") is ALWAYS None on live objects — the
+    // original guard read it from there and was dead code in production
+    // (first-poll readiness on a stale previous-generation status).
+    let generation = generation.unwrap_or(0);
     let observed = data
         .pointer("/status/observedGeneration")
         .and_then(Value::as_i64)
@@ -1046,11 +1048,9 @@ fn check_deployment_ready(data: &Value) -> bool {
 
 /// DaemonSet: numberReady == desiredNumberScheduled && updatedNumberScheduled == desiredNumberScheduled
 /// && observedGeneration >= generation
-fn check_daemonset_ready(data: &Value) -> bool {
-    let generation = data
-        .pointer("/metadata/generation")
-        .and_then(Value::as_i64)
-        .unwrap_or(0);
+fn check_daemonset_ready(generation: Option<i64>, data: &Value) -> bool {
+    // Typed-metadata generation — see check_deployment_ready.
+    let generation = generation.unwrap_or(0);
     let observed = data
         .pointer("/status/observedGeneration")
         .and_then(Value::as_i64)
@@ -1220,7 +1220,37 @@ fn readiness_message(obj: &DynamicObject, kind: &str) -> String {
                 .unwrap_or("no Valid=True condition");
             format!("{kind}/{name}: {reason}")
         }
-        _ => format!("{kind}/{name}: not ready"),
+        _ => {
+            // For a generic CR the usual stall is a condition-vocabulary
+            // mismatch: the controller stamps conditions, but none named
+            // Ready/Available (stage1's VMServiceScrape stamped only
+            // "<consumer>/Applied" and timed out silently). Name what we
+            // saw so the fix — a kind-specific rule in check_readiness —
+            // is obvious from the failure message alone.
+            let seen: Vec<String> = obj
+                .data
+                .pointer("/status/conditions")
+                .and_then(Value::as_array)
+                .map(|conds| {
+                    conds
+                        .iter()
+                        .filter_map(|c| {
+                            let t = c.get("type").and_then(Value::as_str)?;
+                            let st = c.get("status").and_then(Value::as_str).unwrap_or("?");
+                            Some(format!("{t}={st}"))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            if seen.is_empty() {
+                format!("{kind}/{name}: not ready")
+            } else {
+                format!(
+                    "{kind}/{name}: no Ready/Available condition; controller reports [{}] —                      if this vocabulary is healthy for this kind, it needs a readiness rule                      in check_readiness",
+                    seen.join(", ")
+                )
+            }
+        }
     }
 }
 
@@ -1234,6 +1264,23 @@ mod tests {
         DynamicObject {
             metadata: ObjectMeta {
                 name: Some("test".into()),
+                ..Default::default()
+            },
+            types: None,
+            data,
+        }
+    }
+
+    /// Like make_obj but with metadata.generation set on the TYPED
+    /// ObjectMeta — the shape live objects actually have. Stuffing a
+    /// "metadata" key inside `data` tests a shape the apiserver never
+    /// produces (kube-rs consumes it into the named field) and is how the
+    /// dead generation guard stayed green for so long.
+    fn make_obj_gen(generation: i64, data: Value) -> DynamicObject {
+        DynamicObject {
+            metadata: ObjectMeta {
+                name: Some("test".into()),
+                generation: Some(generation),
                 ..Default::default()
             },
             types: None,
@@ -1260,43 +1307,80 @@ mod tests {
 
     #[test]
     fn deployment_ready() {
-        let obj = make_obj(json!({
-            "metadata": {"generation": 2},
-            "spec": {"replicas": 3},
-            "status": {
-                "observedGeneration": 2,
-                "readyReplicas": 3,
-                "updatedReplicas": 3,
-            }
-        }));
+        let obj = make_obj_gen(
+            2,
+            json!({
+                "spec": {"replicas": 3},
+                "status": {
+                    "observedGeneration": 2,
+                    "readyReplicas": 3,
+                    "updatedReplicas": 3,
+                }
+            }),
+        );
         assert!(check_readiness(&obj, "Deployment"));
     }
 
     #[test]
     fn deployment_not_ready_replicas() {
-        let obj = make_obj(json!({
-            "metadata": {"generation": 1},
-            "spec": {"replicas": 3},
-            "status": {
-                "observedGeneration": 1,
-                "readyReplicas": 2,
-                "updatedReplicas": 3,
-            }
-        }));
+        let obj = make_obj_gen(
+            1,
+            json!({
+                "spec": {"replicas": 3},
+                "status": {
+                    "observedGeneration": 1,
+                    "readyReplicas": 2,
+                    "updatedReplicas": 3,
+                }
+            }),
+        );
         assert!(!check_readiness(&obj, "Deployment"));
     }
 
     #[test]
+    fn deployment_stale_status_not_ready() {
+        // The live-object shape the dead guard never caught: an UPDATE
+        // bumped metadata.generation to 2 while status still reports the
+        // previous generation's healthy rollout. Must NOT be ready.
+        let obj = make_obj_gen(
+            2,
+            json!({
+                "spec": {"replicas": 3},
+                "status": {
+                    "observedGeneration": 1,
+                    "readyReplicas": 3,
+                    "updatedReplicas": 3,
+                }
+            }),
+        );
+        assert!(!check_readiness(&obj, "Deployment"));
+        let ds = make_obj_gen(
+            2,
+            json!({
+                "status": {
+                    "observedGeneration": 1,
+                    "desiredNumberScheduled": 3,
+                    "numberReady": 3,
+                    "updatedNumberScheduled": 3,
+                }
+            }),
+        );
+        assert!(!check_readiness(&ds, "DaemonSet"));
+    }
+
+    #[test]
     fn statefulset_ready() {
-        let obj = make_obj(json!({
-            "metadata": {"generation": 1},
-            "spec": {"replicas": 2},
-            "status": {
-                "observedGeneration": 1,
-                "readyReplicas": 2,
-                "updatedReplicas": 2,
-            }
-        }));
+        let obj = make_obj_gen(
+            1,
+            json!({
+                "spec": {"replicas": 2},
+                "status": {
+                    "observedGeneration": 1,
+                    "readyReplicas": 2,
+                    "updatedReplicas": 2,
+                }
+            }),
+        );
         assert!(check_readiness(&obj, "StatefulSet"));
     }
 

@@ -20,6 +20,11 @@ in
   };
 
   options = {
+    nodeSelector = lib.mkOption {
+      type = lib.types.attrsOf lib.types.str;
+      default = { };
+      description = "Merged over the default kubernetes.io/os=linux selector.";
+    };
     image = lib.mkOption {
       type = lib.types.anything;
       default = {
@@ -185,7 +190,8 @@ in
             ];
             nodeSelector = {
               "kubernetes.io/os" = "linux";
-            };
+            }
+            // config.nodeSelector;
           };
         };
       };
@@ -264,7 +270,11 @@ in
                     labels.severity = "warning";
                     annotations = {
                       summary = "Node memory usage above 90%.";
-                      description = "Node {{ $labels.instance }} memory usage is {{ printf \"%.0f\" $value | float64 }}%.";
+                      # `| float64` is not a template function in Prometheus OR vmalert;
+                      # Prometheus only fails such templates lazily when the alert
+                      # fires, while the VM operator's converter validates eagerly
+                      # and rejected the whole rule group (caught live on stage1).
+                      description = "Node {{ $labels.instance }} memory usage is {{ printf \"%.0f\" $value }}%.";
                     };
                   }
                   {
