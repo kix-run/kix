@@ -65,6 +65,13 @@ in
           hasDefault = true;
           explicitOverride = null;
         };
+        # FUTURE (2026-08-31): this fired on stage2 — a cluster with NO DNS at
+        # all — and scrolled past in deploy output while alertmanager
+        # gossip and vmagent remote-write hung on resolution. "Your
+        # workloads cannot resolve anything" is a different species from
+        # advisory lints: eval diagnostics want severity levels, with the
+        # fatal ones surfaced (or gated on) by the deploy path. See
+        # ROADMAP § Open design questions.
         _dnsResolutionCheck =
           if !_dnsResolution.found then
             builtins.trace "[kix] warning: no DNS instance (alias 'dns') found in cluster — workloads will not depend on DNS readiness" null

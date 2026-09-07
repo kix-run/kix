@@ -412,7 +412,16 @@ in
         if scorecardEnabled then
           scorecard.evaluateClusterRules {
             rules = scorecardConfig.rules;
-            allInstances = clusterInstances;
+            # Active view only, restricted to real namespaces: a namespace
+            # whose sole instances are never-activated optionals is NOT
+            # "managed" for cluster-rule purposes (the namespace-rule path
+            # above applies the same filter), and sentinel namespaces are
+            # not namespaces at all.
+            allInstances = lib.filterAttrs (_: insts: insts != { }) (
+              lib.mapAttrs (nsName: nsInsts: lib.filterAttrs (instName: _: isActive nsName instName) nsInsts) (
+                lib.filterAttrs (nsName: _: builtins.elem nsName realNsNames) clusterInstances
+              )
+            );
             allResources = builtins.concatMap (
               inst: map (r: r.rawManifest or { }) (collectResources inst)
             ) allInstancesList;
@@ -495,9 +504,20 @@ in
         }
       );
 
+      # Cross-cutting scorecard findings (namespace + cluster level) have no
+      # owning instance, so they surface here: warnings trace at cluster
+      # eval, error-severity findings fail the build alongside instance
+      # assertions. Without this they only ever reached the (lazily built)
+      # kix-scorecard.json report.
+      crossScorecardDiag = scorecard.scorecardToWarnings (
+        namespaceScorecardFindings ++ clusterScorecardFindings
+      );
+
       clusterDiagnostics = meta.collectClusterDiagnostics {
         clusterName = name;
         inherit allInstancesList;
+        extraWarnings = crossScorecardDiag.warnings;
+        extraAssertions = crossScorecardDiag.assertions;
       };
 
       isInlinePackage = v: builtins.isAttrs v && v ? build && (v._type or "") != "kix-import";
@@ -567,41 +587,43 @@ in
       builtins.seq _roleBindingsCheck (
         builtins.seq _annotationDomainsCheck (
           builtins.seq _clusterHookChecksRun (
-            builtins.seq clusterDiagnostics.assertionCheck {
-              _type = "k8s-cluster-v2";
-              inherit name;
+            builtins.seq clusterDiagnostics.emitExtraWarnings (
+              builtins.seq clusterDiagnostics.assertionCheck {
+                _type = "k8s-cluster-v2";
+                inherit name;
 
-              inherit clusterInstances;
-              instances = clusterInstances;
+                inherit clusterInstances;
+                instances = clusterInstances;
 
-              namespaces = nsResources;
+                namespaces = nsResources;
 
-              inherit
-                activation
-                packageIndex
-                info
-                extraImages
-                ;
+                inherit
+                  activation
+                  packageIndex
+                  info
+                  extraImages
+                  ;
 
-              diagnostics = {
-                warnings = clusterDiagnostics.warnings ++ clusterHookWarnings;
-                inherit (clusterDiagnostics) assertions failedAssertions;
-              };
-
-              out = {
-                maintenance = {
-                  enable = cfg.cluster.maintenance.enable or false;
-                  reason = cfg.cluster.maintenance.reason or null;
-                  until = cfg.cluster.maintenance.until or null;
+                diagnostics = {
+                  warnings = clusterDiagnostics.warnings ++ clusterHookWarnings;
+                  inherit (clusterDiagnostics) assertions failedAssertions;
                 };
-              };
 
-              inherit scorecardReport;
+                out = {
+                  maintenance = {
+                    enable = cfg.cluster.maintenance.enable or false;
+                    reason = cfg.cluster.maintenance.reason or null;
+                    until = cfg.cluster.maintenance.until or null;
+                  };
+                };
 
-              rawManifests = map (
-                r: builtins.fromJSON (builtins.unsafeDiscardStringContext (builtins.toJSON r.rawManifest))
-              ) allResources;
-            }
+                inherit scorecardReport;
+
+                rawManifests = map (
+                  r: builtins.fromJSON (builtins.unsafeDiscardStringContext (builtins.toJSON r.rawManifest))
+                ) allResources;
+              }
+            )
           )
         )
       )

@@ -90,6 +90,10 @@ let
   # write unless the operator itself holds them — observed live on kind
   # (2026-08-31): "attempting to grant RBAC permissions not currently
   # held". They are inert on non-OpenShift clusters but must be granted.
+  # FUTURE (purist note, 2026-08-31): granting API groups the cluster will
+  # never serve, purely to satisfy the operator's self-escalation check,
+  # is a smell — if the operator gains a flag to skip writing them into
+  # the vmagent ClusterRole, gate these grants on config instead.
   legacyExt = group "extensions" [ "ingresses" ];
   openshiftRoute = group "route.openshift.io" [
     "routers/metrics"

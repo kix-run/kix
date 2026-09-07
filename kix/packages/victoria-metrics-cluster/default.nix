@@ -210,6 +210,11 @@ in
         maxUnavailable = 1;
       };
 
+      # FUTURE (purist note, 2026-08-31): dedup correctness rides in a
+      # string flag merged into extraArgs — a cluster-side extraArgs
+      # override can silently clobber it. Consider a first-class operator
+      # spec field (or an eval assertion that extraArgs never overrides a
+      # package-computed arg) if the VM operator ever grows one.
       dedupArgs = {
         "dedup.minScrapeInterval" = config.scrapeInterval;
       };

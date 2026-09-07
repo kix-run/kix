@@ -272,6 +272,10 @@ in
       {
         monitor-kubelet = mkSmon {
           name = "${scope.instanceName}-kubelet";
+          # The `kubelet` Service is operator-created at runtime (see header)
+          # — kix renders no Service matching this selector, which the
+          # monitorSelectorMatchesService rule would otherwise flag.
+          annotations."kix.dev/monitors-external-service" = "true";
           spec = smonSpec;
         };
       };

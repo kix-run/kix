@@ -489,7 +489,11 @@ in
         serviceMonitor = mkSmon {
           name = "${name}-self";
           spec = {
-            selector.matchLabels = svcSelector;
+            # ServiceMonitors match SERVICE labels, not pod labels — the
+            # pod-shaped svcSelector never matched the Service and the
+            # self-monitor was silently unscraped (caught by
+            # monitorSelectorMatchesService, 2026-08-31).
+            selector.matchLabels = self.service.out.selector;
             namespaceSelector.matchNames = [ ns ];
             endpoints = [
               (

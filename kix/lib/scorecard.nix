@@ -327,6 +327,13 @@ rec {
           level = "cluster";
           finding = f;
           tags = rule.tags or [ ];
+          # Cluster rules may attach an identity to each finding (the
+          # offending resource lives SOMEWHERE even when the rule needs
+          # cluster-wide context to judge it) — without this, findings
+          # render with an empty location and same-named resources in
+          # different namespaces are indistinguishable.
+          namespaceName = f.namespace or null;
+          resourceName = f.resource or null;
         }
       ) findings
     ) clusterRules;

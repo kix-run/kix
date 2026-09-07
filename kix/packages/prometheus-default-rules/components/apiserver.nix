@@ -128,6 +128,12 @@ in
       {
         monitor-apiserver = mkSmon {
           name = "${scope.instanceName}-apiserver";
+          # The `kubernetes` Service in `default` is created by the
+          # apiserver itself at runtime (see header) — kix renders no
+          # Service matching this selector, which the
+          # monitorSelectorMatchesService rule would flag on any cluster
+          # with a kix instance in `default`. Same situation as kubelet.
+          annotations."kix.dev/monitors-external-service" = "true";
           spec = smonSpec;
         };
       };

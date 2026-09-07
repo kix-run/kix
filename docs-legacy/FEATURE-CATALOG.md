@@ -139,6 +139,8 @@ Auto-derives CiliumNetworkPolicy from the DI graph:
 - `unsafeGrants` — audit listing every `meta.unsafe` grant (info).
 - `selectorCoherence` — Service selectors must carry store-path context (warning).
 - `fqdnWithoutContext` — `*.svc` FQDNs in workloads must carry store-path context (warning).
+- `monitorSelectorMatchesService` — ServiceMonitor/VMServiceScrape selectors must match some Service's metadata labels (cluster-level, error). Opt-out for operator-created targets: `kix.dev/monitors-external-service` annotation.
+- `externalMonitorTargets` — audit listing every monitors-external-service claim (info).
 
 ### Package Metadata & Diagnostics (`meta.nix`)
 

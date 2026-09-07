@@ -37,6 +37,24 @@ in
     k8s.minVersion = "1.25";
   };
 
+  # Dedup CORRECTNESS rides on scrapeInterval equality with the cluster
+  # (doc 133 §5): -dedup.minScrapeInterval on vmselect/vmstorage is
+  # calibrated to the cluster's value, so a differing agent override
+  # double-counts samples. Surfaced through the structured diagnostics
+  # channel so it lands in kix's warning output, not a bare eval trace.
+  # FUTURE (purist note, 2026-08-31): arguably an assertion, or remove
+  # the agent-side option so drift cannot exist. Kept a warning while
+  # the trial wants easy experimentation.
+  warnings =
+    { config, deps, ... }:
+    lib.optional
+      (
+        config.scrapeInterval != null
+        && (deps ? vmCluster)
+        && config.scrapeInterval != deps.vmCluster.out.scrapeInterval
+      )
+      "scrapeInterval ${config.scrapeInterval} differs from the cluster's ${deps.vmCluster.out.scrapeInterval}; -dedup.minScrapeInterval on vmselect/vmstorage is calibrated to the cluster value, so samples may double-count. Change both together.";
+
   options = {
     image = lib.mkOption {
       type = lib.types.anything;
@@ -113,13 +131,10 @@ in
         remoteWrite = [ { url = vmCluster.out.insertUrl; } ];
         # The cluster's dedup is calibrated to ITS scrapeInterval — an
         # agent override that differs double-counts samples (doc 133 §5).
+        # Drift is flagged through the package-level `warnings` channel
+        # below, not inline.
         scrapeInterval =
-          if config.scrapeInterval == null then
-            vmCluster.out.scrapeInterval
-          else
-            lib.warnIf (config.scrapeInterval != vmCluster.out.scrapeInterval)
-              "victoria-metrics-agent '${name}': scrapeInterval ${config.scrapeInterval} differs from the cluster's ${vmCluster.out.scrapeInterval}; -dedup.minScrapeInterval on vmselect/vmstorage is calibrated to the cluster value, so samples may double-count. Change both together."
-              config.scrapeInterval;
+          if config.scrapeInterval == null then vmCluster.out.scrapeInterval else config.scrapeInterval;
         selectAllByDefault = config.selectAllByDefault;
         podDisruptionBudget = {
           maxUnavailable = 1;

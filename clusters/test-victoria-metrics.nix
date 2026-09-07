@@ -35,8 +35,8 @@ let
       {
         # Selectorless Service (no pods behind it — this fixture only tests
         # the ServiceMonitor→VMServiceScrape conversion contract). The
-        # monitor sources its selector from the Service's labels
-        # (metadata.labels), which is what monitor selectors match against.
+        # monitor sources its selector from the Service's labels, the shape
+        # monitorSelectorMatchesService enforces.
         service = scope.mkResource {
           apiVersion = "v1";
           kind = "Service";

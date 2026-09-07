@@ -213,6 +213,22 @@ ing = svc |> manualWithCertHelper |> scope.mkResource;              # inverts th
 Builders take `scope` so the result lands in the consumer's namespace with the
 consumer's labels. Transformers don't.
 
+When hand-building a ServiceMonitor (rather than using `kix.monitor`), source
+the selector from the **Service's** labels — `self.service.out.selector` —
+never from the workload's pod selector. Monitor selectors match Service
+metadata labels; a pod-shaped selector drops every target at relabeling and
+the job silently vanishes from `up`. The
+`architecture.monitorSelectorMatchesService` scorecard rule enforces this at
+build time (it caught four shipped instances the day it was written).
+
+Caveat: this is the **single-Service** idiom. A Service's `out.selector` is
+its metadata labels, which are instance-common — in a package with two
+Services (main + headless is the classic shape) it matches both, and each pod
+gets scraped once per Service. Multi-Service packages need a per-Service
+discriminator (explicit `labels` on the Service, selected explicitly); a
+first-class `kix.dev/part` identity label is an open design question in
+ROADMAP.
+
 ### 6.3 Wiring (DI) > module system > meta
 
 Reach for these in order:

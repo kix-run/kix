@@ -242,6 +242,154 @@ in
         ];
   };
 
+  # The ServiceMonitor selector-mismatch class: three packages (grafana,
+  # node-exporter, kube-state-metrics) shipped monitors whose selector was
+  # built from the WORKLOAD's pod selector. ServiceMonitor/VMServiceScrape
+  # selectors match the target Service's METADATA LABELS, not its
+  # spec.selector — every target was dropped at relabeling and the jobs
+  # were silently absent from `up` (caught live on kind + stage1,
+  # 2026-08-31). This rule makes the class unshippable: a monitor whose
+  # selector matches no Service in its target namespaces is always a bug
+  # in kix-authored manifests.
+  #
+  # Scoping: only monitors whose target namespaces are ALL kix-managed
+  # (have at least one ACTIVE kix instance) are checked — a monitor aimed
+  # at an unmanaged namespace may legitimately select Services kix cannot
+  # see. matchExpressions are not evaluated (skip, don't guess).
+  #
+  # This predicate is a HEURISTIC, permanently: "namespace has an active
+  # kix instance" neither implies kix renders every Service there (rke2
+  # owns most of stage2's kube-system while kix supplies only coredns) nor
+  # covers namespaces kix renders Services into without an instance
+  # (prometheus-default-rules' bridge Services via forNamespace). The
+  # false-positive relief valves are the annotation below and severity
+  # overrides; the false-negative side is accepted.
+  #
+  # Escape hatch: a monitor that deliberately targets a Service kix does
+  # not render (created by an operator at runtime, e.g. prometheus-
+  # operator's kubelet Service) declares
+  # `annotations."kix.dev/monitors-external-service" = "true"` — the claim
+  # then rides the resource into the cluster, where it documents itself.
+  monitorSelectorMatchesService = {
+    description = "ServiceMonitor/VMServiceScrape selectors must match some Service's metadata labels";
+    level = "cluster";
+    severity = "error";
+    tags = [
+      "architecture"
+      "monitoring"
+      "composition"
+    ];
+    appliesTo = _: true;
+    check =
+      { allInstances, allResources, ... }:
+      let
+        managedNamespaces = builtins.attrNames allInstances;
+
+        services = builtins.filter (r: (r.kind or "") == "Service") allResources;
+        monitors = builtins.filter (
+          r:
+          builtins.elem (r.kind or "") [
+            "ServiceMonitor"
+            "VMServiceScrape"
+          ]
+        ) allResources;
+
+        subsetOf =
+          needle: hay: builtins.all (k: (hay.${k} or null) == needle.${k}) (builtins.attrNames needle);
+
+        # prometheus-operator NamespaceSelector semantics (the VM operator
+        # mirrors them): `any = true` takes precedence and means ALL
+        # namespaces; a non-empty matchNames lists them; empty matchNames
+        # and the empty selector both mean the monitor's own namespace.
+        # `any = true` returns null as a sentinel — the target set includes
+        # namespaces kix cannot see, so the monitor is skipped per the
+        # scoping contract above (a false-negative surface, but the only
+        # honest answer: absence of a match is unprovable there).
+        targetNamespaces =
+          mon:
+          let
+            nsSel = mon.spec.namespaceSelector or { };
+            own = mon.metadata.namespace or null;
+            names = nsSel.matchNames or [ ];
+          in
+          if (nsSel.any or false) then
+            null
+          else if names != [ ] then
+            names
+          else if own != null then
+            [ own ]
+          else
+            [ ];
+
+        checkMonitor =
+          mon:
+          let
+            sel = mon.spec.selector or { };
+            matchLabels = sel.matchLabels or { };
+            targets = targetNamespaces mon;
+            allTargetsManaged =
+              targets != null && targets != [ ] && builtins.all (ns: builtins.elem ns managedNamespaces) targets;
+            candidates = builtins.filter (svc: builtins.elem (svc.metadata.namespace or null) targets) services;
+            anyMatch = builtins.any (svc: subsetOf matchLabels (svc.metadata.labels or { })) candidates;
+            external = ((mon.metadata.annotations or { })."kix.dev/monitors-external-service" or "") == "true";
+            skip = external || sel ? matchExpressions || matchLabels == { } || !allTargetsManaged;
+          in
+          if skip || anyMatch then
+            [ ]
+          else
+            [
+              {
+                namespace = mon.metadata.namespace or null;
+                resource = "${mon.kind or "?"}/${mon.metadata.name or "?"}";
+                message =
+                  "${mon.kind or "?"} '${mon.metadata.name or "?"}' selects "
+                  + "{ ${lib.concatStringsSep ", " (lib.mapAttrsToList (k: v: "${k}=${toString v}") matchLabels)} }, "
+                  + "but no Service in namespace(s) ${lib.concatStringsSep ", " targets} carries those labels, "
+                  + "so this monitor finds nothing and its jobs are silently missing. "
+                  + "A monitor's selector is compared with the labels on the Service itself "
+                  + "(metadata.labels), not with the Service's own selector, and not with the pods' labels. "
+                  + "Build the selector from the target Service's labels: `self.<service>.out.selector`, "
+                  + "or use `kix.monitor`, which does this for you.";
+              }
+            ];
+      in
+      builtins.concatMap checkMonitor monitors;
+  };
+
+  # Companion audit to monitorSelectorMatchesService's escape hatch: every
+  # `kix.dev/monitors-external-service` claim is listed at info level, the
+  # same "never invisible in review" property the meta.unsafe vocabulary
+  # gets from unsafeGrants. A stale claim (the target Service later becomes
+  # kix-rendered) is otherwise undetectable — the escape silently disables
+  # checking forever.
+  externalMonitorTargets = {
+    description = "Audit: monitors claiming an external (non-kix-rendered) target Service";
+    level = "manifest";
+    severity = "info";
+    tags = [
+      "architecture"
+      "monitoring"
+      "audit"
+    ];
+    appliesTo =
+      { resource, ... }:
+      builtins.elem (resource.kind or "") [
+        "ServiceMonitor"
+        "VMServiceScrape"
+      ]
+      && ((resource.metadata.annotations or { })."kix.dev/monitors-external-service" or "") == "true";
+    check =
+      { resource, ... }:
+      [
+        {
+          message =
+            "${resource.kind} '${resource.metadata.name or "?"}' claims its target Service is created "
+            + "outside kix (kix.dev/monitors-external-service), so selector matching is skipped for it. "
+            + "Check that the claim still holds if kix ever starts rendering the target.";
+        }
+      ];
+  };
+
   fqdnWithoutContext = {
     description = "Cluster-internal FQDNs (*.svc) in workloads should come from a ServiceRef/Service out.* value, not literals";
     level = "manifest";

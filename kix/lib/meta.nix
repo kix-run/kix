@@ -279,13 +279,22 @@ rec {
     };
 
   collectClusterDiagnostics =
-    { clusterName, allInstancesList }:
+    # extraWarnings/extraAssertions carry cluster- and namespace-level
+    # diagnostics (e.g. cross-resource scorecard findings) that no single
+    # instance owns. Instance-level warnings are already traced during
+    # instance eval, so emitExtraWarnings covers only the extras.
+    {
+      clusterName,
+      allInstancesList,
+      extraWarnings ? [ ],
+      extraAssertions ? [ ],
+    }:
     let
       collect =
         field: builtins.concatMap (inst: (inst._diagnostics or noDiagnostics).${field}) allInstancesList;
-      warnings = collect "warnings";
-      assertions = collect "assertions";
-      failedAssertions = collect "failedAssertions";
+      warnings = collect "warnings" ++ extraWarnings;
+      assertions = collect "assertions" ++ extraAssertions;
+      failedAssertions = collect "failedAssertions" ++ builtins.filter (a: !a.assertion) extraAssertions;
       assertionCheck =
         if failedAssertions == [ ] then
           null
@@ -302,5 +311,6 @@ rec {
         failedAssertions
         assertionCheck
         ;
+      emitExtraWarnings = emitTraces "warning: " extraWarnings;
     };
 }
