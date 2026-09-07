@@ -287,8 +287,9 @@ Cluster structure analysis: total resources, namespaces with counts, resource ki
 Garbage-collect stale kix-managed resources.
 - `-y, --yes` — Skip confirmation.
 - **Soft GC** (default) — Diffs old vs new activation store graphs. Fast, no cluster scan.
-- **Hard GC** (`--hard`) — Full cluster-wide scan, matches identity-hashes against expected set. Includes superseded Activation CRs.
-- `--operator` — Deletes superseded Activation CRs; operator's finalizer cleans up resources.
+- **Hard GC** (`--hard`) — Full cluster-wide scan, matches identity-hashes against expected set.
+- `--operator` — Deletes retired Activation CRs; operator's finalizer cleans up resources.
+- Record retention, in every mode — Superseded Activation records are rollback history, but each one still on the cluster keeps one entry in `kix.dev/activations` on every managed resource, and that annotation is capped at 256 KiB, so they cannot be kept forever. `--keep N` (default 10) always keeps the N newest whatever their age; `--keep-max N` (default 50) never keeps more; `--keep-for 30d` (default) retires anything older beyond the floor (`0` or `off` disables the age rule). Deletes are conditional on the record being unchanged since it was listed. The next deploy drops the retired entries.
 - Deletes in reverse dependency order (dependents first).
 
 #### `kix rollback <CLUSTER>`
@@ -298,6 +299,7 @@ Rollback to a previous activation.
 - `--prune` — Delete resources only in current activation.
 - `--operator` — Patches Activation CR to target's source path.
 - Interactive selection: lists superseded activations with metadata, checks store path availability.
+- History is bounded by `kix gc` retention (at least the 10 newest, at most 50, and nothing older than 30 days beyond the floor, by default): retired records can no longer be rolled back to.
 
 #### `kix health <CLUSTER>`
 Drift detection: compare intended state vs live cluster.
@@ -358,7 +360,7 @@ Long-lived K8s controller watching Activation CRs.
 - **Stamping:** Annotation injection (identity-hash, depends-on, package metadata).
 
 ### cluster module
-- **Activation:** find_active, list_superseded, Activation CR lifecycle management.
+- **Activation:** find_active, list_superseded_activations, retire_plan (`gc --keep`), Activation CR lifecycle management.
 - **Apply:** `detect_changes` → ChangeAction (Apply, Skip, Orphan). ApplyAction (Created, Configured, Unchanged, Skipped).
 - **Fetch:** API resource discovery, fetch all kix-managed resources, normalize for diff (strip server-side fields).
 - **Graph:** ResourceGraph with tree/dot/json output.

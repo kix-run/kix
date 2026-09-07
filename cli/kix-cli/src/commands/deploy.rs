@@ -331,8 +331,12 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         pre_client,
     ));
 
-    // Save activation path for next deploy's diff
+    // Save activation path for next deploy's diff and for soft `kix gc`.
+    // Never after a dry run: nothing was deployed, and a cache that names a
+    // build the cluster does not run makes soft gc treat every resource of
+    // the real deploy as garbage.
     if deploy_result.is_ok()
+        && !args.dry_run
         && let Err(e) = kix::eval::store::save_activation_path(&args.cluster, &result_path)
     {
         tracing::warn!("failed to save activation path: {e}");

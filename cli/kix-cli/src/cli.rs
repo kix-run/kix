@@ -394,7 +394,7 @@ pub struct GcArgs {
     #[arg(long)]
     pub hard: bool,
 
-    /// Delegate garbage collection to the operator (deletes superseded Activation CRs)
+    /// Delegate garbage collection to the operator (deletes the Activation records the retention policy retires)
     #[arg(long)]
     pub operator: bool,
 
@@ -402,6 +402,23 @@ pub struct GcArgs {
     /// kix never applied those, so by default --hard only reports them.
     #[arg(long)]
     pub include_unstamped: bool,
+
+    /// Always keep at least this many of the newest Superseded Activation
+    /// records (rollback history), whatever their age. Applies in every
+    /// mode. 0 keeps none.
+    #[arg(long, value_name = "N", default_value_t = kix::cluster::activation::DEFAULT_KEEP_MIN)]
+    pub keep: usize,
+
+    /// Never keep more than this many Superseded records. Each record still
+    /// on the cluster keeps one entry in kix.dev/activations on every
+    /// managed resource, and that annotation has a hard size cap.
+    #[arg(long, value_name = "N", default_value_t = kix::cluster::activation::DEFAULT_KEEP_MAX)]
+    pub keep_max: usize,
+
+    /// Beyond --keep, retire records older than this (30d, 12h, 45m; a bare
+    /// number is days). "0" or "off" disables the age rule.
+    #[arg(long, value_name = "DURATION", default_value = "30d")]
+    pub keep_for: String,
 }
 
 #[derive(clap::Args)]
