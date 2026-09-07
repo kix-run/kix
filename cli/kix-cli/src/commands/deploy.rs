@@ -456,10 +456,19 @@ async fn load_old_from_cluster(
                             Ok((Some(old_graph), manifests, Some(client), Some(hash.clone())))
                         }
                         Err(e) => {
-                            tracing::warn!(
-                                "failed to load old activation store graph: {e}, treating as first deploy"
-                            );
-                            Ok((None, vec![], Some(client), Some(hash.clone())))
+                            // A store path that exists but will not load is
+                            // not a first deploy. Fall back to the cluster
+                            // rather than planning against nothing.
+                            if !global.quiet {
+                                println!(
+                                    "  {} previous build at {} would not load ({e}) — reconstructing previous state from cluster",
+                                    output::yellow("!"),
+                                    result_dir.display(),
+                                );
+                            }
+                            let old_manifests =
+                                reconstruct_old_from_live(&client, &discovery).await?;
+                            Ok((None, old_manifests, Some(client), Some(hash.clone())))
                         }
                     }
                 }
@@ -470,7 +479,7 @@ async fn load_old_from_cluster(
                             output::yellow("!"),
                         );
                     }
-                    let old_manifests = reconstruct_old_from_live(&client, &discovery).await;
+                    let old_manifests = reconstruct_old_from_live(&client, &discovery).await?;
                     Ok((None, old_manifests, Some(client), Some(hash.clone())))
                 }
             }
@@ -493,34 +502,39 @@ async fn load_old_from_cluster(
 /// back to manifests substitute for the old store graph. Activation CRs
 /// are excluded: their lifecycle is supersede-managed, never prune (same
 /// policy as the operator's reconcile).
+///
+/// A failed sweep is an error, not an empty previous state. Planning
+/// against an empty old set would show every resource as "added" and,
+/// with `--prune`, would compute no orphans at all: a plan that looks
+/// plausible and is wrong.
 async fn reconstruct_old_from_live(
     client: &kube::Client,
     discovery: &[(kube::discovery::ApiResource, kube::discovery::Scope)],
-) -> Vec<Value> {
-    match fetch::fetch_managed_resources(client, discovery).await {
-        Ok(objects) => objects
-            .into_iter()
-            .filter(|obj| {
-                let kind = obj
-                    .data
-                    .get("kind")
-                    .and_then(|v| v.as_str())
-                    .or_else(|| obj.types.as_ref().map(|t| t.kind.as_str()))
-                    .unwrap_or("");
-                kind != "Activation"
-            })
-            .map(|mut obj| {
-                fetch::normalize_for_diff(&mut obj);
-                kix::cluster::fieldsv1::merge_typed_metadata(&obj)
-            })
-            .collect(),
-        Err(e) => {
-            tracing::warn!(
-                "failed to fetch live resources for old-state reconstruction: {e}, treating as first deploy"
-            );
-            vec![]
-        }
-    }
+) -> Result<Vec<Value>> {
+    let objects = fetch::fetch_managed_resources(client, discovery)
+        .await
+        .map_err(|e| {
+            miette!(
+                "cannot reconstruct the previous state from the cluster: {e}. \
+                 Refusing to plan from a partial view; retry when the apiserver is healthy."
+            )
+        })?;
+    Ok(objects
+        .into_iter()
+        .filter(|obj| {
+            let kind = obj
+                .data
+                .get("kind")
+                .and_then(|v| v.as_str())
+                .or_else(|| obj.types.as_ref().map(|t| t.kind.as_str()))
+                .unwrap_or("");
+            kind != "Activation"
+        })
+        .map(|mut obj| {
+            fetch::normalize_for_diff(&mut obj);
+            kix::cluster::fieldsv1::merge_typed_metadata(&obj)
+        })
+        .collect())
 }
 
 /// Synthesize an "old" StoreGraph from live-reconstructed manifests so the

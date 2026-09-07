@@ -232,9 +232,10 @@ async fn run_hard_async(
 
     if !global.quiet {
         println!(
-            "Found {} live kix-managed resources ({} unstamped label carriers)",
+            "Found {} live kix-managed resources ({} unstamped label carriers){}",
             sweep.managed.len(),
-            sweep.unstamped.len()
+            sweep.unstamped.len(),
+            crate::output::forbidden_note(&sweep.forbidden),
         );
     }
     let live: Vec<_> = sweep.managed.into_iter().chain(sweep.unstamped).collect();

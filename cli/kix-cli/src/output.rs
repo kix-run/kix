@@ -78,6 +78,19 @@ pub fn bold(s: &str) -> Cow<'_, str> {
 
 /// Check if the terminal is interactive (for confirmation prompts).
 /// Returns false in CI or when piped. Respects KIX_NO_INTERACTIVE env var.
+/// A suffix for sweep summaries naming the resource types this account
+/// may not list. Empty when there are none, so it can be appended blindly.
+pub fn forbidden_note(forbidden: &[String]) -> String {
+    if forbidden.is_empty() {
+        return String::new();
+    }
+    format!(
+        "; {} not listable with this account: {}",
+        forbidden.len(),
+        forbidden.join(", ")
+    )
+}
+
 pub fn is_interactive() -> bool {
     use std::io::IsTerminal;
     std::env::var_os("KIX_NO_INTERACTIVE").is_none() && std::io::stdin().is_terminal()

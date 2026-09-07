@@ -34,7 +34,6 @@ use std::sync::Arc;
 
 use futures::StreamExt;
 use kube::{
-    Client,
     api::{Api, DynamicObject},
     discovery::ApiResource,
     runtime::{Controller, WatchStreamExt, reflector::store::Writer, watcher},
@@ -95,8 +94,14 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("Starting kix-operator");
 
-    // Create Kubernetes client (works both in-cluster and via kubeconfig)
-    let client = Client::try_default().await?;
+    // Create Kubernetes client (works both in-cluster and via kubeconfig),
+    // through the same transport policy the CLI uses: retries, deadlines,
+    // and a cap on requests in flight.
+    let client = kix::cluster::client::build_client(
+        kube::Config::infer().await?,
+        kix::cluster::client::ResiliencePolicy::from_env(),
+    )
+    .await?;
     tracing::info!("Connected to Kubernetes API server");
 
     // Set up the Activation API

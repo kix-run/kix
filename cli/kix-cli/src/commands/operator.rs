@@ -288,7 +288,10 @@ pub async fn wait_for_deletion(
                     eprint!("\r  {} Finalizer cleanup in progress...", output::dim("•"),);
                 }
             }
-            Err(kube::Error::Api(ref e)) if e.code == 404 => {
+            Err(ref e)
+                if kix::cluster::errors::classify(e)
+                    == kix::cluster::errors::FailureClass::NotFound =>
+            {
                 if !quiet {
                     eprintln!();
                     println!(

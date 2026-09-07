@@ -33,6 +33,12 @@ kube.workspace = true
 k8s-openapi = { workspace = true, features = ["latest"] }
 tokio.workspace = true
 futures.workspace = true
+tower.workspace = true
+http.workspace = true
+http-body-util.workspace = true
+bytes.workspace = true
+hyper-util.workspace = true
+rand.workspace = true
 
 # DAG
 petgraph.workspace = true

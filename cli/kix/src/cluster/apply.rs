@@ -5,8 +5,8 @@
 //! identity-hashes, without querying the live cluster.
 
 use std::collections::{HashMap, HashSet};
-use std::time::Duration;
 
+use super::errors::FailureClass;
 use super::fieldsv1;
 use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
 use kube::{
@@ -17,21 +17,6 @@ use kube::{
 use serde_json::Value;
 use thiserror::Error;
 use tokio::task::JoinSet;
-
-/// Number of attempts for transient-failure retries on patch operations
-/// (SSA itself and the activations annotation update).
-///
-/// Sized to comfortably outlast a webhook controller pod restart cycle:
-/// 7 attempts with capped exponential backoff = roughly 30 seconds total
-/// (0.5, 1, 2, 4, 8, 8, 8). The cap prevents pathological waits while still
-/// covering JVM-cold-start webhooks like the stackgres operator.
-const PATCH_RETRY_ATTEMPTS: usize = 7;
-
-/// Initial backoff between patch retries; doubles each attempt up to the cap.
-const PATCH_RETRY_INITIAL_BACKOFF: Duration = Duration::from_millis(500);
-
-/// Maximum backoff between patch retries.
-const PATCH_RETRY_MAX_BACKOFF: Duration = Duration::from_secs(8);
 
 /// Annotation key for identity hash (derived from Nix store path).
 pub const IDENTITY_HASH_ANNOTATION: &str = "kix.dev/identity-hash";
@@ -74,11 +59,10 @@ pub enum ApplyError {
     },
 
     #[error(
-        "failed to update kix bookkeeping annotations (activations, applied-hash) on {resource} after {attempts} attempts: {source}"
+        "failed to update kix bookkeeping annotations (activations, applied-hash) on {resource}: {source}"
     )]
     BookkeepingAnnotationsFailed {
         resource: String,
-        attempts: usize,
         #[source]
         source: kube::Error,
     },
@@ -342,7 +326,7 @@ pub async fn record_activation_on_skipped(
     live_activations: Option<&HashSet<String>>,
 ) -> Result<(), ApplyError> {
     let api = api_for(client, ar, scope, rid);
-    update_bookkeeping_annotations_with_retry(
+    update_bookkeeping_annotations_checked(
         &api,
         &rid.name,
         Some(activation_hash),
@@ -390,10 +374,11 @@ pub async fn apply_resource(
     // Check if resource exists to determine Created vs Configured
     let existed = api.get_opt(&name).await.is_ok_and(|o| o.is_some());
 
-    // Apply with retry on transient errors (5xx, network). 409 conflicts are
+    // Transient errors (429, 5xx, connection loss) are retried by the
+    // client transport (cluster::client), not here. 409 conflicts are
     // permanent and surface immediately as ApplyError::Conflict so the user
     // sees an actionable error pointing at --force-conflicts.
-    let echo = apply_patch_with_retry(&api, &name, &pp, manifest, &rid).await?;
+    let echo = apply_patch(&api, &name, &pp, manifest, &rid).await?;
 
     // Compute the applied-content hash from the SSA response echo (doc 122):
     // the echo IS the committed, canonicalized server representation, so a
@@ -419,12 +404,12 @@ pub async fn apply_resource(
     // semantics to merge into the existing comma-separated set without clobbering
     // entries written by other activations. It traverses validating webhooks just
     // like the SSA, so a transient webhook outage (e.g. ingress-nginx admission pod
-    // rolling) can fail it. We retry transient errors with backoff and surface a
-    // hard failure if it still doesn't succeed — silently dropping this update
-    // would corrupt reference counting and cause GC to delete the resource on the
-    // next deploy.
+    // rolling) can fail it. The transport retries those; if the failure
+    // outlasts the retry budget it is surfaced as a hard error, because
+    // silently dropping this update would corrupt reference counting and
+    // cause GC to delete the resource on the next deploy.
     if !dry_run && (activation_hash.is_some() || applied_hash.is_some()) {
-        update_bookkeeping_annotations_with_retry(
+        update_bookkeeping_annotations_checked(
             &api,
             &name,
             activation_hash,
@@ -449,36 +434,29 @@ pub async fn apply_resource(
     })
 }
 
-/// Retry an SSA patch on transient errors (5xx, network), surface 409 conflicts
-/// as [`ApplyError::Conflict`] so the user gets an actionable message instead
+/// Send the SSA patch and classify a failure: 409 conflicts become
+/// [`ApplyError::Conflict`] so the user gets an actionable message instead
 /// of silently clobbering field ownership.
 ///
 /// Returns the SSA response echo — the committed, server-canonicalized object,
 /// used to compute the applied-content hash (doc 122).
-async fn apply_patch_with_retry(
+async fn apply_patch(
     api: &Api<DynamicObject>,
     name: &str,
     pp: &PatchParams,
     manifest: &Value,
     rid: &ResourceId,
 ) -> Result<DynamicObject, ApplyError> {
-    let attempt_label = "applying resource";
-    retry_kube_op(rid, attempt_label, |attempt| async move {
-        let _ = attempt;
-        api.patch(name, pp, &Patch::Apply(manifest)).await
-    })
-    .await
-    .map_err(|e| classify_apply_error(rid, e))
+    api.patch(name, pp, &Patch::Apply(manifest))
+        .await
+        .map_err(|e| classify_apply_error(rid, e))
 }
 
-/// Wrapper around [`update_bookkeeping_annotations`] that retries transient
-/// failures (e.g. validating-webhook pod rolling) with capped exponential
-/// backoff. Permanent errors (4xx, parse, auth) bail immediately.
-/// After exhausting attempts the failure is surfaced as a hard
-/// [`ApplyError::BookkeepingAnnotationsFailed`] so the deploy halts under
-/// `on_error=stop` instead of silently corrupting `kix.dev/activations`
-/// reference counting.
-async fn update_bookkeeping_annotations_with_retry(
+/// Wrapper around [`update_bookkeeping_annotations`] that turns a failure
+/// into a hard [`ApplyError::BookkeepingAnnotationsFailed`] so the deploy
+/// halts under `on_error=stop` instead of silently corrupting
+/// `kix.dev/activations` reference counting.
+async fn update_bookkeeping_annotations_checked(
     api: &Api<DynamicObject>,
     name: &str,
     activation_hash: Option<&str>,
@@ -486,82 +464,37 @@ async fn update_bookkeeping_annotations_with_retry(
     live_activations: Option<&HashSet<String>>,
     rid: &ResourceId,
 ) -> Result<(), ApplyError> {
-    let attempt_label = "updating bookkeeping annotations";
-    retry_kube_op(rid, attempt_label, |attempt| async move {
-        let _ = attempt;
-        update_bookkeeping_annotations(api, name, activation_hash, applied_hash, live_activations)
-            .await
-    })
-    .await
-    .map_err(|e| ApplyError::BookkeepingAnnotationsFailed {
-        resource: rid.display_id(),
-        attempts: PATCH_RETRY_ATTEMPTS,
-        source: e,
-    })
+    update_bookkeeping_annotations(api, name, activation_hash, applied_hash, live_activations)
+        .await
+        .map_err(|e| ApplyError::BookkeepingAnnotationsFailed {
+            resource: rid.display_id(),
+            source: e,
+        })
 }
 
-/// Generic retry loop with capped exponential backoff. Calls `op` up to
-/// `PATCH_RETRY_ATTEMPTS` times; retries iff [`is_transient_kube_error`]
-/// returns true. Returns the final `kube::Error` (transient-exhausted or
-/// permanent on first hit) so the caller can wrap it in an `ApplyError`
-/// variant of its choice.
-async fn retry_kube_op<T, F, Fut>(
-    rid: &ResourceId,
-    label: &'static str,
-    mut op: F,
-) -> Result<T, kube::Error>
-where
-    F: FnMut(usize) -> Fut,
-    Fut: std::future::Future<Output = Result<T, kube::Error>>,
-{
-    let mut backoff = PATCH_RETRY_INITIAL_BACKOFF;
-    let mut last_err: Option<kube::Error> = None;
-
-    for attempt in 1..=PATCH_RETRY_ATTEMPTS {
-        match op(attempt).await {
-            Ok(v) => return Ok(v),
-            Err(e) => {
-                if !is_transient_kube_error(&e) {
-                    return Err(e);
-                }
-                tracing::warn!(
-                    resource = %rid.display_id(),
-                    op = label,
-                    attempt,
-                    max_attempts = PATCH_RETRY_ATTEMPTS,
-                    error = %e,
-                    "transient error, retrying"
-                );
-                last_err = Some(e);
-                if attempt < PATCH_RETRY_ATTEMPTS {
-                    tokio::time::sleep(backoff).await;
-                    backoff = (backoff.saturating_mul(2)).min(PATCH_RETRY_MAX_BACKOFF);
-                }
-            }
-        }
-    }
-
-    Err(last_err.expect("at least one attempt was made"))
-}
-
-/// Classify a permanent (post-retry) `kube::Error` from an SSA patch into the
+/// Classify a `kube::Error` from an SSA patch into the
 /// right `ApplyError` variant. 409 Conflict → `Conflict`. 422 Invalid with an
 /// immutable-field message → `ImmutableConflict`. Everything else falls
 /// through to `PatchFailed`.
 fn classify_apply_error(rid: &ResourceId, err: kube::Error) -> ApplyError {
-    if let kube::Error::Api(ref resp) = err {
-        if resp.code == 409 {
+    match super::errors::classify(&err) {
+        FailureClass::Conflict => {
             return ApplyError::Conflict {
                 resource: rid.display_id(),
                 source: err,
             };
         }
-        if resp.code == 422 && is_immutable_field_message(&resp.message) {
-            return ApplyError::ImmutableConflict {
-                resource: rid.display_id(),
-                source: err,
-            };
+        FailureClass::Invalid => {
+            if let kube::Error::Api(ref resp) = err
+                && is_immutable_field_message(&resp.message)
+            {
+                return ApplyError::ImmutableConflict {
+                    resource: rid.display_id(),
+                    source: err,
+                };
+            }
         }
+        _ => {}
     }
     ApplyError::PatchFailed {
         resource: rid.display_id(),
@@ -580,21 +513,6 @@ fn is_immutable_field_message(msg: &str) -> bool {
         || msg.contains("cannot be changed")
         || msg.contains("updates to statefulset spec for fields other than")
         || msg.contains("updates to daemonset spec for fields other than")
-}
-
-/// Classify a kube::Error as transient (worth retrying) vs permanent.
-///
-/// Transient: 5xx API responses (often surfaced when validating webhooks are
-/// unreachable) and any non-API error (network/hyper/timeout). Everything
-/// else (4xx including 409 Conflict, parse errors, auth failures) is treated
-/// as permanent.
-fn is_transient_kube_error(err: &kube::Error) -> bool {
-    match err {
-        kube::Error::Api(resp) => resp.code >= 500,
-        // Network-ish errors — connection refused, EOF, TLS, timeout, etc.
-        kube::Error::HyperError(_) | kube::Error::Service(_) => true,
-        _ => false,
-    }
 }
 
 /// Fold `activation_hash` into the comma-separated `kix.dev/activations` set,

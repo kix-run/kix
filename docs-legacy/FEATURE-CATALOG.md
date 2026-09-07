@@ -229,7 +229,7 @@ Declarative native Prometheus stack. Options under `monitoring`:
 | `--context <CTX>` | Kubeconfig context |
 | `--flake <PATH>` | Flake reference (default: `.`) |
 
-**Env vars:** `KIX_LOG` overrides verbose-derived log filter (RUST_LOG syntax).
+**Env vars:** `KIX_LOG` overrides verbose-derived log filter (RUST_LOG syntax). `KIX_RETRY_ATTEMPTS`, `KIX_MAX_IN_FLIGHT`, `KIX_REQUEST_TIMEOUT`, `KIX_CONNECT_TIMEOUT` tune the shared apiserver transport policy (retries with backoff, in-flight cap, deadlines); see HANDBOOK § CLI.
 
 ### Commands
 

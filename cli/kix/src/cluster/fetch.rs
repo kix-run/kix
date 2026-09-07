@@ -5,6 +5,8 @@
 
 use std::collections::HashSet;
 
+use super::client::{ResiliencePolicy, build_client};
+use super::errors::{FailureClass, classify};
 use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
 use kube::{
     Config,
@@ -22,10 +24,10 @@ pub enum FetchError {
     #[error("failed to create Kubernetes client: {0}")]
     ClientError(#[source] Box<dyn std::error::Error + Send + Sync>),
 
-    #[error("failed to run API discovery")]
+    #[error("failed to run API discovery: {}", super::errors::describe(.0))]
     DiscoveryError(#[source] kube::Error),
 
-    #[error("failed to list {resource}: {source}")]
+    #[error("failed to list {resource}: {}", super::errors::describe(source))]
     ListError {
         resource: String,
         #[source]
@@ -46,6 +48,10 @@ fn resource_fqn(ar: &ApiResource) -> String {
 }
 
 /// Create a kube client, optionally targeting a specific context.
+///
+/// The client carries the transport policy from [`super::client`]: retries
+/// with backoff, per-request deadlines, and a cap on requests in flight.
+/// Every command and the operator build their client here.
 pub async fn make_client(context: Option<&str>) -> Result<Client, FetchError> {
     let config = match context {
         Some(ctx) => {
@@ -63,7 +69,9 @@ pub async fn make_client(context: Option<&str>) -> Result<Client, FetchError> {
             .await
             .map_err(|e| FetchError::ClientError(Box::new(e)))?,
     };
-    Client::try_from(config).map_err(|e| FetchError::ClientError(Box::new(e)))
+    build_client(config, ResiliencePolicy::from_env())
+        .await
+        .map_err(|e| FetchError::ClientError(Box::new(e)))
 }
 
 /// Run API discovery and return all listable resources with their scope.
@@ -161,13 +169,20 @@ pub struct ManagedSweep {
     /// pre-hash kix did). `kix gc --hard` reports them; nothing deletes them
     /// unless asked.
     pub unstamped: Vec<DynamicObject>,
+    /// Resource types this account may not list (403). Nothing in them is
+    /// visible to kix. Callers print this so a narrower-than-cluster view is
+    /// never mistaken for a complete one.
+    pub forbidden: Vec<String>,
 }
 
 /// Fetch every resource kix applied, in parallel: one LIST per discovered
 /// kind with the `managed-by=kix` label selector, then [`partition_sweep`].
 ///
-/// RBAC errors on individual resource types are logged and skipped
-/// (the cluster may have CRDs the user can't list).
+/// A 403 on a resource type is recorded, not fatal: the account simply
+/// cannot see that kind. Use [`sweep_managed`] to read the list. Any other
+/// list failure that survives the transport's retries is an error: a plan
+/// built on a partial view of the cluster is wrong in ways the user cannot
+/// see, so no caller gets one.
 pub async fn fetch_managed_resources(
     client: &Client,
     discovery: &[(ApiResource, Scope)],
@@ -181,8 +196,10 @@ pub async fn sweep_managed(
     discovery: &[(ApiResource, Scope)],
 ) -> Result<ManagedSweep, FetchError> {
     let lp = ListParams::default().labels(MANAGED_BY_LABEL);
-    let objects = fetch_parallel(client, discovery, &lp).await?;
-    Ok(partition_sweep(objects))
+    let listed = fetch_parallel(client, discovery, &lp).await?;
+    let mut sweep = partition_sweep(listed.objects);
+    sweep.forbidden = listed.forbidden;
+    Ok(sweep)
 }
 
 /// Decide what the label sweep really found.
@@ -223,7 +240,11 @@ pub fn partition_sweep(objects: Vec<DynamicObject>) -> ManagedSweep {
                     .contains(&(namespace_of(o), o.metadata.name.clone().unwrap_or_default())))
         })
         .collect();
-    ManagedSweep { managed, unstamped }
+    ManagedSweep {
+        managed,
+        unstamped,
+        forbidden: Vec::new(),
+    }
 }
 
 /// Did kix's apply step stamp this object?
@@ -370,12 +391,32 @@ pub fn to_manifest_value(obj: &DynamicObject) -> serde_json::Value {
     })
 }
 
+/// What one parallel LIST pass produced.
+pub struct Listed {
+    pub objects: Vec<DynamicObject>,
+    /// Resource types that answered 403.
+    pub forbidden: Vec<String>,
+}
+
+/// One task's result inside [`fetch_parallel`].
+enum ListOutcome {
+    Items(Vec<DynamicObject>),
+    Forbidden(String),
+}
+
 /// Internal: run parallel LIST calls across all discovered resource types.
+///
+/// The transport layer already retried each LIST on 429, 5xx and
+/// connection errors, so an error here is one that outlasted the budget.
+/// It is returned, and dropping the `JoinSet` cancels the lists still in
+/// flight. The old behaviour, logging a warning and continuing with an
+/// empty list for that kind, made `kix diff` report every PackageInstance
+/// as "will be created" during an apiserver restart (2026-09-07, stage1).
 async fn fetch_parallel(
     client: &Client,
     discovery: &[(ApiResource, Scope)],
     lp: &ListParams,
-) -> Result<Vec<DynamicObject>, FetchError> {
+) -> Result<Listed, FetchError> {
     let mut set = JoinSet::new();
 
     for (ar, scope) in discovery {
@@ -412,30 +453,37 @@ async fn fetch_parallel(
                             obj
                         })
                         .collect();
-                    Ok(items)
+                    Ok(ListOutcome::Items(items))
                 }
-                Err(kube::Error::Api(ref resp)) if resp.code == 403 => {
-                    // RBAC forbidden — skip silently (common with CRDs)
-                    tracing::debug!(resource = %fqn, "RBAC forbidden, skipping");
-                    Ok(vec![])
+                Err(e) if classify(&e) == FailureClass::Forbidden => {
+                    // RBAC: a stable fact about the account, not a fault.
+                    tracing::debug!(resource = %fqn, "forbidden, recorded");
+                    Ok(ListOutcome::Forbidden(fqn))
                 }
-                Err(e) => {
-                    tracing::warn!(resource = %fqn, error = %e, "failed to list, skipping");
-                    Ok(vec![])
-                }
+                Err(e) => Err(FetchError::ListError {
+                    resource: fqn,
+                    source: e,
+                }),
             }
         });
     }
 
-    let mut results = Vec::new();
+    let mut listed = Listed {
+        objects: Vec::new(),
+        forbidden: Vec::new(),
+    };
     while let Some(join_result) = set.join_next().await {
         match join_result {
-            Ok(Ok(items)) => results.extend(items),
+            Ok(Ok(ListOutcome::Items(items))) => listed.objects.extend(items),
+            Ok(Ok(ListOutcome::Forbidden(fqn))) => listed.forbidden.push(fqn),
             Ok(Err(e)) => return Err(e),
-            Err(e) => tracing::warn!(error = %e, "task join error during fetch"),
+            Err(e) => {
+                return Err(FetchError::ClientError(Box::new(e)));
+            }
         }
     }
-    Ok(results)
+    listed.forbidden.sort();
+    Ok(listed)
 }
 
 #[cfg(test)]

@@ -3,7 +3,9 @@
 pub mod activation;
 pub mod apply;
 pub mod cancel;
+pub mod client;
 pub mod drift;
+pub mod errors;
 pub mod fetch;
 pub mod fieldsv1;
 pub mod graph;

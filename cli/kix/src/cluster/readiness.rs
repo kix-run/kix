@@ -21,6 +21,7 @@ use serde_json::Value;
 use thiserror::Error;
 
 use super::cancel::CancelToken;
+use super::errors::{FailureClass, classify};
 use super::fetch;
 
 /// After a CRD reaches `Established=True`, the apiserver's discovery endpoint
@@ -295,7 +296,7 @@ pub async fn wait_for_import_target(
                 }
             }
             Ok(None) => "not found yet".into(),
-            Err(kube::Error::Api(resp)) if resp.code == 404 => "not found yet".into(),
+            Err(e) if classify(&e) == FailureClass::NotFound => "not found yet".into(),
             Err(e) => {
                 // Network errors / transient failures — keep polling until
                 // timeout rather than failing immediately.

@@ -244,12 +244,18 @@ async fn fetch_live_manifests(global: &crate::cli::GlobalArgs) -> Result<Vec<(Re
         );
     }
 
-    let objects = fetch::fetch_managed_resources(&client, &discovery)
+    let sweep = fetch::sweep_managed(&client, &discovery)
         .await
         .map_err(|e| miette!("failed to fetch resources: {e}"))?;
+    let objects = sweep.managed;
 
     if !global.quiet {
-        eprintln!("Fetched {} resources", objects.len());
+        eprintln!(
+            "Fetched {} resources across {} resource types{}",
+            objects.len(),
+            discovery.len() - sweep.forbidden.len(),
+            crate::output::forbidden_note(&sweep.forbidden),
+        );
     }
 
     let mut resources = Vec::new();
