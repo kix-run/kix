@@ -284,22 +284,66 @@ in
     ]
   );
 
-  # The operator exemption: CR in the same namespace, Service name prefixed.
-  v04c-operator-exemption-same-namespace = clean (
+  # A Service over operator-created pods declares the CR; the CR is present.
+  v04c-operand-of-declared-cr-present = clean (
     base "a"
     ++ [
       (res "Prometheus" "a" "prom" { apiVersion = "monitoring.coreos.com/v1"; })
-      (service "a" "prom-operated" { operated = "yes"; } { spec.ports = [ { port = 9090; } ]; })
+      (service "a" "prom-thanos" { operated = "yes"; } {
+        metadata.annotations."kix.dev/operand-of" = "monitoring.coreos.com/Prometheus/prom";
+        spec.ports = [ { port = 10901; } ];
+      })
     ]
   );
 
-  # Regression: the exemption never compared namespaces.
-  v04d-operator-exemption-is-namespaced = onlyFailure "Service b/prom-operated" (
+  # The declaration is namespaced: the CR must be in the Service's namespace.
+  v04d-operand-of-is-namespaced =
+    onlyFailure "declares kix.dev/operand-of=monitoring.coreos.com/Prometheus/prom but no such CR"
+      (
+        base "a"
+        ++ base "b"
+        ++ [
+          (res "Prometheus" "a" "prom" { apiVersion = "monitoring.coreos.com/v1"; })
+          (service "b" "prom-thanos" { operated = "yes"; } {
+            metadata.annotations."kix.dev/operand-of" = "monitoring.coreos.com/Prometheus/prom";
+            spec.ports = [ { port = 10901; } ];
+          })
+        ]
+      );
+
+  # Keyed by group: a kind of the same name in another group does not count.
+  v04e-operand-of-checks-the-group =
+    onlyFailure "declares kix.dev/operand-of=other.example/Prometheus/prom"
+      (
+        base "a"
+        ++ [
+          (res "Prometheus" "a" "prom" { apiVersion = "monitoring.coreos.com/v1"; })
+          (service "a" "prom-thanos" { operated = "yes"; } {
+            metadata.annotations."kix.dev/operand-of" = "other.example/Prometheus/prom";
+            spec.ports = [ { port = 10901; } ];
+          })
+        ]
+      );
+
+  # A declaration that is not group/Kind/name is reported as such.
+  v04g-operand-of-malformed = onlyFailure "which is not of the form <group>/<Kind>/<name>" (
     base "a"
-    ++ base "b"
     ++ [
-      (res "Prometheus" "a" "prom" { apiVersion = "monitoring.coreos.com/v1"; })
-      (service "b" "prom-operated" { operated = "yes"; } { spec.ports = [ { port = 9090; } ]; })
+      (service "a" "prom-thanos" { operated = "yes"; } {
+        metadata.annotations."kix.dev/operand-of" = "Prometheus/prom";
+        spec.ports = [ { port = 10901; } ];
+      })
+    ]
+  );
+
+  # No declaration, no match: the plain message, and no kind is exempt by name.
+  v04f-no-kind-is-exempt-by-name = onlyFailure "matches no workload pod template" (
+    base "a"
+    ++ [
+      (res "VMCluster" "a" "vm" { apiVersion = "operator.victoriametrics.com/v1beta1"; })
+      (service "a" "vm-select" { "app.kubernetes.io/name" = "vmselect"; } {
+        spec.ports = [ { port = 8481; } ];
+      })
     ]
   );
 
@@ -497,24 +541,19 @@ in
     ]
   );
 
-  p04c-vm-operand-kinds-are-exempt = clean (
-    base "a"
-    ++ [
-      (res "VMCluster" "a" "vm" { apiVersion = "operator.victoriametrics.com/v1beta1"; })
-      (service "a" "vm-select" { "app.kubernetes.io/name" = "vmselect"; } {
-        spec.ports = [ { port = 8481; } ];
-      })
-    ]
-  );
-
-  # A CR with no namespace (cluster-scoped) does not exempt a namespaced Service.
-  p04d-cluster-scoped-cr-does-not-exempt = onlyFailure "Service a/prom-operated" (
-    base "a"
-    ++ [
-      (res "Prometheus" null "prom" { apiVersion = "monitoring.coreos.com/v1"; })
-      (service "a" "prom-operated" { operated = "yes"; } { spec.ports = [ { port = 9090; } ]; })
-    ]
-  );
+  # A cluster-scoped CR (no namespace) cannot be the operand source of a namespaced Service.
+  p04d-cluster-scoped-cr-does-not-exempt =
+    onlyFailure "declares kix.dev/operand-of=monitoring.coreos.com/Prometheus/prom but no such CR"
+      (
+        base "a"
+        ++ [
+          (res "Prometheus" null "prom" { apiVersion = "monitoring.coreos.com/v1"; })
+          (service "a" "prom-operated" { operated = "yes"; } {
+            metadata.annotations."kix.dev/operand-of" = "monitoring.coreos.com/Prometheus/prom";
+            spec.ports = [ { port = 9090; } ];
+          })
+        ]
+      );
 
   p05-hpa-target-present = clean (
     base "a"

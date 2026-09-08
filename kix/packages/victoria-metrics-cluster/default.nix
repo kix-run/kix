@@ -24,7 +24,7 @@
 #                                default StorageClass
 #
 # Exposes:
-#   out.serviceUrl — "http://<name>-select.<ns>.svc.cluster.local:8481/select/0/prometheus"
+#   out.serviceUrl: "http://vmselect-<name>.<ns>.svc:8481/select/0/prometheus" (the operator's Service)
 #     Prometheus-compatible read path; Grafana auto-wires any
 #     `prometheusServer`-aliased instance exposing this.
 #   out.insertUrl — ".../insert/0/prometheus/api/v1/write" full
@@ -271,58 +271,40 @@ in
         spec = lib.recursiveUpdate baseSpec config.extraSpec;
       };
 
-      # The operator creates its own Services (vmselect-<name> etc.); these
-      # package-owned ones exist for stable naming and DI-friendly
-      # out.serviceUrl/out.insertUrl with dependency context — same
-      # pattern as the prometheus package.
-      selectService = scope.mkResource {
-        apiVersion = "v1";
-        kind = "Service";
-        name = "${name}-select";
-        # Distinct per-Service identity (distinctSameKindLabels): without
-        # it, no label selector can tell the select and insert Services
-        # apart.
-        labels."app.kubernetes.io/component" = "vmselect";
+      # The operator creates the operand Services itself: vmselect-<name>
+      # on 8481 and vminsert-<name> on 8480, selecting the pods it stamps
+      # with componentSelector. Kix used to render a second pair of
+      # Services over the same pods for stable names. Those hand-typed
+      # selectors could not be verified against any pod template in the
+      # build, so every validation layer had to carry an exemption for
+      # them (v2_discussions/135). A ServiceRef describes the operator's
+      # Service instead: consumers get out.fqdn with dependency context,
+      # the deploy engine waits for the Service to exist, and netpol opens
+      # the same edges it would for a rendered Service.
+      selectService = scope.mkServiceRef {
+        name = "vmselect-${name}";
+        selector = componentSelector "vmselect";
+        ports = [
+          {
+            name = "http";
+            port = 8481;
+            protocol = "TCP";
+          }
+        ];
         requires = [ self.vmCluster ];
-        spec = {
-          type = "ClusterIP";
-          selector = componentSelector "vmselect";
-          ports = [
-            {
-              name = "http";
-              port = 8481;
-              targetPort = 8481;
-              protocol = "TCP";
-            }
-          ];
-        };
-        outputs = {
-          serviceUrl = "http://${name}-select.${ns}.svc.cluster.local:8481/select/0/prometheus";
-        };
       };
 
-      insertService = scope.mkResource {
-        apiVersion = "v1";
-        kind = "Service";
-        name = "${name}-insert";
-        labels."app.kubernetes.io/component" = "vminsert";
+      insertService = scope.mkServiceRef {
+        name = "vminsert-${name}";
+        selector = componentSelector "vminsert";
+        ports = [
+          {
+            name = "http";
+            port = 8480;
+            protocol = "TCP";
+          }
+        ];
         requires = [ self.vmCluster ];
-        spec = {
-          type = "ClusterIP";
-          selector = componentSelector "vminsert";
-          ports = [
-            {
-              name = "http";
-              port = 8480;
-              targetPort = 8480;
-              protocol = "TCP";
-            }
-          ];
-        };
-        outputs = {
-          insertUrl = "http://${name}-insert.${ns}.svc.cluster.local:8480/insert/0/prometheus/api/v1/write";
-          insertBaseUrl = "http://${name}-insert.${ns}.svc.cluster.local:8480/insert/0/prometheus";
-        };
       };
 
       root = {
@@ -332,8 +314,11 @@ in
           self.insertService
         ];
         out = {
-          inherit (self.selectService.out) serviceUrl;
-          inherit (self.insertService.out) insertUrl insertBaseUrl;
+          # URLs are built on the refs' fqdn, so they carry the marker's
+          # dependency context and the endpoint fact.
+          serviceUrl = "http://${self.selectService.out.fqdn}:8481/select/0/prometheus";
+          insertUrl = "http://${self.insertService.out.fqdn}:8480/insert/0/prometheus/api/v1/write";
+          insertBaseUrl = "http://${self.insertService.out.fqdn}:8480/insert/0/prometheus";
           inherit (config) scrapeInterval;
           # Operand images are reconciled by the operator, not in any
           # kix-generated pod spec.

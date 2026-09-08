@@ -585,12 +585,16 @@ for that shape (design: `v2_discussions/133`, shipped 2026-09-07):
   `prometheusServer` and `vmCluster`), `victoria-metrics-agent/` (VMAgent)
   and `victoria-metrics-alert/` (VMAlert + VMAlertmanager) each build one CR
   through the operator's builder, never a raw kind string. The cluster
-  package also owns a `-select` and an `-insert` Service whose selectors
-  match the labels the operator stamps on operand pods. They exist for
-  stable names and for `out.serviceUrl` / `out.insertUrl` with dependency
-  context (same pattern as `packages/prometheus`). Two Services of one kind
-  in one package need `distinctSameKindLabels` so a selector can tell them
-  apart.
+  package does not render Services over the operator's pods. It uses
+  `scope.mkServiceRef` for the Services the operator creates
+  (`vmselect-<name>`, `vminsert-<name>`), and builds `out.serviceUrl` /
+  `out.insertUrl` on the ref's `out.fqdn` so consumers keep dependency
+  context. Same pattern as `packages/prometheus` (`prometheus-operated`)
+  and `packages/alertmanager` (`alertmanager-operated`). A Service kix must
+  render itself over operator pods (the Thanos sidecar) declares the CR with
+  `metadata.annotations."kix.dev/operand-of" = "<group>/<Kind>/<name>"`;
+  otherwise the cross-resource check refuses a selector that matches no pod
+  template in the build. There is no list of operator kinds anywhere.
 - Trial posture: `lifecycle = "ephemeral"` on the cluster package means
   historical metrics are expendable on a storage swap. Revisit before VM
   becomes a long-term store.

@@ -352,25 +352,23 @@ in
         ) config.extraSpec;
       };
 
-      service = scope.mkResource {
-        apiVersion = "v1";
-        kind = "Service";
-        inherit name;
-        spec = {
-          type = "ClusterIP";
-          selector = svcSelector;
-          ports = [
-            {
-              name = "http-web";
-              port = 9093;
-              targetPort = 9093;
-              protocol = "TCP";
-            }
-          ];
-        };
-        outputs = {
-          serviceUrl = "http://${name}.${ns}.svc.cluster.local:9093";
-        };
+      # The operator creates `alertmanager-operated` (headless, port web
+      # 9093) over the pods it stamps with svcSelector. A ServiceRef to it
+      # replaces the Service kix used to render over the same pods; see the
+      # prometheus package for the reasoning (v2_discussions/135).
+      service = scope.mkServiceRef {
+        name = "alertmanager-operated";
+        selector = svcSelector;
+        # The label the operator puts on alertmanager-operated.
+        labels."operated-alertmanager" = "true";
+        ports = [
+          {
+            name = "web";
+            port = 9093;
+            protocol = "TCP";
+          }
+        ];
+        requires = [ self.alertmanager ];
       };
 
       # ── PodDisruptionBudget ─────────────────────────────────────────────
@@ -493,12 +491,13 @@ in
             # pod-shaped svcSelector never matched the Service and the
             # self-monitor was silently unscraped (caught by
             # monitorSelectorMatchesService, 2026-08-31).
-            selector.matchLabels = self.service.out.selector;
+            # The ref carries the operated Service's labels and port names.
+            selector.matchLabels = self.service.out.labels;
             namespaceSelector.matchNames = [ ns ];
             endpoints = [
               (
                 {
-                  port = "http-web";
+                  port = "web";
                   path = config.serviceMonitor.path;
                 }
                 // lib.optionalAttrs (config.serviceMonitor.interval != null) {
@@ -521,7 +520,7 @@ in
         ++ lib.optional config.podDisruptionBudget.enabled self.podDisruptionBudget.pdb
         ++ lib.optional config.networkPolicy.enabled self.networkPolicy.np;
         out = {
-          inherit (self.service.out) serviceUrl;
+          serviceUrl = "http://${self.service.out.fqdn}:9093";
           # The Alertmanager CR's image is reconciled by the operator into a
           # StatefulSet — not directly in a kix-generated pod spec.
           extraImages = [

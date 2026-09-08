@@ -77,6 +77,7 @@ rec {
           name,
           selector,
           ports,
+          labels ? { },
           requires ? [ ],
         }:
         let
@@ -93,7 +94,7 @@ rec {
             endpoint = endpointFactCtx;
           };
           out = {
-            inherit selector ports;
+            inherit selector ports labels;
             inherit name;
             fqdn = attachConnectCtx "${name}.${namespaceName}.svc";
             port = attachConnectCtx (toString (builtins.head ports).port);

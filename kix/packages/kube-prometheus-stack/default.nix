@@ -255,11 +255,41 @@ in
   build =
     { config, scope, ... }:
     let
+      # The chart renders Services over pods the operator creates at
+      # runtime (alertmanager, prometheus, the thanos sidecar). No pod
+      # template in the build matches them, so each declares the CR whose
+      # pods it selects (kix.dev/operand-of, read by the cross-resource
+      # checks). The CR name comes from the operator's own pod labels in
+      # the selector: `operator.prometheus.io/name: <cr>` on current
+      # operators, `alertmanager: <cr>` / `prometheus: <cr>` on older ones.
+      declareOperandServices = map (
+        r:
+        let
+          sel = r.spec.selector or { };
+          app = sel."app.kubernetes.io/name" or null;
+          crName = if app == null then null else sel."operator.prometheus.io/name" or sel.${app} or null;
+          kind =
+            if app == "alertmanager" then
+              "Alertmanager"
+            else if app == "prometheus" then
+              "Prometheus"
+            else
+              null;
+          cr =
+            if (r.kind or "") != "Service" || kind == null || crName == null then
+              null
+            else
+              "monitoring.coreos.com/${kind}/${crName}";
+        in
+        if cr == null then r else lib.recursiveUpdate r { metadata.annotations."kix.dev/operand-of" = cr; }
+      );
+
       resources = scope.helm.importChart {
         inherit chart scope;
         values = lib.recursiveUpdate defaultValues (config.values or { });
         releaseName = "prometheus";
         includeCrds = true;
+        patchResources = declareOperandServices;
       };
 
       # CRD ref markers — point at the chart-installed CRDs so

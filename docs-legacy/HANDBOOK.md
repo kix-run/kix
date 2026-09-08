@@ -409,7 +409,7 @@ Use this only for fixtures and inline cluster definitions. Files in `kix/package
 | `scope.mkOptional cond builder` | Gate a resource on a boolean. `builder` may be a thunk `(_: ...)` to avoid eager eval when `cond` is false |
 | `scope.mkSecret { ... }` | Secret with enriched `out` (see §21). **Always** use this instead of `scope.mkResource { kind = "Secret"; }` |
 | `scope.mkSecretRef { ... }` | Reference an externally-managed Secret (Vault, ESO, cert-manager). Emits a PackageInstance import marker; deploy verifies the Secret exists before applying dependents. See §21 |
-| `scope.mkServiceRef { ... }` | Reference an externally-managed Service (operator-provisioned). `out.{name, fqdn, port}` carry context |
+| `scope.mkServiceRef { name, selector, ports, labels?, requires? }` | Reference an externally-managed Service (operator-provisioned). `out.{name, fqdn, port, labels}` carry context; `out.{selector, ports}` are the declared shapes. The marker is Ready when the Service has ready endpoints |
 | `scope.mkWebhookService { ... }` | Builds Service + ValidatingWebhookConfiguration + MutatingWebhookConfiguration in one call |
 | `scope.mkCRD spec` | Create a CustomResourceDefinition. Pair with `crd.fromKind` builders (§22) |
 | `scope.mkCRDRef { kind; ... }` | CRD marker (no CRD resource). Use when the CRD is owned externally |
@@ -1008,7 +1008,7 @@ Thirteen checks over the finished manifest list run inside every cluster evaluat
 | 1 | Workload `serviceAccountName` names a ServiceAccount in its namespace | `default`; unset |
 | 2 | (Cluster)RoleBinding `roleRef` names a Role that is in the build | names starting `system:`, ending `-psp`, or `admin`, `edit`, `view`, `cluster-admin` |
 | 3 | `volumes[].configMap.name` names a ConfigMap in the namespace | Secrets are not checked (often created out of band) |
-| 4 | Service selector matches at least one pod template | no selector; the control-plane scrape selectors (kube-dns, kube-scheduler, ...); the operator rule below |
+| 4 | Service selector matches at least one pod template | no selector; the control-plane scrape selectors (kube-dns, kube-scheduler, ...); a Service that declares `kix.dev/operand-of` (below) |
 | 5 | HPA `scaleTargetRef` exists | |
 | 6 | StatefulSet `serviceName` is a headless Service (`clusterIP: None`) in the namespace | unset |
 | 7 | One resource per kind, namespace and name | |
@@ -1030,8 +1030,8 @@ error: Cluster 'ludo-kind' has 1 failed assertion(s):
 
 **Services for operator-created pods.** Check 4 cannot see pods an operator creates at runtime. Two ways through, in order of preference:
 
-1. `scope.mkServiceRef` for a Service the operator itself creates. It carries the selector and ports, renders as a marker, gates consumers until the Service exists, and no check or rule fires on it. `packages/stackgres-cluster` does this.
-2. The allowlist in `validate.nix` (`operatorManagedKinds`: Prometheus, Alertmanager, VMCluster, VMSingle, VMAgent, VMAlert, VMAlertmanager, VMAuth). A Service is exempt when a CR of a listed kind exists in the same namespace and the Service name starts with the CR name. The selector is not read. This is the heuristic the VictoriaMetrics and prometheus packages rely on today; doc 135 argues for retiring it once those packages use refs.
+1. `scope.mkServiceRef` for a Service the operator itself creates (`prometheus-operated`, `alertmanager-operated`, `vmselect-<name>`). It carries the selector, ports and the Service's labels, renders as a marker, and no check or rule fires on it. The prometheus, alertmanager, victoria-metrics-cluster and stackgres-cluster packages do this. Two consequences to know: consumers now wait until the operator's Service has ready endpoints (the per-node readiness timeout, 180s by default, applies to a slow Prometheus start), and the declared selector should be as wide as the operator's own (`prometheus-operated` selects every Prometheus in the namespace; a ref that adds the instance label describes fewer pods than the Service reaches).
+2. When kix must render the Service itself (the operator creates none, as for the Thanos sidecar), the Service declares the CR whose pods it selects: `metadata.annotations."kix.dev/operand-of" = "<group>/<Kind>/<name>"`. Check 4 accepts the Service when that CR is in the build in the same namespace, and reports the declaration when it is not. Group and kind together, because kind names are not unique across API groups. There is no list of operator kinds anywhere in the checker.
 
 **References to things kix does not render.** Wrap the name in `kix.untrackedRef` (a ServiceAccount the cluster provides, a ConfigMap another system owns). The value carries an inert marker in its string context; `buildCluster` collects those names before context is stripped, keyed by the referring resource's namespace, and the checks accept them there. A `scope.mkServiceRef` or `scope.mkSecretRef` marker counts as the Service or Secret it describes, in its namespace, and its declared pod selector counts as pods for the Service and NetworkPolicy selector checks. For a cluster-level `kix.mkImport`, pass `kind = "Service"` so the marker carries the kind; a consumer in another namespace wraps the name in `kix.untrackedRef`. A bare string that names nothing in the build fails, and so does a name derived from a resource with a suffix added (`self.sa.out.name + "-typo"`): provenance is not resolution. A suffix on an untracked ref stays untracked, since the author marked it. The StatefulSet headless-Service check reads `clusterIP: None` off a rendered Service and cannot accept a marker.
 
@@ -1264,7 +1264,7 @@ Diff features:
 | `kix.monitor` does nothing | No `prometheus` instance; or the prometheus package doesn't expose `out.mkServiceMonitor` |
 | Build fails: "extra.* shadows managed field" | Move customizations into `spec`/`data`/`stringData` directly |
 | Workload starts before its CNPs | Per-workload CNPs are emitted *inside* `mkDeployment`/`mkStatefulSet`/`mkDaemonSet` and spliced into the workload's `extraDeps` so the workload depends on its own policies. If you see ordering issues, you're likely on the post-fixpoint path (RBAC/CRD/LB CNPs); check `processInstance` in `netpol.nix` |
-| Build fails with `[validate] Service ... matches no workload pod template` | The Service selects pods that are not in the build. Typo in a label, or operator-created pods: see §17.4 (`scope.mkServiceRef`, or the `operatorManagedKinds` allowlist) |
+| Build fails with `[validate] Service ... matches no workload pod template` | The Service selects pods that are not in the build. Typo in a label, or operator-created pods: see §17.4 (`scope.mkServiceRef` to the operator's Service, or `kix.dev/operand-of` on the Service) |
 | Build fails with `[validate] Duplicate resource: <kind>/<ns>/<name>` | Two different resources share an identity; the writer would keep one and drop the other. Common cause: an operator auto-instantiated once per environment (cluster-scoped RBAC and webhooks collide). Declare one shared instance |
 | Helm-chart resources lack DI edges to other charts | Helm opacity warning. The `helm-dag.nix` reconstructs intra-chart edges from K8s patterns (SA mounts, RBAC bindings, Service selectors, etc.); cross-chart edges require explicit `requires` |
 

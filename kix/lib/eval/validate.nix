@@ -164,20 +164,43 @@ rec {
           "view"
         ];
 
-      # Services targeting pods managed by operators (Prometheus, Alertmanager,
-      # the VictoriaMetrics operands) or Kubernetes system components. These
-      # pods don't appear in manifests. Same list as kixpkgs#69; doc 135
-      # argues for replacing it with scope.mkServiceRef in the packages.
-      operatorManagedKinds = [
-        "Prometheus"
-        "Alertmanager"
-        "VMCluster"
-        "VMSingle"
-        "VMAgent"
-        "VMAlert"
-        "VMAlertmanager"
-        "VMAuth"
-      ];
+      # A Service kix renders over pods an operator creates at runtime has no
+      # pod template to match. The package says so on the Service:
+      #   metadata.annotations."kix.dev/operand-of" = "<group>/<Kind>/<name>"
+      # names the CR whose operand pods it selects, and check 4 accepts it
+      # when that CR is in the build in the same namespace. Keyed by group
+      # and kind: kind names alone are not unique across API groups. This
+      # replaced a global list of operator kinds plus a name-prefix guess
+      # (v2_discussions/135, kixpkgs#70). Where the operator creates the
+      # Service itself, scope.mkServiceRef is the better tool: nothing to
+      # exempt.
+      operandOfAnnotation = "kix.dev/operand-of";
+      # "monitoring.coreos.com/v1" -> "monitoring.coreos.com"; the core group
+      # ("v1") is "", as Kubernetes writes it.
+      groupOf =
+        apiVersion:
+        let
+          parts = lib.splitString "/" apiVersion;
+        in
+        if builtins.length parts == 2 then builtins.head parts else "";
+      crIds = builtins.listToAttrs (
+        map (r: {
+          name = "${groupOf (r.apiVersion or "")}/${r.kind}/${
+            r.metadata.namespace or "cluster-scoped"
+          }/${r.metadata.name or "unnamed"}";
+          value = true;
+        }) resources
+      );
+      operandOf = svc: (svc.metadata.annotations or { }).${operandOfAnnotation} or null;
+      operandCrPresent =
+        svc:
+        let
+          decl = operandOf svc;
+          parts = if decl == null then [ ] else lib.splitString "/" decl;
+          ns = svc.metadata.namespace or "cluster-scoped";
+        in
+        builtins.length parts == 3
+        && crIds ? "${builtins.elemAt parts 0}/${builtins.elemAt parts 1}/${ns}/${builtins.elemAt parts 2}";
 
       systemComponentSelectors = [
         { "k8s-app" = "kube-dns"; }
@@ -198,19 +221,8 @@ rec {
         selector == { }
         # Targets a K8s system component (metrics scraping).
         || builtins.any (sc: selectorMatchesLabels sc selector) systemComponentSelectors
-        # Targets pods created by an operator CRD at runtime.
-        # Match: a CR of an operator-managed kind exists in the same
-        # namespace, and the Service name starts with that CR's name
-        # (operator naming convention). A heuristic: the selector itself is
-        # not read, and a short CR name exempts every Service that shares its
-        # prefix. v2_discussions/135 (kixpkgs#70) explains why it should give
-        # way to scope.mkServiceRef.
-        || builtins.any (
-          r:
-          builtins.elem r.kind operatorManagedKinds
-          && (r.metadata.namespace or null) == (svc.metadata.namespace or null)
-          && lib.hasPrefix r.metadata.name svc.metadata.name
-        ) resources;
+        # Declares the CR whose operand pods it selects, and that CR is here.
+        || operandCrPresent svc;
 
       # --- 1. ServiceAccount references ---
 
@@ -303,6 +315,14 @@ rec {
           in
           if matchesAny then
             [ ]
+          else if operandOf svc != null && builtins.length (lib.splitString "/" (operandOf svc)) != 3 then
+            [
+              "Service ${ns}/${svc.metadata.name} declares ${operandOfAnnotation}=${operandOf svc}, which is not of the form <group>/<Kind>/<name>"
+            ]
+          else if operandOf svc != null then
+            [
+              "Service ${ns}/${svc.metadata.name} declares ${operandOfAnnotation}=${operandOf svc} but no such CR is in the build in namespace ${ns}"
+            ]
           else
             [
               "Service ${ns}/${svc.metadata.name} selector ${builtins.toJSON selector} matches no workload pod template"

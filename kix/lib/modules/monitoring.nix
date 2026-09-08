@@ -271,11 +271,15 @@ in
               externalUrl = cfg.prometheus.externalUrl;
             }
             // lib.optionalAttrs cfg.alertmanager.enabled {
+              # The alertmanager package no longer renders its own Service; it
+              # refs the operator's `alertmanager-operated` (port `web`). The
+              # operator turns this into Alertmanager service discovery, so
+              # the name must be a Service that exists in the namespace.
               alerting.alertmanagers = [
                 {
                   namespace = ns;
-                  name = rename "alertmanager";
-                  port = "http-web";
+                  name = "alertmanager-operated";
+                  port = "web";
                 }
               ];
             };

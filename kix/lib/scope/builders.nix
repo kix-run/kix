@@ -727,6 +727,12 @@ in
           name,
           selector,
           ports,
+          # metadata.labels the external Service carries (an operator's
+          # `operated-prometheus: "true"`, for example). A ServiceMonitor
+          # selects Services by these, so a self-monitor over a ref builds
+          # its selector from `out.labels`; the monitorSelectorMatchesService
+          # rule reads them off the marker.
+          labels ? { },
           requires ? [ ],
         }:
         let
@@ -740,6 +746,9 @@ in
             extraAnnotations = {
               "kix.dev/service-selector" = builtins.toJSON selector;
               "kix.dev/service-ports" = builtins.toJSON ports;
+            }
+            // lib.optionalAttrs (labels != { }) {
+              "kix.dev/service-labels" = builtins.toJSON labels;
             };
             extraRequires = requires;
           };
@@ -768,6 +777,9 @@ in
             port = attachConnectCtx (toString (builtins.head ports).port);
             ports = ports;
             inherit selector;
+            # Values carry the marker's context so a monitor built from them
+            # depends on the ref, as one built from out.selector used to.
+            labels = lib.mapAttrs (_: v: attachCtx v) labels;
           };
         };
     };

@@ -1762,6 +1762,59 @@ let
       in
       (rule.check { resource = bad; } != [ ] && rule.check { resource = good; } == [ ])
       || throw "volumeHasSource rule misjudged: bad=${builtins.toJSON (rule.check { resource = bad; })}";
+
+    # monitorSelectorMatchesService sees a ServiceRef marker that declares its
+    # Service's labels as that Service, so a self-monitor over an
+    # operator-created Service can be checked. Labels that match nothing still
+    # fail.
+    t54-monitor-rule-sees-service-refs =
+      let
+        rule = (import ../rules/architecture.nix { inherit lib; }).monitorSelectorMatchesService;
+        marker = {
+          kind = "PackageInstance";
+          metadata = {
+            name = "service-ref-am-alertmanager-operated";
+            namespace = "mon";
+            annotations = {
+              "kix.dev/mode" = "import";
+              "kix.dev/import-kind" = "Service";
+              "kix.dev/import-name" = "alertmanager-operated";
+              "kix.dev/service-labels" = builtins.toJSON { operated-alertmanager = "true"; };
+              "kix.dev/service-ports" = builtins.toJSON [
+                {
+                  name = "web";
+                  port = 9093;
+                }
+              ];
+            };
+          };
+        };
+        monitor = labels: {
+          kind = "ServiceMonitor";
+          metadata = {
+            name = "am-self";
+            namespace = "mon";
+          };
+          spec = {
+            selector.matchLabels = labels;
+            namespaceSelector.matchNames = [ "mon" ];
+            endpoints = [ { port = "web"; } ];
+          };
+        };
+        run =
+          labels:
+          rule.check {
+            allInstances.mon = { };
+            allResources = [
+              marker
+              (monitor labels)
+            ];
+          };
+        good = run { operated-alertmanager = "true"; };
+        bad = run { "app.kubernetes.io/name" = "alertmanager"; };
+      in
+      (good == [ ] && bad != [ ])
+      || throw "monitor rule vs ServiceRef: good=${builtins.toJSON good} bad=${builtins.toJSON bad}";
   }
   // import ./validate.nix {
     inherit

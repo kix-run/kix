@@ -371,7 +371,47 @@ in
       let
         managedNamespaces = builtins.attrNames allInstances;
 
-        services = builtins.filter (r: (r.kind or "") == "Service") allResources;
+        # A ServiceRef marker (scope.mkServiceRef) stands for a Service kix
+        # does not render. When the ref declares the Service's labels and
+        # ports, the marker counts here as that Service, so a self-monitor
+        # over an operator-created Service is checked like any other.
+        refServices = builtins.concatMap (
+          r:
+          let
+            anns = r.metadata.annotations or { };
+          in
+          if
+            (r.kind or "") == "PackageInstance"
+            && (anns."kix.dev/import-kind" or null) == "Service"
+            && anns ? "kix.dev/service-labels"
+          then
+            [
+              {
+                kind = "Service";
+                metadata = {
+                  name = anns."kix.dev/import-name";
+                  namespace = r.metadata.namespace or null;
+                  labels = builtins.fromJSON anns."kix.dev/service-labels";
+                };
+                spec.ports = builtins.fromJSON (anns."kix.dev/service-ports" or "[]");
+              }
+            ]
+          else
+            [ ]
+        ) allResources;
+        # Two refs to the same Service (two instances in one namespace) are
+        # one Service, not two candidates.
+        uniqueRefServices = builtins.attrValues (
+          builtins.listToAttrs (
+            map (s: {
+              # Attribute names cannot carry string context; the namespace
+              # value does (it names the Namespace resource).
+              name = builtins.unsafeDiscardStringContext "${s.metadata.namespace or "?"}/${s.metadata.name}";
+              value = s;
+            }) refServices
+          )
+        );
+        services = builtins.filter (r: (r.kind or "") == "Service") allResources ++ uniqueRefServices;
         monitors = builtins.filter (
           r:
           builtins.elem (r.kind or "") [

@@ -7,7 +7,7 @@
 #   prometheus-operator (required) — provides the Prometheus CRD
 #
 # Exposes:
-#   out.serviceUrl — "http://<name>.<ns>.svc.cluster.local:9090"
+#   out.serviceUrl: "http://prometheus-operated.<ns>.svc:9090" (the operator's Service)
 #     for Grafana and other consumers
 
 {
@@ -491,6 +491,10 @@ in
     }:
     let
       mkPrometheus = prometheusOperator.out.mkPrometheus;
+
+      # "<group>/<Kind>/<name>" of a CR, for kix.dev/operand-of. The name
+      # keeps the CR's context, so the Service also depends on the CR.
+      operandOf = cr: "${lib.head (lib.splitString "/" cr.apiVersion)}/${cr.kind}/${cr.name}";
       mkSmon = prometheusOperator.out.mkServiceMonitor scope;
 
       # Selector matching the operator-managed Thanos sidecar pods. The
@@ -770,7 +774,13 @@ in
           kind = "Service";
           name = "${name}-thanos-discovery";
           labels = thanosDiscoveryLabel // config.thanos.service.labels;
-          annotations = config.thanos.service.annotations;
+          # The operator creates no Service for the sidecar, so this one is
+          # kix-rendered over operator-created pods. Say so: the
+          # cross-resource check accepts a selector that matches no pod
+          # template when the Service names the CR that produces the pods.
+          annotations = config.thanos.service.annotations // {
+            "kix.dev/operand-of" = operandOf self.prometheus;
+          };
           spec = {
             type = config.thanos.service.type;
             ports = mkServicePorts config.thanos.service;
@@ -797,7 +807,9 @@ in
           kind = "Service";
           name = "${name}-thanos-external";
           labels = config.thanos.serviceExternal.labels;
-          annotations = config.thanos.serviceExternal.annotations;
+          annotations = config.thanos.serviceExternal.annotations // {
+            "kix.dev/operand-of" = operandOf self.prometheus;
+          };
           spec = {
             type = config.thanos.serviceExternal.type;
             ports = mkServicePorts config.thanos.serviceExternal;
@@ -910,31 +922,30 @@ in
         }
       );
 
-      # Service for Prometheus (the operator creates one, but we define ours
-      # for stable naming and DI-friendly out.serviceUrl)
-      service = scope.mkResource {
-        apiVersion = "v1";
-        kind = "Service";
-        inherit name;
-        spec = {
-          type = "ClusterIP";
-          # The operator labels the Prometheus pods with these labels
-          selector = {
-            "app.kubernetes.io/name" = "prometheus";
-            "app.kubernetes.io/instance" = name;
-          };
-          ports = [
-            {
-              name = "http-web";
-              port = 9090;
-              targetPort = 9090;
-              protocol = "TCP";
-            }
-          ];
+      # The operator creates `prometheus-operated` (headless, port web 9090)
+      # selecting the pods it stamps with the labels below. Kix used to
+      # render its own Service over the same pods for a stable name. That
+      # hand-typed selector could not be verified against any pod template
+      # in the build, so every validation layer carried an exemption for it
+      # (v2_discussions/135). A ServiceRef describes the operator's Service
+      # instead: out.fqdn carries dependency context, the deploy engine
+      # waits for the Service, netpol derives the same edges.
+      service = scope.mkServiceRef {
+        name = "prometheus-operated";
+        selector = {
+          "app.kubernetes.io/name" = "prometheus";
+          "app.kubernetes.io/instance" = name;
         };
-        outputs = {
-          serviceUrl = "http://${name}.${ns}.svc.cluster.local:9090";
-        };
+        # The label the operator puts on prometheus-operated.
+        labels."operated-prometheus" = "true";
+        ports = [
+          {
+            name = "web";
+            port = 9090;
+            protocol = "TCP";
+          }
+        ];
+        requires = [ self.prometheus ];
       };
 
       root = {
@@ -953,7 +964,8 @@ in
         ++ lib.optional amIsSet self.alertManagerConfigsSecret
         ++ lib.optional amRelabelIsSet self.alertRelabelConfigsSecret;
         out = {
-          inherit (self.service.out) serviceUrl;
+          # Built on the ref's fqdn: the URL carries the marker's context.
+          serviceUrl = "http://${self.service.out.fqdn}:9090";
           # The Prometheus CR's image is reconciled by the operator into a
           # StatefulSet — not directly in a kix-generated pod spec.
           extraImages = [
