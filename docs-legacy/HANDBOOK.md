@@ -67,6 +67,7 @@ and [`FEATURE-CATALOG.md`](FEATURE-CATALOG.md) (breadth-first inventory).
 # Build a service from a workload:                    self.deployment |> kix.service.fromWorkload {...} |> scope.mkResource
 # Auto-expose service via Ingress or HTTPRoute:       (kix.expose { service = "service"; })
 # Auto-monitor service:                               (kix.monitor { service = "service"; port = "metrics"; })
+# Post-deploy probe Job:                               (kix.healthCheck { script = builtins.readFile ./health-check.py; env = ...; })
 # Reference a kix-managed Secret:                     self.secret.out.keyRef "password"
 # Reference an external Secret:                       (scope.mkSecretRef { name = ...; keys = [...]; }).out.keyRef "..."
 # Filter null env vars:                               kix.mkEnvVars { OPT = config.opt or null; }
@@ -506,7 +507,7 @@ Each `kix.mount.*` returns `{ _type, name, mountPath, source, ... }` or `null` w
 | Function | Signature |
 |---|---|
 | `kix.mount.pvc resource { mountPath, name?, readOnly?, subPath? }` | PVC mount |
-| `kix.mount.configMap resource { mountPath, name?, subPath?, items?, defaultMode? }` | ConfigMap mount |
+| `kix.mount.configMap resource { mountPath, name?, readOnly?, subPath?, items?, defaultMode? }` | ConfigMap mount |
 | `kix.mount.secret resource { mountPath, name?, subPath?, items?, defaultMode? }` | Secret mount |
 | `kix.mount.emptyDir { mountPath, name, medium?, sizeLimit?, subPath? }` | Ephemeral mount (no resource arg; `name` required) |
 
@@ -571,11 +572,53 @@ These return functions whose own DI args are auto-discovered.
 
 The builder consumes `prometheus.out.mkServiceMonitor` and `prometheus.out.mkPrometheusRule` — those are exposed by the prometheus package's `out`. `metrics.enabled` and `metrics.interval` are read from `config.metrics` (use `options.metrics = kix.options.monitor;`).
 
+**`kix.healthCheck`**: a post-deploy probe, a Job in the package's namespace that runs a script against addresses passed in as env vars from `out.*` values. Every callback receives the same `{ self, config, deps }`.
+
+```nix
+(kix.healthCheck {
+  script,                        # the probe body, usually builtins.readFile ./health-check.py
+  env ? (_: {}),                 # -> { NAME = value; }; nulls dropped; RETRY_FOR is added by the helper
+  when ? ({ config, ... }: config.healthCheck.enable or true),     # false renders nothing
+  retryFor ? ({ config, ... }: config.healthCheck.retryFor or 90), # seconds the script keeps re-checking
+  requires ? (_: []),            # -> resources the probe waits for beyond the package root (always waited for)
+  partName ? "healthCheck",      # parts rendered: <partName> (Job), <partName>Script (ConfigMap)
+  runtime ? kix.healthCheck.runtimes.python,  # { image = { repository; tag; digest; }; file; interpreter; env; }
+  activeDeadlineSeconds ? null,  # null: retryFor + roundBudget (90); given, it must leave that room
+  ttlSecondsAfterFinished ? 3600,
+})
+```
+
+- The script lives in a ConfigMap named `<instance>-health-script`, mounted read-only at `/probe`; the Job runs `interpreter ++ [ "/probe/<file>" ]`. `runtimes.python` is `docker.io/library/python:3.13-slim` pinned by digest (standard library only); `runtimes.shell` is `curlimages/curl`. Bump a digest with `crane digest <repository>:<tag>`.
+- Env values from `out.*` carry the dependency edges: the Job runs after its targets are ready, and under a network-policy enforcer it gets the same egress edge a real consumer gets. The Job also always waits for the package root, so it runs after the package it belongs to; `requires` adds to that. `deps` is every dependency-injected package some entry of the package declares (`deps.vmCluster.out.serviceUrl`); the probe entry itself declares none.
+- The helper owns the time budget. It hands the script its retry window as `RETRY_FOR` and sizes `activeDeadlineSeconds` to that window plus `kix.healthCheck.roundBudget` (90 s, one worst-case round of checks), because the Job deadline deletes the pod and leaves no output. A given deadline that leaves less room fails the build. The script's side: give up once `RETRY_FOR` has passed, keep a round under the budget. `when` and `retryFor` default to the option set `kix.options.healthCheck` (§9.5) when the package declares it.
+- The Job carries `kix.dev/rerun: on-change` (`core/annotations.nix`, shared with check 16). The deploy engine deletes and recreates it whenever its identity hash differs from the one the cluster last ran, or when the live Job failed. So under `kix deploy` and `kix rollback` the probe runs again when it, or anything upstream of what it checks, changes, and never otherwise. A deploy that changes nothing skips it, unless the last run failed; to force a run, change an input such as the retry window. The operator diffs against live objects, so after `ttlSecondsAfterFinished` has reaped a finished Job the operator's next reconcile runs the probe again; it never retries a failed one on its own.
+- A failing probe fails the deploy like a pod that never came up, and the last lines it printed are shown under the failure.
+- The probe pod carries its own labels (`app.kubernetes.io/name: <instance>-health`), never the package's selector labels, so no Service routes traffic to it (check 15 below guards this). It runs as user 65534 with a read-only root filesystem, no capabilities and no service account token, and passes the stock security rules at error.
+
+Example, from the victoria-metrics-agent package:
+
+```nix
+options.healthCheck = kix.options.healthCheck // { maxSampleAge = lib.mkOption { ... }; };
+
+(kix.healthCheck {
+  env = { self, config, deps, ... }: {
+    VMSELECT_URL = deps.vmCluster.out.serviceUrl;
+    AGENT_JOB = self.vmAgent.out.scrapeJob;        # structural outputs the operator package
+    AGENT_REPLICAS = self.vmAgent.out.replicas;    # states on the CR (kix.facts.structural)
+    MAX_SAMPLE_AGE = toString config.healthCheck.maxSampleAge;
+  };
+  script = builtins.readFile ./health-check.py;
+})
+```
+
+The probe reads what it expects off the resource it checks, never off the option that produced it: `config.replicaCount` is what the author asked for, `self.vmAgent.out.replicas` is what the CR says after `extraSpec` had its way.
+
 ### 9.5 Reusable option sets
 
 ```nix
-options.ingress = kix.options.ingress;   # { host = nullOr str; annotations = attrsOf str; }
-options.metrics = kix.options.monitor;   # { enabled = bool (default true); interval = nullOr str; }
+options.ingress = kix.options.ingress;       # { host = nullOr str; annotations = attrsOf str; }
+options.metrics = kix.options.monitor;       # { enabled = bool (default true); interval = nullOr str; }
+options.healthCheck = kix.options.healthCheck;  # { enable = bool (default false); retryFor = int (90) }; kix.healthCheck reads both
 ```
 
 Use these in your package's `options` so cluster authors see consistent shapes across packages.
@@ -1000,7 +1043,7 @@ scorecard.ruleOverrides.byNamespace = { kube-system = { noLatestTag = "info"; };
 
 ### 17.4 Cross-resource checks
 
-Fourteen checks over the finished manifest list run inside every cluster evaluation (`kix/lib/eval/validate.nix`, called from `buildCluster`). They ask whether the thing a name points at exists and whether labels really match a pod in the build. The scorecard rules ask a different question, whether a value came from the right place, and run before string context is stripped. Both are needed: a hand-typed selector with a typo gets the same scorecard warning as a correct one, and only these checks tell them apart.
+Sixteen checks over the finished manifest list run inside every cluster evaluation (`kix/lib/eval/validate.nix`, called from `buildCluster`). They ask whether the thing a name points at exists and whether labels really match a pod in the build. The scorecard rules ask a different question, whether a value came from the right place, and run before string context is stripped. Both are needed: a hand-typed selector with a typo gets the same scorecard warning as a correct one, and only these checks tell them apart.
 
 | # | Check | Skips |
 |---|---|---|
@@ -1012,12 +1055,14 @@ Fourteen checks over the finished manifest list run inside every cluster evaluat
 | 6 | StatefulSet `serviceName` is a headless Service (`clusterIP: None`) in the namespace | unset |
 | 7 | One resource per kind, namespace and name | |
 | 8 | Every resource carries `app.kubernetes.io/managed-by: kix` | |
-| 9 | Workload `selector.matchLabels` is within its pod template labels | |
+| 9 | Workload `selector.matchLabels` is within its pod template labels (Deployment, StatefulSet, DaemonSet, Job) | |
 | 10 | Ingress backends name a Service in the namespace | |
 | 11 | Every `metadata.namespace` has a Namespace resource | `_`-prefixed sentinel namespaces (cluster-level instances) |
 | 12 | NetworkPolicy `podSelector` matches at least one pod template | empty selector |
 | 13 | A named `targetPort` exists on a container of a selected pod | numeric ports; Services that select no pod template in the build (check 4 reports those, or their pods are an operator's and there is no container spec to read) |
 | 14 | PodDisruptionBudget `selector.matchLabels` matches at least one pod template | no `matchLabels`; a PDB that declares `kix.dev/operand-of` (below) |
+| 15 | A Job's pod template labels satisfy no Service selector in its namespace (the Service would route traffic to the Job pod) | Services without a selector |
+| 16 | `kix.dev/rerun` appears on Jobs only, with the value `on-change` (the deploy engine deletes and recreates what carries it; key and value live in `core/annotations.nix`) | |
 
 **Scope of a lookup.** A reference is looked up in the referrer's namespace only, unless the referenced kind is a built-in cluster-scoped kind (a RoleBinding to a ClusterRole). Nothing else falls back to the cluster-scoped bucket. A `kix.untrackedRef` name resolves whatever its kind. Pod selectors follow the same rule: a Service, NetworkPolicy or PodDisruptionBudget matches pod templates in its own namespace only.
 
@@ -1213,6 +1258,7 @@ Every kix-managed resource gets:
 | `kix.dev/package` | Package instance name |
 | `kix.dev/package-namespace` | Package namespace |
 | `kix.dev/mode` | `"import"` for external resources |
+| `kix.dev/rerun` | `on-change`, on a `kix.healthCheck` Job: never patched, deleted and created again when its hash changed or its last run failed (§9.4, check 16) |
 | `kix.dev/cluster` (label) | Cluster name |
 | `app.kubernetes.io/managed-by: kix` (label) | Always |
 

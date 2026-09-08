@@ -3,6 +3,8 @@
 let
   markers = import ../core/markers.nix { inherit lib; };
 
+  annotations = import ../core/annotations.nix;
+
   normalize = import ../core/normalize.nix { inherit lib; };
 
   resourceNamespace =
@@ -47,7 +49,7 @@ rec {
   # `kix.facts.connect svc.factTokens.endpoint value` (dial by a value
   # that lacks the claim, e.g. a bare intra-namespace name).
   facts = {
-    inherit (import ../core/facts.nix { inherit lib; }) refOnly connect;
+    inherit (import ../core/facts.nix { inherit lib; }) refOnly connect structural;
   };
 
   port = name: containerPort: {
@@ -297,6 +299,9 @@ rec {
       {
         mountPath,
         name ? null,
+        # A ConfigMap volume is read-only whatever the mount says; this
+        # writes it on the mount too, where a reader of the pod looks.
+        readOnly ? false,
         subPath ? null,
         items ? null,
         defaultMode ? null,
@@ -307,7 +312,7 @@ rec {
         {
           _type = "kix-mount";
           name = if name != null then name else builtins.unsafeDiscardStringContext resource.out.name;
-          inherit mountPath;
+          inherit mountPath readOnly;
           ${if subPath != null then "subPath" else null} = subPath;
           source = stampSourceNamespace "configMap" resource {
             configMap = {
@@ -468,7 +473,260 @@ rec {
         description = "Scrape interval (e.g. \"30s\"). Null = use Prometheus default.";
       };
     };
+
+    # For packages with a kix.healthCheck probe; the helper reads both.
+    healthCheck = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = "Run the package's post-deploy probe (kix.healthCheck) once its resources are ready. A failing probe fails the deploy before the activation switches.";
+      };
+      retryFor = lib.mkOption {
+        type = lib.types.int;
+        default = 90;
+        description = "Seconds the probe keeps re-checking before it gives up, so a target still restarting from the rollout does not fail the deploy. The Job's deadline is sized from it.";
+      };
+    };
   };
+
+  # A post-deploy health probe. The probe is a Job in the package's own
+  # namespace whose script dials the things it checks through addresses
+  # passed in as env vars from `out.*` values. Everything else is the
+  # machinery every workload already has: the addresses carry the
+  # dependency edges, so the Job runs after its targets are ready and the
+  # netpol plugin opens the same egress a real consumer gets; the deploy
+  # engine treats a Job as ready when it succeeds and as failed when
+  # backoffLimit is exceeded, so a failing probe fails the deploy exactly
+  # like a pod that never came up. The pod resolves names through cluster
+  # DNS over the pod network, the path consumers actually use.
+  #
+  #   options.healthCheck = kix.options.healthCheck;   # enable, retryFor
+  #   build = [
+  #     ({ self, vmCluster, ... }: { ... })
+  #     (kix.healthCheck {
+  #       env = { self, deps, ... }: {
+  #         VMSELECT_URL = deps.vmCluster.out.serviceUrl;
+  #         AGENT_REPLICAS = self.vmAgent.out.replicas;
+  #       };
+  #       script = builtins.readFile ./health-check.py;
+  #     })
+  #   ];
+  #
+  # Two parts are rendered: `<partName>Script`, a ConfigMap holding the
+  # script under a stable name, and `<partName>`, the Job that mounts it at
+  # /probe and runs it. The Job always waits for the package root, so it
+  # runs after the package it belongs to without anyone remembering to say
+  # so; `requires` adds to that. It carries `kix.dev/rerun = "on-change"`
+  # (core/annotations.nix): the deploy engine deletes and recreates a Job
+  # with that annotation whenever its identity hash differs from the one
+  # the cluster last ran, or when the live Job failed. So under
+  # `kix deploy` and `kix rollback` the probe runs again when it, or
+  # anything upstream of what it checks, changes, and never otherwise. The
+  # operator diffs against live objects instead of the activation record,
+  # so once `ttlSecondsAfterFinished` has reaped a finished Job the
+  # operator's next reconcile creates and runs it again.
+  #
+  # `script` is Python by default (`runtimes.python`, the official slim
+  # image pinned by digest, standard library only). A non-zero exit fails
+  # the probe. Keep the script in a file next to the package so it can be
+  # read, linted and run by hand. The helper owns the probe's time budget:
+  # it hands the script its retry window as `RETRY_FOR` and sizes the
+  # Job's `activeDeadlineSeconds` to fit that window plus one worst-case
+  # round of checks (`roundBudget`), because the Job deadline deletes the
+  # pod and leaves no output behind. The script's part of the contract is
+  # to give up once `RETRY_FOR` has passed and to keep one round of checks
+  # under `roundBudget`. On failure the last lines the script printed
+  # travel on the pod (terminationMessagePolicy FallbackToLogsOnError) and
+  # the deploy prints them under the failure line.
+  #
+  # The probe pod carries its own labels, never the package's selector
+  # labels: a Service selecting the package's pods must not route traffic
+  # to the probe. It runs as nobody with a read-only root filesystem and no
+  # service account token; the probe talks to Services, never to the API
+  # server.
+  healthCheck =
+    let
+      imageRef =
+        image:
+        "${image.repository}:${image.tag}"
+        + lib.optionalString (image.digest or null != null) "@${image.digest}";
+
+      # Seconds one worst-case round of checks may take: every query timing
+      # out, plus the pause before the next round. The deadline always
+      # leaves this much room after the retry window. The shipped probes
+      # make at most six requests a round at a 10 s timeout, then pause 10 s.
+      roundBudget = 90;
+
+      # Bump a digest with `crane digest <repository>:<tag>` (the multi-arch
+      # index digest, which is what containerd resolves).
+      runtimes = {
+        python = {
+          image = {
+            repository = "docker.io/library/python";
+            tag = "3.13-slim";
+            digest = "sha256:9d2e5553305c7c7b0097999bb17187c69b921ccd6bc9d40e4bb5ebe652c00285";
+          };
+          file = "health-check.py";
+          interpreter = [ "python3" ];
+          # No bytecode cache next to the script: the root filesystem is
+          # read-only and /probe is a ConfigMap.
+          env.PYTHONDONTWRITEBYTECODE = "1";
+        };
+        shell = {
+          image = {
+            repository = "docker.io/curlimages/curl";
+            tag = "8.14.1";
+            digest = "sha256:9a1ed35addb45476afa911696297f8e115993df459278ed036182dd2cd22b67b";
+          };
+          file = "health-check.sh";
+          interpreter = [
+            "/bin/sh"
+            "-eu"
+          ];
+          env = { };
+        };
+      };
+    in
+    {
+      inherit runtimes roundBudget;
+      __functor =
+        _:
+        # Every callback receives the same `{ self, config, deps }`: `self`
+        # is the package's build result, `config` its evaluated options,
+        # `deps` every dependency-injected package some entry of the
+        # package declares, keyed by argument name.
+        {
+          script,
+          # -> attrset of env var name to value. Values from `out.*` carry
+          # context; that is what gives the Job its edges. Nulls are
+          # dropped. `RETRY_FOR` is set by the helper.
+          env ? (_: { }),
+          # -> bool. False renders nothing. The default reads the option
+          # set `kix.options.healthCheck` when the package declares it, and
+          # is true when it does not.
+          when ? ({ config, ... }: config.healthCheck.enable or true),
+          # -> seconds the script keeps re-checking before it gives up.
+          # Same default rule as `when`; 90 when the package has no option.
+          retryFor ? ({ config, ... }: config.healthCheck.retryFor or 90),
+          # -> resources the probe waits for beyond the package root, which
+          # it always waits for.
+          requires ? (_: [ ]),
+          partName ? "healthCheck",
+          # { image = { repository; tag; digest; }; file; interpreter; env; }.
+          # One of `kix.healthCheck.runtimes`, or a package's own.
+          runtime ? runtimes.python,
+          # Job deadline. Null sizes it from the retry window; a value must
+          # leave `roundBudget` after the window, or the build fails.
+          activeDeadlineSeconds ? null,
+          # Seconds a finished Job stays before Kubernetes removes it.
+          ttlSecondsAfterFinished ? 3600,
+        }:
+        {
+          self,
+          config,
+          scope,
+          deps,
+          ...
+        }:
+        let
+          name = scope.instanceName;
+          scriptPart = "${partName}Script";
+          ctx = {
+            inherit self config deps;
+          };
+          retry = retryFor ctx;
+          deadline = if activeDeadlineSeconds == null then retry + roundBudget else activeDeadlineSeconds;
+          userEnv = env ctx;
+          # The package root as a resource: a bare part, or the wrapper
+          # form `{ resource; out; }`.
+          rootRes =
+            let
+              r = self.root;
+            in
+            r.resource or r;
+          # An env value computed from the root already carries the edge;
+          # listing it again would draw the redundant-requires warning.
+          dialsRoot = builtins.hasAttr (builtins.unsafeDiscardStringContext rootRes.outPath) (
+            builtins.getContext (builtins.toJSON userEnv)
+          );
+        in
+        if !(when ctx) then
+          { }
+        else if deadline < retry + roundBudget then
+          throw "kix.healthCheck (${name}): activeDeadlineSeconds ${toString deadline} leaves no room for a round of checks after the ${toString retry}s retry window; it must be at least ${toString (retry + roundBudget)}"
+        else
+          {
+            ${scriptPart} = scope.mkResource {
+              apiVersion = "v1";
+              kind = "ConfigMap";
+              name = "${name}-health-script";
+              data.${runtime.file} = script;
+            };
+
+            ${partName} =
+              {
+                name = "${name}-health";
+                requires = requires ctx ++ lib.optional (!dialsRoot) rootRes;
+                annotations.${annotations.rerun.key} = annotations.rerun.onChange;
+                spec = {
+                  backoffLimit = 0;
+                  activeDeadlineSeconds = deadline;
+                  inherit ttlSecondsAfterFinished;
+                  template = {
+                    metadata.labels = {
+                      "app.kubernetes.io/name" = "${name}-health";
+                      "app.kubernetes.io/component" = "health-check";
+                    };
+                    spec = {
+                      restartPolicy = "Never";
+                      automountServiceAccountToken = false;
+                      securityContext = {
+                        runAsNonRoot = true;
+                        runAsUser = 65534;
+                        runAsGroup = 65534;
+                        seccompProfile.type = "RuntimeDefault";
+                      };
+                      containers = [
+                        {
+                          name = "probe";
+                          image = imageRef runtime.image;
+                          command = runtime.interpreter ++ [ "/probe/${runtime.file}" ];
+                          env = mkEnvVars (
+                            (runtime.env or { })
+                            // {
+                              RETRY_FOR = toString retry;
+                            }
+                            // userEnv
+                          );
+                          terminationMessagePolicy = "FallbackToLogsOnError";
+                          securityContext = {
+                            runAsNonRoot = true;
+                            allowPrivilegeEscalation = false;
+                            readOnlyRootFilesystem = true;
+                            capabilities.drop = [ "ALL" ];
+                          };
+                          resources = {
+                            requests = {
+                              cpu = "50m";
+                              memory = "64Mi";
+                            };
+                            limits.memory = "128Mi";
+                          };
+                        }
+                      ];
+                    };
+                  };
+                };
+              }
+              |> withMountsOn "probe" [
+                (mount.configMap self.${scriptPart} {
+                  mountPath = "/probe";
+                  readOnly = true;
+                })
+              ]
+              |> scope.mkJob;
+          };
+    };
 
   expose =
     {

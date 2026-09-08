@@ -33,6 +33,9 @@
 
 { lib }:
 
+let
+  annotations = import ../core/annotations.nix;
+in
 rec {
   crossResourceFailures =
     {
@@ -474,6 +477,7 @@ rec {
                 "Deployment"
                 "StatefulSet"
                 "DaemonSet"
+                "Job"
               ]
             ) resources
           );
@@ -661,6 +665,56 @@ rec {
           ]
       ) (builtins.filter (r: r.kind == "PodDisruptionBudget") resources);
 
+      # --- 15. Job pods are not Service endpoints ---
+      # A Job's pod is not a server. When its template labels satisfy a
+      # Service selector in the same namespace, the Service routes real
+      # traffic to the Job pod for as long as it runs (a probe Job built on
+      # the package's selector labels did exactly this, kixpkgs#77).
+
+      jobEndpointFailures = builtins.concatMap (
+        job:
+        let
+          ns = job.metadata.namespace or "cluster-scoped";
+          podLabels = job.spec.template.metadata.labels or { };
+          selecting = builtins.filter (
+            svc:
+            (svc.metadata.namespace or "cluster-scoped") == ns
+            && (svc.spec.selector or { }) != { }
+            && selectorMatchesLabels (svc.spec.selector or { }) podLabels
+          ) (builtins.filter (r: r.kind == "Service") resources);
+        in
+        map (
+          svc:
+          "Job ${ns}/${job.metadata.name} pod labels ${builtins.toJSON podLabels} satisfy Service ${ns}/${svc.metadata.name} selector ${builtins.toJSON svc.spec.selector}; the Service would route traffic to the Job pod"
+        ) selecting
+      ) (builtins.filter (r: r.kind == "Job") resources);
+
+      # --- 16. kix.dev/rerun is for Jobs ---
+      # The deploy engine deletes and recreates a resource carrying the
+      # annotation (core/annotations.nix). For a Job that is a retry; for
+      # anything with a rollout it would be an outage, so the engine
+      # ignores it on other kinds and the eval refuses it.
+
+      rerunFailures = builtins.concatMap (
+        r:
+        let
+          ns = r.metadata.namespace or "cluster-scoped";
+          value = (r.metadata.annotations or { }).${annotations.rerun.key} or null;
+        in
+        if value == null then
+          [ ]
+        else if r.kind != "Job" then
+          [
+            "${r.kind} ${ns}/${r.metadata.name} carries ${annotations.rerun.key}=${toString value}; the rerun rule applies to Jobs only"
+          ]
+        else if value != annotations.rerun.onChange then
+          [
+            "Job ${ns}/${r.metadata.name} carries ${annotations.rerun.key}=${toString value}; the only value the deploy engine honours is \"${annotations.rerun.onChange}\""
+          ]
+        else
+          [ ]
+      ) resources;
+
       # --- Collect all failures ---
 
       allFailures =
@@ -677,7 +731,9 @@ rec {
         ++ uniqueNamespaceFailures
         ++ networkPolicyFailures
         ++ portNameFailures
-        ++ pdbFailures;
+        ++ pdbFailures
+        ++ jobEndpointFailures
+        ++ rerunFailures;
     in
     allFailures;
 

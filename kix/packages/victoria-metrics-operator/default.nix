@@ -146,8 +146,29 @@
         self,
         config,
         lib,
+        kix,
         ...
       }:
+      let
+        # What the operator will name and size an operand: its pods are
+        # scraped under job "<prefix>-<CR name>" and there are
+        # spec.replicaCount of them. Stated on the CR's `out` so a consumer
+        # (the sibling packages' probes) reads it off the resource instead
+        # of retyping the convention. Structural: reading a count is not
+        # dialing anything.
+        mkOperand =
+          prefix: mkCR: consumerScope: args:
+          mkCR consumerScope (
+            args
+            // {
+              outputs = {
+                scrapeJob = kix.facts.structural "${prefix}-${args.name}";
+                replicas = kix.facts.structural (toString (args.spec.replicaCount or 1));
+              }
+              // (args.outputs or { });
+            }
+          );
+      in
       {
         root = {
           resource = self.operatorDeployment;
@@ -173,9 +194,9 @@
             mkProbe = self.crds.probes.out.mkCR;
             # VM-native surface (sibling packages)
             mkVMCluster = self.crds.vmClusters.out.mkCR;
-            mkVMAgent = self.crds.vmAgents.out.mkCR;
-            mkVMAlert = self.crds.vmAlerts.out.mkCR;
-            mkVMAlertmanager = self.crds.vmAlertmanagers.out.mkCR;
+            mkVMAgent = mkOperand "vmagent" self.crds.vmAgents.out.mkCR;
+            mkVMAlert = mkOperand "vmalert" self.crds.vmAlerts.out.mkCR;
+            mkVMAlertmanager = mkOperand "vmalertmanager" self.crds.vmAlertmanagers.out.mkCR;
             mkVMServiceScrape = self.crds.vmServiceScrapes.out.mkCR;
             mkVMPodScrape = self.crds.vmPodScrapes.out.mkCR;
             mkVMRule = self.crds.vmRules.out.mkCR;

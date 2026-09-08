@@ -25,6 +25,7 @@
 {
   scope,
   lib,
+  kix,
 }:
 let
   name = scope.instanceName;
@@ -112,68 +113,104 @@ in
       default = { };
       description = "Extra fields deep-merged into the VMAgent CR spec.";
     };
-  };
 
-  build =
-    {
-      self,
-      config,
-      vmOperator,
-      vmCluster,
-      ...
-    }:
-    let
-      baseSpec = {
-        replicaCount = config.replicaCount;
-        image = {
-          inherit (config.image) repository tag;
-        };
-        remoteWrite = [ { url = vmCluster.out.insertUrl; } ];
-        # The cluster's dedup is calibrated to ITS scrapeInterval — an
-        # agent override that differs double-counts samples (doc 133 §5).
-        # Drift is flagged through the package-level `warnings` channel
-        # below, not inline.
-        scrapeInterval =
-          if config.scrapeInterval == null then vmCluster.out.scrapeInterval else config.scrapeInterval;
-        selectAllByDefault = config.selectAllByDefault;
-        podDisruptionBudget = {
-          maxUnavailable = 1;
-        };
-        affinity = {
-          podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution = [
-            {
-              weight = 100;
-              podAffinityTerm = {
-                labelSelector.matchLabels = {
-                  "app.kubernetes.io/name" = "vmagent";
-                  "app.kubernetes.io/instance" = name;
-                };
-                topologyKey = "kubernetes.io/hostname";
-              };
-            }
-          ];
-        };
-        resources = config.resources;
-      }
-      // lib.optionalAttrs (config.externalLabels != { }) {
-        externalLabels = config.externalLabels;
-      }
-      // lib.optionalAttrs (config.extraArgs != { }) {
-        extraArgs = config.extraArgs;
-      };
-    in
-    {
-      vmAgent = vmOperator.out.mkVMAgent scope {
-        inherit name;
-        spec = lib.recursiveUpdate baseSpec config.extraSpec;
-      };
-
-      root = {
-        resource = self.vmAgent;
-        out = {
-          # Operand pods are operator-created; image not in any kix manifest.
-          extraImages = [ "${config.image.repository}:${config.image.tag}" ];
-        };
+    # After the agent is ready, run ./health-check.py as a Job in this
+    # namespace: the agent's own samples are fresh, every replica is
+    # scraped and up, no remote-write errors. Proves the scrape-and-write
+    # path end to end from inside the cluster.
+    healthCheck = kix.options.healthCheck // {
+      maxSampleAge = lib.mkOption {
+        type = lib.types.int;
+        default = 120;
+        description = "Seconds. The agent's newest sample older than this fails the probe.";
       };
     };
+  };
+
+  build = [
+    (
+      {
+        self,
+        config,
+        vmOperator,
+        vmCluster,
+        ...
+      }:
+      let
+        baseSpec = {
+          replicaCount = config.replicaCount;
+          image = {
+            inherit (config.image) repository tag;
+          };
+          remoteWrite = [ { url = vmCluster.out.insertUrl; } ];
+          # The cluster's dedup is calibrated to ITS scrapeInterval — an
+          # agent override that differs double-counts samples (doc 133 §5).
+          # Drift is flagged through the package-level `warnings` channel
+          # below, not inline.
+          scrapeInterval =
+            if config.scrapeInterval == null then vmCluster.out.scrapeInterval else config.scrapeInterval;
+          selectAllByDefault = config.selectAllByDefault;
+          podDisruptionBudget = {
+            maxUnavailable = 1;
+          };
+          affinity = {
+            podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution = [
+              {
+                weight = 100;
+                podAffinityTerm = {
+                  labelSelector.matchLabels = {
+                    "app.kubernetes.io/name" = "vmagent";
+                    "app.kubernetes.io/instance" = name;
+                  };
+                  topologyKey = "kubernetes.io/hostname";
+                };
+              }
+            ];
+          };
+          resources = config.resources;
+        }
+        // lib.optionalAttrs (config.externalLabels != { }) {
+          externalLabels = config.externalLabels;
+        }
+        // lib.optionalAttrs (config.extraArgs != { }) {
+          extraArgs = config.extraArgs;
+        };
+      in
+      {
+        vmAgent = vmOperator.out.mkVMAgent scope {
+          inherit name;
+          spec = lib.recursiveUpdate baseSpec config.extraSpec;
+        };
+
+        root = {
+          resource = self.vmAgent;
+          out = {
+            # Operand pods are operator-created; image not in any kix manifest.
+            extraImages = [ "${config.image.repository}:${config.image.tag}" ];
+          };
+        };
+      }
+    )
+
+    # The agent's samples arrive at the cluster and nothing on the
+    # scrape-and-write path reports errors (see kix.healthCheck). The
+    # script is a file so it can be read, linted and run on its own.
+    (kix.healthCheck {
+      env =
+        {
+          self,
+          config,
+          deps,
+          ...
+        }:
+        {
+          VMSELECT_URL = deps.vmCluster.out.serviceUrl;
+          # What the operator names and sizes the agent, read off the CR.
+          AGENT_JOB = self.vmAgent.out.scrapeJob;
+          AGENT_REPLICAS = self.vmAgent.out.replicas;
+          MAX_SAMPLE_AGE = toString config.healthCheck.maxSampleAge;
+        };
+      script = builtins.readFile ./health-check.py;
+    })
+  ];
 }

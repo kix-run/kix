@@ -134,6 +134,25 @@ let
       };
     };
 
+  # A Job whose pod labels satisfy a Service selector in its namespace.
+  job =
+    ns: name: labels:
+    res "Job" ns name {
+      apiVersion = "batch/v1";
+      spec.template = {
+        metadata.labels = labels;
+        spec = {
+          restartPolicy = "Never";
+          containers = [
+            {
+              name = "run";
+              image = "img:1";
+            }
+          ];
+        };
+      };
+    };
+
   base = ns: [
     (namespace ns)
     (deployment ns "web" { })
@@ -906,6 +925,61 @@ in
       (res "Ingress" "a" "ing" {
         apiVersion = "networking.k8s.io/v1";
         spec.defaultBackend.service.name = "db";
+      })
+    ]
+  );
+
+  # --- 15. Job pods are not Service endpoints ---
+
+  v15-job-pods-selected-by-service = onlyFailure "would route traffic to the Job pod" (
+    base "a" ++ [ (job "a" "hook" podLabels) ]
+  );
+
+  # Distinct labels, or a Service in another namespace, are fine.
+  v15b-job-pods-with-own-labels = clean (
+    base "a"
+    ++ base "b"
+    ++ [
+      (job "a" "hook" {
+        app = "hook";
+      })
+      (job "b" "other" {
+        app = "web";
+        role = "other";
+      })
+    ]
+    # A superset in another namespace: b's Service selects b's Job pod,
+    # so that one is a failure; take it out of the clean set.
+    |> builtins.filter (m: !(m.kind == "Job" && m.metadata.namespace == "b"))
+  );
+
+  # --- 16. kix.dev/rerun is for Jobs ---
+
+  v16-rerun-on-a-deployment-is-refused = onlyFailure "the rerun rule applies to Jobs only" (
+    base "a"
+    ++ [
+      (deployment "a" "worker" {
+        metadata.annotations."kix.dev/rerun" = "on-change";
+        spec.selector.matchLabels.app = "worker";
+        spec.template.metadata.labels.app = "worker";
+      })
+    ]
+  );
+
+  v16c-rerun-with-another-value-is-refused = onlyFailure "the only value the deploy engine honours" (
+    base "a"
+    ++ [
+      (lib.recursiveUpdate (job "a" "probe" { app = "probe"; }) {
+        metadata.annotations."kix.dev/rerun" = "always";
+      })
+    ]
+  );
+
+  v16b-rerun-on-a-job-is-fine = clean (
+    base "a"
+    ++ [
+      (lib.recursiveUpdate (job "a" "probe" { app = "probe"; }) {
+        metadata.annotations."kix.dev/rerun" = "on-change";
       })
     ]
   );

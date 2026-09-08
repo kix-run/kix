@@ -56,7 +56,7 @@ Complete inventory of kix/lib (Nix library) and CLI features. Breadth-first — 
 - **`ingress.fromService`** — Create Ingress attrset from a service. Auto-derives backend name/port.
 - **`httpRoute.fromService`** — Create HTTPRoute (Gateway API) attrset from a service. Takes parentRef.
 - **`mount.pvc`** — PVC volume mount. Auto-derives name from resource.
-- **`mount.configMap`** — ConfigMap mount with optional items, defaultMode, subPath.
+- **`mount.configMap`** — ConfigMap mount with optional items, defaultMode, subPath, readOnly.
 - **`mount.secret`** — Secret mount with optional items, defaultMode, subPath.
 - **`mount.emptyDir`** — EmptyDir mount with optional medium, sizeLimit.
 - **`withMounts`** — Inject mounts into single-container pod spec (pre-seal). Errors on multi-container.
@@ -65,6 +65,7 @@ Complete inventory of kix/lib (Nix library) and CLI features. Breadth-first — 
 - **`options.monitor`** — Reusable NixOS option set for monitoring (enabled, interval).
 - **`expose`** — Build entry: auto-creates Ingress or HTTPRoute based on which DI dep is present (gateway vs ingressNginx). Auto-derives host from cluster.domain. TLS via clusterIssuer. Errors if both gateway and ingressNginx are wired.
 - **`monitor`** — Build entry: auto-creates ServiceMonitor + optional PrometheusRule when prometheus DI dep is present. Configurable port, path, scrapeInterval, alert rules (expr, for, severity, description, summary, runbook_url), extraEndpoints, extraLabels.
+- **`healthCheck`**: build entry, a post-deploy probe Job in the package's namespace running a script (Python by default, `runtimes.python` pinned by digest; `runtimes.shell` on curl) from a stable-name ConfigMap against addresses passed as env vars from `out.*` values and `deps`. Addresses carry the edges (ordering, netpol egress); the Job always waits for the package root too. The helper owns the time budget: `RETRY_FOR` in the env, `activeDeadlineSeconds` sized from it (`roundBudget` 90 s), a shorter given deadline fails the build. Callbacks all take `{ self, config, deps }`; `when`/`retryFor` default to `kix.options.healthCheck`. Stamped `kix.dev/rerun: on-change`: `kix deploy` and `kix rollback` recreate the Job when its identity hash changed or the live Job failed; the operator only on a change (and after the TTL reaped it, since it diffs against live objects). Failure output is shown in the deploy. Own pod labels, non-root, read-only root, no token.
 
 ### RBAC DSL (`rbac.nix`)
 

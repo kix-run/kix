@@ -120,7 +120,9 @@ kix.buildCluster {
             # Pre-existing finding in the grafana package (here only as the
             # datasource auto-wire consumer): its container securityContext
             # lacks runAsNonRoot. Downgraded from error so it doesn't fail a
-            # fixture about the VM packages — which do pass this at error.
+            # fixture about the VM packages. The probe Job kix.healthCheck
+            # renders passes this rule at error (t66 in kix/lib/tests); the
+            # VM packages' own workloads are operator-created.
             nonRoot = kix.rules.security.nonRoot // {
               severity = "warning";
             };
@@ -137,9 +139,12 @@ kix.buildCluster {
         };
         vm-agent = {
           package = packages.victoria-metrics-agent;
+          # The post-deploy probe Job (kix.healthCheck).
+          config.healthCheck.enable = true;
         };
         vm-alert = {
           package = packages.victoria-metrics-alert;
+          config.healthCheck.enable = true;
         };
         grafana = {
           package = packages.grafana;

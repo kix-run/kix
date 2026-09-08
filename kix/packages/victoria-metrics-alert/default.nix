@@ -27,6 +27,7 @@
 {
   scope,
   lib,
+  kix,
 }:
 let
   name = scope.instanceName;
@@ -161,113 +162,136 @@ in
         description = "Extra fields deep-merged into the VMAlertmanager CR spec.";
       };
     };
+    # After vmalert is ready, run ./health-check.py as a Job in this
+    # namespace: every vmalert and alertmanager replica is up, rules
+    # loaded, no alert-send, datasource or remote-write errors.
+    healthCheck = kix.options.healthCheck;
   };
 
-  build =
-    {
-      self,
-      config,
-      vmOperator,
-      vmCluster,
-      ...
-    }:
-    let
-      antiAffinity = component: {
-        podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution = [
-          {
-            weight = 100;
-            podAffinityTerm = {
-              labelSelector.matchLabels = {
-                "app.kubernetes.io/name" = component;
-                "app.kubernetes.io/instance" = name;
+  build = [
+    (
+      {
+        self,
+        config,
+        vmOperator,
+        vmCluster,
+        ...
+      }:
+      let
+        antiAffinity = component: {
+          podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution = [
+            {
+              weight = 100;
+              podAffinityTerm = {
+                labelSelector.matchLabels = {
+                  "app.kubernetes.io/name" = component;
+                  "app.kubernetes.io/instance" = name;
+                };
+                topologyKey = "kubernetes.io/hostname";
               };
-              topologyKey = "kubernetes.io/hostname";
-            };
-          }
-        ];
-      };
-
-      alertmanagerBaseSpec = {
-        replicaCount = config.alertmanager.replicaCount;
-        image = {
-          inherit (config.alertmanager.image) repository tag;
-        };
-        # out.name carries the store-path edge to the config Secret.
-        configSecret = self.alertmanagerConfig.out.name;
-        retention = config.alertmanager.retention;
-        podDisruptionBudget = {
-          maxUnavailable = 1;
-        };
-        affinity = antiAffinity "vmalertmanager";
-        resources = config.alertmanager.resources;
-      }
-      // lib.optionalAttrs (config.alertmanager.storage != null) {
-        storage.volumeClaimTemplate.spec = config.alertmanager.storage;
-      }
-      // lib.optionalAttrs (config.alertmanager.secrets != [ ]) {
-        secrets = config.alertmanager.secrets;
-      }
-      // lib.optionalAttrs (config.alertmanager.configMaps != [ ]) {
-        configMaps = config.alertmanager.configMaps;
-      };
-
-      vmAlertBaseSpec = {
-        replicaCount = config.replicaCount;
-        image = {
-          inherit (config.image) repository tag;
-        };
-        datasource.url = vmCluster.out.serviceUrl;
-        remoteWrite.url = vmCluster.out.insertBaseUrl;
-        remoteRead.url = vmCluster.out.serviceUrl;
-        # Discover the sibling VMAlertmanager by its own labels
-        # (out.selector carries the dependency edge); the operator expands
-        # the match to every replica's pod FQDN.
-        notifiers = [
-          {
-            selector = {
-              namespaceSelector.matchNames = [ ns ];
-              labelSelector.matchLabels = self.vmAlertmanager.out.selector;
-            };
-          }
-        ];
-        evaluationInterval = config.evaluationInterval;
-        selectAllByDefault = config.selectAllByDefault;
-        podDisruptionBudget = {
-          maxUnavailable = 1;
-        };
-        affinity = antiAffinity "vmalert";
-        resources = config.resources;
-      }
-      // lib.optionalAttrs (config.extraArgs != { }) {
-        extraArgs = config.extraArgs;
-      };
-    in
-    {
-      # VMAlertmanager expects the config under key `alertmanager.yaml`
-      # (mounted at /etc/alertmanager/config). JSON is valid YAML.
-      alertmanagerConfig = scope.mkSecret {
-        name = "${name}-alertmanager-config";
-        stringData."alertmanager.yaml" = builtins.toJSON config.alertmanager.config;
-      };
-
-      vmAlertmanager = vmOperator.out.mkVMAlertmanager scope {
-        inherit name;
-        spec = lib.recursiveUpdate alertmanagerBaseSpec config.alertmanager.extraSpec;
-      };
-
-      vmAlert = vmOperator.out.mkVMAlert scope {
-        inherit name;
-        spec = lib.recursiveUpdate vmAlertBaseSpec config.extraSpec;
-      };
-
-      root = {
-        resource = self.vmAlert;
-        out = {
-          extraImages = [
-            "${config.image.repository}:${config.image.tag}"
-            "${config.alertmanager.image.repository}:${config.alertmanager.image.tag}"
+            }
           ];
         };
-      };
-    };
+
+        alertmanagerBaseSpec = {
+          replicaCount = config.alertmanager.replicaCount;
+          image = {
+            inherit (config.alertmanager.image) repository tag;
+          };
+          # out.name carries the store-path edge to the config Secret.
+          configSecret = self.alertmanagerConfig.out.name;
+          retention = config.alertmanager.retention;
+          podDisruptionBudget = {
+            maxUnavailable = 1;
+          };
+          affinity = antiAffinity "vmalertmanager";
+          resources = config.alertmanager.resources;
+        }
+        // lib.optionalAttrs (config.alertmanager.storage != null) {
+          storage.volumeClaimTemplate.spec = config.alertmanager.storage;
+        }
+        // lib.optionalAttrs (config.alertmanager.secrets != [ ]) {
+          secrets = config.alertmanager.secrets;
+        }
+        // lib.optionalAttrs (config.alertmanager.configMaps != [ ]) {
+          configMaps = config.alertmanager.configMaps;
+        };
+
+        vmAlertBaseSpec = {
+          replicaCount = config.replicaCount;
+          image = {
+            inherit (config.image) repository tag;
+          };
+          datasource.url = vmCluster.out.serviceUrl;
+          remoteWrite.url = vmCluster.out.insertBaseUrl;
+          remoteRead.url = vmCluster.out.serviceUrl;
+          # Discover the sibling VMAlertmanager by its own labels
+          # (out.selector carries the dependency edge); the operator expands
+          # the match to every replica's pod FQDN.
+          notifiers = [
+            {
+              selector = {
+                namespaceSelector.matchNames = [ ns ];
+                labelSelector.matchLabels = self.vmAlertmanager.out.selector;
+              };
+            }
+          ];
+          evaluationInterval = config.evaluationInterval;
+          selectAllByDefault = config.selectAllByDefault;
+          podDisruptionBudget = {
+            maxUnavailable = 1;
+          };
+          affinity = antiAffinity "vmalert";
+          resources = config.resources;
+        }
+        // lib.optionalAttrs (config.extraArgs != { }) {
+          extraArgs = config.extraArgs;
+        };
+      in
+      {
+        # VMAlertmanager expects the config under key `alertmanager.yaml`
+        # (mounted at /etc/alertmanager/config). JSON is valid YAML.
+        alertmanagerConfig = scope.mkSecret {
+          name = "${name}-alertmanager-config";
+          stringData."alertmanager.yaml" = builtins.toJSON config.alertmanager.config;
+        };
+
+        vmAlertmanager = vmOperator.out.mkVMAlertmanager scope {
+          inherit name;
+          spec = lib.recursiveUpdate alertmanagerBaseSpec config.alertmanager.extraSpec;
+        };
+
+        vmAlert = vmOperator.out.mkVMAlert scope {
+          inherit name;
+          spec = lib.recursiveUpdate vmAlertBaseSpec config.extraSpec;
+        };
+
+        root = {
+          resource = self.vmAlert;
+          out = {
+            extraImages = [
+              "${config.image.repository}:${config.image.tag}"
+              "${config.alertmanager.image.repository}:${config.alertmanager.image.tag}"
+            ];
+          };
+        };
+      }
+    )
+
+    # Rule evaluation and delivery are healthy (see kix.healthCheck).
+    (kix.healthCheck {
+      # Reading both CRs' outputs makes the probe wait for both.
+      env =
+        { self, deps, ... }:
+        {
+          VMSELECT_URL = deps.vmCluster.out.serviceUrl;
+          # What the operator names and sizes each operand, read off the CRs.
+          ALERT_JOB = self.vmAlert.out.scrapeJob;
+          ALERT_REPLICAS = self.vmAlert.out.replicas;
+          ALERTMANAGER_JOB = self.vmAlertmanager.out.scrapeJob;
+          ALERTMANAGER_REPLICAS = self.vmAlertmanager.out.replicas;
+        };
+      script = builtins.readFile ./health-check.py;
+    })
+  ];
 }

@@ -279,6 +279,14 @@ edge but NO netpol hole. Consequences when authoring:
 - Dialing by bare `out.name` (intra-namespace short name) will NOT open a
   netpol hole — use `out.fqdn`, or stamp intent with
   `k8s.facts.connect svc.factTokens.endpoint value`.
+- A producer that exposes a fact about itself rather than an address (a
+  replica count, the scrape job label its operator will give it) wraps it:
+  `outputs.replicas = kix.facts.structural (toString n);`. Consumers read
+  `out.replicas` and get the ordering edge with no dial claim and no
+  `refOnly` at the use site. The VictoriaMetrics operator's `mkVMAgent`,
+  `mkVMAlert` and `mkVMAlertmanager` state `out.scrapeJob` and
+  `out.replicas` this way; the probes read them instead of retyping the
+  operator's naming.
 - **Operator packages that own CRDs** declare per-kind fact behavior on the
   CRD itself when their controller dials endpoints embedded in CR specs
   (e.g. a database operator connecting operand pods to an address in the
@@ -322,7 +330,7 @@ Create `{ volume, volumeMount }` pairs from resources. Returns null when resourc
 | Function | Description |
 |----------|-------------|
 | `kix.mount.pvc resource { mountPath, name?, readOnly?, subPath? }` | PVC mount |
-| `kix.mount.configMap resource { mountPath, name?, subPath?, items?, defaultMode? }` | ConfigMap mount |
+| `kix.mount.configMap resource { mountPath, name?, readOnly?, subPath?, items?, defaultMode? }` | ConfigMap mount |
 | `kix.mount.secret resource { mountPath, name?, subPath?, items?, defaultMode? }` | Secret mount |
 | `kix.mount.emptyDir { mountPath, name, medium?, sizeLimit?, subPath? }` | Ephemeral mount (no resource arg) |
 
@@ -367,6 +375,12 @@ For complex routing with multiple backends/paths, build HTTPRoute/Ingress manual
 Parameters: `service` (string key in self), `port` (default "metrics"), `path` (default "/metrics"), `alerts` (attrset of alert definitions), `extraEndpoints`, `extraLabels`.
 
 Use `options.metrics = kix.options.monitor;` for standardized metrics options.
+
+**`kix.healthCheck`**: composable build entry. Renders a post-deploy probe Job (plus a ConfigMap holding the script) that runs after the things it checks are ready; a failing probe fails the deploy. Addresses come in as env vars from `out.*` values, which is what gives the Job its dependency edges and netpol egress.
+
+Parameters, every callback taking `{ self, config, deps }` (`deps` is every DI package some other entry of the package declares): `script` (usually `builtins.readFile ./health-check.py`), `env` (`-> attrset`; the helper adds `RETRY_FOR`), `when` (`-> bool`, default `config.healthCheck.enable or true`), `retryFor` (`-> int`, default `config.healthCheck.retryFor or 90`), `requires` (`-> [ resources ]`, on top of the package root, which the Job always waits for), `partName`, `runtime` (`kix.healthCheck.runtimes.python` by default, `runtimes.shell` on curl, or your own `{ image = { repository; tag; digest; }; file; interpreter; env; }`), `activeDeadlineSeconds` (null: `retryFor` plus `kix.healthCheck.roundBudget`, 90 s; a given value must leave that room or the build fails), `ttlSecondsAfterFinished`. Declare `options.healthCheck = kix.options.healthCheck;` (`enable`, `retryFor`) and the defaults read it.
+
+The script gives up once `RETRY_FOR` seconds have passed and keeps one round of checks under the round budget. It reads what it expects off resources (`self.vmAgent.out.replicas`, a structural output), never off the option that produced them. The Job carries `kix.dev/rerun: on-change` (`kix/lib/core/annotations.nix`): the deploy engine recreates it when its identity hash changed or the last run failed, so the probe runs again when it, or anything upstream of what it checks, changes. Keep the script a file next to `default.nix` so it can be linted and run from a laptop through `kubectl proxy`. Example: `packages/victoria-metrics-agent/`.
 
 **Cluster-side wiring:**
 - Gateway API: instantiate `packages/envoy-gateway` with alias `"gateway"`

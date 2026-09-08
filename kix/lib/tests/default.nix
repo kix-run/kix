@@ -29,6 +29,7 @@
 let
   k8s = import ../core { inherit lib; };
   eval = import ../eval { inherit lib k8s; };
+  kixlib = import ../vocab/compose.nix { inherit lib; };
 
   # ---------------------------------------------------------------- fixtures
 
@@ -160,6 +161,132 @@ let
           };
         };
     };
+
+  # A Deployment, a Service over the package's selector labels, and a
+  # kix.healthCheck probe that dials the Service. Exercises every knob the
+  # probe tests need.
+  mkProbedPackage =
+    {
+      targetPort ? 8080,
+      wire ? (svc: svc.out.url { }),
+      script ? "print('ok')",
+      runtime ? null,
+    }:
+    {
+      meta.version = "test";
+      build = [
+        (
+          { self, scope, ... }:
+          {
+            root = self.svc;
+            deployment = scope.mkDeployment {
+              name = "app";
+              spec = {
+                selector.matchLabels = scope.selectorLabels;
+                template = {
+                  metadata.labels = scope.selectorLabels;
+                  spec.containers = [
+                    (
+                      {
+                        name = "app";
+                        image = "example/app:1";
+                        ports = [
+                          {
+                            name = "http";
+                            containerPort = targetPort;
+                          }
+                        ];
+                        securityContext.runAsNonRoot = true;
+                      }
+                      // containerBase
+                    )
+                  ];
+                };
+              };
+            };
+            svc = scope.mkResource {
+              apiVersion = "v1";
+              kind = "Service";
+              name = "app";
+              requires = [ self.deployment ];
+              spec = {
+                selector = scope.selectorLabels;
+                ports = [
+                  {
+                    name = "http";
+                    port = targetPort;
+                    targetPort = "http";
+                  }
+                ];
+              };
+            };
+          }
+        )
+        (kixlib.healthCheck (
+          {
+            inherit script;
+            requires = { self, ... }: [ self.deployment ];
+            env =
+              { self, ... }:
+              {
+                APP_URL = wire self.svc;
+              };
+          }
+          // lib.optionalAttrs (runtime != null) { inherit runtime; }
+        ))
+      ];
+    };
+
+  # A probe that reads the db package through the `deps` argument. The main
+  # entry declares the dependency; the probe entry cannot.
+  depsProbePackage = {
+    meta.version = "test";
+    build = [
+      (
+        {
+          self,
+          scope,
+          db,
+          ...
+        }:
+        {
+          root = self.deployment;
+          deployment = scope.mkDeployment {
+            name = "app";
+            spec = {
+              selector.matchLabels = scope.selectorLabels;
+              template = {
+                metadata.labels = scope.selectorLabels;
+                spec.containers = [
+                  (
+                    {
+                      name = "app";
+                      image = "example/app:1";
+                      env = [
+                        {
+                          name = "DB_HOST";
+                          value = db.out.fqdn;
+                        }
+                      ];
+                    }
+                    // containerBase
+                  )
+                ];
+              };
+            };
+          };
+        }
+      )
+      (kixlib.healthCheck {
+        script = "print('ok')";
+        env =
+          { deps, ... }:
+          {
+            DB_URL = deps.db.out.url { };
+          };
+      })
+    ];
+  };
 
   # dials db through a ConfigMap: the endpoint fact must conduct through the
   # carrier's seal — indirection is the default case, not a special one
@@ -685,6 +812,12 @@ let
     ) (throw "manifest '${name}' not found") ms;
 
   dependsOn = m: (m.metadata.annotations or { })."kix.dev/depends-on" or "";
+  # Identity hash of a part of the appns/app instance. rawManifests carry no
+  # identity annotation (the CLI stamps it from the store path), so the
+  # tests read the resource's own out.identityHash.
+  partHash =
+    cluster: part:
+    builtins.unsafeDiscardStringContext cluster.instances.appns.app.raw.${part}.out.identityHash;
 
   evalFails = cluster: !(builtins.tryEval (builtins.deepSeq (manifests cluster) true)).success;
 
@@ -2042,6 +2175,412 @@ let
         ]);
       in
       builtins.any (m: (m.metadata.name or "") == "native-fr") ms || throw "native-fr missing";
+
+    # ------------------------------------------------------- kix.healthCheck
+    #
+    # A package with a Deployment, a Service over the package's selector
+    # labels, and a probe Job that dials the Service. `wire` chooses how
+    # the probe gets the address; `script` is the probe body.
+    t60-healthcheck-identity-follows-target =
+      let
+        cluster =
+          target:
+          mkCluster [
+            baseInstances
+            {
+              instances.appns.app.package = lib.mkForce (mkProbedPackage {
+                targetPort = target;
+              });
+            }
+          ];
+        a = cluster 8080;
+        b = cluster 9090;
+        jobA = byName "app-health" (ofKind "Job" (manifests a));
+        jobB = byName "app-health" (ofKind "Job" (manifests b));
+      in
+      (
+        jobA != null
+        && jobB != null
+        && partHash a "healthCheck" != partHash b "healthCheck"
+        && jobA.metadata.name == jobB.metadata.name
+        && (jobA.metadata.annotations."kix.dev/rerun" or "") == "on-change"
+      )
+      || throw "probe identity did not follow its target";
+
+    # The probe reads a dependency-injected package through `deps` and the
+    # Job's depends-on carries that package's Service.
+    t61-healthcheck-deps-arg =
+      let
+        cluster = mkCluster [
+          baseInstances
+          { instances.appns.app.package = lib.mkForce depsProbePackage; }
+        ];
+        ms = manifests cluster;
+        job = byName "app-health" (ofKind "Job" ms);
+        dbSvcHash = builtins.unsafeDiscardStringContext cluster.instances.dbns.db.raw.service.out.identityHash;
+        env = builtins.head (job.spec.template.spec.containers or [ ]);
+        dbUrl = builtins.head (builtins.filter (e: e.name == "DB_URL") (env.env or [ ]));
+      in
+      (
+        job != null
+        && lib.hasInfix dbSvcHash (dependsOn job)
+        && dbUrl.value == "http://db.dbns.svc.cluster.local:5432"
+      )
+      || throw "probe did not read the db Service through deps; depends-on: ${dependsOn job}";
+
+    # Under an enforcer the probe Job gets the same egress edge any
+    # consumer gets: a CNP named after the Job whose endpoint selector is
+    # the probe pod's labels, listed in the Job's requires.
+    t62-healthcheck-job-egress =
+      let
+        cluster = mkCluster [
+          baseInstances
+          netpolOn
+          { instances.appns.app.package = lib.mkForce (mkProbedPackage { }); }
+        ];
+        ms = manifests cluster;
+        cnp = byName "app-job-app-health-egress" (ofKind "CiliumNetworkPolicy" ms);
+        cnpHash =
+          builtins.unsafeDiscardStringContext
+            (lib.findFirst (
+              r: (r.kind or "") == "CiliumNetworkPolicy" && r.name == "app-job-app-health-egress"
+            ) (throw "CNP not in the Job's requires") cluster.instances.appns.app.raw.healthCheck.requires)
+            .out.identityHash;
+        job = byName "app-health" (ofKind "Job" ms);
+        egress = builtins.filter (r: (r.stubRule or "") == "service-egress") (cnp.spec.egress or [ ]);
+        rule = builtins.head egress;
+        podLabels = job.spec.template.metadata.labels;
+        refOnlyMs = manifests (mkCluster [
+          baseInstances
+          netpolOn
+          {
+            instances.appns.app.package = lib.mkForce (mkProbedPackage {
+              wire = svc: k8s.facts.refOnly (svc.out.url { });
+            });
+          }
+        ]);
+      in
+      (
+        cnp != null
+        && job != null
+        && builtins.length egress == 1
+        && rule.namespace == "appns"
+        &&
+          rule.selector == {
+            "app.kubernetes.io/name" = "app";
+            "app.kubernetes.io/instance" = "app";
+          }
+        && cnp.spec.endpointSelector.matchLabels == podLabels
+        && lib.hasInfix "requires:${cnpHash}" (dependsOn job)
+        && hasName "app-job-app-health-to-app-ingress" (ofKind "CiliumNetworkPolicy" ms)
+        && !(hasName "app-job-app-health-to-app-ingress" (ofKind "CiliumNetworkPolicy" refOnlyMs))
+        && builtins.all (r: (r.stubRule or "") != "service-egress") (
+          (byName "app-job-app-health-egress" (ofKind "CiliumNetworkPolicy" refOnlyMs)).spec.egress or [ ]
+        )
+      )
+      || throw "probe egress edge wrong; CNPs: ${builtins.toJSON (namesOf (ofKind "CiliumNetworkPolicy" ms))}";
+
+    # The default runtime is the slim Python image pinned by digest; a
+    # package-supplied runtime renders as given.
+    t63-healthcheck-runtime-default =
+      let
+        container =
+          pkg:
+          builtins.head (
+            (byName "app-health" (
+              ofKind "Job" (
+                manifests (mkCluster [
+                  baseInstances
+                  { instances.appns.app.package = lib.mkForce pkg; }
+                ])
+              )
+            )).spec.template.spec.containers
+          );
+        dflt = container (mkProbedPackage { });
+        custom = container (mkProbedPackage {
+          runtime = {
+            image = {
+              repository = "example/probe";
+              tag = "1";
+              digest = null;
+            };
+            file = "probe.sh";
+            interpreter = [
+              "/bin/sh"
+              "-eu"
+            ];
+            env = { };
+          };
+        });
+      in
+      (
+        dflt.image
+        == "docker.io/library/python:3.13-slim@sha256:9d2e5553305c7c7b0097999bb17187c69b921ccd6bc9d40e4bb5ebe652c00285"
+        &&
+          dflt.command == [
+            "python3"
+            "/probe/health-check.py"
+          ]
+        && dflt.terminationMessagePolicy == "FallbackToLogsOnError"
+        && custom.image == "example/probe:1"
+        &&
+          custom.command == [
+            "/bin/sh"
+            "-eu"
+            "/probe/probe.sh"
+          ]
+      )
+      || throw "runtime rendering wrong: ${
+        builtins.toJSON [
+          dflt.image
+          dflt.command
+          custom.image
+          custom.command
+        ]
+      }";
+
+    # The script lives in a stable-name ConfigMap the Job mounts; a script
+    # change changes the Job's identity hash but not its name.
+    t64-healthcheck-script-configmap =
+      let
+        build =
+          script:
+          mkCluster [
+            baseInstances
+            {
+              instances.appns.app.package = lib.mkForce (mkProbedPackage {
+                inherit script;
+              });
+            }
+          ];
+        a = build "print('a')";
+        b = build "print('b')";
+        cmA = byName "app-health-script" (ofKind "ConfigMap" (manifests a));
+        cmB = byName "app-health-script" (ofKind "ConfigMap" (manifests b));
+        jobA = byName "app-health" (ofKind "Job" (manifests a));
+        jobB = byName "app-health" (ofKind "Job" (manifests b));
+        volume = builtins.head (jobA.spec.template.spec.volumes or [ ]);
+      in
+      (
+        cmA != null
+        && cmA.data."health-check.py" == "print('a')"
+        && cmB.data."health-check.py" == "print('b')"
+        && volume.configMap.name == "app-health-script"
+        && lib.hasInfix (partHash a "healthCheckScript") (dependsOn jobA)
+        && partHash a "healthCheck" != partHash b "healthCheck"
+        && jobA.metadata.name == jobB.metadata.name
+      )
+      || throw "script ConfigMap wiring wrong";
+
+    # The probe pod carries its own labels: the package's Service, which
+    # selects the package's selector labels, must not select it.
+    t65-healthcheck-pod-not-in-service =
+      let
+        ms = manifests (mkCluster [
+          baseInstances
+          { instances.appns.app.package = lib.mkForce (mkProbedPackage { }); }
+        ]);
+        job = byName "app-health" (ofKind "Job" ms);
+        svc = byName "app" (ofKind "Service" ms);
+        podLabels = job.spec.template.metadata.labels;
+        selected = builtins.all (k: (podLabels.${k} or null) == svc.spec.selector.${k}) (
+          builtins.attrNames svc.spec.selector
+        );
+      in
+      (job != null && svc != null && !selected)
+      || throw "the package Service selects the probe pod: ${builtins.toJSON podLabels}";
+
+    # The probe waits for the package root without being told: a Job whose
+    # env dials nothing of the package still lists the root in requires.
+    # When the env already dials the root, it is not listed twice.
+    t67-healthcheck-waits-for-root =
+      let
+        depsCluster = mkCluster [
+          baseInstances
+          { instances.appns.app.package = lib.mkForce depsProbePackage; }
+        ];
+        depsJob = byName "app-health" (ofKind "Job" (manifests depsCluster));
+        rootHash = builtins.unsafeDiscardStringContext depsCluster.instances.appns.app.raw.deployment.out.identityHash;
+        dialCluster = mkCluster [
+          baseInstances
+          { instances.appns.app.package = lib.mkForce (mkProbedPackage { }); }
+        ];
+        dialJob = byName "app-health" (ofKind "Job" (manifests dialCluster));
+        svcHash = builtins.unsafeDiscardStringContext dialCluster.instances.appns.app.raw.svc.out.identityHash;
+      in
+      (
+        depsJob != null
+        && lib.hasInfix "requires:${rootHash}" (dependsOn depsJob)
+        && dialJob != null
+        && lib.hasInfix svcHash (dependsOn dialJob)
+        && !(lib.hasInfix "requires:${svcHash}" (dependsOn dialJob))
+      )
+      || throw "root ordering wrong; deps probe: ${dependsOn depsJob}; dialing probe: ${dependsOn dialJob}";
+
+    # The helper owns the time budget: RETRY_FOR is handed to the script,
+    # the deadline is sized from it, and a deadline with no room for a
+    # round after the window fails the build.
+    t68-healthcheck-time-budget =
+      let
+        job =
+          extra:
+          byName "app-health" (
+            ofKind "Job" (
+              manifests (mkCluster [
+                baseInstances
+                {
+                  instances.appns.app.package = lib.mkForce {
+                    meta.version = "test";
+                    options.healthCheck = kixlib.options.healthCheck;
+                    build = [
+                      (
+                        { self, scope, ... }:
+                        {
+                          root = self.cm;
+                          cm = scope.mkResource {
+                            apiVersion = "v1";
+                            kind = "ConfigMap";
+                            name = "app";
+                            data.k = "v";
+                          };
+                        }
+                      )
+                      (kixlib.healthCheck ({ script = "print('ok')"; } // extra))
+                    ];
+                  };
+                  instances.appns.app.config.healthCheck = {
+                    enable = true;
+                    retryFor = 40;
+                  };
+                }
+              ])
+            )
+          );
+        dflt = job { };
+        given = job { activeDeadlineSeconds = 200; };
+        env = builtins.head (builtins.head dflt.spec.template.spec.containers).env;
+        retryEnv = builtins.filter (e: e.name == "RETRY_FOR") (
+          (builtins.head dflt.spec.template.spec.containers).env
+        );
+        tooShort = mkCluster [
+          baseInstances
+          {
+            instances.appns.app.package = lib.mkForce (
+              mkProbedPackage { }
+              // {
+                build = (mkProbedPackage { }).build ++ [
+                  (kixlib.healthCheck {
+                    script = "print('ok')";
+                    partName = "second";
+                    activeDeadlineSeconds = 100;
+                  })
+                ];
+              }
+            );
+          }
+        ];
+      in
+      builtins.seq env (
+        (
+          dflt != null
+          && dflt.spec.activeDeadlineSeconds == 40 + kixlib.healthCheck.roundBudget
+          && (builtins.head retryEnv).value == "40"
+          && given.spec.activeDeadlineSeconds == 200
+          && evalFails tooShort
+        )
+        || throw "time budget wrong: deadline ${toString dflt.spec.activeDeadlineSeconds}, RETRY_FOR ${builtins.toJSON retryEnv}"
+      );
+
+    # A structural output is read, not dialed: the consumer gets the
+    # ordering edge and no egress rule, and the identity lint stays quiet.
+    t69-structural-output =
+      let
+        cluster = mkCluster [
+          baseInstances
+          netpolOn
+          {
+            instances.appns.app.package = lib.mkForce {
+              meta.version = "test";
+              build =
+                { self, scope, ... }:
+                {
+                  root = self.deployment;
+                  svc = scope.mkResource {
+                    apiVersion = "v1";
+                    kind = "Service";
+                    name = "app";
+                    spec = {
+                      selector = scope.selectorLabels;
+                      ports = [
+                        {
+                          name = "http";
+                          port = 80;
+                        }
+                      ];
+                    };
+                    outputs.replicas = k8s.facts.structural "2";
+                  };
+                  deployment = scope.mkDeployment {
+                    name = "app";
+                    spec = {
+                      selector.matchLabels = scope.selectorLabels;
+                      template = {
+                        metadata.labels = scope.selectorLabels;
+                        spec.containers = [
+                          (
+                            {
+                              name = "app";
+                              image = "example/app:1";
+                              env = [
+                                {
+                                  name = "REPLICAS";
+                                  value = self.svc.out.replicas;
+                                }
+                              ];
+                            }
+                            // containerBase
+                          )
+                        ];
+                      };
+                    };
+                  };
+                };
+            };
+          }
+        ];
+        ms = manifests cluster;
+        dep = byName "app" (ofKind "Deployment" ms);
+        svcHash = builtins.unsafeDiscardStringContext cluster.instances.appns.app.raw.svc.out.identityHash;
+        env = builtins.head (builtins.head dep.spec.template.spec.containers).env;
+        cnp = byName "app-deployment-app-egress" (ofKind "CiliumNetworkPolicy" ms);
+        egress =
+          if cnp == null then
+            [ ]
+          else
+            builtins.filter (r: (r.stubRule or "") == "service-egress") (cnp.spec.egress or [ ]);
+      in
+      (dep != null && env.value == "2" && lib.hasInfix svcHash (dependsOn dep) && egress == [ ])
+      || throw "structural output wrong: env ${builtins.toJSON env}, depends-on ${dependsOn dep}, egress ${builtins.toJSON egress}";
+
+    # The probe Job passes the stock security rules at error severity.
+    t66-healthcheck-passes-security-rules =
+      let
+        cluster = mkCluster [
+          {
+            scorecard = {
+              enable = true;
+              rules.security = import ../rules/security.nix { inherit lib; };
+            };
+            instances.appns.app.package = mkProbedPackage { };
+          }
+        ];
+        findings = builtins.filter (f: lib.hasInfix "app-health" (toString (f.resource or ""))) (
+          (cluster.scorecardReport or { findings = [ ]; }).findings
+        );
+      in
+      builtins.seq (manifests cluster) (
+        findings == [ ] || throw "security findings on the probe Job: ${builtins.toJSON findings}"
+      );
   }
   // import ./validate.nix {
     inherit
@@ -2070,6 +2609,9 @@ in
       k8s
       probePackage
       stubEnforcer
+      mkProbedPackage
+      partHash
+      manifests
       ;
   };
   result =

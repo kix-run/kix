@@ -122,7 +122,13 @@ rec {
         selector = autoSelector;
       };
 
-      userOut = lib.mapAttrs (_: v: attachFactCtx (toString v)) outputs;
+      userOut = lib.mapAttrs (
+        _: v:
+        if facts.isStructural v then
+          facts.refOnly (attachFactCtx (toString v.value))
+        else
+          attachFactCtx (toString v)
+      ) outputs;
     in
     {
       _type = "k8s-resource-ref";
@@ -374,7 +380,9 @@ rec {
       #   attachConnectCtx additionally stamps my own endpoint fact:
       #                    "using this value means dialing me."
       # name/selector are structural (naming ≠ dialing); fqdn/url and user
-      # outputs are address-shaped. `facts.refOnly` is the per-use escape.
+      # outputs are address-shaped. `facts.refOnly` is the per-use escape;
+      # `facts.structural` is the producer's, for an output that is a fact
+      # about the resource and not an address.
       attachCtx = value: builtins.appendContext (toString value) (_identityCtx // _forwardedFactCtx);
       attachConnectCtx =
         value: builtins.appendContext (toString value) (_identityCtx // _forwardedFactCtx // _ownFactCtx);
@@ -416,7 +424,17 @@ rec {
           attachConnectCtx "${scheme}://${name}.${nsKey}.svc.${clusterDomain}${portSuffix}";
       };
 
-      userOut = lib.mapAttrs (_: v: if v == null then null else attachConnectCtx (toString v)) outputs;
+      userOut = lib.mapAttrs (
+        _: v:
+        if v == null then
+          null
+        else if facts.isStructural v then
+          # identity for ordering, the endpoint claim replaced by its
+          # acknowledgment, as refOnly does at a use site
+          facts.refOnly (attachConnectCtx (toString v.value))
+        else
+          attachConnectCtx (toString v)
+      ) outputs;
 
       mergedOut =
         let

@@ -237,4 +237,15 @@ rec {
   # `out.name` used as an intra-namespace host. Takes the producing
   # resource (anything with out.factTokens.endpoint) or a raw fact ctx.
   connect = factCtx: s: builtins.appendContext s factCtx;
+
+  # "Read it, don't dial it", declared by the producer: a value for
+  # `outputs` that states something about the resource (a replica count,
+  # the job label its operator gives it) rather than an address. mkResource
+  # applies `refOnly` to it at the seal, so a consumer that reads it gets
+  # the ordering edge and the acknowledgment, never the dial claim.
+  structural = value: {
+    _type = "kix-structural-output";
+    inherit value;
+  };
+  isStructural = v: builtins.isAttrs v && (v._type or null) == "kix-structural-output";
 }
