@@ -405,7 +405,7 @@ Use this only for fixtures and inline cluster definitions. Files in `kix/package
 | `scope.mkStatefulSet attrs` | Same; expands `headlessService` shorthand (auto-creates the headless Service) |
 | `scope.mkDaemonSet attrs` | Same |
 | `scope.mkJob attrs` | Same; no selector enforcement |
-| `scope.mkHelmWorkload attrs` | Helm-sourced workload (skips kix-native validation; used internally by `importChart`) |
+| `scope.mkHelmWorkload attrs` | Helm-sourced workload (used internally by `importChart`). Runs the pod-spec validators `mkDeployment` runs, except the DI-tracked reference check: chart names are plain strings, and the cross-resource checks resolve them instead |
 | `scope.mkOptional cond builder` | Gate a resource on a boolean. `builder` may be a thunk `(_: ...)` to avoid eager eval when `cond` is false |
 | `scope.mkSecret { ... }` | Secret with enriched `out` (see §21). **Always** use this instead of `scope.mkResource { kind = "Secret"; }` |
 | `scope.mkSecretRef { ... }` | Reference an externally-managed Secret (Vault, ESO, cert-manager). Emits a PackageInstance import marker; deploy verifies the Secret exists before applying dependents. See §21 |
@@ -729,7 +729,6 @@ The collection returned by `importChart` exposes:
 | `attrs` | Resources keyed by `"${toLower kind}-${name}"` |
 | `depsOf resource` | Inferred internal deps (from `helm-dag.nix`) |
 | `edges` | All link edges (`{ from, to, type }`) |
-| `orphans` | Diagnostic orphans |
 | `autoRoot` | Auto-selected root |
 | `mkParts { root, extraParts?, extraRequires?, out? }` | Build complete parts tree |
 
@@ -1001,12 +1000,12 @@ scorecard.ruleOverrides.byNamespace = { kube-system = { noLatestTag = "info"; };
 
 ### 17.4 Cross-resource checks
 
-Thirteen checks over the finished manifest list run inside every cluster evaluation (`kix/lib/eval/validate.nix`, called from `buildCluster`). They ask whether the thing a name points at exists and whether labels really match a pod in the build. The scorecard rules ask a different question, whether a value came from the right place, and run before string context is stripped. Both are needed: a hand-typed selector with a typo gets the same scorecard warning as a correct one, and only these checks tell them apart.
+Fourteen checks over the finished manifest list run inside every cluster evaluation (`kix/lib/eval/validate.nix`, called from `buildCluster`). They ask whether the thing a name points at exists and whether labels really match a pod in the build. The scorecard rules ask a different question, whether a value came from the right place, and run before string context is stripped. Both are needed: a hand-typed selector with a typo gets the same scorecard warning as a correct one, and only these checks tell them apart.
 
 | # | Check | Skips |
 |---|---|---|
 | 1 | Workload `serviceAccountName` names a ServiceAccount in its namespace | `default`; unset |
-| 2 | (Cluster)RoleBinding `roleRef` names a Role that is in the build | names starting `system:`, ending `-psp`, or `admin`, `edit`, `view`, `cluster-admin` |
+| 2 | (Cluster)RoleBinding `roleRef` names a Role or ClusterRole that is in the build | names starting `system:`, ending `-psp`, or `admin`, `edit`, `view`, `cluster-admin` |
 | 3 | `volumes[].configMap.name` names a ConfigMap in the namespace | Secrets are not checked (often created out of band) |
 | 4 | Service selector matches at least one pod template | no selector; the control-plane scrape selectors (kube-dns, kube-scheduler, ...); a Service that declares `kix.dev/operand-of` (below) |
 | 5 | HPA `scaleTargetRef` exists | |
@@ -1017,7 +1016,10 @@ Thirteen checks over the finished manifest list run inside every cluster evaluat
 | 10 | Ingress backends name a Service in the namespace | |
 | 11 | Every `metadata.namespace` has a Namespace resource | `_`-prefixed sentinel namespaces (cluster-level instances) |
 | 12 | NetworkPolicy `podSelector` matches at least one pod template | empty selector |
-| 13 | A named `targetPort` exists on a container of a selected pod | numeric ports; Services that select no pod template |
+| 13 | A named `targetPort` exists on a container of a selected pod | numeric ports; Services that select no pod template in the build (check 4 reports those, or their pods are an operator's and there is no container spec to read) |
+| 14 | PodDisruptionBudget `selector.matchLabels` matches at least one pod template | no `matchLabels`; a PDB that declares `kix.dev/operand-of` (below) |
+
+**Scope of a lookup.** A reference is looked up in the referrer's namespace only, unless the referenced kind is a built-in cluster-scoped kind (a RoleBinding to a ClusterRole). Nothing else falls back to the cluster-scoped bucket. A `kix.untrackedRef` name resolves whatever its kind. Pod selectors follow the same rule: a Service, NetworkPolicy or PodDisruptionBudget matches pod templates in its own namespace only.
 
 **Failure shape.** The eval fails like any other assertion:
 
@@ -1031,7 +1033,7 @@ error: Cluster 'ludo-kind' has 1 failed assertion(s):
 **Services for operator-created pods.** Check 4 cannot see pods an operator creates at runtime. Two ways through, in order of preference:
 
 1. `scope.mkServiceRef` for a Service the operator itself creates (`prometheus-operated`, `alertmanager-operated`, `vmselect-<name>`). It carries the selector, ports and the Service's labels, renders as a marker, and no check or rule fires on it. The prometheus, alertmanager, victoria-metrics-cluster and stackgres-cluster packages do this. Two consequences to know: consumers now wait until the operator's Service has ready endpoints (the per-node readiness timeout, 180s by default, applies to a slow Prometheus start), and the declared selector should be as wide as the operator's own (`prometheus-operated` selects every Prometheus in the namespace; a ref that adds the instance label describes fewer pods than the Service reaches).
-2. When kix must render the Service itself (the operator creates none, as for the Thanos sidecar), the Service declares the CR whose pods it selects: `metadata.annotations."kix.dev/operand-of" = "<group>/<Kind>/<name>"`. Check 4 accepts the Service when that CR is in the build in the same namespace, and reports the declaration when it is not. Group and kind together, because kind names are not unique across API groups. There is no list of operator kinds anywhere in the checker.
+2. When kix must render the Service itself (the operator creates none, as for the Thanos sidecar), the Service declares the CR whose pods it selects: `metadata.annotations."kix.dev/operand-of" = "<group>/<Kind>/<name>"`. Check 4 accepts the Service when that CR is in the build in the same namespace, and reports the declaration when it is not. A PodDisruptionBudget over operator-created pods declares the same annotation for check 14 (the alertmanager package does). Group and kind together, because kind names are not unique across API groups. There is no list of operator kinds anywhere in the checker.
 
 **References to things kix does not render.** Wrap the name in `kix.untrackedRef` (a ServiceAccount the cluster provides, a ConfigMap another system owns). The value carries an inert marker in its string context; `buildCluster` collects those names before context is stripped, keyed by the referring resource's namespace, and the checks accept them there. A `scope.mkServiceRef` or `scope.mkSecretRef` marker counts as the Service or Secret it describes, in its namespace, and its declared pod selector counts as pods for the Service and NetworkPolicy selector checks. For a cluster-level `kix.mkImport`, pass `kind = "Service"` so the marker carries the kind; a consumer in another namespace wraps the name in `kix.untrackedRef`. A bare string that names nothing in the build fails, and so does a name derived from a resource with a suffix added (`self.sa.out.name + "-typo"`): provenance is not resolution. A suffix on an untracked ref stays untracked, since the author marked it. The StatefulSet headless-Service check reads `clusterIP: None` off a rendered Service and cannot accept a marker.
 

@@ -1867,6 +1867,181 @@ let
         && custom == "http://operated.infra.svc.k8s.example:80/"
       )
       || throw "ref fqdn: default=${dflt} custom=${custom}";
+    # Two same-named Services are a name collision, not a label question:
+    # the rule must say so instead of prescribing a label fix that cannot
+    # converge (kixpkgs#71 item 14).
+    t55-distinct-labels-rule-names-a-collision =
+      let
+        rule = (import ../rules/architecture.nix { inherit lib; }).distinctSameKindLabels;
+        svc = labels: {
+          kind = "Service";
+          metadata = {
+            name = "same";
+            namespace = "ns";
+            inherit labels;
+          };
+        };
+        findings = rule.check {
+          instanceName = "inst";
+          resources = [
+            (svc { a = "1"; })
+            (svc { a = "2"; })
+          ];
+        };
+        msg = builtins.concatStringsSep " " (map (f: f.message) findings);
+      in
+      (
+        builtins.length findings == 1
+        && lib.hasInfix "name collision" msg
+        && !(lib.hasInfix "own label" msg)
+      )
+      || throw "expected one collision finding, got: ${msg}";
+
+    # A chart-rendered workload gets the pod-spec validators (kixpkgs#71
+    # item 13): a probe naming a port the container does not declare fails
+    # the eval; the same workload without it builds.
+    t56-helm-workload-runs-validators =
+      let
+        chartWorkload = probe: {
+          build =
+            { self, scope, ... }:
+            {
+              web = scope.mkHelmWorkload {
+                apiVersion = "apps/v1";
+                kind = "Deployment";
+                name = "chart-web";
+                spec = {
+                  selector.matchLabels.app = "chart-web";
+                  template = {
+                    metadata.labels.app = "chart-web";
+                    spec.containers = [
+                      (
+                        {
+                          name = "c";
+                          image = "img:1";
+                          ports = [
+                            {
+                              name = "http";
+                              containerPort = 80;
+                            }
+                          ];
+                        }
+                        // probe
+                      )
+                    ];
+                  };
+                };
+              };
+              root = self.web;
+            };
+        };
+        bad = evalFails (mkCluster [
+          baseInstances
+          { instances.infra.chart.package = chartWorkload { readinessProbe.httpGet.port = "nope"; }; }
+        ]);
+        good = manifests (mkCluster [
+          baseInstances
+          { instances.infra.chart.package = chartWorkload { }; }
+        ]);
+      in
+      (bad && builtins.any (m: (m.metadata.name or "") == "chart-web") good)
+      || throw "helm workload validators: bad=${toString bad}";
+
+    # Shapes valid Kubernetes charts really render must pass the validators
+    # (red team on #75): null list fields from an unset toYaml value, a
+    # duplicate env name (the API server warns, last wins), and a fieldRef
+    # into a label (the allow clause used to throw "invalid regular
+    # expression" on exactly that path).
+    t58-helm-workload-accepts-real-chart-shapes =
+      let
+        chartPackage = {
+          build =
+            { self, scope, ... }:
+            {
+              web = scope.mkHelmWorkload {
+                apiVersion = "apps/v1";
+                kind = "Deployment";
+                name = "chart-real";
+                spec = {
+                  selector.matchLabels.app = "chart-real";
+                  template = {
+                    metadata.labels.app = "chart-real";
+                    spec = {
+                      volumes = null;
+                      initContainers = null;
+                      containers = [
+                        {
+                          name = "c";
+                          image = "img:1";
+                          envFrom = null;
+                          env = [
+                            {
+                              name = "MODE";
+                              value = "default";
+                            }
+                            {
+                              name = "MODE";
+                              value = "override";
+                            }
+                            {
+                              name = "APP";
+                              valueFrom.fieldRef.fieldPath = "metadata.labels['app']";
+                            }
+                            {
+                              name = "HOST_IPS";
+                              valueFrom.fieldRef.fieldPath = "status.hostIPs";
+                            }
+                          ];
+                        }
+                      ];
+                    };
+                  };
+                };
+              };
+              root = self.web;
+            };
+        };
+        ms = manifests (mkCluster [
+          baseInstances
+          { instances.infra.chart.package = chartPackage; }
+        ]);
+      in
+      builtins.any (m: (m.metadata.name or "") == "chart-real") ms || throw "chart-real missing";
+
+    # The same fieldRef path passes the kix-native constructor too.
+    t59-native-workload-accepts-label-fieldref =
+      let
+        pkg = {
+          build =
+            { self, scope, ... }:
+            {
+              web = scope.mkDeployment {
+                name = "native-fr";
+                spec = {
+                  selector.matchLabels.app = "native-fr";
+                  template.spec.containers = [
+                    {
+                      name = "c";
+                      image = "img:1";
+                      env = [
+                        {
+                          name = "APP";
+                          valueFrom.fieldRef.fieldPath = "metadata.annotations['x/y']";
+                        }
+                      ];
+                    }
+                  ];
+                };
+              };
+              root = self.web;
+            };
+        };
+        ms = manifests (mkCluster [
+          baseInstances
+          { instances.infra.fr.package = pkg; }
+        ]);
+      in
+      builtins.any (m: (m.metadata.name or "") == "native-fr") ms || throw "native-fr missing";
   }
   // import ./validate.nix {
     inherit

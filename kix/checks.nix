@@ -4,7 +4,7 @@
 # Imported by kix/lib/mkFlake.nix (and the lithus monorepo) as:
 #   kixChecks = import ./checks.nix { inherit pkgs lib; };
 #
-# The 13 cross-resource checks themselves live in kix/lib/eval/validate.nix
+# The 14 cross-resource checks themselves live in kix/lib/eval/validate.nix
 # and run inside every cluster evaluation since 2026-09. `validateManifestSet`
 # here is the throwing form over an already-evaluated `rawManifests`; it
 # cannot fail on its own any more, because that eval asserts the same
@@ -58,6 +58,7 @@ rec {
   #  11. Namespace existence for namespaced resources
   #  12. NetworkPolicy podSelector matches workloads
   #  13. Service named targetPort → container port name
+  #  14. PodDisruptionBudget selector matches workloads
   #
   # Only validates INTERNAL references (resources created by kix).
   # External references are exempted via documented allowlists.

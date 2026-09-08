@@ -102,6 +102,38 @@ let
       } extra
     );
 
+  pdb =
+    ns: name: selector: extra:
+    res "PodDisruptionBudget" ns name (
+      lib.recursiveUpdate {
+        apiVersion = "policy/v1";
+        spec = {
+          minAvailable = 1;
+          selector.matchLabels = selector;
+        };
+      } extra
+    );
+
+  # A ServiceRef marker as scope.mkServiceRef renders it: the operator's
+  # pods exist by declaration.
+  serviceRef =
+    ns: svcName: selector:
+    res "PackageInstance" ns "service-ref-${svcName}" {
+      apiVersion = "kix.dev/v1alpha1";
+      metadata.annotations = {
+        "kix.dev/mode" = "import";
+        "kix.dev/import-kind" = "Service";
+        "kix.dev/import-name" = svcName;
+        "kix.dev/service-selector" = builtins.toJSON selector;
+        "kix.dev/service-ports" = builtins.toJSON [
+          {
+            name = "http";
+            port = 80;
+          }
+        ];
+      };
+    };
+
   base = ns: [
     (namespace ns)
     (deployment ns "web" { })
@@ -263,6 +295,27 @@ in
       })
     ]
   );
+
+  # A namespaced lookup must not be satisfied by a cluster-scoped object of
+  # the same kind and name (kixpkgs#71 item 5). ConfigMap is namespaced in
+  # Kubernetes; the cluster-scoped one here is synthetic, which is the point:
+  # the checker must not guess.
+  v03b-cluster-scoped-namesake-does-not-satisfy-namespaced-lookup =
+    onlyFailure "mounts ConfigMap 'shared' which does not exist"
+      (
+        base "a"
+        ++ [
+          (res "ConfigMap" null "shared" { data.k = "v"; })
+          (deployment "a" "api" {
+            spec.template.spec.volumes = [
+              {
+                name = "cfg";
+                configMap.name = "shared";
+              }
+            ];
+          })
+        ]
+      );
 
   v04-service-selector-matches-nothing = onlyFailure "matches no workload pod template" (
     base "a" ++ [ (service "a" "lost" { app = "nope"; } { }) ]
@@ -452,6 +505,91 @@ in
     ]
   );
 
+  # A selector reaches pods in its own namespace only (red team on #75).
+  v04h-service-cannot-select-pods-in-another-namespace =
+    onlyFailure "matches no workload pod template"
+      (
+        base "a"
+        ++ [
+          (namespace "b")
+          (service "b" "web-b" podLabels { })
+        ]
+      );
+
+  v12b-networkpolicy-cannot-select-pods-in-another-namespace = onlyFailure "podSelector" (
+    base "a"
+    ++ [
+      (namespace "b")
+      (res "NetworkPolicy" "b" "np" {
+        apiVersion = "networking.k8s.io/v1";
+        spec.podSelector.matchLabels = podLabels;
+      })
+    ]
+  );
+
+  # --- 14. PodDisruptionBudget selectors ---
+
+  v14c-pdb-cannot-select-pods-in-another-namespace =
+    onlyFailure "PodDisruptionBudget b/pdb selector"
+      (
+        base "a"
+        ++ [
+          (namespace "b")
+          (pdb "b" "pdb" podLabels { })
+        ]
+      );
+
+  v14-pdb-selects-nothing = onlyFailure "PodDisruptionBudget a/lost selector" (
+    base "a" ++ [ (pdb "a" "lost" { app = "nope"; } { }) ]
+  );
+
+  v14b-pdb-operand-of-missing-cr = onlyFailure "but no such CR is in the build" (
+    base "a"
+    ++ [
+      (pdb "a" "am" { "app.kubernetes.io/name" = "alertmanager"; } {
+        metadata.annotations."kix.dev/operand-of" = "monitoring.coreos.com/Alertmanager/am";
+      })
+    ]
+  );
+
+  p14-pdb-selects-pod-template = clean (base "a" ++ [ (pdb "a" "web" podLabels { }) ]);
+
+  # matchExpressions-only selectors have no matchLabels to resolve.
+  p14b-pdb-without-matchlabels-is-skipped = clean (
+    base "a"
+    ++ [
+      (pdb "a" "expr" { } {
+        spec.selector = {
+          matchExpressions = [
+            {
+              key = "app";
+              operator = "In";
+              values = [ "web" ];
+            }
+          ];
+        };
+      })
+    ]
+  );
+
+  p14c-pdb-over-ref-pods = clean (
+    base "a"
+    ++ [
+      (serviceRef "a" "vmselect-vm" { "app.kubernetes.io/name" = "vmselect"; })
+      (pdb "a" "vmselect" { "app.kubernetes.io/name" = "vmselect"; } { })
+    ]
+  );
+
+  p14d-pdb-operand-of-declared-cr-present = clean (
+    base "a"
+    ++ [
+      (res "Alertmanager" "a" "am" { apiVersion = "monitoring.coreos.com/v1"; })
+      (pdb "a" "am" { "app.kubernetes.io/name" = "alertmanager"; } {
+        metadata.annotations."kix.dev/operand-of" = "monitoring.coreos.com/Alertmanager/am";
+      })
+    ]
+  );
+
   # --- the reference resolves: one passing case per lookup ---
   # Without these a broken `hasResource` would ship green: every failing
   # case above passes trivially when nothing ever resolves.
@@ -461,6 +599,22 @@ in
     ++ [
       (res "ServiceAccount" "a" "api-sa" { })
       (deployment "a" "api" { spec.template.spec.serviceAccountName = "api-sa"; })
+    ]
+  );
+
+  # The cluster-scoped bucket still serves kinds that are cluster-scoped:
+  # a RoleBinding may bind a ClusterRole.
+  p02c-rolebinding-to-present-clusterrole = clean (
+    base "a"
+    ++ [
+      (res "ClusterRole" null "reader" { apiVersion = "rbac.authorization.k8s.io/v1"; })
+      (res "RoleBinding" "a" "rb" {
+        apiVersion = "rbac.authorization.k8s.io/v1";
+        roleRef = {
+          kind = "ClusterRole";
+          name = "reader";
+        };
+      })
     ]
   );
 

@@ -1,6 +1,11 @@
 { lib }:
 
 let
+  # A chart can render `volumes: null` or `env: null` (an unset value through
+  # toYaml). Every list read below goes through this so a null reads as
+  # empty instead of "expected a list but found null" with no resource named.
+  lst = v: if v == null then [ ] else v;
+
   _allowedFieldPaths = [
     "metadata.name"
     "metadata.namespace"
@@ -10,6 +15,7 @@ let
     "spec.nodeName"
     "spec.serviceAccountName"
     "status.hostIP"
+    "status.hostIPs"
     "status.podIP"
     "status.podIPs"
   ];
@@ -105,6 +111,94 @@ in
           ) null
         else
           null;
+      _checkDuplicateNames =
+        { includeEnv }:
+        templateSpec:
+        let
+          containers = lst (templateSpec.containers or [ ]);
+          initContainers = lst (templateSpec.initContainers or [ ]);
+          allContainers = containers ++ initContainers;
+          volumes = lst (templateSpec.volumes or [ ]);
+
+          dups =
+            names:
+            let
+              sorted = lib.sort (a: b: a < b) names;
+              go =
+                seen: rest:
+                if rest == [ ] then
+                  seen
+                else
+                  let
+                    x = builtins.head rest;
+                    xs = builtins.tail rest;
+                  in
+                  if xs != [ ] && x == (builtins.head xs) then go (seen ++ [ x ]) (builtins.tail xs) else go seen xs;
+            in
+            lib.unique (go [ ] sorted);
+
+          containerNameDups = dups (map (c: c.name) allContainers);
+          volumeNameDups = dups (map (v: v.name) volumes);
+
+          envDups = builtins.concatMap (
+            c:
+            let
+              envNames = map (e: e.name) (lst (c.env or [ ]));
+              d = dups envNames;
+            in
+            if d == [ ] then
+              [ ]
+            else
+              [
+                (
+                  throw "[${instanceName}] Container '${c.name}' has duplicate env var name(s): "
+                  + "[${builtins.concatStringsSep ", " d}]."
+                )
+              ]
+          ) allContainers;
+
+          portDups = builtins.concatMap (
+            c:
+            let
+              portNames = map (p: p.name) (builtins.filter (p: p ? name) (lst (c.ports or [ ])));
+              d = dups portNames;
+            in
+            if d == [ ] then
+              [ ]
+            else
+              [
+                (
+                  throw "[${instanceName}] Container '${c.name}' has duplicate named port(s): "
+                  + "[${builtins.concatStringsSep ", " d}]."
+                )
+              ]
+          ) allContainers;
+
+          containerNameCheck =
+            if containerNameDups != [ ] then
+              throw "[${instanceName}] Pod has duplicate container name(s): "
+              + "[${builtins.concatStringsSep ", " containerNameDups}]. "
+              + "Container names must be unique within a pod."
+            else
+              null;
+
+          volumeNameCheck =
+            if volumeNameDups != [ ] then
+              throw "[${instanceName}] Pod has duplicate volume name(s): "
+              + "[${builtins.concatStringsSep ", " volumeNameDups}]. "
+              + "Volume names must be unique within a pod (common cause: "
+              + "multiple mounts auto-derived from resources with the same name)."
+            else
+              null;
+
+          allChecks = [
+            containerNameCheck
+            volumeNameCheck
+          ]
+          ++ (if includeEnv then envDups else [ ])
+          ++ portDups;
+        in
+        builtins.foldl' (acc: check: builtins.seq check acc) null allChecks;
     in
     {
       # Structural authoring rule (v2_discussions/128 mechanism 1): raw PVCs
@@ -159,13 +253,13 @@ in
       checkPrivileged =
         templateSpec:
         let
-          containers = templateSpec.containers or [ ];
-          initContainers = templateSpec.initContainers or [ ];
+          containers = lst (templateSpec.containers or [ ]);
+          initContainers = lst (templateSpec.initContainers or [ ]);
           allContainers = containers ++ initContainers;
           hasPrivileged = builtins.any (c: (c.securityContext.privileged or false) == true) allContainers;
           hasHostNetwork = templateSpec.hostNetwork or false;
           hasHostPID = templateSpec.hostPID or false;
-          volumes = templateSpec.volumes or [ ];
+          volumes = lst (templateSpec.volumes or [ ]);
           hostPathVols = builtins.filter (v: v ? hostPath) volumes;
           hasHostPath = hostPathVols != [ ];
           reason =
@@ -207,7 +301,8 @@ in
       checkNamespacedRefs =
         templateSpec:
         let
-          allContainers = (templateSpec.containers or [ ]) ++ (templateSpec.initContainers or [ ]);
+          allContainers =
+            (lst (templateSpec.containers or [ ])) ++ (lst (templateSpec.initContainers or [ ]));
 
           validate =
             kind: fieldDesc: fragment: refName:
@@ -242,7 +337,7 @@ in
             ++ (lib.optional (v ? persistentVolumeClaim) (
               validate "pvc" "volumes[].persistentVolumeClaim.claimName" v v.persistentVolumeClaim.claimName
             ))
-          ) (templateSpec.volumes or [ ]);
+          ) (lst (templateSpec.volumes or [ ]));
 
           envFromChecks = builtins.concatMap (
             c:
@@ -254,7 +349,7 @@ in
               ++ (lib.optional (ef ? configMapRef) (
                 validate "configMap" "envFrom[].configMapRef.name in container '${c.name}'" ef ef.configMapRef.name
               ))
-            ) (c.envFrom or [ ])
+            ) (lst (c.envFrom or [ ]))
           ) allContainers;
 
           keyRefChecks = builtins.concatMap (
@@ -275,11 +370,11 @@ in
                 ]
               else
                 [ ]
-            ) (c.env or [ ])
+            ) (lst (c.env or [ ]))
           ) allContainers;
 
           pullSecretChecks = map (ps: validate "secret" "imagePullSecrets[].name" ps ps.name) (
-            templateSpec.imagePullSecrets or [ ]
+            lst (templateSpec.imagePullSecrets or [ ])
           );
 
           saChecks =
@@ -343,9 +438,9 @@ in
       checkNamedPorts =
         templateSpec:
         let
-          containers = (templateSpec.containers or [ ]) ++ (templateSpec.initContainers or [ ]);
+          containers = (lst (templateSpec.containers or [ ])) ++ (lst (templateSpec.initContainers or [ ]));
 
-          containerPortNames = c: map (p: p.name) (builtins.filter (p: p ? name) (c.ports or [ ]));
+          containerPortNames = c: map (p: p.name) (builtins.filter (p: p ? name) (lst (c.ports or [ ])));
 
           probes = c: [
             {
@@ -406,7 +501,8 @@ in
       checkContainerResources =
         templateSpec:
         let
-          allContainers = (templateSpec.containers or [ ]) ++ (templateSpec.initContainers or [ ]);
+          allContainers =
+            (lst (templateSpec.containers or [ ])) ++ (lst (templateSpec.initContainers or [ ]));
           checkOne =
             c:
             let
@@ -437,104 +533,27 @@ in
         in
         builtins.foldl' (acc: check: builtins.seq check acc) null allChecks;
 
-      checkDuplicateNames =
-        templateSpec:
-        let
-          containers = templateSpec.containers or [ ];
-          initContainers = templateSpec.initContainers or [ ];
-          allContainers = containers ++ initContainers;
-          volumes = templateSpec.volumes or [ ];
-
-          dups =
-            names:
-            let
-              sorted = lib.sort (a: b: a < b) names;
-              go =
-                seen: rest:
-                if rest == [ ] then
-                  seen
-                else
-                  let
-                    x = builtins.head rest;
-                    xs = builtins.tail rest;
-                  in
-                  if xs != [ ] && x == (builtins.head xs) then go (seen ++ [ x ]) (builtins.tail xs) else go seen xs;
-            in
-            lib.unique (go [ ] sorted);
-
-          containerNameDups = dups (map (c: c.name) allContainers);
-          volumeNameDups = dups (map (v: v.name) volumes);
-
-          envDups = builtins.concatMap (
-            c:
-            let
-              envNames = map (e: e.name) (c.env or [ ]);
-              d = dups envNames;
-            in
-            if d == [ ] then
-              [ ]
-            else
-              [
-                (
-                  throw "[${instanceName}] Container '${c.name}' has duplicate env var name(s): "
-                  + "[${builtins.concatStringsSep ", " d}]."
-                )
-              ]
-          ) allContainers;
-
-          portDups = builtins.concatMap (
-            c:
-            let
-              portNames = map (p: p.name) (builtins.filter (p: p ? name) (c.ports or [ ]));
-              d = dups portNames;
-            in
-            if d == [ ] then
-              [ ]
-            else
-              [
-                (
-                  throw "[${instanceName}] Container '${c.name}' has duplicate named port(s): "
-                  + "[${builtins.concatStringsSep ", " d}]."
-                )
-              ]
-          ) allContainers;
-
-          containerNameCheck =
-            if containerNameDups != [ ] then
-              throw "[${instanceName}] Pod has duplicate container name(s): "
-              + "[${builtins.concatStringsSep ", " containerNameDups}]. "
-              + "Container names must be unique within a pod."
-            else
-              null;
-
-          volumeNameCheck =
-            if volumeNameDups != [ ] then
-              throw "[${instanceName}] Pod has duplicate volume name(s): "
-              + "[${builtins.concatStringsSep ", " volumeNameDups}]. "
-              + "Volume names must be unique within a pod (common cause: "
-              + "multiple mounts auto-derived from resources with the same name)."
-            else
-              null;
-
-          allChecks = [
-            containerNameCheck
-            volumeNameCheck
-          ]
-          ++ envDups
-          ++ portDups;
-        in
-        builtins.foldl' (acc: check: builtins.seq check acc) null allChecks;
-
+      checkDuplicateNames = _checkDuplicateNames { includeEnv = true; };
+      # Charts commonly append user `extraEnv` over defaults; a duplicate
+      # env name is valid Kubernetes (the API server warns, last wins), so
+      # for chart workloads only container, volume and port names are
+      # checked, the three the API server rejects.
+      checkDuplicateNamesChart = _checkDuplicateNames { includeEnv = false; };
       checkFieldRefs =
         templateSpec:
         let
-          allContainers = (templateSpec.containers or [ ]) ++ (templateSpec.initContainers or [ ]);
+          allContainers =
+            (lst (templateSpec.containers or [ ])) ++ (lst (templateSpec.initContainers or [ ]));
 
           isAllowed =
             path:
             builtins.elem path _allowedFieldPaths
-            || builtins.match "metadata\\.labels\\['.*'\\]" path != null
-            || builtins.match "metadata\\.annotations\\['.*'\\]" path != null;
+            # Bracket expressions for the literal brackets: `\[` is not a
+            # valid escape in the extended regex builtins.match uses, and
+            # the old form threw "invalid regular expression" on exactly
+            # the paths this clause was meant to allow.
+            || builtins.match "metadata\\.labels[[]'.*'[]]" path != null
+            || builtins.match "metadata\\.annotations[[]'.*'[]]" path != null;
 
           checksPerContainer =
             c:
@@ -557,7 +576,7 @@ in
                   [ null ]
               else
                 [ ]
-            ) (c.env or [ ]);
+            ) (lst (c.env or [ ]));
 
           allChecks = builtins.concatMap checksPerContainer allContainers;
         in

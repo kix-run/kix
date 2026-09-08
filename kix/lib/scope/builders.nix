@@ -333,6 +333,13 @@ in
           )
         );
 
+      # Chart-rendered workloads get the same pod-spec validators as
+      # mkWorkload: capability gates, selector within template labels,
+      # probe port names, limits >= requests, duplicate names, fieldRef
+      # paths. Not checkNamespacedRefs: it wants DI-tracked names, and a
+      # chart's ConfigMap and Secret names are plain strings (the
+      # cross-resource checks in eval/validate.nix resolve those instead).
+      # Duplicate env names are allowed here (see checkDuplicateNamesChart).
       mkHelmWorkload =
         attrs:
         let
@@ -342,17 +349,38 @@ in
           selector =
             rawSpec.selector.matchLabels or rawSpec.template.metadata.labels
               or (throw "mkHelmWorkload (${kind}): spec.selector.matchLabels or spec.template.metadata.labels is required");
-          hostNetwork = rawSpec.template.spec.hostNetwork or false;
+          templateMeta = rawSpec.template.metadata or { };
+          templateSpec = rawSpec.template.spec or { };
+          hostNetwork = templateSpec.hostNetwork or false;
 
           # _helmNetworkDeps stays in workloadInput so edge detection sees its store-path context; sealWorkload strips it before mkResource
           workloadInput = attrs // {
             inherit apiVersion kind;
           };
         in
-        sealWorkload {
-          inherit workloadInput selector hostNetwork;
-          workloadKind = kind;
-        };
+        builtins.seq (validators.checkDaemonSet kind) (
+          builtins.seq (validators.checkPrivileged templateSpec) (
+            builtins.seq
+              (
+                if rawSpec ? selector.matchLabels && templateMeta ? labels then
+                  validators.checkSelectorSubset selector templateMeta.labels kind
+                else
+                  null
+              )
+              (
+                builtins.seq (validators.checkNamedPorts templateSpec) (
+                  builtins.seq (validators.checkContainerResources templateSpec) (
+                    builtins.seq (validators.checkDuplicateNamesChart templateSpec) (
+                      builtins.seq (validators.checkFieldRefs templateSpec) (sealWorkload {
+                        inherit workloadInput selector hostNetwork;
+                        workloadKind = kind;
+                      })
+                    )
+                  )
+                )
+              )
+          )
+        );
 
       mkOptional =
         cond: builder:

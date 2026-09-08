@@ -452,9 +452,9 @@ rec {
 
           # Workload kinds route through scope.mkHelmWorkload for per-workload
           # CNP generation (DNS egress, cross-package service egress,
-          # self-ingress for StatefulSets). This skips the validation checks
-          # that mkDeployment/mkStatefulSet/mkDaemonSet perform (those checks
-          # expect DI-tracked references which helm manifests don't have).
+          # self-ingress for StatefulSets). It runs the pod-spec validators
+          # mkDeployment/mkStatefulSet/mkDaemonSet run, except the reference
+          # check that expects DI-tracked names (helm manifests have none).
           isWorkload = builtins.elem kind [
             "Deployment"
             "StatefulSet"
@@ -642,9 +642,6 @@ rec {
       # so root doesn't need to directly require them.
       depTargetIds = helmDag.dependedOnIds rawEdges;
 
-      # Diagnostics: detect orphan selectors/refs.
-      orphans = helmDag.findOrphans patchedResources rawEdges;
-
       # ── Resource collection ────────────────────────────────────────
       #
       # Built recursively to support `replaceResource`: substituting a
@@ -800,9 +797,6 @@ rec {
 
           # All link edges as { from, to, type } triples (wrapped resources).
           edges = effectiveEdges;
-
-          # Diagnostic orphans (selectors/refs matching nothing in chart).
-          inherit orphans;
 
           # ── CRD builders (Phase 3) ───────────────────────────────────
           # Auto-derived `{ cr, mkCR }` builder pair for every CRD the

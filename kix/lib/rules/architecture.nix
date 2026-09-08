@@ -223,18 +223,27 @@ in
         subsetOf =
           needle: hay: builtins.all (k: (hay.${k} or null) == needle.${k}) (builtins.attrNames needle);
         rid = r: "${r.kind or "?"}/${r.metadata.name or "?"}";
+        sameIdentity =
+          a: b:
+          (a.metadata.name or null) == (b.metadata.name or null)
+          && (a.metadata.namespace or null) == (b.metadata.namespace or null);
         # The first sentence of the finding states the exact relationship,
         # because the reader's fix differs slightly: identical label sets
         # mean neither can be picked out; a one-way subset means the
         # smaller set can never be selected without also hitting the
-        # larger.
+        # larger. Two resources with the same name are a different problem
+        # (a collision, not a label question) and get their own message
+        # below, since no label fix can make two same-named Services
+        # coexist (kixpkgs#71 item 14).
         relationship =
           a: b:
           let
             la = a.metadata.labels or { };
             lb = b.metadata.labels or { };
           in
-          if la == lb then
+          if sameIdentity a b then
+            null
+          else if la == lb then
             "${rid a} and ${rid b} carry exactly the same labels, so nothing that finds ${a.kind or "?"}s by labels can pick one without the other"
           else if subsetOf la lb then
             "${rid a} carries a subset of ${rid b}'s labels, so any selector that finds ${rid a} also finds ${rid b}"
@@ -256,7 +265,16 @@ in
                   b = builtins.elemAt rs j;
                   rel = relationship a b;
                 in
-                if rel != null then
+                if sameIdentity a b then
+                  [
+                    {
+                      message =
+                        "In instance '${instanceName}': two ${kind}s are both named '${a.metadata.name or "?"}'"
+                        + " in namespace '${a.metadata.namespace or "?"}'. That is a name collision, not a label"
+                        + " problem: the manifest writer keeps one and drops the other. Rename one of them.";
+                    }
+                  ]
+                else if rel != null then
                   [
                     {
                       message =

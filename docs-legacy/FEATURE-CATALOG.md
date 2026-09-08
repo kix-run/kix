@@ -247,7 +247,7 @@ Colored diff against live cluster, snapshot, or previous build.
 
 #### `kix check <CLUSTER>`
 Three-layer validation: eval correctness → schema compliance (preflight tools like kubeconform) → scorecard policy.
-- The eval step is where every build-time check lives: constructor validators, error-level scorecard findings, and the 13 cross-resource resolution checks (`kix/lib/eval/validate.nix`: ServiceAccount, Role, ConfigMap, Service selector, HPA, StatefulSet headless Service, duplicate identity, managed-by label, selector consistency, Ingress backend, Namespace, NetworkPolicy selector, named targetPort). Since 2026-09 those 13 run inside `buildCluster`, so `nix build` and every `kix` command that evaluates a cluster run them; before that they ran only under `nix flake check`. Exemptions and the failure shape are in HANDBOOK §17.4.
+- The eval step is where every build-time check lives: constructor validators, error-level scorecard findings, and the 14 cross-resource resolution checks (`kix/lib/eval/validate.nix`: ServiceAccount, Role, ConfigMap, Service selector, HPA, StatefulSet headless Service, duplicate identity, managed-by label, selector consistency, Ingress backend, Namespace, NetworkPolicy selector, named targetPort, PodDisruptionBudget selector). Since 2026-09 those run inside `buildCluster`, so `nix build` and every `kix` command that evaluates a cluster run them; before that they ran only under `nix flake check`. Exemptions and the failure shape are in HANDBOOK §17.4.
 - `--sarif` — SARIF 2.1.0 JSON output (GitHub Code Scanning compatible).
 - Text output: TOOL | RESULT | DETAILS table.
 

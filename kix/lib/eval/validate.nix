@@ -81,14 +81,46 @@ rec {
         ) resources
       );
 
-      # Cluster-scoped resources (Namespace, ClusterRole, etc.) have no namespace.
-      # Namespace-scoped lookups need the referring resource's namespace.
-      # A name the author wrapped in `kix.untrackedRef` is external by
+      # Kinds that resolve through the cluster-scoped bucket: the built-in
+      # cluster-scoped kinds, nothing else. Before this every kind fell back
+      # to that bucket, so a Deployment in `a` could mount a ConfigMap that
+      # existed only as a cluster-scoped object of the same name (kixpkgs#71
+      # item 5). No check here looks up a custom cluster-scoped kind: an HPA
+      # can only target namespaced kinds, and the one legitimate cluster-
+      # scoped reference is a RoleBinding to a ClusterRole. A check that
+      # needs another kind extends this list.
+      builtInClusterScopedKinds = [
+        "APIService"
+        "CertificateSigningRequest"
+        "ClusterRole"
+        "ClusterRoleBinding"
+        "CSIDriver"
+        "CSINode"
+        "CustomResourceDefinition"
+        "IngressClass"
+        "MutatingWebhookConfiguration"
+        "Namespace"
+        "Node"
+        "PersistentVolume"
+        "PriorityClass"
+        "RuntimeClass"
+        "StorageClass"
+        "ValidatingAdmissionPolicy"
+        "ValidatingAdmissionPolicyBinding"
+        "ValidatingWebhookConfiguration"
+        "VolumeAttachment"
+      ];
+      isClusterScopedKind = kind: builtins.elem kind builtInClusterScopedKinds;
+
+      # Does `name` of `kind` exist for a referrer in namespace `ns`? The
+      # namespaced bucket first; the cluster-scoped bucket only for a kind
+      # that is cluster-scoped (a RoleBinding may name a ClusterRole). A
+      # name the author wrapped in `kix.untrackedRef` is external by
       # declaration and resolves whatever its kind.
       hasResource =
         kind: ns: name:
         byId ? "${kind}/${ns}/${name}"
-        || byId ? "${kind}/cluster-scoped/${name}"
+        || (isClusterScopedKind kind && byId ? "${kind}/cluster-scoped/${name}")
         || importIds ? "${kind}/${ns}/${name}"
         || externalNames ? "${ns}/${name}"
         || externalNames ? "cluster-scoped/${name}";
@@ -125,6 +157,15 @@ rec {
         "CronJob"
       ];
       workloads = builtins.filter (r: builtins.elem r.kind workloadKinds) resources;
+      nsOf = r: r.metadata.namespace or "cluster-scoped";
+
+      # A label selector reaches pods in its own namespace only, so a
+      # Service, NetworkPolicy or PodDisruptionBudget in `a` is not
+      # satisfied by a matching pod template in `b`. Same rule as the
+      # ServiceRef witness below.
+      selectsPodsIn =
+        ns: selector:
+        builtins.any (w: nsOf w == ns && selectorMatchesLabels selector (getPodLabels w)) workloads;
 
       getPodSpec =
         r:
@@ -164,11 +205,12 @@ rec {
           "view"
         ];
 
-      # A Service kix renders over pods an operator creates at runtime has no
-      # pod template to match. The package says so on the Service:
+      # A Service (or PodDisruptionBudget) kix renders over pods an operator
+      # creates at runtime has no pod template to match. The package says so
+      # on the resource:
       #   metadata.annotations."kix.dev/operand-of" = "<group>/<Kind>/<name>"
-      # names the CR whose operand pods it selects, and check 4 accepts it
-      # when that CR is in the build in the same namespace. Keyed by group
+      # names the CR whose operand pods it selects, and checks 4 and 14
+      # accept it when that CR is in the build in the same namespace. Keyed by group
       # and kind: kind names alone are not unique across API groups. This
       # replaced a global list of operator kinds plus a name-prefix guess
       # (v2_discussions/135, kixpkgs#70). Where the operator creates the
@@ -309,9 +351,7 @@ rec {
           let
             selector = svc.spec.selector or { };
             ns = svc.metadata.namespace or "cluster-scoped";
-            matchesAny =
-              builtins.any (w: selectorMatchesLabels selector (getPodLabels w)) workloads
-              || selectsRefPods ns selector;
+            matchesAny = selectsPodsIn ns selector || selectsRefPods ns selector;
           in
           if matchesAny then
             [ ]
@@ -525,10 +565,7 @@ rec {
         # Empty selector matches all pods in the namespace — always valid.
         if selector == { } then
           [ ]
-        else if
-          builtins.any (w: selectorMatchesLabels selector (getPodLabels w)) workloads
-          || selectsRefPods ns selector
-        then
+        else if selectsPodsIn ns selector || selectsRefPods ns selector then
           [ ]
         else
           [
@@ -538,7 +575,12 @@ rec {
 
       # --- 13. Service port name → container port name consistency ---
       # When a Service uses a named targetPort, that port name must exist in
-      # at least one matched workload's container ports.
+      # at least one matched workload's container ports. A Service that
+      # matches no pod template in the build is skipped here on purpose:
+      # either check 4 already reports it, or it is exempt there because
+      # its pods are an operator's (a ref witness or `kix.dev/operand-of`),
+      # and then there is no container spec in the build to read port
+      # names from. Nothing more can be checked without the pods.
 
       portNameFailures = builtins.concatMap (
         svc:
@@ -555,7 +597,9 @@ rec {
             tp != null && builtins.isString tp
           ) svcPorts;
           # Find all container port names in matched workloads.
-          matchedWorkloads = builtins.filter (w: selectorMatchesLabels selector (getPodLabels w)) workloads;
+          matchedWorkloads = builtins.filter (
+            w: nsOf w == ns && selectorMatchesLabels selector (getPodLabels w)
+          ) workloads;
           containerPortNames = builtins.concatMap (
             w:
             builtins.concatMap (c: map (p: p.name or null) (c.ports or [ ])) ((getPodSpec w).containers or [ ])
@@ -584,6 +628,39 @@ rec {
           ) namedTargetPorts
       ) (builtins.filter (r: r.kind == "Service") resources);
 
+      # --- 14. PodDisruptionBudget selector → pod template matching ---
+      # A PDB whose selector matches no pod in the build protects nothing,
+      # and it is also the one thing helm-dag.findOrphans used to compute
+      # (for chart-internal resources only) that no other check covered.
+      # Same witnesses as check 4: pod templates, ServiceRef selectors,
+      # and a `kix.dev/operand-of` declaration for operator-created pods.
+
+      pdbFailures = builtins.concatMap (
+        pdb:
+        let
+          selector = pdb.spec.selector.matchLabels or { };
+          ns = pdb.metadata.namespace or "cluster-scoped";
+          matchesAny = selectsPodsIn ns selector || selectsRefPods ns selector;
+          decl = operandOf pdb;
+        in
+        # No matchLabels: an empty selector or matchExpressions only. Nothing
+        # to resolve here.
+        if selector == { } || matchesAny || operandCrPresent pdb then
+          [ ]
+        else if decl != null && builtins.length (lib.splitString "/" decl) != 3 then
+          [
+            "PodDisruptionBudget ${ns}/${pdb.metadata.name} declares ${operandOfAnnotation}=${decl}, which is not of the form <group>/<Kind>/<name>"
+          ]
+        else if decl != null then
+          [
+            "PodDisruptionBudget ${ns}/${pdb.metadata.name} declares ${operandOfAnnotation}=${decl} but no such CR is in the build in namespace ${ns}"
+          ]
+        else
+          [
+            "PodDisruptionBudget ${ns}/${pdb.metadata.name} selector ${builtins.toJSON selector} matches no workload pod template"
+          ]
+      ) (builtins.filter (r: r.kind == "PodDisruptionBudget") resources);
+
       # --- Collect all failures ---
 
       allFailures =
@@ -599,7 +676,8 @@ rec {
         ++ ingressFailures
         ++ uniqueNamespaceFailures
         ++ networkPolicyFailures
-        ++ portNameFailures;
+        ++ portNameFailures
+        ++ pdbFailures;
     in
     allFailures;
 
