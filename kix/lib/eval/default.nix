@@ -10,6 +10,7 @@ let
   meta = import ../meta.nix { inherit lib; };
 
   scorecard = import ../scorecard.nix { inherit lib; };
+  validate = import ./validate.nix { inherit lib; };
   helpers = import ./helpers.nix { inherit lib; };
   edgeAnalysis = import ./edges.nix { inherit k8s; };
   roles = import ./roles.nix { inherit lib; };
@@ -67,6 +68,7 @@ let
       kixlib
       helpers
       scorecard
+      validate
       hooks
       roles
       ;

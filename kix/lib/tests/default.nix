@@ -441,6 +441,9 @@ let
         };
       in
       {
+        # Named part: `root` may only alias a named part (kixpkgs#25). Before
+        # this the whole netpol matrix failed on that check, unnoticed.
+        inherit crdRef;
         root = {
           resource = crdRef;
           out.netpol = netpolApi;
@@ -762,6 +765,9 @@ let
               kind = "ConfigMap";
               inherit name;
               namespace = ctx.nsResources.appns;
+              # Bare core mkResource stamps nothing; real hooks emit through
+              # the labelled facade. The cross-resource checks require it.
+              labels."app.kubernetes.io/managed-by" = "kix";
             })
           ];
         };
@@ -1756,6 +1762,17 @@ let
       in
       (rule.check { resource = bad; } != [ ] && rule.check { resource = good; } == [ ])
       || throw "volumeHasSource rule misjudged: bad=${builtins.toJSON (rule.check { resource = bad; })}";
+  }
+  // import ./validate.nix {
+    inherit
+      lib
+      k8s
+      mkCluster
+      baseInstances
+      manifests
+      evalFails
+      ;
+    validate = import ../eval/validate.nix { inherit lib; };
   };
 
   failures = lib.filterAttrs (

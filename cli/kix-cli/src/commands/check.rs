@@ -167,7 +167,10 @@ pub fn run(args: &CheckArgs, ctx: &mut CommandContext) -> Result<()> {
         None
     };
 
-    // Step 1: Nix evaluation (cross-resource validation happens during eval)
+    // Step 1: Nix evaluation. buildCluster runs the constructor validators,
+    // the scorecard (error findings) and the cross-resource resolution
+    // checks (kix/lib/eval/validate.nix) as assertions, so a failure in any
+    // of them surfaces here as an eval error.
     let eval_result = ctx.evaluator.eval_cluster(&args.cluster);
 
     if let Some(sp) = &spinner {

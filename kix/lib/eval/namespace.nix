@@ -13,6 +13,14 @@ in
       resourceQuota ? null,
       networkPolicies ? { },
     }:
+    let
+      # Bare k8s.mkResource stamps no labels; every other sealing path
+      # marks its output as kix-managed, and the cross-resource checks
+      # require it.
+      managedBy = {
+        "app.kubernetes.io/managed-by" = "kix";
+      };
+    in
     lib.fix (ns: {
       resource = mkResource {
         apiVersion = "v1";
@@ -34,6 +42,7 @@ in
             kind = "ResourceQuota";
             name = "${name}-quota";
             namespace = name;
+            labels = managedBy;
             spec.hard = resourceQuota;
           }
         else
@@ -46,6 +55,7 @@ in
           kind = "NetworkPolicy";
           name = "${name}-${polName}";
           namespace = name;
+          labels = managedBy;
           spec = pol;
         }
       ) networkPolicies;

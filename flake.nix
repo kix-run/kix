@@ -62,6 +62,24 @@
           };
         }
       );
+
+      # The kix/lib evaluation test matrix (kix/lib/tests) as a flake check,
+      # so `nix flake check` runs it. Until 2026-09 it ran only when someone
+      # typed the nix eval by hand, and 13 of its 54 cases were failing on
+      # main unnoticed. Forcing `ok` evaluates every case; a failure throws
+      # with the failing names.
+      libTests = lib.genAttrs systems (system: {
+        kix-lib-tests =
+          let
+            pkgs = inputs.nixpkgs.legacyPackages.${system};
+            result = (import ./kix/lib/tests { inherit lib; }).result;
+          in
+          assert result.ok;
+          pkgs.runCommand "kix-lib-tests" { } ''
+            echo "${toString (builtins.length result.passed)} kix/lib tests passed."
+            touch $out
+          '';
+      });
     in
     clusterOutputs
     // {
@@ -69,6 +87,10 @@
       packages = lib.mapAttrs (
         system: clusterPkgs: clusterPkgs // (cliPackages.${system} or { })
       ) clusterOutputs.packages;
+
+      checks = lib.mapAttrs (
+        system: clusterChecks: clusterChecks // (libTests.${system} or { })
+      ) clusterOutputs.checks;
 
       # Preserve the forPkgs API for external consumers.
       lib.forPkgs =

@@ -102,7 +102,7 @@ kixpkgs/
 │   │   ├── meta.nix           # Version system, peekPackageMeta, diagnostics
 │   │   └── mkFlake.nix        # Flake boilerplate generator
 │   ├── packages/              # Reusable kix packages (~50)
-│   ├── checks.nix             # Eval-time checks
+│   ├── checks.nix             # kubeconform schema check; re-exports the cross-resource checks from lib/eval/validate.nix
 │   └── pi-checks.nix          # PackageInstance schema/wiring checks
 ├── cli/                       # Rust workspace (kix CLI + operator)
 │   ├── kix/                   # Library crate: eval, manifest, cluster
@@ -171,7 +171,7 @@ ls result/
 |---|---|---|
 | `kix build <cluster>` | Render manifests to stdout (yaml/json) | `-o yaml|json` |
 | `kix diff <cluster>` | Diff vs live, snapshot, or previous build | `--snapshot <dir>`, `--from <result>`, `-o markdown` |
-| `kix check <cluster>` | Eval + schema + scorecard | `--sarif` |
+| `kix check <cluster>` | Eval (constructor validators, cross-resource checks, scorecard errors) + schema tools + scorecard report | `--sarif` |
 | `kix deploy <cluster>` (alias `apply`) | Wave-based apply with confirmation | `-y`, `--dry-run`, `--reconcile`, `--prune`, `--operator`, `--tui`, `--log-format=line|json|pretty` |
 | `kix status <cluster>` | Resource health table | `--operator` (group by package) |
 | `kix list clusters` | List flake clusters | |
@@ -999,6 +999,44 @@ scorecard.ruleOverrides.byNamespace = { kube-system = { noLatestTag = "info"; };
 
 `buildScorecardReport` aggregates findings; `scorecardToWarnings` converts them into `builtins.trace` (warning/info) or assertion failures (error). `kix check --sarif` emits SARIF 2.1.0.
 
+### 17.4 Cross-resource checks
+
+Thirteen checks over the finished manifest list run inside every cluster evaluation (`kix/lib/eval/validate.nix`, called from `buildCluster`). They ask whether the thing a name points at exists and whether labels really match a pod in the build. The scorecard rules ask a different question, whether a value came from the right place, and run before string context is stripped. Both are needed: a hand-typed selector with a typo gets the same scorecard warning as a correct one, and only these checks tell them apart.
+
+| # | Check | Skips |
+|---|---|---|
+| 1 | Workload `serviceAccountName` names a ServiceAccount in its namespace | `default`; unset |
+| 2 | (Cluster)RoleBinding `roleRef` names a Role that is in the build | names starting `system:`, ending `-psp`, or `admin`, `edit`, `view`, `cluster-admin` |
+| 3 | `volumes[].configMap.name` names a ConfigMap in the namespace | Secrets are not checked (often created out of band) |
+| 4 | Service selector matches at least one pod template | no selector; the control-plane scrape selectors (kube-dns, kube-scheduler, ...); the operator rule below |
+| 5 | HPA `scaleTargetRef` exists | |
+| 6 | StatefulSet `serviceName` is a headless Service (`clusterIP: None`) in the namespace | unset |
+| 7 | One resource per kind, namespace and name | |
+| 8 | Every resource carries `app.kubernetes.io/managed-by: kix` | |
+| 9 | Workload `selector.matchLabels` is within its pod template labels | |
+| 10 | Ingress backends name a Service in the namespace | |
+| 11 | Every `metadata.namespace` has a Namespace resource | `_`-prefixed sentinel namespaces (cluster-level instances) |
+| 12 | NetworkPolicy `podSelector` matches at least one pod template | empty selector |
+| 13 | A named `targetPort` exists on a container of a selected pod | numeric ports; Services that select no pod template |
+
+**Failure shape.** The eval fails like any other assertion:
+
+```
+error: Cluster 'ludo-kind' has 1 failed assertion(s):
+  - [validate] Service data/postgres-metrics selector {"app":"pg"} matches no workload pod template
+```
+
+`nix build`, `kix build`, `kix deploy` and `kix check` all stop there. Under `nix flake check` the same list appears as `validateManifestSet(cluster-<name>):` from `kix/checks.nix`.
+
+**Services for operator-created pods.** Check 4 cannot see pods an operator creates at runtime. Two ways through, in order of preference:
+
+1. `scope.mkServiceRef` for a Service the operator itself creates. It carries the selector and ports, renders as a marker, gates consumers until the Service exists, and no check or rule fires on it. `packages/stackgres-cluster` does this.
+2. The allowlist in `validate.nix` (`operatorManagedKinds`: Prometheus, Alertmanager, VMCluster, VMSingle, VMAgent, VMAlert, VMAlertmanager, VMAuth). A Service is exempt when a CR of a listed kind exists in the same namespace and the Service name starts with the CR name. The selector is not read. This is the heuristic the VictoriaMetrics and prometheus packages rely on today; doc 135 argues for retiring it once those packages use refs.
+
+**References to things kix does not render.** Wrap the name in `kix.untrackedRef` (a ServiceAccount the cluster provides, a ConfigMap another system owns). The value carries an inert marker in its string context; `buildCluster` collects those names before context is stripped, keyed by the referring resource's namespace, and the checks accept them there. A `scope.mkServiceRef` or `scope.mkSecretRef` marker counts as the Service or Secret it describes, in its namespace, and its declared pod selector counts as pods for the Service and NetworkPolicy selector checks. For a cluster-level `kix.mkImport`, pass `kind = "Service"` so the marker carries the kind; a consumer in another namespace wraps the name in `kix.untrackedRef`. A bare string that names nothing in the build fails, and so does a name derived from a resource with a suffix added (`self.sa.out.name + "-typo"`): provenance is not resolution. A suffix on an untracked ref stays untracked, since the author marked it. The StatefulSet headless-Service check reads `clusterIP: None` off a rendered Service and cannot accept a marker.
+
+**Where it sits.** `kix/lib/tests/validate.nix` holds a failing and a passing case per check. The scorecard is off unless a cluster enables it; these checks are always on.
+
 ## 18. Multi-environment stamping
 
 `kix.mkEnv` stamps the same instance set into env-prefixed namespaces:
@@ -1226,6 +1264,8 @@ Diff features:
 | `kix.monitor` does nothing | No `prometheus` instance; or the prometheus package doesn't expose `out.mkServiceMonitor` |
 | Build fails: "extra.* shadows managed field" | Move customizations into `spec`/`data`/`stringData` directly |
 | Workload starts before its CNPs | Per-workload CNPs are emitted *inside* `mkDeployment`/`mkStatefulSet`/`mkDaemonSet` and spliced into the workload's `extraDeps` so the workload depends on its own policies. If you see ordering issues, you're likely on the post-fixpoint path (RBAC/CRD/LB CNPs); check `processInstance` in `netpol.nix` |
+| Build fails with `[validate] Service ... matches no workload pod template` | The Service selects pods that are not in the build. Typo in a label, or operator-created pods: see §17.4 (`scope.mkServiceRef`, or the `operatorManagedKinds` allowlist) |
+| Build fails with `[validate] Duplicate resource: <kind>/<ns>/<name>` | Two different resources share an identity; the writer would keep one and drop the other. Common cause: an operator auto-instantiated once per environment (cluster-scoped RBAC and webhooks collide). Declare one shared instance |
 | Helm-chart resources lack DI edges to other charts | Helm opacity warning. The `helm-dag.nix` reconstructs intra-chart edges from K8s patterns (SA mounts, RBAC bindings, Service selectors, etc.); cross-chart edges require explicit `requires` |
 
 ## 28. References

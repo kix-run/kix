@@ -5,6 +5,7 @@
   kixlib,
   helpers,
   scorecard,
+  validate,
   hooks,
   roles,
   mkNamespace,
@@ -463,22 +464,62 @@ in
         else
           null;
 
-      allResources = [
-        k8s.kixCRDs.packageInstance
-        k8s.kixCRDs.activation
-      ]
-      ++ (builtins.concatMap collectResources allInstancesList)
-      ++ (builtins.concatMap (
-        nsName:
+      # One entry per store path. An instance's parts may name the same
+      # resource twice (an alias next to the part, a dependency's marker
+      # held as a part), and collectResources walks every attribute, so
+      # the raw list carries duplicates. Resources are content-addressed:
+      # same store path, same manifest. The manifest writer already keeps
+      # one file per identity; without this the duplicate check below saw
+      # the same resource twice and reported a collision that was not one.
+      allResources = dedupeByOutPath (
+        [
+          k8s.kixCRDs.packageInstance
+          k8s.kixCRDs.activation
+        ]
+        ++ (builtins.concatMap collectResources allInstancesList)
+        ++ (builtins.concatMap (
+          nsName:
+          let
+            ns = nsResources.${nsName};
+          in
+          [ ns.resource ]
+          ++ (if ns.quota != null then [ ns.quota ] else [ ])
+          ++ builtins.attrValues ns.netpols
+        ) realNsNames)
+        ++ clusterHookResources
+        ++ [ activation ]
+      );
+
+      # The finished, context-free manifest list: what the CLI reads, what
+      # the manifest writer emits, and what the cross-resource checks see.
+      rawManifestList = map (
+        r: builtins.fromJSON (builtins.unsafeDiscardStringContext (builtins.toJSON r.rawManifest))
+      ) allResources;
+
+      dedupeByOutPath =
+        rs:
         let
-          ns = nsResources.${nsName};
+          step =
+            acc: r:
+            let
+              key = if r ? outPath then builtins.unsafeDiscardStringContext (toString r.outPath) else null;
+            in
+            if key == null then
+              acc // { list = acc.list ++ [ r ]; }
+            else if acc.seen ? ${key} then
+              acc
+            else
+              {
+                seen = acc.seen // {
+                  ${key} = true;
+                };
+                list = acc.list ++ [ r ];
+              };
         in
-        [ ns.resource ]
-        ++ (if ns.quota != null then [ ns.quota ] else [ ])
-        ++ builtins.attrValues ns.netpols
-      ) realNsNames)
-      ++ clusterHookResources
-      ++ [ activation ];
+        (builtins.foldl' step {
+          seen = { };
+          list = [ ];
+        } rs).list;
 
       activeClusterInstances = lib.mapAttrs (
         nsName: nsInsts: lib.filterAttrs (instName: _: isActive nsName instName) nsInsts
@@ -513,11 +554,71 @@ in
         namespaceScorecardFindings ++ clusterScorecardFindings
       );
 
+      # Cross-resource resolution checks (kix/lib/eval/validate.nix) run on
+      # the finished manifest list and fail the build like any other
+      # assertion. Until 2026-09 they lived only in the flake `checks`
+      # output, which `nix build` and the kix CLI never evaluate
+      # (v2_discussions/135, kixpkgs#70).
+      crossResourceAssertions =
+        map
+          (f: {
+            assertion = false;
+            message = "[validate] ${f}";
+          })
+          (
+            validate.crossResourceFailures {
+              manifests = rawManifestList;
+              externalNames = externalRefNames;
+            }
+          );
+
+      # Names a package declared external with `kix.untrackedRef`: the value
+      # carries the inert marker's store path in its string context. Read
+      # here, before rawManifestList strips context, so the resolution
+      # checks can accept a ServiceAccount, ConfigMap, Role, Service or HPA
+      # target the author said kix does not own. Keyed "<namespace>/<name>"
+      # by the namespace of the resource that made the reference (or
+      # "cluster-scoped"), so a name marked external in one namespace does
+      # not excuse a dangling reference in another.
+      externalRefNames =
+        let
+          isMarked =
+            s: builtins.any k8s.markers.isUntrackedRefPath (builtins.attrNames (builtins.getContext s));
+          walk =
+            v:
+            if builtins.isString v then
+              (if isMarked v then [ (builtins.unsafeDiscardStringContext v) ] else [ ])
+            # rawManifest is JSON-shaped: sealing goes through builtins.toFile,
+            # which refuses derivation references, so no self-referential
+            # derivation attrset can be here.
+            else if builtins.isAttrs v then
+              builtins.concatMap walk (builtins.attrValues v)
+            else if builtins.isList v then
+              builtins.concatMap walk v
+            else
+              [ ];
+          # Attribute names may not carry context; the namespace value does.
+          nsOf =
+            r:
+            builtins.unsafeDiscardStringContext (
+              toString (r.rawManifest.metadata.namespace or "cluster-scoped")
+            );
+        in
+        builtins.listToAttrs (
+          builtins.concatMap (
+            r:
+            map (n: {
+              name = "${nsOf r}/${n}";
+              value = true;
+            }) (walk r.rawManifest)
+          ) allResources
+        );
+
       clusterDiagnostics = meta.collectClusterDiagnostics {
         clusterName = name;
         inherit allInstancesList;
         extraWarnings = crossScorecardDiag.warnings;
-        extraAssertions = crossScorecardDiag.assertions;
+        extraAssertions = crossScorecardDiag.assertions ++ crossResourceAssertions;
       };
 
       isInlinePackage = v: builtins.isAttrs v && v ? build && (v._type or "") != "kix-import";
@@ -619,9 +720,7 @@ in
 
                 inherit scorecardReport;
 
-                rawManifests = map (
-                  r: builtins.fromJSON (builtins.unsafeDiscardStringContext (builtins.toJSON r.rawManifest))
-                ) allResources;
+                rawManifests = rawManifestList;
               }
             )
           )

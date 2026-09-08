@@ -294,7 +294,19 @@ rec {
               intent = intent // {
                 name = intentName;
               };
-              inherit mkResource namespaceResource;
+              # Same as plugins/netpol/derive.nix: platform intents are sealed
+              # without a scope, so mark them kix-managed here.
+              mkResource =
+                args:
+                mkResource (
+                  args
+                  // {
+                    labels = (args.labels or { }) // {
+                      "app.kubernetes.io/managed-by" = "kix";
+                    };
+                  }
+                );
+              inherit namespaceResource;
               inherit (k8s) clusterScoped;
             }
           ) rawPlatformIntents;

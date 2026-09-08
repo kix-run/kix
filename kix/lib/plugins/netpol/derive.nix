@@ -458,7 +458,20 @@ in
           intent = intent // {
             name = intentName;
           };
-          mkResource = core.mkResource;
+          # Platform intents target pods outside any kix scope, so they are
+          # sealed with the bare core constructor, which stamps no labels.
+          # Mark them kix-managed here, once, whatever the enforcer is: the
+          # cross-resource checks require the label and gc/health key on it.
+          mkResource =
+            args:
+            core.mkResource (
+              args
+              // {
+                labels = (args.labels or { }) // {
+                  "app.kubernetes.io/managed-by" = "kix";
+                };
+              }
+            );
           inherit namespaceResource;
           inherit (core) clusterScoped;
         }
