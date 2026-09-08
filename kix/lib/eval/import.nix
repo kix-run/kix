@@ -46,6 +46,7 @@ rec {
       namespaceName,
       namespaceResource,
       clusterLabels ? { },
+      clusterDomain ? "cluster.local",
     }:
     let
       selectorLabels = {
@@ -96,7 +97,7 @@ rec {
           out = {
             inherit selector ports labels;
             inherit name;
-            fqdn = attachConnectCtx "${name}.${namespaceName}.svc";
+            fqdn = attachConnectCtx "${name}.${namespaceName}.svc.${clusterDomain}";
             port = attachConnectCtx (toString (builtins.head ports).port);
           };
         };
@@ -152,6 +153,7 @@ rec {
         if importDef.from != null then
           let
             importScope = mkImportScope {
+              clusterDomain = clusterConfig.clusterDomain or "cluster.local";
               inherit
                 instanceName
                 namespaceName

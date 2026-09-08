@@ -1815,6 +1815,58 @@ let
       in
       (good == [ ] && bad != [ ])
       || throw "monitor rule vs ServiceRef: good=${builtins.toJSON good} bad=${builtins.toJSON bad}";
+
+    # A ServiceRef's out.fqdn has the same form as a rendered Service's:
+    # `<name>.<ns>.svc.<clusterDomain>`. It used to stop at `.svc`, which
+    # only resolves through the pod's DNS search path.
+    t57-service-ref-fqdn-carries-cluster-domain =
+      let
+        refPackage = {
+          build =
+            { self, scope, ... }:
+            {
+              ref = scope.mkServiceRef {
+                name = "operated";
+                selector.app = "op";
+                ports = [
+                  {
+                    name = "http";
+                    port = 80;
+                  }
+                ];
+              };
+              cm = scope.mkResource {
+                apiVersion = "v1";
+                kind = "ConfigMap";
+                name = "wiring";
+                data.url = "http://${self.ref.out.fqdn}:${self.ref.out.port}/";
+              };
+              root = self.cm;
+            };
+        };
+        urlWith =
+          extraModule:
+          let
+            ms = manifests (
+              mkCluster (
+                [
+                  baseInstances
+                  { instances.infra.op.package = refPackage; }
+                ]
+                ++ extraModule
+              )
+            );
+            cm = lib.findFirst (m: (m.metadata.name or "") == "wiring") null ms;
+          in
+          cm.data.url;
+        dflt = urlWith [ ];
+        custom = urlWith [ { clusterDomain = "k8s.example"; } ];
+      in
+      (
+        dflt == "http://operated.infra.svc.cluster.local:80/"
+        && custom == "http://operated.infra.svc.k8s.example:80/"
+      )
+      || throw "ref fqdn: default=${dflt} custom=${custom}";
   }
   // import ./validate.nix {
     inherit

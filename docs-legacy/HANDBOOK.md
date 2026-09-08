@@ -409,7 +409,7 @@ Use this only for fixtures and inline cluster definitions. Files in `kix/package
 | `scope.mkOptional cond builder` | Gate a resource on a boolean. `builder` may be a thunk `(_: ...)` to avoid eager eval when `cond` is false |
 | `scope.mkSecret { ... }` | Secret with enriched `out` (see §21). **Always** use this instead of `scope.mkResource { kind = "Secret"; }` |
 | `scope.mkSecretRef { ... }` | Reference an externally-managed Secret (Vault, ESO, cert-manager). Emits a PackageInstance import marker; deploy verifies the Secret exists before applying dependents. See §21 |
-| `scope.mkServiceRef { name, selector, ports, labels?, requires? }` | Reference an externally-managed Service (operator-provisioned). `out.{name, fqdn, port, labels}` carry context; `out.{selector, ports}` are the declared shapes. The marker is Ready when the Service has ready endpoints |
+| `scope.mkServiceRef { name, selector, ports, labels?, requires? }` | Reference an externally-managed Service (operator-provisioned). `out.{name, fqdn, port, labels}` carry context (`out.fqdn` is `${name}.${ns}.svc.${clusterDomain}`, the same form as a rendered Service); `out.{selector, ports}` are the declared shapes. The marker is Ready when the Service has ready endpoints |
 | `scope.mkWebhookService { ... }` | Builds Service + ValidatingWebhookConfiguration + MutatingWebhookConfiguration in one call |
 | `scope.mkCRD spec` | Create a CustomResourceDefinition. Pair with `crd.fromKind` builders (§22) |
 | `scope.mkCRDRef { kind; ... }` | CRD marker (no CRD resource). Use when the CRD is owned externally |

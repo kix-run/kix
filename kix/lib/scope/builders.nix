@@ -764,7 +764,9 @@ in
           };
           attachConnectCtx = value: builtins.appendContext (toString value) (resourceCtx // endpointFactCtx);
 
-          fqdn = "${name}.${namespaceName}.svc";
+          # Same form as a rendered Service's out.fqdn (core/resource.nix):
+          # the short `.svc` form resolved only through the pod's search path.
+          fqdn = "${name}.${namespaceName}.svc.${clusterDomain}";
         in
         marker
         // {
