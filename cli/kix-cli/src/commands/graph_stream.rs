@@ -532,6 +532,7 @@ fn detail_message(detail: &Option<NodeDetail>) -> Option<String> {
         NodeDetail::RecreatedInPlace { .. } => {
             Some("recreated (immutable-field conflict)".to_string())
         }
+        NodeDetail::Rerun { reason } => Some(format!("ran again ({reason})")),
     }
 }
 

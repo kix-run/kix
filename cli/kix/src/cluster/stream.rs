@@ -33,9 +33,15 @@ pub enum TransitionKind {
     /// Identity-hash unchanged; no work needed. Rendered dim, folded
     /// aggressively.
     Skip,
-    /// Stage E (future): atomic `Drain → Delete(old) → Apply(new)` triggered
-    /// by an immutable-field conflict. Today this surfaces as an `Apply` that
-    /// recovers via in-place recreate; once promoted, it owns a compound row.
+    /// Delete the live object, then apply. Tagged `recreate` because that
+    /// is the act, whatever the trigger. Today the only producer is the
+    /// rerun rule: a manifest carrying `kix.dev/rerun` (a probe Job) whose
+    /// identity hash changed is run again, never patched, and the reason
+    /// rides [`NodeDetail::Rerun`]. The executor applies plainly when
+    /// nothing is live. Stage E (future) will produce it for an
+    /// immutable-field conflict on any kind; today that recovers under
+    /// `Apply` for a pre-authorized orphan (doc 81 folds both into the
+    /// planner's registry).
     Recreate,
     /// Stage E (future): doc 67 stateful migration pair barrier. Today
     /// detected as warnings by `accept_migrations`; not yet a transition.
@@ -162,6 +168,11 @@ pub enum NodeDetail {
         message: String,
         /// Populated for Secret import mismatches — the exact missing keys.
         missing_keys: Vec<String>,
+        /// The last lines a failed container wrote, read from its
+        /// termination message (a Job whose pod ran with
+        /// `terminationMessagePolicy: FallbackToLogsOnError`). Empty when
+        /// nothing was recorded.
+        output: Vec<String>,
     },
     /// SOPS-hydrated N keys into this Secret.
     SecretHydrated { keys: usize },
@@ -169,6 +180,9 @@ pub enum NodeDetail {
     SecretHydrationFailed(String),
     /// In-place recreate consumed the immutable-field conflict.
     RecreatedInPlace { reason: String },
+    /// A resource carrying `kix.dev/rerun` was deleted and created again
+    /// under the rerun rule (its identity changed, or its last run failed).
+    Rerun { reason: String },
 }
 
 /// Metadata attached to a node at plan-time.

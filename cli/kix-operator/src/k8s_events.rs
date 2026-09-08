@@ -214,6 +214,13 @@ fn node_event(node: &NodeId, verdict: &Verdict, detail: Option<&NodeDetail>) -> 
                 action: "Recreated".into(),
                 secondary: None,
             }),
+            Some(NodeDetail::Rerun { reason }) => Some(KEvent {
+                type_: EventType::Normal,
+                reason: "Rerun".into(),
+                note: Some(format!("{resource} ran again: {reason}")),
+                action: "Rerun".into(),
+                secondary: None,
+            }),
             _ => Some(KEvent {
                 type_: EventType::Normal,
                 reason: "ResourceReady".into(),
@@ -223,7 +230,7 @@ fn node_event(node: &NodeId, verdict: &Verdict, detail: Option<&NodeDetail>) -> 
             }),
         },
         Verdict::Failed { message } => {
-            let note = match detail {
+            let mut note = match detail {
                 Some(NodeDetail::ReadinessFailed { missing_keys, .. })
                     if !missing_keys.is_empty() =>
                 {
@@ -234,6 +241,24 @@ fn node_event(node: &NodeId, verdict: &Verdict, detail: Option<&NodeDetail>) -> 
                 }
                 _ => format!("{resource}: {message}"),
             };
+            if let Some(NodeDetail::ReadinessFailed { output, .. }) = detail
+                && !output.is_empty()
+            {
+                note.push('\n');
+                note.push_str(&output.join("\n"));
+            }
+            // Event notes are capped at 1 KiB by the apiserver; a note over
+            // the cap is rejected and the event vanishes. Keep the head: the
+            // resource, the reason and the first output lines.
+            const NOTE_CAP: usize = 900;
+            if note.len() > NOTE_CAP {
+                let mut cut = NOTE_CAP;
+                while !note.is_char_boundary(cut) {
+                    cut -= 1;
+                }
+                note.truncate(cut);
+                note.push_str("\n... (truncated, see kubectl logs)");
+            }
             Some(KEvent {
                 type_: EventType::Warning,
                 reason: "NodeFailed".into(),

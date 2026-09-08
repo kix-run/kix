@@ -1,5 +1,6 @@
 ---
 source: kix-cli/tests/snapshot_test.rs
+assertion_line: 59
 expression: stdout
 ---
 Cluster: example
@@ -42,7 +43,7 @@ Resource kinds:
 
 Resources:
   (cluster-scoped):
-    Activation/example-6ay8fg561jgz
+    Activation/example-8wszfx7y50ix
     ClusterRole/cert-manager-cainjector
     ClusterRole/cert-manager-cluster-view
     ClusterRole/cert-manager-controller-approve:cert-manager-io

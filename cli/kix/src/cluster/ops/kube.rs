@@ -16,7 +16,7 @@ use tokio::sync::RwLock;
 use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
 
 use super::super::activation::{self, WaveRecord, WaveStatus};
-use super::super::apply::{self, ApplyError, ApplyResult};
+use super::super::apply::{self, ApplyAction, ApplyError, ApplyResult};
 use super::super::cancel::CancelToken;
 use super::super::errors::{FailureClass, classify, describe};
 use super::super::fetch::{self, FetchError};
@@ -230,6 +230,27 @@ impl ClusterOps for KubeOps {
         .await
     }
 
+    async fn get_live(&self, rid: &ResourceId) -> Result<Option<Value>, String> {
+        // Refresh on a miss, as apply does: discovery can lag a CRD apply.
+        let found = match self.cached_kind(&rid.kind).await {
+            Some(found) => Some(found),
+            None => {
+                if let Ok(new) = fetch::discover_resources(&self.client).await {
+                    let mut d = self.discovery.write().await;
+                    *d = fetch::merge_discovery(&d, new);
+                }
+                self.cached_kind(&rid.kind).await
+            }
+        };
+        let (ar, scope) =
+            found.ok_or_else(|| format!("kind {} not in discovery cache", rid.kind))?;
+        let api = self.api_for(&ar, &scope, rid);
+        api.get_opt(&rid.name)
+            .await
+            .map(|o| o.map(|obj| obj.data))
+            .map_err(|e| format!("get failed: {}", describe(&e)))
+    }
+
     async fn recreate_in_place(&self, manifest: &Value) -> Result<ApplyResult, String> {
         let rid = ResourceId::from_value(manifest);
         let (ar, scope) = self
@@ -242,25 +263,71 @@ impl ClusterOps for KubeOps {
             dry_run: self.cfg.dry_run,
             ..Default::default()
         };
-        api.delete(&rid.name, &dp)
+        // An object that is already gone (TTL-reaped, deleted by hand,
+        // or deleted by a concurrent run) is what we wanted anyway.
+        let deleted = match api.delete(&rid.name, &dp).await {
+            Ok(_) => true,
+            Err(kube::Error::Api(ae)) if ae.code == 404 => false,
+            Err(e) => return Err(format!("delete failed: {}", describe(&e))),
+        };
+
+        // Under dry run the delete was checked but nothing went away, so
+        // the dry-run apply of the changed manifest hits the immutable-field
+        // 422 the real path avoids by deleting first. Every other answer
+        // (schema, admission, RBAC, field conflicts) is the validation a dry
+        // run promises, so the apply still runs; only that one error is the
+        // expected "would be created after the delete".
+        if self.cfg.dry_run {
+            let live = self.live_activations();
+            return match apply::apply_resource(
+                &self.client,
+                &ar,
+                scope,
+                manifest,
+                true,
+                self.cfg.activation_identity_hash.as_deref(),
+                live.as_ref(),
+                self.cfg.force_conflicts,
+            )
             .await
-            .map_err(|e| format!("delete failed: {}", describe(&e)))?;
+            {
+                Ok(result) => Ok(result),
+                Err(ApplyError::ImmutableConflict { .. }) => Ok(ApplyResult {
+                    action: ApplyAction::Created,
+                    resource_id: rid,
+                }),
+                Err(e) => Err(format!("dry-run re-apply failed: {e}")),
+            };
+        }
 
         // Poll for deletion. Transient API errors are treated as "probably
         // gone" since the delete itself succeeded; any real problem
-        // re-surfaces on the re-apply. Under dry-run nothing was deleted, so
-        // do not wait for it to vanish.
-        if !self.cfg.dry_run {
+        // re-surfaces on the re-apply. An object still there at the end of
+        // the wait is reported as such rather than re-applied: the apply
+        // would fail with the same immutable-field 422 and say nothing about
+        // why.
+        if deleted {
             let deadline = tokio::time::Instant::now() + RECREATE_DELETE_TIMEOUT;
+            let mut gone = false;
             while tokio::time::Instant::now() < deadline {
                 match api.get_opt(&rid.name).await {
-                    Ok(None) => break,
+                    Ok(None) => {
+                        gone = true;
+                        break;
+                    }
                     Ok(Some(_)) => tokio::time::sleep(Duration::from_millis(500)).await,
                     Err(e) => {
                         tracing::debug!(resource = %rid, error = %e, "transient error polling deletion; assuming gone");
+                        gone = true;
                         break;
                     }
                 }
+            }
+            if !gone && matches!(api.get_opt(&rid.name).await, Ok(Some(_))) {
+                return Err(format!(
+                    "{rid} still exists {}s after delete (stuck finalizer?); not re-applied",
+                    RECREATE_DELETE_TIMEOUT.as_secs()
+                ));
             }
         }
 
@@ -302,10 +369,10 @@ impl ClusterOps for KubeOps {
             // The object was just applied, so its kind is known. If the
             // cache lost it there is nothing to poll; treat as not found.
             None => {
-                return Ok(ReadinessResult::Failed(format!(
-                    "kind {} not in discovery cache",
-                    rid.kind
-                )));
+                return Ok(ReadinessResult::Failed {
+                    message: format!("kind {} not in discovery cache", rid.kind),
+                    output: Vec::new(),
+                });
             }
         };
         let ns = (rid.namespace != CLUSTER_SCOPED).then_some(rid.namespace.as_str());

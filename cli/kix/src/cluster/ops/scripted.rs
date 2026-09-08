@@ -106,6 +106,8 @@ pub struct NodeScript {
     pub apply: Behaviour<Result<ApplyAction, ApplyFailure>>,
     pub recreate: Behaviour<Result<ApplyAction, String>>,
     pub ready: Behaviour<Ready>,
+    /// What [`ClusterOps::get_live`] answers. Default: nothing is live.
+    pub live: Behaviour<Result<Option<Value>, String>>,
 }
 
 /// Apply failures the engine distinguishes.
@@ -124,6 +126,7 @@ impl Default for NodeScript {
             apply: Behaviour::Now(Ok(ApplyAction::Created)),
             recreate: Behaviour::Now(Ok(ApplyAction::Configured)),
             ready: Behaviour::Now(Ready::Ready),
+            live: Behaviour::Now(Ok(None)),
         }
     }
 }
@@ -141,6 +144,14 @@ impl NodeScript {
         self.hydrate = b;
         self
     }
+    pub fn recreate(mut self, b: Behaviour<Result<ApplyAction, String>>) -> Self {
+        self.recreate = b;
+        self
+    }
+    pub fn live(mut self, b: Behaviour<Result<Option<Value>, String>>) -> Self {
+        self.live = b;
+        self
+    }
 }
 
 /// One recorded call, with the virtual time it happened.
@@ -150,6 +161,7 @@ pub enum Call {
     HydrateStart(ResourceId),
     ApplyStart(ResourceId),
     ApplyEnd(ResourceId),
+    GetLive(ResourceId),
     RecreateStart(ResourceId),
     ReadyStart(ResourceId),
     ReadyEnd(ResourceId),
@@ -386,6 +398,12 @@ impl ClusterOps for ScriptedOps {
         }
     }
 
+    async fn get_live(&self, rid: &ResourceId) -> Result<Option<Value>, String> {
+        self.record(Call::GetLive(rid.clone()));
+        let script = self.node_script(rid);
+        script.live.run().await
+    }
+
     async fn recreate_in_place(&self, manifest: &Value) -> Result<ApplyResult, String> {
         let rid = ResourceId::from_value(manifest);
         self.record(Call::RecreateStart(rid.clone()));
@@ -424,7 +442,10 @@ impl ClusterOps for ScriptedOps {
                     self.record(Call::ReadyEnd(rid.clone()));
                     return Ok(match other {
                         Ready::Ready => ReadinessResult::Ready,
-                        Ready::Failed(m) => ReadinessResult::Failed(m),
+                        Ready::Failed(m) => ReadinessResult::Failed {
+                            message: m,
+                            output: Vec::new(),
+                        },
                         Ready::Cancelled => ReadinessResult::Cancelled,
                         Ready::TimedOut => ReadinessResult::TimedOut {
                             elapsed: Duration::ZERO,

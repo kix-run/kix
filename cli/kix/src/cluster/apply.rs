@@ -25,6 +25,26 @@ pub const IDENTITY_HASH_ANNOTATION: &str = "kix.dev/identity-hash";
 /// Annotation key for activations (comma-separated activation identity-hashes).
 pub const ACTIVATIONS_ANNOTATION: &str = "kix.dev/activations";
 
+/// Annotation that opts a run-once resource into the rerun rule: when its
+/// identity hash differs from the one the cluster last ran, or the live
+/// object failed, the engine deletes and recreates it instead of applying
+/// in place. Stamped by `kix.healthCheck` on probe Jobs.
+pub const RERUN_ANNOTATION: &str = "kix.dev/rerun";
+
+/// Does this manifest opt into the rerun rule? Jobs only: the rule deletes
+/// the live object, and for anything with a rollout (a Deployment stuck on
+/// its progress deadline is "failed" too) that would be an outage, not a
+/// retry. The Nix side refuses the annotation on other kinds as well
+/// (cross-resource check 16).
+pub fn wants_rerun(manifest: &Value) -> bool {
+    manifest.get("kind").and_then(Value::as_str) == Some("Job")
+        && manifest
+            .pointer("/metadata/annotations")
+            .and_then(|a| a.get(RERUN_ANNOTATION))
+            .and_then(Value::as_str)
+            == Some("on-change")
+}
+
 /// Field manager name for server-side apply.
 const FIELD_MANAGER: &str = "kix";
 
@@ -49,8 +69,9 @@ pub enum ApplyError {
     },
 
     #[error(
-        "immutable-field conflict on {resource}: the live resource has one or more fields that cannot be updated in place. \
-         To recover, include this resource in the prune set so reconcile is authorized to delete + recreate it. \
+        "immutable-field conflict on {resource}: the live object has one or more fields that cannot change in place. \
+         Kix recreates a Job that carries kix.dev/rerun and a resource that is being pruned; \
+         for anything else, delete the object and deploy again. \
          Underlying error: {source}"
     )]
     ImmutableConflict {

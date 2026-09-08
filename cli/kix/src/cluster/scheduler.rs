@@ -34,7 +34,7 @@ use tokio::task::JoinSet;
 
 use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
 
-use super::apply::{ApplyAction, ApplyError, ChangeAction};
+use super::apply::{ApplyAction, ApplyError, ChangeAction, wants_rerun};
 use super::cancel::CancelToken;
 use super::graph::ResourceGraph;
 use super::ops::ClusterOps;
@@ -59,9 +59,15 @@ pub struct PlanNodeEntry {
     pub id: NodeId,
     pub kind: TransitionKind,
     /// The concrete change to apply. For [`TransitionKind::Skip`] this carries
-    /// the `ResourceId`; for [`TransitionKind::Apply`] it carries the manifest.
+    /// the `ResourceId`; for [`TransitionKind::Apply`] and
+    /// [`TransitionKind::Recreate`] it carries the manifest.
     pub action: ChangeAction,
     pub meta: NodeMeta,
+    /// The manifest, when it carries `kix.dev/rerun`. An `Apply` with it is
+    /// tagged `Recreate`; a `Skip` with it keeps its tag but still runs a
+    /// task, because a live object that failed is recreated even though
+    /// nothing changed.
+    pub rerun: Option<Value>,
 }
 
 /// The planner's output. Handed to [`run_deploy`] which consumes it.
@@ -107,7 +113,9 @@ impl DeployPlan {
                 // occur in practice, but stay defensive).
                 None | Some(ChangeAction::Orphan(_)) => ChangeAction::Skip(node.id.clone()),
             };
+            let rerun = wants_rerun(&node.manifest).then(|| node.manifest.clone());
             let kind = match &action {
+                ChangeAction::Apply(_) if rerun.is_some() => TransitionKind::Recreate,
                 ChangeAction::Apply(_) => TransitionKind::Apply,
                 ChangeAction::Skip(_) => TransitionKind::Skip,
                 ChangeAction::Orphan(_) => TransitionKind::Delete,
@@ -129,6 +137,7 @@ impl DeployPlan {
                 kind,
                 action,
                 meta,
+                rerun,
             });
         }
 
@@ -219,6 +228,13 @@ pub struct SchedulerConfig {
     pub concurrency: usize,
     /// When the progress watchdog warns and when it gives up.
     pub stall: StallPolicy,
+    /// Recreate an unchanged node under `kix.dev/rerun` whose live object
+    /// failed. `kix deploy` and `kix rollback` set this: a person asked for
+    /// a run and a failed probe should get its retry. The operator leaves
+    /// it off: it diffs against live objects and requeues a failed run
+    /// every 30 s, so on a degraded cluster this would delete and recreate
+    /// the probe Job forever.
+    pub rerun_failed: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -383,6 +399,7 @@ pub async fn run_deploy(
         timeout: config.timeout,
         orphan_set: orphan_set.clone(),
         dry_run: config.dry_run,
+        rerun_failed: config.rerun_failed,
         progress: progress.clone(),
         observer: observer.clone(),
     });
@@ -421,8 +438,10 @@ pub async fn run_deploy(
             let entry = state.node_entry(&node_id).clone();
 
             // Skip nodes terminate immediately: no task, just two events
-            // back-to-back.
-            if matches!(entry.kind, TransitionKind::Skip) {
+            // back-to-back. A skipped resource under the rerun rule is the
+            // exception: its live object may have failed, so it runs a task
+            // that reads it.
+            if matches!(entry.kind, TransitionKind::Skip) && entry.rerun.is_none() {
                 emit(DeployEvent::NodeStateChanged {
                     node: node_id.clone(),
                     kind: entry.kind,
@@ -598,11 +617,32 @@ pub async fn run_deploy(
                 match outcome {
                     NodeOutcome::Ready { apply_action } => {
                         checkpoints.count(&apply_action, &mut result);
+                        // A rerun-annotated Skip node that found its live
+                        // object healthy is an unchanged resource like any
+                        // other and still belongs to this activation.
+                        if matches!(entry.kind, TransitionKind::Skip)
+                            && let NodeId::Resource(rid) = &node_id
+                        {
+                            skipped.push(rid.clone());
+                        }
                         emit(DeployEvent::NodeStateChanged {
                             node: node_id.clone(),
                             kind: entry.kind,
                             verdict: Verdict::Ready,
                             detail: Some(NodeDetail::Applied(apply_action)),
+                        });
+                        finish_success(&mut state, &mut barrier, &node_id, &entry);
+                    }
+                    NodeOutcome::Rerun {
+                        apply_action,
+                        reason,
+                    } => {
+                        checkpoints.count(&apply_action, &mut result);
+                        emit(DeployEvent::NodeStateChanged {
+                            node: node_id.clone(),
+                            kind: entry.kind,
+                            verdict: Verdict::Ready,
+                            detail: Some(NodeDetail::Rerun { reason }),
                         });
                         finish_success(&mut state, &mut barrier, &node_id, &entry);
                     }
@@ -1195,6 +1235,7 @@ struct NodeCtx {
     timeout: Duration,
     orphan_set: HashSet<ResourceId>,
     dry_run: bool,
+    rerun_failed: bool,
     progress: Arc<Progress>,
     observer: Arc<dyn DeployObserver>,
 }
@@ -1214,6 +1255,11 @@ enum NodeOutcome {
         apply_action: ApplyAction,
         reason: String,
     },
+    /// Deleted and created again under the rerun rule.
+    Rerun {
+        apply_action: ApplyAction,
+        reason: String,
+    },
     Failed {
         detail: NodeDetail,
         message: String,
@@ -1222,17 +1268,67 @@ enum NodeOutcome {
 }
 
 /// Runs on its own task. Hydrate, apply, wait for readiness, report.
+///
+/// Apply and Recreate nodes come here; so does a Skip node carrying
+/// `kix.dev/rerun`, whose live object is read and recreated when it
+/// failed. Other Skip nodes are short-circuited in the main loop;
+/// Migrate/Drain/Delete/Pause are Stage E/F.
 async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome {
-    // Only Apply reaches this path today; Skip is short-circuited in the
-    // main loop, and Recreate/Migrate/Drain/Delete/Pause are Stage E/F.
-    let manifest = match &entry.action {
-        ChangeAction::Apply(m) => m.clone(),
-        ChangeAction::Skip(_) => {
+    // Why a rerun node is deleted before it is applied. `None` for a plain
+    // apply.
+    let mut rerun_reason: Option<&'static str> = None;
+    let manifest = match (&entry.action, &entry.rerun) {
+        (ChangeAction::Apply(m), _) => m.clone(),
+        (ChangeAction::Skip(rid), Some(manifest)) => {
+            // Unchanged, but a probe that failed against the last
+            // activation must run again without a manual delete. Where the
+            // retry is off (the operator) the failure is still reported:
+            // a red deploy gate must not read as healthy.
+            let live = ctx.ops.get_live(rid).await;
+            let terminal = match &live {
+                Ok(Some(obj)) => readiness::classify_workload_terminal(obj, &rid.kind),
+                _ => None,
+            };
+            match (live, terminal) {
+                (Ok(Some(_)), Some((reason, detail))) => {
+                    if !ctx.rerun_failed {
+                        let message = format!(
+                            "{}: {detail}; unchanged since its last run, which failed. \
+                             Deploy with the CLI to run it again, or change an input",
+                            reason.as_str()
+                        );
+                        return NodeOutcome::Failed {
+                            detail: NodeDetail::ReadinessFailed {
+                                message: message.clone(),
+                                missing_keys: Vec::new(),
+                                output: Vec::new(),
+                            },
+                            message,
+                        };
+                    }
+                    rerun_reason = Some("the last run failed");
+                    manifest.clone()
+                }
+                (Ok(_), _) => {
+                    return NodeOutcome::Ready {
+                        apply_action: ApplyAction::Unchanged,
+                    };
+                }
+                (Err(e), _) => {
+                    let message = format!("could not read the live object: {e}");
+                    return NodeOutcome::Failed {
+                        detail: NodeDetail::ApplyFailed(message.clone()),
+                        message,
+                    };
+                }
+            }
+        }
+        (ChangeAction::Skip(_), None) => {
             return NodeOutcome::Ready {
                 apply_action: ApplyAction::Unchanged,
             };
         }
-        ChangeAction::Orphan(_) => {
+        (ChangeAction::Orphan(_), _) => {
             return NodeOutcome::Ready {
                 apply_action: ApplyAction::Skipped,
             };
@@ -1249,7 +1345,7 @@ async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome {
                 for hr in &results {
                     ctx.emit(DeployEvent::NodeStateChanged {
                         node: NodeId::Resource(hr.rid.clone()),
-                        kind: TransitionKind::Apply,
+                        kind: entry.kind,
                         verdict: Verdict::Running,
                         detail: Some(NodeDetail::SecretHydrated {
                             keys: hr.keys_injected,
@@ -1269,51 +1365,87 @@ async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome {
         manifest
     };
 
+    // The rerun rule: a changed resource carrying `kix.dev/rerun` is never
+    // patched. When something is live it is deleted first (foreground, so
+    // a Job's pod goes with it); when nothing is, a plain apply creates it.
+    if matches!(entry.kind, TransitionKind::Recreate) && rerun_reason.is_none() {
+        match ctx.ops.get_live(&rid).await {
+            Ok(Some(_)) => rerun_reason = Some("changed since the last run"),
+            Ok(None) => {}
+            Err(e) => {
+                let message = format!("could not read the live object: {e}");
+                return NodeOutcome::Failed {
+                    detail: NodeDetail::ApplyFailed(message.clone()),
+                    message,
+                };
+            }
+        }
+    }
+
     // Apply. Kind resolution (with refresh-on-miss) lives in the ops layer.
     ctx.progress.set_phase(&node, Phase::Apply);
     let applied_action: ApplyAction;
     let mut recreated_reason: Option<String> = None;
-    match ctx.ops.apply(&manifest).await {
-        Ok(result) => {
-            applied_action = result.action;
-        }
-        Err(ApplyError::ImmutableConflict { source, .. }) if ctx.orphan_set.contains(&rid) => {
-            let reason = source.to_string();
-            match ctx.ops.recreate_in_place(&manifest).await {
-                Ok(apply_result) => {
-                    applied_action = apply_result.action;
-                    recreated_reason = Some(reason);
-                }
-                Err(e) => {
-                    return NodeOutcome::Failed {
-                        detail: NodeDetail::ApplyFailed(e.clone()),
-                        message: e,
-                    };
-                }
+    if let Some(reason) = rerun_reason {
+        match ctx.ops.recreate_in_place(&manifest).await {
+            Ok(apply_result) => {
+                applied_action = apply_result.action;
+            }
+            Err(e) => {
+                let message = format!("rerun ({reason}) failed: {e}");
+                return NodeOutcome::Failed {
+                    detail: NodeDetail::ApplyFailed(message.clone()),
+                    message,
+                };
             }
         }
-        Err(e) => {
-            return NodeOutcome::Failed {
-                detail: NodeDetail::ApplyFailed(e.to_string()),
-                message: e.to_string(),
-            };
+    } else {
+        match ctx.ops.apply(&manifest).await {
+            Ok(result) => {
+                applied_action = result.action;
+            }
+            Err(ApplyError::ImmutableConflict { source, .. }) if ctx.orphan_set.contains(&rid) => {
+                let reason = source.to_string();
+                match ctx.ops.recreate_in_place(&manifest).await {
+                    Ok(apply_result) => {
+                        applied_action = apply_result.action;
+                        recreated_reason = Some(reason);
+                    }
+                    Err(e) => {
+                        return NodeOutcome::Failed {
+                            detail: NodeDetail::ApplyFailed(e.clone()),
+                            message: e,
+                        };
+                    }
+                }
+            }
+            Err(e) => {
+                return NodeOutcome::Failed {
+                    detail: NodeDetail::ApplyFailed(e.to_string()),
+                    message: e.to_string(),
+                };
+            }
         }
     }
 
     // Surface apply outcome to the renderer as a mid-flight progress event.
     ctx.emit(DeployEvent::NodeStateChanged {
         node: node.clone(),
-        kind: TransitionKind::Apply,
+        kind: entry.kind,
         verdict: Verdict::Running,
         detail: Some(NodeDetail::Applied(applied_action.clone())),
     });
 
-    let done = |recreated_reason: Option<String>| match recreated_reason {
-        Some(reason) => NodeOutcome::Recreated {
+    let done = |recreated_reason: Option<String>| match (rerun_reason, recreated_reason) {
+        (Some(reason), _) => NodeOutcome::Rerun {
+            apply_action: applied_action.clone(),
+            reason: reason.to_string(),
+        },
+        (None, Some(reason)) => NodeOutcome::Recreated {
             apply_action: applied_action.clone(),
             reason,
         },
-        None => NodeOutcome::Ready {
+        (None, None) => NodeOutcome::Ready {
             apply_action: applied_action.clone(),
         },
     };
@@ -1337,7 +1469,7 @@ async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome {
     let on_status = |msg: &str| {
         ctx.emit(DeployEvent::NodeStateChanged {
             node: node.clone(),
-            kind: TransitionKind::Apply,
+            kind: entry.kind,
             verdict: Verdict::Running,
             detail: Some(NodeDetail::ReadinessProgress(msg.to_string())),
         });
@@ -1361,6 +1493,7 @@ async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome {
                 detail: NodeDetail::ReadinessFailed {
                     message: e.to_string(),
                     missing_keys: Vec::new(),
+                    output: Vec::new(),
                 },
                 message: e.to_string(),
             };
@@ -1377,10 +1510,11 @@ async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome {
             },
             message,
         },
-        ReadinessResult::Failed(message) => NodeOutcome::Failed {
+        ReadinessResult::Failed { message, output } => NodeOutcome::Failed {
             detail: NodeDetail::ReadinessFailed {
                 message: message.clone(),
                 missing_keys: Vec::new(),
+                output,
             },
             message,
         },
@@ -1391,6 +1525,7 @@ async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome {
             detail: NodeDetail::ReadinessFailed {
                 message: message.clone(),
                 missing_keys,
+                output: Vec::new(),
             },
             message,
         },
@@ -1400,6 +1535,56 @@ async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Rerun-annotated Skip nodes whose live object failed.
+///
+/// `kix deploy` and `kix rollback` stop before the engine when the plan has
+/// nothing to apply. An unchanged probe whose last run failed still has to
+/// run, and only the engine's Skip path does that (see [`execute_node`]),
+/// so the commands ask this first and run the engine when it names
+/// anything. A read that fails counts as "not failed": the engine reports
+/// it on its own path if the run goes ahead for another reason.
+pub async fn failed_rerun_nodes(
+    client: &kube::Client,
+    discovery: &[(kube::discovery::ApiResource, kube::discovery::Scope)],
+    plan: &DeployPlan,
+) -> Vec<ResourceId> {
+    use kube::api::{Api, DynamicObject};
+    use kube::discovery::Scope;
+
+    let mut failed = Vec::new();
+    for entry in &plan.nodes {
+        let (ChangeAction::Skip(rid), Some(_)) = (&entry.action, &entry.rerun) else {
+            continue;
+        };
+        let Some((ar, scope)) = discovery.iter().find(|(ar, _)| ar.kind == rid.kind) else {
+            continue;
+        };
+        let api: Api<DynamicObject> = match scope {
+            Scope::Namespaced => {
+                let ns = if rid.namespace == CLUSTER_SCOPED {
+                    "default"
+                } else {
+                    rid.namespace.as_str()
+                };
+                Api::namespaced_with(client.clone(), ns, ar)
+            }
+            Scope::Cluster => Api::all_with(client.clone(), ar),
+        };
+        match api.get_opt(&rid.name).await {
+            Ok(Some(live))
+                if readiness::classify_workload_terminal(&live.data, &rid.kind).is_some() =>
+            {
+                failed.push(rid.clone());
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::debug!(resource = %rid, error = %e, "could not read a rerun node's live object");
+            }
+        }
+    }
+    failed
+}
 
 /// Reverse-topological ordering over the subset of `old_manifests` matching
 /// `orphan_rids`. Lifted here so scheduler.rs stops depending on
@@ -1510,6 +1695,51 @@ mod tests {
             .unwrap();
         assert!(matches!(cm.kind, TransitionKind::Skip));
         assert!(matches!(app.kind, TransitionKind::Apply));
+    }
+
+    /// A manifest carrying `kix.dev/rerun` is tagged Recreate when it
+    /// changed and keeps its Skip tag, with the manifest attached, when it
+    /// did not.
+    #[test]
+    fn plan_tags_rerun_manifests() {
+        let mut changed = manifest("Job", "probe", "default", "h_probe", "");
+        changed["metadata"]["annotations"]["kix.dev/rerun"] = json!("on-change");
+        let mut same = manifest("Job", "old-probe", "default", "h_old", "");
+        same["metadata"]["annotations"]["kix.dev/rerun"] = json!("on-change");
+        let plain = manifest("ConfigMap", "cm", "default", "h_cm", "");
+        let manifests = vec![changed.clone(), same.clone(), plain.clone()];
+        let graph = ResourceGraph::from_manifests(&manifests).unwrap();
+        let changes = vec![
+            ChangeAction::Apply(changed),
+            ChangeAction::Skip(ResourceId::from_value(&same)),
+            ChangeAction::Skip(ResourceId::from_value(&plain)),
+        ];
+        let plan = DeployPlan::from_graph_and_changes(&graph, &changes);
+        let by_name = |name: &str| {
+            plan.nodes
+                .iter()
+                .find(|n| matches!(&n.id, NodeId::Resource(rid) if rid.name == name))
+                .unwrap()
+        };
+        assert!(matches!(by_name("probe").kind, TransitionKind::Recreate));
+        assert!(by_name("probe").rerun.is_some());
+        assert!(matches!(by_name("old-probe").kind, TransitionKind::Skip));
+        assert!(by_name("old-probe").rerun.is_some());
+        assert!(matches!(by_name("cm").kind, TransitionKind::Skip));
+        assert!(by_name("cm").rerun.is_none());
+    }
+
+    /// The annotation is honoured on Jobs only: a Deployment carrying it
+    /// is a plain Apply, never deleted.
+    #[test]
+    fn plan_ignores_rerun_on_non_jobs() {
+        let mut deploy = manifest("Deployment", "web", "default", "h_web", "");
+        deploy["metadata"]["annotations"]["kix.dev/rerun"] = json!("on-change");
+        let manifests = vec![deploy.clone()];
+        let graph = ResourceGraph::from_manifests(&manifests).unwrap();
+        let plan = DeployPlan::from_graph_and_changes(&graph, &[ChangeAction::Apply(deploy)]);
+        assert!(matches!(plan.nodes[0].kind, TransitionKind::Apply));
+        assert!(plan.nodes[0].rerun.is_none());
     }
 
     #[test]
@@ -1641,6 +1871,24 @@ mod engine_tests {
         json!({ "apiVersion": "v1", "kind": kind, "metadata": metadata })
     }
 
+    /// `m` with the rerun annotation: a probe Job under the rerun rule.
+    fn rerun_m(kind: &str, name: &str, deps: &[&str]) -> Value {
+        let mut v = m(kind, name, deps);
+        v["metadata"]["annotations"]["kix.dev/rerun"] = json!("on-change");
+        v
+    }
+
+    /// A live Job as the apiserver would return it, failed or succeeded.
+    fn live_job(failed: bool) -> Value {
+        json!({
+            "apiVersion": "batch/v1",
+            "kind": "Job",
+            "metadata": { "name": "probe", "namespace": "default" },
+            "spec": { "backoffLimit": 0 },
+            "status": if failed { json!({ "failed": 1 }) } else { json!({ "succeeded": 1 }) },
+        })
+    }
+
     fn plan_of(manifests: &[Value]) -> DeployPlan {
         plan_with_skips(manifests, &[])
     }
@@ -1671,6 +1919,7 @@ mod engine_tests {
             dry_run: false,
             concurrency: CONCURRENCY,
             stall,
+            rerun_failed: true,
         }
     }
 
@@ -2270,6 +2519,256 @@ mod engine_tests {
         );
         assert_eq!(result.pruned, 0, "the consumed orphan is not pruned again");
         assert!(!ops.calls().iter().any(|c| matches!(c, Call::Delete(_))));
+    }
+
+    fn rerun_details(rec: &Recorder) -> Vec<String> {
+        rec.0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                DeployEvent::NodeStateChanged {
+                    detail: Some(NodeDetail::Rerun { reason }),
+                    ..
+                } => Some(reason.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The rerun rule (doc 136): a changed Job carrying `kix.dev/rerun`
+    /// with a live object is deleted and created again, not applied. The
+    /// delete goes through `recreate_in_place`, never through the prune
+    /// path, and the node reports `Rerun`.
+    #[tokio::test(start_paused = true)]
+    async fn rerun_job_with_live_object_is_recreated() {
+        let manifests = vec![rerun_m("Job", "probe", &[])];
+        let ops = Arc::new(ScriptedOps::new());
+        ops.script(
+            rid("Job", "probe"),
+            NodeScript::default().live(Behaviour::Now(Ok(Some(live_job(false))))),
+        );
+        let rec = Arc::new(Recorder::default());
+        let result = run(
+            &ops,
+            plan_of(&manifests),
+            &config(quiet_watchdog()),
+            rec.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.configured, 1);
+        assert_eq!(result.failed, 0);
+        let calls = ops.calls();
+        assert!(calls.contains(&Call::RecreateStart(rid("Job", "probe"))));
+        assert!(!calls.iter().any(|c| matches!(c, Call::ApplyStart(_))));
+        assert!(!calls.iter().any(|c| matches!(c, Call::Delete(_))));
+        assert_eq!(rerun_details(&rec), vec!["changed since the last run"]);
+    }
+
+    /// Nothing live (first deploy, TTL-reaped, deleted by hand): a plain
+    /// apply, no delete.
+    #[tokio::test(start_paused = true)]
+    async fn rerun_job_without_live_object_is_applied() {
+        let manifests = vec![rerun_m("Job", "probe", &[])];
+        let ops = Arc::new(ScriptedOps::new());
+        let rec = Arc::new(Recorder::default());
+        let result = run(
+            &ops,
+            plan_of(&manifests),
+            &config(quiet_watchdog()),
+            rec.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.created, 1);
+        let calls = ops.calls();
+        assert!(calls.contains(&Call::GetLive(rid("Job", "probe"))));
+        assert!(calls.contains(&Call::ApplyStart(rid("Job", "probe"))));
+        assert!(!calls.iter().any(|c| matches!(c, Call::RecreateStart(_))));
+        assert!(rerun_details(&rec).is_empty());
+    }
+
+    /// An unchanged probe whose live Job failed runs again on the next
+    /// deploy without a manual delete.
+    #[tokio::test(start_paused = true)]
+    async fn skipped_rerun_job_that_failed_is_recreated() {
+        let manifests = vec![rerun_m("Job", "probe", &[])];
+        let ops = Arc::new(ScriptedOps::new());
+        ops.script(
+            rid("Job", "probe"),
+            NodeScript::default().live(Behaviour::Now(Ok(Some(live_job(true))))),
+        );
+        let rec = Arc::new(Recorder::default());
+        let result = run(
+            &ops,
+            plan_with_skips(&manifests, &["probe"]),
+            &config(quiet_watchdog()),
+            rec.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.configured, 1);
+        assert_eq!(result.unchanged, 0);
+        assert!(
+            ops.calls()
+                .contains(&Call::RecreateStart(rid("Job", "probe")))
+        );
+        assert_eq!(rerun_details(&rec), vec!["the last run failed"]);
+    }
+
+    /// An unchanged probe whose live Job succeeded is left alone: counted
+    /// unchanged and stamped with the activation like any Skip node.
+    #[tokio::test(start_paused = true)]
+    async fn skipped_rerun_job_that_succeeded_is_left_alone() {
+        let manifests = vec![rerun_m("Job", "probe", &[])];
+        let ops = Arc::new(ScriptedOps::new());
+        ops.script(
+            rid("Job", "probe"),
+            NodeScript::default().live(Behaviour::Now(Ok(Some(live_job(false))))),
+        );
+        let rec = Arc::new(Recorder::default());
+        let result = run(
+            &ops,
+            plan_with_skips(&manifests, &["probe"]),
+            &config(quiet_watchdog()),
+            rec.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.unchanged, 1);
+        assert_eq!(result.configured, 0);
+        let calls = ops.calls();
+        assert!(calls.contains(&Call::GetLive(rid("Job", "probe"))));
+        assert!(calls.contains(&Call::Stamp(rid("Job", "probe"))));
+        assert!(!calls.iter().any(|c| matches!(c, Call::RecreateStart(_))));
+        assert!(!calls.iter().any(|c| matches!(c, Call::ApplyStart(_))));
+        assert!(rerun_details(&rec).is_empty());
+    }
+
+    /// Without `rerun_failed` (the operator) an unchanged probe whose live
+    /// Job failed is reported as failed, never deleted: the gate stays red
+    /// instead of reading as healthy, and nothing loops.
+    #[tokio::test(start_paused = true)]
+    async fn skipped_rerun_job_is_reported_not_retried_without_rerun_failed() {
+        let manifests = vec![rerun_m("Job", "probe", &[])];
+        let ops = Arc::new(ScriptedOps::new());
+        ops.script(
+            rid("Job", "probe"),
+            NodeScript::default().live(Behaviour::Now(Ok(Some(live_job(true))))),
+        );
+        let mut cfg = config(quiet_watchdog());
+        cfg.rerun_failed = false;
+        let rec = Arc::new(Recorder::default());
+        let result = run(
+            &ops,
+            plan_with_skips(&manifests, &["probe"]),
+            &cfg,
+            rec.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.failed, 1);
+        assert_eq!(result.unchanged, 0);
+        let calls = ops.calls();
+        assert!(calls.contains(&Call::GetLive(rid("Job", "probe"))));
+        assert!(!calls.iter().any(|c| matches!(c, Call::RecreateStart(_))));
+        assert!(!calls.iter().any(|c| matches!(c, Call::Delete(_))));
+        assert!(rerun_details(&rec).is_empty());
+        let failed: Vec<String> = rec
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                DeployEvent::NodeStateChanged {
+                    verdict: Verdict::Failed { message },
+                    ..
+                } => Some(message.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(failed.len(), 1);
+        assert!(failed[0].contains("which failed"), "{}", failed[0]);
+    }
+
+    /// Under dry run a changed rerun Job with a live object still takes the
+    /// recreate path (the ops layer answers without writing) and reports
+    /// `Rerun`, so a preview shows what the real deploy will do.
+    #[tokio::test(start_paused = true)]
+    async fn rerun_job_under_dry_run_reports_rerun() {
+        let manifests = vec![rerun_m("Job", "probe", &[])];
+        let ops = Arc::new(ScriptedOps::new());
+        ops.set_dry_run(true);
+        ops.script(
+            rid("Job", "probe"),
+            NodeScript::default()
+                .live(Behaviour::Now(Ok(Some(live_job(false)))))
+                .recreate(Behaviour::Now(Ok(ApplyAction::Created))),
+        );
+        let mut cfg = config(quiet_watchdog());
+        cfg.dry_run = true;
+        let rec = Arc::new(Recorder::default());
+        let result = run(&ops, plan_of(&manifests), &cfg, rec.clone())
+            .await
+            .unwrap();
+        assert_eq!(result.failed, 0);
+        assert_eq!(result.created, 1);
+        assert!(
+            ops.calls()
+                .contains(&Call::RecreateStart(rid("Job", "probe")))
+        );
+        assert_eq!(rerun_details(&rec), vec!["changed since the last run"]);
+    }
+
+    /// A delete that never completes (stuck finalizer) fails the node with
+    /// the ops layer's message instead of a blind re-apply.
+    #[tokio::test(start_paused = true)]
+    async fn rerun_job_still_present_after_delete_fails_the_node() {
+        let manifests = vec![rerun_m("Job", "probe", &[])];
+        let ops = Arc::new(ScriptedOps::new());
+        ops.script(
+            rid("Job", "probe"),
+            NodeScript::default()
+                .live(Behaviour::Now(Ok(Some(live_job(false)))))
+                .recreate(Behaviour::Now(Err(
+                    "Job/default/probe still exists 30s after delete (stuck finalizer?); not re-applied".into(),
+                ))),
+        );
+        let rec = Arc::new(Recorder::default());
+        let result = run(
+            &ops,
+            plan_of(&manifests),
+            &config(quiet_watchdog()),
+            rec.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.failed, 1);
+        let failed: Vec<String> = rec
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                DeployEvent::NodeStateChanged {
+                    verdict: Verdict::Failed { message },
+                    ..
+                } => Some(message.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(failed.len(), 1);
+        assert!(
+            failed[0].contains("still exists 30s after delete"),
+            "{}",
+            failed[0]
+        );
+        assert!(
+            failed[0].contains("changed since the last run"),
+            "{}",
+            failed[0]
+        );
     }
 
     /// Red team finding: the watchdog must see a hung discovery refresh. With

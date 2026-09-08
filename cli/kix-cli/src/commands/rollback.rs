@@ -412,10 +412,28 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
     }
 
     if total_apply == 0 && orphan_rids.is_empty() {
-        if !ctx.global.quiet {
-            println!("Nothing to change — cluster already matches target activation.");
+        // Same rule as deploy: an unchanged probe under `kix.dev/rerun`
+        // whose last run failed still runs, and only the engine does that.
+        let failed_reruns = if plan.nodes.iter().any(|n| n.rerun.is_some()) {
+            scheduler::failed_rerun_nodes(&client, &discovery, &plan).await
+        } else {
+            Vec::new()
+        };
+        if failed_reruns.is_empty() {
+            if !ctx.global.quiet {
+                println!("Nothing to change — cluster already matches target activation.");
+            }
+            return Ok(());
         }
-        return Ok(());
+        if !ctx.global.quiet {
+            let names: Vec<String> = failed_reruns.iter().map(|r| r.to_string()).collect();
+            println!(
+                "{} nothing changed, but {} failed on the last run and will run again: {}",
+                output::yellow("↻"),
+                failed_reruns.len(),
+                names.join(", "),
+            );
+        }
     }
 
     // 8. Confirmation
@@ -453,6 +471,7 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
         dry_run: false,
         concurrency: scheduler::CONCURRENCY,
         stall: StallPolicy::from_env(),
+        rerun_failed: true,
     };
 
     let observer: Arc<dyn DeployObserver> = if !output::is_interactive() {

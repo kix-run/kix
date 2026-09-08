@@ -66,16 +66,27 @@ impl DeployObserver for LineObserver {
                         Some(NodeDetail::RecreatedInPlace { reason }) => {
                             println!("{label}> recreate (immutable): {reason}");
                         }
+                        Some(NodeDetail::Rerun { reason }) => {
+                            println!("{label}> rerun: {reason}");
+                        }
                         _ => {
                             println!("{label}> ready");
                         }
                     },
                     Verdict::Failed { message } => {
                         eprintln!("{label}> FAILED: {message}");
-                        if let Some(NodeDetail::ReadinessFailed { missing_keys, .. }) = detail
-                            && !missing_keys.is_empty()
+                        if let Some(NodeDetail::ReadinessFailed {
+                            missing_keys,
+                            output,
+                            ..
+                        }) = detail
                         {
-                            eprintln!("{label}>   missing key(s): {}", missing_keys.join(", "),);
+                            if !missing_keys.is_empty() {
+                                eprintln!("{label}>   missing key(s): {}", missing_keys.join(", "),);
+                            }
+                            for line in output {
+                                eprintln!("{label}>   | {line}");
+                            }
                         }
                     }
                     Verdict::Cancelled { because } => {
@@ -351,15 +362,18 @@ fn json_detail(detail: &NodeDetail) -> serde_json::Value {
         NodeDetail::ReadinessFailed {
             message,
             missing_keys,
+            output,
         } => json!({
             "readiness_failed": {
                 "message": message,
                 "missing_keys": missing_keys,
+                "output": output,
             },
         }),
         NodeDetail::SecretHydrated { keys } => json!({ "secret_hydrated": keys }),
         NodeDetail::SecretHydrationFailed(msg) => json!({ "secret_hydration_failed": msg }),
         NodeDetail::RecreatedInPlace { reason } => json!({ "recreated_in_place": reason }),
+        NodeDetail::Rerun { reason } => json!({ "rerun": reason }),
     }
 }
 

@@ -71,9 +71,15 @@ pub trait ClusterOps: Send + Sync + 'static {
     /// Server-side apply one manifest, resolving its kind from discovery.
     async fn apply(&self, manifest: &Value) -> Result<ApplyResult, ApplyError>;
 
-    /// Delete the live object, wait for it to go, re-apply. Only called when
-    /// the engine has pre-authorized the delete (the rid is in the orphan
-    /// set) after an immutable-field conflict.
+    /// Read the live object, `Ok(None)` when there is none. A read even
+    /// under dry run.
+    async fn get_live(&self, rid: &ResourceId) -> Result<Option<Value>, String>;
+
+    /// Delete the live object, wait for it to go, re-apply. Called after an
+    /// immutable-field conflict when the engine has pre-authorized the
+    /// delete (the rid is in the orphan set), and for a live resource that
+    /// carries `kix.dev/rerun` and must run again. A missing object is not
+    /// an error; an object still present after the wait is.
     async fn recreate_in_place(&self, manifest: &Value) -> Result<ApplyResult, String>;
 
     /// Wait for the object (or, for an import marker, the object it

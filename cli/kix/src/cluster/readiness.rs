@@ -464,8 +464,13 @@ pub enum ReadinessResult {
     /// reaching a definitive state. Caller should propagate cancellation
     /// rather than treating this as a failure.
     Cancelled,
-    /// Resource entered a terminal failure state.
-    Failed(String),
+    /// Resource entered a terminal failure state. `output` holds the last
+    /// lines a failed container wrote (see [`termination_output`]); empty
+    /// when nothing was recorded.
+    Failed {
+        message: String,
+        output: Vec<String>,
+    },
     /// An import target exists on the cluster but does not match the shape
     /// declared by its marker. Currently only produced by `Secret` imports
     /// when one or more `expected_keys` are missing from `data`.
@@ -703,15 +708,83 @@ struct ScanResult {
     pods: Vec<Value>,
 }
 
+/// Lines a failed container left in its termination message.
+///
+/// With `terminationMessagePolicy: FallbackToLogsOnError` the kubelet copies
+/// the tail of a container's log (2048 bytes or 80 lines) into
+/// `status.containerStatuses[].state.terminated.message` when the container
+/// exits non-zero. That is how a probe's `FAIL` lines reach the deploy
+/// without a log API call. Only the newest pod (by `status.startTime`) is
+/// read: a Job with a backoff limit above zero has one pod per attempt and
+/// the last attempt is the one that decided the verdict. Reads
+/// `state.terminated` first, then `lastState.terminated`. Lines carry a
+/// `<container>: ` prefix only when more than one container wrote
+/// something. At most the last [`TERMINATION_OUTPUT_LINES`] lines are
+/// kept; a truncated result starts with a line saying how many were
+/// dropped.
+pub fn termination_output(pods: &[Value]) -> Vec<String> {
+    let newest = pods.iter().max_by_key(|p| {
+        p.pointer("/status/startTime")
+            .or_else(|| p.pointer("/metadata/creationTimestamp"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    });
+    let mut per_container: Vec<(String, Vec<String>)> = Vec::new();
+    if let Some(statuses) = newest.and_then(|pod| {
+        pod.pointer("/status/containerStatuses")
+            .and_then(Value::as_array)
+    }) {
+        for cs in statuses {
+            let name = cs.get("name").and_then(Value::as_str).unwrap_or("");
+            let message = cs
+                .pointer("/state/terminated/message")
+                .or_else(|| cs.pointer("/lastState/terminated/message"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let mut lines: Vec<String> = message.lines().map(str::to_string).collect();
+            while lines.last().is_some_and(|l| l.trim().is_empty()) {
+                lines.pop();
+            }
+            if !lines.is_empty() {
+                per_container.push((name.to_string(), lines));
+            }
+        }
+    }
+    let prefix = per_container.len() > 1;
+    let mut all: Vec<String> = per_container
+        .into_iter()
+        .flat_map(|(name, lines)| {
+            lines
+                .into_iter()
+                .map(move |l| if prefix { format!("{name}: {l}") } else { l })
+        })
+        .collect();
+    if all.len() > TERMINATION_OUTPUT_LINES {
+        let dropped = all.len() - TERMINATION_OUTPUT_LINES;
+        all = all.split_off(dropped);
+        all.insert(0, format!("... {dropped} earlier lines, see kubectl logs"));
+    }
+    all
+}
+
+/// How many lines of a failed container's output the deploy shows.
+pub const TERMINATION_OUTPUT_LINES: usize = 20;
+
 /// Full terminal-failure scan: checks workload-level signals first, then
 /// pod-level signals for pod-backed kinds. Returns on the first hit (in
 /// `terminal`) but always returns the fetched pods so the caller can reuse
-/// them for progress fingerprinting.
+/// them for progress fingerprinting. On a Job-level hit the Job's pods are
+/// listed once more so the failure can carry what the container wrote.
 async fn scan_terminal(client: &Client, obj: &Value, kind: &str, namespace: &str) -> ScanResult {
     if let Some(hit) = classify_workload_terminal(obj, kind) {
+        let pods = match (kind, workload_label_selector(obj)) {
+            ("Job", Some(selector)) => list_pods_for_workload(client, namespace, &selector).await,
+            _ => Vec::new(),
+        };
         return ScanResult {
             terminal: Some(hit),
-            pods: Vec::new(),
+            pods,
         };
     }
     if !has_pods(kind) {
@@ -892,10 +965,10 @@ pub async fn wait_for_ready(
         let ns_for_pods = namespace.unwrap_or("default");
         let scan = scan_terminal(client, &obj.data, kind, ns_for_pods).await;
         if let Some((reason, detail)) = scan.terminal {
-            return Ok(ReadinessResult::Failed(format!(
-                "{}: {detail}",
-                reason.as_str()
-            )));
+            return Ok(ReadinessResult::Failed {
+                message: format!("{}: {detail}", reason.as_str()),
+                output: termination_output(&scan.pods),
+            });
         }
 
         if check_readiness(&obj, kind) {
@@ -2085,6 +2158,82 @@ mod tests {
     fn workload_label_selector_missing_returns_none() {
         let obj = json!({"spec": {}});
         assert!(workload_label_selector(&obj).is_none());
+    }
+
+    // -- termination output tests --
+
+    fn pod_with_message(container: &str, message: &str) -> Value {
+        json!({
+            "status": {
+                "containerStatuses": [{
+                    "name": container,
+                    "state": { "terminated": { "exitCode": 1, "message": message } }
+                }]
+            }
+        })
+    }
+
+    #[test]
+    fn termination_output_carries_the_probe_lines() {
+        let pods = vec![pod_with_message(
+            "probe",
+            "FAIL  1 of 2 agent replicas scraped and up\nFAIL  targets down: x\n2 check(s) still failing after 90s\n\n",
+        )];
+        assert_eq!(
+            termination_output(&pods),
+            vec![
+                "FAIL  1 of 2 agent replicas scraped and up",
+                "FAIL  targets down: x",
+                "2 check(s) still failing after 90s",
+            ]
+        );
+    }
+
+    #[test]
+    fn termination_output_reads_last_state_and_prefixes_when_several() {
+        let pods = vec![json!({
+            "status": {
+                "containerStatuses": [
+                    { "name": "a", "state": { "waiting": {} },
+                      "lastState": { "terminated": { "message": "from a" } } },
+                    { "name": "b", "state": { "terminated": { "message": "from b" } } },
+                    { "name": "quiet", "state": { "terminated": { "message": "" } } }
+                ]
+            }
+        })];
+        assert_eq!(termination_output(&pods), vec!["a: from a", "b: from b"]);
+    }
+
+    #[test]
+    fn termination_output_reads_the_newest_pod_only() {
+        let mut first = pod_with_message("probe", "attempt 1");
+        first["status"]["startTime"] = json!("2026-09-08T10:00:00Z");
+        let mut second = pod_with_message("probe", "attempt 2");
+        second["status"]["startTime"] = json!("2026-09-08T10:05:00Z");
+        assert_eq!(
+            termination_output(&[second.clone(), first.clone()]),
+            vec!["attempt 2"]
+        );
+        assert_eq!(termination_output(&[first, second]), vec!["attempt 2"]);
+    }
+
+    #[test]
+    fn termination_output_keeps_the_tail() {
+        let message: String = (1..=25).map(|i| format!("line {i}\n")).collect();
+        let out = termination_output(&[pod_with_message("probe", &message)]);
+        assert_eq!(out.len(), TERMINATION_OUTPUT_LINES + 1);
+        assert_eq!(out[0], "... 5 earlier lines, see kubectl logs");
+        assert_eq!(out[1], "line 6");
+        assert_eq!(out[TERMINATION_OUTPUT_LINES], "line 25");
+    }
+
+    #[test]
+    fn termination_output_is_empty_without_a_message() {
+        let pods = vec![
+            json!({ "status": { "containerStatuses": [{ "name": "probe", "state": { "terminated": { "exitCode": 1 } } }] } }),
+        ];
+        assert!(termination_output(&pods).is_empty());
+        assert!(termination_output(&[]).is_empty());
     }
 
     // -- progress fingerprint tests --

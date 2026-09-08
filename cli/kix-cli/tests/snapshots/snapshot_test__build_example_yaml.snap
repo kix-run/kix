@@ -1,5 +1,6 @@
 ---
 source: kix-cli/tests/snapshot_test.rs
+assertion_line: 23
 expression: stdout
 ---
 apiVersion: admissionregistration.k8s.io/v1
@@ -2026,8 +2027,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   annotations:
-    kix.dev/depends-on: '6iird4741crc04kmz5knrpvjq42k0qdg,awzwpm53w1kb4ysngrwmj47whaddgkih,mq811vfzqnnfvvmf24l4h7sll6w85vl9,nhq664k6kbcmnkxxa8y6krxjqgbq64l2,pyhzdli3qbygn34l5jkiggsyks2z7yzv,vzk1fh12884ayqlqxk0m1ygs94225jr3,ym8ki03aldzjxf3d83fa56542pg6c64r'
-    kix.dev/identity-hash: '14m5mdif3425f4zg58lh3bv66d2jkz4h'
+    kix.dev/depends-on: '1gaam1b27s9dd5n0451d025k5gb26fg3,awzwpm53w1kb4ysngrwmj47whaddgkih,kgz8hdwxblln3ncjw9qlkgr5xp1570gh,mq811vfzqnnfvvmf24l4h7sll6w85vl9,pyhzdli3qbygn34l5jkiggsyks2z7yzv,vzk1fh12884ayqlqxk0m1ygs94225jr3,ym8ki03aldzjxf3d83fa56542pg6c64r'
+    kix.dev/identity-hash: '6vd5gn43v8va0vh660fxfxhwsly1vhs3'
     kix.dev/package: immich
     kix.dev/package-namespace: immich
   labels:
@@ -2056,7 +2057,7 @@ spec:
         - name: DB_DATABASENAME
           value: immich
         - name: DB_HOSTNAME
-          value: postgres.immich.svc
+          value: postgres.immich.svc.cluster.local
         - name: DB_PORT
           value: '5432'
         - name: IMMICH_MACHINE_LEARNING_URL
@@ -2844,7 +2845,7 @@ metadata:
     kix.dev/depends-on: '52q5y0q9wsfxl0v91x064dh9zdzklmrf,awzwpm53w1kb4ysngrwmj47whaddgkih,pyhzdli3qbygn34l5jkiggsyks2z7yzv,wcg5v0xrwnvyazqia71fzanr9fai3nz3'
     kix.dev/hook: post-deploy
     kix.dev/hook-delete-policy: before-hook-creation,hook-succeeded
-    kix.dev/identity-hash: '6iird4741crc04kmz5knrpvjq42k0qdg'
+    kix.dev/identity-hash: '1gaam1b27s9dd5n0451d025k5gb26fg3'
     kix.dev/lifecycle: stateful
     kix.dev/package: immich-db
     kix.dev/package-namespace: immich
@@ -2925,7 +2926,7 @@ spec:
         - '-c'
         env:
         - name: PGHOST
-          value: postgres.immich.svc
+          value: postgres.immich.svc.cluster.local
         - name: PGPORT
           value: '5432'
         - name: PGDATABASE
@@ -2954,15 +2955,15 @@ apiVersion: kix.dev/v1alpha1
 kind: Activation
 metadata:
   annotations:
-    kix.dev/built-via: /nix/store/51bj99rq4jj6nf7a0rczdi826f8826ld-k8s-activation-example
-    kix.dev/depends-on: '0ya8s6z84k3l14jz1mxh5li8dhapab4w,3ckd9j1v1aispj7zlvx7dqmvl16dmw4m,54kjhc0vfr5sf7h4lyw2za97g9xyfj18,6i29aji5fdn305lxbb1c8dihlbnn36zs,6ldjangqda2p0w66zb5sa1g3lg53p7gv,n10ixmgdp0z2y67vz7blsgsyjmnqia6a,rm9hgnz3l8rbkiqqxm5237nfv0sg8sj2,vjqclmrgjf26r4x0di8vlr90a7crbjph,wga9qmdvzv23a1nfkff1dd7fgfaszy6y,wr53rnayc1l4qlx40a2d364sywywz0yr,requires:r5xi4rysn205nn15cjbjaxii4cpcv5g9'
-    kix.dev/identity-hash: '6ay8fg561jgz151p2vcnnmhk0hxy1ndd'
+    kix.dev/built-via: /nix/store/jd8rgd9y5jjjc8a9k37ndmqpkq9xywvx-k8s-activation-example
+    kix.dev/depends-on: '0ya8s6z84k3l14jz1mxh5li8dhapab4w,3zn7vdzmhaz272c1j6900hqxqyq6f3dw,54kjhc0vfr5sf7h4lyw2za97g9xyfj18,6ldjangqda2p0w66zb5sa1g3lg53p7gv,bbgpan00xgbq1kqxdjilmav3ch58mlby,n10ixmgdp0z2y67vz7blsgsyjmnqia6a,rm9hgnz3l8rbkiqqxm5237nfv0sg8sj2,vjqclmrgjf26r4x0di8vlr90a7crbjph,wga9qmdvzv23a1nfkff1dd7fgfaszy6y,wr53rnayc1l4qlx40a2d364sywywz0yr,requires:r5xi4rysn205nn15cjbjaxii4cpcv5g9'
+    kix.dev/identity-hash: '8wszfx7y50ix7jy54hxh2w7avya5q4q5'
     kix.dev/package: _cluster
     kix.dev/package-namespace: _cluster
   labels:
     app.kubernetes.io/managed-by: kix
     kix.dev/cluster: example
-  name: example-6ay8fg561jgz
+  name: example-8wszfx7y50ix
 spec:
   instances:
     cache:
@@ -3031,8 +3032,8 @@ apiVersion: kix.dev/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.dev/depends-on: '0yvwgz00x4j8isrxqsqbq3n0yfkxi0jy,awzwpm53w1kb4ysngrwmj47whaddgkih,requires:n9n2qwqvxz9dsm5pq7yfsy8q2xp2f8r9'
-    kix.dev/identity-hash: '6i29aji5fdn305lxbb1c8dihlbnn36zs'
+    kix.dev/depends-on: '0m0kflf4kyxpxqddh4d1a61a83dv0smq,awzwpm53w1kb4ysngrwmj47whaddgkih,requires:n9n2qwqvxz9dsm5pq7yfsy8q2xp2f8r9'
+    kix.dev/identity-hash: '3zn7vdzmhaz272c1j6900hqxqyq6f3dw'
     kix.dev/package: _cluster
     kix.dev/package-namespace: _cluster
     kix.dev/root: immich-server
@@ -3052,8 +3053,8 @@ apiVersion: kix.dev/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.dev/depends-on: '52q5y0q9wsfxl0v91x064dh9zdzklmrf,6iird4741crc04kmz5knrpvjq42k0qdg,awzwpm53w1kb4ysngrwmj47whaddgkih,nhq664k6kbcmnkxxa8y6krxjqgbq64l2,pyhzdli3qbygn34l5jkiggsyks2z7yzv,rpyki6dvzmlnrz1jzj1xcijn955jd107,wcg5v0xrwnvyazqia71fzanr9fai3nz3,requires:n9n2qwqvxz9dsm5pq7yfsy8q2xp2f8r9'
-    kix.dev/identity-hash: '3ckd9j1v1aispj7zlvx7dqmvl16dmw4m'
+    kix.dev/depends-on: '1gaam1b27s9dd5n0451d025k5gb26fg3,52q5y0q9wsfxl0v91x064dh9zdzklmrf,awzwpm53w1kb4ysngrwmj47whaddgkih,kgz8hdwxblln3ncjw9qlkgr5xp1570gh,pyhzdli3qbygn34l5jkiggsyks2z7yzv,rpyki6dvzmlnrz1jzj1xcijn955jd107,wcg5v0xrwnvyazqia71fzanr9fai3nz3,requires:n9n2qwqvxz9dsm5pq7yfsy8q2xp2f8r9'
+    kix.dev/identity-hash: bbgpan00xgbq1kqxdjilmav3ch58mlby
     kix.dev/inverse-deps: Job/immich-db-bootstrap-55078afb92,Secret/immich-db-bootstrap-password,PackageInstance/postgres,PackageInstance/postgres
     kix.dev/package: _cluster
     kix.dev/package-namespace: _cluster
@@ -6202,7 +6203,7 @@ metadata:
   annotations:
     kix.dev/classification: credential
     kix.dev/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,pyhzdli3qbygn34l5jkiggsyks2z7yzv
-    kix.dev/identity-hash: nhq664k6kbcmnkxxa8y6krxjqgbq64l2
+    kix.dev/identity-hash: kgz8hdwxblln3ncjw9qlkgr5xp1570gh
     kix.dev/lifecycle: stateful
     kix.dev/package: immich-db
     kix.dev/package-namespace: immich
@@ -6219,7 +6220,7 @@ metadata:
   namespace: immich
 stringData:
   database: immich
-  host: postgres.immich.svc
+  host: postgres.immich.svc.cluster.local
   password: immich-dev-password
   port: '5432'
   username: immich
@@ -6418,8 +6419,8 @@ apiVersion: v1
 kind: Service
 metadata:
   annotations:
-    kix.dev/depends-on: '14m5mdif3425f4zg58lh3bv66d2jkz4h,awzwpm53w1kb4ysngrwmj47whaddgkih'
-    kix.dev/identity-hash: '0yvwgz00x4j8isrxqsqbq3n0yfkxi0jy'
+    kix.dev/depends-on: '6vd5gn43v8va0vh660fxfxhwsly1vhs3,awzwpm53w1kb4ysngrwmj47whaddgkih'
+    kix.dev/identity-hash: '0m0kflf4kyxpxqddh4d1a61a83dv0smq'
     kix.dev/package: immich
     kix.dev/package-namespace: immich
   labels:

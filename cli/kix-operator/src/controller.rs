@@ -399,6 +399,9 @@ async fn run_reconcile(
         dry_run: false,
         concurrency: scheduler::CONCURRENCY,
         stall: StallPolicy::from_env(),
+        // Never retry a failed probe from the reconcile loop: it would
+        // delete and recreate the Job every 30 s on a degraded cluster.
+        rerun_failed: false,
     };
 
     // Compose two observers: tracing (structured logs) + K8s Events

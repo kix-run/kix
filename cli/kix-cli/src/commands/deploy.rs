@@ -232,6 +232,26 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         plan::print_package_plan(&pkg_diff, ctx.global.verbose > 0);
         plan::print_plan_summary(&pkg_diff);
 
+        // Jobs under the rerun rule that changed: the engine deletes and
+        // recreates them, so the preview says so before the confirmation.
+        let reruns: Vec<String> = plan
+            .nodes
+            .iter()
+            .filter(|n| matches!(n.kind, TransitionKind::Recreate))
+            .map(|n| match &n.id {
+                NodeId::Resource(rid) => rid.to_string(),
+                NodeId::Synthetic(s) => s.clone(),
+            })
+            .collect();
+        if !reruns.is_empty() {
+            println!(
+                "  {} {} under the rerun rule (deleted first when live): {}",
+                output::yellow("↻"),
+                reruns.len(),
+                reruns.join(", "),
+            );
+        }
+
         if !orphan_rids.is_empty() {
             let orphan_str = orphan_rids.len().to_string();
             let fate = if args.prune_mode == Some(PruneMode::No) {
@@ -259,17 +279,54 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         .count();
 
     if total_apply == 0 && orphan_rids.is_empty() {
-        if !ctx.global.quiet {
-            match (&activation_identity_hash, &active_hash) {
-                (Some(new), Some(old)) if new == old => println!(
-                    "{} activation identical to active ({}...) — nothing to apply.",
-                    output::dim("="),
-                    &new[..8.min(new.len())],
-                ),
-                _ => println!("Nothing to apply."),
+        // An unchanged plan can still owe a run: a probe Job under
+        // `kix.dev/rerun` whose last run failed (the failure kept the
+        // activation from switching, so the next deploy sees the same
+        // hashes). The engine's Skip path recreates it, but only if the
+        // engine runs.
+        let has_reruns = plan.nodes.iter().any(|n| n.rerun.is_some());
+        let failed_reruns = match &pre_client {
+            Some(client) if has_reruns => ctx.runtime.block_on(async {
+                let discovery = fetch::discover_resources(client)
+                    .await
+                    .map_err(|e| miette!("API discovery failed: {e}"))?;
+                Ok::<_, miette::Report>(
+                    scheduler::failed_rerun_nodes(client, &discovery, &plan).await,
+                )
+            })?,
+            _ => Vec::new(),
+        };
+        // Without a client here (`--current-activation`) the engine's Skip
+        // path makes the call instead: it reads the live objects itself.
+        let engine_decides = pre_client.is_none() && has_reruns && !args.dry_run;
+        if failed_reruns.is_empty() && !engine_decides {
+            if !ctx.global.quiet {
+                match (&activation_identity_hash, &active_hash) {
+                    (Some(new), Some(old)) if new == old => println!(
+                        "{} activation identical to active ({}...) — nothing to apply.",
+                        output::dim("="),
+                        &new[..8.min(new.len())],
+                    ),
+                    _ => println!("Nothing to apply."),
+                }
             }
+            return Ok(());
         }
-        return Ok(());
+        if !ctx.global.quiet && engine_decides {
+            println!(
+                "{} nothing changed; the engine reads the live probe Jobs to see whether one must run again",
+                output::yellow("↻"),
+            );
+        }
+        if !ctx.global.quiet && !failed_reruns.is_empty() {
+            let names: Vec<String> = failed_reruns.iter().map(|r| r.to_string()).collect();
+            println!(
+                "{} nothing changed, but {} failed on the last run and will run again: {}",
+                output::yellow("↻"),
+                failed_reruns.len(),
+                names.join(", "),
+            );
+        }
     }
 
     // Offline dry-run (e.g. `--current-activation --dry-run`): we don't
@@ -851,6 +908,14 @@ impl StreamCliObserver {
                         output::dim(reason),
                     );
                 }
+                Some(NodeDetail::Rerun { reason }) => {
+                    println!(
+                        "  {} {} {}",
+                        output::yellow("↻"),
+                        label,
+                        output::yellow(&format!("ran again ({reason})")),
+                    );
+                }
                 _ => {
                     println!(
                         "  {} {} {}",
@@ -883,6 +948,14 @@ impl StreamCliObserver {
                     output::red(message),
                     detail_tail,
                 );
+                // What the container wrote before it exited: a probe's
+                // FAIL lines, so the reason is on screen, not one
+                // `kubectl logs` away.
+                if let Some(NodeDetail::ReadinessFailed { output, .. }) = detail {
+                    for line in output {
+                        eprintln!("      {}", output::dim(line));
+                    }
+                }
             }
             Verdict::Cancelled { because } => {
                 if self.verbose {
@@ -983,6 +1056,7 @@ async fn run_deploy_async(
         dry_run: args.dry_run,
         concurrency: scheduler::CONCURRENCY,
         stall: StallPolicy::from_env(),
+        rerun_failed: true,
     };
     let ops: Arc<dyn ClusterOps> = Arc::new(KubeOps::new(
         client.clone(),

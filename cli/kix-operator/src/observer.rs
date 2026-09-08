@@ -100,14 +100,15 @@ impl DeployObserver for OperatorObserver {
                         }
                     },
                     Verdict::Failed { message } => {
-                        let missing_keys = if let Some(NodeDetail::ReadinessFailed {
+                        let (missing_keys, output) = if let Some(NodeDetail::ReadinessFailed {
                             missing_keys,
+                            output,
                             ..
                         }) = detail
                         {
-                            Some(missing_keys.clone())
+                            (Some(missing_keys.clone()), Some(output.join("\n")))
                         } else {
-                            None
+                            (None, None)
                         };
                         tracing::error!(
                             activation,
@@ -115,6 +116,7 @@ impl DeployObserver for OperatorObserver {
                             kind = kind_str,
                             message = message.as_str(),
                             missing_keys = ?missing_keys,
+                            output = ?output,
                             "Node failed"
                         );
                     }
