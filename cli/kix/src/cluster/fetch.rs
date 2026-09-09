@@ -373,6 +373,70 @@ pub fn normalize_for_diff(obj: &mut DynamicObject) {
     }
 }
 
+/// The kix-owned view of a live object: the live value projected onto the
+/// fieldset kix's server-side apply owns (doc 122's recipe), with the type
+/// meta and identity that fieldsV1 never lists (`apiVersion`, `kind`,
+/// `metadata.name`, `metadata.namespace`) restored.
+///
+/// This is what `kix diff` and `kix snapshot save` compare against a build:
+/// the server's defaults (deployment strategy, probe thresholds, scheduler
+/// name, ...) are owned by nobody or by a controller, so they never enter the
+/// view, and kix's own bookkeeping annotations (`kix.run/activations`,
+/// `kix.run/applied-hash`) are written through a separate `Update` entry, so
+/// they are excluded too. Comparing this to the rendered manifest asks the
+/// question a change review actually needs answered: "does what kix would
+/// apply differ from what kix last applied?"
+///
+/// Objects without a kix `Apply` entry (adopted by hand, or predating SSA)
+/// fall back to the whole object with server metadata stripped.
+pub fn kix_owned_view(obj: &DynamicObject) -> serde_json::Value {
+    let Some(mut view) = super::fieldsv1::kix_owned_projection(obj) else {
+        let mut fallback = obj.clone();
+        normalize_for_diff(&mut fallback);
+        return to_manifest_value(&fallback);
+    };
+    if let Some(map) = view.as_object_mut() {
+        for key in ["apiVersion", "kind"] {
+            if let Some(v) = obj.data.get(key) {
+                map.insert(key.to_string(), v.clone());
+            }
+        }
+        let meta = map
+            .entry("metadata")
+            .or_insert_with(|| serde_json::json!({}));
+        if let Some(meta) = meta.as_object_mut() {
+            if let Some(name) = &obj.metadata.name {
+                meta.insert("name".into(), serde_json::Value::String(name.clone()));
+            }
+            if let Some(ns) = &obj.metadata.namespace {
+                meta.insert("namespace".into(), serde_json::Value::String(ns.clone()));
+            }
+        }
+    }
+    view
+}
+
+/// The kix-owned view of every object in a sweep, brought to the current
+/// domain: what a build is compared against, whether the comparison runs
+/// now (`kix diff`), later from a directory (`kix snapshot save`), or as
+/// the previous state a deploy plans from when its store path is gone.
+///
+/// The domain upgrade matters on a cluster a previous Kix stamped under a
+/// retired domain: without it every Kix annotation reads as a paired add
+/// and remove, and an in-sync cluster reads as entirely modified.
+pub fn kix_owned_manifests(
+    objects: impl IntoIterator<Item = DynamicObject>,
+) -> Vec<serde_json::Value> {
+    objects
+        .into_iter()
+        .map(|obj| {
+            let mut manifest = kix_owned_view(&obj);
+            crate::legacy_domain::upgrade_manifest(&mut manifest);
+            manifest
+        })
+        .collect()
+}
+
 /// Serialise a fetched object into a whole-manifest `Value`.
 ///
 /// `DynamicObject` keeps `metadata` in a typed field and puts only the
@@ -527,6 +591,183 @@ mod tests {
     use super::*;
     use kube::api::ObjectMeta;
     use serde_json::json;
+
+    fn managed(
+        manager: &str,
+        operation: &str,
+        subresource: Option<&str>,
+        fields: serde_json::Value,
+    ) -> k8s_openapi::apimachinery::pkg::apis::meta::v1::ManagedFieldsEntry {
+        k8s_openapi::apimachinery::pkg::apis::meta::v1::ManagedFieldsEntry {
+            manager: Some(manager.into()),
+            operation: Some(operation.into()),
+            subresource: subresource.map(str::to_string),
+            fields_v1: Some(k8s_openapi::apimachinery::pkg::apis::meta::v1::FieldsV1(
+                fields,
+            )),
+            ..Default::default()
+        }
+    }
+
+    /// A live Deployment as the apiserver hands it back: kix's Apply entry
+    /// owns what kix sent, kix's bookkeeping patch is a separate Update
+    /// entry, the controller owns its revision annotation and status, and
+    /// the server defaulted strategy, probe thresholds and the like with no
+    /// owner at all. Only the first survives.
+    #[test]
+    fn kix_owned_view_keeps_only_the_applied_fieldset() {
+        let f_identity = format!("f:{}", keys::IDENTITY_HASH);
+        let f_activations = format!("f:{}", keys::ACTIVATIONS);
+        let f_applied = format!("f:{}", keys::APPLIED_HASH);
+        let obj = DynamicObject {
+            metadata: ObjectMeta {
+                name: Some("web".into()),
+                namespace: Some("app".into()),
+                uid: Some("abc".into()),
+                resource_version: Some("9".into()),
+                labels: Some(
+                    [(
+                        "app.kubernetes.io/managed-by".to_string(),
+                        "kix".to_string(),
+                    )]
+                    .into(),
+                ),
+                annotations: Some(
+                    [
+                        (keys::IDENTITY_HASH.to_string(), "h1".to_string()),
+                        (keys::ACTIVATIONS.to_string(), "a1".to_string()),
+                        (keys::APPLIED_HASH.to_string(), "deadbeef".to_string()),
+                        (
+                            "deployment.kubernetes.io/revision".to_string(),
+                            "1".to_string(),
+                        ),
+                    ]
+                    .into(),
+                ),
+                managed_fields: Some(vec![
+                    managed(
+                        "kix",
+                        "Apply",
+                        None,
+                        json!({
+                            "f:metadata": {
+                                "f:annotations": {f_identity: {}},
+                                "f:labels": {"f:app.kubernetes.io/managed-by": {}}
+                            },
+                            "f:spec": {
+                                "f:replicas": {},
+                                "f:selector": {},
+                                "f:template": {"f:spec": {"f:containers": {
+                                    "k:{\"name\":\"nginx\"}": {
+                                        ".": {}, "f:name": {}, "f:image": {},
+                                        "f:readinessProbe": {"f:httpGet": {"f:path": {}, "f:port": {}}}
+                                    }
+                                }}}
+                            }
+                        }),
+                    ),
+                    managed(
+                        "kix",
+                        "Update",
+                        None,
+                        json!({
+                            "f:metadata": {"f:annotations": {f_activations: {}, f_applied: {}}}
+                        }),
+                    ),
+                    managed(
+                        "kube-controller-manager",
+                        "Update",
+                        Some("status"),
+                        json!({
+                            "f:metadata": {"f:annotations": {"f:deployment.kubernetes.io/revision": {}}},
+                            "f:status": {"f:replicas": {}}
+                        }),
+                    ),
+                ]),
+                ..Default::default()
+            },
+            types: None,
+            data: json!({
+                "apiVersion": "apps/v1",
+                "kind": "Deployment",
+                "spec": {
+                    "replicas": 2,
+                    "selector": {"matchLabels": {"app": "web"}},
+                    "progressDeadlineSeconds": 600,
+                    "revisionHistoryLimit": 10,
+                    "strategy": {"type": "RollingUpdate", "rollingUpdate": {"maxSurge": "25%"}},
+                    "template": {
+                        "metadata": {"creationTimestamp": null},
+                        "spec": {
+                            "dnsPolicy": "ClusterFirst",
+                            "schedulerName": "default-scheduler",
+                            "containers": [{
+                                "name": "nginx",
+                                "image": "nginx:1.27",
+                                "terminationMessagePath": "/dev/termination-log",
+                                "readinessProbe": {
+                                    "httpGet": {"path": "/", "port": "http", "scheme": "HTTP"},
+                                    "failureThreshold": 3,
+                                    "periodSeconds": 10
+                                }
+                            }]
+                        }
+                    }
+                },
+                "status": {"replicas": 2}
+            }),
+        };
+
+        assert_eq!(
+            kix_owned_view(&obj),
+            json!({
+                "apiVersion": "apps/v1",
+                "kind": "Deployment",
+                "metadata": {
+                    "name": "web",
+                    "namespace": "app",
+                    "annotations": {keys::IDENTITY_HASH: "h1"},
+                    "labels": {"app.kubernetes.io/managed-by": "kix"}
+                },
+                "spec": {
+                    "replicas": 2,
+                    "selector": {"matchLabels": {"app": "web"}},
+                    "template": {"spec": {"containers": [{
+                        "name": "nginx",
+                        "image": "nginx:1.27",
+                        "readinessProbe": {"httpGet": {"path": "/", "port": "http"}}
+                    }]}}
+                }
+            })
+        );
+    }
+
+    /// No kix Apply entry (adopted by hand, or pre-SSA): the whole object,
+    /// minus server metadata, so the diff still has something to show.
+    #[test]
+    fn kix_owned_view_falls_back_without_an_apply_entry() {
+        let obj = DynamicObject {
+            metadata: ObjectMeta {
+                name: Some("cm".into()),
+                namespace: Some("app".into()),
+                uid: Some("abc".into()),
+                managed_fields: Some(vec![managed(
+                    "kubectl-create",
+                    "Update",
+                    None,
+                    json!({"f:data": {}}),
+                )]),
+                ..Default::default()
+            },
+            types: None,
+            data: json!({"apiVersion": "v1", "kind": "ConfigMap", "data": {"k": "v"}}),
+        };
+        let view = kix_owned_view(&obj);
+        assert_eq!(view["data"], json!({"k": "v"}));
+        assert_eq!(view["metadata"]["name"], json!("cm"));
+        assert!(view["metadata"].get("uid").is_none());
+        assert!(view["metadata"].get("managedFields").is_none());
+    }
 
     #[test]
     fn normalize_strips_server_fields() {

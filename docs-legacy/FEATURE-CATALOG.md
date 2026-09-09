@@ -277,9 +277,8 @@ the CLI evaluates generically.
 Render all manifests to stdout. Default format: YAML multi-document. JSON outputs array of manifests.
 
 #### `kix diff <CLUSTER>`
-Colored diff against live cluster, snapshot, or previous build.
-- `--snapshot <PATH>` — Diff against snapshot directory.
-- `--from <PATH>` — Build-to-build diff against previous activation result.
+Colored diff of the build against the live cluster, or against a directory. Every mode is one comparison of two store graphs: the live side (and a snapshot or export) is the kix-owned view of each object, lifted into a graph by its package annotations, so the output is the same package-grouped plan `kix deploy` shows, with cluster-level resources and the activation rotation as their own sections.
+- `--from <DIR>` — Compare against a directory instead of the cluster: a previous build result (has `kix-packages.json`), or a manifest directory from `kix snapshot save` or `kix export`.
 - Exit code 2 = differences found, 0 = identical.
 - Package-grouped output with resource-level diffs.
 - Warns on PVC modifications.
@@ -358,10 +357,7 @@ Drift detection: compare intended state vs live cluster.
 - Exit code 1 if issues found.
 
 #### `kix snapshot save <DIR>`
-Save live cluster state to directory. Discovers all API resources, fetches all kix-managed resources, writes by namespace. Path traversal protection.
-
-#### `kix snapshot diff <CLUSTER> <DIR>`
-Diff snapshot against rendered manifests. Detects renames/moves via fuzzy similarity matching. Exit code 2 = differences.
+Save live cluster state to directory. Discovers all API resources, fetches all kix-managed resources, writes by namespace. Each object is written as its kix-owned view (the live value projected onto kix's server-side-apply fieldset), so a snapshot compares to a build exactly the way the live cluster does: server defaults and kix's bookkeeping annotations never appear. Path traversal protection. Compare with `kix diff <CLUSTER> --from <DIR>`.
 
 #### `kix pin set <KEY>` / `kix pin check` / `kix pin list`
 Resolve image references and record them in a committed pin file (`v2_discussions/138`). Needs no flake and evaluates no cluster.
@@ -452,4 +448,4 @@ Long-lived K8s controller watching Activation CRs.
 |---|---|
 | 0 | Success |
 | 1 | Error / validation failure / failed resources |
-| 2 | Differences detected (diff, snapshot diff) |
+| 2 | Differences detected (diff) |

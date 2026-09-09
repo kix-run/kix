@@ -178,7 +178,7 @@ ls result/
 | Command | Purpose | Key flags |
 |---|---|---|
 | `kix build <cluster>` | Render manifests to stdout (yaml/json) | `-o yaml|json` |
-| `kix diff <cluster>` | Diff vs live, snapshot, or previous build | `--snapshot <dir>`, `--from <result>`, `-o markdown` |
+| `kix diff <cluster>` | Diff vs live, or vs a directory (previous build result, snapshot, export) | `--from <dir>`, `-o markdown` |
 | `kix check <cluster>` | Eval (constructor validators, cross-resource checks, scorecard errors) + schema tools + scorecard report | `--sarif` |
 | `kix deploy <cluster>` (alias `apply`) | Wave-based apply with confirmation | `-y`, `--dry-run`, `--reconcile`, `--prune`, `--operator`, `--tui`, `--log-format=line|json|pretty` |
 | `kix status <cluster>` | Resource health table | `--operator` (group by package) |
@@ -190,7 +190,6 @@ ls result/
 | `kix rollback <cluster>` | Roll back to a previous activation | `-y`, `--dry-run`, `--prune`, `--list`, `--operator` |
 | `kix health <cluster>` | Drift detection vs live | |
 | `kix snapshot save <dir>` | Dump live cluster state | |
-| `kix snapshot diff <cluster> <dir>` | Diff snapshot vs build | |
 | `kix logs <package>` | Shell-out to `kubectl logs` for the package's primary workload | `-f`, `--tail`, `--since`, `-c`, `-p` |
 | `kix pf <package> <port>` | Shell-out to `kubectl port-forward` | `--address` |
 | `kix images <cluster>` | List all container images (pull-friendly) | `--sources`, `-o json` |
@@ -204,7 +203,7 @@ ls result/
 
 **Env vars:** `KIX_LOG` overrides the log-filter (RUST_LOG syntax). Apiserver transport (every command and the operator share one policy; defaults suit a cluster mid-incident, override only to debug): `KIX_RETRY_ATTEMPTS` total attempts per request (default 7, `1` disables retries), `KIX_SWEEP_CONCURRENCY` parallel LISTs in the managed-resource sweep (default 16), `KIX_REQUEST_TIMEOUT` per-attempt deadline in seconds for non-watch requests (default 120, `0` none), `KIX_CONNECT_TIMEOUT` TCP connect timeout in seconds (default 15), `KIX_STALL_TIMEOUT` seconds of no progress before `kix deploy` gives up (default 600, `0` never; a `stalled:` line naming every resource in flight, its phase and its age prints after 30s of no progress regardless). Retries: 429 always, with `Retry-After` honoured; 5xx and connection loss only for idempotent requests (GET, DELETE, PATCH including server-side apply). A request that still fails after the retries is an error, never an empty result: `diff`, `deploy` and `gc` refuse to plan from a partial view of the cluster. Resource types the account may not list (403) are reported, not hidden.
 
-**Exit codes:** `0` success; `1` error / failed resources; `2` differences detected (diff, snapshot diff).
+**Exit codes:** `0` success; `1` error / failed resources; `2` differences detected (diff).
 
 ## 4. The eval pipeline
 
@@ -1363,7 +1362,7 @@ Operator requires `nix-store` binary on the host and read access to `/nix/store/
 | Need | Tool |
 |---|---|
 | Diff vs live cluster | `kix diff <cluster>` (default mode) |
-| Diff vs snapshot dir | `kix diff <cluster> --snapshot <dir>` or `kix snapshot diff <cluster> <dir>` |
+| Diff vs snapshot or export dir | `kix diff <cluster> --from <dir>` |
 | Diff between two builds | `kix diff <cluster> --from <result>` |
 | Save live state | `kix snapshot save <dir>` (in-CLI; uses `kix.run/managed-by` label) or `./scripts/kix-dump.py --all <dir>` (Python; broader scope) |
 | Apply with planning | `kix deploy <cluster>` (use `--dry-run` first) |

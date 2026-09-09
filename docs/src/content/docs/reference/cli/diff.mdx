@@ -1,4 +1,137 @@
 ---
 title: "`diff`"
-description: TODO
+description: "Compare a cluster build with the live cluster, a previous build, or a saved manifest directory, package by package."
 ---
+
+`kix diff` evaluates and builds a cluster, then compares the result with an
+old side: the live cluster by default, or a directory passed with `--from`.
+It never changes the cluster.
+
+This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
+`cli/kix-cli/src/commands/diff.rs` when in doubt.
+
+## Synopsis
+
+```text
+kix diff <CLUSTER> [--from <DIR>] [-o text|json|yaml|markdown]
+         [--flake <FLAKE>] [--context <CONTEXT>] [--no-cache]
+```
+
+| Argument or flag | Meaning |
+| --- | --- |
+| `<CLUSTER>` | Cluster name to evaluate and build from the flake. This is the new side of the comparison. |
+| `--from <DIR>` | Use a directory as the old side instead of the live cluster. See [Old side](#old-side). |
+| `-o`, `--output` | `text` (default), `json`, `yaml` (the JSON document as YAML), or `markdown` for pull request comments. |
+| `--flake <FLAKE>` | Flake to evaluate. Defaults to the current directory. |
+| `--context <CONTEXT>` | Kubeconfig context for the live cluster. Ignored with `--from`. |
+| `--no-cache` | Re-evaluate from Nix instead of reading the evaluation cache. |
+
+## Old side
+
+| Old side | How to select it | Needs cluster access |
+| --- | --- | --- |
+| Live cluster | Omit `--from` | Yes |
+| Previous build | `--from <DIR>` where `<DIR>` contains `kix-packages.json`, such as the result of `nix build .#cluster-<name>-activation` | No |
+| Saved manifests | `--from <DIR>` where `<DIR>` holds YAML written by `kix snapshot save` or `kix export --for audit` | No |
+
+For the live cluster, Kix reads only the fields it applied to each managed
+resource. Kubernetes records which tool set each field through server-side
+apply, and Kix keeps its own fields and drops the rest: server defaults,
+status, fields set by controllers or `kubectl`, and the bookkeeping
+annotations Kix writes after every apply. A cluster that matches its build
+reports no differences.
+
+A manifest directory must carry the Kix annotations that name each resource's
+package and identity hash. The default `kix export` mode strips them, so use
+`--for audit` when the old side comes from an export.
+
+Every old side goes through the same comparison. The live cluster and a
+snapshot of it produce the same report.
+
+## What is compared
+
+The report is organised by package. Each package lands in one group:
+
+| Group | Meaning |
+| --- | --- |
+| added | The package is in the build but not on the old side |
+| removed | The package is on the old side but not in the build |
+| changed | The package exists on both sides and at least one resource differs |
+| unchanged | Every resource in the package matches |
+
+Within a changed package, each resource is reported as one of:
+
+| Resource line | Meaning |
+| --- | --- |
+| `+` added or `-` removed | The resource exists on one side only |
+| `~` modified | The content differs. Text output shows each differing path with a unified diff of the values. |
+| `~` via dependency | Only the identity hash changed, because a dependency of this resource changed. The content is the same. Text output marks these "via dependency"; JSON and Markdown call them dep-affected. |
+
+Two more sections follow the packages:
+
+- **Cluster-level resources** groups resources that belong to no package, such
+  as namespaces and custom resource definitions. Text output labels the
+  group `cluster-level resources`; JSON uses the key `_cluster`.
+- **Activation** shows the old and new activation record names when they
+  differ. A build whose content matches the old side keeps the same record
+  name, so this line appears only alongside other changes.
+
+When a stateful resource appears to have moved between packages or names,
+the report adds a "Stateful migrations detected" section. It is informational;
+Kix does not migrate data.
+
+## Output formats
+
+### Text
+
+A summary line, one block per namespace with each package's status and
+resource lines, the cluster-level group, the activation line, then either the
+migration section or `No differences found.` Colour follows `--no-color` and
+the `NO_COLOR` environment variable.
+
+### JSON and YAML
+
+One document with a `packages` object and, when present, a `migration_pairs`
+array.
+
+| Key | Content |
+| --- | --- |
+| `packages.summary` | Counts of `added`, `removed`, `changed`, and `unchanged` packages |
+| `packages.added`, `packages.removed` | Arrays of `{ key, version, resources }` |
+| `packages.changed` | Array of package changes: `key`, `old_version`, `new_version`, `added_resources`, `removed_resources`, `modified_resources` (each `{ resource, diff_count }`), `dep_affected_resources` |
+| `packages.cluster_level` | The same shape as one changed package, with key `_cluster`, or `null` |
+| `packages.activation` | `{ old, new }` record names, or `null` when unchanged |
+| `packages.unchanged` | Number of unchanged packages |
+
+Resource identifiers have the form `Kind/name@namespace`. Package keys have
+the form `namespace/name`.
+
+### Markdown
+
+GitHub-flavoured Markdown: a plan summary, a `<details>` block per changed
+package, the cluster-level and activation sections, and the migration section
+when present.
+
+## Exit status
+
+| Code | Meaning |
+| --- | --- |
+| `0` | No differences |
+| `2` | At least one difference, or a stateful migration was detected |
+| `1` | Evaluation, build, or cluster error |
+
+The status is the same for every output format, so a CI job can write
+Markdown to a file and still branch on the result.
+
+:::note[Reference]
+See [`kix snapshot`](/docs/reference/cli/snapshot/) for how a snapshot
+directory is produced, and [`kix export`](/docs/reference/cli/export/) for
+the audit export mode.
+:::
+
+:::tip[Use it in a task]
+See [Preview changes with `kix diff`](/docs/how-to/operate-a-cluster/preview-changes-with-kix-diff/)
+for the live workflow and
+[Use snapshots for offline or CI diffs](/docs/how-to/operate-a-cluster/use-snapshots-for-offline-or-ci-diffs/)
+when the comparison must run without cluster access.
+:::

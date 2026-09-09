@@ -21,22 +21,47 @@ fn kix() -> Command {
     cmd
 }
 
+/// An empty manifest directory is a cluster with nothing on it: every
+/// package is added.
 #[test]
-fn diff_snapshot_against_minimal() {
+fn diff_from_empty_manifest_dir_adds_everything() {
     let tmp = tempfile::tempdir().unwrap();
     let snapshot_dir = tmp.path().join("snapshot");
     fs::create_dir_all(&snapshot_dir).unwrap();
 
     kix()
-        .args([
-            "diff",
-            "minimal",
-            "--snapshot",
-            snapshot_dir.to_str().unwrap(),
-        ])
+        .args(["diff", "minimal", "--from", snapshot_dir.to_str().unwrap()])
         .assert()
         .code(2)
-        .stdout(predicate::str::contains("Only in kix"));
+        .stdout(predicate::str::contains("added"));
+}
+
+/// `kix export --for audit` writes the build as a manifest directory in
+/// the layout `kix snapshot save` uses. Diffing the build against its own
+/// export exercises the whole flat-side path — loading, synthesis, the
+/// package-grouped diff — with no cluster, and must come back clean.
+#[test]
+fn diff_from_own_audit_export_is_identical() {
+    let tmp = tempfile::tempdir().unwrap();
+    let export_dir = tmp.path().join("export");
+
+    kix()
+        .args([
+            "export",
+            "minimal",
+            "--for",
+            "audit",
+            "--out",
+            export_dir.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    kix()
+        .args(["diff", "minimal", "--from", export_dir.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No differences"));
 }
 
 #[test]

@@ -185,15 +185,23 @@ pub fn merge_typed_metadata(obj: &DynamicObject) -> Value {
 ///
 /// Returns `None` when the object has no kix SSA managedFields entry.
 pub fn applied_content_hash(obj: &DynamicObject) -> Option<String> {
-    let fields = kix_fieldset(obj)?;
-    let full = merge_typed_metadata(obj);
     // TODO(doc-123): exclude PI spec.driftIgnore pointers here — compiled
     // delegation drops the listed JSON pointers from the projection on both
     // the stamp and the check side, so expected co-owners (HPA on replicas,
     // cert-manager on Secret data) never enter the hash.
-    let mut projection = project(&full, &fields);
+    let mut projection = kix_owned_projection(obj)?;
     normalize::strip_kix_annotations(&mut projection);
     Some(normalize::hash_value(&normalize::sort_keys(&projection)))
+}
+
+/// The part of a live object kix's server-side apply owns: typed metadata
+/// merged back, then projected onto kix's `Apply` fieldset. Steps 1 and 2
+/// of the applied-content hash, and the whole of what `kix diff` and
+/// `kix snapshot save` look at (see `fetch::kix_owned_view`). `None` when
+/// the object has no kix SSA managedFields entry.
+pub fn kix_owned_projection(obj: &DynamicObject) -> Option<Value> {
+    let fields = kix_fieldset(obj)?;
+    Some(project(&merge_typed_metadata(obj), &fields))
 }
 
 #[cfg(test)]

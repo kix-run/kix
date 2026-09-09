@@ -229,7 +229,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
             // Old store graph unavailable (live reconstruction) — synthesize
             // a package view from the old manifests so untouched packages
             // show as unchanged instead of everything "added".
-            let synthetic = synthesize_old_graph(&old_manifests, &new_graph);
+            let synthetic = StoreGraph::synthesize(&old_manifests, &new_graph);
             plan::diff_graphs(&synthetic, &new_graph)
         } else {
             // First deploy — everything is "added"
@@ -648,155 +648,9 @@ async fn reconstruct_old_from_live(
                  Refusing to plan from a partial view; retry when the apiserver is healthy."
             )
         })?;
-    Ok(objects
-        .into_iter()
-        .filter(|obj| lifecycle::lifecycle_of_live(obj).prunable())
-        .map(|mut obj| {
-            fetch::normalize_for_diff(&mut obj);
-            let mut manifest = kix::cluster::fieldsv1::merge_typed_metadata(&obj);
-            // Live objects a previous Kix stamped carry the retired keys.
-            // Bring them to the current domain here, the way the store-graph
-            // loader does, so the planner sees one domain either way.
-            kix::legacy_domain::upgrade_manifest(&mut manifest);
-            manifest
-        })
-        .collect())
-}
-
-/// Synthesize an "old" StoreGraph from live-reconstructed manifests so the
-/// package-grouped plan shows changed/unchanged packages instead of
-/// everything "added" when the old store path is gone.
-///
-/// Resources group by their stamped `kix.run/package[-namespace]`
-/// annotations (cluster-level `_cluster` resources are skipped — real
-/// graphs keep them outside any PackageNode). Identity hashes map back
-/// onto the NEW graph's store paths: a matched resource reuses the new
-/// path and manifest (equal hash ⇒ identical content), so untouched
-/// packages compare path-equal and print as unchanged; unmatched
-/// resources keep the live manifest under a synthetic path so their diff
-/// renders live → new. Versions come from live PackageInstance manifests.
-fn synthesize_old_graph(old_manifests: &[Value], new_graph: &StoreGraph) -> StoreGraph {
-    use kix::eval::store_graph::{PackageNode, ResourceNode, store_hash};
-    use std::collections::{HashMap, HashSet};
-
-    let new_path_by_hash: HashMap<String, &PathBuf> = new_graph
-        .resources
-        .keys()
-        .map(|p| (store_hash(p), p))
-        .collect();
-
-    // "ns/instance" → version, from live PackageInstance manifests.
-    let mut version_by_key: HashMap<String, String> = HashMap::new();
-    for m in old_manifests {
-        if m.get("kind").and_then(Value::as_str) != Some(lifecycle::PACKAGE_INSTANCE_KIND) {
-            continue;
-        }
-        let ns = m
-            .pointer("/metadata/namespace")
-            .and_then(Value::as_str)
-            .unwrap_or("_cluster");
-        let name = m
-            .pointer("/spec/instanceName")
-            .and_then(Value::as_str)
-            .or_else(|| m.pointer("/metadata/name").and_then(Value::as_str));
-        if let (Some(name), Some(version)) =
-            (name, m.pointer("/spec/version").and_then(Value::as_str))
-        {
-            version_by_key.insert(format!("{ns}/{name}"), version.to_string());
-        }
-    }
-
-    let mut graph = StoreGraph::empty(&new_graph.cluster_name);
-    let mut paths_by_pkg: HashMap<String, Vec<PathBuf>> = HashMap::new();
-
-    for (i, m) in old_manifests.iter().enumerate() {
-        let ann = |key: &str| {
-            m.pointer("/metadata/annotations")
-                .and_then(|a| a.get(key))
-                .and_then(Value::as_str)
-        };
-        let pkg = ann(keys::PACKAGE).unwrap_or("_cluster");
-        let pkg_ns = ann(keys::PACKAGE_NAMESPACE).unwrap_or("_cluster");
-        let hash = ann(keys::IDENTITY_HASH).unwrap_or("");
-
-        let (path, manifest) = match new_path_by_hash.get(hash) {
-            Some(&p) => (p.clone(), new_graph.resources[p].manifest.clone()),
-            None => (
-                PathBuf::from(format!("/nix/store/live-{i}-reconstructed")),
-                m.clone(),
-            ),
-        };
-        graph.resources.insert(
-            path.clone(),
-            ResourceNode {
-                store_path: path.clone(),
-                manifest,
-            },
-        );
-        if pkg != "_cluster" {
-            paths_by_pkg
-                .entry(format!("{pkg_ns}/{pkg}"))
-                .or_default()
-                .push(path);
-        }
-    }
-
-    let mut keys: Vec<String> = paths_by_pkg.keys().cloned().collect();
-    keys.sort();
-    for key in keys {
-        let paths = paths_by_pkg.remove(&key).unwrap_or_default();
-        let (pkg_ns, pkg_name) = key.split_once('/').unwrap_or(("_cluster", key.as_str()));
-
-        // Order shared paths exactly like the new package so an untouched
-        // package compares Vec-equal (→ unchanged); extras go last.
-        let ordered = match new_graph
-            .packages
-            .values()
-            .find(|p| p.namespace == pkg_ns && p.instance_name == pkg_name)
-        {
-            Some(new_pkg) => {
-                let old_set: HashSet<&PathBuf> = paths.iter().collect();
-                let new_set: HashSet<&PathBuf> = new_pkg.resource_paths.iter().collect();
-                let mut ordered: Vec<PathBuf> = new_pkg
-                    .resource_paths
-                    .iter()
-                    .filter(|p| old_set.contains(p))
-                    .cloned()
-                    .collect();
-                let mut extras: Vec<PathBuf> = paths
-                    .iter()
-                    .filter(|p| !new_set.contains(p))
-                    .cloned()
-                    .collect();
-                extras.sort();
-                extras.dedup();
-                ordered.extend(extras);
-                ordered
-            }
-            None => {
-                let mut sorted = paths;
-                sorted.sort();
-                sorted.dedup();
-                sorted
-            }
-        };
-
-        let store_path = PathBuf::from(format!("/nix/store/live-pkg-{pkg_ns}-{pkg_name}"));
-        graph.packages.insert(
-            store_path.clone(),
-            PackageNode {
-                store_path,
-                instance_name: pkg_name.to_string(),
-                namespace: pkg_ns.to_string(),
-                version: version_by_key.get(&key).cloned(),
-                lifecycle: None,
-                resource_paths: ordered,
-                cross_deps: vec![],
-            },
-        );
-    }
-
-    graph
+    Ok(fetch::kix_owned_manifests(objects.into_iter().filter(
+        |obj| lifecycle::lifecycle_of_live(obj).prunable(),
+    )))
 }
 
 // ── Apply engine (async) — DAG-streaming scheduler (doc 99) ─────────

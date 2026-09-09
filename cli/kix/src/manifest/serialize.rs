@@ -14,7 +14,13 @@ pub enum ManifestLoadError {
     Yaml(#[from] serde_yml::Error),
 }
 
-/// Recursively remove null values and empty objects from a JSON value (in-place).
+/// Recursively remove null values from a JSON value (in-place).
+///
+/// Only nulls. An empty object is content in a Kubernetes manifest:
+/// `emptyDir: {}` is a volume, `subresources: {status: {}}` enables a CRD's
+/// status subresource, `securityContext: {}` is an explicit choice. This
+/// used to drop objects left empty after stripping, and `kix build` and
+/// `kix export` wrote YAML that no longer said what the build said.
 pub fn strip_nulls(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::Array(arr) => {
@@ -28,8 +34,6 @@ pub fn strip_nulls(value: &mut serde_json::Value) {
             for v in map.values_mut() {
                 strip_nulls(v);
             }
-            // Remove objects that became empty after stripping
-            map.retain(|_, v| !matches!(v, serde_json::Value::Object(m) if m.is_empty()));
         }
         _ => {}
     }
@@ -87,7 +91,7 @@ pub fn manifests_to_json(manifests: &[serde_json::Value]) -> String {
 /// Load YAML files from a directory, returning parsed manifests with their ResourceIds.
 ///
 /// Handles both flat (`{ns}--{name}-{kind}.yaml`) and nested (`{ns}/{name}-{kind}.yaml`) layouts.
-/// Skips packageinstance files and README.md.
+/// Skips non-YAML files (README.md and the like).
 pub fn load_manifests_from_dir(
     dir: &Path,
 ) -> Result<Vec<(ResourceId, serde_json::Value)>, ManifestLoadError> {
@@ -107,12 +111,6 @@ pub fn load_manifests_from_dir(
 
         // Skip non-YAML files
         if !filename.ends_with(".yaml") {
-            continue;
-        }
-
-        // Skip packageinstance files
-        if filename.ends_with("-packageinstance.yaml") || filename.contains("-packageinstance.yaml")
-        {
             continue;
         }
 

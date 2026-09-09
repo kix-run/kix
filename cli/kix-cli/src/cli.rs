@@ -381,12 +381,10 @@ pub struct DiffArgs {
     /// Cluster name
     pub cluster: String,
 
-    /// Diff against a snapshot directory instead of the live cluster
-    #[arg(long)]
-    pub snapshot: Option<String>,
-
-    /// Build-to-build diff: compare against a previous activation result directory
-    #[arg(long)]
+    /// Compare against a directory instead of the live cluster: a previous
+    /// build result (`kix-packages.json` inside) or a manifest directory
+    /// written by `kix snapshot save` or `kix export`
+    #[arg(long, value_name = "DIR")]
     pub from: Option<String>,
 }
 
@@ -779,23 +777,11 @@ pub struct SnapshotArgs {
 pub enum SnapshotCommand {
     /// Save a snapshot of the live cluster state
     Save(SnapshotSaveArgs),
-
-    /// Diff a snapshot against the current rendered manifests
-    Diff(SnapshotDiffArgs),
 }
 
 #[derive(clap::Args)]
 pub struct SnapshotSaveArgs {
     /// Directory to save the snapshot to
-    pub dir: String,
-}
-
-#[derive(clap::Args)]
-pub struct SnapshotDiffArgs {
-    /// Cluster name to diff against the snapshot
-    pub cluster: String,
-
-    /// Path to an existing snapshot directory
     pub dir: String,
 }
 

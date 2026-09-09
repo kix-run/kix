@@ -1,4 +1,102 @@
 ---
 title: "`snapshot`"
-description: TODO
+description: "Save the Kix-owned view of a live cluster as a directory of YAML manifests that `kix diff --from` can compare against later."
 ---
+
+`kix snapshot` saves what Kix currently manages in a cluster to a directory.
+The directory is the old side of a later `kix diff --from`, so a build can be
+compared with the cluster without cluster access.
+
+This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
+`cli/kix-cli/src/commands/snapshot.rs` when in doubt.
+
+## Subcommands
+
+| Subcommand | Purpose |
+| --- | --- |
+| `save <DIR>` | Fetch every Kix-managed resource from the selected Kubernetes context and write it to `<DIR>` |
+
+## `kix snapshot save <DIR>`
+
+```text
+kix snapshot save <DIR> [--context <CONTEXT>] [--quiet]
+```
+
+| Argument or flag | Meaning |
+| --- | --- |
+| `<DIR>` | Directory to write. An existing directory is replaced in one step, so a failed save never leaves a half-written snapshot. Paths containing `..` are rejected. |
+| `--context <CONTEXT>` | Kubeconfig context to read. Defaults to the current context. |
+| `-q`, `--quiet` | Suppress the progress lines on stderr. |
+
+The command reads the cluster only. It does not evaluate a flake, so `--flake`
+and `--no-cache` have no effect.
+
+### What is saved
+
+The save lists every resource carrying the Kix managed-by label, keeps the
+ones Kix actually applied, and writes each one as the fields Kix applied.
+Kubernetes records which tool set each field through server-side apply, and
+Kix reads that record to keep only its own fields. Server defaults, status,
+and fields written by controllers or by `kubectl` are left out.
+
+Included:
+
+- every namespaced and cluster-scoped resource Kix applied, including
+  `PackageInstance` records and the `Activation` record;
+- the Kix annotations that identify each resource's package, identity hash,
+  and dependencies.
+
+Excluded:
+
+- `status` and anything a controller wrote;
+- server-side defaults Kix never sent;
+- the bookkeeping annotations Kix writes after applying (activations and
+  applied hash), which change on every deploy without being a content change;
+- resources that only carry the label because a controller copied it, such as
+  Pods and EndpointSlices.
+
+A resource Kix manages can be a `Secret`. Its data is part of what Kix
+applied, so it is part of the snapshot. Store snapshots where you would store
+the rendered manifests.
+
+### Directory layout
+
+```text
+<DIR>/
+  README.md                       # timestamp, context, resource count
+  <namespace>/<name>-<kind>.yaml  # one file per namespaced resource
+  _cluster/<name>-<kind>.yaml     # one file per cluster-scoped resource
+```
+
+Kinds are lower-cased in file names, for example
+`how-to-app/production-deployment.yaml`.
+
+### Exit status
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Snapshot written |
+| `1` | The cluster could not be reached, API discovery failed, or a listing failed |
+
+### Using a snapshot
+
+Pass the directory to `kix diff`:
+
+```text
+kix diff <CLUSTER> --from <DIR>
+```
+
+That comparison runs without Kubernetes access. Save a fresh snapshot after
+each deploy; a snapshot describes the cluster at the moment it was taken.
+
+:::note[Reference]
+See [`kix diff`](/docs/reference/cli/diff/) for the other old-side sources
+and the output formats.
+:::
+
+:::tip[Use it in a task]
+See [Use snapshots for offline or CI diffs](/docs/how-to/operate-a-cluster/use-snapshots-for-offline-or-ci-diffs/)
+for the day-to-day workflow, or
+[Save and diff snapshots for offline CI](/docs/how-to/policy-ci-and-compliance/save-and-diff-snapshots-for-offline-ci/)
+to run the comparison in a pipeline without cluster credentials.
+:::

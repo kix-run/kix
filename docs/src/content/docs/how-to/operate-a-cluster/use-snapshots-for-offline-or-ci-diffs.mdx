@@ -1,4 +1,133 @@
 ---
 title: "Use snapshots for offline or CI diffs"
-description: TODO
+description: "Save what Kix manages in a cluster, then preview changes against that snapshot without cluster access."
 ---
+
+import Command from '/src/components/Command.astro';
+
+Use a snapshot when you want `kix diff` without a connection to the cluster:
+on a laptop off the VPN, in a CI job that holds no cluster credentials, or
+when several people need the same old side for a review.
+
+`kix snapshot save` writes the fields Kix applied to each managed resource.
+`kix diff --from` then compares a build with that directory the same way it
+compares with the live cluster, so the two reports match.
+
+This guide assumes the cluster has been deployed at least once and that you
+can reach it when saving. The examples use the `how-to-application` cluster
+from `kix-examples`.
+
+## Save a snapshot after deploying
+
+Take the snapshot right after a successful deploy, while the cluster and the
+source agree:
+
+<Command
+  commands={["kix snapshot save ./snapshots/how-to-application"]}
+  cwd="kix-examples/"
+/>
+
+Pass `--context` when the cluster is not the current kubectl context. The
+command reports how many resources it fetched and wrote. The directory holds
+one YAML file per resource, grouped by namespace, plus a `README.md` with the
+timestamp and context.
+
+## Diff a build against the snapshot
+
+Compare the current source with the snapshot. No cluster access is needed:
+
+<Command
+  commands={["kix diff how-to-application --from ./snapshots/how-to-application"]}
+  cwd="kix-examples/"
+/>
+
+Straight after the save this reports `No differences found.` and exits with
+status 0.
+
+## Preview a change
+
+Edit the source, then run the same command again. Changing the production
+message in the example cluster gives a report like this:
+
+{/* Hand-written: this output comes from a manual run against a kind cluster.
+    Replace it with a live capture once the operations capture group covers
+    snapshots. The activation names are content hashes and will differ. */}
+<Command
+  commands={[
+    {
+      command: "kix diff how-to-application --from ./snapshots/how-to-application",
+      stdout: `3 packages: 2 unchanged, 1 changed, 0 added, 0 removed
+
+  how-to-app
+    ~ production 1.0.0 (1 changed, 4 dep-affected)
+      ~ ConfigMap/production@how-to-app
+          ~ $.data.index.html:
+              --- old
+              +++ new
+              @@ -1 +1 @@
+              -Hello from production
+              +Updated production message
+      ~ Deployment/production@how-to-app (via dependency)
+      ~ Job/production-health@how-to-app (via dependency)
+      ~ PackageInstance/production@how-to-app (via dependency)
+      ~ Service/production@how-to-app (via dependency)
+
+  Activation: how-to-application-aq1zdgf9gsnb -> how-to-application-h9nqwqrpw48l
+`,
+    },
+  ]}
+  cwd="kix-examples/"
+/>
+
+The ConfigMap is the resource you edited. The four resources marked "via
+dependency" have no content change of their own; their identity hash moves
+because they depend on the ConfigMap, and Kix will re-stamp them on the next
+deploy. The command exits with status 2 whenever it finds a difference.
+
+## Keep the snapshot current
+
+A snapshot describes the cluster at the moment it was taken. Once you deploy,
+save again, or the next diff will keep showing the change you already shipped.
+A simple rule: every command that deploys is followed by a save of the same
+context.
+
+When you can reach the cluster, run `kix diff how-to-application` without
+`--from`. It reads the same fields from the live resources and needs no
+saved copy.
+
+## Compare with a previous build instead
+
+A build result works as the old side too. Build the cluster's activation
+output with Nix from the old revision, keep the result link, and pass it:
+
+<Command
+  commands={[
+    "nix build .#cluster-how-to-application-activation --out-link ./result-before",
+    "kix diff how-to-application --from ./result-before",
+  ]}
+  cwd="kix-examples/"
+/>
+
+Kix recognises the directory by the `kix-packages.json` file inside it. This
+compares two builds of the source and never looks at a cluster. Use it to
+check what a branch changes relative to `main`.
+
+## Troubleshooting
+
+**Every resource shows as removed or cluster-level.** The directory was
+written by `kix export` in its default mode, which strips the annotations the
+comparison needs. Save a snapshot instead, or export with `--for audit`.
+
+**The diff reports changes you did not make.** The snapshot is older than the
+last deploy. Save a fresh one and compare again.
+
+:::note[Reference]
+See [`kix snapshot`](/docs/reference/cli/snapshot/) for the directory layout
+and [`kix diff`](/docs/reference/cli/diff/) for the output formats and exit
+codes.
+:::
+
+:::tip[Use it in a task]
+See [Save and diff snapshots for offline CI](/docs/how-to/policy-ci-and-compliance/save-and-diff-snapshots-for-offline-ci/)
+to run this comparison in a pipeline that has no cluster credentials.
+:::

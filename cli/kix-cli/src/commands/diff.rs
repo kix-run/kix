@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
@@ -9,16 +8,12 @@ use kix::cluster::fetch;
 use kix::cluster::migrate::{MigrationPair, detect_migration_pairs};
 use kix::eval::build_cluster_activation_with_status;
 use kix::eval::store_graph::StoreGraph;
-use kix::manifest::diff::display::format_diffs;
-use kix::manifest::diff::engine::structural_diff;
-use kix::manifest::diff::{DiffConfig, Difference};
 use kix::manifest::serialize::load_manifests_from_dir;
 use kix::manifest::stamp::stamp_annotations;
-use kix::manifest::types::ResourceId;
 
 use crate::cli::{DiffArgs, OutputFormat};
 use crate::output;
-use crate::plan::PackageDiff;
+use crate::plan::{self, PackageDiff};
 
 use super::CommandContext;
 
@@ -26,62 +21,59 @@ use super::CommandContext;
 
 struct DiffResult {
     packages: PackageDiff,
-    /// Flat resource list for non-graph old sides (live cluster / snapshot).
-    legacy_resource_diff: Option<LegacyResourceDiff>,
     /// Detected stateful migration pairs (doc 67). Phase 1: informational only.
     migration_pairs: Vec<MigrationPair>,
 }
 
-/// Fallback for live-cluster or snapshot diffs where we don't have a store graph
-/// on the old side — flat resource-level comparison.
-struct LegacyResourceDiff {
-    identical: usize,
-    modified: Vec<(ResourceId, Vec<Difference>)>,
-    kix_only: Vec<ResourceId>,
-    cluster_only: Vec<ResourceId>,
+impl DiffResult {
+    fn has_diff(&self) -> bool {
+        self.packages.has_changes() || !self.migration_pairs.is_empty()
+    }
 }
 
 // ── Entry point ──────────────────────────────────────────────────────
 
+/// Every mode is one comparison of two store graphs. The new side is
+/// always a build. The old side is a build result when `--from` names one,
+/// and otherwise a graph synthesized from stamped manifests: a manifest
+/// directory (`--from` a snapshot or export), or the live cluster's
+/// kix-owned view. Same renderers as the deploy plan, so what `kix diff`
+/// shows is what `kix deploy` will show.
 pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<()> {
     let flake_path = resolve_flake_path(&ctx.global.flake)?;
 
-    // Build new side
     let spinner = make_spinner(ctx, &format!("Building cluster '{}'...", args.cluster));
     let overrides = ctx.global.input_overrides();
     let new_graph = build_store_graph(&flake_path, &args.cluster, &overrides, &spinner)?;
     clear_spinner(&spinner);
 
-    // Diff against old side
-    let result = if let Some(from_path) = &args.from {
-        // Build-to-build diff — both sides are store graphs
-        let path = PathBuf::from(from_path);
+    let old_graph = if let Some(from) = &args.from {
+        let path = PathBuf::from(from);
         if !path.is_dir() {
-            return Err(miette!("from directory does not exist: {from_path}"));
+            return Err(miette!("from directory does not exist: {from}"));
         }
-        let old_spinner = make_spinner(ctx, "Loading old graph...");
-        let old_graph = load_old_graph(&path, &old_spinner)?;
-        clear_spinner(&old_spinner);
-        diff_graphs(&old_graph, &new_graph)
-    } else if let Some(snapshot_dir) = &args.snapshot {
-        // Snapshot diff — old side is flat manifests
-        let snapshot_path = Path::new(snapshot_dir);
-        if !snapshot_path.is_dir() {
-            return Err(miette!("snapshot directory does not exist: {snapshot_dir}"));
-        }
-        let old_manifests = load_manifests_from_dir(snapshot_path)
-            .map_err(|e| miette!("failed to load snapshot directory: {e}"))?;
-        diff_graph_vs_flat(&new_graph, &old_manifests)
+        let spinner = make_spinner(ctx, "Loading old side...");
+        let graph = if path.join("kix-packages.json").is_file() {
+            load_old_graph(&path, &spinner)?
+        } else {
+            let manifests: Vec<Value> = load_manifests_from_dir(&path)
+                .map_err(|e| miette!("failed to load manifest directory {from}: {e}"))?
+                .into_iter()
+                .map(|(_, v)| v)
+                .collect();
+            StoreGraph::synthesize(&manifests, &new_graph)
+        };
+        clear_spinner(&spinner);
+        graph
     } else {
-        // Live cluster
         let spinner = make_spinner(ctx, "Fetching live cluster state...");
         let global = ctx.global.clone();
-        let old_manifests = ctx.runtime.block_on(fetch_live_manifests(&global))?;
+        let manifests = ctx.runtime.block_on(fetch_live_manifests(&global))?;
         clear_spinner(&spinner);
-        diff_graph_vs_flat(&new_graph, &old_manifests)
+        StoreGraph::synthesize(&manifests, &new_graph)
     };
 
-    let has_diff = result_has_diff(&result);
+    let result = diff_graphs(&old_graph, &new_graph);
 
     match ctx.output_format(OutputFormat::Text) {
         OutputFormat::Json => print_json_output(&result, false)?,
@@ -90,7 +82,7 @@ pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<()> {
         OutputFormat::Text => print_text_output(&result, &ctx.global),
     }
 
-    if has_diff {
+    if result.has_diff() {
         std::process::exit(2);
     }
 
@@ -133,94 +125,21 @@ fn set_spinner(spinner: &Option<indicatif::ProgressBar>, msg: &str) {
     }
 }
 
-// ── Build-to-build diff (both sides are store graphs) ────────────────
-
 fn diff_graphs(old: &StoreGraph, new: &StoreGraph) -> DiffResult {
     let new_manifests: Vec<Value> = new.resources.values().map(|n| n.manifest.clone()).collect();
     let old_manifests: Vec<Value> = old.resources.values().map(|n| n.manifest.clone()).collect();
+    // Fail-closed: live objects that predate the lifecycle stamp carry no
+    // `kix.run/lifecycle`, and then no pairs fire.
     let migration_pairs = detect_migration_pairs(&new_manifests, &old_manifests);
     DiffResult {
-        packages: crate::plan::diff_graphs(old, new),
-        legacy_resource_diff: None,
-        migration_pairs,
-    }
-}
-
-// ── Graph vs flat manifests (live cluster / snapshot) ────────────────
-
-fn diff_graph_vs_flat(new_graph: &StoreGraph, old_manifests: &[(ResourceId, Value)]) -> DiffResult {
-    let config = DiffConfig::new("kix", "cluster");
-
-    let new_map: BTreeMap<ResourceId, &Value> = new_graph
-        .resources
-        .values()
-        .map(|n| (ResourceId::from_value(&n.manifest), &n.manifest))
-        .collect();
-
-    let old_map: BTreeMap<ResourceId, &Value> = old_manifests
-        .iter()
-        .map(|(id, v)| (id.clone(), v))
-        .collect();
-
-    let mut identical = 0usize;
-    let mut modified = Vec::new();
-    let mut kix_only = Vec::new();
-    let mut cluster_only = Vec::new();
-
-    for (id, new_val) in &new_map {
-        if let Some(old_val) = old_map.get(id) {
-            let diffs = structural_diff(new_val, old_val, "$", &config);
-            if diffs.is_empty() {
-                identical += 1;
-            } else {
-                modified.push((id.clone(), diffs));
-            }
-        } else {
-            kix_only.push(id.clone());
-        }
-    }
-
-    for id in old_map.keys() {
-        if !new_map.contains_key(id) {
-            cluster_only.push(id.clone());
-        }
-    }
-
-    // Build package summary from new graph (no old graph available)
-    let pkg_count = new_graph.packages.len();
-
-    // Migration pair detection against the flat old side. Note: live-cluster
-    // manifests may not carry kix.run/lifecycle if they pre-date the stamp
-    // (first deploy with this feature on). In that case no pairs fire — the
-    // detector is fail-closed.
-    let new_manifests: Vec<Value> = new_graph
-        .resources
-        .values()
-        .map(|n| n.manifest.clone())
-        .collect();
-    let old_manifests_vec: Vec<Value> = old_manifests.iter().map(|(_, v)| v.clone()).collect();
-    let migration_pairs = detect_migration_pairs(&new_manifests, &old_manifests_vec);
-
-    DiffResult {
-        packages: PackageDiff {
-            added: Vec::new(),
-            removed: Vec::new(),
-            changed: Vec::new(),
-            unchanged: pkg_count,
-        },
-        legacy_resource_diff: Some(LegacyResourceDiff {
-            identical,
-            modified,
-            kix_only,
-            cluster_only,
-        }),
+        packages: plan::diff_graphs(old, new),
         migration_pairs,
     }
 }
 
 // ── Live cluster fetch ───────────────────────────────────────────────
 
-async fn fetch_live_manifests(global: &crate::cli::GlobalArgs) -> Result<Vec<(ResourceId, Value)>> {
+async fn fetch_live_manifests(global: &crate::cli::GlobalArgs) -> Result<Vec<Value>> {
     let client = fetch::make_client(global.context.as_deref())
         .await
         .map_err(|e| {
@@ -263,53 +182,22 @@ async fn fetch_live_manifests(global: &crate::cli::GlobalArgs) -> Result<Vec<(Re
     let sweep = fetch::sweep_managed(&client, &discovery)
         .await
         .map_err(|e| miette!("failed to fetch resources: {e}"))?;
-    let objects = sweep.managed;
 
     if !global.quiet {
         eprintln!(
             "Fetched {} resources across {} resource types{}",
-            objects.len(),
+            sweep.managed.len(),
             discovery.len() - sweep.forbidden.len(),
             crate::output::forbidden_note(&sweep.forbidden),
         );
     }
 
-    let mut resources = Vec::new();
-    for mut obj in objects {
-        fetch::normalize_for_diff(&mut obj);
-        // Whole object, not `obj.data`: metadata lives on the typed field,
-        // and without it every id degrades to `Kind/unknown`.
-        let mut value = fetch::to_manifest_value(&obj);
-        // Live objects a previous Kix stamped carry the retired keys. Without
-        // this, every Kix annotation shows as a paired add and remove and an
-        // in-sync cluster reads as entirely modified.
-        kix::legacy_domain::upgrade_manifest(&mut value);
-        let id = ResourceId::from_value(&value);
-        resources.push((id, value));
-    }
-
-    Ok(resources)
+    // Only the fields kix's server-side apply owns: server defaults and
+    // kix's own bookkeeping never enter the comparison.
+    Ok(fetch::kix_owned_manifests(sweep.managed))
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
-
-fn result_has_diff(result: &DiffResult) -> bool {
-    let pkg = &result.packages;
-    if !pkg.added.is_empty() || !pkg.removed.is_empty() || !pkg.changed.is_empty() {
-        return true;
-    }
-    if let Some(ref legacy) = result.legacy_resource_diff
-        && (!legacy.modified.is_empty()
-            || !legacy.kix_only.is_empty()
-            || !legacy.cluster_only.is_empty())
-    {
-        return true;
-    }
-    if !result.migration_pairs.is_empty() {
-        return true;
-    }
-    false
-}
 
 fn make_spinner(ctx: &CommandContext, msg: &str) -> Option<indicatif::ProgressBar> {
     if std::io::stderr().is_terminal() && !ctx.global.quiet {
@@ -350,11 +238,8 @@ fn resolve_flake_path(flake: &str) -> Result<PathBuf> {
 // ── Text output ──────────────────────────────────────────────────────
 
 fn print_text_output(result: &DiffResult, global: &crate::cli::GlobalArgs) {
-    let config = DiffConfig::new("old", "new");
-    let color = output::color_enabled();
     let pkg = &result.packages;
 
-    // Package-level summary
     let total_pkgs = pkg.added.len() + pkg.removed.len() + pkg.changed.len() + pkg.unchanged;
     if !global.quiet && total_pkgs > 0 {
         println!(
@@ -365,149 +250,29 @@ fn print_text_output(result: &DiffResult, global: &crate::cli::GlobalArgs) {
             pkg.added.len(),
             pkg.removed.len(),
         );
-        println!();
     }
 
-    // Added packages
-    for p in &pkg.added {
-        let ver = p.version.as_deref().unwrap_or("(no version)");
+    // The deploy plan renderer, always with resource-level detail: a diff
+    // exists to be read.
+    plan::print_package_plan(pkg, true);
+
+    if let Some(a) = &pkg.activation {
+        println!();
         println!(
-            "  {} {}@{} ({} resources)",
-            output::green("+"),
-            output::green(&p.key),
-            ver,
-            p.resource_count,
+            "  {} {} -> {}",
+            output::bold("Activation:"),
+            output::dim(a.old.as_deref().unwrap_or("(none)")),
+            output::green(a.new.as_deref().unwrap_or("(none)")),
         );
     }
-    if !pkg.added.is_empty() {
+
+    if pkg.has_changes() {
         println!();
     }
 
-    // Removed packages
-    for p in &pkg.removed {
-        let ver = p.version.as_deref().unwrap_or("(no version)");
-        println!(
-            "  {} {}@{} ({} resources)",
-            output::red("-"),
-            output::red(&p.key),
-            ver,
-            p.resource_count,
-        );
-    }
-    if !pkg.removed.is_empty() {
-        println!();
-    }
-
-    // Changed packages — this is the main output
-    for change in &pkg.changed {
-        let old_ver = change.old_version.as_deref().unwrap_or("?");
-        let new_ver = change.new_version.as_deref().unwrap_or("?");
-        let ver_str = if old_ver != new_ver {
-            format!("{old_ver} -> {new_ver}")
-        } else {
-            new_ver.to_string()
-        };
-
-        println!(
-            "  {} {}@{}",
-            output::yellow("~"),
-            output::yellow(&change.key),
-            ver_str,
-        );
-
-        for id in &change.added_resources {
-            println!(
-                "      {} {}",
-                output::green("+"),
-                output::green(&id.to_string())
-            );
-        }
-        for id in &change.removed_resources {
-            println!(
-                "      {} {}",
-                output::red("-"),
-                output::red(&id.to_string())
-            );
-        }
-        for (id, diffs) in &change.resource_diffs {
-            println!(
-                "      {} {}",
-                output::yellow("~"),
-                output::yellow(&id.to_string())
-            );
-            let formatted = format_diffs(diffs, &config, color, true);
-            // Indent the diff output under the resource
-            for line in formatted.lines() {
-                println!("        {line}");
-            }
-        }
-        if !change.dep_affected_resources.is_empty() {
-            println!(
-                "      {}",
-                output::dim("affected via dependency (hash bump only, no content change):"),
-            );
-            for id in &change.dep_affected_resources {
-                println!(
-                    "        {} {}",
-                    output::dim("~"),
-                    output::dim(&id.to_string())
-                );
-            }
-        }
-        println!();
-    }
-
-    // Legacy resource diff (live cluster / snapshot — no package grouping on old side)
-    if let Some(ref legacy) = result.legacy_resource_diff {
-        let total = legacy.identical
-            + legacy.modified.len()
-            + legacy.kix_only.len()
-            + legacy.cluster_only.len();
-
-        if !global.quiet {
-            println!(
-                "{} resources: {} identical, {} modified, {} kix-only, {} cluster-only",
-                total,
-                legacy.identical,
-                legacy.modified.len(),
-                legacy.kix_only.len(),
-                legacy.cluster_only.len(),
-            );
-            println!();
-        }
-
-        if !legacy.modified.is_empty() {
-            println!("{}", output::bold("Modified:"));
-            let live_config = DiffConfig::new("kix", "cluster");
-            for (id, diffs) in &legacy.modified {
-                println!("  {}", output::yellow(&id.to_string()));
-                let formatted = format_diffs(diffs, &live_config, color, true);
-                println!("{formatted}");
-            }
-            println!();
-        }
-
-        if !legacy.kix_only.is_empty() {
-            println!("{}", output::bold("Only in kix (will be created):"));
-            for id in &legacy.kix_only {
-                println!("  {}", output::green(&id.to_string()));
-            }
-            println!();
-        }
-
-        if !legacy.cluster_only.is_empty() {
-            println!("{}", output::bold("Only in cluster (not managed by kix):"));
-            for id in &legacy.cluster_only {
-                println!("  {}", output::red(&id.to_string()));
-            }
-            println!();
-        }
-    }
-
-    // Stateful migration pairs (doc 67)
     print_migration_pairs(&result.migration_pairs);
 
-    if !result_has_diff(result) {
+    if !result.has_diff() {
         println!("{}", output::green("No differences found."));
     }
 }
@@ -547,14 +312,13 @@ fn print_migration_pairs(pairs: &[MigrationPair]) {
 
 fn print_json_output(result: &DiffResult, as_yaml: bool) -> Result<()> {
     // Shared PackageDiff renderer — same structure produced by the deploy
-    // modal and the CI PR-comment action. Diff-specific extras (legacy
-    // resource listing, migration pairs) are appended below.
+    // modal and the CI PR-comment action. Migration pairs are appended.
     let mut output = serde_json::json!({
-        "packages": crate::plan::render_package_diff_json(&result.packages),
+        "packages": plan::render_package_diff_json(&result.packages),
     });
 
     if !result.migration_pairs.is_empty() {
-        output["migration_pairs"] = serde_json::Value::Array(
+        output["migration_pairs"] = Value::Array(
             result
                 .migration_pairs
                 .iter()
@@ -568,18 +332,6 @@ fn print_json_output(result: &DiffResult, as_yaml: bool) -> Result<()> {
                 })
                 .collect(),
         );
-    }
-
-    if let Some(ref legacy) = result.legacy_resource_diff {
-        output["resources"] = serde_json::json!({
-            "identical": legacy.identical,
-            "modified": legacy.modified.iter().map(|(id, diffs)| serde_json::json!({
-                "resource": id.display_id(),
-                "diff_count": diffs.len(),
-            })).collect::<Vec<_>>(),
-            "kix_only": legacy.kix_only.iter().map(|id| id.display_id()).collect::<Vec<_>>(),
-            "cluster_only": legacy.cluster_only.iter().map(|id| id.display_id()).collect::<Vec<_>>(),
-        });
     }
 
     if as_yaml {
@@ -598,57 +350,7 @@ fn print_json_output(result: &DiffResult, as_yaml: bool) -> Result<()> {
 fn print_markdown_output(result: &DiffResult) {
     // Shared package-level renderer. Same producer used by the deploy
     // modal and the CI PR-comment GitHub Action so they stay in sync.
-    print!(
-        "{}",
-        crate::plan::render_package_diff_markdown(&result.packages)
-    );
-
-    // Append diff-specific sections that don't belong on a generic
-    // PackageDiff: the legacy resource listing (only present when diffing
-    // against a live cluster / snapshot) and detected stateful migration
-    // pairs.
-    if let Some(ref legacy) = result.legacy_resource_diff {
-        let total = legacy.identical
-            + legacy.modified.len()
-            + legacy.kix_only.len()
-            + legacy.cluster_only.len();
-        if total > 0 {
-            println!("#### Resources (vs live cluster)");
-            println!();
-            println!(
-                "{total} resources compared: {} identical, {} modified, {} kix-only, {} cluster-only",
-                legacy.identical,
-                legacy.modified.len(),
-                legacy.kix_only.len(),
-                legacy.cluster_only.len(),
-            );
-            println!();
-        }
-        if !legacy.modified.is_empty() {
-            println!("**Modified:**");
-            println!();
-            for (id, diffs) in &legacy.modified {
-                println!("- `{}` ({} diffs)", id, diffs.len());
-            }
-            println!();
-        }
-        if !legacy.kix_only.is_empty() {
-            println!("**Only in kix (will be created):**");
-            println!();
-            for id in &legacy.kix_only {
-                println!("- `{}`", id);
-            }
-            println!();
-        }
-        if !legacy.cluster_only.is_empty() {
-            println!("**Only in cluster (not managed by kix):**");
-            println!();
-            for id in &legacy.cluster_only {
-                println!("- `{}`", id);
-            }
-            println!();
-        }
-    }
+    print!("{}", plan::render_package_diff_markdown(&result.packages));
 
     if !result.migration_pairs.is_empty() {
         println!(
@@ -674,7 +376,7 @@ fn print_markdown_output(result: &DiffResult) {
         println!();
     }
 
-    if !result_has_diff(result) {
+    if !result.has_diff() {
         println!("No differences found.");
     }
 }

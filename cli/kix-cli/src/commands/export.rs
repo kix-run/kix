@@ -14,7 +14,7 @@
 //!
 //! Output layout: `<out>/<namespace>/<Kind>-<name>.yaml` (nested), matching
 //! what `manifest::serialize::load_manifests_from_dir` expects, so `kix diff
-//! --snapshot <dir>` can round-trip against the exported tree.
+//! --from <dir>` can round-trip against the exported tree.
 
 use std::fs;
 use std::path::{Path, PathBuf};
