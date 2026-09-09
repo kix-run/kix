@@ -1,4 +1,73 @@
 ---
 title: "Wire cross-namespace dependencies explicitly"
-description: TODO
+description: "Connect a package argument to one specific instance in another namespace."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import crossNamespaceDep from '/src/snippets/tutorials/08-namespace-deps/cluster/crossNamespaceDep.json';
+import check from '/src/command-output/how-to/dependency-cross-namespace/check.json';
+
+Use an explicit `deps` entry when a package consumes an instance in another
+namespace. The wiring remains visible beside the consuming instance, and the
+package still receives the dependency through its build argument.
+
+This guide assumes the package already declares the dependency by naming it in
+a build function, such as `{ backend, ... }: ...`.
+
+## Accept `ref` in the cluster module
+
+Define the module that contains the instances as a function with a `ref`
+argument:
+
+```nix title="cluster.nix"
+modules = [
+  (
+    { ref, ... }:
+    {
+      # Namespace and instance configuration goes here.
+    }
+  )
+];
+```
+
+`ref` mirrors the `instances.<namespace>.<name>` tree. Each leaf identifies
+one package instance.
+
+## Wire the dependency
+
+Set `deps.<argument-name>` on the consuming instance. This tested example
+wires an application gateway to a backend in the `platform` namespace:
+
+<Snippet {...crossNamespaceDep} />
+
+The left side, `deps.backend`, matches the package's `backend` build argument.
+The right side, `ref.platform.backend`, selects the exact provider instance.
+
+Add the provider instance under the referenced namespace as usual:
+
+```nix title="cluster.nix"
+instances.platform.backend = {
+  package = packages.echo-server;
+  config.message = "Hello from the platform backend";
+};
+```
+
+## Check the wiring
+
+Evaluate the cluster:
+
+<Command {...check} />
+
+A missing reference fails module evaluation. If the package declares another
+required build argument without a matching `deps` entry or resolvable
+provider, dependency resolution names the missing argument.
+
+:::note[Explanation]
+See [Dependency resolution and why explicit deps matter](/docs/explanation/dependency-resolution-and-why-explicit-deps-matter/)
+for how Kix selects providers and turns references into deploy ordering.
+:::
+
+:::note[Reference]
+See [`deps`](/docs/reference/instance-schema/deps/) for the instance schema.
+:::

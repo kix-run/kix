@@ -1,0 +1,19 @@
+{
+  "id": "how-to/policy-sbom/sbom",
+  "group": "how-to/policy-sbom",
+  "page": "/docs/how-to/policy-ci-and-compliance/generate-a-cyclonedx-sbom/",
+  "cwd": "kix-examples/",
+  "generator": "offline",
+  "outputExcerpt": true,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix compliance sbom 19-scorecards",
+      "stdout": "{\n  \"bomFormat\": \"CycloneDX\",\n  \"specVersion\": \"1.6\",\n  \"metadata\": {\n    \"component\": {\n      \"bom-ref\": \"cluster-19-scorecards\",\n      \"description\": \"kix cluster 19-scorecards\",\n      \"name\": \"cluster-19-scorecards\",\n      \"properties\": [\n        {\n          \"name\": \"kix:activation-hash\",\n          \"value\": \"1vfqbx85l5k37paa304rcscp0anhc7pq\"\n        },\n        {\n          \"name\": \"kix:flake-ref\",\n          \"value\": \"kix-examples\"\n        }\n      ],\n      \"type\": \"platform\",\n      \"version\": \"activation-1vfqbx85l5k37paa304rcscp0anhc7pq\"\n    }\n  },\n  \"componentTypes\": [\n    {\n      \"type\": \"application\",\n      \"count\": 5\n    },\n    {\n      \"type\": \"container\",\n      \"count\": 1\n    },\n    {\n      \"type\": \"library\",\n      \"count\": 3\n    }\n  ],\n  \"dependencyCount\": 6\n}\n",
+      "stderr": "Building cluster '19-scorecards'...\n  Evaluating cluster '19-scorecards'...\n  Reading package index...\n  Loading store graph...\n  Reading 5 packages...\n  Discovering cluster-level resources...\n  Computing cross-package dependencies...\n",
+      "stdoutDrift": "\"bom-ref\": \"cluster-19-scorecards\",\n\"bomFormat\": \"CycloneDX\",\n\"component\": {\n\"componentTypes\": [\n\"count\": 1\n\"count\": 3\n\"count\": 5\n\"dependencyCount\": 6\n\"description\": \"kix cluster 19-scorecards\",\n\"metadata\": {\n\"name\": \"cluster-19-scorecards\",\n\"name\": \"kix:activation-hash\",\n\"name\": \"kix:flake-ref\",\n\"properties\": [\n\"specVersion\": \"1.6\",\n\"type\": \"application\",\n\"type\": \"container\",\n\"type\": \"library\",\n\"type\": \"platform\",\n\"value\": \"<identity-hash>\"\n\"value\": \"kix-examples\"\n\"version\": \"activation-<identity-hash>\"\n],\n{\n}\n},\n",
+      "stderrDrift": "Building cluster '19-scorecards'...\nComputing cross-package dependencies...\nDiscovering cluster-level resources...\nEvaluating cluster '19-scorecards'...\nLoading store graph...\nReading 5 packages...\nReading package index...\n",
+      "exitCode": 0
+    }
+  ]
+}

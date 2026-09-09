@@ -24,7 +24,8 @@
 # Step shapes:
 #
 #   { capture = "name"; run = [ "kix" "list" "clusters" ]; sortLines = false;
-#     allowFailure = false; skipDriftCheck = false; }
+#     allowFailure = false; skipDriftCheck = false; stdoutJq = null;
+#     stdoutGrep = null; }
 #       runs the command in the workspace, sanitises stdout/stderr,
 #       writes docs/src/command-output/<group>/name.json. By default a
 #       non-zero exit fails the whole pipeline so regressions surface;
@@ -36,12 +37,23 @@
 #       reasonably redact (Nix-version-specific eval-error stack
 #       traces, etc.). --apply still rewrites the sidecar; --check
 #       just doesn't gate on its content.
+#       `stdoutJq` optionally filters JSON stdout before it is stored. It is
+#       capture plumbing, not part of the reader-facing command. The sidecar
+#       marks the rendered result as an output excerpt.
+#       `stdoutGrep` does the same for text output, retaining matching lines
+#       and removing their leading display padding. Regeneration fails if no
+#       line matches, so a changed or missing diagnostic cannot pass unnoticed.
 #
 #   { mutate = { file = "tutorial-04/cluster.nix";
 #                oldString = "Hello"; newString = "Preview"; }; }
 #       literal substitution against workspace/<file>. Preflight checks:
 #       file must exist, oldString must match exactly once. Fails the
 #       whole capture run on any preflight miss (no partial sidecars).
+#
+#   { prepare = [ "kix" "deploy" "example" "-y" ]; }
+#       runs a prerequisite command without writing a sidecar. The command
+#       must succeed. Use this for live state a later captured command needs,
+#       such as deploying before `status` or `diff`.
 #
 # Sequencing:
 #   - Offline: each group gets its own fresh workspace. Steps run in
@@ -395,6 +407,222 @@
   }
 
   {
+    group = "how-to/dependency-cross-namespace";
+    page = "/docs/how-to/debug-dependency-wiring/wire-cross-namespace-dependencies-explicitly/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "check";
+        run = [
+          "kix"
+          "check"
+          "08-namespace-deps"
+        ];
+      }
+    ];
+  }
+
+  {
+    group = "how-to/dependency-missing";
+    page = "/docs/how-to/debug-dependency-wiring/debug-a-missing-dependency/";
+    cwd = "kix-examples/";
+    setup = [
+      {
+        mutate = {
+          file = "tutorials/06-service-dep/cluster.nix";
+          oldString = "backend = {";
+          newString = "renamed-backend = {";
+        };
+      }
+    ];
+    offline = [
+      {
+        capture = "check";
+        run = [
+          "kix"
+          "check"
+          "06-service-dep"
+        ];
+        allowFailure = true;
+        stdoutGrep = "error: no 'backend' found in cluster";
+      }
+    ];
+  }
+
+  {
+    group = "how-to/dependency-graph";
+    page = "/docs/how-to/debug-dependency-wiring/visualize-the-dependency-graph-with-kix-graph/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "graph-tree";
+        run = [
+          "kix"
+          "graph"
+          "08-namespace-deps"
+          "--format"
+          "tree"
+        ];
+      }
+    ];
+  }
+
+  {
+    group = "how-to/policy-sarif";
+    page = "/docs/how-to/policy-ci-and-compliance/run-kix-check-sarif-in-ci/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "check";
+        run = [
+          "kix"
+          "check"
+          "19-scorecards"
+          "--sarif"
+        ];
+        stdoutJq = ''
+          {
+                    version,
+                    runs: [.runs[] | {
+                      tool: .tool.driver.name,
+                      rules: (.tool.driver.rules | length),
+                      results: [.results[] | {
+                        ruleId,
+                        level,
+                        message: .message.text,
+                        location: .locations[0].physicalLocation.artifactLocation.uri
+                      }]
+                    }]
+                  }'';
+      }
+    ];
+  }
+
+  {
+    group = "how-to/policy-sbom";
+    page = "/docs/how-to/policy-ci-and-compliance/generate-a-cyclonedx-sbom/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "sbom";
+        run = [
+          "kix"
+          "compliance"
+          "sbom"
+          "19-scorecards"
+        ];
+        stdoutJq = ''
+          {
+                    bomFormat,
+                    specVersion,
+                    metadata: { component: .metadata.component },
+                    componentTypes: ([.components[].type] | group_by(.) | map({
+                      type: .[0],
+                      count: length
+                    })),
+                    dependencyCount: (.dependencies | length)
+                  }'';
+      }
+    ];
+  }
+
+  {
+    group = "how-to/policy-provenance";
+    page = "/docs/how-to/policy-ci-and-compliance/generate-slsa-provenance/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "attest";
+        run = [
+          "kix"
+          "compliance"
+          "attest"
+          "19-scorecards"
+          "--builder-id"
+          "https://ci.example/runs/1842"
+          "--invocation-id"
+          "1842"
+        ];
+        stdoutJq = ''
+          {
+                    _type,
+                    predicateType,
+                    subject,
+                    buildDefinition: {
+                      buildType: .predicate.buildDefinition.buildType,
+                      externalParameters: .predicate.buildDefinition.externalParameters,
+                      resolvedDependencyCount: (.predicate.buildDefinition.resolvedDependencies | length)
+                    },
+                    runDetails: .predicate.runDetails
+                  }'';
+      }
+    ];
+  }
+
+  {
+    group = "how-to/policy-receipt-attestation";
+    page = "/docs/how-to/policy-ci-and-compliance/attest-a-deployment-from-its-cluster-receipt/";
+    cwd = "kix-examples/";
+    live = [
+      {
+        prepare = [
+          "kix"
+          "deploy"
+          "how-to-application"
+          "-y"
+        ];
+      }
+      {
+        capture = "attest";
+        run = [
+          "kix"
+          "compliance"
+          "attest"
+          "how-to-application"
+          "--from-cluster"
+          "--builder-id"
+          "https://ci.example/runs/1842"
+          "--invocation-id"
+          "1842"
+        ];
+        stdoutJq = ''
+          {
+                    _type,
+                    predicateType,
+                    subject,
+                    buildDefinition: {
+                      buildType: .predicate.buildDefinition.buildType,
+                      externalParameters: .predicate.buildDefinition.externalParameters,
+                      resolvedDependencyCount: (.predicate.buildDefinition.resolvedDependencies | length)
+                    },
+                    runDetails: .predicate.runDetails
+                  }'';
+      }
+    ];
+  }
+
+  {
+    group = "how-to/policy-audit";
+    page = "/docs/how-to/policy-ci-and-compliance/generate-an-audit-bundle/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "audit";
+        run = [
+          "kix"
+          "compliance"
+          "audit"
+          "19-scorecards"
+          "--out"
+          "./compliance"
+          "--builder-id"
+          "https://ci.example/runs/1842"
+        ];
+      }
+    ];
+  }
+
+  {
     group = "how-to/image-pins";
     page = "/docs/how-to/promote-images/create-a-committed-image-pin-file/";
     cwd = "kix-project/";
@@ -423,4 +651,399 @@
       }
     ];
   }
+
+  {
+    group = "how-to/application-health-check";
+    page = "/docs/how-to/author-packages-and-clusters/add-a-post-deploy-health-check/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "check";
+        run = [
+          "kix"
+          "check"
+          "how-to-application"
+        ];
+      }
+      {
+        capture = "build";
+        run = [
+          "kix"
+          "build"
+          "how-to-application"
+          "-o"
+          "json"
+        ];
+        stdoutJq = ''.[] | select(.kind == "Job" and .metadata.name == "production-health")'';
+      }
+    ];
+    live = [
+      {
+        capture = "deploy";
+        run = [
+          "kix"
+          "deploy"
+          "how-to-application"
+          "-y"
+        ];
+      }
+      {
+        mutate = {
+          file = "how-to/application/health-check.sh";
+          oldString = ''exit 0'';
+          newString = ''
+            echo "the application returned an unexpected response"
+            exit 1'';
+        };
+      }
+      {
+        capture = "deploy-failing-probe";
+        run = [
+          "kix"
+          "deploy"
+          "how-to-application"
+          "-y"
+        ];
+        allowFailure = true;
+      }
+    ];
+  }
+
+  {
+    group = "how-to/application-typed-options";
+    page = "/docs/how-to/author-packages-and-clusters/add-typed-package-options/";
+    cwd = "kix-examples/";
+    setup = [
+      {
+        mutate = {
+          file = "how-to/application/cluster.nix";
+          oldString = ''environment = "preview";'';
+          newString = ''environment = "staging";'';
+        };
+      }
+    ];
+    offline = [
+      {
+        capture = "check-invalid-environment";
+        run = [
+          "kix"
+          "check"
+          "how-to-application"
+        ];
+        allowFailure = true;
+      }
+    ];
+  }
+
+  {
+    group = "how-to/application-reuse";
+    page = "/docs/how-to/author-packages-and-clusters/reuse-one-package-for-multiple-instances/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "list-packages";
+        run = [
+          "kix"
+          "list"
+          "packages"
+          "--cluster"
+          "how-to-application"
+        ];
+      }
+    ];
+  }
+
+  {
+    group = "how-to/application-list";
+    page = "/docs/how-to/start-and-inspect/list-clusters-and-packages/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "list-clusters";
+        run = [
+          "kix"
+          "list"
+          "clusters"
+        ];
+      }
+      {
+        capture = "list-packages";
+        run = [
+          "kix"
+          "list"
+          "packages"
+          "--cluster"
+          "how-to-application"
+        ];
+      }
+    ];
+  }
+
+  {
+    group = "how-to/application-render";
+    page = "/docs/how-to/start-and-inspect/render-manifests/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "build-production-deployment";
+        run = [
+          "kix"
+          "build"
+          "how-to-application"
+          "-o"
+          "json"
+        ];
+        stdoutJq = ''.[] | select(.kind == "Deployment" and .metadata.name == "production")'';
+      }
+    ];
+  }
+
+  {
+    group = "how-to/application-status";
+    page = "/docs/how-to/operate-a-cluster/check-resource-status/";
+    cwd = "kix-examples/";
+    live = [
+      {
+        prepare = [
+          "kix"
+          "deploy"
+          "how-to-application"
+          "-y"
+        ];
+      }
+      {
+        capture = "status";
+        run = [
+          "kix"
+          "status"
+          "how-to-application"
+        ];
+      }
+    ];
+  }
+
+  {
+    group = "how-to/application-health";
+    page = "/docs/how-to/operate-a-cluster/check-cluster-health/";
+    cwd = "kix-examples/";
+    live = [
+      {
+        prepare = [
+          "kix"
+          "deploy"
+          "how-to-application"
+          "-y"
+        ];
+      }
+      {
+        capture = "health";
+        run = [
+          "kix"
+          "health"
+          "how-to-application"
+        ];
+      }
+    ];
+  }
+
+  {
+    group = "how-to/application-logs";
+    page = "/docs/how-to/operate-a-cluster/use-kix-logs/";
+    cwd = "kix-examples/";
+    live = [
+      {
+        prepare = [
+          "kix"
+          "deploy"
+          "how-to-application"
+          "-y"
+        ];
+      }
+      {
+        capture = "production-tail";
+        run = [
+          "kix"
+          "logs"
+          "how-to-application"
+          "production"
+          "--tail"
+          "3"
+        ];
+        skipDriftCheck = true;
+      }
+    ];
+  }
+
+  {
+    group = "how-to/application-drift";
+    page = "/docs/how-to/operate-a-cluster/check-live-resources-for-drift/";
+    cwd = "kix-examples/";
+    live = [
+      {
+        prepare = [
+          "kix"
+          "deploy"
+          "how-to-application"
+          "-y"
+        ];
+      }
+      {
+        prepare = [
+          "kubectl"
+          "scale"
+          "deployment"
+          "production"
+          "--replicas=1"
+          "-n"
+          "how-to-app"
+        ];
+      }
+      {
+        capture = "scaled-deployment";
+        run = [
+          "kix"
+          "drift"
+        ];
+        allowFailure = true;
+      }
+    ];
+  }
+
+  {
+    group = "how-to/application-reconcile";
+    page = "/docs/how-to/operate-a-cluster/reconcile-drift/";
+    cwd = "kix-examples/";
+    live = [
+      {
+        prepare = [
+          "kix"
+          "deploy"
+          "how-to-application"
+          "-y"
+        ];
+      }
+      {
+        prepare = [
+          "kubectl"
+          "scale"
+          "deployment"
+          "production"
+          "--replicas=1"
+          "-n"
+          "how-to-app"
+        ];
+      }
+      {
+        capture = "reconcile";
+        run = [
+          "kix"
+          "deploy"
+          "how-to-application"
+          "--reconcile"
+          "--force-conflicts"
+          "-y"
+        ];
+      }
+      {
+        capture = "drift-clean";
+        run = [
+          "kix"
+          "drift"
+        ];
+      }
+    ];
+  }
+
+  {
+    group = "how-to/application-images";
+    page = "/docs/how-to/operate-a-cluster/list-images-for-airgap-preloading/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "list";
+        run = [
+          "kix"
+          "images"
+          "how-to-application"
+        ];
+      }
+      {
+        capture = "list-with-sources";
+        run = [
+          "kix"
+          "images"
+          "how-to-application"
+          "--sources"
+        ];
+      }
+    ];
+  }
+
+  {
+    group = "how-to/application-export-exit";
+    page = "/docs/how-to/operate-a-cluster/export-plain-yaml/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "export";
+        run = [
+          "kix"
+          "export"
+          "how-to-application"
+          "--out"
+          "./handoff"
+        ];
+      }
+    ];
+  }
+
+  {
+    group = "how-to/application-export-audit";
+    page = "/docs/how-to/operate-a-cluster/export-audit-preserving-yaml/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "export";
+        run = [
+          "kix"
+          "export"
+          "how-to-application"
+          "--for"
+          "audit"
+          "--out"
+          "./audit-export"
+        ];
+      }
+    ];
+  }
+
+  {
+    group = "how-to/application-receipt";
+    page = "/docs/how-to/operate-a-cluster/inspect-a-deploy-receipt/";
+    cwd = "kix-examples/";
+    live = [
+      {
+        prepare = [
+          "kix"
+          "deploy"
+          "how-to-application"
+          "-y"
+        ];
+      }
+      {
+        capture = "active-receipt";
+        run = [
+          "kubectl"
+          "get"
+          "activations"
+          "-l"
+          "kix.run/cluster=how-to-application"
+          "-o"
+          "json"
+        ];
+        stdoutJq = ''.items[] | select(.status.phase == "Active") | .status.receipt'';
+      }
+    ];
+  }
+
 ]

@@ -48,9 +48,11 @@ let
     '';
 
     # Activation IDs: `02-hello-world-kddvid7wbdpp` style — `<cluster>-<11-char-hash>`.
+    # Use the Nix base32 alphabet so ordinary 11-letter suffixes such as
+    # `application` are not mistaken for content-addressed IDs.
     # Run before strip-pod-suffix so the longer hash is consumed first.
     redact-activation-id = ''
-      s/(Activation\/)?([a-z0-9][a-z0-9-]*[a-z0-9])-[a-z0-9]{11,12}\b/\1\2-<activation-id>/g
+      s/(Activation\/)?([a-z0-9][a-z0-9-]*[a-z0-9])-[0-9abcdfghijklmnpqrsvwxyz]{11,12}\b/\1\2-<activation-id>/g
     '';
 
     # Kix identity hashes: 32-char base32 Nix-style hashes that appear in

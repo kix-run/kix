@@ -1,4 +1,103 @@
 ---
 title: "Add env vars and mounts"
-description: TODO
+description: "Generate container environment variables and mount Kix resources into a workload."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import environmentVariables from '/src/snippets/how-to/application/web-package/environmentVariables.json';
+import contentConfigMap from '/src/snippets/how-to/application/web-package/contentConfigMap.json';
+import configMount from '/src/snippets/how-to/application/web-package/configMount.json';
+import applyMount from '/src/snippets/how-to/application/web-package/applyMount.json';
+
+Kix provides helpers for the repetitive parts of container environment and
+volume configuration. Use them to keep the source resource attached to the
+workload dependency graph.
+
+This guide uses the package created in
+[Create a local package](/docs/how-to/author-packages-and-clusters/create-a-local-package/).
+
+## Add environment variables
+
+`kix.mkEnvVars` converts an attribute set into the list Kubernetes expects:
+
+<Snippet {...environmentVariables} />
+
+The rendered container contains:
+
+```yaml
+env:
+  - name: APP_ENV
+    value: production
+```
+
+Entries whose value is `null` are omitted. Use `kix.mkEnv` when you need to
+combine simple values with raw Kubernetes entries such as `secretKeyRef` or
+`fieldRef`:
+
+```nix title="web-package.nix"
+env = kix.mkEnv
+  {
+    APP_ENV = config.environment;
+    OPTIONAL_VALUE = config.optionalValue;
+  }
+  [
+    {
+      name = "POD_NAME";
+      valueFrom.fieldRef.fieldPath = "metadata.name";
+    }
+  ];
+```
+
+## Create the resource to mount
+
+This package stores its page content in a ConfigMap:
+
+<Snippet {...contentConfigMap} />
+
+Create a mount from the wrapped resource:
+
+<Snippet {...configMount} />
+
+Passing `self.content` is significant. The mount retains the dependency on the
+ConfigMap, so Kix can order the resources and include changes to the content in
+the workload identity.
+
+The other mount helpers follow the same shape:
+
+- `kix.mount.secret` mounts a Secret.
+- `kix.mount.pvc` mounts a PersistentVolumeClaim.
+- `kix.mount.emptyDir` creates an ephemeral volume.
+- `kix.mount.hostPath` mounts a node path.
+
+## Apply mounts to the workload
+
+Pass the mount list through `kix.withMounts` before wrapping the Deployment:
+
+<Snippet {...applyMount} />
+
+With one container, Kix adds the volumes and volume mounts automatically. For
+a Pod template with several containers, use `kix.withMountsOn "container-name"`
+to select the recipient.
+
+Null entries in the mount list are ignored, which makes optional mounts easy
+to express with an `if` expression:
+
+```nix title="web-package.nix"
+|> kix.withMounts [
+  contentMount
+  (if config.cache.enable then cacheMount else null)
+]
+```
+
+Render the cluster and inspect the Deployment's `env`, `volumeMounts`, and
+`volumes` fields:
+
+<Command commands={["kix build how-to-application"]} cwd="kix-examples/" />
+
+:::note[Reference]
+See [Environment helpers](/docs/reference/kix-helpers/env-helpers/),
+[mount helpers](/docs/reference/kix-helpers/mount-helpers/), and
+[`withMounts` and `withMountsOn`](/docs/reference/kix-helpers/withmounts-withmountson/)
+for the complete helper signatures.
+:::

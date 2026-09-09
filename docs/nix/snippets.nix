@@ -1,4 +1,4 @@
-# Snippet extraction: pull named regions out of `.nix` source files and
+# Snippet extraction: pull named regions out of supported source files and
 # emit raw code plus JSON metadata for MDX docs pages.
 #
 # Marker convention:
@@ -170,8 +170,8 @@ let
   # describing the files to emit, plus a manifest entry.
   #
   # Emit TWO files per region:
-  # - `<region>.nix`  — raw code, importable as `?raw` for use with
-  #   Starlight's `<Code lang="nix" code={...} />`.
+  # - `<region>.<extension>` — raw code, importable as `?raw` for use with
+  #   Starlight's `<Code>` component.
   # - `<region>.json` — metadata + code: `{ code, source, startLine,
   #   endLine, url }`. Importable directly as JSON in MDX; wrap with
   #   the `<Snippet>` component to render code + a "View source" link.
@@ -183,6 +183,8 @@ let
     {
       file,
       name,
+      extension ? "nix",
+      lang ? "nix",
       sourceUrlBase,
     }:
     let
@@ -191,7 +193,7 @@ let
         inherit file;
         fileLabel = fileStr;
       };
-      relPath = "${name}.nix";
+      relPath = "${name}.${extension}";
       mkUrl =
         r:
         if sourceUrlBase == null then
@@ -205,19 +207,20 @@ let
             metadata = {
               code = r.body;
               childRegions = r.children;
+              inherit lang;
               source = relPath;
               startLine = r.startLine;
               endLine = r.endLine;
               url = mkUrl r;
             };
-            nixDrv = pkgs.writeText "snippet-${name}-${r.name}.nix" r.body;
+            sourceDrv = pkgs.writeText "snippet-${name}-${r.name}.${extension}" r.body;
             jsonDrv = pkgs.writeText "snippet-${name}-${r.name}.json" (builtins.toJSON metadata);
           in
           [
             {
               subdir = name;
-              filename = "${r.name}.nix";
-              drv = nixDrv;
+              filename = "${r.name}.${extension}";
+              drv = sourceDrv;
             }
             {
               subdir = name;
@@ -234,7 +237,7 @@ let
       # delay realisation).
       manifestEntry = {
         inherit name;
-        file = "${name}.nix";
+        file = relPath;
         regions = map (r: {
           inherit (r) name startLine endLine;
         }) regions;
@@ -268,10 +271,10 @@ let
       cp ${manifestFile} $out/manifest.json
     '';
 
-  # Auto-discover: scan a directory tree for `.nix` files containing at
+  # Auto-discover: scan a directory tree for supported files containing at
   # least one `# region:NAME` marker. Each discovered file becomes a
   # source; the snippet output path mirrors the file's location under
-  # the tree, with `.nix` stripped from the filename component.
+  # the tree, with the source extension stripped from the filename component.
   #
   # Example: with `root = "${kix-examples}"`, a marker inside
   # `examples/19-scorecards/scorecard.nix` lands at
@@ -280,16 +283,36 @@ let
   # `sourceUrlBase` (optional): if set, emitted JSON sidecars include
   # a `url` pointing to the source line range. Format:
   # `<sourceUrlBase>/<rel>#L<start>-L<end>`. Example value:
-  # `https://github.com/kix-ops/kix-examples/blob/main`.
+  # `https://github.com/kix-run/kix-examples/blob/main`.
   mkSnippetsFromTreeImpl =
     {
       root,
       sourceUrlBase ? null,
     }:
     let
-      # Recursively list .nix files under `dir`, returning records of
-      # { abs; rel; } where `rel` is the path relative to root.
-      listNixFiles =
+      languageFor =
+        fileName:
+        if lib.hasSuffix ".nix" fileName then
+          {
+            extension = "nix";
+            lang = "nix";
+          }
+        else if lib.hasSuffix ".sh" fileName then
+          {
+            extension = "sh";
+            lang = "sh";
+          }
+        else if lib.hasSuffix ".py" fileName then
+          {
+            extension = "py";
+            lang = "python";
+          }
+        else
+          null;
+
+      # Recursively list supported files under `dir`, returning records of
+      # { abs; rel; extension; lang; } where `rel` is relative to root.
+      listSourceFiles =
         dir: prefix:
         let
           entries = builtins.readDir dir;
@@ -300,14 +323,16 @@ let
             let
               entryPath = dir + "/${entryName}";
               relPath = if prefix == "" then entryName else "${prefix}/${entryName}";
+              language = languageFor entryName;
             in
             if type == "directory" then
-              listNixFiles entryPath relPath
-            else if type == "regular" && lib.hasSuffix ".nix" entryName then
+              listSourceFiles entryPath relPath
+            else if type == "regular" && language != null then
               [
                 {
                   abs = entryPath;
                   rel = relPath;
+                  inherit (language) extension lang;
                 }
               ]
             else
@@ -323,12 +348,13 @@ let
         in
         lib.any (line: builtins.match startRe line != null) lines;
 
-      allNixFiles = listNixFiles root "";
-      withRegions = builtins.filter (f: hasRegions f.abs) allNixFiles;
+      allSourceFiles = listSourceFiles root "";
+      withRegions = builtins.filter (f: hasRegions f.abs) allSourceFiles;
 
       sources = map (f: {
         file = f.abs;
-        name = lib.removeSuffix ".nix" f.rel;
+        name = lib.removeSuffix ".${f.extension}" f.rel;
+        inherit (f) extension lang;
       }) withRegions;
     in
     mkSnippetsImpl { inherit sources sourceUrlBase; };

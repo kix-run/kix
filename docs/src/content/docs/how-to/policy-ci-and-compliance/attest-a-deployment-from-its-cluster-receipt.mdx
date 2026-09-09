@@ -1,4 +1,69 @@
 ---
 title: "Attest a deployment from its cluster receipt"
-description: TODO
+description: "Generate SLSA provenance for the version of a Kix cluster that is currently deployed."
 ---
+
+import Command from '/src/components/Command.astro';
+import attest from '/src/command-output/how-to/policy-receipt-attestation/attest.json';
+
+Use `--from-cluster` when the attestation must describe what Kix deployed,
+rather than a fresh evaluation of the repository. Kix reads the receipt from
+the active Activation and turns it into an in-toto Statement with a SLSA v1
+provenance predicate.
+
+This guide assumes Kix has deployed the cluster at least once and your current
+Kubernetes context can read its Activation resources.
+
+## Generate the attestation
+
+Pass the same cluster name used for deployment:
+
+<Command expandable {...attest} />
+
+`--builder-id` should identify the system producing the attestation. In CI, a
+workflow run URL is a useful value. `--invocation-id` identifies the specific
+run. Both flags are optional.
+
+The output excerpt shows the statement type, subject, build parameters, and
+run details. The full statement also contains the source revision, locked
+flake inputs, and image references recorded at deploy time.
+
+## Write it to a file
+
+Redirect stdout when the statement will be stored or signed by another tool:
+
+<Command
+  commands={[
+    "kix compliance attest production --from-cluster --builder-id \"$CI_RUN_URL\" --invocation-id \"$CI_RUN_ID\" > provenance.json",
+  ]}
+/>
+
+Kix writes an unsigned JSON statement. Signing and publishing can be handled
+by the attestation system used by your CI environment.
+
+## Check the statement
+
+Confirm that the subject names the deployed cluster and has an activation
+digest:
+
+<Command
+  commands={[
+    "jq -e '.predicate.buildDefinition.externalParameters.cluster == \"production\" and (.subject[0].digest.nixStoreHash | length) > 0' provenance.json",
+  ]}
+/>
+
+If Kix reports that no receipt exists, deploy the cluster again with a Kix
+version that writes receipts. If it cannot find an Activation CRD, confirm the
+Kubernetes context and cluster name before retrying.
+
+:::note[Explanation]
+See [Deploy receipts and reproducible provenance](/docs/explanation/deploy-receipts-and-reproducible-provenance/)
+for the distinction between attesting the deployed state and attesting a new
+evaluation.
+:::
+
+:::note[Reference]
+See [Compliance commands](/docs/reference/cli/compliance-commands/) and
+[Deploy receipt schema](/docs/reference/annotations-and-crds/deploy-receipt-schema/)
+for the complete fields.
+:::

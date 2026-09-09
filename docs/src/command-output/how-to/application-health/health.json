@@ -1,0 +1,18 @@
+{
+  "id": "how-to/application-health/health",
+  "group": "how-to/application-health",
+  "page": "/docs/how-to/operate-a-cluster/check-cluster-health/",
+  "cwd": "kix-examples/",
+  "generator": "live",
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix health how-to-application",
+      "stdout": "Connecting to cluster...\nActivation: how-to-application-aq1zdgf9gsnb (hash: aq1zdgf9gsnbdpc8hwkma69l8ipalqpx)\n16 kix-managed resources on cluster\n\nPackages:\n  ✓ (cluster-level)                          7/7 resources healthy, 1 imported\n  ✓ preview (how-to-app)                     3/3 resources healthy\n  ✓ production (how-to-app)                  5/5 resources healthy\n\nHealth: 15 in-sync, 1 imported (3/3 packages healthy)\n",
+      "stderr": "",
+      "stdoutDrift": "\n16 kix-managed resources on cluster\nActivation: how-to-application-<activation-id> (hash: <identity-hash>)\nConnecting to cluster...\nHealth: 15 in-sync, 1 imported (3/3 packages healthy)\nPackages:\n✓ (cluster-level) 7/7 resources healthy, 1 imported\n✓ preview (how-to-app) 3/3 resources healthy\n✓ production (how-to-app) 5/5 resources healthy\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

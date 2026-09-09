@@ -1,0 +1,18 @@
+{
+  "id": "how-to/application-status/status",
+  "group": "how-to/application-status",
+  "page": "/docs/how-to/operate-a-cluster/check-resource-status/",
+  "cwd": "kix-examples/",
+  "generator": "live",
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix status how-to-application",
+      "stdout": " NAME                             NAMESPACE    KIND                      READY  STATUS    AGE \n how-to-application-aq1zdgf9gsnb  _cluster     Activation                True   Active    1s  \n activations.kix.run              _cluster     CustomResourceDefinition  True   Active    36s \n packageinstances.kix.run         _cluster     CustomResourceDefinition  True   Active    36s \n how-to-app                       _cluster     Namespace                 True   Active    36s \n kube-system                      _cluster     Namespace                 True   Active    41s \n preview                          how-to-app   ConfigMap                 True   Active    36s \n production                       how-to-app   ConfigMap                 True   Active    36s \n production-health-script         how-to-app   ConfigMap                 True   Active    36s \n preview                          how-to-app   Deployment                True   1/1       36s \n production                       how-to-app   Deployment                True   2/2       36s \n production-health                how-to-app   Job                       True   Complete  12s \n preview                          how-to-app   PackageInstance           True   Active    14s \n production                       how-to-app   PackageInstance           True   Active    1s  \n preview                          how-to-app   Service                   True   Active    14s \n production                       how-to-app   Service                   True   Active    12s \n platform-dns                     kube-system  PackageInstance           True   Active    34s \n",
+      "stderr": "",
+      "stdoutDrift": "NAME NAMESPACE KIND READY STATUS AGE\nactivations.kix.run _cluster CustomResourceDefinition True Active <DURATION>\nhow-to-app _cluster Namespace True Active <DURATION>\nhow-to-application-<activation-id> _cluster Activation True Active <DURATION>\nkube-system _cluster Namespace True Active <DURATION>\npackageinstances.kix.run _cluster CustomResourceDefinition True Active <DURATION>\nplatform-dns kube-system PackageInstance True Active <DURATION>\npreview how-to-app ConfigMap True Active <DURATION>\npreview how-to-app Deployment True 1/1 <DURATION>\npreview how-to-app PackageInstance True Active <DURATION>\npreview how-to-app Service True Active <DURATION>\nproduction how-to-app ConfigMap True Active <DURATION>\nproduction how-to-app Deployment True 2/2 <DURATION>\nproduction how-to-app PackageInstance True Active <DURATION>\nproduction how-to-app Service True Active <DURATION>\nproduction-health how-to-app Job True Complete <DURATION>\nproduction-health-script how-to-app ConfigMap True Active <DURATION>\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

@@ -150,6 +150,28 @@ let
       displayCommand = mkDisplayCommand step.run;
       stepDriftPipeline = driftPipelineFor step;
       allowFailure = step.allowFailure or false;
+      stdoutFilter =
+        if step ? stdoutJq then
+          ''
+            __stdout_filtered=$(mktemp)
+            if ! jq ${lib.escapeShellArg step.stdoutJq} "$__stdout_raw" > "$__stdout_filtered"; then
+              echo "captures.capture: stdoutJq failed for ${id}" >&2
+              exit 6
+            fi
+            mv "$__stdout_filtered" "$__stdout_raw"
+          ''
+        else if step ? stdoutGrep then
+          ''
+            __stdout_filtered=$(mktemp)
+            if ! grep -E -- ${lib.escapeShellArg step.stdoutGrep} "$__stdout_raw" \
+              | sed -E 's/^[[:space:]]+//' > "$__stdout_filtered"; then
+              echo "captures.capture: stdoutGrep matched no output for ${id}" >&2
+              exit 6
+            fi
+            mv "$__stdout_filtered" "$__stdout_raw"
+          ''
+        else
+          "";
       allowFailureGuard =
         if allowFailure then
           ""
@@ -184,6 +206,7 @@ let
       set -e
 
       ${allowFailureGuard}
+      ${stdoutFilter}
 
       # Redact workspace path so per-run tempdir names don't leak into
       # the rendered docs.
@@ -202,6 +225,7 @@ let
         --arg command ${lib.escapeShellArg displayCommand} \
         --arg cwd ${lib.escapeShellArg group.cwd} \
         --arg generator ${lib.escapeShellArg generator} \
+        --argjson outputExcerpt ${if step ? stdoutJq || step ? stdoutGrep then "true" else "false"} \
         --argjson exitCode "$__exit_code" \
         --argjson skipDriftCheck ${if (step.skipDriftCheck or false) then "true" else "false"} \
         --rawfile stdout "$__stdout_display" \
@@ -214,6 +238,7 @@ let
           page: $page,
           cwd: $cwd,
           generator: $generator,
+          outputExcerpt: $outputExcerpt,
           skipDriftCheck: $skipDriftCheck,
           commands: [{
             command: $command,
@@ -230,6 +255,38 @@ let
             "$__stdout_drift" "$__stderr_drift"
     '';
 
+  # Prerequisite command that changes or verifies state for a later capture.
+  # Its output is not stored, but a failure stops the group with diagnostics.
+  prepareShell =
+    {
+      step,
+      invocation,
+    }:
+    let
+      restArgs = lib.tail step.run;
+      displayCommand = mkDisplayCommand step.run;
+    in
+    ''
+      printf '  preparing :: %s\n' ${lib.escapeShellArg displayCommand}
+      __prepare_stdout=$(mktemp)
+      __prepare_stderr=$(mktemp)
+      set +e
+      ( cd "$workspace" && \
+        ${invocation} ${lib.escapeShellArgs restArgs} \
+      ) > "$__prepare_stdout" 2> "$__prepare_stderr"
+      __prepare_exit=$?
+      set -e
+      if [ "$__prepare_exit" -ne 0 ]; then
+        echo "captures.prepare: command failed with exit $__prepare_exit: ${displayCommand}" >&2
+        echo "--- stdout ---" >&2
+        cat "$__prepare_stdout" >&2
+        echo "--- stderr ---" >&2
+        cat "$__prepare_stderr" >&2
+        exit 7
+      fi
+      rm -f "$__prepare_stdout" "$__prepare_stderr"
+    '';
+
   # Step dispatch. A step is either `mutate` (applied in-place) or
   # `capture` (runs a command and writes a sidecar). Drivers loop over
   # steps in declaration order and let the dispatch fall out.
@@ -242,13 +299,23 @@ let
     }:
     if step ? mutate then
       mutateShell step.mutate
+    else if step ? prepare then
+      let
+        preparedStep = step // {
+          run = step.prepare;
+        };
+      in
+      prepareShell {
+        step = preparedStep;
+        invocation = invocationFor preparedStep;
+      }
     else if step ? capture then
       captureShell {
         inherit group step generator;
         invocation = invocationFor step;
       }
     else
-      throw "captures: step must have either `mutate` or `capture`; got: ${builtins.toJSON step}";
+      throw "captures: step must have `mutate`, `prepare`, or `capture`; got: ${builtins.toJSON step}";
 
   manifest = import ./captures.nix;
 
@@ -265,6 +332,7 @@ in
     mkDisplayCommand
     workspaceSetupShell
     mutateShell
+    prepareShell
     captureShell
     mkStepShell
     kixOverrideArgs

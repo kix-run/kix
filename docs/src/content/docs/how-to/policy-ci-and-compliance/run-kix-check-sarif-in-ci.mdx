@@ -1,4 +1,52 @@
 ---
 title: "Run `kix check --sarif` in CI"
-description: TODO
+description: "Write Kix scorecard findings as SARIF for a CI code-scanning step."
 ---
+
+import Command from '/src/components/Command.astro';
+import sarif from '/src/command-output/how-to/policy-sarif/check.json';
+
+Use `kix check --sarif` when your CI system accepts SARIF 2.1.0 findings. The
+command still runs cluster evaluation and the normal checks, but writes SARIF
+instead of the terminal summary.
+
+This guide assumes the job has Kix and the cluster's Nix dependencies
+available.
+
+## Write the SARIF file
+
+Redirect stdout to a file:
+
+<Command commands={["kix check production --sarif > kix-results.sarif"]} />
+
+Upload `kix-results.sarif` with your CI provider's SARIF or code-scanning
+integration. Preserve the command's exit status so error-level checks still
+fail the job, even if the upload step runs after a failure.
+
+The captured example below contains warning and note findings from the
+checked-in scorecard scenario:
+
+<Command expandable {...sarif} />
+
+Each result includes a rule ID, SARIF level, and message. Kix emits a valid
+empty SARIF run when the cluster has no scorecard findings, so the upload step
+can use the same path for clean and failing builds.
+
+## Check the file before upload
+
+A short validation catches an empty or truncated shell redirect:
+
+<Command
+  commands={[
+    "jq -e '.version == \"2.1.0\" and (.runs | length) > 0' kix-results.sarif",
+  ]}
+/>
+
+Run the upload step even when `kix check` exits non-zero, then propagate the
+original failure. The exact job syntax depends on the CI provider.
+
+:::note[Reference]
+See [`kix check`](/docs/reference/cli/check/) for check phases and exit
+behavior, and [Finding schema](/docs/reference/scorecard/finding-schema/) for
+the underlying Kix finding fields.
+:::

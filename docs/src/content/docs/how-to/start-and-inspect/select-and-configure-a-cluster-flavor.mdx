@@ -1,4 +1,93 @@
 ---
 title: "Select and configure a cluster flavor"
-description: TODO
+description: "Choose the provider defaults that match a target cluster and override them with later modules."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import kindFlavor from '/src/snippets/how-to/application/cluster/kindFlavor.json';
+
+A flavor supplies cluster defaults for a Kubernetes environment. Select one
+near the beginning of the cluster's module list, then place project-specific
+configuration after it.
+
+## Select a flavor
+
+The local application scenario targets kind:
+
+<Snippet {...kindFlavor} />
+
+Use the flavor matching the cluster you will deploy to. Kix includes provider
+profiles for local, managed, and self-hosted Kubernetes environments. The
+flavor can set values such as:
+
+- Provider identity and Kubernetes assumptions.
+- DNS and storage role bindings.
+- Platform imports already supplied by the environment.
+- Defaults for nodes, networking, and storage behavior.
+
+A flavor is a module, so it belongs in the same `modules` list as the rest of
+the cluster configuration.
+
+## Put overrides after the flavor
+
+Later modules can refine values supplied by the flavor:
+
+```nix title="cluster.nix"
+modules = [
+  kix.flavors.kind
+
+  {
+    cluster.domain = "cluster.local";
+    networkPolicy.enable = false;
+    namespaces.apps = { };
+  }
+];
+```
+
+Keeping the flavor first makes the merge direction visible: the following
+modules contain the choices made by this cluster.
+
+## Keep environment selection explicit
+
+When one repository targets several environments, make the flavor an explicit
+input to the cluster definition or define a cluster for each target. Do not
+infer it from the current kubectl context because evaluation should produce the
+same manifests without contacting a cluster.
+
+For example:
+
+```nix title="clusters/application.nix"
+{ kix, flavor, ... }:
+
+kix.buildCluster {
+  name = "application";
+  modules = [
+    flavor
+    { namespaces.apps = { }; }
+  ];
+}
+```
+
+The consuming flake can call that cluster with the chosen flavor for each
+environment.
+
+## Check the result
+
+Run `check` after selecting or changing a flavor:
+
+<Command commands={["kix check how-to-application"]} cwd="kix-examples/" />
+
+Inspect the package list to see platform imports contributed by the flavor:
+
+<Command
+  commands={["kix list packages --cluster how-to-application"]}
+  cwd="kix-examples/"
+/>
+
+:::note[Reference]
+See [Provider profiles](/docs/reference/flavors/provider-profiles/),
+[platform imports](/docs/reference/flavors/platform-imports/), and the
+[flavor capability matrix](/docs/reference/flavors/capability-matrix/) for the
+settings supplied by each flavor.
+:::

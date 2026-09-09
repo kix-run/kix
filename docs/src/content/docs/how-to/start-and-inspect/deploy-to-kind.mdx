@@ -1,4 +1,86 @@
 ---
 title: "Deploy to kind"
-description: TODO
+description: "Create a local Kubernetes cluster and deploy a Kix example to it."
 ---
+
+import Command from '/src/components/Command.astro';
+import clusterInfo from '/src/command-output/tutorials/02-hello-world/kubectl-cluster-info.json';
+import deployApplication from '/src/command-output/how-to/application-health-check/deploy.json';
+
+Use kind to run a Kubernetes cluster in Docker for local Kix development. The
+`kix-examples` repository includes a single-node kind configuration and clusters
+that are safe to deploy together.
+
+This guide assumes Docker, kind, kubectl, and the Kix CLI are installed.
+
+## Create the cluster
+
+From the `kix-examples` repository, create the configured cluster:
+
+<Command
+  commands={["kind create cluster --config kind-config.yaml"]}
+  cwd="kix-examples/"
+/>
+
+The configuration names the cluster `kix-demo`. Kind creates the kubectl
+context `kind-kix-demo` and selects it as the current context.
+
+Confirm that kubectl can reach the API server:
+
+<Command {...clusterInfo} />
+
+If another context is current, select the kind context explicitly:
+
+<Command commands={["kubectl config use-context kind-kix-demo"]} />
+
+## Check the cluster definition
+
+Validate the example before connecting Kix to Kubernetes:
+
+<Command commands={["kix check how-to-application"]} cwd="kix-examples/" />
+
+This evaluates the cluster and runs its configured validation without applying
+resources.
+
+## Deploy the application
+
+Deploy the cluster and accept the plan:
+
+<Command expandable {...deployApplication} />
+
+Kix builds the manifests, compares them with the current activation, applies
+resources in dependency order, waits for readiness, runs the production health
+check, and records the new activation.
+
+The captured deployment ends with the activation becoming `Active`. A failed
+resource or post-deploy check prevents that transition.
+
+## Inspect the result
+
+Check the namespaces and workloads with kubectl:
+
+<Command
+  commands={[
+    "kubectl get namespaces",
+    "kubectl get deployments,services,jobs -n how-to-app",
+  ]}
+/>
+
+Use Kix to see the status associated with the cluster definition:
+
+<Command commands={["kix status how-to-application"]} cwd="kix-examples/" />
+
+## Remove the local cluster
+
+When you no longer need it, delete the kind cluster:
+
+<Command commands={["kind delete cluster --name kix-demo"]} />
+
+This removes the local Kubernetes cluster and everything deployed into it. It
+does not change the files in `kix-examples`.
+
+:::note[Next steps]
+See [Check resource status](/docs/how-to/operate-a-cluster/check-resource-status/)
+and [Preview changes with `kix diff`](/docs/how-to/operate-a-cluster/preview-changes-with-kix-diff/)
+for the next operational tasks.
+:::

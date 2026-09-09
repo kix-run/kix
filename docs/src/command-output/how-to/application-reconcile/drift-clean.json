@@ -1,0 +1,19 @@
+{
+  "id": "how-to/application-reconcile/drift-clean",
+  "group": "how-to/application-reconcile",
+  "page": "/docs/how-to/operate-a-cluster/reconcile-drift/",
+  "cwd": "kix-examples/",
+  "generator": "live",
+  "outputExcerpt": false,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix drift",
+      "stdout": "Connecting to cluster...\n16 kix-managed resources\n\n  ✓ Activation/how-to-application-aq1zdgf9gsnb         in sync\n  ✓ ConfigMap/preview@how-to-app                       in sync\n  ✓ ConfigMap/production@how-to-app                    in sync\n  ✓ ConfigMap/production-health-script@how-to-app      in sync\n  ✓ CustomResourceDefinition/activations.kix.run       in sync\n  ✓ CustomResourceDefinition/packageinstances.kix.run  in sync\n  ✓ Deployment/preview@how-to-app                      in sync\n  ✓ Deployment/production@how-to-app                   in sync\n  ✓ Job/production-health@how-to-app                   in sync\n  ✓ Namespace/how-to-app                               in sync\n  ✓ Namespace/kube-system                              in sync\n  ✓ PackageInstance/preview@how-to-app                 in sync\n  ✓ PackageInstance/production@how-to-app              in sync\n  ✓ PackageInstance/platform-dns@kube-system           in sync\n  ✓ Service/preview@how-to-app                         in sync\n  ✓ Service/production@how-to-app                      in sync\n\nDrift: 16 in sync\n",
+      "stderr": "",
+      "stdoutDrift": "\n16 kix-managed resources\nConnecting to cluster...\nDrift: 16 in sync\n✓ Activation/how-to-application-<activation-id> in sync\n✓ ConfigMap/preview@how-to-app in sync\n✓ ConfigMap/production-health-script@how-to-app in sync\n✓ ConfigMap/production@how-to-app in sync\n✓ CustomResourceDefinition/activations.kix.run in sync\n✓ CustomResourceDefinition/packageinstances.kix.run in sync\n✓ Deployment/preview@how-to-app in sync\n✓ Deployment/production@how-to-app in sync\n✓ Job/production-health@how-to-app in sync\n✓ Namespace/how-to-app in sync\n✓ Namespace/kube-system in sync\n✓ PackageInstance/platform-dns@kube-system in sync\n✓ PackageInstance/preview@how-to-app in sync\n✓ PackageInstance/production@how-to-app in sync\n✓ Service/preview@how-to-app in sync\n✓ Service/production@how-to-app in sync\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

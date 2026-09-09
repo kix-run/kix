@@ -1,0 +1,19 @@
+{
+  "id": "how-to/application-export-audit/export",
+  "group": "how-to/application-export-audit",
+  "page": "/docs/how-to/operate-a-cluster/export-audit-preserving-yaml/",
+  "cwd": "kix-examples/",
+  "generator": "offline",
+  "outputExcerpt": false,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix export how-to-application --for audit --out ./audit-export",
+      "stdout": "",
+      "stderr": "Building cluster 'how-to-application'...\n  Evaluating cluster 'how-to-application'...\n  Reading package index...\n  Loading store graph...\n  Reading 3 packages...\n  Discovering cluster-level resources...\n  Computing cross-package dependencies...\n\n  Exported 16 resources to ./audit-export (audit (kix provenance preserved))\n",
+      "stdoutDrift": "",
+      "stderrDrift": "\nBuilding cluster 'how-to-application'...\nComputing cross-package dependencies...\nDiscovering cluster-level resources...\nEvaluating cluster 'how-to-application'...\nExported 16 resources to ./audit-export (audit (kix provenance preserved))\nLoading store graph...\nReading 3 packages...\nReading package index...\n",
+      "exitCode": 0
+    }
+  ]
+}

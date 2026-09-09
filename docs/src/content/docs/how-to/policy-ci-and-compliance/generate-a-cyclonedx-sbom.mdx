@@ -1,4 +1,57 @@
 ---
 title: "Generate a CycloneDX SBOM"
-description: TODO
+description: "Create a CycloneDX inventory of a cluster's packages, container images, and flake inputs."
 ---
+
+import Command from '/src/components/Command.astro';
+import sbom from '/src/command-output/how-to/policy-sbom/sbom.json';
+
+Use `kix compliance sbom` to produce a CycloneDX 1.6 software bill of
+materials from a rendered cluster. The command evaluates the cluster locally
+and does not need Kubernetes access.
+
+## Generate the SBOM
+
+Pass the cluster name and redirect stdout to a file:
+
+<Command
+  commands={["kix compliance sbom 19-scorecards > sbom.json"]}
+  cwd="kix-examples/"
+/>
+
+The output is JSON by default. This captured excerpt shows the document type,
+cluster component, component counts, and dependency count:
+
+<Command expandable {...sbom} />
+
+The complete file contains:
+
+- One `platform` component for the cluster.
+- One `application` component for each package instance.
+- One deduplicated `container` component for each image reference.
+- One `library` component for each locked flake input.
+- Dependency edges between the cluster, packages, images, and inputs.
+
+An image component includes a SHA-256 hash when its rendered reference has an
+`@sha256:` digest.
+
+## Verify the file
+
+Check that the command produced a CycloneDX 1.6 document:
+
+<Command
+  commands={["jq -e '.bomFormat == \"CycloneDX\" and .specVersion == \"1.6\"' sbom.json"]}
+  cwd="kix-examples/"
+/>
+
+Use `--output yaml` if the receiving system expects YAML:
+
+<Command
+  commands={["kix --output yaml compliance sbom 19-scorecards > sbom.yaml"]}
+  cwd="kix-examples/"
+/>
+
+:::note[Reference]
+See [Compliance commands](/docs/reference/cli/compliance-commands/) for the
+complete command interface and component mapping.
+:::

@@ -1,4 +1,69 @@
 ---
-title: "List images for airgap preloading"
-description: TODO
+title: "List images for air-gapped preloading"
+description: "Find every container image a cluster needs and prepare it for an environment without registry access."
 ---
+
+import Command from '/src/components/Command.astro';
+import imageList from '/src/command-output/how-to/application-images/list.json';
+import imageSources from '/src/command-output/how-to/application-images/list-with-sources.json';
+
+Use `kix images` to produce a deduplicated list of the container images in a
+cluster definition. The command evaluates the cluster locally and does not
+connect to Kubernetes.
+
+## List the images
+
+Run the command with the cluster name:
+
+<Command {...imageList} />
+
+The default output contains one complete image reference per line. Kix reads
+images from Pods and pod templates, including regular, init, and ephemeral
+containers. It also includes images that packages declare for resources an
+operator creates later.
+
+## Find where an image is used
+
+Add `--sources` to show each workload and container that refers to an image:
+
+<Command {...imageSources} />
+
+Use this view when an unexpected image appears or when you need to identify
+the package that should pin it to a digest.
+
+For scripts, request JSON instead:
+
+<Command
+  commands={["kix images how-to-application --output json > images.json"]}
+  cwd="kix-examples/"
+/>
+
+Each JSON entry contains the image reference and its source resources.
+
+## Pull or preload the images
+
+Because the default output is one image per line, you can pass it to an image
+tool. For example, pull every image into the local Docker image store:
+
+<Command
+  commands={["kix images how-to-application | xargs -n1 docker pull"]}
+  cwd="kix-examples/"
+/>
+
+To load those images into a local kind cluster:
+
+<Command
+  commands={[
+    "kix images how-to-application | xargs -n1 kind load docker-image --name kix-demo",
+  ]}
+  cwd="kix-examples/"
+/>
+
+For a remote or air-gapped cluster, copy or mirror the listed references using
+the tool your registry workflow already uses. Run `kix images` again whenever
+the cluster definition or its image pins change.
+
+:::note[Reference]
+See [`kix images`](/docs/reference/cli/images/) for output formats and command
+options.
+:::

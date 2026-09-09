@@ -1,4 +1,67 @@
 ---
 title: "Check resource status"
-description: TODO
+description: "Read the live health of the resources associated with a Kix cluster."
 ---
+
+import Command from '/src/components/Command.astro';
+import applicationStatus from '/src/command-output/how-to/application-status/status.json';
+
+Use `kix status` to compare a cluster definition with the resources currently
+running in Kubernetes and see their readiness state.
+
+## Show the cluster status
+
+Run the command with the cluster name:
+
+<Command {...applicationStatus} />
+
+Kix reads the cluster using the selected kubectl context. The output groups
+resources by package and reports the state Kix observes for each one.
+
+Use this after a deployment to confirm that workloads remain ready, Jobs have
+completed, and the active cluster resources are still present.
+
+## Select a Kubernetes context
+
+Pass `--context` when the desired cluster is not the current kubectl context:
+
+<Command
+  commands={["kix status how-to-application --context kind-kix-demo"]}
+  cwd="kix-examples/"
+/>
+
+The context controls which Kubernetes API Kix reads. The `--flake` option
+independently controls which cluster definition it evaluates:
+
+<Command
+  commands={[
+    "kix status how-to-application --flake ./infrastructure --context kind-kix-demo",
+  ]}
+/>
+
+## Investigate an unhealthy resource
+
+Status is a summary. When a resource is not ready:
+
+1. Note its kind, name, and namespace in the status output.
+2. Inspect it with `kubectl describe`.
+3. Read Pod or Job logs where applicable.
+4. Run `kix diff` to determine whether the live resource differs from the
+   desired manifest.
+
+For example:
+
+<Command
+  commands={[
+    "kubectl describe deployment production -n how-to-app",
+    "kubectl logs job/production-health -n how-to-app",
+  ]}
+/>
+
+`status` reports observed health. It does not reapply resources or change the
+active activation.
+
+:::note[Next steps]
+Use [Check live resources for drift](/docs/how-to/operate-a-cluster/check-live-resources-for-drift/)
+when the resource is healthy but may no longer match the desired manifest.
+:::

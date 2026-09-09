@@ -1,4 +1,68 @@
 ---
 title: "Use `kix pf`"
-description: TODO
+description: "Forward local ports to the primary workload of a package instance."
 ---
+
+import Command from '/src/components/Command.astro';
+
+Use `kix pf` to reach a package workload from your machine without first
+looking up its Kubernetes resource name.
+
+## Forward a local port
+
+Provide the cluster, package instance, and a `LOCAL:REMOTE` port mapping:
+
+<Command
+  commands={["kix pf how-to-application production 8080:80"]}
+  cwd="kix-examples/"
+/>
+
+While the command is running, open another terminal and connect through the
+local port:
+
+<Command commands={["curl http://127.0.0.1:8080"]} />
+
+Kix resolves `production` to its primary workload, then keeps the port-forward
+attached to that workload. Stop it with `Ctrl-C`.
+
+## Let kubectl choose the local port
+
+Pass a bare remote port when any available local port is acceptable:
+
+<Command
+  commands={["kix pf how-to-application production 80"]}
+  cwd="kix-examples/"
+/>
+
+The command prints the selected local port when the forward is ready.
+
+## Forward more than one port
+
+Add each mapping as another argument:
+
+<Command
+  commands={["kix pf my-cluster application 8080:80 8443:443"]}
+  cwd="kix-examples/"
+/>
+
+## Choose the listening address
+
+The forwarded port listens on localhost by default. Use `--address` when it
+must listen on another local interface:
+
+<Command
+  commands={[
+    "kix pf how-to-application production 8080:80 --address 0.0.0.0",
+  ]}
+  cwd="kix-examples/"
+/>
+
+Binding to `0.0.0.0` makes the port reachable through every network interface
+on your machine. Only do this on a trusted network and when the service is
+safe to expose.
+
+If an instance name is ambiguous, qualify it as `<namespace>/<name>`. Pass
+`--context` to select a Kubernetes context and `--flake` to evaluate the
+cluster from another directory.
+
+See the [`pf` command reference](/docs/reference/cli/pf/) for every option.

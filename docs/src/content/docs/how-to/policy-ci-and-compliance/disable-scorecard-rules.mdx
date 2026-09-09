@@ -1,4 +1,49 @@
 ---
 title: "Disable scorecard rules"
-description: TODO
+description: "Exclude a scorecard rule while leaving the rest of its rule set enabled."
 ---
+
+import Command from '/src/components/Command.astro';
+
+Disable an individual rule through `scorecard.ruleOverrides.byRule`. This
+keeps the rest of its built-in or custom category active.
+
+This guide assumes scorecard evaluation is enabled and the rule is present
+under `scorecard.rules`.
+
+## Add the override
+
+Use the rule's full `<category>.<rule>` name and set `enabled = false`:
+
+```nix title="cluster.nix"
+scorecard = {
+  enable = true;
+  rules.reliability = kix.rules.reliability;
+
+  ruleOverrides.byRule."reliability.hasProbes".enabled = false;
+};
+```
+
+Kix excludes the rule before evaluating it, so it produces no findings. Other
+reliability rules continue to run.
+
+## Check the result
+
+Run the cluster checks:
+
+<Command commands={["kix check production"]} />
+
+Confirm that the disabled rule no longer appears in the findings. If it still
+appears, check that the override includes the category and matches the rule
+name exactly.
+
+To restore the rule, remove the override. Prefer removing it over setting
+`enabled = true`, so the cluster inherits future changes to the surrounding
+configuration without an unnecessary exception.
+
+:::note[Reference]
+See [Severity override schema](/docs/reference/scorecard/severity-override-schema/)
+for the complete override structure and
+[built-in reliability rules](/docs/reference/scorecard/built-in-reliability-rules/)
+for the rule names in this example.
+:::

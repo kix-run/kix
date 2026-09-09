@@ -1,4 +1,79 @@
 ---
 title: "Garbage-collect stale resources"
-description: TODO
+description: "Remove resources no longer present in the cluster definition and retire old rollback records."
 ---
+
+import Command from '/src/components/Command.astro';
+
+Use `kix gc` to remove resources that an earlier Activation managed but the
+current cluster definition no longer contains. Every mode also applies the
+Activation retention policy.
+
+## Review the normal garbage-collection plan
+
+Run `gc` with the cluster name:
+
+<Command commands={["kix gc production"]} cwd="kix-project/" />
+
+The normal mode compares the previously deployed Activation with a fresh build
+of the cluster. It prints every resource and Activation record it plans to
+delete, then asks for confirmation.
+
+Check the package, kind, namespace, and name of each resource before approving
+the plan. Kix deletes dependants before their dependencies.
+
+## Run without a prompt
+
+After reviewing the plan, pass `--yes` in automation:
+
+<Command commands={["kix gc production --yes"]} cwd="kix-project/" />
+
+This performs the same comparison and deletion without asking for
+confirmation.
+
+## Scan the live cluster for orphans
+
+Use `--hard` when the local activation cache is unavailable or you need to
+find Kix-managed resources outside the previous-to-current build comparison:
+
+<Command commands={["kix gc production --hard"]} cwd="kix-project/" />
+
+Hard mode scans live resources carrying Kix ownership metadata and compares
+them with the expected resources in the current build.
+
+Resources carrying a Kix label but no `kix.run/identity-hash` are reported as
+unstamped and kept by default. Kix cannot establish that it originally applied
+them. Include them only after checking each reported resource:
+
+<Command
+  commands={["kix gc production --hard --include-unstamped"]}
+  cwd="kix-project/"
+/>
+
+## Let the operator perform cleanup
+
+For an operator-managed cluster, use operator mode:
+
+<Command commands={["kix gc production --operator"]} cwd="kix-project/" />
+
+Kix deletes the Activation records selected by the retention policy. The
+operator's finalizers perform the associated resource cleanup.
+
+Use the same `--keep`, `--keep-max`, and `--keep-for` flags in any mode. For
+example:
+
+<Command
+  commands={[
+    "kix gc production --hard --keep 20 --keep-max 100 --keep-for 90d",
+  ]}
+  cwd="kix-project/"
+/>
+
+:::note[Configure the history window]
+See [Configure Activation retention](/docs/how-to/operate-a-cluster/configure-activation-retention/)
+for the retention rules and scheduling example.
+:::
+
+:::note[Reference]
+See [`kix gc`](/docs/reference/cli/gc/) for all flags and mode behavior.
+:::

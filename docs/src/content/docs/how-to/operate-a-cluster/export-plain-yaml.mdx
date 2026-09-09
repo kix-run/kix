@@ -1,4 +1,64 @@
 ---
 title: "Export plain YAML"
-description: TODO
+description: "Export a Kix cluster as a directory of Kubernetes YAML for handoff or use with another deployment tool."
 ---
+
+import Command from '/src/components/Command.astro';
+import exportCluster from '/src/command-output/how-to/application-export-exit/export.json';
+
+Use `kix export` when you need a directory of Kubernetes manifests without
+Kix's deployment records. The default export mode removes Kix annotations and
+omits `Activation` and `PackageInstance` resources.
+
+## Export the cluster
+
+Choose an output directory with `--out`:
+
+<Command {...exportCluster} />
+
+Kix evaluates and builds the cluster before writing the files. It does not
+connect to Kubernetes.
+
+The output is grouped by namespace. Cluster-scoped resources are written
+under `_cluster`:
+
+<Command commands={["find handoff -type f | sort"]} cwd="kix-examples/" />
+
+Each filename contains the resource kind and name, such as
+`how-to-app/Deployment-production.yaml`.
+
+## Review the export
+
+Inspect the directory before handing it to another system:
+
+<Command
+  commands={[
+    "kubectl diff --server-side -R -f ./handoff/",
+    "rg 'kix.run/' ./handoff/",
+  ]}
+  cwd="kix-examples/"
+/>
+
+The `rg` command should find no Kix annotations. Labels such as
+`app.kubernetes.io/managed-by` remain part of the resource metadata, so review
+and adjust labels if the receiving system has its own ownership convention.
+
+## Export again
+
+Kix refuses to write into an existing output directory. Remove or archive the
+previous export, or pass `--force` when replacing it is intentional:
+
+<Command
+  commands={[
+    "kix export how-to-application --out ./handoff --force",
+  ]}
+  cwd="kix-examples/"
+/>
+
+`--force` overwrites files in the directory. Keep an earlier copy if you need
+to compare the two exports.
+
+:::note[Reference]
+See [`kix export`](/docs/reference/cli/export/) for the exact modes, directory
+layout, and options.
+:::

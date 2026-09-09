@@ -1,0 +1,19 @@
+{
+  "id": "how-to/dependency-missing/check",
+  "group": "how-to/dependency-missing",
+  "page": "/docs/how-to/debug-dependency-wiring/debug-a-missing-dependency/",
+  "cwd": "kix-examples/",
+  "generator": "offline",
+  "outputExcerpt": true,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix check 06-service-dep",
+      "stdout": "error: no 'backend' found in cluster for namespace 'tutorial-06'                                                                                         \n",
+      "stderr": "",
+      "stdoutDrift": "error: no 'backend' found in cluster for namespace 'tutorial-06'\n",
+      "stderrDrift": "",
+      "exitCode": 1
+    }
+  ]
+}

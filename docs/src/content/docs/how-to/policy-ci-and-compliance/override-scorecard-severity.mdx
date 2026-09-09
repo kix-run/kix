@@ -1,4 +1,75 @@
 ---
 title: "Override scorecard severity"
-description: TODO
+description: "Change how a scorecard rule is reported across a cluster or for selected workloads."
 ---
+
+import Command from '/src/components/Command.astro';
+
+Use a severity override to promote a finding to an error or reduce it to a
+warning or informational result. Valid severities are `error`, `warning`, and
+`info`.
+
+This guide assumes scorecard evaluation is enabled and the target rule is
+present under `scorecard.rules`.
+
+## Override one rule everywhere
+
+Use the full rule name under `ruleOverrides.byRule`:
+
+```nix title="cluster.nix"
+scorecard = {
+  enable = true;
+  rules.reliability = kix.rules.reliability;
+
+  ruleOverrides.byRule."reliability.hasProbes".severity = "error";
+};
+```
+
+Every `reliability.hasProbes` finding is now an error, so `kix check`, builds,
+and deploys stop when a workload lacks the required probes.
+
+## Override selected namespaces or owners
+
+Use `byNamespace` when a policy should differ for part of the cluster:
+
+```nix title="cluster.nix"
+scorecard.ruleOverrides.byNamespace."kube-system" = {
+  "reliability.hasProbes".severity = "info";
+};
+```
+
+Use `byOwner` to apply an override to packages whose `meta.owner` matches the
+given value:
+
+```nix title="cluster.nix"
+scorecard.ruleOverrides.byOwner."platform" = {
+  "reliability.hasProbes".severity = "error";
+};
+```
+
+Namespace and owner keys, as well as rule names within them, may end with `*`
+to match a prefix. Keep exact names when you only need one exception.
+
+## Set a default for rules without a severity
+
+`ruleDefaults.severity` applies only when a rule does not declare its own
+severity and no override matches:
+
+```nix title="cluster.nix"
+scorecard.ruleDefaults.severity = "warning";
+```
+
+## Check the result
+
+Run the cluster checks and confirm that the finding has the intended severity:
+
+<Command commands={["kix check production"]} />
+
+If several overrides match, a direct `byRule` override wins. Owner overrides
+then take precedence over namespace overrides, followed by the rule's declared
+severity and `ruleDefaults`.
+
+:::note[Reference]
+See [Severity override schema](/docs/reference/scorecard/severity-override-schema/)
+for the override fields and matching rules.
+:::

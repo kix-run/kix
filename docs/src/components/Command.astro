@@ -49,6 +49,8 @@ interface Props {
    * `<Command commands={[...]} />` invocations omit it.
    */
   generator?: 'offline' | 'live';
+  /** The stored output is a capture-time excerpt of the command's stdout. */
+  outputExcerpt?: boolean;
   /**
    * Sidecar id (e.g. `tutorials/02-hello-world/list-clusters`). Used only
    * for diagnostics — included in any thrown error so the maintainer can
@@ -57,7 +59,7 @@ interface Props {
   id?: string;
 }
 
-const { commands, cwd, title, expandable = false, generator, id } = Astro.props;
+const { commands, cwd, title, expandable = false, generator, id, outputExcerpt = false } = Astro.props;
 
 type NormalisedStep = Required<Pick<Step, 'command'>> &
   Pick<Step, 'cwd' | 'stdout' | 'stderr' | 'exitCode'>;
@@ -225,6 +227,7 @@ for (const step of steps) {
       <span></span>
     </span>
     {terminalLabel && <span class="terminal-label">{terminalLabel}</span>}
+    {outputExcerpt && <span class="terminal-label">Output excerpt</span>}
   </figcaption>
   {units.map((unit) => (
     unit.kind === 'pre' ? (

@@ -1,0 +1,19 @@
+{
+  "id": "how-to/policy-receipt-attestation/attest",
+  "group": "how-to/policy-receipt-attestation",
+  "page": "/docs/how-to/policy-ci-and-compliance/attest-a-deployment-from-its-cluster-receipt/",
+  "cwd": "kix-examples/",
+  "generator": "live",
+  "outputExcerpt": true,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix compliance attest how-to-application --from-cluster --builder-id https://ci.example/runs/1842 --invocation-id 1842",
+      "stdout": "{\n  \"_type\": \"https://in-toto.io/Statement/v1\",\n  \"predicateType\": \"https://slsa.dev/provenance/v1\",\n  \"subject\": [\n    {\n      \"digest\": {\n        \"nixStoreHash\": \"aq1zdgf9gsnbdpc8hwkma69l8ipalqpx\"\n      },\n      \"name\": \"cluster-how-to-application-activation\"\n    }\n  ],\n  \"buildDefinition\": {\n    \"buildType\": \"https://kix.run/build/v1\",\n    \"externalParameters\": {\n      \"cluster\": \"how-to-application\",\n      \"flakeLock\": \"blake3:f4c2f924573deded25b1facea4477145fe7ed8a7439834058cdecbaaed0a21a7\",\n      \"flakeRef\": \"kix-examples\"\n    },\n    \"resolvedDependencyCount\": 5\n  },\n  \"runDetails\": {\n    \"builder\": {\n      \"id\": \"https://ci.example/runs/1842\"\n    },\n    \"metadata\": {\n      \"finishedOn\": \"2026-09-09T20:23:40Z\",\n      \"invocationId\": \"1842\",\n      \"startedOn\": \"2026-09-09T20:23:40Z\"\n    }\n  }\n}\n",
+      "stderr": "",
+      "stdoutDrift": "\"_type\": \"https://in-toto.io/Statement/v1\",\n\"buildDefinition\": {\n\"buildType\": \"https://kix.run/build/v1\",\n\"builder\": {\n\"cluster\": \"how-to-application\",\n\"digest\": {\n\"externalParameters\": {\n\"finishedOn\": \"<TIME>\",\n\"flakeLock\": \"blake3:f4c2f924573deded25b1facea4477145fe7ed8a7439834058cdecbaaed0a21a7\",\n\"flakeRef\": \"kix-examples\"\n\"id\": \"https://ci.example/runs/1842\"\n\"invocationId\": \"1842\",\n\"metadata\": {\n\"name\": \"cluster-how-to-application-activation\"\n\"nixStoreHash\": \"<identity-hash>\"\n\"predicateType\": \"https://slsa.dev/provenance/v1\",\n\"resolvedDependencyCount\": 5\n\"runDetails\": {\n\"startedOn\": \"<TIME>\"\n\"subject\": [\n],\n{\n}\n},\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

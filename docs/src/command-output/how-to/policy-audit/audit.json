@@ -1,0 +1,19 @@
+{
+  "id": "how-to/policy-audit/audit",
+  "group": "how-to/policy-audit",
+  "page": "/docs/how-to/policy-ci-and-compliance/generate-an-audit-bundle/",
+  "cwd": "kix-examples/",
+  "generator": "offline",
+  "outputExcerpt": false,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix compliance audit 19-scorecards --out ./compliance --builder-id https://ci.example/runs/1842",
+      "stdout": "",
+      "stderr": "Building cluster '19-scorecards'...\n  Evaluating cluster '19-scorecards'...\n  Reading package index...\n  Loading store graph...\n  Reading 5 packages...\n  Discovering cluster-level resources...\n  Computing cross-package dependencies...\n\n  Wrote audit bundle to ./compliance\n    scorecard: 0 errors, 6 warnings, 4 info\n    framework: SOC 2\n",
+      "stdoutDrift": "",
+      "stderrDrift": "\nBuilding cluster '19-scorecards'...\nComputing cross-package dependencies...\nDiscovering cluster-level resources...\nEvaluating cluster '19-scorecards'...\nLoading store graph...\nReading 5 packages...\nReading package index...\nWrote audit bundle to ./compliance\nframework: SOC 2\nscorecard: 0 errors, 6 warnings, 4 info\n",
+      "exitCode": 0
+    }
+  ]
+}

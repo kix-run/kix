@@ -1,4 +1,79 @@
 ---
 title: "Use `kix logs`"
-description: TODO
+description: "Read or follow logs for the primary workload of a package instance."
 ---
+
+import Command from '/src/components/Command.astro';
+import productionLogs from '/src/command-output/how-to/application-logs/production-tail.json';
+
+Use `kix logs` when you know the Kix package instance but do not want to look
+up its Kubernetes workload or label selector first.
+
+## Read recent logs
+
+Provide the cluster name and package instance:
+
+<Command {...productionLogs} />
+
+Kix resolves `production` to its primary workload and reads logs from the Pods
+selected by that workload. Pod names are prefixed when more than one Pod
+matches.
+
+## Follow logs
+
+Add `--follow` to keep streaming new lines:
+
+<Command
+  commands={["kix logs how-to-application production --follow"]}
+  cwd="kix-examples/"
+/>
+
+Stop following with `Ctrl-C`.
+
+## Limit the output
+
+Use `--tail` to choose the number of recent lines, or `--since` to select a
+relative time window:
+
+<Command
+  commands={[
+    "kix logs how-to-application production --tail 50",
+    "kix logs how-to-application production --since 15m",
+  ]}
+  cwd="kix-examples/"
+/>
+
+Durations can be combined, such as `1h30m`.
+
+## Select a container or previous instance
+
+For a workload with multiple containers, pass the container name:
+
+<Command
+  commands={[
+    "kix logs how-to-application production --container web",
+  ]}
+  cwd="kix-examples/"
+/>
+
+Use `--previous` to inspect the previous terminated container after a restart:
+
+<Command
+  commands={["kix logs how-to-application production --previous"]}
+  cwd="kix-examples/"
+/>
+
+## Disambiguate repeated instance names
+
+If the same instance name occurs in more than one package namespace, qualify
+it as `<namespace>/<name>`:
+
+<Command
+  commands={["kix logs how-to-application how-to-app/production --tail 20"]}
+  cwd="kix-examples/"
+/>
+
+Pass `--context` to select a Kubernetes context and `--flake` to evaluate the
+cluster from another directory.
+
+See the [`logs` command reference](/docs/reference/cli/logs/) for every option.

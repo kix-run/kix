@@ -28,7 +28,7 @@
     # kix-examples are currently private; any consumer must supply
     # `access-tokens = github.com=…` to Nix. See the project README
     # for setup.
-    kix-examples.url = "github:kix-ops/kix-examples";
+    kix-examples.url = "github:kix-run/kix-examples";
   };
 
   outputs =
@@ -62,7 +62,7 @@
             };
             exampleSnippets = snippetLib.mkSnippetsFromTree {
               root = "${kix-examples}";
-              sourceUrlBase = "https://github.com/kix-ops/kix-examples/blob/${kix-examples.rev or "main"}";
+              sourceUrlBase = "https://github.com/kix-run/kix-examples/blob/${kix-examples.rev or "main"}";
             };
             repositorySnippets = snippetLib.mkSnippetsFromTree {
               root = "${kixpkgs}";
@@ -150,12 +150,14 @@
           # `nix run ./docs#regen-captures -- --apply` against a kind
           # cluster; offline captures by `regen-captures-offline`.
           preBuild = ''
+            npm run check:how-to-coverage
             mkdir -p src/snippets
             cp -r --no-preserve=mode ${snippets}/. src/snippets/
             chmod -R u+w src/snippets
             mkdir -p src/content/docs/reference/package-catalog
             cp -r --no-preserve=mode ${reference}/. src/content/docs/reference/package-catalog/
             chmod -R u+w src/content/docs/reference/package-catalog
+            npm run check:local-imports
           '';
 
           # `npm run build` writes the static site to ./dist.
@@ -260,6 +262,8 @@
               chmod -R u+w docs/src/snippets docs/src/content/docs/reference/package-catalog
 
               cd docs
+
+              npm run check:local-imports
 
               if [ ! -d node_modules ]; then
                 echo "→ installing npm dependencies (first run)"

@@ -1,0 +1,19 @@
+{
+  "id": "how-to/application-images/list-with-sources",
+  "group": "how-to/application-images",
+  "page": "/docs/how-to/operate-a-cluster/list-images-for-airgap-preloading/",
+  "cwd": "kix-examples/",
+  "generator": "offline",
+  "outputExcerpt": false,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix images how-to-application --sources",
+      "stdout": "docker.io/curlimages/curl:8.14.1@sha256:9a1ed35addb45476afa911696297f8e115993df459278ed036182dd2cd22b67b\n  Job how-to-app/production-health (container: probe)\ndocker.io/library/nginx:1.27-alpine\n  Deployment how-to-app/preview (container: nginx)\n  Deployment how-to-app/production (container: nginx)\n",
+      "stderr": "",
+      "stdoutDrift": "Deployment how-to-app/preview (container: nginx)\nDeployment how-to-app/production (container: nginx)\nJob how-to-app/production-health (container: probe)\ndocker.io/curlimages/curl:8.14.1@sha256:9a1ed35addb45476afa911696297f8e115993df459278ed036182dd2cd22b67b\ndocker.io/library/nginx:1.27-alpine\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

@@ -1,4 +1,60 @@
 ---
 title: "List clusters and packages"
-description: TODO
+description: "Discover the clusters exposed by a flake and inspect the package instances in one cluster."
 ---
+
+import Command from '/src/components/Command.astro';
+import listClusters from '/src/command-output/how-to/application-list/list-clusters.json';
+import listPackages from '/src/command-output/how-to/application-list/list-packages.json';
+
+Use `kix list` to discover what a project exposes before choosing a cluster to
+check, build, or deploy. Run the commands from the directory containing the
+project's `flake.nix`.
+
+## List clusters
+
+List every cluster registered with `kix.lib.mkFlake`:
+
+<Command {...listClusters} />
+
+The name in the first column is the value accepted by commands such as
+`kix check`, `kix build`, and `kix deploy`.
+
+For a flake in another directory, pass its path explicitly:
+
+<Command commands={["kix list clusters --flake ../infrastructure"]} />
+
+The path may also be any flake reference accepted by Nix.
+
+## List package instances
+
+Select a cluster to see its evaluated package instances:
+
+<Command {...listPackages} />
+
+The output identifies each instance by namespace and name, along with its
+package version. Imports supplied by the cluster flavor also appear in the
+list, even when they do not render resources managed by Kix.
+
+Use this command when you need to confirm that:
+
+- An instance was included by the cluster modules.
+- A package has the version you expect.
+- Automatic or flavor-provided instances were added.
+- The namespace and instance names match a later command or dependency.
+
+## Inspect the cluster in more detail
+
+`list packages` is intentionally compact. Use `inspect` to see package parts,
+dependencies, and exported outputs:
+
+<Command commands={["kix inspect how-to-application"]} cwd="kix-examples/" />
+
+Use `graph` when the relationship between instances or resources is the main
+thing you need to investigate.
+
+:::note[Next steps]
+See [Inspect an instance's deps, parts, and `out`](/docs/how-to/debug-dependency-wiring/inspect-an-instance-s-deps-parts-and-out/)
+and [Visualize the dependency graph with `kix graph`](/docs/how-to/debug-dependency-wiring/visualize-the-dependency-graph-with-kix-graph/)
+for deeper inspection.
+:::

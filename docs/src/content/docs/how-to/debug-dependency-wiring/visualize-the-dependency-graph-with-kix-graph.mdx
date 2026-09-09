@@ -1,4 +1,58 @@
 ---
 title: "Visualize the dependency graph with `kix graph`"
-description: TODO
+description: "Inspect resource ordering in a Kix cluster as a tree, DOT graph, or JSON."
 ---
+
+import Command from '/src/components/Command.astro';
+import graphTree from '/src/command-output/how-to/dependency-graph/graph-tree.json';
+
+Use `kix graph` to inspect the dependencies Kix derived from package outputs,
+explicit `deps`, `requires`, and other tracked references. The graph is built
+from the rendered cluster and does not require access to Kubernetes.
+
+## Print the tree
+
+Tree output is the quickest way to inspect ordering in a terminal:
+
+<Command expandable {...graphTree} />
+
+The tree starts with resources that have no dependencies. Each indented entry
+depends on the resource above it. In this example, the gateway ConfigMap
+appears beneath `Service/backend@platform`, showing the edge across the
+namespace boundary.
+
+If an expected edge is absent, check that the consumer reads a tracked
+`out` value from the dependency or declares an explicit dependency through
+`deps`, `requires`, or `extraDeps`.
+
+## Write a DOT graph
+
+Use DOT output for Graphviz or another graph viewer:
+
+<Command
+  commands={[
+    "kix graph production --format dot > kix-graph.dot",
+    "dot -Tsvg kix-graph.dot > kix-graph.svg",
+  ]}
+/>
+
+The second command requires Graphviz. The generated SVG is useful when a tree
+is too deep to scan comfortably.
+
+## Write graph data as JSON
+
+Use JSON when another tool will inspect the nodes and edges:
+
+<Command commands={["kix graph production --format json > kix-graph.json"]} />
+
+Choose JSON for automation, not as the default way to read the graph by hand.
+
+:::note[Explanation]
+See [The dependency graph as the model](/docs/explanation/the-dependency-graph-as-the-model/)
+for how the same graph controls deployment order and readiness waits.
+:::
+
+:::note[Reference]
+See [`kix graph`](/docs/reference/cli/graph/) for output formats and command
+options.
+:::

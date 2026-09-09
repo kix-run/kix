@@ -1,4 +1,61 @@
 ---
 title: "Check cluster health"
-description: TODO
+description: "Verify that the active Kix dependency graph is intact on a Kubernetes cluster."
 ---
+
+import Command from '/src/components/Command.astro';
+import applicationHealth from '/src/command-output/how-to/application-health/health.json';
+
+Use `kix health` to verify that every resource in the active activation can
+still find the resources it depends on.
+
+## Check the active activation
+
+Run `health` with the cluster name:
+
+<Command {...applicationHealth} />
+
+Kix reads the active activation and its managed resources directly from
+Kubernetes. It then follows their dependency identities and reports a summary
+for each package instance.
+
+A healthy result exits with status 0. A missing dependency or a resource that
+depends on one exits with status 1.
+
+## Read the package summary
+
+Each package is assigned one of these states:
+
+| State | Meaning |
+| --- | --- |
+| `healthy` | Every required resource is present |
+| `external` | The package describes an imported resource |
+| `completed` | A run-to-completion resource finished and removed itself as declared |
+| `DEGRADED` | A required resource is missing |
+| `AT RISK` | The package depends directly or transitively on a broken resource |
+
+Run with `-vv` when you need to see the dependency traversal:
+
+<Command
+  commands={["kix health how-to-application -vv"]}
+  cwd="kix-examples/"
+/>
+
+## Select a Kubernetes context
+
+Pass `--context` when the cluster is not on the current kubectl context:
+
+<Command
+  commands={["kix health how-to-application --context kind-kix-demo"]}
+  cwd="kix-examples/"
+/>
+
+`health` checks the active dependency graph already recorded in Kubernetes. It
+does not evaluate the local cluster definition, compare manifest fields, or
+test workload readiness.
+
+:::note[Choose the check that matches the question]
+Use [`kix status`](/docs/how-to/operate-a-cluster/check-resource-status/) for
+resource readiness. Use [Check live resources for drift](/docs/how-to/operate-a-cluster/check-live-resources-for-drift/)
+to find field changes made outside Kix.
+:::

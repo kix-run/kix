@@ -4,13 +4,14 @@
   "page": "/docs/tutorials/04-first-cluster-from-scratch/",
   "cwd": "kix-examples/",
   "generator": "offline",
+  "outputExcerpt": false,
   "skipDriftCheck": false,
   "commands": [
     {
       "command": "kix list clusters",
-      "stdout": " NAME              \n 02-hello-world    \n 04-from-scratch   \n 06-service-dep    \n 08-namespace-deps \n 09-typed-options  \n 10-reuse-packages \n 19-scorecards     \n",
+      "stdout": " NAME               \n 02-hello-world     \n 04-from-scratch    \n 06-service-dep     \n 08-namespace-deps  \n 09-typed-options   \n 10-reuse-packages  \n 19-scorecards      \n how-to-application \n",
       "stderr": "",
-      "stdoutDrift": "02-hello-world\n04-from-scratch\n06-service-dep\n08-namespace-deps\n09-typed-options\n10-reuse-packages\n19-scorecards\nNAME\n",
+      "stdoutDrift": "02-hello-world\n04-from-scratch\n06-service-dep\n08-namespace-deps\n09-typed-options\n10-reuse-packages\n19-scorecards\nNAME\nhow-to-application\n",
       "stderrDrift": "",
       "exitCode": 0
     }

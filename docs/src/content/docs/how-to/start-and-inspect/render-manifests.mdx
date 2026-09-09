@@ -1,4 +1,74 @@
 ---
 title: "Render manifests"
-description: TODO
+description: "Build a cluster locally and inspect the Kubernetes objects Kix produced."
 ---
+
+import Command from '/src/components/Command.astro';
+import productionDeployment from '/src/command-output/how-to/application-render/build-production-deployment.json';
+
+`kix build` evaluates a cluster and writes its rendered Kubernetes manifests to
+standard output. It does not connect to a Kubernetes cluster.
+
+## Render the cluster
+
+Run `build` with a cluster name:
+
+<Command commands={["kix build how-to-application"]} cwd="kix-examples/" />
+
+The default output is a multi-document YAML stream. It includes workload
+resources, package bookkeeping, cluster-scoped resources, and imports used for
+dependency ordering.
+
+Redirect the stream when another tool or review process needs a file:
+
+<Command
+  commands={["kix build how-to-application > manifests.yaml"]}
+  cwd="kix-examples/"
+/>
+
+The file is ordinary Kubernetes YAML. Apply it only if your workflow intends
+to bypass Kix's deployment planning, readiness handling, activation records,
+and pruning controls.
+
+## Choose an output format
+
+Use `--output` to select a representation:
+
+<Command
+  commands={[
+    "kix build how-to-application --output yaml",
+    "kix build how-to-application --output json",
+  ]}
+  cwd="kix-examples/"
+/>
+
+JSON is useful when another program needs to inspect the rendered objects.
+This excerpt shows the production Deployment from the complete result:
+
+<Command {...productionDeployment} />
+
+The rendered Deployment reflects the package options, generated environment
+variables, ConfigMap mount, and instance-specific replica count.
+
+## Render a flake elsewhere
+
+Pass `--flake` when the current directory is not the project root:
+
+<Command
+  commands={["kix build how-to-application --flake ../infrastructure"]}
+/>
+
+Kix evaluates the requested flake without changing the shell's working
+directory.
+
+## Validate before deployment
+
+`build` proves that evaluation and rendering succeed. Run `check` when you also
+want schema, policy, and optional external validation results:
+
+<Command commands={["kix check how-to-application"]} cwd="kix-examples/" />
+
+:::note[Next steps]
+See [Deploy to kind](/docs/how-to/start-and-inspect/deploy-to-kind/) when you
+are ready to apply the rendered cluster locally.
+:::

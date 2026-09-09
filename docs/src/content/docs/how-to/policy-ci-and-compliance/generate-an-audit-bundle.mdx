@@ -1,4 +1,65 @@
 ---
 title: "Generate an audit bundle"
-description: TODO
+description: "Write scorecard, SBOM, provenance, OSCAL, and Markdown evidence in one directory."
 ---
+
+import Command from '/src/components/Command.astro';
+import audit from '/src/command-output/how-to/policy-audit/audit.json';
+
+Use `kix compliance audit` when a review or compliance process needs the
+cluster's policy findings and build evidence together. The command evaluates
+the cluster locally and writes five files.
+
+## Write the bundle
+
+Choose an output directory and, in CI, supply the workflow URL as the builder
+ID:
+
+<Command {...audit} />
+
+The directory contains:
+
+```text
+compliance/
+├── assessment-results.json
+├── audit-report.md
+├── provenance.json
+├── sbom.json
+└── scorecard-results.sarif
+```
+
+`audit-report.md` is the human-readable summary. The other files provide OSCAL
+Assessment Results, SLSA provenance, a CycloneDX SBOM, and SARIF scorecard
+findings.
+
+## Select a framework
+
+SOC 2 is the default control mapping. Select another supported framework with
+`--framework`:
+
+<Command
+  commands={[
+    "kix compliance audit production --out ./compliance --framework iso27001",
+  ]}
+/>
+
+The accepted values are `soc2`, `iso27001`, `dora`, and `nis2`.
+
+## Replace an existing bundle
+
+Kix refuses to write over an existing output directory. Pass `--force` when
+the job intentionally refreshes that directory:
+
+<Command
+  commands={[
+    "kix compliance audit production --out ./compliance --force",
+  ]}
+/>
+
+Archive or upload the directory as one CI artifact so the files from a single
+evaluation remain together.
+
+:::note[Reference]
+See [Compliance commands](/docs/reference/cli/compliance-commands/) for each
+file's format and the framework options.
+:::

@@ -1,0 +1,18 @@
+{
+  "id": "how-to/application-health-check/deploy-failing-probe",
+  "group": "how-to/application-health-check",
+  "page": "/docs/how-to/author-packages-and-clusters/add-a-post-deploy-health-check/",
+  "cwd": "kix-examples/",
+  "generator": "live",
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix deploy how-to-application -y",
+      "stdout": "Building cluster 'how-to-application'...\nCluster how-to-application: 16 manifests\nConnecting to cluster...\nActive activation: how-to-application-aq1zdgf9gsnb (aq1zdgf9...)\n\n  how-to-app\n    ~ production 1.0.0 (1 changed, 1 dep-affected)\n\n  Plan: 1 updated, 2 unchanged\n  Resources: 1 real content, 1 dep-affected\n  ↻ 1 under the rerun rule (deleted first when live): Job/production-health@how-to-app\nplan: 16 nodes\n  ~ ConfigMap/production-health-script@how-to-app configured\n  ✔ ConfigMap/production-health-script@how-to-app ready\n  + recreate Job/production-health@how-to-app created\n  ⚠ Job/production-health@how-to-app JobBackoffExceeded: Job failed 1 times (backoffLimit=0)\n      ok    GET http://production.how-to-app.svc.cluster.local:80\n      the application returned an unexpected response\n\n✗ halt-on-first-failure: JobBackoffExceeded: Job failed 1 times (backoffLimit=0)\nDeploy complete: 0 created, 1 configured, 12 unchanged, 1 failed, 2 cancelled\n",
+      "stderr": "",
+      "stdoutDrift": "\n+ recreate Job/production-health@how-to-app created\nActive activation: how-to-application-<activation-id> (aq1zdgf9...)\nBuilding cluster 'how-to-application'...\nCluster how-to-application: 16 manifests\nConnecting to cluster...\nDeploy complete: 0 created, 1 configured, 12 unchanged, 1 failed, 2 cancelled\nPlan: 1 updated, 2 unchanged\nResources: 1 real content, 1 dep-affected\nhow-to-app\nok GET http://production.how-to-app.svc.cluster.local:80\nplan: 16 nodes\nthe application returned an unexpected response\n~ ConfigMap/production-health-script@how-to-app configured\n~ production 1.0.0 (1 changed, 1 dep-affected)\n↻ 1 under the rerun rule (deleted first when live): Job/production-health@how-to-app\n⚠ Job/production-health@how-to-app JobBackoffExceeded: Job failed 1 times (backoffLimit=0)\n✔ ConfigMap/production-health-script@how-to-app ready\n✗ halt-on-first-failure: JobBackoffExceeded: Job failed 1 times (backoffLimit=0)\n",
+      "stderrDrift": "",
+      "exitCode": 1
+    }
+  ]
+}

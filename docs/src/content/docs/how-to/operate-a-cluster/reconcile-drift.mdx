@@ -1,4 +1,59 @@
 ---
 title: "Reconcile drift"
-description: TODO
+description: "Reapply a cluster's desired manifests to heal out-of-band changes."
 ---
+
+import Command from '/src/components/Command.astro';
+import reconcileApplication from '/src/command-output/how-to/application-reconcile/reconcile.json';
+import cleanDrift from '/src/command-output/how-to/application-reconcile/drift-clean.json';
+
+Use `kix deploy --reconcile` to reapply every desired resource, including
+resources whose activation identity has not changed. Add `--force-conflicts`
+only when you have reviewed fields owned by another manager and intend Kix to
+take them back.
+
+## Review the drift report
+
+Start by identifying the fields that changed:
+
+<Command commands={["kix drift"]} cwd="kix-examples/" />
+
+Confirm that the checked-in cluster definition still describes the state you
+want. Reconciliation applies that definition, so review intentional emergency
+changes before continuing.
+
+## Reapply the desired resources
+
+The example drift report attributes `spec.replicas` to kubectl. Reapply the
+cluster and deliberately take ownership of that field:
+
+<Command expandable {...reconcileApplication} />
+
+The example begins with a production Deployment that was scaled from two
+replicas to one outside Kix. Reconciliation reapplies the rendered resources
+and waits for them to become ready.
+
+Use `--context` and `--flake` when the Kubernetes target or source directory
+is not the current one:
+
+<Command
+  commands={[
+    "kix deploy how-to-application --reconcile --force-conflicts -y --flake ./infrastructure --context kind-kix-demo",
+  ]}
+/>
+
+Omit `-y` when running interactively if you want to review the confirmation
+prompt.
+
+## Confirm the result
+
+Run the drift check again:
+
+<Command {...cleanDrift} />
+
+The `drifted` count should be zero. You can also use [`kix status`](/docs/how-to/operate-a-cluster/check-resource-status/)
+to confirm that the reapplied workloads are ready.
+
+`--reconcile` deliberately reapplies all desired resources. `--force-conflicts`
+also takes fields from other server-side apply managers. Use a normal
+`kix deploy` when you only need to deploy a new rendered activation.

@@ -1,4 +1,73 @@
 ---
 title: "Add scorecard rules"
-description: TODO
+description: "Enable built-in policy checks and add a custom rule to a cluster."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import packageRule from '/src/snippets/tutorials/19-scorecards/scorecard/packageRule.json';
+
+Scorecard rules run while Kix evaluates a cluster. Add built-in rule sets when
+you want their existing checks, and add custom rules for policy specific to
+your packages or organization.
+
+This guide assumes the cluster is defined with `kix.buildCluster`.
+
+## Enable a built-in rule set
+
+Set `scorecard.enable`, then add a rule set under `scorecard.rules`:
+
+```nix title="cluster.nix"
+scorecard = {
+  enable = true;
+  rules.reliability = kix.rules.reliability;
+};
+```
+
+The attribute name becomes the rule category. For example,
+`kix.rules.reliability.hasProbes` is reported as `reliability.hasProbes`.
+
+You can enable several built-in sets together:
+
+```nix title="cluster.nix"
+scorecard.rules = {
+  inherit (kix.rules) security reliability governance architecture;
+};
+```
+
+## Add a custom rule
+
+Place custom rules under a category of your own. This tested package-level
+rule applies only to packages that advertise the `reverse-proxy` capability,
+then checks their evaluated configuration:
+
+<Snippet {...packageRule} />
+
+Add the rule inside `scorecard.rules`. Its full name is
+`custom.proxyMaxBodySizeMustBeExplicit`.
+
+Every rule declares a `level` that determines the value passed to its check:
+
+- `manifest` runs once for each rendered Kubernetes resource.
+- `package` runs once for each package instance.
+- `namespace` runs once for each namespace.
+- `cluster` runs once for the whole cluster.
+
+The check returns one finding for each problem and an empty list when the
+input passes. Use `appliesTo` when a rule is meaningful only for a subset of
+its level.
+
+## Check the rules
+
+Run the cluster checks after adding or changing a rule:
+
+<Command commands={["kix check 19-scorecards"]} cwd="kix-examples/" />
+
+Kix reports the number of scorecard errors, warnings, and informational
+findings. An error-level finding makes the check fail.
+
+:::note[Reference]
+See [Rule schema](/docs/reference/scorecard/rule-schema/) for the context
+available at each level and the complete rule fields. The built-in rule pages
+list the checks available in each category.
+:::

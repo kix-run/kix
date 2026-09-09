@@ -1,4 +1,121 @@
 ---
 title: "Promote and verify an image pin"
-description: TODO
+description: "Resolve a new image tag, review the committed pin change, and verify the digest before deployment."
 ---
+
+import Command from '/src/components/Command.astro';
+
+Use `kix pin set` to promote an existing image pin. This guide assumes the pin
+file is already loaded by your flake and the cluster reads the pin you want to
+update.
+
+## Promote the image
+
+Pass the pin key and the new tag:
+
+<Command
+  commands={["kix pin set web --tag 1.29-alpine"]}
+  cwd="kix-project/"
+/>
+
+Kix keeps the pin's repository, resolves the new tag through the registry, and
+writes the resulting digest to the pin file. It also records who performed the
+promotion and when it was resolved.
+
+For a floating release tag such as `main`, run the same command whenever the
+tag's image changes:
+
+<Command commands={["kix pin set web --tag main"]} cwd="kix-project/" />
+
+The digest changes even though the tag remains the same. If the tag and digest
+already match the pin, Kix leaves the file untouched.
+
+## Review the committed change
+
+Inspect the pin before deploying it:
+
+<Command
+  commands={[
+    "git diff -- pins.json",
+    "kix pin list --pins-file pins.json",
+  ]}
+  cwd="kix-project/"
+/>
+
+Check the repository, human-readable tag, and resolved digest. A promotion
+should change the pin you intended and no other key.
+
+If your repository contains more than one pin file, continue passing
+`--pins-file` to each command so the target is explicit.
+
+## Verify the digest
+
+Check that the pinned digest is still available from the registry:
+
+<Command
+  commands={["kix pin check --key web --pins-file pins.json"]}
+  cwd="kix-project/"
+/>
+
+The check looks up the digest recorded in the file. If the tag now points to a
+different digest, Kix reports a warning, but the pinned digest remains the
+content Kubernetes will pull. A missing digest fails the check.
+
+Run the check for every pin by omitting `--key`:
+
+<Command commands={["kix pin check"]} cwd="kix-project/" />
+
+## Record and verify the source revision in CI
+
+When CI builds the image, record the source revision during promotion:
+
+<Command
+  commands={[
+    'kix pin set web --tag main --source-rev "$GITHUB_SHA" --promoted-by "ci:${GITHUB_RUN_ID}"',
+    'kix pin check --key web --source-rev "$GITHUB_SHA"',
+  ]}
+  cwd="kix-project/"
+/>
+
+The second command fails if the pin records a different source revision. This
+catches a workflow that built new source but did not update the pin.
+
+## Commit and deploy
+
+Commit the pin file before deploying so another checkout evaluates the same
+image reference:
+
+<Command
+  commands={[
+    "git add pins.json",
+    'git commit -m "Promote web image"',
+    "kix deploy production",
+  ]}
+  cwd="kix-project/"
+/>
+
+Use the cluster name that consumes this pin in the final command.
+
+## Promote with a known digest
+
+In an air-gapped workflow, pass a digest obtained by the image-transfer
+process:
+
+<Command
+  commands={[
+    "kix pin set web --tag 1.29-alpine --digest sha256:<64-hex-characters>",
+  ]}
+  cwd="kix-project/"
+/>
+
+Kix validates the digest's shape and records it without contacting a registry.
+
+:::tip[Create the pin first]
+Follow [Create a committed image pin file](/docs/how-to/promote-images/create-a-committed-image-pin-file/)
+if the project does not yet have a pin file or a `web` key.
+:::
+
+:::note[Reference]
+See [`kix pin`](/docs/reference/cli/pin/) for pin discovery, unresolved pins,
+registry credentials, and every command option.
+:::

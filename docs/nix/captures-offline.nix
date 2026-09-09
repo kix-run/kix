@@ -74,13 +74,15 @@ let
       ) offlineSteps;
     in
     ''
-      printf '→ workspace for %s\n' ${lib.escapeShellArg group.group}
-      workspace=$(mktemp -d -t kix-docs-offline-ws.XXXXXX)
-      ws_dirs+=("$workspace")
+      if [ -z "$group_filter" ] || [ "$group_filter" = ${lib.escapeShellArg group.group} ]; then
+        printf '→ workspace for %s\n' ${lib.escapeShellArg group.group}
+        workspace=$(mktemp -d -t kix-docs-offline-ws.XXXXXX)
+        ws_dirs+=("$workspace")
 
-      ${workspaceSetupShell group}
+        ${workspaceSetupShell group}
 
-      ${stepShellBlocks}
+        ${stepShellBlocks}
+      fi
     '';
 
   groupsWithOffline = builtins.filter (g: (g.offline or [ ]) != [ ]) manifest;
@@ -106,11 +108,20 @@ let
 
     apply=0
     check=0
+    group_filter=""
 
     while [ $# -gt 0 ]; do
       case "$1" in
         --apply) apply=1 ;;
         --check) check=1 ;;
+        --group)
+          shift
+          if [ $# -eq 0 ]; then
+            echo "--group requires a capture group name" >&2
+            exit 2
+          fi
+          group_filter="$1"
+          ;;
         -h|--help)
           cat <<USAGE
     regen-captures-offline — capture every `offline` step in
@@ -121,6 +132,7 @@ let
       nix run ./docs#regen-captures-offline
       nix run ./docs#regen-captures-offline -- --apply
       nix run ./docs#regen-captures-offline -- --check
+      nix run ./docs#regen-captures-offline -- --group how-to/application-health-check --apply
     USAGE
           exit 0
           ;;
@@ -155,6 +167,7 @@ let
     drift_view() {
       jq -S '{
         id, group, page, cwd, generator,
+        outputExcerpt: (.outputExcerpt // false),
         commands: (.commands | map({
           command, exitCode,
           stdoutDrift: (.stdoutDrift // ""),
@@ -177,6 +190,10 @@ let
       # error traces) that can't be cleanly redacted. --apply still
       # rewrites them — we just don't gate CI on their content.
       if [ "$(jq -r '.skipDriftCheck // false' "$sidecar")" = "true" ]; then
+        if [ "$apply" -eq 1 ]; then
+          printf 'REFRESH  %s (drift check skipped)\n' "$rel" >> "$diff_report"
+          changed=$((changed + 1))
+        fi
         continue
       fi
       fresh_view=$(drift_view "$sidecar")

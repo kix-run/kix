@@ -4,6 +4,7 @@
   "page": "/docs/tutorials/02-local-setup-and-first-run/",
   "cwd": "kix-examples/",
   "generator": "offline",
+  "outputExcerpt": false,
   "skipDriftCheck": false,
   "commands": [
     {

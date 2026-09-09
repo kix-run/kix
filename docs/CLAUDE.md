@@ -65,6 +65,9 @@ boundaries are the biggest places to slow down and teach deliberately.
   correctness matters. Declare both offline and live captures in
   `docs/nix/captures.nix`. Keep its steps grouped by docs page or example so
   it stays readable as the docs grow.
+- Run `npm run check:local-imports` after synchronizing generated snippets.
+  The standard dev app and site build run it automatically. Every static
+  `/src/...` import must resolve before Astro starts or builds.
 - Regenerate offline captures with
   `nix run ./docs#regen-captures-offline -- --apply`. Use these for commands
   that need no live Kubernetes API, including `check`, `build`, `graph`, and
@@ -283,11 +286,11 @@ leave the lesson, understand the model, and come back.
 
 ## Examples and Snippets
 
-The docs can render snippets extracted from `kix-examples` and this repository.
-Prefer that for code that should stay tested and tied to a real example or
-implementation.
+The docs can render snippets extracted from `.nix`, `.sh`, and `.py` files in
+`kix-examples` and this repository. Prefer that for code that should stay
+tested and tied to a real example or implementation.
 
-- Use `Snippet.astro` for substantial Nix examples.
+- Use `Snippet.astro` for substantial Nix, shell, and Python examples.
 - Prefer snippets for code that exists in `kix-examples`, `clusters/`,
   `kix/packages/`, or another tested source file. Keep inline fenced code for
   tiny hypothetical fragments or learner-created files only.
@@ -307,6 +310,69 @@ implementation.
 - In prose, explain why the snippet matters and what changes after using it.
 - Do not repeat long code blocks that already live in an example file.
 - If a file is mostly unchanged from a prior example, say so and link back.
+
+## How-to scenario workflow
+
+How-to guides are backed by a small set of reusable scenarios in the
+`kix-examples` repository. Do not create one cluster per page, and do not add
+unrelated features to one catch-all cluster. Extend the smallest coherent
+scenario that can exercise a group of related guides.
+
+- Check `docs/how-to-coverage.json` before starting a guide. It assigns every
+  page to a scenario family and records implemented pages, snippets, and
+  captures. Update the entry when the page is implemented.
+- Use `kix-examples/how-to/` for reusable how-to scenarios. Keep numbered
+  tutorials under `kix-examples/tutorials/`; how-to scenarios are not part of
+  that learning sequence.
+- Keep each scenario runnable in its checked-in state. Put temporary edits,
+  invalid values, drift, and intentional failures in capture `setup` or
+  `mutate` steps under `docs/nix/captures.nix`.
+- Use named source regions for substantial code. Region names describe the
+  concept (`healthCheckBuildEntry`, `reusedInstances`), not the page or line
+  number. The extractor supports `.nix`, `.sh`, and `.py` sources.
+- Add offline captures for important `check`, `build`, `graph`, `list`, and
+  intentional-validation output. Add live captures only when the guide teaches
+  Kubernetes behavior such as deployment, readiness, drift, rollback, or
+  ownership transitions.
+- Reader-facing commands must be commands a developer would reasonably run
+  to complete the task. Do not expose capture setup, fixture selection, or a
+  long `jq` projection as though it were part of the workflow.
+- Use `stdoutJq` only as capture-time plumbing when a command's full JSON
+  output would obscure the object being discussed. The generated sidecar
+  keeps the original command and labels the rendered result "Output excerpt".
+  Prefer the command's normal text output for introductory `diff`, `drift`,
+  `status`, and similar workflows. Show a `jq` pipeline only when JSON
+  processing is itself part of the reader's task, and keep it short.
+- Use `stdoutGrep` for a generated text excerpt when a command's stable,
+  actionable diagnostic would otherwise be buried in stack traces or other
+  incidental output. Match the diagnostic itself, not line positions. Matching
+  lines have their leading display padding removed. The capture fails if the
+  expression matches nothing, and the reader still sees the original command
+  with an "Output excerpt" label.
+- Regenerate one group while developing with `--group`, for example:
+
+  ```sh
+  nix run ./docs#regen-captures-offline \
+    --override-input kix-examples git+file:///path/to/kix-examples \
+    -- --group how-to/application-health-check --apply
+  ```
+
+- Develop both repositories together by overriding the docs input with the
+  local `kix-examples` checkout. Before finishing, commit the examples, update
+  `docs/flake.lock` to that reachable revision, regenerate captures, and build
+  without a local override. Do not leave committed docs dependent on an
+  unpublished examples revision.
+- Run `npm run check:how-to-coverage` from `docs/`. The site build runs the
+  same check and fails when a page is missing from the ledger or its status no
+  longer matches its content.
+
+Use this evidence order for examples:
+
+1. Extract substantial executable code from a tested scenario or package.
+2. Capture Kix output when its shape or behavior teaches part of the task.
+3. Keep small declarations and files the reader is actively creating inline.
+4. Render routine commands with `Command` without manufacturing unhelpful
+   output.
 
 ## Voice
 

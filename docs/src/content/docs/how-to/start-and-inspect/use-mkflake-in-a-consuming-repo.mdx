@@ -1,4 +1,83 @@
 ---
 title: "Use `mkFlake` in a consuming repo"
-description: TODO
+description: "Expose Kix clusters and package inputs from an infrastructure repository flake."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import mkFlakeOutputs from '/src/snippets/flake/mkFlakeOutputs.json';
+import listClusters from '/src/command-output/how-to/application-list/list-clusters.json';
+
+Use `kixpkgs.lib.mkFlake` in the repository that owns your cluster definitions.
+It exposes the cluster outputs that the Kix CLI discovers.
+
+## Add the flake inputs
+
+Create a `flake.nix` and declare nixpkgs and kixpkgs:
+
+```nix title="flake.nix"
+{
+  description = "Application infrastructure";
+
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    kixpkgs.url = "github:kix-run/kixpkgs";
+    kixpkgs.inputs.nixpkgs.follows = "nixpkgs";
+  };
+
+  outputs = inputs: inputs.kixpkgs.lib.mkFlake {
+    inherit inputs;
+    clusters.production = ./clusters/production.nix;
+  };
+}
+```
+
+Following the same nixpkgs input keeps package evaluation on one nixpkgs
+revision.
+
+## Register cluster files
+
+The examples repository registers each cluster by name:
+
+<Snippet {...mkFlakeOutputs} />
+
+Each value under `clusters` is a cluster function. Its attribute name becomes
+the CLI cluster name, while the file's `kix.buildCluster.name` becomes the
+cluster identity recorded in manifests and activations. Keep them the same
+unless you have a specific reason to expose a different CLI alias.
+
+For a single project, a compact registration is enough:
+
+```nix title="flake.nix"
+outputs = inputs: inputs.kixpkgs.lib.mkFlake {
+  inherit inputs;
+  clusters.application = ./cluster.nix;
+};
+```
+
+## Lock the inputs
+
+Create or update `flake.lock` after adding the inputs:
+
+<Command commands={["nix flake lock"]} cwd="infrastructure/" />
+
+Commit `flake.nix` and `flake.lock` together. Other machines and CI will then
+evaluate the same Kix and nixpkgs revisions.
+
+## Verify CLI discovery
+
+List the clusters exposed by the flake:
+
+<Command {...listClusters} />
+
+If the flake is not in the current directory, pass it explicitly:
+
+<Command commands={["kix list clusters --flake ./infrastructure"]} />
+
+You can now use the discovered names with `check`, `build`, `diff`, `deploy`,
+and the other cluster commands.
+
+:::note[Reference]
+See [`list`](/docs/reference/cli/list/) for the cluster and package discovery
+commands.
+:::

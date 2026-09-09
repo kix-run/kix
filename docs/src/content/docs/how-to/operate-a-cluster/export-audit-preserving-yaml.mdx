@@ -1,4 +1,69 @@
 ---
 title: "Export audit-preserving YAML"
-description: TODO
+description: "Export rendered manifests with Kix provenance annotations and deployment records intact."
 ---
+
+import Command from '/src/components/Command.astro';
+import auditExport from '/src/command-output/how-to/application-export-audit/export.json';
+
+Use the audit export mode when the exported manifests need to retain the Kix
+metadata that connects resources to packages, dependencies, and an
+activation. This export is intended as evidence or as input to an audit
+process.
+
+## Create the audit export
+
+Pass `--for audit` and choose an output directory:
+
+<Command {...auditExport} />
+
+Kix evaluates and builds the cluster locally. The export includes every
+rendered resource, including `Activation` and `PackageInstance` custom
+resources, and preserves its `kix.run/*` annotations.
+
+## Inspect the provenance metadata
+
+Search the exported files for Kix annotations:
+
+<Command
+  commands={[
+    "rg -n 'kix.run/(identity-hash|depends-on|package)' ./audit-export/",
+  ]}
+  cwd="kix-examples/"
+/>
+
+The annotations record resource identity, package membership, and dependency
+edges. The Activation resource provides the root of the rendered deployment
+graph.
+
+You can also inspect the internal records directly:
+
+<Command
+  commands={[
+    "find ./audit-export -name 'Activation-*.yaml' -o -name 'PackageInstance-*.yaml'",
+  ]}
+  cwd="kix-examples/"
+/>
+
+## Keep audit and handoff exports separate
+
+Do not use the audit export when another deployment system needs ordinary
+application manifests. Its internal custom resources and Kix annotations are
+part of the evidence being preserved.
+
+Use the default mode for that workflow:
+
+<Command
+  commands={["kix export how-to-application --out ./handoff"]}
+  cwd="kix-examples/"
+/>
+
+:::note[Use it in a task]
+See [Export plain YAML](/docs/how-to/operate-a-cluster/export-plain-yaml/) when
+you need manifests for handoff or application by another tool.
+:::
+
+:::note[Reference]
+See [`kix export`](/docs/reference/cli/export/) for the exact behavior of each
+export mode.
+:::

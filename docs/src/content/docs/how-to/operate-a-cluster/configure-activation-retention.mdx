@@ -1,4 +1,81 @@
 ---
 title: "Configure Activation retention"
-description: TODO
+description: "Choose how much rollback history Kix keeps when garbage collection runs."
 ---
+
+import Command from '/src/components/Command.astro';
+
+Activation retention is applied by `kix gc`. Choose a minimum history, a
+maximum history, and an age limit each time you run or schedule garbage
+collection.
+
+## Use the default policy
+
+The default invocation applies this policy to Superseded Activations:
+
+- always keep the 10 newest records;
+- never keep more than 50 records;
+- beyond the newest 10, retire records older than 30 days.
+
+Run garbage collection without retention flags to use those defaults:
+
+<Command commands={["kix gc production"]} cwd="kix-project/" />
+
+Kix prints the records it plans to retire and asks for confirmation before it
+deletes them.
+
+## Set a retention policy
+
+Use `--keep`, `--keep-max`, and `--keep-for` together when your policy differs
+from the defaults. This example always keeps the newest 20 records, retains no
+more than 100, and retires older records after 90 days once they are outside
+the protected newest 20:
+
+<Command
+  commands={[
+    "kix gc production --keep 20 --keep-max 100 --keep-for 90d",
+  ]}
+  cwd="kix-project/"
+/>
+
+The minimum wins if `--keep-max` is lower than `--keep`.
+
+`--keep-for` accepts days, hours, minutes, or seconds, such as `30d`, `12h`,
+`45m`, or `30s`. A bare number means days.
+
+## Keep records by count only
+
+Disable the age rule with `--keep-for off` or `--keep-for 0`:
+
+<Command
+  commands={[
+    "kix gc production --keep 10 --keep-max 50 --keep-for off",
+  ]}
+  cwd="kix-project/"
+/>
+
+Kix then keeps between 10 and 50 of the newest Superseded records, regardless
+of age.
+
+## Schedule the same policy
+
+Pass the complete policy in automation rather than relying on an operator's
+shell defaults:
+
+<Command
+  commands={[
+    "kix gc production --keep 20 --keep-max 100 --keep-for 90d --yes",
+  ]}
+  cwd="kix-project/"
+/>
+
+`--yes` skips the destructive confirmation, so use it only after reviewing the
+same policy and target cluster interactively.
+
+Retired Activations no longer appear as rollback targets. The next deployment
+removes their hashes from the activation history stored on managed resources.
+
+:::note[Use it in a task]
+See [Garbage-collect stale resources](/docs/how-to/operate-a-cluster/garbage-collect-stale-resources/)
+to choose between normal, hard-scan, and operator garbage collection.
+:::

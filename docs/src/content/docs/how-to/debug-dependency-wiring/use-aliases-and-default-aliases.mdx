@@ -1,4 +1,93 @@
 ---
 title: "Use aliases and default aliases"
-description: TODO
+description: "Make a package instance resolvable under a stable dependency name."
 ---
+
+import Command from '/src/components/Command.astro';
+
+Use an alias when a package should satisfy a dependency name that differs from
+its instance name. Put a reusable default on the package, or set an alias on
+one instance when the mapping belongs to a particular cluster.
+
+## Declare a package default alias
+
+Add `meta.defaultAliases` when every instance of a package provides the same
+kind of dependency. A persistent-volume package can advertise itself as
+`storage` even when cluster authors choose names such as `data` or `uploads`:
+
+```nix title="packages/persistent-volume/default.nix"
+{
+  meta = {
+    version = "1.0.0";
+    defaultAliases = [ "storage" ];
+  };
+
+  build = { ... }: {
+    # Package resources.
+  };
+}
+```
+
+A consumer declares the alias as its build argument:
+
+```nix title="packages/web/default.nix"
+build = { storage, ... }: {
+  dataMount = kix.mount.pvc storage { mountPath = "/data"; };
+  # Other package resources.
+};
+```
+
+The cluster can now give the provider a task-specific instance name:
+
+```nix title="cluster.nix"
+instances.apps.data = {
+  package = packages.persistent-volume;
+};
+```
+
+Kix indexes the instance under both `data` and `storage`.
+
+## Set aliases on one instance
+
+Use the instance's `aliases` field when the name applies only in this cluster:
+
+```nix title="cluster.nix"
+instances.apps.redis-primary = {
+  package = packages.valkey;
+  aliases = [ "cache" ];
+};
+```
+
+A package with a required `cache` build argument can now resolve this
+instance.
+
+A non-empty instance alias list replaces `meta.defaultAliases` for that
+instance. Include any package defaults you still need:
+
+```nix title="cluster.nix"
+aliases = [ "cache" "valkey" ];
+```
+
+Package roles remain available as aliases even when instance aliases replace
+the defaults.
+
+## Check for collisions
+
+Evaluate the cluster after adding an alias:
+
+<Command commands={["kix check production"]} />
+
+If more than one eligible instance has the requested name or alias, Kix
+reports an ambiguous dependency. Wire that consumer directly with
+`deps.<name> = ref.<namespace>.<instance>` instead of adding another alias.
+
+:::note[Explanation]
+See [Dependency resolution and why explicit deps matter](/docs/explanation/dependency-resolution-and-why-explicit-deps-matter/)
+for resolution order and ambiguity handling.
+:::
+
+:::note[Reference]
+See [`aliases`](/docs/reference/instance-schema/aliases/) and
+[`meta.defaultAliases`](/docs/reference/meta/defaultaliases/) for the exact
+schemas.
+:::

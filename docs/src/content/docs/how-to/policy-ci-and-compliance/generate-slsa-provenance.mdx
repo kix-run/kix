@@ -1,4 +1,55 @@
 ---
 title: "Generate SLSA provenance"
-description: TODO
+description: "Create an unsigned SLSA provenance statement for a rendered cluster."
 ---
+
+import Command from '/src/components/Command.astro';
+import provenance from '/src/command-output/how-to/policy-provenance/attest.json';
+
+Use `kix compliance attest` to describe the cluster build as an in-toto
+Statement with a SLSA v1 provenance predicate. The command evaluates the
+cluster locally and writes the unsigned statement to stdout.
+
+## Generate the statement
+
+In CI, identify the builder with the workflow URL and record the run ID:
+
+<Command
+  commands={[
+    "kix compliance attest production --builder-id \"$BUILD_URL\" --invocation-id \"$BUILD_ID\" > provenance.json",
+  ]}
+/>
+
+This captured excerpt uses fixed example identifiers so you can see the main
+fields:
+
+<Command expandable {...provenance} />
+
+The Activation identity hash is the statement's subject. The build definition
+also records the cluster name, flake reference, lock-file digest, Git source,
+locked flake inputs, and rendered container images.
+
+## Verify the statement
+
+Check the statement and predicate types before passing the file to a signing
+or evidence-upload step:
+
+<Command
+  commands={[
+    "jq -e '._type == \"https://in-toto.io/Statement/v1\" and .predicateType == \"https://slsa.dev/provenance/v1\"' provenance.json",
+  ]}
+/>
+
+If the working tree is dirty, Kix records that state and prints a warning. The
+statement remains an honest description of the build, but its Git commit does
+not contain every input that was evaluated.
+
+:::note[Use it in a task]
+See [Attest a deployment from its cluster receipt](/docs/how-to/policy-ci-and-compliance/attest-a-deployment-from-its-cluster-receipt/)
+when the evidence must describe what is already running.
+:::
+
+:::note[Explanation]
+See [Compliance evidence as build output](/docs/explanation/compliance-evidence-as-build-output/)
+for how Kix derives evidence from the same graph it deploys.
+:::

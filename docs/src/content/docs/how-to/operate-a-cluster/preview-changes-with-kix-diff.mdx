@@ -1,4 +1,79 @@
 ---
 title: "Preview changes with `kix diff`"
-description: TODO
+description: "Compare rendered manifests with live Kubernetes resources before deploying."
 ---
+
+import Command from '/src/components/Command.astro';
+
+Use `kix diff` to preview how the rendered cluster differs from the resources
+currently running in Kubernetes. The command reads live state but does not
+apply changes.
+
+## Compare desired and live resources
+
+Run `diff` after editing a cluster or package:
+
+<Command commands={["kix diff how-to-application"]} cwd="kix-examples/" />
+
+This example changes the production message. The text report shows the
+affected ConfigMap and the Deployment that consumes it.
+
+## Read the diff
+
+Use the resource headers to distinguish:
+
+- Resources that will be added or removed.
+- Existing resources whose fields changed.
+- Resources affected because one of their dependencies changed.
+- Bookkeeping resources associated with the next activation.
+
+Focus first on resources you intentionally edited. Then inspect dependent
+resources to understand the rollout Kix will plan. A non-empty diff exits with
+status 2, which lets CI distinguish a change from a clean comparison.
+
+## Select the flake and context
+
+By default, Kix evaluates the current directory and reads the current kubectl
+context. Set either input explicitly when needed:
+
+<Command
+  commands={[
+    "kix diff how-to-application --flake ./infrastructure --context kind-kix-demo",
+  ]}
+/>
+
+The flake supplies the desired manifests. The Kubernetes context supplies the
+live manifests being compared.
+
+## Produce review-friendly output
+
+Select Markdown output when attaching the result to a pull request or change
+review:
+
+<Command
+  commands={["kix diff how-to-application --output markdown > kix-diff.md"]}
+  cwd="kix-examples/"
+/>
+
+Use JSON when another program will process the result:
+
+<Command
+  commands={["kix diff how-to-application --output json > kix-diff.json"]}
+  cwd="kix-examples/"
+/>
+
+## Confirm a clean result
+
+After deploying the intended change, run the command again:
+
+<Command commands={["kix diff how-to-application"]} cwd="kix-examples/" />
+
+A clean result confirms that Kix does not currently plan another content
+change. Use the drift commands when you specifically need to compare field
+ownership and out-of-band changes.
+
+:::note[Related guides]
+See [Generate PR-review Markdown from `kix diff`](/docs/how-to/policy-ci-and-compliance/generate-pr-review-markdown-from-kix-diff/)
+for CI usage and [Reconcile drift](/docs/how-to/operate-a-cluster/reconcile-drift/)
+when live resources need to be reapplied.
+:::

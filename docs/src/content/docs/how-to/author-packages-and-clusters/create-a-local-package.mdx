@@ -1,4 +1,92 @@
 ---
 title: "Create a local package"
-description: TODO
+description: "Define a package beside your cluster, render its Kubernetes resources, and instantiate it from the cluster module."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import packageMetadata from '/src/snippets/how-to/application/web-package/packageMetadata.json';
+import contentConfigMap from '/src/snippets/how-to/application/web-package/contentConfigMap.json';
+import applicationDeployment from '/src/snippets/how-to/application/web-package/applicationDeployment.json';
+import applicationService from '/src/snippets/how-to/application/web-package/applicationService.json';
+import localPackageImport from '/src/snippets/how-to/application/cluster/localPackageImport.json';
+
+Use a local package when a workload belongs to your project rather than the
+shared package catalogue. A package groups its configuration interface and
+Kubernetes resources so the cluster can create one or more instances from it.
+
+This guide creates `web-package.nix` beside `cluster.nix`. The complete example
+is available in the
+[`how-to/application` scenario](https://github.com/kix-run/kix-examples/tree/main/how-to/application).
+
+## Create the package file
+
+Start with a function that accepts the helpers used by the package. Add package
+metadata to the returned attribute set:
+
+<Snippet {...packageMetadata} />
+
+The `version` identifies the package definition. Change it when you make a
+meaningful package release. The description appears in package inspection and
+generated reference material.
+
+## Add the package resources
+
+The package's `build` value creates named parts. This example begins with a
+ConfigMap containing the page nginx will serve:
+
+<Snippet {...contentConfigMap} />
+
+`scope.mkResource` adds the instance namespace, Kix metadata, and an `out`
+interface. Other parts should refer to `self.content.out.name` rather than
+repeating the eventual Kubernetes name.
+
+Add the Deployment:
+
+<Snippet {...applicationDeployment} />
+
+`scope.mkDeployment` fills in the standard workload metadata and validates the
+Deployment shape. The example also uses `scope.selectorLabels` so the workload
+and its Service agree on the Pod selector.
+
+Finish with a Service and select the package root:
+
+<Snippet {...applicationService} />
+
+The root is the resource that represents the instance to its consumers. A
+service-shaped package normally uses its Service as the root.
+
+## Import the package into the cluster
+
+Import the file before calling `kix.buildCluster`:
+
+<Snippet {...localPackageImport} />
+
+Assign the imported value to an instance just like a catalogue package:
+
+```nix title="cluster.nix"
+instances.apps.web = {
+  package = webPackage;
+};
+```
+
+Kix calls the package function for the instance and supplies `scope`, `lib`,
+and `kix`. You do not need to call the package function yourself.
+
+## Check the package
+
+Run the cluster checks after adding the package and instance:
+
+<Command commands={["kix check how-to-application"]} cwd="kix-examples/" />
+
+Then render the manifests and inspect the resources owned by the instance:
+
+<Command commands={["kix build how-to-application"]} cwd="kix-examples/" />
+
+The rendered cluster contains the ConfigMap, Deployment, and Service declared
+by the package, along with Kix's cluster bookkeeping resources.
+
+:::note[Next steps]
+Use [Add typed package options](/docs/how-to/author-packages-and-clusters/add-typed-package-options/)
+to give cluster authors a validated configuration interface.
+:::

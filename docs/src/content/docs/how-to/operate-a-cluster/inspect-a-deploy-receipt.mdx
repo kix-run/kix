@@ -1,4 +1,61 @@
 ---
 title: "Inspect a deploy receipt"
-description: TODO
+description: "Read the source, build environment, inputs, and images recorded by a Kix deployment."
 ---
+
+import Command from '/src/components/Command.astro';
+import activeReceipt from '/src/command-output/how-to/application-receipt/active-receipt.json';
+
+Every successful `kix deploy` writes a receipt to the active Activation's
+status. Read it when you need to establish what was deployed without access to
+the machine that performed the deployment.
+
+## Read the active receipt
+
+List the cluster's Activations. The captured output is the receipt from its
+active record:
+
+<Command expandable {...activeReceipt} />
+
+The label limits the result to Activations for one Kix cluster. In the full
+JSON response, find the item whose `status.phase` is `Active` and inspect its
+`status.receipt` object.
+
+If you are inspecting another Kubernetes context, add `--context` to the
+kubectl command.
+
+## Check the source and builder
+
+The receipt records these top-level fields:
+
+| Field | What to check |
+| --- | --- |
+| `cluster` | The Kix cluster name |
+| `activationHash` | The identity of the deployed Activation |
+| `deployedAt` | When the deployment completed |
+| `source` | Flake reference, Git revision, lock-file digest, and dirty-tree state when available |
+| `builder` | Kix version, Nix version, operating system, and architecture |
+| `inputs` | Locked flake input revisions and NAR hashes |
+| `images` | Sorted container image references found in the deployment |
+
+If `source.dirty` is `true`, the recorded Git commit does not contain the
+complete tree that was deployed. The `revision` field carries the corresponding
+dirty suffix.
+
+## Check the deployed images
+
+Use the receipt's `images` list when you are tracing a running workload back
+to its deployment. An image is recorded exactly as it appeared in the rendered manifests. A
+reference containing `@sha256:...` identifies immutable image content; a tag
+alone records only the tag requested by the deployment.
+
+:::note[Explanation]
+See [Deploy receipts and reproducible provenance](/docs/explanation/deploy-receipts-and-reproducible-provenance/)
+for why Kix stores provenance in Activation status without storing rendered
+manifests there.
+:::
+
+:::note[Reference]
+See [Deploy receipt schema](/docs/reference/annotations-and-crds/deploy-receipt-schema/)
+for the complete field definitions.
+:::

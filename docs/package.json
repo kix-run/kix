@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "astro dev",
     "build": "astro build",
+    "check:how-to-coverage": "node scripts/check-how-to-coverage.mjs",
+    "check:local-imports": "node scripts/check-local-imports.mjs",
     "preview": "astro preview",
     "astro": "astro"
   },

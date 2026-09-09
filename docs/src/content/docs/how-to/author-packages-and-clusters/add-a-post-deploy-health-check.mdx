@@ -5,8 +5,14 @@ description: "Run an end-to-end probe after a package becomes ready and fail the
 
 import Command from '/src/components/Command.astro';
 import Snippet from '/src/components/Snippet.astro';
-import healthCheckOptions from '/src/snippets/kix/packages/victoria-metrics-agent/default/healthCheckOptions.json';
-import healthCheckBuildEntry from '/src/snippets/kix/packages/victoria-metrics-agent/default/healthCheckBuildEntry.json';
+import healthCheckOption from '/src/snippets/how-to/application/web-package/healthCheckOption.json';
+import healthCheckScript from '/src/snippets/how-to/application/health-check/healthCheckScript.json';
+import healthCheckBuildEntry from '/src/snippets/how-to/application/web-package/healthCheckBuildEntry.json';
+import healthCheckConfig from '/src/snippets/how-to/application/cluster/healthCheckConfig.json';
+import checkHealthFixture from '/src/command-output/how-to/application-health-check/check.json';
+import buildHealthFixture from '/src/command-output/how-to/application-health-check/build.json';
+import deployHealthFixture from '/src/command-output/how-to/application-health-check/deploy.json';
+import failingHealthFixture from '/src/command-output/how-to/application-health-check/deploy-failing-probe.json';
 
 Use `kix.healthCheck` when Kubernetes readiness is necessary but not enough.
 For example, ready Pods do not prove that an application can reach its
@@ -23,9 +29,7 @@ This guide assumes your package already has a workload, a Service exposed as
 
 Expose the standard options in the package:
 
-```nix title="packages/web/default.nix"
-options.healthCheck = kix.options.healthCheck;
-```
+<Snippet {...healthCheckOption} />
 
 This gives cluster authors two settings:
 
@@ -34,10 +38,8 @@ This gives cluster authors two settings:
 | `healthCheck.enable` | `false` | Render and run the probe |
 | `healthCheck.retryFor` | `90` | Seconds the script may retry before failing |
 
-You can extend the option set when the probe needs package-specific values.
-The VictoriaMetrics agent adds a maximum sample age this way:
-
-<Snippet {...healthCheckOptions} />
+You can extend the option set with package-specific fields by merging another
+attribute set into `kix.options.healthCheck`.
 
 ## Write the probe script
 
@@ -45,27 +47,7 @@ Keep the script beside the package so it can be reviewed and tested on its
 own. This shell probe retries an HTTP endpoint for the period Kix supplies in
 `RETRY_FOR`:
 
-```sh title="packages/web/health-check.sh"
-#!/bin/sh
-set -u
-
-deadline=$(( $(date +%s) + RETRY_FOR ))
-
-while true; do
-  if curl --fail --silent --show-error --max-time 10 "$APP_URL" >/dev/null; then
-    echo "ok    GET $APP_URL"
-    exit 0
-  fi
-
-  echo "FAIL  GET $APP_URL"
-  if [ "$(date +%s)" -ge "$deadline" ]; then
-    echo "gave up after ${RETRY_FOR}s"
-    exit 1
-  fi
-
-  sleep 5
-done
-```
+<Snippet {...healthCheckScript} />
 
 Keep one pass through the checks below 90 seconds. Kix reserves that much time
 after the retry window so the Job can report its final failure before its
@@ -75,21 +57,7 @@ deadline expires.
 
 Append `kix.healthCheck` to the package's build list:
 
-```nix title="packages/web/default.nix"
-build = [
-  ({ self, config, scope, kix, ... }: {
-    # Existing workload, Service, and root...
-  })
-
-  (kix.healthCheck {
-    runtime = kix.healthCheck.runtimes.shell;
-    env = { self, ... }: {
-      APP_URL = self.service.out.url { };
-    };
-    script = builtins.readFile ./health-check.sh;
-  })
-];
-```
+<Snippet {...healthCheckBuildEntry} />
 
 The callback value `self.service.out.url { }` matters. It gives the Job both
 the address to call and the dependency information attached to that address.
@@ -98,10 +66,7 @@ egress when network policy is enabled.
 
 For a probe with several targets, add each target through `env`. The helper
 also provides `deps`, containing every dependency injected into any build
-entry in the package. This production example checks a service from a
-dependency and structural outputs from its own custom resource:
-
-<Snippet {...healthCheckBuildEntry} />
+entry in the package.
 
 Use `requires` only for resources the probe must wait for but does not address.
 The package root is always included automatically.
@@ -110,35 +75,29 @@ The package root is always included automatically.
 
 Enable it on an instance:
 
-```nix title="cluster.nix"
-instances.apps.web = {
-  package = packages.web;
-  config.healthCheck = {
-    enable = true;
-    retryFor = 60;
-  };
-};
-```
+<Snippet {...healthCheckConfig} />
 
 Check the rendered cluster before deploying:
 
-<Command commands={["kix check production"]} cwd="kix-project/" />
+<Command {...checkHealthFixture} />
 
 The output should include no health-check validation errors. Render the Job
 to confirm the helper is enabled:
 
-<Command
-  commands={["kix build production | yq 'select(.kind == \"Job\" and .metadata.name == \"web-health\")' "]}
-  cwd="kix-project/"
-/>
+<Command expandable {...buildHealthFixture} />
 
 Deploy the cluster:
 
-<Command commands={["kix deploy production"]} cwd="kix-project/" />
+<Command expandable {...deployHealthFixture} />
 
 The deployment does not become active until the Job succeeds. If the script
 exits non-zero, Kix reports the Job as failed and prints its final output below
 the failure.
+
+For example, a probe that reaches the application but rejects its response is
+reported with the final lines from the script:
+
+<Command {...failingHealthFixture} />
 
 The Job carries `kix.run/rerun: on-change`. A later deploy recreates it when
 its identity changes or its previous run failed. A deploy with no relevant

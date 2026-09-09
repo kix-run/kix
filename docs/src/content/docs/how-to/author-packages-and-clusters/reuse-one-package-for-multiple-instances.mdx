@@ -1,4 +1,79 @@
 ---
 title: "Reuse one package for multiple instances"
-description: TODO
+description: "Create independently configured instances from one local or catalogue package."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import reusedInstances from '/src/snippets/how-to/application/cluster/reusedInstances.json';
+import listPackages from '/src/command-output/how-to/application-reuse/list-packages.json';
+
+An instance is one configured use of a package. Reuse the same package value
+when you need several copies of a workload with different names, namespaces,
+or settings.
+
+## Define the instances
+
+Assign the same package to more than one entry under `instances`:
+
+<Snippet {...reusedInstances} />
+
+Kix evaluates the package separately for `preview` and `production`. Each
+evaluation receives its own:
+
+- `scope.instanceName` and namespace.
+- Evaluated `config` values.
+- `self` fixpoint containing that instance's resources.
+- Dependency bindings.
+
+The package can therefore name resources from `scope.instanceName` without
+the two instances colliding.
+
+## Override only what differs
+
+Defaults belong in the package options. Instance configuration should contain
+the values that differ for that deployment.
+
+In the example, `preview` uses the default replica count and leaves the health
+check disabled. `production` uses two replicas and enables its post-deploy
+probe. Both instances still share the package's image, resources, mounts, and
+resource construction.
+
+You can place instances in different namespaces as well:
+
+```nix title="cluster.nix"
+instances.preview.web = {
+  package = webPackage;
+  config.environment = "preview";
+};
+
+instances.production.web = {
+  package = webPackage;
+  config.environment = "production";
+};
+```
+
+Declare both namespaces under `namespaces` and wire any cross-namespace
+dependencies explicitly.
+
+## Inspect the instances
+
+List the packages in the example cluster:
+
+<Command {...listPackages} />
+
+Use `inspect` when you need the evaluated parts, dependencies, and outputs for
+the cluster's instances:
+
+<Command
+  commands={["kix inspect how-to-application"]}
+  cwd="kix-examples/"
+/>
+
+Changes to one instance's configuration affect that instance's rendered
+resources. They do not create a second copy of the package source.
+
+:::note[Next steps]
+Use [Wire cross-namespace dependencies explicitly](/docs/how-to/debug-dependency-wiring/wire-cross-namespace-dependencies-explicitly/)
+when reused instances consume services in another namespace.
+:::
