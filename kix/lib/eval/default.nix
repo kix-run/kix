@@ -6,7 +6,7 @@
 
 let
   rbac = import ../vocab/rbac.nix { inherit lib; };
-  kixlib = import ../vocab/compose.nix { inherit lib; };
+  kixlib = import ../vocab { inherit lib; };
   meta = import ../meta.nix { inherit lib; };
 
   scorecard = import ../scorecard.nix { inherit lib; };

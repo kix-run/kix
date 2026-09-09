@@ -18,6 +18,7 @@ pub mod logs;
 pub mod migrate;
 pub mod operator;
 pub mod pf;
+pub mod pin;
 pub mod rollback;
 pub mod snapshot;
 pub mod status;

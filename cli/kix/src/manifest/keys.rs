@@ -68,6 +68,14 @@ pub const SLSA_BUILDER_ID: &str = concat!("https://", domain!(), "/builder/local
 /// The SLSA build type Kix attests to.
 pub const SLSA_BUILD_TYPE: &str = concat!("https://", domain!(), "/build/v1");
 
+/// Schema identifier of the deploy receipt written into an Activation's
+/// status. Versioned because a reader six months from now has to know which
+/// shape it is holding.
+pub const RECEIPT_SCHEMA: &str = concat!(domain!(), "/receipt/v1");
+
+/// Field under an Activation's `status` that carries the deploy receipt.
+pub const RECEIPT_FIELD: &str = "receipt";
+
 /// `activations.<domain>`, the CRD name.
 pub const ACTIVATIONS_CRD: &str = concat!("activations.", domain!());
 
@@ -365,6 +373,13 @@ mod tests {
                     .to_string_lossy()
                     .to_string();
                 if allowed.iter().any(|a| rel.starts_with(a)) {
+                    continue;
+                }
+                // `nix build` leaves a `result` symlink into the store, and
+                // built manifests are full of Kix domains by design. Walking
+                // into one turns "somebody built a cluster" into a failing
+                // test with a confusing message.
+                if entry.file_type().is_ok_and(|t| t.is_symlink()) {
                     continue;
                 }
                 if path.is_dir() {

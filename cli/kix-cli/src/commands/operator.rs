@@ -73,6 +73,7 @@ pub async fn apply_activation(
     cluster_name: &str,
     source_path: &str,
     identity_hash: Option<&str>,
+    receipt: Option<&Value>,
 ) -> Result<()> {
     let api: Api<DynamicObject> = Api::all_with(client.clone(), ar);
 
@@ -115,6 +116,21 @@ pub async fn apply_activation(
     )
     .await
     .map_err(|e| miette!("failed to apply Activation CR: {e}"))?;
+
+    // The operator has no source tree, so it cannot compute provenance. The
+    // CLI that submitted this activation does, so it writes the receipt here.
+    // A merge patch on the status subresource leaves everything else alone,
+    // so it does not matter whether the operator has already started.
+    if let Some(receipt) = receipt {
+        let status = json!({ "status": { keys::RECEIPT_FIELD: receipt } });
+        api.patch_status(
+            activation_name,
+            &PatchParams::default(),
+            &Patch::Merge(&status),
+        )
+        .await
+        .map_err(|e| miette!("failed to record the deploy receipt: {e}"))?;
+    }
 
     Ok(())
 }

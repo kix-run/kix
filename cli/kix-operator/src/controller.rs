@@ -427,6 +427,10 @@ async fn run_reconcile(
             cluster_name: cluster.to_string(),
             activation_name: reconcile_act_name.map(str::to_string),
             activation_identity_hash: act_identity_hash.clone(),
+            // The operator reconciles a build somebody else made, from inside
+            // the cluster, with no source tree to read provenance from. The
+            // receipt the deploy wrote stays as it is.
+            receipt: None,
             // The operator runs unattended; surface conflicts in Activation
             // status rather than silently clobbering fields owned by other
             // controllers.

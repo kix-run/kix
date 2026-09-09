@@ -61,6 +61,10 @@ Complete inventory of kix/lib (Nix library) and CLI features. Breadth-first — 
 - **`mount.emptyDir`** — EmptyDir mount with optional medium, sizeLimit.
 - **`withMounts`** — Inject mounts into single-container pod spec (pre-seal). Errors on multi-container.
 - **`withMountsOn`** — Inject mounts into a specific container by name.
+- **`image.ref`** — Render a container image reference: `repository:tag`, plus `@digest` when the reference carries one. The tag is what a person reads; the digest is what the runtime pulls, and a tag can be moved after it is read.
+- **`image.isPinned`** — Whether a reference names a digest.
+- **`pins`** — Read a committed pin file: `kix.pins ./pins.json` returns `{ get, ref, keys, all }`. Normally the path is declared once as `mkFlake { pins = ./pins.json; ... }` and a cluster definition takes a `pins` argument instead of naming the file. `get "<key>"` shape-checks the pin and throws a message naming `kix pin set ... --init` when the key is absent, which is the state a fresh checkout hits. A pin holds `{ repository, tag, digest?, sourceRev?, promotedBy?, resolvedAt?, note? }`. JSON rather than Nix because reading a Nix file means evaluating it and writing one means hand-escaping registry strings into a programming language; the eval cache fingerprints `.json` alongside `.nix`, so nothing is lost. `note` is carried through untouched and stripped before the pin reaches the image option. Written by `kix pin` (`v2_discussions/138`).
+- **`options.image`** — Reusable NixOS option set for a package's image (repository, tag, digest, pullPolicy, and the promotion fields), so every package spells the digest slot the same way and `kix pin` always has somewhere to put a resolution.
 - **`options.ingress`** — Reusable NixOS option set for ingress (host, annotations).
 - **`options.monitor`** — Reusable NixOS option set for monitoring (enabled, interval).
 - **`expose`** — Build entry: auto-creates Ingress or HTTPRoute based on which DI dep is present (gateway vs ingressNginx). Auto-derives host from cluster.domain. TLS via clusterIssuer. Errors if both gateway and ingressNginx are wired.
@@ -122,6 +126,7 @@ Auto-derives CiliumNetworkPolicy from the DI graph:
 - `readOnlyRootfs` — Read-only root recommended (warning).
 - `noHostNetwork` — No hostNetwork/hostPID/hostIPC (error, CIS).
 - `noLatestTag` — No `:latest` or untagged images (warning).
+- `noUnresolvedPlaceholder` — Image references must not carry `REPLACE_ME`, `CHANGEME`, `PLACEHOLDER`, `TODO`, `FIXME`, `XXX` or an unexpanded `${...}` (warning; promote to error in a cluster that deploys something you care about). A ratchet, not the fix: a predicate over spelling cannot tell you `sha-typo12` is wrong. What closes the class is a resolved digest checked against a registry (`kix.pins` plus `kix pin check`). Its one job is to make the known placeholders unwriteable again (`v2_discussions/138`).
 - `hasNetworkPolicy` — Workload namespaces need at least one policy (warning).
 
 **Reliability:**
@@ -245,7 +250,8 @@ the CLI evaluates generically.
 ### Flake Generation (`mkFlake.nix`)
 
 - Auto-resolves cluster definitions (path → import → callPackage).
-- Auto-detects package args (kix, packages).
+- Auto-detects package args (kix, packages, pins).
+- `pins = ./pins.json;` names the flake's pin file once. A cluster that takes a `pins` argument gets it already loaded, so no cluster definition repeats the path; one that asks for it when the flake declares none gets an error naming the fix.
 - Generates: `packages.cluster-${name}`, `packages.cluster-${name}-activation`, `checks` (schema, validation, PI wiring), `legacyPackages` (kixClusters, kixPackages).
 
 ---
@@ -357,8 +363,34 @@ Save live cluster state to directory. Discovers all API resources, fetches all k
 #### `kix snapshot diff <CLUSTER> <DIR>`
 Diff snapshot against rendered manifests. Detects renames/moves via fuzzy similarity matching. Exit code 2 = differences.
 
+#### `kix pin set <KEY>` / `kix pin check` / `kix pin list`
+Resolve image references and record them in a committed pin file (`v2_discussions/138`). Needs no flake and evaluates no cluster.
+- `set <KEY> --tag <TAG>` — Ask the registry for the tag's manifest digest and write the pin. Refuses a tag the registry does not have.
+- `--repository <REPO>` — Required for a new pin; otherwise the existing repository is kept.
+- `--init` — Create the pin file, or add a key that is not in it yet. Without it an unknown key exits 1.
+- `--no-resolve` / `--digest <D>` — Write a pin with no digest, or with one you already have. Both warn or validate rather than guess.
+- `--source-rev <REV>` / `--promoted-by <WHO>` — What the image was built from, and who promoted it. `promoted-by` defaults to the CI run, or to user@host.
+- `--force` — Rewrite a pin file `kix pin` did not write, discarding its comments.
+- `check` — Verify every recorded digest is still in its registry, **by digest rather than by tag**. A moved or deleted tag whose digest still runs is a warning; a missing digest is a failure. Exit code 1 on any failure.
+- `check --source-rev <REV>` — Fail unless every pin that records a source revision records this one. Catches a promotion step that silently did not run, which is otherwise invisible: the deploy succeeds, every rule passes, and the cluster runs old code.
+- `check --offline` / `--allow-unresolved` — Shape only, no registry; and treat a missing digest as a warning.
+- `list` — Show what a pin file holds.
+- `--pins-file <PATH>` — Optional. Kix looks in the working directory, then next to `--flake`, then for the only pin file in the repository, and refuses with a list when there is more than one. The flake cannot declare the path, because a path literal in a flake is a store path, and reading it back would make a command that needs neither Nix nor a flake depend on both.
+
+Credentials come from `KIX_REGISTRY_USERNAME`/`KIX_REGISTRY_PASSWORD`, then `credHelpers`, then `credsStore`, then a literal `auths` entry in the Docker config. Anonymous access is a valid outcome.
+
 #### `kix completions <SHELL>`
 Generate shell completions (bash, zsh, fish).
+
+### Deploy Receipt (Activation `status`)
+
+Every `kix deploy` writes what it deployed into the Activation's `status.receipt` (`v2_discussions/138` §5.2). Status rather than spec, because the status subresource is untouched by an apply of the main resource, so a later rollback cannot erase it, and because a receipt is an observation rather than an intent.
+
+The receipt holds the schema id, cluster name, activation identity hash, deploy time, the source (flake ref, git commit, **whether the tree was dirty**, `flake.lock` digest), the builder (kix and Nix versions, arch, os), every flake input's rev and narHash, and every container image the build renders. Superseded activations keep their own receipts, so the cluster carries a per-deploy history of what ran.
+
+Not in the receipt: the manifests. Built manifests carry secret values inline, so storing them would make every deploy record a readable credential archive.
+
+`kix compliance attest --from-cluster` reads a receipt and emits the SLSA statement from it, so a deploy can be attested from a machine that never built it. A dirty tree is stated on the statement rather than left to be inferred.
 
 ### Manifest Stamping (Annotations & Labels)
 

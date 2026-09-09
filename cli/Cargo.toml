@@ -51,6 +51,18 @@ bytes = "1"
 hyper-util = { version = "0.1", features = ["client-legacy"] }
 rand = "0.8"
 
+# Container registry client (`kix pin`). rustls rather than the platform TLS
+# stack, so a static kix binary behaves the same everywhere; no default
+# features, so this does not drag in a second TLS implementation alongside
+# the one kube already uses.
+reqwest = { version = "0.12", default-features = false, features = [
+  "rustls-tls-native-roots",
+  "json",
+  "charset",
+  "http2",
+] }
+base64 = "0.22"
+
 # Async
 tokio = { version = "1", features = ["full"] }
 tokio-util = "0.7"

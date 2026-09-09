@@ -6,10 +6,15 @@
 //! - `attest` — SLSA v1 provenance (in-toto statement)
 //! - `audit`  — bundle: SARIF + SBOM + SLSA + OSCAL assessment + markdown summary
 //!
+//! The provenance those subcommands print is the same provenance a deploy
+//! writes into the Activation record ([`receipt`]), so `attest --from-cluster`
+//! reads a deploy that happened rather than recomputing one that would.
+//!
 //! See `v2_discussions/61_compliance_exports.md`.
 
 pub mod attest;
 pub mod audit;
+pub mod receipt;
 pub mod sbom;
 pub mod shared;
 

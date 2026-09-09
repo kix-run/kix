@@ -7,7 +7,7 @@ let
   fragments = import ./vocab/fragments.nix { inherit lib; };
   helm = import ./helm.nix { inherit pkgs lib; };
   rbac = import ./vocab/rbac.nix { inherit lib; };
-  kixlib = import ./vocab/compose.nix { inherit lib; };
+  kixlib = import ./vocab { inherit lib; };
   meta = import ./meta.nix { inherit lib; };
   scorecard = import ./scorecard.nix { inherit lib; };
   rules = import ./rules { inherit lib; };
@@ -54,6 +54,12 @@ in
   inherit rbac;
 
   inherit kixlib;
+
+  # Read at cluster level, where `kix.pins ./pins.json` and `kix.image.ref`
+  # are the two calls a cluster definition makes. They live in `kixlib`
+  # because packages need them too; they are re-exported here so a cluster
+  # file does not have to know that.
+  inherit (kixlib) pins image;
 
   inherit (meta) peekPackageMeta;
 

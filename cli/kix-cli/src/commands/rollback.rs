@@ -502,6 +502,11 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
             cluster_name,
             activation_name: activation_name.clone(),
             activation_identity_hash: activation_identity_hash.clone(),
+            // A rollback re-applies a build from an earlier deploy, and that
+            // deploy wrote its own receipt. Writing a fresh one here would
+            // record the machine running the rollback as the provenance of a
+            // build it did not make.
+            receipt: None,
             // Rollback re-applies a known-good prior activation; conflicts
             // fail loudly rather than silently overwriting whatever the
             // cluster has.
@@ -701,6 +706,9 @@ async fn run_operator_async(args: &RollbackArgs, ctx: &CommandContext) -> Result
         &args.cluster,
         &target_source_path,
         target_hash.as_deref(),
+        // A rollback re-applies a build from an earlier deploy, which wrote
+        // its own receipt. See the non-operator path in this file.
+        None,
     )
     .await?;
 

@@ -78,25 +78,68 @@ pub fn now_rfc3339() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
-/// Try to resolve a short git commit SHA at the given flake path. Returns
-/// `None` if the directory is not a git checkout or `git` is unavailable.
-pub fn git_commit(flake_path: &Path) -> Option<String> {
+/// Where the source stood when this ran: the commit, and whether the working
+/// tree matched it.
+///
+/// The second half is the part that was missing, and it mattered. Recording
+/// `git rev-parse HEAD` alone says "this deploy came from commit X" even when
+/// the tree that was built has uncommitted changes, which is exactly the
+/// state CI used to deploy production from. An attestation that names a
+/// commit not containing the deployed content is worse than no attestation,
+/// because it will be believed.
+///
+/// Nix takes the same position and states it more strongly: a flake with a
+/// dirty worktree gets no revision at all. Kix records the revision and the
+/// dirty flag, and spells the combination the way Nix does, `<rev>-dirty`, so
+/// the two agree when someone compares them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitState {
+    /// The commit HEAD points at.
+    pub rev: String,
+    /// Whether the working tree differs from that commit, including
+    /// untracked files.
+    pub dirty: bool,
+}
+
+impl GitState {
+    /// Nix's spelling: the revision, plus `-dirty` when the tree has changes.
+    pub fn dirty_rev(&self) -> String {
+        if self.dirty {
+            format!("{}-dirty", self.rev)
+        } else {
+            self.rev.clone()
+        }
+    }
+}
+
+/// Read the git state at the given path. `None` when the directory is not a
+/// git checkout or `git` is unavailable.
+pub fn git_state(flake_path: &Path) -> Option<GitState> {
+    let rev = run_git(flake_path, &["rev-parse", "HEAD"])?;
+    if rev.is_empty() {
+        return None;
+    }
+    // `--porcelain` lists modified, staged and untracked files. Untracked
+    // counts: our own CI staged an edit precisely so Nix would pick it up, so
+    // "staged but not committed" is the case this has to catch.
+    let status = run_git(flake_path, &["status", "--porcelain"])?;
+    Some(GitState {
+        rev,
+        dirty: !status.is_empty(),
+    })
+}
+
+fn run_git(path: &Path, args: &[&str]) -> Option<String> {
     let out = std::process::Command::new("git")
         .arg("-C")
-        .arg(flake_path)
-        .args(["rev-parse", "HEAD"])
+        .arg(path)
+        .args(args)
         .output()
         .ok()?;
     if !out.status.success() {
         return None;
     }
-    let s = String::from_utf8(out.stdout).ok()?;
-    let t = s.trim();
-    if t.is_empty() {
-        None
-    } else {
-        Some(t.to_string())
-    }
+    Some(String::from_utf8(out.stdout).ok()?.trim().to_string())
 }
 
 /// Try to resolve the nix version string. `None` if `nix` is unavailable.

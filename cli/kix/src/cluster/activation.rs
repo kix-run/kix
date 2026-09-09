@@ -139,6 +139,10 @@ pub async fn find_active(
 ///    behavior) leaves an orphaned Activation that nothing can find.
 /// 5. Add kix.run/cluster label for filtering (also stamped at build time
 ///    via `mkActivation`, but re-asserted here for older CRs).
+/// 6. Write the deploy receipt into status, when the caller computed one.
+///    Status rather than spec on purpose: the status subresource is untouched
+///    by an apply of the main resource, so a later rollback that re-applies
+///    this Activation cannot erase the record of what happened.
 pub async fn finalize_deploy(
     client: &Client,
     ar: &ApiResource,
@@ -146,6 +150,7 @@ pub async fn finalize_deploy(
     new_activation_name: &str,
     old_activation: Option<&ActiveActivation>,
     had_failures: bool,
+    receipt: Option<&Value>,
 ) -> Result<(), ActivationError> {
     let api: Api<DynamicObject> = Api::all_with(client.clone(), ar);
     let now = chrono::Utc::now().to_rfc3339();
@@ -198,6 +203,9 @@ pub async fn finalize_deploy(
     if let Some(old) = old_activation {
         status.insert("previousActivation".to_string(), json!(old.name));
     }
+    if let Some(receipt) = receipt {
+        status.insert(keys::RECEIPT_FIELD.to_string(), receipt.clone());
+    }
 
     let status_patch = json!({ "status": status });
     api.patch_status(
@@ -214,6 +222,39 @@ pub async fn finalize_deploy(
     tracing::info!(activation = %new_activation_name, phase = new_phase, "finalized");
 
     Ok(())
+}
+
+/// Read the deploy receipt off a cluster's active Activation.
+///
+/// This is the read half of the record. A deploy writes provenance into the
+/// Activation's status subresource; this reads it back, so a question like
+/// "what is running here and where did it come from" can be answered by
+/// anyone who can reach the cluster, without the machine that built it and
+/// without a rebuild.
+///
+/// `Ok(None)` means the cluster has an active Activation that predates
+/// receipts, which is a different answer from "no such cluster" and is
+/// reported as such.
+pub async fn read_receipt(
+    client: &Client,
+    ar: &ApiResource,
+    cluster_name: &str,
+) -> Result<Option<Value>, ActivationError> {
+    let Some(active) = find_active(client, ar, cluster_name).await? else {
+        return Ok(None);
+    };
+    let api: Api<DynamicObject> = Api::all_with(client.clone(), ar);
+    let full = api
+        .get(&active.name)
+        .await
+        .map_err(|e| ActivationError::PatchFailed {
+            name: active.name.clone(),
+            source: e,
+        })?;
+    Ok(full
+        .data
+        .pointer(&format!("/status/{}", keys::RECEIPT_FIELD))
+        .cloned())
 }
 
 /// List all Superseded activations for a cluster.

@@ -67,6 +67,13 @@ fn main() -> miette::Result<()> {
         return commands::completions::run(args, &cli.global);
     }
 
+    // `kix pin` reads and writes a file. It takes no flake and evaluates no
+    // cluster on purpose: the state in which a pin most needs fixing is the
+    // state in which evaluation is unhappy about it.
+    if let Command::Pin(command) = &cli.command {
+        return commands::pin::run(command, &cli.global);
+    }
+
     // Drift is cluster-only by design (doc 122): no flake, no Nix backend —
     // it must work from a bare kubeconfig outside any kix repo.
     if let Command::Drift(args) = &cli.command {
@@ -101,6 +108,6 @@ fn main() -> miette::Result<()> {
         Command::Images(args) => commands::images::run(args, &mut ctx),
         Command::Snapshot(args) => commands::snapshot::run(args, &mut ctx),
         Command::Compliance(args) => commands::compliance::run(args, &mut ctx),
-        Command::Completions(_) | Command::Drift(_) => unreachable!(),
+        Command::Completions(_) | Command::Drift(_) | Command::Pin(_) => unreachable!(),
     }
 }

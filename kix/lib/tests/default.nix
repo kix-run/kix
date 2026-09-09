@@ -33,7 +33,7 @@ let
   kixKeys = kixAnnotations.keys;
   k8s = import ../core { inherit lib; };
   eval = import ../eval { inherit lib k8s; };
-  kixlib = import ../vocab/compose.nix { inherit lib; };
+  kixlib = import ../vocab { inherit lib; };
 
   # ---------------------------------------------------------------- fixtures
 
@@ -2585,6 +2585,110 @@ let
       builtins.seq (manifests cluster) (
         findings == [ ] || throw "security findings on the probe Job: ${builtins.toJSON findings}"
       );
+
+    # kix.image.ref renders the digest when there is one and omits it when
+    # there is not, so an unresolved pin stays deployable and an unresolved
+    # reference is visibly different from a resolved one.
+    t70-image-ref-renders-digest =
+      let
+        pinned = kixlib.image.ref {
+          repository = "reg.example/app";
+          tag = "v1";
+          digest = "sha256:${lib.concatStrings (lib.genList (_: "ab") 32)}";
+        };
+        loose = kixlib.image.ref {
+          repository = "reg.example/app";
+          tag = "v1";
+        };
+      in
+      (
+        pinned == "reg.example/app:v1@sha256:${lib.concatStrings (lib.genList (_: "ab") 32)}"
+        && loose == "reg.example/app:v1"
+        && kixlib.image.isPinned {
+          repository = "r";
+          tag = "t";
+          digest = "d";
+        }
+        && !(kixlib.image.isPinned {
+          repository = "r";
+          tag = "t";
+        })
+      )
+      || throw "image.ref wrong: pinned=${pinned} loose=${loose}";
+
+    # kix.pins refuses a malformed pin at evaluation, and its refusals name a
+    # command the reader can run. A missing key is the case that matters: it
+    # is what a fresh checkout hits.
+    t71-pins-refuse-with-a-remedy =
+      let
+        pins = kixlib.pins {
+          web = {
+            repository = "reg.example/web";
+            tag = "v1";
+          };
+          noTag.repository = "reg.example/x";
+          badDigest = {
+            repository = "reg.example/x";
+            tag = "v1";
+            digest = "sha256:nothex";
+          };
+          unknownField = {
+            repository = "reg.example/x";
+            tag = "v1";
+            colour = "blue";
+          };
+        };
+        msgOf = expr: (builtins.tryEval expr).success;
+        missingMsg = builtins.tryEval (pins.get "absent");
+      in
+      (
+        pins.ref "web" == "reg.example/web:v1"
+        && !(msgOf (builtins.deepSeq (pins.get "absent") null))
+        && !(msgOf (builtins.deepSeq (pins.get "noTag") null))
+        && !(msgOf (builtins.deepSeq (pins.get "badDigest") null))
+        && !(msgOf (builtins.deepSeq (pins.get "unknownField") null))
+        && !missingMsg.success
+      )
+      || throw "pins accepted something it should have refused";
+
+    # The placeholder ratchet fires on the spellings that have actually
+    # shipped, and stays quiet on an ordinary sha tag. `sha-REPLACE_ME` is the
+    # case this exists for: it passes noLatestTag and every other check.
+    t72-placeholder-ratchet =
+      let
+        rule = (import ../rules/security.nix { inherit lib; }).noUnresolvedPlaceholder;
+        judge =
+          img:
+          rule.check {
+            resource = {
+              kind = "Deployment";
+              spec.template.spec.containers = [
+                {
+                  name = "c";
+                  image = img;
+                }
+              ];
+            };
+          };
+        caught = [
+          "reg/app:sha-REPLACE_ME"
+          "reg/app:CHANGEME"
+          "reg/app:v1-PLACEHOLDER"
+          "reg/app:\${IMAGE_TAG}"
+        ];
+        clean = [
+          "reg/app:sha-0e8423e"
+          "reg/app:v1.2.3"
+          "reg/app:v1@sha256:${lib.concatStrings (lib.genList (_: "ab") 32)}"
+        ];
+      in
+      (
+        builtins.all (i: judge i != [ ]) caught
+        && builtins.all (i: judge i == [ ]) clean
+        # It only applies to workloads, like every other manifest rule here.
+        && !(rule.appliesTo { resource.kind = "ConfigMap"; })
+      )
+      || throw "placeholder ratchet misjudged: caught=${builtins.toJSON (map judge caught)} clean=${builtins.toJSON (map judge clean)}";
   }
   // import ./validate.nix {
     inherit

@@ -17,6 +17,11 @@
     inputs:
     inputs.kix.lib.mkFlake {
       inherit inputs;
+
+      # Declared once. A cluster that takes a `pins` argument gets this file
+      # already loaded, so no cluster definition names the path.
+      pins = ./pins.json;
+
       clusters = {
         minimal = ./test-minimal.nix;
         example = ./example.nix;
@@ -31,6 +36,7 @@
         test-secrets = ./test-secrets.nix;
         victoria-metrics = ./test-victoria-metrics.nix;
         kind-probe = ./test-kind-probe.nix;
+        pins = ./test-pins.nix;
         satchel-dev = ./satchel/dev.nix;
         satchel-prod = ./satchel/prod.nix;
       };

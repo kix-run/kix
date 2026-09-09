@@ -62,6 +62,10 @@ pub struct KubeOpsConfig {
     /// Identity hash of the Activation, stamped into `kix.run/activations`.
     pub activation_identity_hash: Option<String>,
     /// Take ownership of fields another manager owns.
+    /// Provenance to record on the Activation when the deploy finishes. The
+    /// CLI computes it; the operator does not, because it never had a source
+    /// tree to compute it from.
+    pub receipt: Option<serde_json::Value>,
     pub force_conflicts: bool,
     /// Apiserver dry run: SSA and DELETE go with `dryRun=All`; nothing is
     /// written to the Activation.
@@ -516,6 +520,7 @@ impl ClusterOps for KubeOps {
                 name,
                 old.as_ref(),
                 had_failures,
+                self.cfg.receipt.as_ref(),
             )
             .await
             .map(|()| Finalized {

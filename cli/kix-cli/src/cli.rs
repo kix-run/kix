@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use clap::{Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
 
@@ -139,6 +141,10 @@ pub enum Command {
 
     /// Compliance exports: SBOM, SLSA attestations, audit bundles
     Compliance(ComplianceArgs),
+
+    /// Resolve image references and record them in a committed pin file
+    #[command(subcommand)]
+    Pin(PinCommand),
 }
 
 impl Command {
@@ -169,9 +175,125 @@ impl Command {
                 ComplianceCommand::Attest(s) => Some(&s.cluster),
                 ComplianceCommand::Audit(s) => Some(&s.cluster),
             },
-            Command::Snapshot(_) | Command::Completions(_) | Command::Drift(_) => None,
+            Command::Snapshot(_)
+            | Command::Completions(_)
+            | Command::Drift(_)
+            | Command::Pin(_) => None,
         }
     }
+}
+
+/// `kix pin` — the promotion verb.
+///
+/// A cluster definition that decides an image reference at deploy time has no
+/// committed answer to "what is running", and a clean checkout of it renders
+/// something nobody meant to deploy. `kix pin` writes that decision down: it
+/// asks the registry what a tag resolves to, refuses a tag that does not
+/// exist, and records the digest in a pin file next to the cluster.
+///
+/// It deliberately needs no cluster evaluation and no flake. The state in
+/// which you most need to run it is the state in which evaluation is
+/// unhappy, so it takes a file path and nothing else.
+#[derive(Subcommand)]
+pub enum PinCommand {
+    /// Resolve a tag and write it into the pin file
+    Set(PinSetArgs),
+
+    /// Verify every pin still resolves, by digest
+    Check(PinCheckArgs),
+
+    /// Show what a pin file holds
+    List(PinListArgs),
+}
+
+#[derive(clap::Args)]
+pub struct PinSetArgs {
+    /// Pin name, as the cluster definition reads it: `pins.get "<key>"`
+    pub key: String,
+
+    /// Tag to promote to. Kept in the file because it is what a human reads.
+    #[arg(long)]
+    pub tag: Option<String>,
+
+    /// Repository including the registry host. Required for a new pin;
+    /// otherwise the existing repository is kept.
+    #[arg(long)]
+    pub repository: Option<String>,
+
+    /// Record this digest instead of asking the registry. For an air-gapped
+    /// promotion where the digest is already known.
+    #[arg(long, conflicts_with = "no_resolve")]
+    pub digest: Option<String>,
+
+    /// Write the pin without a digest. Honest, and weaker: nothing then
+    /// verifies that the tag exists, now or later.
+    #[arg(long)]
+    pub no_resolve: bool,
+
+    /// Revision of the source this image was built from. `kix pin check
+    /// --source-rev` later asserts the promotion actually ran.
+    #[arg(long)]
+    pub source_rev: Option<String>,
+
+    /// Who promoted it. Defaults to the CI run, or to user@host.
+    #[arg(long)]
+    pub promoted_by: Option<String>,
+
+    /// A note about this entry, kept for whoever reads the file later. Kix
+    /// never reads it and a promotion never discards it. Pass an empty
+    /// string to clear one.
+    #[arg(long)]
+    pub note: Option<String>,
+
+    /// Create the pin file, or add a pin that is not in it yet.
+    #[arg(long)]
+    pub init: bool,
+
+    /// Rewrite a pin file that `kix pin` did not write, discarding its
+    /// comments and layout.
+    #[arg(long)]
+    pub force: bool,
+
+    /// Path to the pin file. Found rather than required: Kix looks in the
+    /// working directory, then next to the flake, then for the only
+    /// `*pins.json` in the repository.
+    #[arg(long)]
+    pub pins_file: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub struct PinCheckArgs {
+    /// Check only these pins. Repeatable. Default: all of them.
+    #[arg(long = "key")]
+    pub keys: Vec<String>,
+
+    /// Fail unless every pin that records a source revision records this one.
+    /// This is what catches a promotion step that silently did not run.
+    #[arg(long)]
+    pub source_rev: Option<String>,
+
+    /// Treat a pin with no digest as a warning rather than a failure.
+    #[arg(long)]
+    pub allow_unresolved: bool,
+
+    /// Check the file's shape without contacting any registry.
+    #[arg(long)]
+    pub offline: bool,
+
+    /// Path to the pin file. Found rather than required: Kix looks in the
+    /// working directory, then next to the flake, then for the only
+    /// `*pins.json` in the repository.
+    #[arg(long)]
+    pub pins_file: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub struct PinListArgs {
+    /// Path to the pin file. Found rather than required: Kix looks in the
+    /// working directory, then next to the flake, then for the only
+    /// `*pins.json` in the repository.
+    #[arg(long)]
+    pub pins_file: Option<PathBuf>,
 }
 
 #[derive(clap::Args)]
@@ -210,6 +332,12 @@ pub struct ComplianceAttestArgs {
     /// Invocation ID (e.g. CI run ID)
     #[arg(long)]
     pub invocation_id: Option<String>,
+
+    /// Read the deploy receipt off the cluster's active Activation instead of
+    /// building. This attests what is deployed rather than what would be, and
+    /// works from a machine that has never built this cluster.
+    #[arg(long)]
+    pub from_cluster: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]

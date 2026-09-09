@@ -558,6 +558,63 @@ scheduler; each node becomes eligible the moment its predecessors emit
 When something looks like "wait N seconds and hope" — design the structured
 verdict instead.
 
+### 9.4 A value that varies per deploy is committed, not injected
+
+Something outside the compilation unit sometimes decides an input to it. A CI
+build finishes and produces an image tag. A person decides that this build is
+the one that goes to production. Kix has one channel for such a value, and it
+is the same channel as every other value: the definition, in the repository.
+
+There is no `--set`, no `--values` and no `--var`, and adding one would not
+work even if we wanted it. Change detection indexes the previous build's
+manifests by Kubernetes identity and seals those hashes before the CLI could
+patch anything, so a value injected after evaluation never reaches the
+comparison and the second deploy is a silent no-op. It would also make
+`kix compliance attest` emit a well-formed false statement, and a false
+attestation is worse than no attestation.
+
+So the value is written down first and deployed second:
+
+```nix
+# flake.nix names the pin file once
+inputs.kix.lib.mkFlake { inherit inputs; pins = ./pins.json; clusters = { ... }; }
+
+# and no cluster definition repeats the path
+{ kix, pins, ... }:
+{
+  instances.app.web.config.image = pins.get "web";
+}
+```
+
+`kix pin set web --tag v1.2.3` asks the registry what that tag resolves to,
+refuses a tag that is not there, and rewrites `pins.json` with the repository,
+the tag and the digest. Promotion is then an ordinary commit, which means the
+repository can always answer what is deployed, a clean checkout deploys
+something real, and both a person and a CI job promote the same way.
+
+Three properties are worth stating because they are easy to lose:
+
+- **Record the digest, not only the tag.** A tag can be moved after it is
+  read. Every serious tool in this space landed on the same answer: Flux
+  rewrites the file with a commit, Kargo promotes an immutable object naming
+  resolved digests, and Argo CD's own Image Updater documentation warns that
+  its cluster-only write-back is lost when the Application is recreated.
+- **JSON, not Nix.** Reading a Nix file means evaluating it, so a pin file in
+  Nix executes whatever it contains when Kix reads it, and writing one means
+  hand-escaping registry-supplied strings into a programming language. Neither
+  belongs in a file a bot rewrites every build. The evaluation cache
+  fingerprints `.json` alongside `.nix`, so nothing is lost by it.
+- **Give the tag a stream, not a build.** `main`, not `sha-<commit>`. A tag
+  that moves per build leaves the file no stable key and pushes CI into
+  editing the cluster definition, which is what a pin file exists to prevent.
+- **Build, promote and deploy in one job.** The digest is an output of the
+  build, so the deploy depends on it. Two workflows joined by a commit turn
+  that dependency into a trigger, and triggers form cycles. One job, with the
+  image build conditional on the source having changed, converges instead.
+- **Kix never resolves a tag at apply time.** A `digest: null` that tells the
+  truth is worth more than a value fetched over the network during a deploy,
+  which nobody could review before it was applied.
+
 ## 10. AI as multiplier on typed surfaces
 
 Agents compound on validated APIs and structured diagnostics; they hallucinate
@@ -712,6 +769,26 @@ step that re-discovers what kix already knows.
 
 If a comment explains a non-obvious gotcha, the gotcha probably wants to be a
 build-time error. Investigate before settling for a comment.
+
+### 12.11 A committed placeholder
+
+```nix
+# Wrong: CI edits this in a working tree at deploy time and never commits it
+serverImage.tag = "sha-REPLACE_ME";
+```
+
+This is the worst shape a wrong value can take, because everything passes.
+`sha-REPLACE_ME` is a valid tag string, so the build succeeds, `noLatestTag`
+is satisfied, `kix check` is clean and `kix deploy --dry-run` reports
+"configured". The first signal is ImagePullBackOff, in production, minutes
+later. Every route that does not go through the CI job that edits the tree,
+which is to say every person, every agent and every runbook, deploys a
+reference that does not exist.
+
+`security.noUnresolvedPlaceholder` catches the known spellings, and it is a
+ratchet rather than a fix: a predicate over spelling cannot tell you that
+`sha-typo12` is wrong. What closes the class is §9.4, a resolved digest in a
+committed pin file, checked against a registry by `kix pin check`.
 
 ## 13. When to update what
 

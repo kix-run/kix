@@ -38,6 +38,8 @@ and [`FEATURE-CATALOG.md`](FEATURE-CATALOG.md) (breadth-first inventory).
 26. [Diff and snapshot tooling](#26-diff-and-snapshot-tooling)
 27. [Common gotchas](#27-common-gotchas)
 28. [References](#28-references)
+29. [Image pins](#29-image-pins)
+30. [Deploy receipt](#30-deploy-receipt)
 
 ---
 
@@ -48,6 +50,9 @@ and [`FEATURE-CATALOG.md`](FEATURE-CATALOG.md) (breadth-first inventory).
 | Build a cluster | `nix build ludo/#cluster-ludo-kind --extra-experimental-features pipe-operators` |
 | Diff vs live cluster | `kix diff <cluster>` (or `./scripts/kix-dump.py --all cluster-dump/ && ./scripts/kix-diff.py ./result cluster-dump/`) |
 | Deploy a cluster | `kix deploy <cluster>` (add `-y` to skip confirm; `--dry-run` to preview) |
+| Promote an image | `kix pin set <key> --tag <tag>` (§29) |
+| Check every pin still resolves | `kix pin check` |
+| See what was actually deployed | `kubectl get activation <name> -o jsonpath='{.status.receipt}'`, or `kix compliance attest <cluster> --from-cluster` (§30) |
 | Find a symbol in `kix.lib` | `kix/lib/default.nix` — re-exports everything |
 | Internals of eval/scope/netpol | `kix/lib/architecture.md` |
 | What CLI commands exist | `kix --help` or `cli/README.md` §Where things live |
@@ -70,6 +75,8 @@ and [`FEATURE-CATALOG.md`](FEATURE-CATALOG.md) (breadth-first inventory).
 # Post-deploy probe Job:                               (kix.healthCheck { script = builtins.readFile ./health-check.py; env = ...; })
 # Reference a kix-managed Secret:                     self.secret.out.keyRef "password"
 # Reference an external Secret:                       (scope.mkSecretRef { name = ...; keys = [...]; }).out.keyRef "..."
+# Read an image from a committed pin file:            { kix, pins, ... }: pins.get "web"   (flake: pins = ./pins.json;)
+# Render an image reference (repo:tag@digest):        kix.image.ref config.image
 # Filter null env vars:                               kix.mkEnvVars { OPT = config.opt or null; }
 # Combine env + raw entries:                          kix.mkEnv { K=v; } [ rawEntry ]
 # Conditional resource:                               if cond then ... else null    (collectTypedAttrs strips null)
@@ -619,6 +626,14 @@ The probe reads what it expects off the resource it checks, never off the option
 options.ingress = kix.options.ingress;       # { host = nullOr str; annotations = attrsOf str; }
 options.metrics = kix.options.monitor;       # { enabled = bool (default true); interval = nullOr str; }
 options.healthCheck = kix.options.healthCheck;  # { enable = bool (default false); retryFor = int (90) }; kix.healthCheck reads both
+
+# A package's image. Takes the defaults, returns one mkOption whose type is a
+# submodule: { repository, tag, digest = null, pullPolicy = "IfNotPresent",
+#              sourceRev = null, promotedBy = null, resolvedAt = null }
+options.image = kix.options.image {
+  repository = "docker.io/library/nginx";
+  tag = "1.27-alpine";
+};
 ```
 
 Use these in your package's `options` so cluster authors see consistent shapes across packages.
@@ -637,6 +652,8 @@ These come from `kix.lib` (top-level), distinct from the per-package `kix` arg (
 | `kix.flavors.{k3s,kind,kubeadm,eks,gke,gke-autopilot,aks,openshift,rke2,talos,lithus}` | Platform flavor modules (§15) |
 | `kix.modules.monitoring` | Reusable Prometheus/Grafana/Loki module (see `kix/lib/modules/monitoring.nix`) |
 | `kix.rules.{security,reliability,governance,architecture}` | Built-in scorecard rule sets (§17) |
+| `kix.pins <path>` | Read a committed pin file (JSON): `{ get, ref, keys, all }`. Usually unnecessary: declare `pins = ./pins.json;` in `mkFlake` and take a `pins` argument (§29) |
+| `kix.image.ref <image>` | Render `repository:tag[@digest]` (§29) |
 | `kix.peekPackageMeta` | Extract package meta without full evaluation (used by tooling) |
 
 The `kixlib` helpers (port, mkEnvVars, mount.*, withMounts, service.fromWorkload, expose, monitor, options.*, etc.) are passed to each package as the `kix` arg by the eval pipeline — see §9. They're also accessible at top level via `kix.kixlib.*`.
@@ -997,6 +1014,7 @@ Configure via `scorecard.{enable, rules, ruleDefaults, ruleOverrides}`.
 | `readOnlyRootfs` | manifest | warning | Read-only root recommended |
 | `noHostNetwork` | manifest | error | No `hostNetwork`/`hostPID`/`hostIPC` |
 | `noLatestTag` | manifest | warning | Images explicitly tagged (not `:latest` or untagged) |
+| `noUnresolvedPlaceholder` | manifest | warning | No `REPLACE_ME`, `CHANGEME`, `PLACEHOLDER`, `TODO`, `FIXME`, `XXX` or unexpanded `${...}` in an image reference (§29) |
 | `hasNetworkPolicy` | namespace | warning | Workload namespaces have at least one NetworkPolicy |
 
 **Reliability** (`kix.rules.reliability`):
@@ -1402,6 +1420,7 @@ Diff features:
 | Clean simple package (Deployment + Service + RBAC) | `kix/packages/reloader/` |
 | `lib.mapAttrs` to generate resources | `kix/packages/storage-classes/` |
 | First-class PVC instance | `kix/packages/persistent-volume-claim/` |
+| Image reference read from a committed pin file | `clusters/test-pins.nix` + `clusters/pins.json` |
 | Mid-complexity with DI storage, expose, monitor, mounts | `kix/packages/immich/` |
 | Complex multi-component | `kix/packages/harbor/` |
 | Helm-wrapped capability owner | `kix/packages/cilium/` (helm) and `external.nix` (CRD-only) |
@@ -1427,3 +1446,321 @@ ROADMAP.md                             2026-05-06
 ```
 
 If a section here disagrees with the source-of-truth file above, **the source wins** — fix this doc.
+
+## 29. Image pins
+
+Something outside the cluster definition sometimes decides an input to it: a
+CI build produces an image tag, or a person decides that this build is the one
+that goes to production. Kix has one channel for such a value, the definition
+itself, so the value is committed first and deployed second. There is no
+`--set` and no `--values`; §9.4 of BEST-PRACTICES explains why one would not
+work even if we wanted it.
+
+### 29.1 The file
+
+A pin file is JSON, living next to the cluster definition that reads it,
+written by `kix pin`:
+
+```json
+{
+  "version": 1,
+  "managedBy": "kix pin",
+  "images": {
+    "atlas-server-prod": {
+      "repository": "harbor.example.com/team/server",
+      "tag": "main",
+      "digest": "sha256:00f522cf9c0e4a4d5a2c1e6b7f8a9d0c3b4e5f6a7b8c9d0e1f2a3b4c5d6e7f80",
+      "sourceRev": "5d5dda2e5c1f",
+      "promotedBy": "ci:deploy#3981",
+      "resolvedAt": "2026-09-09T10:47:00Z",
+      "note": "Held back while we investigate the memory leak. See PLAT-412."
+    }
+  }
+}
+```
+
+`repository` and `tag` are required. Everything else is optional, because an
+upstream image has no revision in your history and a pin that has never been
+resolved has no digest.
+
+**Make the tag name a stream, not a build.** `main`, not `sha-5d5dda2`. A tag
+that changes on every build gives the file no stable key, so CI ends up
+editing the cluster definition to promote, which is the pattern the pin file
+exists to end. With a floating tag the digest is the only thing that moves,
+one line per promotion, and the file stays regenerable. Upstream images keep
+their ordinary version tags, because a person moves those.
+
+**Keys are yours.** Kix never interprets them. `atlas-server-prod`,
+`atlas-server-acme`, `web-eu`: environments, tenants, regions, or two axes
+at once. Nothing in Kix has an opinion about what the axis means.
+
+`note` is for whoever reads the file. Kix never reads it and a promotion
+never discards it, which is what a comment could not promise. It does not
+reach the image option either, so it cannot affect a manifest.
+
+JSON rather than Nix, for a reason worth checking rather than taking on
+taste. Reading a Nix file means evaluating it, so reading a pin file would
+execute whatever is in it, and a pull request that edits the file becomes
+code execution in CI. Writing one means escaping registry-supplied strings
+into a programming language by hand. Neither belongs in a file a bot
+rewrites on every build. It is also what the rest of Kix already does:
+`kix-packages.json`, `kix-scorecard.json`, the SBOM, the provenance and the
+OSCAL assessment are all JSON, and YAML appears only where Kubernetes
+imposes it. The evaluation cache fingerprints `.json` alongside `.nix`,
+`.yaml` and `.yml` (`cli/kix/src/eval/cache.rs`), so a JSON pin file lands
+in the fingerprint like any other input.
+
+### 29.2 Reading it
+
+Name the file once, in the flake. Every cluster that takes a `pins` argument
+gets it already loaded, so no cluster definition repeats the path.
+
+```nix
+# flake.nix
+inputs.kix.lib.mkFlake {
+  inherit inputs;
+  pins = ./pins.json;
+  clusters.app = ./app.nix;
+}
+```
+
+```nix
+# app.nix
+{ kix, packages, pins }:
+kix.buildCluster {
+  name = "app";
+  modules = [{
+    instances.app.web = {
+      package = { ... };
+      config.image = pins.get "web";
+    };
+  }];
+}
+```
+
+A cluster with a pin file of its own reads one directly instead, which is the
+same call under another name:
+
+```nix
+let pins = kix.pins ./other-pins.json; in ...
+```
+
+| Call | Returns |
+|---|---|
+| `pins.get "<key>"` | The pin, shape-checked. Throws naming `kix pin set ... --init` when the key is absent |
+| `pins.ref "<key>"` | `kix.image.ref (pins.get "<key>")` |
+| `pins.keys` | Every pin name in the file |
+| `pins.all` | Every pin, shape-checked |
+
+Inside the package, declare the option once and render the reference:
+
+```nix
+options.image = kix.options.image {
+  repository = "docker.io/nginxinc/nginx-unprivileged";
+  tag = "1.28-alpine";
+};
+
+# in build:
+image = kix.image.ref config.image;   # repository:tag@digest
+imagePullPolicy = config.image.pullPolicy;
+```
+
+`kix.image.ref` renders the digest when there is one and omits it when there
+is not, so an unresolved pin still deploys and is visibly different from a
+resolved one.
+
+### 29.3 Promoting
+
+```bash
+# Add a pin and the file it lives in
+kix pin set web --repository docker.io/library/nginx --tag 1.27 --init
+
+# Promote
+kix pin set web --tag 1.28
+
+# From CI, recording what it was built from
+kix pin set web --tag "sha-${GITHUB_SHA::7}" --source-rev "$GITHUB_SHA"
+```
+
+`kix pin` finds the pin file rather than being told where it is. It looks in
+the working directory, then next to the flake (`--flake ./clusters` is enough
+to point it at `clusters/pins.json`), then for the only pin file in the
+repository. More than one, and it refuses and lists them, because writing a
+digest into the wrong file is a quiet failure and being asked which one is a
+loud one. `--pins-file <path>` settles it either way.
+
+The flake cannot supply that path, and the reason is worth knowing. A path
+literal inside a flake evaluates to a store path, so reading a declaration out
+of the flake would mean evaluating the flake and reconstructing the source
+path from `self`. That would make a command that needs neither Nix nor a
+flake depend on both, and the state in which a pin most needs fixing is the
+state in which evaluation is unhappy about it.
+
+`--promoted-by` defaults to the CI run when `GITHUB_RUN_ID` is set, and to
+`user@host` otherwise, so a human promotion and a CI promotion produce the
+same commit shape.
+
+Refusals, all of which leave the file untouched: a tag the registry does not
+have, a key that is not in the file without `--init`, a malformed `--digest`,
+and a pin file that `kix pin` did not write without `--force`.
+
+`--no-resolve` writes a pin with no digest and warns that nothing then
+verifies the tag exists. `--digest <d>` records a digest you already have,
+for an air-gapped promotion.
+
+### 29.4 Checking
+
+```bash
+kix pin check
+kix pin check --source-rev "$GITHUB_SHA"
+```
+
+Two separate questions, reported separately:
+
+- **Is the reference real?** Verified **by digest, not by tag**. A digest that
+  has gone from the registry is a failure. A tag that has moved, or that a
+  retention job deleted while its digest still runs, is a warning: nothing is
+  broken and there is nothing the author could do about it. A pin with no
+  digest is a failure unless `--allow-unresolved`.
+- **Is it current?** `--source-rev <rev>` fails when a pin records a different
+  source revision. This is the only check that catches a promotion step which
+  silently did not run, and that failure is otherwise invisible: the deploy
+  succeeds, every rule passes, `--dry-run` says configured, the receipt is
+  honest, and the cluster runs old code.
+Exit code 1 on any failure, 0 otherwise. `--offline` checks shape without
+contacting a registry.
+
+### 29.5 Building and deploying in one job
+
+The digest is an output of the build, so the deploy depends on the build.
+Splitting them into two workflows joined by a commit turns that dependency
+into a trigger, and triggers can form a cycle: the build writes a pin, the
+pin commit starts the build, forever.
+
+Do all of it in one job. The commit then records what happened rather than
+instructing anything to happen, because the deploy already ran.
+
+```
+on: push to the deploy branch, filtered to paths that can affect the cluster
+
+1. if the application source changed:
+     build the image
+     push it to repository:<floating tag>
+2. kix pin set <key> --source-rev "$SHA"
+3. if the pin file changed, commit and push it
+4. check the push landed
+5. kix deploy
+```
+
+Two details carry the design.
+
+**Step 1 is conditional, and that is what closes the loop.** The bot's commit
+starts the workflow once more. On that run the source has not changed, so no
+image is built, so no digest moves, so nothing is committed, and Kix deploys
+nothing because the activation hash is unchanged. It converges after one
+extra run. Without the condition the image is rebuilt, most container builds
+are not reproducible, a fresh digest appears for identical source, and it
+really does run forever.
+
+**Step 4 is not optional.** Deploying before the push lands means deploying
+something that is not in your repository, and the receipt then names a
+revision nobody else can fetch.
+
+Filtering which pushes start the workflow is a free optimisation, since a
+wrong filter now costs a wasted run rather than a loop. Filter generously: a
+filter that is too narrow means somebody merges a change, sees green, and
+nothing deployed. Excluding the pin file saves the one redundant run, and
+nothing breaks if it is removed. A `[skip ci]` token on the pin commit does
+the same job. To make wasted runs cheap, have CI cache `~/.cache/kix`, which
+holds the evaluation cache, so a run that changes nothing finishes in
+seconds.
+
+Kix has no opinion about your CI beyond this, and no command that reads its
+configuration.
+
+### 29.5 Credentials
+
+In order: `KIX_REGISTRY_USERNAME` and `KIX_REGISTRY_PASSWORD`, a `credHelpers`
+entry for this registry, the general `credsStore` helper (which is what
+`docker login` uses on macOS and most Linux desktops), then a literal `auths`
+entry in `~/.docker/config.json`, or `$DOCKER_CONFIG/config.json`. Anonymous
+access is a valid outcome, not a failure.
+
+The digest Kix records is the digest of the manifest the registry served, and
+for a multi-architecture image that is the index digest, which is what a
+container runtime resolves and what `crane digest` prints. Kix computes it from
+the response body rather than trusting the `Docker-Content-Digest` header, and
+treats a disagreement between the two as an error.
+
+### 29.6 The ratchet
+
+`security.noUnresolvedPlaceholder` fails an image reference containing
+`REPLACE_ME`, `REPLACEME`, `CHANGE_ME`, `CHANGEME`, `PLACEHOLDER`, `TODO`,
+`FIXME`, `XXX` or an unexpanded `${...}`. Warning by default; promote it to
+error in a cluster that deploys something you care about:
+
+```nix
+scorecard.rules.security.noUnresolvedPlaceholder =
+  kix.rules.security.noUnresolvedPlaceholder // { severity = "error"; };
+```
+
+It is a ratchet, not the fix. A predicate over spelling cannot tell you that
+`sha-typo12` is wrong, which is the same limit `noLatestTag` has. What closes
+the class is a resolved digest checked against a registry. This rule's one job
+is to make the known placeholders unwriteable again.
+
+## 30. Deploy receipt
+
+Every `kix deploy` writes what it deployed into the Activation's
+`status.receipt`:
+
+```bash
+kubectl get activation <name> -o jsonpath='{.status.receipt}' | jq
+```
+
+```json
+{
+  "schema": "kix.run/receipt/v1",
+  "cluster": "app",
+  "activationHash": "jak8b4glx8fnbq2c3hkb0khyyvigb96i",
+  "deployedAt": "2026-09-09T10:47:55Z",
+  "source": {
+    "flakeRef": "./clusters",
+    "gitCommit": "c1b8d5ede22b680fa172991b9edd6e78ae513b70",
+    "dirty": false,
+    "revision": "c1b8d5ede22b680fa172991b9edd6e78ae513b70",
+    "flakeLock": "blake3:1d2417994d31f798…"
+  },
+  "builder": { "kixVersion": "0.1.0", "nixVersion": "nix (Nix) 2.28.5", "arch": "aarch64", "os": "macos" },
+  "inputs": [ { "name": "nixpkgs", "rev": "8d8c1fa…", "narHash": "sha256-J0dZU4a…" } ],
+  "images": [ "docker.io/nginxinc/nginx-unprivileged:1.28-alpine@sha256:7377697a…" ]
+}
+```
+
+Status rather than spec, for two reasons. The status subresource is untouched
+by an apply of the main resource, so a rollback that re-applies an Activation
+cannot erase the record of what happened. And by Kubernetes convention spec is
+intent and status is observation, and a receipt is an observation.
+
+Superseded activations keep their own receipts, so the cluster carries a
+per-deploy history of what ran, bounded by `kix gc` retention.
+
+**Dirty trees are recorded, not hidden.** `source.dirty` says whether the
+working tree matched the commit, and `source.revision` uses Nix's spelling,
+`<rev>-dirty`. `kix deploy` prints the warning above the confirmation, so you
+can still decide not to. This is not a refusal: deploying from a dirty tree is
+a normal thing to do while working. What is not acceptable is doing it while
+recording a commit that does not contain what is being deployed.
+
+**Not in the receipt: the manifests.** Built manifests carry secret values
+inline, so storing them would make every deploy record a readable archive of
+every credential the cluster ever held. Rollback stays tied to the source.
+
+`kix compliance attest --from-cluster` builds the SLSA statement from the
+receipt instead of from a fresh evaluation, so a deploy can be attested from a
+machine that never built it. Both routes go through the same assembly, so they
+cannot drift apart. A container image only gets a `sha256` digest in
+`resolvedDependencies` when its reference actually carries one: a tag is a
+request, not a resolution, and putting it in a digest field would be a
+well-formed false statement.
+

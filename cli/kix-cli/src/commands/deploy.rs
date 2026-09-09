@@ -359,6 +359,42 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         println!("{}", output::dim("Dry run — no changes will be applied."));
     }
 
+    // The receipt: what this deploy will record about itself. Assembled here
+    // rather than inside the apply so a dirty tree can be reported above the
+    // confirmation, where somebody can still decide not to.
+    let receipt = if args.dry_run {
+        None
+    } else {
+        Some(crate::commands::compliance::receipt::build_receipt(
+            &new_graph,
+            &ctx.global.flake,
+        ))
+    };
+
+    if let Some(receipt) = &receipt
+        && receipt["source"]["dirty"] == Value::Bool(true)
+        && !ctx.global.quiet
+    {
+        // Not a refusal. Deploying from a dirty tree is a normal thing to do
+        // while working, and it was our own CI's deliberate method. What is
+        // not acceptable is doing it while recording a commit that does not
+        // contain what is being deployed, so this says so before you agree.
+        println!();
+        println!(
+            "{}",
+            output::yellow(
+                "The working tree has uncommitted changes, so the commit recorded for this deploy"
+            )
+        );
+        println!(
+            "{}",
+            output::yellow("does not contain what is about to be applied. The record will say so.")
+        );
+        if let Some(rev) = receipt["source"]["revision"].as_str() {
+            println!("  {}", output::dim(rev));
+        }
+    }
+
     // Confirmation
     if !args.yes && !args.dry_run {
         if !output::is_interactive() {
@@ -392,6 +428,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         &cluster_name,
         activation_name.as_deref(),
         activation_identity_hash.as_deref(),
+        receipt.as_ref(),
         pre_client,
     ));
 
@@ -1035,6 +1072,7 @@ async fn run_deploy_async(
     cluster_name: &str,
     activation_name: Option<&str>,
     activation_identity_hash: Option<&str>,
+    receipt: Option<&Value>,
     pre_client: Option<kube::Client>,
 ) -> Result<()> {
     let timeout = parse_timeout(args.timeout.as_deref())?;
@@ -1095,6 +1133,7 @@ async fn run_deploy_async(
             cluster_name: cluster_name.to_string(),
             activation_name: activation_name.map(str::to_string),
             activation_identity_hash: activation_identity_hash.map(str::to_string),
+            receipt: receipt.cloned(),
             force_conflicts: args.force_conflicts,
             dry_run: args.dry_run,
         },
@@ -1486,6 +1525,28 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         return Ok(());
     }
 
+    // The receipt, same as the direct path. The operator has no source tree,
+    // so provenance is computed here and written onto the Activation when it
+    // is applied.
+    let receipt =
+        crate::commands::compliance::receipt::build_receipt(&new_graph, &ctx.global.flake);
+    if receipt["source"]["dirty"] == Value::Bool(true) && !ctx.global.quiet {
+        println!();
+        println!(
+            "{}",
+            output::yellow(
+                "The working tree has uncommitted changes, so the commit recorded for this deploy"
+            )
+        );
+        println!(
+            "{}",
+            output::yellow("does not contain what is about to be applied. The record will say so.")
+        );
+        if let Some(rev) = receipt["source"]["revision"].as_str() {
+            println!("  {}", output::dim(rev));
+        }
+    }
+
     // 4. Confirmation
     if !args.yes {
         if !output::is_interactive() {
@@ -1532,6 +1593,7 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
             &cluster_name,
             &source_path,
             activation_identity_hash.as_deref(),
+            Some(&receipt),
         )
         .await?;
 

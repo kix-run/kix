@@ -3,6 +3,12 @@
 
   clusters ? { },
 
+  # The pin file this flake's clusters read, declared once here rather than
+  # named again in every cluster definition. A cluster that asks for a `pins`
+  # argument gets it already loaded; one that wants its own still calls
+  # `kix.pins ./elsewhere.nix` itself.
+  pins ? null,
+
   systems ? [
     "x86_64-linux"
     "aarch64-linux"
@@ -56,12 +62,30 @@ let
           available = {
             inherit kix;
             packages = catalogPackages;
+            # Lazy, so a flake with no pin file is only a problem for a
+            # cluster that actually asks for one.
+            pins =
+              if pins == null then
+                throw "mkFlake: cluster '${name}' takes a `pins` argument, but this flake declares no pin file. Add `pins = ./pins.json;` beside `clusters` in flake.nix, or read one directly with `kix.pins ./pins.json`."
+              else
+                kix.kixlib.pins pins;
           };
         in
         if builtins.isFunction fn then
           let
             fArgs = builtins.functionArgs fn;
-            passArgs = lib.intersectAttrs fArgs available;
+            # `builtins.functionArgs` reports an argument even when it has a
+            # default, and an argument that is passed beats its default. So a
+            # cluster written `{ pins ? null, ... }` would receive the throw
+            # rather than its own null. Withholding `pins` in that case is
+            # what makes the argument genuinely optional: the author has
+            # already said what they want when there is no pin file.
+            wantsItsOwnDefault = pins == null && (fArgs.pins or false);
+            passArgs =
+              let
+                all = lib.intersectAttrs fArgs available;
+              in
+              if wantsItsOwnDefault then builtins.removeAttrs all [ "pins" ] else all;
           in
           fn passArgs
         else

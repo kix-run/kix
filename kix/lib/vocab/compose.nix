@@ -58,6 +58,74 @@ rec {
     inherit (import ../core/facts.nix { inherit lib; }) refOnly connect structural;
   };
 
+  # ------------------------------------------------------------------ images
+  #
+  # A container image reference has three parts, and only two of them can be
+  # trusted. `repository` and `tag` record what was asked for. `digest`
+  # records what will actually run, because a tag can be moved after it is
+  # read and a digest cannot. `kix.image.ref` renders both, so the manifest
+  # stays readable and the pull stays exact:
+  #
+  #     image = kix.image.ref config.serverImage;
+  #     # docker.io/library/nginx:1.27@sha256:0d17b1...
+  #
+  # Where the values come from is the other half. A cluster that decides an
+  # image reference by editing its definition at deploy time has no committed
+  # answer to "what is running", and a clean checkout of that definition
+  # renders something that was never meant to be deployed. So the values live
+  # in a pin file next to the cluster, committed, written by `kix pin`:
+  #
+  #     # flake.nix
+  #     kix.lib.mkFlake { inherit inputs; pins = ./pins.json; clusters = { ... }; }
+  #
+  #     # the cluster definition, which never names the path
+  #     { kix, pins, ... }:
+  #     ...
+  #     config.serverImage = pins.get "atlasServer";
+  #
+  # A cluster that wants a pin file of its own reads one directly instead:
+  #
+  #     let pins = kix.pins ./other-pins.json; in ...
+  #
+  # `pins.get` throws when the key is missing and names the command that adds
+  # it. That matters more than it looks. The state that produces the error is
+  # exactly the state in which the reader needs a remedy they can run.
+  #
+  # What this does not do: check that the digest refers to anything. Nix
+  # evaluation is pure, so a well-formed invented digest passes every check
+  # here. `kix pin --check` is what asks the registry, and it is meant to run
+  # on every change to a pin file. See `v2_discussions/138_*`.
+  image =
+    let
+      needField =
+        image: field:
+        let
+          v = image.${field} or null;
+        in
+        if v == null || v == "" then
+          throw "kix.image.ref: image reference has no '${field}'. An image needs at least { repository, tag }, and got: ${builtins.toJSON image}"
+        else
+          v;
+    in
+    {
+      # Render `repository:tag` plus `@digest` when a digest is pinned.
+      ref =
+        image:
+        "${needField image "repository"}:${needField image "tag"}"
+        + lib.optionalString (image.digest or null != null) "@${image.digest}";
+
+      # True when the reference names a digest, so a package or a rule can
+      # tell a resolved reference from an unresolved one.
+      #
+      # Public API with no caller inside Kix, deliberately. It is the obvious
+      # companion question to `ref` and a package may branch on it. It cannot
+      # currently serve `security.noUnresolvedPlaceholder`, which inspects
+      # rendered manifest strings while this takes an image attrset; closing
+      # that gap needs a rule at the package-config level, which is the one
+      # `rules/security.nix` describes and does not yet have. Not dead code.
+      isPinned = image: (image.digest or null) != null;
+    };
+
   port = name: containerPort: {
     inherit name containerPort;
     protocol = "TCP";
@@ -454,6 +522,82 @@ rec {
   untrackedRef = markers.mkUntrackedRef;
 
   options = {
+    # A package's image, declared once so every package spells the digest
+    # slot the same way and `kix pin` has somewhere to put a resolution.
+    #
+    #   options.image = kix.options.image {
+    #     repository = "docker.io/library/nginx";
+    #     tag = "1.27";
+    #   };
+    #
+    # The cluster then overrides the whole attrset from its pin file:
+    #
+    #   config.image = pins.get "web";
+    #
+    # `digest` defaults to null rather than to a value, because a null that
+    # says "not resolved yet" is worth more than a plausible-looking string
+    # that was never checked against a registry.
+    image =
+      {
+        repository,
+        tag,
+        digest ? null,
+        pullPolicy ? "IfNotPresent",
+      }:
+      lib.mkOption {
+        description = "Container image for this instance. Set it from a pin file (`kix.pins`) so the deployed reference is committed and resolved.";
+        default = {
+          inherit
+            repository
+            tag
+            digest
+            pullPolicy
+            ;
+        };
+        type = lib.types.submodule {
+          options = {
+            repository = lib.mkOption {
+              type = lib.types.str;
+              description = "Image repository, registry host included.";
+            };
+            tag = lib.mkOption {
+              type = lib.types.str;
+              description = "Image tag. What was asked for.";
+            };
+            digest = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              description = "Resolved manifest digest, `sha256:` followed by 64 hex characters. What will actually run. Null means not resolved.";
+            };
+            pullPolicy = lib.mkOption {
+              type = lib.types.str;
+              default = "IfNotPresent";
+              description = "imagePullPolicy for containers using this image.";
+            };
+            sourceRev = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              description = "Revision of the source the image was built from, when Kix built it. Null for upstream images.";
+            };
+            promotedBy = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              description = "Who resolved this pin, for the record. Null when unknown.";
+            };
+            resolvedAt = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              description = "When this pin was resolved, RFC 3339. Null when unknown.";
+            };
+            note = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              description = "Whatever a person wanted to say about this pin. Kix never reads it and a promotion never discards it. Declared here for the same reason as the three fields above: a pin carries its own record-keeping, and the option accepts the whole pin rather than a subset of it.";
+            };
+          };
+        };
+      };
+
     ingress = {
       host = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
@@ -552,10 +696,9 @@ rec {
   # server.
   healthCheck =
     let
-      imageRef =
-        image:
-        "${image.repository}:${image.tag}"
-        + lib.optionalString (image.digest or null != null) "@${image.digest}";
+      # The public renderer; see `kix.image` above. Kept as a local name so
+      # the call sites below read the same as they always did.
+      imageRef = image.ref;
 
       # Seconds one worst-case round of checks may take: every query timing
       # out, plus the pause before the next round. The deadline always
