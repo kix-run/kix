@@ -1,0 +1,18 @@
+{
+  "id": "how-to/image-pins/check-offline",
+  "group": "how-to/image-pins",
+  "page": "/docs/how-to/promote-images/create-a-committed-image-pin-file/",
+  "cwd": "kix-project/",
+  "generator": "offline",
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix pin check --pins-file pins.json --offline",
+      "stdout": "pins.json\n\n  ok    web  docker.io/nginxinc/nginx-unprivileged:1.28-alpine (shape only, offline)\n\n1 pins checked, 0 failed, 0 warned\n",
+      "stderr": "",
+      "stdoutDrift": "\n1 pins checked, 0 failed, 0 warned\nok web docker.io/nginxinc/nginx-<activation-id>:1.28-alpine (shape only, offline)\npins.json\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

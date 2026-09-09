@@ -393,4 +393,34 @@
       }
     ];
   }
+
+  {
+    group = "how-to/image-pins";
+    page = "/docs/how-to/promote-images/create-a-committed-image-pin-file/";
+    cwd = "kix-project/";
+    overlay = ../overlays/how-to-image-pins;
+    offline = [
+      {
+        capture = "list";
+        run = [
+          "kix"
+          "pin"
+          "list"
+          "--pins-file"
+          "pins.json"
+        ];
+      }
+      {
+        capture = "check-offline";
+        run = [
+          "kix"
+          "pin"
+          "check"
+          "--pins-file"
+          "pins.json"
+          "--offline"
+        ];
+      }
+    ];
+  }
 ]

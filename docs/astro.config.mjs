@@ -80,6 +80,7 @@ export default defineConfig({
               items: [
                 { label: 'Start and inspect a Kix project', items: [{ autogenerate: { directory: 'how-to/start-and-inspect' } }] },
                 { label: 'Operate a cluster', items: [{ autogenerate: { directory: 'how-to/operate-a-cluster' } }] },
+                { label: 'Promote images', items: [{ autogenerate: { directory: 'how-to/promote-images' } }] },
                 { label: 'Debug dependency wiring', items: [{ autogenerate: { directory: 'how-to/debug-dependency-wiring' } }] },
                 { label: 'Author packages and clusters', items: [{ autogenerate: { directory: 'how-to/author-packages-and-clusters' } }] },
                 { label: 'Adopt existing resources', items: [{ autogenerate: { directory: 'how-to/adopt-existing-resources' } }] },

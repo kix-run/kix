@@ -2,9 +2,8 @@
 
 Astro Starlight site for Kix. Built as a true sibling Nix subflake.
 
-Deployed at **<https://kix.run/docs/>**. GitHub Pages serves the
-merged `homepage/` + `docs/` artifact — see
-`.github/workflows/pages.yml`.
+Deployed at **<https://kix.run/docs/>**. Cloudflare Pages serves the merged
+`web/` and `docs/` artifact. See `.github/workflows/pages.yml`.
 
 ## Build
 
@@ -74,20 +73,20 @@ On a clean checkout these paths show placeholder content from Phase 2A.
 The `reference` derivation only runs when you build `nix build ./docs#site`
 (which drops it into the content tree via `preBuild`) or directly via
 `nix build ./docs#reference`. Currently only `echo-server`, `cert-manager`,
-and `cilium` are wired up; the remaining 58 packages will be added in a
-later pass.
+and `cilium` are wired up. The remaining packages will be added in later
+passes.
 
 ## Snippets
 
 The snippet pipeline auto-discovers `.nix` files containing `# region:NAME`
-markers under `kix-examples/` and drops each region into
+markers under `kix-examples/` and this repository, then drops each region into
 `src/snippets/<relative-path-without-.nix>/<region>.nix` as raw Nix
 code (no frontmatter, no fence). No registration step.
 
 **Add a new snippet:**
 
-1. In any `.nix` file under `kix-examples/`, wrap the code you
-   want to expose:
+1. In any `.nix` file under `kix-examples/` or this repository, wrap the code
+   you want to expose:
 
    ```nix
    # region:isProxy
@@ -126,10 +125,9 @@ Scorecard rules identify reverse-proxy packages with this helper:
 `<Snippet>` (from `docs/src/components/Snippet.astro`) renders the code
 through Starlight's `<Code>` component (syntax highlighting, copy-to-clipboard,
 title showing the line range) and adds a "View source on GitHub" link
-pointing at the exact line range in the kix-examples repo at the locked
-commit. The URL is computed by the snippet pipeline from `sourceUrlBase`
-in `docs/flake.nix`, which pins to `kix-examples.rev` from `flake.lock` —
-links never rot under `main`.
+pointing at the exact line range. Links into `kix-examples` use its locked
+revision from `flake.lock`; links into this repository use its `main` branch.
+Both source URL bases are configured in `docs/flake.nix`.
 
 Nested regions can be elided by the calling MDX page. This keeps the source
 file free of docs-only presentation hints:

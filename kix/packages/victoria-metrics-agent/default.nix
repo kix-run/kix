@@ -118,6 +118,7 @@ in
     # namespace: the agent's own samples are fresh, every replica is
     # scraped and up, no remote-write errors. Proves the scrape-and-write
     # path end to end from inside the cluster.
+    # region:healthCheckOptions
     healthCheck = kix.options.healthCheck // {
       maxSampleAge = lib.mkOption {
         type = lib.types.int;
@@ -125,6 +126,7 @@ in
         description = "Seconds. The agent's newest sample older than this fails the probe.";
       };
     };
+    # endregion:healthCheckOptions
   };
 
   build = [
@@ -195,6 +197,7 @@ in
     # The agent's samples arrive at the cluster and nothing on the
     # scrape-and-write path reports errors (see kix.healthCheck). The
     # script is a file so it can be read, linted and run on its own.
+    # region:healthCheckBuildEntry
     (kix.healthCheck {
       env =
         {
@@ -212,5 +215,6 @@ in
         };
       script = builtins.readFile ./health-check.py;
     })
+    # endregion:healthCheckBuildEntry
   ];
 }

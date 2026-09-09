@@ -1,0 +1,130 @@
+---
+title: "Create a committed image pin file"
+description: "Resolve an image tag to a digest, commit the result, and use it from a package instance."
+---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import pinFile from '/src/snippets/clusters/flake/pinFile.json';
+import consumePin from '/src/snippets/clusters/test-pins/consumePin.json';
+import renderPinnedImage from '/src/snippets/clusters/test-pins/renderPinnedImage.json';
+import listPins from '/src/command-output/how-to/image-pins/list.json';
+import checkPinsOffline from '/src/command-output/how-to/image-pins/check-offline.json';
+
+Use a pin file when an image is selected outside the cluster definition, such
+as by a CI build or a release decision. The file records the requested tag and
+the digest it resolved to. Your cluster reads that committed value during
+evaluation.
+
+This guide assumes your project uses `kix.lib.mkFlake` and the package exposes
+its image as a `kix.options.image` option.
+
+## Create the first pin
+
+Run `kix pin set` from the project root. A new pin needs a key, repository, and
+tag. `--init` allows Kix to create `pins.json` and add the key:
+
+<Command
+  commands={[
+    "kix pin set web --repository docker.io/nginxinc/nginx-unprivileged --tag 1.28-alpine --init",
+  ]}
+  cwd="kix-project/"
+/>
+
+Kix asks the registry what the tag resolves to and writes the resulting
+digest. If your flake lives in another directory, pass that directory with
+`--flake`; Kix will create the file beside it. You can also choose an explicit
+path with `--pins-file`.
+
+The generated file has this shape:
+
+```json title="pins.json"
+{
+  "version": 1,
+  "managedBy": "kix pin",
+  "images": {
+    "web": {
+      "repository": "docker.io/nginxinc/nginx-unprivileged",
+      "tag": "1.28-alpine",
+      "digest": "sha256:...",
+      "promotedBy": "you@workstation",
+      "resolvedAt": "2026-09-09T10:59:45Z"
+    }
+  }
+}
+```
+
+Do not fill in the digest by guessing it. Let `kix pin set` resolve the tag,
+or pass a digest you obtained through your air-gapped promotion process with
+`--digest`.
+
+## Load the pin file from the flake
+
+Name the file once in your `mkFlake` call:
+
+<Snippet {...pinFile} />
+
+Any cluster function that declares a `pins` argument now receives the loaded,
+shape-checked pin set.
+
+## Use the pin in a cluster
+
+Pass the complete pin to the package's image option:
+
+<Snippet {...consumePin} />
+
+The package should declare the option with the shared image schema:
+
+```nix title="packages/web/default.nix"
+options.image = kix.options.image {
+  repository = "docker.io/nginxinc/nginx-unprivileged";
+  tag = "1.28-alpine";
+};
+```
+
+Render the container image with `kix.image.ref` and carry through the pull
+policy:
+
+<Snippet {...renderPinnedImage} />
+
+The rendered value is `repository:tag@digest`. The tag remains readable while
+the digest fixes the content Kubernetes will pull.
+
+## Verify and commit the result
+
+Inspect the file as Kix sees it:
+
+<Command {...listPins} />
+
+Check the file's schema without contacting the registry:
+
+<Command {...checkPinsOffline} />
+
+Before deploying, run the online check as well. It verifies that every
+recorded digest still exists in its registry:
+
+<Command commands={["kix pin check"]} cwd="kix-project/" />
+
+Finally, add the pin file and the Nix changes to the same commit:
+
+<Command
+  commands={["git add pins.json flake.nix packages/web/default.nix cluster.nix"]}
+  cwd="kix-project/"
+/>
+
+A clean checkout can now render the same image reference. Future promotions
+use the existing key and need only the new tag:
+
+<Command commands={["kix pin set web --tag 1.29-alpine"]} cwd="kix-project/" />
+
+:::note[Explanation]
+See [Why deploy inputs are committed](/docs/explanation/why-deploy-inputs-are-committed/)
+for the reasoning behind recording promotion decisions in the repository
+before Kix evaluates the cluster.
+:::
+
+:::note[Reference]
+See [`pin`](/docs/reference/cli/pin/) and
+[`image`, `image.ref`, and `pins`](/docs/reference/kix-helpers/image-and-pin-helpers/)
+for every command option and helper.
+:::

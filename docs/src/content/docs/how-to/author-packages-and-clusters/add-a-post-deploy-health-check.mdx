@@ -1,0 +1,155 @@
+---
+title: "Add a post-deploy health check"
+description: "Run an end-to-end probe after a package becomes ready and fail the deploy when the probe fails."
+---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import healthCheckOptions from '/src/snippets/kix/packages/victoria-metrics-agent/default/healthCheckOptions.json';
+import healthCheckBuildEntry from '/src/snippets/kix/packages/victoria-metrics-agent/default/healthCheckBuildEntry.json';
+
+Use `kix.healthCheck` when Kubernetes readiness is necessary but not enough.
+For example, ready Pods do not prove that an application can reach its
+database or that a monitoring agent is successfully writing samples.
+
+The helper adds a Job that runs after the package root and every endpoint used
+by the probe are ready. A non-zero exit fails the deployment, and the deploy
+output includes the last lines printed by the probe.
+
+This guide assumes your package already has a workload, a Service exposed as
+`self.service`, and a list-valued `build` field.
+
+## Add the health-check options
+
+Expose the standard options in the package:
+
+```nix title="packages/web/default.nix"
+options.healthCheck = kix.options.healthCheck;
+```
+
+This gives cluster authors two settings:
+
+| Option | Default | Purpose |
+|---|---:|---|
+| `healthCheck.enable` | `false` | Render and run the probe |
+| `healthCheck.retryFor` | `90` | Seconds the script may retry before failing |
+
+You can extend the option set when the probe needs package-specific values.
+The VictoriaMetrics agent adds a maximum sample age this way:
+
+<Snippet {...healthCheckOptions} />
+
+## Write the probe script
+
+Keep the script beside the package so it can be reviewed and tested on its
+own. This shell probe retries an HTTP endpoint for the period Kix supplies in
+`RETRY_FOR`:
+
+```sh title="packages/web/health-check.sh"
+#!/bin/sh
+set -u
+
+deadline=$(( $(date +%s) + RETRY_FOR ))
+
+while true; do
+  if curl --fail --silent --show-error --max-time 10 "$APP_URL" >/dev/null; then
+    echo "ok    GET $APP_URL"
+    exit 0
+  fi
+
+  echo "FAIL  GET $APP_URL"
+  if [ "$(date +%s)" -ge "$deadline" ]; then
+    echo "gave up after ${RETRY_FOR}s"
+    exit 1
+  fi
+
+  sleep 5
+done
+```
+
+Keep one pass through the checks below 90 seconds. Kix reserves that much time
+after the retry window so the Job can report its final failure before its
+deadline expires.
+
+## Add the probe as a build entry
+
+Append `kix.healthCheck` to the package's build list:
+
+```nix title="packages/web/default.nix"
+build = [
+  ({ self, config, scope, kix, ... }: {
+    # Existing workload, Service, and root...
+  })
+
+  (kix.healthCheck {
+    runtime = kix.healthCheck.runtimes.shell;
+    env = { self, ... }: {
+      APP_URL = self.service.out.url { };
+    };
+    script = builtins.readFile ./health-check.sh;
+  })
+];
+```
+
+The callback value `self.service.out.url { }` matters. It gives the Job both
+the address to call and the dependency information attached to that address.
+Kix uses it to order the Job after the Service and to derive network-policy
+egress when network policy is enabled.
+
+For a probe with several targets, add each target through `env`. The helper
+also provides `deps`, containing every dependency injected into any build
+entry in the package. This production example checks a service from a
+dependency and structural outputs from its own custom resource:
+
+<Snippet {...healthCheckBuildEntry} />
+
+Use `requires` only for resources the probe must wait for but does not address.
+The package root is always included automatically.
+
+## Enable and verify the probe
+
+Enable it on an instance:
+
+```nix title="cluster.nix"
+instances.apps.web = {
+  package = packages.web;
+  config.healthCheck = {
+    enable = true;
+    retryFor = 60;
+  };
+};
+```
+
+Check the rendered cluster before deploying:
+
+<Command commands={["kix check production"]} cwd="kix-project/" />
+
+The output should include no health-check validation errors. Render the Job
+to confirm the helper is enabled:
+
+<Command
+  commands={["kix build production | yq 'select(.kind == \"Job\" and .metadata.name == \"web-health\")' "]}
+  cwd="kix-project/"
+/>
+
+Deploy the cluster:
+
+<Command commands={["kix deploy production"]} cwd="kix-project/" />
+
+The deployment does not become active until the Job succeeds. If the script
+exits non-zero, Kix reports the Job as failed and prints its final output below
+the failure.
+
+The Job carries `kix.run/rerun: on-change`. A later deploy recreates it when
+its identity changes or its previous run failed. A deploy with no relevant
+change skips a successful probe.
+
+:::note[Explanation]
+See [Kubernetes readiness and post-deploy verification solve different problems](/docs/explanation/kubernetes-readiness-and-post-deploy-verification/)
+for how workload readiness and end-to-end probes fit together.
+:::
+
+:::note[Reference]
+See [`healthCheck`](/docs/reference/kix-helpers/healthcheck/) for the complete
+callback, runtime, deadline, and retention interface.
+:::

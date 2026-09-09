@@ -18,9 +18,11 @@
     inputs.kix.lib.mkFlake {
       inherit inputs;
 
+      # region:pinFile
       # Declared once. A cluster that takes a `pins` argument gets this file
       # already loaded, so no cluster definition names the path.
       pins = ./pins.json;
+      # endregion:pinFile
 
       clusters = {
         minimal = ./test-minimal.nix;

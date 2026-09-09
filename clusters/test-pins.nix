@@ -64,10 +64,12 @@ kix.buildCluster {
 
           # The digest slot is declared once, the same way in every package,
           # so `kix pin` always has somewhere to put a resolution.
+          # region:pinnedImageOption
           options.image = kix.kixlib.options.image {
             repository = "docker.io/nginxinc/nginx-unprivileged";
             tag = "1.27-alpine";
           };
+          # endregion:pinnedImageOption
 
           build = [
             (
@@ -90,8 +92,10 @@ kix.buildCluster {
                         name = "web";
                         # repository:tag@digest. The tag is what a person
                         # reads; the digest is what the runtime pulls.
+                        # region:renderPinnedImage
                         image = kix.image.ref config.image;
                         imagePullPolicy = config.image.pullPolicy;
+                        # endregion:renderPinnedImage
                         ports = [ (kix.port "http" 8080) ];
                         resources = {
                           requests = {
@@ -118,7 +122,9 @@ kix.buildCluster {
         };
 
         # The whole point: the reference is read, not written.
+        # region:consumePin
         config.image = pins.get "web";
+        # endregion:consumePin
       };
     }
   ];

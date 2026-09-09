@@ -25,6 +25,16 @@ entries here whenever Adam corrects writing style.
   rather than rewording them; the surrounding copy usually already makes the
   point.
 
+## Reader context
+
+- **Do not introduce rejected, nonexistent, or internal alternatives merely to
+  contrast them with the shipped design.** Describe the current model directly.
+  For example, "Kix reads the committed value during evaluation" gives the
+  reader the fact they need. Adding "instead of accepting a deploy-time
+  override" introduces a concept they did not need to consider. Use a contrast
+  only when readers are likely to arrive with that expectation and resolving it
+  helps them complete the task.
+
 ## Capitalization
 
 - **"Kix" with an upper-case K in prose** (headings, body copy, FAQ answers,

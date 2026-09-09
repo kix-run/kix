@@ -83,7 +83,7 @@ if (expandable && !steps.some(stepHasOutput)) {
     `but every step in this block is empty. ` +
     (id ? `Sidecar id: ${id}. ` : '') +
     `Either drop \`expandable\`, hardcode a step's stdout, or add the ` +
-    `command to docs/nix/{command-outputs-manifest,live-command-outputs-manifest}.nix ` +
+    `command to docs/nix/captures.nix ` +
     `and rebuild.`,
   );
 }

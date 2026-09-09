@@ -60,21 +60,36 @@
               inherit pkgs;
               lib = pkgs.lib;
             };
+            exampleSnippets = snippetLib.mkSnippetsFromTree {
+              root = "${kix-examples}";
+              sourceUrlBase = "https://github.com/kix-ops/kix-examples/blob/${kix-examples.rev or "main"}";
+            };
+            repositorySnippets = snippetLib.mkSnippetsFromTree {
+              root = "${kixpkgs}";
+              sourceUrlBase = "https://github.com/kix-run/kixpkgs/blob/${kixpkgs.rev or "main"}";
+            };
           in
-          # Auto-discovery: every `.nix` file under kix-examples
+          # Auto-discovery: every `.nix` file under kix-examples or kixpkgs
           # with at least one `# region:NAME` marker is picked up
-          # automatically. To add a snippet: add the marker. No
-          # registration step.
+          # automatically. To add a snippet, add the marker. No registration
+          # step.
           #
           # `sourceUrlBase` powers the "View source" link in the
-          # `<Snippet>` component. Pinned to the kix-examples commit
-          # currently locked in `flake.lock`, so links never rot under
-          # `main`. Falls back to `main` if the input has no rev (e.g.
-          # dirty working tree without a commit).
-          snippetLib.mkSnippetsFromTree {
-            root = "${kix-examples}";
-            sourceUrlBase = "https://github.com/kix-ops/kix-examples/blob/${kix-examples.rev or "main"}";
-          };
+          # `<Snippet>` component. kix-examples links are pinned to the commit
+          # currently locked in `flake.lock`. The local kixpkgs path input has
+          # no revision, so its links use main.
+          pkgs.runCommand "kix-doc-snippets-combined" { } ''
+            mkdir -p $out
+            cp -r ${exampleSnippets}/. $out/
+            chmod -R u+w $out
+            cp -r ${repositorySnippets}/. $out/
+            chmod -R u+w $out
+            ${pkgs.jq}/bin/jq -s \
+              '{ sources: (.[0].sources + .[1].sources) }' \
+              ${exampleSnippets}/manifest.json \
+              ${repositorySnippets}/manifest.json \
+              > $out/manifest.json
+          '';
 
         # Auto-generated per-package option reference (Markdown), produced
         # via `nixosOptionsDoc` against each package's `options` attrset.
