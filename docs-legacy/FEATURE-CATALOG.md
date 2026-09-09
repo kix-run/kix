@@ -210,6 +210,38 @@ Declarative native Prometheus stack. Options under `monitoring`:
 - `loki.enabled` (Helm-wrapped)
 - `promtail.enabled` (Helm-wrapped, defaults to loki.enabled)
 
+### VictoriaMetrics packages (`kix/packages/victoria-metrics-*`)
+
+Four native packages, an alternative backend for the same monitoring surface
+rather than a second one. Live on stage1 and stage2 since 2026-08-31.
+
+- **`victoria-metrics-operator`** — the operator plus its complete CRD bundle
+  (all 25 kinds from the upstream chart; the operator crashes at startup on a
+  missing indexed kind, so an eval-time throw guards the floor). Ships the
+  ServiceMonitor and PrometheusRule CRDs and claims the `prometheus` and
+  `prometheusServer` DI aliases, so every existing `kix.monitor` consumer
+  works unchanged and the operator converts the results to VMServiceScrape
+  and VMRule. Exposes the same `out.mkServiceMonitor` builders as
+  `prometheus-operator`.
+- **`victoria-metrics-cluster`** — the VMCluster CR. HA defaults live in the
+  package because the scorecard cannot lint operator-created pods:
+  replicationFactor 2, three vmstorage, PodDisruptionBudgets, preferred
+  hostname anti-affinity, `useStrictSecurity`, and `-dedup.minScrapeInterval` pinned to the scrape
+  interval (the operator's 1 ms fallback covers replication twins, not an HA
+  vmagent pair). `out.insertUrl`, `out.insertBaseUrl`, `out.serviceUrl` and
+  `out.scrapeInterval` carry the wiring.
+- **`victoria-metrics-agent`** — the VMAgent CR, remote-writing to the
+  cluster's insert URL and defaulting its scrape interval from
+  `vmCluster.out.scrapeInterval`.
+- **`victoria-metrics-alert`** — the VMAlert and VMAlertmanager CRs. The
+  notifier is operator-side discovery: VMAlert selects the VMAlertmanager CR
+  by label and the operator expands it to every replica's pod FQDN, so this
+  is alertmanager HA fan-out rather than a load-balanced Service.
+
+Readiness is declared, not hardcoded: the CRDs carry
+`readiness = { path; equals; }` (`status.updateStatus == operational`), which
+the CLI evaluates generically.
+
 ### Flake Generation (`mkFlake.nix`)
 
 - Auto-resolves cluster definitions (path → import → callPackage).
