@@ -1352,10 +1352,6 @@ in
             kind = "Job";
             name = "${name}-migrate";
             labels = componentLabels "migrate";
-            annotations = {
-              ${kix.keys.hook} = "pre-deploy";
-              ${kix.keys.hookDeletePolicy} = "before-hook-creation,hook-succeeded";
-            };
             spec = {
               activeDeadlineSeconds = 3600;
               backoffLimit = 0;

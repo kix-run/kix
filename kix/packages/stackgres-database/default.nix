@@ -24,9 +24,9 @@
 #      creates the role, the database, optional ownership, GRANTs, and
 #      requested extensions. Superuser credentials come from the SGCluster's
 #      auto-created secret (also in the postgres namespace), referenced via
-#      a local mkSecretRef. The Job carries the kix.run/hook = "post-deploy"
-#      annotation so it re-runs cleanly when its content changes (e.g.
-#      password rotation).
+#      a local mkSecretRef. The Job's name carries a hash of its inputs, so
+#      a change (e.g. password rotation) is a new Job, not a patch of the
+#      old one; the old one is reaped by its TTL.
 #
 # Same-namespace works too: if the consumer puts both the SGCluster and
 # this database instance in one namespace, `scope.forService` returns a
@@ -349,13 +349,6 @@ in
       bootstrapJob = backendScope.mkJob {
         name = "${name}-bootstrap-${bootstrapHash}";
         labels = labels;
-        annotations = {
-          # Treat as a post-deploy hook so the deploy engine deletes the
-          # previous instance before creating a new one when the spec
-          # changes (e.g. password rotation produces a new hash → new name).
-          ${kix.keys.hook} = "post-deploy";
-          ${kix.keys.hookDeletePolicy} = "before-hook-creation,hook-succeeded";
-        };
         spec = {
           backoffLimit = 20;
           ttlSecondsAfterFinished = 86400;

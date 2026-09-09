@@ -170,12 +170,6 @@ pub const RERUN: &str = key!("rerun");
 /// The only value [`RERUN`] honours.
 pub const RERUN_ON_CHANGE: &str = "on-change";
 
-/// When Kix runs a resource relative to the rest of the deploy.
-pub const HOOK: &str = key!("hook");
-
-/// When Kix deletes a hook resource.
-pub const HOOK_DELETE_POLICY: &str = key!("hook-delete-policy");
-
 /// Finalizer the operator holds on records it reconciles.
 pub const OPERATOR_GC_FINALIZER: &str = key!("operator-gc");
 

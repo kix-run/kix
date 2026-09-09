@@ -87,10 +87,6 @@ let
       jobRes = consumerScope.mkJob {
         name = jobName;
         inherit labels;
-        annotations = {
-          ${kix.keys.hook} = "post-deploy";
-          ${kix.keys.hookDeletePolicy} = "before-hook-creation,hook-succeeded";
-        };
         inherit requires;
         spec = {
           backoffLimit = 20;

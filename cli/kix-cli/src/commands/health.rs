@@ -24,7 +24,7 @@ const DEPENDS_ON: &str = keys::DEPENDS_ON;
 const PACKAGE: &str = keys::PACKAGE;
 const PACKAGE_NAMESPACE: &str = keys::PACKAGE_NAMESPACE;
 // Both spellings mean the same thing; helm-imported hooks carry the helm one.
-const HOOK_DELETE_POLICY: [&str; 2] = [keys::HOOK_DELETE_POLICY, "helm.sh/hook-delete-policy"];
+const HOOK_DELETE_POLICY: [&str; 1] = ["helm.sh/hook-delete-policy"];
 
 /// A live resource with its parsed annotations.
 #[allow(dead_code)]
@@ -392,8 +392,10 @@ fn walk_graph(
 /// Does this manifest declare that it removes itself once it succeeds?
 ///
 /// Two independent declarations, either of which makes absence expected:
-///   * `kix.run/hook-delete-policy` containing `hook-succeeded` — kix deletes
-///     the hook after it completes.
+///   * `helm.sh/hook-delete-policy` containing `hook-succeeded` on a manifest
+///     rendered from a chart: Helm's convention, kept so imported hooks read
+///     the same way. Kix has no hook vocabulary of its own; a Job that
+///     must run again is the rerun rule's business (`kix.run/rerun`).
 ///   * a Job's `spec.ttlSecondsAfterFinished` — Kubernetes' TTL controller
 ///     deletes it some time after completion.
 fn declares_own_deletion(manifest: &serde_json::Value) -> bool {
@@ -845,7 +847,7 @@ mod tests {
         // absent now is still a job that never ran.
         assert!(!declares_own_deletion(&json!({
             "kind": "Job",
-            "metadata": { "annotations": { keys::HOOK_DELETE_POLICY: "before-hook-creation" } },
+            "metadata": { "annotations": { "helm.sh/hook-delete-policy": "before-hook-creation" } },
         })));
     }
 

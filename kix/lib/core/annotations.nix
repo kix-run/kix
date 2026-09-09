@@ -14,7 +14,7 @@
 # Inside `kix/lib`, `import ../core/annotations.nix` (adjust the path).
 # Inside a package, the keys arrive as `kix.keys`:
 #
-#     annotations.${kix.keys.hook} = "post-deploy";
+#     annotations.${kix.keys.derived} = "true";
 #
 # A key spelled by hand in one helper and one checker drifts. A key spelled
 # here does not.
@@ -78,8 +78,6 @@ rec {
     dependsOn = key "depends-on";
     readiness = key "readiness";
     rerun = key "rerun";
-    hook = key "hook";
-    hookDeletePolicy = key "hook-delete-policy";
 
     # Secrets.
     sopsSource = key "sops-source";
