@@ -23,6 +23,7 @@ use thiserror::Error;
 use super::cancel::CancelToken;
 use super::errors::{FailureClass, classify};
 use super::fetch;
+use crate::manifest::keys;
 
 /// After a CRD reaches `Established=True`, the apiserver's discovery endpoint
 /// (and replicas behind an HA load balancer) may still lag by a few hundred
@@ -83,18 +84,18 @@ pub struct ImportTarget {
     /// is sourced from the marker's own `metadata.namespace`.
     pub namespace: Option<String>,
     /// For `Secret` imports, the set of keys the consumer expects to find in
-    /// `data`. Parsed from the `kix.dev/import-secret-keys` annotation (comma
+    /// `data`. Parsed from the `kix.run/import-secret-keys` annotation (comma
     /// separated). Empty = identity-only check (resource existence).
     pub expected_keys: Vec<String>,
 }
 
 /// Extract an [`ImportTarget`] from a manifest if it is a PackageInstance
-/// import marker (`kix.dev/mode: import`). Returns `None` for non-markers or
+/// import marker (`kix.run/mode: import`). Returns `None` for non-markers or
 /// for markers that don't have enough info to verify (no kind hint, etc.).
 ///
 /// The target's namespace is sourced from the marker's own `metadata.namespace`
 /// for namespaced kinds. Cluster-scoped kinds (`CustomResourceDefinition`) set
-/// it to `None`. There is no `kix.dev/import-namespace` annotation: an import
+/// it to `None`. There is no `kix.run/import-namespace` annotation: an import
 /// always describes a resource in the marker's own namespace.
 pub fn import_target_from_manifest(manifest: &Value) -> Option<ImportTarget> {
     if !crate::manifest::lifecycle::is_marker(manifest) {
@@ -103,15 +104,15 @@ pub fn import_target_from_manifest(manifest: &Value) -> Option<ImportTarget> {
     let annotations = manifest.pointer("/metadata/annotations")?;
 
     let import_kind = annotations
-        .get("kix.dev/import-kind")
+        .get(keys::IMPORT_KIND)
         .and_then(Value::as_str)?
         .to_string();
     let import_api_version = annotations
-        .get("kix.dev/import-apiversion")
+        .get(keys::IMPORT_API_VERSION)
         .and_then(Value::as_str)?
         .to_string();
     let import_name = annotations
-        .get("kix.dev/import-name")
+        .get(keys::IMPORT_NAME)
         .and_then(Value::as_str)?
         .to_string();
 
@@ -129,7 +130,7 @@ pub fn import_target_from_manifest(manifest: &Value) -> Option<ImportTarget> {
     // Parse expected Secret keys (comma-separated, no spaces). Empty list is
     // valid — it means "only check that the Secret exists".
     let expected_keys = annotations
-        .get("kix.dev/import-secret-keys")
+        .get(keys::IMPORT_SECRET_KEYS)
         .and_then(Value::as_str)
         .map(|s| {
             s.split(',')
@@ -1047,7 +1048,7 @@ pub fn is_immediate_kind(kind: &str) -> bool {
 }
 
 /// A readiness convention declared by the CRD-owning package and stamped on
-/// the CR as the `kix.dev/readiness` annotation (JSON: `{"path": "/status/...",
+/// the CR as the `kix.run/readiness` annotation (JSON: `{"path": "/status/...",
 /// "equals": "<value>"}`). The CR is ready when the string at `path` equals
 /// `equals`.
 struct DeclaredReadiness {
@@ -1055,7 +1056,7 @@ struct DeclaredReadiness {
     equals: String,
 }
 
-/// Parse the `kix.dev/readiness` annotation, if present and well-formed.
+/// Parse the `kix.run/readiness` annotation, if present and well-formed.
 /// Malformed declarations are ignored (fall through to kind-based checks)
 /// rather than treated as never-ready: the annotation is kix-authored, and a
 /// shape mismatch means a version skew between the CLI and the library, not
@@ -1069,11 +1070,7 @@ struct DeclaredReadiness {
 /// that stamps the annotation. (Old CLI + new manifests is safe: the
 /// annotation is inert there.)
 fn declared_readiness(obj: &DynamicObject) -> Option<DeclaredReadiness> {
-    let raw = obj
-        .metadata
-        .annotations
-        .as_ref()?
-        .get("kix.dev/readiness")?;
+    let raw = keys::get_meta(obj.metadata.annotations.as_ref()?, keys::READINESS)?;
     let v: Value = serde_json::from_str(raw).ok()?;
     Some(DeclaredReadiness {
         path: v.get("path")?.as_str()?.to_string(),
@@ -1091,7 +1088,7 @@ pub fn check_readiness(obj: &DynamicObject, kind: &str) -> bool {
 
     // A CRD-owning package can declare its kinds' readiness convention on
     // the CRD builder (readiness = { path; equals; }); kix stamps it on
-    // every CR built through the typed chain as the `kix.dev/readiness`
+    // every CR built through the typed chain as the `kix.run/readiness`
     // annotation. Honoring it here keeps controller vocabulary out of the
     // CLI: the VictoriaMetrics operator's status.updateStatus ==
     // "operational" convention (15 kinds) used to be a hardcoded list in
@@ -1386,11 +1383,12 @@ fn readiness_message(obj: &DynamicObject, kind: &str) -> String {
                         "{kind}/{name}: no Ready/Available condition; controller reports [{seen}] — ",
                         "if this vocabulary is healthy for this kind, declare its readiness ",
                         "convention on the owning package's CRD builder (readiness = {{ path; ",
-                        "equals; }}, stamped as the kix.dev/readiness annotation) or add a ",
+                        "equals; }}, stamped as the {readiness_key} annotation) or add a ",
                         "rule in check_readiness"
                     ),
                     kind = kind,
                     name = name,
+                    readiness_key = keys::READINESS,
                     seen = seen.join(", ")
                 )
             }
@@ -1432,11 +1430,11 @@ mod tests {
         }
     }
 
-    /// Like make_obj but with a kix.dev/readiness annotation, mirroring what
+    /// Like make_obj but with a kix.run/readiness annotation, mirroring what
     /// the nix typed CRD chain stamps on every CR.
     fn make_annotated_obj(annotation: &str, data: Value) -> DynamicObject {
         let mut annotations = std::collections::BTreeMap::new();
-        annotations.insert("kix.dev/readiness".to_string(), annotation.to_string());
+        annotations.insert(keys::READINESS.to_string(), annotation.to_string());
         DynamicObject {
             metadata: ObjectMeta {
                 name: Some("test".into()),
@@ -1710,16 +1708,16 @@ mod tests {
     #[test]
     fn import_marker_parsed() {
         let manifest = json!({
-            "apiVersion": "kix.dev/v1alpha1",
+            "apiVersion": keys::API_VERSION,
             "kind": "PackageInstance",
             "metadata": {
                 "name": "crd-ref-sgclusters-stackgres-io",
                 "namespace": "data",
                 "annotations": {
-                    "kix.dev/mode": "import",
-                    "kix.dev/import-kind": "CustomResourceDefinition",
-                    "kix.dev/import-apiversion": "apiextensions.k8s.io/v1",
-                    "kix.dev/import-name": "sgclusters.stackgres.io",
+                    keys::MODE: "import",
+                    keys::IMPORT_KIND: "CustomResourceDefinition",
+                    keys::IMPORT_API_VERSION: "apiextensions.k8s.io/v1",
+                    keys::IMPORT_NAME: "sgclusters.stackgres.io",
                 }
             }
         });
@@ -1738,17 +1736,17 @@ mod tests {
         // Namespaced imports take their namespace from the marker's own
         // metadata.namespace, not from any annotation.
         let manifest = json!({
-            "apiVersion": "kix.dev/v1alpha1",
+            "apiVersion": keys::API_VERSION,
             "kind": "PackageInstance",
             "metadata": {
                 "name": "secret-ref-myapp-db-creds",
                 "namespace": "myapp",
                 "annotations": {
-                    "kix.dev/mode": "import",
-                    "kix.dev/import-kind": "Secret",
-                    "kix.dev/import-apiversion": "v1",
-                    "kix.dev/import-name": "db-creds",
-                    "kix.dev/import-secret-keys": "username,password",
+                    keys::MODE: "import",
+                    keys::IMPORT_KIND: "Secret",
+                    keys::IMPORT_API_VERSION: "v1",
+                    keys::IMPORT_NAME: "db-creds",
+                    keys::IMPORT_SECRET_KEYS: "username,password",
                 }
             }
         });
@@ -1767,10 +1765,10 @@ mod tests {
                 "name": "secret-ref-myapp-bootstrap",
                 "namespace": "myapp",
                 "annotations": {
-                    "kix.dev/mode": "import",
-                    "kix.dev/import-kind": "Secret",
-                    "kix.dev/import-apiversion": "v1",
-                    "kix.dev/import-name": "bootstrap",
+                    keys::MODE: "import",
+                    keys::IMPORT_KIND: "Secret",
+                    keys::IMPORT_API_VERSION: "v1",
+                    keys::IMPORT_NAME: "bootstrap",
                 }
             }
         });
@@ -1783,7 +1781,7 @@ mod tests {
         let manifest = json!({
             "kind": "PackageInstance",
             "metadata": {
-                "annotations": { "kix.dev/mode": "normal" }
+                "annotations": { keys::MODE: "normal" }
             }
         });
         assert!(import_target_from_manifest(&manifest).is_none());
@@ -1795,10 +1793,10 @@ mod tests {
             "kind": "ConfigMap",
             "metadata": {
                 "annotations": {
-                    "kix.dev/mode": "import",
-                    "kix.dev/import-kind": "Secret",
-                    "kix.dev/import-apiversion": "v1",
-                    "kix.dev/import-name": "foo",
+                    keys::MODE: "import",
+                    keys::IMPORT_KIND: "Secret",
+                    keys::IMPORT_API_VERSION: "v1",
+                    keys::IMPORT_NAME: "foo",
                 }
             }
         });

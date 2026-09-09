@@ -7,7 +7,7 @@
 # bearerToken settings apply to all three; per-endpoint relabel/interval
 # overrides exist on the cAdvisor / probes sub-options.
 
-{ lib }:
+{ lib, kix }:
 let
   # Default cAdvisor metric drops mirror the kube-prometheus-stack chart —
   # cAdvisor produces a *lot* of metrics that aren't useful for alerting/
@@ -275,7 +275,7 @@ in
           # The `kubelet` Service is operator-created at runtime (see header)
           # — kix renders no Service matching this selector, which the
           # monitorSelectorMatchesService rule would otherwise flag.
-          annotations."kix.dev/monitors-external-service" = "true";
+          annotations.${kix.keys.monitorsExternalService} = "true";
           spec = smonSpec;
         };
       };

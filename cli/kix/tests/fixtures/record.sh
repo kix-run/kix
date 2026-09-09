@@ -29,9 +29,9 @@ metadata:
   labels:
     app.kubernetes.io/managed-by: kix
   annotations:
-    kix.dev/identity-hash: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaans
-    kix.dev/package: fixtures
-    kix.dev/package-namespace: drift-fixtures
+    kix.run/identity-hash: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaans
+    kix.run/package: fixtures
+    kix.run/package-namespace: drift-fixtures
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -42,10 +42,10 @@ metadata:
     app.kubernetes.io/managed-by: kix
     app.kubernetes.io/name: fixture-web
   annotations:
-    kix.dev/identity-hash: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaweb
-    kix.dev/package: fixtures
-    kix.dev/package-namespace: drift-fixtures
-    kix.dev/depends-on: requires:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaans
+    kix.run/identity-hash: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaweb
+    kix.run/package: fixtures
+    kix.run/package-namespace: drift-fixtures
+    kix.run/depends-on: requires:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaans
 spec:
   replicas: 2
   selector:
@@ -92,9 +92,9 @@ metadata:
   labels:
     app.kubernetes.io/managed-by: kix
   annotations:
-    kix.dev/identity-hash: aaaaaaaaaaaaaaaaaaaaaaaaaaaaasec
-    kix.dev/package: fixtures
-    kix.dev/package-namespace: drift-fixtures
+    kix.run/identity-hash: aaaaaaaaaaaaaaaaaaaaaaaaaaaaasec
+    kix.run/package: fixtures
+    kix.run/package-namespace: drift-fixtures
 type: Opaque
 data:
   username: dGVzdHVzZXI=
@@ -109,9 +109,9 @@ metadata:
     app.kubernetes.io/managed-by: kix
     app.kubernetes.io/name: fixture-api
   annotations:
-    kix.dev/identity-hash: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaapi
-    kix.dev/package: fixtures
-    kix.dev/package-namespace: drift-fixtures
+    kix.run/identity-hash: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaapi
+    kix.run/package: fixtures
+    kix.run/package-namespace: drift-fixtures
 spec:
   replicas: 1
   selector:
@@ -140,7 +140,7 @@ kubectl apply --server-side --field-manager=kix -f "$REC/manifests.yaml"
 # kix's bookkeeping merge patch (manager kix, operation Update)
 for target in "namespace/drift-fixtures" "deployment/fixture-web" "secret/fixture-creds" "deployment/fixture-api"; do
     kubectl patch -n drift-fixtures "$target" --field-manager=kix --type=merge \
-        -p '{"metadata":{"annotations":{"kix.dev/activations":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaact","kix.dev/applied-hash":"placeholder-recomputed-by-tests"}}}'
+        -p '{"metadata":{"annotations":{"kix.run/activations":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaact","kix.run/applied-hash":"placeholder-recomputed-by-tests"}}}'
 done
 
 # Foreign co-owner on fixture-api: image takeover (manager kubectl-patch)

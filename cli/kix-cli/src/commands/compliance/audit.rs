@@ -29,6 +29,7 @@ use crate::output;
 
 use super::{attest, sbom, shared};
 use crate::commands::CommandContext;
+use kix::manifest::keys;
 
 pub fn run(args: &ComplianceAuditArgs, ctx: &mut CommandContext) -> Result<()> {
     let out_dir = PathBuf::from(&args.out);
@@ -190,7 +191,7 @@ fn build_sarif(findings: &[Value]) -> Value {
                 "driver": {
                     "name": "kix",
                     "version": env!("CARGO_PKG_VERSION"),
-                    "informationUri": "https://kix.dev",
+                    "informationUri": keys::WEBSITE,
                     "rules": rules,
                 }
             },

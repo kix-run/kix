@@ -15,7 +15,7 @@
 #     serverName = "etcd.local";
 #   };
 
-{ lib }:
+{ lib, kix }:
 let
   serviceName = "kube-prometheus-stack-kube-etcd";
 in

@@ -1,7 +1,7 @@
 # coredns monitor + bridge Service. See kube-controller-manager.nix for rationale.
 # Note: chart's core-dns has no `endpoints.yaml` — coredns is always a Service in kube-system.
 
-{ lib }:
+{ lib, kix }:
 let
   serviceName = "kube-prometheus-stack-coredns";
 in

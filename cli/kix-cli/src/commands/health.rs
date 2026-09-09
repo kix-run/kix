@@ -16,14 +16,15 @@ use crate::cli::HealthArgs;
 use crate::output;
 
 use super::CommandContext;
+use kix::manifest::keys;
 
 // Annotation keys
-const IDENTITY_HASH: &str = "kix.dev/identity-hash";
-const DEPENDS_ON: &str = "kix.dev/depends-on";
-const PACKAGE: &str = "kix.dev/package";
-const PACKAGE_NAMESPACE: &str = "kix.dev/package-namespace";
+const IDENTITY_HASH: &str = keys::IDENTITY_HASH;
+const DEPENDS_ON: &str = keys::DEPENDS_ON;
+const PACKAGE: &str = keys::PACKAGE;
+const PACKAGE_NAMESPACE: &str = keys::PACKAGE_NAMESPACE;
 // Both spellings mean the same thing; helm-imported hooks carry the helm one.
-const HOOK_DELETE_POLICY: [&str; 2] = ["kix.dev/hook-delete-policy", "helm.sh/hook-delete-policy"];
+const HOOK_DELETE_POLICY: [&str; 2] = [keys::HOOK_DELETE_POLICY, "helm.sh/hook-delete-policy"];
 
 /// A live resource with its parsed annotations.
 #[allow(dead_code)]
@@ -140,6 +141,7 @@ pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
 
         // 2. Find active Activation CR
         let activation_ar = activation::find_activation_ar(&discovery)
+            .map_err(|e| miette!("{e}"))?
             .ok_or_else(|| miette!("Activation CRD not registered on cluster"))?;
 
         let active = activation::find_active(&client, &activation_ar.0, &args.cluster)
@@ -173,22 +175,22 @@ pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
         // Read annotations from typed metadata (more reliable than raw data)
         let annotations = obj.metadata.annotations.as_ref();
         let identity_hash = annotations
-            .and_then(|a| a.get(IDENTITY_HASH))
-            .cloned()
+            .and_then(|a| keys::get_meta(a, IDENTITY_HASH))
+            .map(str::to_string)
             .unwrap_or_default();
         let package = annotations
-            .and_then(|a| a.get(PACKAGE))
-            .cloned()
+            .and_then(|a| keys::get_meta(a, PACKAGE))
+            .map(str::to_string)
             .unwrap_or_else(|| "_cluster".to_string());
         let package_namespace = annotations
-            .and_then(|a| a.get(PACKAGE_NAMESPACE))
-            .cloned()
+            .and_then(|a| keys::get_meta(a, PACKAGE_NAMESPACE))
+            .map(str::to_string)
             .unwrap_or_else(|| "_cluster".to_string());
         let is_import = kix::manifest::lifecycle::lifecycle_of_live(&obj)
             == kix::manifest::lifecycle::Lifecycle::Marker;
         let depends_on_str = annotations
-            .and_then(|a| a.get(DEPENDS_ON))
-            .cloned()
+            .and_then(|a| keys::get_meta(a, DEPENDS_ON))
+            .map(str::to_string)
             .unwrap_or_default();
         let depends_on: Vec<String> = depends_on_str
             .split(',')
@@ -390,7 +392,7 @@ fn walk_graph(
 /// Does this manifest declare that it removes itself once it succeeds?
 ///
 /// Two independent declarations, either of which makes absence expected:
-///   * `kix.dev/hook-delete-policy` containing `hook-succeeded` — kix deletes
+///   * `kix.run/hook-delete-policy` containing `hook-succeeded` — kix deletes
 ///     the hook after it completes.
 ///   * a Job's `spec.ttlSecondsAfterFinished` — Kubernetes' TTL controller
 ///     deletes it some time after completion.
@@ -734,7 +736,15 @@ fn store_path_for_hash(hash: &str) -> Option<std::path::PathBuf> {
 fn read_seal(hash: &str) -> Option<serde_json::Value> {
     let path = store_path_for_hash(hash)?;
     let contents = std::fs::read_to_string(path).ok()?;
-    serde_json::from_str(&contents).ok()
+    let mut value: serde_json::Value = serde_json::from_str(&contents).ok()?;
+    // Until the first deploy after the domain move, the hashes that reach
+    // here are pre-move store hashes, so the seal behind them spells its
+    // annotations under the retired domain. These are Nix-rendered keys, not
+    // CLI stamps, and readers here look them up by exact name: an
+    // un-upgraded seal makes every self-deleting hook Job read as Missing
+    // and `kix health` exit 1 on a healthy cluster.
+    kix::legacy_domain::upgrade_manifest(&mut value);
+    Some(value)
 }
 
 /// Try to resolve a nix store hash to a ResourceId.
@@ -835,7 +845,7 @@ mod tests {
         // absent now is still a job that never ran.
         assert!(!declares_own_deletion(&json!({
             "kind": "Job",
-            "metadata": { "annotations": { "kix.dev/hook-delete-policy": "before-hook-creation" } },
+            "metadata": { "annotations": { keys::HOOK_DELETE_POLICY: "before-hook-creation" } },
         })));
     }
 

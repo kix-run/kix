@@ -16,6 +16,7 @@
 {
   scope,
   lib,
+  kix,
 }:
 let
   name = scope.instanceName;
@@ -30,7 +31,7 @@ let
     ./components/kube-scheduler.nix
     ./components/kube-proxy.nix
   ];
-  components = map (f: import f { inherit lib; }) componentFiles;
+  components = map (f: import f { inherit lib kix; }) componentFiles;
 
   # Merge each component's `options` attr into a single tree.
   componentOptions = lib.foldl' lib.recursiveUpdate { } (map (c: c.options) components);

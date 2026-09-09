@@ -41,8 +41,8 @@ in
         name = "${name}-migrate";
         labels = componentLabels "migrate";
         annotations = {
-          "kix.dev/hook" = "pre-deploy";
-          "kix.dev/hook-delete-policy" = "before-hook-creation,hook-succeeded";
+          ${kix.keys.hook} = "pre-deploy";
+          ${kix.keys.hookDeletePolicy} = "before-hook-creation,hook-succeeded";
         };
         spec = {
           activeDeadlineSeconds = 3600;

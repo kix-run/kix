@@ -1,5 +1,11 @@
 { lib }:
 
+let
+  # Kix's own annotation keys and API names, spelled once in
+  # core/annotations.nix.
+  kixAnnotations = import ./annotations.nix;
+  kixKeys = kixAnnotations.keys;
+in
 rec {
 
   facts = import ./facts.nix { inherit lib; };
@@ -277,7 +283,7 @@ rec {
           rawManifest
         else
           lib.recursiveUpdate rawManifest {
-            metadata.annotations."kix.dev/depends-on" = builtins.concatStringsSep "," depEntries;
+            metadata.annotations.${kixKeys.dependsOn} = builtins.concatStringsSep "," depEntries;
           };
 
       manifestJsonStamped = builtins.toJSON rawManifestStamped;
@@ -545,13 +551,13 @@ rec {
     mkResource {
       apiVersion = "apiextensions.k8s.io/v1";
       kind = "CustomResourceDefinition";
-      name = "${plural}.kix.dev";
+      name = "${plural}.${kixAnnotations.group}";
       namespace = clusterScoped;
       labels = {
         "app.kubernetes.io/managed-by" = "kix";
       };
       extra.spec = {
-        group = "kix.dev";
+        group = kixAnnotations.group;
         inherit scope;
         names = {
           inherit kind plural;
@@ -656,7 +662,7 @@ rec {
       factBehavior ? null,
       # readiness convention of this kind's controller — like factBehavior,
       # a property of the CRD, delivered along the typed chain. Stamped on
-      # every CR built via mkCR as the `kix.dev/readiness` annotation
+      # every CR built via mkCR as the `kix.run/readiness` annotation
       # (JSON), which the kix CLI evaluates at deploy time instead of
       # falling back to the generic Ready/Available condition check (many
       # operators never stamp those; the VictoriaMetrics operator, for
@@ -683,7 +689,7 @@ rec {
         // lib.optionalAttrs (factBehavior != null) { inherit factBehavior; }
         // lib.optionalAttrs (_validatedReadiness != null) {
           annotations = (args.annotations or { }) // {
-            "kix.dev/readiness" = builtins.toJSON _validatedReadiness;
+            ${kixKeys.readiness} = builtins.toJSON _validatedReadiness;
           };
         };
 

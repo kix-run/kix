@@ -9,7 +9,7 @@
 # For managed clusters where kube-controller-manager isn't a pod (EKS/GKE/AKS),
 # set `endpoints` to the IP list and an Endpoints object is emitted instead.
 
-{ lib }:
+{ lib, kix }:
 let
   serviceName = "kube-prometheus-stack-kube-controller-manager";
 in

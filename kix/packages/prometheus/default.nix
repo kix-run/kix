@@ -492,7 +492,7 @@ in
     let
       mkPrometheus = prometheusOperator.out.mkPrometheus;
 
-      # "<group>/<Kind>/<name>" of a CR, for kix.dev/operand-of. The name
+      # "<group>/<Kind>/<name>" of a CR, for the operand-of annotation. The name
       # keeps the CR's context, so the Service also depends on the CR.
       operandOf = cr: "${lib.head (lib.splitString "/" cr.apiVersion)}/${cr.kind}/${cr.name}";
       mkSmon = prometheusOperator.out.mkServiceMonitor scope;
@@ -510,7 +510,7 @@ in
       # `out.selector` for a Service falls back to metadata.labels when
       # `spec.selector` lacks `matchLabels`).
       thanosDiscoveryLabel = {
-        "kix.dev/role" = "thanos-discovery";
+        ${kix.keys.role} = "thanos-discovery";
       };
 
       mkServicePorts =
@@ -766,7 +766,7 @@ in
 
       # ── Thanos sidecar discovery Service (in-cluster) ────────────────────
       # Mirrors kube-prometheus-stack/templates/prometheus/serviceThanosSidecar.yaml.
-      # ServiceMonitor and Ingress key off `kix.dev/role: thanos-discovery`
+      # ServiceMonitor and Ingress key off `kix.run/role: thanos-discovery`
       # in metadata.labels (chart uses `app: <fullname>-thanos-discovery`).
       thanosService = lib.optionalAttrs config.thanos.service.enabled {
         discovery = scope.mkResource ({
@@ -779,7 +779,7 @@ in
           # cross-resource check accepts a selector that matches no pod
           # template when the Service names the CR that produces the pods.
           annotations = config.thanos.service.annotations // {
-            "kix.dev/operand-of" = operandOf self.prometheus;
+            ${kix.keys.operandOf} = operandOf self.prometheus;
           };
           spec = {
             type = config.thanos.service.type;
@@ -808,7 +808,7 @@ in
           name = "${name}-thanos-external";
           labels = config.thanos.serviceExternal.labels;
           annotations = config.thanos.serviceExternal.annotations // {
-            "kix.dev/operand-of" = operandOf self.prometheus;
+            ${kix.keys.operandOf} = operandOf self.prometheus;
           };
           spec = {
             type = config.thanos.serviceExternal.type;

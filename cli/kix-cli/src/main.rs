@@ -90,6 +90,9 @@ fn main() -> miette::Result<()> {
         Command::Graph(args) => commands::graph::run(args, &mut ctx),
         Command::Inspect(args) => commands::inspect::run(args, &mut ctx),
         Command::Gc(args) => commands::gc::run(args, &mut ctx),
+        Command::Migrate(cli::MigrateCommand::Domain(args)) => {
+            commands::migrate::run(args, &mut ctx)
+        }
         Command::Rollback(args) => commands::rollback::run(args, &mut ctx),
         Command::Export(args) => commands::export::run(args, &mut ctx),
         Command::Logs(args) => commands::logs::run(args, &mut ctx),

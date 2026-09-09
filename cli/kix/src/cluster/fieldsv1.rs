@@ -16,11 +16,6 @@ use super::normalize;
 /// The field manager kix uses for server-side apply.
 pub const KIX_FIELD_MANAGER: &str = "kix";
 
-/// Annotation carrying the applied-content hash stamped from the SSA echo.
-///
-/// (`kix.dev/content-hash` is taken by the SOPS ciphertext hash.)
-pub const APPLIED_HASH_ANNOTATION: &str = "kix.dev/applied-hash";
-
 /// Extract the fieldsV1 tree of kix's SSA entry: manager == "kix",
 /// operation == "Apply", no subresource.
 ///
@@ -184,7 +179,7 @@ pub fn merge_typed_metadata(obj: &DynamicObject) -> Value {
 ///
 /// 1. Merge typed metadata back into the data `Value`.
 /// 2. Project onto kix's fieldsV1 (the subset kix owns).
-/// 3. Strip `kix.dev/*` annotations (self-reference: the stamp must not
+/// 3. Strip `kix.run/*` annotations (self-reference: the stamp must not
 ///    change its own hash).
 /// 4. Blake3 over canonical (sorted-keys) JSON.
 ///
@@ -289,9 +284,9 @@ mod tests {
 
     #[test]
     fn set_element_matches_by_value() {
-        let live = json!(["kix.dev/finalizer", "other/finalizer"]);
-        let fields = json!({"v:\"kix.dev/finalizer\"": {}});
-        assert_eq!(project(&live, &fields), json!(["kix.dev/finalizer"]));
+        let live = json!(["example.com/finalizer", "other/finalizer"]);
+        let fields = json!({"v:\"example.com/finalizer\"": {}});
+        assert_eq!(project(&live, &fields), json!(["example.com/finalizer"]));
     }
 
     #[test]

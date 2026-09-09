@@ -12,7 +12,8 @@ use kube::api::DynamicObject;
 use serde_json::Value;
 
 use kix::cluster::drift::{self, DriftVerdict};
-use kix::cluster::fieldsv1::{self, APPLIED_HASH_ANNOTATION};
+use kix::cluster::fieldsv1;
+use kix::manifest::keys;
 
 fn load(json: &str) -> DynamicObject {
     serde_json::from_str(json).expect("fixture must deserialize as DynamicObject")
@@ -96,10 +97,7 @@ fn deployment_projection_shape() {
     );
     // The bookkeeping annotations live under kix's Update entry, not the
     // Apply fieldset, so they never enter the projection.
-    assert!(
-        proj.pointer("/metadata/annotations/kix.dev~1applied-hash")
-            .is_none()
-    );
+    assert!(keys::get(&proj, keys::APPLIED_HASH).is_none());
 }
 
 #[test]
@@ -136,15 +134,15 @@ fn hash_is_stable_across_recompute_and_roundtrip() {
 
 #[test]
 fn hash_ignores_own_stamp_annotation() {
-    // The stamp must not change its own hash: rewriting kix.dev/applied-hash
-    // (or any kix.dev/* bookkeeping) leaves the hash untouched.
+    // The stamp must not change its own hash: rewriting kix.run/applied-hash
+    // (or any kix.run/* bookkeeping) leaves the hash untouched.
     let mut obj = secret();
     let before = fieldsv1::applied_content_hash(&obj).unwrap();
     obj.metadata
         .annotations
         .as_mut()
         .unwrap()
-        .insert(APPLIED_HASH_ANNOTATION.to_string(), before.clone());
+        .insert(keys::APPLIED_HASH.to_string(), before.clone());
     assert_eq!(before, fieldsv1::applied_content_hash(&obj).unwrap());
 }
 
@@ -293,7 +291,7 @@ fn check_object_in_sync_when_stamp_matches() {
         .annotations
         .as_mut()
         .unwrap()
-        .insert(APPLIED_HASH_ANNOTATION.to_string(), hash);
+        .insert(keys::APPLIED_HASH.to_string(), hash);
     let report = drift::check_object(&obj);
     assert_eq!(report.verdict, DriftVerdict::InSync);
     assert_eq!(report.rid.name, "fixture-web");
@@ -302,12 +300,31 @@ fn check_object_in_sync_when_stamp_matches() {
 #[test]
 fn check_object_unstamped_without_annotation() {
     let mut obj = deployment();
+    // Every Kix key, under the current domain or a retired one: an object
+    // stamped by an older Kix is stamped, not unstamped.
     obj.metadata
         .annotations
         .as_mut()
         .unwrap()
-        .remove(APPLIED_HASH_ANNOTATION);
+        .retain(|k, _| !keys::is_kix_key(k));
     assert_eq!(drift::check_object(&obj).verdict, DriftVerdict::Unstamped);
+}
+
+/// An object a Kix from before the domain move stamped still reads as
+/// stamped, so drift reports it and gc does not call it unmanaged.
+#[test]
+fn check_object_reads_a_stamp_under_a_retired_domain() {
+    let Some(legacy) = kix::legacy_domain::DOMAINS.first() else {
+        return;
+    };
+    let mut obj = deployment();
+    let annotations = obj.metadata.annotations.as_mut().unwrap();
+    annotations.remove(keys::APPLIED_HASH);
+    annotations.insert(
+        format!("{legacy}/applied-hash"),
+        "some-old-hash".to_string(),
+    );
+    assert_ne!(drift::check_object(&obj).verdict, DriftVerdict::Unstamped);
 }
 
 #[test]
@@ -345,7 +362,7 @@ fn check_object_drifted_with_attribution() {
         .annotations
         .as_mut()
         .unwrap()
-        .insert(APPLIED_HASH_ANNOTATION.to_string(), stamped_hash);
+        .insert(keys::APPLIED_HASH.to_string(), stamped_hash);
 
     let report = drift::check_object(&obj);
     let DriftVerdict::Drifted { foreign } = report.verdict else {

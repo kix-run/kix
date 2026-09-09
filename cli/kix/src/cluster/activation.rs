@@ -10,6 +10,7 @@
 //! kix rollback    → current becomes Superseded, target becomes Active
 //! ```
 
+use crate::manifest::keys;
 use kube::{
     api::{Api, DynamicObject, ListParams, Patch, PatchParams},
     client::Client,
@@ -17,12 +18,6 @@ use kube::{
 };
 use serde_json::{Value, json};
 use thiserror::Error;
-
-use super::apply::IDENTITY_HASH_ANNOTATION;
-
-/// Annotation keys used on Activation CRs.
-pub const PREVIOUS_ANNOTATION: &str = "kix.dev/previous";
-pub const DEPLOYED_AT_ANNOTATION: &str = "kix.dev/deployed-at";
 
 /// Activation phase values (stored in status.phase).
 pub const PHASE_QUEUED: &str = "Queued";
@@ -33,9 +28,6 @@ pub const PHASE_DEPLOYING: &str = "Deploying";
 /// Treated as the "current state" for diffing/drift purposes — the next deploy
 /// must be able to find this CR to compute a meaningful plan.
 pub const PHASE_DEGRADED: &str = "Degraded";
-
-/// Label for filtering activations by cluster.
-pub const CLUSTER_LABEL: &str = "kix.dev/cluster";
 
 #[derive(Error, Debug)]
 pub enum ActivationError {
@@ -65,9 +57,25 @@ pub struct ActiveActivation {
 }
 
 /// Find the Activation ApiResource from discovery results.
-pub fn find_activation_ar(discovery: &[(ApiResource, Scope)]) -> Option<&(ApiResource, Scope)> {
+pub fn find_activation_ar(
+    discovery: &[(ApiResource, Scope)],
+) -> Result<Option<&(ApiResource, Scope)>, crate::legacy_domain::LegacyDomainError> {
+    // The gate. A cluster whose records still sit under a retired group is
+    // refused here, so every command that reads a record is covered: deploy,
+    // rollback, gc, health, status and the operator.
+    let groups: Vec<&str> = discovery
+        .iter()
+        .filter(|(ar, _)| crate::manifest::lifecycle::is_record_kind(&ar.kind))
+        .map(|(ar, _)| ar.group.as_str())
+        .collect();
+    crate::legacy_domain::check_cluster(&groups)?;
+    Ok(find_current_activation_ar(discovery))
+}
+
+/// The Activation `ApiResource` under the current group, if discovery has it.
+fn find_current_activation_ar(discovery: &[(ApiResource, Scope)]) -> Option<&(ApiResource, Scope)> {
     discovery.iter().find(|(ar, _)| {
-        crate::manifest::lifecycle::is_record_kind(&ar.kind) && ar.group == "kix.dev"
+        crate::manifest::lifecycle::is_record_kind(&ar.kind) && ar.group == keys::GROUP
     })
 }
 
@@ -86,7 +94,8 @@ pub async fn find_active(
 ) -> Result<Option<ActiveActivation>, ActivationError> {
     let api: Api<DynamicObject> = Api::all_with(client.clone(), ar);
     let lp = ListParams::default().labels(&format!(
-        "app.kubernetes.io/managed-by=kix,{CLUSTER_LABEL}={cluster_name}"
+        "app.kubernetes.io/managed-by=kix,{}={cluster_name}",
+        keys::CLUSTER_LABEL
     ));
 
     let list = api.list(&lp).await.map_err(ActivationError::ListFailed)?;
@@ -102,11 +111,11 @@ pub async fn find_active(
             let name = item.metadata.name.clone().unwrap_or_default();
             let annotations = item.metadata.annotations.as_ref();
             let identity_hash = annotations
-                .and_then(|a| a.get(IDENTITY_HASH_ANNOTATION))
-                .cloned();
+                .and_then(|a| keys::get_meta(a, keys::IDENTITY_HASH))
+                .map(str::to_string);
             let built_via = annotations
-                .and_then(|a| a.get(BUILT_VIA_ANNOTATION))
-                .cloned();
+                .and_then(|a| keys::get_meta(a, keys::BUILT_VIA))
+                .map(str::to_string);
             return Ok(Some(ActiveActivation {
                 name,
                 identity_hash,
@@ -120,15 +129,15 @@ pub async fn find_active(
 
 /// After a deploy, update the activation lifecycle:
 /// 1. Mark the old activation as Superseded (status.phase=Superseded)
-/// 2. Set kix.dev/previous on the new activation pointing to the old one
-/// 3. Set kix.dev/deployed-at timestamp on the new activation
+/// 2. Set kix.run/previous on the new activation pointing to the old one
+/// 3. Set kix.run/deployed-at timestamp on the new activation
 /// 4. Set the new activation phase: `Active` on a clean deploy, `Degraded` if
 ///    `had_failures` is true. Either way, it becomes the cluster's current
 ///    state — the next deploy must be able to find it via `find_active` to
 ///    compute a meaningful diff. Marking it Active despite failures would
 ///    misrepresent the state; refusing to finalize at all (the previous
 ///    behavior) leaves an orphaned Activation that nothing can find.
-/// 5. Add kix.dev/cluster label for filtering (also stamped at build time
+/// 5. Add kix.run/cluster label for filtering (also stamped at build time
 ///    via `mkActivation`, but re-asserted here for older CRs).
 pub async fn finalize_deploy(
     client: &Client,
@@ -147,19 +156,19 @@ pub async fn finalize_deploy(
     }
 
     // 2. Update new activation with lifecycle annotations (merge patch to preserve
-    //    kix.dev/identity-hash and other annotations set during wave apply)
+    //    kix.run/identity-hash and other annotations set during wave apply)
     let mut annotations = serde_json::Map::new();
-    annotations.insert(DEPLOYED_AT_ANNOTATION.to_string(), Value::String(now));
+    annotations.insert(keys::DEPLOYED_AT.to_string(), Value::String(now));
     if let Some(old) = old_activation
         && let Some(ref hash) = old.identity_hash
     {
-        annotations.insert(PREVIOUS_ANNOTATION.to_string(), Value::String(hash.clone()));
+        annotations.insert(keys::PREVIOUS.to_string(), Value::String(hash.clone()));
     }
 
     let spec_patch = json!({
         "metadata": {
             "labels": {
-                CLUSTER_LABEL: cluster_name,
+                keys::CLUSTER_LABEL: cluster_name,
             },
             "annotations": annotations,
         },
@@ -215,7 +224,8 @@ pub async fn list_superseded(
 ) -> Result<Vec<String>, ActivationError> {
     let api: Api<DynamicObject> = Api::all_with(client.clone(), ar);
     let lp = ListParams::default().labels(&format!(
-        "app.kubernetes.io/managed-by=kix,{CLUSTER_LABEL}={cluster_name}"
+        "app.kubernetes.io/managed-by=kix,{}={cluster_name}",
+        keys::CLUSTER_LABEL
     ));
 
     let list = api.list(&lp).await.map_err(ActivationError::ListFailed)?;
@@ -241,7 +251,7 @@ pub async fn list_superseded(
 /// Identity hashes of every Activation CR on the cluster, across all clusters
 /// and all phases.
 ///
-/// This is the authority for pruning `kix.dev/activations`: a hash in that set
+/// This is the authority for pruning `kix.run/activations`: a hash in that set
 /// that names no Activation here is a reference to something that no longer
 /// exists. Deliberately NOT filtered by cluster label — one resource can be
 /// referenced by activations of more than one cluster, and pruning another
@@ -267,16 +277,13 @@ pub async fn live_activation_hashes(
             .filter_map(|item| {
                 item.metadata
                     .annotations
-                    .as_ref()?
-                    .get(IDENTITY_HASH_ANNOTATION)
-                    .cloned()
+                    .as_ref()
+                    .and_then(|a| keys::get_meta(a, keys::IDENTITY_HASH))
+                    .map(str::to_string)
             })
             .collect(),
     )
 }
-
-/// Annotation key for the activation result dir store path.
-pub const BUILT_VIA_ANNOTATION: &str = "kix.dev/built-via";
 
 /// Info about a Superseded activation, including when it was deployed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -304,7 +311,8 @@ pub async fn list_superseded_activations(
 ) -> Result<Vec<SupersededActivation>, ActivationError> {
     let api: Api<DynamicObject> = Api::all_with(client.clone(), ar);
     let lp = ListParams::default().labels(&format!(
-        "app.kubernetes.io/managed-by=kix,{CLUSTER_LABEL}={cluster_name}"
+        "app.kubernetes.io/managed-by=kix,{}={cluster_name}",
+        keys::CLUSTER_LABEL
     ));
 
     let list = api.list(&lp).await.map_err(ActivationError::ListFailed)?;
@@ -329,17 +337,17 @@ pub async fn list_superseded_activations(
 
         let annotations = item.metadata.annotations.as_ref();
         let identity_hash = annotations
-            .and_then(|a| a.get(IDENTITY_HASH_ANNOTATION))
-            .cloned();
+            .and_then(|a| keys::get_meta(a, keys::IDENTITY_HASH))
+            .map(str::to_string);
 
         let deployed_at = annotations
-            .and_then(|a| a.get(DEPLOYED_AT_ANNOTATION))
-            .cloned()
+            .and_then(|a| keys::get_meta(a, keys::DEPLOYED_AT))
+            .map(str::to_string)
             .unwrap_or_default();
 
         let built_via = annotations
-            .and_then(|a| a.get(BUILT_VIA_ANNOTATION))
-            .cloned();
+            .and_then(|a| keys::get_meta(a, keys::BUILT_VIA))
+            .map(str::to_string);
 
         let previous_activation = item
             .data
@@ -368,7 +376,7 @@ pub async fn list_superseded_activations(
 /// never more than 50, and retire anything older than 30 days beyond the
 /// floor. Helm 3 and Argo CD keep 10 by default; the cap and the age rule
 /// exist because each record still on the cluster keeps one hash alive in
-/// `kix.dev/activations` on every managed resource, and that annotation is
+/// `kix.run/activations` on every managed resource, and that annotation is
 /// capped at 256 KiB.
 pub const DEFAULT_KEEP_MIN: usize = 10;
 pub const DEFAULT_KEEP_MAX: usize = 50;
@@ -406,7 +414,7 @@ pub enum RetireReason {
     BeyondMax(usize),
     /// Older than `keep_for` and past the `keep_min` newest.
     OlderThan(chrono::Duration),
-    /// No usable `kix.dev/deployed-at`, so its age is unknown and it sorts
+    /// No usable `kix.run/deployed-at`, so its age is unknown and it sorts
     /// oldest. Only records that never finished a deploy look like this.
     UnknownAge,
 }
@@ -461,7 +469,7 @@ pub fn deployed_at(record: &SupersededActivation) -> Option<chrono::DateTime<chr
 /// Split a cluster's Superseded records into kept and retired under a
 /// [`RetentionPolicy`] (`kix gc --keep`, kixpkgs#59 follow-up).
 ///
-/// Newest first by `kix.dev/deployed-at` (parsed, so offsets and precision
+/// Newest first by `kix.run/deployed-at` (parsed, so offsets and precision
 /// do not matter); a record whose annotation is missing or unparseable is
 /// treated as the oldest. Ties break on name so the plan is deterministic.
 /// Then, in order: the first `keep_min` are kept whatever their age; past
@@ -570,7 +578,8 @@ pub async fn find_queued(
 ) -> Result<Vec<QueuedActivation>, ActivationError> {
     let api: Api<DynamicObject> = Api::all_with(client.clone(), ar);
     let lp = ListParams::default().labels(&format!(
-        "app.kubernetes.io/managed-by=kix,{CLUSTER_LABEL}={cluster_name}"
+        "app.kubernetes.io/managed-by=kix,{}={cluster_name}",
+        keys::CLUSTER_LABEL
     ));
 
     let list = api.list(&lp).await.map_err(ActivationError::ListFailed)?;
@@ -588,8 +597,8 @@ pub async fn find_queued(
             let name = item.metadata.name.clone().unwrap_or_default();
             let annotations = item.metadata.annotations.as_ref();
             let identity_hash = annotations
-                .and_then(|a| a.get(IDENTITY_HASH_ANNOTATION))
-                .cloned();
+                .and_then(|a| keys::get_meta(a, keys::IDENTITY_HASH))
+                .map(str::to_string);
             let created_at = item
                 .metadata
                 .creation_timestamp

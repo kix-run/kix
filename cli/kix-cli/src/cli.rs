@@ -105,6 +105,10 @@ pub enum Command {
     /// Garbage-collect stale kix-managed resources
     Gc(GcArgs),
 
+    /// One-off cluster migrations
+    #[command(subcommand)]
+    Migrate(MigrateCommand),
+
     /// Rollback to the previous activation
     Rollback(RollbackArgs),
 
@@ -149,6 +153,7 @@ impl Command {
             Command::Graph(a) => Some(&a.cluster),
             Command::Inspect(a) => Some(&a.cluster),
             Command::Gc(a) => Some(&a.cluster),
+            Command::Migrate(MigrateCommand::Domain(a)) => Some(&a.cluster),
             Command::Health(a) => Some(&a.cluster),
             Command::Rollback(a) => Some(&a.cluster),
             Command::Export(a) => Some(&a.cluster),
@@ -381,7 +386,49 @@ pub enum OnError {
     Continue,
 }
 
-#[derive(clap::Args)]
+#[derive(Subcommand, Debug)]
+pub enum MigrateCommand {
+    /// Move this cluster's Kix records to Kix's current API group.
+    ///
+    /// Kix used to stamp its annotations and register its CRDs under a
+    /// domain we do not own. Records made before the move still sit under
+    /// the old API group, and Kix refuses to touch such a cluster until this
+    /// has run.
+    ///
+    /// It copies every Activation record to the new group with its history
+    /// intact, verifies each copy by name and by phase, clears the operator
+    /// finalizer from the old records, and deletes the old CRDs. PackageInstance records are not copied: the
+    /// next deploy re-creates them from the build.
+    ///
+    /// Scale the kix operator to 0 first if this cluster runs one. While it
+    /// watches the old API group it re-adds its finalizer to the records, and
+    /// deleting the old CRDs would then make it delete every resource in the
+    /// activation. The command tests this rather than trusting it: it clears
+    /// the finalizers, waits, and reads them back. Only a running operator
+    /// puts one back, and if one does, it stops there having copied and
+    /// deleted nothing.
+    ///
+    /// Run it once per cluster. If it is interrupted, run it again: it skips
+    /// what it already copied and repairs a copy whose status did not land.
+    /// Then upgrade the operator image, scale it back up, and deploy.
+    Domain(MigrateArgs),
+}
+
+#[derive(Parser, Debug)]
+pub struct MigrateArgs {
+    /// Cluster name
+    pub cluster: String,
+
+    /// Print the plan and stop
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Skip the confirmation prompt
+    #[arg(short, long)]
+    pub yes: bool,
+}
+
+#[derive(Parser, Debug)]
 pub struct GcArgs {
     /// Cluster name
     pub cluster: String,
@@ -398,7 +445,7 @@ pub struct GcArgs {
     #[arg(long)]
     pub operator: bool,
 
-    /// Also delete resources that carry the kix label but no kix.dev/identity-hash.
+    /// Also delete resources that carry the kix label but no kix.run/identity-hash.
     /// kix never applied those, so by default --hard only reports them.
     #[arg(long)]
     pub include_unstamped: bool,
@@ -410,7 +457,7 @@ pub struct GcArgs {
     pub keep: usize,
 
     /// Never keep more than this many Superseded records. Each record still
-    /// on the cluster keeps one entry in kix.dev/activations on every
+    /// on the cluster keeps one entry in kix.run/activations on every
     /// managed resource, and that annotation has a hard size cap.
     #[arg(long, value_name = "N", default_value_t = kix::cluster::activation::DEFAULT_KEEP_MAX)]
     pub keep_max: usize,
@@ -459,7 +506,7 @@ pub struct ExportArgs {
     #[arg(long, default_value = "./kix-export")]
     pub out: String,
 
-    /// Export mode: `exit` strips kix.dev/* annotations and skips kix-internal
+    /// Export mode: `exit` strips kix.run/* annotations and skips kix-internal
     /// CRs (Activation, PackageInstance) for a neutral handoff. `audit`
     /// preserves everything for compliance evidence.
     #[arg(long = "for", value_name = "MODE", default_value = "exit")]
@@ -522,7 +569,7 @@ pub struct PortForwardArgs {
 pub enum ExportMode {
     /// Neutral kix-free YAML suitable for `kubectl apply` / Flux / Argo
     Exit,
-    /// Preserve kix.dev/* provenance annotations for audit evidence
+    /// Preserve kix.run/* provenance annotations for audit evidence
     Audit,
 }
 
@@ -533,7 +580,7 @@ pub struct HealthArgs {
 }
 
 /// Deliberately no cluster/flake argument: the check compares live objects
-/// against the `kix.dev/applied-hash` stamps written at deploy time, so it
+/// against the `kix.run/applied-hash` stamps written at deploy time, so it
 /// runs from any kubeconfig-only context (doc 122). Uses the global
 /// `--context` and `--output` flags.
 #[derive(clap::Args)]

@@ -1,6 +1,10 @@
 { lib }:
 
 let
+  # Kix's own annotation keys and API names, spelled once in
+  # core/annotations.nix.
+  kixAnnotations = import ../../core/annotations.nix;
+  kixKeys = kixAnnotations.keys;
   core = import ../../core/default.nix { inherit lib; };
 
   inherit (import ../../eval/edges.nix { k8s = core; })
@@ -86,7 +90,7 @@ in
                   extraArgs = {
                     name = "${instanceName}-${lib.toLower workloadKind}-${wName}-egress";
                     labels = {
-                      "kix.dev/derived" = "true";
+                      ${kixKeys.derived} = "true";
                     };
                     spec = {
                       endpointSelector.matchLabels = wSelector;
@@ -105,7 +109,7 @@ in
                   extraArgs = {
                     name = "${instanceName}-${lib.toLower workloadKind}-${wName}-ingress";
                     labels = {
-                      "kix.dev/derived" = "true";
+                      ${kixKeys.derived} = "true";
                     };
                     spec = {
                       endpointSelector.matchLabels = wSelector;
@@ -134,8 +138,8 @@ in
                     extraArgs = {
                       name = "${instanceName}-${lib.toLower workloadKind}-${wName}-to-${edge.name}-ingress";
                       labels = {
-                        "kix.dev/derived" = "true";
-                        "kix.dev/policy-type" = "caller-ingress";
+                        ${kixKeys.derived} = "true";
+                        ${kixKeys.policyType} = "caller-ingress";
                       };
                       spec = {
                         endpointSelector.matchLabels = edge.targetSelector;
@@ -243,8 +247,8 @@ in
                   extraArgs = {
                     name = "${instanceName}-${lib.toLower w.kind}-${w.name}-apiserver-egress";
                     labels = {
-                      "kix.dev/derived" = "true";
-                      "kix.dev/policy-type" = "apiserver-supplement";
+                      ${kixKeys.derived} = "true";
+                      ${kixKeys.policyType} = "apiserver-supplement";
                     };
                     spec = {
                       endpointSelector.matchLabels = wSelector;
@@ -275,8 +279,8 @@ in
                   extraArgs = {
                     name = "${instanceName}-${lib.toLower w.kind}-${w.name}-external-ingress";
                     labels = {
-                      "kix.dev/derived" = "true";
-                      "kix.dev/policy-type" = "external-ingress-supplement";
+                      ${kixKeys.derived} = "true";
+                      ${kixKeys.policyType} = "external-ingress-supplement";
                     };
                     spec = {
                       endpointSelector.matchLabels = wSelector;
@@ -335,8 +339,8 @@ in
                   extraArgs = {
                     name = "${instanceName}-${lib.toLower r.kind}-${r.name}-egress";
                     labels = {
-                      "kix.dev/derived" = "true";
-                      "kix.dev/policy-type" = "cr-operand";
+                      ${kixKeys.derived} = "true";
+                      ${kixKeys.policyType} = "cr-operand";
                     };
                     spec = {
                       endpointSelector.matchLabels = operandSelector;
@@ -369,8 +373,8 @@ in
                   extraArgs = {
                     name = "${instanceName}-${lib.toLower r.kind}-${r.name}-to-${edge.name}-ingress";
                     labels = {
-                      "kix.dev/derived" = "true";
-                      "kix.dev/policy-type" = "caller-ingress";
+                      ${kixKeys.derived} = "true";
+                      ${kixKeys.policyType} = "caller-ingress";
                     };
                     spec = {
                       endpointSelector.matchLabels = edge.targetSelector;
@@ -423,8 +427,8 @@ in
         name = "${namespaceName}-default-deny";
         namespace = nsResource;
         labels = {
-          "kix.dev/derived" = "true";
-          "kix.dev/policy-type" = "default-deny";
+          ${kixKeys.derived} = "true";
+          ${kixKeys.policyType} = "default-deny";
           "app.kubernetes.io/managed-by" = "kix";
         };
         spec = enforcerApi.mkDefaultDenySpec {

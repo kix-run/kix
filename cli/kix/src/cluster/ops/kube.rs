@@ -59,7 +59,7 @@ pub struct KubeOpsConfig {
     /// Name of the Activation CR for this run. `None` for runs that do not
     /// manage the lifecycle (some operator paths).
     pub activation_name: Option<String>,
-    /// Identity hash of the Activation, stamped into `kix.dev/activations`.
+    /// Identity hash of the Activation, stamped into `kix.run/activations`.
     pub activation_identity_hash: Option<String>,
     /// Take ownership of fields another manager owns.
     pub force_conflicts: bool,
@@ -91,9 +91,22 @@ impl KubeOps {
         self.live_activations.read().ok().and_then(|g| g.clone())
     }
 
+    /// The Activation `ApiResource`, or `None` when there is no record CRD.
+    ///
+    /// A cluster still on a retired API group returns `None` here and is
+    /// reported by the caller that has somewhere to put the message; the
+    /// engine treats a missing CRD as "no record to write", which is the
+    /// safe direction: the operator reconciles nothing until the migration
+    /// has run.
     async fn activation_ar(&self) -> Option<ApiResource> {
         let d = self.discovery.read().await;
-        activation::find_activation_ar(&d).map(|(ar, _)| ar.clone())
+        match activation::find_activation_ar(&d) {
+            Ok(found) => found.map(|(ar, _)| ar.clone()),
+            Err(e) => {
+                tracing::error!("{e}");
+                None
+            }
+        }
     }
 
     /// Kind lookup from the cache, no refresh.

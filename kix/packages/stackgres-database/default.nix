@@ -24,7 +24,7 @@
 #      creates the role, the database, optional ownership, GRANTs, and
 #      requested extensions. Superuser credentials come from the SGCluster's
 #      auto-created secret (also in the postgres namespace), referenced via
-#      a local mkSecretRef. The Job carries the kix.dev/hook = "post-deploy"
+#      a local mkSecretRef. The Job carries the kix.run/hook = "post-deploy"
 #      annotation so it re-runs cleanly when its content changes (e.g.
 #      password rotation).
 #
@@ -208,7 +208,7 @@ in
       labels = {
         "app.kubernetes.io/name" = "stackgres-database";
         "app.kubernetes.io/instance" = name;
-        "kix.dev/db-cluster" = clusterName;
+        ${kix.keys.dbCluster} = clusterName;
       };
 
       # --- 1. Credentials Secret (consumer namespace) ----------------------
@@ -273,7 +273,7 @@ in
       # `clusterName` carries the SGCluster's store-path context; k8s
       # strips it internally only for the toFile filename, while the
       # content-side context flows through to the marker's outPath and
-      # `kix.dev/depends-on` annotation — so the wave graph correctly
+      # `kix.run/depends-on` annotation — so the wave graph correctly
       # orders this ref after the SGCluster, no manual `requires` needed.
       superuserRef = backendScope.mkSecretRef {
         name = clusterName;
@@ -353,8 +353,8 @@ in
           # Treat as a post-deploy hook so the deploy engine deletes the
           # previous instance before creating a new one when the spec
           # changes (e.g. password rotation produces a new hash → new name).
-          "kix.dev/hook" = "post-deploy";
-          "kix.dev/hook-delete-policy" = "before-hook-creation,hook-succeeded";
+          ${kix.keys.hook} = "post-deploy";
+          ${kix.keys.hookDeletePolicy} = "before-hook-creation,hook-succeeded";
         };
         spec = {
           backoffLimit = 20;

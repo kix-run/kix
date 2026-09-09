@@ -32,7 +32,7 @@ Full shape: 01-fundamentals.md#package-anatomy.
 kix has no `dependsOn` field. Deploy ordering falls out of how you reference other resources.
 
 - A resource's public values (`self.x.out.name`, `.out.fqdn`, `.out.selector`) are real strings carrying that resource's Nix store-path context.
-- Embed one resource's `out.*` in another's manifest -> kix reads the context back off the JSON and stamps a `kix.dev/depends-on` edge. The CLI walks that graph for deploy order and waves.
+- Embed one resource's `out.*` in another's manifest -> kix reads the context back off the JSON and stamps a `kix.run/depends-on` edge. The CLI walks that graph for deploy order and waves.
 - A hardcoded `"echo-server"` carries no context -> no edge -> unordered deploy. Always reference `self.x.out.name` (or `"${self.x}"`), never a literal name.
 - When no value flows between two resources, add the edge explicitly with `requires` / `extraDeps` (see 02-authoring.md#resources-and-the-out-surface).
 

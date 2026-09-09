@@ -54,7 +54,7 @@ let
     '';
 
     # Kix identity hashes: 32-char base32 Nix-style hashes that appear in
-    # `kix.dev/identity-hash`, `kix.dev/depends-on`, and embedded store
+    # `kix.run/identity-hash`, `kix.run/depends-on`, and embedded store
     # paths in `kix build`/`kix graph` output. These are content-addressed
     # over the kixpkgs source path, so when the source changes (e.g.
     # because `--apply` just wrote new sidecars into

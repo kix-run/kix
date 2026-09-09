@@ -35,7 +35,7 @@ pub enum TransitionKind {
     Skip,
     /// Delete the live object, then apply. Tagged `recreate` because that
     /// is the act, whatever the trigger. Today the only producer is the
-    /// rerun rule: a manifest carrying `kix.dev/rerun` (a probe Job) whose
+    /// rerun rule: a manifest carrying `kix.run/rerun` (a probe Job) whose
     /// identity hash changed is run again, never patched, and the reason
     /// rides [`NodeDetail::Rerun`]. The executor applies plainly when
     /// nothing is live. Stage E (future) will produce it for an
@@ -180,7 +180,7 @@ pub enum NodeDetail {
     SecretHydrationFailed(String),
     /// In-place recreate consumed the immutable-field conflict.
     RecreatedInPlace { reason: String },
-    /// A resource carrying `kix.dev/rerun` was deleted and created again
+    /// A resource carrying `kix.run/rerun` was deleted and created again
     /// under the rerun rule (its identity changed, or its last run failed).
     Rerun { reason: String },
 }
@@ -192,12 +192,12 @@ pub enum NodeDetail {
 /// planner twice.
 #[derive(Debug, Clone)]
 pub struct NodeMeta {
-    /// Owning kix package instance name (from `kix.dev/package` annotation).
+    /// Owning kix package instance name (from `kix.run/package` annotation).
     pub package: Option<String>,
     /// Namespace for namespaced resources; `None` for cluster-scoped or
     /// synthetic nodes.
     pub namespace: Option<String>,
-    /// Populated iff the node is an import marker (`kix.dev/mode: import`).
+    /// Populated iff the node is an import marker (`kix.run/mode: import`).
     pub import_target: Option<ImportTarget>,
 }
 

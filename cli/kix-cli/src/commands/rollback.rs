@@ -29,6 +29,7 @@ use crate::output;
 use crate::plan;
 
 use super::CommandContext;
+use kix::manifest::keys;
 
 pub fn run(args: &RollbackArgs, ctx: &mut CommandContext) -> Result<()> {
     if args.list {
@@ -55,6 +56,7 @@ async fn run_list_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()>
         .map_err(|e| miette!("API discovery failed: {e}"))?;
 
     let (activation_ar, _) = activation::find_activation_ar(&discovery)
+        .map_err(|e| miette!("{e}"))?
         .ok_or_else(|| miette!("Activation CRD not registered on cluster"))?
         .clone();
 
@@ -215,6 +217,7 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
         .map_err(|e| miette!("API discovery failed: {e}"))?;
 
     let (activation_ar, _) = activation::find_activation_ar(&discovery)
+        .map_err(|e| miette!("{e}"))?
         .ok_or_else(|| miette!("Activation CRD not registered on cluster"))?
         .clone();
 
@@ -320,6 +323,11 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
     let noop = |_: &str| {};
     let mut target_graph = StoreGraph::from_result_dir_with_status(&target_result_dir, &noop)
         .map_err(|e| miette!("failed to load target activation: {e}"))?;
+    // No `check_build` here. A rollback target is a build from before the
+    // domain move by definition, and refusing it would make every record the
+    // migration carefully preserved unusable. `stamp_annotations` upgrades
+    // its keys, its record's API group and Kix's own CRDs, so what gets
+    // applied names the current domain throughout.
     stamp_annotations(&mut target_graph);
 
     let target_manifests: Vec<Value> = target_graph
@@ -371,7 +379,7 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
         record.and_then(|m| m.pointer("/metadata/name")?.as_str().map(|s| s.to_string()));
     let activation_identity_hash = record.and_then(|m| {
         m.pointer("/metadata/annotations")
-            .and_then(|a| a.get("kix.dev/identity-hash"))
+            .and_then(|a| a.get(keys::IDENTITY_HASH))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
     });
@@ -412,7 +420,7 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
     }
 
     if total_apply == 0 && orphan_rids.is_empty() {
-        // Same rule as deploy: an unchanged probe under `kix.dev/rerun`
+        // Same rule as deploy: an unchanged probe under `kix.run/rerun`
         // whose last run failed still runs, and only the engine does that.
         let failed_reruns = if plan.nodes.iter().any(|n| n.rerun.is_some()) {
             scheduler::failed_rerun_nodes(&client, &discovery, &plan).await
@@ -548,6 +556,7 @@ async fn run_operator_async(args: &RollbackArgs, ctx: &CommandContext) -> Result
         .map_err(|e| miette!("API discovery failed: {e}"))?;
 
     let (activation_ar, _) = activation::find_activation_ar(&discovery)
+        .map_err(|e| miette!("{e}"))?
         .ok_or_else(|| miette!("Activation CRD not registered on cluster"))?
         .clone();
 

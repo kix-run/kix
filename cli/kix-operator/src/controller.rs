@@ -45,7 +45,7 @@ use thiserror::Error;
 use kix::cluster::activation::{
     self, PHASE_ACTIVE, PHASE_DEGRADED, PHASE_DEPLOYING, PHASE_SUPERSEDED,
 };
-use kix::cluster::apply::{ChangeAction, IDENTITY_HASH_ANNOTATION};
+use kix::cluster::apply::ChangeAction;
 use kix::cluster::fetch;
 use kix::cluster::graph::ResourceGraph;
 use kix::cluster::ops::{ClusterOps, KubeOps, KubeOpsConfig};
@@ -58,9 +58,10 @@ use kix::manifest::types::ResourceId;
 
 use crate::k8s_events::{CompositeObserver, K8sEventObserver};
 use crate::observer::OperatorObserver;
+use kix::manifest::keys;
 
 /// Finalizer name for operator-managed cleanup.
-const FINALIZER: &str = "kix.dev/operator-gc";
+const FINALIZER: &str = keys::OPERATOR_GC_FINALIZER;
 
 /// Short requeue when yielding to a Queued activation.
 const QUEUED_REQUEUE_INTERVAL: Duration = Duration::from_secs(5);
@@ -137,8 +138,8 @@ fn identity_hash(activation: &DynamicObject) -> Option<String> {
         .metadata
         .annotations
         .as_ref()
-        .and_then(|a| a.get(IDENTITY_HASH_ANNOTATION))
-        .cloned()
+        .and_then(|a| keys::get_meta(a, keys::IDENTITY_HASH))
+        .map(str::to_string)
 }
 
 // ---------------------------------------------------------------------------
@@ -411,7 +412,7 @@ async fn run_reconcile(
         Arc::new(K8sEventObserver::new(
             ctx.client.clone(),
             activation,
-            "kix.dev/v1alpha1",
+            keys::API_VERSION,
             Some(name.to_string()),
         )) as Arc<dyn DeployObserver>,
     ]));
@@ -505,7 +506,17 @@ async fn handle_delete(
                 .filter(|rid| !kix::manifest::lifecycle::is_record_kind(&rid.kind))
                 .collect();
 
-            let kix_crds: &[&str] = &["activations.kix.dev", "packageinstances.kix.dev"];
+            // Kix's own CRDs, under the current domain and any retired one:
+            // the activation being deleted may name the retired pair, and the
+            // operator must never delete the CRD its own records live in.
+            let mut kix_crds: Vec<String> = vec![
+                keys::ACTIVATIONS_CRD.to_string(),
+                keys::PACKAGE_INSTANCES_CRD.to_string(),
+            ];
+            for domain in kix::legacy_domain::DOMAINS {
+                kix_crds.push(format!("activations.{domain}"));
+                kix_crds.push(format!("packageinstances.{domain}"));
+            }
             let orphan_set: std::collections::HashSet<String> = all_rids
                 .iter()
                 .map(|rid| format!("{}/{}/{}", rid.kind, rid.namespace, rid.name))
@@ -523,9 +534,7 @@ async fn handle_delete(
                 Err(_) => all_rids.clone(),
             }
             .into_iter()
-            .filter(|rid| {
-                !(rid.kind == "CustomResourceDefinition" && kix_crds.contains(&rid.name.as_str()))
-            })
+            .filter(|rid| !(rid.kind == "CustomResourceDefinition" && kix_crds.contains(&rid.name)))
             .collect();
 
             let discovery = fetch::discover_resources(&ctx.client)

@@ -23,7 +23,7 @@ creds = scope.mkSecret {
 
 ## `scope.mkSecretRef` — externally-managed secret
 
-References a secret that exists outside kix (Vault, ESO, cert-manager, operator-provisioned). Emits a `PackageInstance` import marker with `kix.dev/mode=import` that the deploy CLI polls before running the wave that depends on it — if the Secret is missing or the declared keys aren't populated, the wave fails fast.
+References a secret that exists outside kix (Vault, ESO, cert-manager, operator-provisioned). Emits a `PackageInstance` import marker with `kix.run/mode=import` that the deploy CLI polls before running the wave that depends on it — if the Secret is missing or the declared keys aren't populated, the wave fails fast.
 
 ```nix
 appSecret = scope.mkSecretRef {

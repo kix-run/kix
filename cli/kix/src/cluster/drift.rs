@@ -1,7 +1,7 @@
 //! Runtime content drift check (doc 122).
 //!
 //! For every kix-managed live object: project it onto kix's current SSA
-//! fieldset, hash, and compare against the `kix.dev/applied-hash` stamp
+//! fieldset, hash, and compare against the `kix.run/applied-hash` stamp
 //! written from the SSA response echo at apply time. Match ⇒ every field kix
 //! applied is byte-identical to what the server committed. Mismatch ⇒
 //! attribute via `managedFields`: the apiserver records field-precisely who
@@ -17,7 +17,8 @@ use kube::{
 use serde_json::Value;
 
 use super::fetch::{self, FetchError};
-use super::fieldsv1::{self, APPLIED_HASH_ANNOTATION, KIX_FIELD_MANAGER};
+use super::fieldsv1::{self, KIX_FIELD_MANAGER};
+use crate::manifest::keys;
 use crate::manifest::types::ResourceId;
 
 /// Per-resource drift verdict.
@@ -30,7 +31,7 @@ pub enum DriftVerdict {
     /// changed under kix's ownership or ownership was taken by another
     /// manager. `foreign` attributes the co-owners.
     Drifted { foreign: Vec<ForeignOwner> },
-    /// No `kix.dev/applied-hash` annotation: the resource predates stamping
+    /// No `kix.run/applied-hash` annotation: the resource predates stamping
     /// or the stamp patch was lost. NOT drift — re-stamped on next deploy.
     Unstamped,
     /// `managedFields` missing or stripped (backup/restore tools, etcd
@@ -83,8 +84,8 @@ pub fn check_object(obj: &DynamicObject) -> DriftReport {
         .metadata
         .annotations
         .as_ref()
-        .and_then(|a| a.get(APPLIED_HASH_ANNOTATION))
-        .cloned();
+        .and_then(|a| keys::get_meta(a, keys::APPLIED_HASH))
+        .map(str::to_string);
 
     let Some(stamped) = stamped else {
         return DriftReport {
@@ -94,9 +95,9 @@ pub fn check_object(obj: &DynamicObject) -> DriftReport {
     };
 
     // Same recipe as the stamp side: project onto kix's current fieldset,
-    // strip kix.dev self-references, hash canonical JSON.
+    // strip kix.run self-references, hash canonical JSON.
     // TODO(doc-123): exclude PI spec.driftIgnore pointers here (resolved via
-    // the kix.dev/package annotations → PackageInstance GET) so compiled
+    // the kix.run/package annotations → PackageInstance GET) so compiled
     // delegation (HPA on replicas, cert-manager on Secret data) is an
     // expected co-owner, not drift.
     let Some(current) = fieldsv1::applied_content_hash(obj) else {

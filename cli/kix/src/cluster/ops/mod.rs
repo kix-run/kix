@@ -61,7 +61,7 @@ pub trait ClusterOps: Send + Sync + 'static {
     fn dry_run(&self) -> bool;
 
     /// Start of run. Stamps deploy-start on the Activation and reads the set
-    /// of live Activations used to prune `kix.dev/activations`. Nothing is
+    /// of live Activations used to prune `kix.run/activations`. Nothing is
     /// in flight yet, so the engine may await this inline.
     async fn begin(&self) -> Result<(), String>;
 
@@ -78,7 +78,7 @@ pub trait ClusterOps: Send + Sync + 'static {
     /// Delete the live object, wait for it to go, re-apply. Called after an
     /// immutable-field conflict when the engine has pre-authorized the
     /// delete (the rid is in the orphan set), and for a live resource that
-    /// carries `kix.dev/rerun` and must run again. A missing object is not
+    /// carries `kix.run/rerun` and must run again. A missing object is not
     /// an error; an object still present after the wait is.
     async fn recreate_in_place(&self, manifest: &Value) -> Result<ApplyResult, String>;
 

@@ -1,6 +1,6 @@
 //! Secret hydration — SOPS decryption at deploy time.
 //!
-//! Scans manifests for K8s Secrets with `kix.dev/sops-source` annotations,
+//! Scans manifests for K8s Secrets with `kix.run/sops-source` annotations,
 //! decrypts the SOPS file via the `sops` CLI, optionally verifies the
 //! content hash, and injects the plaintext into `stringData`.
 
@@ -12,11 +12,8 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::manifest::keys;
 use crate::manifest::types::ResourceId;
-
-/// Annotation keys used for secret hydration.
-const SOPS_SOURCE_ANNOTATION: &str = "kix.dev/sops-source";
-const CONTENT_HASH_ANNOTATION: &str = "kix.dev/content-hash";
 
 #[derive(Error, Debug)]
 pub enum SecretError {
@@ -58,17 +55,17 @@ pub fn needs_hydration(manifest: &Value) -> bool {
     }
     manifest
         .pointer("/metadata/annotations")
-        .and_then(|a| a.get(SOPS_SOURCE_ANNOTATION))
+        .and_then(|a| a.get(keys::SOPS_SOURCE))
         .and_then(Value::as_str)
         .is_some_and(|s| !s.is_empty())
 }
 
 /// Hydrate all secrets in a list of manifests (mutates in place).
 ///
-/// For each Secret with a `kix.dev/sops-source` annotation:
+/// For each Secret with a `kix.run/sops-source` annotation:
 /// 1. Locate the SOPS file (store path or repo-relative path)
 /// 2. Decrypt via `sops --decrypt`
-/// 3. Verify content hash if `kix.dev/content-hash` is present
+/// 3. Verify content hash if `kix.run/content-hash` is present
 /// 4. Inject decrypted key-value pairs into `stringData`
 ///
 /// Returns the list of hydrated secrets, or the first error encountered.
@@ -93,14 +90,14 @@ fn hydrate_single(manifest: &mut Value) -> Result<HydrationResult, SecretError> 
 
     let sops_source = manifest
         .pointer("/metadata/annotations")
-        .and_then(|a| a.get(SOPS_SOURCE_ANNOTATION))
+        .and_then(|a| a.get(keys::SOPS_SOURCE))
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
 
     let expected_hash = manifest
         .pointer("/metadata/annotations")
-        .and_then(|a| a.get(CONTENT_HASH_ANNOTATION))
+        .and_then(|a| a.get(keys::CONTENT_HASH))
         .and_then(Value::as_str)
         .map(|s| s.to_string());
 
@@ -340,7 +337,7 @@ mod tests {
                 "name": "test-secret",
                 "namespace": "default",
                 "annotations": {
-                    "kix.dev/sops-source": "/nix/store/abc123-secrets.yaml"
+                    keys::SOPS_SOURCE: "/nix/store/abc123-secrets.yaml"
                 }
             }
         });

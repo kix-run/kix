@@ -1,7 +1,7 @@
 # kube-apiserver monitor — targets the built-in `kubernetes` Service in
 # the `default` namespace; no bridge Service needed.
 
-{ lib }:
+{ lib, kix }:
 let
   # Default drop list mirrors the kube-prometheus-stack chart: drops the
   # high-cardinality histogram buckets that aren't useful for SLO alerts.
@@ -133,7 +133,7 @@ in
           # Service matching this selector, which the
           # monitorSelectorMatchesService rule would flag on any cluster
           # with a kix instance in `default`. Same situation as kubelet.
-          annotations."kix.dev/monitors-external-service" = "true";
+          annotations.${kix.keys.monitorsExternalService} = "true";
           spec = smonSpec;
         };
       };

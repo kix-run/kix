@@ -1,6 +1,6 @@
 # kube-proxy monitor + bridge Service. See kube-controller-manager.nix for rationale.
 
-{ lib }:
+{ lib, kix }:
 let
   serviceName = "kube-prometheus-stack-kube-proxy";
 in

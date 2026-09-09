@@ -10,6 +10,8 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
+use crate::manifest::keys;
+
 /// Normalize a `serde_json::Value` manifest for content comparison.
 ///
 /// Strips server-injected metadata, status, kix-internal annotations,
@@ -53,7 +55,7 @@ fn strip_status(v: &mut Value) {
     }
 }
 
-/// Remove all `kix.dev/*` annotations from a manifest's `metadata.annotations`.
+/// Remove all `kix.run/*` annotations from a manifest's `metadata.annotations`.
 /// Used by `normalize_for_content_hash` for drift detection and by
 /// `kix export --for=exit` to produce kix-neutral YAML for exit-strategy
 /// handoff. If the annotations map becomes empty, the `annotations` key is
@@ -65,7 +67,7 @@ pub fn strip_kix_annotations(v: &mut Value) {
     {
         let kix_keys: Vec<String> = annotations
             .keys()
-            .filter(|k| k.starts_with("kix.dev/"))
+            .filter(|k| keys::is_kix_key(k))
             .cloned()
             .collect();
         for key in kix_keys {
@@ -175,9 +177,9 @@ mod tests {
                 "name": "test",
                 "namespace": "default",
                 "annotations": {
-                    "kix.dev/identity-hash": "abc123",
-                    "kix.dev/package": "my-pkg",
-                    "kix.dev/activations": "hash1,hash2",
+                    keys::IDENTITY_HASH: "abc123",
+                    keys::PACKAGE: "my-pkg",
+                    keys::ACTIVATIONS: "hash1,hash2",
                     "kubectl.kubernetes.io/last-applied-configuration": "{}",
                     "custom-annotation": "keep-me"
                 }
@@ -191,9 +193,9 @@ mod tests {
             .and_then(|a| a.as_object());
         assert!(annotations.is_some());
         let ann = annotations.unwrap();
-        assert!(!ann.contains_key("kix.dev/identity-hash"));
-        assert!(!ann.contains_key("kix.dev/package"));
-        assert!(!ann.contains_key("kix.dev/activations"));
+        assert!(!ann.contains_key(keys::IDENTITY_HASH));
+        assert!(!ann.contains_key(keys::PACKAGE));
+        assert!(!ann.contains_key(keys::ACTIVATIONS));
         assert!(!ann.contains_key("kubectl.kubernetes.io/last-applied-configuration"));
         assert_eq!(
             ann.get("custom-annotation").and_then(|v| v.as_str()),

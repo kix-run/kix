@@ -14,6 +14,7 @@ use kix::manifest::types::ResourceId;
 use serde_json::Value;
 
 use crate::output;
+use kix::manifest::keys;
 
 // ── Package-level diff types ─────────────────────────────────────────
 
@@ -39,28 +40,39 @@ pub struct PackageChangeDiff {
     /// Only contains the real (non-propagation) differences.
     pub resource_diffs: Vec<(ResourceId, Vec<Difference>)>,
     /// Resources whose identity-hash changed purely because a dependency's hash
-    /// propagated up (via `kix.dev/identity-hash`/`kix.dev/depends-on`/`kix.dev/activations`/
-    /// `kix.dev/built-via`). Manifest content is otherwise identical — will redeploy
+    /// propagated up (via `kix.run/identity-hash`/`kix.run/depends-on`/`kix.run/activations`/
+    /// `kix.run/built-via`). Manifest content is otherwise identical — will redeploy
     /// only to update stamped annotations.
     pub dep_affected_resources: Vec<ResourceId>,
     pub added_resources: Vec<ResourceId>,
     pub removed_resources: Vec<ResourceId>,
 }
 
-/// Returns true if a structural-diff path points at a kix.dev stamped annotation
+/// Returns true if a structural-diff path points at a kix.run stamped annotation
 /// whose only purpose is to carry hash propagation (identity, deps, activations,
 /// built-via). Used to distinguish real content changes from dependency-propagated
 /// hash bumps.
 fn is_propagation_path(path: &str) -> bool {
     const PROPAGATION_ANNS: &[&str] = &[
-        "kix.dev/identity-hash",
-        "kix.dev/depends-on",
-        "kix.dev/activations",
-        "kix.dev/built-via",
+        keys::IDENTITY_HASH,
+        keys::DEPENDS_ON,
+        keys::ACTIVATIONS,
+        keys::BUILT_VIA,
     ];
+    // The same four under any retired domain: a diff against a cluster whose
+    // objects predate a domain move shows both spellings, and the retired one
+    // is propagation noise just as much as the current one.
+    let legacy: Vec<String> = PROPAGATION_ANNS
+        .iter()
+        .flat_map(|k| kix::legacy_domain::legacy_spellings(k))
+        .collect();
     // Only match top-level metadata.annotations — pod template annotations
     // (e.g. $.spec.template.metadata.annotations.*) are real content changes.
-    for ann in PROPAGATION_ANNS {
+    for ann in PROPAGATION_ANNS
+        .iter()
+        .map(|s| (*s).to_string())
+        .chain(legacy)
+    {
         let needle = format!("$.metadata.annotations.{ann}");
         if path == needle || path.starts_with(&format!("{needle}.")) {
             return true;
@@ -164,7 +176,7 @@ fn diff_package_resources(
             }
             let (real, _propagation) = partition_propagation(diffs);
             if real.is_empty() {
-                // Only kix.dev propagation annotations changed — identity hash
+                // Only kix.run propagation annotations changed — identity hash
                 // bumped because a dependency changed, but content is the same.
                 dep_affected_resources.push(id.clone());
             } else {

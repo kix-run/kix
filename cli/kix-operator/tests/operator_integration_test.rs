@@ -7,6 +7,7 @@
 //! Run with: cargo test --test operator_integration_test -- --ignored
 //! (ignored by default because it requires kind + nix + is slow)
 
+use kix::manifest::keys;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
@@ -132,9 +133,9 @@ fn apply_crds(context: &str) {
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: activations.kix.dev
+  name: activations.kix.run
 spec:
-  group: kix.dev
+  group: kix.run
   scope: Cluster
   names:
     kind: Activation
@@ -162,9 +163,9 @@ spec:
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: packageinstances.kix.dev
+  name: packageinstances.kix.run
 spec:
-  group: kix.dev
+  group: kix.run
   scope: Namespaced
   names:
     kind: PackageInstance
@@ -210,13 +211,13 @@ spec:
 fn create_activation(context: &str, name: &str, store_path: &Path, cluster: &str) {
     let yaml = format!(
         r#"
-apiVersion: kix.dev/v1alpha1
+apiVersion: kix.run/v1alpha1
 kind: Activation
 metadata:
   name: {name}
   labels:
     app.kubernetes.io/managed-by: kix
-    kix.dev/cluster: {cluster}
+    kix.run/cluster: {cluster}
 spec:
   cluster: {cluster}
   active: true
@@ -347,7 +348,7 @@ fn operator_reconcile_and_gc() {
     eprintln!("Managed resources after reconcile:\n{managed}");
 
     // Verify Activation CR exists and has the right cluster label
-    let activation_list = kubectl_stdout(KUBE_CTX, &["get", "activations.kix.dev", "-o", "name"]);
+    let activation_list = kubectl_stdout(KUBE_CTX, &["get", keys::ACTIVATIONS_CRD, "-o", "name"]);
     eprintln!("Activations: {activation_list}");
     assert!(
         activation_list.contains("test-activation"),
@@ -363,7 +364,7 @@ fn operator_reconcile_and_gc() {
         KUBE_CTX,
         &[
             "delete",
-            "activation.kix.dev",
+            &format!("activation.{}", keys::GROUP),
             "test-activation",
             "--timeout=60s",
         ],
@@ -427,7 +428,7 @@ fn operator_reconcile_and_gc() {
         KUBE_CTX,
         &[
             "get",
-            "activations.kix.dev",
+            keys::ACTIVATIONS_CRD,
             "test-activation",
             "--ignore-not-found",
             "-o",

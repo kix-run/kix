@@ -1,6 +1,10 @@
 { lib }:
 
 let
+  # Kix's own annotation keys and API names, spelled once in
+  # core/annotations.nix.
+  kixAnnotations = import ./annotations.nix;
+  kixKeys = kixAnnotations.keys;
   resource = import ./resource.nix { inherit lib; };
   inherit (resource) mkResource kixCRDs clusterScoped;
 in
@@ -28,26 +32,26 @@ in
           version;
     in
     mkResource {
-      apiVersion = "kix.dev/v1alpha1";
+      apiVersion = kixAnnotations.apiVersion;
       kind = "PackageInstance";
       name = instanceName;
       inherit namespace labels;
       requires = [ kixCRDs.packageInstance ];
       annotations = {
-        "kix.dev/root" = mainResource.out.name;
+        ${kixKeys.root} = mainResource.out.name;
       }
       // lib.optionalAttrs (inverseDeps != [ ]) {
-        "kix.dev/inverse-deps" = builtins.concatStringsSep "," (
+        ${kixKeys.inverseDeps} = builtins.concatStringsSep "," (
           map (r: "${r.kind}/${r.out.name}") inverseDeps
         );
       }
       // lib.optionalAttrs (packageRequires != [ ]) {
-        "kix.dev/package-requires" = builtins.concatStringsSep "," (
+        ${kixKeys.packageRequires} = builtins.concatStringsSep "," (
           map (r: "${r.kind}/${r.out.name}") packageRequires
         );
       }
       // lib.optionalAttrs (postHooks != [ ]) {
-        "kix.dev/post-hooks" = builtins.concatStringsSep "," (map (r: "${r.kind}/${r.out.name}") postHooks);
+        ${kixKeys.postHooks} = builtins.concatStringsSep "," (map (r: "${r.kind}/${r.out.name}") postHooks);
       }
       // extraAnnotations;
       extra.spec = {
@@ -66,12 +70,12 @@ in
       extraDeps ? [ ],
     }:
     mkResource {
-      apiVersion = "kix.dev/v1alpha1";
+      apiVersion = kixAnnotations.apiVersion;
       kind = "Activation";
       inherit name;
       labels = {
         "app.kubernetes.io/managed-by" = "kix";
-        "kix.dev/cluster" = name;
+        ${kixKeys.clusterLabel} = name;
       };
       requires = [ kixCRDs.activation ];
       extraDeps = extraDeps;

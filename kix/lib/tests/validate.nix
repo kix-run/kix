@@ -18,6 +18,10 @@
 }:
 
 let
+  # Kix's own annotation keys and API names, spelled once in
+  # core/annotations.nix.
+  kixAnnotations = import ../core/annotations.nix;
+  kixKeys = kixAnnotations.keys;
   failures = ms: validate.crossResourceFailures { manifests = ms; };
 
   # A manifest with the labels every kix resource carries.
@@ -119,13 +123,13 @@ let
   serviceRef =
     ns: svcName: selector:
     res "PackageInstance" ns "service-ref-${svcName}" {
-      apiVersion = "kix.dev/v1alpha1";
+      apiVersion = kixAnnotations.apiVersion;
       metadata.annotations = {
-        "kix.dev/mode" = "import";
-        "kix.dev/import-kind" = "Service";
-        "kix.dev/import-name" = svcName;
-        "kix.dev/service-selector" = builtins.toJSON selector;
-        "kix.dev/service-ports" = builtins.toJSON [
+        ${kixKeys.mode} = "import";
+        ${kixKeys.importKind} = "Service";
+        ${kixKeys.importName} = svcName;
+        ${kixKeys.serviceSelector} = builtins.toJSON selector;
+        ${kixKeys.servicePorts} = builtins.toJSON [
           {
             name = "http";
             port = 80;
@@ -362,7 +366,7 @@ in
     ++ [
       (res "Prometheus" "a" "prom" { apiVersion = "monitoring.coreos.com/v1"; })
       (service "a" "prom-thanos" { operated = "yes"; } {
-        metadata.annotations."kix.dev/operand-of" = "monitoring.coreos.com/Prometheus/prom";
+        metadata.annotations.${kixKeys.operandOf} = "monitoring.coreos.com/Prometheus/prom";
         spec.ports = [ { port = 10901; } ];
       })
     ]
@@ -370,14 +374,14 @@ in
 
   # The declaration is namespaced: the CR must be in the Service's namespace.
   v04d-operand-of-is-namespaced =
-    onlyFailure "declares kix.dev/operand-of=monitoring.coreos.com/Prometheus/prom but no such CR"
+    onlyFailure "declares ${kixKeys.operandOf}=monitoring.coreos.com/Prometheus/prom but no such CR"
       (
         base "a"
         ++ base "b"
         ++ [
           (res "Prometheus" "a" "prom" { apiVersion = "monitoring.coreos.com/v1"; })
           (service "b" "prom-thanos" { operated = "yes"; } {
-            metadata.annotations."kix.dev/operand-of" = "monitoring.coreos.com/Prometheus/prom";
+            metadata.annotations.${kixKeys.operandOf} = "monitoring.coreos.com/Prometheus/prom";
             spec.ports = [ { port = 10901; } ];
           })
         ]
@@ -385,13 +389,13 @@ in
 
   # Keyed by group: a kind of the same name in another group does not count.
   v04e-operand-of-checks-the-group =
-    onlyFailure "declares kix.dev/operand-of=other.example/Prometheus/prom"
+    onlyFailure "declares ${kixKeys.operandOf}=other.example/Prometheus/prom"
       (
         base "a"
         ++ [
           (res "Prometheus" "a" "prom" { apiVersion = "monitoring.coreos.com/v1"; })
           (service "a" "prom-thanos" { operated = "yes"; } {
-            metadata.annotations."kix.dev/operand-of" = "other.example/Prometheus/prom";
+            metadata.annotations.${kixKeys.operandOf} = "other.example/Prometheus/prom";
             spec.ports = [ { port = 10901; } ];
           })
         ]
@@ -402,7 +406,7 @@ in
     base "a"
     ++ [
       (service "a" "prom-thanos" { operated = "yes"; } {
-        metadata.annotations."kix.dev/operand-of" = "Prometheus/prom";
+        metadata.annotations.${kixKeys.operandOf} = "Prometheus/prom";
         spec.ports = [ { port = 10901; } ];
       })
     ]
@@ -566,7 +570,7 @@ in
     base "a"
     ++ [
       (pdb "a" "am" { "app.kubernetes.io/name" = "alertmanager"; } {
-        metadata.annotations."kix.dev/operand-of" = "monitoring.coreos.com/Alertmanager/am";
+        metadata.annotations.${kixKeys.operandOf} = "monitoring.coreos.com/Alertmanager/am";
       })
     ]
   );
@@ -604,7 +608,7 @@ in
     ++ [
       (res "Alertmanager" "a" "am" { apiVersion = "monitoring.coreos.com/v1"; })
       (pdb "a" "am" { "app.kubernetes.io/name" = "alertmanager"; } {
-        metadata.annotations."kix.dev/operand-of" = "monitoring.coreos.com/Alertmanager/am";
+        metadata.annotations.${kixKeys.operandOf} = "monitoring.coreos.com/Alertmanager/am";
       })
     ]
   );
@@ -716,13 +720,13 @@ in
 
   # A cluster-scoped CR (no namespace) cannot be the operand source of a namespaced Service.
   p04d-cluster-scoped-cr-does-not-exempt =
-    onlyFailure "declares kix.dev/operand-of=monitoring.coreos.com/Prometheus/prom but no such CR"
+    onlyFailure "declares ${kixKeys.operandOf}=monitoring.coreos.com/Prometheus/prom but no such CR"
       (
         base "a"
         ++ [
           (res "Prometheus" null "prom" { apiVersion = "monitoring.coreos.com/v1"; })
           (service "a" "prom-operated" { operated = "yes"; } {
-            metadata.annotations."kix.dev/operand-of" = "monitoring.coreos.com/Prometheus/prom";
+            metadata.annotations.${kixKeys.operandOf} = "monitoring.coreos.com/Prometheus/prom";
             spec.ports = [ { port = 9090; } ];
           })
         ]
@@ -852,16 +856,16 @@ in
     base "a"
     ++ [
       (res "PackageInstance" "a" "service-ref-x-pg" {
-        apiVersion = "kix.dev/v1alpha1";
+        apiVersion = kixAnnotations.apiVersion;
         metadata.annotations = {
-          "kix.dev/mode" = "import";
-          "kix.dev/import-kind" = "Service";
-          "kix.dev/import-name" = "pg";
-          "kix.dev/service-selector" = builtins.toJSON {
+          ${kixKeys.mode} = "import";
+          ${kixKeys.importKind} = "Service";
+          ${kixKeys.importName} = "pg";
+          ${kixKeys.serviceSelector} = builtins.toJSON {
             "app.kubernetes.io/name" = "postgres";
             cluster = "pg";
           };
-          "kix.dev/service-ports" = builtins.toJSON [ { port = 5432; } ];
+          ${kixKeys.servicePorts} = builtins.toJSON [ { port = 5432; } ];
         };
       })
       (service "a" "pg-rw" { cluster = "pg"; } { spec.ports = [ { port = 5432; } ]; })
@@ -877,12 +881,12 @@ in
     ++ base "b"
     ++ [
       (res "PackageInstance" "a" "service-ref-x-pg" {
-        apiVersion = "kix.dev/v1alpha1";
+        apiVersion = kixAnnotations.apiVersion;
         metadata.annotations = {
-          "kix.dev/mode" = "import";
-          "kix.dev/import-kind" = "Service";
-          "kix.dev/import-name" = "pg";
-          "kix.dev/service-selector" = builtins.toJSON { cluster = "pg"; };
+          ${kixKeys.mode} = "import";
+          ${kixKeys.importKind} = "Service";
+          ${kixKeys.importName} = "pg";
+          ${kixKeys.serviceSelector} = builtins.toJSON { cluster = "pg"; };
         };
       })
       (service "b" "pg-rw" { cluster = "pg"; } { spec.ports = [ { port = 5432; } ]; })
@@ -894,12 +898,12 @@ in
     base "a"
     ++ [
       (res "PackageInstance" "a" "service-ref-x-db" {
-        apiVersion = "kix.dev/v1alpha1";
+        apiVersion = kixAnnotations.apiVersion;
         metadata.annotations = {
-          "kix.dev/mode" = "import";
-          "kix.dev/import-kind" = "Service";
-          "kix.dev/import-apiversion" = "v1";
-          "kix.dev/import-name" = "db";
+          ${kixKeys.mode} = "import";
+          ${kixKeys.importKind} = "Service";
+          ${kixKeys.importApiVersion} = "v1";
+          ${kixKeys.importName} = "db";
         };
       })
       (res "Ingress" "a" "ing" {
@@ -915,11 +919,11 @@ in
     ++ base "b"
     ++ [
       (res "PackageInstance" "b" "service-ref-x-db" {
-        apiVersion = "kix.dev/v1alpha1";
+        apiVersion = kixAnnotations.apiVersion;
         metadata.annotations = {
-          "kix.dev/mode" = "import";
-          "kix.dev/import-kind" = "Service";
-          "kix.dev/import-name" = "db";
+          ${kixKeys.mode} = "import";
+          ${kixKeys.importKind} = "Service";
+          ${kixKeys.importName} = "db";
         };
       })
       (res "Ingress" "a" "ing" {
@@ -953,13 +957,13 @@ in
     |> builtins.filter (m: !(m.kind == "Job" && m.metadata.namespace == "b"))
   );
 
-  # --- 16. kix.dev/rerun is for Jobs ---
+  # --- 16. kix.run/rerun is for Jobs ---
 
   v16-rerun-on-a-deployment-is-refused = onlyFailure "the rerun rule applies to Jobs only" (
     base "a"
     ++ [
       (deployment "a" "worker" {
-        metadata.annotations."kix.dev/rerun" = "on-change";
+        metadata.annotations.${kixKeys.rerun} = "on-change";
         spec.selector.matchLabels.app = "worker";
         spec.template.metadata.labels.app = "worker";
       })
@@ -970,7 +974,7 @@ in
     base "a"
     ++ [
       (lib.recursiveUpdate (job "a" "probe" { app = "probe"; }) {
-        metadata.annotations."kix.dev/rerun" = "always";
+        metadata.annotations.${kixKeys.rerun} = "always";
       })
     ]
   );
@@ -979,7 +983,7 @@ in
     base "a"
     ++ [
       (lib.recursiveUpdate (job "a" "probe" { app = "probe"; }) {
-        metadata.annotations."kix.dev/rerun" = "on-change";
+        metadata.annotations.${kixKeys.rerun} = "on-change";
       })
     ]
   );

@@ -12,6 +12,7 @@
 {
   scope,
   lib,
+  kix,
 }:
 let
   name = scope.instanceName;
@@ -376,13 +377,13 @@ in
       # uses `app.kubernetes.io/name=alertmanager` + `alertmanager=<crname>`,
       # the labels the Prometheus Operator stamps on Alertmanager pods. Those
       # pods are not in the build, so the PDB declares the CR whose pods it
-      # selects (kix.dev/operand-of), which the cross-resource check accepts.
+      # selects (kix.run/operand-of), which the cross-resource check accepts.
       podDisruptionBudget = lib.optionalAttrs config.podDisruptionBudget.enabled {
         pdb = scope.mkResource {
           apiVersion = "policy/v1";
           kind = "PodDisruptionBudget";
           name = "${name}-alertmanager";
-          annotations."kix.dev/operand-of" =
+          annotations.${kix.keys.operandOf} =
             "${lib.head (lib.splitString "/" self.alertmanager.apiVersion)}/${self.alertmanager.kind}/${self.alertmanager.name}";
           requires = [ self.alertmanager ];
           spec = lib.recursiveUpdate (

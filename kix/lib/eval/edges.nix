@@ -24,6 +24,10 @@
 { k8s }:
 
 let
+  # Kix's own annotation keys and API names, spelled once in
+  # core/annotations.nix.
+  kixAnnotations = import ../core/annotations.nix;
+  kixKeys = kixAnnotations.keys;
   inherit (k8s) facts;
 in
 
@@ -47,8 +51,8 @@ rec {
   isServiceRef =
     r:
     (r.kind or "") == "PackageInstance"
-    && (r.rawManifest.metadata.annotations."kix.dev/mode" or "") == "import"
-    && (r.rawManifest.metadata.annotations."kix.dev/import-kind" or "") == "Service";
+    && (r.rawManifest.metadata.annotations.${kixKeys.mode} or "") == "import"
+    && (r.rawManifest.metadata.annotations.${kixKeys.importKind} or "") == "Service";
 
   # identity-keyed: store path → Service resource (identity hits, lint)
   mkServiceRegistry =
@@ -74,10 +78,10 @@ rec {
           marker = r;
           # the IMPORTED service's name, not the marker's — edge identity
           # must match what the ref's endpoint fact claims
-          name = annotations."kix.dev/import-name" or r.name;
-          targetSelector = builtins.fromJSON (annotations."kix.dev/service-selector" or "{}");
+          name = annotations.${kixKeys.importName} or r.name;
+          targetSelector = builtins.fromJSON (annotations.${kixKeys.serviceSelector} or "{}");
           targetNamespace = k8s.nsOf r;
-          ports = builtins.fromJSON (annotations."kix.dev/service-ports" or "[]");
+          ports = builtins.fromJSON (annotations.${kixKeys.servicePorts} or "[]");
         };
       }
     ) { } (builtins.filter isServiceRef resources);
@@ -94,7 +98,7 @@ rec {
       acc: r:
       acc
       // {
-        "${k8s.nsOf r}/${(r.rawManifest.metadata.annotations or { })."kix.dev/import-name" or r.name}" = r;
+        "${k8s.nsOf r}/${(r.rawManifest.metadata.annotations or { }).${kixKeys.importName} or r.name}" = r;
       }
     ) { } (builtins.filter isServiceRef resources)
     // builtins.foldl' (

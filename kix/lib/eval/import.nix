@@ -7,6 +7,10 @@
 }:
 
 let
+  # Kix's own annotation keys and API names, spelled once in
+  # core/annotations.nix.
+  kixAnnotations = import ../core/annotations.nix;
+  kixKeys = kixAnnotations.keys;
   inherit (k8s)
     clusterScoped
     mkResource
@@ -317,26 +321,26 @@ rec {
       instanceExtraDeps = (instCfg.extraDeps or [ ]) ++ materializedIntentPolicies;
 
       markerResource = mkResource {
-        apiVersion = "kix.dev/v1alpha1";
+        apiVersion = kixAnnotations.apiVersion;
         kind = "PackageInstance";
         name = instanceName;
         namespace = namespaceResource;
         requires = [ kixCRDs.packageInstance ];
         extraDeps = instanceExtraDeps;
         annotations = {
-          "kix.dev/mode" = "import";
+          ${kixKeys.mode} = "import";
         }
         // lib.optionalAttrs (derived.out ? name) {
-          "kix.dev/import-name" = derived.out.name;
+          ${kixKeys.importName} = derived.out.name;
         }
         // lib.optionalAttrs (derived.out ? fqdn) {
-          "kix.dev/import-fqdn" = derived.out.fqdn;
+          ${kixKeys.importFqdn} = derived.out.fqdn;
         }
         // lib.optionalAttrs (derived.hints ? kind) {
-          "kix.dev/import-kind" = derived.hints.kind;
+          ${kixKeys.importKind} = derived.hints.kind;
         }
         // lib.optionalAttrs (derived.hints ? apiVersion) {
-          "kix.dev/import-apiversion" = derived.hints.apiVersion;
+          ${kixKeys.importApiVersion} = derived.hints.apiVersion;
         };
         labels = clusterLabels // {
           "app.kubernetes.io/instance" = instanceName;

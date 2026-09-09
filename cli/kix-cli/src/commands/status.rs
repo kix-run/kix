@@ -1,12 +1,11 @@
 use std::collections::HashMap;
 use std::io::IsTerminal;
 
-use miette::{IntoDiagnostic, Result};
+use miette::{IntoDiagnostic, Result, miette};
 
 use crate::cli::{OutputFormat, StatusArgs};
 use crate::output::{self, CommandResponse};
 use kix::cluster::activation;
-use kix::cluster::apply::IDENTITY_HASH_ANNOTATION;
 use kix::cluster::fetch;
 use kix::cluster::readiness;
 use kix::eval::store_graph::StoreGraph;
@@ -14,6 +13,7 @@ use kix::manifest::stamp::stamp_annotations;
 use kix::manifest::types::{CLUSTER_SCOPED, ResourceId};
 
 use super::CommandContext;
+use kix::manifest::keys;
 
 // ── Flat resource view (legacy) ──────────────────────────────────────
 
@@ -243,41 +243,42 @@ async fn run_operator_async(cluster_name: &str, global: &crate::cli::GlobalArgs)
     let discovery = fetch::discover_resources(&client).await.into_diagnostic()?;
 
     // 2. Find the Active Activation CR
-    let (activation_status, built_via) = match activation::find_activation_ar(&discovery) {
-        Some((ar, _)) => {
-            match activation::find_active(&client, ar, cluster_name)
-                .await
-                .into_diagnostic()?
-            {
-                Some(act) => {
-                    // Read the full CR for age
-                    let api: kube::api::Api<kube::api::DynamicObject> =
-                        kube::api::Api::all_with(client.clone(), ar);
-                    let full = api.get(&act.name).await.into_diagnostic()?;
-                    let phase = full
-                        .data
-                        .pointer("/status/phase")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("Unknown")
-                        .to_string();
-                    let age = compute_age_from_obj(&full);
-                    let hash = act.identity_hash.clone().unwrap_or_default();
-                    let built = act.built_via.clone();
-                    (
-                        Some(ActivationStatus {
-                            name: act.name,
-                            phase,
-                            identity_hash: hash,
-                            age,
-                        }),
-                        built,
-                    )
+    let (activation_status, built_via) =
+        match activation::find_activation_ar(&discovery).map_err(|e| miette!("{e}"))? {
+            Some((ar, _)) => {
+                match activation::find_active(&client, ar, cluster_name)
+                    .await
+                    .into_diagnostic()?
+                {
+                    Some(act) => {
+                        // Read the full CR for age
+                        let api: kube::api::Api<kube::api::DynamicObject> =
+                            kube::api::Api::all_with(client.clone(), ar);
+                        let full = api.get(&act.name).await.into_diagnostic()?;
+                        let phase = full
+                            .data
+                            .pointer("/status/phase")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("Unknown")
+                            .to_string();
+                        let age = compute_age_from_obj(&full);
+                        let hash = act.identity_hash.clone().unwrap_or_default();
+                        let built = act.built_via.clone();
+                        (
+                            Some(ActivationStatus {
+                                name: act.name,
+                                phase,
+                                identity_hash: hash,
+                                age,
+                            }),
+                            built,
+                        )
+                    }
+                    None => (None, None),
                 }
-                None => (None, None),
             }
-        }
-        None => (None, None),
-    };
+            None => (None, None),
+        };
 
     // 3. Load store graph for package grouping (if we have a built-via path)
     let store_graph = built_via
@@ -366,8 +367,8 @@ fn build_package_view(
                     .metadata
                     .annotations
                     .as_ref()
-                    .and_then(|a| a.get(IDENTITY_HASH_ANNOTATION))
-                    .cloned()
+                    .and_then(|a| keys::get_meta(a, keys::IDENTITY_HASH))
+                    .map(str::to_string)
                     .unwrap_or_default();
                 (is_ready, status, age, hash)
             } else {
@@ -460,8 +461,8 @@ fn resource_status_from_obj(obj: &kube::api::DynamicObject) -> PackageResourceSt
         .metadata
         .annotations
         .as_ref()
-        .and_then(|a| a.get(IDENTITY_HASH_ANNOTATION))
-        .cloned()
+        .and_then(|a| keys::get_meta(a, keys::IDENTITY_HASH))
+        .map(str::to_string)
         .unwrap_or_default();
     PackageResourceStatus {
         name: rid.name,

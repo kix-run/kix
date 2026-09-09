@@ -72,7 +72,7 @@ impl NixBackend for CliNixBackend {
         )?;
 
         // Load the StoreGraph, stamp identity-hash + package annotations,
-        // then extract manifests. Without stamping, kix.dev/depends-on edges
+        // then extract manifests. Without stamping, kix.run/depends-on edges
         // can't be resolved (they reference identity hashes).
         let mut graph = super::store_graph::StoreGraph::from_result_dir(&result_dir)?;
         crate::manifest::stamp::stamp_annotations(&mut graph);

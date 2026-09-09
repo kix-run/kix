@@ -107,7 +107,7 @@ let
   # (conditions are consumer-prefixed, never Ready/Available — a generic
   # condition check waits forever; observed live on stage1 with
   # VMServiceScrape). Rides the typed chain into every CR as the
-  # `kix.dev/readiness` annotation, which the kix CLI evaluates at deploy
+  # `kix.run/readiness` annotation, which the kix CLI evaluates at deploy
   # time — no kind list in the CLI to keep in sync.
   #
   # The claim is VERIFIED only for the consumer kinds (observed live on

@@ -315,7 +315,7 @@ edge but NO netpol hole. Consequences when authoring:
   Ready/Available conditions, declare its health convention on the CRD
   builder: `readiness = { path = "/status/updateStatus"; equals =
   "operational"; }` (mkCRD and mkCRDRef both accept it). kix stamps it on
-  every typed-chain CR as the `kix.dev/readiness` annotation and
+  every typed-chain CR as the `kix.run/readiness` annotation and
   `kix deploy` evaluates it instead of the generic condition check —
   without it, deploys time out waiting on healthy CRs (the
   VictoriaMetrics operator's `updateStatus` convention is the canonical
@@ -380,7 +380,7 @@ Use `options.metrics = kix.options.monitor;` for standardized metrics options.
 
 Parameters, every callback taking `{ self, config, deps }` (`deps` is every DI package some other entry of the package declares): `script` (usually `builtins.readFile ./health-check.py`), `env` (`-> attrset`; the helper adds `RETRY_FOR`), `when` (`-> bool`, default `config.healthCheck.enable or true`), `retryFor` (`-> int`, default `config.healthCheck.retryFor or 90`), `requires` (`-> [ resources ]`, on top of the package root, which the Job always waits for), `partName`, `runtime` (`kix.healthCheck.runtimes.python` by default, `runtimes.shell` on curl, or your own `{ image = { repository; tag; digest; }; file; interpreter; env; }`), `activeDeadlineSeconds` (null: `retryFor` plus `kix.healthCheck.roundBudget`, 90 s; a given value must leave that room or the build fails), `ttlSecondsAfterFinished`. Declare `options.healthCheck = kix.options.healthCheck;` (`enable`, `retryFor`) and the defaults read it.
 
-The script gives up once `RETRY_FOR` seconds have passed and keeps one round of checks under the round budget. It reads what it expects off resources (`self.vmAgent.out.replicas`, a structural output), never off the option that produced them. The Job carries `kix.dev/rerun: on-change` (`kix/lib/core/annotations.nix`): the deploy engine recreates it when its identity hash changed or the last run failed, so the probe runs again when it, or anything upstream of what it checks, changes. Keep the script a file next to `default.nix` so it can be linted and run from a laptop through `kubectl proxy`. Example: `packages/victoria-metrics-agent/`.
+The script gives up once `RETRY_FOR` seconds have passed and keeps one round of checks under the round budget. It reads what it expects off resources (`self.vmAgent.out.replicas`, a structural output), never off the option that produced them. The Job carries `kix.run/rerun: on-change` (`kix/lib/core/annotations.nix`): the deploy engine recreates it when its identity hash changed or the last run failed, so the probe runs again when it, or anything upstream of what it checks, changes. Keep the script a file next to `default.nix` so it can be linted and run from a laptop through `kubectl proxy`. Example: `packages/victoria-metrics-agent/`.
 
 **Cluster-side wiring:**
 - Gateway API: instantiate `packages/envoy-gateway` with alias `"gateway"`
@@ -394,6 +394,28 @@ The script gives up once `RETRY_FOR` seconds have passed and keeps one round of 
 | `kix.mkEnvVars { KEY = "val"; OPT = null; }` | `→ [{ name, value }]`. Nulls filtered. |
 | `kix.mkEnv { KEY = "val"; } [ rawEntries ]` | Combine named env vars with raw K8s env entries (e.g. `valueFrom.secretKeyRef`). |
 | `kix.parseGi "50Gi"` | `→ 50`. Supports Ti/Gi/Mi. |
+
+#### Writing one of Kix's own annotations
+
+Kix stamps its own keys under a domain it owns. **Never spell that domain in a
+package.** Use `kix.keys.<name>`, which comes from `kix/lib/core/annotations.nix`:
+
+```nix
+annotations.${kix.keys.hook} = "post-deploy";
+annotations.${kix.keys.hookDeletePolicy} = "before-hook-creation,hook-succeeded";
+annotations.${kix.keys.operandOf} = "monitoring.coreos.com/Prometheus/${name}";
+labels.${kix.keys.derived} = "true";
+```
+
+Common names: `hook`, `hookDeletePolicy`, `operandOf`, `monitorsExternalService`,
+`derived`, `policyType`, `role`, `dbCluster`, `rerun`, `sopsSource`. The full set
+is the `keys` attribute in `kix/lib/core/annotations.nix`.
+
+The domain is spelled exactly once per language, there and in
+`cli/kix/src/manifest/keys.rs`. A test fails the build if any other file in
+`kix/` or `cli/` puts a Kix domain in a string literal, so a package that
+hardcodes one will not merge. A package that needs these takes `kix` as an
+argument.
 
 ### Top-level kix functions
 
@@ -574,7 +596,7 @@ meta = {
 
 **Scorecard:** Packages are automatically scored against built-in policy rules at build time. Rules check for: resource requests/limits, liveness+readiness probes, non-root containers, no `:latest` tags, `meta.owner`, `meta.description`, PDBs for multi-replica deployments, network policies, and more. Violations surface as warnings or errors. Read `kix/lib/rules/` and `kix/lib/scorecard.nix` for the full rule set and override mechanism.
 
-**Annotation domains (v2_discussions/128):** operator packages declare the annotation prefixes they manage via `meta.annotationDomains = [ "reflector.v1.k8s.emberstack.com" ]` (reflector, prometheus-operator do). The `architecture.annotationDomainOwnership` rule warns when a package's resources carry `metadata.annotations` keys under a declared domain without a DI dep on the declarer, and when a domain-shaped annotation has no declarer anywhere (dead annotation — the operator is probably missing). Reserved suffixes (`kubernetes.io`, `k8s.io`, `kix.dev`, `helm.sh`, `kubebuilder.io`) are exempt; by-convention domains consumed outside kix (e.g. `prometheus.io` scrape annotations) go in the cluster's `scorecard.knownAnnotationDomains`. There is no `kix.dev/capability` stamping anymore — the dep edge is the legitimacy marker.
+**Annotation domains (v2_discussions/128):** operator packages declare the annotation prefixes they manage via `meta.annotationDomains = [ "reflector.v1.k8s.emberstack.com" ]` (reflector, prometheus-operator do). The `architecture.annotationDomainOwnership` rule warns when a package's resources carry `metadata.annotations` keys under a declared domain without a DI dep on the declarer, and when a domain-shaped annotation has no declarer anywhere (dead annotation — the operator is probably missing). Reserved suffixes (`kubernetes.io`, `k8s.io`, `kix.run`, `helm.sh`, `kubebuilder.io`) are exempt; by-convention domains consumed outside kix (e.g. `prometheus.io` scrape annotations) go in the cluster's `scorecard.knownAnnotationDomains`. There is no `kix.run/capability` stamping anymore — the dep edge is the legitimacy marker.
 
 ## Multi-Component Packages
 
@@ -606,7 +628,7 @@ for that shape (design: `v2_discussions/133`, shipped 2026-09-07):
   context. Same pattern as `packages/prometheus` (`prometheus-operated`)
   and `packages/alertmanager` (`alertmanager-operated`). A Service kix must
   render itself over operator pods (the Thanos sidecar) declares the CR with
-  `metadata.annotations."kix.dev/operand-of" = "<group>/<Kind>/<name>"`;
+  `metadata.annotations."kix.run/operand-of" = "<group>/<Kind>/<name>"`;
   otherwise the cross-resource check refuses a selector that matches no pod
   template in the build. There is no list of operator kinds anywhere.
 - Trial posture: `lifecycle = "ephemeral"` on the cluster package means

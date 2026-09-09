@@ -13,18 +13,17 @@ use kube::discovery::ApiResource;
 use miette::{Result, miette};
 use serde_json::{Value, json};
 
-use kix::cluster::activation::{BUILT_VIA_ANNOTATION, CLUSTER_LABEL};
-use kix::cluster::apply::IDENTITY_HASH_ANNOTATION;
 use kix::cluster::fetch;
 
 use crate::output;
+use kix::manifest::keys;
 
 /// Build the ApiResource descriptor for kix Activation CRs.
 pub fn activation_api_resource() -> ApiResource {
     ApiResource {
-        group: "kix.dev".into(),
+        group: keys::GROUP.into(),
         version: "v1alpha1".into(),
-        api_version: "kix.dev/v1alpha1".into(),
+        api_version: keys::API_VERSION.into(),
         kind: kix::manifest::lifecycle::RECORD_KIND.into(),
         plural: "activations".into(),
     }
@@ -80,23 +79,23 @@ pub async fn apply_activation(
     let mut annotations = serde_json::Map::new();
     if let Some(hash) = identity_hash {
         annotations.insert(
-            IDENTITY_HASH_ANNOTATION.to_string(),
+            keys::IDENTITY_HASH.to_string(),
             Value::String(hash.to_string()),
         );
     }
     annotations.insert(
-        BUILT_VIA_ANNOTATION.to_string(),
+        keys::BUILT_VIA.to_string(),
         Value::String(source_path.to_string()),
     );
 
     let patch = json!({
-        "apiVersion": "kix.dev/v1alpha1",
+        "apiVersion": keys::API_VERSION,
         "kind": kix::manifest::lifecycle::RECORD_KIND,
         "metadata": {
             "name": activation_name,
             "labels": {
                 "app.kubernetes.io/managed-by": "kix",
-                CLUSTER_LABEL: cluster_name,
+                keys::CLUSTER_LABEL: cluster_name,
             },
             "annotations": annotations,
         },

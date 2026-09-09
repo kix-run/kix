@@ -7,6 +7,7 @@ use crate::output::{self, CommandResponse};
 use kix::manifest::validate::{PreflightResult, default_tools, run_preflight};
 
 use super::CommandContext;
+use kix::manifest::keys;
 
 #[derive(serde::Serialize)]
 struct CheckResult {
@@ -140,7 +141,7 @@ fn to_sarif(scorecard_report: &serde_json::Value) -> serde_json::Value {
             "tool": {
                 "driver": {
                     "name": "kix",
-                    "informationUri": "https://kix.dev",
+                    "informationUri": keys::WEBSITE,
                     "rules": rules
                 }
             },

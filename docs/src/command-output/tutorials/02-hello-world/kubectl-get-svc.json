@@ -8,7 +8,7 @@
   "commands": [
     {
       "command": "kubectl get svc -n tutorial-02",
-      "stdout": "NAME          TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)   AGE\nhello-world   ClusterIP   10.96.69.167   <none>        80/TCP    1s\n",
+      "stdout": "NAME          TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)   AGE\nhello-world   ClusterIP   10.96.132.217   <none>        80/TCP    2s\n",
       "stderr": "",
       "stdoutDrift": "NAME TYPE CLUSTER-IP EXTERNAL-IP PORT(S) AGE\nhello-world ClusterIP <CLUSTER-IP> <none> 80/TCP <DURATION>\n",
       "stderrDrift": "",

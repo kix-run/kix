@@ -48,6 +48,7 @@ use crate::output;
 use crate::plan;
 
 use super::CommandContext;
+use kix::manifest::keys;
 
 pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     if args.operator {
@@ -71,6 +72,19 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
             .map_err(|e| miette!("failed to build cluster: {e}"))?;
     let mut new_graph = StoreGraph::from_result_dir_with_status(&result_path, &status)
         .map_err(|e| miette!("failed to load store graph: {e}"))?;
+    // A kixpkgs pin from before the domain move renders Kix's own CRDs under
+    // the retired group. Deploying it would put those CRDs back and leave two
+    // groups live, which the CLI cannot tell apart. Checked BEFORE
+    // `stamp_annotations`, which upgrades a loaded build to the current
+    // domain: after that a stale pin is indistinguishable from a current one.
+    kix::legacy_domain::check_build(
+        &new_graph
+            .resources
+            .values()
+            .map(|r| r.manifest.clone())
+            .collect::<Vec<_>>(),
+    )
+    .map_err(|e| miette!("{e}"))?;
     stamp_annotations(&mut new_graph);
     if !ctx.global.quiet {
         eprint!("\r\x1b[2K");
@@ -204,15 +218,8 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
     });
-    let activation_identity_hash = activation_manifest.and_then(|m| {
-        m.pointer("/metadata/annotations/kix.dev~1identity-hash")
-            .or_else(|| {
-                m.pointer("/metadata/annotations")
-                    .and_then(|a| a.get("kix.dev/identity-hash"))
-            })
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-    });
+    let activation_identity_hash =
+        activation_manifest.and_then(|m| keys::get(m, keys::IDENTITY_HASH).map(|s| s.to_string()));
 
     // 6. Display plan — package-grouped, changes only
     if !ctx.global.quiet {
@@ -280,7 +287,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
 
     if total_apply == 0 && orphan_rids.is_empty() {
         // An unchanged plan can still owe a run: a probe Job under
-        // `kix.dev/rerun` whose last run failed (the failure kept the
+        // `kix.run/rerun` whose last run failed (the failure kept the
         // activation from switching, so the next deploy sees the same
         // hashes). The engine's Skip path recreates it, but only if the
         // engine runs.
@@ -441,12 +448,12 @@ fn load_old_from_cache(
     }
 }
 
-/// Extract the `kix.dev/identity-hash` annotation from the Activation
+/// Extract the `kix.run/identity-hash` annotation from the Activation
 /// manifest in a manifest set, if present.
 fn find_activation_identity_hash(manifests: &[Value]) -> Option<String> {
     lifecycle::record_of(manifests).and_then(|m| {
         m.pointer("/metadata/annotations")
-            .and_then(|a| a.get("kix.dev/identity-hash"))
+            .and_then(|a| a.get(keys::IDENTITY_HASH))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
     })
@@ -481,7 +488,9 @@ async fn load_old_from_cluster(
         .map_err(|e| miette!("API discovery failed: {e}"))?;
 
     // Try to find the Active Activation on the cluster
-    let active = if let Some((ar, _)) = activation::find_activation_ar(&discovery) {
+    let active = if let Some((ar, _)) =
+        activation::find_activation_ar(&discovery).map_err(|e| miette!("{e}"))?
+    {
         activation::find_active(&client, ar, cluster)
             .await
             .ok()
@@ -607,7 +616,12 @@ async fn reconstruct_old_from_live(
         .filter(|obj| lifecycle::lifecycle_of_live(obj).prunable())
         .map(|mut obj| {
             fetch::normalize_for_diff(&mut obj);
-            kix::cluster::fieldsv1::merge_typed_metadata(&obj)
+            let mut manifest = kix::cluster::fieldsv1::merge_typed_metadata(&obj);
+            // Live objects a previous Kix stamped carry the retired keys.
+            // Bring them to the current domain here, the way the store-graph
+            // loader does, so the planner sees one domain either way.
+            kix::legacy_domain::upgrade_manifest(&mut manifest);
+            manifest
         })
         .collect())
 }
@@ -616,7 +630,7 @@ async fn reconstruct_old_from_live(
 /// package-grouped plan shows changed/unchanged packages instead of
 /// everything "added" when the old store path is gone.
 ///
-/// Resources group by their stamped `kix.dev/package[-namespace]`
+/// Resources group by their stamped `kix.run/package[-namespace]`
 /// annotations (cluster-level `_cluster` resources are skipped — real
 /// graphs keep them outside any PackageNode). Identity hashes map back
 /// onto the NEW graph's store paths: a matched resource reuses the new
@@ -664,9 +678,9 @@ fn synthesize_old_graph(old_manifests: &[Value], new_graph: &StoreGraph) -> Stor
                 .and_then(|a| a.get(key))
                 .and_then(Value::as_str)
         };
-        let pkg = ann("kix.dev/package").unwrap_or("_cluster");
-        let pkg_ns = ann("kix.dev/package-namespace").unwrap_or("_cluster");
-        let hash = ann("kix.dev/identity-hash").unwrap_or("");
+        let pkg = ann(keys::PACKAGE).unwrap_or("_cluster");
+        let pkg_ns = ann(keys::PACKAGE_NAMESPACE).unwrap_or("_cluster");
+        let hash = ann(keys::IDENTITY_HASH).unwrap_or("");
 
         let (path, manifest) = match new_path_by_hash.get(hash) {
             Some(&p) => (p.clone(), new_graph.resources[p].manifest.clone()),
@@ -1040,6 +1054,22 @@ async fn run_deploy_async(
     let discovery = fetch::discover_resources(&client)
         .await
         .map_err(|e| miette!("API discovery failed: {e}"))?;
+
+    // The gate, again, here. `load_old_from_cluster` checks it too, but
+    // `--current-activation` reads the previous build from the local cache
+    // and never contacts the cluster before this point. Without this check
+    // that flag skips the gate, and with `--prune` the deploy would compute
+    // the retired CRDs as orphans and delete them, which cascades away every
+    // Activation record on the cluster.
+    kix::legacy_domain::check_cluster(
+        &discovery
+            .iter()
+            .filter(|(ar, _)| kix::manifest::lifecycle::is_record_kind(&ar.kind))
+            .map(|(ar, _)| ar.group.as_str())
+            .collect::<Vec<_>>(),
+    )
+    .map_err(|e| miette!("{e}"))?;
+
     let discovery = Arc::new(tokio::sync::RwLock::new(discovery));
 
     let prune_policy = prune_policy_for(args);
@@ -1349,6 +1379,20 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
             .map_err(|e| miette!("failed to build cluster: {e}"))?;
     let mut new_graph = StoreGraph::from_result_dir_with_status(&result_path, &status)
         .map_err(|e| miette!("failed to load store graph: {e}"))?;
+    // The same stale-pin check the direct path makes, and for the same
+    // reason: a pin from before the domain move renders Kix's own CRDs under
+    // the retired group. Before `stamp_annotations`, which would upgrade
+    // them and make a stale pin indistinguishable from a current one. Two
+    // deploy paths that answer differently about one build is worse than
+    // either answer.
+    kix::legacy_domain::check_build(
+        &new_graph
+            .resources
+            .values()
+            .map(|r| r.manifest.clone())
+            .collect::<Vec<_>>(),
+    )
+    .map_err(|e| miette!("{e}"))?;
     stamp_annotations(&mut new_graph);
     if !ctx.global.quiet {
         eprint!("\r\x1b[2K");
@@ -1387,7 +1431,7 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         .ok_or_else(|| miette!("no Activation resource found in cluster manifests"))?;
     let activation_identity_hash = activation_manifest.and_then(|m| {
         m.pointer("/metadata/annotations")
-            .and_then(|a| a.get("kix.dev/identity-hash"))
+            .and_then(|a| a.get(keys::IDENTITY_HASH))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
     });

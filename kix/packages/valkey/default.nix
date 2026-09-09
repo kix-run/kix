@@ -55,7 +55,7 @@
         existingSecretPasswordKey = "valkey-password";
         password = null;
         # Path to a SOPS-encrypted file containing the valkey-password key.
-        # Wired to kix.dev/sops-source so `kix deploy` decrypts it at apply time.
+        # Wired to kix.run/sops-source so `kix deploy` decrypts it at apply time.
         secretSource = null;
       };
     };

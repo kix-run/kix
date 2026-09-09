@@ -14,6 +14,7 @@
 {
   scope,
   lib,
+  kix,
 }:
 
 let
@@ -560,8 +561,8 @@ in
             extraArgs = {
               name = "${name}-sgcluster-egress";
               labels = {
-                "kix.dev/derived" = "true";
-                "kix.dev/policy-type" = "operator-managed-workload";
+                ${kix.keys.derived} = "true";
+                ${kix.keys.policyType} = "operator-managed-workload";
               };
               spec = {
                 endpointSelector.matchLabels = sgPodSelector;
@@ -588,8 +589,8 @@ in
             extraArgs = {
               name = "${name}-sgcluster-ingress";
               labels = {
-                "kix.dev/derived" = "true";
-                "kix.dev/policy-type" = "operator-managed-workload";
+                ${kix.keys.derived} = "true";
+                ${kix.keys.policyType} = "operator-managed-workload";
               };
               spec = {
                 endpointSelector.matchLabels = sgPodSelector;

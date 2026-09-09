@@ -138,7 +138,9 @@ def run(check: Callable[[], Check]) -> Check:
 
 def on_sigterm(_signum: int, _frame: object) -> None:
     """The Job deadline deletes the pod; say so before the log is gone."""
-    print("killed before the retry window ended: a round took longer than the round budget")
+    print(
+        "killed before the retry window ended: a round took longer than the round budget"
+    )
     sys.stdout.flush()
     sys.exit(1)
 

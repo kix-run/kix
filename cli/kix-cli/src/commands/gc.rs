@@ -17,7 +17,7 @@
 //! than `--keep-max` (default 50), and beyond the floor retire anything older
 //! than `--keep-for` (default 30d). They are the rollback history, so recent
 //! ones stay, but each record still on the cluster keeps one entry alive in
-//! `kix.dev/activations` on every managed resource, and that annotation has a
+//! `kix.run/activations` on every managed resource, and that annotation has a
 //! 256 KiB cap. `activation::retire_plan` decides which go; deletes are
 //! conditional on the record being unchanged since it was listed; the next
 //! deploy drops the retired hashes from the resources. Soft mode needs the
@@ -207,17 +207,17 @@ fn run_hard(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         .map_err(|e| miette!("failed to load store graph: {e}"))?;
     stamp_annotations(&mut graph);
 
-    // 2. Collect expected identity hashes
+    // 2. Collect expected identity hashes, and the Kubernetes identities
+    //    behind them, for objects whose hash cannot be compared.
     let expected_hashes: HashSet<String> = graph
         .resources
         .values()
-        .filter_map(|r| {
-            r.manifest
-                .pointer("/metadata/annotations")
-                .and_then(|a| a.get("kix.dev/identity-hash"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-        })
+        .filter_map(|r| keys::get(&r.manifest, keys::IDENTITY_HASH).map(|s| s.to_string()))
+        .collect();
+    let expected_ids: HashSet<String> = graph
+        .resources
+        .values()
+        .map(|r| k8s_identity(&r.manifest))
         .collect();
 
     if !ctx.global.quiet {
@@ -235,6 +235,7 @@ fn run_hard(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         args,
         &global,
         &expected_hashes,
+        &expected_ids,
         &cluster_name,
     ))
 }
@@ -243,6 +244,7 @@ async fn run_hard_async(
     args: &GcArgs,
     global: &crate::cli::GlobalArgs,
     expected_hashes: &HashSet<String>,
+    expected_ids: &HashSet<String>,
     cluster_name: &str,
 ) -> Result<()> {
     if !global.quiet {
@@ -269,6 +271,39 @@ async fn run_hard_async(
     }
     let live: Vec<_> = sweep.managed.into_iter().chain(sweep.unstamped).collect();
 
+    // Refuse on a cluster that has been migrated but not deployed since.
+    //
+    // The expected set above comes from a build made now, so every hash in
+    // it is a post-move hash, while every object here still carries the
+    // pre-move one. Every single resource would read as HashNotExpected and
+    // be deleted. `check_cluster` cannot catch this: discovery shows only
+    // the current group, because the migration is what moved it.
+    let has_key = |obj: &kube::api::DynamicObject, key: &str| {
+        obj.data
+            .pointer("/metadata/annotations")
+            .and_then(|a| a.as_object())
+            .is_some_and(|m| m.contains_key(key))
+            || obj
+                .metadata
+                .annotations
+                .as_ref()
+                .is_some_and(|a| a.contains_key(key))
+    };
+    let stale = live
+        .iter()
+        .filter(|obj| kix::legacy_domain::stamped_before_move(|key| has_key(obj, key)))
+        .count();
+    if stale > 0 && !global.quiet {
+        println!(
+            "{} {stale} resources still carry identity annotations from before the {} \
+             move. Their hashes cannot match a build made now, so they are judged by \
+             Kubernetes identity instead, the rule soft gc already uses. One deploy \
+             re-stamps them.",
+            crate::output::yellow("Note:"),
+            keys::DOMAIN,
+        );
+    }
+
     // Find resources with identity-hash not in expected set.
     // Skip Activation CRs here — they're handled separately below.
     let mut garbage: Vec<GarbageEntry> = Vec::new();
@@ -293,14 +328,31 @@ async fn run_hard_async(
             obj.metadata
                 .annotations
                 .as_ref()
-                .and_then(|a| a.get(key))
-                .cloned()
+                .and_then(|a| keys::get_meta(a, key))
+                .map(str::to_string)
         };
 
-        let identity_hash = ann_get("kix.dev/identity-hash");
+        let identity_hash = ann_get(keys::IDENTITY_HASH);
 
         let reason = match &identity_hash {
             Some(hash) if expected_hashes.contains(hash) => continue,
+            // An object still stamped by a pre-move Kix cannot be judged by
+            // hash at all. Its hash was computed from a store path under the
+            // old domain, and the move changed every path, so it can never
+            // appear in a current expected set. Judging it by hash would
+            // condemn every resource the deploy after a migration has not
+            // reached yet, which is most of a cluster.
+            //
+            // Judge it by Kubernetes identity instead, the rule soft gc and
+            // deploy's prune already use. Present in the build means still
+            // ours, waiting to be re-stamped. Absent means garbage, whatever
+            // it is stamped with.
+            Some(_)
+                if kix::legacy_domain::stamped_before_move(|key| has_key(obj, key))
+                    && expected_ids.contains(&live_identity(obj)) =>
+            {
+                continue;
+            }
             Some(_) => GarbageReason::HashNotExpected,
             None => GarbageReason::NoIdentityHash,
         };
@@ -332,9 +384,9 @@ async fn run_hard_async(
                 namespace,
             },
             identity_hash,
-            package: ann_get("kix.dev/package"),
-            package_namespace: ann_get("kix.dev/package-namespace"),
-            activations: ann_get("kix.dev/activations"),
+            package: ann_get(keys::PACKAGE),
+            package_namespace: ann_get(keys::PACKAGE_NAMESPACE),
+            activations: ann_get(keys::ACTIVATIONS),
             reason,
         });
     }
@@ -407,9 +459,9 @@ async fn run_hard_async(
 /// Why a live resource is flagged as garbage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GarbageReason {
-    /// Resource carries a `kix.dev/identity-hash` that isn't in the expected set.
+    /// Resource carries a `kix.run/identity-hash` that isn't in the expected set.
     HashNotExpected,
-    /// Resource has no `kix.dev/identity-hash` annotation — it looks kix-managed
+    /// Resource has no `kix.run/identity-hash` annotation — it looks kix-managed
     /// (matched the managed-by label) but was never properly stamped.
     NoIdentityHash,
     /// An `Activation` CR in phase `Superseded` older than the `--keep`
@@ -421,7 +473,7 @@ impl GarbageReason {
     fn label(&self) -> &'static str {
         match self {
             GarbageReason::HashNotExpected => "identity-hash not in expected set",
-            GarbageReason::NoIdentityHash => "missing kix.dev/identity-hash",
+            GarbageReason::NoIdentityHash => "missing identity-hash",
             GarbageReason::RetiredActivation => "superseded activation older than --keep",
         }
     }
@@ -441,9 +493,10 @@ struct GarbageEntry {
 fn print_unstamped(unstamped: &[GarbageEntry]) {
     println!();
     println!(
-        "{} {} resources carry the kix label but no kix.dev/identity-hash:",
+        "{} {} resources carry the kix label but no {}:",
         output::bold("Unstamped:"),
         unstamped.len(),
+        keys::IDENTITY_HASH,
     );
     for entry in unstamped {
         println!(
@@ -545,6 +598,7 @@ async fn run_operator(args: &GcArgs, ctx: &CommandContext) -> Result<()> {
         .map_err(|e| miette!("API discovery failed: {e}"))?;
 
     let (activation_ar, _) = kix::cluster::activation::find_activation_ar(&discovery)
+        .map_err(|e| miette!("{e}"))?
         .ok_or_else(|| miette!("Activation CRD not registered on cluster"))?
         .clone();
 
@@ -629,6 +683,7 @@ async fn run_operator(args: &GcArgs, ctx: &CommandContext) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 use kix::cluster::activation::{RetentionPolicy, Retirement};
+use kix::manifest::keys;
 
 /// The policy from the flags. `--keep-max` below `--keep` is raised to it
 /// (the floor wins) and said so.
@@ -728,7 +783,13 @@ async fn plan_records_with(
     cluster: &str,
     policy: &RetentionPolicy,
 ) -> Result<RecordRetirement> {
-    let Some((ar, _)) = kix::cluster::activation::find_activation_ar(discovery) else {
+    // The gate error must not be read as "no Activation CRD". On a cluster
+    // still under the retired group, hard gc would compare live objects
+    // stamped with retired identity hashes against a current build, find no
+    // match for most of them, and plan to delete them.
+    let Some((ar, _)) =
+        kix::cluster::activation::find_activation_ar(discovery).map_err(|e| miette!("{e}"))?
+    else {
         return Ok(RecordRetirement {
             conn: None,
             plan: Default::default(),
@@ -811,8 +872,9 @@ fn print_record_plan(records: &RecordRetirement, policy: &RetentionPolicy) {
         "  {}",
         output::dim(&format!(
             "{} kept. Kix cannot roll back to a retired record. The next deploy drops its \
-             hash from kix.dev/activations on every resource.",
-            plan.kept.len()
+             hash from {} on every resource.",
+            plan.kept.len(),
+            keys::ACTIVATIONS
         ))
     );
 }
@@ -1009,6 +1071,24 @@ fn resolve_flake_path(flake: &str) -> Result<PathBuf> {
             Ok(cwd.join(path))
         }
     }
+}
+
+/// `kind/namespace/name` for a live object, in the shape [`k8s_identity`]
+/// produces for a manifest.
+fn live_identity(obj: &kube::api::DynamicObject) -> String {
+    let kind = obj
+        .data
+        .get("kind")
+        .and_then(|v| v.as_str())
+        .or_else(|| obj.types.as_ref().map(|t| t.kind.as_str()))
+        .unwrap_or("Unknown");
+    let namespace = obj
+        .metadata
+        .namespace
+        .as_deref()
+        .unwrap_or(kix::manifest::types::CLUSTER_SCOPED);
+    let name = obj.metadata.name.as_deref().unwrap_or("unknown");
+    format!("{kind}/{namespace}/{name}")
 }
 
 /// `kind/namespace/name`, the identity deploy's change detection matches on.

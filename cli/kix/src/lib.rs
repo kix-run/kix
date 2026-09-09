@@ -10,4 +10,5 @@
 
 pub mod cluster;
 pub mod eval;
+pub mod legacy_domain;
 pub mod manifest;

@@ -1,6 +1,10 @@
 { lib, k8s }:
 
 let
+  # Kix's own annotation keys and API names, spelled once in
+  # core/annotations.nix.
+  kixAnnotations = import ../core/annotations.nix;
+  kixKeys = kixAnnotations.keys;
   inherit (k8s) clusterScoped;
 in
 {
@@ -190,7 +194,7 @@ in
           interceptorResources = builtins.concatMap (r: r.resources or [ ]) interceptorResults;
           interceptorWarnings = builtins.concatMap (r: r.warnings or [ ]) interceptorResults;
           # Splice order contract: author-declared requires, then plugin
-          # requires, then core DNS deps. kix.dev/depends-on stamps entries
+          # requires, then core DNS deps. kix.run/depends-on stamps entries
           # in list order, so this order is content-addressed into the
           # manifest — change it only as a deliberate output change.
           workload = scopeMkResource (
@@ -538,14 +542,14 @@ in
           extraRequires ? [ ],
         }:
         scopeMkResource {
-          apiVersion = "kix.dev/v1alpha1";
+          apiVersion = kixAnnotations.apiVersion;
           kind = "PackageInstance";
           name = markerName;
           annotations = {
-            "kix.dev/mode" = "import";
-            "kix.dev/import-kind" = importKind;
-            "kix.dev/import-apiversion" = importApiVersion;
-            "kix.dev/import-name" = importName;
+            ${kixKeys.mode} = "import";
+            ${kixKeys.importKind} = importKind;
+            ${kixKeys.importApiVersion} = importApiVersion;
+            ${kixKeys.importName} = importName;
           }
           // extraAnnotations;
           requires = [ k8s.kixCRDs.packageInstance ] ++ extraRequires;
@@ -571,7 +575,7 @@ in
           factBehavior ? null,
           # readiness convention of this kind's controller — see
           # mkCRDBuilders in core/resource.nix. Stamped on every CR built
-          # via mkCR as the `kix.dev/readiness` annotation. Validated
+          # via mkCR as the `kix.run/readiness` annotation. Validated
           # eagerly (seq'd into the marker) like factBehavior.
           readiness ? null,
         }:
@@ -665,19 +669,19 @@ in
             annotations =
               annotations
               // {
-                "kix.dev/secret-keys" = builtins.concatStringsSep "," effectiveKeys;
+                ${kixKeys.secretKeys} = builtins.concatStringsSep "," effectiveKeys;
               }
               // lib.optionalAttrs (source != null) {
-                "kix.dev/sops-source" = toString realizedSource;
+                ${kixKeys.sopsSource} = toString realizedSource;
               }
               // lib.optionalAttrs (hash != null) {
-                "kix.dev/content-hash" = hash;
+                ${kixKeys.contentHash} = hash;
               }
               // lib.optionalAttrs (meta ? classification) {
-                "kix.dev/classification" = meta.classification;
+                ${kixKeys.classification} = meta.classification;
               }
               // lib.optionalAttrs (meta ? rotationPolicy) {
-                "kix.dev/rotation-policy" = meta.rotationPolicy;
+                ${kixKeys.rotationPolicy} = meta.rotationPolicy;
               };
             extra = {
               inherit type;
@@ -720,10 +724,10 @@ in
             importApiVersion = "v1";
             importName = name;
             extraAnnotations = {
-              "kix.dev/secret-type" = type;
+              ${kixKeys.secretType} = type;
             }
             // lib.optionalAttrs (keys != [ ]) {
-              "kix.dev/import-secret-keys" = builtins.concatStringsSep "," keys;
+              ${kixKeys.importSecretKeys} = builtins.concatStringsSep "," keys;
             };
             extraRequires = requires;
           });
@@ -772,11 +776,11 @@ in
             importApiVersion = "v1";
             importName = name;
             extraAnnotations = {
-              "kix.dev/service-selector" = builtins.toJSON selector;
-              "kix.dev/service-ports" = builtins.toJSON ports;
+              ${kixKeys.serviceSelector} = builtins.toJSON selector;
+              ${kixKeys.servicePorts} = builtins.toJSON ports;
             }
             // lib.optionalAttrs (labels != { }) {
-              "kix.dev/service-labels" = builtins.toJSON labels;
+              ${kixKeys.serviceLabels} = builtins.toJSON labels;
             };
             extraRequires = requires;
           };

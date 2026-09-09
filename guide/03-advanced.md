@@ -28,7 +28,7 @@ creds = scope.mkSecret {
 ```
 
 - `keys` = declared key names; drives build-time validation in `out`. Omit -> derived from `attrNames stringData`. Neither `keys` nor `stringData` -> throws.
-- Annotations: always `kix.dev/secret-keys`; `source` -> `kix.dev/sops-source`; `hash` -> `kix.dev/content-hash`; `meta.classification` / `meta.rotationPolicy` -> own annotations.
+- Annotations: always `kix.run/secret-keys`; `source` -> `kix.run/sops-source`; `hash` -> `kix.run/content-hash`; `meta.classification` / `meta.rotationPolicy` -> own annotations.
 
 `out` API (`mkSecretHelpers`), each validates requested keys against declared `keys` at build time:
 
@@ -51,7 +51,7 @@ vol    = creds.out.volume "db-creds-vol";
 
 ##### realizedSource gotcha
 
-- `source` is NOT referenced by path directly. `mkSecret` runs `builtins.path { path = source; ... }` to force-copy the file into the store (`realizedSource`), then stamps `toString realizedSource` into `kix.dev/sops-source`.
+- `source` is NOT referenced by path directly. `mkSecret` runs `builtins.path { path = source; ... }` to force-copy the file into the store (`realizedSource`), then stamps `toString realizedSource` into `kix.run/sops-source`.
 - Without this, a self-relative path (`./secrets/x.enc.yaml`) dangles (`path '/nix/store/…-source' is not valid`) under strict Linux sandbox / CI. macOS's loose sandbox tolerates it, so the bug only bites in CI.
 - Ciphertext is deliberately NOT a manifest DAG edge; change detection is `hash`'s job. Re-encrypting same plaintext does not redeploy.
 
@@ -77,7 +77,7 @@ env = creds.out.mkEnv { DB_USER = "username"; };
 
 `mkSecretRef` and `mkCRDRef` both build on `mkImportMarker` (`kix/lib/eval/scope.nix`):
 
-- Emits a namespaced `PackageInstance` annotated `kix.dev/mode=import` + `kix.dev/import-{kind,apiversion,name}`.
+- Emits a namespaced `PackageInstance` annotated `kix.run/mode=import` + `kix.run/import-{kind,apiversion,name}`.
 - CLI readiness parses these into an `ImportTarget`, gates consuming waves until the resource exists (and for Secrets, all `expected_keys` present).
 - Marker lives in consumer's namespace; imported resource expected in same namespace. Cross-namespace imports unsupported.
 - Every marker `requires` the kix `PackageInstance` CRD, plus `extraRequires` (how `installedBy` works).
@@ -357,9 +357,9 @@ meta.provides = [ "cni" "network-policy" "network-policy-enforcer" "cilium" ];
 Fingerprint-driven. A resource matches a fingerprint by kind, annotation domain, or label domain. Package OWNS the capability iff:
 
 - `meta.provides` contains the capability name, OR
-- an emitted resource carries annotation `kix.dev/capability: <name>`.
+- an emitted resource carries annotation `kix.run/capability: <name>`.
 
-The annotation is the key mechanism. Owner builder (e.g. `reflector.out.reflectSecret`) stamps `kix.dev/capability` on returned resources, so the rule distinguishes "built inline" (fires) from "built via owner's DI builder" (passes) with no provenance machinery:
+The annotation is the key mechanism. Owner builder (e.g. `reflector.out.reflectSecret`) stamps `kix.run/capability` on returned resources, so the rule distinguishes "built inline" (fires) from "built via owner's DI builder" (passes) with no provenance machinery:
 
 ```nix
 # kix/packages/reflector/default.nix
@@ -368,7 +368,7 @@ meta = {
   provides = [ "reflection" ];
   defaultAliases = [ "reflector" ];
 };
-# ... and its builder stamps:  "kix.dev/capability" = "reflection";
+# ... and its builder stamps:  "kix.run/capability" = "reflection";
 ```
 
 Built-in fingerprints: `storage` (any `PersistentVolumeClaim`), `reflection` (`reflector.v1.k8s.emberstack.com` domain). Emit a fingerprinted resource without owning the capability -> rule fires, suggests DI.
@@ -404,7 +404,7 @@ Package-declared `warnings` / `assertions` functions (called with `{ config; sel
 ### Gotchas
 
 - **Literal selector / hand-rolled FQDN produces no edge.** A literal `{ app = "..."; }` selector or hand-typed `"name.ns.svc"` FQDN carries no store-path context -> no egress rule -> workload silently fails under default-deny. `selectorCoherence` / `fqdnWithoutContext` (see 03-advanced.md#scorecard--rules) catch both; use `kix.service.fromWorkload` and `out.fqdn` (see 02-authoring.md#composition-helpers-kix).
-- **`provides` does not stamp resources.** `meta.provides = [ "x" ]` makes the package OWN capability `x`; it does NOT put `kix.dev/capability` on a consumer's resources. Consumers must go through the owner's `out.mk*` builder, not just resolve the dep.
+- **`provides` does not stamp resources.** `meta.provides = [ "x" ]` makes the package OWN capability `x`; it does NOT put `kix.run/capability` on a consumer's resources. Consumers must go through the owner's `out.mk*` builder, not just resolve the dep.
 - **Opaque Helm packages warn.** `meta.isHelm` -> `processInstance` warns intra-package edges may be missing; patch with `meta.network.intents`.
 - **hostNetwork bypasses CNPs.** `buildWorkloadCnps` skips emission and `processInstance` warns; hostNetwork is not an external-ingress trigger.
 
@@ -543,7 +543,7 @@ User `out = { ... }` shallow-merges over auto-derived (user wins on collisions).
 
 ### Intra-chart dependency inference (helm-dag.nix)
 
-Reconstructs edges from raw JSON before wrapping; inferred deps become real `requires` (part of content hash and `kix.dev/depends-on`). Edge direction "from depends on to"; `to` deploys first. Patterns:
+Reconstructs edges from raw JSON before wrapping; inferred deps become real `requires` (part of content hash and `kix.run/depends-on`). Edge direction "from depends on to"; `to` deploys first. Patterns:
 
 - Workload -> ServiceAccount (`serviceAccountName`).
 - Workload -> ConfigMap/Secret via volumes (incl. projected sources), `envFrom`, `env[].valueFrom.*KeyRef`.
@@ -823,7 +823,7 @@ Don't disable unless downgrading to `info` is insufficient: `info` still prints 
 - **`error` findings block the build.** Fix the workload or override severity before enabling an error-defaulting category broadly.
 - **Precedence is first-match, not merge.** Only the first matching tier in `byRule -> byOwner -> byNamespace -> rule -> ruleDefaults` applies; tiers don't combine.
 - **Glob matching takes the first match** (`builtins.head`), not the most specific. Avoid overlapping patterns at one tier.
-- **`capabilityOwnership` checks emitted resources, not the resolved dep graph.** The resource must carry `kix.dev/capability` (owner's builder) or the package must list the capability in `meta.provides`.
+- **`capabilityOwnership` checks emitted resources, not the resolved dep graph.** The resource must carry `kix.run/capability` (owner's builder) or the package must list the capability in `meta.provides`.
 
 ## Overrides
 
@@ -918,7 +918,7 @@ instances.data.postgres.selectorLabels = {
 
 ### optional: dormant instances
 
-`optional = true`: included in DI resolution, deployed only if a non-optional instance transitively depends on it. Activated optionals get annotation `kix.dev/optional-activated = "true"` (`kix/lib/eval/instance.nix`).
+`optional = true`: included in DI resolution, deployed only if a non-optional instance transitively depends on it. Activated optionals get annotation `kix.run/optional-activated = "true"` (`kix/lib/eval/instance.nix`).
 
 ```nix
 # platform storage import that ships only if a PVC consumes it.
@@ -1077,7 +1077,7 @@ implicitCtxPaths = builtins.filter (p: lib.hasPrefix "/nix/store/" p) (
 );
 ```
 
-- Each referenced store hash is stamped into `kix.dev/depends-on`. The CLI walks the store DAG for deploy order and waves (see 01-fundamentals.md#overview--mental-model).
+- Each referenced store hash is stamped into `kix.run/depends-on`. The CLI walks the store DAG for deploy order and waves (see 01-fundamentals.md#overview--mental-model).
 
 ### Helpers (`kix/lib/k8s.nix`)
 
@@ -1094,4 +1094,4 @@ implicitCtxPaths = builtins.filter (p: lib.hasPrefix "/nix/store/" p) (
 
 - `mkActivation` builds one cluster-scoped `Activation` CR; `spec.instances` references every `PackageInstance` by name, each carrying that PI's context.
 - Every PI references its resources, so `nix-store -q --tree` on the Activation derivation yields the entire deploy DAG. The CLI's contract: Activation = single root, whole closure reachable.
-- Each `PackageInstance` is a per-package sub-root (stamps `kix.dev/root`, inverse-deps, package-level requires).
+- Each `PackageInstance` is a per-package sub-root (stamps `kix.run/root`, inverse-deps, package-level requires).

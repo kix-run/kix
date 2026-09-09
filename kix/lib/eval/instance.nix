@@ -13,6 +13,10 @@
 }:
 
 let
+  # Kix's own annotation keys and API names, spelled once in
+  # core/annotations.nix.
+  kixAnnotations = import ../core/annotations.nix;
+  kixKeys = kixAnnotations.keys;
   inherit (k8s) mkPackageInstance;
   inherit (helpers) collectTypedAttrs;
   inherit (scope) mkScope;
@@ -576,10 +580,10 @@ in
           };
           extraAnnotations =
             lib.optionalAttrs (instCfg._autoInstantiated or false) {
-              "kix.dev/auto-instantiated" = "true";
+              ${kixKeys.autoInstantiated} = "true";
             }
             // lib.optionalAttrs (instCfg.optional or false) {
-              "kix.dev/optional-activated" = "true";
+              ${kixKeys.optionalActivated} = "true";
             };
         };
 

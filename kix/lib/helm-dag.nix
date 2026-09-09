@@ -3,7 +3,7 @@
 #
 # Works on raw JSON resources (pre-wrapping) so that inferred edges
 # can be passed as `requires` to mkResource, making them part of the
-# content-addressed hash and kix.dev/depends-on annotation.
+# content-addressed hash and kix.run/depends-on annotation.
 #
 # See v2_discussions/86_helm_dag_reconstruction.md for design rationale.
 

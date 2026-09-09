@@ -23,6 +23,7 @@ use crate::cli::{ComplianceSbomArgs, OutputFormat};
 
 use super::shared;
 use crate::commands::CommandContext;
+use kix::manifest::keys;
 
 pub fn run(args: &ComplianceSbomArgs, ctx: &mut CommandContext) -> Result<()> {
     let (_result_path, graph) = shared::build_and_load(ctx, &args.cluster)?;
@@ -210,7 +211,7 @@ pub fn build_sbom(graph: &StoreGraph, flake_ref: &str) -> Value {
                     "type": "application",
                     "name": "kix",
                     "version": env!("CARGO_PKG_VERSION"),
-                    "vendor": "kix.dev",
+                    "vendor": keys::DOMAIN,
                 }]
             },
             "component": {

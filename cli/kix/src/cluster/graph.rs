@@ -1,8 +1,9 @@
-//! DAG construction from kix.dev/depends-on annotations.
+//! DAG construction from kix.run/depends-on annotations.
 //!
 //! Parses annotated manifests to build a dependency graph.
 //! Used for wave computation (deploy ordering) and visualization (kix graph).
 
+use crate::manifest::keys;
 use crate::manifest::types::ResourceId;
 use petgraph::graph::{DiGraph, NodeIndex};
 use std::collections::HashMap;
@@ -41,8 +42,8 @@ impl ResourceGraph {
     /// Build a dependency graph from annotated manifests.
     ///
     /// Each manifest may have these annotations:
-    /// - `kix.dev/identity-hash`: 32-char Nix base32 hash
-    /// - `kix.dev/depends-on`: comma-separated sorted identity hashes
+    /// - `kix.run/identity-hash`: 32-char Nix base32 hash
+    /// - `kix.run/depends-on`: comma-separated sorted identity hashes
     pub fn from_manifests(manifests: &[serde_json::Value]) -> Result<Self, GraphError> {
         let mut graph = DiGraph::new();
         let mut id_to_node = HashMap::new();
@@ -51,7 +52,7 @@ impl ResourceGraph {
         // Phase 1: Create all nodes
         for manifest in manifests {
             let id = ResourceId::from_value(manifest);
-            let identity_hash = get_annotation(manifest, "kix.dev/identity-hash");
+            let identity_hash = get_annotation(manifest, keys::IDENTITY_HASH);
 
             let node = ResourceNode {
                 id: id.clone(),
@@ -71,7 +72,7 @@ impl ResourceGraph {
             let id = ResourceId::from_value(manifest);
             let from_idx = id_to_node[&id];
 
-            if let Some(deps_str) = get_annotation(manifest, "kix.dev/depends-on") {
+            if let Some(deps_str) = get_annotation(manifest, keys::DEPENDS_ON) {
                 for dep_entry in deps_str
                     .split(',')
                     .map(|s| s.trim())
@@ -116,7 +117,7 @@ impl ResourceGraph {
             for idx in graph.node_indices() {
                 let node = &graph[idx];
                 if node.id.kind == crate::manifest::lifecycle::PACKAGE_INSTANCE_KIND
-                    && let Some(pkg) = get_annotation(&node.manifest, "kix.dev/package")
+                    && let Some(pkg) = get_annotation(&node.manifest, keys::PACKAGE)
                 {
                     package_to_pi.insert(pkg, idx);
                 }
@@ -127,11 +128,11 @@ impl ResourceGraph {
             let mut edges_to_add: Vec<(NodeIndex, NodeIndex)> = Vec::new();
             for edge in graph.edge_indices() {
                 let (src, dst) = graph.edge_endpoints(edge).unwrap();
-                let src_pkg = match get_annotation(&graph[src].manifest, "kix.dev/package") {
+                let src_pkg = match get_annotation(&graph[src].manifest, keys::PACKAGE) {
                     Some(p) => p,
                     None => continue,
                 };
-                let dst_pkg = match get_annotation(&graph[dst].manifest, "kix.dev/package") {
+                let dst_pkg = match get_annotation(&graph[dst].manifest, keys::PACKAGE) {
                     Some(p) => p,
                     None => continue,
                 };
@@ -467,9 +468,9 @@ mod tests {
 
     fn manifest(kind: &str, name: &str, ns: &str, id_hash: &str, deps: &str) -> serde_json::Value {
         let mut annotations = serde_json::Map::new();
-        annotations.insert("kix.dev/identity-hash".into(), json!(id_hash));
+        annotations.insert(keys::IDENTITY_HASH.into(), json!(id_hash));
         if !deps.is_empty() {
-            annotations.insert("kix.dev/depends-on".into(), json!(deps));
+            annotations.insert(keys::DEPENDS_ON.into(), json!(deps));
         }
 
         json!({
@@ -519,7 +520,7 @@ mod tests {
         assert!(matches!(result.unwrap_err(), GraphError::CycleDetected(_)));
     }
 
-    /// Helper: manifest with a `kix.dev/package` annotation set.
+    /// Helper: manifest with a `kix.run/package` annotation set.
     fn pkg_manifest(
         kind: &str,
         name: &str,
@@ -529,10 +530,10 @@ mod tests {
         package: &str,
     ) -> serde_json::Value {
         let mut annotations = serde_json::Map::new();
-        annotations.insert("kix.dev/identity-hash".into(), json!(id_hash));
-        annotations.insert("kix.dev/package".into(), json!(package));
+        annotations.insert(keys::IDENTITY_HASH.into(), json!(id_hash));
+        annotations.insert(keys::PACKAGE.into(), json!(package));
         if !deps.is_empty() {
-            annotations.insert("kix.dev/depends-on".into(), json!(deps));
+            annotations.insert(keys::DEPENDS_ON.into(), json!(deps));
         }
         json!({
             "apiVersion": "v1",
@@ -648,13 +649,13 @@ mod tests {
 
     #[test]
     fn unpackaged_resources_are_not_rewritten() {
-        // Activation CR style: no kix.dev/package annotation. An edge from
+        // Activation CR style: no kix.run/package annotation. An edge from
         // an unpackaged node to a packaged resource should not be rewritten,
         // since the src has no package identity.
         let manifests = vec![
             pkg_manifest("Deployment", "controller", "ns-a", "h_wa", "", "pkg-a"),
             pkg_manifest("PackageInstance", "pkg-a", "ns-a", "h_pia", "h_wa", "pkg-a"),
-            // No kix.dev/package on this one.
+            // No kix.run/package on this one.
             manifest("Activation", "root", CLUSTER_SCOPED, "h_act", "h_wa"),
         ];
 

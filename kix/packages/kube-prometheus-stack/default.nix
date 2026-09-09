@@ -20,7 +20,11 @@
 # Name:    kube-prometheus-stack
 # Version: 71.2.0
 
-{ scope, lib }:
+{
+  scope,
+  lib,
+  kix,
+}:
 let
   chart = scope.helm.fetchHelmChart {
     repo = "oci://ghcr.io/prometheus-community/charts";
@@ -258,7 +262,7 @@ in
       # The chart renders Services over pods the operator creates at
       # runtime (alertmanager, prometheus, the thanos sidecar). No pod
       # template in the build matches them, so each declares the CR whose
-      # pods it selects (kix.dev/operand-of, read by the cross-resource
+      # pods it selects (kix.run/operand-of, read by the cross-resource
       # checks). The CR name comes from the operator's own pod labels in
       # the selector: `operator.prometheus.io/name: <cr>` on current
       # operators, `alertmanager: <cr>` / `prometheus: <cr>` on older ones.
@@ -281,7 +285,7 @@ in
             else
               "monitoring.coreos.com/${kind}/${crName}";
         in
-        if cr == null then r else lib.recursiveUpdate r { metadata.annotations."kix.dev/operand-of" = cr; }
+        if cr == null then r else lib.recursiveUpdate r { metadata.annotations.${kix.keys.operandOf} = cr; }
       );
 
       resources = scope.helm.importChart {

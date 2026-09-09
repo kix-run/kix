@@ -8,6 +8,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::errors::FailureClass;
 use super::fieldsv1;
+use crate::manifest::keys;
 use crate::manifest::lifecycle::{lifecycle_of, lifecycle_of_live};
 use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
 use kube::{
@@ -19,18 +20,6 @@ use serde_json::Value;
 use thiserror::Error;
 use tokio::task::JoinSet;
 
-/// Annotation key for identity hash (derived from Nix store path).
-pub const IDENTITY_HASH_ANNOTATION: &str = "kix.dev/identity-hash";
-
-/// Annotation key for activations (comma-separated activation identity-hashes).
-pub const ACTIVATIONS_ANNOTATION: &str = "kix.dev/activations";
-
-/// Annotation that opts a run-once resource into the rerun rule: when its
-/// identity hash differs from the one the cluster last ran, or the live
-/// object failed, the engine deletes and recreates it instead of applying
-/// in place. Stamped by `kix.healthCheck` on probe Jobs.
-pub const RERUN_ANNOTATION: &str = "kix.dev/rerun";
-
 /// Does this manifest opt into the rerun rule? Jobs only: the rule deletes
 /// the live object, and for anything with a rollout (a Deployment stuck on
 /// its progress deadline is "failed" too) that would be an outage, not a
@@ -40,7 +29,7 @@ pub fn wants_rerun(manifest: &Value) -> bool {
     manifest.get("kind").and_then(Value::as_str) == Some("Job")
         && manifest
             .pointer("/metadata/annotations")
-            .and_then(|a| a.get(RERUN_ANNOTATION))
+            .and_then(|a| a.get(keys::RERUN))
             .and_then(Value::as_str)
             == Some("on-change")
 }
@@ -70,7 +59,7 @@ pub enum ApplyError {
 
     #[error(
         "immutable-field conflict on {resource}: the live object has one or more fields that cannot change in place. \
-         Kix recreates a Job that carries kix.dev/rerun and a resource that is being pruned; \
+         Kix recreates a Job marked to rerun on change, and a resource that is being pruned; \
          for anything else, delete the object and deploy again. \
          Underlying error: {source}"
     )]
@@ -136,12 +125,12 @@ pub enum ChangeAction {
 ///
 /// Returns actions for the new manifests (Apply or Skip) plus Orphan actions
 /// for resources in old but not in new.
-/// The `kix.dev/identity-hash` a rendered or live-reconstructed manifest
+/// The `kix.run/identity-hash` a rendered or live-reconstructed manifest
 /// carries, if kix ever applied it.
 fn manifest_identity_hash(manifest: &Value) -> Option<&str> {
     manifest
         .pointer("/metadata/annotations")
-        .and_then(|a| a.get(IDENTITY_HASH_ANNOTATION))
+        .and_then(|a| a.get(keys::IDENTITY_HASH))
         .and_then(Value::as_str)
 }
 
@@ -157,7 +146,7 @@ pub fn detect_changes(new_manifests: &[Value], old_manifests: &[Value]) -> Vec<C
             let k8s_id = format!("{}/{}/{}", rid.kind, rid.namespace, rid.name);
             let hash = m
                 .pointer("/metadata/annotations")
-                .and_then(|a| a.get(IDENTITY_HASH_ANNOTATION))
+                .and_then(|a| a.get(keys::IDENTITY_HASH))
                 .and_then(Value::as_str)?;
             Some((k8s_id, hash))
         })
@@ -173,7 +162,7 @@ pub fn detect_changes(new_manifests: &[Value], old_manifests: &[Value]) -> Vec<C
 
         let new_hash = manifest
             .pointer("/metadata/annotations")
-            .and_then(|a| a.get(IDENTITY_HASH_ANNOTATION))
+            .and_then(|a| a.get(keys::IDENTITY_HASH))
             .and_then(Value::as_str);
 
         match (old_by_k8s_id.get(&k8s_id), new_hash) {
@@ -261,8 +250,7 @@ pub fn detect_changes_live(
             .metadata
             .annotations
             .as_ref()
-            .and_then(|a| a.get(IDENTITY_HASH_ANNOTATION))
-            .map(|s| s.as_str());
+            .and_then(|a| keys::get_meta(a, keys::IDENTITY_HASH));
 
         live_by_k8s_id.insert(k8s_id.clone(), hash);
         if lifecycle_of_live(obj).prunable() {
@@ -287,7 +275,7 @@ pub fn detect_changes_live(
 
         let desired_hash = manifest
             .pointer("/metadata/annotations")
-            .and_then(|a| a.get(IDENTITY_HASH_ANNOTATION))
+            .and_then(|a| a.get(keys::IDENTITY_HASH))
             .and_then(Value::as_str);
 
         match (live_by_k8s_id.get(&k8s_id), desired_hash) {
@@ -348,13 +336,13 @@ fn api_for(
 ///
 /// An unchanged resource is skipped — its identity hash already matches, so
 /// there is nothing to send. But it is still part of THIS activation, and
-/// `kix.dev/activations` is the record of that. Without this, any resource
+/// `kix.run/activations` is the record of that. Without this, any resource
 /// whose identity hash does not churn between deploys (ServiceAccounts,
 /// ConfigMaps, import markers, leaf Services) freezes its activation set at
 /// the last deploy that happened to change it, and the annotation silently
 /// under-counts — it cannot be used for reference-counted GC.
 ///
-/// Deliberately does not touch `kix.dev/applied-hash`: nothing was applied, so
+/// Deliberately does not touch `kix.run/applied-hash`: nothing was applied, so
 /// the existing stamp is still the truth about the content on the cluster.
 /// Writes nothing when the annotation already says the right thing.
 pub async fn record_activation_on_skipped(
@@ -379,7 +367,7 @@ pub async fn record_activation_on_skipped(
 
 /// Apply a single resource via server-side apply.
 ///
-/// If `activation_hash` is provided, the resource's `kix.dev/activations`
+/// If `activation_hash` is provided, the resource's `kix.run/activations`
 /// annotation is updated to include this activation (read-modify-write).
 #[allow(clippy::too_many_arguments)]
 pub async fn apply_resource(
@@ -438,7 +426,7 @@ pub async fn apply_resource(
     };
 
     // Update kix bookkeeping annotations: merge the current activation into
-    // `kix.dev/activations` and stamp `kix.dev/applied-hash`.
+    // `kix.run/activations` and stamp `kix.run/applied-hash`.
     //
     // This is a SEPARATE patch from the SSA above because we need read-modify-write
     // semantics to merge into the existing comma-separated set without clobbering
@@ -495,7 +483,7 @@ async fn apply_patch(
 /// Wrapper around [`update_bookkeeping_annotations`] that turns a failure
 /// into a hard [`ApplyError::BookkeepingAnnotationsFailed`] so the deploy
 /// halts under `on_error=stop` instead of silently corrupting
-/// `kix.dev/activations` reference counting.
+/// `kix.run/activations` reference counting.
 async fn update_bookkeeping_annotations_checked(
     api: &Api<DynamicObject>,
     name: &str,
@@ -555,7 +543,7 @@ fn is_immutable_field_message(msg: &str) -> bool {
         || msg.contains("updates to daemonset spec for fields other than")
 }
 
-/// Fold `activation_hash` into the comma-separated `kix.dev/activations` set,
+/// Fold `activation_hash` into the comma-separated `kix.run/activations` set,
 /// dropping entries that name an activation no longer on the cluster.
 ///
 /// The activation being deployed is always kept, even when `live` does not
@@ -582,9 +570,9 @@ fn merge_activation_set(
 }
 
 /// Write kix's bookkeeping annotations in ONE merge patch (no extra round
-/// trips): read-modify-write `kix.dev/activations` (merge `activation_hash`
+/// trips): read-modify-write `kix.run/activations` (merge `activation_hash`
 /// into the comma-separated set, drop entries naming activations that no
-/// longer exist) and overwrite `kix.dev/applied-hash` with the hash computed
+/// longer exist) and overwrite `kix.run/applied-hash` with the hash computed
 /// from the SSA response echo.
 ///
 /// `live_activations`, when `Some`, is the set of identity hashes of every
@@ -599,6 +587,7 @@ async fn update_bookkeeping_annotations(
     live_activations: Option<&HashSet<String>>,
 ) -> Result<(), kube::Error> {
     let mut annotations = serde_json::Map::new();
+    let mut live: Option<DynamicObject> = None;
 
     if let Some(activation_hash) = activation_hash {
         // Read current annotation so we merge instead of clobbering entries
@@ -608,8 +597,7 @@ async fn update_bookkeeping_annotations(
             .metadata
             .annotations
             .as_ref()
-            .and_then(|a| a.get(ACTIVATIONS_ANNOTATION))
-            .map(String::as_str)
+            .and_then(|a| keys::get_meta(a, keys::ACTIVATIONS))
             .unwrap_or("");
 
         let merged = merge_activation_set(existing, activation_hash, live_activations);
@@ -617,19 +605,49 @@ async fn update_bookkeeping_annotations(
         // Nothing to say: skip the write rather than bump resourceVersion on
         // every unchanged resource, every deploy.
         if merged != existing || applied_hash.is_some() {
-            annotations.insert(ACTIVATIONS_ANNOTATION.to_string(), Value::String(merged));
+            annotations.insert(keys::ACTIVATIONS.to_string(), Value::String(merged));
         }
+        live = Some(current);
     }
 
     if let Some(applied_hash) = applied_hash {
         annotations.insert(
-            fieldsv1::APPLIED_HASH_ANNOTATION.to_string(),
+            keys::APPLIED_HASH.to_string(),
             Value::String(applied_hash.to_string()),
         );
     }
 
     if annotations.is_empty() {
         return Ok(());
+    }
+
+    // These are written by merge patch, not by server-side apply, so the
+    // `kix` field manager does not own them and an apply will not drop their
+    // retired spellings. Clear those by name, in the write that is happening
+    // anyway, and only for the keys this patch actually replaces. Inert when
+    // no domain has been retired.
+    let writing: Vec<&str> = annotations.keys().map(String::as_str).collect();
+    for old in crate::legacy_domain::bookkeeping_null_outs(&writing) {
+        annotations.insert(old, Value::Null);
+    }
+
+    // Retired build-time keys the apply could not drop.
+    //
+    // Server-side apply removes those on its own, but only where the `kix`
+    // field manager owns them. On an object whose `managedFields` are empty,
+    // which client-side `kubectl apply` leaves behind, it owns nothing: the
+    // apply adds the current spelling and the retired one stays beside it,
+    // so the domain move never finishes on that object.
+    //
+    // Only on a real apply. `applied_hash` is None on the skipped path,
+    // where the resource was not re-applied and its retired keys are the
+    // only ones it has: clearing them there would blind drift for good.
+    if applied_hash.is_some()
+        && let Some(present) = live.as_ref().and_then(|o| o.metadata.annotations.as_ref())
+    {
+        for old in crate::legacy_domain::retired_keys(present) {
+            annotations.insert(old, Value::Null);
+        }
     }
 
     // Patch with strategic merge (not SSA — we only want to touch these
@@ -654,7 +672,7 @@ async fn update_bookkeeping_annotations(
 /// Apply all resources in a wave in parallel.
 ///
 /// If `activation_hash` is provided, each applied resource gets the activation
-/// merged into its `kix.dev/activations` annotation.
+/// merged into its `kix.run/activations` annotation.
 ///
 /// Returns a vec of (ResourceId, Result) pairs for each action in the wave.
 pub async fn apply_wave(
@@ -870,7 +888,7 @@ mod tests {
                 "name": name,
                 "namespace": ns,
                 "annotations": {
-                    IDENTITY_HASH_ANNOTATION: identity_hash,
+                    keys::IDENTITY_HASH: identity_hash,
                 }
             }
         })
@@ -996,10 +1014,7 @@ mod tests {
 
     fn live_object(kind: &str, name: &str, ns: &str, identity_hash: &str) -> DynamicObject {
         let mut annotations = std::collections::BTreeMap::new();
-        annotations.insert(
-            IDENTITY_HASH_ANNOTATION.to_string(),
-            identity_hash.to_string(),
-        );
+        annotations.insert(keys::IDENTITY_HASH.to_string(), identity_hash.to_string());
         DynamicObject {
             metadata: ObjectMeta {
                 name: Some(name.to_string()),
@@ -1022,7 +1037,7 @@ mod tests {
                     "name": name,
                     "namespace": ns,
                     "annotations": {
-                        IDENTITY_HASH_ANNOTATION: identity_hash,
+                        keys::IDENTITY_HASH: identity_hash,
                     }
                 }
             }),
@@ -1111,11 +1126,11 @@ mod tests {
 
     fn record(name: &str, hash: &str) -> Value {
         json!({
-            "apiVersion": "kix.dev/v1alpha1",
+            "apiVersion": keys::API_VERSION,
             "kind": "Activation",
             "metadata": {
                 "name": name,
-                "annotations": { IDENTITY_HASH_ANNOTATION: hash, "kix.dev/package": "_cluster" }
+                "annotations": { keys::IDENTITY_HASH: hash, keys::PACKAGE: "_cluster" }
             }
         })
     }
@@ -1216,7 +1231,7 @@ mod tests {
     #[test]
     fn markers_and_plain_package_instances_can_be_orphans() {
         let mut marker = manifest("PackageInstance", "pi-import", "ns", "m1");
-        marker["metadata"]["annotations"]["kix.dev/mode"] = serde_json::json!("import");
+        marker["metadata"]["annotations"][keys::MODE] = serde_json::json!("import");
         let plain = manifest("PackageInstance", "pi-plain", "ns", "p1");
         let keep = manifest("Deployment", "web", "default", "d1");
         let old = vec![marker, plain, keep.clone()];

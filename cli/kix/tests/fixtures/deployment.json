@@ -4,12 +4,12 @@
     "metadata": {
         "annotations": {
             "deployment.kubernetes.io/revision": "1",
-            "kix.dev/activations": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaact",
-            "kix.dev/applied-hash": "placeholder-recomputed-by-tests",
-            "kix.dev/depends-on": "requires:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaans",
-            "kix.dev/identity-hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaweb",
-            "kix.dev/package": "fixtures",
-            "kix.dev/package-namespace": "drift-fixtures"
+            "kix.run/activations": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaact",
+            "kix.run/applied-hash": "placeholder-recomputed-by-tests",
+            "kix.run/depends-on": "requires:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaans",
+            "kix.run/identity-hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaweb",
+            "kix.run/package": "fixtures",
+            "kix.run/package-namespace": "drift-fixtures"
         },
         "creationTimestamp": "2026-07-02T19:23:09Z",
         "generation": 2,
@@ -24,10 +24,10 @@
                 "fieldsV1": {
                     "f:metadata": {
                         "f:annotations": {
-                            "f:kix.dev/depends-on": {},
-                            "f:kix.dev/identity-hash": {},
-                            "f:kix.dev/package": {},
-                            "f:kix.dev/package-namespace": {}
+                            "f:kix.run/depends-on": {},
+                            "f:kix.run/identity-hash": {},
+                            "f:kix.run/package": {},
+                            "f:kix.run/package-namespace": {}
                         },
                         "f:labels": {
                             "f:app.kubernetes.io/managed-by": {},
@@ -118,8 +118,8 @@
                 "fieldsV1": {
                     "f:metadata": {
                         "f:annotations": {
-                            "f:kix.dev/activations": {},
-                            "f:kix.dev/applied-hash": {}
+                            "f:kix.run/activations": {},
+                            "f:kix.run/applied-hash": {}
                         }
                     }
                 },

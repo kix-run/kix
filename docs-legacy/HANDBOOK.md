@@ -351,7 +351,7 @@ DI dep args: `{ requiredDep, optionalDep ? null, ... }`. The `?` default makes a
 - `"${self.x}"` — reads the resource's outPath and creates a Nix store-path edge in string context. **Names** in K8s manifests are real names (not store paths) — see §8. Use `self.x.out.name` instead of `"${self.x}"` when you need a string for use in spec/data fields.
 - `self.x.out.name`, `out.fqdn`, `out.selector` — these all carry the resource's store-path context, so reading them creates a DAG edge.
 - `requires = [ self.x ]` — explicit dependency edge that isn't reached via string interpolation. Use for label-based references (Service selector, PDB, NetworkPolicy) or for ordering against resources whose store path you wouldn't otherwise see.
-- `extraDeps = [ self.x ]` — same as `requires` but tagged differently in the `kix.dev/depends-on` annotation. Use when the edge is structural rather than "requires this to exist before me".
+- `extraDeps = [ self.x ]` — same as `requires` but tagged differently in the `kix.run/depends-on` annotation. Use when the edge is structural rather than "requires this to exist before me".
 - `rawSelector` — workload-only escape hatch that exposes `spec.selector.matchLabels` without forcing the workload's store-path context. Use when reading `out.selector` would create a cycle. Trade-off: the consumer loses the workload DAG edge — `scorecard:architecture.selectorCoherence` fires to keep the workaround visible.
 
 ### 5.3 Warning system
@@ -443,7 +443,7 @@ scope.mkResource {
   annotations = { ... };     # merged into metadata.annotations
   outputs     = { ... };     # named values exposed via .out — name/fqdn/identityHash/selector are auto-derived
   requires    = [ ... ];     # explicit dep edges not visible via string interpolation
-  extraDeps   = [ ... ];     # additional dep edges (tagged "extra:" in kix.dev/depends-on)
+  extraDeps   = [ ... ];     # additional dep edges (tagged "extra:" in kix.run/depends-on)
   extra       = { ... };     # top-level passthrough for fields kix doesn't model (e.g. `rules` for ClusterRole, `provisioner` for StorageClass)
   clusterDomain = "...";     # rarely overridden — comes from clusterConfig.cluster.domain
 }
@@ -463,7 +463,7 @@ Every resource exposes `out.*` carrying the resource's store-path context, so re
 |---|---|---|
 | `out.name` | yes | Real K8s name + context. Prefer over `"${resource}"` string interpolation |
 | `out.fqdn` | yes | `${name}.${ns}.svc.${clusterDomain}` (or just `${name}` for cluster-scoped) |
-| `out.identityHash` | yes | The blake3 32-char store hash. Used in `kix.dev/identity-hash` |
+| `out.identityHash` | yes | The blake3 32-char store hash. Used in `kix.run/identity-hash` |
 | `out.selector` | yes (when present) | Auto-derived from `spec.selector.matchLabels` → `metadata.labels` → null. Each label value carries context |
 | `out.ports` | Service only | The raw `spec.ports` list |
 | `out.url { scheme?, port? }` | Service only | URL builder. Default port = first entry in `spec.ports` |
@@ -497,7 +497,7 @@ The `kix` arg to packages comes from `compose.nix` (`kixlib`).
 | `kix.mkEnvVars { K = "v"; OPT = null; }` | `→ [{ name, value }]`. Null values filtered (`lib.optionalAttrs` plays nicely). |
 | `kix.mkEnv attrs rawList` | `(mkEnvVars attrs) ++ rawList`. Combines named env vars with raw entries (e.g. `valueFrom.secretKeyRef`) |
 | `kix.parseGi "50Gi"` | `→ 50` (number). Supports `Ti`/`Gi`/`Mi`. Strips Nix string context so it works on `dep.out.size` |
-| `kix.untrackedRef "name"` | Escape hatch: a string carrying an "untracked" context marker. Use when referring to resource names not managed by kix (Helm hook secrets, cert-manager-issued secrets, etc.). Bypasses the DI-tracking check in `mkDeployment`. The marker is inert: it satisfies the ref check and is filtered out of `kix.dev/depends-on`, so it never becomes a deploy-ordering edge |
+| `kix.untrackedRef "name"` | Escape hatch: a string carrying an "untracked" context marker. Use when referring to resource names not managed by kix (Helm hook secrets, cert-manager-issued secrets, etc.). Bypasses the DI-tracking check in `mkDeployment`. The marker is inert: it satisfies the ref check and is filtered out of `kix.run/depends-on`, so it never becomes a deploy-ordering edge |
 | `kix.keep container` | Marks an attrset "never collapse to absent": it renders as `{}` even when every member is null, and the protection survives later merges that introduce fresh nulls (additive `_kixKeep` marker, resolved at `mkResource`, never rendered). Lists are normalized eagerly instead, since merges replace lists whole. Use in constructors of presence-meaningful fields (`emptyDir`, selectors) built from optional arguments; a hand-written empty needs no keep, a literal `{ }` renders as-is (§7) |
 
 ### 9.2 Mounts
@@ -591,7 +591,7 @@ The builder consumes `prometheus.out.mkServiceMonitor` and `prometheus.out.mkPro
 - The script lives in a ConfigMap named `<instance>-health-script`, mounted read-only at `/probe`; the Job runs `interpreter ++ [ "/probe/<file>" ]`. `runtimes.python` is `docker.io/library/python:3.13-slim` pinned by digest (standard library only); `runtimes.shell` is `curlimages/curl`. Bump a digest with `crane digest <repository>:<tag>`.
 - Env values from `out.*` carry the dependency edges: the Job runs after its targets are ready, and under a network-policy enforcer it gets the same egress edge a real consumer gets. The Job also always waits for the package root, so it runs after the package it belongs to; `requires` adds to that. `deps` is every dependency-injected package some entry of the package declares (`deps.vmCluster.out.serviceUrl`); the probe entry itself declares none.
 - The helper owns the time budget. It hands the script its retry window as `RETRY_FOR` and sizes `activeDeadlineSeconds` to that window plus `kix.healthCheck.roundBudget` (90 s, one worst-case round of checks), because the Job deadline deletes the pod and leaves no output. A given deadline that leaves less room fails the build. The script's side: give up once `RETRY_FOR` has passed, keep a round under the budget. `when` and `retryFor` default to the option set `kix.options.healthCheck` (§9.5) when the package declares it.
-- The Job carries `kix.dev/rerun: on-change` (`core/annotations.nix`, shared with check 16). The deploy engine deletes and recreates it whenever its identity hash differs from the one the cluster last ran, or when the live Job failed. So under `kix deploy` and `kix rollback` the probe runs again when it, or anything upstream of what it checks, changes, and never otherwise. A deploy that changes nothing skips it, unless the last run failed; to force a run, change an input such as the retry window. The operator diffs against live objects, so after `ttlSecondsAfterFinished` has reaped a finished Job the operator's next reconcile runs the probe again; it never retries a failed one on its own.
+- The Job carries `kix.run/rerun: on-change` (`core/annotations.nix`, shared with check 16). The deploy engine deletes and recreates it whenever its identity hash differs from the one the cluster last ran, or when the live Job failed. So under `kix deploy` and `kix rollback` the probe runs again when it, or anything upstream of what it checks, changes, and never otherwise. A deploy that changes nothing skips it, unless the last run failed; to force a run, change an input such as the retry window. The operator diffs against live objects, so after `ttlSecondsAfterFinished` has reaped a finished Job the operator's next reconcile runs the probe again; it never retries a failed one on its own.
 - A failing probe fails the deploy like a pod that never came up, and the last lines it printed are shown under the failure.
 - The probe pod carries its own labels (`app.kubernetes.io/name: <instance>-health`), never the package's selector labels, so no Service routes traffic to it (check 15 below guards this). It runs as user 65534 with a read-only root filesystem, no capabilities and no service account token, and passes the stock security rules at error.
 
@@ -932,7 +932,7 @@ If a cluster installs its own `coredns` or `storage-classes` instance, the expli
 
 | Signal | Generates |
 |---|---|
-| Package's `kix.dev/depends-on` to a Service in another package | Egress CNP (caller→callee) + paired ingress CNP in callee's namespace via `scope.forNamespace` |
+| Package's `kix.run/depends-on` to a Service in another package | Egress CNP (caller→callee) + paired ingress CNP in callee's namespace via `scope.forNamespace` |
 | Workload makes Helm/JSON-context refs to a sibling Service | Same — discovered by intersecting raw spec JSON context against the per-package Service registry |
 | Any package has RBAC or CRD resources (precise: SA → RoleBinding/ClusterRoleBinding walk) | API-server egress |
 | Package's pod hits DNS | DNS egress (per-workload, emitted inside `mkDeployment` etc., spliced into `extraDeps`) |
@@ -1022,11 +1022,11 @@ Configure via `scorecard.{enable, rules, ruleDefaults, ruleOverrides}`.
 
 DI-hygiene rules (v2_discussions/128 replaced the old fingerprint-based capabilityOwnership rule):
 
-- `annotationDomainOwnership` — a package's `metadata.annotations` keys under an operator-declared domain (`meta.annotationDomains`, e.g. reflector's `reflector.v1.k8s.emberstack.com`) require a DI dep on the declarer; a domain nobody declares warns as a dead annotation. Reserved suffixes (`kubernetes.io`, `k8s.io`, `kix.dev`, `helm.sh`, `kubebuilder.io`) and the cluster's `scorecard.knownAnnotationDomains` are exempt.
+- `annotationDomainOwnership` — a package's `metadata.annotations` keys under an operator-declared domain (`meta.annotationDomains`, e.g. reflector's `reflector.v1.k8s.emberstack.com`) require a DI dep on the declarer; a domain nobody declares warns as a dead annotation. Reserved suffixes (`kubernetes.io`, `k8s.io`, `kix.run`, `helm.sh`, `kubebuilder.io`) and the cluster's `scorecard.knownAnnotationDomains` are exempt.
 - `unsafeGrants` — info-level audit listing every `meta.unsafe` grant (currently only `raw-pvc`, whose absence is enforced as an eval *error* in `scope/validators.nix`, not a scorecard rule).
 - `selectorCoherence` / `fqdnWithoutContext` — selectors and `*.svc` FQDNs must carry store-path context from the owning workload/service.
-- `monitorSelectorMatchesService` (cluster-level, **error**) — every ServiceMonitor/VMServiceScrape selector must match some Service's *metadata labels* in its target namespaces. Monitor selectors match Service labels, NOT the workload's pod selector — a mismatch drops every target at relabeling and the job silently vanishes from `up` (this shipped four times before the rule existed). Use `self.service.out.selector` or `kix.monitor`. A monitor deliberately targeting a Service kix doesn't render (e.g. prometheus-operator's runtime `kubelet` Service) opts out with `annotations."kix.dev/monitors-external-service" = "true"`. Cluster-level findings trace and gate builds like instance findings.
-- `externalMonitorTargets` (info) — audit listing every `kix.dev/monitors-external-service` claim, so opted-out monitors stay visible in review (the unsafeGrants property).
+- `monitorSelectorMatchesService` (cluster-level, **error**) — every ServiceMonitor/VMServiceScrape selector must match some Service's *metadata labels* in its target namespaces. Monitor selectors match Service labels, NOT the workload's pod selector — a mismatch drops every target at relabeling and the job silently vanishes from `up` (this shipped four times before the rule existed). Use `self.service.out.selector` or `kix.monitor`. A monitor deliberately targeting a Service kix doesn't render (e.g. prometheus-operator's runtime `kubelet` Service) opts out with `annotations."kix.run/monitors-external-service" = "true"`. Cluster-level findings trace and gate builds like instance findings.
+- `externalMonitorTargets` (info) — audit listing every `kix.run/monitors-external-service` claim, so opted-out monitors stay visible in review (the unsafeGrants property).
 
 ### 17.3 Output
 
@@ -1050,7 +1050,7 @@ Sixteen checks over the finished manifest list run inside every cluster evaluati
 | 1 | Workload `serviceAccountName` names a ServiceAccount in its namespace | `default`; unset |
 | 2 | (Cluster)RoleBinding `roleRef` names a Role or ClusterRole that is in the build | names starting `system:`, ending `-psp`, or `admin`, `edit`, `view`, `cluster-admin` |
 | 3 | `volumes[].configMap.name` names a ConfigMap in the namespace | Secrets are not checked (often created out of band) |
-| 4 | Service selector matches at least one pod template | no selector; the control-plane scrape selectors (kube-dns, kube-scheduler, ...); a Service that declares `kix.dev/operand-of` (below) |
+| 4 | Service selector matches at least one pod template | no selector; the control-plane scrape selectors (kube-dns, kube-scheduler, ...); a Service that declares `kix.run/operand-of` (below) |
 | 5 | HPA `scaleTargetRef` exists | |
 | 6 | StatefulSet `serviceName` is a headless Service (`clusterIP: None`) in the namespace | unset |
 | 7 | One resource per kind, namespace and name | |
@@ -1060,9 +1060,9 @@ Sixteen checks over the finished manifest list run inside every cluster evaluati
 | 11 | Every `metadata.namespace` has a Namespace resource | `_`-prefixed sentinel namespaces (cluster-level instances) |
 | 12 | NetworkPolicy `podSelector` matches at least one pod template | empty selector |
 | 13 | A named `targetPort` exists on a container of a selected pod | numeric ports; Services that select no pod template in the build (check 4 reports those, or their pods are an operator's and there is no container spec to read) |
-| 14 | PodDisruptionBudget `selector.matchLabels` matches at least one pod template | no `matchLabels`; a PDB that declares `kix.dev/operand-of` (below) |
+| 14 | PodDisruptionBudget `selector.matchLabels` matches at least one pod template | no `matchLabels`; a PDB that declares `kix.run/operand-of` (below) |
 | 15 | A Job's pod template labels satisfy no Service selector in its namespace (the Service would route traffic to the Job pod) | Services without a selector |
-| 16 | `kix.dev/rerun` appears on Jobs only, with the value `on-change` (the deploy engine deletes and recreates what carries it; key and value live in `core/annotations.nix`) | |
+| 16 | `kix.run/rerun` appears on Jobs only, with the value `on-change` (the deploy engine deletes and recreates what carries it; key and value live in `core/annotations.nix`) | |
 
 **Scope of a lookup.** A reference is looked up in the referrer's namespace only, unless the referenced kind is a built-in cluster-scoped kind (a RoleBinding to a ClusterRole). Nothing else falls back to the cluster-scoped bucket. A `kix.untrackedRef` name resolves whatever its kind. Pod selectors follow the same rule: a Service, NetworkPolicy or PodDisruptionBudget matches pod templates in its own namespace only.
 
@@ -1078,7 +1078,7 @@ error: Cluster 'ludo-kind' has 1 failed assertion(s):
 **Services for operator-created pods.** Check 4 cannot see pods an operator creates at runtime. Two ways through, in order of preference:
 
 1. `scope.mkServiceRef` for a Service the operator itself creates (`prometheus-operated`, `alertmanager-operated`, `vmselect-<name>`). It carries the selector, ports and the Service's labels, renders as a marker, and no check or rule fires on it. The prometheus, alertmanager, victoria-metrics-cluster and stackgres-cluster packages do this. Two consequences to know: consumers now wait until the operator's Service has ready endpoints (the per-node readiness timeout, 180s by default, applies to a slow Prometheus start), and the declared selector should be as wide as the operator's own (`prometheus-operated` selects every Prometheus in the namespace; a ref that adds the instance label describes fewer pods than the Service reaches).
-2. When kix must render the Service itself (the operator creates none, as for the Thanos sidecar), the Service declares the CR whose pods it selects: `metadata.annotations."kix.dev/operand-of" = "<group>/<Kind>/<name>"`. Check 4 accepts the Service when that CR is in the build in the same namespace, and reports the declaration when it is not. A PodDisruptionBudget over operator-created pods declares the same annotation for check 14 (the alertmanager package does). Group and kind together, because kind names are not unique across API groups. There is no list of operator kinds anywhere in the checker.
+2. When kix must render the Service itself (the operator creates none, as for the Thanos sidecar), the Service declares the CR whose pods it selects: `metadata.annotations."kix.run/operand-of" = "<group>/<Kind>/<name>"`. Check 4 accepts the Service when that CR is in the build in the same namespace, and reports the declaration when it is not. A PodDisruptionBudget over operator-created pods declares the same annotation for check 14 (the alertmanager package does). Group and kind together, because kind names are not unique across API groups. There is no list of operator kinds anywhere in the checker.
 
 **References to things kix does not render.** Wrap the name in `kix.untrackedRef` (a ServiceAccount the cluster provides, a ConfigMap another system owns). The value carries an inert marker in its string context; `buildCluster` collects those names before context is stripped, keyed by the referring resource's namespace, and the checks accept them there. A `scope.mkServiceRef` or `scope.mkSecretRef` marker counts as the Service or Secret it describes, in its namespace, and its declared pod selector counts as pods for the Service and NetworkPolicy selector checks. For a cluster-level `kix.mkImport`, pass `kind = "Service"` so the marker carries the kind; a consumer in another namespace wraps the name in `kix.untrackedRef`. A bare string that names nothing in the build fails, and so does a name derived from a resource with a suffix added (`self.sa.out.name + "-typo"`): provenance is not resolution. A suffix on an untracked ref stays untracked, since the author marked it. The StatefulSet headless-Service check reads `clusterIP: None` off a rendered Service and cannot accept a marker.
 
@@ -1165,7 +1165,7 @@ creds = scope.mkSecret {
 
 ### 21.2 `scope.mkSecretRef` — external
 
-References a Secret managed outside kix (Vault, ESO, cert-manager, operator-provisioned). Emits a `PackageInstance` import marker with `kix.dev/mode=import` that the deploy CLI polls before applying dependents — if the Secret is missing or declared keys aren't populated, the wave fails fast.
+References a Secret managed outside kix (Vault, ESO, cert-manager, operator-provisioned). Emits a `PackageInstance` import marker with `kix.run/mode=import` that the deploy CLI polls before applying dependents — if the Secret is missing or declared keys aren't populated, the wave fails fast.
 
 ```nix
 appSecret = scope.mkSecretRef {
@@ -1225,7 +1225,7 @@ in {
 Both `mkCRD` and `mkCRDRef` accept two per-kind controller-semantics declarations that ride the typed chain into every CR built via `mkCR`:
 
 - `factBehavior = { endpoint = "terminate"|"conduct"; podSelector = cr: {...}; }` — netpol semantics (§facts).
-- `readiness = { path = "/status/updateStatus"; equals = "operational"; }` — the controller's health convention, stamped on each CR as the `kix.dev/readiness` annotation; `kix deploy` evaluates it instead of the generic Ready/Available condition check. Declare it whenever the operator never stamps Ready/Available (the VictoriaMetrics operator's `updateStatus` convention is the canonical example) — without it, deploys time out waiting on healthy CRs.
+- `readiness = { path = "/status/updateStatus"; equals = "operational"; }` — the controller's health convention, stamped on each CR as the `kix.run/readiness` annotation; `kix deploy` evaluates it instead of the generic Ready/Available condition check. Declare it whenever the operator never stamps Ready/Available (the VictoriaMetrics operator's `updateStatus` convention is the canonical example) — without it, deploys time out waiting on healthy CRs.
 
 ## 23. Imports
 
@@ -1245,7 +1245,7 @@ Both `mkCRD` and `mkCRDRef` accept two per-kind controller-semantics declaration
 }
 ```
 
-Pre-deploy: `kix deploy` polls each `kix.dev/mode=import` PackageInstance to confirm the resource exists before applying anything that depends on it. Skip with `--skip-import-checks`.
+Pre-deploy: `kix deploy` polls each `kix.run/mode=import` PackageInstance to confirm the resource exists before applying anything that depends on it. Skip with `--skip-import-checks`.
 
 ## 24. Manifest stamping
 
@@ -1253,16 +1253,79 @@ Every kix-managed resource gets:
 
 | Annotation/Label | Value |
 |---|---|
-| `kix.dev/identity-hash` | Blake3 32-char store hash (change detection) |
-| `kix.dev/depends-on` | Comma-separated dep entries: bare hash (implicit), `requires:<hash>`, `extra:<hash>` |
-| `kix.dev/package` | Package instance name |
-| `kix.dev/package-namespace` | Package namespace |
-| `kix.dev/mode` | `"import"` for external resources |
-| `kix.dev/rerun` | `on-change`, on a `kix.healthCheck` Job: never patched, deleted and created again when its hash changed or its last run failed (§9.4, check 16) |
-| `kix.dev/cluster` (label) | Cluster name |
+| `kix.run/identity-hash` | Blake3 32-char store hash (change detection) |
+| `kix.run/depends-on` | Comma-separated dep entries: bare hash (implicit), `requires:<hash>`, `extra:<hash>` |
+| `kix.run/package` | Package instance name |
+| `kix.run/package-namespace` | Package namespace |
+| `kix.run/mode` | `"import"` for external resources |
+| `kix.run/rerun` | `on-change`, on a `kix.healthCheck` Job: never patched, deleted and created again when its hash changed or its last run failed (§9.4, check 16) |
+| `kix.run/cluster` (label) | Cluster name |
 | `app.kubernetes.io/managed-by: kix` (label) | Always |
 
-Activation CR also gets `kix.dev/built-via` (the activation derivation's store path).
+Activation CR also gets `kix.run/built-via` (the activation derivation's store path).
+
+### 24.1 Clusters deployed before the kix.run move
+
+Kix stamped these keys under `kix.dev` until September 2026, and registered
+its two CRDs in the `kix.dev` API group. We do not own that domain, so both
+moved to `kix.run`. A cluster deployed before the move still carries the old
+keys and the old CRDs, and Kix refuses to touch it until it has been
+migrated.
+
+Per cluster, once. **If the cluster runs the kix operator, scale it to 0
+first.** While the operator watches the old API group it re-adds its finalizer
+to the records, and deleting the old CRDs would then make the operator delete
+every resource in the activation.
+
+The command checks this for itself rather than trusting you to have done it.
+It clears the finalizers, waits, and reads them back; only a running operator
+puts one back. If one returns, it stops there, having copied and deleted
+nothing. Note that the finalizer's mere presence proves nothing, which is why
+the check is a probe and not a look: the operator adds it on every reconcile
+and removes it only when a record is being deleted, so every record on a
+cluster that ever ran the operator carries one for ever.
+
+```bash
+kubectl -n <ns> scale deploy/kix-operator --replicas=0   # if one runs here
+kix migrate domain <cluster> --dry-run                   # prints the plan, writes nothing
+kix migrate domain <cluster>
+```
+
+It copies every Activation record to the new group with its spec, status and
+history intact, verifies each copy by name and by phase, then deletes the old
+CRDs. Rerunning after an interruption skips
+what it already copied, and repairs a copy whose status write did not land. PackageInstance records are not copied: the next
+deploy re-creates them from the build, import markers included.
+
+Then, in this order:
+
+1. If the cluster runs the kix operator, upgrade its image and scale it back
+   up. The operator watches one API group, so the new image watches the new
+   group and the old one would see nothing.
+2. `kix deploy <cluster>`.
+
+**Hard gc in the window between the two.** Until that first deploy, every
+object still carries the annotations the pre-move build wrote. An identity
+hash covers the manifest that produced it and the move changed every
+manifest, so a live hash from before the move can never equal one from a
+build made now. Hard gc therefore judges those objects by Kubernetes
+identity instead, the rule soft gc and prune already use: present in the
+build means still yours and waiting to be re-stamped, absent means garbage.
+It says how many it judged that way. One deploy restores hash precision.
+
+**What that first deploy does.** Every resource's identity hash changed,
+because the keys stamped into it changed, so every resource is applied once.
+Nothing is deleted. Almost nothing restarts: the keys sit on the object, not
+on the pod template. The exception is a package that hashes a ConfigMap into
+a pod-template annotation to force a rollout on config change (`valkey`,
+`n8n` and `python-app` do). Their pods roll once. A second deploy is a no-op.
+
+**While the compatibility layer stands**, a Kix key is read under the new
+domain first and the old one second, so an object an older Kix stamped is
+still recognised. A build loaded from a pre-move activation, including a
+`kix rollback` target, has its keys and its record's API group moved on load.
+The layer lives in `cli/kix/src/legacy_domain/` and goes as one piece; the
+checklist is in `v2_discussions/137_kix_run_domain_migration.md`.
 
 ## 25. Activation CR and operator
 
@@ -1284,7 +1347,7 @@ Operator requires `nix-store` binary on the host and read access to `/nix/store/
 | Diff vs live cluster | `kix diff <cluster>` (default mode) |
 | Diff vs snapshot dir | `kix diff <cluster> --snapshot <dir>` or `kix snapshot diff <cluster> <dir>` |
 | Diff between two builds | `kix diff <cluster> --from <result>` |
-| Save live state | `kix snapshot save <dir>` (in-CLI; uses `kix.dev/managed-by` label) or `./scripts/kix-dump.py --all <dir>` (Python; broader scope) |
+| Save live state | `kix snapshot save <dir>` (in-CLI; uses `kix.run/managed-by` label) or `./scripts/kix-dump.py --all <dir>` (Python; broader scope) |
 | Apply with planning | `kix deploy <cluster>` (use `--dry-run` first) |
 | Markdown for PR comments | `kix diff <cluster> -o markdown` |
 
@@ -1312,7 +1375,7 @@ Diff features:
 | `kix.monitor` does nothing | No `prometheus` instance; or the prometheus package doesn't expose `out.mkServiceMonitor` |
 | Build fails: "extra.* shadows managed field" | Move customizations into `spec`/`data`/`stringData` directly |
 | Workload starts before its CNPs | Per-workload CNPs are emitted *inside* `mkDeployment`/`mkStatefulSet`/`mkDaemonSet` and spliced into the workload's `extraDeps` so the workload depends on its own policies. If you see ordering issues, you're likely on the post-fixpoint path (RBAC/CRD/LB CNPs); check `processInstance` in `netpol.nix` |
-| Build fails with `[validate] Service ... matches no workload pod template` | The Service selects pods that are not in the build. Typo in a label, or operator-created pods: see §17.4 (`scope.mkServiceRef` to the operator's Service, or `kix.dev/operand-of` on the Service) |
+| Build fails with `[validate] Service ... matches no workload pod template` | The Service selects pods that are not in the build. Typo in a label, or operator-created pods: see §17.4 (`scope.mkServiceRef` to the operator's Service, or `kix.run/operand-of` on the Service) |
 | Build fails with `[validate] Duplicate resource: <kind>/<ns>/<name>` | Two different resources share an identity; the writer would keep one and drop the other. Common cause: an operator auto-instantiated once per environment (cluster-scoped RBAC and webhooks collide). Declare one shared instance |
 | Helm-chart resources lack DI edges to other charts | Helm opacity warning. The `helm-dag.nix` reconstructs intra-chart edges from K8s patterns (SA mounts, RBAC bindings, Service selectors, etc.); cross-chart edges require explicit `requires` |
 

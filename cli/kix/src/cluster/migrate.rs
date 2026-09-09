@@ -11,14 +11,14 @@
 //!
 //! # Logical slot identity
 //!
-//! A resource's logical slot is `kix.dev/package-namespace` + `kix.dev/package`
+//! A resource's logical slot is `kix.run/package-namespace` + `kix.run/package`
 //! — i.e., the (namespace, instance) pair from the cluster definition. Two
 //! different K8s resources in the same slot represent "the thing that fills
 //! dep slot X for namespace Y" across two closures. See doc 67 §2 "Same
 //! logical identity".
 //!
 //! A pair is flagged only when **both** sides are marked
-//! `kix.dev/lifecycle = "stateful"`. L7 swaps, cache rebinds, and monitoring
+//! `kix.run/lifecycle = "stateful"`. L7 swaps, cache rebinds, and monitoring
 //! storage flips are suppressed because their packages declare
 //! `lifecycle = "ephemeral"` (or leave it unset).
 //!
@@ -33,16 +33,8 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
+use crate::manifest::keys;
 use crate::manifest::types::ResourceId;
-
-/// Annotation key for the package instance name (the subslot, e.g. `storage`).
-const PACKAGE_ANNOTATION: &str = "kix.dev/package";
-
-/// Annotation key for the package's cluster namespace (the slot namespace).
-const PACKAGE_NAMESPACE_ANNOTATION: &str = "kix.dev/package-namespace";
-
-/// Annotation key for the package lifecycle classification.
-const LIFECYCLE_ANNOTATION: &str = "kix.dev/lifecycle";
 
 /// The "stateful" lifecycle value — user data that requires migration.
 const LIFECYCLE_STATEFUL: &str = "stateful";
@@ -80,10 +72,8 @@ impl MigrationPair {
 /// resource isn't owned by a package (cluster-scoped Namespaces, CRDs, …).
 fn slot_of(manifest: &Value) -> Option<String> {
     let anns = manifest.pointer("/metadata/annotations")?;
-    let ns = anns
-        .get(PACKAGE_NAMESPACE_ANNOTATION)
-        .and_then(Value::as_str)?;
-    let inst = anns.get(PACKAGE_ANNOTATION).and_then(Value::as_str)?;
+    let ns = anns.get(keys::PACKAGE_NAMESPACE).and_then(Value::as_str)?;
+    let inst = anns.get(keys::PACKAGE).and_then(Value::as_str)?;
     if ns == "_cluster" || inst == "_cluster" {
         return None;
     }
@@ -94,7 +84,7 @@ fn slot_of(manifest: &Value) -> Option<String> {
 fn is_stateful(manifest: &Value) -> bool {
     manifest
         .pointer("/metadata/annotations")
-        .and_then(|a| a.get(LIFECYCLE_ANNOTATION))
+        .and_then(|a| a.get(keys::LIFECYCLE))
         .and_then(Value::as_str)
         == Some(LIFECYCLE_STATEFUL)
 }
@@ -286,11 +276,11 @@ mod tests {
         identity_hash: &str,
     ) -> Value {
         let mut anns = serde_json::Map::new();
-        anns.insert("kix.dev/package".into(), json!(pkg));
-        anns.insert("kix.dev/package-namespace".into(), json!(pkg_ns));
-        anns.insert("kix.dev/identity-hash".into(), json!(identity_hash));
+        anns.insert(keys::PACKAGE.into(), json!(pkg));
+        anns.insert(keys::PACKAGE_NAMESPACE.into(), json!(pkg_ns));
+        anns.insert(keys::IDENTITY_HASH.into(), json!(identity_hash));
         if let Some(lc) = lifecycle {
-            anns.insert("kix.dev/lifecycle".into(), json!(lc));
+            anns.insert(keys::LIFECYCLE.into(), json!(lc));
         }
 
         let mut spec = serde_json::Map::new();

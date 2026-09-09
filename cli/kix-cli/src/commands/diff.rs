@@ -190,7 +190,7 @@ fn diff_graph_vs_flat(new_graph: &StoreGraph, old_manifests: &[(ResourceId, Valu
     let pkg_count = new_graph.packages.len();
 
     // Migration pair detection against the flat old side. Note: live-cluster
-    // manifests may not carry kix.dev/lifecycle if they pre-date the stamp
+    // manifests may not carry kix.run/lifecycle if they pre-date the stamp
     // (first deploy with this feature on). In that case no pairs fire — the
     // detector is fail-closed.
     let new_manifests: Vec<Value> = new_graph
@@ -237,6 +237,22 @@ async fn fetch_live_manifests(global: &crate::cli::GlobalArgs) -> Result<Vec<(Re
         .await
         .map_err(|e| miette!("API discovery failed: {e}"))?;
 
+    // The gate. `kix diff` reads no Activation record, so it never reaches
+    // the check inside `find_activation_ar` that every other cluster command
+    // goes through. It still needs one: the live objects below are upgraded
+    // to the current domain before they are compared, which on an
+    // unmigrated cluster renames the live `activations.<retired>` CRD to the
+    // name the build uses and reports it as matching. The answer would be
+    // "in sync" about a resource that does not exist under that name.
+    kix::legacy_domain::check_cluster(
+        &discovery
+            .iter()
+            .filter(|(ar, _)| kix::manifest::lifecycle::is_record_kind(&ar.kind))
+            .map(|(ar, _)| ar.group.as_str())
+            .collect::<Vec<_>>(),
+    )
+    .map_err(|e| miette!("{e}"))?;
+
     if !global.quiet {
         eprintln!(
             "Fetching managed resources ({} resource types)...",
@@ -263,7 +279,11 @@ async fn fetch_live_manifests(global: &crate::cli::GlobalArgs) -> Result<Vec<(Re
         fetch::normalize_for_diff(&mut obj);
         // Whole object, not `obj.data`: metadata lives on the typed field,
         // and without it every id degrades to `Kind/unknown`.
-        let value = fetch::to_manifest_value(&obj);
+        let mut value = fetch::to_manifest_value(&obj);
+        // Live objects a previous Kix stamped carry the retired keys. Without
+        // this, every Kix annotation shows as a paired add and remove and an
+        // in-sync cluster reads as entirely modified.
+        kix::legacy_domain::upgrade_manifest(&mut value);
         let id = ResourceId::from_value(&value);
         resources.push((id, value));
     }

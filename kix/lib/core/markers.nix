@@ -8,7 +8,7 @@
 #
 # The marker is not a resource. It has no manifest, no identity hash, nothing
 # to apply. So its store path must never be mistaken for a derivation edge:
-# stamped into `kix.dev/depends-on` it becomes a hash no manifest can ever
+# stamped into `kix.run/depends-on` it becomes a hash no manifest can ever
 # resolve, and `kix health` reports the consuming workload as depending on a
 # permanently MISSING resource. `isUntrackedRefPath` is how the depends-on
 # stamper tells the inert channel from the real one.

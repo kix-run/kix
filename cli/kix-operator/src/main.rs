@@ -5,7 +5,7 @@
 //!
 //! # How it works
 //!
-//! 1. Watches Activation CRs (kix.dev/v1alpha1) via kube-rs informer
+//! 1. Watches Activation CRs (kix.run/v1alpha1) via kube-rs informer
 //! 2. Phase-based lifecycle: Queued → Deploying → Active → Superseded
 //! 3. Unified reconcile: fetches live cluster state, compares identity-hashes,
 //!    applies only what changed (works for both new deploys and drift correction)
@@ -41,13 +41,14 @@ use kube::{
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 use controller::{Context, error_policy, reconcile_activation};
+use kix::manifest::keys;
 
 /// Build the ApiResource descriptor for kix Activation CRs.
 fn activation_api_resource() -> ApiResource {
     ApiResource {
-        group: "kix.dev".into(),
+        group: keys::GROUP.into(),
         version: "v1alpha1".into(),
-        api_version: "kix.dev/v1alpha1".into(),
+        api_version: keys::API_VERSION.into(),
         kind: kix::manifest::lifecycle::RECORD_KIND.into(),
         plural: "activations".into(),
     }
@@ -108,6 +109,36 @@ async fn main() -> anyhow::Result<()> {
     let ar = activation_api_resource();
     let activations: Api<DynamicObject> = Api::all_with(client.clone(), &ar);
 
+    // The domain gate, before anything else touches a record.
+    //
+    // The operator watches one API group and hard-codes the current one, so
+    // it cannot tell on its own that a cluster is simply on the retired one:
+    // the list below would fail with "CRD not found", which reads as "your
+    // CRDs are missing" and sends the reader to fix the wrong thing.
+    //
+    // Refusing while both groups are live matters more than the wording. In
+    // that state a migration is either running or was interrupted, and Kix's
+    // records exist twice. An operator that reconciled here would read the
+    // copies the migration has created but not yet given a status to, and an
+    // Activation with no phase reads as Queued: it would supersede the real
+    // Active activation and deploy whatever build that record names.
+    match kix::cluster::fetch::discover_resources(&client).await {
+        Ok(discovery) => {
+            let groups: Vec<&str> = discovery
+                .iter()
+                .filter(|(ar, _)| kix::manifest::lifecycle::is_record_kind(&ar.kind))
+                .map(|(ar, _)| ar.group.as_str())
+                .collect();
+            if let Err(e) = kix::legacy_domain::check_cluster(&groups) {
+                tracing::error!("{e}");
+                return Err(e.into());
+            }
+        }
+        // Discovery is not the operator's job to fix. Log and fall through
+        // to the list below, which gives its own diagnosis.
+        Err(e) => tracing::warn!("could not check the cluster's API groups: {e}"),
+    }
+
     // Verify CRD is registered by attempting a list
     match activations
         .list(&kube::api::ListParams::default().limit(1))
@@ -117,7 +148,8 @@ async fn main() -> anyhow::Result<()> {
         Err(e) => {
             tracing::error!("Activation CRD not found on cluster: {e}");
             tracing::error!(
-                "Ensure the Activation CRD (activations.kix.dev) is deployed before starting the operator"
+                "Ensure the Activation CRD ({}) is deployed before starting the operator",
+                keys::ACTIVATIONS_CRD
             );
             return Err(e.into());
         }

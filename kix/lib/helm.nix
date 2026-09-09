@@ -862,7 +862,7 @@ rec {
           # DAG-aware: root only directly requires resources that are NOT
           # targets of intra-chart edges. Everything else is reachable
           # through the DAG (each resource carries its own `requires`
-          # in kix.dev/depends-on). This gives the same forward-closure
+          # in kix.run/depends-on). This gives the same forward-closure
           # behavior as native kix packages.
           #
           # Auto-derived `out` (Phase 1a):

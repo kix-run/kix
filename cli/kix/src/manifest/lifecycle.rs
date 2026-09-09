@@ -6,7 +6,7 @@
 //! - **Desired** state: the workloads and their supporting resources. Change
 //!   detection diffs them, the scheduler applies them, prune deletes the
 //!   ones that vanished from the build.
-//! - **Markers**: PackageInstance objects with `kix.dev/mode: import`. They
+//! - **Markers**: PackageInstance objects with `kix.run/mode: import`. They
 //!   describe a resource kix does not render (a StorageClass installed by
 //!   hand, a Secret created out of band). Readiness polls for the described
 //!   object instead of the marker.
@@ -24,6 +24,7 @@
 //! table. Nothing outside it may compare a kind string to `"Activation"`
 //! (a test in this module enforces that).
 
+use crate::manifest::keys;
 use kube::api::DynamicObject;
 use serde_json::Value;
 
@@ -32,8 +33,6 @@ pub const RECORD_KIND: &str = "Activation";
 /// The kind that carries import markers (and, without the mode annotation,
 /// ordinary package instance records that are desired state like any other).
 pub const PACKAGE_INSTANCE_KIND: &str = "PackageInstance";
-/// The annotation that turns a PackageInstance into an import marker.
-pub const MODE_ANNOTATION: &str = "kix.dev/mode";
 /// The mode value that marks an import.
 pub const IMPORT_MODE: &str = "import";
 
@@ -81,7 +80,7 @@ pub fn lifecycle_of(manifest: &Value) -> Lifecycle {
     let kind = manifest.get("kind").and_then(Value::as_str).unwrap_or("");
     let mode = manifest
         .pointer("/metadata/annotations")
-        .and_then(|a| a.get(MODE_ANNOTATION))
+        .and_then(|a| a.get(keys::MODE))
         .and_then(Value::as_str);
     classify(kind, mode)
 }
@@ -100,8 +99,7 @@ pub fn lifecycle_of_live(obj: &DynamicObject) -> Lifecycle {
         .metadata
         .annotations
         .as_ref()
-        .and_then(|a| a.get(MODE_ANNOTATION))
-        .map(String::as_str);
+        .and_then(|a| keys::get_meta(a, keys::MODE));
     classify(kind, mode)
 }
 
@@ -140,7 +138,7 @@ mod tests {
     fn m(kind: &str, mode: Option<&str>) -> Value {
         let mut v = json!({ "apiVersion": "v1", "kind": kind, "metadata": { "name": "x" } });
         if let Some(mode) = mode {
-            v["metadata"]["annotations"] = json!({ MODE_ANNOTATION: mode });
+            v["metadata"]["annotations"] = json!({ keys::MODE: mode });
         }
         v
     }
@@ -177,7 +175,7 @@ mod tests {
     #[test]
     fn live_objects_classify_the_same_way() {
         let mut obj: DynamicObject = serde_json::from_value(json!({
-            "apiVersion": "kix.dev/v1alpha1",
+            "apiVersion": keys::API_VERSION,
             "kind": "Activation",
             "metadata": { "name": "stage1-abc" }
         }))
@@ -186,8 +184,7 @@ mod tests {
         // Kind injected into .data by the sweep, types absent.
         obj.types = None;
         obj.data = json!({ "kind": "PackageInstance" });
-        obj.metadata.annotations =
-            Some([(MODE_ANNOTATION.to_string(), "import".to_string())].into());
+        obj.metadata.annotations = Some([(keys::MODE.to_string(), "import".to_string())].into());
         assert_eq!(lifecycle_of_live(&obj), Lifecycle::Marker);
         obj.metadata.annotations = None;
         assert_eq!(lifecycle_of_live(&obj), Lifecycle::Desired);

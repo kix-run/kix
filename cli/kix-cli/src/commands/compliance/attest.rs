@@ -18,6 +18,7 @@ use crate::cli::{ComplianceAttestArgs, OutputFormat};
 
 use super::shared;
 use crate::commands::CommandContext;
+use kix::manifest::keys;
 
 pub fn run(args: &ComplianceAttestArgs, ctx: &mut CommandContext) -> Result<()> {
     let (_result_path, graph) = shared::build_and_load(ctx, &args.cluster)?;
@@ -108,7 +109,7 @@ pub fn build_attestation(
 
     let mut run_details = json!({
         "builder": {
-            "id": builder_id.unwrap_or("https://kix.dev/builder/local"),
+            "id": builder_id.unwrap_or(keys::SLSA_BUILDER_ID),
         },
         "metadata": {
             "startedOn": shared::now_rfc3339(),
@@ -133,7 +134,7 @@ pub fn build_attestation(
         "predicateType": "https://slsa.dev/provenance/v1",
         "predicate": {
             "buildDefinition": {
-                "buildType": "https://kix.dev/build/v1",
+                "buildType": keys::SLSA_BUILD_TYPE,
                 "externalParameters": external_params,
                 "internalParameters": internal_params,
                 "resolvedDependencies": resolved_deps,

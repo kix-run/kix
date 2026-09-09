@@ -8,7 +8,7 @@ Complete inventory of kix/lib (Nix library) and CLI features. Breadth-first — 
 
 ### Core Resource System (`k8s.nix`)
 
-- **`mkResource`** — Content-addressed K8s resource constructor. Accepts apiVersion, kind, name, namespace, spec, data, stringData, labels, annotations, outputs, requires, extraDeps, extra, clusterDomain. Auto-derives selector from `spec.selector.matchLabels` or labels. Auto-derives outputs: name, fqdn, identityHash, selector. Stamps `kix.dev/depends-on` annotation from dependency graph. Returns resource with `outPath` (Nix store path), `out`, `rawManifest`, `manifest`.
+- **`mkResource`** — Content-addressed K8s resource constructor. Accepts apiVersion, kind, name, namespace, spec, data, stringData, labels, annotations, outputs, requires, extraDeps, extra, clusterDomain. Auto-derives selector from `spec.selector.matchLabels` or labels. Auto-derives outputs: name, fqdn, identityHash, selector. Stamps `kix.run/depends-on` annotation from dependency graph. Returns resource with `outPath` (Nix store path), `out`, `rawManifest`, `manifest`.
 - **`mkClusterResource`** — Same as mkResource but cluster-scoped (no namespace).
 - **`mkImportResource`** — Lightweight ref constructor for import mode (no store paths).
 - **`clusterScoped`** — Sentinel value for cluster-scoped resources.
@@ -36,8 +36,8 @@ Complete inventory of kix/lib (Nix library) and CLI features. Breadth-first — 
 - **`evaluateInstance`** (`eval/instance.nix`) — Full single-instance pipeline: normalize → discover deps → resolve → meta checks → config eval → overlays → fixpoint → closure → validation → netpol → scorecard → diagnostics → PackageView → PackageInstance CR.
 - **`evaluateImportInstance`** (`eval/import.nix`) — Lightweight path for imports: runs package with null-throwing proxy deps, extracts root's `out`, creates marker PI CR.
 - **`mkImport`** — Import marker: `{ from?, out? }`. `from` = optional package function for lazy out derivation.
-- **`scope.mkServiceRef` / `scope.mkSecretRef`** (`scope/builders.nix`): a marker for a Service or Secret kix does not render (an operator's `prometheus-operated`, a Secret minted at runtime). `mkServiceRef { name, selector, ports, labels?, requires? }` exposes `out.{name, fqdn, port, labels}` with dependency context; the deploy engine waits for ready endpoints; netpol derives edges from the declared selector; the cross-resource checks and the monitor rule treat the marker as the Service it describes. Since 2026-09 the prometheus, alertmanager and victoria-metrics-cluster packages ref the operator's Services this way instead of rendering their own. A Service kix must render over operator pods declares `kix.dev/operand-of = "<group>/<Kind>/<name>"` instead.
-- **`mkScope`** (`eval/scope.nix`) — Per-instance context. Provides: mkResource, mkClusterResource, mkDeployment, mkStatefulSet, mkDaemonSet, forNamespace, mkCRD, mkCRDRef, mkCR, full RBAC DSL. Supports kix and helm label styles via `labelStyle`. mkCRD/mkCRDRef accept per-kind controller declarations that ride into every mkCR-built CR: `factBehavior` (netpol) and `readiness = { path; equals; }` (health convention, stamped as the `kix.dev/readiness` annotation and evaluated by `kix deploy`).
+- **`scope.mkServiceRef` / `scope.mkSecretRef`** (`scope/builders.nix`): a marker for a Service or Secret kix does not render (an operator's `prometheus-operated`, a Secret minted at runtime). `mkServiceRef { name, selector, ports, labels?, requires? }` exposes `out.{name, fqdn, port, labels}` with dependency context; the deploy engine waits for ready endpoints; netpol derives edges from the declared selector; the cross-resource checks and the monitor rule treat the marker as the Service it describes. Since 2026-09 the prometheus, alertmanager and victoria-metrics-cluster packages ref the operator's Services this way instead of rendering their own. A Service kix must render over operator pods declares `kix.run/operand-of = "<group>/<Kind>/<name>"` instead.
+- **`mkScope`** (`eval/scope.nix`) — Per-instance context. Provides: mkResource, mkClusterResource, mkDeployment, mkStatefulSet, mkDaemonSet, forNamespace, mkCRD, mkCRDRef, mkCR, full RBAC DSL. Supports kix and helm label styles via `labelStyle`. mkCRD/mkCRDRef accept per-kind controller declarations that ride into every mkCR-built CR: `factBehavior` (netpol) and `readiness = { path; equals; }` (health convention, stamped as the `kix.run/readiness` annotation and evaluated by `kix deploy`).
 - **`selectorLabelsOverride`** — Override auto-derived selector labels (for immutable selectors on existing workloads).
 - **Capability checks** — Lazy checks: `checkCapability`. Guards for loadBalancer, privilegedContainers, daemonSets.
 - **`mkNamespace`** (`eval/namespace.nix`) — Creates Namespace resource + optional ResourceQuota + NetworkPolicy resources.
@@ -65,7 +65,7 @@ Complete inventory of kix/lib (Nix library) and CLI features. Breadth-first — 
 - **`options.monitor`** — Reusable NixOS option set for monitoring (enabled, interval).
 - **`expose`** — Build entry: auto-creates Ingress or HTTPRoute based on which DI dep is present (gateway vs ingressNginx). Auto-derives host from cluster.domain. TLS via clusterIssuer. Errors if both gateway and ingressNginx are wired.
 - **`monitor`** — Build entry: auto-creates ServiceMonitor + optional PrometheusRule when prometheus DI dep is present. Configurable port, path, scrapeInterval, alert rules (expr, for, severity, description, summary, runbook_url), extraEndpoints, extraLabels.
-- **`healthCheck`**: build entry, a post-deploy probe Job in the package's namespace running a script (Python by default, `runtimes.python` pinned by digest; `runtimes.shell` on curl) from a stable-name ConfigMap against addresses passed as env vars from `out.*` values and `deps`. Addresses carry the edges (ordering, netpol egress); the Job always waits for the package root too. The helper owns the time budget: `RETRY_FOR` in the env, `activeDeadlineSeconds` sized from it (`roundBudget` 90 s), a shorter given deadline fails the build. Callbacks all take `{ self, config, deps }`; `when`/`retryFor` default to `kix.options.healthCheck`. Stamped `kix.dev/rerun: on-change`: `kix deploy` and `kix rollback` recreate the Job when its identity hash changed or the live Job failed; the operator only on a change (and after the TTL reaped it, since it diffs against live objects). Failure output is shown in the deploy. Own pod labels, non-root, read-only root, no token.
+- **`healthCheck`**: build entry, a post-deploy probe Job in the package's namespace running a script (Python by default, `runtimes.python` pinned by digest; `runtimes.shell` on curl) from a stable-name ConfigMap against addresses passed as env vars from `out.*` values and `deps`. Addresses carry the edges (ordering, netpol egress); the Job always waits for the package root too. The helper owns the time budget: `RETRY_FOR` in the env, `activeDeadlineSeconds` sized from it (`roundBudget` 90 s), a shorter given deadline fails the build. Callbacks all take `{ self, config, deps }`; `when`/`retryFor` default to `kix.options.healthCheck`. Stamped `kix.run/rerun: on-change`: `kix deploy` and `kix rollback` recreate the Job when its identity hash changed or the live Job failed; the operator only on a change (and after the TTL reaped it, since it diffs against live objects). Failure output is shown in the deploy. Own pod labels, non-root, read-only root, no token.
 
 ### RBAC DSL (`rbac.nix`)
 
@@ -141,7 +141,7 @@ Auto-derives CiliumNetworkPolicy from the DI graph:
 - `unsafeGrants` — audit listing every `meta.unsafe` grant (info).
 - `selectorCoherence` — Service selectors must carry store-path context (warning).
 - `fqdnWithoutContext` — `*.svc` FQDNs in workloads must carry store-path context (warning).
-- `monitorSelectorMatchesService` — ServiceMonitor/VMServiceScrape selectors must match some Service's metadata labels (cluster-level, error). Opt-out for operator-created targets: `kix.dev/monitors-external-service` annotation.
+- `monitorSelectorMatchesService` — ServiceMonitor/VMServiceScrape selectors must match some Service's metadata labels (cluster-level, error). Opt-out for operator-created targets: `kix.run/monitors-external-service` annotation.
 - `externalMonitorTargets` — audit listing every monitors-external-service claim (info).
 
 ### Package Metadata & Diagnostics (`meta.nix`)
@@ -292,8 +292,16 @@ Garbage-collect stale kix-managed resources.
 - **Soft GC** (default) — Diffs old vs new activation store graphs. Fast, no cluster scan.
 - **Hard GC** (`--hard`) — Full cluster-wide scan, matches identity-hashes against expected set.
 - `--operator` — Deletes retired Activation CRs; operator's finalizer cleans up resources.
-- Record retention, in every mode — Superseded Activation records are rollback history, but each one still on the cluster keeps one entry in `kix.dev/activations` on every managed resource, and that annotation is capped at 256 KiB, so they cannot be kept forever. `--keep N` (default 10) always keeps the N newest whatever their age; `--keep-max N` (default 50) never keeps more; `--keep-for 30d` (default) retires anything older beyond the floor (`0` or `off` disables the age rule). Deletes are conditional on the record being unchanged since it was listed. The next deploy drops the retired entries.
+- Record retention, in every mode — Superseded Activation records are rollback history, but each one still on the cluster keeps one entry in `kix.run/activations` on every managed resource, and that annotation is capped at 256 KiB, so they cannot be kept forever. `--keep N` (default 10) always keeps the N newest whatever their age; `--keep-max N` (default 50) never keeps more; `--keep-for 30d` (default) retires anything older beyond the floor (`0` or `off` disables the age rule). Deletes are conditional on the record being unchanged since it was listed. The next deploy drops the retired entries.
 - Deletes in reverse dependency order (dependents first).
+
+#### `kix migrate domain <CLUSTER>`
+
+- One-off. Moves a cluster's Kix records off the retired `kix.dev` API group to `kix.run`. Copies every Activation record with spec, status and history intact, verifies the count, clears the operator finalizer from the old records, deletes the old CRDs. PackageInstance records are not copied: the next deploy re-creates them from the build.
+- Always dry-runs first and prints the plan. `--dry-run` stops there; `--yes` skips the prompt.
+- Rerunning after an interruption skips what it already copied.
+- Until it has run, every command that reads a Kix record refuses the cluster and names it. On a cluster running the operator, upgrade the operator image after the migration and before the deploy.
+- The first deploy after it re-applies every resource once, because every identity hash changed. Almost nothing restarts; packages that hash a ConfigMap into a pod-template annotation (`valkey`, `n8n`, `python-app`) roll their pods once. HANDBOOK §24.1.
 
 #### `kix rollback <CLUSTER>`
 Rollback to a previous activation.
@@ -323,15 +331,15 @@ Generate shell completions (bash, zsh, fish).
 ### Manifest Stamping (Annotations & Labels)
 
 All kix-managed resources receive:
-- `kix.dev/identity-hash` — Blake3 content hash (change detection).
-- `kix.dev/depends-on` — Comma-separated dependency identity-hashes.
-- `kix.dev/package` — Package instance name.
-- `kix.dev/package-namespace` — Package namespace.
-- `kix.dev/mode` — "import" for external resources.
+- `kix.run/identity-hash` — Blake3 content hash (change detection).
+- `kix.run/depends-on` — Comma-separated dependency identity-hashes.
+- `kix.run/package` — Package instance name.
+- `kix.run/package-namespace` — Package namespace.
+- `kix.run/mode` — "import" for external resources.
 - `app.kubernetes.io/managed-by: kix` label.
-- `kix.dev/cluster` label.
+- `kix.run/cluster` label.
 
-Activation CR extras: `kix.dev/built-via` (store path).
+Activation CR extras: `kix.run/built-via` (store path).
 
 ---
 

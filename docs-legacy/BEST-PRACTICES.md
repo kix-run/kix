@@ -69,7 +69,7 @@ derived from the DAG or hooks into it.
 ### 3.1 Store-path = DAG edge
 
 Resources never declare deps explicitly via opaque strings. `mkResource` parses
-Nix string context on the manifest JSON and stamps `kix.dev/depends-on`
+Nix string context on the manifest JSON and stamps `kix.run/depends-on`
 annotations. The CLI walks the store DAG (rooted at the Activation CR) to order
 deploys. Read `kix/lib/architecture.md` for details.
 
@@ -152,8 +152,8 @@ operators, dashboards, security tools) is a feature.
 | New `kix.exposure` schema | `Ingress` or `HTTPRoute` |
 | kix-only annotation for SemVer | Standard `app.kubernetes.io/version` |
 
-The annotations kix *does* add (`kix.dev/identity-hash`, `kix.dev/depends-on`,
-`kix.dev/mode`) are about kix-internal bookkeeping, never
+The annotations kix *does* add (`kix.run/identity-hash`, `kix.run/depends-on`,
+`kix.run/mode`) are about kix-internal bookkeeping, never
 about expressing K8s intent.
 
 ### 5.2 Standard K8s vocabulary over invented vocabulary
@@ -226,7 +226,7 @@ its metadata labels, which are instance-common — in a package with two
 Services (main + headless is the classic shape) it matches both, and each pod
 gets scraped once per Service. Multi-Service packages need a per-Service
 discriminator (explicit `labels` on the Service, selected explicitly); a
-first-class `kix.dev/part` identity label is an open design question in
+first-class `kix.run/part` identity label is an open design question in
 ROADMAP.
 
 ### 6.3 Wiring (DI) > module system > meta
@@ -332,7 +332,7 @@ Rule of thumb:
 |---|---|
 | `extra = { ... }` | Passthrough for unmodeled K8s fields. `_extraShadowCheck` errors at build time if `extra.*` would shadow a kix-managed field — safe to use freely. |
 | `requires` | Explicit forward DAG edges for label-only references (where no other field carries the store-path context). |
-| `postHooks` | Resources that must apply *after* this one (stamps `kix.dev/post-hooks`). |
+| `postHooks` | Resources that must apply *after* this one (stamps `kix.run/post-hooks`). |
 
 #### Concrete example: `partsOverlays` to expose CRD builders
 

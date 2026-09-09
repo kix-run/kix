@@ -6,7 +6,7 @@
 # their workload, cluster-internal FQDNs with no store-path context.
 #
 # The old `capabilityOwnership` fingerprint rule (resource-content patterns +
-# `kix.dev/capability` provenance stamps) was decomposed in
+# `kix.run/capability` provenance stamps) was decomposed in
 # v2_discussions/128 into:
 #
 #   - an eval-time *error* on raw PersistentVolumeClaims with a
@@ -19,6 +19,10 @@
 { lib }:
 
 let
+  # Kix's own annotation keys and API names, spelled once in
+  # core/annotations.nix.
+  kixAnnotations = import ../core/annotations.nix;
+  kixKeys = kixAnnotations.keys;
   unsafe = import ../unsafe.nix { inherit lib; };
 
   workloadKinds = [
@@ -50,7 +54,8 @@ let
     s: lib.hasInfix ".svc" s && builtins.match ".*[a-zA-Z0-9-]+\\.[a-zA-Z0-9-]+\\.svc.*" s != null;
 
   # Domains whose annotations need no declarer: Kubernetes reserves the
-  # kubernetes.io / k8s.io suffixes for core components; kix.dev is our own;
+  # kubernetes.io / k8s.io suffixes for core components; Kix's own domain,
+  # and the ones it has retired, are ours;
   # helm.sh (incl. meta.helm.sh) rides on imported chart resources;
   # kubebuilder.io is build-tooling provenance stamped on chart CRDs and
   # consumed by nothing at runtime. Suffix-matched, so
@@ -58,7 +63,10 @@ let
   reservedAnnotationDomains = [
     "kubernetes.io"
     "k8s.io"
-    "kix.dev"
+    kixAnnotations.domain
+  ]
+  ++ kixAnnotations.legacyDomains
+  ++ [
     "helm.sh"
     "kubebuilder.io"
   ];
@@ -372,7 +380,7 @@ in
   # Escape hatch: a monitor that deliberately targets a Service kix does
   # not render (created by an operator at runtime, e.g. prometheus-
   # operator's kubelet Service) declares
-  # `annotations."kix.dev/monitors-external-service" = "true"` — the claim
+  # `annotations.${kixKeys.monitorsExternalService} = "true"` — the claim
   # then rides the resource into the cluster, where it documents itself.
   monitorSelectorMatchesService = {
     description = "ServiceMonitor/VMServiceScrape selectors must match exactly one scrapable Service's metadata labels";
@@ -400,18 +408,18 @@ in
           in
           if
             (r.kind or "") == "PackageInstance"
-            && (anns."kix.dev/import-kind" or null) == "Service"
-            && anns ? "kix.dev/service-labels"
+            && (anns.${kixKeys.importKind} or null) == "Service"
+            && anns ? ${kixKeys.serviceLabels}
           then
             [
               {
                 kind = "Service";
                 metadata = {
-                  name = anns."kix.dev/import-name";
+                  name = anns.${kixKeys.importName};
                   namespace = r.metadata.namespace or null;
-                  labels = builtins.fromJSON anns."kix.dev/service-labels";
+                  labels = builtins.fromJSON anns.${kixKeys.serviceLabels};
                 };
-                spec.ports = builtins.fromJSON (anns."kix.dev/service-ports" or "[]");
+                spec.ports = builtins.fromJSON (anns.${kixKeys.servicePorts} or "[]");
               }
             ]
           else
@@ -509,7 +517,7 @@ in
             candidates = builtins.filter (svc: builtins.elem (svc.metadata.namespace or null) targets) services;
             matched = builtins.filter (svc: subsetOf matchLabels (svc.metadata.labels or { })) candidates;
             scraped = builtins.filter (scrapesService mon) matched;
-            external = ((mon.metadata.annotations or { })."kix.dev/monitors-external-service" or "") == "true";
+            external = ((mon.metadata.annotations or { }).${kixKeys.monitorsExternalService} or "") == "true";
             skip = external || sel ? matchExpressions || matchLabels == { } || !allTargetsManaged;
             monId = "${mon.kind or "?"}/${mon.metadata.name or "?"}";
             svcId = svc: "${svc.metadata.namespace or "?"}/${svc.metadata.name or "?"}";
@@ -555,7 +563,7 @@ in
   };
 
   # Companion audit to monitorSelectorMatchesService's escape hatch: every
-  # `kix.dev/monitors-external-service` claim is listed at info level, the
+  # `kix.run/monitors-external-service` claim is listed at info level, the
   # same "never invisible in review" property the meta.unsafe vocabulary
   # gets from unsafeGrants. A stale claim (the target Service later becomes
   # kix-rendered) is otherwise undetectable — the escape silently disables
@@ -575,14 +583,14 @@ in
         "ServiceMonitor"
         "VMServiceScrape"
       ]
-      && ((resource.metadata.annotations or { })."kix.dev/monitors-external-service" or "") == "true";
+      && ((resource.metadata.annotations or { }).${kixKeys.monitorsExternalService} or "") == "true";
     check =
       { resource, ... }:
       [
         {
           message =
             "${resource.kind} '${resource.metadata.name or "?"}' claims its target Service is created "
-            + "outside kix (kix.dev/monitors-external-service), so selector matching is skipped for it. "
+            + "outside kix (${kixKeys.monitorsExternalService}), so selector matching is skipped for it. "
             + "Check that the claim still holds if kix ever starts rendering the target.";
         }
       ];

@@ -7,6 +7,7 @@ use std::collections::HashSet;
 
 use super::client::{ResiliencePolicy, build_client};
 use super::errors::{FailureClass, classify};
+use crate::manifest::keys;
 use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
 use kube::{
     Config,
@@ -162,7 +163,7 @@ pub fn merge_discovery(
 
 /// What the managed sweep found.
 pub struct ManagedSweep {
-    /// Objects kix applied: each carries `kix.dev/identity-hash`.
+    /// Objects kix applied: each carries `kix.run/identity-hash`.
     pub managed: Vec<DynamicObject>,
     /// Objects that carry the kix label but no identity hash and no owner.
     /// kix never applied them (someone `kubectl apply`ed a kix render, or a
@@ -208,7 +209,7 @@ pub async fn sweep_managed(
 /// Controllers copy labels onto what they derive: the EndpointSlice
 /// controller mirrors a Service's labels, ReplicaSets and Pods carry their
 /// template's labels. Proof that kix applied something is its
-/// `kix.dev/identity-hash` annotation, which the apply step stamps and no
+/// `kix.run/identity-hash` annotation, which the apply step stamps and no
 /// controller copies. So:
 ///
 /// - stamped: kix's, whatever its owner references say (`managed`);
@@ -252,7 +253,7 @@ pub fn is_stamped(obj: &DynamicObject) -> bool {
     obj.metadata
         .annotations
         .as_ref()
-        .is_some_and(|a| a.contains_key(super::apply::IDENTITY_HASH_ANNOTATION))
+        .is_some_and(|a| keys::contains_meta(a, keys::IDENTITY_HASH))
 }
 
 /// Does a controller own this object?
@@ -665,12 +666,9 @@ mod tests {
         };
         if stamped {
             obj.metadata.annotations = Some(
-                [(
-                    super::super::apply::IDENTITY_HASH_ANNOTATION.to_string(),
-                    "h".to_string(),
-                )]
-                .into_iter()
-                .collect(),
+                [(keys::IDENTITY_HASH.to_string(), "h".to_string())]
+                    .into_iter()
+                    .collect(),
             );
         }
         if owned {

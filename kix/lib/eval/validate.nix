@@ -6,7 +6,7 @@
 # with `kix.untrackedRef`: buildCluster collects them from string context
 # before it is stripped, so a reference the author declared external
 # resolves. Import markers in the manifest set (PackageInstance with
-# `kix.dev/import-kind` and `kix.dev/import-name`, from
+# `kix.run/import-kind` and `kix.run/import-name`, from
 # scope.mkServiceRef/mkSecretRef) count as the object they stand for in
 # the lookups, and a ref's declared pod selector stands in for a pod
 # template in the selector checks. buildCluster feeds the failure list
@@ -34,7 +34,8 @@
 { lib }:
 
 let
-  annotations = import ../core/annotations.nix;
+  kixAnnotations = import ../core/annotations.nix;
+  kixKeys = kixAnnotations.keys;
 in
 rec {
   crossResourceFailures =
@@ -60,7 +61,7 @@ rec {
       byId = builtins.foldl' (acc: r: acc // { "${resourceId r}" = r; }) { } resources;
 
       # Import markers stand in for objects kix does not render: a
-      # PackageInstance carrying kix.dev/import-kind and kix.dev/import-name
+      # PackageInstance carrying kix.run/import-kind and kix.run/import-name
       # (scope.mkServiceRef, scope.mkSecretRef, mkImportMarker). The deploy
       # engine gates on the described object, so a reference to it resolves.
       importIds = builtins.listToAttrs (
@@ -68,8 +69,8 @@ rec {
           r:
           let
             anns = r.metadata.annotations or { };
-            kind = anns."kix.dev/import-kind" or null;
-            iname = anns."kix.dev/import-name" or null;
+            kind = anns.${kixKeys.importKind} or null;
+            iname = anns.${kixKeys.importName} or null;
             ns = r.metadata.namespace or "cluster-scoped";
           in
           if r.kind == "PackageInstance" && kind != null && iname != null then
@@ -128,7 +129,7 @@ rec {
         || externalNames ? "${ns}/${name}"
         || externalNames ? "cluster-scoped/${name}";
 
-      # Pod selectors declared by ServiceRef markers (kix.dev/service-selector):
+      # Pod selectors declared by ServiceRef markers (kix.run/service-selector):
       # the operator's pods exist by declaration, so a Service or
       # NetworkPolicy in the same namespace whose selector is within one
       # of them selects real pods. A witness for checks 4 and 12, which
@@ -138,11 +139,11 @@ rec {
         let
           anns = r.metadata.annotations or { };
         in
-        if r.kind == "PackageInstance" && anns ? "kix.dev/service-selector" then
+        if r.kind == "PackageInstance" && anns ? ${kixKeys.serviceSelector} then
           [
             {
               ns = r.metadata.namespace or "cluster-scoped";
-              labels = builtins.fromJSON anns."kix.dev/service-selector";
+              labels = builtins.fromJSON anns.${kixKeys.serviceSelector};
             }
           ]
         else
@@ -211,7 +212,7 @@ rec {
       # A Service (or PodDisruptionBudget) kix renders over pods an operator
       # creates at runtime has no pod template to match. The package says so
       # on the resource:
-      #   metadata.annotations."kix.dev/operand-of" = "<group>/<Kind>/<name>"
+      #   metadata.annotations.<operand-of> = "<group>/<Kind>/<name>"
       # names the CR whose operand pods it selects, and checks 4 and 14
       # accept it when that CR is in the build in the same namespace. Keyed by group
       # and kind: kind names alone are not unique across API groups. This
@@ -219,7 +220,7 @@ rec {
       # (v2_discussions/135, kixpkgs#70). Where the operator creates the
       # Service itself, scope.mkServiceRef is the better tool: nothing to
       # exempt.
-      operandOfAnnotation = "kix.dev/operand-of";
+      operandOfAnnotation = kixKeys.operandOf;
       # "monitoring.coreos.com/v1" -> "monitoring.coreos.com"; the core group
       # ("v1") is "", as Kubernetes writes it.
       groupOf =
@@ -582,7 +583,7 @@ rec {
       # at least one matched workload's container ports. A Service that
       # matches no pod template in the build is skipped here on purpose:
       # either check 4 already reports it, or it is exempt there because
-      # its pods are an operator's (a ref witness or `kix.dev/operand-of`),
+      # its pods are an operator's (a ref witness or `kix.run/operand-of`),
       # and then there is no container spec in the build to read port
       # names from. Nothing more can be checked without the pods.
 
@@ -637,7 +638,7 @@ rec {
       # and it is also the one thing helm-dag.findOrphans used to compute
       # (for chart-internal resources only) that no other check covered.
       # Same witnesses as check 4: pod templates, ServiceRef selectors,
-      # and a `kix.dev/operand-of` declaration for operator-created pods.
+      # and a `kix.run/operand-of` declaration for operator-created pods.
 
       pdbFailures = builtins.concatMap (
         pdb:
@@ -689,7 +690,7 @@ rec {
         ) selecting
       ) (builtins.filter (r: r.kind == "Job") resources);
 
-      # --- 16. kix.dev/rerun is for Jobs ---
+      # --- 16. kix.run/rerun is for Jobs ---
       # The deploy engine deletes and recreates a resource carrying the
       # annotation (core/annotations.nix). For a Job that is a retry; for
       # anything with a rollout it would be an outage, so the engine
@@ -699,17 +700,17 @@ rec {
         r:
         let
           ns = r.metadata.namespace or "cluster-scoped";
-          value = (r.metadata.annotations or { }).${annotations.rerun.key} or null;
+          value = (r.metadata.annotations or { }).${kixKeys.rerun} or null;
         in
         if value == null then
           [ ]
         else if r.kind != "Job" then
           [
-            "${r.kind} ${ns}/${r.metadata.name} carries ${annotations.rerun.key}=${toString value}; the rerun rule applies to Jobs only"
+            "${r.kind} ${ns}/${r.metadata.name} carries ${kixKeys.rerun}=${toString value}; the rerun rule applies to Jobs only"
           ]
-        else if value != annotations.rerun.onChange then
+        else if value != kixAnnotations.values.rerunOnChange then
           [
-            "Job ${ns}/${r.metadata.name} carries ${annotations.rerun.key}=${toString value}; the only value the deploy engine honours is \"${annotations.rerun.onChange}\""
+            "Job ${ns}/${r.metadata.name} carries ${kixKeys.rerun}=${toString value}; the only value the deploy engine honours is \"${kixAnnotations.values.rerunOnChange}\""
           ]
         else
           [ ]

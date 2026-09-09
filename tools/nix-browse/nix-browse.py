@@ -268,7 +268,7 @@ def preview_kix_namespace(model, ns_name):
 def preview_kix_package(model, pi_path):
     pkg = model.packages[pi_path]
     annotations = pkg["metadata"].get("metadata", {}).get("annotations", {})
-    main_res = annotations.get("kix.dev/main", "")
+    main_res = annotations.get("kix.run/main", "")
 
     lines = [
         f"Package: {pkg['name']}",

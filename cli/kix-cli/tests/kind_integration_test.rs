@@ -8,6 +8,7 @@
 //! Run with: cargo test --test kind_integration_test -- --ignored
 //! (ignored by default because it requires kind + is slow)
 
+use kix::manifest::keys;
 use std::path::Path;
 use std::process::Command;
 
@@ -249,7 +250,7 @@ fn deploy_and_gc() {
             "orphan-test",
             "-n",
             "echo",
-            "kix.dev/identity-hash=fake00000000orphan000000000000",
+            &format!("{}=fake00000000orphan000000000000", keys::IDENTITY_HASH),
         ],
     );
     assert!(

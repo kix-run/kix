@@ -30,7 +30,12 @@ in
   };
 
   build =
-    { scope, lib, ... }:
+    {
+      scope,
+      lib,
+      kix,
+      ...
+    }:
     let
       # Re-import with the lib that's available in scope.
       rules = import ./netpol-rules.nix { inherit lib; };
@@ -92,8 +97,8 @@ in
                 enriched = crdRef.out.cr {
                   name = intent.name;
                   labels = {
-                    "kix.dev/derived" = "true";
-                    "kix.dev/policy-type" = "platform-intent";
+                    ${kix.keys.derived} = "true";
+                    ${kix.keys.policyType} = "platform-intent";
                   };
                   inherit spec;
                 };

@@ -43,7 +43,7 @@ Resource kinds:
 
 Resources:
   (cluster-scoped):
-    Activation/example-8wszfx7y50ix
+    Activation/example-qr9cb52s42pm
     ClusterRole/cert-manager-cainjector
     ClusterRole/cert-manager-cluster-view
     ClusterRole/cert-manager-controller-approve:cert-manager-io
@@ -71,14 +71,14 @@ Resources:
     ClusterRoleBinding/cert-manager-webhook:subjectaccessreviews
     ClusterRoleBinding/coredns
     ClusterRoleBinding/stackgres-operator
-    CustomResourceDefinition/activations.kix.dev
+    CustomResourceDefinition/activations.kix.run
     CustomResourceDefinition/certificaterequests.cert-manager.io
     CustomResourceDefinition/certificates.cert-manager.io
     CustomResourceDefinition/challenges.acme.cert-manager.io
     CustomResourceDefinition/clusterissuers.cert-manager.io
     CustomResourceDefinition/issuers.cert-manager.io
     CustomResourceDefinition/orders.acme.cert-manager.io
-    CustomResourceDefinition/packageinstances.kix.dev
+    CustomResourceDefinition/packageinstances.kix.run
     MutatingWebhookConfiguration/cert-manager-webhook
     MutatingWebhookConfiguration/stackgres-operator
     Namespace/cache

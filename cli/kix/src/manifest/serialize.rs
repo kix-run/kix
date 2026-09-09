@@ -149,7 +149,34 @@ pub fn load_manifests_from_dir(
         }
 
         let contents = std::fs::read_to_string(entry.path())?;
-        let value: serde_json::Value = serde_yml::from_str(&contents)?;
+        let mut value: serde_json::Value = serde_yml::from_str(&contents)?;
+        // A snapshot is a dump of live objects, so one taken before the
+        // domain move carries the retired keys. Without this, diffing it
+        // against a build made now shows every Kix annotation as a paired
+        // add and remove, and both of Kix's own CRDs as one addition plus
+        // one deletion, on a cluster that is in sync.
+        crate::legacy_domain::upgrade_manifest(&mut value);
+
+        // Prefer the manifest's own identity over the filename's.
+        //
+        // The other side of every diff that uses this is keyed by
+        // `ResourceId::from_value`, so the two must be derived the same way
+        // or nothing matches. A filename carries the kind lowercased, which
+        // alone means no id from a nested dump ever equals one from a build.
+        // The upgrade above makes it worse: it can rename Kix's own CRDs,
+        // and the filename would then still hold the name they had before.
+        // The filename stays as the fallback, for a file whose content does
+        // not say what it is.
+        let rid = if value.pointer("/kind").and_then(|v| v.as_str()).is_some()
+            && value
+                .pointer("/metadata/name")
+                .and_then(|v| v.as_str())
+                .is_some()
+        {
+            ResourceId::from_value(&value)
+        } else {
+            rid
+        };
         results.push((rid, value));
     }
 
@@ -237,7 +264,25 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].0.namespace, "default");
         assert_eq!(results[0].0.name, "my-svc");
-        assert_eq!(results[0].0.kind, "service");
+        // From the manifest, not the filename. The filename spells the kind
+        // lowercased, and everything these ids are compared against is keyed
+        // by `ResourceId::from_value`, so taking the filename's spelling
+        // meant a snapshot never matched a build.
+        assert_eq!(results[0].0.kind, "Service");
         assert_eq!(results[0].1["kind"], "Service");
+    }
+
+    /// A file whose content does not say what it is still gets an id, from
+    /// its name.
+    #[test]
+    fn load_falls_back_to_the_filename_when_the_manifest_is_headless() {
+        let dir = TempDir::new().unwrap();
+        let yaml = serde_yml::to_string(&json!({"data": {"a": "b"}})).unwrap();
+        fs::write(dir.path().join("default--my-svc-service.yaml"), &yaml).unwrap();
+
+        let results = load_manifests_from_dir(dir.path()).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0.kind, "service");
+        assert_eq!(results[0].0.name, "my-svc");
     }
 }

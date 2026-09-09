@@ -150,7 +150,7 @@ Same idiom as Helm's `sha256sum` over the rendered ConfigMap; here the content h
 
 ### Dependencies: three mechanisms
 
-Edge sources for a resource's dependency set. `mkResource` (`kix/lib/k8s.nix`) tags each in the `kix.dev/depends-on` manifest annotation.
+Edge sources for a resource's dependency set. `mkResource` (`kix/lib/k8s.nix`) tags each in the `kix.run/depends-on` manifest annotation.
 
 | Mechanism | What | Tag |
 | --- | --- | --- |
@@ -733,7 +733,7 @@ Required dep with no explicit instance -> created automatically. `auto.nix` (`co
 - **`availablePackages`** - registry keyed by name/alias; match instantiated in `avPkg.namespace`, else `autoNamespace`, else requester's namespace, with default config and `_autoInstantiated = true`.
 - neither - left unresolved -> `resolveArg` errors later with missing-dep message.
 
-- Auto-instances annotated `kix.dev/auto-instantiated = "true"` (optionals: `kix.dev/optional-activated`).
+- Auto-instances annotated `kix.run/auto-instantiated = "true"` (optionals: `kix.run/optional-activated`).
 - `[kix] auto-instantiated: ...` trace emitted.
 - Only **required** deps drive auto-instantiation; unresolved optionals become `null`.
 

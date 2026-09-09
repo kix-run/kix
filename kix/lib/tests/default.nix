@@ -27,6 +27,10 @@
 }:
 
 let
+  # Kix's own annotation keys and API names, spelled once in
+  # core/annotations.nix.
+  kixAnnotations = import ../core/annotations.nix;
+  kixKeys = kixAnnotations.keys;
   k8s = import ../core { inherit lib; };
   eval = import ../eval { inherit lib k8s; };
   kixlib = import ../vocab/compose.nix { inherit lib; };
@@ -811,7 +815,7 @@ let
       m: (m.metadata.name or "") == name
     ) (throw "manifest '${name}' not found") ms;
 
-  dependsOn = m: (m.metadata.annotations or { })."kix.dev/depends-on" or "";
+  dependsOn = m: (m.metadata.annotations or { }).${kixKeys.dependsOn} or "";
   # Identity hash of a part of the appns/app instance. rawManifests carry no
   # identity annotation (the CLI stamps it from the store path), so the
   # tests read the resource's own out.identityHash.
@@ -1300,7 +1304,7 @@ let
 
     # Annotations under a declared domain without a DI dep on the declarer
     # warn; every other resource in the cluster (all stamped with reserved
-    # kix.dev annotations) stays silent.
+    # kix.run annotations) stays silent.
     t29-annotation-domain-missing-dep-warns =
       let
         cluster = mkCluster [
@@ -1909,11 +1913,11 @@ let
             name = "service-ref-am-alertmanager-operated";
             namespace = "mon";
             annotations = {
-              "kix.dev/mode" = "import";
-              "kix.dev/import-kind" = "Service";
-              "kix.dev/import-name" = "alertmanager-operated";
-              "kix.dev/service-labels" = builtins.toJSON { operated-alertmanager = "true"; };
-              "kix.dev/service-ports" = builtins.toJSON [
+              ${kixKeys.mode} = "import";
+              ${kixKeys.importKind} = "Service";
+              ${kixKeys.importName} = "alertmanager-operated";
+              ${kixKeys.serviceLabels} = builtins.toJSON { operated-alertmanager = "true"; };
+              ${kixKeys.servicePorts} = builtins.toJSON [
                 {
                   name = "web";
                   port = 9093;
@@ -2203,7 +2207,7 @@ let
         && jobB != null
         && partHash a "healthCheck" != partHash b "healthCheck"
         && jobA.metadata.name == jobB.metadata.name
-        && (jobA.metadata.annotations."kix.dev/rerun" or "") == "on-change"
+        && (jobA.metadata.annotations.${kixKeys.rerun} or "") == "on-change"
       )
       || throw "probe identity did not follow its target";
 

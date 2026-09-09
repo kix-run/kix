@@ -12,7 +12,11 @@
 # Name:    cilium
 # Version: 1.19.6
 
-{ scope, lib }:
+{
+  scope,
+  lib,
+  kix,
+}:
 
 let
   # Shared Cilium-native network-policy rule builders.
@@ -233,8 +237,8 @@ in
               enriched = crdRef.out.cr {
                 name = intent.name;
                 labels = {
-                  "kix.dev/derived" = "true";
-                  "kix.dev/policy-type" = "platform-intent";
+                  ${kix.keys.derived} = "true";
+                  ${kix.keys.policyType} = "platform-intent";
                 };
                 inherit spec;
               };

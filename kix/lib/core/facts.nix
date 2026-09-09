@@ -4,7 +4,7 @@
 #
 #   identity paths   the derivation record: "this value was computed from
 #                    resource X". Maximal, exact, never filtered. Drives
-#                    kix.dev/depends-on and the deploy DAG.
+#                    kix.run/depends-on and the deploy DAG.
 #   fact tokens      typed claims riding the same channel: "using this value
 #                    means dialing an L4 endpoint {selector, ports, ns}".
 #                    Read back by interpreters (edge analysis, netpol);
@@ -38,6 +38,10 @@
 { lib }:
 
 let
+  # Kix's own annotation keys and API names, spelled once in
+  # core/annotations.nix.
+  kixAnnotations = import ./annotations.nix;
+  kixKeys = kixAnnotations.keys;
   markers = import ./markers.nix { inherit lib; };
 in
 
@@ -129,7 +133,7 @@ rec {
     let
       group = if lib.hasInfix "/" apiVersion then builtins.head (lib.splitString "/" apiVersion) else "";
     in
-    lib.hasInfix "." group && !(lib.hasSuffix ".k8s.io" group) && group != "kix.dev";
+    lib.hasInfix "." group && !(lib.hasSuffix ".k8s.io" group) && group != kixAnnotations.group;
 
   isFactPath = p: lib.hasPrefix factPrefix (markers.pathName p);
 

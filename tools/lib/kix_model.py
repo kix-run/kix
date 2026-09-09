@@ -285,7 +285,7 @@ class KixModel:
             pkg["metadata"]
             .get("metadata", {})
             .get("annotations", {})
-            .get("kix.dev/content-hash")
+            .get("kix.run/content-hash")
         )
 
     def packages_by_key(self):

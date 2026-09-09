@@ -15,6 +15,7 @@ pub mod images;
 pub mod inspect;
 pub mod list;
 pub mod logs;
+pub mod migrate;
 pub mod operator;
 pub mod pf;
 pub mod rollback;

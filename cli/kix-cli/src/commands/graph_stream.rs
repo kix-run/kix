@@ -64,7 +64,7 @@ const DEFAULT_FOLD_FRACTION: f32 = 0.75;
 /// Grouping axis for the tree view (doc 99 §2–§3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GroupAxis {
-    /// Default — group resources by their `kix.dev/package` label.
+    /// Default — group resources by their `kix.run/package` label.
     Package,
     /// Group resources by Kubernetes namespace; cluster-scoped resources
     /// land under a synthetic `<cluster>` group.

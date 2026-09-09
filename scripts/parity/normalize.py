@@ -46,7 +46,6 @@ STRIP_ANNOTATION_PREFIXES = [
 # Labels stripped from both sides — either build metadata or organizational
 # labels that don't affect K8s behavior.
 STRIP_LABELS = {
-    "build.kix.dev/hash",
     # app.kubernetes.io organizational labels — differ between kix and existing cluster
     "app.kubernetes.io/managed-by",
     "app.kubernetes.io/instance",
@@ -59,6 +58,10 @@ STRIP_LABELS = {
     # Cluster-level labels kix adds
     "cluster",
     "team",
+    # An older kix generation stamped this one. It is not built from the
+    # domain below: `build.kix.dev` was a separate prefix, retired before
+    # the kix.run move, and a live cluster can still carry it.
+    "build.kix.dev/hash",
     # Helm labels on existing cluster resources
     "app",
     "app.kubernetes.io/created-by",
@@ -74,10 +77,18 @@ STRIP_LABEL_PREFIXES = [
     "meta.helm.sh/",
 ]
 
-# Annotation prefixes kix adds for build metadata
-STRIP_KIX_ANNOTATION_PREFIXES = [
+# The domain Kix stamps its own keys under, and the ones it has retired.
+# The retired entries go when the compatibility layer goes; the checklist is
+# in v2_discussions/137_kix_run_domain_migration.md.
+KIX_DOMAIN = "kix.run"
+KIX_LEGACY_DOMAINS = ["kix.dev"]
+
+# Annotation prefixes kix adds for build metadata. `build.kix.dev/` is
+# listed separately: it is not a domain kix stamps keys under, it is an
+# older prefix retired before the kix.run move, so it does not follow from
+# KIX_DOMAIN or KIX_LEGACY_DOMAINS.
+STRIP_KIX_ANNOTATION_PREFIXES = [f"{d}/" for d in [KIX_DOMAIN, *KIX_LEGACY_DOMAINS]] + [
     "build.kix.dev/",
-    "kix.dev/",
 ]
 
 

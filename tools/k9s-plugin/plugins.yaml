@@ -13,11 +13,11 @@ plugins:
       - -c
       - |
         JSON=$(kubectl get $RESOURCE_NAME/$NAME -n $NAMESPACE -o json 2>/dev/null || kubectl get $RESOURCE_NAME/$NAME -o json 2>/dev/null)
-        PKG=$(echo "$JSON" | jq -r '.metadata.annotations["kix.dev/package"] // "not kix-managed"')
-        PKG_NS=$(echo "$JSON" | jq -r '.metadata.annotations["kix.dev/package-namespace"] // "-"')
-        HASH=$(echo "$JSON" | jq -r '.metadata.annotations["kix.dev/identity-hash"] // "-"')
-        DEPS=$(echo "$JSON" | jq -r '.metadata.annotations["kix.dev/depends-on"] // "(none)"')
-        MODE=$(echo "$JSON" | jq -r '.metadata.annotations["kix.dev/mode"] // "managed"')
+        PKG=$(echo "$JSON" | jq -r '.metadata.annotations["kix.run/package"] // .metadata.annotations["kix.dev/package"] // "not kix-managed"')
+        PKG_NS=$(echo "$JSON" | jq -r '.metadata.annotations["kix.run/package-namespace"] // .metadata.annotations["kix.dev/package-namespace"] // "-"')
+        HASH=$(echo "$JSON" | jq -r '.metadata.annotations["kix.run/identity-hash"] // .metadata.annotations["kix.dev/identity-hash"] // "-"')
+        DEPS=$(echo "$JSON" | jq -r '.metadata.annotations["kix.run/depends-on"] // .metadata.annotations["kix.dev/depends-on"] // "(none)"')
+        MODE=$(echo "$JSON" | jq -r '.metadata.annotations["kix.run/mode"] // .metadata.annotations["kix.dev/mode"] // "managed"')
         printf '\n  %-18s %s\n' "Package:" "$PKG"
         printf '  %-18s %s\n' "Package NS:" "$PKG_NS"
         printf '  %-18s %s\n' "Identity Hash:" "$HASH"
@@ -39,8 +39,8 @@ plugins:
       - -c
       - |
         JSON=$(kubectl get $RESOURCE_NAME/$NAME -n $NAMESPACE -o json 2>/dev/null || kubectl get $RESOURCE_NAME/$NAME -o json 2>/dev/null)
-        PKG=$(echo "$JSON" | jq -r '.metadata.annotations["kix.dev/package"] // empty')
-        PKG_NS=$(echo "$JSON" | jq -r '.metadata.annotations["kix.dev/package-namespace"] // empty')
+        PKG=$(echo "$JSON" | jq -r '.metadata.annotations["kix.run/package"] // .metadata.annotations["kix.dev/package"] // empty')
+        PKG_NS=$(echo "$JSON" | jq -r '.metadata.annotations["kix.run/package-namespace"] // .metadata.annotations["kix.dev/package-namespace"] // empty')
         if [ -z "$PKG" ]; then
           echo "Not a kix-managed resource."
           exit 0
@@ -53,7 +53,7 @@ plugins:
           -o json 2>/dev/null | \
           jq -r --arg pkg "$PKG" '
             .items[]
-            | select(.metadata.annotations["kix.dev/package"] == $pkg)
+            | select((.metadata.annotations["kix.run/package"] // .metadata.annotations["kix.dev/package"]) == $pkg)
             | "  \(.kind + " " * (24 - (.kind | length) | if . < 0 then 0 else . end))  \(.metadata.name)"
           ' | sort
         # Also check cluster-scoped resources
@@ -62,7 +62,7 @@ plugins:
           -o json 2>/dev/null | \
           jq -r --arg pkg "$PKG" '
             .items[]
-            | select(.metadata.annotations["kix.dev/package"] == $pkg)
+            | select((.metadata.annotations["kix.run/package"] // .metadata.annotations["kix.dev/package"]) == $pkg)
             | "  \(.kind + " " * (24 - (.kind | length) | if . < 0 then 0 else . end))  \(.metadata.name)"
           ' 2>/dev/null | sort
         printf '\nPress any key to close...\n'
@@ -81,8 +81,8 @@ plugins:
       - -c
       - |
         JSON=$(kubectl get $RESOURCE_NAME/$NAME -n $NAMESPACE -o json 2>/dev/null || kubectl get $RESOURCE_NAME/$NAME -o json 2>/dev/null)
-        HASH=$(echo "$JSON" | jq -r '.metadata.annotations["kix.dev/identity-hash"] // empty')
-        DEPS=$(echo "$JSON" | jq -r '.metadata.annotations["kix.dev/depends-on"] // ""')
+        HASH=$(echo "$JSON" | jq -r '.metadata.annotations["kix.run/identity-hash"] // .metadata.annotations["kix.dev/identity-hash"] // empty')
+        DEPS=$(echo "$JSON" | jq -r '.metadata.annotations["kix.run/depends-on"] // .metadata.annotations["kix.dev/depends-on"] // ""')
         if [ -z "$HASH" ]; then
           echo "Not a kix-managed resource (no identity hash)."
           exit 0
@@ -93,10 +93,10 @@ plugins:
         LOOKUP=$(kubectl get deploy,sts,ds,svc,cm,secret,sa,role,rolebinding,clusterrole,clusterrolebinding,networkpolicy,pvc,ingress,job,cronjob \
           -A -l "app.kubernetes.io/managed-by=kix" -o json 2>/dev/null | \
           jq -c '.items[] | {
-            hash: .metadata.annotations["kix.dev/identity-hash"],
+            hash: .metadata.annotations["kix.run/identity-hash"],
             id: "\(.kind)/\(.metadata.namespace // "(cluster)")/\(.metadata.name)",
-            pkg: .metadata.annotations["kix.dev/package"],
-            deps: (.metadata.annotations["kix.dev/depends-on"] // "")
+            pkg: .metadata.annotations["kix.run/package"],
+            deps: (.metadata.annotations["kix.run/depends-on"] // .metadata.annotations["kix.dev/depends-on"] // "")
           }')
 
         printf '\n  ── Depends on ──\n'
@@ -139,7 +139,7 @@ plugins:
       - -c
       - |
         JSON=$(kubectl get $RESOURCE_NAME/$NAME -n $NAMESPACE -o json 2>/dev/null || kubectl get $RESOURCE_NAME/$NAME -o json 2>/dev/null)
-        ROOT_HASH=$(echo "$JSON" | jq -r '.metadata.annotations["kix.dev/identity-hash"] // empty')
+        ROOT_HASH=$(echo "$JSON" | jq -r '.metadata.annotations["kix.run/identity-hash"] // .metadata.annotations["kix.dev/identity-hash"] // empty')
         if [ -z "$ROOT_HASH" ]; then
           echo "Not a kix-managed resource (no identity hash)."
           exit 0
@@ -149,10 +149,10 @@ plugins:
         LOOKUP=$(kubectl get deploy,sts,ds,svc,cm,secret,sa,role,rolebinding,clusterrole,clusterrolebinding,networkpolicy,pvc,ingress,job,cronjob \
           -A -l "app.kubernetes.io/managed-by=kix" -o json 2>/dev/null | \
           jq -c '.items[] | {
-            hash: .metadata.annotations["kix.dev/identity-hash"],
+            hash: .metadata.annotations["kix.run/identity-hash"],
             id: "\(.kind)/\(.metadata.namespace // "(cluster)")/\(.metadata.name)",
-            pkg: .metadata.annotations["kix.dev/package"],
-            deps: (.metadata.annotations["kix.dev/depends-on"] // "")
+            pkg: .metadata.annotations["kix.run/package"],
+            deps: (.metadata.annotations["kix.run/depends-on"] // .metadata.annotations["kix.dev/depends-on"] // "")
           }')
 
         printf '\n  Blast radius for %s/%s\n\n' "$RESOURCE_NAME" "$NAME"

@@ -3,7 +3,8 @@
 let
   markers = import ../core/markers.nix { inherit lib; };
 
-  annotations = import ../core/annotations.nix;
+  kixAnnotations = import ../core/annotations.nix;
+  kixKeys = kixAnnotations.keys;
 
   normalize = import ../core/normalize.nix { inherit lib; };
 
@@ -43,6 +44,11 @@ let
 in
 
 rec {
+
+  # Kix's own annotation keys, from core/annotations.nix. A package that
+  # writes one of Kix's keys spells it `kix.keys.<name>` rather than the
+  # literal, so a domain move is a one-line change in that file.
+  keys = kixKeys;
 
   # Typed-fact escape hatches (core/facts.nix), re-exported for package
   # authors: `kix.facts.refOnly svc.out.fqdn` (name it, don't dial it),
@@ -516,7 +522,7 @@ rec {
   # script under a stable name, and `<partName>`, the Job that mounts it at
   # /probe and runs it. The Job always waits for the package root, so it
   # runs after the package it belongs to without anyone remembering to say
-  # so; `requires` adds to that. It carries `kix.dev/rerun = "on-change"`
+  # so; `requires` adds to that. It carries `kix.run/rerun = "on-change"`
   # (core/annotations.nix): the deploy engine deletes and recreates a Job
   # with that annotation whenever its identity hash differs from the one
   # the cluster last ran, or when the live Job failed. So under
@@ -667,7 +673,7 @@ rec {
               {
                 name = "${name}-health";
                 requires = requires ctx ++ lib.optional (!dialsRoot) rootRes;
-                annotations.${annotations.rerun.key} = annotations.rerun.onChange;
+                annotations.${kixKeys.rerun} = kixAnnotations.values.rerunOnChange;
                 spec = {
                   backoffLimit = 0;
                   activeDeadlineSeconds = deadline;

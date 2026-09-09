@@ -90,7 +90,7 @@ because the app *used* postgres's address.
   STEP 3 ── app Deployment is sealed
      manifestJson = toJSON(deploy)                 ⟨ctx: P_svc⟩   ◀ rode along
      getContext(manifestJson)  ─▶  finds P_svc
-     stamp:  metadata.annotations["kix.dev/depends-on"] = "hash(P_svc)"
+     stamp:  metadata.annotations["kix.run/depends-on"] = "hash(P_svc)"
                                           │
      Deployment now DAG-depends-on the Service. Nobody wired it.
 ```
@@ -111,7 +111,7 @@ JSON right before `toFile`:
    (b) requires edge  — you didn't, but you need ordering → mkResource does
                         appendContext(json, dep-paths) before sealing.         [explicit]
 
-   Both land as entries in kix.dev/depends-on. At deploy time an edge is an edge.
+   Both land as entries in kix.run/depends-on. At deploy time an edge is an edge.
 ```
 
 ---
@@ -129,7 +129,7 @@ JSON right before `toFile`:
              │                          ├─ requires/extraDeps → "requires:HASH"     ┘ door (b)
              │                          │
              │                          ▼
-             │                stamp kix.dev/depends-on = join(all hashes)
+             │                stamp kix.run/depends-on = join(all hashes)
              │                          │
              │            appendContext(json, deps' own context)   ← so door (b) survives
              │                          ▼

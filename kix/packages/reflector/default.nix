@@ -12,7 +12,11 @@
 # Name:    reflector
 # Version: 10.0.60
 
-{ scope, lib }:
+{
+  scope,
+  lib,
+  kix,
+}:
 let
   chart = scope.helm.fetchHelmChart {
     repo = "https://emberstack.github.io/helm-charts";
@@ -84,8 +88,8 @@ let
         name = jobName;
         inherit labels;
         annotations = {
-          "kix.dev/hook" = "post-deploy";
-          "kix.dev/hook-delete-policy" = "before-hook-creation,hook-succeeded";
+          ${kix.keys.hook} = "post-deploy";
+          ${kix.keys.hookDeletePolicy} = "before-hook-creation,hook-succeeded";
         };
         inherit requires;
         spec = {

@@ -45,6 +45,7 @@ use super::stream::{
     PlanNode, TransitionKind, Verdict,
 };
 use super::watchdog::{self, Progress, StallPolicy};
+use crate::manifest::keys;
 
 pub use super::ops::kube::delete_propagation_for;
 
@@ -63,7 +64,7 @@ pub struct PlanNodeEntry {
     /// [`TransitionKind::Recreate`] it carries the manifest.
     pub action: ChangeAction,
     pub meta: NodeMeta,
-    /// The manifest, when it carries `kix.dev/rerun`. An `Apply` with it is
+    /// The manifest, when it carries `kix.run/rerun`. An `Apply` with it is
     /// tagged `Recreate`; a `Skip` with it keeps its tag but still runs a
     /// task, because a live object that failed is recreated even though
     /// nothing changed.
@@ -123,11 +124,7 @@ impl DeployPlan {
 
             // Extract meta from the manifest.
             let meta = NodeMeta {
-                package: node
-                    .manifest
-                    .pointer("/metadata/annotations/kix.dev~1package")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string()),
+                package: keys::get(&node.manifest, keys::PACKAGE).map(|s| s.to_string()),
                 namespace: (node.id.namespace != CLUSTER_SCOPED).then(|| node.id.namespace.clone()),
                 import_target: readiness::import_target_from_manifest(&node.manifest),
             };
@@ -228,7 +225,7 @@ pub struct SchedulerConfig {
     pub concurrency: usize,
     /// When the progress watchdog warns and when it gives up.
     pub stall: StallPolicy,
-    /// Recreate an unchanged node under `kix.dev/rerun` whose live object
+    /// Recreate an unchanged node under `kix.run/rerun` whose live object
     /// failed. `kix deploy` and `kix rollback` set this: a person asked for
     /// a run and a failed probe should get its retry. The operator leaves
     /// it off: it diffs against live objects and requeues a failed run
@@ -1270,7 +1267,7 @@ enum NodeOutcome {
 /// Runs on its own task. Hydrate, apply, wait for readiness, report.
 ///
 /// Apply and Recreate nodes come here; so does a Skip node carrying
-/// `kix.dev/rerun`, whose live object is read and recreated when it
+/// `kix.run/rerun`, whose live object is read and recreated when it
 /// failed. Other Skip nodes are short-circuited in the main loop;
 /// Migrate/Drain/Delete/Pause are Stage E/F.
 async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome {
@@ -1365,7 +1362,7 @@ async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome {
         manifest
     };
 
-    // The rerun rule: a changed resource carrying `kix.dev/rerun` is never
+    // The rerun rule: a changed resource carrying `kix.run/rerun` is never
     // patched. When something is live it is deleted first (foreground, so
     // a Job's pod goes with it); when nothing is, a plain apply creates it.
     if matches!(entry.kind, TransitionKind::Recreate) && rerun_reason.is_none() {
@@ -1632,9 +1629,9 @@ mod tests {
 
     fn manifest(kind: &str, name: &str, ns: &str, id_hash: &str, deps: &str) -> Value {
         let mut annotations = serde_json::Map::new();
-        annotations.insert("kix.dev/identity-hash".into(), json!(id_hash));
+        annotations.insert(keys::IDENTITY_HASH.into(), json!(id_hash));
         if !deps.is_empty() {
-            annotations.insert("kix.dev/depends-on".into(), json!(deps));
+            annotations.insert(keys::DEPENDS_ON.into(), json!(deps));
         }
         json!({
             "apiVersion": "v1",
@@ -1697,15 +1694,15 @@ mod tests {
         assert!(matches!(app.kind, TransitionKind::Apply));
     }
 
-    /// A manifest carrying `kix.dev/rerun` is tagged Recreate when it
+    /// A manifest carrying `kix.run/rerun` is tagged Recreate when it
     /// changed and keeps its Skip tag, with the manifest attached, when it
     /// did not.
     #[test]
     fn plan_tags_rerun_manifests() {
         let mut changed = manifest("Job", "probe", "default", "h_probe", "");
-        changed["metadata"]["annotations"]["kix.dev/rerun"] = json!("on-change");
+        changed["metadata"]["annotations"][keys::RERUN] = json!("on-change");
         let mut same = manifest("Job", "old-probe", "default", "h_old", "");
-        same["metadata"]["annotations"]["kix.dev/rerun"] = json!("on-change");
+        same["metadata"]["annotations"][keys::RERUN] = json!("on-change");
         let plain = manifest("ConfigMap", "cm", "default", "h_cm", "");
         let manifests = vec![changed.clone(), same.clone(), plain.clone()];
         let graph = ResourceGraph::from_manifests(&manifests).unwrap();
@@ -1734,7 +1731,7 @@ mod tests {
     #[test]
     fn plan_ignores_rerun_on_non_jobs() {
         let mut deploy = manifest("Deployment", "web", "default", "h_web", "");
-        deploy["metadata"]["annotations"]["kix.dev/rerun"] = json!("on-change");
+        deploy["metadata"]["annotations"][keys::RERUN] = json!("on-change");
         let manifests = vec![deploy.clone()];
         let graph = ResourceGraph::from_manifests(&manifests).unwrap();
         let plan = DeployPlan::from_graph_and_changes(&graph, &[ChangeAction::Apply(deploy)]);
@@ -1859,10 +1856,10 @@ mod engine_tests {
     /// are named in `deps`.
     fn m(kind: &str, name: &str, deps: &[&str]) -> Value {
         let mut annotations = serde_json::Map::new();
-        annotations.insert("kix.dev/identity-hash".into(), json!(format!("h_{name}")));
+        annotations.insert(keys::IDENTITY_HASH.into(), json!(format!("h_{name}")));
         if !deps.is_empty() {
             let deps: Vec<String> = deps.iter().map(|d| format!("h_{d}")).collect();
-            annotations.insert("kix.dev/depends-on".into(), json!(deps.join(",")));
+            annotations.insert(keys::DEPENDS_ON.into(), json!(deps.join(",")));
         }
         let mut metadata = json!({ "name": name, "annotations": annotations });
         if kind != "CustomResourceDefinition" {
@@ -1874,7 +1871,7 @@ mod engine_tests {
     /// `m` with the rerun annotation: a probe Job under the rerun rule.
     fn rerun_m(kind: &str, name: &str, deps: &[&str]) -> Value {
         let mut v = m(kind, name, deps);
-        v["metadata"]["annotations"]["kix.dev/rerun"] = json!("on-change");
+        v["metadata"]["annotations"][keys::RERUN] = json!("on-change");
         v
     }
 
@@ -2536,7 +2533,7 @@ mod engine_tests {
             .collect()
     }
 
-    /// The rerun rule (doc 136): a changed Job carrying `kix.dev/rerun`
+    /// The rerun rule (doc 136): a changed Job carrying `kix.run/rerun`
     /// with a live object is deleted and created again, not applied. The
     /// delete goes through `recreate_in_place`, never through the prune
     /// path, and the node reports `Rerun`.

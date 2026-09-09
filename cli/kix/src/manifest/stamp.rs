@@ -1,18 +1,19 @@
-//! Annotation stamping: add `kix.dev/*` annotations to resource manifests.
+//! Annotation stamping: add `kix.run/*` annotations to resource manifests.
 //!
 //! After building a `StoreGraph`, this module stamps each resource with:
-//! - `kix.dev/identity-hash` — the 32-char Nix store hash of the resource
-//! - `kix.dev/package` — owning package instance name
-//! - `kix.dev/package-namespace` — namespace of the owning package
-//! - `kix.dev/lifecycle` — "stateful" | "durable" | "ephemeral" (from package meta);
+//! - `kix.run/identity-hash` — the 32-char Nix store hash of the resource
+//! - `kix.run/package` — owning package instance name
+//! - `kix.run/package-namespace` — namespace of the owning package
+//! - `kix.run/lifecycle` — "stateful" | "durable" | "ephemeral" (from package meta);
 //!   drives migration pair detection (doc 67)
-//! - `kix.dev/activations` — comma-separated activation identity-hashes (set during apply)
+//! - `kix.run/activations` — comma-separated activation identity-hashes (set during apply)
 //!
-//! Note: `kix.dev/depends-on` is stamped at resource creation time in Nix (lib/k8s.nix).
+//! Note: `kix.run/depends-on` is stamped at resource creation time in Nix (lib/k8s.nix).
 
 use std::path::PathBuf;
 
 use crate::eval::store_graph::{StoreGraph, store_hash};
+use crate::manifest::keys;
 
 /// Collected stamping info for a single resource.
 struct StampEntry {
@@ -23,11 +24,19 @@ struct StampEntry {
     lifecycle: Option<String>,
 }
 
-/// Stamp kix.dev annotations onto every resource manifest in the graph.
+/// Stamp kix.run annotations onto every resource manifest in the graph.
 /// Modifies manifests in place.
 ///
 /// Uses the bulk-loaded ref_cache from StoreGraph — no subprocess calls.
 pub fn stamp_annotations(graph: &mut StoreGraph) {
+    // A build loaded from an activation that predates a domain move carries
+    // the retired keys in its store paths. Bring them to the current domain
+    // before anything reads them, so the planner, the differ and the stamps
+    // below all see one domain. Inert when no domain has been retired.
+    for res in graph.resources.values_mut() {
+        crate::legacy_domain::upgrade_manifest(&mut res.manifest);
+    }
+
     // First pass: collect stamping info using explicit loops to avoid borrow issues.
     let mut stamp_info: Vec<StampEntry> = Vec::new();
 
@@ -73,7 +82,7 @@ pub fn stamp_annotations(graph: &mut StoreGraph) {
         // For Activation CRs:
         // - Rename to include identity hash so each deploy creates a distinct CR
         //   (enabling supersede/rollback lifecycle).
-        // - Add kix.dev/built-via annotation with the activation result dir path
+        // - Add kix.run/built-via annotation with the activation result dir path
         //   so rollback can find manifests without a nix build.
         let is_record = crate::manifest::lifecycle::is_record(&res.manifest);
         if is_record {
@@ -101,27 +110,24 @@ pub fn stamp_annotations(graph: &mut StoreGraph) {
             // Store the activation result dir path so rollback/deploy can
             // load manifests directly from the nix store without rebuilding.
             new_anns.insert(
-                "kix.dev/built-via".to_string(),
+                keys::BUILT_VIA.to_string(),
                 serde_json::Value::String(graph.result_dir.to_string_lossy().to_string()),
             );
         }
         new_anns.insert(
-            "kix.dev/identity-hash".to_string(),
+            keys::IDENTITY_HASH.to_string(),
             serde_json::Value::String(entry.identity_hash),
         );
         new_anns.insert(
-            "kix.dev/package".to_string(),
+            keys::PACKAGE.to_string(),
             serde_json::Value::String(entry.package),
         );
         new_anns.insert(
-            "kix.dev/package-namespace".to_string(),
+            keys::PACKAGE_NAMESPACE.to_string(),
             serde_json::Value::String(entry.package_namespace),
         );
         if let Some(lc) = entry.lifecycle {
-            new_anns.insert(
-                "kix.dev/lifecycle".to_string(),
-                serde_json::Value::String(lc),
-            );
+            new_anns.insert(keys::LIFECYCLE.to_string(), serde_json::Value::String(lc));
         }
 
         if let Some(anns) = res
