@@ -30,7 +30,7 @@
 //! # Deleting it
 //!
 //! Set [`DOMAINS`] to `&[]` and the layer is inert. Removing it for real is
-//! a checklist in `v2_discussions/137_kix_run_domain_migration.md`: delete
+//! a checklist in `v2_discussions/archive/137_kix_run_domain_migration.md`: delete
 //! this directory and `kix-cli`'s `migrate` command, remove the four hooks,
 //! drop `legacyDomains` from `kix/lib/core/annotations.nix`, and shrink the
 //! allowlist in `keys`'s `no_other_file_spells_a_kix_domain` test.

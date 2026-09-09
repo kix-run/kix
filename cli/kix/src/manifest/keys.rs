@@ -327,7 +327,7 @@ mod tests {
             // literal cluster YAML. These are the independent restatement
             // that catches a constant changed by mistake, so they spell the
             // domain on purpose and a move updates them by hand. The
-            // checklist is in v2_discussions/137_kix_run_domain_migration.md.
+            // checklist is in v2_discussions/archive/137_kix_run_domain_migration.md.
             "cli/kix/tests/fixtures",
             "cli/kix-operator/tests",
             // The Python half of the compatibility layer. It declares both

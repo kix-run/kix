@@ -1,6 +1,7 @@
 # 136: Health probe Jobs, the plan for the seven blockers on #77
 
-**Status:** Draft (implementation plan), revised after two Opus red-team passes
+**Status:** Implemented (Nix half in kix-run/kixpkgs#77, engine half in #79, both merged 2026-09-08)
+**Shipped as planned, with two changes:** `kix.healthCheck` is marked experimental on #77 and may be removed if the trial clusters do not find it useful; the planner tag stayed `recreate` (the reserved Stage E transition) while the policy is named "rerun" in output. Items 8 to 10 (shared helpers, more probes) and the open questions live in `ROADMAP.md` (the `kix.healthCheck` entry and the `lib.functionArgs` entry).
 **Related:** `81_deploy_as_lifecycle_engine.md` (Recreate transition, structured verdicts), `122_runtime_content_drift.md` (TTL'd Jobs are not drift), `121_netpol_as_plugin.md` (where a Job's egress edge is derived), `115_pod_spec_hardening_pass.md` (the probe pod goes through it), `111_operator_experience.md` (halt and report)
 **Source:** PR kix-run/kixpkgs#77, "Required before this could merge", items 1 to 7. Items 8 to 10 (shared helpers, docs, which packages get probes) are not planned here. Four things the list did not have are at the end.
 

@@ -37,7 +37,7 @@ rec {
   # so an object a previous Kix stamped, or a helm chart that copied one of
   # its keys, is not reported as writing under a domain nobody owns. The Rust
   # half is `DOMAINS` in `cli/kix/src/legacy_domain/`. Both go together; the
-  # checklist is in `v2_discussions/137_kix_run_domain_migration.md`.
+  # checklist is in `v2_discussions/archive/137_kix_run_domain_migration.md`.
   legacyDomains = [ "kix.dev" ];
 
   keys = {

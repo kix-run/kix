@@ -1325,7 +1325,7 @@ domain first and the old one second, so an object an older Kix stamped is
 still recognised. A build loaded from a pre-move activation, including a
 `kix rollback` target, has its keys and its record's API group moved on load.
 The layer lives in `cli/kix/src/legacy_domain/` and goes as one piece; the
-checklist is in `v2_discussions/137_kix_run_domain_migration.md`.
+checklist is in `v2_discussions/archive/137_kix_run_domain_migration.md`.
 
 ## 25. Activation CR and operator
 
