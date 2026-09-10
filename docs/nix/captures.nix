@@ -533,6 +533,32 @@
   }
 
   {
+    group = "how-to/dependency-auto-instantiation";
+    page = "/docs/how-to/debug-dependency-wiring/use-auto-instantiation-with-availablepackages-optional-and-autonamespace/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "check";
+        run = [
+          "kix"
+          "check"
+          "how-to-auto-instantiation"
+        ];
+      }
+      {
+        capture = "graph";
+        run = [
+          "kix"
+          "graph"
+          "how-to-auto-instantiation"
+          "--format"
+          "tree"
+        ];
+      }
+    ];
+  }
+
+  {
     group = "how-to/scorecard-rules";
     page = "/docs/how-to/policy-ci-and-compliance/add-scorecard-rules/";
     cwd = "kix-examples/";

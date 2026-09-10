@@ -36,11 +36,11 @@
         "nixpkgs": "nixpkgs"
       },
       "locked": {
-        "lastModified": 1789034089,
-        "narHash": "sha256-llnHmPlOMYb4m4wdtqI6mC3gZGIDafOVeBnL57rJk8w=",
+        "lastModified": 1789035359,
+        "narHash": "sha256-fC+XUTtMlH9oSLIFRfKxmx1TH/y2Z0DvxgSZFMRh6kY=",
         "ref": "refs/heads/main",
-        "rev": "e43081036348e46f809c5ebefa746381f59a01b8",
-        "revCount": 20,
+        "rev": "b9e80a1cceb5e0bb369d0ddfda9315bd7e677f37",
+        "revCount": 21,
         "type": "git",
         "url": "https://github.com/kix-run/kix-examples"
       },

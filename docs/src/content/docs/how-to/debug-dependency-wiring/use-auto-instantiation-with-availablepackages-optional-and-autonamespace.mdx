@@ -1,4 +1,89 @@
 ---
 title: "Use auto-instantiation with `availablePackages`, `optional`, and `autoNamespace`"
-description: TODO
+description: "Install default packages only when another instance needs them, and keep configured instances dormant until they are required."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import autoInstantiatedDeps from '/src/snippets/how-to/auto-instantiation/application-package/autoInstantiatedDeps.json';
+import autoInstantiationCatalog from '/src/snippets/how-to/auto-instantiation/cluster/autoInstantiationCatalog.json';
+import optionalInstance from '/src/snippets/how-to/auto-instantiation/cluster/optionalInstance.json';
+import autoInstantiationConsumer from '/src/snippets/how-to/auto-instantiation/cluster/autoInstantiationConsumer.json';
+import check from '/src/command-output/how-to/dependency-auto-instantiation/check.json';
+import graph from '/src/command-output/how-to/dependency-auto-instantiation/graph.json';
+
+Use auto-instantiation when a cluster has a standard package for a dependency,
+but should include it only when something needs it. Use an optional instance
+when you also need to configure that dormant provider.
+
+This guide assumes you already have packages whose required build arguments
+describe their dependencies.
+
+## Declare the dependencies
+
+In the consuming package, make each dependency a required build argument. This
+application reads values from `database` and `metrics`:
+
+<Snippet {...autoInstantiatedDeps} />
+
+Required arguments create demand. Kix first looks for a matching instance or
+alias, then consults the cluster's package catalog.
+
+## Add a default package to the catalog
+
+Add the package under the dependency name in `availablePackages`. Set
+`autoNamespace` if auto-instantiated packages should live in a shared
+namespace:
+
+<Snippet {...autoInstantiationCatalog} />
+
+When an instance requires `database`, Kix creates a `database` instance in
+`platform` with the package's default configuration. Without `autoNamespace`,
+Kix creates it in the requesting instance's namespace. A `namespace` set on
+the individual catalog entry takes precedence over `autoNamespace`.
+
+## Keep a configured provider dormant
+
+An `availablePackages` entry is instantiated with default configuration. When
+the provider needs cluster-specific configuration, declare a normal instance
+and set `optional = true`:
+
+<Snippet {...optionalInstance} />
+
+Kix excludes this instance when nothing depends on `metrics`. A required
+`metrics` argument activates it with the configuration shown above.
+
+## Add the consumer
+
+Declare only the package you intend to run directly:
+
+<Snippet {...autoInstantiationConsumer} />
+
+The package's required arguments pull both providers into the evaluated
+cluster. This also works transitively when an activated provider has required
+dependencies of its own.
+
+## Check the result
+
+Evaluate the cluster:
+
+<Command {...check} />
+
+Inspect the dependency graph to confirm where the providers were created:
+
+<Command expandable {...graph} />
+
+The graph contains `database@platform`, `metrics@platform`, and `api@apps`.
+Both provider ConfigMaps appear before the application ConfigMap that consumes
+their outputs.
+
+:::note[Explanation]
+See [Dependency resolution and why explicit deps matter](/docs/explanation/dependency-resolution-and-why-explicit-deps-matter/)
+for how Kix chooses among explicit instances, aliases, and catalog packages.
+:::
+
+:::note[Reference]
+See [`availablePackages`](/docs/reference/cluster-module/availablepackages/),
+[`autoNamespace`](/docs/reference/cluster-module/autonamespace/), and
+[`optional`](/docs/reference/instance-schema/optional/) for the exact schemas.
+:::
