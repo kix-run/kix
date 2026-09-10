@@ -1,0 +1,19 @@
+{
+  "id": "how-to/platform-ingress/ingress",
+  "group": "how-to/platform-ingress",
+  "page": "/docs/how-to/platform-capabilities/expose-a-service-with-ingress/",
+  "cwd": "kix-examples/",
+  "generator": "offline",
+  "outputExcerpt": true,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix build how-to-platform-ingress --output json",
+      "stdout": "{\n  \"apiVersion\": \"networking.k8s.io/v1\",\n  \"kind\": \"Ingress\",\n  \"metadata\": {\n    \"name\": \"web\",\n    \"namespace\": \"ingress-example\"\n  },\n  \"spec\": {\n    \"ingressClassName\": \"ingressNginx\",\n    \"rules\": [\n      {\n        \"host\": \"web.example.test\",\n        \"http\": {\n          \"paths\": [\n            {\n              \"backend\": {\n                \"service\": {\n                  \"name\": \"web\",\n                  \"port\": {\n                    \"number\": 80\n                  }\n                }\n              },\n              \"path\": \"/\",\n              \"pathType\": \"Prefix\"\n            }\n          ]\n        }\n      }\n    ]\n  }\n}\n",
+      "stderr": "",
+      "stdoutDrift": "\"apiVersion\": \"networking.k8s.io/v1\",\n\"backend\": {\n\"host\": \"web.example.test\",\n\"http\": {\n\"ingressClassName\": \"ingressNginx\",\n\"kind\": \"Ingress\",\n\"metadata\": {\n\"name\": \"web\",\n\"namespace\": \"ingress-example\"\n\"number\": 80\n\"path\": \"/\",\n\"pathType\": \"Prefix\"\n\"paths\": [\n\"port\": {\n\"rules\": [\n\"service\": {\n\"spec\": {\n]\n{\n}\n},\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

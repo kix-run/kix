@@ -1,0 +1,19 @@
+{
+  "id": "how-to/platform-gateway/http-route",
+  "group": "how-to/platform-gateway",
+  "page": "/docs/how-to/platform-capabilities/expose-a-service-with-gateway-api/",
+  "cwd": "kix-examples/",
+  "generator": "offline",
+  "outputExcerpt": true,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix build how-to-platform-gateway --output json",
+      "stdout": "{\n  \"apiVersion\": \"gateway.networking.k8s.io/v1\",\n  \"kind\": \"HTTPRoute\",\n  \"metadata\": {\n    \"name\": \"web\",\n    \"namespace\": \"gateway-example\"\n  },\n  \"spec\": {\n    \"hostnames\": [\n      \"web.example.test\"\n    ],\n    \"parentRefs\": [\n      {\n        \"name\": \"gateway\",\n        \"namespace\": \"gateway-system\"\n      }\n    ],\n    \"rules\": [\n      {\n        \"backendRefs\": [\n          {\n            \"name\": \"web\",\n            \"port\": 80\n          }\n        ],\n        \"matches\": [\n          {\n            \"path\": {\n              \"type\": \"PathPrefix\",\n              \"value\": \"/\"\n            }\n          }\n        ]\n      }\n    ]\n  }\n}\n",
+      "stderr": "",
+      "stdoutDrift": "\"apiVersion\": \"gateway.networking.k8s.io/v1\",\n\"backendRefs\": [\n\"hostnames\": [\n\"kind\": \"HTTPRoute\",\n\"matches\": [\n\"metadata\": {\n\"name\": \"gateway\",\n\"name\": \"web\",\n\"namespace\": \"gateway-example\"\n\"namespace\": \"gateway-system\"\n\"parentRefs\": [\n\"path\": {\n\"port\": 80\n\"rules\": [\n\"spec\": {\n\"type\": \"PathPrefix\",\n\"value\": \"/\"\n\"web.example.test\"\n]\n],\n{\n}\n},\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

@@ -1101,6 +1101,66 @@
   }
 
   {
+    group = "how-to/platform-ingress";
+    page = "/docs/how-to/platform-capabilities/expose-a-service-with-ingress/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "check";
+        run = [
+          "kix"
+          "check"
+          "how-to-platform-ingress"
+        ];
+      }
+      {
+        capture = "ingress";
+        run = [
+          "kix"
+          "build"
+          "how-to-platform-ingress"
+          "--output"
+          "json"
+        ];
+        stdoutJq = ''
+          .[]
+          | select(.kind == "Ingress" and .metadata.namespace == "ingress-example")
+          | {apiVersion, kind, metadata: {name: .metadata.name, namespace: .metadata.namespace}, spec}'';
+      }
+    ];
+  }
+
+  {
+    group = "how-to/platform-gateway";
+    page = "/docs/how-to/platform-capabilities/expose-a-service-with-gateway-api/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "check";
+        run = [
+          "kix"
+          "check"
+          "how-to-platform-gateway"
+        ];
+      }
+      {
+        capture = "http-route";
+        run = [
+          "kix"
+          "build"
+          "how-to-platform-gateway"
+          "--output"
+          "json"
+        ];
+        stdoutJq = ''
+          .[]
+          | select(.kind == "HTTPRoute" and .metadata.namespace == "gateway-example")
+          | {apiVersion, kind, metadata: {name: .metadata.name, namespace: .metadata.namespace}, spec}'';
+      }
+    ];
+  }
+
+  {
     group = "how-to/application-typed-options";
     page = "/docs/how-to/author-packages-and-clusters/add-typed-package-options/";
     cwd = "kix-examples/";
