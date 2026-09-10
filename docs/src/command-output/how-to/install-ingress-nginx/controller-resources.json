@@ -1,0 +1,19 @@
+{
+  "id": "how-to/install-ingress-nginx/controller-resources",
+  "group": "how-to/install-ingress-nginx",
+  "page": "/docs/how-to/package-task-guides/install-ingress-nginx/",
+  "cwd": "kix-examples/",
+  "generator": "offline",
+  "outputExcerpt": true,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix build how-to-platform-ingress --output json",
+      "stdout": "[\n  {\n    \"apiVersion\": \"apps/v1\",\n    \"kind\": \"Deployment\",\n    \"metadata\": {\n      \"name\": \"ingressNginx\",\n      \"namespace\": \"ingress-system\"\n    },\n    \"replicas\": 1\n  },\n  {\n    \"apiVersion\": \"networking.k8s.io/v1\",\n    \"kind\": \"IngressClass\",\n    \"metadata\": {\n      \"name\": \"ingressNginx\"\n    },\n    \"spec\": {\n      \"controller\": \"k8s.io/ingressNginx\"\n    }\n  },\n  {\n    \"apiVersion\": \"v1\",\n    \"kind\": \"Service\",\n    \"metadata\": {\n      \"name\": \"ingressNginx\",\n      \"namespace\": \"ingress-system\"\n    },\n    \"type\": \"ClusterIP\",\n    \"ports\": [\n      {\n        \"appProtocol\": \"http\",\n        \"name\": \"http\",\n        \"port\": 80,\n        \"protocol\": \"TCP\",\n        \"targetPort\": \"http\"\n      },\n      {\n        \"appProtocol\": \"https\",\n        \"name\": \"https\",\n        \"port\": 443,\n        \"protocol\": \"TCP\",\n        \"targetPort\": \"https\"\n      }\n    ]\n  }\n]\n",
+      "stderr": "",
+      "stdoutDrift": "\"apiVersion\": \"apps/v1\",\n\"apiVersion\": \"networking.k8s.io/v1\",\n\"apiVersion\": \"v1\",\n\"appProtocol\": \"http\",\n\"appProtocol\": \"https\",\n\"controller\": \"k8s.io/ingressNginx\"\n\"kind\": \"Deployment\",\n\"kind\": \"IngressClass\",\n\"kind\": \"Service\",\n\"metadata\": {\n\"name\": \"http\",\n\"name\": \"https\",\n\"name\": \"ingressNginx\"\n\"name\": \"ingressNginx\",\n\"namespace\": \"ingress-system\"\n\"port\": 443,\n\"port\": 80,\n\"ports\": [\n\"protocol\": \"TCP\",\n\"replicas\": 1\n\"spec\": {\n\"targetPort\": \"http\"\n\"targetPort\": \"https\"\n\"type\": \"ClusterIP\",\n[\n]\n{\n}\n},\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

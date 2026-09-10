@@ -1,4 +1,62 @@
 ---
 title: "Install ingress-nginx"
-description: TODO
+description: "Add the ingress-nginx controller, Service, and IngressClass to a Kix cluster."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import ingressControllerInstance from '/src/snippets/how-to/platform/ingress-cluster/ingressControllerInstance.json';
+import controllerResources from '/src/command-output/how-to/install-ingress-nginx/controller-resources.json';
+
+Add the `ingress-nginx` package when the cluster should run its own NGINX
+Ingress controller. The package creates the controller workload, Service,
+IngressClass, admission webhook, and their RBAC resources.
+
+## Add the controller instance
+
+Add one instance in a platform namespace:
+
+<Snippet {...ingressControllerInstance} />
+
+The instance name becomes the default IngressClass name. Keeping the
+`ingressNginx` name also lets packages that use `kix.expose` resolve this
+controller automatically.
+
+## Choose how traffic reaches the controller
+
+The controller Service defaults to `ClusterIP`. Keep that default when another
+in-cluster component forwards traffic to ingress-nginx.
+
+For a cloud or bare-metal environment with LoadBalancer support, set
+`config.serviceType = "LoadBalancer"` on the instance. Use
+`config.serviceAnnotations` for provider-specific load balancer settings. The
+target cluster must have a provider for the `loadBalancer` role or evaluation
+will reject the Service.
+
+Set `config.replicaCount` when the controller should run more than one replica.
+
+## Inspect and deploy
+
+Inspect the main generated resources:
+
+<Command {...controllerResources} />
+
+The example renders one controller Deployment, a `ClusterIP` Service, and an
+IngressClass named `ingressNginx`.
+
+Deploy the cluster:
+
+<Command commands={["kix deploy how-to-platform-ingress"]} cwd="kix-examples/" />
+
+After the deploy completes, check the controller resources:
+
+<Command commands={["kix status how-to-platform-ingress"]} cwd="kix-examples/" />
+
+The controller must be ready before an Ingress can accept traffic. If the
+Service is a `LoadBalancer`, also wait for your provider to assign its external
+address.
+
+:::tip[Use it in a task]
+See [Expose a service with Ingress](/docs/how-to/platform-capabilities/expose-a-service-with-ingress/)
+to connect an application Service to this controller.
+:::

@@ -1131,6 +1131,40 @@
   }
 
   {
+    group = "how-to/install-ingress-nginx";
+    page = "/docs/how-to/package-task-guides/install-ingress-nginx/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "controller-resources";
+        run = [
+          "kix"
+          "build"
+          "how-to-platform-ingress"
+          "--output"
+          "json"
+        ];
+        stdoutJq = ''
+          [
+            .[]
+            | select(
+                (.kind == "Deployment" and .metadata.namespace == "ingress-system")
+                or (.kind == "Service" and .metadata.namespace == "ingress-system" and .metadata.name == "ingressNginx")
+                or (.kind == "IngressClass" and .metadata.name == "ingressNginx")
+              )
+            | if .kind == "Deployment" then
+                {apiVersion, kind, metadata: {name: .metadata.name, namespace: .metadata.namespace}, replicas: .spec.replicas}
+              else if .kind == "Service" then
+                {apiVersion, kind, metadata: {name: .metadata.name, namespace: .metadata.namespace}, type: .spec.type, ports: .spec.ports}
+              else
+                {apiVersion, kind, metadata: {name: .metadata.name}, spec}
+              end end
+          ]'';
+      }
+    ];
+  }
+
+  {
     group = "how-to/platform-gateway";
     page = "/docs/how-to/platform-capabilities/expose-a-service-with-gateway-api/";
     cwd = "kix-examples/";

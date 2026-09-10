@@ -62,7 +62,7 @@
     { "page": "package-task-guides/deploy-velero", "scenario": "package-stacks", "status": "planned" },
     { "page": "package-task-guides/install-cilium-network-policy-support", "scenario": "package-stacks", "status": "planned" },
     { "page": "package-task-guides/install-envoy-gateway", "scenario": "package-stacks", "status": "planned" },
-    { "page": "package-task-guides/install-ingress-nginx", "scenario": "package-stacks", "status": "planned" },
+    { "page": "package-task-guides/install-ingress-nginx", "scenario": "package-stacks", "status": "implemented", "snippets": ["ingressControllerInstance"], "offlineCaptures": ["how-to/install-ingress-nginx/controller-resources"] },
     { "page": "package-task-guides/install-the-monitoring-stack", "scenario": "package-stacks", "status": "planned" },
     { "page": "package-task-guides/install-the-victoriametrics-ha-monitoring-stack", "scenario": "package-stacks", "status": "planned" },
     { "page": "package-task-guides/provision-persistent-storage", "scenario": "package-stacks", "status": "implemented", "snippets": ["persistentStorageInstances", "persistentVolumeMount", "persistentStorageDeployment"], "offlineCaptures": ["how-to/package-storage/check", "how-to/package-storage/storage-resources"] },
