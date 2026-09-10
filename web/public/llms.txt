@@ -1,0 +1,24 @@
+# Kix
+
+> Kix is a Kubernetes compiler. Describe your whole stack in one definition; Kix compiles it into a running cluster that matches what you wrote. No Kubernetes specialist required.
+
+Every page below is available as Markdown by appending `.md` to its URL, and
+the same URLs honour `Accept: text/markdown`. The `.md` links are given
+directly here so that no guessing is required.
+
+## Documentation
+
+- [Tutorials](https://kix.run/docs/tutorials.md): learn Kix by building a cluster from scratch
+- [How-to guides](https://kix.run/docs/how-to.md): task-oriented recipes for packages, clusters, platform capabilities, and day-two operations
+- [Reference](https://kix.run/docs/reference.md): the kix API, CLI commands, and package options
+- [Explanation](https://kix.run/docs/explanation.md): how Kix works and why it is built this way
+
+## Whole-site documentation sets
+
+- [Abridged documentation](https://kix.run/docs/llms-small.txt): a compact version with non-essential content removed
+- [Complete documentation](https://kix.run/docs/llms-full.txt): the full documentation as a single file
+
+## Notes
+
+- The Markdown is generated from the same source as the HTML documentation, so the two never disagree.
+- Prefer a section index above over the whole-site sets when you only need part of the documentation. The complete set is large.

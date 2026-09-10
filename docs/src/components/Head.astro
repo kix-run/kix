@@ -1,0 +1,25 @@
+---
+// Advertise this page's Markdown twin to agentic tools.
+//
+// Codex CLI ignores the Accept header and instead fetches the HTML and
+// looks for this tag, so it is the only way Codex ever finds the
+// Markdown. Clients that do negotiate (Claude Code, Cursor, Copilot,
+// OpenCode) are served by web/public/_worker.js and never need it.
+//
+// starlight-llms-txt emits a sibling `<page>.md` for every route except
+// 404, hence the guard below.
+import Default from '@astrojs/starlight/components/Head.astro';
+
+// `import.meta.env.BASE_URL` is the configured `base` ("/docs/"), so the
+// mapping stays correct if the docs ever move off that prefix.
+const base = import.meta.env.BASE_URL.replace(/\/+$/, '');
+const path = Astro.url.pathname.replace(/\/+$/, '');
+
+const hasMarkdownTwin = path !== `${base}/404`;
+const markdownHref = hasMarkdownTwin
+  ? new URL(path === base ? `${base}/index.md` : `${path}.md`, Astro.site).href
+  : null;
+---
+
+<Default><slot /></Default>
+{markdownHref && <link rel="alternate" type="text/markdown" href={markdownHref} />}
