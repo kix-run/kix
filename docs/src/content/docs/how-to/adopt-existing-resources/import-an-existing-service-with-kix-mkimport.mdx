@@ -1,4 +1,64 @@
 ---
 title: "Import an existing service with `kix.mkImport`"
-description: TODO
+description: "Expose the address of a Service that already exists in the cluster to Kix packages without taking ownership of it."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import importExistingService from '/src/snippets/how-to/adoption/cluster/importExistingService.json';
+import consumeImportedService from '/src/snippets/how-to/adoption/client-package/consumeImportedService.json';
+import check from '/src/command-output/how-to/adoption-import-service/check.json';
+import listPackages from '/src/command-output/how-to/adoption-import-service/list-packages.json';
+import clientConfig from '/src/command-output/how-to/adoption-import-service/client-config.json';
+
+This guide assumes the Service already exists and its name, namespace, and
+port are stable. Use an import when another system owns that Service and Kix
+packages need its connection details.
+
+## Declare the import
+
+Add an instance whose package is created with `kix.mkImport`:
+
+<Snippet {...importExistingService} />
+
+Set `kind` and `apiVersion` to describe the existing resource. The `out`
+attributes form the interface that consuming packages receive. They must
+match the Service in the target cluster.
+
+The `legacyApi` alias lets a package request this import with a build argument
+of the same name. Choose an alias that describes the dependency's role rather
+than its location.
+
+## Use the imported outputs
+
+Accept the alias as a package build argument and read the values you need:
+
+<Snippet {...consumeImportedService} />
+
+This example writes the imported endpoint into a client ConfigMap. A workload
+could use the same values in environment variables or generated
+configuration.
+
+## Check the cluster
+
+Evaluate the cluster before deploying it:
+
+<Command {...check} />
+
+Confirm that Kix classifies the instance as an import:
+
+<Command {...listPackages} />
+
+Render the manifests to verify the value received by the client:
+
+<Command {...clientConfig} />
+
+Kix renders a PackageInstance marker for `legacy-api`, but it does not render
+or update the Service itself. Keep the Service in the lifecycle of the system
+that already owns it.
+
+:::note[Background]
+See [Imports and existing cluster resources](/docs/tutorials/13-imports-and-existing-cluster-resources/)
+for a guided introduction, and [Imports vs managed packages](/docs/explanation/imports-vs-managed-packages/)
+for the ownership model.
+:::

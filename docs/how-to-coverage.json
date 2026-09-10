@@ -14,7 +14,7 @@
     { "page": "adopt-existing-resources/add-explicit-ordering-with-extradeps", "scenario": "adoption", "status": "planned" },
     { "page": "adopt-existing-resources/handle-server-side-apply-conflicts-safely", "scenario": "adoption", "status": "planned" },
     { "page": "adopt-existing-resources/handle-stateful-migration-prompts-safely", "scenario": "adoption", "status": "planned" },
-    { "page": "adopt-existing-resources/import-an-existing-service-with-kix-mkimport", "scenario": "adoption", "status": "planned" },
+    { "page": "adopt-existing-resources/import-an-existing-service-with-kix-mkimport", "scenario": "adoption", "status": "implemented", "snippets": ["importExistingService", "consumeImportedService"], "offlineCaptures": ["how-to/adoption-import-service/check", "how-to/adoption-import-service/list-packages", "how-to/adoption-import-service/client-config"] },
     { "page": "adopt-existing-resources/patch-package-output-with-overlays", "scenario": "adoption", "status": "planned" },
     { "page": "adopt-existing-resources/preserve-existing-selectors", "scenario": "adoption", "status": "planned" },
     { "page": "adopt-existing-resources/preserve-helm-compatible-labels", "scenario": "adoption", "status": "planned" },

@@ -1,0 +1,19 @@
+{
+  "id": "how-to/adoption-import-service/client-config",
+  "group": "how-to/adoption-import-service",
+  "page": "/docs/how-to/adopt-existing-resources/import-an-existing-service-with-kix-mkimport/",
+  "cwd": "kix-examples/",
+  "generator": "offline",
+  "outputExcerpt": true,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix build how-to-adoption --output json",
+      "stdout": "{\n  \"apiVersion\": \"v1\",\n  \"kind\": \"ConfigMap\",\n  \"metadata\": {\n    \"name\": \"legacy-api-client\",\n    \"namespace\": \"apps\"\n  },\n  \"data\": {\n    \"endpoint\": \"http://legacy-api.legacy.svc.cluster.local:8080\"\n  }\n}\n",
+      "stderr": "",
+      "stdoutDrift": "\"apiVersion\": \"v1\",\n\"data\": {\n\"endpoint\": \"http://legacy-api.legacy.svc.cluster.local:8080\"\n\"kind\": \"ConfigMap\",\n\"metadata\": {\n\"name\": \"legacy-api-client\",\n\"namespace\": \"apps\"\n{\n}\n},\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

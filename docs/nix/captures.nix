@@ -1310,6 +1310,47 @@
   }
 
   {
+    group = "how-to/adoption-import-service";
+    page = "/docs/how-to/adopt-existing-resources/import-an-existing-service-with-kix-mkimport/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "check";
+        run = [
+          "kix"
+          "check"
+          "how-to-adoption"
+        ];
+      }
+      {
+        capture = "list-packages";
+        run = [
+          "kix"
+          "list"
+          "packages"
+          "--cluster"
+          "how-to-adoption"
+        ];
+      }
+      {
+        capture = "client-config";
+        run = [
+          "kix"
+          "build"
+          "how-to-adoption"
+          "--output"
+          "json"
+        ];
+        stdoutJq = ''
+          .[]
+          | select(.kind == "ConfigMap" and .metadata.name == "legacy-api-client")
+          | {apiVersion, kind, metadata: {name: .metadata.name, namespace: .metadata.namespace}, data}
+        '';
+      }
+    ];
+  }
+
+  {
     group = "how-to/application-typed-options";
     page = "/docs/how-to/author-packages-and-clusters/add-typed-package-options/";
     cwd = "kix-examples/";

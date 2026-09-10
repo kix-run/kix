@@ -1,0 +1,19 @@
+{
+  "id": "how-to/adoption-import-service/list-packages",
+  "group": "how-to/adoption-import-service",
+  "page": "/docs/how-to/adopt-existing-resources/import-an-existing-service-with-kix-mkimport/",
+  "cwd": "kix-examples/",
+  "generator": "offline",
+  "outputExcerpt": false,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix list packages --cluster how-to-adoption",
+      "stdout": " NAME              VERSION  STATUS               \n client            1.0.0    installed [apps]     \n legacy-api        -        import [legacy]      \n platform-dns      -        import [kube-system] \n platform-storage  -        import [kube-system] \n",
+      "stderr": "",
+      "stdoutDrift": "NAME VERSION STATUS\nclient 1.0.0 installed [apps]\nlegacy-api - import [legacy]\nplatform-dns - import [kube-system]\nplatform-storage - import [kube-system]\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}
