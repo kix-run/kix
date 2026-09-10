@@ -1059,6 +1059,48 @@
   }
 
   {
+    group = "how-to/platform-managed-secrets";
+    page = "/docs/how-to/platform-capabilities/use-kix-managed-secrets/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "check";
+        run = [
+          "kix"
+          "check"
+          "how-to-platform-secrets"
+        ];
+      }
+    ];
+  }
+
+  {
+    group = "how-to/platform-external-secrets";
+    page = "/docs/how-to/platform-capabilities/use-externally-managed-secrets/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "check";
+        run = [
+          "kix"
+          "check"
+          "how-to-platform-secrets"
+        ];
+      }
+      {
+        capture = "graph";
+        run = [
+          "kix"
+          "graph"
+          "how-to-platform-secrets"
+          "--format"
+          "tree"
+        ];
+      }
+    ];
+  }
+
+  {
     group = "how-to/application-typed-options";
     page = "/docs/how-to/author-packages-and-clusters/add-typed-package-options/";
     cwd = "kix-examples/";

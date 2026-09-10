@@ -1,0 +1,19 @@
+{
+  "id": "how-to/platform-managed-secrets/check",
+  "group": "how-to/platform-managed-secrets",
+  "page": "/docs/how-to/platform-capabilities/use-kix-managed-secrets/",
+  "cwd": "kix-examples/",
+  "generator": "offline",
+  "outputExcerpt": false,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix check how-to-platform-secrets",
+      "stdout": " TOOL         RESULT  DETAILS                                     \n eval         pass    12 manifests evaluated                      \n kubeconform  pass    skipped (not installed)                     \n pluto        pass    skipped (not installed)                     \n kyverno      pass    skipped (not installed)                     \n scorecard    skip    scorecard not enabled in cluster definition \n",
+      "stderr": "",
+      "stdoutDrift": "TOOL RESULT DETAILS\neval pass 12 manifests evaluated\nkubeconform pass skipped (not installed)\nkyverno pass skipped (not installed)\npluto pass skipped (not installed)\nscorecard skip scorecard not enabled in cluster definition\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}
