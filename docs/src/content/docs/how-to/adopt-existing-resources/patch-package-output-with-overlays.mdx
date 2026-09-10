@@ -1,4 +1,58 @@
 ---
 title: "Patch package output with overlays"
-description: TODO
+description: "Change one instance's built resources with a parts overlay when the package has no suitable option."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import patchPackageOutput from '/src/snippets/how-to/adoption/cluster/patchPackageOutput.json';
+import check from '/src/command-output/how-to/adoption-parts-overlay/check.json';
+import patchedConfig from '/src/command-output/how-to/adoption-parts-overlay/patched-config.json';
+
+Use `partsOverlays` for a local change that the package does not expose through
+its typed `config` options. The overlay runs after the package builds and can
+replace returned parts for one instance.
+
+## Add a parts overlay
+
+This overlay rebuilds one ConfigMap with an adoption annotation while
+preserving its generated data:
+
+<Snippet {...patchPackageOutput} />
+
+An overlay receives three arguments:
+
+- `scope` contains the resource builders for this instance.
+- `self` is the final recursive package result. Name it `_self` when the
+  overlay does not need it.
+- `base` is the package result before this overlay runs.
+
+The example reads the original resource fields from `base.clientConfig`,
+creates `patchedConfig`, then replaces both the named part and `root`. Updating
+`root` is necessary because the original package uses that ConfigMap as its
+root resource.
+
+Keep the patch as narrow as possible. Preserve every field the package owns
+unless the adoption requires changing it.
+
+## Check the result
+
+Evaluate the cluster after adding the overlay:
+
+<Command {...check} />
+
+Render the patched resource:
+
+<Command {...patchedConfig} />
+
+The output retains the endpoint from the package and adds the
+`example.com/adopted-from` annotation.
+
+If several instances need the same change, add a typed option to the package
+instead. If every package in the cluster needs a policy-driven transform,
+consider `globalPartsOverlays` rather than repeating an instance overlay.
+
+:::caution
+`partsOverlays` depends on the package's returned part names and shapes. Review
+the overlay whenever the package changes.
+:::

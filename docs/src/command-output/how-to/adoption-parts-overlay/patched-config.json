@@ -1,0 +1,19 @@
+{
+  "id": "how-to/adoption-parts-overlay/patched-config",
+  "group": "how-to/adoption-parts-overlay",
+  "page": "/docs/how-to/adopt-existing-resources/patch-package-output-with-overlays/",
+  "cwd": "kix-examples/",
+  "generator": "offline",
+  "outputExcerpt": true,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix build how-to-adoption --output json",
+      "stdout": "{\n  \"apiVersion\": \"v1\",\n  \"kind\": \"ConfigMap\",\n  \"metadata\": {\n    \"name\": \"legacy-api-client\",\n    \"namespace\": \"apps\",\n    \"annotations\": {\n      \"example.com/adopted-from\": \"legacy-config\"\n    }\n  },\n  \"data\": {\n    \"endpoint\": \"http://legacy-api.legacy.svc.cluster.local:8080\"\n  }\n}\n",
+      "stderr": "",
+      "stdoutDrift": "\"annotations\": {\n\"apiVersion\": \"v1\",\n\"data\": {\n\"endpoint\": \"http://legacy-api.legacy.svc.cluster.local:8080\"\n\"example.com/adopted-from\": \"legacy-config\"\n\"kind\": \"ConfigMap\",\n\"metadata\": {\n\"name\": \"legacy-api-client\",\n\"namespace\": \"apps\",\n{\n}\n},\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

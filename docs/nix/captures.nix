@@ -1310,6 +1310,48 @@
   }
 
   {
+    group = "how-to/adoption-parts-overlay";
+    page = "/docs/how-to/adopt-existing-resources/patch-package-output-with-overlays/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "check";
+        run = [
+          "kix"
+          "check"
+          "how-to-adoption"
+        ];
+      }
+      {
+        capture = "patched-config";
+        run = [
+          "kix"
+          "build"
+          "how-to-adoption"
+          "--output"
+          "json"
+        ];
+        stdoutJq = ''
+          .[]
+          | select(.kind == "ConfigMap" and .metadata.name == "legacy-api-client")
+          | {
+              apiVersion,
+              kind,
+              metadata: {
+                name: .metadata.name,
+                namespace: .metadata.namespace,
+                annotations: {
+                  "example.com/adopted-from": .metadata.annotations["example.com/adopted-from"]
+                }
+              },
+              data
+            }
+        '';
+      }
+    ];
+  }
+
+  {
     group = "how-to/adoption-helm-labels";
     page = "/docs/how-to/adopt-existing-resources/preserve-helm-compatible-labels/";
     cwd = "kix-examples/";
