@@ -1310,6 +1310,43 @@
   }
 
   {
+    group = "how-to/adoption-preserve-selectors";
+    page = "/docs/how-to/adopt-existing-resources/preserve-existing-selectors/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "check";
+        run = [
+          "kix"
+          "check"
+          "how-to-adoption"
+        ];
+      }
+      {
+        capture = "deployment";
+        run = [
+          "kix"
+          "build"
+          "how-to-adoption"
+          "--output"
+          "json"
+        ];
+        stdoutJq = ''
+          .[]
+          | select(.kind == "Deployment" and .metadata.name == "legacy-web")
+          | {
+              apiVersion,
+              kind,
+              metadata: {name: .metadata.name, namespace: .metadata.namespace},
+              selector: .spec.selector,
+              podLabels: .spec.template.metadata.labels
+            }
+        '';
+      }
+    ];
+  }
+
+  {
     group = "how-to/adoption-import-service";
     page = "/docs/how-to/adopt-existing-resources/import-an-existing-service-with-kix-mkimport/";
     cwd = "kix-examples/";

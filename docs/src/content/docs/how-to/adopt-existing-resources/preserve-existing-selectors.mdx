@@ -1,4 +1,59 @@
 ---
 title: "Preserve existing selectors"
-description: TODO
+description: "Keep an existing workload's immutable selector when moving it under Kix management."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import preserveExistingSelectors from '/src/snippets/how-to/adoption/cluster/preserveExistingSelectors.json';
+import check from '/src/command-output/how-to/adoption-preserve-selectors/check.json';
+import deployment from '/src/command-output/how-to/adoption-preserve-selectors/deployment.json';
+
+Kubernetes does not allow a Deployment or StatefulSet selector to change in
+place. Before Kix takes ownership of an existing workload, configure its
+instance to retain that selector.
+
+## Read the current selector
+
+Get the selector from the live workload:
+
+<Command
+  commands={[
+    "kubectl get deployment legacy-web -n apps -o jsonpath='{.spec.selector.matchLabels}'",
+  ]}
+/>
+
+Use the labels from `spec.selector.matchLabels`, not every label on the
+workload. Confirm that the Pod template has the same labels before continuing.
+
+## Set the selector on the instance
+
+Copy those labels into `selectorLabels`:
+
+<Snippet {...preserveExistingSelectors} />
+
+Kix passes this value to package builders as `scope.selectorLabels`. Workload
+helpers use it for both `spec.selector.matchLabels` and the Pod template
+labels, and Service helpers use it when selecting the workload.
+
+The package must build its selectors from `scope.selectorLabels` for this
+instance option to take effect.
+
+## Check before deploying
+
+Evaluate the cluster:
+
+<Command {...check} />
+
+Render the workload and compare both label sets with the live Deployment:
+
+<Command {...deployment} />
+
+The rendered selector and Pod labels contain the existing `app` and `tier`
+values. Run `kix diff how-to-adoption` against the target cluster and confirm
+that the selector is unchanged before deploying.
+
+:::caution
+Do not deploy if the diff replaces the workload or changes
+`spec.selector.matchLabels`. Correct `selectorLabels` first.
+:::
