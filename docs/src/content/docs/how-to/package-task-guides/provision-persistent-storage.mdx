@@ -1,4 +1,67 @@
 ---
 title: "Provision persistent storage"
-description: TODO
+description: "Create a first-class PVC instance and mount it into an application package."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import persistentStorageInstances from '/src/snippets/how-to/package-stacks/storage-cluster/persistentStorageInstances.json';
+import persistentVolumeMount from '/src/snippets/how-to/package-stacks/storage-app/persistentVolumeMount.json';
+import persistentStorageDeployment from '/src/snippets/how-to/package-stacks/storage-app/persistentStorageDeployment.json';
+import check from '/src/command-output/how-to/package-storage/check.json';
+import storageResources from '/src/command-output/how-to/package-storage/storage-resources.json';
+
+Provision storage as a `persistent-volume-claim` instance, then consume that
+instance as a package dependency. This keeps the claim visible in the deploy
+graph and lets Kix treat it as stateful during change planning.
+
+This guide assumes your target cluster flavor provides a default StorageClass,
+or that you know the StorageClass name to request.
+
+## Add the PVC and application instances
+
+Create the PVC in the same namespace as the application:
+
+<Snippet {...persistentStorageInstances} />
+
+The PVC package advertises the `storage` alias. The application's `storage`
+build argument therefore resolves to the claim in the same namespace.
+
+Set `size` to a Kubernetes storage quantity and choose access modes supported
+by the storage provider. If the cluster does not provide a default through its
+flavor, or the application needs another class, set
+`config.storageClassName = "<class-name>"` on the PVC instance.
+
+## Create the package mount
+
+Accept `storage` in the package's build arguments, then create a PVC mount:
+
+<Snippet {...persistentVolumeMount} />
+
+The mount uses the resolved claim's name and carries its dependency edge.
+
+Apply the mount before sealing the workload:
+
+<Snippet {...persistentStorageDeployment} />
+
+`kix.withMounts` adds the PVC volume and the matching container mount. Use
+`kix.withMountsOn` when only one container in a multi-container pod should
+receive it.
+
+## Check the result
+
+Evaluate the cluster:
+
+<Command {...check} />
+
+Inspect the generated claim and workload volume:
+
+<Command {...storageResources} />
+
+In this kind-based example, the flavor supplies the `standard` StorageClass.
+The PVC requests 5 GiB, and the Deployment mounts it at `/var/lib/app`.
+
+The kind StorageClass stores data inside the kind node. It is suitable for
+local testing, but deleting the kind cluster deletes that data. Check the
+reclaim policy and failure behavior of your real storage provider before using
+the same configuration for application data.

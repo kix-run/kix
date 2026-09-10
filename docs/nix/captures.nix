@@ -1229,6 +1229,53 @@
   }
 
   {
+    group = "how-to/package-storage";
+    page = "/docs/how-to/package-task-guides/provision-persistent-storage/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "check";
+        run = [
+          "kix"
+          "check"
+          "how-to-package-storage"
+        ];
+      }
+      {
+        capture = "storage-resources";
+        run = [
+          "kix"
+          "build"
+          "how-to-package-storage"
+          "--output"
+          "json"
+        ];
+        stdoutJq = ''
+          [
+            .[]
+            | select(
+                .metadata.namespace == "storage-example"
+                and (.kind == "PersistentVolumeClaim" or .kind == "Deployment")
+              )
+            | if .kind == "PersistentVolumeClaim" then
+                {apiVersion, kind, metadata: {name: .metadata.name, namespace: .metadata.namespace}, spec}
+              else
+                {
+                  apiVersion,
+                  kind,
+                  metadata: {name: .metadata.name, namespace: .metadata.namespace},
+                  podSpec: {
+                    containers: [.spec.template.spec.containers[] | {name, volumeMounts}],
+                    volumes: .spec.template.spec.volumes
+                  }
+                }
+              end
+          ]'';
+      }
+    ];
+  }
+
+  {
     group = "how-to/application-typed-options";
     page = "/docs/how-to/author-packages-and-clusters/add-typed-package-options/";
     cwd = "kix-examples/";

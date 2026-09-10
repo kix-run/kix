@@ -1,0 +1,19 @@
+{
+  "id": "how-to/package-storage/storage-resources",
+  "group": "how-to/package-storage",
+  "page": "/docs/how-to/package-task-guides/provision-persistent-storage/",
+  "cwd": "kix-examples/",
+  "generator": "offline",
+  "outputExcerpt": true,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix build how-to-package-storage --output json",
+      "stdout": "[\n  {\n    \"apiVersion\": \"apps/v1\",\n    \"kind\": \"Deployment\",\n    \"metadata\": {\n      \"name\": \"worker\",\n      \"namespace\": \"storage-example\"\n    },\n    \"podSpec\": {\n      \"containers\": [\n        {\n          \"name\": \"worker\",\n          \"volumeMounts\": [\n            {\n              \"mountPath\": \"/var/lib/app\",\n              \"name\": \"storage\"\n            }\n          ]\n        }\n      ],\n      \"volumes\": [\n        {\n          \"name\": \"storage\",\n          \"persistentVolumeClaim\": {\n            \"claimName\": \"storage\"\n          }\n        }\n      ]\n    }\n  },\n  {\n    \"apiVersion\": \"v1\",\n    \"kind\": \"PersistentVolumeClaim\",\n    \"metadata\": {\n      \"name\": \"storage\",\n      \"namespace\": \"storage-example\"\n    },\n    \"spec\": {\n      \"accessModes\": [\n        \"ReadWriteOnce\"\n      ],\n      \"resources\": {\n        \"requests\": {\n          \"storage\": \"5Gi\"\n        }\n      },\n      \"storageClassName\": \"standard\"\n    }\n  }\n]\n",
+      "stderr": "",
+      "stdoutDrift": "\"ReadWriteOnce\"\n\"accessModes\": [\n\"apiVersion\": \"apps/v1\",\n\"apiVersion\": \"v1\",\n\"claimName\": \"storage\"\n\"containers\": [\n\"kind\": \"Deployment\",\n\"kind\": \"PersistentVolumeClaim\",\n\"metadata\": {\n\"mountPath\": \"/var/lib/app\",\n\"name\": \"storage\"\n\"name\": \"storage\",\n\"name\": \"worker\",\n\"namespace\": \"storage-example\"\n\"persistentVolumeClaim\": {\n\"podSpec\": {\n\"requests\": {\n\"resources\": {\n\"spec\": {\n\"storage\": \"5Gi\"\n\"storageClassName\": \"standard\"\n\"volumeMounts\": [\n\"volumes\": [\n[\n]\n],\n{\n}\n},\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}
