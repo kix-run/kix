@@ -35,6 +35,17 @@ let
   eval = import ../eval { inherit lib k8s; };
   kixlib = import ../vocab { inherit lib; };
 
+  # The *public* surface, as a consuming flake sees it through `mkFlake`.
+  # The rest of this matrix imports subtrees directly, which is how
+  # `mergeFragments` managed to be implemented, documented and unreachable
+  # all at once: no test ever looked at what `kix/lib/default.nix` exports.
+  # `pkgs` is forced only by the helm and manifest-writing attributes, so a
+  # stub keeps this eval-only like the rest of the file.
+  publicKix = import ../default.nix {
+    inherit lib;
+    pkgs = { };
+  };
+
   # ---------------------------------------------------------------- fixtures
 
   containerBase = {
@@ -2689,6 +2700,113 @@ let
         && !(rule.appliesTo { resource.kind = "ConfigMap"; })
       )
       || throw "placeholder ratchet misjudged: caught=${builtins.toJSON (map judge caught)} clean=${builtins.toJSON (map judge clean)}";
+
+    # ---------------------------------------------------------------
+    # The public export surface (kix/lib/default.nix)
+    #
+    # These go through `publicKix` rather than the subtree imports the rest
+    # of the matrix uses, because the bug they cover was an export never
+    # made, not an implementation that was wrong.
+
+    t73-public-export-has-mergefragments =
+      publicKix ? mergeFragments
+      || throw (
+        "kix.mergeFragments is documented (HANDBOOK, FEATURE-CATALOG) but not exported; "
+        + "public surface is: "
+        + builtins.concatStringsSep ", " (builtins.attrNames publicKix)
+      );
+
+    # Two fragments contributing to one namespace merge key by key, at any
+    # depth, rather than one winning wholesale.
+    t74-mergefragments-merges-namespaces-recursively =
+      let
+        merged = publicKix.mergeFragments {
+          fragments = [
+            { namespaces.apps.labels.tier = "web"; }
+            { namespaces.apps.labels.owner = "platform"; }
+            { namespaces.other.labels.tier = "batch"; }
+          ];
+        };
+      in
+      merged.namespaces == {
+        apps.labels = {
+          tier = "web";
+          owner = "platform";
+        };
+        other.labels.tier = "batch";
+      }
+      || throw "namespaces did not deep-merge: ${builtins.toJSON merged.namespaces}";
+
+    # `namespacePolicies` lands over the merged fragments, which is how a
+    # platform owner keeps the last word.
+    t75-mergefragments-applies-namespace-policies =
+      let
+        merged = publicKix.mergeFragments {
+          fragments = [ { namespaces.apps.labels.tier = "web"; } ];
+          namespacePolicies.apps.labels.managed = "platform";
+        };
+      in
+      merged.namespaces.apps.labels == {
+        tier = "web";
+        managed = "platform";
+      }
+      || throw "policies did not apply: ${builtins.toJSON merged.namespaces}";
+
+    # The same (namespace, instance) from two fragments is a composition
+    # mistake. Picking one silently would be the worst outcome.
+    t76-mergefragments-refuses-instance-collision =
+      let
+        merged = publicKix.mergeFragments {
+          fragments = [
+            { instances.apps.web.package = dnsPackage; }
+            { instances.apps.web.package = dnsPackage; }
+          ];
+        };
+      in
+      !(builtins.tryEval (builtins.deepSeq (merged.instances { }) true)).success
+      || throw "two fragments defined apps.web and the collision was not caught";
+
+    # Two fragments setting one namespace leaf to different values is the
+    # policy conflict the deep merge exists to catch.
+    t77-mergefragments-refuses-namespace-leaf-conflict =
+      let
+        merged = publicKix.mergeFragments {
+          fragments = [
+            { namespaces.apps.labels.tier = "web"; }
+            { namespaces.apps.labels.tier = "batch"; }
+          ];
+        };
+      in
+      !(builtins.tryEval (builtins.deepSeq merged.namespaces true)).success
+      || throw "conflicting values for apps.labels.tier were merged instead of refused";
+
+    # The point of the whole thing: a composition goes straight into a
+    # cluster through the public API and evaluates. `instances` is a
+    # function so a fragment can take `ref`; calling it with `{ }` is the
+    # shape the handbook documents.
+    t78-mergefragments-composes-a-buildable-cluster =
+      let
+        composition = publicKix.mergeFragments {
+          fragments = [
+            {
+              namespaces.fragns.labels.tier = "web";
+              instances.fragns.dns.package = dnsPackage;
+            }
+          ];
+        };
+        cluster = publicKix.buildCluster {
+          name = "fragment-composition";
+          modules = [
+            {
+              namespaces = composition.namespaces;
+              instances = composition.instances { };
+            }
+          ];
+        };
+        ms = manifests cluster;
+      in
+      hasName "dns" ms
+      || throw "composed cluster produced no dns resource; got: ${builtins.toJSON (namesOf ms)}";
   }
   // import ./validate.nix {
     inherit
