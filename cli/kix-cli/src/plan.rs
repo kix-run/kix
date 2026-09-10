@@ -275,7 +275,9 @@ fn diff_resource_maps(
 
     for (id, new_val) in new_res {
         if let Some(old_val) = old_res.get(id) {
-            let diffs = structural_diff(new_val, old_val, "$", config);
+            // Old first: `config` labels side a "old" and side b "new",
+            // and the whole report reads as what a deploy would change.
+            let diffs = structural_diff(old_val, new_val, "$", config);
             if diffs.is_empty() {
                 continue;
             }
@@ -944,6 +946,79 @@ mod diff_graph_tests {
                 json!({"replicas": 2}),
             ),
         ]
+    }
+
+    /// The reported difference has to read old-to-new: the value the
+    /// cluster has now on the `old` side, the value the build wants on
+    /// the `new` side. Rendering them the other way round tells the
+    /// reader to expect the opposite of what a deploy would do.
+    #[test]
+    fn a_changed_value_is_reported_from_old_to_new() {
+        let mut new = baseline();
+        new[0] = record("c-new", &h("rec2"));
+        new[3] = stamped(
+            "ConfigMap",
+            "app",
+            "web",
+            ("app", "web"),
+            &h("cm2"),
+            json!({"k": "wanted"}),
+        );
+        let d = diff_of(&baseline(), &new);
+
+        let change = d
+            .changed
+            .iter()
+            .find(|c| c.key == "app/web")
+            .expect("web package changed");
+        let (_, diffs) = change
+            .resource_diffs
+            .iter()
+            .find(|(id, _)| id.kind == "ConfigMap")
+            .expect("ConfigMap diff");
+        let d0 = diffs.iter().find(|d| d.path == "$.spec.k").expect("spec.k");
+
+        assert_eq!(
+            d0.a_value.as_ref().and_then(|v| v.as_str()),
+            Some("v"),
+            "side a is labelled `old`, so it must carry what the old side had"
+        );
+        assert_eq!(
+            d0.b_value.as_ref().and_then(|v| v.as_str()),
+            Some("wanted"),
+            "side b is labelled `new`, so it must carry what the build wants"
+        );
+    }
+
+    /// A field only the build has is an addition, not a removal.
+    #[test]
+    fn a_field_only_the_new_side_has_is_an_addition() {
+        let mut new = baseline();
+        new[0] = record("c-new", &h("rec2"));
+        new[3] = stamped(
+            "ConfigMap",
+            "app",
+            "web",
+            ("app", "web"),
+            &h("cm2"),
+            json!({"k": "v", "added": "yes"}),
+        );
+        let d = diff_of(&baseline(), &new);
+        let change = d.changed.iter().find(|c| c.key == "app/web").unwrap();
+        let (_, diffs) = change
+            .resource_diffs
+            .iter()
+            .find(|(id, _)| id.kind == "ConfigMap")
+            .unwrap();
+        let d0 = diffs
+            .iter()
+            .find(|d| d.path == "$.spec.added")
+            .expect("spec.added");
+        assert_eq!(
+            d0.kind,
+            kix::manifest::diff::DiffKind::ExtraInB,
+            "a field the build adds must read as extra on the new side"
+        );
     }
 
     #[test]
