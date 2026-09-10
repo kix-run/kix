@@ -1,0 +1,1 @@
+{"childRegions":[],"code":"  options.metrics = kix.options.monitor;","endLine":20,"lang":"nix","source":"how-to/platform/monitoring-app.nix","startLine":20,"url":"https://github.com/kix-run/kix-examples/blob/22464a9587af3c1584a4d518c335de8887a55784/how-to/platform/monitoring-app.nix#L20-L20"}

@@ -1161,6 +1161,36 @@
   }
 
   {
+    group = "how-to/platform-monitoring";
+    page = "/docs/how-to/platform-capabilities/auto-monitor-a-service/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "check";
+        run = [
+          "kix"
+          "check"
+          "how-to-platform-monitoring"
+        ];
+      }
+      {
+        capture = "service-monitor";
+        run = [
+          "kix"
+          "build"
+          "how-to-platform-monitoring"
+          "--output"
+          "json"
+        ];
+        stdoutJq = ''
+          .[]
+          | select(.kind == "ServiceMonitor" and .metadata.namespace == "monitor-example")
+          | {apiVersion, kind, metadata: {name: .metadata.name, namespace: .metadata.namespace}, spec}'';
+      }
+    ];
+  }
+
+  {
     group = "how-to/application-typed-options";
     page = "/docs/how-to/author-packages-and-clusters/add-typed-package-options/";
     cwd = "kix-examples/";

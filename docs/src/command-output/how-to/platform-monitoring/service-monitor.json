@@ -1,0 +1,19 @@
+{
+  "id": "how-to/platform-monitoring/service-monitor",
+  "group": "how-to/platform-monitoring",
+  "page": "/docs/how-to/platform-capabilities/auto-monitor-a-service/",
+  "cwd": "kix-examples/",
+  "generator": "offline",
+  "outputExcerpt": true,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix build how-to-platform-monitoring --output json",
+      "stdout": "{\n  \"apiVersion\": \"monitoring.coreos.com/v1\",\n  \"kind\": \"ServiceMonitor\",\n  \"metadata\": {\n    \"name\": \"metrics\",\n    \"namespace\": \"monitor-example\"\n  },\n  \"spec\": {\n    \"endpoints\": [\n      {\n        \"interval\": \"30s\",\n        \"path\": \"/metrics\",\n        \"port\": \"metrics\",\n        \"scheme\": \"http\"\n      }\n    ],\n    \"namespaceSelector\": {\n      \"matchNames\": [\n        \"monitor-example\"\n      ]\n    },\n    \"selector\": {\n      \"matchLabels\": {\n        \"app.kubernetes.io/instance\": \"metrics\",\n        \"app.kubernetes.io/managed-by\": \"kix\"\n      }\n    }\n  }\n}\n",
+      "stderr": "",
+      "stdoutDrift": "\"apiVersion\": \"monitoring.coreos.com/v1\",\n\"app.kubernetes.io/instance\": \"metrics\",\n\"app.kubernetes.io/managed-by\": \"kix\"\n\"endpoints\": [\n\"interval\": \"<DURATION>\",\n\"kind\": \"ServiceMonitor\",\n\"matchLabels\": {\n\"matchNames\": [\n\"metadata\": {\n\"monitor-example\"\n\"name\": \"metrics\",\n\"namespace\": \"monitor-example\"\n\"namespaceSelector\": {\n\"path\": \"/metrics\",\n\"port\": \"metrics\",\n\"scheme\": \"http\"\n\"selector\": {\n\"spec\": {\n]\n],\n{\n}\n},\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

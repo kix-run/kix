@@ -1,4 +1,75 @@
 ---
 title: "Auto-monitor a service"
-description: TODO
+description: "Generate a ServiceMonitor from a package Service with kix.monitor."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import monitorOption from '/src/snippets/how-to/platform/monitoring-app/monitorOption.json';
+import monitorBuildEntry from '/src/snippets/how-to/platform/monitoring-app/monitorBuildEntry.json';
+import prometheusOperatorInstance from '/src/snippets/how-to/platform/monitoring-cluster/prometheusOperatorInstance.json';
+import monitoredApplicationInstance from '/src/snippets/how-to/platform/monitoring-cluster/monitoredApplicationInstance.json';
+import check from '/src/command-output/how-to/platform-monitoring/check.json';
+import serviceMonitor from '/src/command-output/how-to/platform-monitoring/service-monitor.json';
+
+Use `kix.monitor` when a package exposes Prometheus metrics through a Service.
+Kix creates a ServiceMonitor whose selector, namespace, and dependency edges
+come from that Service.
+
+This guide assumes:
+
+- The package returns a Service named `service` with a port named `metrics`.
+- The cluster has a Prometheus server configured to select ServiceMonitors.
+
+## Add monitoring options to the package
+
+Add the standard monitoring options:
+
+<Snippet {...monitorOption} />
+
+These options let a cluster author enable or disable monitoring and set a
+scrape interval for each instance.
+
+## Generate the ServiceMonitor
+
+Add `kix.monitor` to the package's `build` list:
+
+<Snippet {...monitorBuildEntry} />
+
+Set `service` to the returned Service part and `port` to one of that Service's
+named ports. The default metrics path is `/metrics`.
+
+## Provide the ServiceMonitor API
+
+The `prometheus` dependency must expose the ServiceMonitor builder used by
+`kix.monitor`. Add Prometheus Operator when the cluster does not already have
+a compatible provider:
+
+<Snippet {...prometheusOperatorInstance} />
+
+This instance installs Prometheus Operator and its CRDs. It does not create a
+Prometheus server. Use the cluster's existing server or install a monitoring
+stack that includes one.
+
+## Configure the application instance
+
+Set the scrape interval on the application instance:
+
+<Snippet {...monitoredApplicationInstance} />
+
+Omit `config.metrics.interval` to let Prometheus use its configured default.
+Set `config.metrics.enabled = false` to suppress the ServiceMonitor for one
+instance.
+
+## Check the result
+
+Evaluate the cluster:
+
+<Command {...check} />
+
+Inspect the generated ServiceMonitor:
+
+<Command {...serviceMonitor} />
+
+The monitor selects the `metrics` Service in `monitor-example` and scrapes its
+named `metrics` port at `/metrics` every 30 seconds.
