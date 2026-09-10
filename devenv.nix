@@ -21,6 +21,13 @@ let
     pkgs.nix.libs.nix-fetchers-c
     pkgs.nix.libs.nix-main-c
   ];
+
+  # A stable, readable name for this checkout: the directory name plus a
+  # short digest of its absolute path, so two worktrees of kixpkgs never
+  # collide and neither name is a mystery when you look in ~/.cache.
+  targetDirKey =
+    "${builtins.baseNameOf config.devenv.root}-"
+    + builtins.substring 0 12 (builtins.hashString "sha256" config.devenv.root);
 in
 {
   packages = [
@@ -50,11 +57,29 @@ in
   # devenv's rustc and a host rustup toolchain are rarely the same version.
   # Cargo fingerprints include the compiler version, so if both write to
   # cli/target/ each one invalidates the other's cache and every build from
-  # either side starts from scratch — the shared target dir is precisely what
+  # either side starts from scratch. The shared target dir is precisely what
   # keeps it cold. A separate dir costs disk once and lets both stay warm,
   # and (unlike pinning the two toolchains to match) does not silently
   # re-break the next time either side moves.
-  env.CARGO_TARGET_DIR = "${config.devenv.root}/cli/target-devenv";
+  #
+  # It lives under the user's cache dir rather than in the checkout, because
+  # a `path:` flakeref copies a directory into the Nix store with NO
+  # filtering. .gitignore is not consulted, so an in-repo target dir is
+  # copied verbatim, and a fresh copy is made every time any byte of the
+  # tree changes. On 9 Sep 2026 that left two `-source` paths of 47.7 GB and
+  # 48.4 GB in the store, against a 40 MB git-filtered tree of the same
+  # commit, and filled a 1.9 TB disk overnight. Nothing in the Nix output
+  # names the cause. `.claude/hooks/nix_store_guard.py` refuses the command
+  # that would do it; keeping the artifacts out of the tree is the other
+  # half, and the half that also protects `nix build` from a stale checkout.
+  #
+  # The path is keyed on this checkout so that worktrees do not share one
+  # flat `debug/deps` directory, which is its own slow-build problem
+  # (rust-lang/cargo#16665, see .claude/hooks/cargo_target_guard.py).
+  #
+  # Set in enterShell rather than `env` so that `$XDG_CACHE_HOME` and `$HOME`
+  # are expanded by the shell: devenv evaluates hermetically by default, so
+  # Nix cannot read them at eval time.
 
   # Bindgen needs libclang to generate FFI bindings from the Nix C headers.
   # BINDGEN_EXTRA_CLANG_ARGS is required because the headers use C++20 features.
@@ -152,6 +177,9 @@ in
 
   # Install lefthook git hooks on shell entry
   enterShell = ''
+    export CARGO_TARGET_DIR="''${XDG_CACHE_HOME:-$HOME/.cache}/kix-cargo-target/${targetDirKey}"
+    mkdir -p "$CARGO_TARGET_DIR"
+
     # lefthook install >/dev/null 2>&1 || true
   '';
 
