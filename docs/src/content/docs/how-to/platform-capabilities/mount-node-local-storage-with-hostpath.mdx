@@ -1,4 +1,69 @@
 ---
 title: "Mount node-local storage with `hostPath`"
-description: TODO
+description: "Mount a directory from a Kubernetes node into a package workload."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import hostPathMount from '/src/snippets/how-to/platform/hostpath-app/hostPathMount.json';
+import hostPathDeployment from '/src/snippets/how-to/platform/hostpath-app/hostPathDeployment.json';
+import hostPathApplicationInstance from '/src/snippets/how-to/platform/hostpath-cluster/hostPathApplicationInstance.json';
+import check from '/src/command-output/how-to/platform-hostpath/check.json';
+import deployment from '/src/command-output/how-to/platform-hostpath/deployment.json';
+
+Use `kix.mount.hostPath` when a workload must read or write a directory on the
+Kubernetes node itself. Common uses include node agents, local development,
+and caches that can be rebuilt.
+
+`hostPath` ties the pod to node-local state. A replacement pod scheduled on a
+different node sees that node's directory, and replacing the node removes the
+data. Use a PVC when the data must follow the workload or survive node
+replacement.
+
+## Define the mount
+
+Add the mount to the parts returned by your package:
+
+<Snippet {...hostPathMount} />
+
+This maps `/var/lib/example-cache` on the node to `/var/cache/app` in the
+container. `DirectoryOrCreate` asks Kubernetes to create the node directory
+when it does not exist.
+
+Set `readOnly = true` when the workload only needs to read the directory. Keep
+the host path as narrow as possible so the container cannot access unrelated
+node files.
+
+## Apply the mount to the workload
+
+Pass the mount to `kix.withMounts` before sealing the Deployment with
+`scope.mkDeployment`:
+
+<Snippet {...hostPathDeployment} />
+
+`kix.withMounts` adds both the pod volume and the matching container
+`volumeMount`. For a multi-container workload, use `kix.withMountsOn` to name
+the container that should receive it.
+
+## Add the package instance
+
+Add the package to a cluster whose flavor permits privileged workloads:
+
+<Snippet {...hostPathApplicationInstance} />
+
+Kix checks `hostPath` against
+`cluster.capabilities.privilegedContainers`. Evaluation fails when the target
+platform sets that capability to `false`.
+
+## Check the result
+
+Evaluate the cluster:
+
+<Command {...check} />
+
+Inspect the generated volume and mount:
+
+<Command {...deployment} />
+
+The Deployment contains a `hostPath` volume named `cache` and mounts that same
+volume at `/var/cache/app` in the `worker` container.

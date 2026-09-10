@@ -1191,6 +1191,44 @@
   }
 
   {
+    group = "how-to/platform-hostpath";
+    page = "/docs/how-to/platform-capabilities/mount-node-local-storage-with-hostpath/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "check";
+        run = [
+          "kix"
+          "check"
+          "how-to-platform-hostpath"
+        ];
+      }
+      {
+        capture = "deployment";
+        run = [
+          "kix"
+          "build"
+          "how-to-platform-hostpath"
+          "--output"
+          "json"
+        ];
+        stdoutJq = ''
+          .[]
+          | select(.kind == "Deployment" and .metadata.namespace == "hostpath-example")
+          | {
+              apiVersion,
+              kind,
+              metadata: {name: .metadata.name, namespace: .metadata.namespace},
+              podSpec: {
+                containers: [.spec.template.spec.containers[] | {name, volumeMounts}],
+                volumes: .spec.template.spec.volumes
+              }
+            }'';
+      }
+    ];
+  }
+
+  {
     group = "how-to/application-typed-options";
     page = "/docs/how-to/author-packages-and-clusters/add-typed-package-options/";
     cwd = "kix-examples/";

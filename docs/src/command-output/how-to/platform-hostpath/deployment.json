@@ -1,0 +1,19 @@
+{
+  "id": "how-to/platform-hostpath/deployment",
+  "group": "how-to/platform-hostpath",
+  "page": "/docs/how-to/platform-capabilities/mount-node-local-storage-with-hostpath/",
+  "cwd": "kix-examples/",
+  "generator": "offline",
+  "outputExcerpt": true,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix build how-to-platform-hostpath --output json",
+      "stdout": "{\n  \"apiVersion\": \"apps/v1\",\n  \"kind\": \"Deployment\",\n  \"metadata\": {\n    \"name\": \"worker\",\n    \"namespace\": \"hostpath-example\"\n  },\n  \"podSpec\": {\n    \"containers\": [\n      {\n        \"name\": \"worker\",\n        \"volumeMounts\": [\n          {\n            \"mountPath\": \"/var/cache/app\",\n            \"name\": \"cache\"\n          }\n        ]\n      }\n    ],\n    \"volumes\": [\n      {\n        \"hostPath\": {\n          \"path\": \"/var/lib/example-cache\",\n          \"type\": \"DirectoryOrCreate\"\n        },\n        \"name\": \"cache\"\n      }\n    ]\n  }\n}\n",
+      "stderr": "",
+      "stdoutDrift": "\"apiVersion\": \"apps/v1\",\n\"containers\": [\n\"hostPath\": {\n\"kind\": \"Deployment\",\n\"metadata\": {\n\"mountPath\": \"/var/cache/app\",\n\"name\": \"cache\"\n\"name\": \"worker\",\n\"namespace\": \"hostpath-example\"\n\"path\": \"/var/lib/example-cache\",\n\"podSpec\": {\n\"type\": \"DirectoryOrCreate\"\n\"volumeMounts\": [\n\"volumes\": [\n]\n],\n{\n}\n},\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}
