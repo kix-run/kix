@@ -1,4 +1,128 @@
 ---
 title: "Deploy with dry-run, timeouts, pruning, and log/TUI output modes"
-description: TODO
+description: "Preview an apply, control readiness and stall limits, remove orphaned resources, and choose deploy output for a terminal or CI."
 ---
+
+import Command from '/src/components/Command.astro';
+import dryRun from '/src/command-output/how-to/application-deploy-controls/dry-run.json';
+
+Use deploy controls when the ordinary `kix deploy <cluster>` workflow needs a
+safer preview, different wait limits, orphan cleanup, or machine-readable
+output. This guide assumes Kix can reach the target Kubernetes context.
+
+## Preview the apply
+
+Add `--dry-run` to send the apply and delete requests to the Kubernetes API
+server without persisting them:
+
+<Command expandable {...dryRun} />
+
+For an existing deployment, the preview uses server-side dry-run, so admission
+checks, permissions, and field conflicts are still evaluated. It does not ask
+for confirmation and does not create an activation record.
+
+Remove `--dry-run` when the plan is ready to apply. Keep `--prune` only when
+the orphaned resources shown in the plan should be deleted.
+
+## Set the readiness timeout
+
+`--timeout` controls how long Kix waits for each resource to become ready. It
+accepts minutes, seconds, or a bare number of seconds:
+
+<Command
+  commands={[
+    "kix deploy how-to-application --timeout 10m",
+    "kix deploy how-to-application --timeout 300s",
+  ]}
+  cwd="kix-examples/"
+/>
+
+The default is three minutes. Increase it for resources whose normal startup
+takes longer, such as a database restore or a large image pull.
+
+Kix also stops a deploy after ten minutes with no progress. To change that
+stall limit for one run, set `KIX_STALL_TIMEOUT` in seconds:
+
+<Command
+  commands={["KIX_STALL_TIMEOUT=900 kix deploy how-to-application"]}
+  cwd="kix-examples/"
+/>
+
+Progress and readiness are separate: a resource can take longer than the
+stall limit without triggering it when its readiness checks continue to
+report activity.
+
+## Choose when to prune
+
+By default, Kix reports resources that belonged to the previous activation
+but keeps them. Use `--prune` to delete those orphans after the new resources
+have been applied:
+
+<Command
+  commands={["kix deploy how-to-application --prune"]}
+  cwd="kix-examples/"
+/>
+
+Use `--prune-mode eager` when deletions must be interleaved with apply order,
+or `--prune-mode no` to prevent deletion even if a surrounding script also
+passes `--prune`:
+
+<Command
+  commands={[
+    "kix deploy how-to-application --prune-mode eager",
+    "kix deploy how-to-application --prune --prune-mode no",
+  ]}
+  cwd="kix-examples/"
+/>
+
+Review stateful removals carefully. Kix requires a separate migration
+acknowledgement when a plan replaces a stateful resource in the same logical
+slot.
+
+## Choose terminal or CI output
+
+The default `pretty` format is colored for an interactive terminal and falls
+back to line-oriented output when stdout is not a terminal. Select `line`
+explicitly for stable CI logs:
+
+<Command
+  commands={[
+    "kix deploy how-to-application --log-format line",
+  ]}
+  cwd="kix-examples/"
+/>
+
+Use `json` for newline-delimited JSON events that another program will read:
+
+<Command
+  commands={[
+    "kix deploy how-to-application --dry-run --log-format json > deploy.ndjson",
+  ]}
+  cwd="kix-examples/"
+/>
+
+For a live dependency view in an interactive terminal, use the TUI. This
+example groups resources by namespace and caps the live viewport at 20 rows:
+
+<Command
+  commands={[
+    "kix deploy how-to-application --tui --group-by-ns --fold-height 20",
+  ]}
+  cwd="kix-examples/"
+/>
+
+On a non-interactive terminal, `--tui` falls back to line-oriented output.
+These output options change presentation only; they do not change deployment
+order.
+
+## Troubleshoot a first-deploy preview
+
+A server-side dry-run of a cluster's first deployment can report that a
+Namespace or Kix CRD does not exist. The previewed prerequisite is not
+persisted for a later resource to use. Run `kix check` for validation and
+`kix diff` to review the initial change set before the first deploy.
+
+:::note[Reference]
+See [`kix deploy`](/docs/reference/cli/kix-deploy/) for all deploy flags,
+defaults, and exit behavior.
+:::

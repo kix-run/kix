@@ -43,7 +43,7 @@
     { "page": "operate-a-cluster/check-live-resources-for-drift", "scenario": "operations", "status": "implemented", "liveCaptures": ["how-to/application-drift/scaled-deployment"] },
     { "page": "operate-a-cluster/check-resource-status", "scenario": "operations", "status": "implemented", "liveCaptures": ["how-to/application-status/describe-deployment", "how-to/application-status/job-logs", "how-to/application-status/status"] },
     { "page": "operate-a-cluster/configure-activation-retention", "scenario": "operations", "status": "implemented" },
-    { "page": "operate-a-cluster/deploy-with-dry-run-timeouts-pruning-and-log-tui-output-modes", "scenario": "operations", "status": "planned" },
+    { "page": "operate-a-cluster/deploy-with-dry-run-timeouts-pruning-and-log-tui-output-modes", "scenario": "operations", "status": "implemented", "liveCaptures": ["how-to/application-deploy-controls/dry-run"] },
     { "page": "operate-a-cluster/export-audit-preserving-yaml", "scenario": "operations", "status": "implemented", "offlineCaptures": ["how-to/application-export-audit/annotations", "how-to/application-export-audit/export", "how-to/application-export-audit/internal-crs"] },
     { "page": "operate-a-cluster/export-plain-yaml", "scenario": "operations", "status": "implemented", "offlineCaptures": ["how-to/application-export-exit/export", "how-to/application-export-exit/files", "how-to/application-export-exit/no-annotations"] },
     { "page": "operate-a-cluster/garbage-collect-stale-resources", "scenario": "operations", "status": "implemented", "liveCaptures": ["how-to/application-gc/plan"] },

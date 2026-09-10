@@ -1202,6 +1202,61 @@
   }
 
   {
+    group = "how-to/application-deploy-controls";
+    page = "/docs/how-to/operate-a-cluster/deploy-with-dry-run-timeouts-pruning-and-log-tui-output-modes/";
+    cwd = "kix-examples/";
+    live = [
+      {
+        prepare = [
+          "kix"
+          "deploy"
+          "how-to-application"
+          "-y"
+        ];
+      }
+      {
+        mutate = {
+          file = "how-to/application/cluster.nix";
+          oldString = ''message = "Hello from preview";'';
+          newString = ''message = "Preview deploy controls";'';
+        };
+      }
+      {
+        capture = "dry-run";
+        run = [
+          "kix"
+          "deploy"
+          "how-to-application"
+          "--dry-run"
+          "--timeout"
+          "5m"
+          "--prune"
+          "--log-format"
+          "line"
+        ];
+      }
+      {
+        prepare = "kix deploy how-to-application --dry-run --log-format json > deploy.ndjson";
+      }
+      {
+        prepare = [
+          "kix"
+          "deploy"
+          "how-to-application"
+          "--dry-run"
+          "--tui"
+          "--group-by-ns"
+          "--fold-height"
+          "20"
+        ];
+      }
+      {
+        prepare = "KIX_STALL_TIMEOUT=900 kix deploy how-to-application --dry-run";
+      }
+    ];
+  }
+
+  {
     # The diff guide's flagship: an in-sync cluster, then the same
     # command after one line changes. Both sides come from the live
     # cluster, which is the comparison the page is about.

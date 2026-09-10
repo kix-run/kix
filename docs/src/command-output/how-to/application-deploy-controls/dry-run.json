@@ -1,0 +1,19 @@
+{
+  "id": "how-to/application-deploy-controls/dry-run",
+  "group": "how-to/application-deploy-controls",
+  "page": "/docs/how-to/operate-a-cluster/deploy-with-dry-run-timeouts-pruning-and-log-tui-output-modes/",
+  "cwd": "kix-examples/",
+  "generator": "live",
+  "outputExcerpt": false,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix deploy how-to-application --dry-run --timeout 5m --prune --log-format line",
+      "stdout": "Building cluster 'how-to-application'...\nCluster how-to-application: 16 manifests\nConnecting to cluster...\nActive activation: how-to-application-aq1zdgf9gsnb (aq1zdgf9...)\n\n  how-to-app\n    ~ preview 1.0.0 (1 changed, 3 dep-affected)\n\n  Plan: 1 updated, 2 unchanged\n  Resources: 1 real content, 3 dep-affected\n\nDry run — no changes will be applied.\nplan: 16 nodes\nConfigMap/preview@how-to-app> configured\nConfigMap/preview@how-to-app> ready\nDeployment/preview@how-to-app> configured\nDeployment/preview@how-to-app> ready\nService/preview@how-to-app> configured\nService/preview@how-to-app> ready\nPackageInstance/preview@how-to-app> configured\nPackageInstance/preview@how-to-app> ready\nActivation/how-to-application-4d9xmbm6rcc2> created\nActivation/how-to-application-4d9xmbm6rcc2> ready\n\nDry run complete: 1 created, 4 configured, 11 unchanged, 0 failed\n",
+      "stderr": "",
+      "stdoutDrift": "\nActivation/how-to-application-<activation-id>> created\nActivation/how-to-application-<activation-id>> ready\nActive activation: how-to-application-<activation-id> (aq1zdgf9...)\nBuilding cluster 'how-to-application'...\nCluster how-to-application: 16 manifests\nConfigMap/preview@how-to-app> configured\nConfigMap/preview@how-to-app> ready\nConnecting to cluster...\nDeployment/preview@how-to-app> configured\nDeployment/preview@how-to-app> ready\nDry run complete: 1 created, 4 configured, 11 unchanged, 0 failed\nDry run — no changes will be applied.\nPackageInstance/preview@how-to-app> configured\nPackageInstance/preview@how-to-app> ready\nPlan: 1 updated, 2 unchanged\nResources: 1 real content, 3 dep-affected\nService/preview@how-to-app> configured\nService/preview@how-to-app> ready\nhow-to-app\nplan: 16 nodes\n~ preview 1.0.0 (1 changed, 3 dep-affected)\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}
