@@ -1003,6 +1003,62 @@
   }
 
   {
+    group = "how-to/composition-fragments";
+    page = "/docs/how-to/author-packages-and-clusters/compose-multi-team-clusters-with-mergefragments/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "check";
+        run = [
+          "kix"
+          "check"
+          "how-to-fragments"
+        ];
+      }
+      {
+        capture = "namespace";
+        run = [
+          "kix"
+          "build"
+          "how-to-fragments"
+          "--output"
+          "json"
+        ];
+        stdoutJq = ''.[] | select(.kind == "Namespace" and .metadata.name == "apps") | {kind, metadata: {name: .metadata.name, labels: .metadata.labels, annotations: .metadata.annotations}}'';
+      }
+    ];
+  }
+
+  {
+    group = "how-to/composition-multi-env";
+    page = "/docs/how-to/author-packages-and-clusters/stamp-multi-environment-clusters-with-mkenv/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "check";
+        run = [
+          "kix"
+          "check"
+          "how-to-multi-env"
+        ];
+      }
+      {
+        capture = "environment-resources";
+        run = [
+          "kix"
+          "build"
+          "how-to-multi-env"
+          "--output"
+          "json"
+        ];
+        stdoutJq = ''
+          map(select(.kind == "Deployment" and .metadata.name == "web"))
+          | map({kind, namespace: .metadata.namespace, replicas: .spec.replicas})'';
+      }
+    ];
+  }
+
+  {
     group = "how-to/application-typed-options";
     page = "/docs/how-to/author-packages-and-clusters/add-typed-package-options/";
     cwd = "kix-examples/";

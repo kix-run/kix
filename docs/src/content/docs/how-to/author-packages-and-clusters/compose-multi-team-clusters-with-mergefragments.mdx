@@ -1,4 +1,75 @@
 ---
 title: "Compose multi-team clusters with `mergeFragments`"
-description: TODO
+description: "Combine separately owned namespace policy and package instances into one cluster definition."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import platformFragment from '/src/snippets/how-to/composition/platform-fragment/platformFragment.json';
+import storefrontFragment from '/src/snippets/how-to/composition/storefront-fragment/storefrontFragment.json';
+import mergeTeamFragments from '/src/snippets/how-to/composition/fragments-cluster/mergeTeamFragments.json';
+import useMergedFragments from '/src/snippets/how-to/composition/fragments-cluster/useMergedFragments.json';
+import check from '/src/command-output/how-to/composition-fragments/check.json';
+import namespaceOutput from '/src/command-output/how-to/composition-fragments/namespace.json';
+
+Use `kix.mergeFragments` when different teams maintain parts of one cluster's
+namespace and instance trees. Each fragment remains a normal Nix attrset, so
+it can live beside the code its team owns.
+
+## Define the fragments
+
+A fragment can contribute namespaces, instances, or both. This platform
+fragment adds policy for `apps` and owns a service in `platform`:
+
+<Snippet {...platformFragment} />
+
+An application fragment can add labels to the same namespace and declare its
+own instances:
+
+<Snippet {...storefrontFragment} />
+
+Import each fragment into the cluster file with any arguments it needs. In
+this example, both imports receive `packages`:
+
+```nix title="how-to/composition/fragments-cluster.nix"
+platformFragment = import ./platform-fragment.nix { inherit packages; };
+storefrontFragment = import ./storefront-fragment.nix { inherit packages; };
+```
+
+## Merge the fragments
+
+Pass the fragments in a list. Use `namespacePolicies` for policy owned by the
+cluster definition itself:
+
+<Snippet {...mergeTeamFragments} />
+
+Namespace attrsets merge recursively. Two fragments may add different labels,
+annotations, or quota fields to the same namespace. If they assign different
+values to the same leaf, evaluation stops with a namespace policy conflict.
+
+Instance ownership is stricter. Defining the same instance name in the same
+namespace from two fragments is always an error.
+
+## Add the composition to the cluster
+
+Assign both outputs inside a cluster module:
+
+<Snippet {...useMergedFragments} />
+
+`composition.instances` is a function so fragments may calculate their
+instance tree from shared arguments. Pass those arguments in place of `{ }`
+when a fragment's `instances` value is a function.
+
+## Check the result
+
+Evaluate the composed cluster:
+
+<Command {...check} />
+
+Inspecting the generated `apps` Namespace confirms that labels and annotations
+from both teams and the cluster policy were retained:
+
+<Command expandable {...namespaceOutput} />
+
+Keep settings with a single owner where possible. The conflict errors are most
+useful when overlapping ownership is accidental.

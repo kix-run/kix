@@ -1,0 +1,19 @@
+{
+  "id": "how-to/composition-multi-env/environment-resources",
+  "group": "how-to/composition-multi-env",
+  "page": "/docs/how-to/author-packages-and-clusters/stamp-multi-environment-clusters-with-mkenv/",
+  "cwd": "kix-examples/",
+  "generator": "offline",
+  "outputExcerpt": true,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix build how-to-multi-env --output json",
+      "stdout": "[\n  {\n    \"kind\": \"Deployment\",\n    \"namespace\": \"development-app\",\n    \"replicas\": 1\n  },\n  {\n    \"kind\": \"Deployment\",\n    \"namespace\": \"production-app\",\n    \"replicas\": 3\n  }\n]\n",
+      "stderr": "",
+      "stdoutDrift": "\"kind\": \"Deployment\",\n\"namespace\": \"development-app\",\n\"namespace\": \"production-app\",\n\"replicas\": 1\n\"replicas\": 3\n[\n]\n{\n}\n},\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

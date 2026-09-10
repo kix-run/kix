@@ -1,4 +1,65 @@
 ---
 title: "Stamp multi-environment clusters with `mkEnv`"
-description: TODO
+description: "Create environment-prefixed package instances from one shared definition."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import environmentInstanceSet from '/src/snippets/how-to/composition/multi-env-cluster/environmentInstanceSet.json';
+import stampEnvironments from '/src/snippets/how-to/composition/multi-env-cluster/stampEnvironments.json';
+import check from '/src/command-output/how-to/composition-multi-env/check.json';
+import environmentResources from '/src/command-output/how-to/composition-multi-env/environment-resources.json';
+
+Use `kix.mkEnv` when several environments have the same package layout and
+differ only in configuration. The generated environments belong to one Kix
+cluster artifact and deploy together.
+
+## Define an environment-aware instance set
+
+Write each instance set as a function that accepts `env`. Read shared values
+from `env.config` and use `env.name` where the environment name belongs in
+package configuration:
+
+<Snippet {...environmentInstanceSet} />
+
+This set is named `app` when passed to `mkEnv`. Combining the environment name
+and set name produces namespaces such as `development-app`.
+
+## Stamp each environment
+
+Call `kix.mkEnv` once per environment and combine the returned instance trees:
+
+<Snippet {...stampEnvironments} />
+
+The three arguments are:
+
+1. The environment name used as the namespace prefix.
+2. Environment configuration, with optional per-instance `overrides`.
+3. Named instance-set functions.
+
+The production call passes `replicaCount = 3` to every instance set through
+`env.config`, then overrides the `web` instance's message. Overrides merge
+into the generated instance configuration.
+
+Assign the combined result directly to `instances` inside the cluster module.
+Kix creates `development-app.web` and `production-app.web` as separate package
+instances.
+
+## Check the generated environments
+
+Evaluate the cluster:
+
+<Command {...check} />
+
+Build the manifests to confirm that environment configuration reached each
+Deployment:
+
+<Command expandable {...environmentResources} />
+
+The output excerpt shows one replica in `development-app` and three in
+`production-app`. Package dependencies that are resolved into the requesting
+namespace are stamped separately for each environment. Cluster-wide role
+providers remain shared.
+
+Use separate cluster definitions when environments need independent deploys
+or materially different package layouts.
