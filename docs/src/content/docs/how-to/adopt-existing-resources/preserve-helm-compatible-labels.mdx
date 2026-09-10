@@ -1,4 +1,59 @@
 ---
 title: "Preserve Helm-compatible labels"
-description: TODO
+description: "Render Helm-style app and release selectors while moving a workload under Kix management."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import preserveHelmLabels from '/src/snippets/how-to/adoption/cluster/preserveHelmLabels.json';
+import check from '/src/command-output/how-to/adoption-helm-labels/check.json';
+import workloadLabels from '/src/command-output/how-to/adoption-helm-labels/workload-labels.json';
+
+Use Helm-style labels when an existing workload selects Pods with the `app`
+and `release` keys. Keeping those selectors avoids an immutable-field change
+when Kix takes ownership.
+
+## Check the existing labels
+
+Read the current workload selector and Pod template labels:
+
+<Command
+  commands={[
+    "kubectl get deployment helm-web -n apps -o jsonpath='{.spec.selector.matchLabels}{\"\\n\"}{.spec.template.metadata.labels}{\"\\n\"}'",
+  ]}
+/>
+
+Continue if the selector follows the common Helm shape, with both `app` and
+`release` set to the release name. For a different selector, use
+[`selectorLabels`](/docs/how-to/adopt-existing-resources/preserve-existing-selectors/)
+to copy it exactly.
+
+## Select Helm label style
+
+Set `labelStyle` on the instance:
+
+<Snippet {...preserveHelmLabels} />
+
+For this instance, Kix generates `app = "helm-web"` and
+`release = "helm-web"` as `scope.selectorLabels`. Packages built with Kix's
+workload and Service helpers use the same pair consistently.
+
+## Check before deploying
+
+Evaluate the cluster:
+
+<Command {...check} />
+
+Render the Deployment and Service to verify their labels and selectors:
+
+<Command {...workloadLabels} />
+
+Compare the rendered Deployment selector with the live selector. Then run
+`kix diff how-to-adoption` against the target cluster and review the complete
+ownership change before deploying.
+
+:::caution
+`labelStyle = "helm"` generates the standard `app` and `release` pair. It
+does not discover labels from the cluster. Use `selectorLabels` when the live
+selector differs.
+:::

@@ -1310,6 +1310,58 @@
   }
 
   {
+    group = "how-to/adoption-helm-labels";
+    page = "/docs/how-to/adopt-existing-resources/preserve-helm-compatible-labels/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "check";
+        run = [
+          "kix"
+          "check"
+          "how-to-adoption"
+        ];
+      }
+      {
+        capture = "workload-labels";
+        run = [
+          "kix"
+          "build"
+          "how-to-adoption"
+          "--output"
+          "json"
+        ];
+        stdoutJq = ''
+          [
+            .[]
+            | select(
+                .metadata.namespace == "apps"
+                and .metadata.name == "helm-web"
+                and (.kind == "Deployment" or .kind == "Service")
+              )
+            | if .kind == "Deployment" then
+                {
+                  apiVersion,
+                  kind,
+                  metadata: {name: .metadata.name, namespace: .metadata.namespace, labels: .metadata.labels},
+                  selector: .spec.selector,
+                  podLabels: .spec.template.metadata.labels
+                }
+              else
+                {
+                  apiVersion,
+                  kind,
+                  metadata: {name: .metadata.name, namespace: .metadata.namespace, labels: .metadata.labels},
+                  selector: .spec.selector
+                }
+              end
+          ]
+        '';
+      }
+    ];
+  }
+
+  {
     group = "how-to/adoption-preserve-selectors";
     page = "/docs/how-to/adopt-existing-resources/preserve-existing-selectors/";
     cwd = "kix-examples/";
