@@ -1181,6 +1181,8 @@ mod record_garbage_tests {
             previous_activation: None,
             uid: None,
             resource_version: None,
+            failed_at: None,
+            created_at: None,
         }
     }
 

@@ -60,10 +60,25 @@ pub trait ClusterOps: Send + Sync + 'static {
     /// persisted.
     fn dry_run(&self) -> bool;
 
-    /// Start of run. Stamps deploy-start on the Activation and reads the set
-    /// of live Activations used to prune `kix.run/activations`. Nothing is
-    /// in flight yet, so the engine may await this inline.
+    /// Start of run. Creates the Activation record, marks it Deploying, and
+    /// reads the set of live Activations used to prune `kix.run/activations`.
+    /// Nothing is in flight yet, so the engine may await this inline.
+    ///
+    /// The record is created here rather than only as the last node of the
+    /// plan so that a run which stops part way still leaves something that
+    /// says what it was attempting (kixpkgs#82). On a cluster's first deploy
+    /// the record's own CRD is not served yet, so the implementation may
+    /// defer the create to [`ClusterOps::rediscover`].
     async fn begin(&self) -> Result<(), String>;
+
+    /// The run is ending without finalizing: cancelled, stopped on a failed
+    /// node, discovery broke, or a task panicked. Marks the Activation
+    /// record Failed so the next deploy can see that this closure was
+    /// partially applied.
+    ///
+    /// Best-effort and bounded in time by the implementation. Called at most
+    /// once, and only after [`ClusterOps::begin`] has run.
+    async fn abort(&self, reason: &str) -> Result<(), String>;
 
     /// Decrypt SOPS-backed data in a Secret manifest.
     async fn hydrate(&self, manifest: Value) -> Result<(Value, Vec<HydrationResult>), SecretError>;
@@ -95,6 +110,10 @@ pub trait ClusterOps: Send + Sync + 'static {
 
     /// Refresh discovery after CRDs landed. An error stops the run: a stale
     /// discovery view is a partial view (rule from kixpkgs#60).
+    ///
+    /// Also where a create deferred by [`ClusterOps::begin`] happens, since
+    /// this is the first moment on a cluster's first deploy at which the
+    /// Activation CRD is established.
     async fn rediscover(&self) -> Result<(), FetchError>;
 
     /// Record progress on the Activation. `applied` and `failed` are running

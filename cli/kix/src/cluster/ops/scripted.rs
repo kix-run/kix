@@ -177,6 +177,9 @@ pub enum Call {
     Finalize {
         had_failures: bool,
     },
+    Abort {
+        reason: String,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -195,6 +198,7 @@ pub struct ScriptedOps {
     stamp: Mutex<Behaviour<Result<(), String>>>,
     delete: Mutex<Behaviour<Result<(), String>>>,
     finalize: Mutex<Behaviour<Result<Option<Finalized>, String>>>,
+    abort: Mutex<Behaviour<Result<(), String>>>,
     log: Mutex<Vec<Logged>>,
     applies_now: AtomicUsize,
     applies_peak: AtomicUsize,
@@ -219,6 +223,7 @@ impl ScriptedOps {
             stamp: Mutex::new(Behaviour::Now(Ok(()))),
             delete: Mutex::new(Behaviour::Now(Ok(()))),
             finalize: Mutex::new(Behaviour::Now(Ok(None))),
+            abort: Mutex::new(Behaviour::Now(Ok(()))),
             log: Mutex::new(Vec::new()),
             applies_now: AtomicUsize::new(0),
             applies_peak: AtomicUsize::new(0),
@@ -273,6 +278,11 @@ impl ScriptedOps {
 
     pub fn finalize_behaviour(&self, b: Behaviour<Result<Option<Finalized>, String>>) -> &Self {
         *self.finalize.lock().unwrap() = b;
+        self
+    }
+
+    pub fn abort_behaviour(&self, b: Behaviour<Result<(), String>>) -> &Self {
+        *self.abort.lock().unwrap() = b;
         self
     }
 
@@ -500,6 +510,14 @@ impl ClusterOps for ScriptedOps {
     async fn finalize(&self, had_failures: bool) -> Result<Option<Finalized>, String> {
         self.record(Call::Finalize { had_failures });
         let b = self.finalize.lock().unwrap().clone();
+        b.run().await
+    }
+
+    async fn abort(&self, reason: &str) -> Result<(), String> {
+        self.record(Call::Abort {
+            reason: reason.to_string(),
+        });
+        let b = self.abort.lock().unwrap().clone();
         b.run().await
     }
 }

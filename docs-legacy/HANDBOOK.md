@@ -1348,7 +1348,15 @@ checklist is in `v2_discussions/archive/137_kix_run_domain_migration.md`.
 
 The cluster's root resource is an `Activation` CR. `mkActivation` references every PackageInstance via Nix string context, so `nix-store -q --tree` on the Activation derivation yields the full deploy DAG. This contract is what the CLI (and operator) rely on for ordering.
 
-**Activation lifecycle:** `Queued → Deploying → Active → Superseded`.
+**Activation lifecycle:** `Queued → Deploying → Active | Degraded | Failed → Superseded`.
+
+The record is created before the first wave, not after the last, so a deploy
+that stops part way leaves one. `Degraded` means the deploy finished but some
+resources failed to apply or become ready; it is still the cluster's current
+state. `Failed` means the deploy stopped before finalizing, so it is not a
+current state and `kix deploy` never diffs against it. The next deploy reads a
+`Failed` record only as an extra baseline, to re-apply what that run may have
+changed and prune what it left behind, then supersedes it.
 
 | Path | Behavior |
 |---|---|

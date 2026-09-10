@@ -323,6 +323,25 @@ enum Done {
 /// After every non-orphan node has reached a terminal verdict, orphans are
 /// pruned (in reverse-topological order of the old graph) and the Activation
 /// CR is finalized.
+/// Mark the Activation record Failed because the run is ending without
+/// finalizing. Returns the message to report when it did not work.
+///
+/// Every early return below `begin` goes through this. A run that stops part
+/// way has applied some of its closure, and the record is the only thing that
+/// will tell the next deploy so (kixpkgs#82). Best-effort: the run is already
+/// over, and a cluster that will not take the patch is one the next deploy has
+/// to cope with anyway.
+async fn abort_activation(ops: &Arc<dyn ClusterOps>, reason: &str) -> Option<String> {
+    match tokio::time::timeout(INLINE_BEST_EFFORT_TIMEOUT, ops.abort(reason)).await {
+        Ok(Ok(())) => None,
+        Ok(Err(message)) => Some(message),
+        Err(_) => Some(format!(
+            "no answer within {}s",
+            INLINE_BEST_EFFORT_TIMEOUT.as_secs()
+        )),
+    }
+}
+
 pub async fn run_deploy(
     ops: Arc<dyn ClusterOps>,
     plan: DeployPlan,
@@ -542,6 +561,12 @@ pub async fn run_deploy(
                             reason: message.clone(),
                         });
                         tasks.shutdown().await;
+                        if let Some(m) = abort_activation(&ops, &message).await {
+                            emit(DeployEvent::BestEffortFailed {
+                                what: "activation abort".into(),
+                                message: m,
+                            });
+                        }
                         return Err(DeployError::Internal {
                             message,
                             partial: result,
@@ -761,6 +786,12 @@ pub async fn run_deploy(
         emit(DeployEvent::Stopped {
             reason: reason.clone(),
         });
+        if let Some(m) = abort_activation(&ops, &reason).await {
+            emit(DeployEvent::BestEffortFailed {
+                what: "activation abort".into(),
+                message: m,
+            });
+        }
         return Err(DeployError::Cancelled {
             reason,
             partial: result,
@@ -793,6 +824,12 @@ pub async fn run_deploy(
         emit(DeployEvent::Stopped {
             reason: halting_reason.unwrap_or_else(|| message.clone()),
         });
+        if let Some(m) = abort_activation(&ops, &message).await {
+            emit(DeployEvent::BestEffortFailed {
+                what: "activation abort".into(),
+                message: m,
+            });
+        }
         return Err(DeployError::DiscoveryFailed {
             message,
             partial: result,
@@ -800,13 +837,54 @@ pub async fn run_deploy(
     }
 
     if halting {
+        let reason = halting_reason.unwrap_or_else(|| "halting".into());
         emit(DeployEvent::Stopped {
-            reason: halting_reason.unwrap_or_else(|| "halting".into()),
+            reason: reason.clone(),
         });
+        if let Some(m) = abort_activation(&ops, &reason).await {
+            emit(DeployEvent::BestEffortFailed {
+                what: "activation abort".into(),
+                message: m,
+            });
+        }
         return Err(DeployError::NodesFailed {
             count: result.failed,
             partial: result,
         });
+    }
+
+    // A node that was never attempted means the closure is only partly
+    // applied, which is not a state anything may diff against. Under
+    // `--on-error=continue` a failed node cascades Cancelled to its
+    // dependents and the loop exits without `halting`, so without this the
+    // run would finalize and mark the record Degraded, and Degraded IS a
+    // current state: the next deploy of the same closure would then skip
+    // every node this one never ran.
+    //
+    // It has to happen above the skip stamping and the prune. Pruning deletes
+    // the orphans of the closure being replaced, and this run is not
+    // replacing anything: the record ends Failed and the previous activation
+    // stays Active, so a prune here would delete objects the still current
+    // closure cannot get back.
+    //
+    // The run still returns `Ok`. `--on-error=continue` means the caller
+    // asked to push past failures, and it has always exited zero with a
+    // summary that names them; changing that is a separate decision.
+    if !config.dry_run && result.cancelled > 0 {
+        let reason = format!(
+            "{} failed, {} never attempted",
+            result.failed, result.cancelled
+        );
+        emit(DeployEvent::Stopped {
+            reason: reason.clone(),
+        });
+        if let Some(m) = abort_activation(&ops, &reason).await {
+            emit(DeployEvent::BestEffortFailed {
+                what: "activation abort".into(),
+                message: m,
+            });
+        }
+        return Ok(result);
     }
 
     // Stamp this activation onto the resources we skipped. They were skipped
@@ -932,6 +1010,7 @@ pub async fn run_deploy(
     // Finalize Activation lifecycle (unless pure no-op or dry-run).
     let actually_changed =
         result.created > 0 || result.configured > 0 || result.pruned > 0 || result.failed > 0;
+
     if !config.dry_run && actually_changed {
         match tokio::time::timeout(INLINE_BEST_EFFORT_TIMEOUT, ops.finalize(result.failed > 0))
             .await
@@ -2320,6 +2399,12 @@ mod engine_tests {
                 .iter()
                 .any(|c| matches!(c, Call::Delete(_) | Call::Finalize { .. }))
         );
+        // But it does mark the record Failed, which is the whole point: this
+        // run applied part of its closure and nothing else will say so.
+        assert!(
+            calls.iter().any(|c| matches!(c, Call::Abort { .. })),
+            "a cancelled run must abort the activation: {calls:?}",
+        );
         assert_eq!(
             rec.terminal_count(&NodeId::Resource(rid("Deployment", "a"))),
             1
@@ -2327,6 +2412,163 @@ mod engine_tests {
         assert_eq!(
             rec.terminal_count(&NodeId::Resource(rid("Deployment", "b"))),
             1
+        );
+    }
+
+    /// kixpkgs#82. A run that stops because a node failed under Stop leaves
+    /// a record saying so, so the next deploy can reconcile what it applied.
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_node_under_stop_aborts_the_activation() {
+        let manifests = vec![m("Deployment", "a", &[]), m("Deployment", "b", &["a"])];
+        let ops = Arc::new(ScriptedOps::new());
+        ops.script(
+            rid("Deployment", "a"),
+            NodeScript::default().apply(Behaviour::Now(Err(ApplyFailure::Other("boom".into())))),
+        );
+        let mut cfg = config(quiet_watchdog());
+        cfg.on_error = OnErrorPolicy::Stop;
+        let rec = Arc::new(Recorder::default());
+
+        let err = run(&ops, plan_of(&manifests), &cfg, rec.clone())
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, DeployError::NodesFailed { .. }), "{err}");
+        let calls = ops.calls();
+        assert!(
+            calls.iter().any(|c| matches!(c, Call::Abort { .. })),
+            "a halted run must abort the activation: {calls:?}",
+        );
+        assert!(
+            !calls.iter().any(|c| matches!(c, Call::Finalize { .. })),
+            "and must not also finalize: {calls:?}",
+        );
+    }
+
+    /// A run under `--on-error=continue` that leaves nodes never attempted
+    /// must not finalize. The record would land Degraded, and Degraded is a
+    /// current state: the next deploy of the same closure would then skip
+    /// every node this one never ran.
+    #[tokio::test(start_paused = true)]
+    async fn a_run_with_cancelled_nodes_aborts_instead_of_finalizing() {
+        let manifests = vec![m("Deployment", "a", &[]), m("Deployment", "b", &["a"])];
+        let ops = Arc::new(ScriptedOps::new());
+        ops.script(
+            rid("Deployment", "a"),
+            NodeScript::default().apply(Behaviour::Now(Err(ApplyFailure::Other("boom".into())))),
+        );
+        let mut cfg = config(quiet_watchdog());
+        cfg.on_error = OnErrorPolicy::Continue;
+        cfg.prune = PrunePolicy::Delete;
+        let rec = Arc::new(Recorder::default());
+
+        let result = run_with_orphans(
+            &ops,
+            plan_of(&manifests),
+            &[rid("ConfigMap", "old")],
+            &[m("ConfigMap", "old", &[])],
+            &cfg,
+            rec.clone(),
+        )
+        .await
+        .unwrap();
+        assert!(result.cancelled > 0, "b should have been cancelled");
+
+        let calls = ops.calls();
+        assert!(
+            calls.iter().any(|c| matches!(c, Call::Abort { .. })),
+            "an incomplete run must abort: {calls:?}",
+        );
+        assert!(
+            !calls.iter().any(|c| matches!(c, Call::Finalize { .. })),
+            "and must not finalize, which would supersede a still-running activation: {calls:?}",
+        );
+        // And it must not prune. The previous activation stays Active, so its
+        // orphans are objects the cluster still depends on.
+        assert!(
+            !calls.iter().any(|c| matches!(c, Call::Delete(_))),
+            "an incomplete run must not prune the still-current closure: {calls:?}",
+        );
+    }
+
+    /// A run where everything was attempted and some failed IS a current
+    /// state, so it finalizes (Degraded) rather than aborting.
+    #[tokio::test(start_paused = true)]
+    async fn a_run_that_attempted_everything_still_finalizes() {
+        // Two independent nodes: one fails, the other applies. Nothing is
+        // cancelled, so the closure is as applied as it can be.
+        let manifests = vec![m("Deployment", "a", &[]), m("Deployment", "b", &[])];
+        let ops = Arc::new(ScriptedOps::new());
+        ops.script(
+            rid("Deployment", "a"),
+            NodeScript::default().apply(Behaviour::Now(Err(ApplyFailure::Other("boom".into())))),
+        );
+        let mut cfg = config(quiet_watchdog());
+        cfg.on_error = OnErrorPolicy::Continue;
+        let rec = Arc::new(Recorder::default());
+
+        let result = run(&ops, plan_of(&manifests), &cfg, rec.clone())
+            .await
+            .unwrap();
+        assert_eq!(result.cancelled, 0);
+        assert_eq!(result.failed, 1);
+
+        let calls = ops.calls();
+        assert!(
+            calls
+                .iter()
+                .any(|c| matches!(c, Call::Finalize { had_failures: true })),
+            "expected a Degraded finalize: {calls:?}",
+        );
+        assert!(!calls.iter().any(|c| matches!(c, Call::Abort { .. })));
+    }
+
+    /// A run that finishes never aborts. Finalize and abort are the two ends
+    /// of the same lifecycle and exactly one of them happens.
+    #[tokio::test(start_paused = true)]
+    async fn a_clean_run_finalizes_and_never_aborts() {
+        let manifests = vec![m("Deployment", "a", &[]), m("Deployment", "b", &["a"])];
+        let ops = Arc::new(ScriptedOps::new());
+        let cfg = config(quiet_watchdog());
+        let rec = Arc::new(Recorder::default());
+
+        run(&ops, plan_of(&manifests), &cfg, rec.clone())
+            .await
+            .unwrap();
+
+        let calls = ops.calls();
+        assert!(calls.iter().any(|c| matches!(c, Call::Finalize { .. })));
+        assert!(
+            !calls.iter().any(|c| matches!(c, Call::Abort { .. })),
+            "a clean run must not abort: {calls:?}",
+        );
+    }
+
+    /// An abort that will not go through is reported, not fatal. The run has
+    /// already ended; the error it ends with must still be the real one.
+    #[tokio::test(start_paused = true)]
+    async fn a_failing_abort_is_reported_and_does_not_change_the_error() {
+        let manifests = vec![m("Deployment", "a", &[])];
+        let ops = Arc::new(ScriptedOps::new());
+        ops.script(
+            rid("Deployment", "a"),
+            NodeScript::default().apply(Behaviour::Now(Err(ApplyFailure::Other("boom".into())))),
+        );
+        ops.abort_behaviour(Behaviour::Now(Err("no answer from the apiserver".into())));
+        let mut cfg = config(quiet_watchdog());
+        cfg.on_error = OnErrorPolicy::Stop;
+        let rec = Arc::new(Recorder::default());
+
+        let err = run(&ops, plan_of(&manifests), &cfg, rec.clone())
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, DeployError::NodesFailed { .. }), "{err}");
+        assert!(
+            rec.best_effort_failures()
+                .iter()
+                .any(|line| line.starts_with("activation abort:")),
+            "the failed abort should be reported as best-effort",
         );
     }
 

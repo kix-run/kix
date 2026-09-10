@@ -63,6 +63,22 @@ in
       };
     };
 
+  # The cluster's deploy record, and the root of its Merkle tree.
+  #
+  # `instances` is built from every PackageInstance's `out.name`, and `out`
+  # carries each instance's identity context, which transitively carries every
+  # resource. So this node depends on the whole closure by construction, its
+  # store hash covers everything, and "the activation hash changed" means
+  # "something changed". That is also why it lands in the last wave: the
+  # position is the dependency, not a choice.
+  #
+  # The engine does not wait for that wave to create the record. It applies
+  # this same stamped manifest at the start of the run, so a deploy that stops
+  # part way still leaves something that says what it was attempting
+  # (kixpkgs#82); the last-wave apply is then an unchanged re-assertion. On a
+  # cluster's first deploy the record's own CRD is in this plan, so the create
+  # waits for the CRD barrier rather than the first wave. Keep the two in
+  # step: whatever the engine creates must be exactly this manifest.
   mkActivation =
     {
       name,

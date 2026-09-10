@@ -690,7 +690,7 @@
       {
         mutate = {
           file = "how-to/application/health-check.sh";
-          oldString = ''exit 0'';
+          oldString = "exit 0";
           newString = ''
             echo "the application returned an unexpected response"
             exit 1'';

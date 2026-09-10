@@ -411,7 +411,11 @@ pub struct DeployArgs {
     #[arg(long)]
     pub dry_run: bool,
 
-    /// Use local activation cache instead of fetching from cluster
+    /// Use local activation cache instead of fetching from cluster.
+    ///
+    /// Plans entirely offline, so it cannot see the records of deploys that
+    /// stopped part way and will not reconcile what they left behind. Run a
+    /// plain `kix deploy` for that.
     #[arg(long)]
     pub current_activation: bool,
 

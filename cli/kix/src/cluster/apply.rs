@@ -208,6 +208,138 @@ pub fn detect_changes(new_manifests: &[Value], old_manifests: &[Value]) -> Vec<C
     actions
 }
 
+/// Fold the closures of deploys that stopped part way into a plan.
+///
+/// A run that dies mid-wave applied some of its closure and recorded nothing,
+/// so [`detect_changes`] against the still-Active closure cannot see any of
+/// it: the objects it created are not orphans, and the objects it changed do
+/// not read as changed. That is kixpkgs#82, in both its halves.
+///
+/// The honest statement is that for any resource in a failed closure we do
+/// not know which of two compiler outputs the cluster holds. So:
+///
+/// - A `Skip` whose identity appears in a failed closure under a DIFFERENT
+///   hash becomes an `Apply`. The cluster holds either the new hash or that
+///   one, and applying is idempotent, so the cost of guessing wrong is a
+///   single unchanged apply. Leaving it a `Skip` when the cluster holds the
+///   other one is the bug.
+/// - An identity that only a failed closure has becomes an `Orphan`, under
+///   the same rules [`detect_changes`] uses: stamped, prunable, and not a
+///   record.
+///
+/// Every input is a compiler output. Nothing here reads the cluster, which is
+/// the point: the kix invariant is that we never reason against live state to
+/// decide what to do (v2_discussions/81 §"Closure A to closure B").
+pub fn fold_failed_closures(
+    actions: Vec<ChangeAction>,
+    new_manifests: &[Value],
+    failed_closures: &[Vec<Value>],
+) -> Vec<ChangeAction> {
+    if failed_closures.is_empty() {
+        return actions;
+    }
+
+    let id_of = |m: &Value| {
+        let rid = ResourceId::from_value(m);
+        format!("{}/{}/{}", rid.kind, rid.namespace, rid.name)
+    };
+
+    // Identity -> every hash a failed closure claims for it.
+    let mut uncertain: HashMap<String, HashSet<String>> = HashMap::new();
+    // Identity -> a manifest for it, for the orphan rids.
+    let mut failed_manifest: HashMap<String, &Value> = HashMap::new();
+    for closure in failed_closures {
+        for manifest in closure {
+            let Some(hash) = manifest_identity_hash(manifest) else {
+                continue;
+            };
+            let id = id_of(manifest);
+            uncertain
+                .entry(id.clone())
+                .or_default()
+                .insert(hash.to_string());
+            failed_manifest.entry(id).or_insert(manifest);
+        }
+    }
+
+    let new_by_id: HashMap<String, &Value> = new_manifests.iter().map(|m| (id_of(m), m)).collect();
+
+    let mut out: Vec<ChangeAction> = Vec::with_capacity(actions.len());
+    let mut seen_orphans: HashSet<String> = HashSet::new();
+
+    for action in actions {
+        match action {
+            ChangeAction::Skip(rid) => {
+                let id = format!("{}/{}/{}", rid.kind, rid.namespace, rid.name);
+                let new_hash = new_by_id.get(&id).and_then(|m| manifest_identity_hash(m));
+                let all_agree = match (uncertain.get(&id), new_hash) {
+                    (None, _) => true,
+                    // Every hash a failed closure has for this resource is the
+                    // one we are about to apply, so nothing can have changed.
+                    (Some(hashes), Some(h)) => hashes.iter().all(|candidate| candidate == h),
+                    // No hash on the new side means detect_changes already
+                    // treated it as opaque; leave its verdict alone.
+                    (Some(_), None) => true,
+                };
+                if all_agree {
+                    out.push(ChangeAction::Skip(rid));
+                } else {
+                    match new_by_id.get(&id) {
+                        Some(manifest) => out.push(ChangeAction::Apply((*manifest).clone())),
+                        None => out.push(ChangeAction::Skip(rid)),
+                    }
+                }
+            }
+            ChangeAction::Orphan(rid) => {
+                seen_orphans.insert(format!("{}/{}/{}", rid.kind, rid.namespace, rid.name));
+                out.push(ChangeAction::Orphan(rid));
+            }
+            other => out.push(other),
+        }
+    }
+
+    // Anything only a failed closure knows about. Sorted so a plan is
+    // byte-identical across runs.
+    let mut leftovers: Vec<&String> = uncertain
+        .keys()
+        .filter(|id| !new_by_id.contains_key(*id) && !seen_orphans.contains(*id))
+        .collect();
+    leftovers.sort();
+    for id in leftovers {
+        let manifest = failed_manifest[id];
+        if !lifecycle_of(manifest).prunable() {
+            continue;
+        }
+        out.push(ChangeAction::Orphan(ResourceId::from_value(manifest)));
+    }
+
+    out
+}
+
+/// The manifest set a plan should show and prune against: the Active closure,
+/// plus anything only a failed closure has.
+///
+/// `run_deploy` needs this so `prune_order` can topologically sort orphans
+/// that exist in no current closure, and the plan display needs it so those
+/// orphans have a manifest to describe.
+pub fn baseline_manifests(active: &[Value], failed: &[Vec<Value>]) -> Vec<Value> {
+    let id_of = |m: &Value| {
+        let rid = ResourceId::from_value(m);
+        format!("{}/{}/{}", rid.kind, rid.namespace, rid.name)
+    };
+    let mut seen: HashSet<String> = active.iter().map(id_of).collect();
+    let mut out = active.to_vec();
+    for closure in failed {
+        for manifest in closure {
+            let id = id_of(manifest);
+            if seen.insert(id) {
+                out.push(manifest.clone());
+            }
+        }
+    }
+    out
+}
+
 /// Detect changes by comparing desired manifests against live cluster resources.
 ///
 /// For each desired manifest:
@@ -1161,6 +1293,178 @@ mod tests {
             .collect();
         v.sort();
         v
+    }
+
+    fn skip_ids(actions: &[ChangeAction]) -> Vec<String> {
+        let mut v: Vec<String> = actions
+            .iter()
+            .filter_map(|a| match a {
+                ChangeAction::Skip(rid) => Some(rid.display_id()),
+                _ => None,
+            })
+            .collect();
+        v.sort();
+        v
+    }
+
+    // -- fold_failed_closures --------------------------------------------
+    //
+    // The situation throughout: a deploy of closure F started, applied some of
+    // it, and died. Its record is Failed and resolvable, so F is known. The
+    // cluster is running A, and we are about to deploy N.
+
+    #[test]
+    fn an_object_only_the_failed_closure_has_is_an_orphan() {
+        let active = vec![manifest("Deployment", "web", "app", "h1")];
+        let new = vec![manifest("Deployment", "web", "app", "h1")];
+        let failed = vec![
+            manifest("Deployment", "web", "app", "h2"),
+            manifest("ConfigMap", "leftover", "app", "h9"),
+        ];
+
+        let actions = detect_changes(&new, &active);
+        assert_eq!(orphan_ids(&actions), Vec::<String>::new());
+
+        let folded = fold_failed_closures(actions, &new, &[failed]);
+        assert_eq!(orphan_ids(&folded), vec!["ConfigMap/leftover@app"]);
+    }
+
+    #[test]
+    fn an_object_the_failed_deploy_may_have_changed_is_reapplied() {
+        // The repair half of #82. Reverting the config makes N identical to A,
+        // so detect_changes skips everything, but the cluster may hold F's
+        // version of `web`.
+        let active = vec![manifest("Deployment", "web", "app", "h1")];
+        let new = vec![manifest("Deployment", "web", "app", "h1")];
+        let failed = vec![manifest("Deployment", "web", "app", "h2")];
+
+        let actions = detect_changes(&new, &active);
+        assert_eq!(skip_ids(&actions), vec!["Deployment/web@app"]);
+
+        let folded = fold_failed_closures(actions, &new, &[failed]);
+        assert_eq!(apply_ids(&folded), vec!["Deployment/web@app"]);
+        assert!(skip_ids(&folded).is_empty());
+    }
+
+    #[test]
+    fn a_hash_the_failed_closure_agrees_on_stays_skipped() {
+        // F never disagreed about this one, so nothing it did could have
+        // changed it and re-applying would be noise.
+        let active = vec![manifest("Deployment", "web", "app", "h1")];
+        let new = vec![manifest("Deployment", "web", "app", "h1")];
+        let failed = vec![manifest("Deployment", "web", "app", "h1")];
+
+        let folded = fold_failed_closures(detect_changes(&new, &active), &new, &[failed]);
+        assert_eq!(skip_ids(&folded), vec!["Deployment/web@app"]);
+        assert!(apply_ids(&folded).is_empty());
+    }
+
+    #[test]
+    fn retrying_the_closure_that_failed_applies_it_and_orphans_nothing() {
+        // N == F: every node is already an Apply, and nothing F touched is
+        // outside the set we are about to write.
+        let active = vec![manifest("Deployment", "web", "app", "h1")];
+        let new = vec![
+            manifest("Deployment", "web", "app", "h2"),
+            manifest("ConfigMap", "extra", "app", "h9"),
+        ];
+        let failed = new.clone();
+
+        let folded = fold_failed_closures(detect_changes(&new, &active), &new, &[failed]);
+        assert_eq!(
+            apply_ids(&folded),
+            vec!["ConfigMap/extra@app", "Deployment/web@app"]
+        );
+        assert!(orphan_ids(&folded).is_empty());
+    }
+
+    #[test]
+    fn stacked_failed_closures_union_their_leftovers() {
+        let active = vec![manifest("Deployment", "web", "app", "h1")];
+        let new = vec![manifest("Deployment", "web", "app", "h1")];
+        let first = vec![manifest("ConfigMap", "one", "app", "h7")];
+        let second = vec![manifest("ConfigMap", "two", "app", "h8")];
+
+        let folded = fold_failed_closures(detect_changes(&new, &active), &new, &[first, second]);
+        assert_eq!(
+            orphan_ids(&folded),
+            vec!["ConfigMap/one@app", "ConfigMap/two@app"]
+        );
+    }
+
+    #[test]
+    fn a_record_in_a_failed_closure_is_never_an_orphan() {
+        // Records are superseded, not pruned. A failed closure always carries
+        // its own, and its name differs from the new one on every changed
+        // deploy, so without the lifecycle check every run would invent one.
+        let active = vec![manifest("Deployment", "web", "app", "h1")];
+        let new = vec![manifest("Deployment", "web", "app", "h1")];
+        let failed = vec![
+            manifest("Deployment", "web", "app", "h1"),
+            record("demo-abc123", "h2"),
+        ];
+
+        let folded = fold_failed_closures(detect_changes(&new, &active), &new, &[failed]);
+        assert!(orphan_ids(&folded).is_empty());
+    }
+
+    #[test]
+    fn an_unstamped_manifest_in_a_failed_closure_is_never_an_orphan() {
+        let active = vec![manifest("Deployment", "web", "app", "h1")];
+        let new = vec![manifest("Deployment", "web", "app", "h1")];
+        let failed = vec![json!({
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": { "name": "unstamped", "namespace": "app" }
+        })];
+
+        let folded = fold_failed_closures(detect_changes(&new, &active), &new, &[failed]);
+        assert!(orphan_ids(&folded).is_empty());
+    }
+
+    #[test]
+    fn an_orphan_detect_changes_already_found_is_not_duplicated() {
+        let active = vec![
+            manifest("Deployment", "web", "app", "h1"),
+            manifest("ConfigMap", "gone", "app", "h5"),
+        ];
+        let new = vec![manifest("Deployment", "web", "app", "h1")];
+        let failed = vec![manifest("ConfigMap", "gone", "app", "h6")];
+
+        let folded = fold_failed_closures(detect_changes(&new, &active), &new, &[failed]);
+        assert_eq!(orphan_ids(&folded), vec!["ConfigMap/gone@app"]);
+    }
+
+    #[test]
+    fn no_failed_closures_changes_nothing() {
+        let active = vec![manifest("Deployment", "web", "app", "h1")];
+        let new = vec![manifest("Deployment", "web", "app", "h1")];
+        let before = detect_changes(&new, &active);
+        let after = fold_failed_closures(before.clone(), &new, &[]);
+        assert_eq!(skip_ids(&before), skip_ids(&after));
+        assert_eq!(apply_ids(&before), apply_ids(&after));
+        assert_eq!(orphan_ids(&before), orphan_ids(&after));
+    }
+
+    // -- baseline_manifests ----------------------------------------------
+
+    #[test]
+    fn baseline_keeps_active_and_adds_only_what_is_missing() {
+        let active = vec![manifest("Deployment", "web", "app", "h1")];
+        let failed = vec![
+            // Same identity as active: the active version wins, so the plan
+            // describes the object the way the current closure does.
+            manifest("Deployment", "web", "app", "h2"),
+            manifest("ConfigMap", "leftover", "app", "h9"),
+        ];
+
+        let merged = baseline_manifests(&active, &[failed]);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(manifest_identity_hash(&merged[0]), Some("h1"));
+        assert_eq!(
+            ResourceId::from_value(&merged[1]).display_id(),
+            "ConfigMap/leftover@app"
+        );
     }
 
     /// Invariant 1: two builds that differ only in the record produce no

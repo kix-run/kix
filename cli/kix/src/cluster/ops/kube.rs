@@ -70,6 +70,25 @@ pub struct KubeOpsConfig {
     /// Apiserver dry run: SSA and DELETE go with `dryRun=All`; nothing is
     /// written to the Activation.
     pub dry_run: bool,
+    /// The Activation record's own stamped manifest, so [`ClusterOps::begin`]
+    /// can create it before the first wave instead of waiting for it to come
+    /// round as the last node of the plan.
+    ///
+    /// The same manifest either way, applied by the same field manager with
+    /// the same identity hash, so the last-wave apply of it is a no-op that
+    /// re-asserts spec once everything it depends on is Ready. `None` leaves
+    /// the old behaviour, which is what the operator wants: it created the
+    /// record itself and owns `spec.source`.
+    pub activation_manifest: Option<serde_json::Value>,
+    /// Failed records whose leftovers this run's plan folded in. Superseded
+    /// on finalize, because by then they describe nothing outstanding.
+    pub consumed_failed: Vec<String>,
+    /// Whether [`ClusterOps::abort`] should mark the record Failed.
+    ///
+    /// True for the CLI, which owns the run end to end. False for the
+    /// operator, whose model is resume-on-requeue: a reconcile that returns
+    /// early will be retried, so failing the record would fight it.
+    pub mark_failed_on_abort: bool,
 }
 
 pub struct KubeOps {
@@ -79,6 +98,11 @@ pub struct KubeOps {
     /// Identity hashes of every Activation CR on the cluster, read once in
     /// [`ClusterOps::begin`]. `None` = do not prune the annotation.
     live_activations: std::sync::RwLock<Option<HashSet<String>>>,
+    /// Set when [`ClusterOps::begin`] wanted to create the Activation record
+    /// but its CRD was not served yet, which is every cluster's first deploy.
+    /// [`ClusterOps::rediscover`] does it at the CRD barrier, the earliest
+    /// point at which it can succeed.
+    record_pending: std::sync::atomic::AtomicBool,
 }
 
 impl KubeOps {
@@ -88,6 +112,7 @@ impl KubeOps {
             discovery,
             cfg,
             live_activations: std::sync::RwLock::new(None),
+            record_pending: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -111,6 +136,67 @@ impl KubeOps {
                 None
             }
         }
+    }
+
+    /// Create the Activation record and mark it Deploying.
+    ///
+    /// Returns false when the record CRD is not served yet, which is a
+    /// cluster's first deploy: the caller sets `record_pending` and
+    /// [`ClusterOps::rediscover`] retries at the CRD barrier.
+    ///
+    /// The apply goes through the same path the plan's own node will take, so
+    /// field manager, identity hash and annotation stamping all match and the
+    /// later apply is an unchanged no-op.
+    async fn create_record(&self) -> bool {
+        let Some(name) = self.cfg.activation_name.as_ref() else {
+            return true;
+        };
+        let Some(ar) = self.activation_ar().await else {
+            return false;
+        };
+
+        // Only the CLI brings a manifest. The operator's record already
+        // exists on the cluster, because the operator is reconciling it, so
+        // there is nothing to create and it goes straight to marking the
+        // phase, which is what `begin` has always done for it.
+        if let Some(manifest) = self.cfg.activation_manifest.as_ref() {
+            let rid = ResourceId::from_value(manifest);
+            let Some((manifest_ar, scope)) = self.cached_kind(&rid.kind).await else {
+                return false;
+            };
+
+            let live = self.live_activations();
+            if let Err(e) = apply::apply_resource(
+                &self.client,
+                &manifest_ar,
+                scope,
+                manifest,
+                self.cfg.dry_run,
+                self.cfg.activation_identity_hash.as_deref(),
+                live.as_ref(),
+                self.cfg.force_conflicts,
+            )
+            .await
+            {
+                // Not fatal. Without the record the run behaves exactly as it
+                // did before this existed, and the deploy itself is what
+                // matters. Marking the phase below will 404 and be swallowed.
+                tracing::warn!(
+                    activation = %name,
+                    error = %e,
+                    "could not create the Activation record up front; a failure part way \
+                     through this run will leave nothing to say what it applied",
+                );
+            }
+        }
+
+        if let Err(e) = activation::begin_deploy(&self.client, &ar, name, 1).await {
+            // 404 on a cluster whose record CRD is served but whose record
+            // does not exist yet: the create above failed, or this is the
+            // operator on a record that has since gone.
+            tracing::debug!(activation = %name, error = %e, "could not mark the record Deploying");
+        }
+        true
     }
 
     /// Kind lookup from the cache, no refresh.
@@ -198,19 +284,56 @@ impl ClusterOps for KubeOps {
             return Ok(());
         }
         let Some(ar) = self.activation_ar().await else {
+            // No record CRD served yet. On a cluster's first deploy the CRD is
+            // in this very plan, so the record is created at the CRD barrier
+            // instead; see `rediscover`.
+            self.record_pending
+                .store(true, std::sync::atomic::Ordering::SeqCst);
             return Ok(());
         };
-        if let Some(name) = &self.cfg.activation_name
-            && let Err(e) = activation::begin_deploy(&self.client, &ar, name, 1).await
-        {
-            // 404 on the first deploy: the CR lands in the last wave.
-            tracing::debug!("activation not yet on cluster (first deploy): {e}");
-        }
+
+        // Read the live set BEFORE creating the record, so the annotation
+        // stamped on the record itself is computed the same way as every
+        // other resource's.
         let live = activation::live_activation_hashes(&self.client, &ar).await;
         if let Ok(mut slot) = self.live_activations.write() {
             *slot = live;
         }
+
+        if !self.create_record().await {
+            self.record_pending
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
         Ok(())
+    }
+
+    async fn abort(&self, reason: &str) -> Result<(), String> {
+        if self.cfg.dry_run || !self.cfg.mark_failed_on_abort {
+            return Ok(());
+        }
+        let (Some(ar), Some(name)) = (self.activation_ar().await, &self.cfg.activation_name) else {
+            return Ok(());
+        };
+        match tokio::time::timeout(
+            BEST_EFFORT_TIMEOUT,
+            activation::fail_deploy(&self.client, &ar, name, reason),
+        )
+        .await
+        {
+            Ok(Ok(())) => Ok(()),
+            // Nothing to fail. The record never got created, which is the
+            // pre-CRD window on a first deploy.
+            Ok(Err(activation::ActivationError::PatchFailed { source, .. }))
+                if classify(&source) == FailureClass::NotFound =>
+            {
+                Ok(())
+            }
+            Ok(Err(e)) => Err(describe(&e)),
+            Err(_) => Err(format!(
+                "no answer within {}s",
+                BEST_EFFORT_TIMEOUT.as_secs()
+            )),
+        }
     }
 
     async fn hydrate(&self, manifest: Value) -> Result<(Value, Vec<HydrationResult>), SecretError> {
@@ -409,8 +532,28 @@ impl ClusterOps for KubeOps {
 
     async fn rediscover(&self) -> Result<(), FetchError> {
         let new = fetch::discover_resources(&self.client).await?;
-        let mut d = self.discovery.write().await;
-        *d = fetch::merge_discovery(&d, new);
+        {
+            let mut d = self.discovery.write().await;
+            *d = fetch::merge_discovery(&d, new);
+        }
+
+        // A cluster's first deploy carries the record's own CRD, so `begin`
+        // could not create the record. This is the first moment it can: the
+        // engine only calls this once a CRD it applied is Established.
+        if self
+            .record_pending
+            .load(std::sync::atomic::Ordering::SeqCst)
+            && let Some(ar) = self.activation_ar().await
+        {
+            let live = activation::live_activation_hashes(&self.client, &ar).await;
+            if let Ok(mut slot) = self.live_activations.write() {
+                *slot = live;
+            }
+            if self.create_record().await {
+                self.record_pending
+                    .store(false, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
         Ok(())
     }
 
@@ -494,10 +637,16 @@ impl ClusterOps for KubeOps {
             dry_run: self.cfg.dry_run,
             ..Default::default()
         };
-        api.delete(&rid.name, &dp)
-            .await
-            .map(|_| ())
-            .map_err(|e| describe(&e))
+        // An object that is already gone is what the prune wanted. This is
+        // routine now that a failed run's whole closure is folded into the
+        // baseline: much of it was never created, and a later run pruning
+        // what an earlier one already removed must not read as a failure,
+        // which would land the new record Degraded for no reason.
+        match api.delete(&rid.name, &dp).await {
+            Ok(_) => Ok(()),
+            Err(kube::Error::Api(ae)) if ae.code == 404 => Ok(()),
+            Err(e) => Err(describe(&e)),
+        }
     }
 
     async fn finalize(&self, had_failures: bool) -> Result<Option<Finalized>, String> {
@@ -521,6 +670,7 @@ impl ClusterOps for KubeOps {
                 old.as_ref(),
                 had_failures,
                 self.cfg.receipt.as_ref(),
+                &self.cfg.consumed_failed,
             )
             .await
             .map(|()| Finalized {

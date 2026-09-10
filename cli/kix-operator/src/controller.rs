@@ -43,7 +43,7 @@ use serde_json::Value;
 use thiserror::Error;
 
 use kix::cluster::activation::{
-    self, PHASE_ACTIVE, PHASE_DEGRADED, PHASE_DEPLOYING, PHASE_SUPERSEDED,
+    self, PHASE_ACTIVE, PHASE_DEGRADED, PHASE_DEPLOYING, PHASE_FAILED, PHASE_SUPERSEDED,
 };
 use kix::cluster::apply::ChangeAction;
 use kix::cluster::fetch;
@@ -217,8 +217,21 @@ pub async fn reconcile_activation(
             Ok(Action::await_change())
         }
 
-        // Queued or new (no phase yet) — handle activation switchover
+        // Queued or new (no phase yet): handle activation switchover.
+        //
+        // A record with no phase is not necessarily a queued deploy waiting
+        // for us. The CLI creates its record at the start of a run and marks
+        // it Deploying a round trip later (kixpkgs#82), so for a moment it
+        // looks exactly like this. Adopting one would supersede the Active
+        // record before the CLI had applied anything, stamp our finalizer on
+        // a record we do not own, and put two writers on one closure.
+        // `spec.source` is the discriminator: we write it when we adopt a
+        // deploy, and the CLI never does. Same rule as the Deploying arm.
         s if s.is_empty() || s == activation::PHASE_QUEUED => {
+            if source_path(&activation).is_none() {
+                tracing::debug!(name, "record has no spec.source; not ours to drive");
+                return Ok(Action::await_change());
+            }
             tracing::info!(name, cluster = %cluster, "Processing Queued activation");
 
             // 1. Find all Queued activations for this cluster
@@ -295,11 +308,35 @@ pub async fn reconcile_activation(
             return run_reconcile(&activation, &ctx, name, &cluster, false).await;
         }
 
-        // Deploying — treat as a resume (same as Queued that's already transitioning)
+        // Deploying: a resume, the same as a Queued one already transitioning.
+        //
+        // Unless nobody asked us. The CLI now creates its record at the start
+        // of a deploy rather than the end (kixpkgs#82), so a `Deploying`
+        // record is just as likely to be a `kix deploy` in flight on
+        // somebody's laptop. `spec.source` is what tells the two apart: the
+        // operator writes it when it adopts a deploy, and the CLI never does.
+        // Reconciling one of those would mean two writers on the same
+        // closure, and stamping our finalizer on it would leave the CLI's
+        // record undeletable by anything but us.
         s if s == PHASE_DEPLOYING => {
+            if source_path(&activation).is_none() {
+                tracing::debug!(
+                    name,
+                    "Deploying record has no spec.source; not ours to drive"
+                );
+                return Ok(Action::await_change());
+            }
             tracing::info!(name, "Resuming Deploying activation");
             ensure_finalizer(&ctx.client, &ctx.activation_ar, name, &activation).await?;
             return run_reconcile(&activation, &ctx, name, &cluster, true).await;
+        }
+
+        // Failed is terminal. The deploy that owned it has stopped, and the
+        // next one folds its closure into the plan and supersedes it. There
+        // is nothing here to reconcile toward.
+        s if s == PHASE_FAILED => {
+            tracing::debug!(name, "Failed activation, nothing to reconcile");
+            Ok(Action::await_change())
         }
 
         _ => {
@@ -436,6 +473,16 @@ async fn run_reconcile(
             // controllers.
             force_conflicts: false,
             dry_run: false,
+            // The operator created the record itself and owns `spec.source`;
+            // it has no stamped manifest to re-apply and needs none.
+            activation_manifest: None,
+            // The operator plans against live objects by design, so a failed
+            // deploy's leftovers are already visible to its next reconcile.
+            // Nothing to fold, nothing to supersede.
+            consumed_failed: Vec::new(),
+            // Its model is resume-on-requeue: a reconcile that returns early
+            // is retried, so marking the record Failed would fight it.
+            mark_failed_on_abort: false,
         },
     ));
 

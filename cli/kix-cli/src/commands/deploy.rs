@@ -24,6 +24,7 @@ use std::time::Duration;
 use miette::{IntoDiagnostic, Result, miette};
 use serde_json::Value;
 
+use crate::commands::baseline;
 use kix::cluster::activation;
 use kix::cluster::apply::{ApplyAction, ChangeAction};
 use kix::cluster::fetch;
@@ -116,7 +117,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     // 3. Resolve old activation
     //    Default: connect to cluster, fetch Active Activation, resolve to local store graph
     //    --current-activation: use local cache (no cluster connection yet)
-    let (old_graph, old_manifests, pre_client, active_hash) = if args.current_activation {
+    let (old_graph, active_manifests, pre_client, active_hash) = if args.current_activation {
         // Local cache mode — no cluster connection
         let (og, om) = load_old_from_cache(&args.cluster, &ctx.global);
         let hash = find_activation_identity_hash(&om);
@@ -129,12 +130,58 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         (og, om, client, hash)
     };
 
-    // 4. Local DAG diff: old vs new
-    let all_actions = kix::cluster::apply::detect_changes(&new_manifests, &old_manifests);
+    // 3b. Closures of deploys that stopped part way. They applied objects and
+    //     never became Active, so neither side of the comparison above knows
+    //     about them (kixpkgs#82). Resolved from the local store by hash, so
+    //     every input to the plan is still a compiler output.
+    //
+    //     `--current-activation` deliberately has no cluster connection, so it
+    //     cannot see the records and says so in its own flag documentation.
+    let failed_baseline = match (&pre_client, args.current_activation) {
+        (Some(client), false) => ctx.runtime.block_on(async {
+            let discovery = fetch::discover_resources(client)
+                .await
+                .map_err(|e| miette!("API discovery failed: {e}"))?;
+            let Some((ar, _)) = kix::cluster::activation::find_activation_ar(&discovery)
+                .map_err(|e| miette!("{e}"))?
+            else {
+                return Ok(baseline::FailedBaseline::default());
+            };
+            // Another deploy still in flight would be applying the very
+            // objects this plan might prune, so leave its work alone rather
+            // than guessing which of the two is real.
+            if let Some(record) = baseline::deploy_in_flight(client, ar, &args.cluster).await {
+                baseline::report_in_flight(&record, ctx.global.quiet);
+                return Ok(baseline::FailedBaseline::default());
+            }
+            Ok::<_, miette::Report>(
+                baseline::load_failed(client, ar, &args.cluster, ctx.global.quiet).await,
+            )
+        })?,
+        _ => baseline::FailedBaseline::default(),
+    };
+
+    // The plan display and the prune ordering both need a manifest for an
+    // object that exists only in a failed closure.
+    let old_manifests =
+        kix::cluster::apply::baseline_manifests(&active_manifests, &failed_baseline.closures);
+
+    // 4. Local DAG diff: old vs new, then fold in what the failed deploys may
+    //    have left. The fold can turn a Skip into an Apply (repair) and can
+    //    add orphans (prune); it never invents a change the closures do not
+    //    justify.
+    let all_actions = kix::cluster::apply::fold_failed_closures(
+        kix::cluster::apply::detect_changes(&new_manifests, &active_manifests),
+        &new_manifests,
+        &failed_baseline.closures,
+    );
 
     // Stateful migration pair detection (doc 67). Phase 1: detect + refuse
     // to proceed without explicit --accept-migrations. No execution yet.
-    let migration_pairs = detect_migration_pairs(&new_manifests, &old_manifests);
+    // Against the Active closure only. A half-applied closure is not a
+    // previous intended state, so pairing against it would invent migrations
+    // nobody declared.
+    let migration_pairs = detect_migration_pairs(&new_manifests, &active_manifests);
     if !migration_pairs.is_empty() {
         print_migration_pairs(&migration_pairs);
         if !args.accept_migrations {
@@ -273,6 +320,27 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
                 println!("    {} {}", output::red("-"), rid.display_id());
             }
         }
+
+        // Where the extra work in this plan came from. Without this the
+        // reader sees a deploy of an unchanged config proposing changes, and
+        // has no way to tell why.
+        if !failed_baseline.is_empty() {
+            let names: Vec<&str> = failed_baseline
+                .consumed
+                .iter()
+                .map(String::as_str)
+                .collect();
+            println!(
+                "  {} reconciling what {} left behind ({})",
+                output::yellow("!"),
+                if names.len() == 1 {
+                    "a failed deploy".to_string()
+                } else {
+                    format!("{} failed deploys", names.len())
+                },
+                names.join(", "),
+            );
+        }
     }
 
     // Imports are applied like any other resource (SSA); readiness polls the
@@ -307,6 +375,15 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         // path makes the call instead: it reads the live objects itself.
         let engine_decides = pre_client.is_none() && has_reruns && !args.dry_run;
         if failed_reruns.is_empty() && !engine_decides {
+            // A folded-in record still has to be superseded, even when its
+            // closure turned out to differ from the plan only in things
+            // nothing prunes (a Namespace, the record itself). The engine
+            // never runs on this path, and `finalize_deploy` is where records
+            // are normally consumed, so do it here or report the same failed
+            // deploy on every deploy from now on.
+            if let (Some(client), false) = (&pre_client, args.dry_run) {
+                supersede_consumed(ctx, client, &failed_baseline.consumed, ctx.global.quiet);
+            }
             if !ctx.global.quiet {
                 match (&activation_identity_hash, &active_hash) {
                     (Some(new), Some(old)) if new == old => println!(
@@ -430,6 +507,8 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         activation_identity_hash.as_deref(),
         receipt.as_ref(),
         pre_client,
+        activation_manifest,
+        &failed_baseline.consumed,
     ));
 
     // Save activation path for next deploy's diff and for soft `kix gc`.
@@ -603,6 +682,46 @@ async fn load_old_from_cluster(
             }
             Ok((None, vec![], Some(client), None))
         }
+    }
+}
+
+/// Mark records Superseded whose leftovers this run has nothing left to do
+/// about.
+///
+/// Only for the path that returns before the engine starts. Every other route
+/// goes through `finalize_deploy`, which does this as part of the lifecycle.
+/// Best-effort: a record that will not supersede is reported again next time,
+/// which is annoying but not wrong.
+fn supersede_consumed(
+    ctx: &CommandContext,
+    client: &kube::Client,
+    consumed: &[String],
+    quiet: bool,
+) {
+    if consumed.is_empty() {
+        return;
+    }
+    let done = ctx.runtime.block_on(async {
+        let Ok(discovery) = fetch::discover_resources(client).await else {
+            return 0usize;
+        };
+        let Ok(Some((ar, _))) = kix::cluster::activation::find_activation_ar(&discovery) else {
+            return 0;
+        };
+        let mut done = 0;
+        for name in consumed {
+            match kix::cluster::activation::supersede_activation(client, ar, name).await {
+                Ok(()) => done += 1,
+                Err(e) => tracing::warn!(activation = %name, error = %e, "could not supersede"),
+            }
+        }
+        done
+    });
+    if done > 0 && !quiet {
+        println!(
+            "  {} {done} failed deploy record(s) had nothing left to reconcile; marked superseded",
+            output::dim("="),
+        );
     }
 }
 
@@ -928,6 +1047,8 @@ async fn run_deploy_async(
     activation_identity_hash: Option<&str>,
     receipt: Option<&Value>,
     pre_client: Option<kube::Client>,
+    activation_manifest: Option<&Value>,
+    consumed_failed: &[String],
 ) -> Result<()> {
     let timeout = parse_timeout(args.timeout.as_deref())?;
 
@@ -980,6 +1101,10 @@ async fn run_deploy_async(
         stall: StallPolicy::from_env(),
         rerun_failed: true,
     };
+    // Ctrl-C and SIGTERM now have to reach the engine: the record exists from
+    // the start of the run, so a process that just dies leaves it Deploying.
+    config.cancel.cancel_on_interrupt();
+
     let ops: Arc<dyn ClusterOps> = Arc::new(KubeOps::new(
         client.clone(),
         discovery,
@@ -990,6 +1115,13 @@ async fn run_deploy_async(
             receipt: receipt.cloned(),
             force_conflicts: args.force_conflicts,
             dry_run: args.dry_run,
+            // Create the record before the first wave, so a run that stops
+            // part way leaves something that says what it was attempting
+            // (kixpkgs#82). The plan applies this same manifest again as its
+            // last node, which is then an unchanged no-op.
+            activation_manifest: activation_manifest.cloned(),
+            consumed_failed: consumed_failed.to_vec(),
+            mark_failed_on_abort: true,
         },
     ));
 

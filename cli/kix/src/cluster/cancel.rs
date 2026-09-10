@@ -32,6 +32,54 @@ impl CancelToken {
         self.inner.cancel();
     }
 
+    /// Cancel when the process is interrupted or asked to terminate.
+    ///
+    /// Must be called from inside a tokio runtime; the watcher task ends when
+    /// the token is cancelled by anything, so it does not outlive the run.
+    ///
+    /// This is what turns Ctrl-C into an orderly stop rather than a killed
+    /// process. It matters more than it used to: the deploy record is now
+    /// created before the first wave, so a run that dies without cancelling
+    /// leaves the record `Deploying` and nothing to say the run is over. A
+    /// cancel takes the engine through its abort path, which marks the record
+    /// `Failed` and lets the next deploy reconcile what this one applied.
+    ///
+    /// A second interrupt exits the process immediately. That has to be done
+    /// by hand: registering a signal with tokio replaces the OS default for
+    /// the life of the process, so after the first Ctrl-C nothing but SIGKILL
+    /// would end it, and an orderly stop against an unresponsive apiserver
+    /// can sit through a 60 second bound. Exiting this way leaves the record
+    /// `Deploying`, which the next deploy reports rather than guesses at.
+    pub fn cancel_on_interrupt(&self) {
+        let token = self.clone();
+        tokio::spawn(async move {
+            let mut terminate =
+                match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        tracing::debug!("cannot watch SIGTERM: {e}");
+                        return;
+                    }
+                };
+            let reason = tokio::select! {
+                _ = tokio::signal::ctrl_c() => "interrupted",
+                _ = terminate.recv() => "terminated",
+                _ = token.cancelled() => return,
+            };
+            tracing::info!(%reason, "cancelling the run");
+            token.cancel_with_reason(reason);
+
+            // From here the run is winding down. Give the user the escape
+            // hatch the OS default would have given them.
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = terminate.recv() => {}
+            }
+            // 130 is the conventional shell code for "killed by SIGINT".
+            std::process::exit(130);
+        });
+    }
+
     /// Signal cancellation and record why. The first reason wins.
     pub fn cancel_with_reason(&self, reason: impl Into<String>) {
         if let Ok(mut slot) = self.reason.lock()

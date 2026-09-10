@@ -11,6 +11,7 @@ use std::sync::Arc;
 use miette::{IntoDiagnostic, Result, miette};
 use serde_json::Value;
 
+use crate::commands::baseline;
 use kix::cluster::activation;
 use kix::cluster::apply::ChangeAction;
 use kix::cluster::fetch;
@@ -66,10 +67,17 @@ async fn run_list_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()>
         .await
         .map_err(|e| miette!("failed to find active activation: {e}"))?;
 
-    let superseded =
+    // Only records that really were the cluster's state. A deploy that
+    // stopped part way is Superseded once a later plan folded its leftovers
+    // in, but it was never running, so rolling back to it would apply a state
+    // the cluster has never been in.
+    let superseded: Vec<_> =
         activation::list_superseded_activations(&client, &activation_ar, &args.cluster)
             .await
-            .map_err(|e| miette!("failed to list superseded activations: {e}"))?;
+            .map_err(|e| miette!("failed to list superseded activations: {e}"))?
+            .into_iter()
+            .filter(activation::SupersededActivation::was_ever_current)
+            .collect();
 
     let format = ctx.output_format(OutputFormat::Text);
     match format {
@@ -241,10 +249,17 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
     }
 
     // 3. Find available Superseded activations
-    let superseded =
+    // Only records that really were the cluster's state. A deploy that
+    // stopped part way is Superseded once a later plan folded its leftovers
+    // in, but it was never running, so rolling back to it would apply a state
+    // the cluster has never been in.
+    let superseded: Vec<_> =
         activation::list_superseded_activations(&client, &activation_ar, &args.cluster)
             .await
-            .map_err(|e| miette!("failed to list superseded activations: {e}"))?;
+            .map_err(|e| miette!("failed to list superseded activations: {e}"))?
+            .into_iter()
+            .filter(activation::SupersededActivation::was_ever_current)
+            .collect();
 
     if superseded.is_empty() {
         return Err(miette!(
@@ -360,8 +375,38 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
         None => (None, vec![]),
     };
 
-    // 6. Compute changes (current → target)
-    let all_actions = kix::cluster::apply::detect_changes(&target_manifests, &current_manifests);
+    // 5b. Closures of deploys that stopped part way. A rollback is the most
+    //     likely thing to run straight after one, and its baseline has exactly
+    //     the same hole as a deploy's: those objects are in neither the
+    //     current closure nor the target one (kixpkgs#82).
+    let failed_baseline = match baseline::deploy_in_flight(&client, &activation_ar, &args.cluster)
+        .await
+    {
+        Some(record) => {
+            baseline::report_in_flight(&record, ctx.global.quiet);
+            baseline::FailedBaseline::default()
+        }
+        None => {
+            baseline::load_failed(&client, &activation_ar, &args.cluster, ctx.global.quiet).await
+        }
+    };
+
+    // The merged set is for the plan display and for prune ordering only.
+    // The comparison itself stays against the current closure: folding the
+    // failed manifests into the old side would make an object that a failed
+    // deploy declared but never created read as already present, and if the
+    // target declares it at the same hash the plan would skip it and the
+    // rollback would finalize claiming an object that is not there.
+    let baseline_manifests =
+        kix::cluster::apply::baseline_manifests(&current_manifests, &failed_baseline.closures);
+
+    // 6. Compute changes (current → target), then fold in what the failed
+    //    deploys may have left behind.
+    let all_actions = kix::cluster::apply::fold_failed_closures(
+        kix::cluster::apply::detect_changes(&target_manifests, &current_manifests),
+        &target_manifests,
+        &failed_baseline.closures,
+    );
 
     let mut orphan_rids: Vec<ResourceId> = Vec::new();
     for action in &all_actions {
@@ -495,6 +540,10 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
 
     let cluster_name = target_graph.cluster_name.clone();
     let discovery = Arc::new(tokio::sync::RwLock::new(discovery));
+    // Ctrl-C and SIGTERM now have to reach the engine: the record exists from
+    // the start of the run, so a process that just dies leaves it Deploying.
+    config.cancel.cancel_on_interrupt();
+
     let ops: Arc<dyn ClusterOps> = Arc::new(KubeOps::new(
         client.clone(),
         discovery,
@@ -507,6 +556,12 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
             // record the machine running the rollback as the provenance of a
             // build it did not make.
             receipt: None,
+            // A rollback's target record already exists on the cluster as a
+            // Superseded one, so this re-asserts it and marks it Deploying
+            // for the duration, the same as a deploy.
+            activation_manifest: record.cloned(),
+            consumed_failed: failed_baseline.consumed.clone(),
+            mark_failed_on_abort: true,
             // Rollback re-applies a known-good prior activation; conflicts
             // fail loudly rather than silently overwriting whatever the
             // cluster has.
@@ -519,7 +574,9 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
         ops,
         plan,
         &orphan_rids,
-        &current_manifests,
+        // The merged set, so `prune_order` can topologically sort an orphan
+        // that exists in no current closure.
+        &baseline_manifests,
         &config,
         observer,
     )
@@ -585,10 +642,17 @@ async fn run_operator_async(args: &RollbackArgs, ctx: &CommandContext) -> Result
     }
 
     // 3. Find superseded activations
-    let superseded =
+    // Only records that really were the cluster's state. A deploy that
+    // stopped part way is Superseded once a later plan folded its leftovers
+    // in, but it was never running, so rolling back to it would apply a state
+    // the cluster has never been in.
+    let superseded: Vec<_> =
         activation::list_superseded_activations(&client, &activation_ar, &args.cluster)
             .await
-            .map_err(|e| miette!("failed to list superseded activations: {e}"))?;
+            .map_err(|e| miette!("failed to list superseded activations: {e}"))?
+            .into_iter()
+            .filter(activation::SupersededActivation::was_ever_current)
+            .collect();
 
     if superseded.is_empty() {
         return Err(miette!(
