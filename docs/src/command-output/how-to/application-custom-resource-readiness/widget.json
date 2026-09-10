@@ -1,0 +1,19 @@
+{
+  "id": "how-to/application-custom-resource-readiness/widget",
+  "group": "how-to/application-custom-resource-readiness",
+  "page": "/docs/how-to/author-packages-and-clusters/declare-readiness-for-custom-resources/",
+  "cwd": "kix-examples/",
+  "generator": "offline",
+  "outputExcerpt": true,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix build how-to-composition --output json",
+      "stdout": "{\n  \"apiVersion\": \"widgets.example.com/v1\",\n  \"kind\": \"Widget\",\n  \"metadata\": {\n    \"name\": \"example\",\n    \"readiness\": \"{\\\"equals\\\":\\\"Ready\\\",\\\"path\\\":\\\"/status/phase\\\"}\"\n  },\n  \"spec\": {\n    \"size\": \"small\"\n  }\n}\n",
+      "stderr": "",
+      "stdoutDrift": "\"apiVersion\": \"widgets.example.com/v1\",\n\"kind\": \"Widget\",\n\"metadata\": {\n\"name\": \"example\",\n\"readiness\": \"{\\\"equals\\\":\\\"Ready\\\",\\\"path\\\":\\\"/status/phase\\\"}\"\n\"size\": \"small\"\n\"spec\": {\n{\n}\n},\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

@@ -1,4 +1,44 @@
 ---
 title: "Install and run the Kix CLI"
-description: TODO
+description: "Install Kix with Nix and verify that the CLI is available."
 ---
+
+import Command from '/src/components/Command.astro';
+import version from '/src/command-output/how-to/application-install/version.json';
+
+This guide assumes that [Nix](https://nixos.org/download/) is installed with
+flakes enabled.
+
+## Install Kix
+
+Install the `kix` package from the public `kixpkgs` flake:
+
+<Command commands={["nix profile install github:kix-run/kixpkgs#kix"]} />
+
+Nix adds the executable to your user profile. Open a new shell if the current
+one does not find it immediately.
+
+## Verify the installation
+
+Ask Kix for its version:
+
+<Command {...version} />
+
+Then confirm that the command list is available:
+
+<Command commands={["kix --help"]} />
+
+Kix evaluates the flake in the current directory unless you pass `--flake`.
+From a Kix project, a useful first command is:
+
+<Command commands={["kix list clusters"]} cwd="kix-examples/" />
+
+If the project is elsewhere, point Kix at it explicitly:
+
+<Command commands={["kix --flake /path/to/project list clusters"]} />
+
+:::tip[Try it as a tutorial]
+Work through [local setup and your first Kix deployment](/docs/tutorials/02-local-setup-and-first-run/)
+to create a kind cluster and run the complete edit, check, deploy, and verify
+loop.
+:::

@@ -1,0 +1,19 @@
+{
+  "id": "how-to/application-cluster-settings/namespace-resources",
+  "group": "how-to/application-cluster-settings",
+  "page": "/docs/how-to/author-packages-and-clusters/configure-namespace-policy-and-global-cluster-settings/",
+  "cwd": "kix-examples/",
+  "generator": "offline",
+  "outputExcerpt": true,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix build how-to-composition --output json",
+      "stdout": "[\n  {\n    \"kind\": \"Namespace\",\n    \"name\": \"apps\",\n    \"labels\": {\n      \"app.kubernetes.io/managed-by\": \"kix\",\n      \"kubernetes.io/metadata.name\": \"apps\",\n      \"platform.example.com/tier\": \"application\"\n    },\n    \"annotations\": {\n      \"kix.run/depends-on\": \"requires:kda3jwwkcfas7vfwl370cz40wafpbxgb\",\n      \"kix.run/identity-hash\": \"k2bga9v0b2s1dbzi64nhmlk25v68yxj6\",\n      \"kix.run/package\": \"_cluster\",\n      \"kix.run/package-namespace\": \"_cluster\",\n      \"platform.example.com/owner\": \"platform\"\n    },\n    \"hard\": null\n  },\n  {\n    \"kind\": \"ResourceQuota\",\n    \"name\": \"apps-quota\",\n    \"labels\": {\n      \"app.kubernetes.io/managed-by\": \"kix\"\n    },\n    \"annotations\": {\n      \"kix.run/identity-hash\": \"kda3jwwkcfas7vfwl370cz40wafpbxgb\",\n      \"kix.run/package\": \"_cluster\",\n      \"kix.run/package-namespace\": \"_cluster\"\n    },\n    \"hard\": {\n      \"requests.cpu\": \"2\",\n      \"requests.memory\": \"2Gi\"\n    }\n  }\n]\n",
+      "stderr": "",
+      "stdoutDrift": "\"annotations\": {\n\"app.kubernetes.io/managed-by\": \"kix\"\n\"app.kubernetes.io/managed-by\": \"kix\",\n\"hard\": null\n\"hard\": {\n\"kind\": \"Namespace\",\n\"kind\": \"ResourceQuota\",\n\"kix.run/depends-on\": \"requires:<identity-hash>\",\n\"kix.run/identity-hash\": \"<identity-hash>\",\n\"kix.run/package\": \"_cluster\",\n\"kix.run/package-namespace\": \"_cluster\"\n\"kix.run/package-namespace\": \"_cluster\",\n\"kubernetes.io/metadata.name\": \"apps\",\n\"labels\": {\n\"name\": \"apps\",\n\"name\": \"apps-quota\",\n\"platform.example.com/owner\": \"platform\"\n\"platform.example.com/tier\": \"application\"\n\"requests.cpu\": \"2\",\n\"requests.memory\": \"2Gi\"\n[\n]\n{\n}\n},\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

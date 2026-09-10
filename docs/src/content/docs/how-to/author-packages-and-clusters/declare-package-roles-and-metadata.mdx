@@ -1,4 +1,57 @@
 ---
 title: "Declare package roles and metadata"
-description: TODO
+description: "Describe package ownership and lifecycle, and claim a registered infrastructure role when the package provides one."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import packageMetadata from '/src/snippets/how-to/composition/config-package/packageMetadataFields.json';
+import infrastructureRole from '/src/snippets/how-to/composition/storage-provider/infrastructureRole.json';
+import roleOutputContract from '/src/snippets/how-to/composition/storage-provider/roleOutputContract.json';
+import check from '/src/command-output/how-to/application-package-metadata/check.json';
+
+Add `meta` beside a package's `options` and `build` attributes:
+
+<Snippet {...packageMetadata} />
+
+Use these fields to describe the package:
+
+- `version` identifies the package version shown by inspection commands and in
+  PackageInstance records.
+- `description` gives the package a short human-readable purpose.
+- `owner` identifies the team responsible for it and supports governance
+  scorecard rules.
+- `lifecycle` classifies its state as `stateless`, `stateful`, `durable`, or
+  `ephemeral`.
+- `scope` records whether the package is namespace-scoped or cluster-scoped.
+
+Application packages usually need only this descriptive metadata.
+
+## Claim an infrastructure role
+
+Add `meta.roles` only when the package provides one of Kix's registered
+cluster infrastructure roles. This minimal provider claims the
+`storageClasses` role:
+
+<Snippet {...infrastructureRole} />
+
+Registered roles are also dependency-resolution aliases. Kix validates role
+names, prevents conflicting providers, and checks any required `out`
+attributes when a consumer resolves the role.
+
+The `storageClasses` role requires an exported `storageClassName`, so the
+package root supplies it:
+
+<Snippet {...roleOutputContract} />
+
+Do not use roles as general package tags. Ordinary application dependencies
+are resolved through instance names, aliases, or explicit `deps` wiring.
+
+## Check the declarations
+
+Run the normal checks after adding or changing metadata:
+
+<Command {...check} />
+
+Evaluation fails if a role name is unknown, two managed packages claim the
+same role, or a resolved provider does not satisfy the role's output contract.

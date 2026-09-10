@@ -1,4 +1,45 @@
 ---
 title: "Configure namespace policy and global cluster settings"
-description: TODO
+description: "Set shared cluster metadata, Kubernetes compatibility, namespace metadata, and resource quotas."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import clusterSettings from '/src/snippets/how-to/composition/cluster/clusterAndNamespaceSettings.json';
+import check from '/src/command-output/how-to/application-cluster-settings/check.json';
+import namespaceResources from '/src/command-output/how-to/application-cluster-settings/namespace-resources.json';
+
+Set cluster-wide values and namespace policy in a module passed to
+`kix.buildCluster`:
+
+<Snippet {...clusterSettings} />
+
+The cluster-wide settings in this example have distinct jobs:
+
+- `clusterDomain` is used when Kix derives service FQDNs.
+- `clusterLabels` adds the given labels to every managed resource.
+- `k8sVersion` lets package compatibility checks evaluate against the intended
+  Kubernetes version.
+
+The `namespaces.apps` block configures the generated `apps` Namespace. Its
+`labels` and `annotations` are added to that Namespace. `resourceQuota` is the
+`hard` map for a generated ResourceQuota named `apps-quota`.
+
+Add instances beneath the same namespace key. Kix also creates a Namespace for
+an instance namespace that has no explicit `namespaces` block, but the explicit
+block is where its policy belongs.
+
+## Check the cluster
+
+Run the normal pre-deploy checks:
+
+<Command {...check} />
+
+To inspect the generated Namespace and ResourceQuota, render the cluster as
+JSON. The excerpt shows the two relevant resources from the complete build:
+
+<Command {...namespaceResources} />
+
+Check the generated resources again after changing a quota or a shared label.
+This catches invalid package configuration and Kubernetes schema problems
+before deployment.

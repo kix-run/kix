@@ -1,4 +1,44 @@
 ---
 title: "Declare readiness for custom resources"
-description: TODO
+description: "Tell Kix which status value means that an operator-managed custom resource is ready."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import customResourceReadiness from '/src/snippets/how-to/composition/custom-resource-package/customResourceReadiness.json';
+import widget from '/src/command-output/how-to/application-custom-resource-readiness/widget.json';
+
+Use a readiness declaration when a custom resource's controller does not set a
+standard `Ready` or `Available` condition. Declare the controller's convention
+on the CRD or CRD reference, then create resources through its typed builder:
+
+<Snippet {...customResourceReadiness} />
+
+`path` is a JSON pointer into the live custom resource. `equals` is the string
+value that indicates readiness. In this example, Kix waits until
+`status.phase` is `Ready`.
+
+Keep this declaration in the package that owns or imports the CRD. Every custom
+resource created through `widgetCrd.out.mkCR` then receives the same readiness
+rule, along with its dependency on the CRD.
+
+## Check the generated custom resource
+
+Build the cluster as JSON and inspect the custom resource. The output excerpt
+shows the readiness annotation Kix generated from the declaration:
+
+<Command {...widget} />
+
+Run the normal pre-deploy checks as well:
+
+<Command commands={["kix check how-to-composition"]} cwd="kix-examples/" />
+
+During deployment, Kix reads the live object at the declared path and waits for
+the expected value. Make the path match the status field written by the
+controller, including its exact capitalization.
+
+:::note[Explanation]
+See [Kubernetes readiness and post-deploy verification solve different problems](/docs/explanation/kubernetes-readiness-and-post-deploy-verification/)
+for when resource readiness is sufficient and when to add an end-to-end health
+check.
+:::

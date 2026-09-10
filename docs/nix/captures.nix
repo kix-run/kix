@@ -862,6 +862,121 @@
   }
 
   {
+    group = "how-to/application-install";
+    page = "/docs/how-to/start-and-inspect/install-and-run-the-kix-cli/";
+    cwd = "";
+    offline = [
+      {
+        capture = "version";
+        run = [
+          "kix"
+          "--version"
+        ];
+      }
+      {
+        # The guide uses help only as a smoke test. Run it so the command
+        # stays valid, but do not make the reader scan the full help text.
+        prepare = [
+          "kix"
+          "--help"
+        ];
+      }
+    ];
+  }
+
+  {
+    group = "how-to/application-cluster-settings";
+    page = "/docs/how-to/author-packages-and-clusters/configure-namespace-policy-and-global-cluster-settings/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "check";
+        run = [
+          "kix"
+          "check"
+          "how-to-composition"
+        ];
+      }
+      {
+        capture = "namespace-resources";
+        run = [
+          "kix"
+          "build"
+          "how-to-composition"
+          "--output"
+          "json"
+        ];
+        stdoutJq = ''
+          [.[]
+                  | select(
+                      (.kind == "Namespace" and .metadata.name == "apps")
+                      or (.kind == "ResourceQuota" and .metadata.name == "apps-quota")
+                    )
+                  | {
+                      kind,
+                      name: .metadata.name,
+                      labels: .metadata.labels,
+                      annotations: .metadata.annotations,
+                      hard: .spec.hard
+                    }]'';
+      }
+    ];
+  }
+
+  {
+    group = "how-to/application-package-metadata";
+    page = "/docs/how-to/author-packages-and-clusters/declare-package-roles-and-metadata/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "check";
+        run = [
+          "kix"
+          "check"
+          "how-to-composition"
+        ];
+      }
+    ];
+  }
+
+  {
+    group = "how-to/application-custom-resource-readiness";
+    page = "/docs/how-to/author-packages-and-clusters/declare-readiness-for-custom-resources/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "widget";
+        run = [
+          "kix"
+          "build"
+          "how-to-composition"
+          "--output"
+          "json"
+        ];
+        stdoutJq = ''
+          .[]
+                  | select(.kind == "Widget" and .metadata.name == "example")
+                  | {
+                      apiVersion,
+                      kind,
+                      metadata: {
+                        name: .metadata.name,
+                        readiness: .metadata.annotations."kix.run/readiness"
+                      },
+                      spec
+                    }'';
+      }
+      {
+        prepare = [
+          "kix"
+          "check"
+          "how-to-composition"
+        ];
+      }
+    ];
+  }
+
+  {
     group = "how-to/application-typed-options";
     page = "/docs/how-to/author-packages-and-clusters/add-typed-package-options/";
     cwd = "kix-examples/";

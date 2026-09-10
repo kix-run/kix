@@ -1,0 +1,19 @@
+{
+  "id": "how-to/application-cluster-settings/check",
+  "group": "how-to/application-cluster-settings",
+  "page": "/docs/how-to/author-packages-and-clusters/configure-namespace-policy-and-global-cluster-settings/",
+  "cwd": "kix-examples/",
+  "generator": "offline",
+  "outputExcerpt": false,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix check how-to-composition",
+      "stdout": " TOOL         RESULT  DETAILS                                     \n eval         pass    15 manifests evaluated                      \n kubeconform  pass    skipped (not installed)                     \n pluto        pass    skipped (not installed)                     \n kyverno      pass    skipped (not installed)                     \n scorecard    skip    scorecard not enabled in cluster definition \n",
+      "stderr": "",
+      "stdoutDrift": "TOOL RESULT DETAILS\neval pass 15 manifests evaluated\nkubeconform pass skipped (not installed)\nkyverno pass skipped (not installed)\npluto pass skipped (not installed)\nscorecard skip scorecard not enabled in cluster definition\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

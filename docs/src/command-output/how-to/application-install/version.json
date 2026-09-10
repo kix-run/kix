@@ -1,0 +1,19 @@
+{
+  "id": "how-to/application-install/version",
+  "group": "how-to/application-install",
+  "page": "/docs/how-to/start-and-inspect/install-and-run-the-kix-cli/",
+  "cwd": "",
+  "generator": "offline",
+  "outputExcerpt": false,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix --version",
+      "stdout": "kix 0.1.0\n",
+      "stderr": "",
+      "stdoutDrift": "kix 0.1.0\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}
