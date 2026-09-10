@@ -164,7 +164,7 @@ Auto-derives CiliumNetworkPolicy from the DI graph:
 
 ### Environment Stamping (`env.nix`)
 
-- **`mkEnv`** — Stamp instance sets into env-prefixed namespaces (dev/staging/prod). Namespaces become `"${envName}-${setName}"`. Per-instance overrides via `overrides.${setName}.${instName}`. Adds `_envScope` to instances.
+- **`mkEnv`** — Stamp instance sets into env-prefixed namespaces (dev/staging/prod). Namespaces become `"${envName}-${setName}"`. Per-instance overrides via `overrides.${setName}.${instName}`. The namespace prefix is the only isolation: auto-instantiated plain deps follow the requesting namespace, while role providers and packages pinned via `namespace`/`autoNamespace` are shared across environments.
 
 ### Cluster Module Options (`modules.nix`)
 

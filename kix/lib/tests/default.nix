@@ -46,6 +46,65 @@ let
     pkgs = { };
   };
 
+  # A plain (non-role) dependency and its consumer. Role-named deps take a
+  # deliberately different path in `eval/auto.nix`: they are keyed by the
+  # role, so one provider is shared by every namespace. A plain dep is keyed
+  # `"${depName}@${requesterNs}"`, which is the path that makes mkEnv's
+  # namespaces do the isolating.
+  envSidecarPackage = mkCmPackage { name = "env-sidecar"; };
+
+  envSidecarConsumer = {
+    meta.version = "test";
+    build =
+      {
+        self,
+        scope,
+        envSidecar,
+        ...
+      }:
+      {
+        cm = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          name = "sidecar-consumer";
+          extra.data.sidecar = envSidecar.out.name;
+        };
+        root = self.cm;
+      };
+  };
+
+  # Renders its own config, so a test can tell two environments apart by
+  # what the ConfigMap says rather than only by which namespace it is in.
+  envProbePackage = {
+    meta.version = "test";
+    options.message = lib.mkOption {
+      type = lib.types.str;
+      default = "unset";
+    };
+    options.keep = lib.mkOption {
+      type = lib.types.str;
+      default = "unset";
+    };
+    build =
+      {
+        self,
+        scope,
+        config,
+        ...
+      }:
+      {
+        cm = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          name = "probe";
+          data = {
+            inherit (config) message keep;
+          };
+        };
+        root = self.cm;
+      };
+  };
+
   # ---------------------------------------------------------------- fixtures
 
   containerBase = {
@@ -2807,6 +2866,150 @@ let
       in
       hasName "dns" ms
       || throw "composed cluster produced no dns resource; got: ${builtins.toJSON (namesOf ms)}";
+    # mkEnv, through the public export
+    #
+    # `mkEnv` output only meets the instance submodule inside
+    # `buildCluster`, so these build clusters rather than inspecting the
+    # attrset. Inspecting the attrset is exactly what would have missed
+    # `_envScope`.
+
+    # The bug: every generated instance carried `_envScope`, which the
+    # instance submodule does not declare, so assigning a `mkEnv` result to
+    # `instances` failed with "The option ... does not exist".
+    t79-mkenv-output-is-assignable-to-instances =
+      let
+        application =
+          { env, ... }:
+          {
+            web = {
+              package = envProbePackage;
+              config.message = "hello from ${env.name}";
+            };
+          };
+        cluster = publicKix.buildCluster {
+          name = "mkenv-two-envs";
+          modules = [
+            {
+              instances =
+                publicKix.mkEnv "development" { } { app = application; }
+                // publicKix.mkEnv "production" { } { app = application; };
+            }
+          ];
+        };
+        ms = manifests cluster;
+        nsOf = name: (byName name (ofKind "Namespace" ms)) != null;
+        msg =
+          ns:
+          (lib.findFirst (m: (m.kind or "") == "ConfigMap" && (m.metadata.namespace or "") == ns) null ms)
+          .data.message or null;
+      in
+      (
+        nsOf "development-app"
+        && nsOf "production-app"
+        # The same instance-set function, evaluated once per environment,
+        # so `env.name` must differ between the two.
+        && msg "development-app" == "hello from development"
+        && msg "production-app" == "hello from production"
+      )
+      || throw "mkEnv did not produce two independent environments: ${builtins.toJSON (namesOf ms)}";
+
+    # `overrides.<set>.<instance>.config` merges into the generated config
+    # rather than replacing the instance.
+    t80-mkenv-per-instance-overrides-merge =
+      let
+        application =
+          { env, ... }:
+          {
+            web = {
+              package = envProbePackage;
+              config = {
+                message = "from ${env.name}";
+                keep = "me";
+              };
+            };
+          };
+        cluster = publicKix.buildCluster {
+          name = "mkenv-overrides";
+          modules = [
+            {
+              instances = publicKix.mkEnv "production" {
+                overrides.app.web.config.message = "overridden";
+              } { app = application; };
+            }
+          ];
+        };
+        cm = byName "probe" (ofKind "ConfigMap" (manifests cluster));
+      in
+      # `message` overridden, `keep` surviving from the generated config:
+      # the override merges into it rather than replacing it.
+      (cm.data.message == "overridden" && cm.data.keep == "me")
+      || throw "override did not merge over the generated config: ${builtins.toJSON cm.data}";
+
+    # A plain auto-instantiated dependency resolves into the *requesting*
+    # namespace, which under mkEnv is the environment. The namespace is the
+    # isolation; there is no second scoping mechanism, and this is what
+    # `_envScope` would have been for had it ever been read.
+    t81-mkenv-isolates-plain-auto-instantiated-packages =
+      let
+        application =
+          { ... }:
+          {
+            consumer.package = envSidecarConsumer;
+          };
+        cluster = publicKix.buildCluster {
+          name = "mkenv-auto";
+          modules = [
+            {
+              availablePackages.envSidecar.package = envSidecarPackage;
+              instances =
+                publicKix.mkEnv "development" { } { app = application; }
+                // publicKix.mkEnv "production" { } { app = application; };
+            }
+          ];
+        };
+        sidecarNamespaces = builtins.sort (a: b: a < b) (
+          map (m: m.metadata.namespace or "-") (
+            builtins.filter (m: (m.kind or "") == "ConfigMap" && (m.metadata.name or "") == "env-sidecar") (
+              manifests cluster
+            )
+          )
+        );
+      in
+      sidecarNamespaces == [
+        "development-app"
+        "production-app"
+      ]
+      || throw "plain auto dep not scoped per environment: ${builtins.toJSON sidecarNamespaces}";
+
+    # The deliberate exception, pinned so nobody "fixes" it into the rule
+    # above. A role-named dep is keyed by the role, never by the requesting
+    # namespace, so two environments share one provider on purpose
+    # (`eval/auto.nix`: "two consumers in two namespaces share one provider
+    # instead of instantiating two strong symbols of the same role").
+    t82-mkenv-shares-one-role-provider-across-environments =
+      let
+        application =
+          { ... }:
+          {
+            consumer.package = optionalScConsumer;
+          };
+        cluster = publicKix.buildCluster {
+          name = "mkenv-role";
+          modules = [
+            {
+              availablePackages.stock-storage.package = stockStorage;
+              instances =
+                publicKix.mkEnv "development" { } { app = application; }
+                // publicKix.mkEnv "production" { } { app = application; };
+            }
+          ];
+        };
+        stock = builtins.filter (
+          m: (m.kind or "") == "ConfigMap" && (m.metadata.name or "") == "stock-sc"
+        ) (manifests cluster);
+      in
+      builtins.length stock == 1
+      || throw "expected one shared role provider, got ${toString (builtins.length stock)}";
   }
   // import ./validate.nix {
     inherit

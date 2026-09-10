@@ -1118,7 +1118,11 @@ in {
 }
 ```
 
-Result: namespaces `dev-app`, `prod-app` with per-env config overrides. Each instance gets `_envScope` attached. `overrides.${setName}.${instName}` lets you override individual instances.
+Result: namespaces `dev-app`, `prod-app` with per-env config overrides. `overrides.${setName}.${instName}` lets you override individual instances.
+
+The namespace prefix is the whole isolation mechanism. A plain dependency auto-instantiated for `dev-app` lands in `dev-app`, because `eval/auto.nix` resolves it into the requesting namespace. Two exceptions, both deliberate: a package that declares its own `namespace` in `availablePackages`, and a cluster that sets `autoNamespace`, are pinned there and so shared by every environment. Role-named deps are keyed by the role rather than by namespace, so one provider serves them all.
+
+Every environment in one `mkEnv` cluster deploys together, under one activation. When you want them to deploy separately, write one cluster per environment over a shared base module instead (`clusters/example-multi-env/`).
 
 Use only when the environment dimension is genuinely "same shape, different tuning". Don't use for truly distinct shapes — make those separate clusters.
 
