@@ -1,0 +1,1 @@
+    (kix.expose { service = "service"; })

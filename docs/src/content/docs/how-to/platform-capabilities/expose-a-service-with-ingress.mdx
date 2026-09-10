@@ -1,4 +1,78 @@
 ---
 title: "Expose a service with Ingress"
-description: TODO
+description: "Add ingress-nginx to a cluster and expose a package Service on a hostname."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import exposureOption from '/src/snippets/how-to/platform/exposure-app/exposureOption.json';
+import exposureBuildEntry from '/src/snippets/how-to/platform/exposure-app/exposureBuildEntry.json';
+import ingressControllerInstance from '/src/snippets/how-to/platform/ingress-cluster/ingressControllerInstance.json';
+import ingressApplicationInstance from '/src/snippets/how-to/platform/ingress-cluster/ingressApplicationInstance.json';
+import check from '/src/command-output/how-to/platform-ingress/check.json';
+import ingress from '/src/command-output/how-to/platform-ingress/ingress.json';
+
+Use `kix.expose` when a package already creates a Service and the cluster uses
+ingress-nginx. Kix connects the generated Ingress to the Service and applies
+it after the Service and ingress controller resources.
+
+This guide assumes you have a local package whose returned parts include a
+Service named `service`.
+
+## Make the package exposable
+
+Add the standard ingress options to the package:
+
+<Snippet {...exposureOption} />
+
+The cluster author will use `config.ingress.host` to choose the hostname. The
+option set also accepts annotations for controller-specific configuration.
+
+Add `kix.expose` to the package's `build` list and name the Service part it
+should route to:
+
+<Snippet {...exposureBuildEntry} />
+
+`kix.expose` reads the Service name and port from that part, so the package
+doesn't need to repeat either value.
+
+## Add ingress-nginx to the cluster
+
+Create one ingress-nginx instance in the cluster:
+
+<Snippet {...ingressControllerInstance} />
+
+The instance's `ingressNginx` name matches the dependency requested by
+`kix.expose`. If the cluster already has one compatible instance, use that
+instance instead.
+
+The ingress-nginx Service defaults to `ClusterIP`. Set
+`config.serviceType = "LoadBalancer"` when your environment provides external
+load balancers and traffic must enter the cluster through that Service.
+
+## Set the application hostname
+
+Add the application instance and set the host clients will request:
+
+<Snippet {...ingressApplicationInstance} />
+
+Kix resolves the `ingressNginx` dependency and creates an Ingress for the
+application's Service.
+
+## Check the result
+
+Evaluate the cluster before deploying it:
+
+<Command {...check} />
+
+Inspect the generated Ingress:
+
+<Command {...ingress} />
+
+The Ingress uses `web.example.test`, selects the ingress class exposed by the
+controller instance, and sends requests for `/` to port 80 of the `web`
+Service.
+
+Before sending traffic, point the hostname at the address through which your
+ingress controller is reachable. The way you obtain that address depends on
+the cluster environment.

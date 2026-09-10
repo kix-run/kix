@@ -1,4 +1,79 @@
 ---
 title: "Expose a service with Gateway API"
-description: TODO
+description: "Create a Gateway and route a package Service through it with an HTTPRoute."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import exposureOption from '/src/snippets/how-to/platform/exposure-app/exposureOption.json';
+import exposureBuildEntry from '/src/snippets/how-to/platform/exposure-app/exposureBuildEntry.json';
+import gatewayInstance from '/src/snippets/how-to/platform/gateway-cluster/gatewayInstance.json';
+import gatewayApplicationInstance from '/src/snippets/how-to/platform/gateway-cluster/gatewayApplicationInstance.json';
+import check from '/src/command-output/how-to/platform-gateway/check.json';
+import httpRoute from '/src/command-output/how-to/platform-gateway/http-route.json';
+
+Use `kix.expose` to create an HTTPRoute for a package Service when the cluster
+uses Gateway API.
+
+This guide assumes:
+
+- Your cluster has the Gateway API CRDs and an Envoy Gateway controller.
+- You have a local package whose returned parts include a Service named
+  `service`.
+
+The `envoy-gateway` Kix package used below creates the `GatewayClass` and
+`Gateway` resources. Its default controller name is
+`gateway.envoyproxy.io/gatewayclass-controller`, which must match the
+controller installed in the cluster.
+
+## Make the package exposable
+
+Add the standard ingress options to the package:
+
+<Snippet {...exposureOption} />
+
+The option name is `ingress` for both supported exposure resources. Set
+`config.ingress.host` on an instance to choose its hostname.
+
+Add `kix.expose` to the package's `build` list and name the Service part it
+should route to:
+
+<Snippet {...exposureBuildEntry} />
+
+`kix.expose` reads the Service name and port from that part.
+
+## Create the Gateway
+
+Add a Gateway instance with an HTTP listener:
+
+<Snippet {...gatewayInstance} />
+
+The Gateway is in `gateway-system`, while the application in the next step is
+in another namespace. `allowedRoutes.namespaces.from = "All"` permits that
+HTTPRoute to attach to this listener.
+
+If your controller uses a different controller name, set
+`config.controllerName` on this instance to the value advertised by that
+controller.
+
+## Set the application hostname
+
+Add the application instance and set the host clients will request:
+
+<Snippet {...gatewayApplicationInstance} />
+
+Kix resolves the `gateway` dependency and creates an HTTPRoute for the
+application's Service.
+
+## Check the result
+
+Evaluate the cluster before deploying it:
+
+<Command {...check} />
+
+Inspect the generated HTTPRoute:
+
+<Command {...httpRoute} />
+
+The route attaches to the `gateway-system/gateway` Gateway and sends requests
+for `web.example.test` to port 80 of the `web` Service.
