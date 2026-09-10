@@ -16,8 +16,9 @@ In CI, identify the builder with the workflow URL and record the run ID:
 
 <Command
   commands={[
-    "kix compliance attest production --builder-id \"$BUILD_URL\" --invocation-id \"$BUILD_ID\" > provenance.json",
+    "kix compliance attest 19-scorecards --builder-id \"$BUILD_URL\" --invocation-id \"$BUILD_ID\" > provenance.json",
   ]}
+  cwd="kix-examples/"
 />
 
 This captured excerpt uses fixed example identifiers so you can see the main
@@ -38,6 +39,7 @@ or evidence-upload step:
   commands={[
     "jq -e '._type == \"https://in-toto.io/Statement/v1\" and .predicateType == \"https://slsa.dev/provenance/v1\"' provenance.json",
   ]}
+  cwd="kix-examples/"
 />
 
 If the working tree is dirty, Kix records that state and prints a warning. The

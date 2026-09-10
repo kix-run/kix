@@ -343,6 +343,27 @@ scenario that can exercise a group of related guides.
   Prefer the command's normal text output for introductory `diff`, `drift`,
   `status`, and similar workflows. Show a `jq` pipeline only when JSON
   processing is itself part of the reader's task, and keep it short.
+- Prefer a `shell` step when the command the reader types is a command
+  *line* rather than a single binary with arguments: a pipe, a redirect, or a
+  second tool such as `find`, `grep`, `sort`, or `jq`. `kix` (and `kubectl`,
+  live) are already on PATH carrying the driver's flags, so write the command
+  exactly as the page shows it.
+- Use a string `prepare` for a documented command whose output teaches
+  nothing but whose flags must keep working: `kix build demo > manifests.yaml`,
+  a `jq -e` assertion on a generated file, an `--output yaml` variant. It runs
+  on every regeneration and writes no sidecar, so a page can never keep
+  showing a flag the CLI has dropped. This is the main way a page's commands
+  stay honest without adding noise to the page.
+- Every step is bounded by `timeout` (default 600s). A step that stops making
+  progress fails the run by name. Raise it for a genuinely slow command; do
+  not raise it to hide one that stopped terminating.
+- Set `resetCluster = true` on the first live group that needs a whole-cluster
+  view. `kix diff` and `kix gc --hard` read every kix-managed resource in the
+  Kubernetes cluster and judge it against the one cluster you named, so the
+  tutorial deployments would otherwise show up as that cluster's removals.
+- Put a group that deliberately breaks the cluster last. A deploy whose probe
+  fails leaves a Degraded activation, and later groups preparing a deploy
+  would inherit the broken cluster.
 - Use `stdoutGrep` for a generated text excerpt when a command's stable,
   actionable diagnostic would otherwise be buried in stack traces or other
   incidental output. Match the diagnostic itself, not line positions. Matching

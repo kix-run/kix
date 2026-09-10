@@ -1,0 +1,19 @@
+{
+  "id": "how-to/application-kubectl/get-namespaces",
+  "group": "how-to/application-kubectl",
+  "page": "/docs/how-to/start-and-inspect/deploy-to-kind/",
+  "cwd": "kix-examples/",
+  "generator": "live",
+  "outputExcerpt": false,
+  "skipDriftCheck": true,
+  "commands": [
+    {
+      "command": "kubectl get namespaces",
+      "stdout": "NAME                 STATUS   AGE\ndefault              Active   60s\nhow-to-app           Active   55s\nkube-node-lease      Active   60s\nkube-public          Active   60s\nkube-system          Active   60s\nlocal-path-storage   Active   56s\n",
+      "stderr": "",
+      "stdoutDrift": "NAME STATUS AGE\ndefault Active <DURATION>\nhow-to-app Active <DURATION>\nkube-node-lease Active <DURATION>\nkube-public Active <DURATION>\nkube-system Active <DURATION>\nlocal-path-storage Active <DURATION>\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

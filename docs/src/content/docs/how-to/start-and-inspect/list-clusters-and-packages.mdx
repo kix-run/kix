@@ -4,6 +4,7 @@ description: "Discover the clusters exposed by a flake and inspect the package i
 ---
 
 import Command from '/src/components/Command.astro';
+import inspect from '/src/command-output/how-to/application-basics/inspect.json';
 import listClusters from '/src/command-output/how-to/application-list/list-clusters.json';
 import listPackages from '/src/command-output/how-to/application-list/list-packages.json';
 
@@ -48,7 +49,7 @@ Use this command when you need to confirm that:
 `list packages` is intentionally compact. Use `inspect` to see package parts,
 dependencies, and exported outputs:
 
-<Command commands={["kix inspect how-to-application"]} cwd="kix-examples/" />
+<Command expandable {...inspect} />
 
 Use `graph` when the relationship between instances or resources is the main
 thing you need to investigate.

@@ -4,6 +4,8 @@ description: "Let pull request jobs review cluster changes with `kix diff --from
 ---
 
 import Command from '/src/components/Command.astro';
+import save from '/src/command-output/how-to/application-snapshot/save.json';
+import diffClean from '/src/command-output/how-to/application-snapshot/diff-clean.json';
 
 Use this setup when pull request jobs must not hold cluster credentials but
 reviewers still want to see what a change does to the cluster. The deploy job
@@ -65,17 +67,12 @@ works unchanged.
 Run the same two commands by hand before wiring them into CI. With the
 `how-to-application` example cluster deployed to kind:
 
-<Command
-  commands={[
-    "kix snapshot save ./snapshots/how-to-application",
-    "kix diff how-to-application --from ./snapshots/how-to-application",
-  ]}
-  cwd="kix-examples/"
-/>
+<Command {...save} />
 
-The diff reports `No differences found.` and exits `0`. Edit a package,
-rerun the diff, and confirm the report names the resource you changed and
-exits `2`.
+<Command {...diffClean} />
+
+The diff reports no differences and exits `0`. Edit a package, rerun the
+diff, and confirm the report names the resource you changed and exits `2`.
 
 ## What the reviewer sees
 

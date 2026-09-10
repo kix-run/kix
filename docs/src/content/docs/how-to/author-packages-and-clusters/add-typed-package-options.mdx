@@ -4,6 +4,7 @@ description: "Declare validated package settings with defaults, descriptions, an
 ---
 
 import Command from '/src/components/Command.astro';
+import check from '/src/command-output/how-to/application-basics/check.json';
 import Snippet from '/src/components/Snippet.astro';
 import typedOptions from '/src/snippets/how-to/application/web-package/typedOptions.json';
 import invalidEnvironment from '/src/command-output/how-to/application-typed-options/check-invalid-environment.json';
@@ -83,7 +84,7 @@ names. Setting `environment = "staging"` produces this error:
 The error names the option and the rejected definition. Restore an allowed
 value and check the cluster again:
 
-<Command commands={["kix check how-to-application"]} cwd="kix-examples/" />
+<Command {...check} />
 
 :::note[Reference]
 See [`build`](/docs/reference/package-schema/build/),

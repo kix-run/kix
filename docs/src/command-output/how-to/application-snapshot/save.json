@@ -1,0 +1,19 @@
+{
+  "id": "how-to/application-snapshot/save",
+  "group": "how-to/application-snapshot",
+  "page": "/docs/how-to/operate-a-cluster/use-snapshots-for-offline-or-ci-diffs/",
+  "cwd": "kix-examples/",
+  "generator": "live",
+  "outputExcerpt": false,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix snapshot save ./snapshots/how-to-application",
+      "stdout": "Discovering API resources...\nFetching managed resources (60 resource types)...\nFetched 16 resources\nSaved 16 resources to ./snapshots/how-to-application/\n",
+      "stderr": "",
+      "stdoutDrift": "Discovering API resources...\nFetched 16 resources\nFetching managed resources (60 resource types)...\nSaved 16 resources to ./snapshots/how-to-application/\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "id": "how-to/application-gc/plan",
+  "group": "how-to/application-gc",
+  "page": "/docs/how-to/operate-a-cluster/garbage-collect-stale-resources/",
+  "cwd": "kix-examples/",
+  "generator": "live",
+  "outputExcerpt": false,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix gc how-to-application -y",
+      "stdout": "Loading old activation...\nBuilding cluster '\u001b[1mhow-to-application\u001b[0m'...\n\n\u001b[1mGarbage collection plan\u001b[0m\n\n  \u001b[1mhow-to-app\u001b[0m\n    \u001b[31m-\u001b[39m \u001b[31mpreview\u001b[39m 1.0.0 (3 resources)\n\n  Plan: \u001b[31m1 removed\u001b[39m, \u001b[2m2 unchanged\u001b[0m\n  \u001b[2m1 activation records kept\u001b[0m\n  \u001b[31m-\u001b[39m deleted PackageInstance/preview@how-to-app\n  \u001b[31m-\u001b[39m deleted Service/preview@how-to-app\n  \u001b[31m-\u001b[39m deleted Deployment/preview@how-to-app\n  \u001b[31m-\u001b[39m deleted ConfigMap/preview@how-to-app\n\nGC complete: \u001b[32m4\u001b[39m deleted, \u001b[2m0\u001b[0m failed, 0 activation record(s) retired, 1 kept\n",
+      "stderr": "",
+      "stdoutDrift": "\n- deleted ConfigMap/preview@how-to-app\n- deleted Deployment/preview@how-to-app\n- deleted PackageInstance/preview@how-to-app\n- deleted Service/preview@how-to-app\n- preview 1.0.0 (3 resources)\n1 activation records kept\nBuilding cluster 'how-to-application'...\nGC complete: 4 deleted, 0 failed, 0 activation record(s) retired, 1 kept\nGarbage collection plan\nLoading old activation...\nPlan: 1 removed, 2 unchanged\nhow-to-app\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

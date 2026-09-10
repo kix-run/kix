@@ -1,0 +1,19 @@
+{
+  "id": "how-to/application-rollback/list",
+  "group": "how-to/application-rollback",
+  "page": "/docs/how-to/operate-a-cluster/roll-back-an-activation/",
+  "cwd": "kix-examples/",
+  "generator": "live",
+  "outputExcerpt": false,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix rollback how-to-application --list",
+      "stdout": "\u001b[1mRollback:\u001b[0m activation history for 'how-to-application'\n\n  \u001b[32m● active  \u001b[39m \u001b[1mhow-to-application-lchxmwcma8ca\u001b[0m (lchxmwcm...)  \u001b[2m← you are here\u001b[0m\n    \u001b[2msource:  \u001b[0m \u001b[2m/nix/store/si2fnvbjp2lz0mhp7rpi885pyzqmpgki-k8s-activation-how-to-application\u001b[0m\n\n  \u001b[1mSuperseded (most recent first):\u001b[0m\n\n  \u001b[1m[1]\u001b[0m how-to-application-aq1zdgf9gsnb (aq1zdgf9...)  deployed 2026-09-10T00:22:07.560031+00:00  [\u001b[31mstore path missing\u001b[39m]\n      \u001b[2msource:  \u001b[0m \u001b[2m/nix/store/c5lyxiwp2v311kpm3z9gr699ffrm5riq-k8s-activation-how-to-application\u001b[0m\n\n  \u001b[2mRun `kix rollback <cluster>` (or `--yes` for most recent) to switch activations.\u001b[0m\n",
+      "stderr": "",
+      "stdoutDrift": "\nRollback: activation history for 'how-to-application'\nRun `kix rollback <cluster>` (or `--yes` for most recent) to switch activations.\nSuperseded (most recent first):\n[1] how-to-application-<activation-id> (aq1zdgf9...) deployed <TIME>+00:00 [store path missing]\nsource: /nix/store/<identity-hash>-k8s-activation-how-to-application\n● active how-to-application-<activation-id> (lchxmwcm...) ← you are here\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

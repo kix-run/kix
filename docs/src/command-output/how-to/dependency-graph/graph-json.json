@@ -1,0 +1,19 @@
+{
+  "id": "how-to/dependency-graph/graph-json",
+  "group": "how-to/dependency-graph",
+  "page": "/docs/how-to/debug-dependency-wiring/visualize-the-dependency-graph-with-kix-graph/",
+  "cwd": "kix-examples/",
+  "generator": "offline",
+  "outputExcerpt": true,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix graph 08-namespace-deps --format json",
+      "stdout": "{\n  \"nodes\": 15,\n  \"edges\": 24,\n  \"sample\": {\n    \"id\": \"CustomResourceDefinition/activations.kix.run\",\n    \"identityHash\": \"gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj\",\n    \"isImport\": false,\n    \"kind\": \"CustomResourceDefinition\",\n    \"name\": \"activations.kix.run\",\n    \"namespace\": \"_cluster\"\n  }\n}\n",
+      "stderr": "15 resources, 24 dependencies\n",
+      "stdoutDrift": "\"edges\": 24,\n\"id\": \"CustomResourceDefinition/activations.kix.run\",\n\"identityHash\": \"<identity-hash>\",\n\"isImport\": false,\n\"kind\": \"CustomResourceDefinition\",\n\"name\": \"activations.kix.run\",\n\"namespace\": \"_cluster\"\n\"nodes\": 15,\n\"sample\": {\n{\n}\n",
+      "stderrDrift": "15 resources, 24 dependencies\n",
+      "exitCode": 0
+    }
+  ]
+}

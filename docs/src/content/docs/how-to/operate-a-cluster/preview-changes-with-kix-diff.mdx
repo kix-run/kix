@@ -4,6 +4,9 @@ description: "Compare rendered manifests with live Kubernetes resources before d
 ---
 
 import Command from '/src/components/Command.astro';
+import diffClean from '/src/command-output/how-to/application-diff/diff-clean.json';
+import diffChange from '/src/command-output/how-to/application-diff/diff-message-change.json';
+import diffMarkdown from '/src/command-output/how-to/application-diff/diff-markdown.json';
 
 Use `kix diff` to preview how the rendered cluster differs from the resources
 currently running in Kubernetes. The command reads live state but does not
@@ -11,25 +14,37 @@ apply changes.
 
 ## Compare desired and live resources
 
-Run `diff` after editing a cluster or package:
+Start from a cluster that matches what is deployed. Kix compares only the
+fields it applied, so an unchanged cluster reports nothing and exits 0:
 
-<Command commands={["kix diff how-to-application"]} cwd="kix-examples/" />
+<Command {...diffClean} />
 
-This example changes the production message. The text report shows the
-affected ConfigMap and the Deployment that consumes it.
+Now change the production message in the cluster definition and run the same
+command:
+
+<Command {...diffChange} />
+
+The report names the ConfigMap you edited and shows the changed value. The
+resources marked "via dependency" have no content change of their own. Their
+identity hash moves because they depend on the ConfigMap, so Kix will
+re-stamp them on the next deploy.
 
 ## Read the diff
 
-Use the resource headers to distinguish:
+The report is grouped by package, and each line tells you something different:
 
-- Resources that will be added or removed.
-- Existing resources whose fields changed.
-- Resources affected because one of their dependencies changed.
-- Bookkeeping resources associated with the next activation.
+- A package marked added or removed appears on only one side.
+- A resource marked `~` has a content change, shown as a diff of the fields
+  that differ.
+- A resource marked "via dependency" has no content change of its own. Only
+  its identity hash moved, because something it depends on changed.
+- A cluster-level group collects resources that belong to no package, such as
+  namespaces and custom resource definitions.
+- An activation line names the deployment record this change would create.
 
-Focus first on resources you intentionally edited. Then inspect dependent
-resources to understand the rollout Kix will plan. A non-empty diff exits with
-status 2, which lets CI distinguish a change from a clean comparison.
+Read the packages you edited first, then the dependent resources, which tell
+you how far the rollout reaches. A non-empty diff exits with status 2, which
+lets CI tell a change from a clean comparison.
 
 ## Select the flake and context
 
@@ -50,6 +65,10 @@ live manifests being compared.
 Select Markdown output when attaching the result to a pull request or change
 review:
 
+<Command expandable {...diffMarkdown} />
+
+Redirect it into a file for the job to publish:
+
 <Command
   commands={["kix diff how-to-application --output markdown > kix-diff.md"]}
   cwd="kix-examples/"
@@ -64,13 +83,11 @@ Use JSON when another program will process the result:
 
 ## Confirm a clean result
 
-After deploying the intended change, run the command again:
+After deploying the intended change, run the command again. A clean result
+confirms that Kix does not currently plan another content change.
 
-<Command commands={["kix diff how-to-application"]} cwd="kix-examples/" />
-
-A clean result confirms that Kix does not currently plan another content
-change. Use the drift commands when you specifically need to compare field
-ownership and out-of-band changes.
+`kix diff` compares the fields Kix applied. Use `kix drift` when you need to
+know who else owns a field and what they changed.
 
 :::note[Related guides]
 See [Generate PR-review Markdown from `kix diff`](/docs/how-to/policy-ci-and-compliance/generate-pr-review-markdown-from-kix-diff/)

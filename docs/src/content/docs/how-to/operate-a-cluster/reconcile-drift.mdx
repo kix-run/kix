@@ -6,6 +6,7 @@ description: "Reapply a cluster's desired manifests to heal out-of-band changes.
 import Command from '/src/components/Command.astro';
 import reconcileApplication from '/src/command-output/how-to/application-reconcile/reconcile.json';
 import cleanDrift from '/src/command-output/how-to/application-reconcile/drift-clean.json';
+import driftReport from '/src/command-output/how-to/application-drift/scaled-deployment.json';
 
 Use `kix deploy --reconcile` to reapply every desired resource, including
 resources whose activation identity has not changed. Add `--force-conflicts`
@@ -16,7 +17,7 @@ take them back.
 
 Start by identifying the fields that changed:
 
-<Command commands={["kix drift"]} cwd="kix-examples/" />
+<Command {...driftReport} />
 
 Confirm that the checked-in cluster definition still describes the state you
 want. Reconciliation applies that definition, so review intentional emergency

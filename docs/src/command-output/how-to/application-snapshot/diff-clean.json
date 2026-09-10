@@ -1,0 +1,19 @@
+{
+  "id": "how-to/application-snapshot/diff-clean",
+  "group": "how-to/application-snapshot",
+  "page": "/docs/how-to/operate-a-cluster/use-snapshots-for-offline-or-ci-diffs/",
+  "cwd": "kix-examples/",
+  "generator": "live",
+  "outputExcerpt": false,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix diff how-to-application --from ./snapshots/how-to-application",
+      "stdout": "3 packages: 3 unchanged, 0 changed, 0 added, 0 removed\n\u001b[32mNo differences found.\u001b[39m\n",
+      "stderr": "",
+      "stdoutDrift": "3 packages: 3 unchanged, 0 changed, 0 added, 0 removed\nNo differences found.\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

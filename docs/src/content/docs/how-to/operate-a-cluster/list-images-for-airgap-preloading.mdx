@@ -6,6 +6,7 @@ description: "Find every container image a cluster needs and prepare it for an e
 import Command from '/src/components/Command.astro';
 import imageList from '/src/command-output/how-to/application-images/list.json';
 import imageSources from '/src/command-output/how-to/application-images/list-with-sources.json';
+import imageJson from '/src/command-output/how-to/application-images/list-json.json';
 
 Use `kix images` to produce a deduplicated list of the container images in a
 cluster definition. The command evaluates the cluster locally and does not
@@ -33,10 +34,7 @@ the package that should pin it to a digest.
 
 For scripts, request JSON instead:
 
-<Command
-  commands={["kix images how-to-application --output json > images.json"]}
-  cwd="kix-examples/"
-/>
+<Command expandable {...imageJson} />
 
 Each JSON entry contains the image reference and its source resources.
 

@@ -4,6 +4,8 @@ description: "Review the available Activation history and restore the cluster fr
 ---
 
 import Command from '/src/components/Command.astro';
+import rollbackList from '/src/command-output/how-to/application-rollback/list.json';
+import rollbackListJson from '/src/command-output/how-to/application-rollback/list-json.json';
 
 Use `kix rollback` to reapply the manifests from a Superseded Activation. A
 direct rollback requires that Activation's build output to remain available in
@@ -13,7 +15,7 @@ the local Nix store.
 
 Start with the read-only history view:
 
-<Command commands={["kix rollback production --list"]} cwd="kix-project/" />
+<Command {...rollbackList} />
 
 The output marks the current Activation and lists Superseded Activations from
 most recent to oldest. Check the deployment time and the local availability of
@@ -22,18 +24,15 @@ direct rollback on this machine.
 
 Use structured output when a script needs the history:
 
-<Command
-  commands={["kix rollback production --list --output json"]}
-  cwd="kix-project/"
-/>
+<Command expandable {...rollbackListJson} />
 
 ## Preview the rollback
 
 Run a dry run and select a target from the numbered history:
 
 <Command
-  commands={["kix rollback production --dry-run"]}
-  cwd="kix-project/"
+  commands={["kix rollback how-to-application --dry-run"]}
+  cwd="kix-examples/"
 />
 
 Kix compares the active Activation with the selected target and prints the
@@ -43,7 +42,7 @@ package and resource changes. The dry run stops before applying anything.
 
 Run the command again without `--dry-run`:
 
-<Command commands={["kix rollback production"]} cwd="kix-project/" />
+<Command commands={["kix rollback how-to-application"]} cwd="kix-examples/" />
 
 Select the Activation, review the plan, and confirm it. Kix applies the target
 through the normal dependency scheduler and readiness checks.
@@ -52,8 +51,8 @@ Resources present only in the current Activation are reported but kept by
 default. Add `--prune` when the rollback must also remove them:
 
 <Command
-  commands={["kix rollback production --prune"]}
-  cwd="kix-project/"
+  commands={["kix rollback how-to-application --prune"]}
+  cwd="kix-examples/"
 />
 
 Review those removals carefully, especially for stateful resources.
@@ -62,7 +61,7 @@ Review those removals carefully, especially for stateful resources.
 
 `--yes` selects the most recent Superseded Activation and skips confirmation:
 
-<Command commands={["kix rollback production --yes"]} cwd="kix-project/" />
+<Command commands={["kix rollback how-to-application --yes"]} cwd="kix-examples/" />
 
 Use it only when the automation is intended to restore the immediately
 previous Activation. The command does not accept an Activation name on the
@@ -72,7 +71,7 @@ command line.
 
 For an operator-managed cluster, add `--operator`:
 
-<Command commands={["kix rollback production --operator"]} cwd="kix-project/" />
+<Command commands={["kix rollback how-to-application --operator"]} cwd="kix-examples/" />
 
 Kix selects the rollback target and updates the Activation for the operator to
 reconcile.

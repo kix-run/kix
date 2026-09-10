@@ -4,6 +4,9 @@ description: "Save what Kix manages in a cluster, then preview changes against t
 ---
 
 import Command from '/src/components/Command.astro';
+import save from '/src/command-output/how-to/application-snapshot/save.json';
+import diffClean from '/src/command-output/how-to/application-snapshot/diff-clean.json';
+import diffFromSnapshot from '/src/command-output/how-to/application-snapshot/diff-from-snapshot.json';
 
 Use a snapshot when you want `kix diff` without a connection to the cluster:
 on a laptop off the VPN, in a CI job that holds no cluster credentials, or
@@ -22,10 +25,7 @@ from `kix-examples`.
 Take the snapshot right after a successful deploy, while the cluster and the
 source agree:
 
-<Command
-  commands={["kix snapshot save ./snapshots/how-to-application"]}
-  cwd="kix-examples/"
-/>
+<Command {...save} />
 
 Pass `--context` when the cluster is not the current kubectl context. The
 command reports how many resources it fetched and wrote. The directory holds
@@ -36,48 +36,16 @@ timestamp and context.
 
 Compare the current source with the snapshot. No cluster access is needed:
 
-<Command
-  commands={["kix diff how-to-application --from ./snapshots/how-to-application"]}
-  cwd="kix-examples/"
-/>
+<Command {...diffClean} />
 
-Straight after the save this reports `No differences found.` and exits with
-status 0.
+Straight after the save this reports no differences and exits with status 0.
 
 ## Preview a change
 
 Edit the source, then run the same command again. Changing the production
 message in the example cluster gives a report like this:
 
-{/* Hand-written: this output comes from a manual run against a kind cluster.
-    Replace it with a live capture once the operations capture group covers
-    snapshots. The activation names are content hashes and will differ. */}
-<Command
-  commands={[
-    {
-      command: "kix diff how-to-application --from ./snapshots/how-to-application",
-      stdout: `3 packages: 2 unchanged, 1 changed, 0 added, 0 removed
-
-  how-to-app
-    ~ production 1.0.0 (1 changed, 4 dep-affected)
-      ~ ConfigMap/production@how-to-app
-          ~ $.data.index.html:
-              --- old
-              +++ new
-              @@ -1 +1 @@
-              -Hello from production
-              +Updated production message
-      ~ Deployment/production@how-to-app (via dependency)
-      ~ Job/production-health@how-to-app (via dependency)
-      ~ PackageInstance/production@how-to-app (via dependency)
-      ~ Service/production@how-to-app (via dependency)
-
-  Activation: how-to-application-aq1zdgf9gsnb -> how-to-application-h9nqwqrpw48l
-`,
-    },
-  ]}
-  cwd="kix-examples/"
-/>
+<Command {...diffFromSnapshot} />
 
 The ConfigMap is the resource you edited. The four resources marked "via
 dependency" have no content change of their own; their identity hash moves

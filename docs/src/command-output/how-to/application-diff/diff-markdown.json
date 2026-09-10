@@ -1,0 +1,19 @@
+{
+  "id": "how-to/application-diff/diff-markdown",
+  "group": "how-to/application-diff",
+  "page": "/docs/how-to/operate-a-cluster/preview-changes-with-kix-diff/",
+  "cwd": "kix-examples/",
+  "generator": "live",
+  "outputExcerpt": false,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix diff how-to-application --output markdown",
+      "stdout": "\u001b[36m⠁\u001b[0m Fetching live cluster state...                                                Discovering API resources...\nFetching managed resources (60 resource types)...\nFetched 16 resources across 60 resource types\n### kix diff\n\n**Plan:** 1 updated, 0 added, 0 removed, 2 unchanged\n**Resources:** 1 with real content changes, 4 dep-affected (hash bump only)\n\n#### Changed packages\n\n<details>\n<summary><code>how-to-app/production</code> 1.0.0 (1 changed, 4 dep-affected)</summary>\n\n**Modified resources:**\n\n- `ConfigMap/production@how-to-app` (1 diffs)\n\n**Dep-affected (hash bump only, no content change):**\n\n- `Deployment/production@how-to-app`\n- `Job/production-health@how-to-app`\n- `PackageInstance/production@how-to-app`\n- `Service/production@how-to-app`\n\n</details>\n\n**Activation:** `how-to-application-aq1zdgf9gsnb` → `how-to-application-h9nqwqrpw48l`\n\n",
+      "stderr": "",
+      "stdoutDrift": "\n### kix diff\n#### Changed packages\n**Activation:** `how-to-application-<activation-id>` → `how-to-application-<activation-id>`\n**Dep-affected (hash bump only, no content change):**\n**Modified resources:**\n**Plan:** 1 updated, 0 added, 0 removed, 2 unchanged\n**Resources:** 1 with real content changes, 4 dep-affected (hash bump only)\n- `ConfigMap/production@how-to-app` (1 diffs)\n- `Deployment/production@how-to-app`\n- `Job/production-health@how-to-app`\n- `PackageInstance/production@how-to-app`\n- `Service/production@how-to-app`\n</details>\n<details>\n<summary><code>how-to-app/production</code> 1.0.0 (1 changed, 4 dep-affected)</summary>\nFetched 16 resources across 60 resource types\nFetching managed resources (60 resource types)...\n⠁ Fetching live cluster state... Discovering API resources...\n",
+      "stderrDrift": "",
+      "exitCode": 2
+    }
+  ]
+}

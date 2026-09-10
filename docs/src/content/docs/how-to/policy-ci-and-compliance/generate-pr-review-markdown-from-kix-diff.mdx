@@ -4,6 +4,7 @@ description: "Render a Kix diff as GitHub-flavored Markdown and preserve its CI 
 ---
 
 import Command from '/src/components/Command.astro';
+import diffMarkdown from '/src/command-output/how-to/application-diff/diff-markdown.json';
 
 Use Markdown output when a CI job will post the result of `kix diff` on a pull
 request. Kix formats the package and resource changes for a Markdown renderer.
@@ -16,7 +17,14 @@ side of the diff.
 
 Run the diff against the target cluster and redirect stdout:
 
-<Command commands={["kix diff production -o markdown > kix-diff.md"]} />
+<Command expandable {...diffMarkdown} />
+
+Redirect it into the file the job will publish:
+
+<Command
+  commands={["kix diff how-to-application --output markdown > kix-diff.md"]}
+  cwd="kix-examples/"
+/>
 
 The file contains GitHub-flavored Markdown suitable for a pull request comment
 or job summary. Publish it with the integration used by your CI provider.
@@ -30,7 +38,7 @@ whether differences should fail the job:
 
 ```sh title="ci/kix-diff.sh"
 set +e
-kix diff production -o markdown > kix-diff.md
+kix diff production --output markdown > kix-diff.md
 diff_status=$?
 set -e
 

@@ -10,6 +10,8 @@ import contentConfigMap from '/src/snippets/how-to/application/web-package/conte
 import applicationDeployment from '/src/snippets/how-to/application/web-package/applicationDeployment.json';
 import applicationService from '/src/snippets/how-to/application/web-package/applicationService.json';
 import localPackageImport from '/src/snippets/how-to/application/cluster/localPackageImport.json';
+import check from '/src/command-output/how-to/application-basics/check.json';
+import build from '/src/command-output/how-to/application-basics/build.json';
 
 Use a local package when a workload belongs to your project rather than the
 shared package catalogue. A package groups its configuration interface and
@@ -77,11 +79,11 @@ and `kix`. You do not need to call the package function yourself.
 
 Run the cluster checks after adding the package and instance:
 
-<Command commands={["kix check how-to-application"]} cwd="kix-examples/" />
+<Command {...check} />
 
 Then render the manifests and inspect the resources owned by the instance:
 
-<Command commands={["kix build how-to-application"]} cwd="kix-examples/" />
+<Command expandable {...build} />
 
 The rendered cluster contains the ConfigMap, Deployment, and Service declared
 by the package, along with Kix's cluster bookkeeping resources.

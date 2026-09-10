@@ -5,6 +5,7 @@ description: "Write scorecard, SBOM, provenance, OSCAL, and Markdown evidence in
 
 import Command from '/src/components/Command.astro';
 import audit from '/src/command-output/how-to/policy-audit/audit.json';
+import auditFiles from '/src/command-output/how-to/policy-audit/files.json';
 
 Use `kix compliance audit` when a review or compliance process needs the
 cluster's policy findings and build evidence together. The command evaluates
@@ -17,16 +18,9 @@ ID:
 
 <Command {...audit} />
 
-The directory contains:
+The directory contains five files:
 
-```text
-compliance/
-├── assessment-results.json
-├── audit-report.md
-├── provenance.json
-├── sbom.json
-└── scorecard-results.sarif
-```
+<Command {...auditFiles} />
 
 `audit-report.md` is the human-readable summary. The other files provide OSCAL
 Assessment Results, SLSA provenance, a CycloneDX SBOM, and SARIF scorecard
@@ -39,8 +33,9 @@ SOC 2 is the default control mapping. Select another supported framework with
 
 <Command
   commands={[
-    "kix compliance audit production --out ./compliance --framework iso27001",
+    "kix compliance audit 19-scorecards --out ./compliance-iso27001 --framework iso27001",
   ]}
+  cwd="kix-examples/"
 />
 
 The accepted values are `soc2`, `iso27001`, `dora`, and `nis2`.
@@ -51,9 +46,8 @@ Kix refuses to write over an existing output directory. Pass `--force` when
 the job intentionally refreshes that directory:
 
 <Command
-  commands={[
-    "kix compliance audit production --out ./compliance --force",
-  ]}
+  commands={["kix compliance audit 19-scorecards --out ./compliance --force"]}
+  cwd="kix-examples/"
 />
 
 Archive or upload the directory as one CI artifact so the files from a single

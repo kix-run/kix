@@ -4,6 +4,7 @@ description: "Verify that the active Kix dependency graph is intact on a Kuberne
 ---
 
 import Command from '/src/components/Command.astro';
+import healthVerbose from '/src/command-output/how-to/application-health/health-verbose.json';
 import applicationHealth from '/src/command-output/how-to/application-health/health.json';
 
 Use `kix health` to verify that every resource in the active activation can
@@ -36,10 +37,7 @@ Each package is assigned one of these states:
 
 Run with `-vv` when you need to see the dependency traversal:
 
-<Command
-  commands={["kix health how-to-application -vv"]}
-  cwd="kix-examples/"
-/>
+<Command expandable {...healthVerbose} />
 
 ## Select a Kubernetes context
 

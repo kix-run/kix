@@ -17,7 +17,10 @@ available.
 
 Redirect stdout to a file:
 
-<Command commands={["kix check production --sarif > kix-results.sarif"]} />
+<Command
+  commands={["kix check 19-scorecards --sarif > kix-results.sarif"]}
+  cwd="kix-examples/"
+/>
 
 Upload `kix-results.sarif` with your CI provider's SARIF or code-scanning
 integration. Preserve the command's exit status so error-level checks still
@@ -40,6 +43,7 @@ A short validation catches an empty or truncated shell redirect:
   commands={[
     "jq -e '.version == \"2.1.0\" and (.runs | length) > 0' kix-results.sarif",
   ]}
+  cwd="kix-examples/"
 />
 
 Run the upload step even when `kix check` exits non-zero, then propagate the

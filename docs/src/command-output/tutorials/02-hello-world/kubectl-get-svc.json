@@ -4,11 +4,12 @@
   "page": "/docs/tutorials/02-local-setup-and-first-run/",
   "cwd": "kix-examples/",
   "generator": "live",
+  "outputExcerpt": false,
   "skipDriftCheck": false,
   "commands": [
     {
       "command": "kubectl get svc -n tutorial-02",
-      "stdout": "NAME          TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)   AGE\nhello-world   ClusterIP   10.96.132.217   <none>        80/TCP    2s\n",
+      "stdout": "NAME          TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)   AGE\nhello-world   ClusterIP   10.96.142.137   <none>        80/TCP    2s\n",
       "stderr": "",
       "stdoutDrift": "NAME TYPE CLUSTER-IP EXTERNAL-IP PORT(S) AGE\nhello-world ClusterIP <CLUSTER-IP> <none> 80/TCP <DURATION>\n",
       "stderrDrift": "",

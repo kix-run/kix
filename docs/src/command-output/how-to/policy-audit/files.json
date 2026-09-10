@@ -1,0 +1,19 @@
+{
+  "id": "how-to/policy-audit/files",
+  "group": "how-to/policy-audit",
+  "page": "/docs/how-to/policy-ci-and-compliance/generate-an-audit-bundle/",
+  "cwd": "kix-examples/",
+  "generator": "offline",
+  "outputExcerpt": false,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "find compliance -type f | sort",
+      "stdout": "compliance/assessment-results.json\ncompliance/audit-report.md\ncompliance/provenance.json\ncompliance/sbom.json\ncompliance/scorecard-results.sarif\n",
+      "stderr": "",
+      "stdoutDrift": "compliance/assessment-results.json\ncompliance/audit-report.md\ncompliance/provenance.json\ncompliance/sbom.json\ncompliance/scorecard-results.sarif\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

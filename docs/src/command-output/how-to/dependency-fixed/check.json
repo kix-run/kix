@@ -1,0 +1,19 @@
+{
+  "id": "how-to/dependency-fixed/check",
+  "group": "how-to/dependency-fixed",
+  "page": "/docs/how-to/debug-dependency-wiring/debug-a-missing-dependency/",
+  "cwd": "kix-examples/",
+  "generator": "offline",
+  "outputExcerpt": false,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix check 06-service-dep",
+      "stdout": " TOOL         RESULT  DETAILS                                     \n eval         pass    14 manifests evaluated                      \n kubeconform  pass    skipped (not installed)                     \n pluto        pass    skipped (not installed)                     \n kyverno      pass    skipped (not installed)                     \n scorecard    skip    scorecard not enabled in cluster definition \n",
+      "stderr": "",
+      "stdoutDrift": "TOOL RESULT DETAILS\neval pass 14 manifests evaluated\nkubeconform pass skipped (not installed)\nkyverno pass skipped (not installed)\npluto pass skipped (not installed)\nscorecard skip scorecard not enabled in cluster definition\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

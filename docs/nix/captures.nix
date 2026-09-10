@@ -12,6 +12,9 @@
 #   group     — identifier; sidecar paths go to docs/src/command-output/<group>/<name>.json
 #   page      — docs URL the sidecars belong to (carried in the JSON for tooling)
 #   cwd       — working directory shown in the `<Command>` chrome
+#   resetCluster — live only. Delete and recreate the kind cluster before
+#               this group runs. Use it when a group needs a whole-cluster
+#               view that only its own kix cluster contributes to.
 #   overlay   — optional directory `cp -r`'d onto the workspace (e.g. adds
 #               a tutorial's finished cluster file). Layout mirrors
 #               kix-examples/. See docs/overlays/README.md.
@@ -43,6 +46,20 @@
 #       `stdoutGrep` does the same for text output, retaining matching lines
 #       and removing their leading display padding. Regeneration fails if no
 #       line matches, so a changed or missing diagnostic cannot pass unnoticed.
+#       `timeout` bounds the step's wall clock (default 600s). A step that
+#       exceeds it fails the run by name instead of stalling the pipeline.
+#       Raise it for a step that is legitimately slow; do not raise it to
+#       paper over a command that stopped terminating.
+#
+#   { capture = "name"; shell = "kix build demo | head -20"; }
+#       runs one reader-facing command line through bash instead of
+#       exec'ing an argv. Use it when the command the reader types
+#       contains a pipe, a redirect, or a second tool: `find`, `grep`,
+#       `jq`, `sort`. `kix` (and `kubectl`, live) are on PATH already
+#       carrying --flake/--context, so write the command exactly as the
+#       docs show it. The same allowFailure / stdoutJq / stdoutGrep /
+#       sortLines fields apply. Prefer a plain `run` step when the
+#       command is a single binary with arguments.
 #
 #   { mutate = { file = "tutorial-04/cluster.nix";
 #                oldString = "Hello"; newString = "Preview"; }; }
@@ -51,9 +68,13 @@
 #       whole capture run on any preflight miss (no partial sidecars).
 #
 #   { prepare = [ "kix" "deploy" "example" "-y" ]; }
+#   { prepare = "kix build demo > manifests.yaml"; }
 #       runs a prerequisite command without writing a sidecar. The command
 #       must succeed. Use this for live state a later captured command needs,
-#       such as deploying before `status` or `diff`.
+#       such as deploying before `status` or `diff`. The string form runs
+#       through bash like a `shell` capture, which is also how a documented
+#       command whose output teaches nothing still gets executed on every
+#       regen: if the CLI stops accepting it, the pipeline fails.
 #
 # Sequencing:
 #   - Offline: each group gets its own fresh workspace. Steps run in
@@ -450,6 +471,24 @@
   }
 
   {
+    # Same cluster as `how-to/dependency-missing`, without the mutation:
+    # this is what the reader sees once the wiring is corrected.
+    group = "how-to/dependency-fixed";
+    page = "/docs/how-to/debug-dependency-wiring/debug-a-missing-dependency/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "check";
+        run = [
+          "kix"
+          "check"
+          "06-service-dep"
+        ];
+      }
+    ];
+  }
+
+  {
     group = "how-to/dependency-graph";
     page = "/docs/how-to/debug-dependency-wiring/visualize-the-dependency-graph-with-kix-graph/";
     cwd = "kix-examples/";
@@ -462,6 +501,48 @@
           "08-namespace-deps"
           "--format"
           "tree"
+        ];
+      }
+      {
+        capture = "graph-dot";
+        run = [
+          "kix"
+          "graph"
+          "08-namespace-deps"
+          "--format"
+          "dot"
+        ];
+      }
+      {
+        # The DOT and JSON forms are what the reader redirects into a
+        # file. Run the redirect itself so the docs cannot outlive it.
+        prepare = "kix graph 08-namespace-deps --format dot > kix-graph.dot";
+      }
+      {
+        capture = "graph-json";
+        run = [
+          "kix"
+          "graph"
+          "08-namespace-deps"
+          "--format"
+          "json"
+        ];
+        stdoutJq = "{ nodes: (.nodes | length), edges: (.edges | length), sample: .nodes[0] }";
+      }
+    ];
+  }
+
+  {
+    group = "how-to/scorecard-rules";
+    page = "/docs/how-to/policy-ci-and-compliance/add-scorecard-rules/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "check";
+        run = [
+          "kix"
+          "check"
+          "19-scorecards"
         ];
       }
     ];
@@ -495,6 +576,12 @@
                     }]
                   }'';
       }
+      {
+        prepare = "kix check 19-scorecards --sarif > kix-results.sarif";
+      }
+      {
+        prepare = ''jq -e '.version == "2.1.0" and (.runs | length) > 0' kix-results.sarif > /dev/null'';
+      }
     ];
   }
 
@@ -522,6 +609,18 @@
                     })),
                     dependencyCount: (.dependencies | length)
                   }'';
+      }
+      # The page tells the reader to redirect the SBOM to a file and
+      # then assert its format. Both run here, so a change to the
+      # CycloneDX version fails the regen instead of the reader.
+      {
+        prepare = "kix compliance sbom 19-scorecards > sbom.json";
+      }
+      {
+        prepare = ''jq -e '.bomFormat == "CycloneDX" and .specVersion == "1.6"' sbom.json > /dev/null'';
+      }
+      {
+        prepare = "kix --output yaml compliance sbom 19-scorecards > sbom.yaml";
       }
     ];
   }
@@ -556,6 +655,12 @@
                     runDetails: .predicate.runDetails
                   }'';
       }
+      {
+        prepare = ''kix compliance attest 19-scorecards --builder-id "$BUILD_URL" --invocation-id "$BUILD_ID" > provenance.json'';
+      }
+      {
+        prepare = ''jq -e '._type == "https://in-toto.io/Statement/v1" and .predicateType == "https://slsa.dev/provenance/v1"' provenance.json > /dev/null'';
+      }
     ];
   }
 
@@ -563,6 +668,12 @@
     group = "how-to/policy-receipt-attestation";
     page = "/docs/how-to/policy-ci-and-compliance/attest-a-deployment-from-its-cluster-receipt/";
     cwd = "kix-examples/";
+    # First live group after the tutorials. Reset here so every how-to
+    # group below sees a Kubernetes cluster whose only kix cluster is
+    # how-to-application; `kix diff` and `kix gc --hard` both read the
+    # whole cluster, so the tutorial deployments would otherwise show
+    # up as this cluster's removals.
+    resetCluster = true;
     live = [
       {
         prepare = [
@@ -598,6 +709,12 @@
                     runDetails: .predicate.runDetails
                   }'';
       }
+      {
+        prepare = ''kix compliance attest how-to-application --from-cluster --builder-id "$CI_RUN_URL" --invocation-id "$CI_RUN_ID" > provenance.json'';
+      }
+      {
+        prepare = ''jq -e '.predicate.buildDefinition.externalParameters.cluster == "how-to-application" and (.subject[0].digest.nixStoreHash | length) > 0' provenance.json > /dev/null'';
+      }
     ];
   }
 
@@ -618,6 +735,18 @@
           "--builder-id"
           "https://ci.example/runs/1842"
         ];
+      }
+      {
+        # The page used to list the bundle's files by hand. Capture them
+        # instead, so a new or renamed evidence file shows up in review.
+        capture = "files";
+        shell = "find compliance -type f | sort";
+      }
+      {
+        prepare = "kix compliance audit 19-scorecards --out ./compliance-iso27001 --framework iso27001";
+      }
+      {
+        prepare = "kix compliance audit 19-scorecards --out ./compliance --force";
       }
     ];
   }
@@ -653,8 +782,10 @@
   }
 
   {
-    group = "how-to/application-health-check";
-    page = "/docs/how-to/author-packages-and-clusters/add-a-post-deploy-health-check/";
+    # Shared basics for the pages that introduce a command against the
+    # application scenario. One workspace, one eval, several pages.
+    group = "how-to/application-basics";
+    page = "/docs/how-to/start-and-inspect/render-manifests/";
     cwd = "kix-examples/";
     offline = [
       {
@@ -671,40 +802,61 @@
           "kix"
           "build"
           "how-to-application"
-          "-o"
+        ];
+      }
+      {
+        capture = "inspect";
+        run = [
+          "kix"
+          "inspect"
+          "how-to-application"
+        ];
+      }
+      {
+        capture = "list-packages";
+        run = [
+          "kix"
+          "list"
+          "packages"
+          "--cluster"
+          "how-to-application"
+        ];
+      }
+      {
+        # The env/mount guide only cares about one container's wiring,
+        # and the full render buries it under 480 lines.
+        capture = "deployment-env";
+        run = [
+          "kix"
+          "build"
+          "how-to-application"
+          "--output"
           "json"
         ];
-        stdoutJq = ''.[] | select(.kind == "Job" and .metadata.name == "production-health")'';
+        stdoutJq = ''
+          .[]
+                  | select(.kind == "Deployment" and .metadata.name == "production")
+                  | {
+                      containers: [.spec.template.spec.containers[] | {
+                        name,
+                        env,
+                        volumeMounts
+                      }],
+                      volumes: .spec.template.spec.volumes
+                    }'';
       }
-    ];
-    live = [
+      # The next three teach a flag or a redirect rather than an output
+      # shape, so they write no sidecar. They still run on every regen:
+      # if the flag surface changes, the pipeline fails and the pages
+      # showing them get fixed.
       {
-        capture = "deploy";
-        run = [
-          "kix"
-          "deploy"
-          "how-to-application"
-          "-y"
-        ];
-      }
-      {
-        mutate = {
-          file = "how-to/application/health-check.sh";
-          oldString = "exit 0";
-          newString = ''
-            echo "the application returned an unexpected response"
-            exit 1'';
-        };
+        prepare = "kix build how-to-application > manifests.yaml";
       }
       {
-        capture = "deploy-failing-probe";
-        run = [
-          "kix"
-          "deploy"
-          "how-to-application"
-          "-y"
-        ];
-        allowFailure = true;
+        prepare = "kix build how-to-application --output yaml > /dev/null";
+      }
+      {
+        prepare = "kix build how-to-application --output json > /dev/null";
       }
     ];
   }
@@ -819,6 +971,31 @@
           "how-to-application"
         ];
       }
+      {
+        # The page sends the reader to kubectl when a resource is not
+        # ready. Capture both hand-offs so the names stay right.
+        capture = "describe-deployment";
+        run = [
+          "kubectl"
+          "describe"
+          "deployment"
+          "production"
+          "-n"
+          "how-to-app"
+        ];
+        skipDriftCheck = true;
+      }
+      {
+        capture = "job-logs";
+        run = [
+          "kubectl"
+          "logs"
+          "job/production-health"
+          "-n"
+          "how-to-app"
+        ];
+        skipDriftCheck = true;
+      }
     ];
   }
 
@@ -841,6 +1018,15 @@
           "kix"
           "health"
           "how-to-application"
+        ];
+      }
+      {
+        capture = "health-verbose";
+        run = [
+          "kix"
+          "health"
+          "how-to-application"
+          "-vv"
         ];
       }
     ];
@@ -870,6 +1056,129 @@
           "3"
         ];
         skipDriftCheck = true;
+      }
+    ];
+  }
+
+  {
+    # The diff guide's flagship: an in-sync cluster, then the same
+    # command after one line changes. Both sides come from the live
+    # cluster, which is the comparison the page is about.
+    group = "how-to/application-diff";
+    page = "/docs/how-to/operate-a-cluster/preview-changes-with-kix-diff/";
+    cwd = "kix-examples/";
+    live = [
+      {
+        prepare = [
+          "kix"
+          "deploy"
+          "how-to-application"
+          "-y"
+        ];
+      }
+      {
+        capture = "diff-clean";
+        run = [
+          "kix"
+          "diff"
+          "how-to-application"
+        ];
+      }
+      {
+        mutate = {
+          file = "how-to/application/cluster.nix";
+          oldString = ''message = "Hello from production";'';
+          newString = ''message = "Updated production message";'';
+        };
+      }
+      {
+        capture = "diff-message-change";
+        run = [
+          "kix"
+          "diff"
+          "how-to-application"
+        ];
+        allowFailure = true;
+      }
+      {
+        capture = "diff-markdown";
+        run = [
+          "kix"
+          "diff"
+          "how-to-application"
+          "--output"
+          "markdown"
+        ];
+        allowFailure = true;
+      }
+      {
+        # The two redirects the page and the CI guide show. No sidecar,
+        # but they run, so the flags cannot rot. `kix diff` exits 2 when
+        # it finds differences, and by this point in the group it does,
+        # so the redirect has to tolerate that exit the way the CI
+        # snippet on the page does.
+        prepare = "kix diff how-to-application --output markdown > kix-diff.md || [ $? -eq 2 ]";
+        timeout = "900s";
+      }
+      {
+        prepare = "kix diff how-to-application --output json > kix-diff.json || [ $? -eq 2 ]";
+        timeout = "900s";
+      }
+    ];
+  }
+
+  {
+    # Save the cluster, then diff a build against the saved directory.
+    # The snapshot guides claim this matches the live comparison, so
+    # capture both and let the sidecars show it.
+    group = "how-to/application-snapshot";
+    page = "/docs/how-to/operate-a-cluster/use-snapshots-for-offline-or-ci-diffs/";
+    cwd = "kix-examples/";
+    live = [
+      {
+        prepare = [
+          "kix"
+          "deploy"
+          "how-to-application"
+          "-y"
+        ];
+      }
+      {
+        capture = "save";
+        run = [
+          "kix"
+          "snapshot"
+          "save"
+          "./snapshots/how-to-application"
+        ];
+      }
+      {
+        capture = "diff-clean";
+        run = [
+          "kix"
+          "diff"
+          "how-to-application"
+          "--from"
+          "./snapshots/how-to-application"
+        ];
+      }
+      {
+        mutate = {
+          file = "how-to/application/cluster.nix";
+          oldString = ''message = "Hello from production";'';
+          newString = ''message = "Updated production message";'';
+        };
+      }
+      {
+        capture = "diff-from-snapshot";
+        run = [
+          "kix"
+          "diff"
+          "how-to-application"
+          "--from"
+          "./snapshots/how-to-application"
+        ];
+        allowFailure = true;
       }
     ];
   }
@@ -905,6 +1214,11 @@
           "drift"
         ];
         allowFailure = true;
+      }
+      {
+        # Drift exits non-zero when it finds drift, so the redirect the
+        # page shows has to tolerate that too.
+        prepare = "kix drift --output json > drift.json || [ $? -eq 1 ]";
       }
     ];
   }
@@ -955,6 +1269,97 @@
   }
 
   {
+    # Deploy-to-kind sends the reader to kubectl to confirm the result.
+    group = "how-to/application-kubectl";
+    page = "/docs/how-to/start-and-inspect/deploy-to-kind/";
+    cwd = "kix-examples/";
+    live = [
+      {
+        prepare = [
+          "kix"
+          "deploy"
+          "how-to-application"
+          "-y"
+        ];
+      }
+      {
+        capture = "get-namespaces";
+        run = [
+          "kubectl"
+          "get"
+          "namespaces"
+        ];
+        skipDriftCheck = true;
+      }
+      {
+        capture = "get-workloads";
+        run = [
+          "kubectl"
+          "get"
+          "deployments,services,jobs"
+          "-n"
+          "how-to-app"
+        ];
+        skipDriftCheck = true;
+      }
+    ];
+  }
+
+  {
+    # Rollback history needs a second deploy to have something
+    # superseded, so the mutate below is what creates the history the
+    # page describes.
+    group = "how-to/application-rollback";
+    page = "/docs/how-to/operate-a-cluster/roll-back-an-activation/";
+    cwd = "kix-examples/";
+    live = [
+      {
+        prepare = [
+          "kix"
+          "deploy"
+          "how-to-application"
+          "-y"
+        ];
+      }
+      {
+        mutate = {
+          file = "how-to/application/cluster.nix";
+          oldString = ''message = "Hello from production";'';
+          newString = ''message = "Second deploy";'';
+        };
+      }
+      {
+        prepare = [
+          "kix"
+          "deploy"
+          "how-to-application"
+          "-y"
+        ];
+      }
+      {
+        capture = "list";
+        run = [
+          "kix"
+          "rollback"
+          "how-to-application"
+          "--list"
+        ];
+      }
+      {
+        capture = "list-json";
+        run = [
+          "kix"
+          "rollback"
+          "how-to-application"
+          "--list"
+          "--output"
+          "json"
+        ];
+      }
+    ];
+  }
+
+  {
     group = "how-to/application-images";
     page = "/docs/how-to/operate-a-cluster/list-images-for-airgap-preloading/";
     cwd = "kix-examples/";
@@ -976,6 +1381,19 @@
           "--sources"
         ];
       }
+      {
+        capture = "list-json";
+        run = [
+          "kix"
+          "images"
+          "how-to-application"
+          "--output"
+          "json"
+        ];
+      }
+      {
+        prepare = "kix images how-to-application --output json > images.json";
+      }
     ];
   }
 
@@ -993,6 +1411,20 @@
           "--out"
           "./handoff"
         ];
+      }
+      {
+        capture = "files";
+        shell = "find handoff -type f | sort";
+      }
+      {
+        # The point of the exit export is that nothing kix-specific
+        # survives it, so the grep is expected to find nothing and exit 1.
+        capture = "no-annotations";
+        shell = "grep -r 'kix.run/' ./handoff/";
+        allowFailure = true;
+      }
+      {
+        prepare = "kix export how-to-application --out ./handoff --force";
       }
     ];
   }
@@ -1013,6 +1445,19 @@
           "--out"
           "./audit-export"
         ];
+      }
+      {
+        capture = "annotations";
+        shell = "grep -rn 'kix.run/\\(identity-hash\\|depends-on\\|package\\)' ./audit-export/ | head -8";
+      }
+      {
+        capture = "internal-crs";
+        shell = "find ./audit-export -name 'Activation-*.yaml' -o -name 'PackageInstance-*.yaml'";
+      }
+      {
+        # The same page contrasts the audit bundle with the default
+        # export mode. Run it so the contrast stays true.
+        prepare = "kix export how-to-application --out ./handoff";
       }
     ];
   }
@@ -1046,4 +1491,119 @@
     ];
   }
 
+  # Ordering note: the two groups below run last on purpose. Each one
+  # deliberately leaves the shared kind cluster in a state a later group
+  # would trip over. The gc group deletes the resources of a renamed
+  # instance, and the health-check group deploys a probe that fails,
+  # which leaves a Degraded activation behind. A plain `kix deploy`
+  # after a Degraded activation is a no-op, so any group preparing a
+  # deploy after these would get the broken cluster, not a fresh one.
+
+  {
+    # Drop one instance from the cluster, then let gc find the resources
+    # the previous activation left behind. The next group's deploy
+    # restores them.
+    group = "how-to/application-gc";
+    page = "/docs/how-to/operate-a-cluster/garbage-collect-stale-resources/";
+    cwd = "kix-examples/";
+    live = [
+      {
+        prepare = [
+          "kix"
+          "deploy"
+          "how-to-application"
+          "-y"
+        ];
+      }
+      # The retention page shows these flag combinations. They run here,
+      # before the rename below, so they exercise the retention policy
+      # on a cluster that has nothing to collect.
+      {
+        prepare = "kix gc how-to-application --keep 20 --keep-max 100 --keep-for 90d --yes";
+      }
+      {
+        prepare = "kix gc how-to-application --keep 10 --keep-max 50 --keep-for off --yes";
+      }
+      {
+        # Renaming the instance orphans everything the deployed
+        # activation created under the old name, which is the situation
+        # the page is about.
+        mutate = {
+          file = "how-to/application/cluster.nix";
+          oldString = "preview = {";
+          newString = "preview-renamed = {";
+        };
+      }
+      {
+        capture = "plan";
+        run = [
+          "kix"
+          "gc"
+          "how-to-application"
+          "-y"
+        ];
+      }
+      # No `--hard` capture on purpose. Hard mode sweeps every
+      # kix-managed resource in the Kubernetes cluster and judges it
+      # against this one cluster's build, so it would delete the
+      # tutorial deployments the other live groups put here.
+    ];
+  }
+
+  {
+    group = "how-to/application-health-check";
+    page = "/docs/how-to/author-packages-and-clusters/add-a-post-deploy-health-check/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "check";
+        run = [
+          "kix"
+          "check"
+          "how-to-application"
+        ];
+      }
+      {
+        capture = "build";
+        run = [
+          "kix"
+          "build"
+          "how-to-application"
+          "-o"
+          "json"
+        ];
+        stdoutJq = ''.[] | select(.kind == "Job" and .metadata.name == "production-health")'';
+      }
+    ];
+    live = [
+      {
+        capture = "deploy";
+        run = [
+          "kix"
+          "deploy"
+          "how-to-application"
+          "-y"
+        ];
+      }
+      {
+        mutate = {
+          file = "how-to/application/health-check.sh";
+          oldString = "exit 0";
+          newString = ''
+            echo "the application returned an unexpected response"
+            exit 1'';
+        };
+      }
+      {
+        capture = "deploy-failing-probe";
+        run = [
+          "kix"
+          "deploy"
+          "how-to-application"
+          "-y"
+        ];
+        allowFailure = true;
+      }
+    ];
+  }
 ]

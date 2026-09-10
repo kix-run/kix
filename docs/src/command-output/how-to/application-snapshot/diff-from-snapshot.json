@@ -1,0 +1,19 @@
+{
+  "id": "how-to/application-snapshot/diff-from-snapshot",
+  "group": "how-to/application-snapshot",
+  "page": "/docs/how-to/operate-a-cluster/use-snapshots-for-offline-or-ci-diffs/",
+  "cwd": "kix-examples/",
+  "generator": "live",
+  "outputExcerpt": false,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix diff how-to-application --from ./snapshots/how-to-application",
+      "stdout": "3 packages: 2 unchanged, 1 changed, 0 added, 0 removed\n\n  \u001b[1mhow-to-app\u001b[0m\n    \u001b[33m~\u001b[39m \u001b[33mproduction\u001b[39m 1.0.0 (1 changed, 4 dep-affected)\n      \u001b[33m~\u001b[39m \u001b[33mConfigMap/production@how-to-app\u001b[39m\n          \u001b[33m\u001b[1m~\u001b[0m \u001b[2m$.data.index.html:\u001b[0m\n              \u001b[1m--- old\u001b[0m\n              \u001b[1m+++ new\u001b[0m\n              \u001b[36m@@ -1 +1 @@\u001b[0m\n              \u001b[31m-Hello from production\u001b[0m\n              \u001b[32m+Updated production message\u001b[0m\n      \u001b[2m~\u001b[0m \u001b[2mDeployment/production@how-to-app\u001b[0m \u001b[2m(via dependency)\u001b[0m\n      \u001b[2m~\u001b[0m \u001b[2mJob/production-health@how-to-app\u001b[0m \u001b[2m(via dependency)\u001b[0m\n      \u001b[2m~\u001b[0m \u001b[2mPackageInstance/production@how-to-app\u001b[0m \u001b[2m(via dependency)\u001b[0m\n      \u001b[2m~\u001b[0m \u001b[2mService/production@how-to-app\u001b[0m \u001b[2m(via dependency)\u001b[0m\n\n  \u001b[1mActivation:\u001b[0m \u001b[2mhow-to-application-aq1zdgf9gsnb\u001b[0m -> \u001b[32mhow-to-application-h9nqwqrpw48l\u001b[39m\n\n",
+      "stderr": "",
+      "stdoutDrift": "\n+++ new\n+Updated production message\n--- old\n-Hello from production\n3 packages: 2 unchanged, 1 changed, 0 added, 0 removed\n@@ -1 +1 @@\nActivation: how-to-application-<activation-id> -> how-to-application-<activation-id>\nhow-to-app\n~ $.data.index.html:\n~ ConfigMap/production@how-to-app\n~ Deployment/production@how-to-app (via dependency)\n~ Job/production-health@how-to-app (via dependency)\n~ PackageInstance/production@how-to-app (via dependency)\n~ Service/production@how-to-app (via dependency)\n~ production 1.0.0 (1 changed, 4 dep-affected)\n",
+      "stderrDrift": "",
+      "exitCode": 2
+    }
+  ]
+}

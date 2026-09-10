@@ -4,6 +4,7 @@ description: "Generate container environment variables and mount Kix resources i
 ---
 
 import Command from '/src/components/Command.astro';
+import deploymentEnv from '/src/command-output/how-to/application-basics/deployment-env.json';
 import Snippet from '/src/components/Snippet.astro';
 import environmentVariables from '/src/snippets/how-to/application/web-package/environmentVariables.json';
 import contentConfigMap from '/src/snippets/how-to/application/web-package/contentConfigMap.json';
@@ -91,9 +92,14 @@ to express with an `if` expression:
 ```
 
 Render the cluster and inspect the Deployment's `env`, `volumeMounts`, and
-`volumes` fields:
+`volumes` fields. This excerpt shows the container wiring the helpers
+produced:
 
-<Command commands={["kix build how-to-application"]} cwd="kix-examples/" />
+<Command expandable {...deploymentEnv} />
+
+The environment variables come from the helper calls above. The mount pairs
+the `volumeMounts` entry on the container with the `volumes` entry that names
+the ConfigMap.
 
 :::note[Reference]
 See [Environment helpers](/docs/reference/kix-helpers/env-helpers/),

@@ -4,6 +4,8 @@ description: "Resolve a new image tag, review the committed pin change, and veri
 ---
 
 import Command from '/src/components/Command.astro';
+import pinList from '/src/command-output/how-to/image-pins/list.json';
+import pinCheckOffline from '/src/command-output/how-to/image-pins/check-offline.json';
 
 Use `kix pin set` to promote an existing image pin. This guide assumes the pin
 file is already loaded by your flake and the cluster reads the pin you want to
@@ -34,13 +36,11 @@ already match the pin, Kix leaves the file untouched.
 
 Inspect the pin before deploying it:
 
-<Command
-  commands={[
-    "git diff -- pins.json",
-    "kix pin list --pins-file pins.json",
-  ]}
-  cwd="kix-project/"
-/>
+<Command commands={["git diff -- pins.json"]} cwd="kix-project/" />
+
+Then read the pin file back:
+
+<Command {...pinList} />
 
 Check the repository, human-readable tag, and resolved digest. A promotion
 should change the pin you intended and no other key.

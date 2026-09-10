@@ -5,6 +5,8 @@ description: "Inspect resource ordering in a Kix cluster as a tree, DOT graph, o
 
 import Command from '/src/components/Command.astro';
 import graphTree from '/src/command-output/how-to/dependency-graph/graph-tree.json';
+import graphDot from '/src/command-output/how-to/dependency-graph/graph-dot.json';
+import graphJson from '/src/command-output/how-to/dependency-graph/graph-json.json';
 
 Use `kix graph` to inspect the dependencies Kix derived from package outputs,
 explicit `deps`, `requires`, and other tracked references. The graph is built
@@ -29,11 +31,16 @@ If an expected edge is absent, check that the consumer reads a tracked
 
 Use DOT output for Graphviz or another graph viewer:
 
+<Command expandable {...graphDot} />
+
+Redirect it into a file and render it with Graphviz:
+
 <Command
   commands={[
-    "kix graph production --format dot > kix-graph.dot",
+    "kix graph 08-namespace-deps --format dot > kix-graph.dot",
     "dot -Tsvg kix-graph.dot > kix-graph.svg",
   ]}
+  cwd="kix-examples/"
 />
 
 The second command requires Graphviz. The generated SVG is useful when a tree
@@ -43,7 +50,11 @@ is too deep to scan comfortably.
 
 Use JSON when another tool will inspect the nodes and edges:
 
-<Command commands={["kix graph production --format json > kix-graph.json"]} />
+<Command {...graphJson} />
+
+The excerpt above counts the nodes and edges and shows one node. Every node
+carries its kind, name, namespace, and identity hash, so another tool can
+join the graph to the rendered manifests.
 
 Choose JSON for automation, not as the default way to read the graph by hand.
 

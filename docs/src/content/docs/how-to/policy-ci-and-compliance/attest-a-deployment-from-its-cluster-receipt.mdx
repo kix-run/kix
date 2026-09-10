@@ -34,7 +34,7 @@ Redirect stdout when the statement will be stored or signed by another tool:
 
 <Command
   commands={[
-    "kix compliance attest production --from-cluster --builder-id \"$CI_RUN_URL\" --invocation-id \"$CI_RUN_ID\" > provenance.json",
+    "kix compliance attest how-to-application --from-cluster --builder-id \"$CI_RUN_URL\" --invocation-id \"$CI_RUN_ID\" > provenance.json",
   ]}
 />
 
@@ -48,7 +48,7 @@ digest:
 
 <Command
   commands={[
-    "jq -e '.predicate.buildDefinition.externalParameters.cluster == \"production\" and (.subject[0].digest.nixStoreHash | length) > 0' provenance.json",
+    "jq -e '.predicate.buildDefinition.externalParameters.cluster == \"how-to-application\" and (.subject[0].digest.nixStoreHash | length) > 0' provenance.json",
   ]}
 />
 

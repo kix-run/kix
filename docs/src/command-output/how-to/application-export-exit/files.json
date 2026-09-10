@@ -1,0 +1,19 @@
+{
+  "id": "how-to/application-export-exit/files",
+  "group": "how-to/application-export-exit",
+  "page": "/docs/how-to/operate-a-cluster/export-plain-yaml/",
+  "cwd": "kix-examples/",
+  "generator": "offline",
+  "outputExcerpt": false,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "find handoff -type f | sort",
+      "stdout": "handoff/_cluster/CustomResourceDefinition-activations.kix.run.yaml\nhandoff/_cluster/CustomResourceDefinition-packageinstances.kix.run.yaml\nhandoff/_cluster/Namespace-how-to-app.yaml\nhandoff/_cluster/Namespace-kube-system.yaml\nhandoff/how-to-app/ConfigMap-preview.yaml\nhandoff/how-to-app/ConfigMap-production-health-script.yaml\nhandoff/how-to-app/ConfigMap-production.yaml\nhandoff/how-to-app/Deployment-preview.yaml\nhandoff/how-to-app/Deployment-production.yaml\nhandoff/how-to-app/Job-production-health.yaml\nhandoff/how-to-app/Service-preview.yaml\nhandoff/how-to-app/Service-production.yaml\n",
+      "stderr": "",
+      "stdoutDrift": "handoff/_cluster/CustomResourceDefinition-activations.kix.run.yaml\nhandoff/_cluster/CustomResourceDefinition-packageinstances.kix.run.yaml\nhandoff/_cluster/Namespace-how-to-app.yaml\nhandoff/_cluster/Namespace-kube-system.yaml\nhandoff/how-to-app/ConfigMap-preview.yaml\nhandoff/how-to-app/ConfigMap-production-health-script.yaml\nhandoff/how-to-app/ConfigMap-production.yaml\nhandoff/how-to-app/Deployment-preview.yaml\nhandoff/how-to-app/Deployment-production.yaml\nhandoff/how-to-app/Job-production-health.yaml\nhandoff/how-to-app/Service-preview.yaml\nhandoff/how-to-app/Service-production.yaml\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

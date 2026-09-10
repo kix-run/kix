@@ -4,11 +4,12 @@
   "page": "/docs/tutorials/02-local-setup-and-first-run/",
   "cwd": "kix-examples/",
   "generator": "live",
+  "outputExcerpt": false,
   "skipDriftCheck": false,
   "commands": [
     {
       "command": "kubectl get pods -n tutorial-02",
-      "stdout": "NAME                           READY   STATUS    RESTARTS   AGE\nhello-world-6f4588d4c5-7b87l   1/1     Running   0          21s\n",
+      "stdout": "NAME                           READY   STATUS    RESTARTS   AGE\nhello-world-6f4588d4c5-pwt94   1/1     Running   0          21s\n",
       "stderr": "",
       "stdoutDrift": "NAME READY STATUS RESTARTS AGE\nhello-world-<hash> 1/1 Running 0 <DURATION>\n",
       "stderrDrift": "",

@@ -131,9 +131,62 @@ let
       ${mutateBlocks}
     '';
 
+  # Wrapper bin dir for `shell` steps. A shell step runs a command line
+  # the reader would actually type, so `kix` (and `kubectl`, live) must
+  # be on PATH already carrying the driver's auto-flags. We write a tiny
+  # exec wrapper per binary into a temp dir and prepend it to PATH.
+  #
+  # `$workspace` is deliberately expanded when the wrapper is written,
+  # not when it runs: the driver's invocation strings embed it.
+  mkWrappers =
+    invocationFor: names:
+    map (name: {
+      inherit name;
+      invocation = invocationFor {
+        run = [ name ];
+        plain = true;
+      };
+    }) names;
+
+  # The wrapper is named after the binary it wraps and lives on the front
+  # of PATH, so it must not resolve that name through PATH itself or it
+  # execs itself forever. Pinning PATH back to the driver's own value
+  # (expanded here, at write time, before the prepend) keeps the lookup
+  # pointed at the real binary.
+  shellWrapperShell =
+    wrappers:
+    lib.concatMapStringsSep "\n" (w: ''
+      cat > "$__shell_bin/${w.name}" <<WRAPPER
+      #!/bin/sh
+      PATH=$PATH
+      exec ${w.invocation} "\$@"
+      WRAPPER
+      chmod +x "$__shell_bin/${w.name}"
+    '') wrappers;
+
+  # Every step runs under a wall-clock limit. A capture that stops making
+  # progress is a bug worth a loud, named failure: without this the whole
+  # regen just sits there and the maintainer has to guess which step.
+  defaultStepTimeout = "600s";
+
+  timeoutGuard = kind: label: exitVar: ''
+    if [ "${exitVar}" -eq 124 ]; then
+      echo "captures.${kind}: timed out after ${defaultStepTimeout}: ${label}" >&2
+      echo "(raise it with \`timeout = \"900s\";\` on the step if the command is legitimately slow)" >&2
+      exit 8
+    fi
+  '';
+
+  # Every step reads from /dev/null. The live driver wraps commands in
+  # `script` to get a pty, and `script` fails outright when the stdin it
+  # inherits is a socket, which is what happens whenever the regen runs
+  # from anything but an interactive shell.
+  #
   # Capture step → shell. Parameterised by:
   #   invocation — shell string that invokes the binary with whatever
   #     auto-flags the driver wants (PTY wrap, --context, --flake, etc.)
+  #   wrappers   — [{ name; invocation; }] used only by `shell` steps, so
+  #     the command line runs the driver-flagged binaries off PATH.
   #   generator  — "offline" or "live"; baked into the sidecar JSON.
   # Caller is expected to have on PATH or pinned: jq, sed, python3.
   # Caller is expected to have set: $workspace, $stagingDir.
@@ -143,11 +196,36 @@ let
       step,
       invocation,
       generator,
+      wrappers ? [ ],
     }:
     let
-      restArgs = lib.tail step.run;
+      isShellStep = step ? shell;
+      restArgs = if isShellStep then [ ] else lib.tail step.run;
       id = "${group.group}/${step.capture}";
-      displayCommand = mkDisplayCommand step.run;
+      stepTimeout = step.timeout or defaultStepTimeout;
+      displayCommand = if isShellStep then step.shell else mkDisplayCommand step.run;
+      # A shell step needs the wrapper bin dir on PATH; everything else
+      # execs the driver's invocation directly with the step's args.
+      runBlock =
+        if isShellStep then
+          ''
+            __shell_bin=$(mktemp -d)
+            ${shellWrapperShell wrappers}
+            ( cd "$workspace" && PATH="$__shell_bin:$PATH" \
+              timeout ${stepTimeout} bash -o pipefail -c ${lib.escapeShellArg step.shell} \
+            ) < /dev/null > "$__stdout_raw" 2> "$__stderr_raw"
+            __exit_code=$?
+            rm -rf "$__shell_bin"
+            ${timeoutGuard "capture" id "$__exit_code"}
+          ''
+        else
+          ''
+            ( cd "$workspace" && \
+              timeout ${stepTimeout} ${invocation} ${lib.escapeShellArgs restArgs} \
+            ) < /dev/null > "$__stdout_raw" 2> "$__stderr_raw"
+            __exit_code=$?
+            ${timeoutGuard "capture" id "$__exit_code"}
+          '';
       stepDriftPipeline = driftPipelineFor step;
       allowFailure = step.allowFailure or false;
       stdoutFilter =
@@ -199,10 +277,7 @@ let
       __stderr_drift=$(mktemp)
 
       set +e
-      ( cd "$workspace" && \
-        ${invocation} ${lib.escapeShellArgs restArgs} \
-      ) > "$__stdout_raw" 2> "$__stderr_raw"
-      __exit_code=$?
+      ${runBlock}
       set -e
 
       ${allowFailureGuard}
@@ -261,20 +336,45 @@ let
     {
       step,
       invocation,
+      wrappers ? [ ],
     }:
     let
-      restArgs = lib.tail step.run;
-      displayCommand = mkDisplayCommand step.run;
+      # `prepare` is either an argv list or, when the command needs a
+      # pipe or a redirect, a single shell string. A string prepare is
+      # how a command whose output teaches nothing still gets executed
+      # on every regen, so the docs cannot claim something the CLI no
+      # longer does.
+      isShellPrepare = builtins.isString step.run;
+      restArgs = if isShellPrepare then [ ] else lib.tail step.run;
+      displayCommand = if isShellPrepare then step.run else mkDisplayCommand step.run;
+      stepTimeout = step.timeout or defaultStepTimeout;
+      runBlock =
+        if isShellPrepare then
+          ''
+            __shell_bin=$(mktemp -d)
+            ${shellWrapperShell wrappers}
+            ( cd "$workspace" && PATH="$__shell_bin:$PATH" \
+              timeout ${stepTimeout} bash -o pipefail -c ${lib.escapeShellArg step.run} \
+            ) < /dev/null > "$__prepare_stdout" 2> "$__prepare_stderr"
+            __prepare_exit=$?
+            rm -rf "$__shell_bin"
+            ${timeoutGuard "prepare" displayCommand "$__prepare_exit"}
+          ''
+        else
+          ''
+            ( cd "$workspace" && \
+              timeout ${stepTimeout} ${invocation} ${lib.escapeShellArgs restArgs} \
+            ) < /dev/null > "$__prepare_stdout" 2> "$__prepare_stderr"
+            __prepare_exit=$?
+            ${timeoutGuard "prepare" displayCommand "$__prepare_exit"}
+          '';
     in
     ''
       printf '  preparing :: %s\n' ${lib.escapeShellArg displayCommand}
       __prepare_stdout=$(mktemp)
       __prepare_stderr=$(mktemp)
       set +e
-      ( cd "$workspace" && \
-        ${invocation} ${lib.escapeShellArgs restArgs} \
-      ) > "$__prepare_stdout" 2> "$__prepare_stderr"
-      __prepare_exit=$?
+      ${runBlock}
       set -e
       if [ "$__prepare_exit" -ne 0 ]; then
         echo "captures.prepare: command failed with exit $__prepare_exit: ${displayCommand}" >&2
@@ -290,12 +390,17 @@ let
   # Step dispatch. A step is either `mutate` (applied in-place) or
   # `capture` (runs a command and writes a sidecar). Drivers loop over
   # steps in declaration order and let the dispatch fall out.
+  #
+  # `shellBinaries` names the binaries a driver is willing to put on
+  # PATH for `shell` steps. Each becomes a wrapper carrying that
+  # driver's auto-flags.
   mkStepShell =
     {
       group,
       step,
       invocationFor,
       generator,
+      shellBinaries ? [ ],
     }:
     if step ? mutate then
       mutateShell step.mutate
@@ -307,12 +412,14 @@ let
       in
       prepareShell {
         step = preparedStep;
-        invocation = invocationFor preparedStep;
+        invocation = if builtins.isString step.prepare then "" else invocationFor preparedStep;
+        wrappers = mkWrappers invocationFor shellBinaries;
       }
     else if step ? capture then
       captureShell {
         inherit group step generator;
-        invocation = invocationFor step;
+        invocation = if step ? shell then "" else invocationFor step;
+        wrappers = mkWrappers invocationFor shellBinaries;
       }
     else
       throw "captures: step must have `mutate`, `prepare`, or `capture`; got: ${builtins.toJSON step}";

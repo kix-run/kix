@@ -4,6 +4,7 @@ description: "Change how a scorecard rule is reported across a cluster or for se
 ---
 
 import Command from '/src/components/Command.astro';
+import check from '/src/command-output/how-to/scorecard-rules/check.json';
 
 Use a severity override to promote a finding to an error or reduce it to a
 warning or informational result. Valid severities are `error`, `warning`, and
@@ -63,7 +64,7 @@ scorecard.ruleDefaults.severity = "warning";
 
 Run the cluster checks and confirm that the finding has the intended severity:
 
-<Command commands={["kix check production"]} />
+<Command {...check} />
 
 If several overrides match, a direct `byRule` override wins. Owner overrides
 then take precedence over namespace overrides, followed by the rule's declared

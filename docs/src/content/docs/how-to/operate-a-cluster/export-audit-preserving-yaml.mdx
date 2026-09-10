@@ -5,6 +5,8 @@ description: "Export rendered manifests with Kix provenance annotations and depl
 
 import Command from '/src/components/Command.astro';
 import auditExport from '/src/command-output/how-to/application-export-audit/export.json';
+import annotations from '/src/command-output/how-to/application-export-audit/annotations.json';
+import internalCrs from '/src/command-output/how-to/application-export-audit/internal-crs.json';
 
 Use the audit export mode when the exported manifests need to retain the Kix
 metadata that connects resources to packages, dependencies, and an
@@ -25,12 +27,7 @@ resources, and preserves its `kix.run/*` annotations.
 
 Search the exported files for Kix annotations:
 
-<Command
-  commands={[
-    "rg -n 'kix.run/(identity-hash|depends-on|package)' ./audit-export/",
-  ]}
-  cwd="kix-examples/"
-/>
+<Command expandable {...annotations} />
 
 The annotations record resource identity, package membership, and dependency
 edges. The Activation resource provides the root of the rendered deployment
@@ -38,12 +35,7 @@ graph.
 
 You can also inspect the internal records directly:
 
-<Command
-  commands={[
-    "find ./audit-export -name 'Activation-*.yaml' -o -name 'PackageInstance-*.yaml'",
-  ]}
-  cwd="kix-examples/"
-/>
+<Command {...internalCrs} />
 
 ## Keep audit and handoff exports separate
 

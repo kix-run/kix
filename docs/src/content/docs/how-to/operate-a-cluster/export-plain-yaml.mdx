@@ -5,6 +5,8 @@ description: "Export a Kix cluster as a directory of Kubernetes YAML for handoff
 
 import Command from '/src/components/Command.astro';
 import exportCluster from '/src/command-output/how-to/application-export-exit/export.json';
+import exportFiles from '/src/command-output/how-to/application-export-exit/files.json';
+import noAnnotations from '/src/command-output/how-to/application-export-exit/no-annotations.json';
 
 Use `kix export` when you need a directory of Kubernetes manifests without
 Kix's deployment records. The default export mode removes Kix annotations and
@@ -22,7 +24,7 @@ connect to Kubernetes.
 The output is grouped by namespace. Cluster-scoped resources are written
 under `_cluster`:
 
-<Command commands={["find handoff -type f | sort"]} cwd="kix-examples/" />
+<Command {...exportFiles} />
 
 Each filename contains the resource kind and name, such as
 `how-to-app/Deployment-production.yaml`.
@@ -31,15 +33,19 @@ Each filename contains the resource kind and name, such as
 
 Inspect the directory before handing it to another system:
 
+Compare the files with a live cluster before applying them:
+
 <Command
-  commands={[
-    "kubectl diff --server-side -R -f ./handoff/",
-    "rg 'kix.run/' ./handoff/",
-  ]}
+  commands={["kubectl diff --server-side -R -f ./handoff/"]}
   cwd="kix-examples/"
 />
 
-The `rg` command should find no Kix annotations. Labels such as
+Then confirm no Kix annotation survived the export. The search finds nothing
+and exits with status 1, which is the result you want here:
+
+<Command {...noAnnotations} />
+
+ Labels such as
 `app.kubernetes.io/managed-by` remain part of the resource metadata, so review
 and adjust labels if the receiving system has its own ownership convention.
 

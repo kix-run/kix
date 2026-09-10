@@ -4,6 +4,8 @@ description: "Read the live health of the resources associated with a Kix cluste
 ---
 
 import Command from '/src/components/Command.astro';
+import describeDeployment from '/src/command-output/how-to/application-status/describe-deployment.json';
+import jobLogs from '/src/command-output/how-to/application-status/job-logs.json';
 import applicationStatus from '/src/command-output/how-to/application-status/status.json';
 
 Use `kix status` to compare a cluster definition with the resources currently
@@ -51,12 +53,11 @@ Status is a summary. When a resource is not ready:
 
 For example:
 
-<Command
-  commands={[
-    "kubectl describe deployment production -n how-to-app",
-    "kubectl logs job/production-health -n how-to-app",
-  ]}
-/>
+<Command expandable {...describeDeployment} />
+
+The health-check Job's logs say whether the post-deploy probe passed:
+
+<Command {...jobLogs} />
 
 `status` reports observed health. It does not reapply resources or change the
 active activation.

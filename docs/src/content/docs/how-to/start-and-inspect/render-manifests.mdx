@@ -5,6 +5,8 @@ description: "Build a cluster locally and inspect the Kubernetes objects Kix pro
 
 import Command from '/src/components/Command.astro';
 import productionDeployment from '/src/command-output/how-to/application-render/build-production-deployment.json';
+import build from '/src/command-output/how-to/application-basics/build.json';
+import check from '/src/command-output/how-to/application-basics/check.json';
 
 `kix build` evaluates a cluster and writes its rendered Kubernetes manifests to
 standard output. It does not connect to a Kubernetes cluster.
@@ -13,7 +15,7 @@ standard output. It does not connect to a Kubernetes cluster.
 
 Run `build` with a cluster name:
 
-<Command commands={["kix build how-to-application"]} cwd="kix-examples/" />
+<Command expandable {...build} />
 
 The default output is a multi-document YAML stream. It includes workload
 resources, package bookkeeping, cluster-scoped resources, and imports used for
@@ -66,7 +68,7 @@ directory.
 `build` proves that evaluation and rendering succeed. Run `check` when you also
 want schema, policy, and optional external validation results:
 
-<Command commands={["kix check how-to-application"]} cwd="kix-examples/" />
+<Command {...check} />
 
 :::note[Next steps]
 See [Deploy to kind](/docs/how-to/start-and-inspect/deploy-to-kind/) when you

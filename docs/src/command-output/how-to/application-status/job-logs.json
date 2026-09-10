@@ -1,0 +1,19 @@
+{
+  "id": "how-to/application-status/job-logs",
+  "group": "how-to/application-status",
+  "page": "/docs/how-to/operate-a-cluster/check-resource-status/",
+  "cwd": "kix-examples/",
+  "generator": "live",
+  "outputExcerpt": false,
+  "skipDriftCheck": true,
+  "commands": [
+    {
+      "command": "kubectl logs job/production-health -n how-to-app",
+      "stdout": "ok    GET http://production.how-to-app.svc.cluster.local:80\n",
+      "stderr": "",
+      "stdoutDrift": "ok GET http://production.how-to-app.svc.cluster.local:80\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

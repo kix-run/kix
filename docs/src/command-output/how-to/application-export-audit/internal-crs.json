@@ -1,0 +1,19 @@
+{
+  "id": "how-to/application-export-audit/internal-crs",
+  "group": "how-to/application-export-audit",
+  "page": "/docs/how-to/operate-a-cluster/export-audit-preserving-yaml/",
+  "cwd": "kix-examples/",
+  "generator": "offline",
+  "outputExcerpt": false,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "find ./audit-export -name 'Activation-*.yaml' -o -name 'PackageInstance-*.yaml'",
+      "stdout": "./audit-export/how-to-app/PackageInstance-preview.yaml\n./audit-export/how-to-app/PackageInstance-production.yaml\n./audit-export/kube-system/PackageInstance-platform-dns.yaml\n./audit-export/_cluster/Activation-how-to-application-aq1zdgf9gsnb.yaml\n",
+      "stderr": "",
+      "stdoutDrift": "./audit-export/_cluster/Activation-how-to-application-<activation-id>.yaml\n./audit-export/how-to-app/PackageInstance-preview.yaml\n./audit-export/how-to-app/PackageInstance-production.yaml\n./audit-export/kube-system/PackageInstance-platform-dns.yaml\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

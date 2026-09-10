@@ -4,6 +4,7 @@ description: "Enable built-in policy checks and add a custom rule to a cluster."
 ---
 
 import Command from '/src/components/Command.astro';
+import check from '/src/command-output/how-to/scorecard-rules/check.json';
 import Snippet from '/src/components/Snippet.astro';
 import packageRule from '/src/snippets/tutorials/19-scorecards/scorecard/packageRule.json';
 
@@ -61,7 +62,7 @@ its level.
 
 Run the cluster checks after adding or changing a rule:
 
-<Command commands={["kix check 19-scorecards"]} cwd="kix-examples/" />
+<Command {...check} />
 
 Kix reports the number of scorecard errors, warnings, and informational
 findings. An error-level finding makes the check fail.

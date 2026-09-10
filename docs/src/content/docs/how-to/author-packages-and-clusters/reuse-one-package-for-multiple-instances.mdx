@@ -4,6 +4,7 @@ description: "Create independently configured instances from one local or catalo
 ---
 
 import Command from '/src/components/Command.astro';
+import inspect from '/src/command-output/how-to/application-basics/inspect.json';
 import Snippet from '/src/components/Snippet.astro';
 import reusedInstances from '/src/snippets/how-to/application/cluster/reusedInstances.json';
 import listPackages from '/src/command-output/how-to/application-reuse/list-packages.json';
@@ -65,10 +66,7 @@ List the packages in the example cluster:
 Use `inspect` when you need the evaluated parts, dependencies, and outputs for
 the cluster's instances:
 
-<Command
-  commands={["kix inspect how-to-application"]}
-  cwd="kix-examples/"
-/>
+<Command expandable {...inspect} />
 
 Changes to one instance's configuration affect that instance's rendered
 resources. They do not create a second copy of the package source.

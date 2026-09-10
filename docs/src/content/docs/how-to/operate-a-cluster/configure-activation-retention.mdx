@@ -19,7 +19,7 @@ The default invocation applies this policy to Superseded Activations:
 
 Run garbage collection without retention flags to use those defaults:
 
-<Command commands={["kix gc production"]} cwd="kix-project/" />
+<Command commands={["kix gc how-to-application"]} cwd="kix-examples/" />
 
 Kix prints the records it plans to retire and asks for confirmation before it
 deletes them.
@@ -33,9 +33,9 @@ the protected newest 20:
 
 <Command
   commands={[
-    "kix gc production --keep 20 --keep-max 100 --keep-for 90d",
+    "kix gc how-to-application --keep 20 --keep-max 100 --keep-for 90d",
   ]}
-  cwd="kix-project/"
+  cwd="kix-examples/"
 />
 
 The minimum wins if `--keep-max` is lower than `--keep`.
@@ -49,9 +49,9 @@ Disable the age rule with `--keep-for off` or `--keep-for 0`:
 
 <Command
   commands={[
-    "kix gc production --keep 10 --keep-max 50 --keep-for off",
+    "kix gc how-to-application --keep 10 --keep-max 50 --keep-for off",
   ]}
-  cwd="kix-project/"
+  cwd="kix-examples/"
 />
 
 Kix then keeps between 10 and 50 of the newest Superseded records, regardless
@@ -64,9 +64,9 @@ shell defaults:
 
 <Command
   commands={[
-    "kix gc production --keep 20 --keep-max 100 --keep-for 90d --yes",
+    "kix gc how-to-application --keep 20 --keep-max 100 --keep-for 90d --yes",
   ]}
-  cwd="kix-project/"
+  cwd="kix-examples/"
 />
 
 `--yes` skips the destructive confirmation, so use it only after reviewing the

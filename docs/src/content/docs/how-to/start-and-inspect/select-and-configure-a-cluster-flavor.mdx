@@ -6,6 +6,8 @@ description: "Choose the provider defaults that match a target cluster and overr
 import Command from '/src/components/Command.astro';
 import Snippet from '/src/components/Snippet.astro';
 import kindFlavor from '/src/snippets/how-to/application/cluster/kindFlavor.json';
+import check from '/src/command-output/how-to/application-basics/check.json';
+import listPackages from '/src/command-output/how-to/application-basics/list-packages.json';
 
 A flavor supplies cluster defaults for a Kubernetes environment. Select one
 near the beginning of the cluster's module list, then place project-specific
@@ -76,14 +78,12 @@ environment.
 
 Run `check` after selecting or changing a flavor:
 
-<Command commands={["kix check how-to-application"]} cwd="kix-examples/" />
+<Command {...check} />
 
-Inspect the package list to see platform imports contributed by the flavor:
+Inspect the package list to see platform imports contributed by the flavor.
+The two `import` rows come from the kind flavor, not from the cluster body:
 
-<Command
-  commands={["kix list packages --cluster how-to-application"]}
-  cwd="kix-examples/"
-/>
+<Command {...listPackages} />
 
 :::note[Reference]
 See [Provider profiles](/docs/reference/flavors/provider-profiles/),

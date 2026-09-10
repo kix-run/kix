@@ -60,6 +60,12 @@ let
     else
       throw "captures-offline: only `kix` is allowed offline (got `${bin}`); move kubectl/live commands to the live array";
 
+  # Binaries a `shell` step gets on PATH, already carrying the flags
+  # above. Offline steps must not reach a cluster, so `kix` is the only
+  # one; the surrounding coreutils/findutils/grep/jq come from
+  # `scriptDeps` and need no wrapper.
+  shellBinaries = [ "kix" ];
+
   mkGroupBlock =
     group:
     let
@@ -68,7 +74,7 @@ let
         step:
         mkStepShell {
           inherit group step;
-          inherit invocationFor;
+          inherit invocationFor shellBinaries;
           generator = "offline";
         }
       ) offlineSteps;
@@ -98,6 +104,10 @@ let
     pkgs.gnutar
     pkgs.diffutils
     pkgs.findutils
+    # `shell` steps run a reader-facing command line, so the tools those
+    # command lines use have to be here too.
+    pkgs.bash
+    pkgs.ripgrep
     kix
   ];
 

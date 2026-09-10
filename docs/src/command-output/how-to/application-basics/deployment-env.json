@@ -1,0 +1,19 @@
+{
+  "id": "how-to/application-basics/deployment-env",
+  "group": "how-to/application-basics",
+  "page": "/docs/how-to/start-and-inspect/render-manifests/",
+  "cwd": "kix-examples/",
+  "generator": "offline",
+  "outputExcerpt": true,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix build how-to-application --output json",
+      "stdout": "{\n  \"containers\": [\n    {\n      \"name\": \"nginx\",\n      \"env\": [\n        {\n          \"name\": \"APP_ENV\",\n          \"value\": \"production\"\n        }\n      ],\n      \"volumeMounts\": [\n        {\n          \"mountPath\": \"/usr/share/nginx/html\",\n          \"name\": \"content\",\n          \"readOnly\": true\n        }\n      ]\n    }\n  ],\n  \"volumes\": [\n    {\n      \"configMap\": {\n        \"name\": \"production\"\n      },\n      \"name\": \"content\"\n    }\n  ]\n}\n",
+      "stderr": "",
+      "stdoutDrift": "\"configMap\": {\n\"containers\": [\n\"env\": [\n\"mountPath\": \"/usr/share/nginx/html\",\n\"name\": \"APP_ENV\",\n\"name\": \"content\"\n\"name\": \"content\",\n\"name\": \"nginx\",\n\"name\": \"production\"\n\"readOnly\": true\n\"value\": \"production\"\n\"volumeMounts\": [\n\"volumes\": [\n]\n],\n{\n}\n},\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

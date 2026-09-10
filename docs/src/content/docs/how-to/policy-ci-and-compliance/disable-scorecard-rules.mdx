@@ -4,6 +4,7 @@ description: "Exclude a scorecard rule while leaving the rest of its rule set en
 ---
 
 import Command from '/src/components/Command.astro';
+import check from '/src/command-output/how-to/scorecard-rules/check.json';
 
 Disable an individual rule through `scorecard.ruleOverrides.byRule`. This
 keeps the rest of its built-in or custom category active.
@@ -31,7 +32,7 @@ reliability rules continue to run.
 
 Run the cluster checks:
 
-<Command commands={["kix check production"]} />
+<Command {...check} />
 
 Confirm that the disabled rule no longer appears in the findings. If it still
 appears, check that the override includes the category and matches the rule

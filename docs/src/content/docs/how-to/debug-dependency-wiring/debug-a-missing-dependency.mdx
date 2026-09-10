@@ -5,6 +5,7 @@ description: "Find the unresolved build argument and wire it to the intended pac
 
 import Command from '/src/components/Command.astro';
 import check from '/src/command-output/how-to/dependency-missing/check.json';
+import checkFixed from '/src/command-output/how-to/dependency-fixed/check.json';
 
 A package declares required dependencies through the arguments to its build
 functions. When Kix cannot resolve one of those arguments, evaluation stops
@@ -55,7 +56,7 @@ provider by namespace and instance name.
 
 Run the checks again after correcting the name or wiring:
 
-<Command commands={["kix check production"]} />
+<Command {...checkFixed} />
 
 If Kix reports several matches instead, keep the providers as they are and add
 an explicit `deps` entry to the consumer that needs one of them.

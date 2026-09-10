@@ -44,6 +44,10 @@ Check that the command produced a CycloneDX 1.6 document:
   cwd="kix-examples/"
 />
 
+The capture pipeline runs this same assertion on every regeneration, so a
+change to the emitted CycloneDX version fails the docs build rather than
+reaching you as a surprise.
+
 Use `--output yaml` if the receiving system expects YAML:
 
 <Command

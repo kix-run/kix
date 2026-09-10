@@ -1,0 +1,19 @@
+{
+  "id": "how-to/application-export-exit/no-annotations",
+  "group": "how-to/application-export-exit",
+  "page": "/docs/how-to/operate-a-cluster/export-plain-yaml/",
+  "cwd": "kix-examples/",
+  "generator": "offline",
+  "outputExcerpt": false,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "grep -r 'kix.run/' ./handoff/",
+      "stdout": "",
+      "stderr": "",
+      "stdoutDrift": "",
+      "stderrDrift": "",
+      "exitCode": 1
+    }
+  ]
+}

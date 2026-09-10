@@ -1,0 +1,19 @@
+{
+  "id": "how-to/application-export-audit/annotations",
+  "group": "how-to/application-export-audit",
+  "page": "/docs/how-to/operate-a-cluster/export-audit-preserving-yaml/",
+  "cwd": "kix-examples/",
+  "generator": "offline",
+  "outputExcerpt": false,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "grep -rn 'kix.run/\\(identity-hash\\|depends-on\\|package\\)' ./audit-export/ | head -8",
+      "stdout": "./audit-export/how-to-app/ConfigMap-production.yaml:8:    kix.run/depends-on: '8767b7nzgc1x5bpfa9gv71cpk9z8h0iw'\n./audit-export/how-to-app/ConfigMap-production.yaml:9:    kix.run/identity-hash: '4x75h2z7rsj3dvrdg9vzqc8l789xvm4w'\n./audit-export/how-to-app/ConfigMap-production.yaml:10:    kix.run/package: production\n./audit-export/how-to-app/ConfigMap-production.yaml:11:    kix.run/package-namespace: how-to-app\n./audit-export/how-to-app/PackageInstance-preview.yaml:5:    kix.run/depends-on: '8767b7nzgc1x5bpfa9gv71cpk9z8h0iw,y6f6a4crihkpwp7w7z2cclrq93zk55i7,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs'\n./audit-export/how-to-app/PackageInstance-preview.yaml:6:    kix.run/identity-hash: q9w5514xkajmcjrzr9dq9h335zxkvaap\n./audit-export/how-to-app/PackageInstance-preview.yaml:7:    kix.run/package: _cluster\n./audit-export/how-to-app/PackageInstance-preview.yaml:8:    kix.run/package-namespace: _cluster\n",
+      "stderr": "",
+      "stdoutDrift": "./audit-export/how-to-app/ConfigMap-production.yaml:10: kix.run/package: production\n./audit-export/how-to-app/ConfigMap-production.yaml:11: kix.run/package-namespace: how-to-app\n./audit-export/how-to-app/ConfigMap-production.yaml:8: kix.run/depends-on: '<identity-hash>'\n./audit-export/how-to-app/ConfigMap-production.yaml:9: kix.run/identity-hash: '<identity-hash>'\n./audit-export/how-to-app/PackageInstance-preview.yaml:5: kix.run/depends-on: '<identity-hash>,<identity-hash>,requires:<identity-hash>'\n./audit-export/how-to-app/PackageInstance-preview.yaml:6: kix.run/identity-hash: <identity-hash>\n./audit-export/how-to-app/PackageInstance-preview.yaml:7: kix.run/package: _cluster\n./audit-export/how-to-app/PackageInstance-preview.yaml:8: kix.run/package-namespace: _cluster\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

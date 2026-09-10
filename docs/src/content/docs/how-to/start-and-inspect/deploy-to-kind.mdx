@@ -4,6 +4,10 @@ description: "Create a local Kubernetes cluster and deploy a Kix example to it."
 ---
 
 import Command from '/src/components/Command.astro';
+import getNamespaces from '/src/command-output/how-to/application-kubectl/get-namespaces.json';
+import getWorkloads from '/src/command-output/how-to/application-kubectl/get-workloads.json';
+import check from '/src/command-output/how-to/application-basics/check.json';
+import status from '/src/command-output/how-to/application-status/status.json';
 import clusterInfo from '/src/command-output/tutorials/02-hello-world/kubectl-cluster-info.json';
 import deployApplication from '/src/command-output/how-to/application-health-check/deploy.json';
 
@@ -37,7 +41,7 @@ If another context is current, select the kind context explicitly:
 
 Validate the example before connecting Kix to Kubernetes:
 
-<Command commands={["kix check how-to-application"]} cwd="kix-examples/" />
+<Command {...check} />
 
 This evaluates the cluster and runs its configured validation without applying
 resources.
@@ -59,16 +63,13 @@ resource or post-deploy check prevents that transition.
 
 Check the namespaces and workloads with kubectl:
 
-<Command
-  commands={[
-    "kubectl get namespaces",
-    "kubectl get deployments,services,jobs -n how-to-app",
-  ]}
-/>
+<Command {...getNamespaces} />
+
+<Command {...getWorkloads} />
 
 Use Kix to see the status associated with the cluster definition:
 
-<Command commands={["kix status how-to-application"]} cwd="kix-examples/" />
+<Command {...status} />
 
 ## Remove the local cluster
 

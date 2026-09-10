@@ -58,17 +58,49 @@ let
     step:
     let
       bin = lib.head step.run;
+      # A `shell` step's wrapper must not be PTY-wrapped: its command
+      # line pipes into grep/jq, and injected ANSI would break them.
+      plain = step ? stdoutJq || step ? plain;
     in
-    if bin == "kix" && step ? stdoutJq then
+    if bin == "kix" && plain then
       ''kix --no-color --no-cache --context "${kubeContext}" --flake "$workspace" ${kixOverrideArgs}''
     else if bin == "kix" then
       ''script -q /dev/null kix --no-cache --context "${kubeContext}" --flake "$workspace" ${kixOverrideArgs}''
-    else if bin == "kubectl" && step ? stdoutJq then
+    else if bin == "kubectl" && plain then
       ''kubectl --context "${kubeContext}"''
     else if bin == "kubectl" then
       ''script -q /dev/null kubectl --context "${kubeContext}"''
     else
       throw "captures-live: unknown binary `${bin}` (extend invocationFor)";
+
+  # Binaries a `shell` step gets on PATH, already carrying --context and
+  # the flake/override flags.
+  shellBinaries = [
+    "kix"
+    "kubectl"
+  ];
+
+  # Several kix commands treat every kix-managed resource in the
+  # Kubernetes cluster as belonging to the cluster you named: `kix diff`
+  # reports another kix cluster's resources as removals, and `kix gc
+  # --hard` would delete them. The tutorial groups deploy three other
+  # clusters into the shared kind cluster, so a group that needs a
+  # truthful whole-cluster view has to start from an empty one.
+  resetClusterShell =
+    group:
+    if (group.resetCluster or false) then
+      ''
+        printf '→ resetting the %s kind cluster for %s\n' "${kindClusterName}" ${lib.escapeShellArg group.group}
+        kind delete cluster --name "${kindClusterName}" >/dev/null 2>&1 || true
+        kind create cluster --name "${kindClusterName}" --kubeconfig "$KUBECONFIG"
+        current_ctx=$(kubectl config current-context)
+        if [ "$current_ctx" != "${kubeContext}" ]; then
+          echo "fatal: expected current-context ${kubeContext}, got $current_ctx" >&2
+          exit 4
+        fi
+      ''
+    else
+      "";
 
   mkGroupBlock =
     group:
@@ -78,13 +110,14 @@ let
         step:
         mkStepShell {
           inherit group step;
-          inherit invocationFor;
+          inherit invocationFor shellBinaries;
           generator = "live";
         }
       ) liveSteps;
     in
     ''
       if [ -z "$group_filter" ] || [ "$group_filter" = ${lib.escapeShellArg group.group} ]; then
+        ${resetClusterShell group}
         printf '→ workspace for %s\n' ${lib.escapeShellArg group.group}
         workspace=$(mktemp -d -t kix-docs-ws.XXXXXX)
         ws_dirs+=("$workspace")
@@ -108,6 +141,8 @@ let
     pkgs.kind
     pkgs.kubectl
     pkgs.gnutar
+    pkgs.bash
+    pkgs.ripgrep
     pkgs.diffutils
     pkgs.findutils
     kix

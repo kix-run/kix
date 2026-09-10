@@ -1,0 +1,19 @@
+{
+  "id": "how-to/application-rollback/list-json",
+  "group": "how-to/application-rollback",
+  "page": "/docs/how-to/operate-a-cluster/roll-back-an-activation/",
+  "cwd": "kix-examples/",
+  "generator": "live",
+  "outputExcerpt": false,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix rollback how-to-application --list --output json",
+      "stdout": "{\n  \"cluster\": \"how-to-application\",\n  \"current\": {\n    \"built_via\": \"/nix/store/si2fnvbjp2lz0mhp7rpi885pyzqmpgki-k8s-activation-how-to-application\",\n    \"identity_hash\": \"lchxmwcma8cav513dw9d0002b5qpax6v\",\n    \"name\": \"how-to-application-lchxmwcma8ca\"\n  },\n  \"superseded\": [\n    {\n      \"available_locally\": false,\n      \"built_via\": \"/nix/store/c5lyxiwp2v311kpm3z9gr699ffrm5riq-k8s-activation-how-to-application\",\n      \"deployed_at\": \"2026-09-10T00:22:07.560031+00:00\",\n      \"identity_hash\": \"aq1zdgf9gsnbdpc8hwkma69l8ipalqpx\",\n      \"name\": \"how-to-application-aq1zdgf9gsnb\",\n      \"previous_activation\": null\n    }\n  ]\n}\n",
+      "stderr": "",
+      "stdoutDrift": "\"available_locally\": false,\n\"built_via\": \"/nix/store/<identity-hash>-k8s-activation-how-to-application\",\n\"cluster\": \"how-to-application\",\n\"current\": {\n\"deployed_at\": \"<TIME>+00:00\",\n\"identity_hash\": \"<identity-hash>\",\n\"name\": \"how-to-application-<activation-id>\"\n\"name\": \"how-to-application-<activation-id>\",\n\"previous_activation\": null\n\"superseded\": [\n]\n{\n}\n},\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}
