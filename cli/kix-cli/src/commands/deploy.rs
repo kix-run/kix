@@ -593,11 +593,7 @@ async fn load_old_from_cluster(
 
     let client = fetch::make_client(global.context.as_deref())
         .await
-        .map_err(|e| {
-            miette!(
-                "failed to connect to cluster: {e}. Check your kubeconfig or try --context <name>"
-            )
-        })?;
+        .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
 
     let discovery = fetch::discover_resources(&client)
         .await
@@ -1057,11 +1053,7 @@ async fn run_deploy_async(
         Some(c) => c,
         None => fetch::make_client(global.context.as_deref())
             .await
-            .map_err(|e| {
-                miette!(
-                    "failed to connect to cluster: {e}. Check your kubeconfig or try --context <name>"
-                )
-            })?,
+            .map_err(|e| miette!("failed to connect to cluster: {e}"))?,
     };
 
     let discovery = fetch::discover_resources(&client)

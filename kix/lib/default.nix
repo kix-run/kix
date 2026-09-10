@@ -51,6 +51,12 @@ in
 
   inherit (env) mkEnv;
 
+  # `fragments` is imported above for this one export. It was imported and
+  # never re-exported, so every documented call to `kix.mergeFragments` from
+  # a consuming flake failed with "attribute 'mergeFragments' missing"
+  # (kixpkgs handbook §"Composition", FEATURE-CATALOG §mergeFragments).
+  inherit (fragments) mergeFragments;
+
   inherit rbac;
 
   inherit kixlib;

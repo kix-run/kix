@@ -142,11 +142,7 @@ fn diff_graphs(old: &StoreGraph, new: &StoreGraph) -> DiffResult {
 async fn fetch_live_manifests(global: &crate::cli::GlobalArgs) -> Result<Vec<Value>> {
     let client = fetch::make_client(global.context.as_deref())
         .await
-        .map_err(|e| {
-            miette!(
-                "failed to connect to cluster: {e}. Check your kubeconfig or try --context <name>"
-            )
-        })?;
+        .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
 
     if !global.quiet {
         eprintln!("Discovering API resources...");

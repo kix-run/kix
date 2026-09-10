@@ -39,6 +39,8 @@
         victoria-metrics = ./test-victoria-metrics.nix;
         kind-probe = ./test-kind-probe.nix;
         pins = ./test-pins.nix;
+        fragments = ./test-fragments.nix;
+        multi-env = ./test-multi-env.nix;
         satchel-dev = ./satchel/dev.nix;
         satchel-prod = ./satchel/prod.nix;
       };

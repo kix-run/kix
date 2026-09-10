@@ -164,7 +164,7 @@ Auto-derives CiliumNetworkPolicy from the DI graph:
 
 ### Environment Stamping (`env.nix`)
 
-- **`mkEnv`** — Stamp instance sets into env-prefixed namespaces (dev/staging/prod). Namespaces become `"${envName}-${setName}"`. Per-instance overrides via `overrides.${setName}.${instName}`. Adds `_envScope` to instances.
+- **`mkEnv`** — Stamp instance sets into env-prefixed namespaces (dev/staging/prod). Namespaces become `"${envName}-${setName}"`. Per-instance overrides via `overrides.${setName}.${instName}`. The namespace prefix is the only isolation: auto-instantiated plain deps follow the requesting namespace, while role providers and packages pinned via `namespace`/`autoNamespace` are shared across environments.
 
 ### Cluster Module Options (`modules.nix`)
 
@@ -269,7 +269,7 @@ the CLI evaluates generically.
 | `--context <CTX>` | Kubeconfig context |
 | `--flake <PATH>` | Flake reference (default: `.`) |
 
-**Env vars:** `KIX_LOG` overrides verbose-derived log filter (RUST_LOG syntax). `KIX_RETRY_ATTEMPTS`, `KIX_REQUEST_TIMEOUT`, `KIX_CONNECT_TIMEOUT` tune the shared apiserver transport policy (retries with backoff, deadlines); `KIX_SWEEP_CONCURRENCY` bounds the managed-resource sweep; `KIX_STALL_TIMEOUT` is the deploy progress watchdog's abort bound (default 600s, `0` never); see HANDBOOK § CLI.
+**Env vars:** `KIX_LOG` overrides verbose-derived log filter (RUST_LOG syntax). `KIX_RETRY_ATTEMPTS`, `KIX_REQUEST_TIMEOUT`, `KIX_CONNECT_TIMEOUT` tune the shared apiserver transport policy (retries with backoff, deadlines) and `KIX_PREFLIGHT=0` skips the first-contact probe; `KIX_SWEEP_CONCURRENCY` bounds the managed-resource sweep; `KIX_STALL_TIMEOUT` is the deploy progress watchdog's abort bound (default 600s, `0` never); see HANDBOOK § CLI.
 
 ### Commands
 

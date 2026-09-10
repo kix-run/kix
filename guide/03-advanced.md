@@ -1030,7 +1030,7 @@ instances = kix.mkEnv "dev" {
 
 - Each set function called with `{ ref = { }; env = { name; config; }; }`.
 - `overrides.<set>.<inst>.config` **shallow-merged** (`//`, not deep) onto `config`; `overrides.<set>.<inst>.parts` replaces `parts` if present.
-- Each stamped instance gains `_envScope = envName`.
+- Isolation is the namespace prefix and nothing else. A plain auto-instantiated dep follows the requesting namespace, so each env gets its own; role-named deps are keyed by the role and shared, as are packages pinned by `namespace` or `autoNamespace`.
 - Call once per env (`"prod"`, `"stage"`, `"demo"`); merge results into `instances`. DI graph independent per env (namespaces differ, resolution is namespace-scoped; see 02-authoring.md#dependency-injection).
 
 Gotcha: override merge is shallow `//`, unlike instance `config` deep-merge. `overrides.app.api.config.resources = { cpu = ...; }` replaces the whole `resources` block, dropping sibling defaults. For deep semantics prefer plain `instances."dev-app"` defs with `lib.mkDefault`, or hand-written prefixed instances (`ludo/variants/cluster-kind-env-stamped.nix`).
