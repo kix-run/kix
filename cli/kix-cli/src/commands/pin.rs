@@ -18,7 +18,7 @@
 //! purpose: the moment you most need to fix a pin is the moment evaluation is
 //! unhappy about it.
 //!
-//! Design and reasoning: `v2_discussions/138_values_that_vary_per_deploy.md`.
+//! Design and reasoning: `v2_discussions/archive/138_values_that_vary_per_deploy.md`.
 
 use miette::{IntoDiagnostic, Result, miette};
 

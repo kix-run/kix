@@ -1,7 +1,7 @@
 # 139: External Inputs and Resolutions
 
 **Status:** RFC
-**Related:** `117_self_service_platform_interface.md` (the request half), `91_cicd_organizational_patterns.md` (§5 shift-left self-service), `45_multi_team_and_operator_models.md` (repo topology), `129a_grounding_field_and_prior_art.md` (pin coherence as the fleet-level computation), `138_values_that_vary_per_deploy.md` (#88, the design; implemented in #89)
+**Related:** `117_self_service_platform_interface.md` (the request half), `91_cicd_organizational_patterns.md` (§5 shift-left self-service), `45_multi_team_and_operator_models.md` (repo topology), `129a_grounding_field_and_prior_art.md` (pin coherence as the fleet-level computation), `archive/138_values_that_vary_per_deploy.md` (the design; implemented in #89)
 
 ---
 
@@ -62,9 +62,11 @@ Doc 138 argued that a pin file must be Nix rather than JSON, because the CLI's e
 
 This matters here because doc 117 §3.3 proposes JSON instance files. Had the original claim held, 117 would have had the same bug. It does not, so requests can be JSON, which is what an external portal or an agent can write without knowing Nix.
 
-The remaining argument for Nix is narrower and worth keeping in view for resolutions specifically. A resolution file is written by a machine and read by a person, so the header explaining what it is and how to change it is load-bearing, and JSON has no comments. Against that, JSON would let the resolving command drop its `nix eval --json --file` read and need no Nix at all, which serves the "works when evaluation is unhappy" property better than what shipped.
+The remaining argument for Nix was narrower and specific to resolutions: a resolution file is written by a machine and read by a person, so the header explaining what it is and how to change it is load-bearing, and JSON has no comments. #89 answered that with a `note` field per entry, carried through every rewrite and never reaching a manifest, which puts the explanation next to the entry it explains rather than at the top of the file. JSON5 was considered and rejected, because `builtins.fromJSON` refuses it and only import-from-derivation could bridge the gap. TOML would have parsed comments and preserved them across rewrites, but it is not in the cache extension list, so choosing it would have made doc 138's false claim true.
 
-The correction to doc 138's prose is a separate decision and is not made here.
+JSON also let `kix pin` drop any Nix read at all, which serves the "works when evaluation is unhappy" property that doc 138 asked for and its own recommendation did not deliver.
+
+Doc 138 is corrected and archived; the three decisions that changed are in `archive/138_values_that_vary_per_deploy.md` §0.
 
 ## 7. Open questions
 

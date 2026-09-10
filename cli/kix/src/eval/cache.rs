@@ -191,7 +191,13 @@ impl SqliteCache {
     }
 }
 
-/// Recursively walk a directory collecting `*.nix` files as `(relative_path, mtime_secs)`.
+/// Recursively walk a directory collecting evaluation inputs as `(relative_path, mtime_secs)`.
+///
+/// `.nix`, `.yaml`, `.yml` and `.json`, not `.nix` alone. Anything a cluster
+/// reads with `builtins.readFile` belongs here, or a change to it renders
+/// differently without invalidating the cache. `d96297d` widened the set from
+/// `.nix`; this comment claimed otherwise for long enough that a design
+/// document built an argument on it.
 ///
 /// Skips `.git`, `.direnv`, `result`, and `node_modules` directories.
 /// Results are sorted by relative path for deterministic ordering.

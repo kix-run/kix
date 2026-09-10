@@ -94,7 +94,7 @@ rec {
   # What this does not do: check that the digest refers to anything. Nix
   # evaluation is pure, so a well-formed invented digest passes every check
   # here. `kix pin --check` is what asks the registry, and it is meant to run
-  # on every change to a pin file. See `v2_discussions/138_*`.
+  # on every change to a pin file. See `v2_discussions/archive/138_*`.
   image =
     let
       needField =

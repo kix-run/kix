@@ -29,7 +29,7 @@
 //! values inline too, so the same store would be the same archive. The
 //! receipt records provenance, and rollback stays tied to the source.
 //!
-//! Design: `v2_discussions/138_values_that_vary_per_deploy.md` section 5.2.
+//! Design: `v2_discussions/archive/138_values_that_vary_per_deploy.md` section 5.2.
 
 use std::collections::BTreeSet;
 
