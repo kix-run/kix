@@ -39,7 +39,9 @@
 //!
 //! Every knob has an environment override for debugging (`KIX_RETRY_ATTEMPTS`,
 //! `KIX_REQUEST_TIMEOUT`, `KIX_CONNECT_TIMEOUT`); see
-//! [`ResiliencePolicy::from_env`].
+//! [`ResiliencePolicy::from_env`]. `KIX_PREFLIGHT=0` turns off the
+//! first-contact probe in [`super::fetch::make_client`], which rides this
+//! layer marked with [`FirstContact`].
 
 use std::{
     future::Future,
@@ -112,6 +114,9 @@ pub const RETRY_ATTEMPTS_ENV: &str = "KIX_RETRY_ATTEMPTS";
 pub const REQUEST_TIMEOUT_ENV: &str = "KIX_REQUEST_TIMEOUT";
 /// Env var: TCP connect timeout in whole seconds.
 pub const CONNECT_TIMEOUT_ENV: &str = "KIX_CONNECT_TIMEOUT";
+/// Env var: set to `0` to skip the first-contact probe in
+/// [`super::fetch::make_client`].
+pub const PREFLIGHT_ENV: &str = "KIX_PREFLIGHT";
 
 impl ResiliencePolicy {
     /// The defaults with environment overrides applied. Unparseable values
@@ -131,6 +136,44 @@ impl ResiliencePolicy {
         }
         policy
     }
+}
+
+/// Request extension marking the one request that proves the cluster answers.
+///
+/// A request carrying this gets exactly one attempt and no deadline of its
+/// own. Insert it with [`mark_first_contact`].
+///
+/// First contact is not the place for this layer's generosity. The retries
+/// exist to carry a deploy through an apiserver restart or a webhook
+/// rolling, where persistence is what gets the run through. But a cluster
+/// that is not there will not become there, and seven attempts over a 60s
+/// budget only delay the one thing the user needs, which is the error: a
+/// refused port takes ~18s of retries and 0.1s without them.
+///
+/// The per-attempt deadline goes too, so the caller's own deadline is the
+/// only one running. Two deadlines of the same length would race, and which
+/// message the user got would be a coin flip. `connect_timeout` stays,
+/// because a connect that times out produces a better cause than a bare
+/// "time passed".
+///
+/// This rides the real client's request rather than a second client built
+/// from a second policy. A second client means a second connection pool: the
+/// probe would pay its own TLS handshake and then throw the connection away,
+/// measured at ~0.6s against stage1 and stage2, on every cluster command. On the
+/// real client the probe is a connection pre-warm instead of a tax.
+#[derive(Clone, Copy, Debug)]
+pub struct FirstContact;
+
+/// Mark a request as first contact. See [`FirstContact`].
+pub fn mark_first_contact<T>(req: &mut Request<T>) {
+    req.extensions_mut().insert(FirstContact);
+}
+
+/// Is the first-contact probe enabled? `KIX_PREFLIGHT=0` turns it off and
+/// restores the pre-probe behaviour, where an unreachable endpoint surfaces
+/// from whatever request happens to run first.
+pub fn preflight_enabled() -> bool {
+    env_number(PREFLIGHT_ENV).is_none_or(|n| n > 0)
 }
 
 /// Read a whole-number environment variable, warning on garbage.
@@ -292,6 +335,7 @@ struct RequestShape {
     headers: HeaderMap,
     is_watch: bool,
     idempotent: bool,
+    first_contact: bool,
 }
 
 impl RequestShape {
@@ -303,6 +347,7 @@ impl RequestShape {
             headers: parts.headers.clone(),
             is_watch: is_watch_uri(&parts.uri),
             idempotent: is_idempotent(&parts.method),
+            first_contact: parts.extensions.get::<FirstContact>().is_some(),
         }
     }
 
@@ -469,13 +514,20 @@ where
             Ok(resp) => Observed::Status(resp.status(), resp.headers()),
             Err(err) => Observed::Error(err),
         };
-        match decide(
-            &policy,
-            shape.idempotent,
-            observed,
-            attempt,
-            started.elapsed(),
-        ) {
+        // First contact never retries. Handled here so `decide` stays the
+        // pure policy for every other request rather than growing a case.
+        let verdict = if shape.first_contact {
+            Verdict::Done
+        } else {
+            decide(
+                &policy,
+                shape.idempotent,
+                observed,
+                attempt,
+                started.elapsed(),
+            )
+        };
+        match verdict {
             Verdict::Done => {
                 if retried {
                     let gave_up = match &outcome {
@@ -532,12 +584,15 @@ where
     let req = shape.build(body);
     let ready = inner.ready().await.map_err(Into::into)?;
     let call = ready.call(req);
-    match (shape.is_watch, policy.request_timeout) {
-        (false, Some(deadline)) => match tokio::time::timeout(deadline, call).await {
+    // A watch is long-lived by design and first contact carries the caller's
+    // deadline instead. Neither wants one of ours.
+    let exempt = shape.is_watch || shape.first_contact;
+    match policy.request_timeout.filter(|_| !exempt) {
+        Some(deadline) => match tokio::time::timeout(deadline, call).await {
             Ok(result) => result.map_err(Into::into),
             Err(_) => Err(Box::new(RequestTimeout(deadline)) as BoxError),
         },
-        _ => call.await.map_err(Into::into),
+        None => call.await.map_err(Into::into),
     }
 }
 

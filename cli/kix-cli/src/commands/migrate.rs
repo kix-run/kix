@@ -28,9 +28,7 @@ pub fn run(args: &MigrateArgs, ctx: &mut CommandContext) -> Result<()> {
     let client = ctx
         .runtime
         .block_on(fetch::make_client(ctx.global.context.as_deref()))
-        .map_err(|e| {
-            miette!("failed to connect to cluster: {e}. Check your kubeconfig or try --context")
-        })?;
+        .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
     let ops = KubeMigrationOps::new(client);
 
     // A dry run first, always: it is the only way to show the plan before
