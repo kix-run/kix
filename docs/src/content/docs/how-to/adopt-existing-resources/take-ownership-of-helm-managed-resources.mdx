@@ -1,4 +1,116 @@
 ---
 title: "Take ownership of Helm-managed resources"
-description: TODO
+description: "Move an existing Helm release under Kix without recreating its resources."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import inlineHelmChart from '/src/snippets/how-to/adoption/helm-bridge-cluster/inlineHelmChart.json';
+import check from '/src/command-output/how-to/adoption-helm-takeover/check.json';
+import desiredDeployment from '/src/command-output/how-to/adoption-helm-takeover/desired-deployment.json';
+import conflict from '/src/command-output/how-to/adoption-helm-takeover/conflict.json';
+import takeOwnership from '/src/command-output/how-to/adoption-helm-takeover/take-ownership.json';
+import removeReleaseRecord from '/src/command-output/how-to/adoption-helm-takeover/remove-release-record.json';
+
+Use a one-time server-side apply takeover when an existing Helm release should
+become part of a Kix cluster. The Kix definition must render the same resources
+before you transfer ownership.
+
+This guide uses the Reflector chart. Perform the takeover during a normal
+change window.
+
+## Save the release configuration
+
+Record the installed chart and values:
+
+<Command
+  commands={[
+    "helm list --namespace reflector-system",
+    "helm get values reflector --namespace reflector-system --all --output yaml > reflector.values.yaml",
+    "helm get manifest reflector --namespace reflector-system > reflector.manifest.yaml",
+  ]}
+/>
+
+Keep these files until the migrated release has been deployed and checked.
+They provide the inputs and rendered resources you need for comparison.
+
+## Define the same chart in Kix
+
+Pin the installed chart version and use the same release name:
+
+<Snippet {...inlineHelmChart} />
+
+Copy the release's non-default values into `config.values`. Do not proceed with
+different chart values merely because the Kix definition evaluates.
+
+Check the cluster without contacting Kubernetes:
+
+<Command {...check} />
+
+Inspect the rendered Deployment:
+
+<Command {...desiredDeployment} />
+
+Save the complete Kix output, then compare each resource from the Helm
+manifest with the resource of the same kind, namespace, and name:
+
+<Command
+  commands={[
+    "kix build how-to-helm-bridge --output yaml > reflector.kix.yaml",
+  ]}
+  cwd="kix-examples/"
+/>
+
+The Kix output also contains Kix tracking resources. Chart resources gain Kix
+management metadata and lose Helm release metadata, test hooks, and fields
+that only repeat Kubernetes defaults. Correct any other difference before
+deploying.
+
+## Confirm the ownership conflict
+
+Ask the API server to validate the takeover without persisting it:
+
+<Command expandable {...conflict} />
+
+The conflict identifies fields still owned by Helm. Review those fields
+against the saved manifest and values. If the Kix output is not meant to
+replace them, change the Kix definition instead of forcing the deployment.
+
+## Transfer resource ownership
+
+Once the rendered resources are equivalent, deploy once with
+`--force-conflicts`:
+
+<Command {...takeOwnership} />
+
+Check the workload before changing the Helm release record:
+
+<Command
+  commands={[
+    "kix status how-to-helm-bridge",
+    "kubectl rollout status deployment/reflector --namespace reflector-system",
+  ]}
+  cwd="kix-examples/"
+/>
+
+## Remove the Helm release record
+
+Helm stores release records as Secrets. Delete the record only after Kix owns
+the resources and the workload is healthy:
+
+<Command {...removeReleaseRecord} />
+
+This leaves the workload in place but makes the release unavailable to future
+`helm upgrade` and `helm uninstall` commands. Retain the saved values and
+manifest with your migration records.
+
+Use ordinary `kix deploy how-to-helm-bridge` commands after the takeover. Do
+not keep `--force-conflicts` in routine commands.
+
+:::caution
+Do not run `helm uninstall` to remove the release record. It also deletes the
+resources recorded by the release.
+:::
+
+For more about defining chart-backed packages, see
+[Use Helm charts through the Kix Helm bridge](/docs/how-to/adopt-existing-resources/use-helm-charts-through-the-kix-helm-bridge/).

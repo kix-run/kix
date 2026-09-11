@@ -15,7 +15,7 @@
 #      writes them, `--check` exits non-zero on any diff.
 #
 # Trust boundary: the script writes its own KUBECONFIG and pins the
-# context to `kind-kix-docs`. All kix and kubectl invocations get
+# context to `kind-kix-docs`. All kix, kubectl, and Helm invocations get
 # `--context kind-kix-docs` so they refuse to talk to any other
 # cluster the maintainer might have set as current.
 
@@ -48,7 +48,7 @@ let
   kubeContext = "kind-kix-docs";
   kindClusterName = "kix-docs";
 
-  # Live kix/kubectl invocation. PTY wrapping via `script -q /dev/null`
+  # Live kix/kubectl/Helm invocation. PTY wrapping via `script -q /dev/null`
   # so kix/kubectl produce ANSI colour even though we redirect to a
   # file (their output detects non-TTY and disables colour otherwise).
   # --context is injected uniformly to keep the trust boundary tight.
@@ -70,6 +70,8 @@ let
       ''kubectl --context "${kubeContext}"''
     else if bin == "kubectl" then
       ''script -q /dev/null kubectl --context "${kubeContext}"''
+    else if bin == "helm" then
+      ''env HELM_PLUGINS= helm --kube-context "${kubeContext}"''
     else
       throw "captures-live: unknown binary `${bin}` (extend invocationFor)";
 
@@ -140,6 +142,7 @@ let
     pkgs.jq
     pkgs.kind
     pkgs.kubectl
+    pkgs.kubernetes-helm
     pkgs.gnutar
     pkgs.bash
     pkgs.ripgrep

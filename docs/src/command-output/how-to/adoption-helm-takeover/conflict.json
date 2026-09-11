@@ -1,0 +1,19 @@
+{
+  "id": "how-to/adoption-helm-takeover/conflict",
+  "group": "how-to/adoption-helm-takeover",
+  "page": "/docs/how-to/adopt-existing-resources/take-ownership-of-helm-managed-resources/",
+  "cwd": "kix-examples/",
+  "generator": "live",
+  "outputExcerpt": true,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix deploy how-to-helm-bridge --dry-run -y",
+      "stdout": "⚠ ClusterRole/reflector field-ownership conflict on ClusterRole/reflector: another field manager owns one or more fields kix is trying to set. Re-run with --force-conflicts to take ownership. Underlying error: ApiError: Apply failed with 1 conflict: conflict with \"helm\" using rbac.authorization.k8s.io/v1: .metadata.labels.app.kubernetes.io/managed-by: Conflict (ErrorResponse { status: \"Failure\", message: \"Apply failed with 1 conflict: conflict with \\\"helm\\\" using rbac.authorization.k8s.io/v1: .metadata.labels.app.kubernetes.io/managed-by\", reason: \"Conflict\", code: 409 })\n✗ halt-on-first-failure: field-ownership conflict on ClusterRole/reflector: another field manager owns one or more fields kix is trying to set. Re-run with --force-conflicts to take ownership. Underlying error: ApiError: Apply failed with 1 conflict: conflict with \"helm\" using rbac.authorization.k8s.io/v1: .metadata.labels.app.kubernetes.io/managed-by: Conflict (ErrorResponse { status: \"Failure\", message: \"Apply failed with 1 conflict: conflict with \\\"helm\\\" using rbac.authorization.k8s.io/v1: .metadata.labels.app.kubernetes.io/managed-by\", reason: \"Conflict\", code: 409 })\nDry run complete: 2 created, 2 configured, 0 unchanged, 1 failed, 6 cancelled\n",
+      "stderr": "",
+      "stdoutDrift": "Dry run complete: 2 created, 2 configured, 0 unchanged, 1 failed, 6 cancelled\n⚠ ClusterRole/reflector field-ownership conflict on ClusterRole/reflector: another field manager owns one or more fields kix is trying to set. Re-run with --force-conflicts to take ownership. Underlying error: ApiError: Apply failed with 1 conflict: conflict with \"helm\" using rbac.authorization.k8s.io/v1: .metadata.labels.app.kubernetes.io/managed-by: Conflict (ErrorResponse { status: \"Failure\", message: \"Apply failed with 1 conflict: conflict with \\\"helm\\\" using rbac.authorization.k8s.io/v1: .metadata.labels.app.kubernetes.io/managed-by\", reason: \"Conflict\", code: 409 })\n✗ halt-on-first-failure: field-ownership conflict on ClusterRole/reflector: another field manager owns one or more fields kix is trying to set. Re-run with --force-conflicts to take ownership. Underlying error: ApiError: Apply failed with 1 conflict: conflict with \"helm\" using rbac.authorization.k8s.io/v1: .metadata.labels.app.kubernetes.io/managed-by: Conflict (ErrorResponse { status: \"Failure\", message: \"Apply failed with 1 conflict: conflict with \\\"helm\\\" using rbac.authorization.k8s.io/v1: .metadata.labels.app.kubernetes.io/managed-by\", reason: \"Conflict\", code: 409 })\n",
+      "stderrDrift": "",
+      "exitCode": 1
+    }
+  ]
+}

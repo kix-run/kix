@@ -2092,6 +2092,100 @@
   }
 
   {
+    group = "how-to/adoption-helm-takeover";
+    page = "/docs/how-to/adopt-existing-resources/take-ownership-of-helm-managed-resources/";
+    cwd = "kix-examples/";
+    resetCluster = true;
+    offline = [
+      {
+        capture = "check";
+        run = [
+          "kix"
+          "check"
+          "how-to-helm-bridge"
+        ];
+      }
+      {
+        capture = "desired-deployment";
+        run = [
+          "kix"
+          "build"
+          "how-to-helm-bridge"
+          "--output"
+          "json"
+        ];
+        stdoutJq = ''
+          .[]
+          | select(.kind == "Deployment" and .metadata.namespace == "reflector-system")
+          | {
+              apiVersion,
+              kind,
+              metadata: {name: .metadata.name, namespace: .metadata.namespace},
+              spec: {
+                replicas: .spec.replicas,
+                selector: .spec.selector,
+                serviceAccountName: .spec.template.spec.serviceAccountName,
+                containers: .spec.template.spec.containers | map({name, image})
+              }
+            }'';
+      }
+    ];
+    live = [
+      {
+        prepare = [
+          "helm"
+          "upgrade"
+          "--install"
+          "reflector"
+          "reflector"
+          "--repo"
+          "https://emberstack.github.io/helm-charts"
+          "--version"
+          "10.0.60"
+          "--namespace"
+          "reflector-system"
+          "--create-namespace"
+        ];
+      }
+      {
+        capture = "conflict";
+        run = [
+          "kix"
+          "deploy"
+          "how-to-helm-bridge"
+          "--dry-run"
+          "-y"
+        ];
+        allowFailure = true;
+        stdoutGrep = "field-ownership conflict|Dry run complete";
+      }
+      {
+        capture = "take-ownership";
+        run = [
+          "kix"
+          "deploy"
+          "how-to-helm-bridge"
+          "--force-conflicts"
+          "-y"
+        ];
+        stdoutGrep = "Deployment/reflector|activation .*Active|Deploy complete";
+      }
+      {
+        capture = "remove-release-record";
+        run = [
+          "kubectl"
+          "delete"
+          "secret"
+          "--namespace"
+          "reflector-system"
+          "--selector"
+          "owner=helm,name=reflector"
+        ];
+      }
+    ];
+  }
+
+  {
     group = "how-to/application-typed-options";
     page = "/docs/how-to/author-packages-and-clusters/add-typed-package-options/";
     cwd = "kix-examples/";

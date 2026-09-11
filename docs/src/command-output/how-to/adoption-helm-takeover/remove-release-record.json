@@ -1,0 +1,19 @@
+{
+  "id": "how-to/adoption-helm-takeover/remove-release-record",
+  "group": "how-to/adoption-helm-takeover",
+  "page": "/docs/how-to/adopt-existing-resources/take-ownership-of-helm-managed-resources/",
+  "cwd": "kix-examples/",
+  "generator": "live",
+  "outputExcerpt": false,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kubectl delete secret --namespace reflector-system --selector owner=helm,name=reflector",
+      "stdout": "secret \"sh.helm.release.v1.reflector.v1\" deleted from reflector-system namespace\n",
+      "stderr": "",
+      "stdoutDrift": "secret \"sh.helm.release.v1.reflector.v1\" deleted from reflector-system namespace\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}
