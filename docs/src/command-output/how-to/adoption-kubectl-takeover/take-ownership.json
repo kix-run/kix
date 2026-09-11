@@ -1,0 +1,19 @@
+{
+  "id": "how-to/adoption-kubectl-takeover/take-ownership",
+  "group": "how-to/adoption-kubectl-takeover",
+  "page": "/docs/how-to/adopt-existing-resources/take-ownership-of-kubectl-managed-resources/",
+  "cwd": "kix-examples/",
+  "generator": "live",
+  "outputExcerpt": true,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix deploy how-to-adoption-takeover --force-conflicts -y",
+      "stdout": "~ Deployment/legacy-web@takeover configured\n✔ Deployment/legacy-web@takeover ready\n• activation 'how-to-adoption-takeover-nphkg40wdk30' → Active\nDeploy complete: 6 created, 4 configured, 0 unchanged, 0 failed\n",
+      "stderr": "",
+      "stdoutDrift": "Deploy complete: 6 created, 4 configured, 0 unchanged, 0 failed\n~ Deployment/legacy-web@takeover configured\n• activation 'how-to-adoption-takeover-<activation-id>' → Active\n✔ Deployment/legacy-web@takeover ready\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

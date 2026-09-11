@@ -1,4 +1,99 @@
 ---
 title: "Take ownership of kubectl-managed resources"
-description: TODO
+description: "Move an existing kubectl-managed workload under Kix without changing immutable selectors."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import kubectlManagedWorkload from '/src/snippets/how-to/adoption/takeover-cluster/kubectlManagedWorkload.json';
+import check from '/src/command-output/how-to/adoption-kubectl-takeover/check.json';
+import desiredDeployment from '/src/command-output/how-to/adoption-kubectl-takeover/desired-deployment.json';
+import conflict from '/src/command-output/how-to/adoption-kubectl-takeover/conflict.json';
+import takeOwnership from '/src/command-output/how-to/adoption-kubectl-takeover/take-ownership.json';
+
+Use a one-time server-side apply takeover when an existing resource was
+applied with `kubectl` and should now be managed by Kix.
+
+This guide uses a Deployment as the example. Back up the live resource first,
+and perform the takeover during a normal change window.
+
+## Record the live resource
+
+Save the resource before changing its ownership:
+
+<Command
+  commands={[
+    "kubectl get deployment legacy-web -n takeover -o yaml --show-managed-fields > legacy-web.before.yaml",
+  ]}
+/>
+
+Keep any fields your workload relies on, especially immutable selectors,
+Service selectors, volume claims, and identity-bearing names. The
+`managedFields` section also shows which manager owns each part of the object.
+
+## Make the Kix definition match
+
+Configure the package instance with the live Deployment's selector and the
+state you want Kix to manage:
+
+<Snippet {...kubectlManagedWorkload} />
+
+The example retains the existing `app` and `tier` selector. Its desired replica
+count is two, while the kubectl-managed fixture has one replica.
+
+Check the cluster before contacting Kubernetes:
+
+<Command {...check} />
+
+Inspect the rendered Deployment:
+
+<Command {...desiredDeployment} />
+
+Compare it with `legacy-web.before.yaml`. Do not continue if the rendered
+resource changes an immutable selector or omits a field the workload still
+needs. Correct the package configuration first.
+
+## Confirm the ownership conflict
+
+Run an API-server dry run without taking ownership:
+
+<Command expandable {...conflict} />
+
+Kix discovers live state through its management labels, so `kix diff` does not
+compare a resource that Kix has not managed before. The deployment dry run
+sends the intended manifests to the API server without persisting them.
+
+The API server rejects a change when another field manager owns a field Kix is
+trying to change. The error identifies the resource and points to
+`--force-conflicts`. Review the named fields against the saved resource before
+using that flag.
+
+## Take ownership once
+
+When the diff and conflicting fields are expected, deploy with
+`--force-conflicts`:
+
+<Command {...takeOwnership} />
+
+The flag tells server-side apply to transfer conflicting fields in the Kix
+manifest to the `kix` field manager. Fields that Kix does not specify remain
+with their existing managers.
+
+Check the result and save its field ownership:
+
+<Command
+  commands={[
+    "kix status how-to-adoption-takeover",
+    "kubectl get deployment legacy-web -n takeover -o yaml --show-managed-fields > legacy-web.after.yaml",
+  ]}
+  cwd="kix-examples/"
+/>
+
+Use ordinary `kix deploy how-to-adoption-takeover` commands after the takeover.
+Do not leave `--force-conflicts` enabled for routine deployments, because a
+later conflict may represent another controller making an intentional change.
+
+:::note[Explanation]
+See [Server-side apply field ownership and drift](/docs/explanation/server-side-apply-field-ownership-and-drift/)
+for how Kix and other field managers can share one Kubernetes object.
+:::

@@ -1,0 +1,19 @@
+{
+  "id": "how-to/adoption-kubectl-takeover/check",
+  "group": "how-to/adoption-kubectl-takeover",
+  "page": "/docs/how-to/adopt-existing-resources/take-ownership-of-kubectl-managed-resources/",
+  "cwd": "kix-examples/",
+  "generator": "offline",
+  "outputExcerpt": false,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix check how-to-adoption-takeover",
+      "stdout": " TOOL         RESULT  DETAILS                                     \n eval         pass    10 manifests evaluated                      \n kubeconform  pass    skipped (not installed)                     \n pluto        pass    skipped (not installed)                     \n kyverno      pass    skipped (not installed)                     \n scorecard    skip    scorecard not enabled in cluster definition \n",
+      "stderr": "",
+      "stdoutDrift": "TOOL RESULT DETAILS\neval pass 10 manifests evaluated\nkubeconform pass skipped (not installed)\nkyverno pass skipped (not installed)\npluto pass skipped (not installed)\nscorecard skip scorecard not enabled in cluster definition\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

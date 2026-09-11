@@ -1942,6 +1942,90 @@
   }
 
   {
+    group = "how-to/adoption-kubectl-takeover";
+    page = "/docs/how-to/adopt-existing-resources/take-ownership-of-kubectl-managed-resources/";
+    cwd = "kix-examples/";
+    resetCluster = true;
+    offline = [
+      {
+        capture = "check";
+        run = [
+          "kix"
+          "check"
+          "how-to-adoption-takeover"
+        ];
+      }
+      {
+        capture = "desired-deployment";
+        run = [
+          "kix"
+          "build"
+          "how-to-adoption-takeover"
+          "--output"
+          "json"
+        ];
+        stdoutJq = ''
+          .[]
+          | select(.kind == "Deployment" and .metadata.name == "legacy-web")
+          | {
+              apiVersion,
+              kind,
+              metadata: {name: .metadata.name, namespace: .metadata.namespace},
+              spec: {
+                replicas: .spec.replicas,
+                selector: .spec.selector,
+                podLabels: .spec.template.metadata.labels,
+                containers: .spec.template.spec.containers | map({name, image})
+              }
+            }'';
+      }
+    ];
+    live = [
+      {
+        prepare = [
+          "kubectl"
+          "create"
+          "namespace"
+          "takeover"
+        ];
+      }
+      {
+        prepare = [
+          "kubectl"
+          "apply"
+          "--server-side"
+          "--field-manager=kubectl"
+          "-f"
+          "how-to/adoption/kubectl-deployment.yaml"
+        ];
+      }
+      {
+        capture = "conflict";
+        run = [
+          "kix"
+          "deploy"
+          "how-to-adoption-takeover"
+          "--dry-run"
+          "-y"
+        ];
+        allowFailure = true;
+        stdoutGrep = "field-ownership conflict|Dry run complete";
+      }
+      {
+        capture = "take-ownership";
+        run = [
+          "kix"
+          "deploy"
+          "how-to-adoption-takeover"
+          "--force-conflicts"
+          "-y"
+        ];
+        stdoutGrep = "Deployment/legacy-web|activation .*Active|Deploy complete";
+      }
+    ];
+  }
+
+  {
     group = "how-to/application-typed-options";
     page = "/docs/how-to/author-packages-and-clusters/add-typed-package-options/";
     cwd = "kix-examples/";

@@ -1,0 +1,19 @@
+{
+  "id": "how-to/adoption-kubectl-takeover/desired-deployment",
+  "group": "how-to/adoption-kubectl-takeover",
+  "page": "/docs/how-to/adopt-existing-resources/take-ownership-of-kubectl-managed-resources/",
+  "cwd": "kix-examples/",
+  "generator": "offline",
+  "outputExcerpt": true,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix build how-to-adoption-takeover --output json",
+      "stdout": "{\n  \"apiVersion\": \"apps/v1\",\n  \"kind\": \"Deployment\",\n  \"metadata\": {\n    \"name\": \"legacy-web\",\n    \"namespace\": \"takeover\"\n  },\n  \"spec\": {\n    \"replicas\": 2,\n    \"selector\": {\n      \"matchLabels\": {\n        \"app\": \"legacy-web\",\n        \"tier\": \"frontend\"\n      }\n    },\n    \"podLabels\": {\n      \"app\": \"legacy-web\",\n      \"tier\": \"frontend\"\n    },\n    \"containers\": [\n      {\n        \"name\": \"nginx\",\n        \"image\": \"docker.io/library/nginx:1.27-alpine\"\n      }\n    ]\n  }\n}\n",
+      "stderr": "",
+      "stdoutDrift": "\"apiVersion\": \"apps/v1\",\n\"app\": \"legacy-web\",\n\"containers\": [\n\"image\": \"docker.io/library/nginx:1.27-alpine\"\n\"kind\": \"Deployment\",\n\"matchLabels\": {\n\"metadata\": {\n\"name\": \"legacy-web\",\n\"name\": \"nginx\",\n\"namespace\": \"takeover\"\n\"podLabels\": {\n\"replicas\": 2,\n\"selector\": {\n\"spec\": {\n\"tier\": \"frontend\"\n]\n{\n}\n},\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}
