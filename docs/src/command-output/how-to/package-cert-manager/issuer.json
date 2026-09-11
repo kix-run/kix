@@ -1,0 +1,19 @@
+{
+  "id": "how-to/package-cert-manager/issuer",
+  "group": "how-to/package-cert-manager",
+  "page": "/docs/how-to/package-task-guides/configure-cert-manager-issuers/",
+  "cwd": "kix-examples/",
+  "generator": "offline",
+  "outputExcerpt": true,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix build how-to-package-cert-manager --output json",
+      "stdout": "{\n  \"apiVersion\": \"cert-manager.io/v1\",\n  \"kind\": \"ClusterIssuer\",\n  \"metadata\": {\n    \"name\": \"local-self-signed\"\n  },\n  \"spec\": {\n    \"selfSigned\": {}\n  }\n}\n",
+      "stderr": "",
+      "stdoutDrift": "\"apiVersion\": \"cert-manager.io/v1\",\n\"kind\": \"ClusterIssuer\",\n\"metadata\": {\n\"name\": \"local-self-signed\"\n\"selfSigned\": {}\n\"spec\": {\n{\n}\n},\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

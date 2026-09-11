@@ -55,7 +55,7 @@
     { "page": "operate-a-cluster/use-kix-logs", "scenario": "operations", "status": "implemented", "liveCaptures": ["how-to/application-logs/production-tail"] },
     { "page": "operate-a-cluster/use-kix-pf", "scenario": "operations", "status": "implemented" },
     { "page": "operate-a-cluster/use-snapshots-for-offline-or-ci-diffs", "scenario": "operations", "status": "implemented", "liveCaptures": ["how-to/application-snapshot/diff-clean", "how-to/application-snapshot/diff-from-snapshot", "how-to/application-snapshot/save"] },
-    { "page": "package-task-guides/configure-cert-manager-issuers", "scenario": "package-stacks", "status": "planned" },
+    { "page": "package-task-guides/configure-cert-manager-issuers", "scenario": "package-stacks", "status": "implemented", "snippets": ["certManagerAndIssuer"], "offlineCaptures": ["how-to/package-cert-manager/check", "how-to/package-cert-manager/issuer"] },
     { "page": "package-task-guides/deploy-a-python-app", "scenario": "package-stacks", "status": "implemented", "snippets": ["pythonApplicationInstance"], "offlineCaptures": ["how-to/package-python/check", "how-to/package-python/workload"] },
     { "page": "package-task-guides/deploy-stackgres", "scenario": "package-stacks", "status": "planned" },
     { "page": "package-task-guides/deploy-valkey-redis", "scenario": "package-stacks", "status": "implemented", "snippets": ["valkeyInstance"], "offlineCaptures": ["how-to/package-valkey/check", "how-to/package-valkey/resources"] },

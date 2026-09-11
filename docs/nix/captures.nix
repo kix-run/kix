@@ -1165,6 +1165,36 @@
   }
 
   {
+    group = "how-to/package-cert-manager";
+    page = "/docs/how-to/package-task-guides/configure-cert-manager-issuers/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "check";
+        run = [
+          "kix"
+          "check"
+          "how-to-package-cert-manager"
+        ];
+      }
+      {
+        capture = "issuer";
+        run = [
+          "kix"
+          "build"
+          "how-to-package-cert-manager"
+          "--output"
+          "json"
+        ];
+        stdoutJq = ''
+          .[]
+          | select(.kind == "ClusterIssuer" and .metadata.name == "local-self-signed")
+          | {apiVersion, kind, metadata: {name: .metadata.name}, spec}'';
+      }
+    ];
+  }
+
+  {
     group = "how-to/package-python";
     page = "/docs/how-to/package-task-guides/deploy-a-python-app/";
     cwd = "kix-examples/";
