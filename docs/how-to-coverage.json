@@ -12,7 +12,7 @@
   },
   "pages": [
     { "page": "adopt-existing-resources/add-explicit-ordering-with-extradeps", "scenario": "adoption", "status": "planned" },
-    { "page": "adopt-existing-resources/handle-server-side-apply-conflicts-safely", "scenario": "adoption", "status": "planned" },
+    { "page": "adopt-existing-resources/handle-server-side-apply-conflicts-safely", "scenario": "adoption", "status": "implemented", "liveCaptures": ["how-to/adoption-ssa-conflicts/conflict", "how-to/adoption-ssa-conflicts/force-preview", "how-to/adoption-ssa-conflicts/resolve"] },
     { "page": "adopt-existing-resources/handle-stateful-migration-prompts-safely", "scenario": "adoption", "status": "planned" },
     { "page": "adopt-existing-resources/import-an-existing-service-with-kix-mkimport", "scenario": "adoption", "status": "implemented", "snippets": ["importExistingService", "consumeImportedService"], "offlineCaptures": ["how-to/adoption-import-service/check", "how-to/adoption-import-service/list-packages", "how-to/adoption-import-service/client-config"] },
     { "page": "adopt-existing-resources/patch-package-output-with-overlays", "scenario": "adoption", "status": "implemented", "snippets": ["patchPackageOutput"], "offlineCaptures": ["how-to/adoption-parts-overlay/check", "how-to/adoption-parts-overlay/patched-config"] },

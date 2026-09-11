@@ -1,0 +1,19 @@
+{
+  "id": "how-to/adoption-ssa-conflicts/resolve",
+  "group": "how-to/adoption-ssa-conflicts",
+  "page": "/docs/how-to/adopt-existing-resources/handle-server-side-apply-conflicts-safely/",
+  "cwd": "kix-examples/",
+  "generator": "live",
+  "outputExcerpt": true,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix deploy how-to-adoption-takeover --reconcile --force-conflicts -y",
+      "stdout": "~ Deployment/legacy-web@takeover configured\n✔ Deployment/legacy-web@takeover ready\n• activation 'how-to-adoption-takeover-nphkg40wdk30' → Active\nDeploy complete: 0 created, 10 configured, 0 unchanged, 0 failed\n",
+      "stderr": "",
+      "stdoutDrift": "Deploy complete: 0 created, 10 configured, 0 unchanged, 0 failed\n~ Deployment/legacy-web@takeover configured\n• activation 'how-to-adoption-takeover-<activation-id>' → Active\n✔ Deployment/legacy-web@takeover ready\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

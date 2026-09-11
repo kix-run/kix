@@ -1,0 +1,19 @@
+{
+  "id": "how-to/adoption-ssa-conflicts/conflict",
+  "group": "how-to/adoption-ssa-conflicts",
+  "page": "/docs/how-to/adopt-existing-resources/handle-server-side-apply-conflicts-safely/",
+  "cwd": "kix-examples/",
+  "generator": "live",
+  "outputExcerpt": true,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix deploy how-to-adoption-takeover --reconcile --dry-run -y",
+      "stdout": "⚠ Deployment/legacy-web@takeover field-ownership conflict on Deployment/legacy-web@takeover: another field manager owns one or more fields kix is trying to set. Re-run with --force-conflicts to take ownership. Underlying error: ApiError: Apply failed with 1 conflict: conflict with \"autoscaler\": .spec.replicas: Conflict (ErrorResponse { status: \"Failure\", message: \"Apply failed with 1 conflict: conflict with \\\"autoscaler\\\": .spec.replicas\", reason: \"Conflict\", code: 409 })\n✗ halt-on-first-failure: field-ownership conflict on Deployment/legacy-web@takeover: another field manager owns one or more fields kix is trying to set. Re-run with --force-conflicts to take ownership. Underlying error: ApiError: Apply failed with 1 conflict: conflict with \"autoscaler\": .spec.replicas: Conflict (ErrorResponse { status: \"Failure\", message: \"Apply failed with 1 conflict: conflict with \\\"autoscaler\\\": .spec.replicas\", reason: \"Conflict\", code: 409 })\nDry run complete: 0 created, 5 configured, 0 unchanged, 1 failed, 4 cancelled\n",
+      "stderr": "",
+      "stdoutDrift": "Dry run complete: 0 created, 5 configured, 0 unchanged, 1 failed, 4 cancelled\n⚠ Deployment/legacy-web@takeover field-ownership conflict on Deployment/legacy-web@takeover: another field manager owns one or more fields kix is trying to set. Re-run with --force-conflicts to take ownership. Underlying error: ApiError: Apply failed with 1 conflict: conflict with \"autoscaler\": .spec.replicas: Conflict (ErrorResponse { status: \"Failure\", message: \"Apply failed with 1 conflict: conflict with \\\"autoscaler\\\": .spec.replicas\", reason: \"Conflict\", code: 409 })\n✗ halt-on-first-failure: field-ownership conflict on Deployment/legacy-web@takeover: another field manager owns one or more fields kix is trying to set. Re-run with --force-conflicts to take ownership. Underlying error: ApiError: Apply failed with 1 conflict: conflict with \"autoscaler\": .spec.replicas: Conflict (ErrorResponse { status: \"Failure\", message: \"Apply failed with 1 conflict: conflict with \\\"autoscaler\\\": .spec.replicas\", reason: \"Conflict\", code: 409 })\n",
+      "stderrDrift": "",
+      "exitCode": 1
+    }
+  ]
+}

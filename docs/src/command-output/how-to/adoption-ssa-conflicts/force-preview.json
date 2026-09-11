@@ -1,0 +1,19 @@
+{
+  "id": "how-to/adoption-ssa-conflicts/force-preview",
+  "group": "how-to/adoption-ssa-conflicts",
+  "page": "/docs/how-to/adopt-existing-resources/handle-server-side-apply-conflicts-safely/",
+  "cwd": "kix-examples/",
+  "generator": "live",
+  "outputExcerpt": true,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix deploy how-to-adoption-takeover --reconcile --dry-run --force-conflicts -y",
+      "stdout": "~ Deployment/legacy-web@takeover configured\n✔ Deployment/legacy-web@takeover ready\nDry run complete: 0 created, 10 configured, 0 unchanged, 0 failed\n",
+      "stderr": "",
+      "stdoutDrift": "Dry run complete: 0 created, 10 configured, 0 unchanged, 0 failed\n~ Deployment/legacy-web@takeover configured\n✔ Deployment/legacy-web@takeover ready\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

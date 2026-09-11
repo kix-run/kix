@@ -1,4 +1,89 @@
 ---
 title: "Handle server-side-apply conflicts safely"
-description: TODO
+description: "Identify the competing field manager and resolve a Kix server-side apply conflict deliberately."
 ---
+
+import Command from '/src/components/Command.astro';
+import conflict from '/src/command-output/how-to/adoption-ssa-conflicts/conflict.json';
+import forcePreview from '/src/command-output/how-to/adoption-ssa-conflicts/force-preview.json';
+import resolve from '/src/command-output/how-to/adoption-ssa-conflicts/resolve.json';
+
+A server-side apply conflict means Kix is trying to change a field owned by
+another field manager. Identify that manager and decide who should own the
+field before forcing a deployment.
+
+The example below starts with a Kix-managed Deployment. A separate manager
+named `autoscaler` then takes ownership of `spec.replicas` and changes it from
+two to three.
+
+## Reproduce the conflict without changing the cluster
+
+Run a reconciled API-server dry run:
+
+<Command {...conflict} />
+
+`--reconcile` makes Kix check every resource even when the activation itself
+has not changed. `--dry-run` asks the API server to validate the apply without
+persisting it.
+
+Read the conflict message closely. It identifies three things:
+
+- the resource, `Deployment/legacy-web@takeover`;
+- the other field manager, `autoscaler`;
+- the overlapping field, `.spec.replicas`.
+
+## Inspect the other manager
+
+Fetch the resource with its managed fields:
+
+<Command
+  commands={[
+    "kubectl get deployment legacy-web -n takeover -o yaml --show-managed-fields",
+  ]}
+/>
+
+Find the named manager under `metadata.managedFields`, then determine what owns
+it. Common managers include an operator, an autoscaler, `kubectl`, Helm, and
+another deployment system.
+
+Also inspect the current field value and the Kix definition. A conflict is not
+evidence that the other value is wrong.
+
+## Choose the field owner
+
+If the other controller should continue managing the field, change the Kix
+package or its configuration so it no longer emits that field. When the
+package cannot omit it, choose one manager rather than letting both repeatedly
+take ownership from each other.
+
+If Kix should manage the field, first disable or reconfigure the other manager
+for this resource. Otherwise the conflict will return after both systems
+reconcile again.
+
+## Preview the ownership transfer
+
+Once Kix is the intended owner, add `--force-conflicts` to the same dry run:
+
+<Command {...forcePreview} />
+
+This confirms that the API server accepts the transfer while still writing
+nothing. Review the rest of the plan before continuing.
+
+## Apply the resolution
+
+Run the reconciled deployment with the same flag:
+
+<Command {...resolve} />
+
+The successful apply transfers the overlapping field to the `kix` field
+manager and restores the replica count from the Kix definition.
+
+Return to ordinary deployments after resolving the conflict. Keeping
+`--force-conflicts` in routine commands can hide a new ownership dispute that
+needs a separate decision.
+
+:::note[Use it for a migration]
+See [Take ownership of kubectl-managed resources](/docs/how-to/adopt-existing-resources/take-ownership-of-kubectl-managed-resources/)
+for the full first-deployment checklist, including selector preservation and a
+backup of the live object.
+:::

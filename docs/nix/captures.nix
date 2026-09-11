@@ -2026,6 +2026,72 @@
   }
 
   {
+    group = "how-to/adoption-ssa-conflicts";
+    page = "/docs/how-to/adopt-existing-resources/handle-server-side-apply-conflicts-safely/";
+    cwd = "kix-examples/";
+    resetCluster = true;
+    live = [
+      {
+        prepare = [
+          "kix"
+          "deploy"
+          "how-to-adoption-takeover"
+          "-y"
+        ];
+      }
+      {
+        prepare = [
+          "kubectl"
+          "apply"
+          "--server-side"
+          "--field-manager=autoscaler"
+          "--force-conflicts"
+          "-f"
+          "how-to/adoption/autoscaler-replicas.yaml"
+        ];
+      }
+      {
+        capture = "conflict";
+        run = [
+          "kix"
+          "deploy"
+          "how-to-adoption-takeover"
+          "--reconcile"
+          "--dry-run"
+          "-y"
+        ];
+        allowFailure = true;
+        stdoutGrep = "field-ownership conflict|Dry run complete";
+      }
+      {
+        capture = "force-preview";
+        run = [
+          "kix"
+          "deploy"
+          "how-to-adoption-takeover"
+          "--reconcile"
+          "--dry-run"
+          "--force-conflicts"
+          "-y"
+        ];
+        stdoutGrep = "Deployment/legacy-web|Dry run complete";
+      }
+      {
+        capture = "resolve";
+        run = [
+          "kix"
+          "deploy"
+          "how-to-adoption-takeover"
+          "--reconcile"
+          "--force-conflicts"
+          "-y"
+        ];
+        stdoutGrep = "Deployment/legacy-web|activation .*Active|Deploy complete";
+      }
+    ];
+  }
+
+  {
     group = "how-to/application-typed-options";
     page = "/docs/how-to/author-packages-and-clusters/add-typed-package-options/";
     cwd = "kix-examples/";
