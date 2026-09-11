@@ -1,4 +1,80 @@
 ---
 title: "Deploy Valkey / Redis"
-description: TODO
+description: "Deploy a persistent Redis-compatible Valkey service with the Kix package catalogue."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import valkeyInstance from '/src/snippets/how-to/package-stacks/valkey-cluster/valkeyInstance.json';
+import check from '/src/command-output/how-to/package-valkey/check.json';
+import resources from '/src/command-output/how-to/package-valkey/resources.json';
+
+Use the `valkey` package to deploy a Redis-compatible data store with a
+StatefulSet, Services, health checks, authentication, and persistent storage.
+
+This guide uses one Valkey node for a small cluster. The target cluster must
+provide a default StorageClass, or you must supply one in the instance
+configuration.
+
+## Add the Valkey instance
+
+Add the package in the namespace where applications will resolve it:
+
+<Snippet {...valkeyInstance} />
+
+Disabling Sentinel and using one replica gives this example a single Valkey
+process. Keep Sentinel enabled and use at least three replicas when the
+cluster spans enough nodes to make automatic failover useful.
+
+The package creates a 2 GiB claim for the node. Set
+`persistence.storageClass` when the cluster's default class is not the one you
+want.
+
+The password in the example is only for local development. For a deployed
+environment, set `auth.existingSecret` to a Secret managed outside Kix, or set
+`auth.secretSource` to a SOPS-encrypted file. The password key defaults to
+`valkey-password` and can be changed with `auth.existingSecretPasswordKey`.
+
+## Check the generated resources
+
+Evaluate the cluster:
+
+<Command {...check} />
+
+Inspect the StatefulSet and client Service:
+
+<Command {...resources} />
+
+The StatefulSet requests the configured 2 GiB volume and uses the headless
+Service for stable pod identity. Applications connect to the `valkey` Service
+on port 6379.
+
+## Deploy and connect
+
+Deploy the cluster and check the instance:
+
+<Command
+  commands={[
+    "kix deploy how-to-package-valkey",
+    "kix status how-to-package-valkey",
+  ]}
+  cwd="kix-examples/"
+/>
+
+To test it locally, forward the service port:
+
+<Command
+  commands={["kix pf how-to-package-valkey valkey 6379:6379"]}
+  cwd="kix-examples/"
+/>
+
+While the forward is running, use a Redis-compatible client from another
+terminal:
+
+<Command commands={["REDISCLI_AUTH=development-only-password redis-cli ping"]} />
+
+A successful connection returns `PONG`. Stop the port-forward with `Ctrl-C`.
+
+If the pod remains pending, inspect its PVC and confirm that the requested
+StorageClass exists and can provision `ReadWriteOnce` volumes in the target
+cluster.

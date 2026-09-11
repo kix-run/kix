@@ -1,4 +1,83 @@
 ---
 title: "Install the monitoring stack"
-description: TODO
+description: "Install Prometheus, Alertmanager, Grafana, and cluster exporters with the monitoring module."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import monitoringStack from '/src/snippets/how-to/package-stacks/monitoring-cluster/monitoringStack.json';
+import check from '/src/command-output/how-to/package-monitoring/check.json';
+import packages from '/src/command-output/how-to/package-monitoring/packages.json';
+
+Use `kix.modules.monitoring` to install the native Kix monitoring stack. The
+module configures Prometheus Operator, Prometheus, Alertmanager, Grafana,
+node-exporter, and kube-state-metrics as related package instances.
+
+This guide assumes the cluster's package catalogue is available to its modules.
+The standard `mkFlake` setup supplies it automatically.
+
+## Add the monitoring module
+
+Import the module and enable the stack in a cluster module:
+
+<Snippet {...monitoringStack} />
+
+The example keeps Grafana storage ephemeral so it can run on a fresh local
+cluster. For a long-lived cluster, keep Grafana persistence enabled and set
+`monitoring.grafana.persistence.size` to the required capacity.
+
+`defaultRules.enabled` adds the standard Kubernetes alert rules, recording
+rules, and ServiceMonitors. Disable it when you want to install the core stack
+first and add cluster-specific rules separately.
+
+Before deploying, adjust these settings for the cluster:
+
+- `monitoring.prometheus.retention` and `retentionSize` bound stored metrics.
+- `monitoring.prometheus.resources` sets Prometheus CPU and memory requests and
+  limits.
+- `monitoring.prometheus.storage` configures persistent Prometheus storage.
+- `monitoring.grafana.replicas` controls Grafana replicas. Keep one replica
+  when its volume only supports `ReadWriteOnce`.
+- `monitoring.nodeExporter.enabled` controls the node-exporter DaemonSet.
+
+## Check the stack
+
+Evaluate all monitoring resources:
+
+<Command {...check} />
+
+List the package instances selected by the module:
+
+<Command {...packages} />
+
+The list includes the operator and the components it manages. The flavor's DNS
+and storage entries are imports supplied by the target platform.
+
+## Deploy and inspect
+
+Deploy the cluster, then check readiness:
+
+<Command
+  commands={[
+    "kix deploy how-to-package-monitoring",
+    "kix status how-to-package-monitoring",
+  ]}
+  cwd="kix-examples/"
+/>
+
+On a small local cluster, Prometheus and Grafana can take several minutes to
+become ready while their images are pulled.
+
+To open Grafana locally, forward its port:
+
+<Command
+  commands={["kix pf how-to-package-monitoring grafana 3000:3000"]}
+  cwd="kix-examples/"
+/>
+
+Open `http://127.0.0.1:3000` while the forward is running. Stop it with
+`Ctrl-C`.
+
+If a component remains pending, use `kix status` to find its workload, then
+check node capacity, PVC provisioning, and any pod security restrictions on
+the target cluster.

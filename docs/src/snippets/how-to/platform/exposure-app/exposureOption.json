@@ -1,1 +1,1 @@
-{"childRegions":[],"code":"  options.ingress = kix.options.ingress;","endLine":21,"lang":"nix","source":"how-to/platform/exposure-app.nix","startLine":21,"url":"https://github.com/kix-run/kix-examples/blob/49506109acd8184d6d6ed865d73b665e2fd0cb44/how-to/platform/exposure-app.nix#L21-L21"}
+{"childRegions":[],"code":"  options.ingress = kix.options.ingress;","endLine":21,"lang":"nix","source":"how-to/platform/exposure-app.nix","startLine":21,"url":"https://github.com/kix-run/kix-examples/blob/d167620355e82fd4d4ffe8924f4bcbddfddce102/how-to/platform/exposure-app.nix#L21-L21"}

@@ -1165,6 +1165,133 @@
   }
 
   {
+    group = "how-to/package-python";
+    page = "/docs/how-to/package-task-guides/deploy-a-python-app/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "check";
+        run = [
+          "kix"
+          "check"
+          "how-to-package-python"
+        ];
+      }
+      {
+        capture = "workload";
+        run = [
+          "kix"
+          "build"
+          "how-to-package-python"
+          "--output"
+          "json"
+        ];
+        stdoutJq = ''
+          [
+            .[]
+            | select(
+                (.kind == "Deployment" and .metadata.namespace == "python-example")
+                or (.kind == "Service" and .metadata.namespace == "python-example")
+                or (.kind == "ConfigMap" and .metadata.namespace == "python-example")
+              )
+            | if .kind == "Deployment" then
+                {
+                  apiVersion,
+                  kind,
+                  metadata: {name: .metadata.name, namespace: .metadata.namespace},
+                  spec: {
+                    replicas: .spec.replicas,
+                    containers: .spec.template.spec.containers
+                      | map({name, image, command, args, ports, livenessProbe, readinessProbe})
+                  }
+                }
+              else if .kind == "Service" then
+                {apiVersion, kind, metadata: {name: .metadata.name, namespace: .metadata.namespace}, spec: {ports: .spec.ports}}
+              else
+                {apiVersion, kind, metadata: {name: .metadata.name, namespace: .metadata.namespace}, data}
+              end end
+          ]'';
+      }
+    ];
+  }
+
+  {
+    group = "how-to/package-monitoring";
+    page = "/docs/how-to/package-task-guides/install-the-monitoring-stack/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "check";
+        run = [
+          "kix"
+          "check"
+          "how-to-package-monitoring"
+        ];
+      }
+      {
+        capture = "packages";
+        run = [
+          "kix"
+          "list"
+          "packages"
+          "--cluster"
+          "how-to-package-monitoring"
+        ];
+      }
+    ];
+  }
+
+  {
+    group = "how-to/package-valkey";
+    page = "/docs/how-to/package-task-guides/deploy-valkey-redis/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "check";
+        run = [
+          "kix"
+          "check"
+          "how-to-package-valkey"
+        ];
+      }
+      {
+        capture = "resources";
+        run = [
+          "kix"
+          "build"
+          "how-to-package-valkey"
+          "--output"
+          "json"
+        ];
+        stdoutJq = ''
+          [
+            .[]
+            | select(
+                (.kind == "StatefulSet" and .metadata.namespace == "cache")
+                or (.kind == "Service" and .metadata.namespace == "cache" and .metadata.name == "valkey")
+              )
+            | if .kind == "StatefulSet" then
+                {
+                  apiVersion,
+                  kind,
+                  metadata: {name: .metadata.name, namespace: .metadata.namespace},
+                  spec: {
+                    replicas: .spec.replicas,
+                    serviceName: .spec.serviceName,
+                    containers: .spec.template.spec.containers | map({name, image, ports}),
+                    volumeClaimTemplates: .spec.volumeClaimTemplates
+                      | map({metadata: {name: .metadata.name}, spec})
+                  }
+                }
+              else
+                {apiVersion, kind, metadata: {name: .metadata.name, namespace: .metadata.namespace}, spec: {ports: .spec.ports}}
+              end
+          ]'';
+      }
+    ];
+  }
+
+  {
     group = "how-to/platform-gateway";
     page = "/docs/how-to/platform-capabilities/expose-a-service-with-gateway-api/";
     cwd = "kix-examples/";

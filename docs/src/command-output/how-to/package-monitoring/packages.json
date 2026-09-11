@@ -1,0 +1,19 @@
+{
+  "id": "how-to/package-monitoring/packages",
+  "group": "how-to/package-monitoring",
+  "page": "/docs/how-to/package-task-guides/install-the-monitoring-stack/",
+  "cwd": "kix-examples/",
+  "generator": "offline",
+  "outputExcerpt": false,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix list packages --cluster how-to-package-monitoring",
+      "stdout": " NAME                 VERSION  STATUS                        \n alertmanager         v0.33.1  installed [monitoring-system] \n default-rules        84.5.0   installed [monitoring-system] \n grafana              13.1.1   installed [monitoring-system] \n kube-state-metrics   v2.19.1  installed [monitoring-system] \n node-exporter        v1.12.1  installed [monitoring-system] \n platform-dns         -        import [kube-system]          \n platform-storage     -        import [kube-system]          \n prometheus-operator  v0.92.1  installed [monitoring-system] \n prometheus-server    v3.13.1  installed [monitoring-system] \n",
+      "stderr": "",
+      "stdoutDrift": "NAME VERSION STATUS\nalertmanager v0.33.1 installed [monitoring-system]\ndefault-rules 84.5.0 installed [monitoring-system]\ngrafana 13.1.1 installed [monitoring-system]\nkube-state-metrics v2.19.1 installed [monitoring-system]\nnode-exporter v1.12.1 installed [monitoring-system]\nplatform-dns - import [kube-system]\nplatform-storage - import [kube-system]\nprometheus-operator v0.92.1 installed [monitoring-system]\nprometheus-server v3.13.1 installed [monitoring-system]\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}
