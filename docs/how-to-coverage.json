@@ -88,7 +88,7 @@
     { "page": "policy-ci-and-compliance/override-scorecard-severity", "scenario": "policy", "status": "implemented" },
     { "page": "policy-ci-and-compliance/run-kix-check-sarif-in-ci", "scenario": "policy", "status": "implemented", "offlineCaptures": ["how-to/policy-sarif/check"] },
     { "page": "policy-ci-and-compliance/save-and-diff-snapshots-for-offline-ci", "scenario": "policy", "status": "implemented" },
-    { "page": "promote-images/build-promote-and-deploy-an-image-in-ci", "scenario": "image-promotion", "status": "planned" },
+    { "page": "promote-images/build-promote-and-deploy-an-image-in-ci", "scenario": "image-promotion", "status": "implemented" },
     { "page": "promote-images/create-a-committed-image-pin-file", "scenario": "image-promotion", "status": "implemented", "snippets": ["pinFile", "consumePin", "renderPinnedImage"], "offlineCaptures": ["how-to/image-pins/check-offline", "how-to/image-pins/list"] },
     { "page": "promote-images/promote-and-verify-an-image-pin", "scenario": "image-promotion", "status": "implemented" },
     { "page": "start-and-inspect/deploy-to-kind", "scenario": "application", "status": "implemented", "liveCaptures": ["how-to/application-kubectl/get-namespaces", "how-to/application-kubectl/get-workloads"] },

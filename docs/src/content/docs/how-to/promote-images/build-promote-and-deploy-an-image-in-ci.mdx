@@ -1,4 +1,111 @@
 ---
 title: "Build, promote, and deploy an image in CI"
-description: TODO
+description: "Build an application image, commit its resolved digest, and deploy the recorded revision from one CI job."
 ---
+
+Use one CI job to build an application image, update its Kix pin, commit the
+pin, and deploy the cluster. The committed pin records the image digest that
+the deployment consumes.
+
+This guide assumes:
+
+- The project already has a committed pin named `web`.
+- The cluster reads that pin and is named `production`.
+- The runner can push the image, push to the Git repository, and reach the
+  Kubernetes cluster.
+- `kix`, Docker, Nix, and `git` are installed on the runner.
+
+## Detect application source changes
+
+Configure the CI system to set `SOURCE_CHANGED=true` when files that can affect
+the application image have changed. Include the application source,
+Dockerfile, build inputs, and dependency lock files.
+
+The image build must be conditional. A pin commit may start the job again. On
+that run, the application inputs have not changed, so the job skips the image
+build and does not create another pin commit.
+
+## Run the promotion and deployment
+
+Add the following script to the deployment job. Replace the image repository,
+pin file, and cluster name with values from your project:
+
+```bash title="ci/deploy.sh"
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${CI_COMMIT_SHA:?set CI_COMMIT_SHA to the source revision}"
+: "${CI_BRANCH:?set CI_BRANCH to the deployment branch}"
+: "${SOURCE_CHANGED:?set SOURCE_CHANGED to true or false}"
+
+IMAGE_REPOSITORY="registry.example.com/acme/web"
+IMAGE_TAG="main"
+
+if [[ "$SOURCE_CHANGED" == "true" ]]; then
+  docker build --tag "$IMAGE_REPOSITORY:$IMAGE_TAG" .
+  docker push "$IMAGE_REPOSITORY:$IMAGE_TAG"
+
+  kix pin set web \
+    --repository "$IMAGE_REPOSITORY" \
+    --tag "$IMAGE_TAG" \
+    --source-rev "$CI_COMMIT_SHA" \
+    --pins-file pins.json
+
+  kix pin check \
+    --key web \
+    --source-rev "$CI_COMMIT_SHA" \
+    --pins-file pins.json
+
+  git add pins.json
+  if ! git diff --cached --quiet; then
+    git commit -m "Promote web image from $CI_COMMIT_SHA"
+    git push origin "HEAD:$CI_BRANCH"
+  fi
+fi
+
+git fetch origin "$CI_BRANCH"
+test "$(git rev-parse HEAD)" = "$(git rev-parse "origin/$CI_BRANCH")"
+
+kix deploy production -y
+```
+
+Use a stable tag such as `main` for the image stream. `kix pin set` resolves
+the current content behind that tag and records its digest, so the pin diff is
+the promotion record.
+
+The `kix pin check --source-rev` command verifies that the pin was updated for
+the source revision built by this run. Keep it inside the source-change branch;
+a job started by the subsequent pin commit has a different commit SHA and no
+new application image.
+
+## Configure Git before the script runs
+
+Set the commit identity once in the CI job:
+
+```bash title="CI job setup"
+git config user.name "Kix deployment bot"
+git config user.email "kix-deploy@example.com"
+```
+
+Use your CI system's push credential for `git push`. Protect the deployment
+branch so only the expected job can write promotion commits.
+
+## Keep the job convergent
+
+The second run caused by the pin commit should set `SOURCE_CHANGED=false`.
+It skips the image build and pin update, then reaches `kix deploy` with an
+unchanged activation. No additional commit is created.
+
+Do not rebuild the image on every invocation of this job. Container builds are
+not necessarily reproducible, so rebuilding unchanged source can produce a new
+digest and another commit each time.
+
+:::tip[Prepare the pin]
+Follow [Create a committed image pin file](/docs/how-to/promote-images/create-a-committed-image-pin-file/)
+before adding this workflow to a project without `pins.json`.
+:::
+
+:::note[Explanation]
+See [Why deploy inputs are committed](/docs/explanation/why-deploy-inputs-are-committed/)
+for why the pin is pushed before the deployment runs.
+:::
