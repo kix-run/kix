@@ -36,11 +36,11 @@
         "nixpkgs": "nixpkgs"
       },
       "locked": {
-        "lastModified": 1789151788,
-        "narHash": "sha256-XSRgB8QomNhkev5VMaa1G8+405MgMT8JgFbXAXZC4dQ=",
+        "lastModified": 1789155715,
+        "narHash": "sha256-QvjjyEEUfIvHfn3CGctMfsNJuIPiBfnUtSvU1DYYkIQ=",
         "ref": "refs/heads/docs/how-to-application-scenario",
-        "rev": "9ada090582311683dcc4e90964a4784b82a8df41",
-        "revCount": 36,
+        "rev": "391c83f424775ad9dab7b138db4eb92a571d2df9",
+        "revCount": 37,
         "type": "git",
         "url": "https://github.com/kix-run/kix-examples"
       },

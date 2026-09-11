@@ -1,4 +1,75 @@
 ---
 title: "Enable generated network policy"
-description: TODO
+description: "Generate default-deny and service-allow policies from Kix dependency wiring."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import trackedServiceEndpoint from '/src/snippets/how-to/platform/network-policy-client/trackedServiceEndpoint.json';
+import networkPolicySettings from '/src/snippets/how-to/platform/network-policy-cluster/networkPolicySettings.json';
+import networkPolicyInstances from '/src/snippets/how-to/platform/network-policy-cluster/networkPolicyInstances.json';
+import check from '/src/command-output/how-to/platform-network-policy/check.json';
+import policies from '/src/command-output/how-to/platform-network-policy/policies.json';
+
+Enable generated network policy when you want Kix to restrict workloads using
+the Service relationships already present in the deployment graph. Kix creates
+default-deny policies and the allowances each workload needs.
+
+This guide assumes the cluster has a package that provides the
+`network-policy-enforcer` role. Follow [Install Cilium / network policy
+support](/docs/how-to/package-task-guides/install-cilium-network-policy-support/)
+first if the cluster does not have one.
+
+## Use a tracked Service endpoint
+
+In the calling package, read the destination from the dependency's `out` API:
+
+<Snippet {...trackedServiceEndpoint} />
+
+`backend.out.url { }` supplies the application with the Service URL and gives
+Kix the destination, port, and protocol needed for policy generation. Keep the
+endpoint connected to the workload that makes the request.
+
+## Enable policy generation
+
+Enable network policy in the cluster definition:
+
+<Snippet {...networkPolicySettings} />
+
+`defaultDeny = true` creates a policy for each managed workload namespace.
+`directions = "both"` denies ingress and egress unless another generated rule
+allows it.
+
+## Wire the dependency
+
+Add the destination and caller instances. For a cross-namespace connection,
+wire the dependency explicitly:
+
+<Snippet {...networkPolicyInstances} />
+
+The client runs in `apps`; the backend Service and its pods run in `services`.
+
+## Check the generated policies
+
+Evaluate the cluster:
+
+<Command {...check} />
+
+Inspect the policies produced by the build:
+
+<Command expandable {...policies} />
+
+The client egress policy permits DNS and traffic to the backend's `http` port.
+Kix also places a matching ingress policy in `services`, scoped to the backend
+pods and the client pods in `apps`. The two namespace default-deny policies
+make those allowances effective.
+
+Deploy the cluster, then list the policies installed by Cilium:
+
+<Command
+  commands={[
+    "kix deploy how-to-platform-network-policy",
+    "kubectl get ciliumnetworkpolicies --all-namespaces",
+  ]}
+  cwd="kix-examples/"
+/>

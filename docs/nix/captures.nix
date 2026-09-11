@@ -1516,6 +1516,46 @@
   }
 
   {
+    group = "how-to/platform-network-policy";
+    page = "/docs/how-to/platform-capabilities/enable-generated-network-policy/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "check";
+        run = [
+          "kix"
+          "check"
+          "how-to-platform-network-policy"
+        ];
+      }
+      {
+        capture = "policies";
+        run = [
+          "kix"
+          "build"
+          "how-to-platform-network-policy"
+          "--output"
+          "json"
+        ];
+        stdoutJq = ''
+          [
+            .[]
+            | select(
+                .kind == "CiliumNetworkPolicy"
+                and (
+                  .metadata.name == "apps-default-deny"
+                  or .metadata.name == "services-default-deny"
+                  or .metadata.name == "client-deployment-client-egress"
+                  or .metadata.name == "client-deployment-client-to-backend-ingress"
+                )
+              )
+            | {apiVersion, kind, metadata: {name: .metadata.name, namespace: .metadata.namespace}, spec}
+          ]'';
+      }
+    ];
+  }
+
+  {
     group = "how-to/platform-hostpath";
     page = "/docs/how-to/platform-capabilities/mount-node-local-storage-with-hostpath/";
     cwd = "kix-examples/";
