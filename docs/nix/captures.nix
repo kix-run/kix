@@ -1195,6 +1195,45 @@
   }
 
   {
+    group = "how-to/helm-bridge";
+    page = "/docs/how-to/adopt-existing-resources/use-helm-charts-through-the-kix-helm-bridge/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "check";
+        run = [
+          "kix"
+          "check"
+          "how-to-helm-bridge"
+        ];
+      }
+      {
+        capture = "deployment";
+        run = [
+          "kix"
+          "build"
+          "how-to-helm-bridge"
+          "--output"
+          "json"
+        ];
+        stdoutJq = ''
+          .[]
+          | select(.kind == "Deployment" and .metadata.namespace == "reflector-system")
+          | {
+              apiVersion,
+              kind,
+              metadata: {name: .metadata.name, namespace: .metadata.namespace, labels: .metadata.labels},
+              spec: {
+                replicas: .spec.replicas,
+                serviceAccountName: .spec.template.spec.serviceAccountName,
+                containers: .spec.template.spec.containers | map({name, image})
+              }
+            }'';
+      }
+    ];
+  }
+
+  {
     group = "how-to/package-cilium";
     page = "/docs/how-to/package-task-guides/install-cilium-network-policy-support/";
     cwd = "kix-examples/";
