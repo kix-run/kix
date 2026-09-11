@@ -1,4 +1,109 @@
 ---
 title: "Install the VictoriaMetrics HA monitoring stack"
-description: TODO
+description: "Install VictoriaMetrics cluster storage, scraping, alerting, and Grafana with HA defaults."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import victoriaMetricsHaStack from '/src/snippets/how-to/package-stacks/victoria-metrics-cluster/victoriaMetricsHaStack.json';
+import check from '/src/command-output/how-to/package-victoria-metrics/check.json';
+import packages from '/src/command-output/how-to/package-victoria-metrics/packages.json';
+import resources from '/src/command-output/how-to/package-victoria-metrics/resources.json';
+
+Use the VictoriaMetrics packages to install clustered metrics storage, an HA
+scrape agent, HA alerting, and Grafana.
+
+This guide assumes Kubernetes 1.25 or later and a default StorageClass. The
+example requests three 20 GiB vmstorage volumes. Check that the target cluster
+has enough storage, CPU, and memory before deploying it.
+
+## Add the stack
+
+Declare the five package instances in one namespace:
+
+<Snippet {...victoriaMetricsHaStack} />
+
+The package dependencies connect the components:
+
+- `vm-agent` sends samples to `vm-cluster` and uses its scrape interval.
+- `vm-alert` reads from and writes recording rules to `vm-cluster`. It also
+  creates a two-replica VMAlertmanager.
+- Grafana discovers `vm-cluster` through the `prometheusServer` alias and adds
+  its Prometheus-compatible query endpoint as a datasource.
+- The operator supplies the custom resource definitions and reconciles the
+  VictoriaMetrics workloads.
+
+The catalogue defaults create three vmstorage replicas, two vmselect replicas,
+two vminsert replicas, two VMAgent replicas, and two replicas for each alerting
+component. Pod disruption budgets allow one unavailable replica per component,
+and preferred pod anti-affinity spreads replicas across nodes when possible.
+
+## Set retention and storage
+
+Set `retentionPeriod` to the amount of metrics history you need. Each vmstorage
+replica gets the volume request under
+`vmstorage.storage.resources.requests.storage`, so account for all three
+volumes when estimating capacity.
+
+The example leaves Alertmanager state on ephemeral storage. For a long-lived
+cluster, set `vm-alert.config.alertmanager.storage` to a persistent volume claim
+spec. This preserves silences and the notification log across a simultaneous
+restart of both replicas.
+
+Before making Grafana reachable outside the cluster, configure its admin
+credentials with an existing Secret. See [Use externally managed
+Secrets](/docs/how-to/platform-capabilities/use-externally-managed-secrets/)
+for the Kix pattern.
+
+## Check the generated stack
+
+Evaluate the cluster before deploying it:
+
+<Command {...check} />
+
+List the resolved package instances:
+
+<Command {...packages} />
+
+Inspect the custom resources that configure storage, scraping, and alerting:
+
+<Command expandable {...resources} />
+
+The output excerpt shows the HA replica counts, persistent vmstorage request,
+and URLs carried from the cluster package into the agent and alerting packages.
+The command itself emits the complete generated manifest set.
+
+## Deploy and inspect
+
+Deploy the stack, then check the package and custom resource status:
+
+<Command
+  commands={[
+    "kix deploy how-to-package-victoria-metrics",
+    "kix status how-to-package-victoria-metrics",
+    "kubectl get vmcluster,vmagent,vmalert,vmalertmanager -n monitoring-system",
+  ]}
+  cwd="kix-examples/"
+/>
+
+The operator must become ready before it can create the operand workloads.
+Image pulls and the initial volume provisioning can make the first deployment
+take several minutes.
+
+To open Grafana locally, forward its Service port:
+
+<Command commands={["kix pf how-to-package-victoria-metrics grafana 3000:3000"]} cwd="kix-examples/" />
+
+Open `http://127.0.0.1:3000` while the forward is running. Stop it with
+`Ctrl-C`.
+
+If an operand remains pending, inspect its custom resource and the operator
+logs, then check node capacity and the vmstorage PVCs:
+
+<Command
+  commands={[
+    "kubectl describe vmcluster -n monitoring-system vm-cluster",
+    "kubectl logs -n monitoring-system deployment/vm-operator",
+    "kubectl get pvc -n monitoring-system",
+  ]}
+/>

@@ -1406,6 +1406,105 @@
   }
 
   {
+    group = "how-to/package-victoria-metrics";
+    page = "/docs/how-to/package-task-guides/install-the-victoriametrics-ha-monitoring-stack/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "check";
+        run = [
+          "kix"
+          "check"
+          "how-to-package-victoria-metrics"
+        ];
+      }
+      {
+        capture = "packages";
+        run = [
+          "kix"
+          "list"
+          "packages"
+          "--cluster"
+          "how-to-package-victoria-metrics"
+        ];
+      }
+      {
+        capture = "resources";
+        run = [
+          "kix"
+          "build"
+          "how-to-package-victoria-metrics"
+          "--output"
+          "json"
+        ];
+        stdoutJq = ''
+          [
+            .[]
+            | select(
+                .metadata.namespace == "monitoring-system"
+                and (.kind == "VMCluster" or .kind == "VMAgent" or .kind == "VMAlert" or .kind == "VMAlertmanager")
+              )
+            | if .kind == "VMCluster" then
+                {
+                  apiVersion,
+                  kind,
+                  metadata: {name: .metadata.name, namespace: .metadata.namespace},
+                  spec: {
+                    retentionPeriod: .spec.retentionPeriod,
+                    replicationFactor: .spec.replicationFactor,
+                    vmstorage: {
+                      replicaCount: .spec.vmstorage.replicaCount,
+                      storage: .spec.vmstorage.storage,
+                      podDisruptionBudget: .spec.vmstorage.podDisruptionBudget
+                    },
+                    vmselect: {
+                      replicaCount: .spec.vmselect.replicaCount,
+                      podDisruptionBudget: .spec.vmselect.podDisruptionBudget
+                    },
+                    vminsert: {
+                      replicaCount: .spec.vminsert.replicaCount,
+                      podDisruptionBudget: .spec.vminsert.podDisruptionBudget
+                    }
+                  }
+                }
+              elif .kind == "VMAgent" then
+                {
+                  apiVersion,
+                  kind,
+                  metadata: {name: .metadata.name, namespace: .metadata.namespace},
+                  spec: {
+                    replicaCount: .spec.replicaCount,
+                    scrapeInterval: .spec.scrapeInterval,
+                    remoteWrite: .spec.remoteWrite,
+                    externalLabels: .spec.externalLabels
+                  }
+                }
+              elif .kind == "VMAlert" then
+                {
+                  apiVersion,
+                  kind,
+                  metadata: {name: .metadata.name, namespace: .metadata.namespace},
+                  spec: {
+                    replicaCount: .spec.replicaCount,
+                    datasource: .spec.datasource,
+                    remoteRead: .spec.remoteRead,
+                    remoteWrite: .spec.remoteWrite
+                  }
+                }
+              else
+                {
+                  apiVersion,
+                  kind,
+                  metadata: {name: .metadata.name, namespace: .metadata.namespace},
+                  spec: {replicaCount: .spec.replicaCount, retention: .spec.retention}
+                }
+              end
+          ]'';
+      }
+    ];
+  }
+
+  {
     group = "how-to/package-valkey";
     page = "/docs/how-to/package-task-guides/deploy-valkey-redis/";
     cwd = "kix-examples/";

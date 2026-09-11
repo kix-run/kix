@@ -1,0 +1,19 @@
+{
+  "id": "how-to/package-victoria-metrics/packages",
+  "group": "how-to/package-victoria-metrics",
+  "page": "/docs/how-to/package-task-guides/install-the-victoriametrics-ha-monitoring-stack/",
+  "cwd": "kix-examples/",
+  "generator": "offline",
+  "outputExcerpt": false,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix list packages --cluster how-to-package-victoria-metrics",
+      "stdout": " NAME              VERSION   STATUS                        \n grafana           13.1.1    installed [monitoring-system] \n platform-dns      -         import [kube-system]          \n platform-storage  -         import [kube-system]          \n vm-agent          v1.150.0  installed [monitoring-system] \n vm-alert          v1.150.0  installed [monitoring-system] \n vm-cluster        v1.150.0  installed [monitoring-system] \n vm-operator       v0.74.1   installed [monitoring-system] \n",
+      "stderr": "",
+      "stdoutDrift": "NAME VERSION STATUS\ngrafana 13.1.1 installed [monitoring-system]\nplatform-dns - import [kube-system]\nplatform-storage - import [kube-system]\nvm-agent v1.150.0 installed [monitoring-system]\nvm-alert v1.150.0 installed [monitoring-system]\nvm-cluster v1.150.0 installed [monitoring-system]\nvm-operator v0.74.1 installed [monitoring-system]\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}
