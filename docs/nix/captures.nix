@@ -1246,6 +1246,56 @@
   }
 
   {
+    group = "how-to/package-stackgres";
+    page = "/docs/how-to/package-task-guides/deploy-stackgres/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "check";
+        run = [
+          "kix"
+          "check"
+          "how-to-package-stackgres"
+        ];
+      }
+      {
+        capture = "database-resources";
+        run = [
+          "kix"
+          "build"
+          "how-to-package-stackgres"
+          "--output"
+          "json"
+        ];
+        stdoutJq = ''
+          [
+            .[]
+            | select(
+                .metadata.namespace == "database"
+                and (.kind == "SGCluster" or .kind == "SGInstanceProfile")
+              )
+            | if .kind == "SGCluster" then
+                {
+                  apiVersion,
+                  kind,
+                  metadata: {name: .metadata.name, namespace: .metadata.namespace},
+                  spec: {
+                    instances: .spec.instances,
+                    postgres: .spec.postgres,
+                    sgInstanceProfile: .spec.sgInstanceProfile,
+                    configurations: .spec.configurations,
+                    persistentVolume: .spec.pods.persistentVolume
+                  }
+                }
+              else
+                {apiVersion, kind, metadata: {name: .metadata.name, namespace: .metadata.namespace}, spec}
+              end
+          ]'';
+      }
+    ];
+  }
+
+  {
     group = "how-to/package-monitoring";
     page = "/docs/how-to/package-task-guides/install-the-monitoring-stack/";
     cwd = "kix-examples/";

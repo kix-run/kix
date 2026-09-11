@@ -1,4 +1,89 @@
 ---
 title: "Deploy StackGres"
-description: TODO
+description: "Install the StackGres operator and deploy a PostgreSQL cluster."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import stackgresOperatorInstance from '/src/snippets/how-to/package-stacks/stackgres-cluster/stackgresOperatorInstance.json';
+import stackgresClusterInstance from '/src/snippets/how-to/package-stacks/stackgres-cluster/stackgresClusterInstance.json';
+import check from '/src/command-output/how-to/package-stackgres/check.json';
+import databaseResources from '/src/command-output/how-to/package-stackgres/database-resources.json';
+
+Use the `stackgres-operator` and `stackgres-cluster` packages to run PostgreSQL
+under the StackGres operator.
+
+This guide creates one PostgreSQL 16 instance with a 5 GiB volume. The target
+cluster must provide a default StorageClass, or the database instance must name
+one explicitly.
+
+## Add the StackGres operator
+
+Install one operator instance in its own namespace:
+
+<Snippet {...stackgresOperatorInstance} />
+
+The operator installs and reconciles the StackGres custom resource types. One
+operator can manage database clusters in other namespaces.
+
+## Add the PostgreSQL cluster
+
+Add the database instance in the namespace where it should run:
+
+<Snippet {...stackgresClusterInstance} />
+
+The `stackgresCluster` package resolves the operator through its
+`stackgresOperator` dependency. Kix also connects it to the StorageClass
+provided by the cluster flavor.
+
+For a production cluster, set `instances` to match the number of PostgreSQL
+members you need, increase `storage.size`, and size `instanceProfile` for the
+workload. Set `storage.storageClass` when the flavor's default is not suitable.
+
+## Check the generated resources
+
+Evaluate the cluster before deploying it:
+
+<Command {...check} />
+
+Inspect the custom resources that configure PostgreSQL:
+
+<Command {...databaseResources} />
+
+The `SGCluster` refers to the generated instance profile and PostgreSQL
+configuration by name. StackGres uses those resources to create and operate
+the StatefulSet, Services, and persistent volume claims.
+
+## Deploy and connect
+
+Deploy the operator and database, then check their status:
+
+<Command
+  commands={[
+    "kix deploy how-to-package-stackgres",
+    "kix status how-to-package-stackgres",
+    "kubectl get sgcluster -n database postgres",
+  ]}
+  cwd="kix-examples/"
+/>
+
+The StackGres operator creates a Service and a Secret named `postgres` in the
+database namespace. Forward the primary Service port:
+
+<Command commands={["kubectl port-forward -n database service/postgres 5432:5432"]} />
+
+In another terminal, read the generated superuser password and connect:
+
+<Command
+  commands={[
+    "export PGPASSWORD=$(kubectl get secret -n database postgres -o jsonpath='{.data.superuser-password}' | base64 --decode)",
+    "psql --host 127.0.0.1 --username postgres --dbname postgres",
+  ]}
+/>
+
+Stop the port-forward with `Ctrl-C`. Clear the shell variable when you finish:
+
+<Command commands={["unset PGPASSWORD"]} />
+
+If the `SGCluster` does not become ready, inspect it with `kubectl describe`,
+then check the StackGres operator logs and PVC state in the database namespace.

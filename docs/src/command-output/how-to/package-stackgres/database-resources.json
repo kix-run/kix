@@ -1,0 +1,19 @@
+{
+  "id": "how-to/package-stackgres/database-resources",
+  "group": "how-to/package-stackgres",
+  "page": "/docs/how-to/package-task-guides/deploy-stackgres/",
+  "cwd": "kix-examples/",
+  "generator": "offline",
+  "outputExcerpt": true,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix build how-to-package-stackgres --output json",
+      "stdout": "[\n  {\n    \"apiVersion\": \"stackgres.io/v1\",\n    \"kind\": \"SGCluster\",\n    \"metadata\": {\n      \"name\": \"postgres\",\n      \"namespace\": \"database\"\n    },\n    \"spec\": {\n      \"instances\": 1,\n      \"postgres\": {\n        \"flavor\": \"vanilla\",\n        \"ssl\": {\n          \"enabled\": true\n        },\n        \"version\": \"16\"\n      },\n      \"sgInstanceProfile\": \"postgres-profile\",\n      \"configurations\": {\n        \"sgPostgresConfig\": \"postgres-pg16-config\"\n      },\n      \"persistentVolume\": {\n        \"size\": \"5Gi\",\n        \"storageClass\": \"standard\"\n      }\n    }\n  },\n  {\n    \"apiVersion\": \"stackgres.io/v1\",\n    \"kind\": \"SGInstanceProfile\",\n    \"metadata\": {\n      \"name\": \"postgres-profile\",\n      \"namespace\": \"database\"\n    },\n    \"spec\": {\n      \"cpu\": \"500m\",\n      \"memory\": \"1Gi\"\n    }\n  }\n]\n",
+      "stderr": "",
+      "stdoutDrift": "\"apiVersion\": \"stackgres.io/v1\",\n\"configurations\": {\n\"cpu\": \"500m\",\n\"enabled\": true\n\"flavor\": \"vanilla\",\n\"instances\": 1,\n\"kind\": \"SGCluster\",\n\"kind\": \"SGInstanceProfile\",\n\"memory\": \"1Gi\"\n\"metadata\": {\n\"name\": \"postgres\",\n\"name\": \"postgres-profile\",\n\"namespace\": \"database\"\n\"persistentVolume\": {\n\"postgres\": {\n\"sgInstanceProfile\": \"postgres-profile\",\n\"sgPostgresConfig\": \"postgres-pg16-config\"\n\"size\": \"5Gi\",\n\"spec\": {\n\"ssl\": {\n\"storageClass\": \"standard\"\n\"version\": \"16\"\n[\n]\n{\n}\n},\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}
