@@ -1556,6 +1556,36 @@
   }
 
   {
+    group = "how-to/platform-intents";
+    page = "/docs/how-to/platform-capabilities/declare-platform-intents-for-non-kix-managed-pods/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "check";
+        run = [
+          "kix"
+          "check"
+          "how-to-platform-network-policy"
+        ];
+      }
+      {
+        capture = "intent";
+        run = [
+          "kix"
+          "build"
+          "how-to-platform-network-policy"
+          "--output"
+          "json"
+        ];
+        stdoutJq = ''
+          .[]
+          | select(.kind == "CiliumClusterwideNetworkPolicy" and .metadata.name == "metrics-agent")
+          | {apiVersion, kind, metadata: {name: .metadata.name}, spec}'';
+      }
+    ];
+  }
+
+  {
     group = "how-to/platform-hostpath";
     page = "/docs/how-to/platform-capabilities/mount-node-local-storage-with-hostpath/";
     cwd = "kix-examples/";

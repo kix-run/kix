@@ -1,0 +1,19 @@
+{
+  "id": "how-to/platform-intents/intent",
+  "group": "how-to/platform-intents",
+  "page": "/docs/how-to/platform-capabilities/declare-platform-intents-for-non-kix-managed-pods/",
+  "cwd": "kix-examples/",
+  "generator": "offline",
+  "outputExcerpt": true,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix build how-to-platform-network-policy --output json",
+      "stdout": "{\n  \"apiVersion\": \"cilium.io/v2\",\n  \"kind\": \"CiliumClusterwideNetworkPolicy\",\n  \"metadata\": {\n    \"name\": \"metrics-agent\"\n  },\n  \"spec\": {\n    \"egress\": [\n      {\n        \"toEndpoints\": [\n          {\n            \"matchLabels\": {\n              \"k8s-app\": \"kube-dns\",\n              \"k8s:io.kubernetes.pod.namespace\": \"kube-system\"\n            }\n          }\n        ],\n        \"toPorts\": [\n          {\n            \"ports\": [\n              {\n                \"port\": \"53\",\n                \"protocol\": \"UDP\"\n              },\n              {\n                \"port\": \"53\",\n                \"protocol\": \"TCP\"\n              }\n            ]\n          }\n        ]\n      },\n      {\n        \"toEntities\": [\n          \"world\"\n        ],\n        \"toPorts\": [\n          {\n            \"ports\": [\n              {\n                \"port\": \"443\",\n                \"protocol\": \"TCP\"\n              }\n            ]\n          }\n        ]\n      }\n    ],\n    \"endpointSelector\": {\n      \"matchLabels\": {\n        \"app.kubernetes.io/name\": \"metrics-agent\",\n        \"k8s:io.kubernetes.pod.namespace\": \"observability\"\n      }\n    }\n  }\n}\n",
+      "stderr": "",
+      "stdoutDrift": "\"apiVersion\": \"cilium.io/v2\",\n\"app.kubernetes.io/name\": \"metrics-agent\",\n\"egress\": [\n\"endpointSelector\": {\n\"k8s-app\": \"kube-dns\",\n\"k8s:io.kubernetes.pod.namespace\": \"kube-system\"\n\"k8s:io.kubernetes.pod.namespace\": \"observability\"\n\"kind\": \"CiliumClusterwideNetworkPolicy\",\n\"matchLabels\": {\n\"metadata\": {\n\"name\": \"metrics-agent\"\n\"port\": \"443\",\n\"port\": \"53\",\n\"ports\": [\n\"protocol\": \"TCP\"\n\"protocol\": \"UDP\"\n\"spec\": {\n\"toEndpoints\": [\n\"toEntities\": [\n\"toPorts\": [\n\"world\"\n]\n],\n{\n}\n},\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

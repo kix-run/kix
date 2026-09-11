@@ -1,4 +1,67 @@
 ---
 title: "Declare platform intents for non-Kix-managed pods"
-description: TODO
+description: "Generate network policy for workloads installed outside Kix."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import externalWorkloadIntent from '/src/snippets/how-to/platform/network-policy-cluster/externalWorkloadIntent.json';
+import check from '/src/command-output/how-to/platform-intents/check.json';
+import intent from '/src/command-output/how-to/platform-intents/intent.json';
+
+Use a platform intent when pods installed outside Kix need explicit network
+access. An intent identifies those pods and describes their required ingress or
+egress without adding them to a Kix package.
+
+This guide assumes [generated network policy is
+enabled](/docs/how-to/platform-capabilities/enable-generated-network-policy/)
+and the cluster has a network policy enforcer.
+
+## Find a stable pod selector
+
+Inspect the labels on the externally managed pods:
+
+<Command commands={["kubectl get pods -n observability --show-labels"]} />
+
+Choose labels maintained by the system that installs the workload. Avoid pod
+names and rollout-specific labels.
+
+## Add the platform intent
+
+Add an entry under `networkPolicy.platformIntents`:
+
+<Snippet {...externalWorkloadIntent} />
+
+This intent selects pods labelled `app.kubernetes.io/name=metrics-agent` in
+the `observability` namespace. It permits DNS lookups and outbound HTTPS.
+
+`scope = "clusterwide"` creates a cluster-wide policy. The
+`targetNamespace` label constraint keeps it scoped to the intended namespace.
+
+## Check the generated policy
+
+Evaluate the cluster:
+
+<Command {...check} />
+
+Inspect the policy generated for the intent:
+
+<Command {...intent} />
+
+The generated endpoint selector contains both the workload label and the
+namespace. Its egress rules allow UDP and TCP DNS traffic, plus TCP port 443
+to destinations outside the cluster.
+
+Deploy the cluster and inspect the installed policy:
+
+<Command
+  commands={[
+    "kix deploy how-to-platform-network-policy",
+    "kubectl get ciliumclusterwidenetworkpolicy metrics-agent -o yaml",
+  ]}
+  cwd="kix-examples/"
+/>
+
+If the policy does not select the expected pods, compare its
+`endpointSelector.matchLabels` with the labels reported by `kubectl`. All
+selector labels must match the same pod.
