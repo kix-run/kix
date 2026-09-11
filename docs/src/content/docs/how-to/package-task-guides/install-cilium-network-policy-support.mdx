@@ -1,4 +1,91 @@
 ---
 title: "Install Cilium / network policy support"
-description: TODO
+description: "Install Cilium as a managed CNI and enable generated network policy."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import ciliumRoleAndPolicy from '/src/snippets/how-to/package-stacks/cilium-cluster/ciliumRoleAndPolicy.json';
+import ciliumInstance from '/src/snippets/how-to/package-stacks/cilium-cluster/ciliumInstance.json';
+import check from '/src/command-output/how-to/package-cilium/check.json';
+import components from '/src/command-output/how-to/package-cilium/components.json';
+
+Use the `cilium` package to make Kix responsible for the Cilium CNI and the
+CiliumNetworkPolicy API.
+
+This guide uses a new Kind cluster. Cilium must be the cluster's CNI from the
+start, so create Kind without its default CNI before deploying the example.
+
+## Create the Kind cluster
+
+Create this Kind configuration beside the `kix-examples` checkout:
+
+```yaml title="kind-cilium.yaml"
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+networking:
+  disableDefaultCNI: true
+  podSubnet: "10.244.0.0/16"
+```
+
+Create the cluster:
+
+<Command commands={["kind create cluster --config kind-cilium.yaml"]} />
+
+The control-plane node remains `NotReady` until Cilium is deployed. That is
+expected for a cluster with no CNI.
+
+## Make the CNI role available
+
+Tell Kix that the Kind environment is not providing a CNI, then enable network
+policy generation:
+
+<Snippet {...ciliumRoleAndPolicy} />
+
+The role setting must describe the cluster you actually created. Do not mark
+the role absent on a Kind cluster that is already running kindnet.
+
+## Add the Cilium instance
+
+Install Cilium in `kube-system`:
+
+<Snippet {...ciliumInstance} />
+
+`kubeProxyReplacement = false` keeps Kind's kube-proxy. The Cilium IPAM range
+matches `podSubnet` in `kind-cilium.yaml`.
+
+## Check the generated resources
+
+Evaluate the cluster before deploying it:
+
+<Command {...check} />
+
+Inspect the main Cilium components and a generated default-deny policy:
+
+<Command {...components} />
+
+Kix builds the Cilium DaemonSet and operator from the package, then connects
+generated policies to Cilium's custom resource definitions in the deployment
+graph.
+
+## Deploy and verify Cilium
+
+Deploy the cluster and wait for the Cilium pods to become ready:
+
+<Command
+  commands={[
+    "kix deploy how-to-package-cilium",
+    "kubectl rollout status -n kube-system daemonset/cilium",
+    "kubectl get nodes",
+  ]}
+  cwd="kix-examples/"
+/>
+
+The Kind node should report `Ready` after the Cilium DaemonSet is running.
+Check the generated policies with:
+
+<Command commands={["kubectl get ciliumnetworkpolicies --all-namespaces"]} />
+
+If the node remains `NotReady`, compare the pod CIDR in the Kind configuration
+with `clusterPoolIPv4PodCIDRList`, then inspect the Cilium pod logs in
+`kube-system`.

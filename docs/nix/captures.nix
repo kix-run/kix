@@ -1195,6 +1195,51 @@
   }
 
   {
+    group = "how-to/package-cilium";
+    page = "/docs/how-to/package-task-guides/install-cilium-network-policy-support/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "check";
+        run = [
+          "kix"
+          "check"
+          "how-to-package-cilium"
+        ];
+      }
+      {
+        capture = "components";
+        run = [
+          "kix"
+          "build"
+          "how-to-package-cilium"
+          "--output"
+          "json"
+        ];
+        stdoutJq = ''
+          [
+            .[]
+            | select(
+                (.kind == "DaemonSet" and .metadata.namespace == "kube-system" and .metadata.name == "cilium")
+                or (.kind == "Deployment" and .metadata.namespace == "kube-system" and .metadata.name == "cilium-operator")
+                or (.kind == "CiliumNetworkPolicy" and .metadata.name == "kube-system-default-deny")
+              )
+            | if .kind == "DaemonSet" or .kind == "Deployment" then
+                {
+                  apiVersion,
+                  kind,
+                  metadata: {name: .metadata.name, namespace: .metadata.namespace},
+                  containers: .spec.template.spec.containers | map({name, image})
+                }
+              else
+                {apiVersion, kind, metadata: {name: .metadata.name, namespace: .metadata.namespace}, spec}
+              end
+          ]'';
+      }
+    ];
+  }
+
+  {
     group = "how-to/package-python";
     page = "/docs/how-to/package-task-guides/deploy-a-python-app/";
     cwd = "kix-examples/";
