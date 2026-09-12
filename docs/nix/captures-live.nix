@@ -143,6 +143,7 @@ let
     pkgs.kind
     pkgs.kubectl
     pkgs.kubernetes-helm
+    pkgs.sops
     pkgs.gnutar
     pkgs.bash
     pkgs.ripgrep

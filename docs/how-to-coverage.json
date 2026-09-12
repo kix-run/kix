@@ -77,7 +77,7 @@
     { "page": "platform-capabilities/mount-node-local-storage-with-hostpath", "scenario": "platform", "status": "implemented", "snippets": ["hostPathMount", "hostPathDeployment", "hostPathApplicationInstance"], "offlineCaptures": ["how-to/platform-hostpath/check", "how-to/platform-hostpath/deployment"] },
     { "page": "platform-capabilities/use-externally-managed-secrets", "scenario": "platform", "status": "implemented", "snippets": ["externalSecretRef", "externalSecretEnv"], "offlineCaptures": ["how-to/platform-external-secrets/check", "how-to/platform-external-secrets/graph"] },
     { "page": "platform-capabilities/use-kix-managed-secrets", "scenario": "platform", "status": "implemented", "snippets": ["managedSecret", "managedSecretEnv"], "offlineCaptures": ["how-to/platform-managed-secrets/check"] },
-    { "page": "platform-capabilities/use-sops-backed-secrets-if-production-ready", "scenario": "platform", "status": "planned" },
+    { "page": "platform-capabilities/use-sops-backed-secrets-if-production-ready", "scenario": "platform", "status": "implemented", "snippets": ["sopsBackedSecret", "sopsSecretEnv"], "offlineCaptures": ["how-to/platform-sops-secrets/rendered-secret"], "liveCaptures": ["how-to/platform-sops-secrets/secret"] },
     { "page": "policy-ci-and-compliance/add-scorecard-rules", "scenario": "policy", "status": "implemented", "snippets": ["packageRule"], "offlineCaptures": ["how-to/scorecard-rules/check"] },
     { "page": "policy-ci-and-compliance/attest-a-deployment-from-its-cluster-receipt", "scenario": "policy", "status": "implemented", "liveCaptures": ["how-to/policy-receipt-attestation/attest"] },
     { "page": "policy-ci-and-compliance/disable-scorecard-rules", "scenario": "policy", "status": "implemented" },

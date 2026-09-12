@@ -1101,6 +1101,49 @@
   }
 
   {
+    group = "how-to/platform-sops-secrets";
+    page = "/docs/how-to/platform-capabilities/use-sops-backed-secrets-if-production-ready/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "rendered-secret";
+        run = [
+          "kix"
+          "build"
+          "how-to-platform-sops"
+          "--output"
+          "json"
+        ];
+        stdoutJq = ''
+          map(select(.kind == "Secret" and .metadata.name == "app-credentials"))
+          | map({
+              kind,
+              namespace: .metadata.namespace,
+              name: .metadata.name,
+              declaredKeys: (.metadata.annotations["kix.run/secret-keys"] | split(",")),
+              plaintextIncluded: has("stringData") or has("data")
+            })'';
+      }
+    ];
+    live = [
+      {
+        prepare = ''SOPS_AGE_KEY_FILE=how-to/platform/test-only-age-key.txt kix deploy how-to-platform-sops -y'';
+      }
+      {
+        capture = "secret";
+        run = [
+          "kubectl"
+          "get"
+          "secret"
+          "app-credentials"
+          "-n"
+          "sops-example"
+        ];
+      }
+    ];
+  }
+
+  {
     group = "how-to/platform-ingress";
     page = "/docs/how-to/platform-capabilities/expose-a-service-with-ingress/";
     cwd = "kix-examples/";
