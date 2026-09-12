@@ -1,0 +1,60 @@
+name: Spindle smoke test
+
+# Proves the Spindle runner path end to end, without dragging the real
+# build in with it.
+#
+# Spindle (runners.example.com) brokers this repo's Actions jobs onto
+# ephemeral GCE VMs. It sees a queued job via a `workflow_job` webhook,
+# boots a VM, registers a single-use JIT runner named `spindle-<vm-id>`
+# against this repository, and powers the VM off when the job ends. The
+# runner is repository-level, so it appears under this repo's Settings →
+# Actions → Runners for the seconds it exists, never in the org list.
+#
+# On GitHub the `runs-on` label IS the machine shape:
+# `spindle-<vcpu>c-<ram>g[-<disk>d]`, vCPU one of 2/4/8/16/32 and RAM
+# between 0.5 and 8 GiB per vCPU. `spindle-auto` is rejected here (it
+# works on Forgejo) — GitHub has no per-job claim API, so the job that
+# lands on a VM is not necessarily the one Spindle sized for, and only a
+# label that names the size makes that swap harmless.
+#
+# The VM image is NixOS with a fixed CI toolset baked in, which is why
+# this asserts on tools rather than installing any.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/spindle-smoke.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: [self-hosted, spindle-2c-4g]
+    steps:
+      # A JS action: proves the runner's own node works and that the
+      # image's git is found (without git, checkout silently degrades to
+      # an API tarball with no .git directory).
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Report the machine Spindle gave us
+        run: |
+          echo "runner    ${RUNNER_NAME}"
+          echo "kernel    $(uname -srm)"
+          echo "vcpu      $(nproc)"
+          echo "ram       $(free -h | awk '/^Mem:/ {print $2}')"
+          echo "disk      $(df -h --output=size,avail / | tail -1)"
+          echo "node      $(node --version)"
+          echo "npm       $(npm --version)"
+          echo "nix       $(nix --version)"
+          echo "git       $(git --version)"
+          test -d .git || { echo "no .git — checkout degraded to a tarball"; exit 1; }
+
+      # The substituter the image ships. If this resolves, Nix builds here
+      # pull from cache.nixos.org and the Lithus read-through cache rather
+      # than building nixpkgs from source.
+      - name: Check the Nix substituters answer
+        run: nix store info --store https://cache.nixos.org
