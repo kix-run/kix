@@ -1,4 +1,94 @@
 ---
 title: "Handle stateful migration prompts safely"
-description: TODO
+description: "Review a detected stateful replacement, migrate its data separately, and acknowledge the deployment gate."
 ---
+
+import Command from '/src/components/Command.astro';
+import exportBefore from '/src/command-output/how-to/adoption-stateful-migration/export-before.json';
+import diff from '/src/command-output/how-to/adoption-stateful-migration/diff.json';
+import refusal from '/src/command-output/how-to/adoption-stateful-migration/refusal.json';
+import acceptedDryRun from '/src/command-output/how-to/adoption-stateful-migration/accepted-dry-run.json';
+
+Kix stops a deployment when one stateful resource replaces another in the
+same package slot. Treat this as a data-migration gate, not as an ordinary
+confirmation prompt.
+
+The example changes the `data/volume` package from
+`PersistentVolumeClaim/media-v1` at `5Gi` to
+`PersistentVolumeClaim/media-v2` at `10Gi`.
+
+## Review the pair before contacting the cluster
+
+This example exports the current definition with its Kix provenance so it can
+stand in for the old side of an offline diff:
+
+<Command {...exportBefore} />
+
+Compare the replacement definition with that saved state:
+
+<Command expandable {...diff} />
+
+Check the logical slot, source, target, and reason. Kix reports this pair
+because both resources have `lifecycle = "stateful"`, occupy the same
+`data/volume` slot, and have different Kubernetes identities.
+
+## Prepare the data migration
+
+Choose a procedure supported by the workload and storage provider. Before
+changing the deployment:
+
+1. make a recoverable backup or snapshot;
+2. stop or quiesce writers;
+3. copy or restore the data into the target;
+4. verify the target data independently;
+5. record how to return consumers to the source.
+
+Kix detects the replacement but does not perform these steps. The exact copy
+and verification commands depend on the application, volume provider, and
+access mode, so they should live in the service's migration runbook.
+
+## Confirm that the gate is active
+
+An ordinary deployment refuses the pair even when `--yes` is present:
+
+<Command expandable {...refusal} />
+
+`--yes` skips the general deploy confirmation. It does not acknowledge data
+loss risk.
+
+## Preview the acknowledged deployment
+
+After the data has been migrated and verified, repeat the API-server dry run
+with the separate acknowledgement:
+
+<Command expandable {...acceptedDryRun} />
+
+`--accept-migrations` only allows the deployment to continue. It does not
+copy data or verify that the target contains it. The warning about an empty
+target is literal when the out-of-band migration has not happened.
+
+Review the rest of the deployment plan. Do not add `--prune` while the source
+PVC is still part of the rollback plan.
+
+## Apply after verification
+
+Run the acknowledged deployment without `--dry-run`:
+
+<Command
+  commands={[
+    "kix deploy how-to-stateful-migration --accept-migrations",
+  ]}
+  cwd="kix-examples/"
+/>
+
+Confirm the application is using the target and validate its data before
+retiring the source. Remove the old PVC only after the recovery window and
+according to the storage provider's reclaim policy.
+
+:::caution
+Do not make `--accept-migrations` a default CI flag. A newly detected pair
+needs its own reviewed migration plan.
+:::
+
+See [Preview changes with `kix diff`](/docs/how-to/operate-a-cluster/preview-changes-with-kix-diff/)
+for the ordinary diff workflow.

@@ -2213,6 +2213,84 @@
   }
 
   {
+    group = "how-to/adoption-stateful-migration";
+    page = "/docs/how-to/adopt-existing-resources/handle-stateful-migration-prompts-safely/";
+    cwd = "kix-examples/";
+    resetCluster = true;
+    offline = [
+      {
+        capture = "export-before";
+        run = [
+          "kix"
+          "export"
+          "how-to-stateful-migration"
+          "--for"
+          "audit"
+          "--out"
+          "stateful-before"
+        ];
+      }
+      {
+        mutate = {
+          file = "flake.nix";
+          oldString = ''"how-to-stateful-migration" = ./how-to/adoption/stateful-before-cluster.nix;'';
+          newString = ''"how-to-stateful-migration" = ./how-to/adoption/stateful-after-cluster.nix;'';
+        };
+      }
+      {
+        capture = "diff";
+        run = [
+          "kix"
+          "diff"
+          "how-to-stateful-migration"
+          "--from"
+          "stateful-before"
+        ];
+        allowFailure = true;
+        stdoutGrep = "PersistentVolumeClaim/media-v[12]|Stateful migrations detected|data/volume:|source:|target:|data migration is NOT yet automated";
+      }
+    ];
+    live = [
+      {
+        prepare = [
+          "kix"
+          "deploy"
+          "how-to-stateful-migration"
+          "-y"
+        ];
+      }
+      {
+        mutate = {
+          file = "flake.nix";
+          oldString = ''"how-to-stateful-migration" = ./how-to/adoption/stateful-before-cluster.nix;'';
+          newString = ''"how-to-stateful-migration" = ./how-to/adoption/stateful-after-cluster.nix;'';
+        };
+      }
+      {
+        capture = "refusal";
+        run = [
+          "kix"
+          "deploy"
+          "how-to-stateful-migration"
+          "-y"
+        ];
+        allowFailure = true;
+      }
+      {
+        capture = "accepted-dry-run";
+        run = [
+          "kix"
+          "deploy"
+          "how-to-stateful-migration"
+          "--accept-migrations"
+          "--dry-run"
+          "-y"
+        ];
+      }
+    ];
+  }
+
+  {
     group = "how-to/application-typed-options";
     page = "/docs/how-to/author-packages-and-clusters/add-typed-package-options/";
     cwd = "kix-examples/";

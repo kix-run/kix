@@ -1,0 +1,19 @@
+{
+  "id": "how-to/adoption-stateful-migration/refusal",
+  "group": "how-to/adoption-stateful-migration",
+  "page": "/docs/how-to/adopt-existing-resources/handle-stateful-migration-prompts-safely/",
+  "cwd": "kix-examples/",
+  "generator": "live",
+  "outputExcerpt": false,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix deploy how-to-stateful-migration -y",
+      "stdout": "Building cluster 'how-to-stateful-migration'...\nCluster how-to-stateful-migration: 8 manifests\nConnecting to cluster...\nActive activation: how-to-stateful-migration-w2a1afvarsca (w2a1afva...)\n\nStateful migrations detected (1):\n  ~ data/volume: PersistentVolumeClaim/media-v1 -> PersistentVolumeClaim/media-v2 (size changed: 5Gi -> 10Gi)\n      source: PersistentVolumeClaim/data/media-v1\n      target: PersistentVolumeClaim/data/media-v2\n\nRefusing to deploy: stateful migration pairs detected but --accept-migrations was not passed.\nData migration is NOT yet automated. Review the pairs above, handle the data out-of-band, then re-run with --accept-migrations.\n",
+      "stderr": "",
+      "stdoutDrift": "\nActive activation: how-to-stateful-migration-<activation-id> (w2a1afva...)\nBuilding cluster 'how-to-stateful-migration'...\nCluster how-to-stateful-migration: 8 manifests\nConnecting to cluster...\nData migration is NOT yet automated. Review the pairs above, handle the data out-of-band, then re-run with --accept-migrations.\nRefusing to deploy: stateful migration pairs detected but --accept-migrations was not passed.\nStateful migrations detected (1):\nsource: PersistentVolumeClaim/data/media-v1\ntarget: PersistentVolumeClaim/data/media-v2\n~ data/volume: PersistentVolumeClaim/media-v1 -> PersistentVolumeClaim/media-v2 (size changed: 5Gi -> 10Gi)\n",
+      "stderrDrift": "",
+      "exitCode": 1
+    }
+  ]
+}
