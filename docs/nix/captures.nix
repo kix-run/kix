@@ -1144,6 +1144,54 @@
   }
 
   {
+    group = "how-to/platform-cloudflare-tunnel";
+    page = "/docs/how-to/platform-capabilities/expose-a-service-through-cloudflare-tunnel/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "resources";
+        run = [
+          "kix"
+          "build"
+          "how-to-platform-cloudflare-tunnel"
+          "--output"
+          "json"
+        ];
+        stdoutJq = ''
+          map(select(
+            (.kind == "Service" and .metadata.name == "web")
+            or (.kind == "Deployment" and .metadata.name == "cloudflared")
+            or (.kind == "Secret" and .metadata.name == "cloudflared-token")
+          ))
+          | map(
+              if .kind == "Service" then {
+                kind,
+                namespace: .metadata.namespace,
+                name: .metadata.name,
+                ports: .spec.ports
+              }
+              elif .kind == "Deployment" then {
+                kind,
+                namespace: .metadata.namespace,
+                name: .metadata.name,
+                replicas: .spec.replicas,
+                image: .spec.template.spec.containers[0].image,
+                args: .spec.template.spec.containers[0].args
+              }
+              else {
+                kind,
+                namespace: .metadata.namespace,
+                name: .metadata.name,
+                declaredKeys: (.metadata.annotations["kix.run/secret-keys"] | split(",")),
+                plaintextIncluded: has("stringData") or has("data")
+              }
+              end
+            )'';
+      }
+    ];
+  }
+
+  {
     group = "how-to/platform-ingress";
     page = "/docs/how-to/platform-capabilities/expose-a-service-with-ingress/";
     cwd = "kix-examples/";

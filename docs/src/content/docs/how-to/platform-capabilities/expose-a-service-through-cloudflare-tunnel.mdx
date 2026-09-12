@@ -1,4 +1,129 @@
 ---
 title: "Expose a service through Cloudflare Tunnel"
-description: TODO
+description: "Run a remotely managed Cloudflare Tunnel connector and route a public hostname to a ClusterIP Service."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import tunnelOriginInstance from '/src/snippets/how-to/platform/cloudflare-tunnel-cluster/tunnelOriginInstance.json';
+import cloudflaredInstance from '/src/snippets/how-to/platform/cloudflare-tunnel-cluster/cloudflaredInstance.json';
+import resources from '/src/command-output/how-to/platform-cloudflare-tunnel/resources.json';
+
+Run `cloudflared` in the cluster when you want Cloudflare Tunnel to reach a
+ClusterIP Service. The connector makes outbound connections to Cloudflare, so
+the Service does not need an Ingress or `LoadBalancer`.
+
+This guide assumes you have a Cloudflare account, a domain managed by
+Cloudflare, and a Kix package that exposes its workload through a Service.
+
+## Create a remotely managed tunnel
+
+In the Cloudflare dashboard, open **Networking > Tunnels** and create a
+Cloudflare Tunnel. Select **Add a replica** and copy the token from the
+generated `cloudflared` installation command. Anyone with this token can run
+the tunnel, so handle it as a credential.
+
+Store the token in a SOPS file with one top-level key:
+
+```yaml title="cloudflare-token.enc.yaml"
+token: eyJ...
+```
+
+Encrypt the file before committing it. Follow
+[Use SOPS-backed secrets](/docs/how-to/platform-capabilities/use-sops-backed-secrets-if-production-ready/)
+if the deployment machine is not already configured to decrypt SOPS files.
+
+## Add the origin Service
+
+Add the application package to the cluster. The example package creates
+`Service/web` in the `cloudflare-example` namespace:
+
+<Snippet {...tunnelOriginInstance} />
+
+The Service remains internal to Kubernetes. Its default cluster address is:
+
+```text
+http://web.cloudflare-example.svc.cluster.local:80
+```
+
+If your cluster changes `cluster.domain`, replace `cluster.local` with that
+domain when you configure the tunnel route.
+
+## Add the connector
+
+Create the `cloudflared` instance in its own namespace:
+
+<Snippet {...cloudflaredInstance} />
+
+`tokenSource` must point to a SOPS file whose top-level `token` key contains
+the tunnel token. The example pins the connector image to a specific
+[cloudflared release](https://github.com/cloudflare/cloudflared/releases);
+review and update that version as part of normal dependency maintenance.
+
+Two replicas give the tunnel more than one connector process. Both use the
+same remotely managed tunnel token.
+
+## Configure the public hostname
+
+Open the tunnel in the Cloudflare dashboard and add a public hostname. Set its
+service type to **HTTP** and its URL to the in-cluster address:
+
+```text
+web.cloudflare-example.svc.cluster.local:80
+```
+
+This route is part of the remotely managed tunnel configuration. It is not a
+Kubernetes resource in the Kix cluster artifact.
+
+## Check and deploy
+
+Render the relevant resources before contacting the cluster:
+
+<Command {...resources} />
+
+The excerpt shows the origin Service, the two-replica connector Deployment,
+and the token Secret without decrypted data.
+
+Make the SOPS identity available and deploy:
+
+<Command
+  commands={[
+    "export SOPS_AGE_KEY_FILE=/secure/path/age-key.txt",
+    "kix deploy how-to-platform-cloudflare-tunnel",
+  ]}
+  cwd="kix-examples/"
+/>
+
+Check the connector pods and the tunnel status:
+
+<Command
+  commands={[
+    "kubectl get pods -n tunnel-system",
+  ]}
+/>
+
+Cloudflare should show the tunnel as healthy once at least one connector is
+registered. Test the public hostname from outside the cluster:
+
+<Command commands={["curl https://app.example.com"]} />
+
+Replace `app.example.com` with the hostname you configured.
+
+## Troubleshoot the connector
+
+Inspect the connector logs when the tunnel remains down or requests return an
+origin error:
+
+<Command commands={["kix logs cloudflared --since 10m"]} cwd="kix-examples/" />
+
+Check these common causes:
+
+- The SOPS identity cannot decrypt `cloudflare-token.enc.yaml`.
+- The token belongs to another tunnel or has been rotated.
+- The public hostname route uses the wrong namespace, Service name, port, or
+  cluster domain.
+- Network policy blocks DNS or outbound connections from `tunnel-system`.
+
+When you rotate the tunnel token, replace the value in the encrypted file and
+deploy again. Restart the connector pods after the Secret update so each
+process reads the new token.
