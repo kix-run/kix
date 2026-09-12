@@ -1,0 +1,19 @@
+{
+  "id": "how-to/adoption-extra-deps/graph",
+  "group": "how-to/adoption-extra-deps",
+  "page": "/docs/how-to/adopt-existing-resources/add-explicit-ordering-with-extradeps/",
+  "cwd": "kix-examples/",
+  "generator": "offline",
+  "outputExcerpt": true,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix graph how-to-adoption --format tree",
+      "stdout": "├── PackageInstance/legacy-api@legacy (import)\n├── PackageInstance/legacy-api-contract@apps\n│   ├── PackageInstance/legacy-api@legacy (import)\n├── ConfigMap/legacy-api-contract@apps\n│   └── PackageInstance/legacy-api-contract@apps\n│       ├── PackageInstance/legacy-api@legacy (import)\n├── PackageInstance/legacy-api-contract@apps\n│   ├── PackageInstance/legacy-api@legacy (import)\n└── PackageInstance/legacy-api@legacy (import)\n",
+      "stderr": "20 resources, 36 dependencies\n",
+      "stdoutDrift": "ConfigMap/legacy-api-contract@apps\nPackageInstance/legacy-api-contract@apps\nPackageInstance/legacy-api@legacy (import)\n",
+      "stderrDrift": "20 resources, 36 dependencies\n",
+      "exitCode": 0
+    }
+  ]
+}

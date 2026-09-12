@@ -2186,6 +2186,33 @@
   }
 
   {
+    group = "how-to/adoption-extra-deps";
+    page = "/docs/how-to/adopt-existing-resources/add-explicit-ordering-with-extradeps/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "check";
+        run = [
+          "kix"
+          "check"
+          "how-to-adoption"
+        ];
+      }
+      {
+        capture = "graph";
+        run = [
+          "kix"
+          "graph"
+          "how-to-adoption"
+          "--format"
+          "tree"
+        ];
+        stdoutGrep = "legacy-api-contract|PackageInstance/legacy-api@legacy";
+      }
+    ];
+  }
+
+  {
     group = "how-to/application-typed-options";
     page = "/docs/how-to/author-packages-and-clusters/add-typed-package-options/";
     cwd = "kix-examples/";

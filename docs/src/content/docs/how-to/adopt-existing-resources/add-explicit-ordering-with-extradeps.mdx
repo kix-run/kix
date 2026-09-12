@@ -1,4 +1,70 @@
 ---
 title: "Add explicit ordering with `extraDeps`"
-description: TODO
+description: "Order an imported instance after a managed prerequisite when no value connects them."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import explicitImportOrdering from '/src/snippets/how-to/adoption/cluster/explicitImportOrdering.json';
+import check from '/src/command-output/how-to/adoption-extra-deps/check.json';
+import graph from '/src/command-output/how-to/adoption-extra-deps/graph.json';
+
+Use an instance-level `extraDeps` edge when an imported instance's marker must
+follow a managed prerequisite, but no manifest field carries a reference
+between them.
+
+The example below imports an existing `legacy-api` Service. Its
+`PackageInstance` marker should be recorded only after Kix deploys a managed
+compatibility contract.
+
+## Add the explicit edge
+
+Make the cluster module accept `ref`, then point the imported instance at the
+managed prerequisite:
+
+<Snippet {...explicitImportOrdering} />
+
+The reference has the form `ref.<namespace>.<instance>.root`. It identifies
+the managed instance's `PackageInstance` marker, which is itself ordered after
+the instance's resources.
+
+`extraDeps` adds an ordering edge to the imported instance's marker. It does
+not modify, deploy, or check the imported Kubernetes resource.
+
+## Check the cluster
+
+Evaluate the complete cluster:
+
+<Command {...check} />
+
+A missing namespace or instance in the `ref` path fails evaluation. Fix that
+reference before inspecting the graph.
+
+## Verify the order
+
+Print the dependency tree:
+
+<Command expandable {...graph} />
+
+The relevant chain is:
+
+1. `ConfigMap/legacy-api-contract@apps` is deployed.
+2. `PackageInstance/legacy-api-contract@apps` records the managed instance.
+3. `PackageInstance/legacy-api@legacy` records the import.
+
+Use `extraDeps` only when the ordering relationship has no corresponding
+manifest value. Reading a dependency's tracked `out` value already creates an
+edge, so adding another one is unnecessary.
+
+At the cluster instance level, `extraDeps` applies to `kix.mkImport` markers.
+Package authors can place `requires` or `extraDeps` on individual resources
+when the relationship belongs inside a package.
+
+This edge does not automatically order packages that consume manually
+declared import outputs. If a consumer must wait for the same prerequisite,
+declare that dependency in the consumer as well.
+
+:::note[Related guide]
+See [Import an existing Service with `kix.mkImport`](/docs/how-to/adopt-existing-resources/import-an-existing-service-with-kix-mkimport/)
+for the import and consumer setup used here.
+:::
