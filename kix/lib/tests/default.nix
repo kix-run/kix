@@ -908,6 +908,34 @@ let
       (cluster.scorecardReport or { findings = [ ]; }).findings
     );
 
+  # The real kix/packages/envoy-gateway, not a synthetic stand-in: its
+  # EnvoyProxy/GatewayClass/Gateway wiring is what decides whether a
+  # Gateway can program on a cluster with no LoadBalancer, so the tests
+  # want the shipped package, field names and all.
+  envoyGatewayPackage = import ../../packages/envoy-gateway;
+
+  # What a kind scenario opts into. Envoy Gateway's own default is a
+  # LoadBalancer Service for the proxy, which stock kind never gives an
+  # address; NodePort makes the controller publish node addresses
+  # instead, and the Gateway reaches Programmed=True.
+  kindProxySpec = {
+    provider = {
+      type = "Kubernetes";
+      kubernetes.envoyService.type = "NodePort";
+    };
+  };
+
+  mkGatewayCluster =
+    config:
+    mkCluster [
+      {
+        instances.gwns.gateway = {
+          package = envoyGatewayPackage;
+          inherit config;
+        };
+      }
+    ];
+
   # ------------------------------------------------------------------- tests
 
   tests = {
@@ -3010,6 +3038,71 @@ let
       in
       builtins.length stock == 1
       || throw "expected one shared role provider, got ${toString (builtins.length stock)}";
+
+    # ── envoy-gateway: data-plane parameters ───────────────────────────
+    # Real clusters keep Envoy Gateway's defaults, so an instance that
+    # says nothing about the proxy must emit no EnvoyProxy and hang no
+    # parametersRef off the class.
+    t83-envoy-gateway-default-emits-no-proxy =
+      let
+        ms = manifests (mkGatewayCluster { });
+        gc = byName "gateway" (ofKind "GatewayClass" ms);
+      in
+      (ofKind "EnvoyProxy" ms == [ ] && gc != null && !(gc.spec ? parametersRef))
+      || throw "default envoy-gateway instance leaked proxy parameters: ${
+        builtins.toJSON (gc.spec or null)
+      }";
+
+    # Opting in emits the EnvoyProxy verbatim and points the class at it
+    # by group/kind/name/namespace — the four fields Envoy Gateway's
+    # processGatewayClassParamsRef resolves.
+    t84-envoy-gateway-proxyspec-wires-parametersref =
+      let
+        ms = manifests (mkGatewayCluster {
+          proxySpec = kindProxySpec;
+        });
+        ep = byName "gateway-proxy" (ofKind "EnvoyProxy" ms);
+        gc = byName "gateway" (ofKind "GatewayClass" ms);
+      in
+      (
+        ep != null
+        && ep.apiVersion == "gateway.envoyproxy.io/v1alpha1"
+        && ep.metadata.namespace == "gwns"
+        && ep.spec == kindProxySpec
+        &&
+          gc.spec.parametersRef == {
+            group = "gateway.envoyproxy.io";
+            kind = "EnvoyProxy";
+            name = "gateway-proxy";
+            namespace = "gwns";
+          }
+      )
+      || throw "unexpected EnvoyProxy wiring: proxy=${builtins.toJSON ep} class=${builtins.toJSON gc}";
+
+    # The parametersRef is resolved by name at admission time, so the
+    # EnvoyProxy has to land first. Referencing it through out.name is
+    # what buys that edge; this asserts the edge exists rather than
+    # trusting the reference style.
+    t85-envoy-gateway-proxy-orders-before-class =
+      let
+        cluster = mkGatewayCluster { proxySpec = kindProxySpec; };
+        ms = manifests cluster;
+        raw = cluster.instances.gwns.gateway.raw;
+        proxyHash = k8s.extractStoreHash raw.envoyProxy.outPath;
+        classHash = k8s.extractStoreHash raw.gatewayClass.outPath;
+        gc = byName "gateway" (ofKind "GatewayClass" ms);
+        gw = byName "gateway" (ofKind "Gateway" ms);
+      in
+      (lib.hasInfix proxyHash (dependsOn gc) && lib.hasInfix classHash (dependsOn gw))
+      || throw "ordering edges missing: class depends-on '${dependsOn gc}', gateway depends-on '${dependsOn gw}'";
+
+    # EnvoyProxy is an Envoy Gateway extension. Pointing a class at
+    # another implementation's controller and still handing it a
+    # proxySpec is a silent no-op in the cluster, so it fails eval.
+    t86-envoy-gateway-proxyspec-needs-envoy-controller = evalFails (mkGatewayCluster {
+      controllerName = "gateway.nginx.org/nginx-gateway-controller";
+      proxySpec = kindProxySpec;
+    });
   }
   // import ./validate.nix {
     inherit

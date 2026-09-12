@@ -1,6 +1,9 @@
 # envoy-gateway kix package — Gateway API resources.
 #
-# Creates GatewayClass and Gateway resources for the Gateway API.
+# Creates GatewayClass and Gateway resources for the Gateway API, plus an
+# optional EnvoyProxy that tells Envoy Gateway how to provision the data
+# plane for that class.
+#
 # The actual Envoy Gateway controller is installed separately (e.g.
 # via Helm at the cluster level). This package provides the Gateway
 # API resources and the DI contract that kix.expose consumes.
@@ -8,7 +11,7 @@
 # Supports multiple instances (public gateway, private gateway, etc.)
 # — all resource names derive from scope.instanceName.
 #
-# Resources: GatewayClass, Gateway.
+# Resources: EnvoyProxy (optional), GatewayClass, Gateway.
 # root = Gateway, with out.gatewayRef for kix.expose consumption.
 
 {
@@ -16,9 +19,17 @@
   lib,
 }:
 
+let
+  # The controller name Envoy Gateway's own GatewayClass controller
+  # watches for. Spelled once: it is both the `controllerName` default
+  # and the precondition for emitting an EnvoyProxy, which is an Envoy
+  # Gateway extension and means nothing to another implementation.
+  envoyGatewayController = "gateway.envoyproxy.io/gatewayclass-controller";
+in
+
 {
   meta = {
-    version = "1.0.0";
+    version = "1.1.0";
     description = "Gateway API resources (GatewayClass + Gateway)";
     defaultAliases = [ "gateway" ];
     k8s.minVersion = "1.26";
@@ -30,7 +41,7 @@
     #                "gateway.nginx.org/nginx-gateway-controller" (nginx-gateway-fabric).
     controllerName = lib.mkOption {
       type = lib.types.str;
-      default = "gateway.envoyproxy.io/gatewayclass-controller";
+      default = envoyGatewayController;
       description = "Controller name for the GatewayClass. Must match the installed gateway controller.";
     };
 
@@ -81,7 +92,50 @@
       default = [ ];
       description = "Optional static addresses for the Gateway.";
     };
+
+    # Data-plane provisioning parameters, as an EnvoyProxy spec.
+    proxySpec = lib.mkOption {
+      type = lib.types.nullOr (lib.types.attrsOf lib.types.anything);
+      default = null;
+      example = lib.literalExpression ''
+        {
+          provider = {
+            type = "Kubernetes";
+            kubernetes.envoyService.type = "NodePort";
+          };
+        }
+      '';
+      description = ''
+        `spec` of an EnvoyProxy (gateway.envoyproxy.io/v1alpha1), verbatim.
+
+        When set, the package emits an EnvoyProxy and points the
+        GatewayClass's `parametersRef` at it, so Envoy Gateway provisions
+        every Gateway in the class from this spec. Leave it null (the
+        default) to accept Envoy Gateway's own defaults, which include a
+        `LoadBalancer` Service for the proxy.
+
+        That default never gets an address on a cluster with no
+        LoadBalancer implementation (stock kind, for one), so the Gateway
+        stays `Programmed=False` and `kix deploy` waits for a readiness
+        that cannot arrive. Setting
+        `provider.kubernetes.envoyService.type = "NodePort"` makes Envoy
+        Gateway publish the node addresses instead, and the Gateway
+        programs.
+      '';
+    };
   };
+
+  assertions =
+    { config, ... }:
+    [
+      {
+        assertion = config.proxySpec == null || config.controllerName == envoyGatewayController;
+        message =
+          "envoy-gateway: proxySpec configures an EnvoyProxy, an Envoy Gateway extension, "
+          + "but controllerName is \"${config.controllerName}\". Either drop proxySpec or point "
+          + "controllerName at \"${envoyGatewayController}\".";
+      }
+    ];
 
   build =
     {
@@ -106,8 +160,24 @@
       activeListeners = builtins.filter (
         l: if l.protocol == "HTTPS" && l ? tls.certificateRefs then l.tls.certificateRefs != [ ] else true
       ) config.listeners;
+
+      haveProxy = config.proxySpec != null;
     in
-    {
+    # --- EnvoyProxy (optional, namespaced) ---
+    # Envoy Gateway reads this through the GatewayClass's parametersRef and
+    # provisions the proxy Deployment/Service from it. The reference is by
+    # name and namespace, so it must exist before the class is accepted;
+    # the `self.envoyProxy.out.name` below is what buys that ordering edge.
+    lib.optionalAttrs haveProxy {
+      envoyProxy = scope.mkResource {
+        apiVersion = "gateway.envoyproxy.io/v1alpha1";
+        kind = "EnvoyProxy";
+        name = "${name}-proxy";
+        labels = selectorLabels;
+        spec = config.proxySpec;
+      };
+    }
+    // {
       # --- GatewayClass (cluster-scoped) ---
       gatewayClass = scope.mkClusterResource {
         apiVersion = "gateway.networking.k8s.io/v1";
@@ -116,6 +186,14 @@
         labels = selectorLabels;
         spec = {
           controllerName = config.controllerName;
+        }
+        // lib.optionalAttrs haveProxy {
+          parametersRef = {
+            group = "gateway.envoyproxy.io";
+            kind = "EnvoyProxy";
+            name = self.envoyProxy.out.name;
+            namespace = scope.namespaceName;
+          };
         };
       };
 
