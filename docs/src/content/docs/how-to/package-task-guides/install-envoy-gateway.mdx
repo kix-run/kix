@@ -1,4 +1,95 @@
 ---
 title: "Install Envoy Gateway"
-description: TODO
+description: "Install the Envoy Gateway controller and CRDs, then manage its GatewayClass and Gateway with Kix."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import gatewayInstance from '/src/snippets/how-to/platform/gateway-cluster/gatewayInstance.json';
+import gatewayKindProxy from '/src/snippets/how-to/platform/gateway-cluster/gatewayKindProxy.json';
+import controllerReady from '/src/command-output/how-to/package-envoy-gateway/controller-ready.json';
+import gatewayResources from '/src/command-output/how-to/package-envoy-gateway/gateway-resources.json';
+
+Install the Envoy Gateway controller and its CRDs with the upstream Helm
+chart. Then use Kix to create the `GatewayClass` and `Gateway` that application
+packages route through.
+
+This guide assumes Helm is installed and your current Kubernetes context
+points at the target cluster. Check the
+[Envoy Gateway compatibility matrix](https://gateway.envoyproxy.io/docs/install/version-compatibility/)
+before choosing a release for a production cluster.
+
+## Install the controller and CRDs
+
+Install the pinned chart in `envoy-gateway-system`:
+
+<Command
+  commands={[
+    "helm install eg oci://docker.io/envoyproxy/gateway-helm --version v1.9.1 --namespace envoy-gateway-system --create-namespace",
+  ]}
+/>
+
+The default chart installation includes the Gateway API CRDs, Envoy Gateway
+CRDs, and the controller. If your Kubernetes provider already manages
+compatible Gateway API CRDs, follow Envoy Gateway's
+[provider-managed CRD procedure](https://gateway.envoyproxy.io/docs/install/install-helm/#clusters-with-compatible-provider-managed-gateway-api-crds)
+instead of installing a second copy.
+
+Wait for the controller Deployment:
+
+<Command {...controllerReady} />
+
+## Add the Gateway resources to Kix
+
+The Kix `envoy-gateway` package creates the `GatewayClass` and `Gateway`. Add
+an instance with the listeners your applications need:
+
+<Snippet {...gatewayInstance} />
+
+The default `controllerName` is
+`gateway.envoyproxy.io/gatewayclass-controller`, which matches Envoy Gateway.
+The example permits routes from every namespace. Restrict
+`allowedRoutes.namespaces` if only selected namespaces should attach routes.
+
+On kind, configure Envoy Gateway to expose its data plane through a `NodePort`
+Service:
+
+<Snippet {...gatewayKindProxy} />
+
+kind does not provide a load balancer, so Envoy Gateway's default
+`LoadBalancer` Service cannot receive an address there. The `NodePort` setting
+allows the Gateway to become ready. Omit this setting on a cluster where a
+load balancer assigns addresses to `LoadBalancer` Services.
+
+Deploy the Kix cluster:
+
+<Command
+  commands={["kix deploy how-to-platform-gateway"]}
+  cwd="kix-examples/"
+/>
+
+## Verify the installation
+
+Check the controller-managed resources:
+
+<Command {...gatewayResources} />
+
+The `GatewayClass` should report `Accepted`, and the `Gateway` should report
+`Programmed`. With the kind configuration above, Envoy Gateway reports a kind
+node address for the Gateway.
+
+If either resource remains unready, inspect its conditions and the controller
+logs:
+
+<Command
+  commands={[
+    "kubectl describe gatewayclass gateway",
+    "kubectl describe gateway gateway -n gateway-system",
+    "kubectl logs -n envoy-gateway-system deployment/envoy-gateway --since=10m",
+  ]}
+/>
+
+:::tip[Use it in a task]
+Continue with [Expose a service with Gateway API](/docs/how-to/platform-capabilities/expose-a-service-with-gateway-api/)
+to add an HTTPRoute from an application package to this Gateway.
+:::

@@ -1676,6 +1676,60 @@
   }
 
   {
+    group = "how-to/package-envoy-gateway";
+    page = "/docs/how-to/package-task-guides/install-envoy-gateway/";
+    cwd = "kix-examples/";
+    resetCluster = true;
+    live = [
+      {
+        prepare = [
+          "helm"
+          "install"
+          "eg"
+          "oci://docker.io/envoyproxy/gateway-helm"
+          "--version"
+          "v1.9.1"
+          "--namespace"
+          "envoy-gateway-system"
+          "--create-namespace"
+        ];
+        timeout = "900s";
+      }
+      {
+        capture = "controller-ready";
+        run = [
+          "kubectl"
+          "wait"
+          "--timeout=5m"
+          "--namespace"
+          "envoy-gateway-system"
+          "deployment/envoy-gateway"
+          "--for=condition=Available"
+        ];
+      }
+      {
+        prepare = [
+          "kix"
+          "deploy"
+          "how-to-platform-gateway"
+          "-y"
+        ];
+        timeout = "900s";
+      }
+      {
+        capture = "gateway-resources";
+        run = [
+          "kubectl"
+          "get"
+          "gatewayclass,gateway"
+          "--all-namespaces"
+        ];
+        skipDriftCheck = true;
+      }
+    ];
+  }
+
+  {
     group = "how-to/platform-monitoring";
     page = "/docs/how-to/platform-capabilities/auto-monitor-a-service/";
     cwd = "kix-examples/";
