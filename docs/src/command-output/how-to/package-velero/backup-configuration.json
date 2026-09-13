@@ -1,0 +1,19 @@
+{
+  "id": "how-to/package-velero/backup-configuration",
+  "group": "how-to/package-velero",
+  "page": "/docs/how-to/package-task-guides/deploy-velero/",
+  "cwd": "kix-examples/",
+  "generator": "offline",
+  "outputExcerpt": true,
+  "skipDriftCheck": false,
+  "commands": [
+    {
+      "command": "kix build how-to-package-velero --output json",
+      "stdout": "[\n  {\n    \"apiVersion\": \"velero.io/v1\",\n    \"kind\": \"BackupStorageLocation\",\n    \"metadata\": {\n      \"name\": \"default\",\n      \"namespace\": \"velero-system\"\n    },\n    \"spec\": {\n      \"accessMode\": \"ReadWrite\",\n      \"config\": {\n        \"region\": \"eu-central-1\",\n        \"s3ForcePathStyle\": \"false\"\n      },\n      \"credential\": {\n        \"key\": \"cloud\",\n        \"name\": \"velero-credentials\"\n      },\n      \"default\": true,\n      \"objectStorage\": {\n        \"bucket\": \"example-cluster-backups\"\n      },\n      \"provider\": \"velero.io/aws\"\n    }\n  },\n  {\n    \"apiVersion\": \"velero.io/v1\",\n    \"kind\": \"Schedule\",\n    \"metadata\": {\n      \"name\": \"daily\",\n      \"namespace\": \"velero-system\"\n    },\n    \"spec\": {\n      \"schedule\": \"0 2 * * *\",\n      \"template\": {\n        \"defaultVolumesToFsBackup\": true,\n        \"includedNamespaces\": [\n          \"applications\"\n        ],\n        \"ttl\": \"720h0m0s\"\n      }\n    }\n  }\n]\n",
+      "stderr": "",
+      "stdoutDrift": "\"accessMode\": \"ReadWrite\",\n\"apiVersion\": \"velero.io/v1\",\n\"applications\"\n\"bucket\": \"example-cluster-backups\"\n\"config\": {\n\"credential\": {\n\"default\": true,\n\"defaultVolumesToFsBackup\": true,\n\"includedNamespaces\": [\n\"key\": \"cloud\",\n\"kind\": \"BackupStorageLocation\",\n\"kind\": \"Schedule\",\n\"metadata\": {\n\"name\": \"daily\",\n\"name\": \"default\",\n\"name\": \"velero-credentials\"\n\"namespace\": \"velero-system\"\n\"objectStorage\": {\n\"provider\": \"velero.io/aws\"\n\"region\": \"eu-central-1\",\n\"s3ForcePathStyle\": \"false\"\n\"schedule\": \"0 2 * * *\",\n\"spec\": {\n\"template\": {\n\"ttl\": \"720h0m0s\"\n[\n]\n],\n{\n}\n},\n",
+      "stderrDrift": "",
+      "exitCode": 0
+    }
+  ]
+}

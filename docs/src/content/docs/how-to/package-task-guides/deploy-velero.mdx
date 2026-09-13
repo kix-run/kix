@@ -1,4 +1,116 @@
 ---
 title: "Deploy Velero"
-description: TODO
+description: "Deploy Velero with an S3-compatible backup location and a recurring backup schedule."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import veleroInstance from '/src/snippets/how-to/package-stacks/velero-cluster/veleroInstance.json';
+import check from '/src/command-output/how-to/package-velero/check.json';
+import backupConfiguration from '/src/command-output/how-to/package-velero/backup-configuration.json';
+
+Use the `velero` package to deploy the Velero server and node agent, connect
+them to S3-compatible object storage, and schedule recurring backups.
+
+This guide uses Velero 1.15.2 with the AWS object-store plugin. It assumes you
+have an existing bucket and credentials that can read, write, list, and delete
+objects in it.
+
+## Install the Velero CRDs
+
+The Kix package creates Velero resources but does not install their custom
+resource definitions. Install the matching CRDs before the first deployment:
+
+<Command
+  commands={[
+    "velero install --crds-only --dry-run -o yaml | kubectl apply -f -",
+  ]}
+/>
+
+Use the Velero 1.15.2 CLI for this command. When upgrading Velero, update its
+CRDs before deploying resources built for the new version.
+
+## Create the credentials Secret
+
+Create a local file named `credentials-velero` in the format expected by the
+AWS plugin:
+
+```ini title="credentials-velero"
+[default]
+aws_access_key_id=<access-key-id>
+aws_secret_access_key=<secret-access-key>
+```
+
+Create the namespace and Secret before deploying Velero:
+
+<Command
+  commands={[
+    "kubectl create namespace velero-system",
+    "kubectl create secret generic velero-credentials --namespace velero-system --from-file=cloud=./credentials-velero",
+  ]}
+/>
+
+Keep the credentials file out of version control. If your platform already
+creates Kubernetes Secrets, use that system to create the same Secret and
+`cloud` key.
+
+## Configure Velero
+
+Add a Velero instance to the cluster:
+
+<Snippet {...veleroInstance} />
+
+Replace `example-cluster-backups` and the region with values for your bucket.
+For an S3-compatible service with a custom endpoint, also set `s3Url` and set
+`s3ForcePathStyle` according to the service's requirements.
+
+The `daily` schedule backs up the `applications` namespace at 02:00 UTC,
+retains each backup for 30 days, and uses the node agent for volume data.
+Change the namespace selection, schedule, and retention period to match your
+recovery policy.
+
+## Check the generated configuration
+
+Evaluate the cluster:
+
+<Command {...check} />
+
+Inspect the backup location and schedule that Kix will apply:
+
+<Command expandable {...backupConfiguration} />
+
+The backup location refers to the existing `velero-credentials` Secret. Its
+contents are not part of the rendered manifests.
+
+## Deploy and verify
+
+Deploy Velero, then check the server, backup location, and schedule:
+
+<Command
+  commands={[
+    "kix deploy how-to-package-velero",
+    "kubectl rollout status deployment/velero --namespace velero-system",
+    "velero backup-location get",
+    "velero schedule get",
+  ]}
+  cwd="kix-examples/"
+/>
+
+The backup location should report `Available`. Confirm the complete path by
+starting a backup and waiting for it to finish:
+
+<Command
+  commands={[
+    "velero backup create initial-applications-backup --include-namespaces applications --wait",
+    "velero backup describe initial-applications-backup --details",
+  ]}
+/>
+
+If the location is unavailable, inspect it and the server logs:
+
+<Command
+  commands={[
+    "kubectl describe backupstoragelocation default --namespace velero-system",
+    "kubectl logs deployment/velero --namespace velero-system --since=10m",
+  ]}
+/>

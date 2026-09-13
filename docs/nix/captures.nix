@@ -1596,6 +1596,46 @@
   }
 
   {
+    group = "how-to/package-velero";
+    page = "/docs/how-to/package-task-guides/deploy-velero/";
+    cwd = "kix-examples/";
+    offline = [
+      {
+        capture = "check";
+        run = [
+          "kix"
+          "check"
+          "how-to-package-velero"
+        ];
+      }
+      {
+        capture = "backup-configuration";
+        run = [
+          "kix"
+          "build"
+          "how-to-package-velero"
+          "--output"
+          "json"
+        ];
+        stdoutJq = ''
+          [
+            .[]
+            | select(.kind == "BackupStorageLocation" or .kind == "Schedule")
+            | {
+                apiVersion,
+                kind,
+                metadata: {
+                  name: .metadata.name,
+                  namespace: .metadata.namespace
+                },
+                spec
+              }
+          ]'';
+      }
+    ];
+  }
+
+  {
     group = "how-to/package-valkey";
     page = "/docs/how-to/package-task-guides/deploy-valkey-redis/";
     cwd = "kix-examples/";
