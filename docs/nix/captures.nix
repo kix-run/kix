@@ -1256,36 +1256,6 @@
   }
 
   {
-    group = "how-to/package-cert-manager";
-    page = "/docs/how-to/package-task-guides/configure-cert-manager-issuers/";
-    cwd = "kix-examples/";
-    offline = [
-      {
-        capture = "check";
-        run = [
-          "kix"
-          "check"
-          "how-to-package-cert-manager"
-        ];
-      }
-      {
-        capture = "issuer";
-        run = [
-          "kix"
-          "build"
-          "how-to-package-cert-manager"
-          "--output"
-          "json"
-        ];
-        stdoutJq = ''
-          .[]
-          | select(.kind == "ClusterIssuer" and .metadata.name == "local-self-signed")
-          | {apiVersion, kind, metadata: {name: .metadata.name}, spec}'';
-      }
-    ];
-  }
-
-  {
     group = "how-to/helm-bridge";
     page = "/docs/how-to/adopt-existing-resources/use-helm-charts-through-the-kix-helm-bridge/";
     cwd = "kix-examples/";
