@@ -74,8 +74,16 @@ jobs:
       # is sufficient ONLY because `--override-input kix-examples` below
       # bypasses the one fetch it cannot cover (kix-ops/kix-examples is a
       # different org).
+      # `extra-` matters: the bare `experimental-features` REPLACES whatever
+      # /etc/nix/nix.conf enabled, and the Spindle image now enables
+      # `configurable-impure-env` there to carry a crates.io User-Agent
+      # workaround. Replacing the list dropped that feature while leaving the
+      # `impure-env` setting that needs it in place, which Nix rejects
+      # outright ("experimental Nix feature 'configurable-impure-env' is
+      # disabled"). Every monorepo workflow uses the additive form for the
+      # same reason.
       NIX_CONFIG: |
-        experimental-features = nix-command flakes pipe-operators
+        extra-experimental-features = nix-command flakes pipe-operators
         accept-flake-config = true
         access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
     steps:
