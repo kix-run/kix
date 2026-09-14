@@ -55,6 +55,76 @@ credentials with an existing Secret. See [Use externally managed
 Secrets](/docs/how-to/platform-capabilities/use-externally-managed-secrets/)
 for the Kix pattern.
 
+## Install beside an existing prometheus-operator
+
+The operator package installs four CRDs from the `monitoring.coreos.com`
+group: ServiceMonitor, PodMonitor, PrometheusRule and Probe. Its converter
+watches them and turns each object into the VictoriaMetrics equivalent, which
+is what lets existing monitoring definitions keep working.
+
+A cluster that already runs prometheus-operator already has those four CRDs,
+at the upstream schemas. Installing a second version of them fails: the apply
+conflicts on `.spec.versions` with the field manager that owns them, usually
+`helm` or `kubectl`, and the deploy stops.
+
+Tell the operator instance that the CRDs are already there:
+
+```nix
+vm-operator = {
+  package = packages.victoria-metrics-operator;
+  config.prometheusOperatorCRDs = "reference";
+};
+```
+
+Kix then waits for each of the four CRDs to be Established and moves on,
+rather than declaring them. The `out.mkServiceMonitor`, `out.mkPodMonitor`,
+`out.mkPrometheusRule` and `out.mkProbe` builders are unchanged, so packages
+that create those objects need no edit.
+
+Leave the setting at its default, `"declare"`, on a cluster where
+VictoriaMetrics is the only monitoring stack. Setting `"reference"` where the
+CRDs are absent makes the deploy wait for them until it times out.
+
+The VictoriaMetrics CRDs are not affected by this setting. The operator ships
+its own complete bundle either way, because it crashes at startup if any of
+the kinds it indexes is missing.
+
+## Choose what the converter converts
+
+The operator converts four prometheus-operator kinds into VictoriaMetrics
+equivalents, and all four are on by default. That is what makes the package a
+drop-in: existing ServiceMonitors keep working.
+
+Each converter writes its output into the namespace the source object lives in.
+A converter whose output nothing reads therefore spreads objects across the
+cluster for no benefit. The clearest case is running VictoriaMetrics next to
+Prometheus without a vmalert: every PrometheusRule becomes a VMRule that
+nothing evaluates.
+
+There are six converters. `serviceMonitors`, `podMonitors`, `prometheusRules`
+and `probes` are on by default. `scrapeConfigs` and `alertmanagerConfigs` are
+off by default, because turning one on also installs its CRD and a cluster with
+no ScrapeConfigs has no use for it.
+
+```nix
+vm-operator = {
+  package = packages.victoria-metrics-operator;
+  config.convert = {
+    scrapeConfigs = true;      # this cluster has ScrapeConfig objects
+    prometheusRules = false;   # no vmalert here to evaluate the result
+    probes = false;
+  };
+};
+```
+
+`serviceMonitors`, `podMonitors` and `scrapeConfigs` are what feed a VMAgent.
+Leave those on wherever the agent is meant to scrape what Prometheus scrapes.
+A Prometheus that reads ScrapeConfig objects has targets that no ServiceMonitor
+describes, and with the converter off the agent misses them without saying so.
+
+Turning a converter off does not remove what it already converted. The operator
+stops reconciling that kind and leaves the objects it made.
+
 ## Check the generated stack
 
 Evaluate the cluster before deploying it:

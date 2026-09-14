@@ -9,7 +9,9 @@
 #     PrometheusRule, Probe (monitoring.coreos.com). CRDs only, no
 #     prometheus-operator controller: the VM operator's built-in converter
 #     watches these and materializes VM equivalents, so existing kix.monitor
-#     callers and app-package ServiceMonitors work unchanged.
+#     callers and app-package ServiceMonitors work unchanged. On a cluster
+#     that already has them, `prometheusOperatorCRDs = "reference"` waits
+#     for the real ones instead of declaring a second opinion.
 #
 # VMSingle / VMAuth and the logs/traces kinds are still not shipped — the
 # operator only gates on the indexed set; add the rest when a consumer
@@ -24,7 +26,8 @@
 }:
 let
   vmGroup = "operator.victoriametrics.com";
-  inherit (import ./kinds.nix) vmCrdDefs indexedKinds;
+  promGroup = "monitoring.coreos.com";
+  inherit (import ./kinds.nix) vmCrdDefs indexedKinds promCompatDefs;
 
   # ── Compile-time guard for the runtime invariant (kinds.nix) ─────────
   shippedKinds = lib.mapAttrsToList (_: def: def.kind) vmCrdDefs;
@@ -122,10 +125,43 @@ let
     equals = "operational";
   };
 
+  # ── Vendored upstream spec schemas ──────────────────────────────────
+  # `fromKind` mints a stub whose spec is x-kubernetes-preserve-unknown-
+  # fields, which registers the kind and validates nothing. A mistyped
+  # field in a CR then reaches the operator instead of being refused at
+  # apply time, and `kix deploy --dry-run` cannot see it either.
+  #
+  # So every kind with a consumer surface (`consumer = true` in kinds.nix
+  # — the out.mk* builders and the sibling packages) carries the real
+  # upstream schema, vendored per kind under ./schemas by
+  # scripts/vendor-vm-crd-schemas.py. The indexer-floor kinds keep the
+  # stub: nothing in kix writes one, and their only job is to exist.
+  #
+  # The file is the whole upstream CRD document; only its spec subtree is
+  # read here. A missing file is an error rather than a silent fall back
+  # to the stub, because the point is that consumer kinds are checked.
+  vendoredSpec =
+    def:
+    let
+      path = ./schemas + "/${def.plural}.json";
+    in
+    if !(def.consumer or false) then
+      null
+    else if !builtins.pathExists path then
+      throw (
+        "victoria-metrics-operator: ${def.kind} has a consumer surface but no "
+        + "vendored schema at schemas/${def.plural}.json. Run "
+        + "scripts/vendor-vm-crd-schemas.py."
+      )
+    else
+      (builtins.elemAt (builtins.fromJSON (builtins.readFile path)).spec.versions 0)
+      .schema.openAPIV3Schema.properties.spec;
+
   mkVMKindCRD =
     def:
     let
       extras = kindExtras.${def.kind} or { };
+      spec = vendoredSpec def;
       base =
         scope.crd.fromKind def.kind {
           spec.group = vmGroup;
@@ -133,9 +169,10 @@ let
         }
         |> scope.crd.withVersion def.version
         |> scope.crd.withPrinterColumns (extras.printerColumns or ageColumn);
+      schemed = if spec == null then base else base |> scope.crd.withSchema spec;
     in
     mkVMOperatorCRD (
-      base
+      schemed
       // {
         readiness = vmReadiness;
       }
@@ -145,35 +182,50 @@ let
     );
 
   vmCrds = lib.mapAttrs (_: mkVMKindCRD) vmCrdDefs;
+
+  # ── prometheus-operator compat CRDs (converter input) ────────────────
+  # ServiceMonitor, PodMonitor, PrometheusRule, Probe. The same slim
+  # schemas as prometheus-operator/crds.nix, so the converter has
+  # something to watch when that package isn't installed.
+  #
+  # On a cluster that already runs prometheus-operator, these four names
+  # are taken: the real CRDs are there at the upstream schemas, owned by
+  # whatever installed them. `prometheusOperatorCRDs = "reference"` swaps
+  # each declaration for an import marker that waits for the CRD instead.
+  # See the option in default.nix for why there is no safe default.
+  mkPromCompatCRD =
+    def:
+    mkVMOperatorCRD (
+      scope.crd.fromKind def.kind {
+        spec.group = promGroup;
+        spec.names.plural = def.plural;
+      }
+      |> scope.crd.withShortNames def.shortNames
+      |> scope.crd.withPrinterColumns ageColumn
+    );
+
+  # No labels, annotations, short names or printer columns: this marker
+  # names a CRD somebody else installed and does not get to restyle it.
+  # The plural is spelled out in the table above rather than derived,
+  # because `<plural>.<group>` has to match the name already on the
+  # cluster exactly.
+  mkPromCompatRef =
+    def:
+    scope.mkCRDRef {
+      group = promGroup;
+      inherit (def) kind plural;
+    };
+
+  mkPromCompat =
+    if config.prometheusOperatorCRDs == "reference" then mkPromCompatRef else mkPromCompatCRD;
+
+  # A compat CRD is here when the package exposes a builder for it, or
+  # when its converter is on. Deriving it this way is what stops a
+  # converter ever running without its CRD (kinds.nix promCompatDefs).
+  neededCompat = lib.filterAttrs (name: def: def.builder || config.convert.${name}) promCompatDefs;
+
+  promCompatCrds = lib.mapAttrs (_: mkPromCompat) neededCompat;
 in
 builtins.seq guard {
-  crds = vmCrds // {
-    # ── prometheus-operator compat CRDs (converter input) ──────────────
-    # Same slim schemas as prometheus-operator/crds.nix; shipped here so the
-    # converter has something to watch when that package isn't installed.
-
-    serviceMonitors = mkVMOperatorCRD (
-      scope.crd.fromKind "ServiceMonitor" { spec.group = "monitoring.coreos.com"; }
-      |> scope.crd.withShortNames [ "smon" ]
-      |> scope.crd.withPrinterColumns ageColumn
-    );
-
-    podMonitors = mkVMOperatorCRD (
-      scope.crd.fromKind "PodMonitor" { spec.group = "monitoring.coreos.com"; }
-      |> scope.crd.withShortNames [ "pmon" ]
-      |> scope.crd.withPrinterColumns ageColumn
-    );
-
-    prometheusRules = mkVMOperatorCRD (
-      scope.crd.fromKind "PrometheusRule" { spec.group = "monitoring.coreos.com"; }
-      |> scope.crd.withShortNames [ "promrule" ]
-      |> scope.crd.withPrinterColumns ageColumn
-    );
-
-    probes = mkVMOperatorCRD (
-      scope.crd.fromKind "Probe" { spec.group = "monitoring.coreos.com"; }
-      |> scope.crd.withShortNames [ "prb" ]
-      |> scope.crd.withPrinterColumns ageColumn
-    );
-  };
+  crds = vmCrds // promCompatCrds;
 }

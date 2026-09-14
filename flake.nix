@@ -35,6 +35,8 @@
           kind = ./clusters/test-kind.nix;
           monitoring-helm = ./clusters/test-monitoring-helm.nix;
           monitoring-native = ./clusters/test-monitoring-native.nix;
+          victoria-metrics = ./clusters/test-victoria-metrics.nix;
+          victoria-metrics-crd-ref = ./clusters/test-victoria-metrics-crd-ref.nix;
 
           # Production clusters
           ludo = ./ludo/cluster.nix;

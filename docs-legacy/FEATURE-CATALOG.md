@@ -227,7 +227,20 @@ rather than a second one. Live on stage1 and stage2 since 2026-08-31.
   `prometheusServer` DI aliases, so every existing `kix.monitor` consumer
   works unchanged and the operator converts the results to VMServiceScrape
   and VMRule. Exposes the same `out.mkServiceMonitor` builders as
-  `prometheus-operator`.
+  `prometheus-operator`. On a cluster that already runs prometheus-operator,
+  those four CRDs already exist and applying a second version of them fails on
+  a field-ownership conflict; `prometheusOperatorCRDs = "reference"` emits
+  import markers that wait for the real ones instead, leaving the builders
+  unchanged. `convert.<kind>` turns each of the six
+  converters on or off, for the case where the VM side has no consumer for the
+  result. The compat CRD set is derived from it, so a converter can never run
+  without its CRD (which is a crashloop, not a config error); the four kinds
+  with an `out.mk*` builder keep their CRD either way, and `scrapeConfigs` and
+  `alertmanagerConfigs` default off because enabling one installs a CRD. The kinds with a consumer surface carry the real
+  upstream spec schema, vendored under the package's `schemas/` by
+  `scripts/vendor-vm-crd-schemas.py`, so a mistyped field is refused at apply
+  time; the kinds that exist only to satisfy the operator's startup indexers
+  keep the slim stub.
 - **`victoria-metrics-cluster`** — the VMCluster CR. HA defaults live in the
   package because the scorecard cannot lint operator-created pods:
   replicationFactor 2, three vmstorage, PodDisruptionBudgets, preferred

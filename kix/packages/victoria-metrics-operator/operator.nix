@@ -60,12 +60,14 @@ let
     )
   ]) vmResources;
 
-  promCompat = group "monitoring.coreos.com" [
-    "servicemonitors"
-    "podmonitors"
-    "prometheusrules"
-    "probes"
-  ];
+  # Same table as the compat CRDs (kinds.nix), for the same reason as
+  # vmResources above: a converter the operator may run and a grant to
+  # read its input cannot drift apart. Granted for every kind in the
+  # table rather than only the enabled ones, so flipping a converter on
+  # does not also need an RBAC change.
+  promCompat = group "monitoring.coreos.com" (
+    lib.mapAttrsToList (_: def: def.plural) (import ./kinds.nix).promCompatDefs
+  );
   apps = group "apps" [
     "daemonsets"
     "deployments"
@@ -313,10 +315,10 @@ in
       ++ config.extraArgs;
 
       # The prometheus-operator converter is the compat contract for the
-      # `prometheus` alias claim (v2_discussions/133 §5): pin every kind we
-      # ship a compat CRD for explicitly ON (upstream default, made
-      # load-bearing) and the kinds we don't ship explicitly OFF so the
-      # operator never watches a CRD that doesn't exist here.
+      # `prometheus` alias claim (v2_discussions/133 §5): every converter
+      # is pinned explicitly, from the `convert` options. Those decide
+      # which compat CRDs crds.nix renders, so the operator can never be
+      # told to watch a CRD that is not here.
       env = [
         {
           name = "POD_NAME";
@@ -327,34 +329,14 @@ in
           value = "victoria-metrics-operator";
         }
         {
-          name = "VM_ENABLEDPROMETHEUSCONVERTER_SERVICESCRAPE";
-          value = "true";
-        }
-        {
-          name = "VM_ENABLEDPROMETHEUSCONVERTER_PODMONITOR";
-          value = "true";
-        }
-        {
-          name = "VM_ENABLEDPROMETHEUSCONVERTER_PROMETHEUSRULE";
-          value = "true";
-        }
-        {
-          name = "VM_ENABLEDPROMETHEUSCONVERTER_PROBE";
-          value = "true";
-        }
-        {
-          name = "VM_ENABLEDPROMETHEUSCONVERTER_SCRAPECONFIG";
-          value = "false";
-        }
-        {
-          name = "VM_ENABLEDPROMETHEUSCONVERTER_ALERTMANAGERCONFIG";
-          value = "false";
-        }
-        {
           name = "VM_ENABLEDPROMETHEUSCONVERTEROWNERREFERENCES";
           value = lib.boolToString config.converterOwnerReferences;
         }
       ]
+      ++ lib.mapAttrsToList (name: def: {
+        name = "VM_ENABLEDPROMETHEUSCONVERTER_${def.env}";
+        value = lib.boolToString config.convert.${name};
+      }) (import ./kinds.nix).promCompatDefs
       ++ lib.optional (config.watchNamespaces != [ ]) {
         name = "WATCH_NAMESPACE";
         value = lib.concatStringsSep "," config.watchNamespaces;

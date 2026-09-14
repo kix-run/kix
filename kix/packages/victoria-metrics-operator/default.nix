@@ -28,6 +28,10 @@
   kix,
 }:
 
+let
+  inherit (import ./kinds.nix) promCompatDefs;
+in
+
 {
   meta = {
     version = "v0.74.1";
@@ -78,6 +82,33 @@
     # but never for its own Deployment — this emits a VMServiceScrape for
     # the operator's metrics Service.
     metrics = kix.options.monitor;
+    # Which prometheus-operator kinds the built-in converter turns into
+    # VM equivalents. One option per converter the operator has, generated
+    # from the same table that decides which compat CRDs ship
+    # (kinds.nix promCompatDefs), so a converter can never be switched on
+    # for a kind whose CRD is absent.
+    #
+    # The four with an out.mk* builder default on, which is what makes
+    # this package a drop-in for prometheus-operator. The two without one
+    # default off: turning one on adds its CRD, and a cluster with no
+    # ScrapeConfigs has no use for the machinery.
+    #
+    # Turn a converter off where the VM side has no consumer for the
+    # result. Running VM beside Prometheus with no vmalert, for instance,
+    # converts every PrometheusRule on the cluster into a VMRule that
+    # nothing evaluates, and those land in whatever namespace the source
+    # lives in. Turning one off does not delete what it already
+    # converted; the operator stops reconciling that kind and leaves the
+    # objects behind.
+    convert = lib.mapAttrs (
+      _: def:
+      lib.mkOption {
+        type = lib.types.bool;
+        default = def.convertByDefault;
+        description = "Convert ${def.kind} to its VictoriaMetrics equivalent.";
+      }
+    ) promCompatDefs;
+
     converterOwnerReferences = lib.mkOption {
       type = lib.types.bool;
       default = false;
@@ -86,6 +117,39 @@
         prometheus-operator sources so Kubernetes GC removes them together
         (VM_ENABLEDPROMETHEUSCONVERTEROWNERREFERENCES). Upstream default is
         false: the operator tracks and deletes converted objects itself.
+      '';
+    };
+    # Who installs the four prometheus-operator CRDs the converter watches
+    # (ServiceMonitor, PodMonitor, PrometheusRule, Probe).
+    #
+    # "declare" ships them from this package, as the slim schemas below.
+    # That is right where VictoriaMetrics is the only monitoring stack on
+    # the cluster.
+    #
+    # "reference" is for a cluster that already has them — prometheus-
+    # operator itself, usually installed by Helm. Kix emits an import
+    # marker per CRD and waits for it to be Established instead of
+    # declaring it. Deploying "declare" onto such a cluster stops on a
+    # field-ownership conflict, because kix's `.spec.versions` collides
+    # with the real one and helm and kubectl own it. Forcing that conflict
+    # would replace the upstream schemas with stubs for every
+    # ServiceMonitor on the cluster, so there is no safe default here to
+    # guess: say which cluster you are on.
+    #
+    # `out.mkServiceMonitor` and its siblings work the same either way —
+    # mkCRDRef returns the same builders mkCRD does. Choosing "reference"
+    # on a cluster that does NOT have the CRDs makes the deploy wait for
+    # them and time out, which is the visible failure, preferred over
+    # installing a second opinion about the schema.
+    prometheusOperatorCRDs = lib.mkOption {
+      type = lib.types.enum [
+        "declare"
+        "reference"
+      ];
+      default = "declare";
+      description = ''
+        Whether this package declares the prometheus-operator compat CRDs
+        or references ones already installed on the cluster.
       '';
     };
     watchNamespaces = lib.mkOption {

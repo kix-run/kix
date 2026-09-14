@@ -22,6 +22,81 @@
 # instead of at operator startup; the watch invariant has no
 # compile-time oracle beyond keeping this table == the chart bundle.
 {
+  # ── monitoring.coreos.com, the converter's input ─────────────────────
+  # The prometheus-operator kinds the operator's built-in converter can
+  # turn into VM equivalents. One entry per converter the operator has.
+  #
+  # `env` is the suffix of its VM_ENABLEDPROMETHEUSCONVERTER_* variable,
+  # and `builder` says whether the package exposes an out.mk* for the
+  # kind. That distinction decides when the CRD is needed:
+  #
+  #   builder = true   the CRD is part of this package's API surface, so
+  #                    it is always present. A cluster can still turn the
+  #                    converter off (VM beside Prometheus, where kix
+  #                    writes the objects but VM should ignore them).
+  #   builder = false  the CRD exists only to feed the converter, so it
+  #                    is present exactly when that converter is on.
+  #
+  # Deriving the CRDs from this table is what makes it impossible to
+  # enable a converter for a kind whose CRD is absent. That combination
+  # is not a config error, it is a slow crashloop: the controller's watch
+  # fails to sync and takes the manager down with it (same failure the VM
+  # table below guards against).
+  #
+  # `convertByDefault` is false for the two without builders. Turning one
+  # on adds a CRD, and a cluster that has no ScrapeConfigs should not be
+  # handed the machinery for them.
+  promCompatDefs = {
+    serviceMonitors = {
+      kind = "ServiceMonitor";
+      plural = "servicemonitors";
+      shortNames = [ "smon" ];
+      env = "SERVICESCRAPE";
+      builder = true;
+      convertByDefault = true;
+    };
+    podMonitors = {
+      kind = "PodMonitor";
+      plural = "podmonitors";
+      shortNames = [ "pmon" ];
+      env = "PODMONITOR";
+      builder = true;
+      convertByDefault = true;
+    };
+    prometheusRules = {
+      kind = "PrometheusRule";
+      plural = "prometheusrules";
+      shortNames = [ "promrule" ];
+      env = "PROMETHEUSRULE";
+      builder = true;
+      convertByDefault = true;
+    };
+    probes = {
+      kind = "Probe";
+      plural = "probes";
+      shortNames = [ "prb" ];
+      env = "PROBE";
+      builder = true;
+      convertByDefault = true;
+    };
+    scrapeConfigs = {
+      kind = "ScrapeConfig";
+      plural = "scrapeconfigs";
+      shortNames = [ "scfg" ];
+      env = "SCRAPECONFIG";
+      builder = false;
+      convertByDefault = false;
+    };
+    alertmanagerConfigs = {
+      kind = "AlertmanagerConfig";
+      plural = "alertmanagerconfigs";
+      shortNames = [ "amcfg" ];
+      env = "ALERTMANAGERCONFIG";
+      builder = false;
+      convertByDefault = false;
+    };
+  };
+
   # kind → { plural, version } for every CRD we ship in the VM group.
   # `consumer = true` marks kinds with a kix-side consumer surface
   # (out.mk* builder / sibling package); the rest exist only to satisfy
