@@ -65,9 +65,13 @@ let
   # read its input cannot drift apart. Granted for every kind in the
   # table rather than only the enabled ones, so flipping a converter on
   # does not also need an RBAC change.
-  promCompat = group "monitoring.coreos.com" (
-    lib.mapAttrsToList (_: def: def.plural) (import ./kinds.nix).promCompatDefs
-  );
+  promCompat = group "monitoring.coreos.com" promCompatPlurals;
+  promCompatPlurals = lib.mapAttrsToList (_: def: def.plural) (import ./kinds.nix).promCompatDefs;
+  # One grant per kind in the table. Listing them by hand here is what let
+  # the table grow two entries while the ClusterRole kept the original
+  # four, so the operator watched ScrapeConfig and was refused: a slow
+  # crashloop with the real cause six lines deep in the log.
+  promCompatRules = map (plural: promCompat.${plural} |> full) promCompatPlurals;
   apps = group "apps" [
     "daemonsets"
     "deployments"
@@ -126,13 +130,11 @@ let
       "${name}" =
         grant (
           vmKindRules
+          # Converter input — prometheus-operator compat objects, every
+          # kind in the table whether or not its converter is enabled, so
+          # flipping one on needs no RBAC change.
+          ++ promCompatRules
           ++ [
-            # Converter input — prometheus-operator compat objects
-            (promCompat.servicemonitors |> full)
-            (promCompat.podmonitors |> full)
-            (promCompat.prometheusrules |> full)
-            (promCompat.probes |> full)
-
             # Core resources the operator manages for operands
             (core.configmaps |> full)
             (core "configmaps/finalizers" |> allow [ "update" ])
