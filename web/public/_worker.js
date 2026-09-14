@@ -23,6 +23,24 @@
 
 const DOCS_PREFIX = '/docs/';
 
+// The docs root and the Diataxis quadrant roots are navigation pages:
+// their source is frontmatter only, so the `.md` twin is a bare heading
+// (`# How-to guides`, 17 bytes) while the HTML carries the sidebar
+// listing every child page. Serving the twin for these would hand an
+// agent less than the HTML does, and an agent with no list of pages
+// invents URLs. Serve HTML here and let the sidebar do the work.
+//
+// docs/src/components/Head.astro withholds its <link rel="alternate">
+// for the same routes. Keep the two lists in step.
+const NAVIGATION_ONLY = new Set([
+  '/docs',
+  '/docs/tutorials',
+  '/docs/how-to',
+  '/docs/reference',
+  '/docs/explanation',
+  '/docs/v0.1',
+]);
+
 /**
  * True when the client explicitly asked for Markdown.
  *
@@ -65,9 +83,12 @@ function withVaryAccept(response) {
   });
 }
 
-/** A docs page that has a Markdown twin, as opposed to the twin itself. */
+/** A docs page with a Markdown twin worth serving, not the twin itself. */
 function isNegotiablePage(url) {
-  return url.pathname.startsWith(DOCS_PREFIX) && !url.pathname.endsWith('.md');
+  if (!url.pathname.startsWith(DOCS_PREFIX) || url.pathname.endsWith('.md')) {
+    return false;
+  }
+  return !NAVIGATION_ONLY.has(url.pathname.replace(/\/+$/, ''));
 }
 
 export default {

@@ -7,8 +7,17 @@
 // OpenCode) are served by web/public/_worker.js and never need it.
 //
 // starlight-llms-txt emits a sibling `<page>.md` for every route except
-// 404, hence the guard below.
+// 404, hence the first guard below.
+//
+// The second guard covers the docs root and the Diataxis quadrant roots.
+// Those pages are frontmatter only, so their twin is a bare heading while
+// the HTML carries the sidebar listing every child page. Pointing an
+// agent at the twin would give it less than the HTML does. The same
+// routes are excluded from content negotiation in web/public/_worker.js;
+// keep the two lists in step.
 import Default from '@astrojs/starlight/components/Head.astro';
+
+const NAVIGATION_ONLY = ['', '/tutorials', '/how-to', '/reference', '/explanation', '/v0.1'];
 
 // `import.meta.env.BASE_URL` is the configured `base` ("/docs/"), so the
 // mapping stays correct if the docs ever move off that prefix.
@@ -16,9 +25,10 @@ const base = import.meta.env.BASE_URL.replace(/\/+$/, '');
 const path = Astro.url.pathname.replace(/\/+$/, '');
 
 const hasMarkdownTwin = path !== `${base}/404`;
-const markdownHref = hasMarkdownTwin
-  ? new URL(path === base ? `${base}/index.md` : `${path}.md`, Astro.site).href
-  : null;
+const isNavigationOnly = NAVIGATION_ONLY.includes(path.slice(base.length));
+
+const markdownHref =
+  hasMarkdownTwin && !isNavigationOnly ? new URL(`${path}.md`, Astro.site).href : null;
 ---
 
 <Default><slot /></Default>

@@ -37,6 +37,9 @@ export default defineConfig({
       // (web/src/index.css).
       customCss: ['@fontsource-variable/geist', './src/styles/lagoon.css'],
       components: {
+        // Adds <link rel="alternate" type="text/markdown"> pointing at
+        // the page's `.md` twin, which is how Codex CLI discovers it.
+        Head: './src/components/Head.astro',
         // Replace the default theme dropdown (laptop icon labelled
         // "Auto") with three explicit Light/Dark/Auto icon buttons.
         ThemeSelect: './src/components/ThemeSelect.astro',

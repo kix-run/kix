@@ -191,3 +191,46 @@ private kixpkgs repo from github.
 - [`starlight-links-validator`](https://starlight-links-validator.vercel.app/) — fails the build on broken internal links. Links must include the `/docs/` base prefix; see `docs/CLAUDE.md` for the convention.
 - [`starlight-github-alerts`](https://starlight-github-alerts.netlify.app/) — renders GitHub-style `> [!NOTE]` / `> [!WARNING]` blocks as Starlight asides.
 - [`starlight-page-actions`](https://starlight-page-actions.dlcastillop.com/) — "Copy as Markdown" + "Open in ChatGPT/Claude" + share menu in the page header.
+
+## Agent-facing surface
+
+Coding agents read the site far more cheaply as Markdown than as HTML: a
+typical how-to page is about 80 KB of HTML against about 2 KB of Markdown.
+`starlight-llms-txt` emits a `.md` twin for every route except `404`, and
+three mechanisms point agents at them.
+
+**Content negotiation.** `web/public/_worker.js` serves the `.md` twin when
+the request carries `Accept: text/markdown`, and adds `Vary: Accept` so caches
+keep the two representations apart. Cloudflare Pages runs that file as the
+site Worker whenever it is present in the deployed directory, and does not
+publish it as a static asset. Claude Code, Cursor, GitHub Copilot and OpenCode
+all send the header already.
+
+**`<link rel="alternate">`.** `src/components/Head.astro` overrides Starlight's
+`Head` to advertise the twin. Codex CLI ignores `Accept` and reads this tag
+instead, so it is the only route by which Codex finds the Markdown.
+
+**`llms.txt`.** `web/public/llms.txt` is the root index, which is where agents
+look first. It links the whole-site `llms-small.txt` and `llms-full.txt` that
+the plugin generates under `/docs/`, the sitemap, and each Diátaxis section.
+Listing real page URLs matters: agents given no index invent paths and 404.
+
+**Sitemap.** `@astrojs/sitemap` covers only the docs, and emits them under
+`/docs/`. `web/public/sitemap-index.xml` is the whole-site index that
+`robots.txt` points at: it lists `/sitemap-0.xml` (the landing page) and
+`/docs/sitemap-0.xml` (all 558 documentation URLs). Adding a page outside
+`docs/` means adding it to `web/public/sitemap-0.xml` by hand. `/alt1/` and
+`/alt2/` are left out on purpose so they do not compete with the real landing
+page.
+
+Check the whole surface against a deployed URL with:
+
+```bash
+curl -sI -H 'Accept: text/markdown' https://kix.run/docs/tutorials/ | grep -i 'content-type\|vary'
+curl -s https://kix.run/docs/tutorials/ | grep 'rel="alternate"'
+curl -s https://kix.run/llms.txt | head -3
+```
+
+Note that `llms.txt` is close to useless for AI *search* crawlers, which
+overwhelmingly ignore it. It earns its place here as a map for coding agents,
+which is a separate audience with separate behaviour.

@@ -2,23 +2,24 @@
 
 > Kix is a Kubernetes compiler. Describe your whole stack in one definition; Kix compiles it into a running cluster that matches what you wrote. No Kubernetes specialist required.
 
-Every page below is available as Markdown by appending `.md` to its URL, and
-the same URLs honour `Accept: text/markdown`. The `.md` links are given
-directly here so that no guessing is required.
+Every documentation page is available as Markdown. Append `.md` to any page
+URL, or send `Accept: text/markdown` to the page URL itself. The Markdown is
+generated from the same source as the HTML, so the two never disagree.
 
-## Documentation
+## Whole-site documentation
 
-- [Tutorials](https://kix.run/docs/tutorials.md): learn Kix by building a cluster from scratch
-- [How-to guides](https://kix.run/docs/how-to.md): task-oriented recipes for packages, clusters, platform capabilities, and day-two operations
-- [Reference](https://kix.run/docs/reference.md): the kix API, CLI commands, and package options
-- [Explanation](https://kix.run/docs/explanation.md): how Kix works and why it is built this way
+- [Abridged documentation](https://kix.run/docs/llms-small.txt): every page, with non-essential content removed
+- [Complete documentation](https://kix.run/docs/llms-full.txt): every page in full
 
-## Whole-site documentation sets
+## Finding a specific page
 
-- [Abridged documentation](https://kix.run/docs/llms-small.txt): a compact version with non-essential content removed
-- [Complete documentation](https://kix.run/docs/llms-full.txt): the full documentation as a single file
+- [Sitemap](https://kix.run/sitemap-index.xml): the complete list of URLs for the whole site
+- [Tutorials](https://kix.run/docs/tutorials/): learn Kix by building a cluster from scratch
+- [How-to guides](https://kix.run/docs/how-to/): task-oriented recipes for packages, clusters, platform capabilities, and day-two operations
+- [Reference](https://kix.run/docs/reference/): the kix API, CLI commands, and package options
+- [Explanation](https://kix.run/docs/explanation/): how Kix works and why it is built this way
 
 ## Notes
 
-- The Markdown is generated from the same source as the HTML documentation, so the two never disagree.
-- Prefer a section index above over the whole-site sets when you only need part of the documentation. The complete set is large.
+- The four section links above are navigation pages. Their sidebars list every page in that section, so request them as HTML.
+- Prefer the abridged set over the complete set unless you need full detail. The complete set is large.

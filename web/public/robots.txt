@@ -1,7 +1,7 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://kix.run/docs/sitemap-index.xml
+Sitemap: https://kix.run/sitemap-index.xml
 
 # Machine-readable index of the documentation: https://kix.run/llms.txt
 # Every docs page is also available as Markdown, either by appending
