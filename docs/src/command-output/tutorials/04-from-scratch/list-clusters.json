@@ -9,9 +9,9 @@
   "commands": [
     {
       "command": "kix list clusters",
-      "stdout": " NAME               \n 02-hello-world     \n 04-from-scratch    \n 06-service-dep     \n 08-namespace-deps  \n 09-typed-options   \n 10-reuse-packages  \n 19-scorecards      \n how-to-application \n",
+      "stdout": " NAME                      \n 02-hello-world            \n 04-from-scratch           \n 06-service-dep            \n 08-namespace-deps         \n 09-typed-options          \n 10-reuse-packages         \n 19-scorecards             \n how-to-application        \n how-to-auto-instantiation \n how-to-composition        \n how-to-fragments          \n how-to-multi-env          \n how-to-platform-gateway   \n how-to-platform-ingress   \n how-to-platform-secrets   \n",
       "stderr": "",
-      "stdoutDrift": "02-hello-world\n04-from-scratch\n06-service-dep\n08-namespace-deps\n09-typed-options\n10-reuse-packages\n19-scorecards\nNAME\nhow-to-application\n",
+      "stdoutDrift": "02-hello-world\n04-from-scratch\n06-service-dep\n08-namespace-deps\n09-typed-options\n10-reuse-packages\n19-scorecards\nNAME\nhow-to-application\nhow-to-auto-instantiation\nhow-to-composition\nhow-to-fragments\nhow-to-multi-env\nhow-to-platform-gateway\nhow-to-platform-ingress\nhow-to-platform-secrets\n",
       "stderrDrift": "",
       "exitCode": 0
     }

@@ -9,7 +9,7 @@
   "commands": [
     {
       "command": "kix check 06-service-dep",
-      "stdout": "error: no 'backend' found in cluster for namespace 'tutorial-06'                                                                                           \n",
+      "stdout": "error: no 'backend' found in cluster for namespace 'tutorial-06'                                                                                         \n",
       "stderr": "",
       "stdoutDrift": "error: no 'backend' found in cluster for namespace 'tutorial-06'\n",
       "stderrDrift": "",
