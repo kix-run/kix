@@ -15,24 +15,11 @@
         "type": "github"
       }
     },
-    "crane_2": {
-      "locked": {
-        "lastModified": 1775839657,
-        "narHash": "sha256-SPm9ck7jh3Un9nwPuMGbRU04UroFmOHjLP56T10MOeM=",
-        "owner": "ipetkov",
-        "repo": "crane",
-        "rev": "7cf72d978629469c4bd4206b95c402514c1f6000",
-        "type": "github"
-      },
-      "original": {
-        "owner": "ipetkov",
-        "repo": "crane",
-        "type": "github"
-      }
-    },
     "kix-examples": {
       "inputs": {
-        "kixpkgs": "kixpkgs",
+        "kixpkgs": [
+          "kixpkgs"
+        ],
         "nixpkgs": "nixpkgs"
       },
       "locked": {
@@ -52,29 +39,6 @@
     "kixpkgs": {
       "inputs": {
         "crane": "crane",
-        "nixpkgs": [
-          "kix-examples",
-          "nixpkgs"
-        ]
-      },
-      "locked": {
-        "lastModified": 1789068707,
-        "narHash": "sha256-aXiQ4IWL2o/X4k1ZMLapbHKxLdaYDNyBi6qvaigDXLo=",
-        "ref": "refs/heads/main",
-        "rev": "9dcf5b3e33b728ef3fc76a693e4feda2921b1913",
-        "revCount": 586,
-        "type": "git",
-        "url": "https://github.com/kix-run/kixpkgs"
-      },
-      "original": {
-        "owner": "adamcharnock",
-        "repo": "kixpkgs",
-        "type": "github"
-      }
-    },
-    "kixpkgs_2": {
-      "inputs": {
-        "crane": "crane_2",
         "nixpkgs": [
           "nixpkgs"
         ]
@@ -124,7 +88,7 @@
     "root": {
       "inputs": {
         "kix-examples": "kix-examples",
-        "kixpkgs": "kixpkgs_2",
+        "kixpkgs": "kixpkgs",
         "nixpkgs": "nixpkgs_2"
       }
     }
