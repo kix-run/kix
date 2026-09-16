@@ -198,8 +198,29 @@ rec {
       optionDefaults = lib.filterAttrs (_: v: v != null) (
         lib.mapAttrs (_: opt: if opt ? default then opt.default else null) packageOptions
       );
+
+      # The post-eval recursive merge preserves nested defaults for
+      # types.anything options. Do not reintroduce those defaults when the
+      # instance explicitly used mkForce on the whole option.
+      forcedOptionNames = lib.unique (
+        builtins.concatMap (
+          value:
+          if builtins.isAttrs value then
+            builtins.attrNames (
+              lib.filterAttrs (
+                _: optionValue:
+                builtins.isAttrs optionValue
+                && (optionValue._type or "") == "override"
+                && (optionValue.priority or null) == (lib.mkForce null).priority
+              ) value
+            )
+          else
+            [ ]
+        ) configValues
+      );
+      mergeableDefaults = removeAttrs optionDefaults forcedOptionNames;
     in
-    builtins.seq _lockedCheck (lib.recursiveUpdate optionDefaults evaluated);
+    builtins.seq _lockedCheck (lib.recursiveUpdate mergeableDefaults evaluated);
 
   normalizePackage =
     { package, scope }:

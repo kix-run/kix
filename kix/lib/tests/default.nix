@@ -946,6 +946,30 @@ let
   # ------------------------------------------------------------------- tests
 
   tests = {
+    t00-mkforce-replaces-anything-default =
+      let
+        config = eval.evaluateInstanceConfig {
+          packageOptions.issuers = lib.mkOption {
+            type = lib.types.attrsOf lib.types.anything;
+            default = {
+              production.kind = "acme";
+              staging.kind = "acme";
+            };
+          };
+          instCfg.config.imports = [
+            {
+              issuers = lib.mkForce {
+                local.kind = "selfSigned";
+              };
+            }
+          ];
+        };
+      in
+      config.issuers == {
+        local.kind = "selfSigned";
+      }
+      || throw "mkForce did not replace the complete types.anything option default";
+
     # netpol disabled: no policies of any kind, interceptor pipeline inert.
     t01-netpol-off-no-cnps =
       let

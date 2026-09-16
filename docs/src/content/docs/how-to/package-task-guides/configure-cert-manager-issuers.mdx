@@ -1,4 +1,76 @@
 ---
 title: "Configure cert-manager issuers"
-description: TODO
+description: "Install cert-manager and configure a ClusterIssuer for ACME DNS-01 certificates or local self-signed certificates."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import acmeClusterIssuer from '/src/snippets/clusters/test-doc-how-tos/acmeClusterIssuer.json';
+import selfSignedClusterIssuer from '/src/snippets/ludo/variants/cluster-kind-tls/selfSignedClusterIssuer.json';
+
+Kix separates the cert-manager controller from issuer configuration. Install
+`cert-manager`, then add one `cluster-issuers` instance to create the
+ClusterIssuer resources used throughout the cluster.
+
+## Configure an ACME issuer
+
+For public certificates, configure the ACME server, account email, the name of
+the account-key Secret that cert-manager will create, and Cloudflare DNS-01
+credentials:
+
+<Snippet {...acmeClusterIssuer} />
+
+The example replaces the package defaults with one issuer. Keep
+`lib.mkForce`: `issuers` is an attrset option, so an ordinary assignment would
+merge with the default production and staging entries.
+
+Before deployment, create the `cloudflare-api-token` Secret in the
+`cert-manager` namespace with an `api-token` key. The cert-manager controller
+uses its own namespace for Secrets referenced by a ClusterIssuer. The
+`cluster-issuers` package currently passes this Secret name to cert-manager; it
+does not create or verify the Secret.
+
+Use [a Kix-managed Secret](/docs/how-to/platform-capabilities/use-kix-managed-secrets/),
+[a SOPS-backed Secret](/docs/how-to/platform-capabilities/use-sops-backed-secrets-if-production-ready/),
+or an externally managed Secret. Restrict `dnsZones` to the zones this token
+may update.
+
+`mainIssuer` must name one entry in `issuers`. Kix exports that issuer as the
+`clusterIssuer` dependency used by TLS-capable packages.
+
+## Configure a self-signed issuer
+
+For a local cluster, replace the issuer set with a self-signed issuer:
+
+<Snippet {...selfSignedClusterIssuer} />
+
+A self-signed issuer tests certificate creation and TLS wiring without an ACME
+account or DNS provider. Clients will not trust its certificates unless you
+install the generated trust material, so do not use this configuration for a
+public service.
+
+## Check and deploy
+
+Evaluate the cluster before applying it:
+
+<Command commands={["kix check doc-how-tos"]} />
+
+Deploy cert-manager, its CRDs, and the ClusterIssuer:
+
+<Command commands={["kix deploy doc-how-tos"]} />
+
+After deployment, inspect issuer readiness:
+
+<Command
+  commands={[
+    "kubectl get clusterissuers",
+    "kubectl describe clusterissuer letsencrypt-production",
+  ]}
+/>
+
+Do not proceed to application TLS until the selected issuer reports `Ready`.
+For ACME failures, check the credential key, zone restriction, DNS delegation,
+and cert-manager controller logs.
+
+See [Add TLS through cluster issuers](/docs/how-to/platform-capabilities/add-tls-through-cluster-issuers/)
+to use the selected issuer from an application package.

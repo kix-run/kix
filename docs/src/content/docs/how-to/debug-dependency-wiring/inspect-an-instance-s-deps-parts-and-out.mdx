@@ -1,4 +1,94 @@
 ---
 title: "Inspect an instance's deps, parts, and `out`"
-description: TODO
+description: "Inspect an instance's rendered resources, dependency edges, package parts, and exported values."
 ---
+
+import Command from '/src/components/Command.astro';
+import inspect from '/src/command-output/how-to/application-basics/inspect.json';
+import graphTree from '/src/command-output/how-to/dependency-graph/graph-tree.json';
+
+Use the CLI for the rendered resource inventory and dependency graph. Use
+`nix eval` when you need the package author's `raw` parts or exported `out`
+attributes.
+
+## Inspect rendered resources
+
+Start with `kix inspect`:
+
+<Command expandable {...inspect} />
+
+This output lists resources by namespace and kind. It does not show package
+parts, resolved dependency bindings, or `out` values.
+
+## Inspect dependency edges
+
+Use `kix graph` to see the dependencies that affect deployment ordering:
+
+<Command expandable {...graphTree} />
+
+The graph is built from rendered manifests. It includes references carried by
+resource values and explicit `requires` or `extraDeps` edges. A package build
+argument by itself does not create an edge; the edge appears when a resource
+uses an output from that dependency.
+
+Use JSON when you need to filter the graph by resource fields:
+
+<Command
+  commands={[
+    "kix graph how-to-application --format json | jq '.nodes[] | select(.namespace == \"how-to-app\" and .name == \"production\")'",
+  ]}
+  cwd="kix-examples/"
+/>
+
+## Inspect package parts
+
+`buildCluster` exposes evaluated instances under
+`legacyPackages.<system>.kixClusters`. The instance's `raw` attribute is the
+parts attrset returned by its package build function.
+
+List the parts without forcing every resource into JSON:
+
+<Command
+  commands={[
+    "system=$(nix eval --impure --raw --expr builtins.currentSystem)",
+    "nix eval --json \".#legacyPackages.${system}.kixClusters.how-to-application\" --apply 'cluster: builtins.attrNames cluster.instances.\"how-to-app\".production.raw'",
+  ]}
+  cwd="kix-examples/"
+/>
+
+For the example instance, the result includes `content`, `deployment`,
+`service`, `healthCheck`, and `root`. Use a quoted attribute name whenever a
+namespace or instance name contains a hyphen.
+
+## Inspect exported values
+
+List the public values on the package root:
+
+<Command
+  commands={[
+    "system=$(nix eval --impure --raw --expr builtins.currentSystem)",
+    "nix eval --json \".#legacyPackages.${system}.kixClusters.how-to-application\" --apply 'cluster: builtins.attrNames cluster.instances.\"how-to-app\".production.out'",
+  ]}
+  cwd="kix-examples/"
+/>
+
+Then evaluate one serializable value directly:
+
+<Command
+  commands={[
+    "system=$(nix eval --impure --raw --expr builtins.currentSystem)",
+    "nix eval --raw \".#legacyPackages.${system}.kixClusters.how-to-application\" --apply 'cluster: cluster.instances.\"how-to-app\".production.out.name'",
+  ]}
+  cwd="kix-examples/"
+/>
+
+Some `out` attributes are functions or carry Nix string context, so the whole
+attrset may not serialize. List its keys first, then evaluate the scalar value
+you need.
+
+:::note[What “deps” means here]
+The evaluated instance view does not expose a separate resolved-dependencies
+attrset. Inspect `kix graph` for dependency edges that reached manifests. Read
+the package build arguments and the cluster's `instances.*.*.deps` settings
+when you need to trace how a dependency name resolved to its provider.
+:::

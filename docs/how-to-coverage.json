@@ -100,7 +100,11 @@
     {
       "page": "adopt-existing-resources/shadow-a-flavor-provided-import-with-a-managed-package",
       "scenario": "adoption",
-      "status": "planned"
+      "status": "implemented",
+      "snippets": [
+        "managedStorageClassPackage",
+        "shadowPlatformStorage"
+      ]
     },
     {
       "page": "adopt-existing-resources/take-ownership-of-helm-managed-resources",
@@ -299,7 +303,11 @@
     {
       "page": "debug-dependency-wiring/inspect-an-instance-s-deps-parts-and-out",
       "scenario": "dependency-wiring",
-      "status": "planned"
+      "status": "implemented",
+      "offlineCaptures": [
+        "how-to/application-basics/inspect",
+        "how-to/dependency-graph/graph-tree"
+      ]
     },
     {
       "page": "debug-dependency-wiring/use-aliases-and-default-aliases",
@@ -484,7 +492,11 @@
     {
       "page": "package-task-guides/configure-cert-manager-issuers",
       "scenario": "package-stacks",
-      "status": "planned"
+      "status": "implemented",
+      "snippets": [
+        "acmeClusterIssuer",
+        "selfSignedClusterIssuer"
+      ]
     },
     {
       "page": "package-task-guides/deploy-a-python-app",
@@ -616,7 +628,13 @@
     {
       "page": "platform-capabilities/add-tls-through-cluster-issuers",
       "scenario": "platform",
-      "status": "planned"
+      "status": "implemented",
+      "snippets": [
+        "exposureOption",
+        "exposureBuildEntry",
+        "acmeClusterIssuer",
+        "tlsApplicationInstance"
+      ]
     },
     {
       "page": "platform-capabilities/auto-monitor-a-service",
@@ -636,7 +654,12 @@
     {
       "page": "platform-capabilities/configure-storage-classes-and-pvcs",
       "scenario": "platform",
-      "status": "planned"
+      "status": "implemented",
+      "snippets": [
+        "managedStorageClassPackage",
+        "shadowPlatformStorage",
+        "configuredPersistentVolumeClaim"
+      ]
     },
     {
       "page": "platform-capabilities/declare-platform-intents-for-non-kix-managed-pods",

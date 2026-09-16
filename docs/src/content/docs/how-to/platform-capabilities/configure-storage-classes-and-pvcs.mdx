@@ -1,4 +1,87 @@
 ---
 title: "Configure storage classes and PVCs"
-description: TODO
+description: "Provide a default StorageClass through dependency injection and configure PVC instances that consume it."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import managedStorageClassPackage from '/src/snippets/clusters/test-doc-how-tos/managedStorageClassPackage.json';
+import shadowPlatformStorage from '/src/snippets/clusters/test-doc-how-tos/shadowPlatformStorage.json';
+import configuredPersistentVolumeClaim from '/src/snippets/clusters/test-doc-how-tos/configuredPersistentVolumeClaim.json';
+
+Kix models storage in two layers. A cluster-level provider exports the default
+StorageClass name, and namespace-scoped `persistent-volume-claim` instances
+request volumes from that class. Application packages consume the claims
+through a `storage` dependency.
+
+## Decide whether the flavor is sufficient
+
+Provider flavors such as GKE, EKS, and kind expose their platform default as a
+`storageClasses` import. If that class has the provisioner, binding mode,
+reclaim policy, and access modes you need, use it directly and create only the
+PVC instance below.
+
+Add a managed provider when the cluster must create its own StorageClass or
+use a different default.
+
+## Define a StorageClass provider
+
+Create a package that renders the StorageClass, claims the `storageClasses`
+role, and exports `out.storageClassName`:
+
+<Snippet {...managedStorageClassPackage} />
+
+Choose the `provisioner`, `parameters`, `reclaimPolicy`,
+`volumeBindingMode`, and `allowVolumeExpansion` values supported by the CSI
+driver installed in the target cluster. Creating a StorageClass does not
+install its provisioner.
+
+The example uses `kubernetes.io/no-provisioner` only to demonstrate the Kix
+contract. A claim using it needs a matching statically provisioned volume.
+
+## Add the provider
+
+Add one managed provider to the cluster:
+
+<Snippet {...shadowPlatformStorage} />
+
+Because the package claims the `storageClasses` role, consumers resolve it by
+that name. On a flavor with a shadowable platform storage import, the managed
+provider takes precedence.
+
+Kix rejects multiple managed providers for the same role. To offer several
+classes, render them from one provider and choose which name it exports as the
+default.
+
+## Configure a PVC
+
+Create a `persistent-volume-claim` instance in the application's namespace:
+
+<Snippet {...configuredPersistentVolumeClaim} />
+
+With `storageClassName` omitted, the package reads the name exported by the
+`storageClasses` provider. Set `config.storageClassName` when this particular
+claim should use a non-default class. An explicit value takes precedence over
+the dependency.
+
+Select only access modes supported by the provider. `ReadWriteOnce` is common
+for block storage; `ReadWriteMany` requires a provider that supports shared
+mounts.
+
+## Check the rendered resources
+
+Evaluate the cluster and inspect the StorageClass and claim together:
+
+<Command
+  commands={[
+    "kix check doc-how-tos",
+    "kix build doc-how-tos --output json | jq '.[] | select(.kind == \"StorageClass\" or .kind == \"PersistentVolumeClaim\") | {kind, name: .metadata.name, spec}'",
+  ]}
+/>
+
+Changing a bound claim's StorageClass is normally an immutable, stateful
+migration. Review the diff and the storage provider's reclaim behavior before
+deploying that change.
+
+See [Provision persistent storage](/docs/how-to/package-task-guides/provision-persistent-storage/)
+for mounting the resulting claim into an application package.

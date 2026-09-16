@@ -46,13 +46,13 @@ Use this command when you need to confirm that:
 
 ## Inspect the cluster in more detail
 
-`list packages` is intentionally compact. Use `inspect` to see package parts,
-dependencies, and exported outputs:
+`list packages` is intentionally compact. Use `inspect` to see the rendered
+resource inventory:
 
 <Command expandable {...inspect} />
 
-Use `graph` when the relationship between instances or resources is the main
-thing you need to investigate.
+Use `graph` when you need dependency edges. The evaluated cluster view exposes
+package parts and exported outputs.
 
 :::note[Next steps]
 See [Inspect an instance's deps, parts, and `out`](/docs/how-to/debug-dependency-wiring/inspect-an-instance-s-deps-parts-and-out/)

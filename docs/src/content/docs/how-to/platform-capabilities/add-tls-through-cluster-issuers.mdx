@@ -1,4 +1,82 @@
 ---
 title: "Add TLS through cluster issuers"
-description: TODO
+description: "Have Kix annotate an Ingress for cert-manager and create its TLS configuration from the cluster's selected issuer."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import exposureOption from '/src/snippets/how-to/platform/exposure-app/exposureOption.json';
+import exposureBuildEntry from '/src/snippets/how-to/platform/exposure-app/exposureBuildEntry.json';
+import acmeClusterIssuer from '/src/snippets/clusters/test-doc-how-tos/acmeClusterIssuer.json';
+import tlsApplicationInstance from '/src/snippets/clusters/test-doc-how-tos/tlsApplicationInstance.json';
+
+When a package uses `kix.expose`, Kix can add TLS to its Ingress from the
+cluster's `clusterIssuer` dependency. cert-manager then creates and renews the
+certificate Secret named by that Ingress.
+
+This path requires an ingress-nginx provider and a ready ClusterIssuer. Gateway
+API listeners manage TLS separately and do not use this integration.
+
+## Make the package exposable
+
+Declare the standard ingress options:
+
+<Snippet {...exposureOption} />
+
+Add `kix.expose` to the package build and point it at the Service part:
+
+<Snippet {...exposureBuildEntry} />
+
+`kix.expose` has optional dependencies on `ingressNginx` and
+`clusterIssuer`. With ingress-nginx alone it emits an HTTP Ingress. When a
+ClusterIssuer is also available, it adds:
+
+- `cert-manager.io/cluster-issuer` with the selected issuer name.
+- An Ingress TLS entry for the configured host.
+- A Secret name of `<instance>-tls` unless the package supplies another
+  tracked TLS Secret.
+
+## Add the issuer to the cluster
+
+Install cert-manager and configure the issuer:
+
+<Snippet {...acmeClusterIssuer} />
+
+The `cluster-issuers` package declares `clusterIssuer` as a default alias, so
+TLS-capable packages resolve it without per-application `deps` entries.
+
+See [Configure cert-manager issuers](/docs/how-to/package-task-guides/configure-cert-manager-issuers/)
+for the credential and self-signed configurations.
+
+## Set the application host
+
+Configure the application hostname:
+
+<Snippet {...tlsApplicationInstance} />
+
+If `config.ingress.host` is null, `kix.expose` can derive
+`<instance>.<cluster.domain>` when the cluster sets `cluster.domain`. Set the
+host explicitly when DNS or certificate policy requires a particular name.
+
+## Verify the generated Ingress
+
+Check the cluster, then inspect the Ingress before deployment:
+
+<Command
+  commands={[
+    "kix check doc-how-tos",
+    "kix build doc-how-tos --output json | jq '.[] | select(.kind == \"Ingress\") | {name: .metadata.name, annotations: .metadata.annotations, tls: .spec.tls}'",
+  ]}
+/>
+
+After deployment, verify the Certificate and Secret created by cert-manager:
+
+<Command
+  commands={[
+    "kubectl -n apps get certificate,secret",
+    "kubectl -n apps describe certificate web-tls",
+  ]}
+/>
+
+The Ingress and its TLS Secret must be in the same namespace. Kix validates
+that constraint when a package passes a Secret resource to `kix.expose`.

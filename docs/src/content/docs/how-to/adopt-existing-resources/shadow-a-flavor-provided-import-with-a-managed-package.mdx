@@ -1,4 +1,76 @@
 ---
 title: "Shadow a flavor-provided import with a managed package"
-description: TODO
+description: "Replace a flavor's weak infrastructure default with a Kix-managed provider for the same role."
 ---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import managedStorageClassPackage from '/src/snippets/clusters/test-doc-how-tos/managedStorageClassPackage.json';
+import shadowPlatformStorage from '/src/snippets/clusters/test-doc-how-tos/shadowPlatformStorage.json';
+
+Flavors can describe infrastructure that already exists in the target cluster
+as imports. These imports are weak providers: a managed package that claims the
+same infrastructure role takes precedence during dependency resolution.
+
+This guide replaces the default StorageClass supplied by the `kind` flavor.
+The same pattern applies to another flavor import whose role binding is
+`shadowable`.
+
+## Create a managed provider
+
+The replacement package must claim the same registered role as the import and
+satisfy that role's output contract:
+
+<Snippet {...managedStorageClassPackage} />
+
+The `storageClasses` role requires `out.storageClassName`. PVC packages use
+that value when they do not set a class explicitly.
+
+Use a provisioner and parameters supported by the target cluster. The example
+uses a static local provisioner to keep the package small; it is not a general
+purpose dynamic storage configuration.
+
+## Add the managed instance
+
+Add the provider as an ordinary cluster instance:
+
+<Snippet {...shadowPlatformStorage} />
+
+The `kind` flavor also declares a `platform-storage` import for the
+`storageClasses` role. Kix selects the managed `storage` instance and leaves
+the imported provider out of dependency resolution. Consumers do not need
+individual `deps` overrides.
+
+Shadowing changes which provider Kix packages receive. It does not adopt,
+modify, or delete the infrastructure represented by the flavor import.
+
+## Check the replacement
+
+Evaluate the cluster and inspect the dependency graph:
+
+<Command
+  commands={[
+    "kix check doc-how-tos",
+    "kix graph doc-how-tos --format tree",
+  ]}
+/>
+
+The generated PVC should depend on the managed StorageClass, not on the
+flavor's import marker. Render the relevant resources when you want to confirm
+the selected name:
+
+<Command
+  commands={[
+    "kix build doc-how-tos --output json | jq '.[] | select(.kind == \"StorageClass\" or .kind == \"PersistentVolumeClaim\") | {kind, name: .metadata.name, storageClassName: .spec.storageClassName}'",
+  ]}
+/>
+
+:::caution[Exclusive roles cannot be shadowed]
+If the flavor declares the role `exclusive`, Kix rejects a managed provider.
+An exclusive binding means the environment owns that capability. Change the
+binding to `absent` only when the environment's provider has genuinely been
+disabled.
+:::
+
+See [Configure storage classes and PVCs](/docs/how-to/platform-capabilities/configure-storage-classes-and-pvcs/)
+for the provider and consumer configuration together.
