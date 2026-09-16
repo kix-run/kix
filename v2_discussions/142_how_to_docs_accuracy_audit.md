@@ -130,9 +130,10 @@ it without a stateful migration gate. `prunable()` excludes only
   permitted by `check-how-to-coverage.mjs:50-54`. Across the site, 180 pages
   have `description: TODO`, mostly under `reference/`. **Decision: leave
   as-is for now.**
-- `docs/flake.lock` pins kix-examples to `refs/heads/docs/how-to-application-scenario`;
-  PR #1 has been open since 2026-09-09. The published guides therefore depend
-  on examples from an unmerged branch.
+- `docs/flake.lock` pinned kix-examples to
+  `refs/heads/docs/how-to-application-scenario`, with PR #1 open since
+  2026-09-09, so the published guides depended on an unmerged branch. Fixed
+  in phase 2: the PR is merged and the lock follows the default branch.
 
 ## Product bugs surfaced
 
