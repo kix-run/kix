@@ -3107,7 +3107,14 @@
       }
       {
         capture = "annotations";
-        shell = "grep -rn 'kix.run/\\(identity-hash\\|depends-on\\|package\\)' ./audit-export/ | head -8";
+        # No `| head`: steps run under `bash -o pipefail`, so when head
+        # closes the pipe early grep dies on EPIPE and the pipeline exits
+        # 2, failing the capture. An interactive shell hides this, because
+        # there the pipeline takes head's status, which is why the command
+        # is fine for a reader and why this passed on macOS and failed on
+        # the Linux runner. The page renders it with `<Command expandable>`,
+        # so it does not need truncating.
+        shell = "grep -rn 'kix.run/\\(identity-hash\\|depends-on\\|package\\)' ./audit-export/";
       }
       {
         capture = "internal-crs";
