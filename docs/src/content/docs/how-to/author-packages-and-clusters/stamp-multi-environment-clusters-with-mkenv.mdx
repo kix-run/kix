@@ -40,10 +40,10 @@ The three arguments are:
 The production call passes `replicaCount = 3` to every instance set through
 `env.config`, then overrides the `web` instance's message.
 
-An override replaces top-level config keys rather than merging into them. It
-is a shallow update, so `overrides.web.config.resources = { limits = ...; }`
-discards any `requests` the set produced instead of adding to it. Restate the
-whole value of any key you override.
+Overrides use a shallow update: each top-level key replaces the value produced
+by the instance set. For example,
+`overrides.web.config.resources = { limits = ...; }` also removes any existing
+`requests`. Restate the complete value of each key you override.
 
 Assign the combined result directly to `instances` inside the cluster module.
 Kix creates `development-app.web` and `production-app.web` as separate package

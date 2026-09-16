@@ -32,26 +32,26 @@ Add an entry under `networkPolicy.platformIntents`:
 
 <Snippet {...externalWorkloadIntent} />
 
-This intent selects pods labelled `app.kubernetes.io/name=metrics-agent` in
-the `observability` namespace, and allows DNS lookups and outbound HTTPS.
+This intent selects Pods labelled `app.kubernetes.io/name=metrics-agent` in
+the `observability` namespace. It allows DNS lookups and outbound HTTPS.
 
 :::caution[An intent restricts as well as permits]
-In Cilium, an endpoint selected by any policy enters default-deny for each
-direction that policy carries rules for. This intent carries `egress` rules,
-so once it is applied the selected pods can reach DNS and TCP 443 to the
-world, and nothing else. Egress they had before, such as scraping a target
-inside the cluster, is dropped.
+In Cilium, selecting an endpoint with an egress policy puts that endpoint into
+default-deny for egress. After this intent is applied, the selected Pods can
+reach DNS and TCP port 443 on the internet, but no other destinations. Existing
+traffic, such as scraping an in-cluster target, will be blocked unless you add
+a rule for it.
 
-List every destination the workload needs, not only the one that prompted the
-intent. `observability` holds no Kix instances, so nothing else in this
-cluster was restricting those pods before now.
+List every destination the workload needs, not just the destination that
+prompted the intent. In this example, `observability` contains no Kix
+instances, so no generated policy restricted these Pods beforehand.
 
-Directions you leave out are untouched. This intent declares no `ingress`, so
-ingress to those pods is unaffected by it.
+Omitted directions remain unchanged. This intent declares no `ingress`, so it
+does not affect incoming traffic to these Pods.
 :::
 
-`to` and `from` are closed vocabularies, not free-form selectors. `to` accepts
-`dns`, `world`, and `apiserver`; `from` accepts `all-pods` and `world`.
+`to` and `from` accept fixed values rather than arbitrary selectors. `to`
+accepts `dns`, `world`, and `apiserver`; `from` accepts `all-pods` and `world`.
 Anything else fails evaluation with `unknown egress intent target` or
 `unknown ingress intent source`.
 

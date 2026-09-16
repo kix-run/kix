@@ -724,11 +724,9 @@ fn supersede_consumed(
 /// The prune policy the flags ask for. `--prune-mode=no` skips, plain
 /// `deploy` reports orphans without deleting (warn-only), `--prune` deletes.
 ///
-/// There used to be a third mode, `eager`, documented as interleaving prune
-/// waves with apply waves. Nothing implemented that: it mapped to the same
-/// `Delete` policy as `--prune`, so the only thing it did was make a
-/// destructive run look like an ordering choice. See ROADMAP for the real
-/// feature.
+/// The removed `eager` mode claimed to interleave prune and apply waves, but
+/// mapped to the same `Delete` policy as `--prune`. The actual scheduling
+/// feature is tracked in ROADMAP.
 fn prune_policy_for(args: &DeployArgs) -> PrunePolicy {
     match args.prune_mode.unwrap_or(PruneMode::Default) {
         PruneMode::No => PrunePolicy::Skip,
@@ -1775,10 +1773,7 @@ mod prune_flag_tests {
         ])));
     }
 
-    /// `eager` used to parse and delete, while its help promised it
-    /// interleaved prune waves with apply waves. Nothing implemented that, so
-    /// the value is gone rather than silently equal to `--prune`. A script
-    /// still passing it should be told, not obeyed.
+    /// Reject the removed `eager` value instead of treating it as `--prune`.
     #[test]
     fn eager_is_no_longer_a_prune_mode() {
         let err = match Cli::try_parse_from(["kix", "deploy", "x", "--prune-mode", "eager"]) {

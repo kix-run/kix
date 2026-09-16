@@ -22,8 +22,7 @@ first if the cluster does not have one.
 
 ## Use a tracked Service endpoint
 
-In the calling package, dial the dependency through an address-shaped field on
-its `out` API:
+In the calling package, use an address from the dependency's `out` API:
 
 <Snippet {...trackedServiceEndpoint} />
 
@@ -31,18 +30,18 @@ its `out` API:
 Kix the destination, port, and protocol needed for policy generation. Keep the
 endpoint connected to the workload that makes the request.
 
-Not every `out` field does this. `out.fqdn`, `out.url`, and a package's own
-declared outputs are address-shaped: using one asserts that reaching the value
-reaches the Service, and that assertion is what becomes the egress rule.
-`out.name` and `out.selector` are structural. They create a dependency edge,
-so ordering is right and `kix check` is green, but they open no hole. The
-failure shows up as a dropped connection at runtime.
+Not every `out` field provides enough information for policy generation.
+`out.fqdn`, `out.url`, and address outputs declared by a package identify the
+Service being reached, so Kix can derive an egress rule. Structural values such
+as `out.name` and `out.selector` create a dependency edge but no network-policy
+rule. Using one as an address can therefore pass `kix check` and still produce
+a blocked connection at runtime.
 
-Naming a Service without dialing it traces `no netpol edge derived` during
-evaluation, with the Service and a pointer to `out.fqdn`/`out.url`. That is a
-trace warning, not a check failure, so read the evaluation output when a
-generated policy is missing a rule you expected. For a genuinely structural
-use, such as a label or a display string, silence it with `facts.refOnly`.
+When a workload references a Service without using one of its addresses, Kix
+emits a `no netpol edge derived` trace with the Service name and a suggestion
+to use `out.fqdn` or `out.url`. This is a warning, not a check failure. If the
+reference is intentionally structural, such as a label or display value, mark
+it with `facts.refOnly` to suppress the warning.
 
 ## Enable policy generation
 

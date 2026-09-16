@@ -885,12 +885,19 @@ Set at the top level of the cluster module (or under `config.*` in module form).
 | `scorecard` | submodule | `{}` | `{ enable, rules, ruleDefaults, ruleOverrides }` (§17) |
 | `networkPolicy` | submodule | `{}` | `{ enable, defaultDeny, directions, platformIntents }` (§16) |
 
-`clusterDomain` and `cluster.domain` are different options and are not interchangeable.
+`clusterDomain` and `cluster.domain` serve different purposes:
 
-- `clusterDomain` is the Kubernetes DNS suffix, default `cluster.local`. `mkResource` builds `out.fqdn` as `<name>.<namespace>.svc.<clusterDomain>`. Change it only when the cluster itself was installed with a non-default domain.
-- `cluster.domain` is the public base domain, default `null`. `kix.expose` derives an Ingress/HTTPRoute host as `<instanceName>.<cluster.domain>` when the instance sets no explicit `ingress.host`; `kix.modules.monitoring` derives Grafana's root URL from it. Null means no host is derived and `kix.expose` emits no route.
+- `clusterDomain` is the Kubernetes DNS suffix and defaults to `cluster.local`.
+  `mkResource` uses it to build `out.fqdn` as
+  `<name>.<namespace>.svc.<clusterDomain>`. Change it only if Kubernetes was
+  installed with a different cluster domain.
+- `cluster.domain` is the public base domain and defaults to `null`. When an
+  instance does not set `ingress.host`, `kix.expose` uses this option to derive
+  `<instanceName>.<cluster.domain>`. The monitoring module also uses it for
+  Grafana's root URL. When it is null, `kix.expose` creates no route.
 
-Putting a public domain in `clusterDomain`, or `cluster.local` in `cluster.domain`, produces addresses that resolve nowhere and no error.
+Kix does not currently detect when these values are exchanged. Doing so
+produces invalid addresses without an evaluation error.
 
 ## 15. Flavors and capability matrix
 
@@ -1048,9 +1055,17 @@ DI-hygiene rules (v2_discussions/128 replaced the old fingerprint-based capabili
 - `annotationDomainOwnership` — a package's `metadata.annotations` keys under an operator-declared domain (`meta.annotationDomains`, e.g. reflector's `reflector.v1.k8s.emberstack.com`) require a DI dep on the declarer; a domain nobody declares warns as a dead annotation. Reserved suffixes (`kubernetes.io`, `k8s.io`, `kix.run`, `helm.sh`, `kubebuilder.io`) and the cluster's `scorecard.knownAnnotationDomains` are exempt.
 - `unsafeGrants` — info-level audit listing every `meta.unsafe` grant (currently only `raw-pvc`, whose absence is enforced as an eval *error* in `scope/validators.nix`, not a scorecard rule).
 
-`level` and `severity` are closed vocabularies, checked at rule ingestion (`scorecard.nix#checkLevel`, `#checkSeverity`). Both used to fail open, and both failed silently: a rule at an unknown level matches no level filter and is never evaluated, and a severity that is not `"error"` is reported as a warning, so `severity = "critical"` reads as a promotion and lands as a trace line. Overrides (`ruleOverrides.byRule` / `.byOwner` / `.byNamespace`) are checked too.
+Kix validates `level` and `severity` when loading a rule
+(`scorecard.nix#checkLevel`, `#checkSeverity`). This prevents an unknown level
+from creating a rule that never runs, and an unknown severity from being
+treated as a warning. Severity overrides under `ruleOverrides.byRule`,
+`.byOwner`, and `.byNamespace` receive the same validation.
 
-An error-severity finding is a failed assertion, not a report entry. Evaluation stops at the first one, so the cluster does not build and only that finding is reported. `kix check --sarif` has no report to convert in that case and emits one error-level result describing the failure, attributed to the rule when the message names one.
+An error-severity finding becomes a failed assertion. Evaluation stops at the
+first error, so the cluster does not build and only that finding is reported.
+Because no scorecard report is produced, `kix check --sarif` emits one
+error-level result for the evaluation failure. It attributes the result to the
+rule when the error message identifies one.
 - `selectorCoherence` / `fqdnWithoutContext` — selectors and `*.svc` FQDNs must carry store-path context from the owning workload/service.
 - `monitorSelectorMatchesService` (cluster-level, **error**) — every ServiceMonitor/VMServiceScrape selector must match some Service's *metadata labels* in its target namespaces. Monitor selectors match Service labels, NOT the workload's pod selector — a mismatch drops every target at relabeling and the job silently vanishes from `up` (this shipped four times before the rule existed). Use `self.service.out.selector` or `kix.monitor`. A monitor deliberately targeting a Service kix doesn't render (e.g. prometheus-operator's runtime `kubelet` Service) opts out with `annotations."kix.run/monitors-external-service" = "true"`. Cluster-level findings trace and gate builds like instance findings.
 - `externalMonitorTargets` (info) — audit listing every `kix.run/monitors-external-service` claim, so opted-out monitors stay visible in review (the unsafeGrants property).
@@ -1276,7 +1291,11 @@ Both `mkCRD` and `mkCRDRef` accept two per-kind controller-semantics declaration
 }
 ```
 
-Pre-deploy: `kix deploy` polls each `kix.run/mode=import` PackageInstance to confirm the resource exists before applying anything that depends on it. There is no flag to skip this; mark the instance `optional = true` if the resource may legitimately be absent. Only kind, apiVersion and name are verified (plus the declared keys of a Secret ref) — an import's `fqdn` and `port` are passed through unchecked.
+Before applying dependent resources, `kix deploy` waits for each
+`kix.run/mode=import` PackageInstance to exist. This check cannot be skipped.
+Set `optional = true` when the resource may legitimately be absent. Kix checks
+the kind, API version, and name, plus the declared keys for a Secret reference.
+It does not verify imported `fqdn` or `port` values.
 
 ## 24. Manifest stamping
 
@@ -1402,7 +1421,7 @@ Diff features:
 |---|---|
 | Reading `out.selector` cycles through a back-reference | Use `workload.rawSelector`. Trade-off: `architecture.selectorCoherence` warns; live with it |
 | Raw PVC throws at eval | Provision via a sibling `persistent-volume-claim` instance + `storage` dep; only canonical/chart-persistence packages hold `meta.unsafe = [ "raw-pvc" ]` |
-| `<Kind> name '<n>' is not a legal Kubernetes object name` | Rename the **instance**, not the resource: packages derive names from `scope.instanceName`, so `ingressNginx` renders `Deployment/ingressNginx`. Use a lowercase name and give the package `meta.defaultAliases = [ "camelCaseArgName" ]` so the DI build argument still resolves |
+| `<Kind> name '<n>' is not a legal Kubernetes object name` | Packages usually derive resource names from `scope.instanceName`, so rename the instance with a lowercase name. If consumers use a camel-case build argument, preserve it with `meta.defaultAliases = [ "camelCaseArgName" ]` |
 | `annotationDomainOwnership` warns about an operator's annotations | Declare the DI dep on the operator (e.g. `reflector`) and use its builder; for domains consumed outside kix add `scorecard.knownAnnotationDomains` |
 | Cross-namespace mount or secret-ref errors at build | Either move the resource to the right ns, use `scope.forNamespace`, or set `reflected = true` if reflector mirrors it |
 | Dep injection overrides a value you want to pin | Wrap with `mkLocked` |
@@ -1785,4 +1804,3 @@ cannot drift apart. A container image only gets a `sha256` digest in
 `resolvedDependencies` when its reference actually carries one: a tag is a
 request, not a resolution, and putting it in a digest field would be a
 well-formed false statement.
-

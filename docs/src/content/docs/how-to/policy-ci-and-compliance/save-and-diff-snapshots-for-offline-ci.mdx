@@ -85,10 +85,10 @@ The Markdown report lists each changed package with its modified resources,
 resources affected only through a dependency, cluster-level resources such as
 namespaces, and the activation record names.
 
-The report is never empty. With no content change against the snapshot it is
-a `### kix diff` heading followed by `No package-level changes (N unchanged)`.
-Decide whether to post it from the exit status the script already captured,
-not from whether the file has content.
+The report always contains text. When nothing changed, it contains a
+`### kix diff` heading followed by `No package-level changes (N unchanged)`.
+Use the captured exit status, rather than the file size, to decide whether to
+post the report.
 
 ## Troubleshooting
 

@@ -32,19 +32,17 @@ creates `patchedConfig`, then replaces both the named part and `root`. Updating
 `root` is necessary because the original package uses that ConfigMap as its
 root resource.
 
-Keep the patch as narrow as possible, and name everything you want to keep.
-`rawManifest` is the rendered manifest and nothing more, so a rebuilt part
-loses whatever the overlay does not restate. That includes labels and
-annotations the package set, and it includes the part's `requires` and
-`extraDeps`, which are ordering edges rather than manifest fields and so never
-appear in `rawManifest` at all.
+Keep the patch as narrow as possible and explicitly preserve every field you
+need. `rawManifest` contains only the rendered Kubernetes manifest. Rebuilding
+a part drops any labels or annotations that the overlay does not copy. It also
+drops `requires` and `extraDeps`, because those ordering edges are not part of
+the manifest.
 
-Overlay a workload only when there is no alternative. `scope.mkResource` is
-the generic builder: rebuilding a Deployment with it skips the selector and
-pod-template label derivation `scope.mkDeployment` performs, and skips the
-network-policy resources the workload builders attach. Prefer overlaying a
-leaf resource, as the example does with a ConfigMap, or adding a typed option
-to the package.
+Avoid overlaying a workload. Rebuilding a Deployment with the generic
+`scope.mkResource` skips the selector and Pod-template labels added by
+`scope.mkDeployment`. It also skips the network policies attached by the
+workload builders. Prefer overlaying a leaf resource, such as the ConfigMap in
+this example. For broader changes, add a typed option to the package.
 
 ## Check the result
 

@@ -52,16 +52,15 @@ Add the package to a cluster whose flavor permits privileged workloads:
 <Snippet {...hostPathApplicationInstance} />
 
 Kix checks `hostPath` against `cluster.capabilities.privilegedContainers`.
-The check is three-valued: `false` fails evaluation, `true` passes, and a
-capability the cluster never declares is `unknown`, which traces a warning and
-carries on. An unannounced target is not a cleared one, so declare the
-capability rather than relying on the absence of an error.
+If the capability is `false`, evaluation fails. If it is `true`, the check
+passes. An undeclared capability is `unknown`; Kix emits a trace warning but
+continues. Declare the capability explicitly instead of treating the absence
+of an error as confirmation that the target supports `hostPath`.
 
-Pin the workload to one node as well. The Deployment above runs a single
-replica with no scheduling constraint, so a rescheduled pod can land on
-another node and find that node's directory instead, empty. Add a
-`nodeSelector` or a node affinity naming the node whose directory holds the
-data.
+Also pin the workload to the node that holds the data. The Deployment above
+has one replica and no scheduling constraint. If Kubernetes reschedules the
+Pod onto another node, it mounts that node's directory, which may be empty.
+Add a `nodeSelector` or node affinity for the correct node.
 
 ## Check the result
 

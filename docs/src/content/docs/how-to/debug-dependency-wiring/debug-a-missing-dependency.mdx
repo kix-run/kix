@@ -59,10 +59,9 @@ Run the checks again after correcting the name or wiring:
 <Command {...checkFixed} />
 
 If Kix reports several matches instead, add an explicit `deps` entry to the
-consumer that needs one of them. That entry alone will not clear the report:
-the ambiguity comes from a phase-1 pre-pass that runs with explicit overrides
-suppressed, so one of the colliding instances must also keep a unique claim on
-the name. See
+consumer that needs one of them. This does not resolve the phase-1 ambiguity by
+itself, because that pass does not read explicit dependency overrides. One of
+the providers must also have a unique alias. See
 [Use aliases and default aliases](/docs/how-to/debug-dependency-wiring/use-aliases-and-default-aliases/)
 for that shape.
 

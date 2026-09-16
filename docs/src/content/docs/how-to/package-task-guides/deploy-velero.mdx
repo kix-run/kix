@@ -30,12 +30,11 @@ resource definitions. Install the matching CRDs before the first deployment:
 Use the Velero 1.15.2 CLI for this command. When upgrading Velero, update its
 CRDs before deploying resources built for the new version.
 
-The package can run the same thing in-cluster instead.
-`config.upgradeCRDs.enable = true` emits a Job and ServiceAccount that run
-`velero install --crds-only` on every apply, which puts CRD upgrades in the
-deployment rather than in a runbook. It needs cluster-scoped RBAC for that
-ServiceAccount, which the package does not create, so wire that up before
-turning it on.
+The package can also perform this step inside the cluster. Setting
+`config.upgradeCRDs.enable = true` creates a Job and ServiceAccount that run
+`velero install --crds-only` on every apply. The package does not create the
+cluster-scoped RBAC needed by that ServiceAccount, so provide it before
+enabling this option.
 
 ## Create the credentials Secret
 

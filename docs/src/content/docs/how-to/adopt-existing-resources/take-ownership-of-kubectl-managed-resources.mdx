@@ -67,9 +67,9 @@ The API server rejects a change when another field manager owns a field Kix is
 trying to change. The error identifies the resource and points to
 `--force-conflicts`.
 
-That run stops at the first conflict, which is why it ends `1 failed, 4
-cancelled`. The cancelled resources have not been checked, and any of them may
-conflict too. Enumerate the rest before deciding:
+By default, the run stops after the first conflict and ends with `1 failed, 4
+cancelled`. The cancelled resources have not been checked. Run the dry run
+again with `--on-error continue` to find conflicts on the remaining resources:
 
 <Command
   commands={[
@@ -78,9 +78,9 @@ conflict too. Enumerate the rest before deciding:
   cwd="kix-examples/"
 />
 
-`--on-error continue` halts only the dependents of a failed resource, so
-sibling subtrees still report. Review every named field against the saved
-resource before using `--force-conflicts`.
+This still skips resources that depend on a failed resource, but continues
+checking independent branches of the dependency graph. Review every reported
+field against the saved resource before using `--force-conflicts`.
 
 ## Take ownership once
 

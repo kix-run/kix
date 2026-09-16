@@ -32,10 +32,9 @@ Read the conflict message closely. It identifies three things:
 - the other field manager, `autoscaler`;
 - the overlapping field, `.spec.replicas`.
 
-The run stops there, which is why it ends `1 failed, 4 cancelled`. One
-conflict is one resource's worth of evidence, and the cancelled resources have
-not been checked. When more than one manager may be in play, enumerate them in
-a single pass first:
+By default, the run stops after this conflict and ends with `1 failed, 4
+cancelled`. The cancelled resources have not been checked. To find conflicts
+on the remaining resources, run the dry run again with `--on-error continue`:
 
 <Command
   commands={[
@@ -44,8 +43,8 @@ a single pass first:
   cwd="kix-examples/"
 />
 
-`--on-error continue` halts only the dependents of a failed resource, so
-sibling subtrees still report.
+This still skips resources that depend on a failed resource, but continues
+checking independent branches of the dependency graph.
 
 ## Inspect the other manager
 

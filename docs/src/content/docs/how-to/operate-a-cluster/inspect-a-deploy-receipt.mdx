@@ -19,8 +19,9 @@ active record:
 
 <Command expandable {...activeReceipt} />
 
-The label limits the result to Activations for one Kix cluster. That command
-returns a List, and the output above is the receipt projected out of it:
+The label limits the result to Activations for one Kix cluster. The command
+returns a Kubernetes List. Use `jq` to select the active Activation and print
+its receipt:
 
 <Command
   commands={[
@@ -28,9 +29,9 @@ returns a List, and the output above is the receipt projected out of it:
   ]}
 />
 
-A deploy that finished with failures leaves its Activation `Degraded` rather
-than `Active`, and it still carries a receipt. Widen the `select` to both
-phases when you are investigating a deployment that did not go cleanly.
+A deployment that finishes with failures marks its Activation as `Degraded`,
+but still records a receipt. When investigating a failed deployment, change
+the `select` expression to include both `Active` and `Degraded` phases.
 
 If you are inspecting another Kubernetes context, add `--context` to the
 kubectl command.

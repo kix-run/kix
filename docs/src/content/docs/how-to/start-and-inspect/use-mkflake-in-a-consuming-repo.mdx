@@ -48,10 +48,10 @@ cluster identity recorded in manifests and activations.
 :::caution
 Keep the two the same. The Activation record is labelled with the
 `buildCluster` name, and every command that reads cluster state filters on the
-name you typed on the command line. When they differ, `kix health`,
-`kix rollback --list`, `kix gc` retention, and the baseline `kix deploy`
-compares against all find nothing, and each reports that absence as an empty
-result rather than as an error.
+CLI name. If the names differ, `kix health`, `kix rollback --list`, `kix gc`
+retention, and the baseline comparison in `kix deploy` cannot find the
+Activation. These commands currently report an empty result instead of
+identifying the mismatch.
 :::
 
 For a single project, a compact registration is enough:

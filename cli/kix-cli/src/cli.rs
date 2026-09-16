@@ -683,10 +683,9 @@ pub struct PortForwardArgs {
     /// Package instance name (e.g. `vaultwarden`) or `<namespace>/<name>`
     pub package: String,
 
-    /// Port specs passed straight to `kubectl port-forward`, whose grammar
-    /// is `[LOCAL]:REMOTE` or a bare `REMOTE` meaning both sides. So
-    /// `8080:80` binds local 8080, `5432` binds local 5432, and `:80` lets
-    /// kubectl pick a free local port. One or more.
+    /// One or more port specs passed to `kubectl port-forward`.
+    /// Use `8080:80` to bind a specific local port, `5432` to use the same
+    /// port on both sides, or `:80` to let kubectl choose a free local port.
     #[arg(required = true)]
     pub ports: Vec<String>,
 

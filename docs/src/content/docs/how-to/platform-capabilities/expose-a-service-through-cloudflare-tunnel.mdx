@@ -46,9 +46,9 @@ The Service remains internal to Kubernetes. Its default cluster address is:
 http://web.cloudflare-example.svc.cluster.local:80
 ```
 
-`cluster.local` is the value of the cluster's `clusterDomain` option. Replace
-it if your cluster sets a different one. `clusterDomain` is the Kubernetes DNS
-suffix; it is not the public domain the tunnel serves.
+`cluster.local` comes from the cluster's `clusterDomain` option. Replace the
+suffix if your cluster uses a different value. `clusterDomain` controls
+in-cluster DNS and is unrelated to the public domain served by the tunnel.
 
 ## Add the connector
 

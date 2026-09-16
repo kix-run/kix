@@ -29,11 +29,10 @@ under `_cluster`:
 Each filename contains the resource kind and name, such as
 `how-to-app/Deployment-production.yaml`.
 
-Exit mode drops the `Activation` and `PackageInstance` objects themselves, but
-not the two CustomResourceDefinitions that declare those kinds. Those are
-ordinary cluster-scoped resources in the cluster's graph, so they export like
-any other, which is why they appear under `_cluster` above. Delete them by
-hand if the receiving system should carry nothing of Kix's.
+Exit mode omits the `Activation` and `PackageInstance` objects, but includes
+the two CustomResourceDefinitions for those kinds. The CRDs are ordinary
+cluster-scoped resources in the graph, so they appear under `_cluster`. Remove
+them manually if the receiving system should contain no Kix resources.
 
 ## Review the export
 
@@ -49,8 +48,8 @@ and exits with status 1, which is the result you want here:
 
 <Command {...noAnnotations} />
 
-That pattern matches annotation keys, which all end in a slash. It does not
-match the two CRD names, where `kix.run` is a bare suffix.
+That pattern matches annotation keys, where `kix.run` is followed by a slash.
+It does not match the CRD names, where `kix.run` appears as a bare suffix.
 
 Labels such as `app.kubernetes.io/managed-by` remain part of the resource
 metadata, so review and adjust labels if the receiving system has its own
@@ -68,12 +67,12 @@ previous export, or pass `--force` when replacing it is intentional:
   cwd="kix-examples/"
 />
 
-`--force` clears the directory before writing, so a resource you deleted from
-the cluster leaves nothing behind for `kubectl apply -R -f ./handoff/` to
-recreate. It clears only a directory that holds nothing but `.yaml` files and
-the directories containing them, which is what an export writes. If `--out`
-points at anything else, Kix names the file it found and refuses; remove that
-directory yourself.
+`--force` clears the output directory before writing the new export. This
+prevents stale YAML from recreating resources that have since been removed.
+For safety, Kix clears only a tree containing directories and `.yaml` files,
+which is the structure produced by an earlier export. If it finds any other
+file or a symbolic link, it reports the path and refuses to continue. Remove
+or relocate the directory yourself.
 
 :::note[Reference]
 See [`kix export`](/docs/reference/cli/export/) for the exact modes, directory

@@ -26,12 +26,9 @@ let
   isValidSeverity = s: builtins.hasAttr s severityLevels;
   isValidLevel = l: builtins.elem l validLevels;
 
-  # Both vocabularies are closed, and both fail silently when they are not
-  # checked. A rule whose `level` is misspelled matches none of the four
-  # level filters, so it is never evaluated and reports nothing. A severity
-  # that is not "error" is treated as a warning by `scorecardToWarnings`, so
-  # `severity = "critical"` reads as a promotion and lands as a trace line.
-  # In both cases the scorecard says everything passed.
+  # Validate both vocabularies before running any rule. An unknown level would
+  # otherwise match no filter, while an unknown severity would be treated as
+  # a warning.
   checkLevel =
     ruleName: rule:
     let
@@ -49,7 +46,7 @@ let
     if severity == null || isValidSeverity severity then
       null
     else
-      throw "scorecard rule '${ruleName}' has severity '${toString severity}'${source}, which is not one of: ${lib.concatStringsSep ", " (builtins.attrNames severityLevels)}. Only \"error\" fails the build; anything else is reported as a warning.";
+      throw "scorecard rule '${ruleName}' has severity '${toString severity}'${source}, which is not one of: ${lib.concatStringsSep ", " (builtins.attrNames severityLevels)}.";
 
   flattenRules =
     rules:

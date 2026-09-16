@@ -76,9 +76,9 @@ The conflict identifies fields still owned by Helm. Review those fields
 against the saved manifest and values. If the Kix output is not meant to
 replace them, change the Kix definition instead of forcing the deployment.
 
-That run stops at the first conflict, which is why it ends `1 failed, 6
-cancelled`. A chart takeover usually conflicts on more than one resource, and
-the cancelled ones have not been checked. Enumerate them before deciding:
+By default, the run stops after the first conflict and ends with `1 failed, 6
+cancelled`. A chart takeover may conflict on several resources. Run the dry
+run again with `--on-error continue` to check the remaining resources:
 
 <Command
   commands={[
@@ -87,8 +87,8 @@ the cancelled ones have not been checked. Enumerate them before deciding:
   cwd="kix-examples/"
 />
 
-`--on-error continue` halts only the dependents of a failed resource, so
-sibling subtrees still report.
+This still skips resources that depend on a failed resource, but continues
+checking independent branches of the dependency graph.
 
 ## Transfer resource ownership
 

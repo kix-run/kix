@@ -20,10 +20,8 @@ in
 {
   meta = {
     version = "v2.0.0";
-    # immich's build argument is `machineLearning`, but an instance named
-    # that renders `Deployment/machineLearning`, which the API server
-    # refuses: Kubernetes object names are lowercase. The alias lets the
-    # instance be `machine-learning` and still resolve the dep.
+    # Keep the `machineLearning` build argument while using a lowercase
+    # Kubernetes instance name.
     defaultAliases = [ "machineLearning" ];
     # persistence.enabled hand-rolls the model-cache claim; the preferred
     # path is a `storage` dep + sibling persistent-volume-claim instance.

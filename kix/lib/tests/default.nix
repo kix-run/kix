@@ -1379,10 +1379,8 @@ let
       hasName "data" (ofKind "PersistentVolumeClaim" ms)
       || throw "granted raw-pvc package did not emit its claim";
 
-    # Kubernetes validates metadata.name in the API server, not in the
-    # OpenAPI schema, so kubeconform passes an illegal name and only a real
-    # apply refuses it. These run the check at eval instead. The camelCase
-    # case is the one that reached a published how-to guide.
+    # The OpenAPI schema does not constrain metadata.name, so check the API
+    # server's naming rules during evaluation.
     t27a-camelcase-resource-name-throws = evalFails (mkCluster [
       baseInstances
       { instances.appns.bad.package = mkCmPackage { name = "ingressNginx"; }; }
@@ -1442,11 +1440,7 @@ let
       hasName "operator:leader-election" (ofKind "Role" ms)
       || throw "a Role named with a colon should be accepted";
 
-    # `level` and `severity` are closed vocabularies, and both used to fail
-    # open. A misspelled level matches none of the four level filters, so the
-    # rule is never evaluated. A severity other than "error" is treated as a
-    # warning, so `severity = "critical"` reads as a promotion and lands as a
-    # trace line. Either way the scorecard reports that everything passed.
+    # Reject unknown scorecard levels and severities before evaluating rules.
     t27e-scorecard-valid-rule-passes =
       let
         c = mkCluster [

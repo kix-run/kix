@@ -52,10 +52,10 @@ Render the workload and compare both label sets with the live Deployment:
 The rendered selector and Pod labels contain the existing `app` and `tier`
 values. Compare them against the `kubectl get` output from the first step.
 
-`kix diff` cannot make that comparison for you. It reads live state through
-Kix's own management labels, so a workload Kix has not owned before is absent
-from the live side and the diff shows it as a plain addition. The selector
-never gets compared.
+`kix diff` cannot make this comparison. It finds live resources through Kix's
+management labels, which the existing workload does not yet have. The diff
+therefore shows the workload as a new resource and never compares the
+selectors.
 
 Ask the API server instead:
 
@@ -64,9 +64,9 @@ Ask the API server instead:
   cwd="kix-examples/"
 />
 
-A Deployment or StatefulSet selector is immutable, so a mismatch fails the
-dry run rather than reaching the cluster: either as an immutable-field error,
-or as a field-ownership conflict on the selector if another manager owns it.
+Deployment and StatefulSet selectors are immutable. A mismatch therefore
+fails the dry run, either as an immutable-field error or as a field-ownership
+conflict when another manager owns the selector.
 
 :::caution
 Do not deploy if the rendered `spec.selector.matchLabels` differs from the

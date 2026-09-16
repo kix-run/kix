@@ -53,16 +53,15 @@ modules = [
 ];
 ```
 
-Flavors set their role bindings and capability flags with `lib.mkDefault`, so
-a later module overrides them by plain assignment. Keeping the flavor first
-makes the merge direction visible: the following modules contain the choices
-made by this cluster.
+Flavors set role bindings and capability flags with `lib.mkDefault`. A later
+module can therefore override them with an ordinary assignment. Put the flavor
+first so the cluster-specific choices that override it are easy to see.
 
 ## Keep environment selection explicit
 
-When one repository targets several environments, define a cluster for each
-target and name the flavor in it. Do not infer it from the current kubectl
-context, because evaluation should produce the same manifests without
+When a repository targets several environments, define a cluster for each one
+and select its flavor explicitly. Do not infer the flavor from the current
+kubectl context. Evaluation should produce the same manifests without
 contacting a cluster.
 
 Put everything the environments share in a module they both import:
@@ -104,10 +103,9 @@ clusters = {
 };
 ```
 
-`mkFlake` calls a cluster function with `kix`, `packages`, and `pins`, and
-nothing else. A cluster written to take some other argument, such as a
-`flavor` passed in from outside, fails with `called without required
-argument`.
+`mkFlake` passes only `kix`, `packages`, and `pins` to a cluster function. If
+the function requires another argument, such as an externally supplied
+`flavor`, evaluation fails with `called without required argument`.
 
 ## Check the result
 

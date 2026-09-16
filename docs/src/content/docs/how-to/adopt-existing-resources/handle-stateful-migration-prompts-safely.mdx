@@ -13,11 +13,12 @@ Kix stops a deployment when one stateful resource replaces another in the
 same package slot. Treat this as a data-migration gate, not as an ordinary
 confirmation prompt.
 
-The gate is specific to replacement. A stateful resource removed with nothing
-taking its slot is an ordinary orphan, and `--prune` deletes it with no
-migration prompt. See
+The migration gate applies only when one stateful resource replaces another.
+If a stateful resource is removed without a replacement, Kix treats it as an
+ordinary orphan. Running with `--prune` deletes it without a migration prompt.
+See
 [Deploy with dry-run, timeouts, pruning, and log/TUI output modes](/docs/how-to/operate-a-cluster/deploy-with-dry-run-timeouts-pruning-and-log-tui-output-modes/)
-for what the plan shows before it does.
+to see how the plan reports orphans before deletion.
 
 The example changes the `data/volume` package from
 `PersistentVolumeClaim/media-v1` at `5Gi` to
@@ -74,9 +75,9 @@ copy data or verify that the target contains it. The warning about an empty
 target is literal when the out-of-band migration has not happened.
 
 Review the rest of the deployment plan. Do not add `--prune` while the source
-PVC is still part of the rollback plan. Pruning has no stateful-specific gate
-of its own: once the source PVC is an orphan, it is deleted like any other
-orphan.
+PVC is still part of the rollback plan. Pruning has no separate safeguard for
+stateful resources. Once the source PVC becomes an orphan, Kix deletes it like
+any other orphan.
 
 ## Apply after verification
 

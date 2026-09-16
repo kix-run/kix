@@ -34,11 +34,12 @@ Prefix the remote port with a colon and leave the local side empty:
   cwd="kix-examples/"
 />
 
-kubectl prints the chosen local port when the forward is ready.
+kubectl prints the selected local port when the forward is ready.
 
-A bare `80` is not the same thing. Port specs are passed straight to
-`kubectl port-forward`, whose grammar reads a lone number as both sides, so
-`80` means `80:80` and fails when local port 80 is taken or privileged.
+Do not use a bare `80` for this. Kix passes port specifications directly to
+`kubectl port-forward`, which interprets a single number as both the local and
+remote port. A bare `80` therefore means `80:80` and may fail because local
+port 80 is occupied or requires additional privileges.
 
 ## Forward more than one port
 

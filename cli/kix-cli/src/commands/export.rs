@@ -69,15 +69,12 @@ pub fn run(args: &ExportArgs, ctx: &mut CommandContext) -> Result<()> {
                 args.out
             ));
         }
-        // `--force` used to mean only "do not refuse". Each file the new
-        // export wrote replaced the old one, but a file the previous export
-        // wrote and this one does not was left behind, so a resource deleted
-        // from the cluster survived as stale YAML and the `kubectl apply -R`
-        // this output exists to feed would recreate it.
+        // A forced export must remove stale YAML. Overwriting files in place
+        // leaves resources from the previous export behind, and a later
+        // `kubectl apply -R` would recreate them.
         //
-        // Clear the directory instead. Only one that looks like a previous
-        // export is cleared: `--out` is a path a person typed, and
-        // `remove_dir_all` on the wrong one is not recoverable.
+        // Clear only a directory that has the shape of an earlier export.
+        // `--out` is user input, so deleting an arbitrary directory is unsafe.
         if let Some(intruder) = first_non_export_entry(&out_dir)? {
             return Err(miette!(
                 "refusing to overwrite '{}': it holds '{}', which no kix export wrote. \
@@ -197,12 +194,11 @@ fn resolve_flake_path(flake: &str) -> Result<PathBuf> {
     }
 }
 
-/// The first entry under `dir` that a kix export would not have written.
+/// Return the first entry under `dir` that Kix export would not have written.
 ///
 /// An export writes `<namespace>/<Kind>-<name>.yaml` and nothing else, so a
-/// tree of directories and `.yaml` files is one this command can replace.
-/// Anything else means `--out` points at something that is not a previous
-/// export, and `--force` must not delete it.
+/// tree containing only directories and `.yaml` files is safe to replace.
+/// Any other entry prevents `--force` from deleting the directory.
 fn first_non_export_entry(dir: &std::path::Path) -> Result<Option<PathBuf>> {
     for entry in fs::read_dir(dir).into_diagnostic()? {
         let entry = entry.into_diagnostic()?;
@@ -255,8 +251,7 @@ mod force_guard_tests {
         fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// The guard exists so that `--force` on a hand-picked `--out` cannot
-    /// delete something a person cares about.
+    /// Refuse to delete a user-selected output directory containing other data.
     #[test]
     fn anything_else_stops_the_overwrite() {
         let dir = tmpdir("mixed");

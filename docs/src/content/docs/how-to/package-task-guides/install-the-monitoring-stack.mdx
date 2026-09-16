@@ -13,10 +13,10 @@ Use `kix.modules.monitoring` to install the native Kix monitoring stack. The
 module configures Prometheus Operator, Prometheus, Alertmanager, Grafana,
 node-exporter, and kube-state-metrics as related package instances.
 
-The module needs the cluster's package catalogue. `buildCluster` passes modules
-only `ref` and a minimal `kix`, so the cluster has to forward it with
-`specialArgs = { inherit kix packages; };`. The example cluster does that on
-the line above the snippet below.
+The module needs the cluster's package catalogue. By default, `buildCluster`
+passes modules only `ref` and a minimal `kix` value. The cluster must forward
+the full values with `specialArgs = { inherit kix packages; };`. The example
+cluster does this immediately above the following snippet.
 
 ## Add the monitoring module
 
@@ -34,17 +34,17 @@ monitoring.grafana.persistence = {
 };
 ```
 
-`persistence` is one option typed `anything`, not a submodule with its own
-options, so a single definition replaces its default outright instead of
-merging into it. Writing `monitoring.grafana.persistence.size = "20Gi"` on its
-own drops `enabled`, and evaluation fails with `attribute 'enabled' missing`.
-The example gets away with setting only `enabled` because the code that reads
-`size` sits behind that flag.
+`persistence` is a single unstructured option, not a submodule. Defining one
+field replaces the complete default value rather than merging with it. Setting
+only `monitoring.grafana.persistence.size = "20Gi"` therefore removes
+`enabled`, and evaluation fails with `attribute 'enabled' missing`. The example
+can set only `enabled = false` because the module does not read `size` when
+persistence is disabled.
 
-Package `config` options do not behave this way. There Kix merges each option's
-default back over the evaluated result, so a partial setting fills in the rest.
-Cluster module options such as this one go through the plain module system,
-where it does not.
+Package `config` options behave differently: Kix merges their defaults into
+the evaluated result, so partial values retain the remaining defaults. This
+cluster module option uses the standard module system and must be defined in
+full.
 
 `defaultRules.enabled` adds the standard Kubernetes alert rules, recording
 rules, and ServiceMonitors. Disable it when you want to install the core stack

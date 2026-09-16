@@ -25,21 +25,23 @@ Set `kind` and `apiVersion` to describe the existing resource. The `out`
 attributes form the interface that consuming packages receive. They must
 match the Service in the target cluster.
 
-Kix checks only part of that match. A deploy waits for an object of that kind,
-apiVersion, and name to exist in the namespace, and fails if it does not. The
-`fqdn` and `port` written here are strings Kix passes through untouched, so a
-wrong port deploys cleanly and fails at runtime.
+Kix verifies the imported object's kind, API version, name, and namespace
+before deployment. It does not verify the `fqdn` or `port` outputs. Those
+values pass through unchanged, so an incorrect port can deploy successfully
+and fail only at runtime.
 
 The `legacyApi` alias lets a package request this import with a build argument
 of the same name. Choose an alias that describes the dependency's role rather
-than its location. When the import fills one of Kix's registered
-infrastructure roles, declare `roles = [ "dns" ]` and so on instead of an
-alias: a role name is also the resolution key, and it makes the import a weak
-provider, so a managed instance claiming the same role shadows it.
+than its location. If the import provides one of Kix's registered
+infrastructure roles, such as `dns`, declare it with `roles = [ "dns" ]`
+instead. The role name also acts as the dependency key. An imported role is a
+weak provider, so a managed instance that claims the same role takes
+precedence.
 
 :::caution[Generated network policy needs the other form]
-An `out.fqdn` written as a string literal carries no provenance. A workload
-that dials it gets a dependency edge and no egress rule, so on a cluster with
+An `out.fqdn` written as a string literal carries no information about the
+Service behind it. A workload that uses the address gets a dependency edge,
+but Kix cannot derive an egress rule. On a cluster with
 [generated network policy](/docs/how-to/platform-capabilities/enable-generated-network-policy/)
 the call is dropped at runtime while `kix check` stays green.
 
@@ -77,9 +79,10 @@ package = kix.mkImport {
 };
 ```
 
-Kix still renders no Service. It uses the description to derive `out.fqdn` and
-to record which pods that address reaches, which is what the policy generator
-needs. The selector has to match the live Service's own selector.
+Kix still does not render the Service. It uses this description to derive
+`out.fqdn` and identify the pods reached through that address. The policy
+generator needs both pieces of information. Make sure the selector matches
+the live Service.
 :::
 
 ## Use the imported outputs

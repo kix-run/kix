@@ -153,16 +153,13 @@ fn to_sarif(scorecard_report: &serde_json::Value) -> serde_json::Value {
 /// A SARIF run describing an evaluation that never produced a scorecard.
 ///
 /// An error-severity scorecard finding becomes a failed assertion in
-/// `scorecardToWarnings`, so it throws during evaluation and there is no
-/// report to convert. Emitting an empty run here is the worst of both: the
-/// job goes red and the code-scanning upload says zero findings, so the one
-/// place a reviewer looks shows nothing wrong. Report the failure as a
-/// finding instead.
+/// `scorecardToWarnings`. Evaluation therefore stops before producing a
+/// report. Emit the evaluation failure as a finding so a failing job does not
+/// upload an empty SARIF run.
 ///
-/// Nix stops at the first failing assertion, so at most one scorecard rule is
-/// recoverable per run. Its message carries `[scorecard:<rule>] <loc>: <text>`
-/// (kix/lib/scorecard.nix), which is enough to attribute the result to the
-/// rule that produced it rather than to a generic eval error.
+/// Nix stops at the first failed assertion, so each run can report at most one
+/// scorecard error. The message format, `[scorecard:<rule>] <loc>: <text>`,
+/// identifies the responsible rule.
 fn eval_failure_sarif(message: &str) -> serde_json::Value {
     let parsed = message
         .split_once("[scorecard:")
@@ -292,9 +289,8 @@ pub fn run(args: &CheckArgs, ctx: &mut CommandContext) -> Result<()> {
             if let Some(report) = &output.scorecard_report {
                 to_sarif(report)
             } else {
-                // Evaluated fine and the scorecard is off. An empty run is
-                // the truthful answer: nothing was checked and nothing
-                // failed, and `has_failure` is false, so the job stays green.
+                // Evaluation succeeded with the scorecard disabled. Emit an
+                // empty run because no findings were produced.
                 to_sarif(&serde_json::json!({"findings": []}))
             }
         } else {
@@ -337,10 +333,9 @@ pub fn run(args: &CheckArgs, ctx: &mut CommandContext) -> Result<()> {
 mod sarif_tests {
     use super::*;
 
-    /// The regression this guards: `--sarif` used to emit a run with zero
-    /// results whenever evaluation failed, which is exactly when a promoted
-    /// error-severity rule fires. The job went red and the code-scanning
-    /// upload said nothing was wrong.
+    /// `--sarif` used to emit no results when evaluation failed on an
+    /// error-severity rule. The CI job failed, but its code-scanning report
+    /// contained no explanation.
     #[test]
     fn a_failed_eval_becomes_a_finding_attributed_to_its_rule() {
         let msg = "[scorecard:reliability.volumeHasSource] apps/web/Deployment-web: \
@@ -370,9 +365,7 @@ mod sarif_tests {
         assert_eq!(results[0]["level"], "error");
     }
 
-    /// A clean evaluation with the scorecard off still emits an empty run,
-    /// and that is correct: nothing was checked, so nothing is reported and
-    /// the job stays green.
+    /// A successful evaluation with the scorecard disabled emits an empty run.
     #[test]
     fn no_scorecard_data_is_an_empty_run() {
         let sarif = to_sarif(&serde_json::json!({"findings": []}));

@@ -55,17 +55,13 @@ for (const entry of entries) {
     errors.push(`${entry.page}: has content but is still marked planned`);
   }
 
-  // Hand-written ```nix blocks are the part of a how-to guide that nothing
-  // checks. A `<Snippet>` is extracted from a real file in kix-examples and
-  // drift-checked against it; a fenced block is prose that happens to look
-  // like code, and it is where the September 2026 accuracy audit found most
-  // of its broken-as-written defects (v2_discussions/142).
+  // Unlike `<Snippet>` excerpts, hand-written ```nix blocks are not checked
+  // against a source file. The September 2026 audit found that most examples
+  // that failed as written were in these blocks (v2_discussions/142).
   //
-  // They are not banned: a two-line fragment or a file the reader is creating
-  // has no source to extract from. But the count is declared in the ledger,
-  // so adding one is a deliberate edit to this file rather than something
-  // that happens while writing a page, and the total is a debt with a number
-  // on it.
+  // They remain useful for short fragments and files the reader is creating.
+  // Recording the count in the ledger makes each addition explicit and keeps
+  // the remaining unverified examples measurable.
   const declared = entry.unverifiedNixBlocks ?? 0;
   const actual = (content.match(/^```nix\b/gmu) ?? []).length;
   if (actual !== declared) {
@@ -87,5 +83,5 @@ if (errors.length > 0) {
 const implemented = entries.filter(({ status }) => status === 'implemented').length;
 console.log(
   `how-to coverage: ${implemented}/${entries.length} implemented; ledger matches content tree; ` +
-  `${unverifiedTotal} hand-written nix block(s) nothing verifies`,
+  `${unverifiedTotal} unverified hand-written nix block(s)`,
 );

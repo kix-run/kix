@@ -30,9 +30,9 @@ Add the standard monitoring options:
 These options let a cluster author enable or disable monitoring and set a
 scrape interval for each instance.
 
-The option has to be called `metrics`. `kix.monitor` reads `config.metrics`
-by that name, so a package that calls it `monitoring` or `prometheus` gets the
-defaults and no way for a cluster author to change them.
+Name the option `metrics`. `kix.monitor` reads `config.metrics` directly, so a
+different name such as `monitoring` or `prometheus` is ignored. The cluster
+author would then have no way to change the defaults.
 
 ## Generate the ServiceMonitor
 
@@ -55,11 +55,10 @@ This instance installs Prometheus Operator and its CRDs. It does not create a
 Prometheus server. Use the cluster's existing server or install a monitoring
 stack that includes one.
 
-`kix.monitor` treats `prometheus` as an optional dependency. With no instance
-in the cluster that resolves it, the builder returns nothing: no ServiceMonitor
-is generated, evaluation succeeds, and `kix check` stays green. The absent
-monitor is the only signal that the provider is missing, so check for it after
-adding monitoring to a package.
+`kix.monitor` treats `prometheus` as an optional dependency. If no cluster
+instance provides it, the builder produces no ServiceMonitor. Evaluation and
+`kix check` still succeed. After adding monitoring to a package, inspect the
+rendered output to confirm that the ServiceMonitor exists.
 
 ## Configure the application instance
 

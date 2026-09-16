@@ -96,9 +96,9 @@ The `volumeHasSource` scorecard rule (severity error) backs this up for the
 volume case: a volume that would render without a source fails the build with
 a message naming the volume and the fix.
 
-The scorecard is off by default, so that rule only runs where the cluster sets
-`scorecard.enable = true`. Without it, a volume with no source renders as
-written and nothing objects.
+The scorecard is disabled by default. This rule runs only when the cluster sets
+`scorecard.enable = true`. Otherwise, Kix renders a volume with no source
+without reporting an error.
 
 :::note[Reference]
 See [`kix.keep`](/docs/reference/kix-helpers/keep/) for exact semantics,

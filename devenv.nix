@@ -174,14 +174,10 @@ in
       ruff-format.enable = true;
     };
 
-    # The .nix files under docs/src/snippets are not Nix files. They are
-    # region extracts committed beside their JSON sidecar, so each one starts
-    # mid-expression at the indentation of the source it came from. nixfmt
-    # cannot parse them (it reports 39 syntax errors and formats the few that
-    # happen to parse), and reformatting one is worse than the noise: the
-    # extract has to stay byte-identical to the region, or the drift check
-    # against kix-examples fails and the rendered snippet stops matching the
-    # file it claims to quote.
+    # These files are excerpts, not standalone Nix expressions. Many begin in
+    # the middle of an expression and cannot be parsed by nixfmt. They must
+    # also remain byte-identical to their source regions in kix-examples so the
+    # snippet drift check remains valid.
     config.settings.global.excludes = [ "docs/src/snippets/**" ];
   };
 
