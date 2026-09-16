@@ -15,8 +15,9 @@ node-exporter, and kube-state-metrics as related package instances.
 
 The module needs the cluster's package catalogue. By default, `buildCluster`
 passes modules only `ref` and a minimal `kix` value. The cluster must forward
-the full values with `specialArgs = { inherit kix packages; };`. The example
-cluster does this immediately above the following snippet.
+the full values with `specialArgs = { inherit kix packages; };`, which is the
+first line of the snippet below. Without it the module fails to resolve the
+packages it instantiates.
 
 ## Add the monitoring module
 

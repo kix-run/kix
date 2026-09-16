@@ -1,3 +1,3 @@
-      instances.ingress-system.ingressNginx = {
+      instances.ingress-system."ingress-nginx" = {
         package = packages."ingress-nginx";
       };
