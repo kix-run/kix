@@ -38,7 +38,9 @@ BUNDLE = (
 def pinned_tag() -> str:
     """The operator image tag the package pins, e.g. v0.74.1."""
     text = (PKG / "default.nix").read_text()
-    match = re.search(r'repository = "victoriametrics/operator";\s*\n\s*tag = "([^"]+)"', text)
+    match = re.search(
+        r'repository = "victoriametrics/operator";\s*\n\s*tag = "([^"]+)"', text
+    )
     if not match:
         sys.exit("could not find the operator image tag in default.nix")
     return match.group(1)
@@ -93,7 +95,9 @@ def main() -> int:
     for entry in sorted(kinds.values(), key=lambda e: e["plural"]):
         name = f"{entry['plural']}.operator.victoriametrics.com"
         if name not in crds:
-            sys.exit(f"{name} is not in the {tag} bundle; check kinds.nix against upstream")
+            sys.exit(
+                f"{name} is not in the {tag} bundle; check kinds.nix against upstream"
+            )
         target = SCHEMAS / f"{entry['plural']}.json"
         wanted = render(crds[name])
         if target.exists() and target.read_text() == wanted:

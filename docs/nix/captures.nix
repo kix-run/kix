@@ -1127,7 +1127,7 @@
     ];
     live = [
       {
-        prepare = ''SOPS_AGE_KEY_FILE=how-to/platform/test-only-age-key.txt kix deploy how-to-platform-sops -y'';
+        prepare = "SOPS_AGE_KEY_FILE=how-to/platform/test-only-age-key.txt kix deploy how-to-platform-sops -y";
       }
       {
         capture = "secret";
