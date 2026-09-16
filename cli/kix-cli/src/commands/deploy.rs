@@ -722,13 +722,18 @@ fn supersede_consumed(
 }
 
 /// The prune policy the flags ask for. `--prune-mode=no` skips, plain
-/// `deploy` reports orphans without deleting (warn-only), `--prune` or
-/// `--prune-mode=eager` deletes.
+/// `deploy` reports orphans without deleting (warn-only), `--prune` deletes.
+///
+/// There used to be a third mode, `eager`, documented as interleaving prune
+/// waves with apply waves. Nothing implemented that: it mapped to the same
+/// `Delete` policy as `--prune`, so the only thing it did was make a
+/// destructive run look like an ordering choice. See ROADMAP for the real
+/// feature.
 fn prune_policy_for(args: &DeployArgs) -> PrunePolicy {
     match args.prune_mode.unwrap_or(PruneMode::Default) {
         PruneMode::No => PrunePolicy::Skip,
         PruneMode::Default if !args.prune => PrunePolicy::WarnOnly,
-        PruneMode::Default | PruneMode::Eager => PrunePolicy::Delete,
+        PruneMode::Default => PrunePolicy::Delete,
     }
 }
 
@@ -1752,8 +1757,12 @@ mod prune_flag_tests {
         );
         assert!(prune_flag_requested(&deploy_args(&["--prune"])));
         assert_eq!(
-            prune_policy_for(&deploy_args(&["--prune-mode", "eager"])),
+            prune_policy_for(&deploy_args(&["--prune", "--prune-mode", "default"])),
             PrunePolicy::Delete
+        );
+        assert_eq!(
+            prune_policy_for(&deploy_args(&["--prune-mode", "default"])),
+            PrunePolicy::WarnOnly
         );
         assert_eq!(
             prune_policy_for(&deploy_args(&["--prune", "--prune-mode", "no"])),
@@ -1764,5 +1773,18 @@ mod prune_flag_tests {
             "--prune-mode",
             "no"
         ])));
+    }
+
+    /// `eager` used to parse and delete, while its help promised it
+    /// interleaved prune waves with apply waves. Nothing implemented that, so
+    /// the value is gone rather than silently equal to `--prune`. A script
+    /// still passing it should be told, not obeyed.
+    #[test]
+    fn eager_is_no_longer_a_prune_mode() {
+        let err = match Cli::try_parse_from(["kix", "deploy", "x", "--prune-mode", "eager"]) {
+            Ok(_) => panic!("eager must not parse"),
+            Err(e) => e,
+        };
+        assert_eq!(err.kind(), clap::error::ErrorKind::InvalidValue);
     }
 }

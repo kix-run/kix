@@ -867,7 +867,7 @@ Set at the top level of the cluster module (or under `config.*` in module form).
 | Option | Type | Default | Use |
 |---|---|---|---|
 | `clusterLabels` | `attrsOf str` | `{}` | Labels injected into every resource |
-| `clusterDomain` | `str` | `"cluster.local"` | DNS domain — affects every `out.fqdn` |
+| `clusterDomain` | `str` | `"cluster.local"` | In-cluster DNS suffix — affects every `out.fqdn` |
 | `instances` | nested attrset | `{}` | `{ namespace: { instance: { package, ... } } }` (§13.3) |
 | `availablePackages` | `attrsOf raw` | `{}` | Package registry; auto-instantiates on DI miss |
 | `autoNamespace` | `nullOr str` | `null` | Default ns for auto-instantiated packages |
@@ -875,6 +875,7 @@ Set at the top level of the cluster module (or under `config.*` in module form).
 | `globalPartsOverlays` | list | `[]` | Parts overlays applied to ALL instances |
 | `global` | `attrsOf anything` | `{}` | Cluster-wide configuration accessed via `_kixOptions` |
 | `k8sVersion` | `nullOr str` | `null` | Target K8s version — used for meta version-compat checks |
+| `cluster.domain` | `nullOr str` | `null` | Public base domain — `kix.expose` derives `<instance>.<domain>` |
 | `cluster.provider` | `nullOr str` | flavor-set | Distribution name (informational) |
 | `cluster.roles` | `attrsOf submodule` | flavor-set | Environment role bindings per registry role: `{ binding = "absent" | "shadowable" | "exclusive"; provider? }` (§15) |
 | `cluster.capabilities.*` | various | flavor-set | 8 substrate axioms — see §15 |
@@ -884,7 +885,12 @@ Set at the top level of the cluster module (or under `config.*` in module form).
 | `scorecard` | submodule | `{}` | `{ enable, rules, ruleDefaults, ruleOverrides }` (§17) |
 | `networkPolicy` | submodule | `{}` | `{ enable, defaultDeny, directions, platformIntents }` (§16) |
 
-`config.cluster.domain` is consumed by `kix.expose` (auto-derives the host as `${instanceName}.${clusterDomain}`) and by `mkResource`'s `out.fqdn`.
+`clusterDomain` and `cluster.domain` are different options and are not interchangeable.
+
+- `clusterDomain` is the Kubernetes DNS suffix, default `cluster.local`. `mkResource` builds `out.fqdn` as `<name>.<namespace>.svc.<clusterDomain>`. Change it only when the cluster itself was installed with a non-default domain.
+- `cluster.domain` is the public base domain, default `null`. `kix.expose` derives an Ingress/HTTPRoute host as `<instanceName>.<cluster.domain>` when the instance sets no explicit `ingress.host`; `kix.modules.monitoring` derives Grafana's root URL from it. Null means no host is derived and `kix.expose` emits no route.
+
+Putting a public domain in `clusterDomain`, or `cluster.local` in `cluster.domain`, produces addresses that resolve nowhere and no error.
 
 ## 15. Flavors and capability matrix
 
@@ -1266,7 +1272,7 @@ Both `mkCRD` and `mkCRDRef` accept two per-kind controller-semantics declaration
 }
 ```
 
-Pre-deploy: `kix deploy` polls each `kix.run/mode=import` PackageInstance to confirm the resource exists before applying anything that depends on it. Skip with `--skip-import-checks`.
+Pre-deploy: `kix deploy` polls each `kix.run/mode=import` PackageInstance to confirm the resource exists before applying anything that depends on it. There is no flag to skip this; mark the instance `optional = true` if the resource may legitimately be absent. Only kind, apiVersion and name are verified (plus the declared keys of a Secret ref) — an import's `fqdn` and `port` are passed through unchecked.
 
 ## 24. Manifest stamping
 
