@@ -33,7 +33,27 @@ Add an entry under `networkPolicy.platformIntents`:
 <Snippet {...externalWorkloadIntent} />
 
 This intent selects pods labelled `app.kubernetes.io/name=metrics-agent` in
-the `observability` namespace. It permits DNS lookups and outbound HTTPS.
+the `observability` namespace, and allows DNS lookups and outbound HTTPS.
+
+:::caution[An intent restricts as well as permits]
+In Cilium, an endpoint selected by any policy enters default-deny for each
+direction that policy carries rules for. This intent carries `egress` rules,
+so once it is applied the selected pods can reach DNS and TCP 443 to the
+world, and nothing else. Egress they had before, such as scraping a target
+inside the cluster, is dropped.
+
+List every destination the workload needs, not only the one that prompted the
+intent. `observability` holds no Kix instances, so nothing else in this
+cluster was restricting those pods before now.
+
+Directions you leave out are untouched. This intent declares no `ingress`, so
+ingress to those pods is unaffected by it.
+:::
+
+`to` and `from` are closed vocabularies, not free-form selectors. `to` accepts
+`dns`, `world`, and `apiserver`; `from` accepts `all-pods` and `world`.
+Anything else fails evaluation with `unknown egress intent target` or
+`unknown ingress intent source`.
 
 `scope = "clusterwide"` creates a cluster-wide policy. The
 `targetNamespace` label constraint keeps it scoped to the intended namespace.

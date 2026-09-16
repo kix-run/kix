@@ -32,6 +32,21 @@ Read the conflict message closely. It identifies three things:
 - the other field manager, `autoscaler`;
 - the overlapping field, `.spec.replicas`.
 
+The run stops there, which is why it ends `1 failed, 4 cancelled`. One
+conflict is one resource's worth of evidence, and the cancelled resources have
+not been checked. When more than one manager may be in play, enumerate them in
+a single pass first:
+
+<Command
+  commands={[
+    "kix deploy how-to-adoption-takeover --reconcile --dry-run -y --on-error continue",
+  ]}
+  cwd="kix-examples/"
+/>
+
+`--on-error continue` halts only the dependents of a failed resource, so
+sibling subtrees still report.
+
 ## Inspect the other manager
 
 Fetch the resource with its managed fields:

@@ -27,14 +27,18 @@ attached to that workload. Stop it with `Ctrl-C`.
 
 ## Let kubectl choose the local port
 
-Pass a bare remote port when any available local port is acceptable:
+Prefix the remote port with a colon and leave the local side empty:
 
 <Command
-  commands={["kix pf how-to-application production 80"]}
+  commands={["kix pf how-to-application production :80"]}
   cwd="kix-examples/"
 />
 
-The command prints the selected local port when the forward is ready.
+kubectl prints the chosen local port when the forward is ready.
+
+A bare `80` is not the same thing. Port specs are passed straight to
+`kubectl port-forward`, whose grammar reads a lone number as both sides, so
+`80` means `80:80` and fails when local port 80 is taken or privileged.
 
 ## Forward more than one port
 

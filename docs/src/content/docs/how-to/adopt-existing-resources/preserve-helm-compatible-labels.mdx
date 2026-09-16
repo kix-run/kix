@@ -48,9 +48,20 @@ Render the Deployment and Service to verify their labels and selectors:
 
 <Command {...workloadLabels} />
 
-Compare the rendered Deployment selector with the live selector. Then run
-`kix diff how-to-adoption` against the target cluster and review the complete
-ownership change before deploying.
+Compare the rendered Deployment selector with the live selector from the first
+step by hand. `kix diff` cannot do it: it reads live state through Kix's own
+management labels, so a Helm-owned workload is absent from the live side and
+shows up as a plain addition.
+
+Ask the API server to review the complete ownership change instead:
+
+<Command
+  commands={["kix deploy how-to-adoption --dry-run"]}
+  cwd="kix-examples/"
+/>
+
+A selector mismatch fails there rather than reaching the cluster, because the
+field is immutable.
 
 :::caution
 `labelStyle = "helm"` generates the standard `app` and `release` pair. It

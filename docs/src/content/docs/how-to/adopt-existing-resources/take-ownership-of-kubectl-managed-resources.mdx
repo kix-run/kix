@@ -65,8 +65,22 @@ sends the intended manifests to the API server without persisting them.
 
 The API server rejects a change when another field manager owns a field Kix is
 trying to change. The error identifies the resource and points to
-`--force-conflicts`. Review the named fields against the saved resource before
-using that flag.
+`--force-conflicts`.
+
+That run stops at the first conflict, which is why it ends `1 failed, 4
+cancelled`. The cancelled resources have not been checked, and any of them may
+conflict too. Enumerate the rest before deciding:
+
+<Command
+  commands={[
+    "kix deploy how-to-adoption-takeover --dry-run -y --on-error continue",
+  ]}
+  cwd="kix-examples/"
+/>
+
+`--on-error continue` halts only the dependents of a failed resource, so
+sibling subtrees still report. Review every named field against the saved
+resource before using `--force-conflicts`.
 
 ## Take ownership once
 

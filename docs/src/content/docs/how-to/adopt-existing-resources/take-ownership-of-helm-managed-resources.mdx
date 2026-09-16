@@ -76,6 +76,20 @@ The conflict identifies fields still owned by Helm. Review those fields
 against the saved manifest and values. If the Kix output is not meant to
 replace them, change the Kix definition instead of forcing the deployment.
 
+That run stops at the first conflict, which is why it ends `1 failed, 6
+cancelled`. A chart takeover usually conflicts on more than one resource, and
+the cancelled ones have not been checked. Enumerate them before deciding:
+
+<Command
+  commands={[
+    "kix deploy how-to-helm-bridge --dry-run -y --on-error continue",
+  ]}
+  cwd="kix-examples/"
+/>
+
+`--on-error continue` halts only the dependents of a failed resource, so
+sibling subtrees still report.
+
 ## Transfer resource ownership
 
 Once the rendered resources are equivalent, deploy once with
