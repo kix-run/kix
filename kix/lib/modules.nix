@@ -22,6 +22,24 @@
       description = "Kubernetes cluster DNS domain. Used to construct resource FQDNs (e.g. svc.cluster.local).";
     };
 
+    # The public domain, as opposed to `clusterDomain` above, which is the
+    # in-cluster DNS suffix. kix reads this in three places (kix.expose's
+    # host derivation, the monitoring module's Grafana root URL, and
+    # vaultwarden), so kix declares it. It used to be declared by each
+    # consumer instead, which made a forgotten declaration into a silent
+    # `null` at every read site rather than an error at the one that matters.
+    cluster.domain = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "example.com";
+      description = ''
+        Base public domain for services this cluster exposes. `kix.expose`
+        derives a host as `<instance>.<domain>` when the instance sets no
+        explicit `ingress.host`. Null means no host is derived, and
+        `kix.expose` produces no Ingress or HTTPRoute.
+      '';
+    };
+
     instances = lib.mkOption {
       type = lib.types.attrsOf (
         lib.types.attrsOf (
