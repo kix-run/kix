@@ -24,6 +24,7 @@ const actualPages = (await findPages(contentRoot))
   .sort();
 const ledgerPages = entries.map(({ page }) => page).sort();
 const errors = [];
+let unverifiedTotal = 0;
 
 for (const page of new Set(ledgerPages)) {
   if (ledgerPages.filter((candidate) => candidate === page).length > 1) {
@@ -53,6 +54,29 @@ for (const entry of entries) {
   if (entry.status === 'planned' && !isPlaceholder) {
     errors.push(`${entry.page}: has content but is still marked planned`);
   }
+
+  // Hand-written ```nix blocks are the part of a how-to guide that nothing
+  // checks. A `<Snippet>` is extracted from a real file in kix-examples and
+  // drift-checked against it; a fenced block is prose that happens to look
+  // like code, and it is where the September 2026 accuracy audit found most
+  // of its broken-as-written defects (v2_discussions/142).
+  //
+  // They are not banned: a two-line fragment or a file the reader is creating
+  // has no source to extract from. But the count is declared in the ledger,
+  // so adding one is a deliberate edit to this file rather than something
+  // that happens while writing a page, and the total is a debt with a number
+  // on it.
+  const declared = entry.unverifiedNixBlocks ?? 0;
+  const actual = (content.match(/^```nix\b/gmu) ?? []).length;
+  if (actual !== declared) {
+    const verb = actual > declared ? 'added' : 'removed';
+    errors.push(
+      `${entry.page}: ${actual} hand-written \`\`\`nix block(s), ledger declares ${declared}. ` +
+      `If you ${verb} one deliberately, update unverifiedNixBlocks in how-to-coverage.json. ` +
+      `Prefer a region snippet from kix-examples, which is drift-checked against its source.`,
+    );
+  }
+  unverifiedTotal += actual;
 }
 
 if (errors.length > 0) {
@@ -61,4 +85,7 @@ if (errors.length > 0) {
 }
 
 const implemented = entries.filter(({ status }) => status === 'implemented').length;
-console.log(`how-to coverage: ${implemented}/${entries.length} implemented; ledger matches content tree`);
+console.log(
+  `how-to coverage: ${implemented}/${entries.length} implemented; ledger matches content tree; ` +
+  `${unverifiedTotal} hand-written nix block(s) nothing verifies`,
+);
