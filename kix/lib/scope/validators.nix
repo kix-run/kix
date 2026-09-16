@@ -20,6 +20,27 @@ let
     "status.podIPs"
   ];
 
+  _nameRule =
+    kind:
+    if kind == "Service" then
+      {
+        pattern = "[a-z]([-a-z0-9]*[a-z0-9])?";
+        max = 63;
+        desc = "a lowercase RFC 1035 label: start with a letter, then letters, digits or '-', ending alphanumeric";
+      }
+    else if kind == "Namespace" then
+      {
+        pattern = "[a-z0-9]([-a-z0-9]*[a-z0-9])?";
+        max = 63;
+        desc = "a lowercase DNS-1123 label: letters, digits or '-', starting and ending alphanumeric";
+      }
+    else
+      {
+        pattern = "[a-z0-9]([-a-z0-9.]*[a-z0-9])?";
+        max = 253;
+        desc = "a lowercase DNS-1123 subdomain: letters, digits, '-' or '.', starting and ending alphanumeric";
+      };
+
   _parseQuantity =
     resource: q:
     let
@@ -209,6 +230,52 @@ in
       # `meta.unsafe = [ "raw-pvc" ]` grant, which the scorecard audits.
       # Helm-imported chart resources route through the wrapping package's
       # mkResource, so charts with persistence enabled need the same grant.
+      # Kubernetes object names are validated by the API server, not by the
+      # OpenAPI schema: `metadata.name` is an unconstrained string there, so
+      # kubeconform passes an illegal name and only a real apply (or a
+      # server-side dry run) refuses it. That gap is how an instance named
+      # `ingressNginx` reached a published how-to guide, rendering
+      # `Deployment/ingressNginx`, `Service/ingressNginx` and
+      # `IngressClass/ingressNginx`, with a green `kix check` and a capture
+      # of the output. Packages derive names from `scope.instanceName`, so a
+      # camelCase instance name is the usual cause.
+      #
+      # Three rules, matching apimachinery:
+      #   Service    RFC 1035 label, must start with a letter, <= 63
+      #   Namespace  DNS-1123 label, no dots, <= 63
+      #   otherwise  DNS-1123 subdomain, <= 253
+      # RBAC kinds are exempt: the API server validates those as path
+      # segments, which is why `prometheus-operator:leader-election` is a
+      # legal Role name.
+      checkResourceName =
+        args:
+        let
+          kind = args.kind or "";
+          name = builtins.unsafeDiscardStringContext (toString (args.name or ""));
+          exempt = builtins.elem kind [
+            "Role"
+            "RoleBinding"
+            "ClusterRole"
+            "ClusterRoleBinding"
+          ];
+          rule = _nameRule kind;
+          tooLong = builtins.stringLength name > rule.max;
+          malformed = builtins.match rule.pattern name == null;
+          hint =
+            if builtins.match ".*[A-Z].*" name != null then
+              " Kubernetes names are lowercase; this one has a capital letter. Package resources are usually named from `scope.instanceName`, so rename the instance in the cluster definition rather than the resource."
+            else
+              "";
+        in
+        if kind == "" || name == "" || exempt then
+          null
+        else if tooLong then
+          throw "[${instanceName}] ${kind} name '${name}' is ${toString (builtins.stringLength name)} characters; Kubernetes allows at most ${toString rule.max} for this kind."
+        else if malformed then
+          throw "[${instanceName}] ${kind} name '${name}' is not a legal Kubernetes object name. It must be ${rule.desc}.${hint} The OpenAPI schema does not constrain `metadata.name`, so this is refused here rather than at apply time."
+        else
+          null;
+
       checkRawPvc =
         args:
         if (args.kind or "") == "PersistentVolumeClaim" && !(builtins.elem "raw-pvc" unsafeGrants) then

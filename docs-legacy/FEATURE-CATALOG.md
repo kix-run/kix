@@ -157,6 +157,7 @@ Auto-derives CiliumNetworkPolicy from the DI graph:
 - **`effectiveAliases`** — Instance aliases override package defaults.
 - **`checkMetaStatic`** — Pre-build assertions: K8s version compat, dependency version compat, conflicts, unknown `meta.unsafe` grants.
 - **Unsafe grants** (`unsafe.nix`) — closed vocabulary of structural-rule escapes (`raw-pvc`); raw PVCs outside a granted package are an eval error (`scope/validators.nix#checkRawPvc`).
+- **Object-name validation** (`scope/validators.nix#checkResourceName`) — `metadata.name` is an unconstrained string in the Kubernetes OpenAPI schema, so schema tools pass an illegal name and only a real apply refuses it. Checked at the seal instead: RFC 1035 label for a Service, DNS-1123 label for a Namespace, DNS-1123 subdomain otherwise; RBAC kinds exempt (the API server validates those as path segments).
 - **Annotation domains** — `meta.annotationDomains` declares operator-owned annotation prefixes; duplicate declarers are an eager eval error (`eval/hooks.nix#buildAnnotationDomainIndex`).
 - **Conflict detection:** `conflictsWith` (same namespace) and `cluster:conflictsWith` (cluster-wide).
 - **`evaluatePackageDiagnostics`** — Call package-declared warnings/assertions functions.

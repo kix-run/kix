@@ -1372,6 +1372,69 @@ let
       hasName "data" (ofKind "PersistentVolumeClaim" ms)
       || throw "granted raw-pvc package did not emit its claim";
 
+    # Kubernetes validates metadata.name in the API server, not in the
+    # OpenAPI schema, so kubeconform passes an illegal name and only a real
+    # apply refuses it. These run the check at eval instead. The camelCase
+    # case is the one that reached a published how-to guide.
+    t27a-camelcase-resource-name-throws = evalFails (mkCluster [
+      baseInstances
+      { instances.appns.bad.package = mkCmPackage { name = "ingressNginx"; }; }
+    ]);
+
+    t27b-underscore-resource-name-throws = evalFails (mkCluster [
+      baseInstances
+      { instances.appns.bad.package = mkCmPackage { name = "my_config"; }; }
+    ]);
+
+    # A Service is RFC 1035, not RFC 1123: it must start with a letter, so a
+    # name a ConfigMap could carry is still refused here.
+    t27c-service-name-starting-with-a-digit-throws = evalFails (mkCluster [
+      baseInstances
+      {
+        instances.appns.svc.package = {
+          meta.version = "test";
+          build =
+            { self, scope, ... }:
+            {
+              s = scope.mkResource {
+                apiVersion = "v1";
+                kind = "Service";
+                name = "8080-proxy";
+                spec.selector.app = "x";
+                spec.ports = [ { port = 80; } ];
+              };
+              root = self.s;
+            };
+        };
+      }
+    ]);
+
+    # RBAC names are path segments in the API server, not DNS names, which is
+    # why upstream charts ship roles like `prometheus-operator:leader-election`.
+    t27d-rbac-name-with-a-colon-passes =
+      let
+        ms = manifests (mkCluster [
+          baseInstances
+          {
+            instances.appns.rb.package = {
+              meta.version = "test";
+              build =
+                { self, scope, ... }:
+                {
+                  r = scope.mkResource {
+                    apiVersion = "rbac.authorization.k8s.io/v1";
+                    kind = "Role";
+                    name = "operator:leader-election";
+                  };
+                  root = self.r;
+                };
+            };
+          }
+        ]);
+      in
+      hasName "operator:leader-election" (ofKind "Role" ms)
+      || throw "a Role named with a colon should be accepted";
+
     # The unsafe vocabulary is closed: a typo'd grant fails the cluster
     # even though the package never builds a PVC (mkCmPackage builds none).
     t27-unknown-unsafe-grant-throws = evalFails (mkCluster [

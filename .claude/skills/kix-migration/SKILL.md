@@ -572,6 +572,8 @@ DI resolution priority: (1) explicit dep overrides, (2) same-namespace match, (3
 
 **Storage DI:** Persistent storage uses first-class PVC instances, not config-based `existingClaim` strings. Short version: `storage` is a DI dep, use `kix.mount.pvc storage { mountPath = ...; }`. **Read `STORAGE.md` for the full pattern, cluster definition example, and design rationale.**
 
+**Illegal object names are an eval error.** Resource names are checked at the seal against the rule Kubernetes applies for the kind: RFC 1035 label for a Service, DNS-1123 label for a Namespace, DNS-1123 subdomain otherwise, with RBAC kinds exempt. Schema validation will not catch this for you, because `metadata.name` is an unconstrained string in the OpenAPI schema. Packages name resources from `scope.instanceName`, so the usual trigger during a migration is a camelCase instance name carried over to match a build argument. Rename the instance to lowercase and give the package `meta.defaultAliases = [ "thatCamelCaseName" ]`, which is how `ingress-nginx` keeps its `ingressNginx` DI alias.
+
 **Raw PVCs are an eval error.** A package building `kind: PersistentVolumeClaim` directly throws at build time — including PVCs emitted by an imported helm chart with persistence enabled. The escape is an explicit grant in package meta: `meta.unsafe = [ "raw-pvc" ]` (closed vocabulary, `kix/lib/unsafe.nix`; every grant is listed by the `architecture.unsafeGrants` scorecard audit). Prefer restructuring to the `storage` DI dep; grant `raw-pvc` only for chart-emitted claims or genuinely inline multi-component claims.
 
 ### Package Meta

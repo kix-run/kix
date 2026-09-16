@@ -218,7 +218,10 @@ in
         grafanaRootUrl =
           if cfg.grafana.rootUrl != null then
             cfg.grafana.rootUrl
-          else if config ? cluster && config.cluster ? domain then
+          # `cluster.domain` is declared by kix and defaults to null, so the
+          # option is always present and only its value says whether a public
+          # domain exists.
+          else if (config.cluster.domain or null) != null then
             "http://grafana.${config.cluster.domain}"
           else
             "http://grafana.localhost";

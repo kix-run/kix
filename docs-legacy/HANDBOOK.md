@@ -1398,6 +1398,7 @@ Diff features:
 |---|---|
 | Reading `out.selector` cycles through a back-reference | Use `workload.rawSelector`. Trade-off: `architecture.selectorCoherence` warns; live with it |
 | Raw PVC throws at eval | Provision via a sibling `persistent-volume-claim` instance + `storage` dep; only canonical/chart-persistence packages hold `meta.unsafe = [ "raw-pvc" ]` |
+| `<Kind> name '<n>' is not a legal Kubernetes object name` | Rename the **instance**, not the resource: packages derive names from `scope.instanceName`, so `ingressNginx` renders `Deployment/ingressNginx`. Use a lowercase name and give the package `meta.defaultAliases = [ "camelCaseArgName" ]` so the DI build argument still resolves |
 | `annotationDomainOwnership` warns about an operator's annotations | Declare the DI dep on the operator (e.g. `reflector`) and use its builder; for domains consumed outside kix add `scorecard.knownAnnotationDomains` |
 | Cross-namespace mount or secret-ref errors at build | Either move the resource to the right ns, use `scope.forNamespace`, or set `reflected = true` if reflector mirrors it |
 | Dep injection overrides a value you want to pin | Wrap with `mkLocked` |
