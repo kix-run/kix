@@ -32,6 +32,20 @@ Read the conflict message closely. It identifies three things:
 - the other field manager, `autoscaler`;
 - the overlapping field, `.spec.replicas`.
 
+By default, the run stops after this conflict and ends with `1 failed, 4
+cancelled`. The cancelled resources have not been checked. To find conflicts
+on the remaining resources, run the dry run again with `--on-error continue`:
+
+<Command
+  commands={[
+    "kix deploy how-to-adoption-takeover --reconcile --dry-run -y --on-error continue",
+  ]}
+  cwd="kix-examples/"
+/>
+
+This still skips resources that depend on a failed resource, but continues
+checking independent branches of the dependency graph.
+
 ## Inspect the other manager
 
 Fetch the resource with its managed fields:

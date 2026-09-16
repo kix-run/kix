@@ -18,9 +18,11 @@ Add one instance in a platform namespace:
 
 <Snippet {...ingressControllerInstance} />
 
-The instance name becomes the default IngressClass name. Keeping the
-`ingressNginx` name also lets packages that use `kix.expose` resolve this
-controller automatically.
+The instance name becomes the default IngressClass name, so it has to be a
+legal Kubernetes object name. `ingress-nginx` is lowercase; `ingressNginx`
+is refused at evaluation. Packages that use `kix.expose` still resolve this
+controller, because the package declares `meta.defaultAliases =
+[ "ingressNginx" ]` and that alias is what the dependency matches on.
 
 ## Choose how traffic reaches the controller
 
@@ -29,9 +31,14 @@ in-cluster component forwards traffic to ingress-nginx.
 
 For a cloud or bare-metal environment with LoadBalancer support, set
 `config.serviceType = "LoadBalancer"` on the instance. Use
-`config.serviceAnnotations` for provider-specific load balancer settings. The
-target cluster must have a provider for the `loadBalancer` role or evaluation
-will reject the Service.
+`config.serviceAnnotations` for provider-specific load balancer settings.
+
+Evaluation rejects the Service when the cluster declares the `loadBalancer`
+role absent, as the kind flavor does. A managed provider instance satisfies
+the role. So does a `shadowable` or `exclusive` environment binding for a load
+balancer already supplied by the platform. If the cluster does not declare the
+role, Kix treats its availability as unknown and emits a trace warning instead
+of rejecting the Service.
 
 Set `config.replicaCount` when the controller should run more than one replica.
 
@@ -42,7 +49,7 @@ Inspect the main generated resources:
 <Command {...controllerResources} />
 
 The example renders one controller Deployment, a `ClusterIP` Service, and an
-IngressClass named `ingressNginx`.
+IngressClass named `ingress-nginx`.
 
 Deploy the cluster:
 

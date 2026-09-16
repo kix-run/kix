@@ -218,7 +218,9 @@ in
         grafanaRootUrl =
           if cfg.grafana.rootUrl != null then
             cfg.grafana.rootUrl
-          else if config ? cluster && config.cluster ? domain then
+          # `cluster.domain` always exists and is null when no public domain
+          # has been configured.
+          else if (config.cluster.domain or null) != null then
             "http://grafana.${config.cluster.domain}"
           else
             "http://grafana.localhost";

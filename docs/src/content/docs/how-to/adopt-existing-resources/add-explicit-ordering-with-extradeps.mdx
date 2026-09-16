@@ -56,9 +56,10 @@ Use `extraDeps` only when the ordering relationship has no corresponding
 manifest value. Reading a dependency's tracked `out` value already creates an
 edge, so adding another one is unnecessary.
 
-At the cluster instance level, `extraDeps` applies to `kix.mkImport` markers.
-Package authors can place `requires` or `extraDeps` on individual resources
-when the relationship belongs inside a package.
+At the cluster instance level, `extraDeps` only affects `kix.mkImport`
+markers. Although the option is available on every instance, managed
+instances ignore it. Package authors should instead set `requires` or
+`extraDeps` on the individual resource that needs the ordering constraint.
 
 This edge does not automatically order packages that consume manually
 declared import outputs. If a consumer must wait for the same prerequisite,

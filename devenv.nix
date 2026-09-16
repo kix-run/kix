@@ -173,6 +173,12 @@ in
       ruff-check.enable = true;
       ruff-format.enable = true;
     };
+
+    # These files are excerpts, not standalone Nix expressions. Many begin in
+    # the middle of an expression and cannot be parsed by nixfmt. They must
+    # also remain byte-identical to their source regions in kix-examples so the
+    # snippet drift check remains valid.
+    config.settings.global.excludes = [ "docs/src/snippets/**" ];
   };
 
   # Install lefthook git hooks on shell entry

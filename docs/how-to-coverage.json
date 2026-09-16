@@ -11,91 +11,915 @@
     "package-stacks": "Focused deployments of catalogue packages"
   },
   "pages": [
-    { "page": "adopt-existing-resources/add-explicit-ordering-with-extradeps", "scenario": "adoption", "status": "implemented", "snippets": ["explicitImportOrdering"], "offlineCaptures": ["how-to/adoption-extra-deps/check", "how-to/adoption-extra-deps/graph"] },
-    { "page": "adopt-existing-resources/handle-server-side-apply-conflicts-safely", "scenario": "adoption", "status": "implemented", "liveCaptures": ["how-to/adoption-ssa-conflicts/conflict", "how-to/adoption-ssa-conflicts/force-preview", "how-to/adoption-ssa-conflicts/resolve"] },
-    { "page": "adopt-existing-resources/handle-stateful-migration-prompts-safely", "scenario": "adoption", "status": "implemented", "offlineCaptures": ["how-to/adoption-stateful-migration/export-before", "how-to/adoption-stateful-migration/diff"], "liveCaptures": ["how-to/adoption-stateful-migration/refusal", "how-to/adoption-stateful-migration/accepted-dry-run"] },
-    { "page": "adopt-existing-resources/import-an-existing-service-with-kix-mkimport", "scenario": "adoption", "status": "implemented", "snippets": ["importExistingService", "consumeImportedService"], "offlineCaptures": ["how-to/adoption-import-service/check", "how-to/adoption-import-service/list-packages", "how-to/adoption-import-service/client-config"] },
-    { "page": "adopt-existing-resources/patch-package-output-with-overlays", "scenario": "adoption", "status": "implemented", "snippets": ["patchPackageOutput"], "offlineCaptures": ["how-to/adoption-parts-overlay/check", "how-to/adoption-parts-overlay/patched-config"] },
-    { "page": "adopt-existing-resources/preserve-existing-selectors", "scenario": "adoption", "status": "implemented", "snippets": ["preserveExistingSelectors"], "offlineCaptures": ["how-to/adoption-preserve-selectors/check", "how-to/adoption-preserve-selectors/deployment"] },
-    { "page": "adopt-existing-resources/preserve-helm-compatible-labels", "scenario": "adoption", "status": "implemented", "snippets": ["preserveHelmLabels"], "offlineCaptures": ["how-to/adoption-helm-labels/check", "how-to/adoption-helm-labels/workload-labels"] },
-    { "page": "adopt-existing-resources/shadow-a-flavor-provided-import-with-a-managed-package", "scenario": "adoption", "status": "planned" },
-    { "page": "adopt-existing-resources/take-ownership-of-helm-managed-resources", "scenario": "adoption", "status": "implemented", "snippets": ["inlineHelmChart"], "offlineCaptures": ["how-to/adoption-helm-takeover/check", "how-to/adoption-helm-takeover/desired-deployment"], "liveCaptures": ["how-to/adoption-helm-takeover/conflict", "how-to/adoption-helm-takeover/take-ownership", "how-to/adoption-helm-takeover/remove-release-record"] },
-    { "page": "adopt-existing-resources/take-ownership-of-kubectl-managed-resources", "scenario": "adoption", "status": "implemented", "snippets": ["kubectlManagedWorkload"], "offlineCaptures": ["how-to/adoption-kubectl-takeover/check", "how-to/adoption-kubectl-takeover/desired-deployment"], "liveCaptures": ["how-to/adoption-kubectl-takeover/conflict", "how-to/adoption-kubectl-takeover/take-ownership"] },
-    { "page": "adopt-existing-resources/use-helm-charts-through-the-kix-helm-bridge", "scenario": "adoption", "status": "implemented", "snippets": ["inlineHelmChart"], "offlineCaptures": ["how-to/helm-bridge/check", "how-to/helm-bridge/deployment"] },
-    { "page": "author-packages-and-clusters/add-a-post-deploy-health-check", "scenario": "application", "status": "implemented", "snippets": ["healthCheckOption", "healthCheckScript", "healthCheckBuildEntry", "healthCheckConfig"], "offlineCaptures": ["how-to/application-health-check/build", "how-to/application-health-check/check"], "liveCaptures": ["how-to/application-health-check/deploy", "how-to/application-health-check/deploy-failing-probe"] },
-    { "page": "author-packages-and-clusters/add-env-vars-and-mounts", "scenario": "application", "status": "implemented", "snippets": ["environmentVariables", "contentConfigMap", "configMount", "applyMount"] },
-    { "page": "author-packages-and-clusters/add-typed-package-options", "scenario": "application", "status": "implemented", "snippets": ["typedOptions"], "offlineCaptures": ["how-to/application-typed-options/check-invalid-environment"] },
-    { "page": "author-packages-and-clusters/compose-multi-team-clusters-with-mergefragments", "scenario": "application", "status": "implemented", "snippets": ["platformFragment", "storefrontFragment", "mergeTeamFragments", "useMergedFragments"], "offlineCaptures": ["how-to/composition-fragments/check", "how-to/composition-fragments/namespace"] },
-    { "page": "author-packages-and-clusters/configure-namespace-policy-and-global-cluster-settings", "scenario": "application", "status": "implemented", "snippets": ["clusterAndNamespaceSettings"], "offlineCaptures": ["how-to/application-cluster-settings/check", "how-to/application-cluster-settings/namespace-resources"] },
-    { "page": "author-packages-and-clusters/create-a-local-package", "scenario": "application", "status": "implemented", "snippets": ["packageMetadata", "contentConfigMap", "applicationDeployment", "applicationService", "localPackageImport"] },
-    { "page": "author-packages-and-clusters/declare-package-roles-and-metadata", "scenario": "application", "status": "implemented", "snippets": ["packageMetadataFields", "infrastructureRole", "roleOutputContract"], "offlineCaptures": ["how-to/application-package-metadata/check"] },
-    { "page": "author-packages-and-clusters/declare-readiness-for-custom-resources", "scenario": "application", "status": "implemented", "snippets": ["customResourceReadiness"], "offlineCaptures": ["how-to/application-custom-resource-readiness/widget"] },
-    { "page": "author-packages-and-clusters/keep-intentionally-empty-values", "scenario": "application", "status": "implemented" },
-    { "page": "author-packages-and-clusters/reuse-one-package-for-multiple-instances", "scenario": "application", "status": "implemented", "snippets": ["reusedInstances"], "offlineCaptures": ["how-to/application-reuse/list-packages"] },
-    { "page": "author-packages-and-clusters/stamp-multi-environment-clusters-with-mkenv", "scenario": "application", "status": "implemented", "snippets": ["environmentInstanceSet", "stampEnvironments"], "offlineCaptures": ["how-to/composition-multi-env/check", "how-to/composition-multi-env/environment-resources"] },
-    { "page": "debug-dependency-wiring/debug-a-missing-dependency", "scenario": "dependency-wiring", "status": "implemented", "offlineCaptures": ["how-to/dependency-fixed/check", "how-to/dependency-missing/check"] },
-    { "page": "debug-dependency-wiring/inspect-an-instance-s-deps-parts-and-out", "scenario": "dependency-wiring", "status": "planned" },
-    { "page": "debug-dependency-wiring/use-aliases-and-default-aliases", "scenario": "dependency-wiring", "status": "implemented" },
-    { "page": "debug-dependency-wiring/use-auto-instantiation-with-availablepackages-optional-and-autonamespace", "scenario": "dependency-wiring", "status": "implemented", "snippets": ["autoInstantiatedDeps", "autoInstantiationCatalog", "optionalInstance", "autoInstantiationConsumer"], "offlineCaptures": ["how-to/dependency-auto-instantiation/check", "how-to/dependency-auto-instantiation/graph"] },
-    { "page": "debug-dependency-wiring/visualize-the-dependency-graph-with-kix-graph", "scenario": "dependency-wiring", "status": "implemented", "offlineCaptures": ["how-to/dependency-graph/graph-dot", "how-to/dependency-graph/graph-json", "how-to/dependency-graph/graph-tree"] },
-    { "page": "debug-dependency-wiring/wire-cross-namespace-dependencies-explicitly", "scenario": "dependency-wiring", "status": "implemented", "snippets": ["crossNamespaceDep"], "offlineCaptures": ["how-to/dependency-cross-namespace/check"] },
-    { "page": "operate-a-cluster/check-cluster-health", "scenario": "operations", "status": "implemented", "liveCaptures": ["how-to/application-health/health", "how-to/application-health/health-verbose"] },
-    { "page": "operate-a-cluster/check-live-resources-for-drift", "scenario": "operations", "status": "implemented", "liveCaptures": ["how-to/application-drift/scaled-deployment"] },
-    { "page": "operate-a-cluster/check-resource-status", "scenario": "operations", "status": "implemented", "liveCaptures": ["how-to/application-status/describe-deployment", "how-to/application-status/job-logs", "how-to/application-status/status"] },
-    { "page": "operate-a-cluster/configure-activation-retention", "scenario": "operations", "status": "implemented" },
-    { "page": "operate-a-cluster/deploy-with-dry-run-timeouts-pruning-and-log-tui-output-modes", "scenario": "operations", "status": "implemented", "liveCaptures": ["how-to/application-deploy-controls/dry-run"] },
-    { "page": "operate-a-cluster/export-audit-preserving-yaml", "scenario": "operations", "status": "implemented", "offlineCaptures": ["how-to/application-export-audit/annotations", "how-to/application-export-audit/export", "how-to/application-export-audit/internal-crs"] },
-    { "page": "operate-a-cluster/export-plain-yaml", "scenario": "operations", "status": "implemented", "offlineCaptures": ["how-to/application-export-exit/export", "how-to/application-export-exit/files", "how-to/application-export-exit/no-annotations"] },
-    { "page": "operate-a-cluster/garbage-collect-stale-resources", "scenario": "operations", "status": "implemented", "liveCaptures": ["how-to/application-gc/plan"] },
-    { "page": "operate-a-cluster/inspect-a-deploy-receipt", "scenario": "operations", "status": "implemented", "liveCaptures": ["how-to/application-receipt/active-receipt"] },
-    { "page": "operate-a-cluster/list-images-for-airgap-preloading", "scenario": "operations", "status": "implemented", "offlineCaptures": ["how-to/application-images/list", "how-to/application-images/list-json", "how-to/application-images/list-with-sources"] },
-    { "page": "operate-a-cluster/preview-changes-with-kix-diff", "scenario": "operations", "status": "implemented", "liveCaptures": ["how-to/application-diff/diff-clean", "how-to/application-diff/diff-markdown", "how-to/application-diff/diff-message-change"] },
-    { "page": "operate-a-cluster/reconcile-drift", "scenario": "operations", "status": "implemented", "liveCaptures": ["how-to/application-reconcile/drift-clean", "how-to/application-reconcile/reconcile"] },
-    { "page": "operate-a-cluster/roll-back-an-activation", "scenario": "operations", "status": "implemented", "liveCaptures": ["how-to/application-rollback/list", "how-to/application-rollback/list-json"] },
-    { "page": "operate-a-cluster/use-kix-logs", "scenario": "operations", "status": "implemented", "liveCaptures": ["how-to/application-logs/production-tail"] },
-    { "page": "operate-a-cluster/use-kix-pf", "scenario": "operations", "status": "implemented" },
-    { "page": "operate-a-cluster/use-snapshots-for-offline-or-ci-diffs", "scenario": "operations", "status": "implemented", "liveCaptures": ["how-to/application-snapshot/diff-clean", "how-to/application-snapshot/diff-from-snapshot", "how-to/application-snapshot/save"] },
-    { "page": "package-task-guides/configure-cert-manager-issuers", "scenario": "package-stacks", "status": "planned" },
-    { "page": "package-task-guides/deploy-a-python-app", "scenario": "package-stacks", "status": "implemented", "snippets": ["pythonApplicationInstance"], "offlineCaptures": ["how-to/package-python/check", "how-to/package-python/workload"] },
-    { "page": "package-task-guides/deploy-stackgres", "scenario": "package-stacks", "status": "implemented", "snippets": ["stackgresOperatorInstance", "stackgresClusterInstance"], "offlineCaptures": ["how-to/package-stackgres/check", "how-to/package-stackgres/database-resources"] },
-    { "page": "package-task-guides/deploy-valkey-redis", "scenario": "package-stacks", "status": "implemented", "snippets": ["valkeyInstance"], "offlineCaptures": ["how-to/package-valkey/check", "how-to/package-valkey/resources"] },
-    { "page": "package-task-guides/deploy-velero", "scenario": "package-stacks", "status": "implemented", "snippets": ["veleroInstance"], "offlineCaptures": ["how-to/package-velero/check", "how-to/package-velero/backup-configuration"] },
-    { "page": "package-task-guides/install-cilium-network-policy-support", "scenario": "package-stacks", "status": "implemented", "snippets": ["ciliumRoleAndPolicy", "ciliumInstance"], "offlineCaptures": ["how-to/package-cilium/check", "how-to/package-cilium/components"] },
-    { "page": "package-task-guides/install-envoy-gateway", "scenario": "platform", "status": "implemented", "snippets": ["gatewayInstance", "gatewayKindProxy"], "liveCaptures": ["how-to/package-envoy-gateway/controller-ready", "how-to/package-envoy-gateway/gateway-resources"] },
-    { "page": "package-task-guides/install-ingress-nginx", "scenario": "package-stacks", "status": "implemented", "snippets": ["ingressControllerInstance"], "offlineCaptures": ["how-to/install-ingress-nginx/controller-resources"] },
-    { "page": "package-task-guides/install-the-monitoring-stack", "scenario": "package-stacks", "status": "implemented", "snippets": ["monitoringStack"], "offlineCaptures": ["how-to/package-monitoring/check", "how-to/package-monitoring/packages"] },
-    { "page": "package-task-guides/install-the-victoriametrics-ha-monitoring-stack", "scenario": "package-stacks", "status": "implemented", "snippets": ["victoriaMetricsHaStack"], "offlineCaptures": ["how-to/package-victoria-metrics/check", "how-to/package-victoria-metrics/packages", "how-to/package-victoria-metrics/resources"] },
-    { "page": "package-task-guides/provision-persistent-storage", "scenario": "package-stacks", "status": "implemented", "snippets": ["persistentStorageInstances", "persistentVolumeMount", "persistentStorageDeployment"], "offlineCaptures": ["how-to/package-storage/check", "how-to/package-storage/storage-resources"] },
-    { "page": "platform-capabilities/add-tls-through-cluster-issuers", "scenario": "platform", "status": "planned" },
-    { "page": "platform-capabilities/auto-monitor-a-service", "scenario": "platform", "status": "implemented", "snippets": ["monitorOption", "monitorBuildEntry", "prometheusOperatorInstance", "monitoredApplicationInstance"], "offlineCaptures": ["how-to/platform-monitoring/check", "how-to/platform-monitoring/service-monitor"] },
-    { "page": "platform-capabilities/configure-storage-classes-and-pvcs", "scenario": "platform", "status": "planned" },
-    { "page": "platform-capabilities/declare-platform-intents-for-non-kix-managed-pods", "scenario": "platform", "status": "implemented", "snippets": ["externalWorkloadIntent"], "offlineCaptures": ["how-to/platform-intents/check", "how-to/platform-intents/intent"] },
-    { "page": "platform-capabilities/enable-generated-network-policy", "scenario": "platform", "status": "implemented", "snippets": ["trackedServiceEndpoint", "networkPolicySettings", "networkPolicyInstances"], "offlineCaptures": ["how-to/platform-network-policy/check", "how-to/platform-network-policy/policies"] },
-    { "page": "platform-capabilities/expose-a-service-through-cloudflare-tunnel", "scenario": "platform", "status": "implemented", "snippets": ["tunnelOriginInstance", "cloudflaredInstance"], "offlineCaptures": ["how-to/platform-cloudflare-tunnel/resources"] },
-    { "page": "platform-capabilities/expose-a-service-with-gateway-api", "scenario": "platform", "status": "implemented", "snippets": ["exposureOption", "exposureBuildEntry", "gatewayInstance", "gatewayApplicationInstance"], "offlineCaptures": ["how-to/platform-gateway/check", "how-to/platform-gateway/http-route"] },
-    { "page": "platform-capabilities/expose-a-service-with-ingress", "scenario": "platform", "status": "implemented", "snippets": ["exposureOption", "exposureBuildEntry", "ingressControllerInstance", "ingressApplicationInstance"], "offlineCaptures": ["how-to/platform-ingress/check", "how-to/platform-ingress/ingress"] },
-    { "page": "platform-capabilities/mount-node-local-storage-with-hostpath", "scenario": "platform", "status": "implemented", "snippets": ["hostPathMount", "hostPathDeployment", "hostPathApplicationInstance"], "offlineCaptures": ["how-to/platform-hostpath/check", "how-to/platform-hostpath/deployment"] },
-    { "page": "platform-capabilities/use-externally-managed-secrets", "scenario": "platform", "status": "implemented", "snippets": ["externalSecretRef", "externalSecretEnv"], "offlineCaptures": ["how-to/platform-external-secrets/check", "how-to/platform-external-secrets/graph"] },
-    { "page": "platform-capabilities/use-kix-managed-secrets", "scenario": "platform", "status": "implemented", "snippets": ["managedSecret", "managedSecretEnv"], "offlineCaptures": ["how-to/platform-managed-secrets/check"] },
-    { "page": "platform-capabilities/use-sops-backed-secrets-if-production-ready", "scenario": "platform", "status": "implemented", "snippets": ["sopsBackedSecret", "sopsSecretEnv"], "offlineCaptures": ["how-to/platform-sops-secrets/rendered-secret"], "liveCaptures": ["how-to/platform-sops-secrets/secret"] },
-    { "page": "policy-ci-and-compliance/add-scorecard-rules", "scenario": "policy", "status": "implemented", "snippets": ["packageRule"], "offlineCaptures": ["how-to/scorecard-rules/check"] },
-    { "page": "policy-ci-and-compliance/attest-a-deployment-from-its-cluster-receipt", "scenario": "policy", "status": "implemented", "liveCaptures": ["how-to/policy-receipt-attestation/attest"] },
-    { "page": "policy-ci-and-compliance/disable-scorecard-rules", "scenario": "policy", "status": "implemented" },
-    { "page": "policy-ci-and-compliance/generate-a-cyclonedx-sbom", "scenario": "policy", "status": "implemented", "offlineCaptures": ["how-to/policy-sbom/sbom"] },
-    { "page": "policy-ci-and-compliance/generate-an-audit-bundle", "scenario": "policy", "status": "implemented", "offlineCaptures": ["how-to/policy-audit/audit", "how-to/policy-audit/files"] },
-    { "page": "policy-ci-and-compliance/generate-pr-review-markdown-from-kix-diff", "scenario": "policy", "status": "implemented" },
-    { "page": "policy-ci-and-compliance/generate-slsa-provenance", "scenario": "policy", "status": "implemented", "offlineCaptures": ["how-to/policy-provenance/attest"] },
-    { "page": "policy-ci-and-compliance/override-scorecard-severity", "scenario": "policy", "status": "implemented" },
-    { "page": "policy-ci-and-compliance/run-kix-check-sarif-in-ci", "scenario": "policy", "status": "implemented", "offlineCaptures": ["how-to/policy-sarif/check"] },
-    { "page": "policy-ci-and-compliance/save-and-diff-snapshots-for-offline-ci", "scenario": "policy", "status": "implemented" },
-    { "page": "promote-images/build-promote-and-deploy-an-image-in-ci", "scenario": "image-promotion", "status": "implemented" },
-    { "page": "promote-images/create-a-committed-image-pin-file", "scenario": "image-promotion", "status": "implemented", "snippets": ["pinFile", "consumePin", "renderPinnedImage"], "offlineCaptures": ["how-to/image-pins/check-offline", "how-to/image-pins/list"] },
-    { "page": "promote-images/promote-and-verify-an-image-pin", "scenario": "image-promotion", "status": "implemented" },
-    { "page": "start-and-inspect/deploy-to-kind", "scenario": "application", "status": "implemented", "liveCaptures": ["how-to/application-kubectl/get-namespaces", "how-to/application-kubectl/get-workloads"] },
-    { "page": "start-and-inspect/install-and-run-the-kix-cli", "scenario": "application", "status": "implemented", "offlineCaptures": ["how-to/application-install/version"] },
-    { "page": "start-and-inspect/list-clusters-and-packages", "scenario": "application", "status": "implemented", "offlineCaptures": ["how-to/application-list/list-clusters", "how-to/application-list/list-packages"] },
-    { "page": "start-and-inspect/render-manifests", "scenario": "application", "status": "implemented", "offlineCaptures": ["how-to/application-basics/build", "how-to/application-basics/check", "how-to/application-basics/deployment-env", "how-to/application-basics/inspect", "how-to/application-basics/list-packages", "how-to/application-render/build-production-deployment"] },
-    { "page": "start-and-inspect/select-and-configure-a-cluster-flavor", "scenario": "application", "status": "implemented", "snippets": ["kindFlavor"] },
-    { "page": "start-and-inspect/use-mkflake-in-a-consuming-repo", "scenario": "application", "status": "implemented", "snippets": ["mkFlakeOutputs"], "offlineCaptures": ["how-to/application-list/list-clusters"] }
+    {
+      "page": "adopt-existing-resources/add-explicit-ordering-with-extradeps",
+      "scenario": "adoption",
+      "status": "implemented",
+      "snippets": [
+        "explicitImportOrdering"
+      ],
+      "offlineCaptures": [
+        "how-to/adoption-extra-deps/check",
+        "how-to/adoption-extra-deps/graph"
+      ]
+    },
+    {
+      "page": "adopt-existing-resources/handle-server-side-apply-conflicts-safely",
+      "scenario": "adoption",
+      "status": "implemented",
+      "liveCaptures": [
+        "how-to/adoption-ssa-conflicts/conflict",
+        "how-to/adoption-ssa-conflicts/force-preview",
+        "how-to/adoption-ssa-conflicts/resolve"
+      ]
+    },
+    {
+      "page": "adopt-existing-resources/handle-stateful-migration-prompts-safely",
+      "scenario": "adoption",
+      "status": "implemented",
+      "offlineCaptures": [
+        "how-to/adoption-stateful-migration/export-before",
+        "how-to/adoption-stateful-migration/diff"
+      ],
+      "liveCaptures": [
+        "how-to/adoption-stateful-migration/refusal",
+        "how-to/adoption-stateful-migration/accepted-dry-run"
+      ]
+    },
+    {
+      "page": "adopt-existing-resources/import-an-existing-service-with-kix-mkimport",
+      "scenario": "adoption",
+      "status": "implemented",
+      "snippets": [
+        "importExistingService",
+        "consumeImportedService"
+      ],
+      "offlineCaptures": [
+        "how-to/adoption-import-service/check",
+        "how-to/adoption-import-service/list-packages",
+        "how-to/adoption-import-service/client-config"
+      ],
+      "unverifiedNixBlocks": 1
+    },
+    {
+      "page": "adopt-existing-resources/patch-package-output-with-overlays",
+      "scenario": "adoption",
+      "status": "implemented",
+      "snippets": [
+        "patchPackageOutput"
+      ],
+      "offlineCaptures": [
+        "how-to/adoption-parts-overlay/check",
+        "how-to/adoption-parts-overlay/patched-config"
+      ]
+    },
+    {
+      "page": "adopt-existing-resources/preserve-existing-selectors",
+      "scenario": "adoption",
+      "status": "implemented",
+      "snippets": [
+        "preserveExistingSelectors"
+      ],
+      "offlineCaptures": [
+        "how-to/adoption-preserve-selectors/check",
+        "how-to/adoption-preserve-selectors/deployment"
+      ]
+    },
+    {
+      "page": "adopt-existing-resources/preserve-helm-compatible-labels",
+      "scenario": "adoption",
+      "status": "implemented",
+      "snippets": [
+        "preserveHelmLabels"
+      ],
+      "offlineCaptures": [
+        "how-to/adoption-helm-labels/check",
+        "how-to/adoption-helm-labels/workload-labels"
+      ]
+    },
+    {
+      "page": "adopt-existing-resources/shadow-a-flavor-provided-import-with-a-managed-package",
+      "scenario": "adoption",
+      "status": "planned"
+    },
+    {
+      "page": "adopt-existing-resources/take-ownership-of-helm-managed-resources",
+      "scenario": "adoption",
+      "status": "implemented",
+      "snippets": [
+        "inlineHelmChart"
+      ],
+      "offlineCaptures": [
+        "how-to/adoption-helm-takeover/check",
+        "how-to/adoption-helm-takeover/desired-deployment"
+      ],
+      "liveCaptures": [
+        "how-to/adoption-helm-takeover/conflict",
+        "how-to/adoption-helm-takeover/take-ownership",
+        "how-to/adoption-helm-takeover/remove-release-record"
+      ]
+    },
+    {
+      "page": "adopt-existing-resources/take-ownership-of-kubectl-managed-resources",
+      "scenario": "adoption",
+      "status": "implemented",
+      "snippets": [
+        "kubectlManagedWorkload"
+      ],
+      "offlineCaptures": [
+        "how-to/adoption-kubectl-takeover/check",
+        "how-to/adoption-kubectl-takeover/desired-deployment"
+      ],
+      "liveCaptures": [
+        "how-to/adoption-kubectl-takeover/conflict",
+        "how-to/adoption-kubectl-takeover/take-ownership"
+      ]
+    },
+    {
+      "page": "adopt-existing-resources/use-helm-charts-through-the-kix-helm-bridge",
+      "scenario": "adoption",
+      "status": "implemented",
+      "snippets": [
+        "inlineHelmChart"
+      ],
+      "offlineCaptures": [
+        "how-to/helm-bridge/check",
+        "how-to/helm-bridge/deployment"
+      ]
+    },
+    {
+      "page": "author-packages-and-clusters/add-a-post-deploy-health-check",
+      "scenario": "application",
+      "status": "implemented",
+      "snippets": [
+        "healthCheckOption",
+        "healthCheckScript",
+        "healthCheckBuildEntry",
+        "healthCheckConfig"
+      ],
+      "offlineCaptures": [
+        "how-to/application-health-check/build",
+        "how-to/application-health-check/check"
+      ],
+      "liveCaptures": [
+        "how-to/application-health-check/deploy",
+        "how-to/application-health-check/deploy-failing-probe"
+      ]
+    },
+    {
+      "page": "author-packages-and-clusters/add-env-vars-and-mounts",
+      "scenario": "application",
+      "status": "implemented",
+      "snippets": [
+        "environmentVariables",
+        "contentConfigMap",
+        "configMount",
+        "applyMount"
+      ],
+      "unverifiedNixBlocks": 2
+    },
+    {
+      "page": "author-packages-and-clusters/add-typed-package-options",
+      "scenario": "application",
+      "status": "implemented",
+      "snippets": [
+        "typedOptions"
+      ],
+      "offlineCaptures": [
+        "how-to/application-typed-options/check-invalid-environment"
+      ],
+      "unverifiedNixBlocks": 2
+    },
+    {
+      "page": "author-packages-and-clusters/compose-multi-team-clusters-with-mergefragments",
+      "scenario": "application",
+      "status": "implemented",
+      "snippets": [
+        "platformFragment",
+        "storefrontFragment",
+        "mergeTeamFragments",
+        "useMergedFragments"
+      ],
+      "offlineCaptures": [
+        "how-to/composition-fragments/check",
+        "how-to/composition-fragments/namespace"
+      ],
+      "unverifiedNixBlocks": 1
+    },
+    {
+      "page": "author-packages-and-clusters/configure-namespace-policy-and-global-cluster-settings",
+      "scenario": "application",
+      "status": "implemented",
+      "snippets": [
+        "clusterAndNamespaceSettings"
+      ],
+      "offlineCaptures": [
+        "how-to/application-cluster-settings/check",
+        "how-to/application-cluster-settings/namespace-resources"
+      ]
+    },
+    {
+      "page": "author-packages-and-clusters/create-a-local-package",
+      "scenario": "application",
+      "status": "implemented",
+      "snippets": [
+        "packageMetadata",
+        "contentConfigMap",
+        "applicationDeployment",
+        "applicationService",
+        "localPackageImport"
+      ],
+      "unverifiedNixBlocks": 1
+    },
+    {
+      "page": "author-packages-and-clusters/declare-package-roles-and-metadata",
+      "scenario": "application",
+      "status": "implemented",
+      "snippets": [
+        "packageMetadataFields",
+        "infrastructureRole",
+        "roleOutputContract"
+      ],
+      "offlineCaptures": [
+        "how-to/application-package-metadata/check"
+      ]
+    },
+    {
+      "page": "author-packages-and-clusters/declare-readiness-for-custom-resources",
+      "scenario": "application",
+      "status": "implemented",
+      "snippets": [
+        "customResourceReadiness"
+      ],
+      "offlineCaptures": [
+        "how-to/application-custom-resource-readiness/widget"
+      ]
+    },
+    {
+      "page": "author-packages-and-clusters/keep-intentionally-empty-values",
+      "scenario": "application",
+      "status": "implemented",
+      "unverifiedNixBlocks": 5
+    },
+    {
+      "page": "author-packages-and-clusters/reuse-one-package-for-multiple-instances",
+      "scenario": "application",
+      "status": "implemented",
+      "snippets": [
+        "reusedInstances"
+      ],
+      "offlineCaptures": [
+        "how-to/application-reuse/list-packages"
+      ],
+      "unverifiedNixBlocks": 1
+    },
+    {
+      "page": "author-packages-and-clusters/stamp-multi-environment-clusters-with-mkenv",
+      "scenario": "application",
+      "status": "implemented",
+      "snippets": [
+        "environmentInstanceSet",
+        "stampEnvironments"
+      ],
+      "offlineCaptures": [
+        "how-to/composition-multi-env/check",
+        "how-to/composition-multi-env/environment-resources"
+      ]
+    },
+    {
+      "page": "debug-dependency-wiring/debug-a-missing-dependency",
+      "scenario": "dependency-wiring",
+      "status": "implemented",
+      "offlineCaptures": [
+        "how-to/dependency-fixed/check",
+        "how-to/dependency-missing/check"
+      ],
+      "unverifiedNixBlocks": 2
+    },
+    {
+      "page": "debug-dependency-wiring/inspect-an-instance-s-deps-parts-and-out",
+      "scenario": "dependency-wiring",
+      "status": "planned"
+    },
+    {
+      "page": "debug-dependency-wiring/use-aliases-and-default-aliases",
+      "scenario": "dependency-wiring",
+      "status": "implemented",
+      "unverifiedNixBlocks": 6
+    },
+    {
+      "page": "debug-dependency-wiring/use-auto-instantiation-with-availablepackages-optional-and-autonamespace",
+      "scenario": "dependency-wiring",
+      "status": "implemented",
+      "snippets": [
+        "autoInstantiatedDeps",
+        "autoInstantiationCatalog",
+        "optionalInstance",
+        "autoInstantiationConsumer"
+      ],
+      "offlineCaptures": [
+        "how-to/dependency-auto-instantiation/check",
+        "how-to/dependency-auto-instantiation/graph"
+      ]
+    },
+    {
+      "page": "debug-dependency-wiring/visualize-the-dependency-graph-with-kix-graph",
+      "scenario": "dependency-wiring",
+      "status": "implemented",
+      "offlineCaptures": [
+        "how-to/dependency-graph/graph-dot",
+        "how-to/dependency-graph/graph-json",
+        "how-to/dependency-graph/graph-tree"
+      ]
+    },
+    {
+      "page": "debug-dependency-wiring/wire-cross-namespace-dependencies-explicitly",
+      "scenario": "dependency-wiring",
+      "status": "implemented",
+      "snippets": [
+        "crossNamespaceDep"
+      ],
+      "offlineCaptures": [
+        "how-to/dependency-cross-namespace/check"
+      ],
+      "unverifiedNixBlocks": 2
+    },
+    {
+      "page": "operate-a-cluster/check-cluster-health",
+      "scenario": "operations",
+      "status": "implemented",
+      "liveCaptures": [
+        "how-to/application-health/health",
+        "how-to/application-health/health-verbose"
+      ]
+    },
+    {
+      "page": "operate-a-cluster/check-live-resources-for-drift",
+      "scenario": "operations",
+      "status": "implemented",
+      "liveCaptures": [
+        "how-to/application-drift/scaled-deployment"
+      ]
+    },
+    {
+      "page": "operate-a-cluster/check-resource-status",
+      "scenario": "operations",
+      "status": "implemented",
+      "liveCaptures": [
+        "how-to/application-status/describe-deployment",
+        "how-to/application-status/job-logs",
+        "how-to/application-status/status"
+      ]
+    },
+    {
+      "page": "operate-a-cluster/configure-activation-retention",
+      "scenario": "operations",
+      "status": "implemented"
+    },
+    {
+      "page": "operate-a-cluster/deploy-with-dry-run-timeouts-pruning-and-log-tui-output-modes",
+      "scenario": "operations",
+      "status": "implemented",
+      "liveCaptures": [
+        "how-to/application-deploy-controls/dry-run"
+      ]
+    },
+    {
+      "page": "operate-a-cluster/export-audit-preserving-yaml",
+      "scenario": "operations",
+      "status": "implemented",
+      "offlineCaptures": [
+        "how-to/application-export-audit/annotations",
+        "how-to/application-export-audit/export",
+        "how-to/application-export-audit/internal-crs"
+      ]
+    },
+    {
+      "page": "operate-a-cluster/export-plain-yaml",
+      "scenario": "operations",
+      "status": "implemented",
+      "offlineCaptures": [
+        "how-to/application-export-exit/export",
+        "how-to/application-export-exit/files",
+        "how-to/application-export-exit/no-annotations"
+      ]
+    },
+    {
+      "page": "operate-a-cluster/garbage-collect-stale-resources",
+      "scenario": "operations",
+      "status": "implemented",
+      "liveCaptures": [
+        "how-to/application-gc/plan"
+      ]
+    },
+    {
+      "page": "operate-a-cluster/inspect-a-deploy-receipt",
+      "scenario": "operations",
+      "status": "implemented",
+      "liveCaptures": [
+        "how-to/application-receipt/active-receipt"
+      ]
+    },
+    {
+      "page": "operate-a-cluster/list-images-for-airgap-preloading",
+      "scenario": "operations",
+      "status": "implemented",
+      "offlineCaptures": [
+        "how-to/application-images/list",
+        "how-to/application-images/list-json",
+        "how-to/application-images/list-with-sources"
+      ]
+    },
+    {
+      "page": "operate-a-cluster/preview-changes-with-kix-diff",
+      "scenario": "operations",
+      "status": "implemented",
+      "liveCaptures": [
+        "how-to/application-diff/diff-clean",
+        "how-to/application-diff/diff-markdown",
+        "how-to/application-diff/diff-message-change"
+      ]
+    },
+    {
+      "page": "operate-a-cluster/reconcile-drift",
+      "scenario": "operations",
+      "status": "implemented",
+      "liveCaptures": [
+        "how-to/application-reconcile/drift-clean",
+        "how-to/application-reconcile/reconcile"
+      ]
+    },
+    {
+      "page": "operate-a-cluster/roll-back-an-activation",
+      "scenario": "operations",
+      "status": "implemented",
+      "liveCaptures": [
+        "how-to/application-rollback/list",
+        "how-to/application-rollback/list-json"
+      ]
+    },
+    {
+      "page": "operate-a-cluster/use-kix-logs",
+      "scenario": "operations",
+      "status": "implemented",
+      "liveCaptures": [
+        "how-to/application-logs/production-tail"
+      ]
+    },
+    {
+      "page": "operate-a-cluster/use-kix-pf",
+      "scenario": "operations",
+      "status": "implemented"
+    },
+    {
+      "page": "operate-a-cluster/use-snapshots-for-offline-or-ci-diffs",
+      "scenario": "operations",
+      "status": "implemented",
+      "liveCaptures": [
+        "how-to/application-snapshot/diff-clean",
+        "how-to/application-snapshot/diff-from-snapshot",
+        "how-to/application-snapshot/save"
+      ]
+    },
+    {
+      "page": "package-task-guides/configure-cert-manager-issuers",
+      "scenario": "package-stacks",
+      "status": "planned"
+    },
+    {
+      "page": "package-task-guides/deploy-a-python-app",
+      "scenario": "package-stacks",
+      "status": "implemented",
+      "snippets": [
+        "pythonApplicationInstance"
+      ],
+      "offlineCaptures": [
+        "how-to/package-python/check",
+        "how-to/package-python/workload"
+      ]
+    },
+    {
+      "page": "package-task-guides/deploy-stackgres",
+      "scenario": "package-stacks",
+      "status": "implemented",
+      "snippets": [
+        "stackgresOperatorInstance",
+        "stackgresClusterInstance"
+      ],
+      "offlineCaptures": [
+        "how-to/package-stackgres/check",
+        "how-to/package-stackgres/database-resources"
+      ]
+    },
+    {
+      "page": "package-task-guides/deploy-valkey-redis",
+      "scenario": "package-stacks",
+      "status": "implemented",
+      "snippets": [
+        "valkeyInstance"
+      ],
+      "offlineCaptures": [
+        "how-to/package-valkey/check",
+        "how-to/package-valkey/resources"
+      ]
+    },
+    {
+      "page": "package-task-guides/deploy-velero",
+      "scenario": "package-stacks",
+      "status": "implemented",
+      "snippets": [
+        "veleroInstance"
+      ],
+      "offlineCaptures": [
+        "how-to/package-velero/check",
+        "how-to/package-velero/backup-configuration"
+      ]
+    },
+    {
+      "page": "package-task-guides/install-cilium-network-policy-support",
+      "scenario": "package-stacks",
+      "status": "implemented",
+      "snippets": [
+        "ciliumRoleAndPolicy",
+        "ciliumInstance"
+      ],
+      "offlineCaptures": [
+        "how-to/package-cilium/check",
+        "how-to/package-cilium/components"
+      ]
+    },
+    {
+      "page": "package-task-guides/install-envoy-gateway",
+      "scenario": "platform",
+      "status": "implemented",
+      "snippets": [
+        "gatewayInstance",
+        "gatewayKindProxy"
+      ],
+      "liveCaptures": [
+        "how-to/package-envoy-gateway/controller-ready",
+        "how-to/package-envoy-gateway/gateway-resources"
+      ]
+    },
+    {
+      "page": "package-task-guides/install-ingress-nginx",
+      "scenario": "package-stacks",
+      "status": "implemented",
+      "snippets": [
+        "ingressControllerInstance"
+      ],
+      "offlineCaptures": [
+        "how-to/install-ingress-nginx/controller-resources"
+      ]
+    },
+    {
+      "page": "package-task-guides/install-the-monitoring-stack",
+      "scenario": "package-stacks",
+      "status": "implemented",
+      "snippets": [
+        "monitoringStack"
+      ],
+      "offlineCaptures": [
+        "how-to/package-monitoring/check",
+        "how-to/package-monitoring/packages"
+      ],
+      "unverifiedNixBlocks": 1
+    },
+    {
+      "page": "package-task-guides/install-the-victoriametrics-ha-monitoring-stack",
+      "scenario": "package-stacks",
+      "status": "implemented",
+      "snippets": [
+        "victoriaMetricsHaStack"
+      ],
+      "offlineCaptures": [
+        "how-to/package-victoria-metrics/check",
+        "how-to/package-victoria-metrics/packages",
+        "how-to/package-victoria-metrics/resources"
+      ],
+      "unverifiedNixBlocks": 2
+    },
+    {
+      "page": "package-task-guides/provision-persistent-storage",
+      "scenario": "package-stacks",
+      "status": "implemented",
+      "snippets": [
+        "persistentStorageInstances",
+        "persistentVolumeMount",
+        "persistentStorageDeployment"
+      ],
+      "offlineCaptures": [
+        "how-to/package-storage/check",
+        "how-to/package-storage/storage-resources"
+      ]
+    },
+    {
+      "page": "platform-capabilities/add-tls-through-cluster-issuers",
+      "scenario": "platform",
+      "status": "planned"
+    },
+    {
+      "page": "platform-capabilities/auto-monitor-a-service",
+      "scenario": "platform",
+      "status": "implemented",
+      "snippets": [
+        "monitorOption",
+        "monitorBuildEntry",
+        "prometheusOperatorInstance",
+        "monitoredApplicationInstance"
+      ],
+      "offlineCaptures": [
+        "how-to/platform-monitoring/check",
+        "how-to/platform-monitoring/service-monitor"
+      ]
+    },
+    {
+      "page": "platform-capabilities/configure-storage-classes-and-pvcs",
+      "scenario": "platform",
+      "status": "planned"
+    },
+    {
+      "page": "platform-capabilities/declare-platform-intents-for-non-kix-managed-pods",
+      "scenario": "platform",
+      "status": "implemented",
+      "snippets": [
+        "externalWorkloadIntent"
+      ],
+      "offlineCaptures": [
+        "how-to/platform-intents/check",
+        "how-to/platform-intents/intent"
+      ]
+    },
+    {
+      "page": "platform-capabilities/enable-generated-network-policy",
+      "scenario": "platform",
+      "status": "implemented",
+      "snippets": [
+        "trackedServiceEndpoint",
+        "networkPolicySettings",
+        "networkPolicyInstances"
+      ],
+      "offlineCaptures": [
+        "how-to/platform-network-policy/check",
+        "how-to/platform-network-policy/policies"
+      ]
+    },
+    {
+      "page": "platform-capabilities/expose-a-service-through-cloudflare-tunnel",
+      "scenario": "platform",
+      "status": "implemented",
+      "snippets": [
+        "tunnelOriginInstance",
+        "cloudflaredInstance"
+      ],
+      "offlineCaptures": [
+        "how-to/platform-cloudflare-tunnel/resources"
+      ]
+    },
+    {
+      "page": "platform-capabilities/expose-a-service-with-gateway-api",
+      "scenario": "platform",
+      "status": "implemented",
+      "snippets": [
+        "exposureOption",
+        "exposureBuildEntry",
+        "gatewayInstance",
+        "gatewayApplicationInstance"
+      ],
+      "offlineCaptures": [
+        "how-to/platform-gateway/check",
+        "how-to/platform-gateway/http-route"
+      ]
+    },
+    {
+      "page": "platform-capabilities/expose-a-service-with-ingress",
+      "scenario": "platform",
+      "status": "implemented",
+      "snippets": [
+        "exposureOption",
+        "exposureBuildEntry",
+        "ingressControllerInstance",
+        "ingressApplicationInstance"
+      ],
+      "offlineCaptures": [
+        "how-to/platform-ingress/check",
+        "how-to/platform-ingress/ingress"
+      ]
+    },
+    {
+      "page": "platform-capabilities/mount-node-local-storage-with-hostpath",
+      "scenario": "platform",
+      "status": "implemented",
+      "snippets": [
+        "hostPathMount",
+        "hostPathDeployment",
+        "hostPathApplicationInstance"
+      ],
+      "offlineCaptures": [
+        "how-to/platform-hostpath/check",
+        "how-to/platform-hostpath/deployment"
+      ]
+    },
+    {
+      "page": "platform-capabilities/use-externally-managed-secrets",
+      "scenario": "platform",
+      "status": "implemented",
+      "snippets": [
+        "externalSecretRef",
+        "externalSecretEnv"
+      ],
+      "offlineCaptures": [
+        "how-to/platform-external-secrets/check",
+        "how-to/platform-external-secrets/graph"
+      ]
+    },
+    {
+      "page": "platform-capabilities/use-kix-managed-secrets",
+      "scenario": "platform",
+      "status": "implemented",
+      "snippets": [
+        "managedSecret",
+        "managedSecretEnv"
+      ],
+      "offlineCaptures": [
+        "how-to/platform-managed-secrets/check"
+      ]
+    },
+    {
+      "page": "platform-capabilities/use-sops-backed-secrets-if-production-ready",
+      "scenario": "platform",
+      "status": "implemented",
+      "snippets": [
+        "sopsBackedSecret",
+        "sopsSecretEnv"
+      ],
+      "offlineCaptures": [
+        "how-to/platform-sops-secrets/rendered-secret"
+      ],
+      "liveCaptures": [
+        "how-to/platform-sops-secrets/secret"
+      ],
+      "unverifiedNixBlocks": 1
+    },
+    {
+      "page": "policy-ci-and-compliance/add-scorecard-rules",
+      "scenario": "policy",
+      "status": "implemented",
+      "snippets": [
+        "packageRule"
+      ],
+      "offlineCaptures": [
+        "how-to/scorecard-rules/check"
+      ],
+      "unverifiedNixBlocks": 2
+    },
+    {
+      "page": "policy-ci-and-compliance/attest-a-deployment-from-its-cluster-receipt",
+      "scenario": "policy",
+      "status": "implemented",
+      "liveCaptures": [
+        "how-to/policy-receipt-attestation/attest"
+      ]
+    },
+    {
+      "page": "policy-ci-and-compliance/disable-scorecard-rules",
+      "scenario": "policy",
+      "status": "implemented",
+      "unverifiedNixBlocks": 1
+    },
+    {
+      "page": "policy-ci-and-compliance/generate-a-cyclonedx-sbom",
+      "scenario": "policy",
+      "status": "implemented",
+      "offlineCaptures": [
+        "how-to/policy-sbom/sbom"
+      ]
+    },
+    {
+      "page": "policy-ci-and-compliance/generate-an-audit-bundle",
+      "scenario": "policy",
+      "status": "implemented",
+      "offlineCaptures": [
+        "how-to/policy-audit/audit",
+        "how-to/policy-audit/files"
+      ]
+    },
+    {
+      "page": "policy-ci-and-compliance/generate-pr-review-markdown-from-kix-diff",
+      "scenario": "policy",
+      "status": "implemented"
+    },
+    {
+      "page": "policy-ci-and-compliance/generate-slsa-provenance",
+      "scenario": "policy",
+      "status": "implemented",
+      "offlineCaptures": [
+        "how-to/policy-provenance/attest"
+      ]
+    },
+    {
+      "page": "policy-ci-and-compliance/override-scorecard-severity",
+      "scenario": "policy",
+      "status": "implemented",
+      "unverifiedNixBlocks": 4
+    },
+    {
+      "page": "policy-ci-and-compliance/run-kix-check-sarif-in-ci",
+      "scenario": "policy",
+      "status": "implemented",
+      "offlineCaptures": [
+        "how-to/policy-sarif/check"
+      ]
+    },
+    {
+      "page": "policy-ci-and-compliance/save-and-diff-snapshots-for-offline-ci",
+      "scenario": "policy",
+      "status": "implemented"
+    },
+    {
+      "page": "promote-images/build-promote-and-deploy-an-image-in-ci",
+      "scenario": "image-promotion",
+      "status": "implemented"
+    },
+    {
+      "page": "promote-images/create-a-committed-image-pin-file",
+      "scenario": "image-promotion",
+      "status": "implemented",
+      "snippets": [
+        "pinFile",
+        "consumePin",
+        "renderPinnedImage"
+      ],
+      "offlineCaptures": [
+        "how-to/image-pins/check-offline",
+        "how-to/image-pins/list"
+      ],
+      "unverifiedNixBlocks": 1
+    },
+    {
+      "page": "promote-images/promote-and-verify-an-image-pin",
+      "scenario": "image-promotion",
+      "status": "implemented"
+    },
+    {
+      "page": "start-and-inspect/deploy-to-kind",
+      "scenario": "application",
+      "status": "implemented",
+      "liveCaptures": [
+        "how-to/application-kubectl/get-namespaces",
+        "how-to/application-kubectl/get-workloads"
+      ]
+    },
+    {
+      "page": "start-and-inspect/install-and-run-the-kix-cli",
+      "scenario": "application",
+      "status": "implemented",
+      "offlineCaptures": [
+        "how-to/application-install/version"
+      ]
+    },
+    {
+      "page": "start-and-inspect/list-clusters-and-packages",
+      "scenario": "application",
+      "status": "implemented",
+      "offlineCaptures": [
+        "how-to/application-list/list-clusters",
+        "how-to/application-list/list-packages"
+      ]
+    },
+    {
+      "page": "start-and-inspect/render-manifests",
+      "scenario": "application",
+      "status": "implemented",
+      "offlineCaptures": [
+        "how-to/application-basics/build",
+        "how-to/application-basics/check",
+        "how-to/application-basics/deployment-env",
+        "how-to/application-basics/inspect",
+        "how-to/application-basics/list-packages",
+        "how-to/application-render/build-production-deployment"
+      ]
+    },
+    {
+      "page": "start-and-inspect/select-and-configure-a-cluster-flavor",
+      "scenario": "application",
+      "status": "implemented",
+      "snippets": [
+        "kindFlavor"
+      ],
+      "unverifiedNixBlocks": 4
+    },
+    {
+      "page": "start-and-inspect/use-mkflake-in-a-consuming-repo",
+      "scenario": "application",
+      "status": "implemented",
+      "snippets": [
+        "mkFlakeOutputs"
+      ],
+      "offlineCaptures": [
+        "how-to/application-list/list-clusters"
+      ],
+      "unverifiedNixBlocks": 2
+    }
   ]
 }

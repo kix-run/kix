@@ -29,11 +29,14 @@ under `_cluster`:
 Each filename contains the resource kind and name, such as
 `how-to-app/Deployment-production.yaml`.
 
+Exit mode omits the `Activation` and `PackageInstance` objects, but includes
+the two CustomResourceDefinitions for those kinds. The CRDs are ordinary
+cluster-scoped resources in the graph, so they appear under `_cluster`. Remove
+them manually if the receiving system should contain no Kix resources.
+
 ## Review the export
 
-Inspect the directory before handing it to another system:
-
-Compare the files with a live cluster before applying them:
+Compare the files with a live cluster before handing them to another system:
 
 <Command
   commands={["kubectl diff --server-side -R -f ./handoff/"]}
@@ -45,9 +48,12 @@ and exits with status 1, which is the result you want here:
 
 <Command {...noAnnotations} />
 
- Labels such as
-`app.kubernetes.io/managed-by` remain part of the resource metadata, so review
-and adjust labels if the receiving system has its own ownership convention.
+That pattern matches annotation keys, where `kix.run` is followed by a slash.
+It does not match the CRD names, where `kix.run` appears as a bare suffix.
+
+Labels such as `app.kubernetes.io/managed-by` remain part of the resource
+metadata, so review and adjust labels if the receiving system has its own
+ownership convention.
 
 ## Export again
 
@@ -61,8 +67,12 @@ previous export, or pass `--force` when replacing it is intentional:
   cwd="kix-examples/"
 />
 
-`--force` overwrites files in the directory. Keep an earlier copy if you need
-to compare the two exports.
+`--force` clears the output directory before writing the new export. This
+prevents stale YAML from recreating resources that have since been removed.
+For safety, Kix clears only a tree containing directories and `.yaml` files,
+which is the structure produced by an earlier export. If it finds any other
+file or a symbolic link, it reports the path and refuses to continue. Remove
+or relocate the directory yourself.
 
 :::note[Reference]
 See [`kix export`](/docs/reference/cli/export/) for the exact modes, directory

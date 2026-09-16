@@ -51,8 +51,13 @@ if [ "$diff_status" -ne 0 ] && [ "$diff_status" -ne 2 ]; then
   exit "$diff_status"
 fi
 
-# Post kix-diff.md as a pull request comment or job summary here.
-exit "$diff_status"
+if [ "$diff_status" -eq 2 ]; then
+  # Post kix-diff.md as a pull request comment or job summary here.
+  # Exit 0 instead if a non-empty diff should not fail the job.
+  exit 2
+fi
+
+exit 0
 ```
 
 `kix diff` exits with `2` when it finds differences, so the script captures
@@ -78,9 +83,12 @@ diff, and confirm the report names the resource you changed and exits `2`.
 
 The Markdown report lists each changed package with its modified resources,
 resources affected only through a dependency, cluster-level resources such as
-namespaces, and the activation record names. A build with no content change
-against the snapshot produces an empty report, so reviewers can trust that a
-non-empty comment means a real change.
+namespaces, and the activation record names.
+
+The report always contains text. When nothing changed, it contains a
+`### kix diff` heading followed by `No package-level changes (N unchanged)`.
+Use the captured exit status, rather than the file size, to decide whether to
+post the report.
 
 ## Troubleshooting
 

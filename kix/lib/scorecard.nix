@@ -7,16 +7,6 @@ let
     "error" = 2;
   };
 
-  isValidSeverity = s: builtins.hasAttr s severityLevels;
-  isValidLevel =
-    l:
-    builtins.elem l [
-      "manifest"
-      "package"
-      "namespace"
-      "cluster"
-    ];
-
   matchPattern =
     pattern: value:
     if pattern == "*" then
@@ -26,16 +16,53 @@ let
     else
       pattern == value;
 
+  validLevels = [
+    "manifest"
+    "package"
+    "namespace"
+    "cluster"
+  ];
+
+  isValidSeverity = s: builtins.hasAttr s severityLevels;
+  isValidLevel = l: builtins.elem l validLevels;
+
+  # Validate both vocabularies before running any rule. An unknown level would
+  # otherwise match no filter, while an unknown severity would be treated as
+  # a warning.
+  checkLevel =
+    ruleName: rule:
+    let
+      level = rule.level or null;
+    in
+    if level == null then
+      throw "scorecard rule '${ruleName}' declares no level. It must be one of: ${lib.concatStringsSep ", " validLevels}."
+    else if !(isValidLevel level) then
+      throw "scorecard rule '${ruleName}' has level '${toString level}', which is not one of: ${lib.concatStringsSep ", " validLevels}. A rule at an unknown level is never evaluated."
+    else
+      null;
+
+  checkSeverity =
+    ruleName: severity: source:
+    if severity == null || isValidSeverity severity then
+      null
+    else
+      throw "scorecard rule '${ruleName}' has severity '${toString severity}'${source}, which is not one of: ${lib.concatStringsSep ", " (builtins.attrNames severityLevels)}.";
+
   flattenRules =
     rules:
     lib.concatLists (
       lib.mapAttrsToList (
         category: categoryRules:
         if builtins.isAttrs categoryRules then
-          lib.mapAttrsToList (ruleName: rule: {
-            name = "${category}.${ruleName}";
-            inherit rule;
-          }) categoryRules
+          lib.mapAttrsToList (
+            ruleName: rule:
+            let
+              name = "${category}.${ruleName}";
+            in
+            builtins.seq (checkLevel name rule) {
+              inherit name rule;
+            }
+          ) categoryRules
         else
           [ ]
       ) rules
@@ -101,17 +128,27 @@ let
 
       ruleDisabled = if byRuleMatch != null then !(byRuleMatch.enabled or true) else false;
       ruleSeverity = if byRuleMatch != null then byRuleMatch.severity or null else null;
+
+      _severityChecks = builtins.seq (checkSeverity ruleName baseSeverity "") (
+        builtins.seq (checkSeverity ruleName ruleSeverity " (via ruleOverrides.byRule)") (
+          builtins.seq (checkSeverity ruleName ownerSeverity " (via ruleOverrides.byOwner)") (
+            checkSeverity ruleName nsSeverity " (via ruleOverrides.byNamespace)"
+          )
+        )
+      );
     in
-    if ruleDisabled then
-      null
-    else if ruleSeverity != null then
-      ruleSeverity
-    else if ownerSeverity != null then
-      ownerSeverity
-    else if nsSeverity != null then
-      nsSeverity
-    else
-      baseSeverity;
+    builtins.seq _severityChecks (
+      if ruleDisabled then
+        null
+      else if ruleSeverity != null then
+        ruleSeverity
+      else if ownerSeverity != null then
+        ownerSeverity
+      else if nsSeverity != null then
+        nsSeverity
+      else
+        baseSeverity
+    );
 
   checkAppliesTo =
     rule: ctx: if rule ? appliesTo && rule.appliesTo != null then rule.appliesTo ctx else true;

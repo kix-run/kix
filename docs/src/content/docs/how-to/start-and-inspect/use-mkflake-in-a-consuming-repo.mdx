@@ -43,8 +43,16 @@ The examples repository registers each cluster by name:
 
 Each value under `clusters` is a cluster function. Its attribute name becomes
 the CLI cluster name, while the file's `kix.buildCluster.name` becomes the
-cluster identity recorded in manifests and activations. Keep them the same
-unless you have a specific reason to expose a different CLI alias.
+cluster identity recorded in manifests and activations.
+
+:::caution
+Keep the two the same. The Activation record is labelled with the
+`buildCluster` name, and every command that reads cluster state filters on the
+CLI name. If the names differ, `kix health`, `kix rollback --list`, `kix gc`
+retention, and the baseline comparison in `kix deploy` cannot find the
+Activation. These commands currently report an empty result instead of
+identifying the mismatch.
+:::
 
 For a single project, a compact registration is enough:
 

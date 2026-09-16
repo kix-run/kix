@@ -1,3 +1,9 @@
+  # `kix.modules.monitoring` reads the package catalogue, which buildCluster
+  # does not pass to modules on its own. specialArgs forwards it.
+  specialArgs = { inherit kix packages; };
+
+  modules = [
+    kix.flavors.kind
     {
       imports = [ kix.modules.monitoring ];
 
@@ -15,3 +21,4 @@
         defaultRules.enabled = true;
       };
     }
+  ];

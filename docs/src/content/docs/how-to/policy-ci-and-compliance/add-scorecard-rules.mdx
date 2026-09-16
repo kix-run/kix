@@ -54,6 +54,11 @@ Every rule declares a `level` that determines the value passed to its check:
 - `namespace` runs once for each namespace.
 - `cluster` runs once for the whole cluster.
 
+Kix accepts only these four levels and three severities: `info`, `warning`, and
+`error`. Evaluation rejects any other value. This prevents misspelled levels
+from creating rules that never run, and misspelled severities from being
+treated as warnings.
+
 The check returns one finding for each problem and an empty list when the
 input passes. Use `appliesTo` when a rule is meaningful only for a subset of
 its level.
@@ -65,7 +70,10 @@ Run the cluster checks after adding or changing a rule:
 <Command {...check} />
 
 Kix reports the number of scorecard errors, warnings, and informational
-findings. An error-level finding makes the check fail.
+findings. An error-severity finding becomes a failed assertion. Evaluation
+stops at the first error, the cluster does not build, and only that finding is
+reported. Warnings and informational findings are collected across the
+cluster and reported together.
 
 :::note[Reference]
 See [Rule schema](/docs/reference/scorecard/rule-schema/) for the context

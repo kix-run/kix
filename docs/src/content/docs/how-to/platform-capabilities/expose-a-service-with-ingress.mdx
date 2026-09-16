@@ -42,9 +42,11 @@ Create one ingress-nginx instance in the cluster:
 
 <Snippet {...ingressControllerInstance} />
 
-The instance's `ingressNginx` name matches the dependency requested by
-`kix.expose`. If the cluster already has one compatible instance, use that
-instance instead.
+`kix.expose` requests a dependency called `ingressNginx`, and the package's
+`meta.defaultAliases` carries that name, so the lowercase `ingress-nginx`
+instance resolves it. The instance name has to be lowercase because the
+package names its resources after it. If the cluster already has one
+compatible instance, use that instance instead.
 
 The ingress-nginx Service defaults to `ClusterIP`. Set
 `config.serviceType = "LoadBalancer"` when your environment provides external

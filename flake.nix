@@ -38,6 +38,11 @@
           victoria-metrics = ./clusters/test-victoria-metrics.nix;
           victoria-metrics-crd-ref = ./clusters/test-victoria-metrics-crd-ref.nix;
 
+          # Register documented examples so routine builds catch evaluation
+          # errors in them.
+          example-multi-env-dev = ./clusters/example-multi-env/dev.nix;
+          example-multi-env-prod = ./clusters/example-multi-env/prod.nix;
+
           # Production clusters
           ludo = ./ludo/cluster.nix;
         };

@@ -161,9 +161,8 @@ kix.buildCluster {
             package = packages.immich;
           };
 
-          machineLearning = {
+          machine-learning = {
             package = packages."immich-machine-learning";
-
           };
         };
       };

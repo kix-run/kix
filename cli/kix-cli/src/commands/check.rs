@@ -150,6 +150,36 @@ fn to_sarif(scorecard_report: &serde_json::Value) -> serde_json::Value {
     })
 }
 
+/// A SARIF run describing an evaluation that never produced a scorecard.
+///
+/// An error-severity scorecard finding becomes a failed assertion in
+/// `scorecardToWarnings`. Evaluation therefore stops before producing a
+/// report. Emit the evaluation failure as a finding so a failing job does not
+/// upload an empty SARIF run.
+///
+/// Nix stops at the first failed assertion, so each run can report at most one
+/// scorecard error. The message format, `[scorecard:<rule>] <loc>: <text>`,
+/// identifies the responsible rule.
+fn eval_failure_sarif(message: &str) -> serde_json::Value {
+    let parsed = message
+        .split_once("[scorecard:")
+        .and_then(|(_, rest)| rest.split_once(']'))
+        .map(|(rule, rest)| (rule.trim().to_string(), rest.trim_start().to_string()));
+
+    let (rule_id, text) = match parsed {
+        Some((rule, rest)) => (format!("scorecard/{rule}"), rest),
+        None => ("kix/eval-failure".to_string(), message.to_string()),
+    };
+
+    serde_json::json!({
+        "findings": [{
+            "rule": rule_id,
+            "severity": "error",
+            "message": text,
+        }]
+    })
+}
+
 pub fn run(args: &CheckArgs, ctx: &mut CommandContext) -> Result<()> {
     let mut results: Vec<CheckResult> = Vec::new();
 
@@ -259,12 +289,20 @@ pub fn run(args: &CheckArgs, ctx: &mut CommandContext) -> Result<()> {
             if let Some(report) = &output.scorecard_report {
                 to_sarif(report)
             } else {
-                // No scorecard data — emit empty SARIF run
+                // Evaluation succeeded with the scorecard disabled. Emit an
+                // empty run because no findings were produced.
                 to_sarif(&serde_json::json!({"findings": []}))
             }
         } else {
-            // Eval failed — emit empty SARIF run
-            to_sarif(&serde_json::json!({"findings": []}))
+            // Evaluation failed, so there is no report to convert. Report the
+            // failure itself, attributed to the scorecard rule when the
+            // message names one.
+            let detail = results
+                .iter()
+                .find(|r| r.tool == "eval" && r.result == "fail")
+                .map(|r| r.details.clone())
+                .unwrap_or_else(|| "cluster evaluation failed".to_string());
+            to_sarif(&eval_failure_sarif(&detail))
         };
 
         println!(
@@ -289,4 +327,53 @@ pub fn run(args: &CheckArgs, ctx: &mut CommandContext) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod sarif_tests {
+    use super::*;
+
+    /// `--sarif` used to emit no results when evaluation failed on an
+    /// error-severity rule. The CI job failed, but its code-scanning report
+    /// contained no explanation.
+    #[test]
+    fn a_failed_eval_becomes_a_finding_attributed_to_its_rule() {
+        let msg = "[scorecard:reliability.volumeHasSource] apps/web/Deployment-web: \
+                   volume 'cache' has no source";
+        let sarif = to_sarif(&eval_failure_sarif(msg));
+        let results = sarif["runs"][0]["results"].as_array().expect("results");
+
+        assert_eq!(results.len(), 1, "an eval failure must produce one result");
+        assert_eq!(
+            results[0]["ruleId"],
+            "scorecard/reliability.volumeHasSource"
+        );
+        assert_eq!(results[0]["level"], "error");
+        assert_eq!(
+            results[0]["message"]["text"],
+            "apps/web/Deployment-web: volume 'cache' has no source"
+        );
+    }
+
+    #[test]
+    fn an_eval_failure_with_no_rule_still_reports_something() {
+        let sarif = to_sarif(&eval_failure_sarif("error: attribute 'foo' missing"));
+        let results = sarif["runs"][0]["results"].as_array().expect("results");
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["ruleId"], "kix/eval-failure");
+        assert_eq!(results[0]["level"], "error");
+    }
+
+    /// A successful evaluation with the scorecard disabled emits an empty run.
+    #[test]
+    fn no_scorecard_data_is_an_empty_run() {
+        let sarif = to_sarif(&serde_json::json!({"findings": []}));
+        assert!(
+            sarif["runs"][0]["results"]
+                .as_array()
+                .expect("results")
+                .is_empty()
+        );
+    }
 }

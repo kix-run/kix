@@ -22,6 +22,19 @@
       description = "Kubernetes cluster DNS domain. Used to construct resource FQDNs (e.g. svc.cluster.local).";
     };
 
+    # Public base domain. This is distinct from `clusterDomain`, which is the
+    # DNS suffix used inside the cluster.
+    cluster.domain = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "example.com";
+      description = ''
+        Public base domain for exposed services. When an instance has no
+        explicit `ingress.host`, `kix.expose` derives
+        `<instance>.<domain>`. When null, it creates no Ingress or HTTPRoute.
+      '';
+    };
+
     instances = lib.mkOption {
       type = lib.types.attrsOf (
         lib.types.attrsOf (

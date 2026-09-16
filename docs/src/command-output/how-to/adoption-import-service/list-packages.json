@@ -9,9 +9,9 @@
   "commands": [
     {
       "command": "kix list packages --cluster how-to-adoption",
-      "stdout": " NAME              VERSION  STATUS               \n client            1.0.0    installed [apps]     \n legacy-api        -        import [legacy]      \n platform-dns      -        import [kube-system] \n platform-storage  -        import [kube-system] \n",
+      "stdout": " NAME                 VERSION  STATUS               \n client               1.0.0    installed [apps]     \n helm-web             1.0.0    installed [apps]     \n legacy-api           -        import [legacy]      \n legacy-api-contract  1.0.0    installed [apps]     \n legacy-web           1.0.0    installed [apps]     \n platform-dns         -        import [kube-system] \n platform-storage     -        import [kube-system] \n",
       "stderr": "",
-      "stdoutDrift": "NAME VERSION STATUS\nclient 1.0.0 installed [apps]\nlegacy-api - import [legacy]\nplatform-dns - import [kube-system]\nplatform-storage - import [kube-system]\n",
+      "stdoutDrift": "NAME VERSION STATUS\nclient 1.0.0 installed [apps]\nhelm-web 1.0.0 installed [apps]\nlegacy-api - import [legacy]\nlegacy-api-contract 1.0.0 installed [apps]\nlegacy-web 1.0.0 installed [apps]\nplatform-dns - import [kube-system]\nplatform-storage - import [kube-system]\n",
       "stderrDrift": "",
       "exitCode": 0
     }

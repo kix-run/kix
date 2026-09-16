@@ -50,10 +50,26 @@ Render the workload and compare both label sets with the live Deployment:
 <Command {...deployment} />
 
 The rendered selector and Pod labels contain the existing `app` and `tier`
-values. Run `kix diff how-to-adoption` against the target cluster and confirm
-that the selector is unchanged before deploying.
+values. Compare them against the `kubectl get` output from the first step.
+
+`kix diff` cannot make this comparison. It finds live resources through Kix's
+management labels, which the existing workload does not yet have. The diff
+therefore shows the workload as a new resource and never compares the
+selectors.
+
+Ask the API server instead:
+
+<Command
+  commands={["kix deploy how-to-adoption --dry-run"]}
+  cwd="kix-examples/"
+/>
+
+Deployment and StatefulSet selectors are immutable. A mismatch therefore
+fails the dry run, either as an immutable-field error or as a field-ownership
+conflict when another manager owns the selector.
 
 :::caution
-Do not deploy if the diff replaces the workload or changes
-`spec.selector.matchLabels`. Correct `selectorLabels` first.
+Do not deploy if the rendered `spec.selector.matchLabels` differs from the
+live one, or if the dry run reports the workload being replaced. Correct
+`selectorLabels` first.
 :::

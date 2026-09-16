@@ -15,6 +15,14 @@ Provision storage as a `persistent-volume-claim` instance, then consume that
 instance as a package dependency. This keeps the claim visible in the deploy
 graph and lets Kix treat it as stateful during change planning.
 
+Kix requires this pattern. Storage size, StorageClass, and lifecycle belong to
+the cluster operator, so evaluation rejects application packages that create
+their own PersistentVolumeClaims and directs them to use a `storage`
+dependency. Packages that must create claims, such as the canonical
+`persistent-volume-claim` package or a Helm chart with persistence enabled,
+need an explicit `meta.unsafe = [ "raw-pvc" ]` grant. The scorecard reports
+every such grant for review.
+
 This guide assumes your target cluster flavor provides a default StorageClass,
 or that you know the StorageClass name to request.
 

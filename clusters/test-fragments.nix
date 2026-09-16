@@ -21,7 +21,7 @@ let
   };
 
   application = {
-    namespaces.kube-system.labels."platform.kix.run/tier" = "system";
+    namespaces.kube-system.labels."platform.example.com/tier" = "system";
   };
 
   composition = kix.mergeFragments {
@@ -31,7 +31,7 @@ let
     ];
 
     # The platform owner's last word, applied over the merged fragments.
-    namespacePolicies.kube-system.labels."platform.kix.run/managed" = "true";
+    namespacePolicies.kube-system.labels."platform.example.com/managed" = "true";
   };
 in
 kix.buildCluster {

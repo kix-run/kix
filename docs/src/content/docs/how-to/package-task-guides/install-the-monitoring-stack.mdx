@@ -13,8 +13,11 @@ Use `kix.modules.monitoring` to install the native Kix monitoring stack. The
 module configures Prometheus Operator, Prometheus, Alertmanager, Grafana,
 node-exporter, and kube-state-metrics as related package instances.
 
-This guide assumes the cluster's package catalogue is available to its modules.
-The standard `mkFlake` setup supplies it automatically.
+The module needs the cluster's package catalogue. By default, `buildCluster`
+passes modules only `ref` and a minimal `kix` value. The cluster must forward
+the full values with `specialArgs = { inherit kix packages; };`, which is the
+first line of the snippet below. Without it the module fails to resolve the
+packages it instantiates.
 
 ## Add the monitoring module
 
@@ -23,8 +26,26 @@ Import the module and enable the stack in a cluster module:
 <Snippet {...monitoringStack} />
 
 The example keeps Grafana storage ephemeral so it can run on a fresh local
-cluster. For a long-lived cluster, keep Grafana persistence enabled and set
-`monitoring.grafana.persistence.size` to the required capacity.
+cluster. For a long-lived cluster, set the whole `persistence` attrset:
+
+```nix title="cluster.nix"
+monitoring.grafana.persistence = {
+  enabled = true;
+  size = "20Gi";
+};
+```
+
+`persistence` is a single unstructured option, not a submodule. Defining one
+field replaces the complete default value rather than merging with it. Setting
+only `monitoring.grafana.persistence.size = "20Gi"` therefore removes
+`enabled`, and evaluation fails with `attribute 'enabled' missing`. The example
+can set only `enabled = false` because the module does not read `size` when
+persistence is disabled.
+
+Package `config` options behave differently: Kix merges their defaults into
+the evaluated result, so partial values retain the remaining defaults. This
+cluster module option uses the standard module system and must be defined in
+full.
 
 `defaultRules.enabled` adds the standard Kubernetes alert rules, recording
 rules, and ServiceMonitors. Disable it when you want to install the core stack

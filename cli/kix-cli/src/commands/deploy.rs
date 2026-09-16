@@ -722,13 +722,16 @@ fn supersede_consumed(
 }
 
 /// The prune policy the flags ask for. `--prune-mode=no` skips, plain
-/// `deploy` reports orphans without deleting (warn-only), `--prune` or
-/// `--prune-mode=eager` deletes.
+/// `deploy` reports orphans without deleting (warn-only), `--prune` deletes.
+///
+/// The removed `eager` mode claimed to interleave prune and apply waves, but
+/// mapped to the same `Delete` policy as `--prune`. The actual scheduling
+/// feature is tracked in ROADMAP.
 fn prune_policy_for(args: &DeployArgs) -> PrunePolicy {
     match args.prune_mode.unwrap_or(PruneMode::Default) {
         PruneMode::No => PrunePolicy::Skip,
         PruneMode::Default if !args.prune => PrunePolicy::WarnOnly,
-        PruneMode::Default | PruneMode::Eager => PrunePolicy::Delete,
+        PruneMode::Default => PrunePolicy::Delete,
     }
 }
 
@@ -1752,8 +1755,12 @@ mod prune_flag_tests {
         );
         assert!(prune_flag_requested(&deploy_args(&["--prune"])));
         assert_eq!(
-            prune_policy_for(&deploy_args(&["--prune-mode", "eager"])),
+            prune_policy_for(&deploy_args(&["--prune", "--prune-mode", "default"])),
             PrunePolicy::Delete
+        );
+        assert_eq!(
+            prune_policy_for(&deploy_args(&["--prune-mode", "default"])),
+            PrunePolicy::WarnOnly
         );
         assert_eq!(
             prune_policy_for(&deploy_args(&["--prune", "--prune-mode", "no"])),
@@ -1764,5 +1771,15 @@ mod prune_flag_tests {
             "--prune-mode",
             "no"
         ])));
+    }
+
+    /// Reject the removed `eager` value instead of treating it as `--prune`.
+    #[test]
+    fn eager_is_no_longer_a_prune_mode() {
+        let err = match Cli::try_parse_from(["kix", "deploy", "x", "--prune-mode", "eager"]) {
+            Ok(_) => panic!("eager must not parse"),
+            Err(e) => e,
+        };
+        assert_eq!(err.kind(), clap::error::ErrorKind::InvalidValue);
     }
 }

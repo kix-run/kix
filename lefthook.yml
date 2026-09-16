@@ -75,8 +75,16 @@ pre-commit:
       glob: "cli/**/*.rs"
       run: devenv shell -- bash -c 'cd cli && cargo clippy --workspace --all-targets -- -D warnings'
 
+    # The .nix files under docs/src/snippets are region extracts, not
+    # standalone Nix files: each one starts mid-expression at the
+    # indentation of the source it was cut from, so nixfmt cannot parse
+    # it. They also have to stay byte-identical to their source region
+    # or the drift check against kix-examples fails. treefmt excludes
+    # them for the same reason (devenv.nix).
     nixfmt:
       glob: "*.nix"
+      exclude:
+        - "docs/src/snippets/**/*.nix"
       run: nix shell nixpkgs#nixfmt-rfc-style -c nixfmt --check {staged_files}
 
     format-python:

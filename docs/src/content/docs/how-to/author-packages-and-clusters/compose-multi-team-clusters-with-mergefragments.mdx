@@ -44,8 +44,12 @@ cluster definition itself:
 <Snippet {...mergeTeamFragments} />
 
 Namespace attrsets merge recursively. Two fragments may add different labels,
-annotations, or quota fields to the same namespace. If they assign different
-values to the same leaf, evaluation stops with a namespace policy conflict.
+annotations, or quota fields to the same namespace. They may not set the same
+leaf, even to the same value. Kix treats any duplicate leaf as a namespace
+policy conflict.
+
+`namespacePolicies` uses the same merge. Cluster-level policy can add leaves,
+but it cannot override or repeat a leaf set by a fragment.
 
 Instance ownership is stricter. Defining the same instance name in the same
 namespace from two fragments is always an error.

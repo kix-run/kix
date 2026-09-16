@@ -58,8 +58,12 @@ Run the checks again after correcting the name or wiring:
 
 <Command {...checkFixed} />
 
-If Kix reports several matches instead, keep the providers as they are and add
-an explicit `deps` entry to the consumer that needs one of them.
+If Kix reports several matches instead, add an explicit `deps` entry to the
+consumer that needs one of them. This does not resolve the phase-1 ambiguity by
+itself, because that pass does not read explicit dependency overrides. One of
+the providers must also have a unique alias. See
+[Use aliases and default aliases](/docs/how-to/debug-dependency-wiring/use-aliases-and-default-aliases/)
+for that shape.
 
 :::note[Explanation]
 See [Dependency resolution and why explicit deps matter](/docs/explanation/dependency-resolution-and-why-explicit-deps-matter/)

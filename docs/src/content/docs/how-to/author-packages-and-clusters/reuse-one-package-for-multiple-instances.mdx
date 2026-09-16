@@ -63,10 +63,16 @@ List the packages in the example cluster:
 
 <Command {...listPackages} />
 
-Use `inspect` when you need the evaluated parts, dependencies, and outputs for
-the cluster's instances:
+Use `inspect` to see the resources each instance rendered. It prints the total
+number of resources, the namespaces, counts by kind, and a resource inventory
+grouped by namespace.
 
 <Command expandable {...inspect} />
+
+Each instance appears under its own name with its own resources. To inspect
+the dependencies between them, use
+[`kix graph`](/docs/how-to/debug-dependency-wiring/visualize-the-dependency-graph-with-kix-graph/);
+`inspect` does not report dependency edges.
 
 Changes to one instance's configuration affect that instance's rendered
 resources. They do not create a second copy of the package source.

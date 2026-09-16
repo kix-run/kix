@@ -8,7 +8,9 @@ import activeReceipt from '/src/command-output/how-to/application-receipt/active
 
 Every successful `kix deploy` writes a receipt to the active Activation's
 status. Read it when you need to establish what was deployed without access to
-the machine that performed the deployment.
+the machine that performed the deployment. To turn the same receipt into a
+signed provenance document, see
+[Attest a deployment from its cluster receipt](/docs/how-to/policy-ci-and-compliance/attest-a-deployment-from-its-cluster-receipt/).
 
 ## Read the active receipt
 
@@ -17,9 +19,19 @@ active record:
 
 <Command expandable {...activeReceipt} />
 
-The label limits the result to Activations for one Kix cluster. In the full
-JSON response, find the item whose `status.phase` is `Active` and inspect its
-`status.receipt` object.
+The label limits the result to Activations for one Kix cluster. The command
+returns a Kubernetes List. Use `jq` to select the active Activation and print
+its receipt:
+
+<Command
+  commands={[
+    "kubectl get activations -l kix.run/cluster=how-to-application -o json | jq '.items[] | select(.status.phase == \"Active\") | .status.receipt'",
+  ]}
+/>
+
+A deployment that finishes with failures marks its Activation as `Degraded`,
+but still records a receipt. When investigating a failed deployment, change
+the `select` expression to include both `Active` and `Degraded` phases.
 
 If you are inspecting another Kubernetes context, add `--context` to the
 kubectl command.

@@ -902,6 +902,13 @@ let
     };
   };
 
+  _validScorecardRule = {
+    description = "a rule that reports nothing";
+    level = "manifest";
+    severity = "warning";
+    check = _: [ ];
+  };
+
   domainFindings =
     cluster:
     builtins.filter (f: lib.hasSuffix "annotationDomainOwnership" (f.rule or "")) (
@@ -1371,6 +1378,117 @@ let
       in
       hasName "data" (ofKind "PersistentVolumeClaim" ms)
       || throw "granted raw-pvc package did not emit its claim";
+
+    # The OpenAPI schema does not constrain metadata.name, so check the API
+    # server's naming rules during evaluation.
+    t27a-camelcase-resource-name-throws = evalFails (mkCluster [
+      baseInstances
+      { instances.appns.bad.package = mkCmPackage { name = "ingressNginx"; }; }
+    ]);
+
+    t27b-underscore-resource-name-throws = evalFails (mkCluster [
+      baseInstances
+      { instances.appns.bad.package = mkCmPackage { name = "my_config"; }; }
+    ]);
+
+    # A Service is RFC 1035, not RFC 1123: it must start with a letter, so a
+    # name a ConfigMap could carry is still refused here.
+    t27c-service-name-starting-with-a-digit-throws = evalFails (mkCluster [
+      baseInstances
+      {
+        instances.appns.svc.package = {
+          meta.version = "test";
+          build =
+            { self, scope, ... }:
+            {
+              s = scope.mkResource {
+                apiVersion = "v1";
+                kind = "Service";
+                name = "8080-proxy";
+                spec.selector.app = "x";
+                spec.ports = [ { port = 80; } ];
+              };
+              root = self.s;
+            };
+        };
+      }
+    ]);
+
+    # RBAC names are path segments in the API server, not DNS names, which is
+    # why upstream charts ship roles like `prometheus-operator:leader-election`.
+    t27d-rbac-name-with-a-colon-passes =
+      let
+        ms = manifests (mkCluster [
+          baseInstances
+          {
+            instances.appns.rb.package = {
+              meta.version = "test";
+              build =
+                { self, scope, ... }:
+                {
+                  r = scope.mkResource {
+                    apiVersion = "rbac.authorization.k8s.io/v1";
+                    kind = "Role";
+                    name = "operator:leader-election";
+                  };
+                  root = self.r;
+                };
+            };
+          }
+        ]);
+      in
+      hasName "operator:leader-election" (ofKind "Role" ms)
+      || throw "a Role named with a colon should be accepted";
+
+    # Reject unknown scorecard levels and severities before evaluating rules.
+    t27e-scorecard-valid-rule-passes =
+      let
+        c = mkCluster [
+          baseInstances
+          {
+            scorecard = {
+              enable = true;
+              rules.cat.r = _validScorecardRule;
+            };
+          }
+        ];
+      in
+      builtins.length (manifests c) > 0 || throw "a valid scorecard rule should not break the cluster";
+
+    t27f-scorecard-unknown-level-throws = evalFails (mkCluster [
+      baseInstances
+      {
+        scorecard = {
+          enable = true;
+          rules.cat.r = _validScorecardRule // {
+            level = "resource";
+          };
+        };
+      }
+    ]);
+
+    t27g-scorecard-unknown-severity-throws = evalFails (mkCluster [
+      baseInstances
+      {
+        scorecard = {
+          enable = true;
+          rules.cat.r = _validScorecardRule // {
+            severity = "critical";
+          };
+        };
+      }
+    ]);
+
+    t27h-scorecard-unknown-override-severity-throws = evalFails (mkCluster [
+      baseInstances
+      {
+        scorecard = {
+          enable = true;
+          rules.cat.r = _validScorecardRule;
+          ruleOverrides.byRule."cat.r".severity = "fatal";
+        };
+      }
+    ]);
 
     # The unsafe vocabulary is closed: a typo'd grant fails the cluster
     # even though the package never builds a PVC (mkCmPackage builds none).

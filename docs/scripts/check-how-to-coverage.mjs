@@ -24,6 +24,7 @@ const actualPages = (await findPages(contentRoot))
   .sort();
 const ledgerPages = entries.map(({ page }) => page).sort();
 const errors = [];
+let unverifiedTotal = 0;
 
 for (const page of new Set(ledgerPages)) {
   if (ledgerPages.filter((candidate) => candidate === page).length > 1) {
@@ -53,6 +54,25 @@ for (const entry of entries) {
   if (entry.status === 'planned' && !isPlaceholder) {
     errors.push(`${entry.page}: has content but is still marked planned`);
   }
+
+  // Unlike `<Snippet>` excerpts, hand-written ```nix blocks are not checked
+  // against a source file. The September 2026 audit found that most examples
+  // that failed as written were in these blocks (v2_discussions/142).
+  //
+  // They remain useful for short fragments and files the reader is creating.
+  // Recording the count in the ledger makes each addition explicit and keeps
+  // the remaining unverified examples measurable.
+  const declared = entry.unverifiedNixBlocks ?? 0;
+  const actual = (content.match(/^```nix\b/gmu) ?? []).length;
+  if (actual !== declared) {
+    const verb = actual > declared ? 'added' : 'removed';
+    errors.push(
+      `${entry.page}: ${actual} hand-written \`\`\`nix block(s), ledger declares ${declared}. ` +
+      `If you ${verb} one deliberately, update unverifiedNixBlocks in how-to-coverage.json. ` +
+      `Prefer a region snippet from kix-examples, which is drift-checked against its source.`,
+    );
+  }
+  unverifiedTotal += actual;
 }
 
 if (errors.length > 0) {
@@ -61,4 +81,7 @@ if (errors.length > 0) {
 }
 
 const implemented = entries.filter(({ status }) => status === 'implemented').length;
-console.log(`how-to coverage: ${implemented}/${entries.length} implemented; ledger matches content tree`);
+console.log(
+  `how-to coverage: ${implemented}/${entries.length} implemented; ledger matches content tree; ` +
+  `${unverifiedTotal} unverified hand-written nix block(s)`,
+);

@@ -42,7 +42,7 @@ Resource kinds:
 
 Resources:
   (cluster-scoped):
-    Activation/example-1ycihv4ffjq5
+    Activation/example-xv94r9l5jhb9
     ClusterRole/cert-manager-cainjector
     ClusterRole/cert-manager-cluster-view
     ClusterRole/cert-manager-controller-approve:cert-manager-io
@@ -127,11 +127,11 @@ Resources:
     ServiceAccount/cert-manager-webhook
   immich:
     Deployment/immich-server
-    Deployment/machineLearning
+    Deployment/machine-learning
     Job/immich-db-bootstrap-55078afb92
     PackageInstance/immich
     PackageInstance/immich-db
-    PackageInstance/machineLearning
+    PackageInstance/machine-learning
     PackageInstance/postgres
     PackageInstance/secret-ref-immich-db-postgres
     PackageInstance/secret-ref-postgres-postgres
@@ -144,7 +144,7 @@ Resources:
     Secret/immich-db-bootstrap-password
     Secret/immich-db-credentials
     Service/immich-server
-    Service/machineLearning
+    Service/machine-learning
   kube-system:
     ConfigMap/coredns
     Deployment/coredns

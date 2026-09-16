@@ -157,6 +157,7 @@ Auto-derives CiliumNetworkPolicy from the DI graph:
 - **`effectiveAliases`** — Instance aliases override package defaults.
 - **`checkMetaStatic`** — Pre-build assertions: K8s version compat, dependency version compat, conflicts, unknown `meta.unsafe` grants.
 - **Unsafe grants** (`unsafe.nix`) — closed vocabulary of structural-rule escapes (`raw-pvc`); raw PVCs outside a granted package are an eval error (`scope/validators.nix#checkRawPvc`).
+- **Object-name validation** (`scope/validators.nix#checkResourceName`): Checks names during evaluation because the Kubernetes OpenAPI schema leaves `metadata.name` unconstrained. Services require an RFC 1035 label, Namespaces require a DNS-1123 label, and other resources require a DNS-1123 subdomain. RBAC resources are exempt because the API server validates their names as path segments.
 - **Annotation domains** — `meta.annotationDomains` declares operator-owned annotation prefixes; duplicate declarers are an eager eval error (`eval/hooks.nix#buildAnnotationDomainIndex`).
 - **Conflict detection:** `conflictsWith` (same namespace) and `cluster:conflictsWith` (cluster-wide).
 - **`evaluatePackageDiagnostics`** — Call package-declared warnings/assertions functions.
@@ -308,7 +309,7 @@ Wave-based deployment with confirmation.
 - `--dry-run` — Preview without applying.
 - `--reconcile` — Re-apply all resources (heal drift).
 - `--prune` — Delete orphaned resources. Without it the plan still lists every orphan by name and says they are kept. The previous deploy record (Activation) is never an orphan.
-- `--prune-mode <MODE>` — default (after apply), eager (interleave), no (skip).
+- `--prune-mode <MODE>` — default (after apply), no (skip).
 - `--on-error <MODE>` — stop (default) or continue.
 - `--timeout <DURATION>` — Readiness timeout (default: 5m).
 - `--skip-import-checks` — Skip pre-deploy import verification.

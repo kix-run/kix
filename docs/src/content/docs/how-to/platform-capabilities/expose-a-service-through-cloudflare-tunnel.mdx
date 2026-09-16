@@ -46,8 +46,9 @@ The Service remains internal to Kubernetes. Its default cluster address is:
 http://web.cloudflare-example.svc.cluster.local:80
 ```
 
-If your cluster changes `cluster.domain`, replace `cluster.local` with that
-domain when you configure the tunnel route.
+`cluster.local` comes from the cluster's `clusterDomain` option. Replace the
+suffix if your cluster uses a different value. `clusterDomain` controls
+in-cluster DNS and is unrelated to the public domain served by the tunnel.
 
 ## Add the connector
 
@@ -114,14 +115,17 @@ Replace `app.example.com` with the hostname you configured.
 Inspect the connector logs when the tunnel remains down or requests return an
 origin error:
 
-<Command commands={["kix logs cloudflared --since 10m"]} cwd="kix-examples/" />
+<Command
+  commands={["kix logs how-to-platform-cloudflare-tunnel cloudflared --since 10m"]}
+  cwd="kix-examples/"
+/>
 
 Check these common causes:
 
 - The SOPS identity cannot decrypt `cloudflare-token.enc.yaml`.
 - The token belongs to another tunnel or has been rotated.
 - The public hostname route uses the wrong namespace, Service name, port, or
-  cluster domain.
+  `clusterDomain` suffix.
 - Network policy blocks DNS or outbound connections from `tunnel-system`.
 
 When you rotate the tunnel token, replace the value in the encrypted file and

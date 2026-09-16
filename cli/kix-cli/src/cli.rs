@@ -435,7 +435,7 @@ pub struct DeployArgs {
     #[arg(long)]
     pub prune: bool,
 
-    /// Prune mode: default (prune after apply), eager (interleave), no (skip pruning)
+    /// Prune mode: default (prune after apply), no (skip pruning)
     #[arg(long, value_name = "MODE")]
     pub prune_mode: Option<PruneMode>,
 
@@ -504,8 +504,6 @@ pub enum LogFormat {
 pub enum PruneMode {
     /// Prune orphans after all apply waves complete (default)
     Default,
-    /// Interleave prune waves with apply waves
-    Eager,
     /// Skip pruning entirely, defer to `kix gc`
     No,
 }
@@ -685,8 +683,9 @@ pub struct PortForwardArgs {
     /// Package instance name (e.g. `vaultwarden`) or `<namespace>/<name>`
     pub package: String,
 
-    /// Port specs passed straight to `kubectl port-forward`: `LOCAL:REMOTE`
-    /// or a bare `REMOTE` (e.g. `8080:80`, `5432`). One or more.
+    /// One or more port specs passed to `kubectl port-forward`.
+    /// Use `8080:80` to bind a specific local port, `5432` to use the same
+    /// port on both sides, or `:80` to let kubectl choose a free local port.
     #[arg(required = true)]
     pub ports: Vec<String>,
 
