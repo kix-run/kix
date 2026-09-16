@@ -668,18 +668,24 @@
           "--invocation-id"
           "1842"
         ];
+        # Excerpt, not a reshape: every key below sits at the path an
+        # in-toto statement actually uses, and resolvedDependencies is
+        # truncated rather than replaced by a count. An auditor reading
+        # this page against the SLSA schema has to find what they see.
         stdoutJq = ''
           {
-                    _type,
-                    predicateType,
-                    subject,
-                    buildDefinition: {
-                      buildType: .predicate.buildDefinition.buildType,
-                      externalParameters: .predicate.buildDefinition.externalParameters,
-                      resolvedDependencyCount: (.predicate.buildDefinition.resolvedDependencies | length)
-                    },
-                    runDetails: .predicate.runDetails
-                  }'';
+            _type,
+            predicateType,
+            subject,
+            predicate: {
+              buildDefinition: {
+                buildType: .predicate.buildDefinition.buildType,
+                externalParameters: .predicate.buildDefinition.externalParameters,
+                resolvedDependencies: .predicate.buildDefinition.resolvedDependencies[0:2]
+              },
+              runDetails: .predicate.runDetails
+            }
+          }'';
       }
       {
         prepare = ''kix compliance attest 19-scorecards --builder-id "$BUILD_URL" --invocation-id "$BUILD_ID" > provenance.json'';
@@ -722,18 +728,24 @@
           "--invocation-id"
           "1842"
         ];
+        # Excerpt, not a reshape: every key below sits at the path an
+        # in-toto statement actually uses, and resolvedDependencies is
+        # truncated rather than replaced by a count. An auditor reading
+        # this page against the SLSA schema has to find what they see.
         stdoutJq = ''
           {
-                    _type,
-                    predicateType,
-                    subject,
-                    buildDefinition: {
-                      buildType: .predicate.buildDefinition.buildType,
-                      externalParameters: .predicate.buildDefinition.externalParameters,
-                      resolvedDependencyCount: (.predicate.buildDefinition.resolvedDependencies | length)
-                    },
-                    runDetails: .predicate.runDetails
-                  }'';
+            _type,
+            predicateType,
+            subject,
+            predicate: {
+              buildDefinition: {
+                buildType: .predicate.buildDefinition.buildType,
+                externalParameters: .predicate.buildDefinition.externalParameters,
+                resolvedDependencies: .predicate.buildDefinition.resolvedDependencies[0:2]
+              },
+              runDetails: .predicate.runDetails
+            }
+          }'';
       }
       {
         prepare = ''kix compliance attest how-to-application --from-cluster --builder-id "$CI_RUN_URL" --invocation-id "$CI_RUN_ID" > provenance.json'';
@@ -981,16 +993,18 @@
         ];
         stdoutJq = ''
           .[]
-                  | select(.kind == "Widget" and .metadata.name == "example")
-                  | {
-                      apiVersion,
-                      kind,
-                      metadata: {
-                        name: .metadata.name,
-                        readiness: .metadata.annotations."kix.run/readiness"
-                      },
-                      spec
-                    }'';
+          | select(.kind == "Widget" and .metadata.name == "example")
+          | {
+              apiVersion,
+              kind,
+              metadata: {
+                name: .metadata.name,
+                annotations: {
+                  "kix.run/readiness": .metadata.annotations."kix.run/readiness"
+                }
+              },
+              spec
+            }'';
       }
       {
         prepare = [
@@ -2001,15 +2015,17 @@
                   apiVersion,
                   kind,
                   metadata: {name: .metadata.name, namespace: .metadata.namespace, labels: .metadata.labels},
-                  selector: .spec.selector,
-                  podLabels: .spec.template.metadata.labels
+                  spec: {
+                    selector: .spec.selector,
+                    template: {metadata: {labels: .spec.template.metadata.labels}}
+                  }
                 }
               else
                 {
                   apiVersion,
                   kind,
                   metadata: {name: .metadata.name, namespace: .metadata.namespace, labels: .metadata.labels},
-                  selector: .spec.selector
+                  spec: {selector: .spec.selector}
                 }
               end
           ]
@@ -2047,8 +2063,10 @@
               apiVersion,
               kind,
               metadata: {name: .metadata.name, namespace: .metadata.namespace},
-              selector: .spec.selector,
-              podLabels: .spec.template.metadata.labels
+              spec: {
+                selector: .spec.selector,
+                template: {metadata: {labels: .spec.template.metadata.labels}}
+              }
             }
         '';
       }
@@ -2129,8 +2147,10 @@
               spec: {
                 replicas: .spec.replicas,
                 selector: .spec.selector,
-                podLabels: .spec.template.metadata.labels,
-                containers: .spec.template.spec.containers | map({name, image})
+                template: {
+                  metadata: {labels: .spec.template.metadata.labels},
+                  spec: {containers: .spec.template.spec.containers | map({name, image})}
+                }
               }
             }'';
       }
@@ -3193,6 +3213,13 @@
     group = "how-to/application-health-check";
     page = "/docs/how-to/author-packages-and-clusters/add-a-post-deploy-health-check/";
     cwd = "kix-examples/";
+    # The page exists to show the health-check Job running, so the first
+    # deploy here has to be one that actually applies something. Earlier
+    # live groups leave how-to-application deployed and unchanged, which
+    # made this a no-op whose capture showed no Job at all. Reset so the
+    # group's output does not depend on what ran before it, and so
+    # `--group how-to/application-health-check` reproduces a full run.
+    resetCluster = true;
     offline = [
       {
         capture = "check";
