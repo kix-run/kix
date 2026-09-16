@@ -159,10 +159,11 @@ jobs:
         working-directory: kixpkgs
         run: |
           # Override kix-examples to the local checkout so we pick up
-          # uncommitted/in-PR changes. Its kixpkgs input resolves via
-          # the GitHub fetcher (using the access-tokens config on the
-          # Nix installer step). The captures sidecars are read from
-          # the source tree (already gated by the check step above).
+          # uncommitted/in-PR changes. Its own kixpkgs input follows
+          # ours (docs/flake.nix), so there is no second copy to fetch;
+          # a lock that resolves one needs git credentials this runner
+          # does not have. The captures sidecars are read from the
+          # source tree (already gated by the check step above).
           nix build ./docs#site \
             --override-input kix-examples "git+file://${{ github.workspace }}/kix-examples" \
             --print-build-logs \

@@ -29,6 +29,13 @@
     # `access-tokens = github.com=…` to Nix. See the project README
     # for setup.
     kix-examples.url = "github:kix-run/kix-examples";
+    # kix-examples declares its own kixpkgs, and this flake uses only its
+    # source tree (snippet regions, and the workspace the captures runner
+    # rewrites to a store path). Following ours keeps that second copy out
+    # of the lock. It is not just waste: when the lock resolves it to a
+    # `git+https://` ref, fetching it needs git credentials rather than the
+    # `access-tokens` the `github:` fetcher uses, which no CI runner has.
+    kix-examples.inputs.kixpkgs.follows = "kixpkgs";
   };
 
   outputs =
