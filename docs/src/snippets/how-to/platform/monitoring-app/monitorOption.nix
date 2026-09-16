@@ -1,1 +1,0 @@
-  options.metrics = kix.options.monitor;

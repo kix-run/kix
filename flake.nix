@@ -37,6 +37,7 @@
           monitoring-native = ./clusters/test-monitoring-native.nix;
           victoria-metrics = ./clusters/test-victoria-metrics.nix;
           victoria-metrics-crd-ref = ./clusters/test-victoria-metrics-crd-ref.nix;
+          doc-how-tos = ./clusters/test-doc-how-tos.nix;
 
           # Register documented examples so routine builds catch evaluation
           # errors in them.

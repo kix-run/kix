@@ -3,11 +3,6 @@ title: "Keep intentionally empty values"
 description: "Make sure an empty map or list survives to the rendered manifest, and protect helpers that build one from optional arguments."
 ---
 
-{/* Maintainer note: this page was written ahead of the how-to section being
-    properly built out (most sibling pages are still stubs). Revisit its
-    structure, prerequisites, and cross-links once the
-    author-packages-and-clusters section gets its real authoring pass. */}
-
 Some Kubernetes values are meaningful precisely because they are empty.
 `emptyDir: {}` selects a volume source. An empty label selector matches
 everything. `subresources.status: {}` enables a CRD subresource. Kix keeps

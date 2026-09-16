@@ -131,6 +131,23 @@ let
       /^$/N;/^\n$/D
     '';
 
+    # Drop Nix's build-progress chatter. `kix` forwards these from the
+    # `nix build` it shells out to (cli/kix/src/eval/build.rs), and Nix
+    # only emits them when it actually has to build: a warm store prints
+    # nothing. So whether a capture contains them records the state of
+    # the machine that generated it, not the behaviour of the command.
+    # Drift-only — a reader on a cold store really would see them.
+    #
+    # `Building cluster '...'` is kix's own line and stays; the pattern
+    # requires the quote immediately after `Building`.
+    strip-nix-build-progress = ''
+      /^[[:space:]]*building '\/nix\/store\/.*\.\.\.$/d
+      /^[[:space:]]*Building '[^']*'\.\.\.$/d
+      /^[[:space:]]*copying path '\/nix\/store\/.*\.\.\.$/d
+      /^[[:space:]]*this derivation will be built:$/d
+      /^[[:space:]]*these [0-9]+ derivations will be built:$/d
+    '';
+
     # Strip leading tree-drawing characters and whitespace. Used for
     # drift comparison of `kix graph --format tree`: the same DAG node
     # gets rendered at different indents depending on which parent the
@@ -155,6 +172,9 @@ let
   driftOnlyTransforms = [
     # SGR first so subsequent regexes see plain text.
     "strip-sgr"
+    # Then drop nix build progress, while the store paths in those lines
+    # are still literal and before any redaction rewrites them.
+    "strip-nix-build-progress"
     # Literal-content redactions: shape-preserving placeholders for values
     # that are noise (hashes, IDs, addresses, times). Activation ID first
     # (it consumes the longer suffix); identity-hash second so it doesn't

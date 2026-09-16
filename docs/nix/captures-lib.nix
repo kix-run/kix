@@ -285,6 +285,15 @@ let
 
       # Redact workspace path so per-run tempdir names don't leak into
       # the rendered docs.
+      #
+      # Two spellings, longest first. `mktemp -d` hands back /var/... on
+      # macOS while anything that resolves symlinks reports the same
+      # directory as /private/var/..., so substituting only the short form
+      # eats the tail of the long one and leaves `/privatekix-examples`
+      # behind. That is invisible locally and fails the drift check on a
+      # Linux runner, where the two spellings are identical.
+      workspace_real=$(cd "$workspace" && pwd -P)
+      sed -i "s#$workspace_real#kix-examples#g" "$__stdout_raw" "$__stderr_raw"
       sed -i "s#$workspace#kix-examples#g" "$__stdout_raw" "$__stderr_raw"
 
       <"$__stdout_raw" ${displayPipeline} > "$__stdout_display"
