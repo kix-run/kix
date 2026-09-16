@@ -68,11 +68,12 @@ previous export, or pass `--force` when replacing it is intentional:
   cwd="kix-examples/"
 />
 
-`--force` only lifts the refusal. Every file the new export writes replaces
-the old one, but nothing removes a file the previous export wrote and this one
-does not. A resource you deleted from the cluster stays behind as stale YAML,
-and the `kubectl apply -R -f ./handoff/` that the receiving system runs would
-recreate it. Export into a fresh directory, or delete the old one first.
+`--force` clears the directory before writing, so a resource you deleted from
+the cluster leaves nothing behind for `kubectl apply -R -f ./handoff/` to
+recreate. It clears only a directory that holds nothing but `.yaml` files and
+the directories containing them, which is what an export writes. If `--out`
+points at anything else, Kix names the file it found and refuses; remove that
+directory yourself.
 
 :::note[Reference]
 See [`kix export`](/docs/reference/cli/export/) for the exact modes, directory

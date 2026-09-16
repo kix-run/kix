@@ -902,6 +902,13 @@ let
     };
   };
 
+  _validScorecardRule = {
+    description = "a rule that reports nothing";
+    level = "manifest";
+    severity = "warning";
+    check = _: [ ];
+  };
+
   domainFindings =
     cluster:
     builtins.filter (f: lib.hasSuffix "annotationDomainOwnership" (f.rule or "")) (
@@ -1434,6 +1441,60 @@ let
       in
       hasName "operator:leader-election" (ofKind "Role" ms)
       || throw "a Role named with a colon should be accepted";
+
+    # `level` and `severity` are closed vocabularies, and both used to fail
+    # open. A misspelled level matches none of the four level filters, so the
+    # rule is never evaluated. A severity other than "error" is treated as a
+    # warning, so `severity = "critical"` reads as a promotion and lands as a
+    # trace line. Either way the scorecard reports that everything passed.
+    t27e-scorecard-valid-rule-passes =
+      let
+        c = mkCluster [
+          baseInstances
+          {
+            scorecard = {
+              enable = true;
+              rules.cat.r = _validScorecardRule;
+            };
+          }
+        ];
+      in
+      builtins.length (manifests c) > 0 || throw "a valid scorecard rule should not break the cluster";
+
+    t27f-scorecard-unknown-level-throws = evalFails (mkCluster [
+      baseInstances
+      {
+        scorecard = {
+          enable = true;
+          rules.cat.r = _validScorecardRule // {
+            level = "resource";
+          };
+        };
+      }
+    ]);
+
+    t27g-scorecard-unknown-severity-throws = evalFails (mkCluster [
+      baseInstances
+      {
+        scorecard = {
+          enable = true;
+          rules.cat.r = _validScorecardRule // {
+            severity = "critical";
+          };
+        };
+      }
+    ]);
+
+    t27h-scorecard-unknown-override-severity-throws = evalFails (mkCluster [
+      baseInstances
+      {
+        scorecard = {
+          enable = true;
+          rules.cat.r = _validScorecardRule;
+          ruleOverrides.byRule."cat.r".severity = "fatal";
+        };
+      }
+    ]);
 
     # The unsafe vocabulary is closed: a typo'd grant fails the cluster
     # even though the package never builds a PVC (mkCmPackage builds none).

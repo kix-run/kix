@@ -2583,8 +2583,8 @@ expression: stable
     "kind": "Deployment",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "amcy3an3i9m37k3xvvkjsbrw1w5nhwrl,awzwpm53w1kb4ysngrwmj47whaddgkih,nmkyq34qvmimmx5ww652blhhg57z3frg,qm6c1siifkgbif978fm9s274l8amsyxq,v7nr893k0f8mhqxj20v3fw6fcwyf0p2h,vkr302x5d6cdl4asw5ywy0d6gfc46724,y5306x1zp2rfmfx2iv28ndna6gz86z8p",
-        "kix.run/identity-hash": "47cix9cyp26mppq5yq1zj8km44xncjxx",
+        "kix.run/depends-on": "amcy3an3i9m37k3xvvkjsbrw1w5nhwrl,awzwpm53w1kb4ysngrwmj47whaddgkih,h65kdsdsn35hn2r9dnypxyw30k2624wh,nmkyq34qvmimmx5ww652blhhg57z3frg,qm6c1siifkgbif978fm9s274l8amsyxq,vkr302x5d6cdl4asw5ywy0d6gfc46724,y5306x1zp2rfmfx2iv28ndna6gz86z8p",
+        "kix.run/identity-hash": "pk5rfgcwcphnxyd1n6vgnazkpkzypvcp",
         "kix.run/package": "immich",
         "kix.run/package-namespace": "immich"
       },
@@ -2633,7 +2633,7 @@ expression: stable
                 },
                 {
                   "name": "IMMICH_MACHINE_LEARNING_URL",
-                  "value": "http://machineLearning.immich.svc.cluster.local:3003"
+                  "value": "http://machine-learning.immich.svc.cluster.local:3003"
                 },
                 {
                   "name": "REDIS_HOSTNAME",
@@ -2721,25 +2721,25 @@ expression: stable
     "metadata": {
       "annotations": {
         "kix.run/depends-on": "awzwpm53w1kb4ysngrwmj47whaddgkih",
-        "kix.run/identity-hash": "zlvphh57lcby3hjv4sdfdmp50pbgghf3",
-        "kix.run/package": "machineLearning",
+        "kix.run/identity-hash": "db3x6v273wa7w5hpnyg8qsv2p092wzia",
+        "kix.run/package": "machine-learning",
         "kix.run/package-namespace": "immich"
       },
       "labels": {
-        "app.kubernetes.io/instance": "machineLearning",
+        "app.kubernetes.io/instance": "machine-learning",
         "app.kubernetes.io/managed-by": "kix",
         "app.kubernetes.io/part-of": "kix-example",
         "team": "platform"
       },
-      "name": "machineLearning",
+      "name": "machine-learning",
       "namespace": "immich"
     },
     "spec": {
       "replicas": 1,
       "selector": {
         "matchLabels": {
-          "app.kubernetes.io/instance": "machineLearning",
-          "app.kubernetes.io/name": "machineLearning"
+          "app.kubernetes.io/instance": "machine-learning",
+          "app.kubernetes.io/name": "machine-learning"
         }
       },
       "strategy": {
@@ -2748,8 +2748,8 @@ expression: stable
       "template": {
         "metadata": {
           "labels": {
-            "app.kubernetes.io/instance": "machineLearning",
-            "app.kubernetes.io/name": "machineLearning"
+            "app.kubernetes.io/instance": "machine-learning",
+            "app.kubernetes.io/name": "machine-learning"
           }
         },
         "spec": {
@@ -3919,9 +3919,9 @@ expression: stable
     "kind": "Activation",
     "metadata": {
       "annotations": {
-        "kix.run/built-via": "/nix/store/bjs42v9wg1kb1z2fhkv268p20w5g2g1w-k8s-activation-example",
-        "kix.run/depends-on": "6440dxhp2zgadgrgvk986p0nkcffi517,a2kqmkidnpm2rp0nchixaacx0mr45xhr,dbp875hmfrmh2mbcjxwllqaiahh86lwn,h5vfss5dl9q5hbpq4rrh44idncmn39i3,jbxbg4y1yi3g7r9glqahavayqmq4ivyy,jz418q101ijbmikn1g1arkm2gzr4xzbq,p4z8yj9z9dngvnd1f2fp76lkk26vk0c9,vmnnjy4wzjll87gfafn4cr72wgshn9kw,wiyvwgcds793mcysbzdh1xr8rc2nksj6,yd165yf11lfpldh835wvq7l3kl1bjc7s,requires:gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj",
-        "kix.run/identity-hash": "1ycihv4ffjq5frj33yliimvvl4g9smdr",
+        "kix.run/built-via": "/nix/store/qkdaq7cbpyjyd0n5mqgx769lkkq217w9-k8s-activation-example",
+        "kix.run/depends-on": "1bbhhi1xxyi8gwmlzbhbnpad4ws35ra7,7s1j23k48jrpkcfql6y5zwrdnpx2j6j1,a2kqmkidnpm2rp0nchixaacx0mr45xhr,dbp875hmfrmh2mbcjxwllqaiahh86lwn,h5vfss5dl9q5hbpq4rrh44idncmn39i3,jbxbg4y1yi3g7r9glqahavayqmq4ivyy,jz418q101ijbmikn1g1arkm2gzr4xzbq,vmnnjy4wzjll87gfafn4cr72wgshn9kw,wiyvwgcds793mcysbzdh1xr8rc2nksj6,yd165yf11lfpldh835wvq7l3kl1bjc7s,requires:gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj",
+        "kix.run/identity-hash": "xv94r9l5jhb9525snz0szv0s8s4jaf7s",
         "kix.run/package": "_cluster",
         "kix.run/package-namespace": "_cluster"
       },
@@ -3929,7 +3929,7 @@ expression: stable
         "app.kubernetes.io/managed-by": "kix",
         "kix.run/cluster": "example"
       },
-      "name": "example-1ycihv4ffjq5"
+      "name": "example-xv94r9l5jhb9"
     },
     "spec": {
       "instances": {
@@ -3942,7 +3942,7 @@ expression: stable
         "immich": {
           "immich": "immich",
           "immich-db": "immich-db",
-          "machineLearning": "machineLearning",
+          "machine-learning": "machine-learning",
           "postgres": "postgres",
           "storage": "storage"
         },
@@ -4017,8 +4017,8 @@ expression: stable
     "kind": "PackageInstance",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "1h4qykh4fbgphagn8qh4zypm5003mvxw,awzwpm53w1kb4ysngrwmj47whaddgkih,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
-        "kix.run/identity-hash": "p4z8yj9z9dngvnd1f2fp76lkk26vk0c9",
+        "kix.run/depends-on": "awzwpm53w1kb4ysngrwmj47whaddgkih,qf6vhk2qbl8f9qlshkf9rrm16393zdhs,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
+        "kix.run/identity-hash": "1bbhhi1xxyi8gwmlzbhbnpad4ws35ra7",
         "kix.run/package": "_cluster",
         "kix.run/package-namespace": "_cluster",
         "kix.run/root": "immich-server"
@@ -4071,23 +4071,23 @@ expression: stable
     "kind": "PackageInstance",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "awzwpm53w1kb4ysngrwmj47whaddgkih,v7nr893k0f8mhqxj20v3fw6fcwyf0p2h,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
-        "kix.run/identity-hash": "6440dxhp2zgadgrgvk986p0nkcffi517",
+        "kix.run/depends-on": "awzwpm53w1kb4ysngrwmj47whaddgkih,h65kdsdsn35hn2r9dnypxyw30k2624wh,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
+        "kix.run/identity-hash": "7s1j23k48jrpkcfql6y5zwrdnpx2j6j1",
         "kix.run/package": "_cluster",
         "kix.run/package-namespace": "_cluster",
-        "kix.run/root": "machineLearning"
+        "kix.run/root": "machine-learning"
       },
       "labels": {
-        "app.kubernetes.io/instance": "machineLearning",
+        "app.kubernetes.io/instance": "machine-learning",
         "app.kubernetes.io/managed-by": "kix",
         "app.kubernetes.io/part-of": "kix-example",
         "team": "platform"
       },
-      "name": "machineLearning",
+      "name": "machine-learning",
       "namespace": "immich"
     },
     "spec": {
-      "instanceName": "machineLearning",
+      "instanceName": "machine-learning",
       "namespaceName": "immich",
       "version": "v2.0.0"
     }
@@ -7922,8 +7922,8 @@ expression: stable
     "kind": "Service",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "47cix9cyp26mppq5yq1zj8km44xncjxx,awzwpm53w1kb4ysngrwmj47whaddgkih",
-        "kix.run/identity-hash": "1h4qykh4fbgphagn8qh4zypm5003mvxw",
+        "kix.run/depends-on": "awzwpm53w1kb4ysngrwmj47whaddgkih,pk5rfgcwcphnxyd1n6vgnazkpkzypvcp",
+        "kix.run/identity-hash": "qf6vhk2qbl8f9qlshkf9rrm16393zdhs",
         "kix.run/package": "immich",
         "kix.run/package-namespace": "immich"
       },
@@ -7957,18 +7957,18 @@ expression: stable
     "kind": "Service",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "awzwpm53w1kb4ysngrwmj47whaddgkih,zlvphh57lcby3hjv4sdfdmp50pbgghf3",
-        "kix.run/identity-hash": "v7nr893k0f8mhqxj20v3fw6fcwyf0p2h",
-        "kix.run/package": "machineLearning",
+        "kix.run/depends-on": "awzwpm53w1kb4ysngrwmj47whaddgkih,db3x6v273wa7w5hpnyg8qsv2p092wzia",
+        "kix.run/identity-hash": "h65kdsdsn35hn2r9dnypxyw30k2624wh",
+        "kix.run/package": "machine-learning",
         "kix.run/package-namespace": "immich"
       },
       "labels": {
-        "app.kubernetes.io/instance": "machineLearning",
+        "app.kubernetes.io/instance": "machine-learning",
         "app.kubernetes.io/managed-by": "kix",
         "app.kubernetes.io/part-of": "kix-example",
         "team": "platform"
       },
-      "name": "machineLearning",
+      "name": "machine-learning",
       "namespace": "immich"
     },
     "spec": {
@@ -7981,8 +7981,8 @@ expression: stable
         }
       ],
       "selector": {
-        "app.kubernetes.io/instance": "machineLearning",
-        "app.kubernetes.io/name": "machineLearning"
+        "app.kubernetes.io/instance": "machine-learning",
+        "app.kubernetes.io/name": "machine-learning"
       },
       "type": "ClusterIP"
     }

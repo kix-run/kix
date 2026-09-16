@@ -69,9 +69,26 @@ pub fn run(args: &ExportArgs, ctx: &mut CommandContext) -> Result<()> {
                 args.out
             ));
         }
-    } else {
-        fs::create_dir_all(&out_dir).into_diagnostic()?;
+        // `--force` used to mean only "do not refuse". Each file the new
+        // export wrote replaced the old one, but a file the previous export
+        // wrote and this one does not was left behind, so a resource deleted
+        // from the cluster survived as stale YAML and the `kubectl apply -R`
+        // this output exists to feed would recreate it.
+        //
+        // Clear the directory instead. Only one that looks like a previous
+        // export is cleared: `--out` is a path a person typed, and
+        // `remove_dir_all` on the wrong one is not recoverable.
+        if let Some(intruder) = first_non_export_entry(&out_dir)? {
+            return Err(miette!(
+                "refusing to overwrite '{}': it holds '{}', which no kix export wrote. \
+                 Remove the directory yourself, or export somewhere else.",
+                args.out,
+                intruder.display()
+            ));
+        }
+        fs::remove_dir_all(&out_dir).into_diagnostic()?;
     }
+    fs::create_dir_all(&out_dir).into_diagnostic()?;
 
     let mut written = 0usize;
     let mut skipped_internal = 0usize;
@@ -177,5 +194,93 @@ fn resolve_flake_path(flake: &str) -> Result<PathBuf> {
             let cwd = std::env::current_dir().into_diagnostic()?;
             Ok(cwd.join(path))
         }
+    }
+}
+
+/// The first entry under `dir` that a kix export would not have written.
+///
+/// An export writes `<namespace>/<Kind>-<name>.yaml` and nothing else, so a
+/// tree of directories and `.yaml` files is one this command can replace.
+/// Anything else means `--out` points at something that is not a previous
+/// export, and `--force` must not delete it.
+fn first_non_export_entry(dir: &std::path::Path) -> Result<Option<PathBuf>> {
+    for entry in fs::read_dir(dir).into_diagnostic()? {
+        let entry = entry.into_diagnostic()?;
+        let path = entry.path();
+        let file_type = entry.file_type().into_diagnostic()?;
+
+        // A symlink is never followed: whatever it points at is not ours.
+        if file_type.is_symlink() {
+            return Ok(Some(path));
+        }
+        if file_type.is_dir() {
+            if let Some(found) = first_non_export_entry(&path)? {
+                return Ok(Some(found));
+            }
+            continue;
+        }
+        if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
+            return Ok(Some(path));
+        }
+    }
+    Ok(None)
+}
+
+#[cfg(test)]
+mod force_guard_tests {
+    use super::*;
+    use std::fs;
+
+    fn tmpdir(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("kix-export-guard-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    #[test]
+    fn a_tree_of_yaml_is_recognised_as_a_previous_export() {
+        let dir = tmpdir("yaml");
+        fs::create_dir_all(dir.join("apps")).unwrap();
+        fs::write(dir.join("apps/Deployment-web.yaml"), "kind: Deployment\n").unwrap();
+        fs::create_dir_all(dir.join("_cluster")).unwrap();
+        fs::write(
+            dir.join("_cluster/Namespace-apps.yaml"),
+            "kind: Namespace\n",
+        )
+        .unwrap();
+
+        assert!(first_non_export_entry(&dir).unwrap().is_none());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The guard exists so that `--force` on a hand-picked `--out` cannot
+    /// delete something a person cares about.
+    #[test]
+    fn anything_else_stops_the_overwrite() {
+        let dir = tmpdir("mixed");
+        fs::create_dir_all(dir.join("apps")).unwrap();
+        fs::write(dir.join("apps/Deployment-web.yaml"), "kind: Deployment\n").unwrap();
+        fs::write(dir.join("apps/notes.md"), "mine\n").unwrap();
+
+        let found = first_non_export_entry(&dir).unwrap().expect("must refuse");
+        assert!(found.ends_with("notes.md"));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_symlink_stops_the_overwrite_without_being_followed() {
+        let dir = tmpdir("symlink");
+        fs::write(dir.join("Namespace-apps.yaml"), "kind: Namespace\n").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("/etc", dir.join("link")).unwrap();
+
+        #[cfg(unix)]
+        {
+            let found = first_non_export_entry(&dir).unwrap().expect("must refuse");
+            assert!(found.ends_with("link"));
+        }
+        fs::remove_dir_all(&dir).unwrap();
     }
 }

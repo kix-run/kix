@@ -35,6 +35,18 @@ Each result includes a rule ID, SARIF level, and message. Kix emits a valid
 empty SARIF run when the cluster has no scorecard findings, so the upload step
 can use the same path for clean and failing builds.
 
+An error-severity finding is different from the others. It becomes a failed
+assertion during evaluation, so the cluster never finishes evaluating and there
+is no scorecard report to convert. Rather than uploading an empty run beside a
+red job, Kix reports the evaluation failure itself as one error-level result,
+attributed to the rule that threw when the message names one. Expect one
+result, not one per violation: evaluation stops at the first failed assertion.
+
+That is worth knowing before you promote a rule to `error` in
+[Override scorecard severity](/docs/how-to/policy-ci-and-compliance/override-scorecard-severity/).
+Promotion turns a rule from something the report lists into something that
+stops the build.
+
 ## Check the file before upload
 
 A short validation catches an empty or truncated shell redirect:
