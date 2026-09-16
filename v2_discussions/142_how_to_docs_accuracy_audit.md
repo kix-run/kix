@@ -1,9 +1,10 @@
 # 142: How-to docs accuracy audit and the verification gap
 
-**Status:** In progress. Phases 0, 1 and most of 4 landed 2026-09-16 on
-`docs/how-to-cluster-safety-fixes` in nine follow-up commits after `726afe2`.
-Phases 2 and 3 depend on changes to kix-examples and access to a live kind
-cluster.
+**Status:** All five phases landed 2026-09-16 on
+`docs/how-to-cluster-safety-fixes`, thirteen commits from `726afe2`.
+kix-examples PR #1 is merged and the docs lock points at it. What remains is
+follow-on pipeline work and two design questions, listed under "What remains"
+below.
 
 **Related:** `135_validation_layers_audit.md` (same question one layer down: what
 validation actually runs), `docs/README.md` (snippet + capture pipeline)
@@ -239,24 +240,47 @@ ambiguity limitation remains open because it requires a design change.
 region snippets; enable the scorecard in example clusters through a shared
 module; and validate scorecard levels and severities when loading rules.
 
-### What remains, 2026-09-16
+### Phases 2 and 3, landed 2026-09-16
 
-- **Phase 2**, in kix-examples: rename the `ingressNginx` instance (the new
-  validator refuses it, so the docs lock cannot advance until this lands),
-  move `specialArgs` inside the `monitoringStack` region, fix or drop
-  `metrics-package.nix`'s invalid ConfigMap endpoint, document the
-  `raw-pvc` grant in the stateful fixture. Then merge PR #1 and bump
-  `docs/flake.lock` off the branch.
-- **Phase 3**, in `docs/nix/captures.nix`: point the three `podLabels` jq
-  projections at real paths, fix the readiness and provenance projections,
-  and reorder the health-check group so the success capture runs against a
-  changed instance. Needs a kind cluster for the live groups.
-- **Two product items left open above**, both of which are design questions
-  rather than implementation fixes: which name defines cluster identity, and whether the
-  phase-1 pre-pass can be taught to see explicit `deps`.
-- **Snippet conversion**: 41 hand-written nix blocks across 19 pages now have
-  a tracked count (`1fc70c6`). Convert them to checked snippets incrementally,
-  starting with the examples most likely to be copied.
+**Phase 2** (`3abd392` in kix-examples, `239c1ec` here). The four example
+fixes went in, PR #1 merged as `3b0a04e`, and `docs/flake.lock` moved off the
+branch it had been pinned to since 9 September. All 31 example clusters
+evaluate against the new name validator; the `ingressNginx` instance was the
+only thing it refused. The three guides that named that instance now explain
+the mechanism rather than the old name: the instance is lowercase because a
+package names its resources after it, and `meta.defaultAliases` is what keeps
+the dependency resolving.
+
+Two things the rename surfaced. The published ingress capture had been showing
+object names Kubernetes would reject, so the fix reached the rendered output
+and not only the source. And the `monitoringStack` region had excluded the
+`specialArgs` line that makes the module resolve, so the snippet a reader
+copies omitted the one line they needed.
+
+**Phase 3** (`37b0b71`). Six jq projections reshaped their input rather than
+excerpting it, three of them on pages that tell the reader to compare what
+they see against a live object at a named path. Every key now sits where it
+sits in the real output.
+
+The health-check group's success capture contained no Job. It deployed a
+cluster that earlier live groups had already deployed unchanged, so the probe
+correctly did not re-run. The group now resets the cluster, which fixes the
+capture and makes `--group` reproduce a full run. A fresh-cluster first deploy
+logs an apiserver 429 retry, stable across runs and left in as real output.
+
+### What remains
+
+- **Two design questions**, not implementation gaps: which name defines
+  cluster identity (`activation.rs:107-116` vs `core/activation.nix:92-94`),
+  and whether the phase-1 pre-pass can be taught to see explicit `deps`
+  (`cluster.nix:223`). Both are documented as cautions in the guides.
+- **Snippet conversion**: 41 hand-written nix blocks across 19 pages have a
+  tracked count (`1fc70c6`) and a checker that fails when it moves
+  unannounced. Converting them to checked snippets is the durable half of
+  this work, a page at a time.
+- **Scorecard in the example clusters**, the one pipeline item from the plan
+  that did not land. It would close T3.3 mechanically and stop `check.json`
+  reading "scorecard skip" on the pages that teach the scorecard.
 
 ## Open questions
 
