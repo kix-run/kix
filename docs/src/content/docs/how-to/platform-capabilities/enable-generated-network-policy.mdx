@@ -22,13 +22,27 @@ first if the cluster does not have one.
 
 ## Use a tracked Service endpoint
 
-In the calling package, read the destination from the dependency's `out` API:
+In the calling package, dial the dependency through an address-shaped field on
+its `out` API:
 
 <Snippet {...trackedServiceEndpoint} />
 
 `backend.out.url { }` supplies the application with the Service URL and gives
 Kix the destination, port, and protocol needed for policy generation. Keep the
 endpoint connected to the workload that makes the request.
+
+Not every `out` field does this. `out.fqdn`, `out.url`, and a package's own
+declared outputs are address-shaped: using one asserts that reaching the value
+reaches the Service, and that assertion is what becomes the egress rule.
+`out.name` and `out.selector` are structural. They create a dependency edge,
+so ordering is right and `kix check` is green, but they open no hole. The
+failure shows up as a dropped connection at runtime.
+
+Naming a Service without dialing it traces `no netpol edge derived` during
+evaluation, with the Service and a pointer to `out.fqdn`/`out.url`. That is a
+trace warning, not a check failure, so read the evaluation output when a
+generated policy is missing a rule you expected. For a genuinely structural
+use, such as a label or a display string, silence it with `facts.refOnly`.
 
 ## Enable policy generation
 

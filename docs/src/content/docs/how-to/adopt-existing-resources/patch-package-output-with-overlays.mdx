@@ -32,8 +32,19 @@ creates `patchedConfig`, then replaces both the named part and `root`. Updating
 `root` is necessary because the original package uses that ConfigMap as its
 root resource.
 
-Keep the patch as narrow as possible. Preserve every field the package owns
-unless the adoption requires changing it.
+Keep the patch as narrow as possible, and name everything you want to keep.
+`rawManifest` is the rendered manifest and nothing more, so a rebuilt part
+loses whatever the overlay does not restate. That includes labels and
+annotations the package set, and it includes the part's `requires` and
+`extraDeps`, which are ordering edges rather than manifest fields and so never
+appear in `rawManifest` at all.
+
+Overlay a workload only when there is no alternative. `scope.mkResource` is
+the generic builder: rebuilding a Deployment with it skips the selector and
+pod-template label derivation `scope.mkDeployment` performs, and skips the
+network-policy resources the workload builders attach. Prefer overlaying a
+leaf resource, as the example does with a ConfigMap, or adding a typed option
+to the package.
 
 ## Check the result
 

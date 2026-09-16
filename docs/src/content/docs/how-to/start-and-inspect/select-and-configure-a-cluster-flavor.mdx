@@ -40,39 +40,74 @@ modules = [
   kix.flavors.kind
 
   {
-    cluster.domain = "cluster.local";
+    # The kind flavor binds the CNI role exclusively to kindnet. Release it
+    # when the kind cluster was created with its default CNI disabled.
+    cluster.roles.cni = {
+      binding = "absent";
+      provider = null;
+    };
+
     networkPolicy.enable = false;
     namespaces.apps = { };
   }
 ];
 ```
 
-Keeping the flavor first makes the merge direction visible: the following
-modules contain the choices made by this cluster.
+Flavors set their role bindings and capability flags with `lib.mkDefault`, so
+a later module overrides them by plain assignment. Keeping the flavor first
+makes the merge direction visible: the following modules contain the choices
+made by this cluster.
 
 ## Keep environment selection explicit
 
-When one repository targets several environments, make the flavor an explicit
-input to the cluster definition or define a cluster for each target. Do not
-infer it from the current kubectl context because evaluation should produce the
-same manifests without contacting a cluster.
+When one repository targets several environments, define a cluster for each
+target and name the flavor in it. Do not infer it from the current kubectl
+context, because evaluation should produce the same manifests without
+contacting a cluster.
 
-For example:
+Put everything the environments share in a module they both import:
 
-```nix title="clusters/application.nix"
-{ kix, flavor, ... }:
+```nix title="clusters/dev.nix"
+{ kix, packages }:
 
 kix.buildCluster {
-  name = "application";
+  name = "dev";
+  # Modules receive `ref` and a minimal `kix` by default. Forward the full
+  # `kix` and the package catalogue so shared modules can use them.
+  specialArgs = { inherit kix packages; };
   modules = [
-    flavor
-    { namespaces.apps = { }; }
+    kix.flavors.kind
+    ./base.nix
   ];
 }
 ```
 
-The consuming flake can call that cluster with the chosen flavor for each
-environment.
+```nix title="clusters/prod.nix"
+{ kix, packages }:
+
+kix.buildCluster {
+  name = "prod";
+  specialArgs = { inherit kix packages; };
+  modules = [
+    kix.flavors.eks
+    ./base.nix
+  ];
+}
+```
+
+Register both in the flake:
+
+```nix title="flake.nix"
+clusters = {
+  dev = ./clusters/dev.nix;
+  prod = ./clusters/prod.nix;
+};
+```
+
+`mkFlake` calls a cluster function with `kix`, `packages`, and `pins`, and
+nothing else. A cluster written to take some other argument, such as a
+`flavor` passed in from outside, fails with `called without required
+argument`.
 
 ## Check the result
 

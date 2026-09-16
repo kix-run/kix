@@ -8,9 +8,9 @@ import graphTree from '/src/command-output/how-to/dependency-graph/graph-tree.js
 import graphDot from '/src/command-output/how-to/dependency-graph/graph-dot.json';
 import graphJson from '/src/command-output/how-to/dependency-graph/graph-json.json';
 
-Use `kix graph` to inspect the dependencies Kix derived from package outputs,
-explicit `deps`, `requires`, and other tracked references. The graph is built
-from the rendered cluster and does not require access to Kubernetes.
+Use `kix graph` to inspect the dependencies Kix derived from the rendered
+cluster: every reference a resource's manifest carries, plus anything named in
+`requires` or `extraDeps`. The graph needs no access to Kubernetes.
 
 ## Print the tree
 
@@ -23,9 +23,14 @@ depends on the resource above it. In this example, the gateway ConfigMap
 appears beneath `Service/backend@platform`, showing the edge across the
 namespace boundary.
 
-If an expected edge is absent, check that the consumer reads a tracked
-`out` value from the dependency or declares an explicit dependency through
-`deps`, `requires`, or `extraDeps`.
+If an expected edge is absent, check that the consumer actually reads a value
+from the dependency, such as `backend.out.url { }` or `backend.out.name`. The
+reference is the edge. For a relationship with no value to read, name the
+resource in `requires` or `extraDeps`.
+
+`deps` on its own creates no edge. It binds a build argument so the package
+can reach the provider; the edge appears only where the built manifest uses
+something the provider produced.
 
 ## Write a DOT graph
 

@@ -44,8 +44,14 @@ cluster definition itself:
 <Snippet {...mergeTeamFragments} />
 
 Namespace attrsets merge recursively. Two fragments may add different labels,
-annotations, or quota fields to the same namespace. If they assign different
-values to the same leaf, evaluation stops with a namespace policy conflict.
+annotations, or quota fields to the same namespace. If two of them set the
+same leaf, evaluation stops with a namespace policy conflict, whether or not
+they agree on the value. The merge looks at which fragments defined a key,
+never at what they defined it as.
+
+`namespacePolicies` goes through that same merge, so cluster-level policy adds
+leaves rather than overriding them. A leaf a fragment already set cannot be
+restated here.
 
 Instance ownership is stricter. Defining the same instance name in the same
 namespace from two fragments is always an error.

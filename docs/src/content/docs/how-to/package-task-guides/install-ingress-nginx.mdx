@@ -29,9 +29,15 @@ in-cluster component forwards traffic to ingress-nginx.
 
 For a cloud or bare-metal environment with LoadBalancer support, set
 `config.serviceType = "LoadBalancer"` on the instance. Use
-`config.serviceAnnotations` for provider-specific load balancer settings. The
-target cluster must have a provider for the `loadBalancer` role or evaluation
-will reject the Service.
+`config.serviceAnnotations` for provider-specific load balancer settings.
+
+Evaluation rejects that Service only when the cluster declares the
+`loadBalancer` role vacant with `cluster.roles.loadBalancer.binding =
+"absent"`, which is what the kind flavor does. A managed provider instance
+satisfies the role, and so does an environment binding of `shadowable` or
+`exclusive` for a load balancer the platform already runs. A cluster that
+declares nothing leaves the role `unknown`, and that is a trace warning during
+evaluation rather than a refusal.
 
 Set `config.replicaCount` when the controller should run more than one replica.
 

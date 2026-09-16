@@ -71,10 +71,6 @@ passes `--prune`:
   cwd="kix-examples/"
 />
 
-`--prune-mode eager` also deletes orphans, whether or not `--prune` is passed.
-It is currently the same behaviour as `--prune`: nothing yet interleaves prune
-waves with apply waves.
-
 Review stateful removals carefully. Kix requires a separate migration
 acknowledgement when a plan replaces a stateful resource in the same logical
 slot. It does not gate a stateful resource that is removed with nothing taking

@@ -25,9 +25,62 @@ Set `kind` and `apiVersion` to describe the existing resource. The `out`
 attributes form the interface that consuming packages receive. They must
 match the Service in the target cluster.
 
+Kix checks only part of that match. A deploy waits for an object of that kind,
+apiVersion, and name to exist in the namespace, and fails if it does not. The
+`fqdn` and `port` written here are strings Kix passes through untouched, so a
+wrong port deploys cleanly and fails at runtime.
+
 The `legacyApi` alias lets a package request this import with a build argument
 of the same name. Choose an alias that describes the dependency's role rather
-than its location.
+than its location. When the import fills one of Kix's registered
+infrastructure roles, declare `roles = [ "dns" ]` and so on instead of an
+alias: a role name is also the resolution key, and it makes the import a weak
+provider, so a managed instance claiming the same role shadows it.
+
+:::caution[Generated network policy needs the other form]
+An `out.fqdn` written as a string literal carries no provenance. A workload
+that dials it gets a dependency edge and no egress rule, so on a cluster with
+[generated network policy](/docs/how-to/platform-capabilities/enable-generated-network-policy/)
+the call is dropped at runtime while `kix check` stays green.
+
+Describe the Service instead of asserting its address, and let Kix derive the
+address from the description:
+
+```nix title="cluster.nix"
+package = kix.mkImport {
+  kind = "Service";
+  apiVersion = "v1";
+  from =
+    { scope, ... }:
+    {
+      build =
+        { self, ... }:
+        {
+          service = scope.mkResource {
+            apiVersion = "v1";
+            kind = "Service";
+            name = "legacy-api";
+            spec = {
+              selector."app.kubernetes.io/name" = "legacy-api";
+              ports = [
+                {
+                  port = 8080;
+                  protocol = "TCP";
+                }
+              ];
+            };
+          };
+
+          root = self.service;
+        };
+    };
+};
+```
+
+Kix still renders no Service. It uses the description to derive `out.fqdn` and
+to record which pods that address reaches, which is what the policy generator
+needs. The selector has to match the live Service's own selector.
+:::
 
 ## Use the imported outputs
 

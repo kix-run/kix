@@ -13,8 +13,10 @@ Use `kix.modules.monitoring` to install the native Kix monitoring stack. The
 module configures Prometheus Operator, Prometheus, Alertmanager, Grafana,
 node-exporter, and kube-state-metrics as related package instances.
 
-This guide assumes the cluster's package catalogue is available to its modules.
-The standard `mkFlake` setup supplies it automatically.
+The module needs the cluster's package catalogue. `buildCluster` passes modules
+only `ref` and a minimal `kix`, so the cluster has to forward it with
+`specialArgs = { inherit kix packages; };`. The example cluster does that on
+the line above the snippet below.
 
 ## Add the monitoring module
 
@@ -23,8 +25,26 @@ Import the module and enable the stack in a cluster module:
 <Snippet {...monitoringStack} />
 
 The example keeps Grafana storage ephemeral so it can run on a fresh local
-cluster. For a long-lived cluster, keep Grafana persistence enabled and set
-`monitoring.grafana.persistence.size` to the required capacity.
+cluster. For a long-lived cluster, set the whole `persistence` attrset:
+
+```nix title="cluster.nix"
+monitoring.grafana.persistence = {
+  enabled = true;
+  size = "20Gi";
+};
+```
+
+`persistence` is one option typed `anything`, not a submodule with its own
+options, so a single definition replaces its default outright instead of
+merging into it. Writing `monitoring.grafana.persistence.size = "20Gi"` on its
+own drops `enabled`, and evaluation fails with `attribute 'enabled' missing`.
+The example gets away with setting only `enabled` because the code that reads
+`size` sits behind that flag.
+
+Package `config` options do not behave this way. There Kix merges each option's
+default back over the evaluated result, so a partial setting fills in the rest.
+Cluster module options such as this one go through the plain module system,
+where it does not.
 
 `defaultRules.enabled` adds the standard Kubernetes alert rules, recording
 rules, and ServiceMonitors. Disable it when you want to install the core stack

@@ -22,10 +22,15 @@ Use these fields to describe the package:
 - `owner` identifies the team responsible for it and supports governance
   scorecard rules.
 - `lifecycle` classifies its state as `stateless`, `stateful`, `durable`, or
-  `ephemeral`.
-- `scope` records whether the package is namespace-scoped or cluster-scoped.
+  `ephemeral`. It reaches the cluster as the `kix.run/lifecycle` annotation,
+  and `stateful` is what makes a replacement trip the migration gate at deploy
+  time.
+- `scope` is a constraint, not a label. `scope = "namespace"` means no instance
+  in another namespace may depend on this package, and evaluation throws when
+  one does. The default is `cluster`.
 
-Application packages usually need only this descriptive metadata.
+`version`, `description`, and `owner` are descriptive. `lifecycle` and `scope`
+change what Kix allows, so set them deliberately.
 
 ## Claim an infrastructure role
 

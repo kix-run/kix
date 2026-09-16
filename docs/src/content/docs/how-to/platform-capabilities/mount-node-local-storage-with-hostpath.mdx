@@ -51,9 +51,17 @@ Add the package to a cluster whose flavor permits privileged workloads:
 
 <Snippet {...hostPathApplicationInstance} />
 
-Kix checks `hostPath` against
-`cluster.capabilities.privilegedContainers`. Evaluation fails when the target
-platform sets that capability to `false`.
+Kix checks `hostPath` against `cluster.capabilities.privilegedContainers`.
+The check is three-valued: `false` fails evaluation, `true` passes, and a
+capability the cluster never declares is `unknown`, which traces a warning and
+carries on. An unannounced target is not a cleared one, so declare the
+capability rather than relying on the absence of an error.
+
+Pin the workload to one node as well. The Deployment above runs a single
+replica with no scheduling constraint, so a rescheduled pod can land on
+another node and find that node's directory instead, empty. Add a
+`nodeSelector` or a node affinity naming the node whose directory holds the
+data.
 
 ## Check the result
 

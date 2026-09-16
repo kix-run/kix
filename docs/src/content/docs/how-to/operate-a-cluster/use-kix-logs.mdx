@@ -15,9 +15,9 @@ Provide the cluster name and package instance:
 
 <Command {...productionLogs} />
 
-Kix resolves `production` to its primary workload and reads logs from the Pods
-selected by that workload. Pod names are prefixed when more than one Pod
-matches.
+Kix resolves `production` to its primary workload and reads logs from every
+Pod the workload selects, and from every container in them. Each line is
+prefixed with its Pod and container, whether one Pod matches or twenty.
 
 ## Follow logs
 
@@ -47,7 +47,8 @@ Durations can be combined, such as `1h30m`.
 
 ## Select a container or previous instance
 
-For a workload with multiple containers, pass the container name:
+All containers are read by default. Pass a container name to read only that
+one:
 
 <Command
   commands={[

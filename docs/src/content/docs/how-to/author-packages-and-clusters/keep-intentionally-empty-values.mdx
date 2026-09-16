@@ -93,8 +93,12 @@ volumes:
 ```
 
 The `volumeHasSource` scorecard rule (severity error) backs this up for the
-volume case: a volume that would render without a source fails the build
-with a message naming the volume and the fix.
+volume case: a volume that would render without a source fails the build with
+a message naming the volume and the fix.
+
+The scorecard is off by default, so that rule only runs where the cluster sets
+`scorecard.enable = true`. Without it, a volume with no source renders as
+written and nothing objects.
 
 :::note[Reference]
 See [`kix.keep`](/docs/reference/kix-helpers/keep/) for exact semantics,

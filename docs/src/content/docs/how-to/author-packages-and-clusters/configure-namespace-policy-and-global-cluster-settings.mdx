@@ -29,6 +29,14 @@ Add instances beneath the same namespace key. Kix also creates a Namespace for
 an instance namespace that has no explicit `namespaces` block, but the explicit
 block is where its policy belongs.
 
+`instances._platform.storage` in the snippet is the exception. A namespace key
+beginning with `_` is a sentinel: it groups instances without being a
+Kubernetes namespace at all. Kix generates no Namespace, no ResourceQuota and
+no default-deny policy for it, and cluster scorecard rules skip it. Use one for
+an instance whose resources are all cluster-scoped, as the storage provider's
+StorageClass is here. Anything that needs a real namespace takes a name
+without the prefix.
+
 ## Check the cluster
 
 Run the normal pre-deploy checks:
