@@ -1,6 +1,8 @@
 # 142: How-to docs accuracy audit and the verification gap
 
-**Status:** Analysis / Accepted (findings audited, fixes not yet landed)
+**Status:** In progress. Phases 0, 1 and most of 4 landed 2026-09-16 on
+`docs/how-to-cluster-safety-fixes` (9 commits from `726afe2`). Phases 2 and 3
+are blocked on the kix-examples repo and a live kind cluster.
 **Related:** `135_validation_layers_audit.md` (same question one layer down: what
 validation actually runs), `docs/README.md` (snippet + capture pipeline)
 
@@ -138,16 +140,23 @@ The purist question came out better than expected. Confirmed drift:
 Writing the docs functioned as a test suite and found real defects. These need
 code, not prose:
 
-| Bug | Location |
+| Bug | Location | Status |
+|---|---|---|
+| Error-severity scorecard findings never reach SARIF (empty run + exit 1) | `check.rs:264-266` | Fixed, `84effbd`: the failure is reported as one error result, attributed to the rule its message names |
+| `--prune-mode eager` claims interleaving that does not exist | `cli.rs:438,507`; `deploy.rs:727-731` | Removed, `fc3c512`. The real feature is in ROADMAP: it is scheduler work, not a flag |
+| `kix export --for exit` ships both kix CRDs; `--force` does not clear the directory | `export.rs:64-73,84-90` | `--force` fixed, `84effbd`, guarded so it only clears a tree of `.yaml`. The CRDs are documented rather than filtered: they are ordinary resources in the graph |
+| No DNS-1123 name validation anywhere in `kix/lib` or `cli/` | absent | Fixed, `254f64a`. Found `machineLearning` in two of this repo's own clusters on the first run |
+| `isValidSeverity` / `isValidLevel` defined and never called, so a typo'd severity silently downgrades an error rule | `scorecard.nix:10-19` | Fixed, `84effbd`, including the three override channels |
+| `cluster.domain` read defensively in two places but declared nowhere | `compose.nix:955`, `monitoring.nix:219-222` | Fixed, `a85fea8`: kix declares it, ludo stops declaring it, and the multi-env example that proved the gap is now registered and built |
+| Cluster-state commands filter Activations by CLI name; the label carries `buildCluster.name` | `activation.rs:107-116` vs `core/activation.nix:92-94` | Open. Documented as a caution in `use-mkflake-in-a-consuming-repo`; the fix is a design choice about which name is the identity |
+| Phase-1 ambiguity pre-pass cannot see explicit `deps` | `cluster.nix:223`; already documented in BEST-PRACTICES §8.4 | Open, by design for now. The caveat is documented in both dependency-debugging guides |
+
+Two more the fixes themselves surfaced:
+
+| Bug | Status |
 |---|---|
-| Error-severity scorecard findings never reach SARIF (empty run + exit 1) | `check.rs:264-266`, by design per `:159-163` |
-| `--prune-mode eager` claims interleaving that does not exist | `cli.rs:438,507`; `deploy.rs:727-731` |
-| Cluster-state commands filter Activations by CLI name; the label carries `buildCluster.name` | `activation.rs:107-116` vs `core/activation.nix:92-94` |
-| `kix export --for exit` ships both kix CRDs; `--force` does not clear the directory | `export.rs:64-73,84-90` |
-| No DNS-1123 name validation anywhere in `kix/lib` or `cli/` | absent |
-| `isValidSeverity` / `isValidLevel` defined and never called, so a typo'd severity silently downgrades an error rule | `scorecard.nix:10-19` |
-| `cluster.domain` read defensively in two places but declared nowhere | `compose.nix:955`, `monitoring.nix:219-222` |
-| Phase-1 ambiguity pre-pass cannot see explicit `deps` | `cluster.nix:223`; already documented in BEST-PRACTICES §8.4 |
+| treefmt was reformatting the `docs/src/snippets/**` region extracts, which must stay byte-identical to their source or the drift check fails | Fixed, `c159411`. It had also been reporting a syntax error on 39 of them on every commit |
+| `clusters/test-fragments.nix` spelled an example platform team's labels under `platform.kix.run`, failing the keys.rs domain guard | Fixed, `a85fea8`. Pre-existing on main |
 
 ## Upstream sources of error
 
@@ -209,6 +218,10 @@ It would not, for the reason in the table above.
 
 Sequenced, bucketed by where the change lands. All four buckets approved.
 
+Phases 0, 1 and most of 4 landed on 2026-09-16. What follows is the plan as
+written; the two remaining phases are 2 and 3, both blocked on something
+outside this repo.
+
 **Phase 0, cluster safety, `docs/` prose, one PR:** T1.1, T1.2, T1.3, T1.4-lite,
 the `kix pf` port fix, and a caution on platform intents (a Cilium policy
 selecting an endpoint puts it in default-deny for the directions it specifies,
@@ -238,6 +251,26 @@ blocks to region snippets (roughly 8 of the 19 files covers every Tier-2
 finding that lives in a block); the scorecard enabled in the example clusters
 via one shared module; wiring `isValidSeverity`/`isValidLevel` into rule
 ingestion.
+
+### What remains, 2026-09-16
+
+- **Phase 2**, in kix-examples: rename the `ingressNginx` instance (the new
+  validator refuses it, so the docs lock cannot advance until this lands),
+  move `specialArgs` inside the `monitoringStack` region, fix or drop
+  `metrics-package.nix`'s fabricated ConfigMap endpoint, characterise the
+  `raw-pvc` grant in the stateful fixture. Then merge PR #1 and bump
+  `docs/flake.lock` off the branch.
+- **Phase 3**, in `docs/nix/captures.nix`: point the three `podLabels` jq
+  projections at real paths, fix the readiness and provenance projections,
+  and reorder the health-check group so the success capture runs against a
+  changed instance. Needs a kind cluster for the live groups.
+- **Two product items left open above**, both of which are design questions
+  rather than fixes: which name is a cluster's identity, and whether the
+  phase-1 pre-pass can be taught to see explicit `deps`.
+- **Snippet conversion**: 41 hand-written nix blocks across 19 pages now have
+  a number on them (`1fc70c6`). Driving that number down is the durable half
+  of this work, and it is worth doing a page at a time rather than in a
+  sweep.
 
 ## Open questions
 
