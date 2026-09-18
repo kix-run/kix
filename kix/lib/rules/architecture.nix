@@ -540,6 +540,34 @@ in
                   + "or use `kix.monitor`, which does this for you.";
               }
             ]
+          else if scraped == [ ] then
+            # The labels match, the port does not: prometheus-operator keeps
+            # the Service and drops every endpoint at relabeling, so the job
+            # is just as absent from `up` as with no match at all. Harbor
+            # shipped this shape (selector on the redis Service, scrape port
+            # only on core/registry/jobservice/exporter) and passed silently
+            # before this branch existed (2026-09-18).
+            [
+              {
+                namespace = mon.metadata.namespace or null;
+                resource = monId;
+                message =
+                  "${mon.kind or "?"} '${mon.metadata.name or "?"}' selects "
+                  + "${lib.concatStringsSep ", " (map svcId matched)} by labels, but none of "
+                  + "${if builtins.length matched == 1 then "its" else "their"} ports match the monitor's endpoint"
+                  + "${
+                    lib.optionalString (mon.spec.endpoints or [ ] != [ ])
+                      " (${
+                         lib.concatStringsSep ", " (
+                           map (ep: toString (ep.port or ep.targetPort or "?")) (mon.spec.endpoints or [ ])
+                         )
+                       })"
+                  }, "
+                  + "so every target is dropped at relabeling and the job is silently missing from `up`. "
+                  + "Point the endpoint at a port the Service declares by name, or select the Service that "
+                  + "serves metrics: `self.<service>.out.selector`, or use `kix.monitor` with `port = \"<name>\"`.";
+              }
+            ]
           else if builtins.length scraped > 1 then
             [
               {

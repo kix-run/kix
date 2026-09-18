@@ -104,7 +104,6 @@ in
         };
       };
     };
-    requires = [ self.startupapicheckServiceAccount ];
   };
 }
 // startupRoles

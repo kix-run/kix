@@ -360,7 +360,11 @@ DI dep args: `{ requiredDep, optionalDep ? null, ... }`. The `?` default makes a
 - `extraDeps = [ self.x ]` — same as `requires` but tagged differently in the `kix.run/depends-on` annotation. Use when the edge is structural rather than "requires this to exist before me".
 - `rawSelector` — workload-only escape hatch that exposes `spec.selector.matchLabels` without forcing the workload's store-path context. Use when reading `out.selector` would create a cycle. Trade-off: the consumer loses the workload DAG edge — `scorecard:architecture.selectorCoherence` fires to keep the workaround visible.
 
-### 5.3 Warning system
+### 5.3 Reserved part names
+
+Two part names are folders, not resources: `secrets` and `crds` (`knownFolders` in `kix/lib/eval/helpers.nix`). The package view expects `secrets.<name> = scope.mkSecret { ... }` and `crds.<name> = scope.mkCRD { ... }` under them and refuses a resource assigned to the folder itself ("'secrets' must be an attrset of resources, not a resource directly"). Name a single Secret part something else, e.g. `credentials`.
+
+### 5.4 Warning system
 
 `scope.mkDeployment`/`mkStatefulSet`/`mkDaemonSet` emit `builtins.trace` warnings for:
 
@@ -370,7 +374,7 @@ DI dep args: `{ requiredDep, optionalDep ? null, ... }`. The `?` default makes a
 
 Fix all warnings before committing.
 
-### 5.4 Inline-attrset packages
+### 5.5 Inline-attrset packages
 
 Test fixtures and one-off cluster-inline packages can skip the function wrapper:
 
@@ -573,6 +577,9 @@ These return functions whose own DI args are auto-discovered.
   alerts ? {},                   # { alertName = { expr, "for"?, severity?, description?, summary?, runbook_url?, labels?, annotations? }; }
   extraEndpoints ? [],
   extraLabels ? {},
+  name ? null,                   # ServiceMonitor name; default the instance name. Rules are `<name>-alerts`.
+  monitorPart ? "serviceMonitor",  # part names, so a package with several metrics
+  rulesPart ? "prometheusRules",   # Services can call kix.monitor once per Service (harbor)
 })
 ```
 
@@ -1155,13 +1162,16 @@ Use only when the environment dimension is genuinely "same shape, different tuni
 
 Apps with multiple sub-services (Harbor: core, portal, registry, jobservice, exporter) live in **one package**, not split across packages. They share config, secrets, and internal URLs. Reference: `kix/packages/harbor/`. Deep dive: [`.claude/skills/kix-migration/MULTI_COMPONENT.md`](../.claude/skills/kix-migration/MULTI_COMPONENT.md).
 
-Five key patterns:
+Key patterns:
 
-1. **Shared `let` bindings** — define common values (selector labels, security contexts, probe bases, internal URLs) once.
-2. **Per-component selectors** — add a `component` label to distinguish pods: `selector.matchLabels = selectorLabels // { component = "core"; }`.
-3. **Cross-resource refs via enriched `out`** — `self.coreSecret.out.envFrom`, `self.coreConfigMap.out.name`, `self.coreSecret.out.keyRef "secret"`.
-4. **Inline PVCs** — when storage is owned by the package (not the cluster operator), define PVCs as resources within the package.
-5. **`root.requires` / `root.postHooks`** — the synthesized `root` declares `requires` (everything must exist before root) and `postHooks` (resources deployed after the rest of the package).
+1. **Shared `let` bindings** — define common values (security contexts, probe bases, internal URLs) once.
+2. **Per-component selectors and Service labels** — `scope.selectorLabels // { "app.kubernetes.io/component" = "core"; }` on the workload, and a distinct component label on each Service so `architecture.distinctSameKindLabels` can tell them apart.
+3. **Internal URLs carry facts** — components dial each other through `self.<service>.out.fqdn`, never a bare `"${name}-core"` string; that is what gives the consumer its netpol egress and ordering.
+4. **Mutual-dial cycles** — when two components dial each other, one Service is built on a literal selector shared with its Deployment, and the Deployment goes in `root.requires`.
+5. **Cross-resource refs via enriched `out`** — one `scope.mkSecret` with declared keys, consumed through `out.mkEnv`/`out.keyRef`; a password that must appear in a URL goes through `$(VAR)` expansion so no ConfigMap carries it.
+6. **Storage is a DI dep** — the registry's blobs come from `storage`; scratch paths are `emptyDir`.
+7. **One `kix.monitor` per metrics Service** — with `name`, `monitorPart` and `rulesPart` so the entries do not collide.
+8. **`root.requires` / `root.postHooks`** — `requires` lists what the entry point cannot reach through `self.*` (filter nulls for optional parts); `postHooks` are resources deployed after the rest of the package.
 
 ## 20. Storage
 

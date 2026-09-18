@@ -1074,6 +1074,10 @@ rec {
           null;
     };
 
+  # `name`, `monitorPart` and `rulesPart` let a package with several
+  # metrics Services (harbor: core, registry, jobservice, exporter) call
+  # this once per Service without the parts or the resource names
+  # colliding. The defaults are the single-Service case.
   monitor =
     {
       service,
@@ -1082,6 +1086,9 @@ rec {
       alerts ? { },
       extraEndpoints ? [ ],
       extraLabels ? { },
+      name ? null,
+      monitorPart ? "serviceMonitor",
+      rulesPart ? "prometheusRules",
     }:
     {
       self,
@@ -1092,7 +1099,7 @@ rec {
       ...
     }:
     let
-      name = scope.instanceName;
+      monitorName = if name != null then name else scope.instanceName;
       svc = self.${service};
 
       metricsConfig = config.metrics or { };
@@ -1139,10 +1146,10 @@ rec {
       hasAlerts = alerts != { };
     in
     {
-      serviceMonitor =
+      ${monitorPart} =
         if metricsEnabled then
           prometheus.out.mkServiceMonitor scope {
-            inherit name;
+            name = monitorName;
             labels = extraLabels;
             spec = {
               namespaceSelector.matchNames = [ scope.namespaceName ];
@@ -1153,15 +1160,15 @@ rec {
         else
           null;
 
-      prometheusRules =
+      ${rulesPart} =
         if metricsEnabled && hasAlerts then
           prometheus.out.mkPrometheusRule scope {
-            name = "${name}-alerts";
+            name = "${monitorName}-alerts";
             labels = extraLabels;
             spec = {
               groups = [
                 {
-                  name = "${name}-alerts";
+                  name = "${monitorName}-alerts";
                   rules = alertRules;
                 }
               ];

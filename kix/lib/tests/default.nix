@@ -2193,6 +2193,57 @@ let
       (good == [ ] && bad != [ ])
       || throw "monitor rule vs ServiceRef: good=${builtins.toJSON good} bad=${builtins.toJSON bad}";
 
+    # The labels match but no port does: the monitor finds the Service and
+    # then drops every endpoint. Harbor shipped this shape and the rule
+    # passed it, because the no-match and over-match branches were the only
+    # two (2026-09-18).
+    t54b-monitor-rule-matched-but-unscraped =
+      let
+        rule = (import ../rules/architecture.nix { inherit lib; }).monitorSelectorMatchesService;
+        service = {
+          kind = "Service";
+          metadata = {
+            name = "cache";
+            namespace = "app";
+            labels.app = "cache";
+          };
+          spec.ports = [
+            {
+              name = "redis";
+              port = 6379;
+            }
+          ];
+        };
+        monitor = port: {
+          kind = "ServiceMonitor";
+          metadata = {
+            name = "cache";
+            namespace = "app";
+          };
+          spec = {
+            selector.matchLabels.app = "cache";
+            namespaceSelector.matchNames = [ "app" ];
+            endpoints = [ { inherit port; } ];
+          };
+        };
+        run =
+          port:
+          rule.check {
+            allInstances.app = { };
+            allResources = [
+              service
+              (monitor port)
+            ];
+          };
+        good = run "redis";
+        bad = run "http-metrics";
+        mentionsPort = builtins.any (
+          f: builtins.match ".*none of its ports match.*http-metrics.*" f.message != null
+        ) bad;
+      in
+      (good == [ ] && builtins.length bad == 1 && mentionsPort)
+      || throw "monitor rule matched-but-unscraped: good=${builtins.toJSON good} bad=${builtins.toJSON bad}";
+
     # A ServiceRef's out.fqdn has the same form as a rendered Service's:
     # `<name>.<ns>.svc.<clusterDomain>`. It used to stop at `.svc`, which
     # only resolves through the pod's DNS search path.
