@@ -14,6 +14,17 @@ If you want to understand internals of kix/lib, read kix/lib/architecture.md. If
 
 The user-facing reference docs are `docs-legacy/BEST-PRACTICES.md` (durable, principles-first) and `docs-legacy/HANDBOOK.md` (dense, low-level mechanics). When you change user-visible API surface or durable guidance, update them. The breadth-first inventory in `docs-legacy/FEATURE-CATALOG.md` is the third sibling — keep it in sync when adding new APIs. Do not create additional top-level docs; extend these.
 
+## Housekeeping — log what you notice
+
+Add every problem you notice and do not fix to the
+[`housekeeping/`](housekeeping/) directory, one problem to a file, and commit
+it as you go. Approval is not needed, the problem does not have to relate to
+the work in hand, and the entry can go on any branch and ride along in any
+pull request. We develop this repository through agents, so anything you
+notice and do not record is lost when the session ends. A new file under
+`housekeeping/` is the one documentation file you may create unasked. Format
+and rules: [`CLAUDE.housekeeping.md`](CLAUDE.housekeeping.md).
+
 ## Git hygiene
 
 Never `git stash pop`/`apply` unless you created the stash in this session and verified it is the top entry (`git stash list` — check the message matches yours). This repo's stash stack carries old `autostash` leftovers; a blind pop resurrects them into the working tree. To test a hypothesis against a clean tree, use `git worktree add` (or `git show HEAD:<file>`) instead of stashing. Chain stash push→pop with `&&`, never `;`.
