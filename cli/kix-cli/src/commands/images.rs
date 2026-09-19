@@ -89,23 +89,7 @@ pub fn run(args: &ImagesArgs, ctx: &mut CommandContext) -> Result<()> {
             .and_then(|v| v.as_str())
             .unwrap_or("_cluster");
 
-        // Determine where to find pod specs depending on resource kind
-        let pod_specs: Vec<&serde_json::Value> = match kind {
-            "Pod" => vec![manifest.get("spec")].into_iter().flatten().collect(),
-            "Deployment" | "StatefulSet" | "DaemonSet" | "ReplicaSet" | "Job" => {
-                vec![manifest.pointer("/spec/template/spec")]
-                    .into_iter()
-                    .flatten()
-                    .collect()
-            }
-            "CronJob" => vec![manifest.pointer("/spec/jobTemplate/spec/template/spec")]
-                .into_iter()
-                .flatten()
-                .collect(),
-            _ => vec![],
-        };
-
-        for pod_spec in pod_specs {
+        if let Some(pod_spec) = kix::manifest::workload::pod_spec(manifest) {
             // Extract from containers, initContainers, and ephemeralContainers
             for field in ["containers", "initContainers", "ephemeralContainers"] {
                 if let Some(containers) = pod_spec.get(field).and_then(|v| v.as_array()) {
