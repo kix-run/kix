@@ -68,7 +68,7 @@ Complete inventory of kix/lib (Nix library) and CLI features. Breadth-first — 
 - **`options.ingress`** — Reusable NixOS option set for ingress (host, annotations).
 - **`options.monitor`** — Reusable NixOS option set for monitoring (enabled, interval).
 - **`expose`** — Build entry: auto-creates Ingress or HTTPRoute based on which DI dep is present (gateway vs ingressNginx). Auto-derives host from cluster.domain. TLS via clusterIssuer. Errors if both gateway and ingressNginx are wired.
-- **`monitor`** — Build entry: auto-creates ServiceMonitor + optional PrometheusRule when prometheus DI dep is present. Configurable port, path, scrapeInterval, alert rules (expr, for, severity, description, summary, runbook_url), extraEndpoints, extraLabels.
+- **`monitor`** — Build entry: auto-creates ServiceMonitor + optional PrometheusRule when prometheus DI dep is present. Configurable port, path, scrapeInterval, alert rules (expr, for, severity, description, summary, runbook_url), extraEndpoints, extraLabels; `name`, `monitorPart`, `rulesPart` let one package call it once per metrics Service (harbor).
 - **`healthCheck`**: build entry, a post-deploy probe Job in the package's namespace running a script (Python by default, `runtimes.python` pinned by digest; `runtimes.shell` on curl) from a stable-name ConfigMap against addresses passed as env vars from `out.*` values and `deps`. Addresses carry the edges (ordering, netpol egress); the Job always waits for the package root too. The helper owns the time budget: `RETRY_FOR` in the env, `activeDeadlineSeconds` sized from it (`roundBudget` 90 s), a shorter given deadline fails the build. Callbacks all take `{ self, config, deps }`; `when`/`retryFor` default to `kix.options.healthCheck`. Stamped `kix.run/rerun: on-change`: `kix deploy` and `kix rollback` recreate the Job when its identity hash changed or the live Job failed; the operator only on a change (and after the TTL reaped it, since it diffs against live objects). Failure output is shown in the deploy. Own pod labels, non-root, read-only root, no token.
 
 ### RBAC DSL (`rbac.nix`)
@@ -102,7 +102,9 @@ Internal helpers: `mkServiceRegistry` (service discovery index), `extractService
 Auto-derives CiliumNetworkPolicy from the DI graph:
 - **Auto-detected egress:** API server access (precise — only workloads whose SA is subject of a RoleBinding/ClusterRoleBinding), DNS, cross-package service egress, self-communication (StatefulSet).
 - **Auto-detected ingress:** Emitted caller-side at `scope.mkDeployment` time — paired ingress CNP in the callee's namespace via `scope.forNamespace` (v2_discussions/83 Phase C). No cluster-level inverted-ingress pass.
-- **Default deny:** Per-namespace, configurable directions (ingress/egress/both).
+- **Default deny:** Per-namespace, configurable directions (ingress/egress/both). One empty rule per direction, which is the form cilium 1.19 accepts.
+- **Package intents:** `meta.network.intents.<name>.{ingress,egress}` for edges the graph cannot see; sources `world`/`all-pods`, targets `world`/`all-pods`/`apiserver`/`dns` (HANDBOOK §16.5).
+- **Numeric ports:** `kix.service.fromWorkload` resolves a named `targetPort` to the container port number, and `portsToCilium` warns on a name, because cilium drops egress on a named port.
 - Warnings for hostNetwork and Helm opacity (intra-package edges may be missing).
 
 ### Fragment Composition (`fragments.nix`)

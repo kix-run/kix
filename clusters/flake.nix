@@ -43,6 +43,7 @@
         fragments = ./test-fragments.nix;
         multi-env = ./test-multi-env.nix;
         doc-how-tos = ./test-doc-how-tos.nix;
+        harbor = ./test-harbor.nix;
         satchel-dev = ./satchel/dev.nix;
         satchel-prod = ./satchel/prod.nix;
         operators = ./test-operators.nix;

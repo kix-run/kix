@@ -169,7 +169,6 @@ rec {
         }
         // lib.optionalAttrs (cp ? name) {
           name = cp.name;
-          targetPort = cp.name;
         }
       ) allPorts;
 
@@ -196,11 +195,34 @@ rec {
             workload.rawManifest.spec.template.spec.containers or [ ]
           )
         );
+        # name -> containerPort, for resolving named targetPorts below.
+        workloadPortNumbers = builtins.listToAttrs (
+          builtins.concatMap (
+            c:
+            map (cp: {
+              name = cp.name;
+              value = cp.containerPort;
+            }) (builtins.filter (cp: cp ? name) (c.ports or [ ]))
+          ) (workload.rawManifest.spec.template.spec.containers or [ ])
+        );
         badTargets = builtins.filter (
           p:
           (p ? targetPort)
           && builtins.isString p.targetPort
           && !(builtins.elem p.targetPort workloadPortNames)
+        ) finalPorts;
+        # The Service is written with numeric targetPorts even when the
+        # author named them. The netpol layer copies targetPort into every
+        # consumer's egress rule, and cilium drops egress traffic on a
+        # named port (verified on cilium 1.19: the same rule passes with
+        # the number). The name still identifies the port on the workload;
+        # here it is resolved once, where the workload is in hand.
+        resolvedPorts = map (
+          p:
+          if (p ? targetPort) && builtins.isString p.targetPort then
+            p // { targetPort = workloadPortNumbers.${p.targetPort}; }
+          else
+            p
         ) finalPorts;
         _portCheck =
           if ports != null && badTargets != [ ] then
@@ -218,7 +240,7 @@ rec {
         spec = {
           inherit type;
           selector = workload.out.selector;
-          ports = finalPorts;
+          ports = resolvedPorts;
         };
         outputs = autoOutputs // (cfg.outputs or { });
       }
@@ -1074,6 +1096,10 @@ rec {
           null;
     };
 
+  # `name`, `monitorPart` and `rulesPart` let a package with several
+  # metrics Services (harbor: core, registry, jobservice, exporter) call
+  # this once per Service without the parts or the resource names
+  # colliding. The defaults are the single-Service case.
   monitor =
     {
       service,
@@ -1082,6 +1108,9 @@ rec {
       alerts ? { },
       extraEndpoints ? [ ],
       extraLabels ? { },
+      name ? null,
+      monitorPart ? "serviceMonitor",
+      rulesPart ? "prometheusRules",
     }:
     {
       self,
@@ -1092,7 +1121,7 @@ rec {
       ...
     }:
     let
-      name = scope.instanceName;
+      monitorName = if name != null then name else scope.instanceName;
       svc = self.${service};
 
       metricsConfig = config.metrics or { };
@@ -1139,10 +1168,10 @@ rec {
       hasAlerts = alerts != { };
     in
     {
-      serviceMonitor =
+      ${monitorPart} =
         if metricsEnabled then
           prometheus.out.mkServiceMonitor scope {
-            inherit name;
+            name = monitorName;
             labels = extraLabels;
             spec = {
               namespaceSelector.matchNames = [ scope.namespaceName ];
@@ -1153,15 +1182,15 @@ rec {
         else
           null;
 
-      prometheusRules =
+      ${rulesPart} =
         if metricsEnabled && hasAlerts then
           prometheus.out.mkPrometheusRule scope {
-            name = "${name}-alerts";
+            name = "${monitorName}-alerts";
             labels = extraLabels;
             spec = {
               groups = [
                 {
-                  name = "${name}-alerts";
+                  name = "${monitorName}-alerts";
                   rules = alertRules;
                 }
               ];

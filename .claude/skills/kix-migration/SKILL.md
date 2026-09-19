@@ -193,6 +193,10 @@ root = { resource = self.deployment; requires = [ self.sa ]; out = { ... }; };  
 
 This bit `persistent-volume-claim` (it shipped root-only and rendered no PVC), and later a package that produced zero CustomResources with no error. Both fixed by naming the part.
 
+### Reserved part names
+
+`secrets` and `crds` are folders (`knownFolders` in `kix/lib/eval/helpers.nix`): the view expects `secrets.<name> = ...` under them and refuses a resource assigned directly (`'secrets' must be an attrset of resources`). Call a single Secret part something else, e.g. `credentials`.
+
 ### `self` and dependency tracking
 
 `self` is a lazy-recursive reference to the build function's return attrset. Use `"${self.resourceName}"` to reference another resource — this creates a Nix store-path dependency that kix tracks automatically. For label-based selectors (Services, PDBs), use `scope.selectorLabels` and `requires`:
@@ -361,7 +365,7 @@ The `volumeHasSource` scorecard rule (severity error) fails the build on any vol
 
 | Function | Description |
 |----------|-------------|
-| `kix.service.fromWorkload { name, type?, ports?, outputs? } workload` | Auto-derive Service from a workload. Reads selector and ports from the container spec. Pipe to `scope.mkResource`. |
+| `kix.service.fromWorkload { name, type?, ports?, outputs? } workload` | Auto-derive Service from a workload. Reads selector and ports from the container spec; a named `targetPort` you pass is checked against the container ports and written as the number (cilium drops egress on a named port, so hand-written Services must use numbers too). Pipe to `scope.mkResource`. |
 
 #### Exposure & monitoring
 
@@ -378,7 +382,7 @@ For complex routing with multiple backends/paths, build HTTPRoute/Ingress manual
 
 **`kix.monitor`** — composable build entry. Creates ServiceMonitor + optional PrometheusRule when `prometheus` DI dep is present, emits nothing otherwise.
 
-Parameters: `service` (string key in self), `port` (default "metrics"), `path` (default "/metrics"), `alerts` (attrset of alert definitions), `extraEndpoints`, `extraLabels`.
+Parameters: `service` (string key in self), `port` (default "metrics"), `path` (default "/metrics"), `alerts` (attrset of alert definitions), `extraEndpoints`, `extraLabels`. A package with several metrics Services calls it once per Service and sets `name` (resource name, default the instance name), `monitorPart` and `rulesPart` (part names, default `serviceMonitor` / `prometheusRules`) so the entries do not collide; `packages/harbor/` does this four times.
 
 Use `options.metrics = kix.options.monitor;` for standardized metrics options.
 
@@ -514,7 +518,7 @@ Each module file receives `{ config, lib, ref, packages, ... }` and can declare 
 - **`mkLocked`** — marks a config field as immutable; blocks dep injection overrides.
 - **Monitoring module** — declarative Prometheus/Grafana/Loki stack. Read `kix/lib/modules/monitoring.nix`.
 
-**Network policy:** CiliumNetworkPolicy is auto-derived from endpoint facts — no package authoring needed. Egress rules for API server access, DNS, and cross-package services are generated automatically; a workload gets an edge to exactly the Services whose *address values* (`out.fqdn`/`out.url`, possibly via ConfigMap/Secret indirection) reached its manifest. Default-deny is per-namespace. Read `kix/lib/plugins/netpol/` and `kix/lib/core/facts.nix` for details. If hitting blindspots (Helm chart opacity, operator-managed pods), see `v2_discussions/96_netpol_autogeneration_blindspots.md`.
+**Network policy:** CiliumNetworkPolicy is auto-derived from endpoint facts — no package authoring needed. Egress rules for API server access, DNS, and cross-package services are generated automatically; a workload gets an edge to exactly the Services whose *address values* (`out.fqdn`/`out.url`, possibly via ConfigMap/Secret indirection) reached its manifest. Default-deny is per-namespace. Edges the graph cannot see (an ingress controller's backends, a component that dials something it was not handed facts for) are declared as `meta.network.intents` (HANDBOOK §16.5) or by repeating the dep's `out.*` facts in the workload's env. Use container port numbers as `targetPort` in hand-written Services: cilium drops egress on a named port. Read `kix/lib/plugins/netpol/` and `kix/lib/core/facts.nix` for details. If hitting blindspots (Helm chart opacity, operator-managed pods), see `v2_discussions/96_netpol_autogeneration_blindspots.md`.
 
 ### Flavors (target presets)
 
@@ -609,7 +613,7 @@ meta = {
 
 ## Multi-Component Packages
 
-For packages with multiple sub-services (harbor-style), keep everything in **one package** — not split into separate packages. **Read `MULTI_COMPONENT.md` for patterns**: shared let bindings, per-component selectors, inline PVCs, `root.requires`, `root.postHooks`. Reference: `packages/harbor/`.
+For packages with multiple sub-services (harbor-style), keep everything in **one package** — not split into separate packages. **Read `MULTI_COMPONENT.md` for patterns**: shared let bindings, per-component selectors and Service labels, fact-carrying internal URLs, breaking a mutual-dial cycle, one `kix.monitor` per metrics Service, `root.requires`, `root.postHooks`. Reference: `packages/harbor/`.
 
 ## Operator-Managed Stacks (VictoriaMetrics reference)
 

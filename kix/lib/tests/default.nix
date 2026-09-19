@@ -2409,6 +2409,110 @@ let
       (good == [ ] && bad != [ ])
       || throw "monitor rule vs ServiceRef: good=${builtins.toJSON good} bad=${builtins.toJSON bad}";
 
+    # The labels match but no port does: the monitor finds the Service and
+    # then drops every endpoint. Harbor shipped this shape and the rule
+    # passed it, because the no-match and over-match branches were the only
+    # two (2026-09-18).
+    t54b-monitor-rule-matched-but-unscraped =
+      let
+        rule = (import ../rules/architecture.nix { inherit lib; }).monitorSelectorMatchesService;
+        service = {
+          kind = "Service";
+          metadata = {
+            name = "cache";
+            namespace = "app";
+            labels.app = "cache";
+          };
+          spec.ports = [
+            {
+              name = "redis";
+              port = 6379;
+            }
+          ];
+        };
+        monitor = port: {
+          kind = "ServiceMonitor";
+          metadata = {
+            name = "cache";
+            namespace = "app";
+          };
+          spec = {
+            selector.matchLabels.app = "cache";
+            namespaceSelector.matchNames = [ "app" ];
+            endpoints = [ { inherit port; } ];
+          };
+        };
+        run =
+          port:
+          rule.check {
+            allInstances.app = { };
+            allResources = [
+              service
+              (monitor port)
+            ];
+          };
+        good = run "redis";
+        bad = run "http-metrics";
+        mentionsPort = builtins.any (
+          f: builtins.match ".*none of its ports match.*http-metrics.*" f.message != null
+        ) bad;
+      in
+      (good == [ ] && builtins.length bad == 1 && mentionsPort)
+      || throw "monitor rule matched-but-unscraped: good=${builtins.toJSON good} bad=${builtins.toJSON bad}";
+
+    # fromWorkload writes container port numbers as targetPort. The netpol
+    # layer copies targetPort into every consumer's egress rule and cilium
+    # drops egress on a named port (seen live on 1.19, 2026-09-19), so a
+    # name the author passes is checked against the workload and replaced
+    # by its number; extracted ports never carry a name as targetPort.
+    t88-from-workload-numeric-target-ports =
+      let
+        workload = {
+          out.selector.app = "web";
+          rawManifest.spec.template.spec.containers = [
+            {
+              name = "web";
+              ports = [
+                {
+                  name = "http";
+                  containerPort = 8080;
+                }
+                {
+                  name = "metrics";
+                  containerPort = 8001;
+                }
+              ];
+            }
+          ];
+        };
+        named =
+          (kixlib.service.fromWorkload {
+            name = "web";
+            ports = [
+              {
+                name = "http-web";
+                port = 80;
+                targetPort = "http";
+              }
+              {
+                name = "http-metrics";
+                port = 8001;
+                targetPort = "metrics";
+              }
+            ];
+          } workload).spec.ports;
+        extracted = (kixlib.service.fromWorkload { name = "web"; } workload).spec.ports;
+        targets = map (p: p.targetPort or null) named;
+      in
+      (
+        targets == [
+          8080
+          8001
+        ]
+        && builtins.all (p: !(p ? targetPort)) extracted
+      )
+      || throw "fromWorkload targetPorts: named=${builtins.toJSON targets} extracted=${builtins.toJSON extracted}";
+
     # A ServiceRef's out.fqdn has the same form as a rendered Service's:
     # `<name>.<ns>.svc.<clusterDomain>`. It used to stop at `.svc`, which
     # only resolves through the pod's DNS search path.
