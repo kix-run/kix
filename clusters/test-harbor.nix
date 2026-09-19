@@ -85,6 +85,11 @@ kix.buildCluster {
         instances.harbor = {
           harbor = {
             package = packages.harbor;
+            # The smoke test reaches the Ingress through
+            # `kubectl port-forward -n ingress-system svc/ingress-nginx 8443:443`,
+            # and registry clients follow the token realm core hands them, so
+            # the public URL has to carry that port.
+            config.externalURL = "https://harbor.harbor.test:8443";
             # Dev-only values. The key and hash below were generated for this
             # fixture and protect nothing.
             config.secrets.values = {

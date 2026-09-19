@@ -14,7 +14,7 @@ Reference implementation: `packages/harbor/`.
      coreProbe = lib.recursiveUpdate probeBase { httpGet.path = "/api/v2.0/ping"; };
    ```
 
-2. **Per-component selectors and Service labels** — derive both from `scope.selectorLabels`, and give every Service its own `app.kubernetes.io/component` value. `architecture.distinctSameKindLabels` (error) refuses two Services in one instance that carry the same labels, because nothing selecting by labels could tell them apart:
+2. **Per-component selectors and Service labels** — derive both from `scope.selectorLabels`, and give every Service its own `app.kubernetes.io/component` value. `architecture.distinctSameKindLabels` (error) refuses two Services in one instance that carry the same labels, because nothing selecting by labels could tell them apart. Use container port *numbers* as `targetPort` in any Service you write by hand: the netpol layer copies them into consumers' egress rules and cilium drops egress on a named port (`fromWorkload` resolves names for you):
    ```nix
    componentSelector = c: scope.selectorLabels // { "app.kubernetes.io/component" = c; };
    componentLabels = c: { "app.kubernetes.io/component" = c; };
@@ -31,11 +31,14 @@ Reference implementation: `packages/harbor/`.
    coreUrl = "http://${self.coreService.out.fqdn}:${self.coreService.out.port}";
    ```
 
-4. **Breaking a mutual-dial cycle** — when two components dial each other (Harbor's core and jobservice), one direction has to lose its workload edge or the store paths recurse. Build that one Service with a literal selector, shared with its Deployment so the two cannot drift, and put the Deployment in `root.requires` to restore the ordering edge. The `selectorCoherence` warning this raises is deliberate (BEST-PRACTICES §12.6):
+4. **Breaking a mutual-dial cycle** — when two components dial each other (Harbor's core and jobservice), one direction has to lose its workload edge or the store paths recurse. Build that one Service with a literal selector, shared with its Deployment so the two cannot drift, and put the Deployment in `root.requires` to restore the ordering edge. The `selectorCoherence` warning this raises is deliberate (BEST-PRACTICES §12.6). Choose the side by boot order, not by convenience: the Service that goes literal is the one whose pod must start *later*. Jobservice fetches its configuration from core's API on boot and panics until core answers, so the jobservice Service is the literal one and its Deployment carries an explicit `requires` on core (verified on a kind cluster: the other way round, jobservice crash-loops and the deploy fails). A component whose own config names its own Service (core's `CORE_URL`) has to be literal as well:
    ```nix
-   coreSelector = componentSelector "core";
+   coreSelector = componentSelector "core";           # core dials itself (CORE_URL)
+   jobserviceSelector = componentSelector "jobservice";
    coreService = scope.mkResource { kind = "Service"; ...; spec.selector = coreSelector; ... };
-   coreDeployment = { ...; spec.selector.matchLabels = coreSelector; ... } |> scope.mkDeployment;
+   jobserviceService = scope.mkResource { kind = "Service"; ...; spec.selector = jobserviceSelector; ... };
+   jobserviceDeployment = { ...; requires = [ self.coreDeployment ]; spec.selector.matchLabels = jobserviceSelector; ... } |> scope.mkDeployment;
+   # root.requires = [ self.coreDeployment self.jobserviceDeployment ... ]
    ```
 
 5. **Cross-resource references via the enriched `out` API** — secrets use `out.mkEnv`/`out.keyRef`, configmaps use `out.name`. Keep every credential in one `scope.mkSecret` with declared `keys` (SOPS `source` in real clusters, `stringData` on dev clusters) so each component's `mkEnv` is validated at build time:
@@ -44,7 +47,8 @@ Reference implementation: `packages/harbor/`.
      ++ (database.out.credentials.out.mkEnv { POSTGRESQL_PASSWORD = "password"; });
    envFrom = [ { configMapRef.name = self.coreConfigMap.out.name; } ];
    ```
-   A password that has to appear inside a URL goes through `$(VAR)` expansion: put the `secretKeyRef` entry first in `env` and the URL after it, so no ConfigMap ever carries the secret.
+   A password that has to appear inside a URL goes through `$(VAR)` expansion: put the `secretKeyRef` entry first in `env` and the URL after it, so no ConfigMap ever carries the secret. Stamp `template.metadata.annotations."checksum/config" = self.<configMap>.out.identityHash` (and `checksum/secret`) on every pod template, or a ConfigMap change never rolls the pods.
+   A component that dials a dependency it was not handed facts for gets no netpol egress: jobservice takes its database settings from core's API, so its env repeats the `database.out.*` facts purely to carry the edge.
 
 6. **Storage is a DI dep** — the registry's blobs come from a `storage` dep (`kix.mount.pvc storage { ... }`); scratch data (job logs) is an `emptyDir`. A package that builds its own PVC needs `meta.unsafe = [ "raw-pvc" ]` and the `unsafeGrants` audit lists it forever.
 

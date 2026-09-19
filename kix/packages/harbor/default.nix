@@ -566,6 +566,12 @@ in
               replicas = config.core.replicas;
               revisionHistoryLimit = 5;
               selector.matchLabels = coreSelector;
+              # Roll the pods when their configuration changes; a ConfigMap
+              # or Secret edit alone does not touch the pod template.
+              template.metadata.annotations = {
+                "checksum/config" = self.coreConfigMap.out.identityHash;
+                "checksum/secret" = self.credentials.out.identityHash;
+              };
               template.spec = harborPodDefaults // {
                 containers = [
                   {
@@ -721,6 +727,9 @@ in
               replicas = config.portal.replicas;
               revisionHistoryLimit = 5;
               selector.matchLabels = componentSelector "portal";
+              template.metadata.annotations = {
+                "checksum/config" = self.portalConfigMap.out.identityHash;
+              };
               template.spec = harborPodDefaults // {
                 containers = [
                   {
@@ -874,6 +883,10 @@ in
               revisionHistoryLimit = 5;
               strategy.type = "Recreate";
               selector.matchLabels = componentSelector "registry";
+              template.metadata.annotations = {
+                "checksum/config" = self.registryConfigMap.out.identityHash;
+                "checksum/secret" = self.credentials.out.identityHash;
+              };
               template.spec = harborPodDefaults // {
                 securityContext = harborPodDefaults.securityContext // {
                   fsGroupChangePolicy = "OnRootMismatch";
@@ -1054,6 +1067,11 @@ in
               revisionHistoryLimit = 5;
               strategy.type = "Recreate";
               selector.matchLabels = jobserviceSelector;
+              template.metadata.annotations = {
+                "checksum/config" = self.jobserviceConfigMap.out.identityHash;
+                "checksum/env" = self.jobserviceEnvConfigMap.out.identityHash;
+                "checksum/secret" = self.credentials.out.identityHash;
+              };
               template.spec = harborPodDefaults // {
                 containers = [
                   {
@@ -1170,6 +1188,10 @@ in
                 replicas = 1;
                 revisionHistoryLimit = 5;
                 selector.matchLabels = componentSelector "exporter";
+                template.metadata.annotations = {
+                  "checksum/env" = self.exporterEnvConfigMap.out.identityHash;
+                  "checksum/secret" = self.credentials.out.identityHash;
+                };
                 template.spec = harborPodDefaults // {
                   terminationGracePeriodSeconds = 30;
                   containers = [

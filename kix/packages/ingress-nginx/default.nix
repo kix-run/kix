@@ -46,9 +46,15 @@ in
     k8s.minVersion = "1.25";
     # The ingress controller proxies external traffic to backend pods.
     # It needs world ingress (external HTTP/HTTPS), all-pods ingress
-    # (webhook callbacks from kube-apiserver), and world egress (OCSP
-    # stapling, upstream auth endpoints, etc.).
+    # (webhook callbacks from kube-apiserver) and all-pods egress: the
+    # backends are whatever the cluster's Ingress objects name, on any
+    # port, and nothing in the graph ties them to this package. Without
+    # that rule cilium drops every proxied request at the controller and
+    # clients see 504 (seen on the harbor smoke cluster, 2026-09-19).
     network.intents = {
+      backends = {
+        egress = [ { to = "all-pods"; } ];
+      };
       external-ingress = {
         ingress = [
           {

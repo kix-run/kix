@@ -359,7 +359,7 @@ The `volumeHasSource` scorecard rule (severity error) fails the build on any vol
 
 | Function | Description |
 |----------|-------------|
-| `kix.service.fromWorkload { name, type?, ports?, outputs? } workload` | Auto-derive Service from a workload. Reads selector and ports from the container spec. Pipe to `scope.mkResource`. |
+| `kix.service.fromWorkload { name, type?, ports?, outputs? } workload` | Auto-derive Service from a workload. Reads selector and ports from the container spec; a named `targetPort` you pass is checked against the container ports and written as the number (cilium drops egress on a named port, so hand-written Services must use numbers too). Pipe to `scope.mkResource`. |
 
 #### Exposure & monitoring
 
@@ -511,7 +511,7 @@ Each module file receives `{ config, lib, ref, packages, ... }` and can declare 
 - **`mkLocked`** — marks a config field as immutable; blocks dep injection overrides.
 - **Monitoring module** — declarative Prometheus/Grafana/Loki stack. Read `kix/lib/modules/monitoring.nix`.
 
-**Network policy:** CiliumNetworkPolicy is auto-derived from endpoint facts — no package authoring needed. Egress rules for API server access, DNS, and cross-package services are generated automatically; a workload gets an edge to exactly the Services whose *address values* (`out.fqdn`/`out.url`, possibly via ConfigMap/Secret indirection) reached its manifest. Default-deny is per-namespace. Read `kix/lib/plugins/netpol/` and `kix/lib/core/facts.nix` for details. If hitting blindspots (Helm chart opacity, operator-managed pods), see `v2_discussions/96_netpol_autogeneration_blindspots.md`.
+**Network policy:** CiliumNetworkPolicy is auto-derived from endpoint facts — no package authoring needed. Egress rules for API server access, DNS, and cross-package services are generated automatically; a workload gets an edge to exactly the Services whose *address values* (`out.fqdn`/`out.url`, possibly via ConfigMap/Secret indirection) reached its manifest. Default-deny is per-namespace. Edges the graph cannot see (an ingress controller's backends, a component that dials something it was not handed facts for) are declared as `meta.network.intents` (HANDBOOK §16.5) or by repeating the dep's `out.*` facts in the workload's env. Use container port numbers as `targetPort` in hand-written Services: cilium drops egress on a named port. Read `kix/lib/plugins/netpol/` and `kix/lib/core/facts.nix` for details. If hitting blindspots (Helm chart opacity, operator-managed pods), see `v2_discussions/96_netpol_autogeneration_blindspots.md`.
 
 ### Flavors (target presets)
 

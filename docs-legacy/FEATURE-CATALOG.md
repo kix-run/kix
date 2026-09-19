@@ -102,7 +102,9 @@ Internal helpers: `mkServiceRegistry` (service discovery index), `extractService
 Auto-derives CiliumNetworkPolicy from the DI graph:
 - **Auto-detected egress:** API server access (precise — only workloads whose SA is subject of a RoleBinding/ClusterRoleBinding), DNS, cross-package service egress, self-communication (StatefulSet).
 - **Auto-detected ingress:** Emitted caller-side at `scope.mkDeployment` time — paired ingress CNP in the callee's namespace via `scope.forNamespace` (v2_discussions/83 Phase C). No cluster-level inverted-ingress pass.
-- **Default deny:** Per-namespace, configurable directions (ingress/egress/both).
+- **Default deny:** Per-namespace, configurable directions (ingress/egress/both). One empty rule per direction, which is the form cilium 1.19 accepts.
+- **Package intents:** `meta.network.intents.<name>.{ingress,egress}` for edges the graph cannot see; sources `world`/`all-pods`, targets `world`/`all-pods`/`apiserver`/`dns` (HANDBOOK §16.5).
+- **Numeric ports:** `kix.service.fromWorkload` resolves a named `targetPort` to the container port number, and `portsToCilium` warns on a name, because cilium drops egress on a named port.
 - Warnings for hostNetwork and Helm opacity (intra-package edges may be missing).
 
 ### Fragment Composition (`fragments.nix`)

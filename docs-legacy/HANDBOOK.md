@@ -535,7 +535,7 @@ Both errors-out on duplicate volume names. Pipe pre-seal: `attrs |> kix.withMoun
 | Symbol | Signature |
 |---|---|
 | `kix.service.extractPorts workload` | Extract service port entries from a workload's container spec |
-| `kix.service.fromWorkload { name, type?, ports?, outputs?, ... }` | Pre-seal Service attrset from a workload. Auto-derives selector from `workload.out.selector` and ports from container spec. **Validates** that any user-supplied string `targetPort` matches a named container port. Pipe to `scope.mkResource` |
+| `kix.service.fromWorkload { name, type?, ports?, outputs?, ... }` | Pre-seal Service attrset from a workload. Auto-derives selector from `workload.out.selector` and ports from container spec. **Validates** that any user-supplied string `targetPort` matches a named container port, then **writes the container port number** in its place: the netpol layer copies `targetPort` into every consumer's egress rule and cilium drops egress on a named port (verified on 1.19). A hand-written Service must use numbers too; the cilium translator warns when it sees a name. Pipe to `scope.mkResource` |
 | `kix.ingress.fromService { name, host, path?, pathType?, port?, className?, tls? }` | Pre-seal Ingress from a Service. Auto-derives backend name + port |
 | `kix.httpRoute.fromService { name, host, parentRef, path?, pathType?, port? }` | Pre-seal HTTPRoute (Gateway API) from a Service |
 
@@ -999,6 +999,21 @@ networkPolicy = {
 
 `namespaces.<ns>.networkPolicies.{directions, defaultDeny}` allows per-namespace overrides.
 
+Each default-deny CNP carries one empty rule per denied direction (`ingress: [ { } ]`), which is what puts the namespace's endpoints into default deny with nothing allowed. An empty list is not the same: cilium 1.19 rejects it as invalid and enforces nothing.
+
+### 16.5 Package intents
+
+Connectivity the graph cannot derive is declared on the package, once, and applies to every workload in it:
+
+```nix
+meta.network.intents.<name> = {
+  ingress = [ { from = "world" | "all-pods"; ports = [ { port = 8080; protocol = "TCP"; } ]; } ];
+  egress  = [ { to = "world" | "all-pods" | "apiserver" | "dns"; ports = [ ... ]; } ];  # ports optional
+};
+```
+
+`all-pods` is cilium's `cluster` entity. An ingress controller needs `egress = [ { to = "all-pods"; } ]` because its backends are whatever the cluster's Ingress objects name; a backend that an ingress controller fronts currently needs `from = "all-pods"` on its web port, since `kix.expose` does not yet add that edge (housekeeping). Ports in rules and in Services are numbers: cilium resolves a named port on an ingress rule but drops egress on one.
+
 ## 17. Scorecard
 
 Rule levels, evaluated against the corresponding object:
@@ -1167,7 +1182,7 @@ Key patterns:
 1. **Shared `let` bindings** — define common values (security contexts, probe bases, internal URLs) once.
 2. **Per-component selectors and Service labels** — `scope.selectorLabels // { "app.kubernetes.io/component" = "core"; }` on the workload, and a distinct component label on each Service so `architecture.distinctSameKindLabels` can tell them apart.
 3. **Internal URLs carry facts** — components dial each other through `self.<service>.out.fqdn`, never a bare `"${name}-core"` string; that is what gives the consumer its netpol egress and ordering.
-4. **Mutual-dial cycles** — when two components dial each other, one Service is built on a literal selector shared with its Deployment, and the Deployment goes in `root.requires`.
+4. **Mutual-dial cycles** — when two components dial each other, one Service is built on a literal selector shared with its Deployment, and the Deployment goes in `root.requires`. Pick the side by boot order: the Service that loses its workload edge is the one whose pod must start *later* (Harbor's jobservice fetches its config from core's API and panics until core answers, so the jobservice Service is the literal one), and an explicit `requires = [ self.coreDeployment ]` on that Deployment states the order the graph no longer carries. A component whose own config names its own Service (core's `CORE_URL`) has to be literal regardless.
 5. **Cross-resource refs via enriched `out`** — one `scope.mkSecret` with declared keys, consumed through `out.mkEnv`/`out.keyRef`; a password that must appear in a URL goes through `$(VAR)` expansion so no ConfigMap carries it.
 6. **Storage is a DI dep** — the registry's blobs come from `storage`; scratch paths are `emptyDir`.
 7. **One `kix.monitor` per metrics Service** — with `name`, `monitorPart` and `rulesPart` so the entries do not collide.

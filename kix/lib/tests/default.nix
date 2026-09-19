@@ -2244,6 +2244,59 @@ let
       (good == [ ] && builtins.length bad == 1 && mentionsPort)
       || throw "monitor rule matched-but-unscraped: good=${builtins.toJSON good} bad=${builtins.toJSON bad}";
 
+    # fromWorkload writes container port numbers as targetPort. The netpol
+    # layer copies targetPort into every consumer's egress rule and cilium
+    # drops egress on a named port (seen live on 1.19, 2026-09-19), so a
+    # name the author passes is checked against the workload and replaced
+    # by its number; extracted ports never carry a name as targetPort.
+    t55-from-workload-numeric-target-ports =
+      let
+        workload = {
+          out.selector.app = "web";
+          rawManifest.spec.template.spec.containers = [
+            {
+              name = "web";
+              ports = [
+                {
+                  name = "http";
+                  containerPort = 8080;
+                }
+                {
+                  name = "metrics";
+                  containerPort = 8001;
+                }
+              ];
+            }
+          ];
+        };
+        named =
+          (kixlib.service.fromWorkload {
+            name = "web";
+            ports = [
+              {
+                name = "http-web";
+                port = 80;
+                targetPort = "http";
+              }
+              {
+                name = "http-metrics";
+                port = 8001;
+                targetPort = "metrics";
+              }
+            ];
+          } workload).spec.ports;
+        extracted = (kixlib.service.fromWorkload { name = "web"; } workload).spec.ports;
+        targets = map (p: p.targetPort or null) named;
+      in
+      (
+        targets == [
+          8080
+          8001
+        ]
+        && builtins.all (p: !(p ? targetPort)) extracted
+      )
+      || throw "fromWorkload targetPorts: named=${builtins.toJSON targets} extracted=${builtins.toJSON extracted}";
+
     # A ServiceRef's out.fqdn has the same form as a rendered Service's:
     # `<name>.<ns>.svc.<clusterDomain>`. It used to stop at `.svc`, which
     # only resolves through the pod's DNS search path.

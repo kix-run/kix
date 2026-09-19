@@ -202,6 +202,8 @@ rec {
               mkExternalEgressRule { entities = rule.entities or [ "world" ]; }
             else if target == "dns" then
               dnsEgressRule
+            else if target == "all-pods" then
+              { toEntities = [ "cluster" ]; }
             else
               throw "kix: unknown egress intent target '${toString target}'";
         in
