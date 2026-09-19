@@ -6,7 +6,10 @@
 
 { lib, ... }:
 {
-  imports = [ ./plugins/netpol/module.nix ];
+  imports = [
+    ./plugins/netpol/module.nix
+    ./plugins/spread/module.nix
+  ];
 
   options = {
 

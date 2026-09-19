@@ -361,6 +361,50 @@ in
         else
           null;
 
+      # A hard placement rule on a multi-replica workload can only ever
+      # leave pods Pending on a single-node cluster: one node has exactly
+      # one value of every topology key. Refuse when multiNode is declared
+      # false, warn when it is unknown (v2_discussions/143 §4). Soft rules
+      # and single-replica workloads pass.
+      checkSpreadFeasible =
+        {
+          kind,
+          name,
+          spec,
+        }:
+        let
+          replicas = spec.replicas or null;
+          templateSpec = spec.template.spec or { };
+          hardAntiAffinity =
+            lst (
+              (templateSpec.affinity or { }).podAntiAffinity.requiredDuringSchedulingIgnoredDuringExecution or [ ]
+            ) != [ ];
+          hardSpread = builtins.any (c: (c.whenUnsatisfiable or "") == "DoNotSchedule") (
+            lst (templateSpec.topologySpreadConstraints or [ ])
+          );
+          rule =
+            if hardAntiAffinity then
+              "required pod anti-affinity"
+            else if hardSpread then
+              "a DoNotSchedule topology spread constraint"
+            else
+              null;
+          multiNode = capabilities.multiNode or null;
+          message =
+            "[${instanceName}] ${kind} '${name}' wants ${toString replicas} replicas with ${toString rule}, "
+            + "and cluster.capabilities.multiNode is ${if multiNode == null then "unknown" else "false"}. "
+            + "On one node this leaves ${toString (replicas - 1)} pods Pending forever. "
+            + "Make the rule preferred/ScheduleAnyway, set replicas to 1, or declare multiNode.";
+        in
+        if capabilities == { } || rule == null || !(builtins.isInt replicas) || replicas <= 1 then
+          null
+        else if multiNode == false then
+          throw message
+        else if multiNode == null then
+          builtins.trace "[kix] warning: ${message}" null
+        else
+          null;
+
       checkNamespacedRefs =
         templateSpec:
         let
