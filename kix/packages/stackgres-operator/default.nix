@@ -387,6 +387,21 @@ in
               "patch"
             ];
           }
+          # Leader election. Without this the operator logs a 403 on
+          # its lock every five seconds and never reconciles a cluster.
+          {
+            apiGroups = [ "coordination.k8s.io" ];
+            resources = [ "leases" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "create"
+              "update"
+              "patch"
+              "delete"
+            ];
+          }
           # Finalizers
           {
             apiGroups = [

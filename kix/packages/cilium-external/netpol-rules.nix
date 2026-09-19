@@ -20,7 +20,11 @@ rec {
     }:
     mkResource (crdRef.out.cr extraArgs);
 
-  # Spec for a default-deny policy (empty rule lists = deny all).
+  # Spec for a default-deny policy. One empty rule per direction: it
+  # matches no peer, so the selected endpoints go into default deny for
+  # that direction with nothing allowed. An empty list is not the same
+  # thing: cilium 1.19 rejects it ("rule must have at least one of
+  # Ingress, IngressDeny, Egress, EgressDeny") and enforces nothing.
   mkDefaultDenySpec =
     {
       denyIngress,
@@ -29,8 +33,8 @@ rec {
     {
       endpointSelector = { };
     }
-    // lib.optionalAttrs denyIngress { ingress = [ ]; }
-    // lib.optionalAttrs denyEgress { egress = [ ]; };
+    // lib.optionalAttrs denyIngress { ingress = [ { } ]; }
+    // lib.optionalAttrs denyEgress { egress = [ { } ]; };
 
   # DNS egress — allow UDP+TCP 53 to kube-dns in kube-system.
   dnsEgressRule = {
@@ -150,6 +154,11 @@ rec {
 
   # Convert K8s Service ports to Cilium toPorts format.
   # Uses targetPort (pod port), not port (service port).
+  # A named port here is a policy that drops traffic: cilium resolves
+  # names on ingress rules but not on egress ones (verified on 1.19), and
+  # the same port list feeds both. Services from `kix.service.fromWorkload`
+  # arrive numeric; a hand-written Service with `targetPort = "http"`
+  # gets this warning and its consumers get no egress.
   portsToCilium =
     ports:
     builtins.filter (p: p != null) (
@@ -160,6 +169,13 @@ rec {
         in
         if tp == null then
           null
+        else if builtins.isString tp && builtins.match "[0-9]+" tp == null then
+          lib.warn
+            "kix netpol: port '${tp}' is a name, and cilium drops egress on a named port; use the container port number as targetPort (numbers are what kix.service.fromWorkload writes)"
+            {
+              port = tp;
+              protocol = p.protocol or "TCP";
+            }
         else
           {
             port = toString tp;

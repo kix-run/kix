@@ -752,7 +752,10 @@ in
           "helm.sh/hook-delete-policy" = "before-hook-creation,hook-succeeded";
         };
         spec = {
-          ttlSecondsAfterFinished = 0;
+          # Long enough for the deploy's readiness check to see the finished
+          # Job. At 0 the apiserver reaps it the instant it completes and
+          # the check fails with NotFound, cancelling everything downstream.
+          ttlSecondsAfterFinished = 600;
           template = {
             metadata = {
               name = "${name}-admission-create";
@@ -810,7 +813,10 @@ in
           "helm.sh/hook-delete-policy" = "before-hook-creation,hook-succeeded";
         };
         spec = {
-          ttlSecondsAfterFinished = 0;
+          # Long enough for the deploy's readiness check to see the finished
+          # Job. At 0 the apiserver reaps it the instant it completes and
+          # the check fails with NotFound, cancelling everything downstream.
+          ttlSecondsAfterFinished = 600;
           template = {
             metadata = {
               name = "${name}-admission-patch";

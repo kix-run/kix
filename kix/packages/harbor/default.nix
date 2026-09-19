@@ -154,6 +154,25 @@ in
   meta = {
     version = harborVersion;
     description = "Harbor — OCI container registry";
+    # The ingress controller has to reach core and portal, and kix.expose
+    # gives it no netpol edge yet (housekeeping: no-netpol-edge-from-
+    # ingress-controller). Until it does, the web port accepts any pod in
+    # the cluster, which a registry wants anyway: in-cluster clients pull
+    # through the same Service the Ingress fronts. Every request past
+    # this port is still authenticated by core.
+    network.intents.in-cluster-clients = {
+      ingress = [
+        {
+          from = "all-pods";
+          ports = [
+            {
+              port = 8080;
+              protocol = "TCP";
+            }
+          ];
+        }
+      ];
+    };
   };
 
   options = {
@@ -380,6 +399,7 @@ in
         componentSelector =
           component: scope.selectorLabels // { "app.kubernetes.io/component" = component; };
         coreSelector = componentSelector "core";
+        jobserviceSelector = componentSelector "jobservice";
         componentLabels = component: {
           "app.kubernetes.io/component" = component;
         };
@@ -433,10 +453,12 @@ in
         };
 
         metricsContainerPort = lib.optional metricsEnabled (kix.port "metrics" metricsPort);
+        # Numeric targetPorts throughout: the netpol layer copies them
+        # into consumers' egress rules, and cilium drops a named one.
         metricsServicePort = lib.optional metricsEnabled {
           name = "http-metrics";
           port = metricsPort;
-          targetPort = "metrics";
+          targetPort = metricsPort;
           protocol = "TCP";
         };
       in
@@ -509,15 +531,13 @@ in
           };
         };
 
-        # Not fromWorkload: core and jobservice dial each other, and a core
-        # Service carrying the core Deployment's context would close the
-        # loop (core Deployment -> core ConfigMap -> jobservice Service ->
-        # jobservice Deployment -> jobservice ConfigMap -> core Service).
+        # Not fromWorkload: core's own config carries CORE_URL, so a core
+        # Service with the core Deployment's context would recurse (core
+        # Deployment -> core ConfigMap -> core Service -> core Deployment).
         # The selector is the same literal the Deployment is built from, so
-        # they cannot drift; the selectorCoherence warning this raises is
-        # the price of keeping the workaround visible (BEST-PRACTICES
-        # §12.6). root.requires restores the ordering edge to the core
-        # Deployment.
+        # they cannot drift; the selectorCoherence warning is the price of
+        # keeping the workaround visible (BEST-PRACTICES §12.6).
+        # root.requires restores the ordering edge to the core Deployment.
         coreService = scope.mkResource {
           apiVersion = "v1";
           kind = "Service";
@@ -529,7 +549,7 @@ in
               {
                 name = "http-web";
                 port = 80;
-                targetPort = "http";
+                targetPort = 8080;
                 protocol = "TCP";
               }
             ]
@@ -996,33 +1016,44 @@ in
           };
         };
 
-        jobserviceService =
-          self.jobserviceDeployment
-          |> kix.service.fromWorkload {
-            name = "${name}-jobservice";
-            labels = componentLabels "jobservice";
+        # Not fromWorkload either: core's ConfigMap carries the jobservice
+        # URL, and a jobservice Service with the jobservice Deployment's
+        # context would order core after jobservice. That is backwards:
+        # jobservice fetches its configuration from core's API on boot and
+        # panics until core answers, so it must start after core, which the
+        # explicit `requires` on the jobservice Deployment below states.
+        # Same literal-selector trade as the core Service.
+        jobserviceService = scope.mkResource {
+          apiVersion = "v1";
+          kind = "Service";
+          name = "${name}-jobservice";
+          labels = componentLabels "jobservice";
+          spec = {
+            selector = jobserviceSelector;
             ports = [
               {
                 name = "http-jobservice";
                 port = 80;
-                targetPort = "http";
+                targetPort = 8080;
                 protocol = "TCP";
               }
             ]
             ++ metricsServicePort;
-            outputs.port = "80";
-          }
-          |> scope.mkResource;
+          };
+          outputs.port = "80";
+        };
 
         jobserviceDeployment =
           {
             name = "${name}-jobservice";
             labels = componentSelector "jobservice";
+            # Boot order, not a data edge: see the jobservice Service.
+            requires = [ self.coreDeployment ];
             spec = {
               replicas = config.jobservice.replicas;
               revisionHistoryLimit = 5;
               strategy.type = "Recreate";
-              selector.matchLabels = componentSelector "jobservice";
+              selector.matchLabels = jobserviceSelector;
               template.spec = harborPodDefaults // {
                 containers = [
                   {
@@ -1037,14 +1068,27 @@ in
                       initialDelaySeconds = 20;
                     };
                     envFrom = [ { configMapRef.name = self.jobserviceEnvConfigMap.out.name; } ];
+                    # jobservice takes its database settings from core's
+                    # internalconfig API, but it dials postgres itself, so
+                    # the database facts have to appear here for the
+                    # netpol egress edge (and they match what core hands
+                    # it anyway).
                     env =
                       (self.credentials.out.mkEnv {
                         CORE_SECRET = "coreSecret";
                         JOBSERVICE_SECRET = "jobserviceSecret";
                         REGISTRY_CREDENTIAL_PASSWORD = "registryPassword";
                       })
+                      ++ (database.out.credentials.out.mkEnv { POSTGRESQL_PASSWORD = "password"; })
                       ++ redisPasswordEnv
-                      ++ kix.mkEnvVars { JOB_SERVICE_POOL_REDIS_URL = redisUrl 1; };
+                      ++ kix.mkEnvVars {
+                        POSTGRESQL_HOST = database.out.host;
+                        POSTGRESQL_PORT = database.out.port;
+                        POSTGRESQL_USERNAME = database.out.username;
+                        POSTGRESQL_DATABASE = database.out.database;
+                        POSTGRESQL_SSLMODE = config.database.sslmode;
+                        JOB_SERVICE_POOL_REDIS_URL = redisUrl 1;
+                      };
                     resources = config.jobservice.resources;
                     securityContext = containerSecurityContext;
                   }
@@ -1163,14 +1207,16 @@ in
         # Entry point
         # ============================================================
 
-        # Reachable through the Ingress: the core and portal Services. The
-        # core Service carries no workload edge (rawSelector), so the core
-        # Deployment is listed here; its ConfigMap reaches every other
-        # component. The exporter and the monitors hang off nothing.
+        # Reachable through the Ingress: the core and portal Services.
+        # Neither the core nor the jobservice Service carries a workload
+        # edge (see above), so both Deployments are listed here; core's
+        # ConfigMap reaches every other component. The exporter and the
+        # monitors hang off nothing.
         root = {
           resource = if self.ingress != null then self.ingress else self.coreService;
           requires = builtins.filter (r: r != null) [
             self.coreDeployment
+            self.jobserviceDeployment
             self.exporterService
             self.coreMonitor
             self.coreAlerts

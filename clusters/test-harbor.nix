@@ -33,12 +33,29 @@ kix.buildCluster {
           # Operator packages outside this test still fail nonRoot; see
           # housekeeping/. Harbor itself passes it.
           ruleOverrides.byRule."security.nonRoot".severity = "warning";
+          # cilium is a CNI: host network and a privileged BPF mount are
+          # what it is for. Scoped to its namespace so nothing else gets
+          # the exemption.
+          ruleOverrides.byNamespace."kube-system" = {
+            "security.noHostNetwork".severity = "warning";
+            "security.noPrivileged".severity = "warning";
+          };
         };
 
-        # kind's own cilium is installed by the deploy script; kix only
-        # needs the CRD ref marker to author policies.
+        # kind runs with the default CNI disabled (see the deploy scripts
+        # under demo/), so the managed cilium instance fills the cni role,
+        # the same way the ludo kind variants do.
+        cluster.roles.cni = {
+          binding = "absent";
+          provider = null;
+        };
         instances.kube-system.cilium = {
-          package = packages."cilium-external";
+          package = packages.cilium;
+          config.values = {
+            kubeProxyReplacement = false;
+            prometheus.enabled = false;
+            ipam.operator.clusterPoolIPv4PodCIDRList = [ "10.244.0.0/16" ];
+          };
         };
 
         instances.ingress-system.ingress-nginx = {
@@ -127,6 +144,9 @@ kix.buildCluster {
           harbor-pg = {
             package = packages."stackgres-cluster";
             aliases = [ "postgres" ];
+            # kind has one node and the pods anti-affine, so a second
+            # instance never schedules.
+            config.instances = 1;
           };
           harbor-db = {
             package = packages."stackgres-database";
