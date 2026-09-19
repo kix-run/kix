@@ -221,11 +221,12 @@ Fix all warnings before committing.
 
 | API | Description |
 |-----|-------------|
-| `scope.mkResource { ... }` | Create a namespaced K8s resource |
+| `scope.mkResource { ... }` | Create a namespaced K8s resource that is not a workload. A Deployment, StatefulSet, DaemonSet or Job through it is an eval error: only the typed builders below seal a workload (validators, derived spread and PDB, netpol edges) |
 | `scope.mkClusterResource { ... }` | Create a cluster-scoped resource |
 | `scope.mkDeployment` | Create a Deployment — auto-sets apiVersion/kind, copies `selector.matchLabels` to template labels |
 | `scope.mkStatefulSet` | Same as mkDeployment but for StatefulSets |
 | `scope.mkDaemonSet` | Same as mkDeployment but for DaemonSets |
+| `scope.mkJob` | Same for Jobs; the selector may be omitted (template labels are used) |
 | `scope.selectorLabels` | Default selector labels for this instance. Overridable per-instance via `selectorLabels` in cluster config. |
 | `scope.mkSecret`, `scope.mkSecretRef` | Secret primitives with enriched `out` API. **Read `SECRETS.md` for the full API, gotchas, and usage patterns.** |
 | `scope.forNamespace nsName` | Get a scope for a different namespace (cross-namespace resources) |
@@ -235,7 +236,7 @@ Fix all warnings before committing.
 | `scope.namespaceName` | The namespace this instance lives in |
 | `scope.namespace` | The Namespace resource itself (for deps) |
 
-Workload constructors (`mkDeployment`, `mkStatefulSet`, `mkDaemonSet`) are pipe-friendly — use at the end of a `|>` chain. They auto-set `apiVersion`/`kind` and copy `spec.selector.matchLabels` to `spec.template.metadata.labels` (preventing selector mismatch). The `name` field is required.
+Workload constructors (`mkDeployment`, `mkStatefulSet`, `mkDaemonSet`, `mkJob`) are pipe-friendly — use at the end of a `|>` chain. They auto-set `apiVersion`/`kind` and copy `spec.selector.matchLabels` to `spec.template.metadata.labels` (preventing selector mismatch). The `name` field is required. They are the only way to build a workload: `scope.mkResource { kind = "Deployment"; ... }` is refused at eval, because a workload that skips `sealWorkload` gets no pod-spec validation, no derived spread or PodDisruptionBudget and no network-policy edges. Inside `spec.template.spec` write `serviceAccount = self.sa;` (not `serviceAccountName`), and in a StatefulSet `headlessService = self.svc;` (not `serviceName`).
 
 ### mkResource / mkClusterResource fields
 

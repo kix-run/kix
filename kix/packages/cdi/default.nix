@@ -3,8 +3,13 @@
 # Deploys the cdi-operator which manages CDI components (cdi-apiserver,
 # cdi-controller/uploadcontroller, cdi-uploadproxy) via the CDI custom resource.
 #
-# Resources: ServiceAccount, ClusterRole, ClusterRoleBinding,
-#            Deployment (cdi-operator), CDI CR, CRDs.
+# Resources: ServiceAccount, ClusterRole, ClusterRoleBinding, Role,
+#            RoleBinding, Deployment (cdi-operator), CDI CR, the cdis CRD.
+#
+# Only the cdis.cdi.kubevirt.io CRD is shipped here, as upstream does. The
+# operator installs the CRDs for its own kinds (DataVolume, DataImportCron,
+# StorageProfile and the rest) with full schemas once it runs; a stub here
+# would fight the operator's version on every server-side apply.
 #
 # root = Deployment (cdi-operator)
 
@@ -571,10 +576,252 @@ in
         };
       };
 
+      # --- Role (namespaced) ---
+      # The operator manages its operands' namespaced resources and takes a
+      # lease for its leader-election helper. Mirrors the upstream namespace
+      # Role; upstream's duplicate leases rule is folded into one.
+      role = scope.mkResource {
+        apiVersion = "rbac.authorization.k8s.io/v1";
+        kind = "Role";
+        name = "${name}-operator";
+        labels = {
+          "operator.cdi.kubevirt.io" = "";
+        };
+        extra.rules = [
+          # RBAC for the operands
+          {
+            apiGroups = [ "rbac.authorization.k8s.io" ];
+            resources = [
+              "rolebindings"
+              "roles"
+            ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "create"
+              "update"
+              "delete"
+            ];
+          }
+          # Core resources the operands are built from
+          {
+            apiGroups = [ "" ];
+            resources = [
+              "serviceaccounts"
+              "configmaps"
+              "events"
+              "secrets"
+              "services"
+            ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "create"
+              "update"
+              "patch"
+              "delete"
+            ];
+          }
+          # Operand deployments
+          {
+            apiGroups = [ "apps" ];
+            resources = [
+              "deployments"
+              "deployments/finalizers"
+            ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "create"
+              "update"
+              "delete"
+            ];
+          }
+          # OpenShift routes
+          {
+            apiGroups = [ "route.openshift.io" ];
+            resources = [
+              "routes"
+              "routes/custom-host"
+            ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "create"
+              "update"
+            ];
+          }
+          # OpenShift proxies
+          {
+            apiGroups = [ "config.openshift.io" ];
+            resources = [ "proxies" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          # Prometheus operator objects
+          {
+            apiGroups = [ "monitoring.coreos.com" ];
+            resources = [
+              "servicemonitors"
+              "prometheusrules"
+            ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "create"
+              "delete"
+              "update"
+              "patch"
+            ];
+          }
+          # Leader-election helper lease
+          {
+            apiGroups = [ "coordination.k8s.io" ];
+            resources = [ "leases" ];
+            verbs = [
+              "get"
+              "create"
+              "update"
+            ];
+          }
+          # Secrets + configmaps (read/create)
+          {
+            apiGroups = [ "" ];
+            resources = [
+              "secrets"
+              "configmaps"
+            ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "create"
+            ];
+          }
+          # Configmaps (full)
+          {
+            apiGroups = [ "" ];
+            resources = [ "configmaps" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "create"
+              "update"
+              "delete"
+            ];
+          }
+          # Secrets (read)
+          {
+            apiGroups = [ "" ];
+            resources = [ "secrets" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          # Cronjobs
+          {
+            apiGroups = [ "batch" ];
+            resources = [ "cronjobs" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "create"
+              "update"
+              "deletecollection"
+            ];
+          }
+          # Jobs
+          {
+            apiGroups = [ "batch" ];
+            resources = [ "jobs" ];
+            verbs = [
+              "create"
+              "deletecollection"
+              "list"
+              "watch"
+            ];
+          }
+          # Ingresses (read)
+          {
+            apiGroups = [ "networking.k8s.io" ];
+            resources = [ "ingresses" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          # OpenShift routes (read)
+          {
+            apiGroups = [ "route.openshift.io" ];
+            resources = [ "routes" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          # Configmaps (get)
+          {
+            apiGroups = [ "" ];
+            resources = [ "configmaps" ];
+            verbs = [ "get" ];
+          }
+          # Services, endpoints, pods (read)
+          {
+            apiGroups = [ "" ];
+            resources = [
+              "services"
+              "endpoints"
+              "pods"
+            ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+        ];
+      };
+
+      # --- RoleBinding ---
+      roleBinding = scope.mkResource {
+        apiVersion = "rbac.authorization.k8s.io/v1";
+        kind = "RoleBinding";
+        name = "${name}-operator";
+        labels = {
+          "operator.cdi.kubevirt.io" = "";
+        };
+        extra = {
+          roleRef = {
+            apiGroup = "rbac.authorization.k8s.io";
+            kind = "Role";
+            name = self.role.out.name;
+          };
+          subjects = [
+            {
+              kind = "ServiceAccount";
+              name = self.serviceAccount.out.name;
+              namespace = scope.namespaceName;
+            }
+          ];
+        };
+      };
+
       # --- Deployment (cdi-operator) ---
-      deployment = scope.mkResource {
-        apiVersion = "apps/v1";
-        kind = "Deployment";
+      deployment = scope.mkDeployment {
         name = "${name}-operator";
         labels = operatorLabels;
         spec = {
@@ -589,7 +836,7 @@ in
               };
             };
             spec = {
-              serviceAccountName = self.serviceAccount.out.name;
+              serviceAccount = self.serviceAccount;
               terminationGracePeriodSeconds = 30;
               securityContext = {
                 runAsNonRoot = true;
@@ -719,63 +966,33 @@ in
         )
         // (if config.infra != { } then { infra = config.infra; } else { })
         // (if config.workload != { } then { workload = config.workload; } else { });
-        requires = [ self.deployment ];
+        requires = [
+          self.deployment
+          self.crds.cdi
+        ];
       };
 
       # --- CRDs ---
-      crds = {
-        cdi = scope.mkCRD (
-          scope.crd.fromKind "CDI" { spec.group = "cdi.kubevirt.io"; }
-          |> scope.crd.clusterScoped
-          |> scope.crd.withVersion "v1beta1"
-        );
-
-        dataVolume = scope.mkCRD (
-          scope.crd.fromKind "DataVolume" { spec.group = "cdi.kubevirt.io"; }
-          |> scope.crd.withShortNames [
-            "dv"
-            "dvs"
-          ]
-          |> scope.crd.withVersion "v1beta1"
-        );
-
-        dataImportCron = scope.mkCRD (
-          scope.crd.fromKind "DataImportCron" { spec.group = "cdi.kubevirt.io"; }
-          |> scope.crd.withVersion "v1beta1"
-        );
-
-        dataSource = scope.mkCRD (
-          scope.crd.fromKind "DataSource" { spec.group = "cdi.kubevirt.io"; }
-          |> scope.crd.withVersion "v1beta1"
-        );
-
-        objectTransfer = scope.mkCRD (
-          scope.crd.fromKind "ObjectTransfer" { spec.group = "cdi.kubevirt.io"; }
-          |> scope.crd.clusterScoped
-          |> scope.crd.withVersion "v1beta1"
-        );
-
-        storageProfile = scope.mkCRD (
-          scope.crd.fromKind "StorageProfile" { spec.group = "cdi.kubevirt.io"; }
-          |> scope.crd.clusterScoped
-          |> scope.crd.withVersion "v1beta1"
-        );
-
-        volumeCloneSource = scope.mkCRD (
-          scope.crd.fromKind "VolumeCloneSource" { spec.group = "cdi.kubevirt.io"; }
-          |> scope.crd.withVersion "v1beta1"
-        );
-
-        volumeImportSource = scope.mkCRD (
-          scope.crd.fromKind "VolumeImportSource" { spec.group = "cdi.kubevirt.io"; }
-          |> scope.crd.withVersion "v1beta1"
-        );
-
-        volumeUploadSource = scope.mkCRD (
-          scope.crd.fromKind "VolumeUploadSource" { spec.group = "cdi.kubevirt.io"; }
-          |> scope.crd.withVersion "v1beta1"
-        );
-      };
+      # Only the CDI CR's own definition, vendored from upstream v1.62.0.
+      # The operator installs the CRDs for the kinds it serves.
+      #
+      # The operator also rewrites this CRD once it runs: it drops the
+      # deprecated v1alpha1 version, leaving v1beta1 alone. Shipping v1alpha1
+      # would make every deploy after the first a field-ownership conflict
+      # on spec.versions, so it is left out here and both sides agree.
+      crds =
+        let
+          upstream = builtins.fromJSON (
+            builtins.readFile ./cdis.cdi.kubevirt.io-customresourcedefinition.yaml.json
+          );
+        in
+        {
+          cdi = scope.mkCRD {
+            spec = upstream.spec // {
+              versions = builtins.filter (v: v.name != "v1alpha1") upstream.spec.versions;
+            };
+          };
+        };
 
       # --- Entry point ---
       root = {
@@ -784,17 +1001,10 @@ in
           self.serviceAccount
           self.clusterRole
           self.clusterRoleBinding
+          self.role
+          self.roleBinding
           self.cdiCR
-          # CRDs
           self.crds.cdi
-          self.crds.dataVolume
-          self.crds.dataImportCron
-          self.crds.dataSource
-          self.crds.objectTransfer
-          self.crds.storageProfile
-          self.crds.volumeCloneSource
-          self.crds.volumeImportSource
-          self.crds.volumeUploadSource
         ];
       };
     };

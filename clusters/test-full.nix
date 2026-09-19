@@ -17,9 +17,13 @@ kix.buildCluster {
         kube-system = { };
         cache = { };
         cert-manager = { };
+        velero = { };
       };
 
       instances = {
+        # velero with no credentials at all: no Secret and no secret-ref
+        # marker. clusters/test-operators.nix builds the managed-Secret path.
+        velero.velero.package = packages.velero;
         kube-system = {
           coredns = {
             package = packages.coredns;
@@ -39,10 +43,6 @@ kix.buildCluster {
                   enabled = true;
                   interval = null;
                 };
-              };
-              podDisruptionBudget = {
-                minAvailable = 1;
-                maxUnavailable = null;
               };
               hpa = {
                 enabled = true;

@@ -893,6 +893,41 @@ let
         };
     };
 
+  # A Deployment built with raw scope.mkResource, the shape every package
+  # carried before the seal became the only way to build a workload.
+  mkRawDeploymentPackage = {
+    meta = {
+      version = "test";
+    };
+    build =
+      { self, scope, ... }:
+      {
+        deployment = scope.mkResource {
+          apiVersion = "apps/v1";
+          kind = "Deployment";
+          name = "raw";
+          spec = {
+            replicas = 1;
+            selector.matchLabels = {
+              app = "raw";
+            };
+            template = {
+              metadata.labels = {
+                app = "raw";
+              };
+              spec.containers = [
+                {
+                  name = "c";
+                  image = "img";
+                }
+              ];
+            };
+          };
+        };
+        root = self.deployment;
+      };
+  };
+
   mkAnnotatedCmPackage =
     {
       key,
@@ -3426,6 +3461,13 @@ let
       controllerName = "gateway.nginx.org/nginx-gateway-controller";
       proxySpec = kindProxySpec;
     });
+
+    # A workload kind through raw scope.mkResource never reaches sealWorkload
+    # (no validators, no derived spread, no netpol edges), so it is refused.
+    t87-raw-workload-kind-throws = evalFails (mkCluster [
+      baseInstances
+      { instances.appns.raw.package = mkRawDeploymentPackage; }
+    ]);
 
     # ---------------------------------------------------- v2_discussions/145
     # The availability level: derived from the substrate, overridable per

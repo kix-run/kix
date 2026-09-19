@@ -30,7 +30,42 @@ in
       scopeObj,
     }:
     rec {
-      scopeMkResource =
+      # A workload is sealed by its typed builder only: mkDeployment,
+      # mkStatefulSet, mkDaemonSet, mkJob and mkHelmWorkload run the pod-spec
+      # validators, the edge analysis and the interceptors (derived spread,
+      # netpol) before the seal. A raw mkResource of one of these kinds used
+      # to skip all of that without a word, so it is refused; sealWorkload
+      # reaches the seal through sealResource below.
+      workloadKinds = [
+        "Deployment"
+        "StatefulSet"
+        "DaemonSet"
+        "Job"
+      ];
+      builderFor = {
+        Deployment = "scope.mkDeployment";
+        StatefulSet = "scope.mkStatefulSet";
+        DaemonSet = "scope.mkDaemonSet";
+        Job = "scope.mkJob";
+      };
+      checkNotRawWorkload =
+        args:
+        let
+          kind = args.kind or "";
+        in
+        if builtins.elem kind workloadKinds then
+          throw (
+            "[${instanceName}] ${kind} '${args.name or "?"}' is built with scope.mkResource, which does not seal "
+            + "a workload: no pod-spec checks, no derived spread or PodDisruptionBudget, no network "
+            + "policy edges. Build it with ${builderFor.${kind}} instead (drop apiVersion and kind; "
+            + "the rest of the attrset is the same)."
+          )
+        else
+          null;
+
+      scopeMkResource = args: builtins.seq (checkNotRawWorkload args) (sealResource args);
+
+      sealResource =
         {
           labels ? { },
           ...
@@ -219,7 +254,7 @@ in
           # requires, then core DNS deps. kix.run/depends-on stamps entries
           # in list order, so this order is content-addressed into the
           # manifest — change it only as a deliberate output change.
-          workload = scopeMkResource (
+          workload = sealResource (
             removeAttrs patchedInput [ "_helmNetworkDeps" ]
             // {
               requires = (workloadInput.requires or [ ]) ++ interceptorRequires ++ dnsDeps;

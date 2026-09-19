@@ -3,8 +3,9 @@
 # Deploys the virt-operator which manages KubeVirt components (virt-api,
 # virt-controller, virt-handler) via the KubeVirt custom resource.
 #
-# Resources: ServiceAccount, ClusterRole, ClusterRoleBinding,
-#            Deployment (virt-operator), KubeVirt CR, CRDs.
+# Resources: ServiceAccount, ClusterRole, ClusterRoleBinding, Role,
+#            RoleBinding, PriorityClass, Deployment (virt-operator),
+#            KubeVirt CR, the kubevirts.kubevirt.io CRD.
 #
 # root = Deployment (virt-operator)
 
@@ -1477,6 +1478,37 @@ in
         ];
       };
 
+      # --- ClusterRole (aggregated to admin) ---
+      # Upstream's second ClusterRole. Nothing binds it to the operator; it
+      # aggregates into the built-in admin role so cluster admins can manage
+      # KubeVirt CRs with kubectl. Fixed name, as upstream, because the
+      # aggregation is what gives it its meaning.
+      adminClusterRole = scope.mkClusterResource {
+        apiVersion = "rbac.authorization.k8s.io/v1";
+        kind = "ClusterRole";
+        name = "kubevirt.io:operator";
+        labels = kubevirtLabels // {
+          "operator.kubevirt.io" = "";
+          "rbac.authorization.k8s.io/aggregate-to-admin" = "true";
+        };
+        extra.rules = [
+          {
+            apiGroups = [ "kubevirt.io" ];
+            resources = [ "kubevirts" ];
+            verbs = [
+              "get"
+              "delete"
+              "create"
+              "update"
+              "patch"
+              "list"
+              "watch"
+              "deletecollection"
+            ];
+          }
+        ];
+      };
+
       # --- ClusterRoleBinding ---
       clusterRoleBinding = scope.mkClusterResource {
         apiVersion = "rbac.authorization.k8s.io/v1";
@@ -1499,10 +1531,147 @@ in
         };
       };
 
+      # --- Role (namespace-scoped) ---
+      # virt-operator does its leader election and its certificate rotation
+      # inside its own namespace, so these rights are namespaced rather than
+      # cluster-wide. Mirrors the upstream v1.5.0 kubevirt-operator Role.
+      role = scope.mkResource {
+        apiVersion = "rbac.authorization.k8s.io/v1";
+        kind = "Role";
+        name = "${name}-operator";
+        labels = kubevirtLabels;
+        extra.rules = [
+          # The certificate secrets the operator mints and rotates. Upstream
+          # names them explicitly rather than granting write on every secret.
+          {
+            apiGroups = [ "" ];
+            resources = [ "secrets" ];
+            resourceNames = [
+              "kubevirt-ca"
+              "kubevirt-export-ca"
+              "kubevirt-virt-handler-certs"
+              "kubevirt-virt-handler-server-certs"
+              "kubevirt-operator-certs"
+              "kubevirt-virt-api-certs"
+              "kubevirt-controller-certs"
+              "kubevirt-exportproxy-certs"
+            ];
+            verbs = [
+              "create"
+              "get"
+              "list"
+              "watch"
+              "patch"
+              "delete"
+            ];
+          }
+          # Read access to every secret in the namespace: the operator lists
+          # them to find what it has already issued.
+          {
+            apiGroups = [ "" ];
+            resources = [ "secrets" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          {
+            apiGroups = [ "" ];
+            resources = [ "configmaps" ];
+            verbs = [
+              "create"
+              "get"
+              "list"
+              "watch"
+              "patch"
+              "delete"
+            ];
+          }
+          # Leader election between the operator replicas.
+          {
+            apiGroups = [ "coordination.k8s.io" ];
+            resources = [ "leases" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+              "create"
+              "update"
+              "patch"
+              "delete"
+            ];
+          }
+          {
+            apiGroups = [ "networking.k8s.io" ];
+            resources = [ "ingresses" ];
+            verbs = [
+              "get"
+              "list"
+              "watch"
+            ];
+          }
+          # OpenShift routes for the export proxy. Harmless on plain
+          # Kubernetes, where the group is simply not served.
+          {
+            apiGroups = [ "route.openshift.io" ];
+            resources = [ "routes" ];
+            verbs = [
+              "create"
+              "get"
+              "list"
+              "watch"
+              "patch"
+              "delete"
+            ];
+          }
+          {
+            apiGroups = [ "route.openshift.io" ];
+            resources = [ "routes/custom-host" ];
+            verbs = [ "create" ];
+          }
+        ];
+      };
+
+      # --- RoleBinding ---
+      roleBinding = scope.mkResource {
+        apiVersion = "rbac.authorization.k8s.io/v1";
+        kind = "RoleBinding";
+        name = "${name}-operator";
+        labels = kubevirtLabels;
+        extra = {
+          roleRef = {
+            apiGroup = "rbac.authorization.k8s.io";
+            kind = "Role";
+            name = self.role.out.name;
+          };
+          subjects = [
+            {
+              kind = "ServiceAccount";
+              name = self.serviceAccount.out.name;
+              namespace = scope.namespaceName;
+            }
+          ];
+        };
+      };
+
+      # --- PriorityClass (cluster-critical for kubevirt components) ---
+      # The pod template asks for this class; nothing else in the cluster
+      # creates it, so the package owns it and the Deployment orders after it.
+      priorityClass = scope.mkClusterResource {
+        apiVersion = "scheduling.k8s.io/v1";
+        kind = "PriorityClass";
+        name = "kubevirt-cluster-critical";
+        labels = kubevirtLabels;
+        extra = {
+          value = 1000000000;
+          globalDefault = false;
+          description = "This priority class should be used for core kubevirt components only.";
+        };
+      };
+
       # --- Deployment (virt-operator) ---
-      deployment = scope.mkResource {
-        apiVersion = "apps/v1";
-        kind = "Deployment";
+      deployment = scope.mkDeployment {
         name = "virt-operator";
         labels = operatorLabels;
         spec = {
@@ -1520,7 +1689,7 @@ in
               };
             };
             spec = {
-              serviceAccountName = self.serviceAccount.out.name;
+              serviceAccount = self.serviceAccount;
               terminationGracePeriodSeconds = 30;
               securityContext = {
                 runAsNonRoot = true;
@@ -1529,7 +1698,7 @@ in
               nodeSelector = {
                 "kubernetes.io/os" = "linux";
               };
-              priorityClassName = "kubevirt-cluster-critical";
+              priorityClassName = self.priorityClass.out.name;
               tolerations = [
                 {
                   key = "CriticalAddonsOnly";
@@ -1637,97 +1806,27 @@ in
           }
           // config.configuration;
         };
-        requires = [ self.deployment ];
+        requires = [
+          self.crds.kubeVirt
+          self.deployment
+        ];
       };
 
       # --- CRDs ---
-      # Minimal CRD stubs. Production would include full OpenAPI validation schemas
-      # from the upstream kubevirt-operator.yaml manifest.
-
+      # Upstream ships exactly one CRD with the operator manifest: the
+      # KubeVirt CR the operator watches. virt-operator installs the rest
+      # (VirtualMachine, VirtualMachineInstance, the snapshot and export
+      # kinds) itself, with full schemas, once it is running. kix must not
+      # ship stubs for those: server-side apply would keep overwriting the
+      # operator's schemas with an empty one.
+      #
+      # Vendored from upstream kubevirt-operator.yaml v1.5.0.
       crds = {
-        kubeVirt = scope.mkCRD (scope.crd.fromKind "KubeVirt" { spec.group = "kubevirt.io"; });
-
-        virtualMachine = scope.mkCRD (
-          scope.crd.fromKind "VirtualMachine" { spec.group = "kubevirt.io"; }
-          |> scope.crd.withShortNames [
-            "vm"
-            "vms"
-          ]
-        );
-
-        virtualMachineInstance = scope.mkCRD (
-          scope.crd.fromKind "VirtualMachineInstance" { spec.group = "kubevirt.io"; }
-          |> scope.crd.withShortNames [
-            "vmi"
-            "vmis"
-          ]
-        );
-
-        virtualMachineInstanceMigration = scope.mkCRD (
-          scope.crd.fromKind "VirtualMachineInstanceMigration" { spec.group = "kubevirt.io"; }
-          |> scope.crd.withShortNames [
-            "vmim"
-            "vmims"
-          ]
-        );
-
-        virtualMachineInstancePreset = scope.mkCRD (
-          scope.crd.fromKind "VirtualMachineInstancePreset" { spec.group = "kubevirt.io"; }
-          |> scope.crd.withShortNames [
-            "vmipreset"
-            "vmipresets"
-          ]
-        );
-
-        virtualMachineInstanceReplicaSet = scope.mkCRD (
-          scope.crd.fromKind "VirtualMachineInstanceReplicaSet" { spec.group = "kubevirt.io"; }
-          |> scope.crd.withShortNames [ "vmirs" ]
-        );
-
-        virtualMachineClone = scope.mkCRD (
-          scope.crd.fromKind "VirtualMachineClone" { spec.group = "clone.kubevirt.io"; }
-          |> scope.crd.withShortNames [
-            "vmclone"
-            "vmclones"
-          ]
-          |> scope.crd.withVersion "v1beta1"
-        );
-
-        virtualMachineExport = scope.mkCRD (
-          scope.crd.fromKind "VirtualMachineExport" { spec.group = "export.kubevirt.io"; }
-          |> scope.crd.withShortNames [
-            "vmexport"
-            "vmexports"
-          ]
-          |> scope.crd.withVersion "v1beta1"
-        );
-
-        virtualMachineSnapshot = scope.mkCRD (
-          scope.crd.fromKind "VirtualMachineSnapshot" { spec.group = "snapshot.kubevirt.io"; }
-          |> scope.crd.withShortNames [
-            "vmsnapshot"
-            "vmsnapshots"
-          ]
-          |> scope.crd.withVersion "v1beta1"
-        );
-
-        virtualMachineSnapshotContent = scope.mkCRD (
-          scope.crd.fromKind "VirtualMachineSnapshotContent" { spec.group = "snapshot.kubevirt.io"; }
-          |> scope.crd.withShortNames [
-            "vmsnapshotcontent"
-            "vmsnapshotcontents"
-          ]
-          |> scope.crd.withVersion "v1beta1"
-        );
-
-        virtualMachineRestore = scope.mkCRD (
-          scope.crd.fromKind "VirtualMachineRestore" { spec.group = "snapshot.kubevirt.io"; }
-          |> scope.crd.withShortNames [
-            "vmrestore"
-            "vmrestores"
-          ]
-          |> scope.crd.withVersion "v1beta1"
-        );
+        kubeVirt = scope.mkCRD {
+          spec =
+            (builtins.fromJSON (builtins.readFile ./kubevirts.kubevirt.io-customresourcedefinition.yaml.json))
+            .spec;
+        };
       };
 
       # --- Entry point ---
@@ -1736,20 +1835,12 @@ in
         requires = [
           self.serviceAccount
           self.clusterRole
+          self.adminClusterRole
           self.clusterRoleBinding
+          self.role
+          self.roleBinding
           self.kubevirtCR
-          # CRDs
           self.crds.kubeVirt
-          self.crds.virtualMachine
-          self.crds.virtualMachineInstance
-          self.crds.virtualMachineInstanceMigration
-          self.crds.virtualMachineInstancePreset
-          self.crds.virtualMachineInstanceReplicaSet
-          self.crds.virtualMachineClone
-          self.crds.virtualMachineExport
-          self.crds.virtualMachineSnapshot
-          self.crds.virtualMachineSnapshotContent
-          self.crds.virtualMachineRestore
         ];
       };
     };

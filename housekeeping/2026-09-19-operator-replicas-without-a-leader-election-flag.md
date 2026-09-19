@@ -13,3 +13,5 @@ The cost is that a cluster asking for availability `node` may get two
 replicas of a controller that cannot coordinate, and each one reconciles
 everything. Worth one pass per package: confirm the flag, then either
 pass it or record the ceiling.
+
+- Corrected 2026-09-19: `cdi` now grants `coordination.k8s.io/leases` in its namespace `Role`, copied from upstream. Its `meta.availability.max = "pod"` still stands, because the operator takes only a helper lease and a second replica would still fight the first.

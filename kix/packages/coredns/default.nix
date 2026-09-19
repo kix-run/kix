@@ -1,8 +1,9 @@
 # CoreDNS kix package.
 #
 # Produces: ConfigMap, Deployment, Service (kube-dns), ServiceAccount,
-# ClusterRole, ClusterRoleBinding, and optionally HPA, PDB, metrics
-# Service, and ServiceMonitor.
+# ClusterRole, ClusterRoleBinding, and optionally HPA, metrics Service,
+# and ServiceMonitor. The PodDisruptionBudget is derived by the compiler
+# from the availability level, not written here.
 #
 # Dependencies:
 #   prometheus — optional, gates ServiceMonitor creation and provides CRD ref
@@ -128,13 +129,6 @@ in
         metrics = [ ];
       };
     };
-    podDisruptionBudget = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        minAvailable = null;
-        maxUnavailable = null;
-      };
-    };
     prometheus = lib.mkOption {
       type = lib.types.anything;
       default = {
@@ -159,11 +153,6 @@ in
       prometheus ? null,
     }:
     let
-      # Whether PDB is enabled: at least one of minAvailable/maxUnavailable is set.
-      pdbEnabled =
-        config.podDisruptionBudget.minAvailable != null
-        || config.podDisruptionBudget.maxUnavailable != null;
-
       # Common labels applied to all resources.
       commonLabels =
         selectorLabels
@@ -214,7 +203,9 @@ in
       subjects = [
         {
           kind = "ServiceAccount";
-          name = self.serviceAccount.out.name;
+          # Tracked when we build the SA; the bare name when the cluster
+          # supplies an existing one (config.serviceAccount.create = false).
+          name = if config.serviceAccount.create then self.serviceAccount.out.name else saName;
           namespace = scope.namespaceName;
         }
       ];
@@ -240,9 +231,7 @@ in
     // {
 
       # --- Deployment ---
-      deployment = scope.mkResource {
-        apiVersion = "apps/v1";
-        kind = "Deployment";
+      deployment = scope.mkDeployment {
         name = "${scope.instanceName}";
         labels = commonLabels // {
           "app.kubernetes.io/version" = config.image.tag;
@@ -263,16 +252,27 @@ in
               labels = selectorLabels // {
                 "app.kubernetes.io/instance" = scope.instanceName;
               };
-              annotations = {
-                "scheduler.alpha.kubernetes.io/tolerations" =
-                  ''[{"key":"CriticalAddonsOnly", "operator":"Exists"}]'';
-              };
             };
             spec = {
               terminationGracePeriodSeconds = 30;
-              serviceAccountName = self.serviceAccount.out.name;
               dnsPolicy = "Default";
+              # Cluster DNS must keep running on nodes tainted for add-ons
+              # only. This replaces the pre-1.6 alpha tolerations annotation,
+              # which current kubelets ignore.
+              tolerations = [
+                {
+                  key = "CriticalAddonsOnly";
+                  operator = "Exists";
+                }
+              ];
             }
+            // (
+              if config.serviceAccount.create then
+                { serviceAccount = self.serviceAccount; }
+              else
+                # An existing ServiceAccount this package does not build.
+                { serviceAccountName = kix.untrackedRef saName; }
+            )
             // lib.optionalAttrs (config.affinity != null) {
               inherit (config) affinity;
             }
@@ -397,8 +397,7 @@ in
           lib.optional (self.metricsService != null) self.metricsService
           ++ lib.optional (self.serviceMonitor != null) self.serviceMonitor
           ++ lib.optional (self.prometheusRules != null) self.prometheusRules
-          ++ lib.optional (self.hpa != null) self.hpa
-          ++ lib.optional (self.pdb != null) self.pdb;
+          ++ lib.optional (self.hpa != null) self.hpa;
       };
 
       # --- Optional: Metrics Service ---
@@ -508,27 +507,6 @@ in
               minReplicas = config.hpa.minReplicas;
               maxReplicas = config.hpa.maxReplicas;
               metrics = config.hpa.metrics;
-            };
-          }
-        else
-          null;
-
-      # --- Optional: PDB ---
-      pdb =
-        if pdbEnabled then
-          scope.mkResource {
-            apiVersion = "policy/v1";
-            kind = "PodDisruptionBudget";
-            name = "${scope.instanceName}";
-            labels = commonLabels;
-            spec = {
-              selector.matchLabels = self.deployment.out.selector;
-            }
-            // lib.optionalAttrs (config.podDisruptionBudget.minAvailable != null) {
-              minAvailable = config.podDisruptionBudget.minAvailable;
-            }
-            // lib.optionalAttrs (config.podDisruptionBudget.maxUnavailable != null) {
-              maxUnavailable = config.podDisruptionBudget.maxUnavailable;
             };
           }
         else

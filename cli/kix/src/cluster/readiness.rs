@@ -1166,6 +1166,13 @@ fn check_deployment_ready(generation: Option<i64>, data: &Value) -> bool {
 
 /// DaemonSet: numberReady == desiredNumberScheduled && updatedNumberScheduled == desiredNumberScheduled
 /// && observedGeneration >= generation
+///
+/// A DaemonSet whose node selector matches no node has
+/// `desiredNumberScheduled: 0` once the controller has observed it, and
+/// is complete (`kubectl rollout status` agrees): mayastor's io-engine
+/// selects `openebs.io/engine=mayastor` nodes, and a cluster labels those
+/// after the deploy. The observedGeneration guard is what keeps an
+/// unobserved, status-less object from passing on the first poll.
 fn check_daemonset_ready(generation: Option<i64>, data: &Value) -> bool {
     // Typed-metadata generation — see check_deployment_ready.
     let generation = generation.unwrap_or(0);
@@ -1191,7 +1198,7 @@ fn check_daemonset_ready(generation: Option<i64>, data: &Value) -> bool {
         .and_then(Value::as_i64)
         .unwrap_or(0);
 
-    desired > 0 && ready >= desired && updated >= desired
+    ready >= desired && updated >= desired
 }
 
 /// Job: status.succeeded >= 1
@@ -1622,6 +1629,27 @@ mod tests {
             }),
         );
         assert!(!check_readiness(&ds, "DaemonSet"));
+    }
+
+    #[test]
+    fn daemonset_matching_no_node_is_ready_once_observed() {
+        // io-engine on a cluster with no openebs.io/engine=mayastor node:
+        // 0 desired, 0 ready, observed. Complete, not a timeout.
+        let ds = make_obj_gen(
+            1,
+            json!({
+                "status": {
+                    "observedGeneration": 1,
+                    "desiredNumberScheduled": 0,
+                    "numberReady": 0,
+                    "updatedNumberScheduled": 0,
+                }
+            }),
+        );
+        assert!(check_readiness(&ds, "DaemonSet"));
+        // The same object before the controller has written any status.
+        let unobserved = make_obj_gen(1, json!({}));
+        assert!(!check_readiness(&unobserved, "DaemonSet"));
     }
 
     #[test]

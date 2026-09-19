@@ -106,6 +106,7 @@ reconciler, and no runbook should need to.
 | Class of mistake | Mechanism |
 |---|---|
 | Mismatched selector vs template labels | `mkDeployment` etc. copy `spec.selector.matchLabels` to `template.metadata.labels` |
+| Workload built outside the seal | `mkResource` refuses Deployment, StatefulSet, DaemonSet and Job; only the typed builders run the validators, derived spread and PDB, and netpol edges |
 | Dangling resource refs | All refs are Nix-typed; `null` resources are stripped, not silently dropped |
 | Meaningful empty value deleted (`emptyDir: {}`, empty selectors) | Collapse-rule normalization: literal empties render; only containers that lost every member to null-stripping collapse. `kix.keep` protects constructor-built containers |
 | Sourceless volume shipped to the apiserver | `volumeHasSource` scorecard rule (severity error) checks volumes as they will render |

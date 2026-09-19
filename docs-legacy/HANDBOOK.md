@@ -406,12 +406,12 @@ Use this only for fixtures and inline cluster definitions. Files in `kix/package
 
 | Symbol | Signature / Notes |
 |---|---|
-| `scope.mkResource attrs` | Create a namespaced K8s resource — see §7 for fields |
+| `scope.mkResource attrs` | Create a namespaced K8s resource — see §7 for fields. Refuses Deployment, StatefulSet, DaemonSet and Job: a workload is sealed by its typed builder below or not at all |
 | `scope.mkClusterResource attrs` | Same, cluster-scoped (omits `metadata.namespace`) |
 | `scope.mkDeployment attrs` | Workload wrapper. Sets apiVersion/kind, copies `selector.matchLabels` to `template.metadata.labels`, validates, runs per-workload CNP generation. Pipe-friendly. `name` required. |
 | `scope.mkStatefulSet attrs` | Same; expands `headlessService` shorthand (auto-creates the headless Service) |
 | `scope.mkDaemonSet attrs` | Same |
-| `scope.mkJob attrs` | Same; no selector enforcement |
+| `scope.mkJob attrs` | Same; the selector may be omitted (template labels stand in) |
 | `scope.mkHelmWorkload attrs` | Helm-sourced workload (used internally by `importChart`). Runs the pod-spec validators `mkDeployment` runs, except the DI-tracked reference check: chart names are plain strings, and the cross-resource checks resolve them instead |
 | `scope.mkOptional cond builder` | Gate a resource on a boolean. `builder` may be a thunk `(_: ...)` to avoid eager eval when `cond` is false |
 | `scope.mkSecret { ... }` | Secret with enriched `out` (see §21). **Always** use this instead of `scope.mkResource { kind = "Secret"; }` |

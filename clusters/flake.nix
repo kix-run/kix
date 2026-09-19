@@ -45,6 +45,8 @@
         doc-how-tos = ./test-doc-how-tos.nix;
         satchel-dev = ./satchel/dev.nix;
         satchel-prod = ./satchel/prod.nix;
+        operators = ./test-operators.nix;
+        sealed-jobs = ./test-sealed-jobs.nix;
       };
     };
 }
