@@ -204,14 +204,41 @@ gap recorded in housekeeping on 2026-09-19.
 `cluster.topology.failureDomainKeys` stays as it is, for packages whose
 pods an operator renders. `meta.spread` is removed.
 
+Every derived constraint carries `nodeTaintsPolicy: Honor`. Found on the
+three-zone kind cluster while proving the `node` level: the tainted
+control-plane node counts as a hostname domain with zero pods under the
+default `Ignore`, so a hard hostname constraint refuses a second pod on
+any worker. Doc 143's proof did not see this because its hard zone
+constraint excluded the control plane for lacking a zone label. Honouring
+taints excludes every node the pod could not land on anyway.
+
+The same policy changes two other things. Nodes in a zone that has gone
+dark carry `node.kubernetes.io/unreachable`, so they stop counting and
+replacement pods may land in the live zones, which is most of the answer
+to doc 143's zone-outage question. And pods scheduled while other nodes
+are still coming up (kind applies seconds after creation; workers carry a
+not-ready taint for a moment) pack onto the nodes that are ready and stay
+there until the next rollout, where the default policy would have left
+them Pending until the nodes were ready. `scripts/kind-spread.sh` waits
+for every node to be Ready before applying, as a real deploy would.
+
+Deployment constraints also carry `matchLabelKeys: [pod-template-hash]`.
+Restarting the zoned deployment on kind left one zone empty (1/2/0):
+during a rolling update the new pods are counted against the old ones,
+which satisfy the skew until they terminate. Keying the count on the
+revision label counts only the new pods, so a rollout keeps the spread.
+StatefulSets replace pods in place and have no such label.
+
 ## 7. Verification
 
 Packages promise to honour the level; the compiler checks the result. The
 availability plugin's instance processor warns, always on rather than only
-where the scorecard is enabled: under a resolved level of `pod` or above, a
+where the scorecard is enabled: under a resolved level of `node` or above, a
 Deployment or StatefulSet reachable from the package root with fewer than
-two replicas is reported with the level and the instance. Ancillary
-workloads off the root path are not judged. The check cannot judge quorums
+two replicas is reported with the level and the instance. The check starts
+at `node`, not `pod`, because §5.3 lets a stateful component stay
+standalone at `pod`; from `node` up every workload owes a second replica.
+Ancillary workloads off the root path are not judged. The check cannot judge quorums
 or replication generically, so `zone` is verified only as far as spread and
 replica count go.
 

@@ -27,6 +27,10 @@ if ! kind get clusters 2>/dev/null | grep -qx "$NAME"; then
 fi
 kubectl --context "$CTX" get nodes -L topology.kubernetes.io/zone
 
+# Derived constraints honour taints, so a worker still carrying its
+# bring-up not-ready taint is not a domain: apply only once every node is
+# Ready, as a real deploy would.
+kubectl --context "$CTX" wait --for=condition=Ready nodes --all --timeout=180s
 nix build ./clusters#cluster-spread --extra-experimental-features pipe-operators -o result-spread
 # CRDs first (the PackageInstance kind), then everything.
 for f in $(find result-spread/ -name '*customresourcedefinition*.yaml'); do
@@ -40,7 +44,7 @@ done
 
 zone_of() { kubectl --context "$CTX" get node "$1" -o jsonpath='{.metadata.labels.topology\.kubernetes\.io/zone}'; }
 placement() {
-  kubectl --context "$CTX" -n echo get pods -l app.kubernetes.io/instance="$1" -o jsonpath='{range .items[*]}{.spec.nodeName}{"\n"}{end}'
+  kubectl --context "$CTX" -n echo get pods -l app.kubernetes.io/instance="$1" --field-selector=status.phase=Running -o jsonpath='{range .items[*]}{.spec.nodeName}{"\n"}{end}'
 }
 
 fail=0
@@ -54,6 +58,14 @@ check "zoned has a PDB" kubectl --context "$CTX" -n echo get pdb zoned -o name
 check "pinned has a PDB" kubectl --context "$CTX" -n echo get pdb pinned -o name
 check "exactly two PDBs (unspread has none)" test "$(kubectl --context "$CTX" -n echo get pdb -o name | wc -l)" -eq 2
 check "unspread: no constraints" test -z "$(kubectl --context "$CTX" -n echo get deploy unspread -o jsonpath='{.spec.template.spec.topologySpreadConstraints}')"
+
+# A rolling update keeps the spread (matchLabelKeys on pod-template-hash):
+# after a restart the zoned pods are still one per zone.
+kubectl --context "$CTX" -n echo rollout restart deploy/zoned
+kubectl --context "$CTX" -n echo rollout status deploy/zoned --timeout=120s
+sleep 10
+zones_after=$(placement zoned | while read -r n; do zone_of "$n"; echo; done | sort -u | wc -l)
+check "zoned after a rolling restart: still 3 distinct zones (got $zones_after)" test "$zones_after" -eq 3
 
 # Even distribution, not one-per-domain: a fourth "pinned" pod lands 2/1/1.
 kubectl --context "$CTX" -n echo scale deploy/pinned --replicas=4

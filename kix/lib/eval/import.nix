@@ -172,6 +172,7 @@ rec {
                 "scope"
                 "lib"
                 "kix"
+                "availability"
               ]
             );
             mkDepProxy =
@@ -189,6 +190,10 @@ rec {
                 inherit lib;
               }
               // lib.optionalAttrs (fnArgs ? kix) { kix = kixlib; }
+              # An import renders no workloads of its own, so the level it
+              # sees only shapes option defaults nobody reads; "none" keeps
+              # every mapped default at its floor.
+              // lib.optionalAttrs (fnArgs ? availability) { availability = "none"; }
               // nullDeps
             );
 

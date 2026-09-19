@@ -75,14 +75,28 @@ let
   # derives neither constraints nor a PDB for it (one signal, one meaning).
   authorPlaced = spec: (spec.template.spec or { }) ? topologySpreadConstraints;
 
+  # nodeTaintsPolicy = Honor: a node the pod cannot land on (a tainted
+  # control plane) must not count as a domain with zero pods, or a hard
+  # hostname constraint caps every worker at one pod. Found on kind: with
+  # the zone key also hard the control plane was excluded for lacking a
+  # zone label, which hid it; with hostname alone it blocked the fourth pod.
+  # matchLabelKeys = [ pod-template-hash ] on Deployments: during a rolling
+  # update the new pods are counted against the old ones, so once the old
+  # ones leave a domain can be empty. Keying on the revision counts only
+  # the new pods. StatefulSets replace pods in place and have no such label.
   mkConstraints =
-    level: selector:
-    map (key: {
-      topologyKey = key;
-      maxSkew = 1;
-      whenUnsatisfiable = whenUnsatisfiable level key;
-      labelSelector.matchLabels = selector;
-    }) failureDomainKeys;
+    kind: level: selector:
+    map (
+      key:
+      {
+        topologyKey = key;
+        maxSkew = 1;
+        whenUnsatisfiable = whenUnsatisfiable level key;
+        nodeTaintsPolicy = "Honor";
+        labelSelector.matchLabels = selector;
+      }
+      // lib.optionalAttrs (kind == "Deployment") { matchLabelKeys = [ "pod-template-hash" ]; }
+    ) failureDomainKeys;
 
   # A PDB written by the author covers a workload when its selector is a
   # subset of the workload's template labels.
@@ -171,7 +185,7 @@ in
       in
       {
         podSpec = lib.optionalAttrs derive {
-          topologySpreadConstraints = mkConstraints ctx.availability.level ctx.selector;
+          topologySpreadConstraints = mkConstraints ctx.workloadKind ctx.availability.level ctx.selector;
         };
       };
 
@@ -184,7 +198,7 @@ in
         # Post-seal the manifest carries the derived constraints, so "the
         # author placed this" is "the constraints are not the ones we would
         # have derived" (they are a pure function of level and selector).
-        derivedConstraints = m: mkConstraints level (m.spec.selector.matchLabels or { });
+        derivedConstraints = m: mkConstraints m.kind level (m.spec.selector.matchLabels or { });
         authorPlacedSealed =
           m: (m.spec.template.spec.topologySpreadConstraints or [ ]) != derivedConstraints m;
         wantsPdb =
@@ -210,9 +224,10 @@ in
           };
 
         # 145 §7: the package promised to honour the level; check the
-        # result. A root-reachable workload with one replica under "pod" or
-        # above is a shortfall. Ancillary workloads off the root path are
-        # not judged.
+        # result. From "node" up every root-reachable workload must run more
+        # than one replica (at "pod" a stateful component may still be
+        # standalone by design, §5.3). Ancillary workloads off the root path
+        # are not judged.
         shortfall = builtins.filter (
           r:
           let
@@ -223,12 +238,12 @@ in
           && m.spec.replicas < 2
           && ctx.forwardReachable r
         ) ctx.allPartResources;
-        shortfallWarnings = lib.optionals (avail.atLeast "pod" level) (
+        shortfallWarnings = lib.optionals (avail.atLeast "node" level) (
           map (
             r:
             "[${ctx.instanceName}] ${r.rawManifest.kind} '${r.rawManifest.metadata.name}' runs "
             + "${toString r.rawManifest.spec.replicas} replica under availability \"${level}\": "
-            + "a pod restart is downtime the level promised to avoid. The package should map the level "
+            + "a lost node takes it down, which the level promised to avoid. The package should map the level "
             + "(kix.availability.pick) or declare meta.availability.max."
           ) shortfall
         );
