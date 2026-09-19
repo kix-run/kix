@@ -472,6 +472,15 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         }
     }
 
+    // The nodes: do they carry the labels the plan's placement rules name?
+    // Only when a connection already exists: --current-activation is the
+    // no-cluster-before-confirm mode.
+    if let Some(client) = &pre_client
+        && !ctx.global.quiet
+    {
+        report_topology_labels(ctx, client, &new_manifests);
+    }
+
     // Confirmation
     if !args.yes && !args.dry_run {
         if !output::is_interactive() {
@@ -727,6 +736,45 @@ fn supersede_consumed(
 /// The removed `eager` mode claimed to interleave prune and apply waves, but
 /// mapped to the same `Delete` policy as `--prune`. The actual scheduling
 /// feature is tracked in ROADMAP.
+/// The topology label preflight, printed above the confirmation. The
+/// compiler derives spread on cluster.topology.zoneKey and cannot see a
+/// node; under DoNotSchedule a node without the label cannot take the pod,
+/// and the first sign would be a readiness stall. One LIST of nodes here
+/// names the label instead. Warn only, never a refusal.
+fn report_topology_labels(ctx: &CommandContext, client: &kube::Client, manifests: &[Value]) {
+    use kix::cluster::topology::{NodesOutcome, assess, list_nodes};
+
+    let keys = kix::cluster::topology::topology_keys(manifests);
+    if keys.is_empty() {
+        return;
+    }
+    match ctx.runtime.block_on(list_nodes(client)) {
+        Ok(NodesOutcome::Listed(nodes)) => {
+            for finding in assess(&keys, &nodes) {
+                let tag = if finding.is_warning() {
+                    output::yellow("warn:")
+                } else {
+                    output::dim("note:")
+                };
+                println!("{tag} {}", finding.describe());
+            }
+        }
+        Ok(NodesOutcome::Forbidden) => {
+            println!(
+                "{}",
+                output::dim("note: topology labels not checked; this account may not list nodes")
+            );
+        }
+        Err(e) => {
+            println!(
+                "{} could not list nodes to check topology labels: {}",
+                output::yellow("warn:"),
+                kix::cluster::errors::describe(&e)
+            );
+        }
+    }
+}
+
 fn prune_policy_for(args: &DeployArgs) -> PrunePolicy {
     match args.prune_mode.unwrap_or(PruneMode::Default) {
         PruneMode::No => PrunePolicy::Skip,

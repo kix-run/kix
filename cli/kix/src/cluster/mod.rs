@@ -16,6 +16,7 @@ pub mod readiness;
 pub mod scheduler;
 pub mod secrets;
 pub mod stream;
+pub mod topology;
 pub mod watchdog;
 
 pub use graph::ResourceGraph;
