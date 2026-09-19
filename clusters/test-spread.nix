@@ -1,9 +1,10 @@
-# clusters/test-spread.nix — derived pod spread on a multi-zone kind cluster.
+# clusters/test-spread.nix — the availability level and derived pod spread
+# on a multi-zone kind cluster.
 #
 # kind itself is one node per container, so zones are node labels set by
 # the kind config (scripts/kind-spread.sh); the flavor's multiNode = false
 # and availabilityZones = [ ] are overridden here to say so.
-# Design: v2_discussions/143_pod_spread_and_failure_zones.md.
+# Design: v2_discussions/145_availability_level.md (spread mechanism: archive/143).
 #
 # Build:  nix build .#cluster-spread --extra-experimental-features pipe-operators
 # Deploy: scripts/kind-spread.sh
@@ -25,22 +26,22 @@ kix.buildCluster {
       namespaces.echo = { };
 
       instances.echo = {
-        # cluster default: hard on zones, soft on hosts, plus a PDB.
+        # cluster default, derived "zone": three replicas from the level,
+        # hard on the zone key, soft on hosts, plus a PDB.
         zoned = {
           package = packages.echo-server;
-          config.replicaCount = 3;
         };
-        # operator escape hatch: no spread, no PDB.
+        # operator escape hatch: one replica from the level, so no spread
+        # and no PDB.
         unspread = {
           package = packages.echo-server;
-          config.replicaCount = 2;
-          spread = "off";
+          availability = "none";
         };
-        # hard on every key: even across zones and across hosts.
+        # "node" on a zoned cluster: hard on hosts, soft on the zone.
         pinned = {
           package = packages.echo-server;
           config.replicaCount = 3;
-          spread = "hard";
+          availability = "node";
         };
       };
     }

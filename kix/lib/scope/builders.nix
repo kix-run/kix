@@ -21,6 +21,7 @@ in
       workloadInterceptors,
       peekedPackageMeta,
       clusterCtx,
+      availability,
       # cluster.factBehavior, keyed "group/Kind": operator override (wins
       # over the CRD-declared behavior arriving via mkCR) and fallback for
       # builder-less CRs (helm-rendered, raw mkResource)
@@ -190,6 +191,7 @@ in
               inherit (edgeAnalysis) serviceRegistry serviceRefRegistry;
               packageMeta = peekedPackageMeta;
               cluster = clusterCtx;
+              inherit availability;
             }
           ) workloadInterceptors;
           interceptorRequires = builtins.concatMap (r: r.requires or [ ]) interceptorResults;

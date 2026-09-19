@@ -5,6 +5,7 @@ let
     "scope"
     "lib"
     "kix"
+    "availability"
   ];
 
   systemBuildArgNames = [
@@ -15,6 +16,7 @@ let
     "lib"
     "kix"
     "deps"
+    "availability"
   ];
 in
 
@@ -222,8 +224,15 @@ rec {
     in
     builtins.seq _lockedCheck (lib.recursiveUpdate mergeableDefaults evaluated);
 
+  # `availability` is the instance's resolved level (core/availability.nix),
+  # a plain string a package may take as an argument so its option defaults
+  # can read it.
   normalizePackage =
-    { package, scope }:
+    {
+      package,
+      scope,
+      availability ? "none",
+    }:
     if builtins.isAttrs package && package ? build then
       package
     else if (package._type or "") == "kix-import" then
@@ -237,6 +246,7 @@ rec {
           inherit scope lib;
         }
         // lib.optionalAttrs (fnArgs ? kix) { kix = kixlib; }
+        // lib.optionalAttrs (fnArgs ? availability) { inherit availability; }
       );
 
   callPackagePhase1 = normalizePackage;

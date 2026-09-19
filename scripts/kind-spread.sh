@@ -3,9 +3,11 @@
 #
 # Creates a kind cluster "spread" with three workers labelled as zones a, b
 # and c, deploys clusters/test-spread.nix, and checks that:
-#   - the "zoned" pods land one per zone (hard zone spread) and get a PDB
+#   - the "zoned" pods (three, from the derived "zone" level) land one per
+#     zone and get a PDB
 #   - the "pinned" pods land one per node (hard on every key)
-#   - the "unspread" pods get no constraints and no PDB
+#   - the "unspread" instance (availability = "none") runs one pod with no
+#     constraints and no PDB
 # Then scales "pinned" to four: with maxSkew = 1 a DoNotSchedule constraint
 # is even distribution, so the fourth pod lands (2/1/1), nothing pends.
 #

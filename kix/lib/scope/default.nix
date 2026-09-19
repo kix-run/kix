@@ -44,6 +44,11 @@ rec {
       networkPolicyEnforcer ? null,
       peekedPackageMeta ? { },
       workloadInterceptors ? [ ],
+      # the instance's resolved availability (core/availability.nix resolve)
+      availability ? {
+        level = "none";
+        warnings = [ ];
+      },
       factBehaviorOverrides ? { },
       edgeAnalysis ? emptyEdgeAnalysis,
       clusterCtx ? {
@@ -102,6 +107,7 @@ rec {
           workloadInterceptors
           peekedPackageMeta
           clusterCtx
+          availability
           factBehaviorOverrides
           scopeObj
           ;
@@ -211,6 +217,7 @@ rec {
               peekedPackageMeta
               workloadInterceptors
               clusterCtx
+              availability
               ;
             # Subscopes keep the edge registries but drop the DNS root:
             # resources built through a subscope are parented into a foreign
