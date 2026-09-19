@@ -8,7 +8,7 @@
 {
   imports = [
     ./plugins/netpol/module.nix
-    ./plugins/spread/module.nix
+    ./plugins/availability/module.nix
   ];
 
   options = {

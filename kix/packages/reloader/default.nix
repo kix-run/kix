@@ -11,6 +11,7 @@
   scope,
   lib,
   kix,
+  availability,
 }:
 
 let
@@ -55,6 +56,9 @@ in
 {
   meta = {
     version = "v1.3.0";
+    # Reloader coordinates replicas only in its HA mode, which this package
+    # does not enable, so one replica is the ceiling it can honour.
+    availability.max = "pod";
   };
 
   options = {
@@ -68,6 +72,8 @@ in
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;
+      # Fixed at 1: without reloader's HA mode a second replica would issue
+      # every rolling restart twice. See meta.availability.max.
       default = 1;
     };
     logFormat = lib.mkOption {

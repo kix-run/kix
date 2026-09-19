@@ -16,7 +16,12 @@
 # Name:    loki
 # Version: 7.1.0
 
-{ scope, lib }:
+{
+  scope,
+  lib,
+  kix,
+  availability,
+}:
 let
   chart = scope.helm.fetchHelmChart {
     repo = "https://grafana.github.io/helm-charts";
@@ -122,6 +127,12 @@ in
     version = "7.1.0";
     description = "Loki — log aggregation system (single-binary, filesystem)";
     lifecycle = "ephemeral";
+    # Single-binary Loki over a filesystem store on one ReadWriteOnce PVC:
+    # a second replica has no volume to mount and no shared object store to
+    # read, so nothing here can be mapped to the level. The replica counts
+    # below are fixed, and a cluster that needs more must move to
+    # SimpleScalable with a real object store via `values`.
+    availability.max = "none";
     # Helm chart is opaque — intra-package edges (gateway → backend) aren't
     # visible via store-path context.  Declare them explicitly so Cilium
     # allows the traffic under default-deny.

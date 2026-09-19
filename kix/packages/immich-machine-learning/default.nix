@@ -12,6 +12,7 @@
   scope,
   lib,
   kix,
+  availability,
 }:
 
 let
@@ -40,7 +41,18 @@ in
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;
-      default = 1;
+      # Stateless HTTP inference, so replicas scale out. The optional model
+      # cache is ReadWriteOnce: enabling persistence pins pods to one node.
+      default = kix.availability.pick availability {
+        none = 1;
+        pod = 2;
+        node = 2;
+        zone = 3;
+      };
+      description = ''
+        Number of machine-learning replicas. Defaults from the cluster's
+        availability level (v2_discussions/145).
+      '';
     };
     persistence = lib.mkOption {
       type = lib.types.anything;

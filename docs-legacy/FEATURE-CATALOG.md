@@ -184,8 +184,9 @@ Auto-derives CiliumNetworkPolicy from the DI graph:
 - `cluster.roles` — environment binding modes per registry role (`kix/lib/eval/roles.nix`): absent | shadowable | exclusive.
 - `cluster.network` — podCidr, serviceCidr, dnsUpstream.
 - `cluster.nodes` — Static node inventory (roles, cpu, memory, labels, taints).
-- `cluster.spread.default` — Derived pod spread strictness: `hard-zones` (default) | `hard` | `soft` | `off`. `instances.<ns>.<inst>.spread` overrides per instance; `meta.spread = false` is the warned package opt-out. (`kix/lib/plugins/spread/module.nix`, v2_discussions/143)
-- `cluster.topology.failureDomainKeys` — Read-only: the topology keys pods spread across, computed from `capabilities.availabilityZones` and `multiNode`. Operator-CR packages read it through `clusterConfig`.
+- `cluster.availability.default` — The largest failure a workload must survive: `none` | `pod` | `node` | `zone`, derived from the capabilities when unset and capped by them. `instances.<ns>.<inst>.availability` overrides per instance; `meta.availability.max` is the warned package ceiling; `cluster.availability.substrate` is the read-only derived maximum. Packages receive the level as their `availability` argument and map it with `kix.availability.pick` / `atLeast`. Spread strictness and PDBs derive from it. (`kix/lib/plugins/availability/module.nix`, v2_discussions/145)
+- `cluster.topology.zoneKey`, `cluster.topology.hostKey` — The node labels that name a zone and a node. Default to the well-known `topology.kubernetes.io/zone` and `kubernetes.io/hostname`; a hand-labelled substrate sets its own, a flavor may `mkDefault` them.
+- `cluster.topology.failureDomainKeys` — Read-only: the topology keys pods spread across, computed from `capabilities.availabilityZones`, `multiNode` and the two keys above. Operator-CR packages read it through `clusterConfig`.
 - `scorecard` — enable, rules, ruleDefaults, ruleOverrides, knownAnnotationDomains.
 - `networkPolicy` — enable, defaultDeny, directions.
 

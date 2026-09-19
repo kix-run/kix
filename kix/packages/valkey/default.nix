@@ -3,6 +3,8 @@
 # Supports two topologies (controlled by sentinel.enabled):
 #   sentinel=true  — Node StatefulSet with sentinel sidecar for HA failover.
 #   sentinel=false — Primary/replica StatefulSet (Bitnami primary/replica mode).
+# Both default from the cluster's availability level (v2_discussions/145):
+# standalone below "node", Sentinel with three pods from "node" up.
 #
 # Mirrors the Bitnami Valkey Helm chart topology.
 #
@@ -16,6 +18,7 @@
   scope,
   lib,
   kix,
+  availability,
 }:
 
 {
@@ -41,7 +44,20 @@
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;
-      default = 3;
+      # A replica that cannot fail over is cost without benefit, so below
+      # "node" Valkey runs standalone; from "node" up it is the Sentinel
+      # topology (three nodes, quorum of two).
+      default = kix.availability.pick availability {
+        none = 1;
+        pod = 1;
+        node = 3;
+        zone = 3;
+      };
+      description = ''
+        Number of Valkey pods. Defaults from the cluster's availability
+        level (v2_discussions/145): standalone below "node", three with
+        Sentinel from "node" up.
+      '';
     };
     podManagementPolicy = lib.mkOption {
       type = lib.types.str;
@@ -62,7 +78,8 @@
     sentinel = lib.mkOption {
       type = lib.types.anything;
       default = {
-        enabled = true;
+        # Automatic failover needs a second node to fail over to.
+        enabled = kix.availability.atLeast "node" availability;
         image = {
           repository = "docker.io/bitnamilegacy/valkey-sentinel";
           tag = "8.1.3-debian-12-r3";

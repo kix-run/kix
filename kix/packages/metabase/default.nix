@@ -18,6 +18,7 @@
   scope,
   lib,
   kix,
+  availability,
 }:
 
 let
@@ -39,7 +40,18 @@ in
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;
-      default = 2;
+      # Stateless and serving user traffic; all state lives in the shared
+      # postgres application database, so replicas scale out freely.
+      default = kix.availability.pick availability {
+        none = 1;
+        pod = 2;
+        node = 2;
+        zone = 3;
+      };
+      description = ''
+        Number of Metabase `Deployment` replicas. Defaults from the
+        cluster's availability level (v2_discussions/145).
+      '';
     };
     port = lib.mkOption {
       type = lib.types.int;

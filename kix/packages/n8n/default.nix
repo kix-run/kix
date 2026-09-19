@@ -22,6 +22,7 @@
   scope,
   lib,
   kix,
+  availability,
 }:
 
 let
@@ -39,6 +40,11 @@ in
 {
   meta = {
     version = "1.74.2";
+    # The main process owns the scheduler and active webhooks, and n8n's
+    # multi-main setup is an enterprise feature this package does not wire
+    # up, so the main instance can never be made redundant: even a rolling
+    # update is downtime.
+    availability.max = "none";
   };
 
   options = {
@@ -52,13 +58,33 @@ in
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;
-      default = 1;
+      # Single-writer at every level: the n8n main process owns the
+      # scheduler, so a second one would double-run every trigger.
+      default = kix.availability.pick availability {
+        none = 1;
+        pod = 1;
+        node = 1;
+        zone = 1;
+      };
+      description = ''
+        Number of n8n main (UI/API) replicas. Pinned to one at every
+        availability level (v2_discussions/145); see meta.availability.max.
+      '';
     };
     worker = lib.mkOption {
       type = lib.types.anything;
       default = {
         enabled = true;
-        replicaCount = 3;
+        # Workers are stateless queue consumers: one is enough when
+        # downtime is fine, more once a pod or node loss must not stall
+        # the queue. Defaults from the cluster's availability level
+        # (v2_discussions/145).
+        replicaCount = kix.availability.pick availability {
+          none = 1;
+          pod = 2;
+          node = 3;
+          zone = 3;
+        };
         port = 5679;
         concurrency = 10;
       };

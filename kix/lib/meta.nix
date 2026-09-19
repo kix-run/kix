@@ -85,6 +85,8 @@ rec {
             inherit lib;
           }
           // lib.optionalAttrs (fnArgs ? kix) { kix = kixlib; }
+          # meta must not depend on the level; the peek runs before it is resolved
+          // lib.optionalAttrs (fnArgs ? availability) { availability = "none"; }
         );
       in
       result.meta or { };

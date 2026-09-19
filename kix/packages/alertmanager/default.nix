@@ -13,6 +13,7 @@
   scope,
   lib,
   kix,
+  availability,
 }:
 let
   name = scope.instanceName;
@@ -39,7 +40,20 @@ in
     };
     replicas = lib.mkOption {
       type = lib.types.int;
-      default = 1;
+      # Replicas gossip silences and the notification log, and the
+      # package's NetworkPolicy opens that gossip port by default, so
+      # from "node" up this runs the usual three-way mesh.
+      default = kix.availability.pick availability {
+        none = 1;
+        pod = 1;
+        node = 3;
+        zone = 3;
+      };
+      description = ''
+        Number of Alertmanager replicas the operator stamps out.
+        Defaults from the cluster's availability level
+        (v2_discussions/145).
+      '';
     };
     resources = lib.mkOption {
       type = lib.types.anything;

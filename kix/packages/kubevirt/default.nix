@@ -12,6 +12,7 @@
   scope,
   lib,
   kix,
+  availability,
 }:
 
 let
@@ -50,7 +51,18 @@ in
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;
-      default = 2;
+      # virt-operator holds a leader election lease, so a restart is not
+      # user-visible; from "node" up a standby survives a lost node.
+      default = kix.availability.pick availability {
+        none = 1;
+        pod = 1;
+        node = 2;
+        zone = 2;
+      };
+      description = ''
+        Number of virt-operator replicas. Defaults from the cluster's
+        availability level (v2_discussions/145).
+      '';
     };
     resources = lib.mkOption {
       type = lib.types.anything;

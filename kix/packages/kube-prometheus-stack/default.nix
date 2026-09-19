@@ -24,6 +24,7 @@
   scope,
   lib,
   kix,
+  availability,
 }:
 let
   chart = scope.helm.fetchHelmChart {
@@ -56,7 +57,15 @@ let
     prometheus = {
       enabled = true;
       prometheusSpec = {
-        replicas = 1;
+        # Each replica keeps its own TSDB, so a second one is a duplicate
+        # scraper rather than a spare: it only earns its storage once it
+        # can sit on another node.
+        replicas = kix.availability.pick availability {
+          none = 1;
+          pod = 1;
+          node = 2;
+          zone = 2;
+        };
         resources = {
           requests = {
             cpu = "500m";
@@ -88,6 +97,9 @@ let
     # --- Grafana ---
     grafana = {
       enabled = true;
+      # Not mapped: the dashboards live on one ReadWriteOnce PVC and the
+      # chart deploys Grafana with Recreate, so a second replica has no
+      # volume to mount. Raising this needs a shared datastore first.
       replicas = 1;
       deploymentStrategy = {
         type = "Recreate";
@@ -139,7 +151,15 @@ let
     alertmanager = {
       enabled = true;
       alertmanagerSpec = {
-        replicas = 1;
+        # Replicas gossip and deduplicate notifications, so a second one
+        # keeps alerts flowing when a node goes; a restart on the same node
+        # only delays them.
+        replicas = kix.availability.pick availability {
+          none = 1;
+          pod = 1;
+          node = 2;
+          zone = 2;
+        };
         resources = {
           requests = {
             cpu = "0.01";

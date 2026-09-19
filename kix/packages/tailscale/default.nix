@@ -11,6 +11,7 @@
   scope,
   lib,
   kix,
+  availability,
 }:
 
 let
@@ -25,6 +26,9 @@ in
 {
   meta = {
     version = "1.0.0";
+    # The operator is a single-leader controller with no leader
+    # election, so only one replica may run at a time.
+    availability.max = "none";
   };
 
   options = {
@@ -42,7 +46,18 @@ in
     # --- Deployment ---
     replicaCount = lib.mkOption {
       type = lib.types.int;
-      default = 1;
+      # Pinned to one at every level: see meta.availability.max.
+      default = kix.availability.pick availability {
+        none = 1;
+        pod = 1;
+        node = 1;
+        zone = 1;
+      };
+      description = ''
+        Number of Tailscale operator replicas. Pinned to one at every
+        availability level (v2_discussions/145) because the operator has
+        no leader election.
+      '';
     };
 
     resources = lib.mkOption {

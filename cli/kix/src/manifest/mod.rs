@@ -7,6 +7,7 @@ pub mod serialize;
 pub mod stamp;
 pub mod types;
 pub mod validate;
+pub mod workload;
 
 pub use types::CLUSTER_SCOPED;
 pub use types::ResourceId;

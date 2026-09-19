@@ -26,6 +26,7 @@
   scope,
   lib,
   kix,
+  availability,
 }:
 
 let
@@ -58,7 +59,18 @@ in
     };
     replicas = lib.mkOption {
       type = lib.types.int;
-      default = 1;
+      # The operator runs with --leader-elect, so a restart is invisible and
+      # "pod" stays at 1; from "node" up a standby covers a lost node.
+      default = kix.availability.pick availability {
+        none = 1;
+        pod = 1;
+        node = 2;
+        zone = 2;
+      };
+      description = ''
+        Number of operator replicas. Defaults from the cluster's
+        availability level (v2_discussions/145).
+      '';
     };
     resources = lib.mkOption {
       type = lib.types.anything;

@@ -12,6 +12,8 @@
 {
   scope,
   lib,
+  kix,
+  availability,
 }:
 
 let
@@ -45,7 +47,18 @@ in
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;
-      default = 1;
+      # A serving data plane: two replicas once a pod restart must not stop
+      # cluster DNS, three once a whole zone may go.
+      default = kix.availability.pick availability {
+        none = 1;
+        pod = 2;
+        node = 2;
+        zone = 3;
+      };
+      description = ''
+        Number of CoreDNS `Deployment` replicas. Defaults from the
+        cluster's availability level (v2_discussions/145).
+      '';
     };
     isClusterService = lib.mkOption {
       type = lib.types.bool;
@@ -103,7 +116,14 @@ in
       type = lib.types.anything;
       default = {
         enabled = false;
-        minReplicas = 1;
+        # The floor follows replicaCount's mapping of the availability
+        # level (v2_discussions/145), so the autoscaler never undoes it.
+        minReplicas = kix.availability.pick availability {
+          none = 1;
+          pod = 2;
+          node = 2;
+          zone = 3;
+        };
         maxReplicas = 5;
         metrics = [ ];
       };

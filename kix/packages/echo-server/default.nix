@@ -7,6 +7,7 @@
   scope,
   lib,
   kix,
+  availability,
 }:
 
 let
@@ -34,8 +35,18 @@ in
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;
-      default = 1;
-      description = "Number of `Deployment` replicas for the echo-server pods.";
+      # Stateless and serving: two replicas as soon as a pod restart must
+      # not be downtime, three once a whole zone may go.
+      default = kix.availability.pick availability {
+        none = 1;
+        pod = 2;
+        node = 2;
+        zone = 3;
+      };
+      description = ''
+        Number of `Deployment` replicas for the echo-server pods. Defaults
+        from the cluster's availability level (v2_discussions/145).
+      '';
     };
     service = lib.mkOption {
       type = lib.types.anything;

@@ -13,6 +13,7 @@
   scope,
   lib,
   kix,
+  availability,
 }:
 
 let
@@ -44,8 +45,18 @@ in
     };
     replicas = lib.mkOption {
       type = lib.types.int;
-      default = 2;
-      description = "Connector replicas (>=2 for connection redundancy).";
+      # Stateless outbound connectors: a second one holds the tunnel open
+      # across a pod restart, and a third buys nothing.
+      default = kix.availability.pick availability {
+        none = 1;
+        pod = 2;
+        node = 2;
+        zone = 2;
+      };
+      description = ''
+        Connector replicas (>=2 for connection redundancy). Defaults from
+        the cluster's availability level (v2_discussions/145).
+      '';
     };
     resources = lib.mkOption {
       type = lib.types.anything;

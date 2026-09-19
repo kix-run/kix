@@ -21,6 +21,7 @@
   scope,
   lib,
   kix,
+  availability,
 }:
 let
   name = scope.instanceName;
@@ -32,6 +33,9 @@ in
     description = "Grafana — observability and data visualization";
     defaultAliases = [ "grafana" ];
     k8s.minVersion = "1.25";
+    # This package configures no external database, so Grafana runs on
+    # its local SQLite file and cannot run more than one replica.
+    availability.max = "none";
     # persistence.inlinePvc hand-rolls a claim; the preferred path is the
     # `storage` dep + sibling persistent-volume-claim instance. Grant kept
     # until the inline option is removed (audited by unsafeGrants).
@@ -62,7 +66,18 @@ in
     };
     replicas = lib.mkOption {
       type = lib.types.int;
-      default = 1;
+      # Pinned to one at every level: see meta.availability.max.
+      default = kix.availability.pick availability {
+        none = 1;
+        pod = 1;
+        node = 1;
+        zone = 1;
+      };
+      description = ''
+        Number of Grafana replicas. Pinned to one at every availability
+        level (v2_discussions/145) because the SQLite database takes a
+        single writer.
+      '';
     };
     resources = lib.mkOption {
       type = lib.types.anything;

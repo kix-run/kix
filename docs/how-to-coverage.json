@@ -266,6 +266,11 @@
       "unverifiedNixBlocks": 5
     },
     {
+      "page": "author-packages-and-clusters/map-the-availability-level-in-a-package",
+      "scenario": "application",
+      "status": "planned"
+    },
+    {
       "page": "author-packages-and-clusters/reuse-one-package-for-multiple-instances",
       "scenario": "application",
       "status": "implemented",
@@ -742,6 +747,11 @@
         "how-to/platform-hostpath/check",
         "how-to/platform-hostpath/deployment"
       ]
+    },
+    {
+      "page": "platform-capabilities/set-the-cluster-availability-level",
+      "scenario": "platform",
+      "status": "planned"
     },
     {
       "page": "platform-capabilities/use-externally-managed-secrets",

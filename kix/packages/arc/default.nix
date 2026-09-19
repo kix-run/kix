@@ -12,6 +12,8 @@
 {
   scope,
   lib,
+  kix,
+  availability,
 }:
 
 let
@@ -49,6 +51,9 @@ in
 {
   meta = {
     version = "0.13.1";
+    # The controller runs without leader election here (no lease RBAC), so
+    # one replica is the ceiling it can honour.
+    availability.max = "pod";
   };
 
   options = {
@@ -62,6 +67,8 @@ in
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;
+      # Fixed at 1: a second controller would reconcile every runner scale
+      # set twice. See meta.availability.max.
       default = 1;
     };
     releaseName = lib.mkOption {
