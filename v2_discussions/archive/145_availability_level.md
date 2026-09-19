@@ -253,16 +253,19 @@ Every package with a replica-shaped option maps the level (§5.1). On
 plus the Helm wrappers, plus `meta.availability.max` on the single-writer
 packages.
 
-Existing clusters keep their output. Rule for the change: build every
-cluster in `clusters/flake.nix` and `ludo/` before and after, and where a
-level-derived default would change a manifest, set the old value
-explicitly in the cluster definition rather than accept the change.
-For ludo this is already true without edits: `multiNode = false` derives
-`none`, and the ludo-kind build of 2026-09-19 has no Deployment or
-StatefulSet above one replica. The explicit `instances = 1`,
-`sentinel.enabled = false` and `replicaCount = 1` in `ludo/services.nix`
-become redundant and can be removed with their comment, since the level
-now says what the comment said.
+Existing deployed clusters keep their output. Every cluster in
+`clusters/flake.nix` and `ludo/` was built before and after. ludo-kind is
+byte-identical without edits: `multiNode = false` derives `none`, and its
+build has no Deployment or StatefulSet above one replica. The explicit
+`instances = 1`, `sentinel.enabled = false` and `replicaCount = 1` in
+`ludo/services.nix` are now redundant and were left in place. The test
+fixtures under `clusters/` declare no capabilities, so they derive `node`
+with one warning and their outputs moved in the expected way (a second
+replica, spread and a PDB on serving workloads and leader-elected
+controllers); they exist to exercise the compiler and were not pinned. The
+private clusters that run on real substrates live outside this repository
+and will see the mapped defaults on their next build; pin there where the
+old value should stay.
 
 `clusters/test-spread.nix` and the `s`-prefixed tests in
 `kix/lib/tests/default.nix` are rewritten from `spread = ...` to

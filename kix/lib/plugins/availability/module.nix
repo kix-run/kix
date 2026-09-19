@@ -196,11 +196,18 @@ in
         manifests = builtins.filter (m: m ? kind) (map (r: r.rawManifest or { }) ctx.allPartResources);
         pdbs = builtins.filter (m: m.kind == "PodDisruptionBudget") manifests;
         # Post-seal the manifest carries the derived constraints, so "the
-        # author placed this" is "the constraints are not the ones we would
-        # have derived" (they are a pure function of level and selector).
+        # author placed this" is "constraints are present and are not the
+        # ones we would have derived" (a pure function of level and
+        # selector). No constraints at all means a workload the seal never
+        # patched (a raw mkResource Deployment, housekeeping 2026-09-19); it
+        # still gets its PDB.
         derivedConstraints = m: mkConstraints m.kind level (m.spec.selector.matchLabels or { });
         authorPlacedSealed =
-          m: (m.spec.template.spec.topologySpreadConstraints or [ ]) != derivedConstraints m;
+          m:
+          let
+            sealed = m.spec.template.spec.topologySpreadConstraints or null;
+          in
+          sealed != null && sealed != derivedConstraints m;
         wantsPdb =
           m:
           isMultiReplica m.kind m.spec
