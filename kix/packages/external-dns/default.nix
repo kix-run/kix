@@ -126,22 +126,12 @@
     };
     affinity = lib.mkOption {
       type = lib.types.anything;
-      default = {
-        podAntiAffinity = {
-          preferredDuringSchedulingIgnoredDuringExecution = [
-            {
-              podAffinityTerm = {
-                labelSelector.matchLabels = {
-                  "app.kubernetes.io/name" = "external-dns";
-                  "app.kubernetes.io/instance" = "PLACEHOLDER";
-                };
-                topologyKey = "kubernetes.io/hostname";
-              };
-              weight = 1;
-            }
-          ];
-        };
-      };
+      default = { };
+      description = ''
+        Pod affinity, verbatim. Spread across failure domains is derived by
+        the cluster (cluster.spread); set this only for node affinity or a
+        rule stronger than the derived one.
+      '';
     };
     pdb = lib.mkOption {
       type = lib.types.attrsOf lib.types.anything;
@@ -338,30 +328,7 @@
       # Merge extra labels into all resource labels.
       allLabels = edSelectorLabels // config.extraLabels;
 
-      # Resolve the affinity with actual instance name replacing PLACEHOLDER.
-      resolvedAffinity =
-        let
-          defaultAffinity = {
-            podAntiAffinity = {
-              preferredDuringSchedulingIgnoredDuringExecution = [
-                {
-                  podAffinityTerm = {
-                    labelSelector.matchLabels = edSelectorLabels;
-                    topologyKey = "kubernetes.io/hostname";
-                  };
-                  weight = 1;
-                }
-              ];
-            };
-          };
-        in
-        if config.affinity == { } then
-          null
-        else if config.affinity ? podAntiAffinity then
-          # Replace PLACEHOLDER in the default affinity structure with actual selectorLabels
-          defaultAffinity
-        else
-          config.affinity;
+      resolvedAffinity = if config.affinity == { } then null else config.affinity;
 
       # Build CLI args for the external-dns binary — ordered to match bitnami chart.
       args = [

@@ -1231,15 +1231,6 @@
                   fsGroup = 1001;
                   fsGroupChangePolicy = "Always";
                 };
-                affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution = [
-                  {
-                    weight = 1;
-                    podAffinityTerm = {
-                      labelSelector.matchLabels = selectorLabels // componentLabel;
-                      topologyKey = "kubernetes.io/hostname";
-                    };
-                  }
-                ];
                 inherit containers;
                 volumes = [
                   {

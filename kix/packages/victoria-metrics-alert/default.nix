@@ -173,24 +173,26 @@ in
       {
         self,
         config,
+        clusterConfig,
         vmOperator,
         vmCluster,
         ...
       }:
       let
+        # Operand pods are rendered by the operator, so kix's derived spread
+        # never sees them: the CR carries the rule, but the failure-domain
+        # keys come from the cluster (v2_discussions/143 §2), never a literal.
         antiAffinity = component: {
-          podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution = [
-            {
-              weight = 100;
-              podAffinityTerm = {
-                labelSelector.matchLabels = {
-                  "app.kubernetes.io/name" = component;
-                  "app.kubernetes.io/instance" = name;
-                };
-                topologyKey = "kubernetes.io/hostname";
+          podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution = map (topologyKey: {
+            weight = 100;
+            podAffinityTerm = {
+              labelSelector.matchLabels = {
+                "app.kubernetes.io/name" = component;
+                "app.kubernetes.io/instance" = name;
               };
-            }
-          ];
+              inherit topologyKey;
+            };
+          }) clusterConfig.cluster.topology.failureDomainKeys;
         };
 
         alertmanagerBaseSpec = {
