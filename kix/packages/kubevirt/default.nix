@@ -1524,27 +1524,6 @@ in
                   operator = "Exists";
                 }
               ];
-              affinity = {
-                podAntiAffinity = {
-                  preferredDuringSchedulingIgnoredDuringExecution = [
-                    {
-                      weight = 1;
-                      podAffinityTerm = {
-                        labelSelector = {
-                          matchExpressions = [
-                            {
-                              key = "kubevirt.io";
-                              operator = "In";
-                              values = [ "virt-operator" ];
-                            }
-                          ];
-                        };
-                        topologyKey = "kubernetes.io/hostname";
-                      };
-                    }
-                  ];
-                };
-              };
               containers = [
                 {
                   name = "virt-operator";

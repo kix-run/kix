@@ -203,14 +203,6 @@ in
                   ];
                 }
               ];
-              topologySpreadConstraints = [
-                {
-                  labelSelector.matchLabels = scope.selectorLabels;
-                  maxSkew = 1;
-                  topologyKey = "kubernetes.io/hostname";
-                  whenUnsatisfiable = "ScheduleAnyway";
-                }
-              ];
               volumes = [
                 {
                   name = "caddy-config";

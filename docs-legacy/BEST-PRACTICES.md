@@ -186,6 +186,18 @@ DSL features exist to **prevent mistakes**, not to save lines.
 `mkDeployment` is verbose because it copies selector to template labels — that
 verbosity is the safety net. Don't introduce a "compact" form that skips it.
 
+The same principle runs the other way for pod placement: a package does not
+write `topologySpreadConstraints` or pod anti-affinity. It sets
+`spec.replicas`, and the compiler derives spread across the cluster's
+failure-domain keys plus a PodDisruptionBudget (`cluster.spread`,
+v2_discussions/143). The package cannot know what a failure zone is on the
+cluster it lands on, and a literal `topologyKey` is a guess. Strictness and
+the per-workload off switch belong to the cluster operator
+(`instances.<ns>.<inst>.spread`). Write placement by hand only for a rule the
+derivation cannot express (a quorum that must never co-locate), and reach for
+`meta.spread = false` only with a reason you would put in the warning it
+raises.
+
 ### 6.2 Resources are rich objects
 
 Consumers query the resource directly through `out`:

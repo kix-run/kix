@@ -194,27 +194,6 @@ in
                     runAsUser = 1000;
                     runAsGroup = 1000;
                   };
-                  affinity = {
-                    podAntiAffinity = {
-                      preferredDuringSchedulingIgnoredDuringExecution = [
-                        {
-                          weight = 100;
-                          podAffinityTerm = {
-                            labelSelector = {
-                              matchExpressions = [
-                                {
-                                  key = "app.kubernetes.io/name";
-                                  operator = "In";
-                                  values = [ "n8n" ];
-                                }
-                              ];
-                            };
-                            topologyKey = "kubernetes.io/hostname";
-                          };
-                        }
-                      ];
-                    };
-                  };
                   containers = [
                     {
                       name = "n8n";

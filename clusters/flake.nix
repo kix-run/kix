@@ -33,6 +33,7 @@
         auto2 = ./test-auto2.nix;
         immich = ./test-immich.nix;
         kind = ./test-kind.nix;
+        spread = ./test-spread.nix;
         monitoring-helm = ./test-monitoring-helm.nix;
         monitoring-native = ./test-monitoring-native.nix;
         test-secrets = ./test-secrets.nix;

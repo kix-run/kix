@@ -183,17 +183,6 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
     };
-    enableAntiAffinity = lib.mkOption {
-      type = lib.types.bool;
-      default = true;
-    };
-    antiAffinityTopologyKeys = lib.mkOption {
-      type = lib.types.listOf lib.types.str;
-      default = [
-        "kubernetes.io/hostname"
-        "topology.kubernetes.io/zone"
-      ];
-    };
     # Extra labels added to pod templates (e.g. tenant labels).
     podLabels = lib.mkOption {
       type = lib.types.attrsOf lib.types.anything;
@@ -621,22 +610,6 @@ in
                   };
                 }
               ];
-            }
-            // lib.optionalAttrs config.enableAntiAffinity {
-              affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution = lib.imap0 (
-                i: topologyKey: {
-                  weight = 100;
-                  podAffinityTerm = {
-                    labelSelector.matchExpressions = [
-                      {
-                        key = "app.kubernetes.io/name";
-                        operator = "In";
-                        values = [ "ingress-nginx" ];
-                      }
-                    ];
-                    inherit topologyKey;
-                  };
-                }) config.antiAffinityTopologyKeys;
             };
           };
         };

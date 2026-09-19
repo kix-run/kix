@@ -133,7 +133,7 @@ Auto-derives CiliumNetworkPolicy from the DI graph:
 - `hasResourceLimits` — Every container needs limits (warning).
 - `hasResourceRequests` — Every container needs requests (warning).
 - `hasProbes` — Liveness + readiness probes (warning).
-- `hasPDB` — Multi-replica Deployments need PodDisruptionBudget (warning).
+- `hasPDB` — Multi-replica Deployments need PodDisruptionBudget (warning; the spread plugin derives one, so this fires only where spread is off).
 - `gracefulShutdown` — terminationGracePeriodSeconds set (info).
 
 **Governance:**
@@ -159,6 +159,7 @@ Auto-derives CiliumNetworkPolicy from the DI graph:
 - **Unsafe grants** (`unsafe.nix`) — closed vocabulary of structural-rule escapes (`raw-pvc`); raw PVCs outside a granted package are an eval error (`scope/validators.nix#checkRawPvc`).
 - **Object-name validation** (`scope/validators.nix#checkResourceName`): Checks names during evaluation because the Kubernetes OpenAPI schema leaves `metadata.name` unconstrained. Services require an RFC 1035 label, Namespaces require a DNS-1123 label, and other resources require a DNS-1123 subdomain. RBAC resources are exempt because the API server validates their names as path segments.
 - **Annotation domains** — `meta.annotationDomains` declares operator-owned annotation prefixes; duplicate declarers are an eager eval error (`eval/hooks.nix#buildAnnotationDomainIndex`).
+- **Derived pod spread and PDBs** — `hooks.workloadInterceptors.spread` patches `topologySpreadConstraints` into every multi-replica Deployment/StatefulSet pre-seal (the `podSpec` hook channel, author wins per field); `hooks.instanceProcessors.spread` emits a PDB unless the package wrote one over the same pods. `validators.checkSpreadFeasible` refuses hard hand-written placement rules on `multiNode = false`.
 - **Conflict detection:** `conflictsWith` (same namespace) and `cluster:conflictsWith` (cluster-wide).
 - **`evaluatePackageDiagnostics`** — Call package-declared warnings/assertions functions.
 - **`combineDiagnostics`** / **`collectClusterDiagnostics`** — Merge and enforce diagnostics.
@@ -183,6 +184,8 @@ Auto-derives CiliumNetworkPolicy from the DI graph:
 - `cluster.roles` — environment binding modes per registry role (`kix/lib/eval/roles.nix`): absent | shadowable | exclusive.
 - `cluster.network` — podCidr, serviceCidr, dnsUpstream.
 - `cluster.nodes` — Static node inventory (roles, cpu, memory, labels, taints).
+- `cluster.spread.default` — Derived pod spread strictness: `hard-zones` (default) | `hard` | `soft` | `off`. `instances.<ns>.<inst>.spread` overrides per instance; `meta.spread = false` is the warned package opt-out. (`kix/lib/plugins/spread/module.nix`, v2_discussions/143)
+- `cluster.topology.failureDomainKeys` — Read-only: the topology keys pods spread across, computed from `capabilities.availabilityZones` and `multiNode`. Operator-CR packages read it through `clusterConfig`.
 - `scorecard` — enable, rules, ruleDefaults, ruleOverrides, knownAnnotationDomains.
 - `networkPolicy` — enable, defaultDeny, directions.
 

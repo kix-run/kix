@@ -49,15 +49,6 @@ in
           spec = {
             replicas = config.replicaCount;
             selector.matchLabels = scope.selectorLabels;
-            template.spec.affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution = [
-              {
-                weight = 100;
-                podAffinityTerm = {
-                  topologyKey = "kubernetes.io/hostname";
-                  labelSelector.matchLabels = scope.selectorLabels;
-                };
-              }
-            ];
             template.spec.containers = [
               {
                 name = "dns-exporter";

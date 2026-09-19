@@ -927,6 +927,8 @@ modules = [
 
 **Capability flags** (full list, all on `cluster.capabilities`): `multiNode`, `availabilityZones` (list), `nodeAutoscaling`, `managedControlPlane`, `gpu`, `privilegedContainers`, `podSecurityEnforcement` (`"privileged" | "baseline" | "restricted" | null`), `daemonSets`. Flags are three-valued substrate axioms: `null` = unknown (relying workloads warn), `false` = hard error, `true` = pass.
 
+**Pod spread and PDBs** (`kix/lib/plugins/spread/module.nix`, v2_discussions/143). Every Deployment or StatefulSet with `spec.replicas > 1` gets `topologySpreadConstraints` on the cluster's failure-domain keys and a `PodDisruptionBudget` (`maxUnavailable = 1`), derived at build time; packages write neither. The keys are `cluster.topology.failureDomainKeys` (read-only): `[ "topology.kubernetes.io/zone" "kubernetes.io/hostname" ]` when `availabilityZones` lists more than one zone, `[ "kubernetes.io/hostname" ]` otherwise, `[ ]` when `multiNode = false` (nothing derived). Strictness is `cluster.spread.default`: `hard-zones` (default; DoNotSchedule on the zone key, ScheduleAnyway on hostname), `hard`, `soft`, `off`. Override per instance with `instances.<ns>.<inst>.spread`. A package may set `meta.spread = false`, which derives nothing and warns on every build. Author-written `topologySpreadConstraints` or a PDB over the same pods win whole. On `multiNode = false`, a hand-written `requiredDuringScheduling` anti-affinity or `DoNotSchedule` spread on a multi-replica workload is an eval error (it can only leave pods Pending); on `multiNode = null` it warns. Packages whose pods an operator renders (VMCluster) read `clusterConfig.cluster.topology.failureDomainKeys` for their CR's affinity instead of naming a key. With `maxSkew = 1` a hard constraint means even distribution, not one pod per domain: five replicas across three zones is 2/2/1.
+
 The old role-backed bools (`cni`, `networkPolicyAPI`, `loadBalancer`, `persistentStorage`, `rwxStorage`, `volumeSnapshots`, `ingressController`) are gone (v2_discussions/127): role providers derive from `meta.roles`, the environment's claim on a role is a `cluster.roles.<name>.binding`, and rwx/snapshot facts live on the storage provider's `out`. The CNI/LB/storage columns in the table above describe role bindings and platform imports, not capability flags.
 
 **Override flavor defaults** when reality differs (e.g. ludo runs k3s with
@@ -1037,7 +1039,7 @@ Configure via `scorecard.{enable, rules, ruleDefaults, ruleOverrides}`.
 | `hasResourceLimits` | manifest | warning | All containers have limits |
 | `hasResourceRequests` | manifest | warning | All containers have requests |
 | `hasProbes` | manifest | warning | Workload containers have liveness + readiness probes |
-| `hasPDB` | package | warning | Multi-replica Deployments have PodDisruptionBudget |
+| `hasPDB` | package | warning | Multi-replica Deployments have PodDisruptionBudget (derived by `cluster.spread`; fires only where spread is off) |
 | `gracefulShutdown` | manifest | info | `terminationGracePeriodSeconds` set |
 
 **Governance** (`kix.rules.governance`):
