@@ -12,6 +12,8 @@
 {
   scope,
   lib,
+  kix,
+  availability,
 }:
 
 let
@@ -152,7 +154,11 @@ in
     operatorReplicas = lib.mkOption {
       type = lib.types.nullOr lib.types.int;
       default = null;
-      description = "Cilium operator replicas. Null = auto (min(2, nodeCount)).";
+      description = ''
+        Cilium operator replicas. Null = auto: the count the cluster's
+        availability level asks for (v2_discussions/145), clamped to the
+        node count so the anti-affinity can place every replica.
+      '';
     };
 
     autoRolloutRestart = lib.mkOption {
@@ -201,11 +207,19 @@ in
       nodePortReliable =
         !(config.loadBalancer.mode == "dsr" && config.bpf.masquerade && hasLoopbackNodePort);
 
+      # The operator holds a leader election lease, so a restart is not
+      # user-visible; from "node" up a standby covers a lost node. Still
+      # clamped to the node count, which the anti-affinity needs.
       operatorReplicas =
         if config.operatorReplicas != null then
           config.operatorReplicas
         else
-          lib.min 2 (if nodeCount > 0 then nodeCount else 1);
+          lib.min (kix.availability.pick availability {
+            none = 1;
+            pod = 1;
+            node = 2;
+            zone = 2;
+          }) (if nodeCount > 0 then nodeCount else 1);
 
       allDevices = [
         "lo"

@@ -1347,9 +1347,7 @@ in
       # ── Migration Hook (Job) ────────────────────────────────────────
       migrateJob =
         if config.hooks.migrate.enabled then
-          scope.mkResource {
-            apiVersion = "batch/v1";
-            kind = "Job";
+          scope.mkJob {
             name = "${name}-migrate";
             labels = componentLabels "migrate";
             spec = {

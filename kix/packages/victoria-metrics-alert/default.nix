@@ -28,6 +28,7 @@
   scope,
   lib,
   kix,
+  availability,
 }:
 let
   name = scope.instanceName;
@@ -51,7 +52,18 @@ in
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;
-      default = 2;
+      # Two vmalert replicas evaluate every rule from "node" up;
+      # alertmanager collapses the duplicate notifications.
+      default = kix.availability.pick availability {
+        none = 1;
+        pod = 1;
+        node = 2;
+        zone = 2;
+      };
+      description = ''
+        Number of vmalert replicas. Defaults from the cluster's
+        availability level (v2_discussions/145).
+      '';
     };
     evaluationInterval = lib.mkOption {
       type = lib.types.str;
@@ -94,7 +106,18 @@ in
       };
       replicaCount = lib.mkOption {
         type = lib.types.int;
-        default = 2;
+        # The pair gossips silences and the notification log, so from
+        # "node" up a lost pod does not take them with it.
+        default = kix.availability.pick availability {
+          none = 1;
+          pod = 1;
+          node = 2;
+          zone = 2;
+        };
+        description = ''
+          Number of VMAlertmanager replicas. Defaults from the cluster's
+          availability level (v2_discussions/145).
+        '';
       };
       retention = lib.mkOption {
         type = lib.types.str;
@@ -173,24 +196,26 @@ in
       {
         self,
         config,
+        clusterConfig,
         vmOperator,
         vmCluster,
         ...
       }:
       let
+        # Operand pods are rendered by the operator, so kix's derived spread
+        # never sees them: the CR carries the rule, but the failure-domain
+        # keys come from the cluster (v2_discussions/143 §2), never a literal.
         antiAffinity = component: {
-          podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution = [
-            {
-              weight = 100;
-              podAffinityTerm = {
-                labelSelector.matchLabels = {
-                  "app.kubernetes.io/name" = component;
-                  "app.kubernetes.io/instance" = name;
-                };
-                topologyKey = "kubernetes.io/hostname";
+          podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution = map (topologyKey: {
+            weight = 100;
+            podAffinityTerm = {
+              labelSelector.matchLabels = {
+                "app.kubernetes.io/name" = component;
+                "app.kubernetes.io/instance" = name;
               };
-            }
-          ];
+              inherit topologyKey;
+            };
+          }) clusterConfig.cluster.topology.failureDomainKeys;
         };
 
         alertmanagerBaseSpec = {

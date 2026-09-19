@@ -7,7 +7,12 @@
 # Name:    descheduler
 # Version: 0.32.2
 
-{ scope, lib }:
+{
+  scope,
+  lib,
+  kix,
+  availability,
+}:
 let
   chart = scope.helm.fetchHelmChart {
     repo = "https://kubernetes-sigs.github.io/descheduler";
@@ -19,6 +24,10 @@ let
   defaultValues = {
     # Deployment mode (not CronJob) — matches live cluster.
     kind = "Deployment";
+    # Not mapped to the availability level: the descheduler is a
+    # leader-elected singleton that rebalances in the background, so its
+    # own downtime is not the cluster's downtime. Zero keeps it inert
+    # until a cluster opts in through `values`.
     replicas = 0;
 
     deschedulingInterval = "5m";

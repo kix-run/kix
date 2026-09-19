@@ -21,6 +21,23 @@ Or use the devenv shortcut:
 kix-check nw1 nw1-prod
 ```
 
+## vendor-crds.py
+
+Refreshes the CRDs every package vendors under `kix/packages/<pkg>/crds/`
+from the public URLs in that directory's `sources.txt` (one per line, with
+optional CRD names to take from a bundle). `--check` fails on drift and runs
+in CI on every pull request that touches a package. A package whose upstream
+is not a public URL ships `crds/update.py` instead, exposing
+`crds() -> list[dict]` against `scripts/vendor_crds/`. Design and rules:
+`v2_discussions/146_crd_vendoring_and_upgrades.md`; the maintainer is the
+`crd-vendoring` skill.
+
+```bash
+uv run scripts/vendor-crds.py                # every package
+uv run scripts/vendor-crds.py velero arc     # just these
+uv run scripts/vendor-crds.py --check        # what CI runs
+```
+
 ## kix-dump.py
 
 Dumps live cluster resources into a directory of normalized YAML files, organized by namespace.

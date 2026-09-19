@@ -35,6 +35,7 @@
   scope,
   lib,
   kix,
+  availability,
 }:
 
 let
@@ -154,6 +155,11 @@ in
   meta = {
     version = harborVersion;
     description = "Harbor — OCI container registry";
+    # The registry keeps its blobs on one ReadWriteOnce claim and this
+    # package does not wire up object storage, so it cannot run twice: a
+    # restart of the registry pod is downtime for every push and pull.
+    # core and portal still map the level for an operator who raises them.
+    availability.max = "none";
     # The ingress controller has to reach core and portal, and kix.expose
     # gives it no netpol edge yet (housekeeping: no-netpol-edge-from-
     # ingress-controller). Until it does, the web port accepts any pod in
@@ -197,7 +203,18 @@ in
       // {
         replicas = lib.mkOption {
           type = lib.types.int;
-          default = 1;
+          # Stateless API and auth front end; its state lives in postgres
+          # and redis, so replicas scale out.
+          default = kix.availability.pick availability {
+            none = 1;
+            pod = 2;
+            node = 2;
+            zone = 2;
+          };
+          description = ''
+            Number of Harbor core replicas. Defaults from the cluster's
+            availability level (v2_discussions/145).
+          '';
         };
       };
 
@@ -216,7 +233,18 @@ in
       // {
         replicas = lib.mkOption {
           type = lib.types.int;
-          default = 1;
+          # The portal is a static web UI with no state at all, so replicas
+          # scale out.
+          default = kix.availability.pick availability {
+            none = 1;
+            pod = 2;
+            node = 2;
+            zone = 2;
+          };
+          description = ''
+            Number of Harbor portal replicas. Defaults from the cluster's
+            availability level (v2_discussions/145).
+          '';
         };
       };
 
@@ -259,7 +287,21 @@ in
       // {
         replicas = lib.mkOption {
           type = lib.types.int;
-          default = 1;
+          # Pinned to one: core fetches a job's log from whichever
+          # jobservice pod the Service picks, and the file logger writes to
+          # a per-pod emptyDir, so a second pod cannot serve the first
+          # pod's logs. Harbor's chart wants shared storage for more.
+          default = kix.availability.pick availability {
+            none = 1;
+            pod = 1;
+            node = 1;
+            zone = 1;
+          };
+          description = ''
+            Number of Harbor jobservice replicas. Pinned to one at every
+            availability level (v2_discussions/145) by the per-pod job-log
+            volume; see meta.availability.max.
+          '';
         };
         workers = lib.mkOption {
           type = lib.types.int;
@@ -879,6 +921,8 @@ in
             name = "${name}-registry";
             labels = componentSelector "registry";
             spec = {
+              # One pod: the blob claim is ReadWriteOnce. See
+              # meta.availability.max.
               replicas = 1;
               revisionHistoryLimit = 5;
               strategy.type = "Recreate";

@@ -8,6 +8,7 @@
   scope,
   lib,
   kix,
+  availability,
 }:
 
 let
@@ -28,7 +29,18 @@ in
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;
-      default = 2;
+      # Probe-style exporter behind a Service: each scrape lands on one
+      # pod, so a second replica is redundancy and not duplicate series.
+      default = kix.availability.pick availability {
+        none = 1;
+        pod = 2;
+        node = 2;
+        zone = 2;
+      };
+      description = ''
+        Number of dns-exporter `Deployment` replicas. Defaults from the
+        cluster's availability level (v2_discussions/145).
+      '';
     };
     resources = lib.mkOption {
       type = lib.types.anything;
@@ -49,15 +61,6 @@ in
           spec = {
             replicas = config.replicaCount;
             selector.matchLabels = scope.selectorLabels;
-            template.spec.affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution = [
-              {
-                weight = 100;
-                podAffinityTerm = {
-                  topologyKey = "kubernetes.io/hostname";
-                  labelSelector.matchLabels = scope.selectorLabels;
-                };
-              }
-            ];
             template.spec.containers = [
               {
                 name = "dns-exporter";

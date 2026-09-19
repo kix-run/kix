@@ -21,6 +21,7 @@ in
       workloadInterceptors,
       peekedPackageMeta,
       clusterCtx,
+      availability,
       # cluster.factBehavior, keyed "group/Kind": operator override (wins
       # over the CRD-declared behavior arriving via mkCR) and fallback for
       # builder-less CRs (helm-rendered, raw mkResource)
@@ -29,7 +30,42 @@ in
       scopeObj,
     }:
     rec {
-      scopeMkResource =
+      # A workload is sealed by its typed builder only: mkDeployment,
+      # mkStatefulSet, mkDaemonSet, mkJob and mkHelmWorkload run the pod-spec
+      # validators, the edge analysis and the interceptors (derived spread,
+      # netpol) before the seal. A raw mkResource of one of these kinds used
+      # to skip all of that without a word, so it is refused; sealWorkload
+      # reaches the seal through sealResource below.
+      workloadKinds = [
+        "Deployment"
+        "StatefulSet"
+        "DaemonSet"
+        "Job"
+      ];
+      builderFor = {
+        Deployment = "scope.mkDeployment";
+        StatefulSet = "scope.mkStatefulSet";
+        DaemonSet = "scope.mkDaemonSet";
+        Job = "scope.mkJob";
+      };
+      checkNotRawWorkload =
+        args:
+        let
+          kind = args.kind or "";
+        in
+        if builtins.elem kind workloadKinds then
+          throw (
+            "[${instanceName}] ${kind} '${args.name or "?"}' is built with scope.mkResource, which does not seal "
+            + "a workload: no pod-spec checks, no derived spread or PodDisruptionBudget, no network "
+            + "policy edges. Build it with ${builderFor.${kind}} instead (drop apiVersion and kind; "
+            + "the rest of the attrset is the same)."
+          )
+        else
+          null;
+
+      scopeMkResource = args: builtins.seq (checkNotRawWorkload args) (sealResource args);
+
+      sealResource =
         {
           labels ? { },
           ...
@@ -190,17 +226,36 @@ in
               inherit (edgeAnalysis) serviceRegistry serviceRefRegistry;
               packageMeta = peekedPackageMeta;
               cluster = clusterCtx;
+              inherit availability;
             }
           ) workloadInterceptors;
           interceptorRequires = builtins.concatMap (r: r.requires or [ ]) interceptorResults;
           interceptorResources = builtins.concatMap (r: r.resources or [ ]) interceptorResults;
           interceptorWarnings = builtins.concatMap (r: r.warnings or [ ]) interceptorResults;
+          # podSpec patches land in spec.template.spec before the seal, so
+          # they are part of the workload's store-path identity. Author
+          # fields win per top-level pod-spec field; between interceptors
+          # the earlier one (lower priority) wins, which keeps the merge
+          # deterministic and therefore content-addressed.
+          interceptorPodSpec = builtins.foldl' (acc: r: (r.podSpec or { }) // acc) { } interceptorResults;
+          patchedInput =
+            if interceptorPodSpec == { } then
+              workloadInput
+            else
+              workloadInput
+              // {
+                spec = workloadInput.spec // {
+                  template = workloadInput.spec.template // {
+                    spec = interceptorPodSpec // (workloadInput.spec.template.spec or { });
+                  };
+                };
+              };
           # Splice order contract: author-declared requires, then plugin
           # requires, then core DNS deps. kix.run/depends-on stamps entries
           # in list order, so this order is content-addressed into the
           # manifest — change it only as a deliberate output change.
-          workload = scopeMkResource (
-            removeAttrs workloadInput [ "_helmNetworkDeps" ]
+          workload = sealResource (
+            removeAttrs patchedInput [ "_helmNetworkDeps" ]
             // {
               requires = (workloadInput.requires or [ ]) ++ interceptorRequires ++ dnsDeps;
             }
@@ -260,30 +315,38 @@ in
           };
         in
         builtins.seq (validators.checkDaemonSet kind) (
-          builtins.seq (validators.checkPrivileged templateSpec) (
-            builtins.seq
-              (
-                if userSuppliedLabels then
-                  validators.checkSelectorSubset selector templateMeta.labels kind
-                else
-                  null
-              )
-              (
-                builtins.seq (validators.checkNamespacedRefs templateSpec) (
-                  builtins.seq (validators.checkNamedPorts templateSpec) (
-                    builtins.seq (validators.checkContainerResources templateSpec) (
-                      builtins.seq (validators.checkDuplicateNames templateSpec) (
-                        builtins.seq (validators.checkFieldRefs templateSpec) (sealWorkload {
-                          workloadInput = baseArgs;
-                          workloadKind = kind;
-                          inherit selector hostNetwork;
-                        })
+          builtins.seq
+            (validators.checkSpreadFeasible {
+              inherit kind;
+              name = attrs.name or "?";
+              spec = finalSpec;
+            })
+            (
+              builtins.seq (validators.checkPrivileged templateSpec) (
+                builtins.seq
+                  (
+                    if userSuppliedLabels then
+                      validators.checkSelectorSubset selector templateMeta.labels kind
+                    else
+                      null
+                  )
+                  (
+                    builtins.seq (validators.checkNamespacedRefs templateSpec) (
+                      builtins.seq (validators.checkNamedPorts templateSpec) (
+                        builtins.seq (validators.checkContainerResources templateSpec) (
+                          builtins.seq (validators.checkDuplicateNames templateSpec) (
+                            builtins.seq (validators.checkFieldRefs templateSpec) (sealWorkload {
+                              workloadInput = baseArgs;
+                              workloadKind = kind;
+                              inherit selector hostNetwork;
+                            })
+                          )
+                        )
                       )
                     )
                   )
-                )
               )
-          )
+            )
         );
 
       mkJob =
@@ -365,27 +428,35 @@ in
           };
         in
         builtins.seq (validators.checkDaemonSet kind) (
-          builtins.seq (validators.checkPrivileged templateSpec) (
-            builtins.seq
-              (
-                if rawSpec ? selector.matchLabels && templateMeta ? labels then
-                  validators.checkSelectorSubset selector templateMeta.labels kind
-                else
-                  null
-              )
-              (
-                builtins.seq (validators.checkNamedPorts templateSpec) (
-                  builtins.seq (validators.checkContainerResources templateSpec) (
-                    builtins.seq (validators.checkDuplicateNamesChart templateSpec) (
-                      builtins.seq (validators.checkFieldRefs templateSpec) (sealWorkload {
-                        inherit workloadInput selector hostNetwork;
-                        workloadKind = kind;
-                      })
+          builtins.seq
+            (validators.checkSpreadFeasible {
+              inherit kind;
+              name = attrs.name or attrs.metadata.name or "?";
+              spec = rawSpec;
+            })
+            (
+              builtins.seq (validators.checkPrivileged templateSpec) (
+                builtins.seq
+                  (
+                    if rawSpec ? selector.matchLabels && templateMeta ? labels then
+                      validators.checkSelectorSubset selector templateMeta.labels kind
+                    else
+                      null
+                  )
+                  (
+                    builtins.seq (validators.checkNamedPorts templateSpec) (
+                      builtins.seq (validators.checkContainerResources templateSpec) (
+                        builtins.seq (validators.checkDuplicateNamesChart templateSpec) (
+                          builtins.seq (validators.checkFieldRefs templateSpec) (sealWorkload {
+                            inherit workloadInput selector hostNetwork;
+                            workloadKind = kind;
+                          })
+                        )
+                      )
                     )
                   )
-                )
               )
-          )
+            )
         );
 
       mkOptional =

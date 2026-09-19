@@ -1,0 +1,20 @@
+# Three upstreams, each at the version the matching driver pins in default.nix.
+
+# zfs.openebs.io: openebs/zfs-localpv
+https://raw.githubusercontent.com/openebs/zfs-localpv/v2.7.1/deploy/yamls/zfsnode-crd.yaml
+https://raw.githubusercontent.com/openebs/zfs-localpv/v2.7.1/deploy/yamls/zfsvolume-crd.yaml
+https://raw.githubusercontent.com/openebs/zfs-localpv/v2.7.1/deploy/yamls/zfssnapshot-crd.yaml
+https://raw.githubusercontent.com/openebs/zfs-localpv/v2.7.1/deploy/yamls/zfsbackup-crd.yaml
+https://raw.githubusercontent.com/openebs/zfs-localpv/v2.7.1/deploy/yamls/zfsrestore-crd.yaml
+
+# local.openebs.io: openebs/lvm-localpv
+https://raw.githubusercontent.com/openebs/lvm-localpv/v1.6.1/deploy/yamls/lvmnode-crd.yaml
+https://raw.githubusercontent.com/openebs/lvm-localpv/v1.6.1/deploy/yamls/lvmvolume-crd.yaml
+https://raw.githubusercontent.com/openebs/lvm-localpv/v1.6.1/deploy/yamls/lvmsnapshot-crd.yaml
+
+# snapshot.storage.k8s.io: kubernetes-csi/external-snapshotter, at the
+# snapshot-controller image mayastor pins (zfs and lvm pin v6.2.2 but share
+# one cluster API, so the newer schema wins).
+https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/v6.3.3/client/config/crd/snapshot.storage.k8s.io_volumesnapshotclasses.yaml
+https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/v6.3.3/client/config/crd/snapshot.storage.k8s.io_volumesnapshotcontents.yaml
+https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/v6.3.3/client/config/crd/snapshot.storage.k8s.io_volumesnapshots.yaml

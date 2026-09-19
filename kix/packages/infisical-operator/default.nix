@@ -11,6 +11,8 @@
 {
   scope,
   lib,
+  kix,
+  availability,
 }:
 
 let
@@ -76,7 +78,18 @@ in
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;
-      default = 1;
+      # The manager runs with --leader-elect, so a restart is invisible and
+      # "pod" stays at 1; from "node" up a standby survives a lost node.
+      default = kix.availability.pick availability {
+        none = 1;
+        pod = 1;
+        node = 2;
+        zone = 2;
+      };
+      description = ''
+        Number of operator replicas. Defaults from the cluster's
+        availability level (v2_discussions/145).
+      '';
     };
     resources = lib.mkOption {
       type = lib.types.anything;
@@ -431,7 +444,9 @@ in
               name = "https";
               port = 8443;
               protocol = "TCP";
-              targetPort = "https";
+              # 8443 is the proxy sidecar's "https" port when the sidecar
+              # runs, and the manager's own "metrics" port when it does not.
+              targetPort = if config.kubeRbacProxy.enabled then "https" else "metrics";
             }
           ];
         };
@@ -442,9 +457,7 @@ in
 
       # --- Deployment ---
 
-      deployment = scope.mkResource {
-        apiVersion = "apps/v1";
-        kind = "Deployment";
+      deployment = scope.mkDeployment {
         name = "${prefix}-controller-manager";
         labels = selectorLabels;
         spec = {
@@ -465,7 +478,7 @@ in
               };
             };
             spec = {
-              serviceAccountName = self.serviceAccount.out.name;
+              serviceAccount = self.serviceAccount;
               terminationGracePeriodSeconds = 10;
               securityContext = podSecurityContext;
               inherit containers;
@@ -473,7 +486,27 @@ in
             // nodeAffinity;
           };
         };
+        requires = builtins.attrValues self.crds;
       };
+
+      # --- CRDs ---
+      # Vendored from Infisical/infisical at tag infisical-k8-operator/v0.9.1,
+      # k8-operator/config/crd/bases/. The controller's informers list these
+      # kinds at start; without them the caches never sync and the manager
+      # exits every two minutes.
+      crds =
+        let
+          vendored = file: (builtins.fromJSON (builtins.readFile ./crds/${file})).spec;
+        in
+        {
+          infisicalSecrets = scope.mkCRD { spec = vendored "infisicalsecrets.secrets.infisical.com.json"; };
+          infisicalPushSecrets = scope.mkCRD {
+            spec = vendored "infisicalpushsecrets.secrets.infisical.com.json";
+          };
+          infisicalDynamicSecrets = scope.mkCRD {
+            spec = vendored "infisicaldynamicsecrets.secrets.infisical.com.json";
+          };
+        };
 
       root = {
         resource = self.deployment;
@@ -481,7 +514,8 @@ in
           self.serviceAccount
           self.metricsReaderRole
           self.service
-        ];
+        ]
+        ++ builtins.attrValues self.crds;
       };
     }
     // clusterRoles

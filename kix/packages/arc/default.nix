@@ -5,13 +5,16 @@
 # self-hosted runners.
 #
 # Resources: ServiceAccount, ClusterRole, ClusterRoleBinding,
-#            Role (listener), RoleBinding, Deployment.
+#            Role (listener), RoleBinding, Deployment,
+#            4 CustomResourceDefinitions (actions.github.com).
 #
 # root = Deployment (gha-rs-controller)
 
 {
   scope,
   lib,
+  kix,
+  availability,
 }:
 
 let
@@ -49,6 +52,9 @@ in
 {
   meta = {
     version = "0.13.1";
+    # The controller runs without leader election here (no lease RBAC), so
+    # one replica is the ceiling it can honour.
+    availability.max = "pod";
   };
 
   options = {
@@ -62,6 +68,8 @@ in
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;
+      # Fixed at 1: a second controller would reconcile every runner scale
+      # set twice. See meta.availability.max.
       default = 1;
     };
     releaseName = lib.mkOption {
@@ -228,11 +236,37 @@ in
         };
       };
 
+      # --- CRDs ---
+      # Vendored verbatim from the gha-runner-scale-set-controller chart at the
+      # tag matching config.image.tag:
+      #   https://github.com/actions/actions-runner-controller/tree/gha-runner-scale-set-0.13.1/charts/gha-runner-scale-set-controller/crds
+      # Without them the controller crash-loops on start with
+      # `no matches for kind "EphemeralRunnerSet" in version
+      # "actions.github.com/v1alpha1"`.
+      crds =
+        let
+          vendored = file: (builtins.fromJSON (builtins.readFile ./crds/${file})).spec;
+        in
+        {
+          autoscalingListeners = scope.mkCRD {
+            spec = vendored "autoscalinglisteners.actions.github.com.json";
+          };
+          autoscalingRunnerSets = scope.mkCRD {
+            spec = vendored "autoscalingrunnersets.actions.github.com.json";
+          };
+          ephemeralRunners = scope.mkCRD {
+            spec = vendored "ephemeralrunners.actions.github.com.json";
+          };
+          ephemeralRunnerSets = scope.mkCRD {
+            spec = vendored "ephemeralrunnersets.actions.github.com.json";
+          };
+        };
+
       # --- Deployment (gha-rs-controller) ---
-      deployment = scope.mkResource {
-        apiVersion = "apps/v1";
-        kind = "Deployment";
+      deployment = scope.mkDeployment {
         name = controllerName;
+        # The API group this controller reconciles must exist before it starts.
+        requires = builtins.attrValues self.crds;
         labels = {
           "actions.github.com/controller-service-account-name" = controllerName;
           "actions.github.com/controller-service-account-namespace" = scope.namespaceName;
@@ -253,7 +287,7 @@ in
               };
             };
             spec = {
-              serviceAccountName = self.serviceAccount.out.name;
+              serviceAccount = self.serviceAccount;
               terminationGracePeriodSeconds = 10;
               containers = [
                 {
@@ -302,7 +336,13 @@ in
       };
 
       # --- Entry point ---
-      root = self.deployment;
+      root = {
+        resource = self.deployment;
+        requires = [
+          self.serviceAccount
+        ]
+        ++ builtins.attrValues self.crds;
+      };
     }
     // clusterRoles
     // nsRoles;

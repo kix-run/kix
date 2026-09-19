@@ -8,6 +8,7 @@
   scope,
   lib,
   kix,
+  availability,
 }:
 let
   name = scope.instanceName;
@@ -18,6 +19,9 @@ in
     description = "kube-state-metrics — Kubernetes object state exporter";
     defaultAliases = [ "kubeStateMetrics" ];
     k8s.minVersion = "1.25";
+    # Unsharded exporter: a second replica duplicates every series, so
+    # there is no honest way to go above "pod".
+    availability.max = "pod";
   };
 
   options = {
@@ -36,7 +40,19 @@ in
     };
     replicas = lib.mkOption {
       type = lib.types.int;
-      default = 1;
+      # One at every level: a second replica scrapes the same API objects
+      # and duplicates every series.
+      default = kix.availability.pick availability {
+        none = 1;
+        pod = 1;
+        node = 1;
+        zone = 1;
+      };
+      description = ''
+        Number of kube-state-metrics replicas. Read from the cluster's
+        availability level (v2_discussions/145), but one at every level
+        because a second replica would duplicate every series.
+      '';
     };
     resources = lib.mkOption {
       type = lib.types.anything;

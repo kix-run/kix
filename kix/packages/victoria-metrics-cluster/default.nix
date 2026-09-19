@@ -37,6 +37,8 @@
 {
   scope,
   lib,
+  kix,
+  availability,
 }:
 let
   name = scope.instanceName;
@@ -82,11 +84,19 @@ in
     };
     replicationFactor = lib.mkOption {
       type = lib.types.int;
-      default = 2;
+      # A second copy of every sample only pays off once a whole node may
+      # go, so replication starts at "node".
+      default = kix.availability.pick availability {
+        none = 1;
+        pod = 1;
+        node = 2;
+        zone = 2;
+      };
       description = ''
         Copies of every sample across vmstorage nodes. The operator
         propagates it to vminsert and vmselect (-replicationFactor), so
-        queries stay complete with one vmstorage down.
+        queries stay complete with one vmstorage down. Defaults from the
+        cluster's availability level (v2_discussions/145).
       '';
     };
     scrapeInterval = lib.mkOption {
@@ -107,8 +117,19 @@ in
     vmstorage = {
       replicaCount = lib.mkOption {
         type = lib.types.int;
-        default = 3;
-        description = "Minimum 3 for replicationFactor 2 with one-node failure headroom.";
+        # Three nodes is what replicationFactor 2 needs for one-node
+        # failure headroom, so the count rises with the factor at "node".
+        default = kix.availability.pick availability {
+          none = 1;
+          pod = 1;
+          node = 3;
+          zone = 3;
+        };
+        description = ''
+          Minimum 3 for replicationFactor 2 with one-node failure
+          headroom. Defaults from the cluster's availability level
+          (v2_discussions/145).
+        '';
       };
       storage = lib.mkOption {
         type = lib.types.anything;
@@ -139,7 +160,18 @@ in
     vmselect = {
       replicaCount = lib.mkOption {
         type = lib.types.int;
-        default = 2;
+        # Stateless read path: a second replica as soon as a pod restart must not
+        # be an outage, and vmselect needs no more than the pair.
+        default = kix.availability.pick availability {
+          none = 1;
+          pod = 2;
+          node = 2;
+          zone = 2;
+        };
+        description = ''
+          Number of vmselect replicas. Defaults from the cluster's
+          availability level (v2_discussions/145).
+        '';
       };
       resources = mkComponentResources {
         cpu = "500m";
@@ -154,7 +186,18 @@ in
     vminsert = {
       replicaCount = lib.mkOption {
         type = lib.types.int;
-        default = 2;
+        # Stateless write path: a second replica as soon as a pod restart must not
+        # be an outage, and vminsert needs no more than the pair.
+        default = kix.availability.pick availability {
+          none = 1;
+          pod = 2;
+          node = 2;
+          zone = 2;
+        };
+        description = ''
+          Number of vminsert replicas. Defaults from the cluster's
+          availability level (v2_discussions/145).
+        '';
       };
       resources = mkComponentResources {
         cpu = "500m";
@@ -182,6 +225,7 @@ in
     {
       self,
       config,
+      clusterConfig,
       vmOperator,
       storageClasses ? null,
       ...
@@ -194,16 +238,17 @@ in
         "app.kubernetes.io/instance" = name;
       };
 
+      # Operand pods are rendered by the operator, so kix's derived spread
+      # never sees them: the CR carries the rule, but the failure-domain
+      # keys come from the cluster (v2_discussions/143 §2), never a literal.
       antiAffinity = component: {
-        podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution = [
-          {
-            weight = 100;
-            podAffinityTerm = {
-              labelSelector.matchLabels = componentSelector component;
-              topologyKey = "kubernetes.io/hostname";
-            };
-          }
-        ];
+        podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution = map (topologyKey: {
+          weight = 100;
+          podAffinityTerm = {
+            labelSelector.matchLabels = componentSelector component;
+            inherit topologyKey;
+          };
+        }) clusterConfig.cluster.topology.failureDomainKeys;
       };
 
       pdb = {

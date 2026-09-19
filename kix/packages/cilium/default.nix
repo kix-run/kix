@@ -16,6 +16,7 @@
   scope,
   lib,
   kix,
+  availability,
 }:
 
 let
@@ -71,7 +72,15 @@ let
 
     # --- Operator ---
     operator = {
-      replicas = 1;
+      # The operator is leader-elected, so the second replica is a warm
+      # standby: it only buys anything once it can sit on another node.
+      # Two is also the chart's own default.
+      replicas = kix.availability.pick availability {
+        none = 1;
+        pod = 1;
+        node = 2;
+        zone = 2;
+      };
       prometheus.enabled = false;
       rollOutPods = true;
     };

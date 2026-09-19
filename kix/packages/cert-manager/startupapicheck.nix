@@ -64,9 +64,7 @@ in
     extra.automountServiceAccountToken = true;
   };
 
-  startupapicheckJob = scope.mkResource {
-    apiVersion = "batch/v1";
-    kind = "Job";
+  startupapicheckJob = scope.mkJob {
     name = "${name}-startupapicheck";
     labels = startupLabels;
     spec = {
@@ -75,7 +73,7 @@ in
         metadata.labels = startupLabels;
         spec = {
           restartPolicy = "OnFailure";
-          serviceAccountName = self.startupapicheckServiceAccount.out.name;
+          serviceAccount = self.startupapicheckServiceAccount;
           enableServiceLinks = false;
           securityContext = common.podSecurityContext;
           containers = [

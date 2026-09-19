@@ -39,6 +39,7 @@
 
   cluster.capabilities = {
     multiNode = lib.mkDefault false;
+    availabilityZones = lib.mkDefault [ ];
     managedControlPlane = lib.mkDefault false;
     nodeAutoscaling = lib.mkDefault false;
     privilegedContainers = lib.mkDefault true;

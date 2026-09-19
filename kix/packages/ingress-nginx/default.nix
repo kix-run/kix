@@ -15,6 +15,7 @@
   scope,
   lib,
   kix,
+  availability,
 }:
 
 let
@@ -131,7 +132,18 @@ in
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;
-      default = 1;
+      # A serving data plane: two controllers once a pod restart must not
+      # drop ingress traffic, three once a whole zone may go.
+      default = kix.availability.pick availability {
+        none = 1;
+        pod = 2;
+        node = 2;
+        zone = 3;
+      };
+      description = ''
+        Number of ingress-nginx controller replicas. Defaults from the
+        cluster's availability level (v2_discussions/145).
+      '';
     };
     serviceType = lib.mkOption {
       type = lib.types.str;
@@ -188,17 +200,6 @@ in
     maxmindLicenseKey = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
-    };
-    enableAntiAffinity = lib.mkOption {
-      type = lib.types.bool;
-      default = true;
-    };
-    antiAffinityTopologyKeys = lib.mkOption {
-      type = lib.types.listOf lib.types.str;
-      default = [
-        "kubernetes.io/hostname"
-        "topology.kubernetes.io/zone"
-      ];
     };
     # Extra labels added to pod templates (e.g. tenant labels).
     podLabels = lib.mkOption {
@@ -627,22 +628,6 @@ in
                   };
                 }
               ];
-            }
-            // lib.optionalAttrs config.enableAntiAffinity {
-              affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution = lib.imap0 (
-                i: topologyKey: {
-                  weight = 100;
-                  podAffinityTerm = {
-                    labelSelector.matchExpressions = [
-                      {
-                        key = "app.kubernetes.io/name";
-                        operator = "In";
-                        values = [ "ingress-nginx" ];
-                      }
-                    ];
-                    inherit topologyKey;
-                  };
-                }) config.antiAffinityTopologyKeys;
             };
           };
         };

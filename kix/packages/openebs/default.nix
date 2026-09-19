@@ -17,6 +17,7 @@
   scope,
   lib,
   kix,
+  availability,
 }:
 
 let
@@ -89,6 +90,16 @@ let
     "openebs.io/release" = name;
   };
 
+  # The NATS pod selector, written out rather than read back from the
+  # StatefulSet. `natsService` is that StatefulSet's headless Service, and the
+  # NATS routes resolve their peers through its pod DNS, so the Service has to
+  # be applied first. Reading `self.natsStatefulSet.out.selector` here would
+  # make the Service depend on the StatefulSet and reverse that order.
+  natsSelector = {
+    "app.kubernetes.io/name" = "nats";
+    "app.kubernetes.io/instance" = name;
+  };
+
   # --- Toleration for unreachable/not-ready nodes (Mayastor control plane) ---
   controlPlaneTolerations = [
     {
@@ -150,6 +161,10 @@ in
 {
   meta = {
     version = "v2.8.0";
+    # The Mayastor control-plane agents (agent-core, api-rest,
+    # operator-diskpool) run one replica by upstream design; volume
+    # availability comes from the replica count on the StorageClass.
+    availability.max = "pod";
   };
 
   options = {
@@ -172,18 +187,44 @@ in
           alpineBash = "docker.io/openebs/alpine-bash:4.1.0";
         };
         etcd = {
-          replicaCount = 3;
-          image = "docker.io/bitnami/etcd:3.5.6-debian-11-r10";
+          # A quorum store: one member at "none", a quorum of three from "pod" up.
+          replicaCount = kix.availability.pick availability {
+            none = 1;
+            pod = 3;
+            node = 3;
+            zone = 3;
+          };
+          # The tag mayastor pins. Bitnami took its versioned tags off
+          # docker.io/bitnami in 2025 and republished them under bitnamilegacy.
+          image = "docker.io/bitnamilegacy/etcd:3.5.6-debian-11-r10";
           persistence = {
             size = "2Gi";
             storageClass = "mayastor-etcd-localpv";
           };
         };
         nats = {
-          replicaCount = 3;
+          # A quorum mesh: one member at "none", a quorum of three from "pod" up.
+          replicaCount = kix.availability.pick availability {
+            none = 1;
+            pod = 3;
+            node = 3;
+            zone = 3;
+          };
           image = "nats:2.9.17-alpine";
           reloaderImage = "natsio/nats-server-config-reloader:0.10.1";
           exporterImage = "natsio/prometheus-nats-exporter:0.11.0";
+        };
+        # Upstream csi.node.topology: with nodeSelector on, csi-node and
+        # agent-ha-node run only on nodes carrying the segments, the way
+        # io-engine runs only on openebs.io/engine=mayastor nodes. Both
+        # need a real host (writable sysfs for the nvme_core parameters,
+        # /run/udev), so a cluster whose nodes have neither turns this on
+        # and labels the nodes that do.
+        csiNode.topology = {
+          nodeSelector = false;
+          segments = {
+            "openebs.io/csi-node" = "mayastor";
+          };
         };
         csiController = {
           replicas = 1;
@@ -241,7 +282,9 @@ in
     localPvProvisioner = lib.mkOption {
       type = lib.types.anything;
       default = {
-        enabled = false;
+        # On by default: the mayastor etcd StorageClass names provisioner
+        # `openebs.io/local`, which is this provisioner, as in the upstream chart.
+        enabled = true;
         image = "openebs/provisioner-localpv:4.2.0";
         # OPENEBS_IO_HELPER_IMAGE: image used for short-lived helper pods
         # (cleanup, hostpath init). Older charts shipped a separate
@@ -264,6 +307,16 @@ in
       default = [ ];
       description = "DiskPool custom resources for Mayastor";
     };
+    snapshotCrds = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = ''
+        Ship the CSI snapshot CRDs (volumesnapshotclasses, volumesnapshotcontents
+        and volumesnapshots in group snapshot.storage.k8s.io). They are
+        cluster-wide singletons that another package may own instead, so set this
+        to false when something else installs them.
+      '';
+    };
   };
 
   build =
@@ -279,6 +332,17 @@ in
           indices = lib.genList (i: toString (i + 1)) config.mayastor.ioEngine.cpuCount;
         in
         builtins.concatStringsSep "," indices;
+
+      # Where csi-node and agent-ha-node run: every amd64 node, or only the
+      # nodes labelled with the topology segments when the cluster says so.
+      nodeAgentSelector =
+        let
+          topology = config.mayastor.csiNode.topology;
+        in
+        {
+          "kubernetes.io/arch" = "amd64";
+        }
+        // lib.optionalAttrs topology.nodeSelector topology.segments;
 
       # ── Mayastor RBAC ────────────────────────────────────────
       mayastorClusterRoles =
@@ -368,6 +432,9 @@ in
                     "patch"
                   ]
                 )
+                # agent-core reads the kube-system Namespace at start for
+                # its platform id and exits when it cannot.
+                (core.namespaces |> allow [ "get" ])
                 (
                   core.persistentvolumeclaims
                   |> allow [
@@ -816,6 +883,42 @@ in
             roles = {
               "${name}-localpv-provisioner" = grant [
                 (core.nodes |> watch)
+                # Leader election takes an Endpoints lock and a Lease of the
+                # same name, and every hostpath volume is prepared by a
+                # short-lived helper pod the provisioner creates and deletes.
+                (
+                  core.endpoints
+                  |> allow [
+                    "get"
+                    "list"
+                    "watch"
+                    "create"
+                    "update"
+                    "patch"
+                  ]
+                )
+                (
+                  coord.leases
+                  |> allow [
+                    "get"
+                    "list"
+                    "watch"
+                    "create"
+                    "update"
+                    "patch"
+                    "delete"
+                  ]
+                )
+                (
+                  core.pods
+                  |> allow [
+                    "get"
+                    "list"
+                    "watch"
+                    "create"
+                    "delete"
+                  ]
+                )
                 (
                   core.persistentvolumes
                   |> allow [
@@ -842,8 +945,105 @@ in
           }
         else
           { };
+
+      # Dependency lists for the workloads below. A disabled CRD is null, and a
+      # null in `requires` is not a resource, so the nulls are filtered out.
+      crdsFor =
+        let
+          present = lib.filter (r: r != null);
+          snapshots = present [
+            self.crds.volumeSnapshotClasses
+            self.crds.volumeSnapshotContents
+            self.crds.volumeSnapshots
+          ];
+        in
+        {
+          inherit snapshots;
+          zfs =
+            present [
+              self.crds.zfsNodes
+              self.crds.zfsVolumes
+              self.crds.zfsSnapshots
+              self.crds.zfsBackups
+              self.crds.zfsRestores
+            ]
+            ++ snapshots;
+          lvm =
+            present [
+              self.crds.lvmNodes
+              self.crds.lvmVolumes
+              self.crds.lvmSnapshots
+            ]
+            ++ snapshots;
+        };
     in
     {
+
+      # ==========================================================================
+      #  CustomResourceDefinitions
+      #
+      #  Vendored at the versions this package pins:
+      #    zfs.openebs.io     openebs/zfs-localpv v2.7.1
+      #                       deploy/yamls/<zfsnode|zfsvolume|zfssnapshot
+      #                                     |zfsbackup|zfsrestore>-crd.yaml
+      #    local.openebs.io   openebs/lvm-localpv v1.6.1
+      #                       deploy/yamls/<lvmnode|lvmvolume|lvmsnapshot>-crd.yaml
+      #    snapshot.storage.k8s.io
+      #                       kubernetes-csi/external-snapshotter v6.3.3
+      #                       client/config/crd/snapshot.storage.k8s.io_*.yaml
+      #                       (v6.3.3 is the snapshot-controller image mayastor
+      #                       pins; zfs and lvm pin v6.2.2 but share one cluster
+      #                       API, so the newer schema wins)
+      #
+      #  There is no DiskPool CRD here. Mayastor ships no manifest for it: the
+      #  operator-diskpool binary installs the CRD itself at startup, so the
+      #  DiskPool CRs below are ordered after that Deployment instead.
+      #
+      #  Each entry is null when the workload that needs it is disabled, so a
+      #  cluster that runs only one driver does not claim another driver's API.
+      # ==========================================================================
+      crds =
+        let
+          vendored = file: builtins.fromJSON (builtins.readFile ./crds/${file});
+          # A CRD in a *.k8s.io group is refused by the apiserver unless it
+          # carries the api-approved.kubernetes.io annotation upstream put on
+          # it, so that one annotation rides along with the spec.
+          gated =
+            enabled: file:
+            let
+              crd = vendored file;
+              approval = crd.metadata.annotations."api-approved.kubernetes.io" or null;
+            in
+            if enabled then
+              scope.mkCRD (
+                {
+                  spec = crd.spec;
+                }
+                // lib.optionalAttrs (approval != null) {
+                  annotations."api-approved.kubernetes.io" = approval;
+                }
+              )
+            else
+              null;
+          zfsCrd = gated config.zfsLocalPv.enabled;
+          lvmCrd = gated config.lvmLocalPv.enabled;
+          snapCrd = gated config.snapshotCrds;
+        in
+        {
+          zfsNodes = zfsCrd "zfsnodes.zfs.openebs.io.json";
+          zfsVolumes = zfsCrd "zfsvolumes.zfs.openebs.io.json";
+          zfsSnapshots = zfsCrd "zfssnapshots.zfs.openebs.io.json";
+          zfsBackups = zfsCrd "zfsbackups.zfs.openebs.io.json";
+          zfsRestores = zfsCrd "zfsrestores.zfs.openebs.io.json";
+
+          lvmNodes = lvmCrd "lvmnodes.local.openebs.io.json";
+          lvmVolumes = lvmCrd "lvmvolumes.local.openebs.io.json";
+          lvmSnapshots = lvmCrd "lvmsnapshots.local.openebs.io.json";
+
+          volumeSnapshotClasses = snapCrd "volumesnapshotclasses.snapshot.storage.k8s.io.json";
+          volumeSnapshotContents = snapCrd "volumesnapshotcontents.snapshot.storage.k8s.io.json";
+          volumeSnapshots = snapCrd "volumesnapshots.snapshot.storage.k8s.io.json";
+        };
 
       # ==========================================================================
       #  MAYASTOR — Replicated Block Storage
@@ -957,9 +1157,7 @@ in
 
       etcdStatefulSet =
         if config.mayastor.enabled then
-          (scope.mkResource {
-            apiVersion = "apps/v1";
-            kind = "StatefulSet";
+          (scope.mkStatefulSet {
             name = "${name}-etcd";
             labels = {
               "app.kubernetes.io/name" = "etcd";
@@ -968,7 +1166,7 @@ in
             };
             spec = {
               replicas = config.mayastor.etcd.replicaCount;
-              serviceName = "${name}-etcd-headless";
+              headlessService = self.etcdHeadlessService;
               podManagementPolicy = "Parallel";
               selector.matchLabels = {
                 "app.kubernetes.io/name" = "etcd";
@@ -983,16 +1181,6 @@ in
                   "openebs.io/logging" = "true";
                 };
                 spec = {
-                  affinity.podAntiAffinity.requiredDuringSchedulingIgnoredDuringExecution = [
-                    {
-                      labelSelector.matchLabels = {
-                        "app.kubernetes.io/name" = "etcd";
-                        "app.kubernetes.io/instance" = name;
-                      };
-                      topologyKey = "kubernetes.io/hostname";
-                    }
-                  ];
-                  serviceAccountName = "default";
                   securityContext = {
                     fsGroup = 1001;
                   };
@@ -1076,7 +1264,11 @@ in
                         }
                         {
                           name = "ETCD_ADVERTISE_CLIENT_URLS";
-                          value = "http://$(MY_POD_NAME).${name}-etcd-headless.${ns}.svc.cluster.local:2379,http://${name}-etcd.${ns}.svc.cluster.local:2379";
+                          # The client Service stays a literal: etcdService
+                          # selects this StatefulSet, so naming it here is a
+                          # reference cycle. etcd only advertises the address
+                          # to clients, it never dials it, so no edge is lost.
+                          value = "http://$(MY_POD_NAME).${self.etcdHeadlessService.out.fqdn}:2379,http://${name}-etcd.${ns}.svc.cluster.local:2379";
                         }
                         {
                           name = "ETCD_LISTEN_CLIENT_URLS";
@@ -1084,7 +1276,7 @@ in
                         }
                         {
                           name = "ETCD_INITIAL_ADVERTISE_PEER_URLS";
-                          value = "http://$(MY_POD_NAME).${name}-etcd-headless.${ns}.svc.cluster.local:2380";
+                          value = "http://$(MY_POD_NAME).${self.etcdHeadlessService.out.fqdn}:2380";
                         }
                         {
                           name = "ETCD_LISTEN_PEER_URLS";
@@ -1111,21 +1303,26 @@ in
                           value = builtins.concatStringsSep "," (
                             lib.genList (
                               i:
-                              "${name}-etcd-${toString i}=http://${name}-etcd-${toString i}.${name}-etcd-headless.${ns}.svc.cluster.local:2380"
+                              "${name}-etcd-${toString i}=http://${name}-etcd-${toString i}.${self.etcdHeadlessService.out.fqdn}:2380"
                             ) config.mayastor.etcd.replicaCount
                           );
                         }
                         {
                           name = "ETCD_CLUSTER_DOMAIN";
-                          value = "${name}-etcd-headless.${ns}.svc.cluster.local";
+                          value = "${self.etcdHeadlessService.out.fqdn}";
                         }
                         {
                           name = "ETCD_QUOTA_BACKEND_BYTES";
                           value = "8589934592";
                         }
+                        # Mayastor runs etcd with authentication off, so the
+                        # token type does not matter; "simple" needs no signing
+                        # key. The upstream chart's "jwt" needs an RSA key in a
+                        # Secret that the chart generates at install time and
+                        # nothing here can.
                         {
                           name = "ETCD_AUTH_TOKEN";
-                          value = "jwt,priv-key=/opt/bitnami/etcd/certs/token/jwt-token.pem,sign-method=RS256,ttl=10m";
+                          value = "simple";
                         }
                       ];
                       ports = [
@@ -1159,22 +1356,7 @@ in
                           name = "data";
                           mountPath = "/bitnami/etcd";
                         }
-                        {
-                          name = "etcd-jwt-token";
-                          mountPath = "/opt/bitnami/etcd/certs/token";
-                          readOnly = true;
-                        }
                       ];
-                    }
-                  ];
-                  volumes = [
-                    {
-                      name = "etcd-jwt-token";
-                      secret = {
-                        # Created by the openebs operator at runtime, not by kix.
-                        secretName = kix.untrackedRef "${name}-etcd-jwt-token-custom";
-                        defaultMode = 256; # 0400
-                      };
                     }
                   ];
                 };
@@ -1190,8 +1372,11 @@ in
                 }
               ];
             };
+            # No explicit edge to `etcdHeadlessService` is needed: the peer and
+            # advertise URLs below interpolate its `out.fqdn`, and that store
+            # path reference already orders the Service first. Adding one makes
+            # kix warn that the requires is redundant.
             requires = [
-              self.etcdHeadlessService
               self.etcdStorageClass
             ];
           })
@@ -1224,28 +1409,11 @@ in
               volumeBindingMode = "WaitForFirstConsumer";
               reclaimPolicy = "Delete";
             };
-          })
-        else
-          null;
-
-      # --- PodDisruptionBudget for etcd (chart 4.2.0 emits this) ---
-      etcdPdb =
-        if config.mayastor.enabled then
-          (scope.mkResource {
-            apiVersion = "policy/v1";
-            kind = "PodDisruptionBudget";
-            name = "${name}-etcd";
-            labels = {
-              "app.kubernetes.io/name" = "etcd";
-              "app.kubernetes.io/instance" = name;
-            };
-            spec = {
-              minAvailable = "51%";
-              selector.matchLabels = {
-                "app.kubernetes.io/name" = "etcd";
-                "app.kubernetes.io/instance" = name;
-              };
-            };
+            # `openebs.io/local` is the localpv provisioner below. Without it
+            # running, the etcd PVCs stay Pending forever.
+            requires = lib.optionals config.localPvProvisioner.enabled [
+              self.localPvDeployment
+            ];
           })
         else
           null;
@@ -1332,28 +1500,6 @@ in
         else
           null;
 
-      # --- PodDisruptionBudget for NATS (chart 4.2.0 emits this) ---
-      natsPdb =
-        if config.mayastor.enabled then
-          (scope.mkResource {
-            apiVersion = "policy/v1";
-            kind = "PodDisruptionBudget";
-            name = "${name}-nats";
-            labels = {
-              "app.kubernetes.io/name" = "nats";
-              "app.kubernetes.io/instance" = name;
-            };
-            spec = {
-              maxUnavailable = 1;
-              selector.matchLabels = {
-                "app.kubernetes.io/name" = "nats";
-                "app.kubernetes.io/instance" = name;
-              };
-            };
-          })
-        else
-          null;
-
       natsService =
         if config.mayastor.enabled then
           (scope.mkResource {
@@ -1367,7 +1513,7 @@ in
             };
             spec = {
               clusterIP = "None";
-              selector = self.natsStatefulSet.out.selector;
+              selector = natsSelector;
               publishNotReadyAddresses = true;
               ports = [
                 {
@@ -1414,9 +1560,7 @@ in
 
       natsStatefulSet =
         if config.mayastor.enabled then
-          (scope.mkResource {
-            apiVersion = "apps/v1";
-            kind = "StatefulSet";
+          (scope.mkStatefulSet {
             name = "${name}-nats";
             labels = {
               "app.kubernetes.io/name" = "nats";
@@ -1425,12 +1569,9 @@ in
             };
             spec = {
               replicas = config.mayastor.nats.replicaCount;
-              serviceName = "${name}-nats";
+              headlessService = self.natsService;
               podManagementPolicy = "Parallel";
-              selector.matchLabels = {
-                "app.kubernetes.io/name" = "nats";
-                "app.kubernetes.io/instance" = name;
-              };
+              selector.matchLabels = natsSelector;
               template = {
                 metadata = {
                   labels = {
@@ -1443,15 +1584,13 @@ in
                     "prometheus.io/path" = "/metrics";
                     "prometheus.io/port" = "7777";
                     "prometheus.io/scrape" = "true";
-                    # Helm uses this to roll the StatefulSet on configmap
-                    # change. We pin to the chart-4.2.0 rendering's value
-                    # so the diff converges; kix tracks ConfigMap dependency
-                    # explicitly via `requires` and doesn't need it.
-                    "checksum/config" = "04c9da2849ac0239fed07bca8e89be15fd56add19a0a75e2d4413d74531c2c5e";
+                    # Rolls the pods when the NATS config changes; a
+                    # dependency edge alone does not restart a running pod.
+                    "checksum/config" = self.natsConfigMap.out.identityHash;
                   };
                 };
                 spec = {
-                  serviceAccountName = self.natsSa.out.name;
+                  serviceAccount = self.natsSa;
                   dnsPolicy = "ClusterFirst";
                   shareProcessNamespace = true;
                   terminationGracePeriodSeconds = 60;
@@ -1600,6 +1739,13 @@ in
               };
               # NATS is stateless (no VCTs needed)
             };
+            # The `headlessService` shorthand carries no store-path context, so
+            # the edge to the Service is spelled out here. NATS routes resolve
+            # their peers through its pod DNS, and without it the startup probe
+            # answers 503 with "Waiting for routing to be established".
+            requires = [
+              self.natsService
+            ];
           })
         else
           null;
@@ -1635,9 +1781,7 @@ in
 
       agentCoreDeployment =
         if config.mayastor.enabled then
-          (scope.mkResource {
-            apiVersion = "apps/v1";
-            kind = "Deployment";
+          (scope.mkDeployment {
             name = "${name}-agent-core";
             labels = mayastorLabels // {
               app = "agent-core";
@@ -1651,7 +1795,7 @@ in
                   "openebs.io/logging" = "true";
                 };
                 spec = {
-                  serviceAccountName = self.mayastorSa.out.name;
+                  serviceAccount = self.mayastorSa;
                   priorityClassName = self.priorityClass.out.name;
                   nodeSelector = {
                     "kubernetes.io/arch" = "amd64";
@@ -1665,7 +1809,7 @@ in
                       command = [
                         "sh"
                         "-c"
-                        "trap \"exit 1\" TERM; until nc -vzw 5 ${name}-etcd 2379; do date; echo \"Waiting for etcd...\"; sleep 1; done;"
+                        "trap \"exit 1\" TERM; until nc -vzw 5 ${self.etcdService.out.name} 2379; do date; echo \"Waiting for etcd...\"; sleep 1; done;"
                       ];
                     }
                   ];
@@ -1675,7 +1819,7 @@ in
                       image = config.mayastor.image.agentCore;
                       imagePullPolicy = "IfNotPresent";
                       args = [
-                        "--store=${name}-etcd:2379"
+                        "--store=${self.etcdService.out.name}:2379"
                         "--request-timeout=5s"
                         "--cache-period=30s"
                         "--grpc-server-addr=[::]:50051"
@@ -1683,7 +1827,7 @@ in
                         "--snapshot-commitment=40%"
                         "--volume-commitment-initial=40%"
                         "--volume-commitment=40%"
-                        "--events-url=nats://${name}-nats:4222"
+                        "--events-url=nats://${self.natsService.out.name}:4222"
                         "--fmt-style=pretty"
                         "--ansi-colors=true"
                         "--create-volume-limit=10"
@@ -1720,9 +1864,11 @@ in
                       imagePullPolicy = "IfNotPresent";
                       args = [
                         "-g=[::]:50052"
-                        "--store=http://${name}-etcd:2379"
+                        "--store=http://${self.etcdService.out.name}:2379"
+                        # A literal: agentCoreService selects this Deployment,
+                        # so naming it from inside is a reference cycle.
                         "--core-grpc=https://${name}-agent-core:50051"
-                        "--events-url=nats://${name}-nats:4222"
+                        "--events-url=nats://${self.natsService.out.name}:4222"
                         "--ansi-colors=true"
                         "--fmt-style=pretty"
                       ];
@@ -1756,10 +1902,6 @@ in
                 };
               };
             };
-            requires = [
-              self.etcdService
-              self.natsService
-            ];
           })
         else
           null;
@@ -1798,9 +1940,7 @@ in
 
       apiRestDeployment =
         if config.mayastor.enabled then
-          (scope.mkResource {
-            apiVersion = "apps/v1";
-            kind = "Deployment";
+          (scope.mkDeployment {
             name = "${name}-api-rest";
             labels = mayastorLabels // {
               app = "api-rest";
@@ -1827,7 +1967,7 @@ in
                       command = [
                         "sh"
                         "-c"
-                        "trap \"exit 1\" TERM; until nc -vzw 5 ${name}-agent-core 50051; do date; echo \"Waiting for agent-core-grpc services...\"; sleep 1; done;"
+                        "trap \"exit 1\" TERM; until nc -vzw 5 ${self.agentCoreService.out.name} 50051; do date; echo \"Waiting for agent-core-grpc services...\"; sleep 1; done;"
                       ];
                     }
                     {
@@ -1837,7 +1977,7 @@ in
                       command = [
                         "sh"
                         "-c"
-                        "trap \"exit 1\" TERM; until nc -vzw 5 ${name}-etcd 2379; do date; echo \"Waiting for etcd...\"; sleep 1; done;"
+                        "trap \"exit 1\" TERM; until nc -vzw 5 ${self.etcdService.out.name} 2379; do date; echo \"Waiting for etcd...\"; sleep 1; done;"
                       ];
                     }
                   ];
@@ -1851,7 +1991,7 @@ in
                         "--no-auth"
                         "--http=[::]:8081"
                         "--request-timeout=5s"
-                        "--core-grpc=https://${name}-agent-core:50051"
+                        "--core-grpc=https://${self.agentCoreService.out.name}:50051"
                         "--ansi-colors=true"
                         "--fmt-style=pretty"
                         "--core-health-freq=20s"
@@ -1899,10 +2039,6 @@ in
                 };
               };
             };
-            requires = [
-              self.agentCoreService
-              self.etcdService
-            ];
           })
         else
           null;
@@ -1910,9 +2046,7 @@ in
       # --- operator-diskpool ---
       operatorDiskpoolDeployment =
         if config.mayastor.enabled then
-          (scope.mkResource {
-            apiVersion = "apps/v1";
-            kind = "Deployment";
+          (scope.mkDeployment {
             name = "${name}-operator-diskpool";
             labels = mayastorLabels // {
               app = "operator-diskpool";
@@ -1926,7 +2060,7 @@ in
                   "openebs.io/logging" = "true";
                 };
                 spec = {
-                  serviceAccountName = self.mayastorSa.out.name;
+                  serviceAccount = self.mayastorSa;
                   priorityClassName = self.priorityClass.out.name;
                   nodeSelector = {
                     "kubernetes.io/arch" = "amd64";
@@ -1940,7 +2074,7 @@ in
                       command = [
                         "sh"
                         "-c"
-                        "trap \"exit 1\" TERM; until nc -vzw 5 ${name}-agent-core 50051; do date; echo \"Waiting for agent-core-grpc services...\"; sleep 1; done;"
+                        "trap \"exit 1\" TERM; until nc -vzw 5 ${self.agentCoreService.out.name} 50051; do date; echo \"Waiting for agent-core-grpc services...\"; sleep 1; done;"
                       ];
                     }
                     {
@@ -1950,7 +2084,7 @@ in
                       command = [
                         "sh"
                         "-c"
-                        "trap \"exit 1\" TERM; until nc -vzw 5 ${name}-etcd 2379; do date; echo \"Waiting for etcd...\"; sleep 1; done;"
+                        "trap \"exit 1\" TERM; until nc -vzw 5 ${self.etcdService.out.name} 2379; do date; echo \"Waiting for etcd...\"; sleep 1; done;"
                       ];
                     }
                   ];
@@ -1960,7 +2094,7 @@ in
                       image = config.mayastor.image.operatorDiskpool;
                       imagePullPolicy = "IfNotPresent";
                       args = [
-                        "-e http://${name}-api-rest:8081"
+                        "-e http://${self.apiRestService.out.name}:8081"
                         "-n${ns}"
                         "--request-timeout=5s"
                         "--interval=30s"
@@ -1992,11 +2126,6 @@ in
                 };
               };
             };
-            requires = [
-              self.apiRestService
-              self.agentCoreService
-              self.etcdService
-            ];
           })
         else
           null;
@@ -2004,9 +2133,7 @@ in
       # --- csi-controller (Mayastor CSI provisioner/attacher/snapshotter) ---
       csiControllerDeployment =
         if config.mayastor.enabled then
-          (scope.mkResource {
-            apiVersion = "apps/v1";
-            kind = "Deployment";
+          (scope.mkDeployment {
             name = "${name}-csi-controller";
             labels = mayastorLabels // {
               app = "csi-controller";
@@ -2021,7 +2148,7 @@ in
                 };
                 spec = {
                   hostNetwork = true;
-                  serviceAccountName = self.mayastorSa.out.name;
+                  serviceAccount = self.mayastorSa;
                   dnsPolicy = "ClusterFirstWithHostNet";
                   priorityClassName = self.priorityClass.out.name;
                   nodeSelector = {
@@ -2036,7 +2163,7 @@ in
                       command = [
                         "sh"
                         "-c"
-                        "trap \"exit 1\" TERM; until nc -vzw 5 ${name}-api-rest 8081; do date; echo \"Waiting for REST API endpoint to become available\"; sleep 1; done;"
+                        "trap \"exit 1\" TERM; until nc -vzw 5 ${self.apiRestService.out.name} 8081; do date; echo \"Waiting for REST API endpoint to become available\"; sleep 1; done;"
                       ];
                     }
                   ];
@@ -2150,7 +2277,7 @@ in
                       imagePullPolicy = "IfNotPresent";
                       args = [
                         "--csi-socket=/var/lib/csi/sockets/pluginproxy/csi.sock"
-                        "--rest-endpoint=http://${name}-api-rest:8081"
+                        "--rest-endpoint=http://${self.apiRestService.out.name}:8081"
                         "--node-selector=openebs.io/csi-node=mayastor"
                         "--ansi-colors=true"
                         "--fmt-style=pretty"
@@ -2189,9 +2316,7 @@ in
                 };
               };
             };
-            requires = [
-              self.apiRestService
-            ];
+            requires = crdsFor.snapshots;
           })
         else
           null;
@@ -2199,9 +2324,7 @@ in
       # --- csi-node DaemonSet (Mayastor CSI node plugin) ---
       csiNodeDaemonSet =
         if config.mayastor.enabled then
-          (scope.mkResource {
-            apiVersion = "apps/v1";
-            kind = "DaemonSet";
+          (scope.mkDaemonSet {
             name = "${name}-csi-node";
             labels = mayastorLabels // {
               app = "csi-node";
@@ -2220,12 +2343,10 @@ in
                   "openebs.io/logging" = "true";
                 };
                 spec = {
-                  serviceAccountName = self.mayastorSa.out.name;
+                  serviceAccount = self.mayastorSa;
                   hostNetwork = true;
                   dnsPolicy = "ClusterFirstWithHostNet";
-                  nodeSelector = {
-                    "kubernetes.io/arch" = "amd64";
-                  };
+                  nodeSelector = nodeAgentSelector;
                   initContainers = [
                     {
                       name = "nvme-tcp-probe";
@@ -2264,7 +2385,7 @@ in
                       args = [
                         "--csi-socket=/csi/csi.sock"
                         "--node-name=$(MY_NODE_NAME)"
-                        "--rest-endpoint=http://${name}-api-rest:8081"
+                        "--rest-endpoint=http://${self.apiRestService.out.name}:8081"
                         "--enable-rest"
                         "--enable-registration"
                         "--grpc-ip=$(MY_POD_IP)"
@@ -2397,9 +2518,6 @@ in
                 };
               };
             };
-            requires = [
-              self.apiRestService
-            ];
           })
         else
           null;
@@ -2407,9 +2525,7 @@ in
       # --- io-engine DaemonSet (Mayastor data plane — hugepages, privileged) ---
       ioEngineDaemonSet =
         if config.mayastor.enabled then
-          (scope.mkResource {
-            apiVersion = "apps/v1";
-            kind = "DaemonSet";
+          (scope.mkDaemonSet {
             name = "${name}-io-engine";
             labels = mayastorLabels // {
               app = "io-engine";
@@ -2438,7 +2554,7 @@ in
                       command = [
                         "sh"
                         "-c"
-                        "trap \"exit 1\" TERM; until nc -vzw 5 ${name}-agent-core 50051; do date; echo \"Waiting for agent-core-grpc services...\"; sleep 1; done;"
+                        "trap \"exit 1\" TERM; until nc -vzw 5 ${self.agentCoreService.out.name} 50051; do date; echo \"Waiting for agent-core-grpc services...\"; sleep 1; done;"
                       ];
                     }
                     {
@@ -2448,7 +2564,7 @@ in
                       command = [
                         "sh"
                         "-c"
-                        "trap \"exit 1\" TERM; until nc -vzw 5 ${name}-etcd 2379; do date; echo \"Waiting for etcd...\"; sleep 1; done;"
+                        "trap \"exit 1\" TERM; until nc -vzw 5 ${self.etcdService.out.name} 2379; do date; echo \"Waiting for etcd...\"; sleep 1; done;"
                       ];
                     }
                   ];
@@ -2488,14 +2604,14 @@ in
                       args = [
                         "--grpc-ip=$(MY_POD_IP)"
                         "-N$(MY_NODE_NAME)"
-                        "-Rhttps://${name}-agent-core:50051"
+                        "-Rhttps://${self.agentCoreService.out.name}:50051"
                         "-y/var/local/openebs/io-engine/config.yaml"
                         "-l${cpuList}"
-                        "-p=${name}-etcd:2379"
+                        "-p=${self.etcdService.out.name}:2379"
                         "--ptpl-dir=/var/local/openebs/io-engine/ptpl/"
                         "--api-versions=v1"
                         "--tgt-crdt=30"
-                        "--events-url=nats://${name}-nats:4222"
+                        "--events-url=nats://${self.natsService.out.name}:4222"
                         "--ps-retries=300"
                       ];
                       env = [
@@ -2611,11 +2727,6 @@ in
                 };
               };
             };
-            requires = [
-              self.agentCoreService
-              self.etcdService
-              self.natsService
-            ];
           })
         else
           null;
@@ -2648,9 +2759,7 @@ in
       # --- agent-ha-node DaemonSet ---
       agentHaNodeDaemonSet =
         if config.mayastor.enabled then
-          (scope.mkResource {
-            apiVersion = "apps/v1";
-            kind = "DaemonSet";
+          (scope.mkDaemonSet {
             name = "${name}-agent-ha-node";
             labels = mayastorLabels // {
               app = "agent-ha-node";
@@ -2670,9 +2779,7 @@ in
                 spec = {
                   hostNetwork = true;
                   dnsPolicy = "ClusterFirstWithHostNet";
-                  nodeSelector = {
-                    "kubernetes.io/arch" = "amd64";
-                  };
+                  nodeSelector = nodeAgentSelector;
                   initContainers = [
                     {
                       name = "agent-cluster-grpc-probe";
@@ -2681,7 +2788,7 @@ in
                       command = [
                         "sh"
                         "-c"
-                        "trap \"exit 1\" TERM; until nc -vzw 5 ${name}-agent-core 50052; do date; echo \"Waiting for agent-cluster-grpc services...\"; sleep 1; done;"
+                        "trap \"exit 1\" TERM; until nc -vzw 5 ${self.agentCoreService.out.name} 50052; do date; echo \"Waiting for agent-cluster-grpc services...\"; sleep 1; done;"
                       ];
                     }
                   ];
@@ -2714,8 +2821,8 @@ in
                         "--csi-socket=/csi/csi.sock"
                         "--grpc-ip=$(MY_POD_IP)"
                         "--grpc-port=50053"
-                        "--cluster-agent=https://${name}-agent-core:50052"
-                        "--events-url=nats://${name}-nats:4222"
+                        "--cluster-agent=https://${self.agentCoreService.out.name}:50052"
+                        "--events-url=nats://${self.natsService.out.name}:4222"
                         "--ansi-colors=true"
                         "--fmt-style=pretty"
                       ];
@@ -2789,10 +2896,6 @@ in
                 };
               };
             };
-            requires = [
-              self.agentCoreService
-              self.natsService
-            ];
           })
         else
           null;
@@ -2847,6 +2950,39 @@ in
         else
           null;
 
+      # --- PriorityClasses (the zfs-localpv chart ships these) ---
+      zfsControllerPriorityClass =
+        if config.zfsLocalPv.enabled then
+          (scope.mkClusterResource {
+            apiVersion = "scheduling.k8s.io/v1";
+            kind = "PriorityClass";
+            name = "openebs-zfs-csi-controller-critical";
+            labels = zfsControllerLabels;
+            extra = {
+              value = 900000000;
+              globalDefault = false;
+              description = "Used for the openebs ZFS LocalPV CSI controller, which must run on the cluster even under pressure.";
+            };
+          })
+        else
+          null;
+
+      zfsNodePriorityClass =
+        if config.zfsLocalPv.enabled then
+          (scope.mkClusterResource {
+            apiVersion = "scheduling.k8s.io/v1";
+            kind = "PriorityClass";
+            name = "openebs-zfs-csi-node-critical";
+            labels = zfsNodeLabels;
+            extra = {
+              value = 900001000;
+              globalDefault = false;
+              description = "Used for the openebs ZFS LocalPV CSI node plugin, which must run on every storage node even under pressure.";
+            };
+          })
+        else
+          null;
+
       # --- CSIDriver ---
       zfsCsiDriver =
         if config.zfsLocalPv.enabled then
@@ -2889,9 +3025,7 @@ in
       # --- ZFS Controller Deployment ---
       zfsController =
         if config.zfsLocalPv.enabled then
-          (scope.mkResource {
-            apiVersion = "apps/v1";
-            kind = "Deployment";
+          (scope.mkDeployment {
             name = "${name}-zfs-localpv-controller";
             labels = zfsControllerLabels // {
               app = "openebs-zfs-controller";
@@ -2914,8 +3048,8 @@ in
                   "openebs.io/version" = zfsVersion;
                 };
                 spec = {
-                  serviceAccountName = self.zfsControllerSa.out.name;
-                  priorityClassName = "openebs-zfs-csi-controller-critical";
+                  serviceAccount = self.zfsControllerSa;
+                  priorityClassName = self.zfsControllerPriorityClass.out.name;
                   containers = [
                     {
                       name = "csi-provisioner";
@@ -3049,7 +3183,8 @@ in
             };
             requires = [
               self.zfsCsiDriver
-            ];
+            ]
+            ++ crdsFor.zfs;
           })
         else
           null;
@@ -3057,9 +3192,7 @@ in
       # --- ZFS Node DaemonSet ---
       zfsNode =
         if config.zfsLocalPv.enabled then
-          (scope.mkResource {
-            apiVersion = "apps/v1";
-            kind = "DaemonSet";
+          (scope.mkDaemonSet {
             name = "${name}-zfs-localpv-node";
             labels = zfsNodeLabels // {
               app = "openebs-zfs-node";
@@ -3085,9 +3218,9 @@ in
                   "openebs.io/version" = zfsVersion;
                 };
                 spec = {
-                  serviceAccountName = self.zfsNodeSa.out.name;
+                  serviceAccount = self.zfsNodeSa;
                   hostNetwork = true;
-                  priorityClassName = "openebs-zfs-csi-node-critical";
+                  priorityClassName = self.zfsNodePriorityClass.out.name;
                   containers = [
                     {
                       name = "csi-node-driver-registrar";
@@ -3255,7 +3388,8 @@ in
             };
             requires = [
               self.zfsCsiDriver
-            ];
+            ]
+            ++ crdsFor.zfs;
           })
         else
           null;
@@ -3287,6 +3421,39 @@ in
         else
           null;
 
+      # --- PriorityClasses (the lvm-localpv chart ships these) ---
+      lvmControllerPriorityClass =
+        if config.lvmLocalPv.enabled then
+          (scope.mkClusterResource {
+            apiVersion = "scheduling.k8s.io/v1";
+            kind = "PriorityClass";
+            name = "openebs-lvm-localpv-csi-controller-critical";
+            labels = lvmControllerLabels;
+            extra = {
+              value = 900000000;
+              globalDefault = false;
+              description = "Used for the openebs LVM LocalPV CSI controller, which must run on the cluster even under pressure.";
+            };
+          })
+        else
+          null;
+
+      lvmNodePriorityClass =
+        if config.lvmLocalPv.enabled then
+          (scope.mkClusterResource {
+            apiVersion = "scheduling.k8s.io/v1";
+            kind = "PriorityClass";
+            name = "openebs-lvm-localpv-csi-node-critical";
+            labels = lvmNodeLabels;
+            extra = {
+              value = 900001000;
+              globalDefault = false;
+              description = "Used for the openebs LVM LocalPV CSI node plugin, which must run on every storage node even under pressure.";
+            };
+          })
+        else
+          null;
+
       # --- CSIDriver ---
       lvmCsiDriver =
         if config.lvmLocalPv.enabled then
@@ -3307,9 +3474,7 @@ in
       # --- LVM Controller Deployment ---
       lvmController =
         if config.lvmLocalPv.enabled then
-          (scope.mkResource {
-            apiVersion = "apps/v1";
-            kind = "Deployment";
+          (scope.mkDeployment {
             name = "${name}-lvm-localpv-controller";
             labels = lvmControllerLabels // {
               app = "openebs-lvm-controller";
@@ -3331,8 +3496,8 @@ in
                   "openebs.io/version" = lvmVersion;
                 };
                 spec = {
-                  serviceAccountName = self.lvmControllerSa.out.name;
-                  priorityClassName = "openebs-lvm-localpv-csi-controller-critical";
+                  serviceAccount = self.lvmControllerSa;
+                  priorityClassName = self.lvmControllerPriorityClass.out.name;
                   containers = [
                     {
                       name = "csi-provisioner";
@@ -3468,7 +3633,8 @@ in
             };
             requires = [
               self.lvmCsiDriver
-            ];
+            ]
+            ++ crdsFor.lvm;
           })
         else
           null;
@@ -3476,9 +3642,7 @@ in
       # --- LVM Node DaemonSet ---
       lvmNode =
         if config.lvmLocalPv.enabled then
-          (scope.mkResource {
-            apiVersion = "apps/v1";
-            kind = "DaemonSet";
+          (scope.mkDaemonSet {
             name = "${name}-lvm-localpv-node";
             labels = lvmNodeLabels // {
               app = "openebs-lvm-node";
@@ -3504,8 +3668,8 @@ in
                   "openebs.io/version" = lvmVersion;
                 };
                 spec = {
-                  serviceAccountName = self.lvmNodeSa.out.name;
-                  priorityClassName = "openebs-lvm-localpv-csi-node-critical";
+                  serviceAccount = self.lvmNodeSa;
+                  priorityClassName = self.lvmNodePriorityClass.out.name;
                   containers = [
                     {
                       name = "csi-node-driver-registrar";
@@ -3644,7 +3808,8 @@ in
             };
             requires = [
               self.lvmCsiDriver
-            ];
+            ]
+            ++ crdsFor.lvm;
           })
         else
           null;
@@ -3695,9 +3860,7 @@ in
 
       localPvDeployment =
         if config.localPvProvisioner.enabled then
-          (scope.mkResource {
-            apiVersion = "apps/v1";
-            kind = "Deployment";
+          (scope.mkDeployment {
             name = "${name}-localpv-provisioner";
             labels = localPvLabels // {
               "openebs.io/component-name" = "${name}-localpv-provisioner";
@@ -3716,7 +3879,7 @@ in
                   "openebs.io/component-name" = "${name}-localpv-provisioner";
                 };
                 spec = {
-                  serviceAccountName = self.localPvSa.out.name;
+                  serviceAccount = self.localPvSa;
                   tolerations = controlPlaneTolerations;
                   containers = [
                     {
@@ -3735,6 +3898,14 @@ in
                         {
                           name = "OPENEBS_NAMESPACE";
                           valueFrom.fieldRef.fieldPath = "metadata.namespace";
+                        }
+                        # The helper pod that prepares each hostpath runs
+                        # under this account; without the name the provisioner
+                        # refuses every claim ("invalid empty ... service
+                        # account name").
+                        {
+                          name = "OPENEBS_SERVICE_ACCOUNT";
+                          valueFrom.fieldRef.fieldPath = "spec.serviceAccountName";
                         }
                         {
                           name = "OPENEBS_IO_HELPER_IMAGE";
@@ -3817,6 +3988,9 @@ in
               node = pool.node;
               disks = pool.disks;
             };
+            # operator-diskpool installs the DiskPool CRD itself at startup, so
+            # its Deployment is the only thing this CR can be ordered after.
+            requires = [ self.operatorDiskpoolDeployment ];
           };
         }) config.diskPools
       );
@@ -3865,9 +4039,7 @@ in
 
       obsCallhomeDeployment =
         if config.mayastor.enabled then
-          (scope.mkResource {
-            apiVersion = "apps/v1";
-            kind = "Deployment";
+          (scope.mkDeployment {
             name = "${name}-obs-callhome";
             labels = {
               app = "obs-callhome";
@@ -3888,7 +4060,7 @@ in
                   "openebs.io/logging" = "true";
                 };
                 spec = {
-                  serviceAccountName = self.mayastorSa.out.name;
+                  serviceAccount = self.mayastorSa;
                   imagePullSecrets = null;
                   nodeSelector = {
                     "kubernetes.io/arch" = "amd64";
@@ -3898,7 +4070,7 @@ in
                       name = "obs-callhome";
                       image = "docker.io/openebs/mayastor-obs-callhome:v2.8.0";
                       args = [
-                        "-e http://${name}-api-rest:8081"
+                        "-e http://${self.apiRestService.out.name}:8081"
                         "-n ${ns}"
                         "--aggregator-url=http://${name}-obs-callhome-stats:9090/stats"
                         "--send-report"
@@ -3927,7 +4099,7 @@ in
                       args = [
                         "--namespace=${ns}"
                         "--release-name=${name}"
-                        "--mbus-url=nats://${name}-nats:4222"
+                        "--mbus-url=nats://${self.natsService.out.name}:4222"
                         "--ansi-colors=true"
                         "--fmt-style=pretty"
                       ];
@@ -3961,9 +4133,6 @@ in
               };
             };
             requires = [
-              self.mayastorSa
-              self.apiRestService
-              self.natsService
               self.obsCallhomeService
             ];
           })
@@ -3976,20 +4145,20 @@ in
       root = {
         resource = self.apiRestService;
         requires =
+          # --- CRDs ---
+          lib.filter (r: r != null) (lib.attrValues self.crds)
           # --- Mayastor components ---
-          lib.optionals config.mayastor.enabled [
+          ++ lib.optionals config.mayastor.enabled [
             self.mayastorSa
             self.priorityClass
             self.etcdStatefulSet
             self.etcdService
             self.etcdHeadlessService
             self.etcdStorageClass
-            self.etcdPdb
             self.natsStatefulSet
             self.natsService
             self.natsSa
             self.natsConfigMap
-            self.natsPdb
             self.agentCoreDeployment
             self.agentCoreService
             self.apiRestDeployment

@@ -37,7 +37,7 @@ Complete inventory of kix/lib (Nix library) and CLI features. Breadth-first — 
 - **`evaluateImportInstance`** (`eval/import.nix`) — Lightweight path for imports: runs package with null-throwing proxy deps, extracts root's `out`, creates marker PI CR.
 - **`mkImport`** — Import marker: `{ from?, out? }`. `from` = optional package function for lazy out derivation.
 - **`scope.mkServiceRef` / `scope.mkSecretRef`** (`scope/builders.nix`): a marker for a Service or Secret kix does not render (an operator's `prometheus-operated`, a Secret minted at runtime). `mkServiceRef { name, selector, ports, labels?, requires? }` exposes `out.{name, fqdn, port, labels}` with dependency context; the deploy engine waits for ready endpoints; netpol derives edges from the declared selector; the cross-resource checks and the monitor rule treat the marker as the Service it describes. Since 2026-09 the prometheus, alertmanager and victoria-metrics-cluster packages ref the operator's Services this way instead of rendering their own. A Service kix must render over operator pods declares `kix.run/operand-of = "<group>/<Kind>/<name>"` instead.
-- **`mkScope`** (`eval/scope.nix`) — Per-instance context. Provides: mkResource, mkClusterResource, mkDeployment, mkStatefulSet, mkDaemonSet, forNamespace, mkCRD, mkCRDRef, mkCR, full RBAC DSL. Supports kix and helm label styles via `labelStyle`. mkCRD/mkCRDRef accept per-kind controller declarations that ride into every mkCR-built CR: `factBehavior` (netpol) and `readiness = { path; equals; }` (health convention, stamped as the `kix.run/readiness` annotation and evaluated by `kix deploy`).
+- **`mkScope`** (`eval/scope.nix`) — Per-instance context. Provides: mkResource (refuses workload kinds), mkClusterResource, mkDeployment, mkStatefulSet, mkDaemonSet, mkJob, forNamespace, mkCRD, mkCRDRef, mkCR, full RBAC DSL. Supports kix and helm label styles via `labelStyle`. mkCRD/mkCRDRef accept per-kind controller declarations that ride into every mkCR-built CR: `factBehavior` (netpol) and `readiness = { path; equals; }` (health convention, stamped as the `kix.run/readiness` annotation and evaluated by `kix deploy`).
 - **`selectorLabelsOverride`** — Override auto-derived selector labels (for immutable selectors on existing workloads).
 - **Capability checks** — Lazy checks: `checkCapability`. Guards for loadBalancer, privilegedContainers, daemonSets.
 - **`mkNamespace`** (`eval/namespace.nix`) — Creates Namespace resource + optional ResourceQuota + NetworkPolicy resources.
@@ -135,7 +135,7 @@ Auto-derives CiliumNetworkPolicy from the DI graph:
 - `hasResourceLimits` — Every container needs limits (warning).
 - `hasResourceRequests` — Every container needs requests (warning).
 - `hasProbes` — Liveness + readiness probes (warning).
-- `hasPDB` — Multi-replica Deployments need PodDisruptionBudget (warning).
+- `hasPDB` — Multi-replica Deployments need PodDisruptionBudget (warning; the spread plugin derives one, so this fires only where spread is off).
 - `gracefulShutdown` — terminationGracePeriodSeconds set (info).
 
 **Governance:**
@@ -161,6 +161,7 @@ Auto-derives CiliumNetworkPolicy from the DI graph:
 - **Unsafe grants** (`unsafe.nix`) — closed vocabulary of structural-rule escapes (`raw-pvc`); raw PVCs outside a granted package are an eval error (`scope/validators.nix#checkRawPvc`).
 - **Object-name validation** (`scope/validators.nix#checkResourceName`): Checks names during evaluation because the Kubernetes OpenAPI schema leaves `metadata.name` unconstrained. Services require an RFC 1035 label, Namespaces require a DNS-1123 label, and other resources require a DNS-1123 subdomain. RBAC resources are exempt because the API server validates their names as path segments.
 - **Annotation domains** — `meta.annotationDomains` declares operator-owned annotation prefixes; duplicate declarers are an eager eval error (`eval/hooks.nix#buildAnnotationDomainIndex`).
+- **Derived pod spread and PDBs** — `hooks.workloadInterceptors.spread` patches `topologySpreadConstraints` into every multi-replica Deployment/StatefulSet pre-seal (the `podSpec` hook channel, author wins per field); `hooks.instanceProcessors.spread` emits a PDB unless the package wrote one over the same pods. `validators.checkSpreadFeasible` refuses hard hand-written placement rules on `multiNode = false`.
 - **Conflict detection:** `conflictsWith` (same namespace) and `cluster:conflictsWith` (cluster-wide).
 - **`evaluatePackageDiagnostics`** — Call package-declared warnings/assertions functions.
 - **`combineDiagnostics`** / **`collectClusterDiagnostics`** — Merge and enforce diagnostics.
@@ -185,6 +186,9 @@ Auto-derives CiliumNetworkPolicy from the DI graph:
 - `cluster.roles` — environment binding modes per registry role (`kix/lib/eval/roles.nix`): absent | shadowable | exclusive.
 - `cluster.network` — podCidr, serviceCidr, dnsUpstream.
 - `cluster.nodes` — Static node inventory (roles, cpu, memory, labels, taints).
+- `cluster.availability.default` — The largest failure a workload must survive: `none` | `pod` | `node` | `zone`, derived from the capabilities when unset and capped by them. `instances.<ns>.<inst>.availability` overrides per instance; `meta.availability.max` is the warned package ceiling; `cluster.availability.substrate` is the read-only derived maximum. Packages receive the level as their `availability` argument and map it with `kix.availability.pick` / `atLeast`. Spread strictness and PDBs derive from it. (`kix/lib/plugins/availability/module.nix`, v2_discussions/145)
+- `cluster.topology.zoneKey`, `cluster.topology.hostKey` — The node labels that name a zone and a node. Default to the well-known `topology.kubernetes.io/zone` and `kubernetes.io/hostname`; a hand-labelled substrate sets its own, a flavor may `mkDefault` them.
+- `cluster.topology.failureDomainKeys` — Read-only: the topology keys pods spread across, computed from `capabilities.availabilityZones`, `multiNode` and the two keys above. Operator-CR packages read it through `clusterConfig`.
 - `scorecard` — enable, rules, ruleDefaults, ruleOverrides, knownAnnotationDomains.
 - `networkPolicy` — enable, defaultDeny, directions.
 
@@ -240,8 +244,8 @@ rather than a second one. Live on stage1 and stage2 since 2026-08-31.
   without its CRD (which is a crashloop, not a config error); the four kinds
   with an `out.mk*` builder keep their CRD either way, and `scrapeConfigs` and
   `alertmanagerConfigs` default off because enabling one installs a CRD. The kinds with a consumer surface carry the real
-  upstream spec schema, vendored under the package's `schemas/` by
-  `scripts/vendor-vm-crd-schemas.py`, so a mistyped field is refused at apply
+  upstream spec schema, vendored under the package's `crds/` by
+  `scripts/vendor-crds.py` from `crds/sources.txt`, so a mistyped field is refused at apply
   time; the kinds that exist only to satisfy the operator's startup indexers
   keep the slim stub.
 - **`victoria-metrics-cluster`** — the VMCluster CR. HA defaults live in the

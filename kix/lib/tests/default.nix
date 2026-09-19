@@ -236,6 +236,187 @@ let
         };
     };
 
+  # v2_discussions/143/145 fixtures: a dep-free multi-replica Deployment, with
+  # optional pod-spec extras (hand-written placement rules) and an optional
+  # author-written PDB over the same selector.
+  mkReplicatedPackage =
+    {
+      replicas ? 3,
+      templateExtra ? { },
+      withPdb ? false,
+      metaExtra ? { },
+      helm ? false,
+    }:
+    {
+      meta = {
+        version = "test";
+      }
+      // metaExtra;
+      build =
+        { self, scope, ... }:
+        let
+          body = {
+            name = "web";
+            spec = {
+              inherit replicas;
+              selector.matchLabels = scope.selectorLabels;
+              template = {
+                metadata.labels = scope.selectorLabels;
+                spec = {
+                  containers = [
+                    (
+                      {
+                        name = "web";
+                        image = "example/web:1";
+                      }
+                      // containerBase
+                    )
+                  ];
+                }
+                // templateExtra;
+              };
+            };
+          };
+        in
+        {
+          root = self.deployment;
+          deployment =
+            if helm then
+              scope.mkHelmWorkload (
+                body
+                // {
+                  apiVersion = "apps/v1";
+                  kind = "Deployment";
+                }
+              )
+            else
+              scope.mkDeployment body;
+        }
+        // lib.optionalAttrs withPdb {
+          pdb = scope.mkResource {
+            apiVersion = "policy/v1";
+            kind = "PodDisruptionBudget";
+            name = "web-pdb";
+            spec = {
+              minAvailable = 2;
+              selector.matchLabels = scope.selectorLabels;
+            };
+          };
+        };
+    };
+
+  multiZone = {
+    cluster.capabilities.multiNode = true;
+    cluster.capabilities.availabilityZones = [
+      "a"
+      "b"
+      "c"
+    ];
+  };
+
+  singleNode = {
+    cluster.capabilities.multiNode = false;
+  };
+
+  hardHostnameAntiAffinity = {
+    affinity.podAntiAffinity.requiredDuringSchedulingIgnoredDuringExecution = [
+      {
+        labelSelector.matchLabels.app = "web";
+        topologyKey = "kubernetes.io/hostname";
+      }
+    ];
+  };
+
+  # The derived constraints of the fixture's Deployment, or [ ] when none.
+  # A package that takes the level as an argument and maps it, the way
+  # every replica-shaped option is expected to (145 §5). Also emits the
+  # level it saw into a ConfigMap so a test can read it.
+  mkLevelPackage =
+    {
+      metaExtra ? { },
+    }:
+    {
+      scope,
+      lib,
+      kix,
+      availability,
+      ...
+    }:
+    {
+      meta = {
+        version = "test";
+      }
+      // metaExtra;
+      options.replicaCount = lib.mkOption {
+        type = lib.types.int;
+        default = kix.availability.pick availability {
+          none = 1;
+          pod = 2;
+          node = 2;
+          zone = 3;
+        };
+      };
+      build =
+        {
+          self,
+          scope,
+          config,
+          availability,
+          ...
+        }:
+        {
+          root = self.deployment;
+          deployment = scope.mkDeployment {
+            name = "web";
+            spec = {
+              replicas = config.replicaCount;
+              selector.matchLabels = scope.selectorLabels;
+              template = {
+                metadata.labels = scope.selectorLabels;
+                spec.containers = [
+                  (
+                    {
+                      name = "web";
+                      image = "example/web:1";
+                    }
+                    // containerBase
+                  )
+                ];
+              };
+            };
+          };
+          seen = scope.mkResource {
+            apiVersion = "v1";
+            kind = "ConfigMap";
+            name = "level";
+            data.level = availability;
+          };
+        };
+    };
+
+  # The level an instance named `capped` in namespace `appns` saw, or, when
+  # no such instance is given, the level a fresh one sees under `mods`.
+  levelSeenBy =
+    mods:
+    let
+      hasCapped = builtins.any (
+        m: builtins.isAttrs m && (((m.instances or { }).appns or { }).capped or { }) ? package
+      ) mods;
+      cluster = mkCluster (
+        mods ++ lib.optional (!hasCapped) { instances.appns.capped.package = mkLevelPackage { }; }
+      );
+    in
+    (byName "level" (ofKind "ConfigMap" (manifests cluster))).data.level;
+
+  spreadOf =
+    cluster:
+    let
+      web = byName "web" (ofKind "Deployment" (manifests cluster));
+    in
+    web.spec.template.spec.topologySpreadConstraints or [ ];
+
+  spreadKeys = cs: map (c: "${c.topologyKey}=${c.whenUnsatisfiable}") cs;
+
   # A Deployment, a Service over the package's selector labels, and a
   # kix.healthCheck probe that dials the Service. Exercises every knob the
   # probe tests need.
@@ -711,6 +892,41 @@ let
           root = self.pvc;
         };
     };
+
+  # A Deployment built with raw scope.mkResource, the shape every package
+  # carried before the seal became the only way to build a workload.
+  mkRawDeploymentPackage = {
+    meta = {
+      version = "test";
+    };
+    build =
+      { self, scope, ... }:
+      {
+        deployment = scope.mkResource {
+          apiVersion = "apps/v1";
+          kind = "Deployment";
+          name = "raw";
+          spec = {
+            replicas = 1;
+            selector.matchLabels = {
+              app = "raw";
+            };
+            template = {
+              metadata.labels = {
+                app = "raw";
+              };
+              spec.containers = [
+                {
+                  name = "c";
+                  image = "img";
+                }
+              ];
+            };
+          };
+        };
+        root = self.deployment;
+      };
+  };
 
   mkAnnotatedCmPackage =
     {
@@ -2249,7 +2465,7 @@ let
     # drops egress on a named port (seen live on 1.19, 2026-09-19), so a
     # name the author passes is checked against the workload and replaced
     # by its number; extracted ports never carry a name as targetPort.
-    t55-from-workload-numeric-target-ports =
+    t88-from-workload-numeric-target-ports =
       let
         workload = {
           out.selector.app = "web";
@@ -3349,6 +3565,496 @@ let
       controllerName = "gateway.nginx.org/nginx-gateway-controller";
       proxySpec = kindProxySpec;
     });
+
+    # A workload kind through raw scope.mkResource never reaches sealWorkload
+    # (no validators, no derived spread, no netpol edges), so it is refused.
+    t87-raw-workload-kind-throws = evalFails (mkCluster [
+      baseInstances
+      { instances.appns.raw.package = mkRawDeploymentPackage; }
+    ]);
+
+    # ---------------------------------------------------- v2_discussions/145
+    # The availability level: derived from the substrate, overridable per
+    # instance, capped by the package, refused above the substrate. Spread
+    # strictness is a lowering of the level; constraints and the PDB are
+    # derived for every workload above one replica (mechanism from 143).
+
+    # Two or more zones derive "zone": hard on the zone key, best effort on
+    # hostname.
+    a01-level-zone-derived-from-zones =
+      let
+        keys = spreadKeys (
+          spreadOf (mkCluster [
+            multiZone
+            { instances.appns.web.package = mkReplicatedPackage { }; }
+          ])
+        );
+      in
+      keys == [
+        "topology.kubernetes.io/zone=DoNotSchedule"
+        "kubernetes.io/hostname=ScheduleAnyway"
+      ]
+      || throw "zone-level spread wrong: ${builtins.toJSON keys}";
+
+    # multiNode with zones unknown derives "node": hard on hostname only.
+    a02-level-node-derived-when-zones-unknown =
+      let
+        keys = spreadKeys (
+          spreadOf (mkCluster [
+            { cluster.capabilities.multiNode = true; }
+            { instances.appns.web.package = mkReplicatedPackage { }; }
+          ])
+        );
+      in
+      keys == [ "kubernetes.io/hostname=DoNotSchedule" ]
+      || throw "node-level spread wrong: ${builtins.toJSON keys}";
+
+    # multiNode = false derives "none": nothing derived, no PDB either, and
+    # the level is visible to the package.
+    a03-level-none-on-single-node =
+      let
+        cluster = mkCluster [
+          singleNode
+          { instances.appns.web.package = mkReplicatedPackage { }; }
+        ];
+      in
+      (
+        spreadOf cluster == [ ]
+        && ofKind "PodDisruptionBudget" (manifests cluster) == [ ]
+        && levelSeenBy [ singleNode ] == "none"
+      )
+      || throw "single node still derived spread or a PDB";
+
+    a04-single-replica-untouched =
+      let
+        cluster = mkCluster [
+          multiZone
+          { instances.appns.web.package = mkReplicatedPackage { replicas = 1; }; }
+        ];
+      in
+      (spreadOf cluster == [ ] && ofKind "PodDisruptionBudget" (manifests cluster) == [ ])
+      || throw "single-replica workload got spread or a PDB";
+
+    # Author-written topologySpreadConstraints win whole: nothing is merged
+    # in and no PDB is derived (one signal, one meaning).
+    a05-author-placement-wins-whole =
+      let
+        mine = [
+          {
+            topologyKey = "example.com/rack";
+            maxSkew = 2;
+            whenUnsatisfiable = "ScheduleAnyway";
+            labelSelector.matchLabels.app = "web";
+          }
+        ];
+        cluster = mkCluster [
+          multiZone
+          {
+            instances.appns.web.package = mkReplicatedPackage {
+              templateExtra.topologySpreadConstraints = mine;
+            };
+          }
+        ];
+      in
+      (spreadOf cluster == mine && ofKind "PodDisruptionBudget" (manifests cluster) == [ ])
+      || throw "author-written spread was merged with or a PDB was added";
+
+    # instances.<ns>.<inst>.availability = "none" with an explicit replica
+    # count above one: the count is a request for availability, so the pods
+    # still get best-effort spread and a PDB.
+    a06-instance-none-keeps-soft-spread-for-explicit-replicas =
+      let
+        cluster = mkCluster [
+          multiZone
+          {
+            instances.appns.web = {
+              package = mkReplicatedPackage { };
+              availability = "none";
+            };
+          }
+        ];
+        keys = spreadKeys (spreadOf cluster);
+      in
+      (
+        keys == [
+          "topology.kubernetes.io/zone=ScheduleAnyway"
+          "kubernetes.io/hostname=ScheduleAnyway"
+        ]
+        && namesOf (ofKind "PodDisruptionBudget" (manifests cluster)) == [ "web" ]
+      )
+      || throw "availability=none spread wrong: ${builtins.toJSON keys}";
+
+    # An instance may exceed the cluster default up to the substrate.
+    a07-instance-may-exceed-cluster-default =
+      let
+        keys = spreadKeys (
+          spreadOf (mkCluster [
+            multiZone
+            { cluster.availability.default = "node"; }
+            {
+              instances.appns.web = {
+                package = mkReplicatedPackage { };
+                availability = "zone";
+              };
+            }
+          ])
+        );
+      in
+      keys == [
+        "topology.kubernetes.io/zone=DoNotSchedule"
+        "kubernetes.io/hostname=ScheduleAnyway"
+      ]
+      || throw "instance override above cluster default wrong: ${builtins.toJSON keys}";
+
+    # "node" on a zoned cluster: hard on hostname, best effort on the zone.
+    a08-level-node-on-zoned-cluster =
+      let
+        keys = spreadKeys (
+          spreadOf (mkCluster [
+            multiZone
+            { cluster.availability.default = "node"; }
+            { instances.appns.web.package = mkReplicatedPackage { }; }
+          ])
+        );
+      in
+      keys == [
+        "topology.kubernetes.io/zone=ScheduleAnyway"
+        "kubernetes.io/hostname=DoNotSchedule"
+      ]
+      || throw "node-level spread on zoned cluster wrong: ${builtins.toJSON keys}";
+
+    # With maxSkew = 1 a DoNotSchedule constraint is even distribution, not
+    # one pod per domain: five replicas across three zones is 2/2/1 and
+    # legal, so there is no replica-count arithmetic to refuse.
+    a09-hard-spread-tolerates-more-replicas-than-domains =
+      let
+        cs = spreadOf (mkCluster [
+          multiZone
+          { instances.appns.web.package = mkReplicatedPackage { replicas = 5; }; }
+        ]);
+      in
+      builtins.length cs == 2 || throw "zone level with replicas > zones was refused";
+
+    # The substrate caps every level: a request above a known substrate is
+    # an error, above an unknown one it builds with a warning.
+    a10-substrate-caps-the-level =
+      evalFails (mkCluster [
+        { cluster.capabilities.availabilityZones = [ "only" ]; }
+        { cluster.capabilities.multiNode = true; }
+        { cluster.availability.default = "zone"; }
+        { instances.appns.web.package = mkReplicatedPackage { }; }
+      ])
+      && evalFails (mkCluster [
+        singleNode
+        {
+          instances.appns.web = {
+            package = mkReplicatedPackage { };
+            availability = "node";
+          };
+        }
+      ])
+      && hasName "web" (
+        ofKind "Deployment" (
+          manifests (mkCluster [
+            { cluster.availability.default = "zone"; }
+            { instances.appns.web.package = mkReplicatedPackage { }; }
+          ])
+        )
+      );
+
+    # meta.availability.max caps the level for one package, with a warning
+    # this matrix cannot observe; the package then runs at its ceiling.
+    a11-package-ceiling-caps-the-level =
+      let
+        keys = spreadKeys (
+          spreadOf (mkCluster [
+            multiZone
+            { instances.appns.web.package = mkReplicatedPackage { metaExtra.availability.max = "pod"; }; }
+          ])
+        );
+      in
+      (
+        keys == [
+          "topology.kubernetes.io/zone=ScheduleAnyway"
+          "kubernetes.io/hostname=ScheduleAnyway"
+        ]
+        &&
+          levelSeenBy [
+            multiZone
+            { instances.appns.capped.package = mkLevelPackage { metaExtra.availability.max = "pod"; }; }
+          ] == "pod"
+      )
+      || throw "ceiling not applied: ${builtins.toJSON keys}";
+
+    # A hand-written hard placement rule on a multi-replica workload cannot
+    # be satisfied on one node: refused when multiNode is declared false.
+    s12-single-node-refuses-hard-anti-affinity = evalFails (mkCluster [
+      singleNode
+      { instances.appns.web.package = mkReplicatedPackage { templateExtra = hardHostnameAntiAffinity; }; }
+    ]);
+
+    s12b-single-node-refuses-hard-spread = evalFails (mkCluster [
+      singleNode
+      {
+        instances.appns.web.package = mkReplicatedPackage {
+          templateExtra.topologySpreadConstraints = [
+            {
+              topologyKey = "kubernetes.io/hostname";
+              maxSkew = 1;
+              whenUnsatisfiable = "DoNotSchedule";
+              labelSelector.matchLabels.app = "web";
+            }
+          ];
+        };
+      }
+    ]);
+
+    # Preferred rules and single replicas are fine on one node.
+    s13-single-node-soft-anti-affinity-passes =
+      hasName "web" (
+        ofKind "Deployment" (
+          manifests (mkCluster [
+            singleNode
+            {
+              instances.appns.web.package = mkReplicatedPackage {
+                templateExtra.affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution = [
+                  {
+                    weight = 1;
+                    podAffinityTerm = {
+                      labelSelector.matchLabels.app = "web";
+                      topologyKey = "kubernetes.io/hostname";
+                    };
+                  }
+                ];
+              };
+            }
+          ])
+        )
+      )
+      || throw "soft anti-affinity on one node was refused";
+
+    s13b-single-node-hard-rule-one-replica-passes =
+      hasName "web" (
+        ofKind "Deployment" (
+          manifests (mkCluster [
+            singleNode
+            {
+              instances.appns.web.package = mkReplicatedPackage {
+                replicas = 1;
+                templateExtra = hardHostnameAntiAffinity;
+              };
+            }
+          ])
+        )
+      )
+      || throw "hard anti-affinity with one replica was refused";
+
+    # multiNode unknown: the hard rule warns and the cluster still builds.
+    s14-multinode-unknown-hard-anti-affinity-warns-only =
+      hasName "web" (
+        ofKind "Deployment" (
+          manifests (mkCluster [
+            { instances.appns.web.package = mkReplicatedPackage { templateExtra = hardHostnameAntiAffinity; }; }
+          ])
+        )
+      )
+      || throw "hard anti-affinity under unknown multiNode was refused";
+
+    # A PDB rides the same gate, named after the workload, in its
+    # namespace, selecting what the workload selects.
+    a15-pdb-derived =
+      let
+        ms = manifests (mkCluster [
+          multiZone
+          { instances.appns.web.package = mkReplicatedPackage { }; }
+        ]);
+        pdbs = ofKind "PodDisruptionBudget" ms;
+        pdb = byName "web" pdbs;
+        web = byName "web" (ofKind "Deployment" ms);
+      in
+      (
+        builtins.length pdbs == 1
+        && pdb.metadata.namespace == "appns"
+        && pdb.spec.maxUnavailable == 1
+        && pdb.spec.selector.matchLabels == web.spec.selector.matchLabels
+      )
+      || throw "derived PDB wrong: ${builtins.toJSON pdbs}";
+
+    # An author-written PDB over the same pods is kept and nothing is added.
+    a16-pdb-author-wins =
+      let
+        pdbs = ofKind "PodDisruptionBudget" (
+          manifests (mkCluster [
+            multiZone
+            { instances.appns.web.package = mkReplicatedPackage { withPdb = true; }; }
+          ])
+        );
+      in
+      namesOf pdbs == [ "web-pdb" ] || throw "author PDB not honoured: ${builtins.toJSON (namesOf pdbs)}";
+
+    # Helm-imported workloads go through the same seal and get the same spread.
+    a17-helm-workload-gets-spread =
+      let
+        keys = spreadKeys (
+          spreadOf (mkCluster [
+            multiZone
+            { instances.appns.web.package = mkReplicatedPackage { helm = true; }; }
+          ])
+        );
+      in
+      keys == [
+        "topology.kubernetes.io/zone=DoNotSchedule"
+        "kubernetes.io/hostname=ScheduleAnyway"
+      ]
+      || throw "helm workload spread wrong: ${builtins.toJSON keys}";
+
+    # The failure-domain keys and the substrate level are readable cluster
+    # facts for packages whose pods an operator renders.
+    a18-failure-domain-keys-are-a-cluster-fact =
+      let
+        keysProbe = {
+          meta.version = "test";
+          build =
+            {
+              self,
+              scope,
+              clusterConfig,
+              ...
+            }:
+            {
+              root = self.cm;
+              cm = scope.mkResource {
+                apiVersion = "v1";
+                kind = "ConfigMap";
+                name = "keys";
+                data.keys = builtins.concatStringsSep "," clusterConfig.cluster.topology.failureDomainKeys;
+                data.substrate = clusterConfig.cluster.availability.substrate;
+              };
+            };
+        };
+        probe =
+          mods:
+          byName "keys" (
+            ofKind "ConfigMap" (manifests (mkCluster (mods ++ [ { instances.p.probe.package = keysProbe; } ])))
+          );
+        keysOf = mods: builtins.filter (k: k != "") (lib.splitString "," (probe mods).data.keys);
+      in
+      (
+        keysOf [ multiZone ] == [
+          "topology.kubernetes.io/zone"
+          "kubernetes.io/hostname"
+        ]
+        && keysOf [ singleNode ] == [ ]
+        &&
+          keysOf [ { cluster.capabilities.availabilityZones = [ "only" ]; } ] == [ "kubernetes.io/hostname" ]
+        && (probe [ multiZone ]).data.substrate == "zone"
+        && (probe [ singleNode ]).data.substrate == "none"
+      )
+      || throw "failureDomainKeys or substrate wrong";
+
+    # The labels that name a zone and a host are cluster facts too: a
+    # hand-labelled substrate sets its own and every derived constraint,
+    # the strictness lowering and failureDomainKeys follow.
+    a18b-topology-keys-are-configurable =
+      let
+        customKeys = {
+          cluster.topology.zoneKey = "topology.example.com/rack";
+          cluster.topology.hostKey = "example.com/host";
+        };
+        cluster = mkCluster [
+          multiZone
+          customKeys
+          { instances.appns.web.package = mkReplicatedPackage { }; }
+        ];
+        keys = spreadKeys (spreadOf cluster);
+        keysProbe = {
+          meta.version = "test";
+          build =
+            {
+              self,
+              scope,
+              clusterConfig,
+              ...
+            }:
+            {
+              root = self.cm;
+              cm = scope.mkResource {
+                apiVersion = "v1";
+                kind = "ConfigMap";
+                name = "keys";
+                data.keys = builtins.concatStringsSep "," clusterConfig.cluster.topology.failureDomainKeys;
+              };
+            };
+        };
+        seen =
+          (byName "keys" (
+            ofKind "ConfigMap" (
+              manifests (mkCluster [
+                multiZone
+                customKeys
+                { instances.p.probe.package = keysProbe; }
+              ])
+            )
+          )).data.keys;
+        nodeKeys = spreadKeys (
+          spreadOf (mkCluster [
+            { cluster.capabilities.multiNode = true; }
+            customKeys
+            { instances.appns.web.package = mkReplicatedPackage { }; }
+          ])
+        );
+      in
+      (
+        keys == [
+          "topology.example.com/rack=DoNotSchedule"
+          "example.com/host=ScheduleAnyway"
+        ]
+        && seen == "topology.example.com/rack,example.com/host"
+        && nodeKeys == [ "example.com/host=DoNotSchedule" ]
+      )
+      || throw "custom topology keys not honoured: ${builtins.toJSON keys} ${seen} ${builtins.toJSON nodeKeys}";
+
+    # The package receives the resolved level as its `availability`
+    # argument and maps it through kix.availability.pick; an explicit
+    # instance value still wins over the mapped default.
+    a19-package-maps-the-level =
+      let
+        replicasUnder =
+          mods:
+          (byName "web" (
+            ofKind "Deployment" (
+              manifests (mkCluster (mods ++ [ { instances.appns.web.package = mkLevelPackage { }; } ]))
+            )
+          )).spec.replicas;
+      in
+      (
+        replicasUnder [ singleNode ] == 1
+        && replicasUnder [ { cluster.capabilities.multiNode = true; } ] == 2
+        && replicasUnder [ multiZone ] == 3
+        &&
+          replicasUnder [
+            multiZone
+            { instances.appns.web.config.replicaCount = 7; }
+          ] == 7
+        &&
+          levelSeenBy [
+            multiZone
+            { instances.appns.capped.availability = "pod"; }
+          ] == "pod"
+      )
+      || throw "package did not receive or map the level";
+
+    # kix.availability.pick refuses an incomplete table, so a package's
+    # mapping is complete by construction.
+    a20-pick-refuses-incomplete-table =
+      !(builtins.tryEval (
+        kixlib.availability.pick "zone" {
+          none = 1;
+          zone = 3;
+        }
+      )).success
+      && kixlib.availability.atLeast "node" "zone"
+      && !(kixlib.availability.atLeast "node" "pod");
   }
   // import ./validate.nix {
     inherit

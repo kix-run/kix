@@ -29,6 +29,7 @@ let
     resolveDeclaredDeps
     ;
   inherit (import_) evaluateImportInstance;
+  availabilityLib = import ../core/availability.nix { inherit lib; };
 in
 
 {
@@ -60,6 +61,21 @@ in
         peekedPackageMeta = meta.peekPackageMeta {
           package = instCfg.package;
           inherit kixlib;
+        };
+
+        # The availability ladder for this instance (core/availability.nix,
+        # v2_discussions/145): instance override, else cluster default,
+        # capped by the package ceiling, refused above the substrate.
+        # `.level` reaches the package as the `availability` argument, the
+        # scope's workload interceptors and the instance processors.
+        availability = availabilityLib.resolve {
+          capabilities = clusterConfig.cluster.capabilities or { };
+          clusterDefault =
+            ((clusterConfig.cluster or { }).availability or { }).default
+              or (availabilityLib.substrate (clusterConfig.cluster.capabilities or { })).level;
+          instanceOverride = instCfg.availability or null;
+          ceiling = (peekedPackageMeta.availability or { }).max or null;
+          where = "${namespaceName}/${instanceName}";
         };
 
         _dnsResolution = resolveArg {
@@ -149,6 +165,7 @@ in
             peekedPackageMeta
             workloadInterceptors
             clusterCtx
+            availability
             ;
           networkPolicyEnforcer = _networkPolicyEnforcer;
           namespaces = nsResources;
@@ -179,6 +196,7 @@ in
         raw = callPackagePhase1 {
           package = instCfg.package;
           scope = scope';
+          availability = availability.level;
         };
 
         packageMeta = raw.meta or { };
@@ -271,7 +289,8 @@ in
               lib.optionalAttrs (args ? scope) { scope = scope'; }
               // lib.optionalAttrs (args ? lib) { inherit lib; }
               // lib.optionalAttrs (args ? kix) { kix = kixlib; }
-              // lib.optionalAttrs (args ? deps) { deps = resolvedDeps; };
+              // lib.optionalAttrs (args ? deps) { deps = resolvedDeps; }
+              // lib.optionalAttrs (args ? availability) { availability = availability.level; };
             depArgs = lib.intersectAttrs args resolvedDeps;
           in
           fn (base // extra // depArgs);
@@ -488,8 +507,12 @@ in
             namespaceName
             allPartResources
             packageMeta
+            availability
             ;
           cluster = clusterCtx;
+          # Root-reachability of a part, from the forward closure only (never
+          # from processor output, which would recurse).
+          forwardReachable = r: builtins.hasAttr (builtins.unsafeDiscardStringContext r.outPath) forwardPaths;
         };
         processorResults = map (p: p processorCtx) instanceProcessors;
         processorResources = builtins.concatMap (r: r.resources or [ ]) processorResults;

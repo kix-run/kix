@@ -13,9 +13,22 @@
 { lib }:
 let
   compose = import ./compose.nix { inherit lib; };
+  availability = import ../core/availability.nix { inherit lib; };
 in
 compose
 // {
+  # kix.availability.pick level { none = 1; pod = 2; node = 2; zone = 3; }
+  # and kix.availability.atLeast "node" level: how a package maps the
+  # cluster's availability level (v2_discussions/145) onto its own
+  # replica counts and quorums.
+  availability = {
+    inherit (availability)
+      levels
+      pick
+      atLeast
+      rank
+      ;
+  };
   pins = import ./pins.nix {
     inherit lib;
     inherit (compose) image;

@@ -106,6 +106,7 @@ reconciler, and no runbook should need to.
 | Class of mistake | Mechanism |
 |---|---|
 | Mismatched selector vs template labels | `mkDeployment` etc. copy `spec.selector.matchLabels` to `template.metadata.labels` |
+| Workload built outside the seal | `mkResource` refuses Deployment, StatefulSet, DaemonSet and Job; only the typed builders run the validators, derived spread and PDB, and netpol edges |
 | Dangling resource refs | All refs are Nix-typed; `null` resources are stripped, not silently dropped |
 | Meaningful empty value deleted (`emptyDir: {}`, empty selectors) | Collapse-rule normalization: literal empties render; only containers that lost every member to null-stripping collapse. `kix.keep` protects constructor-built containers |
 | Sourceless volume shipped to the apiserver | `volumeHasSource` scorecard rule (severity error) checks volumes as they will render |
@@ -175,6 +176,17 @@ for it directly without leaving kix:
 If the escape hatch is the only way to express something common, that's a
 signal to upstream the pattern.
 
+### 5.4 Upstream CRDs are vendored, not restated
+
+A package that wraps an operator ships the operator's own CRDs, fetched from
+a public URL at the pinned version and committed as JSON under the package's
+`crds/`. A hand-written stub that accepts any spec registers the kind and
+validates nothing, so a mistyped field reaches the operator instead of
+failing at apply time. Stubs are for kinds kix itself defines. When the
+operator installs and rewrites its own CRDs, the package ships markers and
+no copy, because two writers of one CRD conflict on every deploy. The
+`crd-vendoring` skill holds the procedure.
+
 ## 6. DSL design rules
 
 ### 6.1 Automation over brevity
@@ -185,6 +197,21 @@ DSL features exist to **prevent mistakes**, not to save lines.
 
 `mkDeployment` is verbose because it copies selector to template labels — that
 verbosity is the safety net. Don't introduce a "compact" form that skips it.
+
+The same principle runs the other way for availability and placement. A
+package does not decide how many replicas a cluster wants, and does not
+write `topologySpreadConstraints` or pod anti-affinity. It receives the
+cluster's availability level as its `availability` argument and maps it in
+every replica-shaped default (`kix.availability.pick availability { none =
+1; pod = 2; node = 2; zone = 3; }`), and the compiler derives spread across
+the cluster's failure-domain keys plus a PodDisruptionBudget from the
+replica count (`cluster.availability`, v2_discussions/145). The package
+cannot know what a failure zone is on the cluster it lands on, and a literal
+`topologyKey` or a literal `3` is a guess. The level and the per-instance
+override belong to the cluster operator (`instances.<ns>.<inst>.availability`).
+A package that cannot reach a level says so with `meta.availability.max` and
+a reason. Write placement by hand only for a rule the derivation cannot
+express (a quorum that must never co-locate).
 
 ### 6.2 Resources are rich objects
 

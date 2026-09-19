@@ -1,0 +1,33 @@
+name: CRD vendoring check
+
+# Every package that ships CRDs keeps them under kix/packages/<pkg>/crds/,
+# vendored from the public URLs in that directory's sources.txt by
+# scripts/vendor-crds.py. This job fails when a committed file no longer
+# matches its source, which is what a version bump that moved the image
+# and forgot the CRDs looks like. Design: v2_discussions/146.
+
+on:
+  pull_request:
+    paths:
+      - 'kix/packages/**'
+      - 'scripts/vendor-crds.py'
+      - 'scripts/vendor_crds/**'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - '.github/workflows/crd-check.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v6
+      - name: Unit tests
+        run: uv run --frozen python -m unittest -v vendor_crds.test_vendor_crds
+        working-directory: scripts
+      - name: Vendored CRDs match their sources
+        run: uv run --frozen scripts/vendor-crds.py --check

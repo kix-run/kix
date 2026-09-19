@@ -26,6 +26,7 @@
   scope,
   lib,
   kix,
+  availability,
 }:
 let
   name = scope.instanceName;
@@ -66,8 +67,19 @@ in
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;
-      default = 2;
-      description = "Identical-replica HA pair; the cluster's dedup collapses the double ingest.";
+      # The HA pair from "node" up; below that a second scraper only
+      # doubles the ingest the cluster then has to dedup away.
+      default = kix.availability.pick availability {
+        none = 1;
+        pod = 1;
+        node = 2;
+        zone = 2;
+      };
+      description = ''
+        Identical-replica HA pair; the cluster's dedup collapses the
+        double ingest. Defaults from the cluster's availability level
+        (v2_discussions/145).
+      '';
     };
     scrapeInterval = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
@@ -134,6 +146,7 @@ in
       {
         self,
         config,
+        clusterConfig,
         vmOperator,
         vmCluster,
         ...
@@ -155,19 +168,21 @@ in
           podDisruptionBudget = {
             maxUnavailable = 1;
           };
+          # Operand pods are rendered by the operator, so kix's derived
+          # spread never sees them: the CR carries the rule, but the
+          # failure-domain keys come from the cluster (v2_discussions/143
+          # §2), never a literal.
           affinity = {
-            podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution = [
-              {
-                weight = 100;
-                podAffinityTerm = {
-                  labelSelector.matchLabels = {
-                    "app.kubernetes.io/name" = "vmagent";
-                    "app.kubernetes.io/instance" = name;
-                  };
-                  topologyKey = "kubernetes.io/hostname";
+            podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution = map (topologyKey: {
+              weight = 100;
+              podAffinityTerm = {
+                labelSelector.matchLabels = {
+                  "app.kubernetes.io/name" = "vmagent";
+                  "app.kubernetes.io/instance" = name;
                 };
-              }
-            ];
+                inherit topologyKey;
+              };
+            }) clusterConfig.cluster.topology.failureDomainKeys;
           };
           resources = config.resources;
         }

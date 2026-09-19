@@ -1,0 +1,5 @@
+# gha-runner-scale-set-controller chart at the tag matching config.image.tag.
+https://raw.githubusercontent.com/actions/actions-runner-controller/gha-runner-scale-set-0.13.1/charts/gha-runner-scale-set-controller/crds/actions.github.com_autoscalinglisteners.yaml
+https://raw.githubusercontent.com/actions/actions-runner-controller/gha-runner-scale-set-0.13.1/charts/gha-runner-scale-set-controller/crds/actions.github.com_autoscalingrunnersets.yaml
+https://raw.githubusercontent.com/actions/actions-runner-controller/gha-runner-scale-set-0.13.1/charts/gha-runner-scale-set-controller/crds/actions.github.com_ephemeralrunners.yaml
+https://raw.githubusercontent.com/actions/actions-runner-controller/gha-runner-scale-set-0.13.1/charts/gha-runner-scale-set-controller/crds/actions.github.com_ephemeralrunnersets.yaml

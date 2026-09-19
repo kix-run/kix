@@ -4,9 +4,11 @@
 # BackupStorageLocation, optional VolumeSnapshotLocation, and scheduled
 # backup CRs.
 #
-# Resources: ServiceAccount, ClusterRoleBinding, Role, RoleBinding, Deployment,
-#            DaemonSet (node-agent), ConfigMap (volume-policies), Service,
-#            BackupStorageLocation, VolumeSnapshotLocation, Schedule CRs.
+# Resources: CustomResourceDefinitions (velero.io v1 + v2alpha1, vendored from
+#            upstream v1.15.2), ServiceAccount, ClusterRoleBinding, Role,
+#            RoleBinding, Deployment, DaemonSet (node-agent), ConfigMap
+#            (volume-policies), Service, BackupStorageLocation,
+#            VolumeSnapshotLocation, Schedule CRs.
 #
 # root = Deployment (velero server)
 #
@@ -32,6 +34,9 @@ in
 {
   meta = {
     version = "v1.15.2";
+    # The velero server has no leader election and a second one would race
+    # the first over backups, so one replica is the ceiling it can honour.
+    availability.max = "pod";
   };
 
   options = {
@@ -133,26 +138,6 @@ in
         config = { };
       };
     };
-    upgradeCRDs = lib.mkOption {
-      type = lib.types.submodule {
-        options = {
-          enable = lib.mkOption {
-            type = lib.types.bool;
-            default = false;
-            description = "Emit the helm-style upgrade-crds Job + ServiceAccount that runs `velero install --crds-only` on each apply. Cluster-scoped RBAC must be provided separately.";
-          };
-          kubectlImage = lib.mkOption {
-            type = lib.types.str;
-            default = "docker.io/bitnamilegacy/kubectl:1.33.4";
-          };
-          backoffLimit = lib.mkOption {
-            type = lib.types.int;
-            default = 3;
-          };
-        };
-      };
-      default = { };
-    };
   };
 
   build =
@@ -248,12 +233,40 @@ in
           // lib.optionalAttrs (scheduleCfg ? skipImmediately) {
             skipImmediately = scheduleCfg.skipImmediately;
           };
+          # A Schedule cannot be applied before the API server serves the kind.
+          requires = [ self.crds.schedules ];
         }
       ) config.schedules;
 
     in
     scheduleResources
     // {
+
+      # --- CustomResourceDefinitions ---
+      # Vendored from upstream velero v1.15.2:
+      #   config/crd/v1/bases/velero.io_<plural>.yaml          (group v1)
+      #   config/crd/v2alpha1/bases/velero.io_<plural>.yaml    (group v2alpha1)
+      # The server and the node-agent both refuse to start until every kind
+      # they watch is served, so they require these.
+      crds =
+        let
+          vendored = file: (builtins.fromJSON (builtins.readFile ./crds/${file})).spec;
+        in
+        {
+          backupRepositories = scope.mkCRD { spec = vendored "backuprepositories.velero.io.json"; };
+          backups = scope.mkCRD { spec = vendored "backups.velero.io.json"; };
+          backupStorageLocations = scope.mkCRD { spec = vendored "backupstoragelocations.velero.io.json"; };
+          dataDownloads = scope.mkCRD { spec = vendored "datadownloads.velero.io.json"; };
+          dataUploads = scope.mkCRD { spec = vendored "datauploads.velero.io.json"; };
+          deleteBackupRequests = scope.mkCRD { spec = vendored "deletebackuprequests.velero.io.json"; };
+          downloadRequests = scope.mkCRD { spec = vendored "downloadrequests.velero.io.json"; };
+          podVolumeBackups = scope.mkCRD { spec = vendored "podvolumebackups.velero.io.json"; };
+          podVolumeRestores = scope.mkCRD { spec = vendored "podvolumerestores.velero.io.json"; };
+          restores = scope.mkCRD { spec = vendored "restores.velero.io.json"; };
+          schedules = scope.mkCRD { spec = vendored "schedules.velero.io.json"; };
+          serverStatusRequests = scope.mkCRD { spec = vendored "serverstatusrequests.velero.io.json"; };
+          volumeSnapshotLocations = scope.mkCRD { spec = vendored "volumesnapshotlocations.velero.io.json"; };
+        };
 
       # --- ServiceAccount ---
       serviceAccount = scope.mkResource {
@@ -324,8 +337,11 @@ in
       };
 
       # --- Secret (S3 credentials) ---
-      # Always a resource with .out.name — either kix-managed (mkSecret) or
-      # a reference to a user-provided external secret (mkSecretRef).
+      # kix-managed (mkSecret) from secretContents, a reference to a Secret
+      # the operator provides (mkSecretRef) from secretName, or nothing:
+      # a reference emitted with no credentials configured is an import
+      # marker for a Secret nobody creates, and a deploy waits on it until
+      # its timeout.
       secret =
         if createSecret then
           scope.mkSecret {
@@ -333,11 +349,13 @@ in
             labels = selectorLabels;
             stringData = config.credentials.secretContents;
           }
-        else
+        else if config.credentials.secretName != null then
           scope.mkSecretRef {
             name = credentialSecretName;
             keys = [ ];
-          };
+          }
+        else
+          null;
 
       # --- ConfigMap (volume policies) ---
       configmap =
@@ -377,9 +395,7 @@ in
       };
 
       # --- Deployment (velero server) ---
-      deployment = scope.mkResource {
-        apiVersion = "apps/v1";
-        kind = "Deployment";
+      deployment = scope.mkDeployment {
         inherit name;
         labels = selectorLabels // {
           component = "velero";
@@ -387,7 +403,12 @@ in
         spec = {
           replicas = 1;
           strategy.type = "Recreate";
-          selector.matchLabels = selectorLabels;
+          # The node-agent pods carry selectorLabels too, so a bare
+          # selectorLabels selector would also claim them. name=velero is
+          # what tells the two pod sets apart (the Service selector agrees).
+          selector.matchLabels = selectorLabels // {
+            name = "velero";
+          };
           template = {
             metadata = {
               labels = selectorLabels // {
@@ -400,7 +421,7 @@ in
               };
             };
             spec = {
-              serviceAccountName = "${name}-server";
+              serviceAccount = self.serviceAccount;
               automountServiceAccountToken = true;
               terminationGracePeriodSeconds = 3600;
               initContainers = map (ic: {
@@ -505,14 +526,13 @@ in
             };
           };
         };
+        requires = builtins.attrValues self.crds;
       };
 
       # --- DaemonSet (node-agent) ---
       nodeAgent =
         if config.deployNodeAgent then
-          scope.mkResource {
-            apiVersion = "apps/v1";
-            kind = "DaemonSet";
+          scope.mkDaemonSet {
             name = "node-agent";
             labels = selectorLabels;
             spec = {
@@ -536,7 +556,7 @@ in
                   };
                 };
                 spec = {
-                  serviceAccountName = "${name}-server";
+                  serviceAccount = self.serviceAccount;
                   automountServiceAccountToken = true;
                   securityContext = {
                     runAsUser = 0;
@@ -623,6 +643,7 @@ in
                 };
               };
             };
+            requires = builtins.attrValues self.crds;
           }
         else
           null;
@@ -681,88 +702,6 @@ in
         else
           null;
 
-      # --- upgrade-crds Job + ServiceAccount (helm-style pre-install hook) ---
-      # Matches the velero helm chart's `upgrade-crds` template, which runs
-      # `velero install --crds-only --dry-run -o yaml | kubectl apply -f -`.
-      # The ClusterRole/ClusterRoleBinding (cluster-scoped) are NOT emitted
-      # here — wire them in via cluster-scope converge resources.
-      upgradeCrdsServiceAccount =
-        if config.upgradeCRDs.enable then
-          scope.mkResource {
-            apiVersion = "v1";
-            kind = "ServiceAccount";
-            name = "${name}-server-upgrade-crds";
-            labels = selectorLabels;
-            extra.automountServiceAccountToken = true;
-          }
-        else
-          null;
-
-      upgradeCrdsJob =
-        if config.upgradeCRDs.enable then
-          scope.mkResource {
-            apiVersion = "batch/v1";
-            kind = "Job";
-            name = "${name}-upgrade-crds";
-            labels = selectorLabels;
-            spec = {
-              backoffLimit = config.upgradeCRDs.backoffLimit;
-              template = {
-                metadata.name = "${name}-upgrade-crds";
-                spec = {
-                  serviceAccountName = self.upgradeCrdsServiceAccount.out.name;
-                  automountServiceAccountToken = true;
-                  restartPolicy = "OnFailure";
-                  initContainers = [
-                    {
-                      name = "kubectl";
-                      image = config.upgradeCRDs.kubectlImage;
-                      imagePullPolicy = "IfNotPresent";
-                      command = [ "/bin/sh" ];
-                      args = [
-                        "-c"
-                        "cp `which sh` /tmp && cp `which kubectl` /tmp"
-                      ];
-                      volumeMounts = [
-                        {
-                          mountPath = "/tmp";
-                          name = "crds";
-                        }
-                      ];
-                    }
-                  ];
-                  containers = [
-                    {
-                      name = "velero";
-                      image = "${config.image.repository}:${config.image.tag}";
-                      imagePullPolicy = config.image.pullPolicy;
-                      command = [ "/tmp/sh" ];
-                      args = [
-                        "-c"
-                        "/velero install --crds-only --dry-run -o yaml | /tmp/kubectl apply -f -"
-                      ];
-                      volumeMounts = [
-                        {
-                          mountPath = "/tmp";
-                          name = "crds";
-                        }
-                      ];
-                    }
-                  ];
-                  volumes = [
-                    {
-                      name = "crds";
-                      emptyDir = { };
-                    }
-                  ];
-                };
-              };
-            };
-            requires = [ self.upgradeCrdsServiceAccount ];
-          }
-        else
-          null;
-
       # --- Entry point ---
       root = {
         resource = self.deployment;
@@ -778,8 +717,7 @@ in
         ++ lib.optional (self.nodeAgent != null) self.nodeAgent
         ++ lib.optional (self.secret != null) self.secret
         ++ lib.optional (self.volumeSnapshotLocation != null) self.volumeSnapshotLocation
-        ++ lib.optional (self.upgradeCrdsServiceAccount != null) self.upgradeCrdsServiceAccount
-        ++ lib.optional (self.upgradeCrdsJob != null) self.upgradeCrdsJob
+        ++ (builtins.attrValues self.crds)
         ++ (lib.attrValues scheduleResources);
 
         # Package-level out extensions — exposed via DI as velero.out.*

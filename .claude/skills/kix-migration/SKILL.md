@@ -225,21 +225,22 @@ Fix all warnings before committing.
 
 | API | Description |
 |-----|-------------|
-| `scope.mkResource { ... }` | Create a namespaced K8s resource |
+| `scope.mkResource { ... }` | Create a namespaced K8s resource that is not a workload. A Deployment, StatefulSet, DaemonSet or Job through it is an eval error: only the typed builders below seal a workload (validators, derived spread and PDB, netpol edges) |
 | `scope.mkClusterResource { ... }` | Create a cluster-scoped resource |
 | `scope.mkDeployment` | Create a Deployment — auto-sets apiVersion/kind, copies `selector.matchLabels` to template labels |
 | `scope.mkStatefulSet` | Same as mkDeployment but for StatefulSets |
 | `scope.mkDaemonSet` | Same as mkDeployment but for DaemonSets |
+| `scope.mkJob` | Same for Jobs; the selector may be omitted (template labels are used) |
 | `scope.selectorLabels` | Default selector labels for this instance. Overridable per-instance via `selectorLabels` in cluster config. |
 | `scope.mkSecret`, `scope.mkSecretRef` | Secret primitives with enriched `out` API. **Read `SECRETS.md` for the full API, gotchas, and usage patterns.** |
 | `scope.forNamespace nsName` | Get a scope for a different namespace (cross-namespace resources) |
 | `scope.rbac` | RBAC DSL. **Read `docs/RBAC_DSL.md`** for the full API (`group`, `core`, intents like `watch`/`reconcile`/`own`/`full`, `grant`, `mkClusterRoleSet`/`mkRoleSet`). |
-| `scope.mkCRD`, `scope.mkCRDRef`, `scope.mkCR` | CRD resource builders. For pipeable CRD construction (`fromKind \|> clusterScoped \|> withVersion \|> ...`), read `kix/lib/crd.nix`. |
+| `scope.mkCRD`, `scope.mkCRDRef`, `scope.mkCR` | CRD resource builders. A package that wraps an upstream operator vendors the real CRDs under `<pkg>/crds/` from the URLs in `crds/sources.txt` and loads each with `scope.mkCRD { spec = (builtins.fromJSON (builtins.readFile ./crds/<name>.json)).spec; }`; use the `crd-vendoring` skill for that. `fromKind \|> clusterScoped \|> ...` (`kix/lib/vocab/crd.nix`) builds stubs for kinds kix invents. |
 | `scope.instanceName` | The instance name from the cluster definition |
 | `scope.namespaceName` | The namespace this instance lives in |
 | `scope.namespace` | The Namespace resource itself (for deps) |
 
-Workload constructors (`mkDeployment`, `mkStatefulSet`, `mkDaemonSet`) are pipe-friendly — use at the end of a `|>` chain. They auto-set `apiVersion`/`kind` and copy `spec.selector.matchLabels` to `spec.template.metadata.labels` (preventing selector mismatch). The `name` field is required.
+Workload constructors (`mkDeployment`, `mkStatefulSet`, `mkDaemonSet`, `mkJob`) are pipe-friendly — use at the end of a `|>` chain. They auto-set `apiVersion`/`kind` and copy `spec.selector.matchLabels` to `spec.template.metadata.labels` (preventing selector mismatch). The `name` field is required. They are the only way to build a workload: `scope.mkResource { kind = "Deployment"; ... }` is refused at eval, because a workload that skips `sealWorkload` gets no pod-spec validation, no derived spread or PodDisruptionBudget and no network-policy edges. Inside `spec.template.spec` write `serviceAccount = self.sa;` (not `serviceAccountName`), and in a StatefulSet `headlessService = self.svc;` (not `serviceName`).
 
 ### mkResource / mkClusterResource fields
 
@@ -291,6 +292,11 @@ edge but NO netpol hole. Consequences when authoring:
   `mkVMAlert` and `mkVMAlertmanager` state `out.scrapeJob` and
   `out.replicas` this way; the probes read them instead of retyping the
   operator's naming.
+- **Operator packages that own CRDs** get them from upstream, not from
+  `fromKind` stubs: the `crd-vendoring` skill covers the route choice
+  (vendor, or `mkCRDRef` markers when the operator installs its own),
+  the `crds/sources.txt` file, and what to read in a refresh diff at a
+  version bump. Design: `v2_discussions/146_crd_vendoring_and_upgrades.md`.
 - **Operator packages that own CRDs** declare per-kind fact behavior on the
   CRD itself when their controller dials endpoints embedded in CR specs
   (e.g. a database operator connecting operand pods to an address in the
@@ -507,6 +513,7 @@ Each module file receives `{ config, lib, ref, packages, ... }` and can declare 
 - **`cluster.roles`** — binding modes for environment-owned roles (`cni`, `dns`, `storageClasses`, `loadBalancer`, `network-policy-enforcer`): `absent` (vacant, a managed instance fills it), `shadowable` (environment default, managed instance overrides), `exclusive` (environment owns it — a managed instance claiming it is an eval error). Set by flavors; override per-cluster (e.g. `cluster.roles.cni.binding = "absent"` on kind created with `disableDefaultCNI`).
 - **`cluster.capabilities`** — substrate axioms (`multiNode`, `privilegedContainers`, `daemonSets`, `gpu`, ...), three-valued: `null` = unknown (relying workloads warn), `false` = hard error, `true` = pass. Read `kix/lib/modules.nix` for the full list. The old role-backed bools (`cni`, `networkPolicyAPI`, `loadBalancer`, `persistentStorage`, `rwxStorage`, `volumeSnapshots`, `ingressController`) no longer exist — role providers are derived from `meta.roles`; rwx/snapshot facts live on the storage provider's `out`.
 - **`cluster.network`** — `podCidr`, `serviceCidr`, `dnsUpstream`.
+- **`cluster.availability`** — `none | pod | node | zone`, the largest failure a workload must survive; derived from the capabilities when unset, capped by them, overridable with `instances.<ns>.<inst>.availability`. Every package takes an `availability` argument and maps it in every replica-shaped default: `default = kix.availability.pick availability { none = 1; pod = 2; node = 2; zone = 3; }` (a literal replica default is wrong; an explicit instance value still wins). A package that cannot run more than one replica declares `meta.availability.max = "none"` (or `"pod"` if it cannot fail over) with a reason. Do not write `topologySpreadConstraints` or pod anti-affinity in a package: any Deployment/StatefulSet with `replicas > 1` gets spread across `cluster.topology.failureDomainKeys` (zone, then hostname, from `cluster.topology.zoneKey` and `hostKey`, which default to the well-known labels; nothing on `multiNode = false`) and a PDB, derived at build time, with strictness lowered from the level. Author-written constraints switch both derivations off for that workload. On a single-node cluster a hand-written `requiredDuringScheduling` anti-affinity with `replicas > 1` is an eval error. Operator-CR packages (VMCluster) read `clusterConfig.cluster.topology.failureDomainKeys`. Read `kix/lib/plugins/availability/module.nix` and `kix/lib/core/availability.nix`.
 - **`ref`** — module arg for referencing other instances by path (e.g. `ref.instances.kube-system.coredns`).
 - **`mkLocked`** — marks a config field as immutable; blocks dep injection overrides.
 - **Monitoring module** — declarative Prometheus/Grafana/Loki stack. Read `kix/lib/modules/monitoring.nix`.

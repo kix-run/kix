@@ -136,15 +136,16 @@ in
     echo "Building kix manifests for $cluster..."
     nix build ".#cluster-$cluster" --extra-experimental-features pipe-operators
     echo "Applying manifests to kind cluster $kind_name..."
-    # Apply CRDs first and wait for them to register
-    for f in result/*-customresourcedefinition.yaml; do
-      [ -e "$f" ] || continue
+    # The manifest dir is nested (result/_cluster, result/<namespace>), so
+    # both passes have to recurse. Apply CRDs first and wait for them to
+    # register.
+    find -L result -name '*-customresourcedefinition.yaml' | sort | while read -r f; do
       echo "  apply $(basename "$f")"
       kubectl --context "kind-$kind_name" apply -f "$f"
     done
     kubectl --context "kind-$kind_name" wait --for=condition=Established crd --all --timeout=30s 2>/dev/null || true
     # Apply everything (CRDs are idempotent, CRs now work)
-    kubectl --context "kind-$kind_name" apply -f result/
+    kubectl --context "kind-$kind_name" apply -R -f result/
     echo "Done."
   '';
 

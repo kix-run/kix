@@ -16,6 +16,7 @@
   scope,
   lib,
   kix,
+  availability,
 }:
 
 let
@@ -25,6 +26,9 @@ in
   meta = {
     version = "0.7.26";
     description = "Firezone — self-hosted WireGuard VPN";
+    # One process owns the WireGuard interface and its peer state, so
+    # Firezone 0.7 cannot run more than one replica.
+    availability.max = "none";
   };
 
   options = {
@@ -39,7 +43,18 @@ in
 
     replicaCount = lib.mkOption {
       type = lib.types.int;
-      default = 1;
+      # Pinned to one at every level: see meta.availability.max.
+      default = kix.availability.pick availability {
+        none = 1;
+        pod = 1;
+        node = 1;
+        zone = 1;
+      };
+      description = ''
+        Number of Firezone replicas. Pinned to one at every availability
+        level (v2_discussions/145) because the WireGuard interface has a
+        single owner.
+      '';
     };
 
     domain = lib.mkOption {

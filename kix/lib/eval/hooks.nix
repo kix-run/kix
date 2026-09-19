@@ -12,6 +12,7 @@ let
       "requires"
       "resources"
       "warnings"
+      "podSpec"
     ];
     instanceProcessors = [
       "resources"

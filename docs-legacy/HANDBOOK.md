@@ -410,12 +410,12 @@ Use this only for fixtures and inline cluster definitions. Files in `kix/package
 
 | Symbol | Signature / Notes |
 |---|---|
-| `scope.mkResource attrs` | Create a namespaced K8s resource — see §7 for fields |
+| `scope.mkResource attrs` | Create a namespaced K8s resource — see §7 for fields. Refuses Deployment, StatefulSet, DaemonSet and Job: a workload is sealed by its typed builder below or not at all |
 | `scope.mkClusterResource attrs` | Same, cluster-scoped (omits `metadata.namespace`) |
 | `scope.mkDeployment attrs` | Workload wrapper. Sets apiVersion/kind, copies `selector.matchLabels` to `template.metadata.labels`, validates, runs per-workload CNP generation. Pipe-friendly. `name` required. |
 | `scope.mkStatefulSet attrs` | Same; expands `headlessService` shorthand (auto-creates the headless Service) |
 | `scope.mkDaemonSet attrs` | Same |
-| `scope.mkJob attrs` | Same; no selector enforcement |
+| `scope.mkJob attrs` | Same; the selector may be omitted (template labels stand in) |
 | `scope.mkHelmWorkload attrs` | Helm-sourced workload (used internally by `importChart`). Runs the pod-spec validators `mkDeployment` runs, except the DI-tracked reference check: chart names are plain strings, and the cross-resource checks resolve them instead |
 | `scope.mkOptional cond builder` | Gate a resource on a boolean. `builder` may be a thunk `(_: ...)` to avoid eager eval when `cond` is false |
 | `scope.mkSecret { ... }` | Secret with enriched `out` (see §21). **Always** use this instead of `scope.mkResource { kind = "Secret"; }` |
@@ -934,6 +934,8 @@ modules = [
 
 **Capability flags** (full list, all on `cluster.capabilities`): `multiNode`, `availabilityZones` (list), `nodeAutoscaling`, `managedControlPlane`, `gpu`, `privilegedContainers`, `podSecurityEnforcement` (`"privileged" | "baseline" | "restricted" | null`), `daemonSets`. Flags are three-valued substrate axioms: `null` = unknown (relying workloads warn), `false` = hard error, `true` = pass.
 
+**Availability level, pod spread and PDBs** (`kix/lib/plugins/availability/module.nix`, v2_discussions/145; spread mechanism from archive/143). `cluster.availability.default = "none" | "pod" | "node" | "zone"` names the largest failure a workload must survive without downtime. It is derived from the capabilities when unset (`multiNode = false` gives `none`, two or more `availabilityZones` give `zone`, otherwise `node`; unknown capabilities derive `node` with one warning), capped by them (asking `zone` without zones is an eval error), and overridable per instance with `instances.<ns>.<inst>.availability`, which may exceed the cluster default up to the substrate. `cluster.availability.substrate` (read-only) is the derived maximum. Every package receives the resolved level as its `availability` function argument, and every replica-shaped option default maps it: `kix.availability.pick availability { none = 1; pod = 2; node = 2; zone = 3; }`, `kix.availability.atLeast "node" availability`. An explicit instance value still wins. A package that cannot reach a level declares `meta.availability.max = "pod"`; a request above it is lowered with a warning. Every Deployment or StatefulSet with `spec.replicas > 1` gets `topologySpreadConstraints` on `cluster.topology.failureDomainKeys` (read-only: `[ zoneKey hostKey ]` with more than one zone, `[ hostKey ]` otherwise, `[ ]` on `multiNode = false`; `cluster.topology.zoneKey` and `cluster.topology.hostKey` default to the well-known labels `topology.kubernetes.io/zone` and `kubernetes.io/hostname`, and a cluster whose nodes are labelled by hand sets its own) and a `PodDisruptionBudget` (`maxUnavailable = 1`). Strictness is a lowering of the level: `zone` is DoNotSchedule on the zone key, `node` is DoNotSchedule on hostname, `pod` and `none` are ScheduleAnyway everywhere; an explicit replica count above one under `none` still gets best-effort spread and a PDB. Author-written `topologySpreadConstraints` on a workload switch off both derivations for it; an author PDB over the same pods is kept. On `multiNode = false`, a hand-written `requiredDuringScheduling` anti-affinity or `DoNotSchedule` spread on a multi-replica workload is an eval error; on `multiNode = null` it warns. A root-reachable workload with one replica under `node` or above warns (the package did not map the level). Packages whose pods an operator renders (VMCluster) read `clusterConfig.cluster.topology.failureDomainKeys` for their CR's affinity. With `maxSkew = 1` a hard constraint means even distribution, not one pod per domain: five replicas across three zones is 2/2/1.
+
 The old role-backed bools (`cni`, `networkPolicyAPI`, `loadBalancer`, `persistentStorage`, `rwxStorage`, `volumeSnapshots`, `ingressController`) are gone (v2_discussions/127): role providers derive from `meta.roles`, the environment's claim on a role is a `cluster.roles.<name>.binding`, and rwx/snapshot facts live on the storage provider's `out`. The CNI/LB/storage columns in the table above describe role bindings and platform imports, not capability flags.
 
 **Override flavor defaults** when reality differs (e.g. ludo runs k3s with
@@ -1059,7 +1061,7 @@ Configure via `scorecard.{enable, rules, ruleDefaults, ruleOverrides}`.
 | `hasResourceLimits` | manifest | warning | All containers have limits |
 | `hasResourceRequests` | manifest | warning | All containers have requests |
 | `hasProbes` | manifest | warning | Workload containers have liveness + readiness probes |
-| `hasPDB` | package | warning | Multi-replica Deployments have PodDisruptionBudget |
+| `hasPDB` | package | warning | Multi-replica Deployments have PodDisruptionBudget (derived by `cluster.availability`; fires only where the author placed the workload) |
 | `gracefulShutdown` | manifest | info | `terminationGracePeriodSeconds` set |
 
 **Governance** (`kix.rules.governance`):
@@ -1292,6 +1294,16 @@ in {
 ```
 
 `scope.mkCRDRef` creates a CRD marker (no actual CRD resource) — use when the CRD is owned by an external package that you depend on.
+
+`fromKind` builds a single-version stub whose spec accepts anything. It is
+for kinds Kix invents. A package that wraps an upstream operator vendors the
+real CRDs instead: one JSON object per CRD under `<pkg>/crds/`, refreshed
+from the public URLs in `crds/sources.txt` by `scripts/vendor-crds.py`
+(`--check` runs in CI), and loaded with
+`scope.mkCRD { spec = (builtins.fromJSON (builtins.readFile ./crds/<name>.json)).spec; }`.
+When the operator installs and rewrites its own CRDs, ship `mkCRDRef`
+markers and no copy. Rules and the bump procedure: the `crd-vendoring`
+skill and `v2_discussions/146_crd_vendoring_and_upgrades.md`.
 
 Both `mkCRD` and `mkCRDRef` accept two per-kind controller-semantics declarations that ride the typed chain into every CR built via `mkCR`:
 

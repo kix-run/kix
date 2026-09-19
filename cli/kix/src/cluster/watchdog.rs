@@ -140,7 +140,7 @@ impl Progress {
                     .collect()
             })
             .unwrap_or_default();
-        out.sort_by(|a, b| b.since.cmp(&a.since));
+        out.sort_by_key(|b| std::cmp::Reverse(b.since));
         out
     }
 

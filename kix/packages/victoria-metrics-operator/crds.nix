@@ -133,9 +133,9 @@ let
   #
   # So every kind with a consumer surface (`consumer = true` in kinds.nix
   # — the out.mk* builders and the sibling packages) carries the real
-  # upstream schema, vendored per kind under ./schemas by
-  # scripts/vendor-vm-crd-schemas.py. The indexer-floor kinds keep the
-  # stub: nothing in kix writes one, and their only job is to exist.
+  # upstream schema, vendored under ./crds by scripts/vendor-crds.py from
+  # the URL in crds/sources.txt. The indexer-floor kinds keep the stub:
+  # nothing in kix writes one, and their only job is to exist.
   #
   # The file is the whole upstream CRD document; only its spec subtree is
   # read here. A missing file is an error rather than a silent fall back
@@ -143,15 +143,15 @@ let
   vendoredSpec =
     def:
     let
-      path = ./schemas + "/${def.plural}.json";
+      path = ./crds + "/${def.plural}.${vmGroup}.json";
     in
     if !(def.consumer or false) then
       null
     else if !builtins.pathExists path then
       throw (
         "victoria-metrics-operator: ${def.kind} has a consumer surface but no "
-        + "vendored schema at schemas/${def.plural}.json. Run "
-        + "scripts/vendor-vm-crd-schemas.py."
+        + "vendored schema at crds/${def.plural}.${vmGroup}.json. Add it to "
+        + "crds/sources.txt and run scripts/vendor-crds.py."
       )
     else
       (builtins.elemAt (builtins.fromJSON (builtins.readFile path)).spec.versions 0)
