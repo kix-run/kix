@@ -201,6 +201,9 @@ spread and a PDB. And a workload whose author wrote
 compiler: one signal, one meaning. This closes the per-workload opt-out
 gap recorded in housekeeping on 2026-09-19.
 
+The two labels are `cluster.topology.zoneKey` and `cluster.topology.hostKey`,
+defaulting to the well-known `topology.kubernetes.io/zone` and
+`kubernetes.io/hostname`; a hand-labelled substrate sets its own.
 `cluster.topology.failureDomainKeys` stays as it is, for packages whose
 pods an operator renders. `meta.spread` is removed.
 

@@ -3806,6 +3806,68 @@ let
       )
       || throw "failureDomainKeys or substrate wrong";
 
+    # The labels that name a zone and a host are cluster facts too: a
+    # hand-labelled substrate sets its own and every derived constraint,
+    # the strictness lowering and failureDomainKeys follow.
+    a18b-topology-keys-are-configurable =
+      let
+        customKeys = {
+          cluster.topology.zoneKey = "topology.example.com/rack";
+          cluster.topology.hostKey = "example.com/host";
+        };
+        cluster = mkCluster [
+          multiZone
+          customKeys
+          { instances.appns.web.package = mkReplicatedPackage { }; }
+        ];
+        keys = spreadKeys (spreadOf cluster);
+        keysProbe = {
+          meta.version = "test";
+          build =
+            {
+              self,
+              scope,
+              clusterConfig,
+              ...
+            }:
+            {
+              root = self.cm;
+              cm = scope.mkResource {
+                apiVersion = "v1";
+                kind = "ConfigMap";
+                name = "keys";
+                data.keys = builtins.concatStringsSep "," clusterConfig.cluster.topology.failureDomainKeys;
+              };
+            };
+        };
+        seen =
+          (byName "keys" (
+            ofKind "ConfigMap" (
+              manifests (mkCluster [
+                multiZone
+                customKeys
+                { instances.p.probe.package = keysProbe; }
+              ])
+            )
+          )).data.keys;
+        nodeKeys = spreadKeys (
+          spreadOf (mkCluster [
+            { cluster.capabilities.multiNode = true; }
+            customKeys
+            { instances.appns.web.package = mkReplicatedPackage { }; }
+          ])
+        );
+      in
+      (
+        keys == [
+          "topology.example.com/rack=DoNotSchedule"
+          "example.com/host=ScheduleAnyway"
+        ]
+        && seen == "topology.example.com/rack,example.com/host"
+        && nodeKeys == [ "example.com/host=DoNotSchedule" ]
+      )
+      || throw "custom topology keys not honoured: ${builtins.toJSON keys} ${seen} ${builtins.toJSON nodeKeys}";
+
     # The package receives the resolved level as its `availability`
     # argument and maps it through kix.availability.pick; an explicit
     # instance value still wins over the mapped default.

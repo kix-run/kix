@@ -27,8 +27,11 @@ let
   avail = import ../../core/availability.nix { inherit lib; };
   caps = config.cluster.capabilities;
 
-  zoneKey = "topology.kubernetes.io/zone";
-  hostKey = "kubernetes.io/hostname";
+  # The labels that name a zone and a host. Both default to the well-known
+  # Kubernetes labels; a cluster whose nodes are labelled by hand (racks,
+  # hypervisor hosts, no cloud controller) sets its own.
+  zoneKey = config.cluster.topology.zoneKey;
+  hostKey = config.cluster.topology.hostKey;
 
   spreadKinds = [
     "Deployment"
@@ -139,13 +142,33 @@ in
       };
     };
 
+    cluster.topology.zoneKey = lib.mkOption {
+      type = lib.types.str;
+      default = "topology.kubernetes.io/zone";
+      description = ''
+        The node label whose value names the availability zone. Cloud
+        controllers set the well-known default; a cluster whose nodes are
+        labelled by hand (racks, hypervisor hosts, no cloud controller)
+        names its own label here. A flavor may set it with mkDefault.
+      '';
+    };
+
+    cluster.topology.hostKey = lib.mkOption {
+      type = lib.types.str;
+      default = "kubernetes.io/hostname";
+      description = ''
+        The node label whose value names the node. The kubelet sets the
+        well-known default on every node, so this rarely changes.
+      '';
+    };
+
     cluster.topology.failureDomainKeys = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       readOnly = true;
       description = ''
         The topology keys a pod should be spread across on this cluster,
         outermost first. Computed from cluster.capabilities: zones declared
-        and more than one gives [ zone, hostname ]; otherwise [ hostname ];
+        and more than one gives [ zoneKey, hostKey ]; otherwise [ hostKey ];
         multiNode = false gives [ ]. Packages whose pods are rendered by an
         operator read this (clusterConfig.cluster.topology.failureDomainKeys)
         instead of naming a key.
@@ -269,7 +292,7 @@ in
         )
         ++ lib.optional (multiNode == true && zones == null) (
           "[kix] cluster.capabilities.availabilityZones is unknown, so availability is derived as "
-          + "\"node\" and derived pod spread uses kubernetes.io/hostname only. Declare the zones "
+          + "\"node\" and derived pod spread uses ${hostKey} only. Declare the zones "
           + "(or [ ] for single-zone) in the target."
         );
     };
