@@ -242,8 +242,8 @@ rather than a second one. Live on stage1 and stage2 since 2026-08-31.
   without its CRD (which is a crashloop, not a config error); the four kinds
   with an `out.mk*` builder keep their CRD either way, and `scrapeConfigs` and
   `alertmanagerConfigs` default off because enabling one installs a CRD. The kinds with a consumer surface carry the real
-  upstream spec schema, vendored under the package's `schemas/` by
-  `scripts/vendor-vm-crd-schemas.py`, so a mistyped field is refused at apply
+  upstream spec schema, vendored under the package's `crds/` by
+  `scripts/vendor-crds.py` from `crds/sources.txt`, so a mistyped field is refused at apply
   time; the kinds that exist only to satisfy the operator's startup indexers
   keep the slim stub.
 - **`victoria-metrics-cluster`** — the VMCluster CR. HA defaults live in the

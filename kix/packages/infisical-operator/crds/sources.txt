@@ -1,0 +1,4 @@
+# Infisical/infisical at the operator tag in default.nix (infisical-k8-operator/<version>).
+https://raw.githubusercontent.com/Infisical/infisical/infisical-k8-operator/v0.9.1/k8-operator/config/crd/bases/secrets.infisical.com_infisicaldynamicsecrets.yaml
+https://raw.githubusercontent.com/Infisical/infisical/infisical-k8-operator/v0.9.1/k8-operator/config/crd/bases/secrets.infisical.com_infisicalpushsecrets.yaml
+https://raw.githubusercontent.com/Infisical/infisical/infisical-k8-operator/v0.9.1/k8-operator/config/crd/bases/secrets.infisical.com_infisicalsecrets.yaml

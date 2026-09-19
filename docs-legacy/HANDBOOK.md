@@ -1270,6 +1270,16 @@ in {
 
 `scope.mkCRDRef` creates a CRD marker (no actual CRD resource) — use when the CRD is owned by an external package that you depend on.
 
+`fromKind` builds a single-version stub whose spec accepts anything. It is
+for kinds Kix invents. A package that wraps an upstream operator vendors the
+real CRDs instead: one JSON object per CRD under `<pkg>/crds/`, refreshed
+from the public URLs in `crds/sources.txt` by `scripts/vendor-crds.py`
+(`--check` runs in CI), and loaded with
+`scope.mkCRD { spec = (builtins.fromJSON (builtins.readFile ./crds/<name>.json)).spec; }`.
+When the operator installs and rewrites its own CRDs, ship `mkCRDRef`
+markers and no copy. Rules and the bump procedure: the `crd-vendoring`
+skill and `v2_discussions/146_crd_vendoring_and_upgrades.md`.
+
 Both `mkCRD` and `mkCRDRef` accept two per-kind controller-semantics declarations that ride the typed chain into every CR built via `mkCR`:
 
 - `factBehavior = { endpoint = "terminate"|"conduct"; podSelector = cr: {...}; }` — netpol semantics (§facts).

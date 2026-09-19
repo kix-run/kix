@@ -58,7 +58,7 @@ in
           type = "date";
         }
       ]
-      |> scope.crd.withSchema (builtins.elemAt (builtins.fromJSON (builtins.readFile ./certificates.cert-manager.io-customresourcedefinition.yaml.json)).spec.versions 0)
+      |> scope.crd.withSchema (builtins.elemAt (builtins.fromJSON (builtins.readFile ./crds/certificates.cert-manager.io.json)).spec.versions 0)
       .schema.openAPIV3Schema.properties.spec
     );
 

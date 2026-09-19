@@ -1,0 +1,4 @@
+# cert-manager release asset at the image tag in default.nix. Only the
+# Certificate schema is vendored today; the other five kinds are stubs in
+# crds.nix (v2_discussions/146 §6 lists them for migration).
+https://github.com/cert-manager/cert-manager/releases/download/v1.17.1/cert-manager.crds.yaml certificates.cert-manager.io

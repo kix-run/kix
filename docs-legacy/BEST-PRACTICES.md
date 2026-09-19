@@ -176,6 +176,17 @@ for it directly without leaving kix:
 If the escape hatch is the only way to express something common, that's a
 signal to upstream the pattern.
 
+### 5.4 Upstream CRDs are vendored, not restated
+
+A package that wraps an operator ships the operator's own CRDs, fetched from
+a public URL at the pinned version and committed as JSON under the package's
+`crds/`. A hand-written stub that accepts any spec registers the kind and
+validates nothing, so a mistyped field reaches the operator instead of
+failing at apply time. Stubs are for kinds kix itself defines. When the
+operator installs and rewrites its own CRDs, the package ships markers and
+no copy, because two writers of one CRD conflict on every deploy. The
+`crd-vendoring` skill holds the procedure.
+
 ## 6. DSL design rules
 
 ### 6.1 Automation over brevity

@@ -231,7 +231,7 @@ Fix all warnings before committing.
 | `scope.mkSecret`, `scope.mkSecretRef` | Secret primitives with enriched `out` API. **Read `SECRETS.md` for the full API, gotchas, and usage patterns.** |
 | `scope.forNamespace nsName` | Get a scope for a different namespace (cross-namespace resources) |
 | `scope.rbac` | RBAC DSL. **Read `docs/RBAC_DSL.md`** for the full API (`group`, `core`, intents like `watch`/`reconcile`/`own`/`full`, `grant`, `mkClusterRoleSet`/`mkRoleSet`). |
-| `scope.mkCRD`, `scope.mkCRDRef`, `scope.mkCR` | CRD resource builders. For pipeable CRD construction (`fromKind \|> clusterScoped \|> withVersion \|> ...`), read `kix/lib/crd.nix`. |
+| `scope.mkCRD`, `scope.mkCRDRef`, `scope.mkCR` | CRD resource builders. A package that wraps an upstream operator vendors the real CRDs under `<pkg>/crds/` from the URLs in `crds/sources.txt` and loads each with `scope.mkCRD { spec = (builtins.fromJSON (builtins.readFile ./crds/<name>.json)).spec; }`; use the `crd-vendoring` skill for that. `fromKind \|> clusterScoped \|> ...` (`kix/lib/vocab/crd.nix`) builds stubs for kinds kix invents. |
 | `scope.instanceName` | The instance name from the cluster definition |
 | `scope.namespaceName` | The namespace this instance lives in |
 | `scope.namespace` | The Namespace resource itself (for deps) |
@@ -288,6 +288,11 @@ edge but NO netpol hole. Consequences when authoring:
   `mkVMAlert` and `mkVMAlertmanager` state `out.scrapeJob` and
   `out.replicas` this way; the probes read them instead of retyping the
   operator's naming.
+- **Operator packages that own CRDs** get them from upstream, not from
+  `fromKind` stubs: the `crd-vendoring` skill covers the route choice
+  (vendor, or `mkCRDRef` markers when the operator installs its own),
+  the `crds/sources.txt` file, and what to read in a refresh diff at a
+  version bump. Design: `v2_discussions/146_crd_vendoring_and_upgrades.md`.
 - **Operator packages that own CRDs** declare per-kind fact behavior on the
   CRD itself when their controller dials endpoints embedded in CR specs
   (e.g. a database operator connecting operand pods to an address in the

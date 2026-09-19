@@ -1823,9 +1823,7 @@ in
       # Vendored from upstream kubevirt-operator.yaml v1.5.0.
       crds = {
         kubeVirt = scope.mkCRD {
-          spec =
-            (builtins.fromJSON (builtins.readFile ./kubevirts.kubevirt.io-customresourcedefinition.yaml.json))
-            .spec;
+          spec = (builtins.fromJSON (builtins.readFile ./crds/kubevirts.kubevirt.io.json)).spec;
         };
       };
 

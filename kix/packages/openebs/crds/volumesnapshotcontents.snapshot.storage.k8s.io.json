@@ -3,8 +3,8 @@
   "kind": "CustomResourceDefinition",
   "metadata": {
     "annotations": {
-      "controller-gen.kubebuilder.io/version": "v0.11.3",
-      "api-approved.kubernetes.io": "https://github.com/kubernetes-csi/external-snapshotter/pull/814"
+      "api-approved.kubernetes.io": "https://github.com/kubernetes-csi/external-snapshotter/pull/814",
+      "controller-gen.kubebuilder.io/version": "v0.11.3"
     },
     "creationTimestamp": null,
     "name": "volumesnapshotcontents.snapshot.storage.k8s.io"
@@ -103,17 +103,6 @@
                   },
                   "source": {
                     "description": "source specifies whether the snapshot is (or should be) dynamically provisioned or already exists, and just requires a Kubernetes object representation. This field is immutable after creation. Required.",
-                    "properties": {
-                      "snapshotHandle": {
-                        "description": "snapshotHandle specifies the CSI \"snapshot_id\" of a pre-existing snapshot on the underlying storage system for which a Kubernetes object representation was (or should be) created. This field is immutable.",
-                        "type": "string"
-                      },
-                      "volumeHandle": {
-                        "description": "volumeHandle specifies the CSI \"volume_id\" of the volume from which a snapshot should be dynamically taken from. This field is immutable.",
-                        "type": "string"
-                      }
-                    },
-                    "type": "object",
                     "oneOf": [
                       {
                         "required": [
@@ -125,10 +114,21 @@
                           "volumeHandle"
                         ]
                       }
-                    ]
+                    ],
+                    "properties": {
+                      "snapshotHandle": {
+                        "description": "snapshotHandle specifies the CSI \"snapshot_id\" of a pre-existing snapshot on the underlying storage system for which a Kubernetes object representation was (or should be) created. This field is immutable.",
+                        "type": "string"
+                      },
+                      "volumeHandle": {
+                        "description": "volumeHandle specifies the CSI \"volume_id\" of the volume from which a snapshot should be dynamically taken from. This field is immutable.",
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
                   },
                   "sourceVolumeMode": {
-                    "description": "SourceVolumeMode is the mode of the volume whose snapshot is taken. Can be either “Filesystem” or “Block”. If not specified, it indicates the source volume's mode is unknown. This field is immutable. This field is an alpha field.",
+                    "description": "SourceVolumeMode is the mode of the volume whose snapshot is taken. Can be either \u201cFilesystem\u201d or \u201cBlock\u201d. If not specified, it indicates the source volume's mode is unknown. This field is immutable. This field is an alpha field.",
                     "type": "string"
                   },
                   "volumeSnapshotClassName": {
@@ -286,9 +286,9 @@
             "type": "date"
           }
         ],
-        "name": "v1beta1",
         "deprecated": true,
         "deprecationWarning": "snapshot.storage.k8s.io/v1beta1 VolumeSnapshotContent is deprecated; use snapshot.storage.k8s.io/v1 VolumeSnapshotContent",
+        "name": "v1beta1",
         "schema": {
           "openAPIV3Schema": {
             "description": "VolumeSnapshotContent represents the actual \"on-disk\" snapshot object in the underlying storage system",

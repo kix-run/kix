@@ -982,9 +982,7 @@ in
       # on spec.versions, so it is left out here and both sides agree.
       crds =
         let
-          upstream = builtins.fromJSON (
-            builtins.readFile ./cdis.cdi.kubevirt.io-customresourcedefinition.yaml.json
-          );
+          upstream = builtins.fromJSON (builtins.readFile ./crds/cdis.cdi.kubevirt.io.json);
         in
         {
           cdi = scope.mkCRD {

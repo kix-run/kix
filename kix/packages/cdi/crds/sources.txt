@@ -1,0 +1,4 @@
+# containerized-data-importer release operator bundle at the image tag in
+# default.nix. It carries the CDI CRD; cdi-operator installs the rest at
+# runtime and drops v1alpha1 from this one (filtered in default.nix).
+https://github.com/kubevirt/containerized-data-importer/releases/download/v1.62.0/cdi-operator.yaml cdis.cdi.kubevirt.io
