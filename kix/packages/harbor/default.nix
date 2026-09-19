@@ -27,6 +27,7 @@
   scope,
   lib,
   kix,
+  availability,
 }:
 
 let
@@ -39,6 +40,11 @@ in
     # `storage` deps + sibling persistent-volume-claim instances. Grant kept
     # until refactored (audited by unsafeGrants).
     unsafe = [ "raw-pvc" ];
+    # The registry and jobservice keep their blobs and logs on ReadWriteOnce
+    # claims and this package does not wire up object storage, so neither
+    # can run twice: a pod restart of either is downtime for all of Harbor.
+    # core and portal still map the level for an operator who raises them.
+    availability.max = "none";
   };
 
   options = {
@@ -57,7 +63,18 @@ in
       };
       replicas = lib.mkOption {
         type = lib.types.int;
-        default = 1;
+        # Stateless API and auth front end; its state lives in postgres and
+        # redis, so replicas scale out.
+        default = kix.availability.pick availability {
+          none = 1;
+          pod = 2;
+          node = 2;
+          zone = 2;
+        };
+        description = ''
+          Number of Harbor core replicas. Defaults from the cluster's
+          availability level (v2_discussions/145).
+        '';
       };
     };
 
@@ -71,7 +88,18 @@ in
       };
       replicas = lib.mkOption {
         type = lib.types.int;
-        default = 1;
+        # The portal is a static web UI with no state at all, so replicas
+        # scale out.
+        default = kix.availability.pick availability {
+          none = 1;
+          pod = 2;
+          node = 2;
+          zone = 2;
+        };
+        description = ''
+          Number of Harbor portal replicas. Defaults from the cluster's
+          availability level (v2_discussions/145).
+        '';
       };
     };
 
@@ -85,7 +113,19 @@ in
       };
       replicas = lib.mkOption {
         type = lib.types.int;
-        default = 1;
+        # Pinned to one: the registry keeps its blobs on a ReadWriteOnce
+        # claim, which no second pod on another node can mount.
+        default = kix.availability.pick availability {
+          none = 1;
+          pod = 1;
+          node = 1;
+          zone = 1;
+        };
+        description = ''
+          Number of Harbor registry replicas. Pinned to one at every
+          availability level (v2_discussions/145) by the ReadWriteOnce
+          blob volume.
+        '';
       };
     };
 
@@ -99,7 +139,19 @@ in
       };
       replicas = lib.mkOption {
         type = lib.types.int;
-        default = 1;
+        # Pinned to one: job logs live on a ReadWriteOnce claim, which no
+        # second pod on another node can mount.
+        default = kix.availability.pick availability {
+          none = 1;
+          pod = 1;
+          node = 1;
+          zone = 1;
+        };
+        description = ''
+          Number of Harbor jobservice replicas. Pinned to one at every
+          availability level (v2_discussions/145) by the ReadWriteOnce
+          job-log volume.
+        '';
       };
     };
 

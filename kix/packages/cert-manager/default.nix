@@ -12,6 +12,8 @@
 {
   scope,
   lib,
+  kix,
+  availability,
 }:
 
 {
@@ -61,12 +63,20 @@
           repository = "quay.io/jetstack/cert-manager-webhook";
           tag = "v1.17.1";
         };
-        replicaCount = 1;
+        # The webhook sits in the write path for every cert-manager object,
+        # so with one replica a rolling restart is a visible API failure.
+        replicaCount = kix.availability.pick availability {
+          none = 1;
+          pod = 2;
+          node = 2;
+          zone = 2;
+        };
       };
       description = ''
         Webhook component config. Sets the `image` attrset and
         `replicaCount` for the admission webhook that validates and mutates
-        cert-manager CRs.
+        cert-manager CRs. The replica count defaults from the cluster's
+        availability level (v2_discussions/145).
       '';
     };
     cainjector = lib.mkOption {
@@ -76,12 +86,20 @@
           repository = "quay.io/jetstack/cert-manager-cainjector";
           tag = "v1.17.1";
         };
-        replicaCount = 1;
+        # Leader election makes a restart invisible, so "pod" stays at 1.
+        # From "node" up a standby keeps injecting when a node is lost.
+        replicaCount = kix.availability.pick availability {
+          none = 1;
+          pod = 1;
+          node = 2;
+          zone = 2;
+        };
       };
       description = ''
         CA-injector component config. Sets the `image` attrset and
         `replicaCount` for the controller that injects CA bundles into
-        webhooks, APIServices, and CRDs.
+        webhooks, APIServices, and CRDs. The replica count defaults from the
+        cluster's availability level (v2_discussions/145).
       '';
     };
     acmesolver = lib.mkOption {
@@ -99,8 +117,18 @@
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;
-      default = 1;
-      description = "Number of replicas for the cert-manager controller `Deployment`.";
+      # The controller holds a leader election lease, so a restart is not
+      # user-visible; from "node" up a standby takes over when a node dies.
+      default = kix.availability.pick availability {
+        none = 1;
+        pod = 1;
+        node = 2;
+        zone = 2;
+      };
+      description = ''
+        Number of replicas for the cert-manager controller `Deployment`.
+        Defaults from the cluster's availability level (v2_discussions/145).
+      '';
     };
     installCRDs = lib.mkOption {
       type = lib.types.bool;

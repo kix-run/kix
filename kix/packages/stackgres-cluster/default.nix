@@ -15,6 +15,7 @@
   scope,
   lib,
   kix,
+  availability,
 }:
 
 let
@@ -36,7 +37,20 @@ in
   options = {
     instances = lib.mkOption {
       type = lib.types.int;
-      default = 2;
+      # A second instance only pays off once it can sit on another node,
+      # so failover has somewhere to go; three at "zone" so the Patroni
+      # quorum survives the loss of a zone.
+      default = kix.availability.pick availability {
+        none = 1;
+        pod = 1;
+        node = 2;
+        zone = 3;
+      };
+      description = ''
+        Number of PostgreSQL instances in the `SGCluster` (one primary, the
+        rest replicas with automatic failover). Defaults from the cluster's
+        availability level (v2_discussions/145).
+      '';
     };
     postgres = lib.mkOption {
       type = lib.types.anything;

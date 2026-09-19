@@ -15,6 +15,7 @@
   scope,
   lib,
   kix,
+  availability,
 }:
 
 let
@@ -125,7 +126,18 @@ in
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;
-      default = 1;
+      # A serving data plane: two controllers once a pod restart must not
+      # drop ingress traffic, three once a whole zone may go.
+      default = kix.availability.pick availability {
+        none = 1;
+        pod = 2;
+        node = 2;
+        zone = 3;
+      };
+      description = ''
+        Number of ingress-nginx controller replicas. Defaults from the
+        cluster's availability level (v2_discussions/145).
+      '';
     };
     serviceType = lib.mkOption {
       type = lib.types.str;

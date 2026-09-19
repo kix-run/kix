@@ -26,6 +26,7 @@
   scope,
   lib,
   kix,
+  availability,
 }:
 let
   name = scope.instanceName;
@@ -66,8 +67,19 @@ in
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;
-      default = 2;
-      description = "Identical-replica HA pair; the cluster's dedup collapses the double ingest.";
+      # The HA pair from "node" up; below that a second scraper only
+      # doubles the ingest the cluster then has to dedup away.
+      default = kix.availability.pick availability {
+        none = 1;
+        pod = 1;
+        node = 2;
+        zone = 2;
+      };
+      description = ''
+        Identical-replica HA pair; the cluster's dedup collapses the
+        double ingest. Defaults from the cluster's availability level
+        (v2_discussions/145).
+      '';
     };
     scrapeInterval = lib.mkOption {
       type = lib.types.nullOr lib.types.str;

@@ -14,6 +14,7 @@
   scope,
   lib,
   kix,
+  availability,
 }:
 let
   name = scope.instanceName;
@@ -43,7 +44,18 @@ in
     };
     replicas = lib.mkOption {
       type = lib.types.int;
-      default = 1;
+      # The operator's HA pair: from "node" up two replicas scrape and
+      # store everything twice, so losing one leaves no gap.
+      default = kix.availability.pick availability {
+        none = 1;
+        pod = 1;
+        node = 2;
+        zone = 2;
+      };
+      description = ''
+        Number of Prometheus replicas the operator stamps out. Defaults
+        from the cluster's availability level (v2_discussions/145).
+      '';
     };
     retention = lib.mkOption {
       type = lib.types.str;

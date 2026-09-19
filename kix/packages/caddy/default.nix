@@ -10,6 +10,7 @@
   scope,
   lib,
   kix,
+  availability,
 }:
 
 let
@@ -46,7 +47,18 @@ in
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;
-      default = 3;
+      # Stateless and serving user traffic: two replicas once a pod restart
+      # must not be downtime, three once a whole zone may go.
+      default = kix.availability.pick availability {
+        none = 1;
+        pod = 2;
+        node = 2;
+        zone = 3;
+      };
+      description = ''
+        Number of Caddy `Deployment` replicas. Defaults from the cluster's
+        availability level (v2_discussions/145).
+      '';
     };
     resources = lib.mkOption {
       type = lib.types.anything;
@@ -84,7 +96,14 @@ in
     hpa = lib.mkOption {
       type = lib.types.anything;
       default = {
-        minReplicas = 3;
+        # The floor follows replicaCount's mapping of the availability
+        # level (v2_discussions/145), so the autoscaler never undoes it.
+        minReplicas = kix.availability.pick availability {
+          none = 1;
+          pod = 2;
+          node = 2;
+          zone = 3;
+        };
         maxReplicas = 10;
         targetCPUUtilization = 60;
       };

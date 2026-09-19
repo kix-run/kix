@@ -11,6 +11,8 @@
 {
   scope,
   lib,
+  kix,
+  availability,
 }:
 
 let
@@ -33,6 +35,9 @@ in
 {
   meta = {
     version = "v1.62.0";
+    # The cdi-operator has no leader election, so one replica is the
+    # ceiling it can honour. The components it deploys are unaffected.
+    availability.max = "pod";
   };
 
   options = {
@@ -46,6 +51,8 @@ in
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;
+      # Fixed at 1: a second cdi-operator would fight the first over the
+      # CDI custom resource. See meta.availability.max.
       default = 1;
     };
     resources = lib.mkOption {

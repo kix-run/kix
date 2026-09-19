@@ -23,6 +23,7 @@
   scope,
   lib,
   kix,
+  availability,
 }:
 
 let
@@ -33,6 +34,9 @@ in
     version = "v3.0.3";
     description = "Immich — self-hosted photo management";
     owner = "app-team";
+    # The server mounts the photo library from a single ReadWriteOnce
+    # claim and runs the job workers in-process, so it is single-writer.
+    availability.max = "none";
     compatibleWith.database = {
       reason = "immich requires the VectorChord (vchord) extension plus uuid-ossp, cube, earthdistance, unaccent, pg_trgm on its postgres backend";
     };
@@ -126,7 +130,18 @@ in
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;
-      default = 1;
+      # Pinned to one at every level: see meta.availability.max.
+      default = kix.availability.pick availability {
+        none = 1;
+        pod = 1;
+        node = 1;
+        zone = 1;
+      };
+      description = ''
+        Number of immich-server replicas. Pinned to one at every
+        availability level (v2_discussions/145) because the server is
+        single-writer over the library volume.
+      '';
     };
     env = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;

@@ -16,11 +16,16 @@
 {
   scope,
   lib,
+  kix,
+  availability,
 }:
 
 {
   meta = {
     version = "v0.92.1";
+    # Leader election is not enabled in the operator args, so one replica
+    # is the ceiling this package can honour.
+    availability.max = "pod";
     description = "Prometheus Operator — monitoring.coreos.com CRD controller";
     defaultAliases = [
       "prometheus"
@@ -53,7 +58,14 @@
     };
     replicas = lib.mkOption {
       type = lib.types.int;
+      # Fixed at 1: the package grants the leader election lease role but
+      # never passes the flag that turns leader election on, so a second
+      # replica would reconcile everything twice. See meta.availability.max.
       default = 1;
+      description = ''
+        Number of operator replicas. Defaults from the cluster's
+        availability level (v2_discussions/145).
+      '';
     };
     resources = lib.mkOption {
       type = lib.types.anything;
