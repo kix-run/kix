@@ -245,7 +245,7 @@
 - [x] `kix gc` — garbage-collect orphaned kix-managed resources against a cluster's expected manifest set
 - [ ] `kix gc` without cluster eval — GC purely from live Activation/PI graph (no nix eval required)
 - [x] `kix gc` shows exactly which resources will be deleted before collection. Soft GC (`print_package_plan` with forced-verbose) lists every removed resource per package. Hard GC (`print_garbage_plan` in `cli/kix-cli/src/commands/gc.rs`) groups garbage by namespace+kind and annotates each entry with identity-hash, orphaning reason (`identity-hash not in expected set` / `missing kix.run/identity-hash` / `superseded activation`), owning package, and activation hashes pulled from `kix.run/*` annotations. No silent bulk deletes.
-- [ ] Non-K8s side effects (e.g. Forgejo user creation) — start with execution on "ssh", later crossplane or provider plugins
+- [ ] Non-K8s side effects (e.g. Forgejo user creation) — start with execution on "ssh", later crossplane or provider plugins. Design in `v2_discussions/144_in_app_resources_via_terranix.md`: terranix compiled at eval, applied by an in-cluster OpenTofu Job
 - [ ] Auto-collect readiness — custom general runtime readiness checks (also outside k8s)
 - [ ] Auto-inject package identity labels (hash?, otherwise package name + version, like helm best practice)
 - [x] Reconcile mode — `kix deploy --reconcile` re-applies all resources even when the activation identity hash matches, healing drift from manual cluster changes. Converts `Skip` actions to `Apply` after change detection.
@@ -336,7 +336,7 @@
 
 ### Terraform coexistence
 - [ ] Terraform output → kix import bridge — documented pattern and tooling for consuming Terraform outputs (database URLs, bucket names, service account keys) as kix DI inputs via `mkImport`. Pragmatic scope boundary: kix manages K8s, Terraform manages cloud resources, the bridge connects them. See `v2_discussions/58_satchel_mvp_technical_requirements.md`
-- [ ] Long-term: connector/provider abstraction that can wrap Terraform providers, Crossplane XRDs, or raw API calls at compile time. Absorbs cloud resource management into kix evaluation
+- [ ] Long-term: connector/provider abstraction that can wrap Terraform providers, Crossplane XRDs, or raw API calls at compile time. Absorbs cloud resource management into kix evaluation. First cut for in-application resources: `v2_discussions/144_in_app_resources_via_terranix.md`
 
 ### Ecosystem & adoption
 - [ ] Functional CRDs — deploy against kix, not k8s directly; the end user never needs to think about CRDs/operators. kix evaluates the "need" into manifests (imperative CRD operators replaced by pure evaluation where possible)
