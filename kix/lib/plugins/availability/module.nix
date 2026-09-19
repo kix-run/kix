@@ -6,7 +6,7 @@
 # given as its `availability` argument); the cluster states what a failure
 # domain is (`cluster.capabilities.availabilityZones`, `multiNode`); the
 # operator states how much failure to survive (`cluster.availability`).
-# Design: v2_discussions/145_availability_level.md (spread mechanism from
+# Design: v2_discussions/archive/145_availability_level.md (spread mechanism from
 # archive/143).
 #
 # The level itself is resolved once per instance in eval/instance.nix

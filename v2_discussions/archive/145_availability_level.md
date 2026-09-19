@@ -1,6 +1,6 @@
 # 145: Availability level
 
-**Status:** Accepted (decisions taken 2026-09-19), Design Doc
+**Status:** Implemented (decisions taken 2026-09-19, built the same day), Design Doc
 **Related:** `archive/143_pod_spread_and_failure_zones.md` (spread, PR #115), `127_compiler_target_model.md` (substrate facts), `115_pod_spec_hardening_pass.md` and `110_alerts_as_graph_resources.md` (cluster-level profile read by packages), `132_di_visibility_first_principles.md` (namespace-keyed policy)
 
 One cluster setting says how much failure a workload must survive. Packages
@@ -98,31 +98,37 @@ and doc 132's `cluster.di.policy.namespaces`.
 
 ### 5.1 Delivery
 
-Every package receives the resolved level as a module option named
-`availability`, declared by the evaluator alongside the package's own
-options (`kix/lib/eval/resolve.nix`, where `packageOptions` is assembled)
-and set from the ladder. Package defaults read it, and an explicit value
-in the instance config still wins by ordinary module priority:
+Every package receives the resolved level as a function argument named
+`availability`, beside `scope`, `lib` and `kix` (a system argument in
+`kix/lib/eval/resolve.nix`, never resolved as a dependency), and build
+functions may take the same argument. Package option defaults read it, and
+an explicit value in the instance config still wins by ordinary module
+priority:
 
 ```nix
-replicaCount = lib.mkOption {
-  type = lib.types.int;
-  default = kix.availability.pick config.availability {
-    none = 1;
-    pod = 2;
-    node = 2;
-    zone = 3;
+{ scope, lib, kix, availability }:
+{
+  options.replicaCount = lib.mkOption {
+    type = lib.types.int;
+    default = kix.availability.pick availability {
+      none = 1;
+      pod = 2;
+      node = 2;
+      zone = 3;
+    };
   };
-};
-
-sentinel.enabled = lib.mkOption {
-  default = kix.availability.atLeast "node" config.availability;
-};
+  options.sentinel.enabled = lib.mkOption {
+    default = kix.availability.atLeast "node" availability;
+  };
+}
 ```
 
-`kix.availability.pick` and `atLeast` are the whole helper surface: a
-lookup and a comparison, so that a package's mapping is one expression
-and reads the same in every file.
+An argument rather than an injected option, because a package's option set
+is a static attrset that cannot read its own evaluated config, and because
+the level must be readable inside `build` too. `kix.availability.pick` and
+`atLeast` are the whole helper surface: a lookup that refuses an
+incomplete table and a comparison, so that a package's mapping is one
+expression and reads the same in every file.
 
 ### 5.2 Every package maps the level
 
@@ -200,17 +206,17 @@ pods an operator renders. `meta.spread` is removed.
 
 ## 7. Verification
 
-Packages promise to honour the level; the compiler checks the result. A
-scorecard rule, `reliability.availabilityShortfall`, at warning severity:
-under a resolved level of `pod` or above, a Deployment or StatefulSet
-reachable from the package root with fewer than two replicas is reported
-with the level, the instance and the package ceiling if one applies. The
-rule cannot judge quorums or replication generically, so `zone` is
-verified only as far as spread and replica count go.
+Packages promise to honour the level; the compiler checks the result. The
+availability plugin's instance processor warns, always on rather than only
+where the scorecard is enabled: under a resolved level of `pod` or above, a
+Deployment or StatefulSet reachable from the package root with fewer than
+two replicas is reported with the level and the instance. Ancillary
+workloads off the root path are not judged. The check cannot judge quorums
+or replication generically, so `zone` is verified only as far as spread and
+replica count go.
 
 `validators.checkSpreadFeasible` keeps refusing hand-written hard rules
-on a single node. Its condition becomes "resolved level `none` because
-`multiNode = false`" rather than reading the capability directly.
+on a single node, reading the capability directly as before.
 
 ## 8. Migration
 

@@ -1,6 +1,6 @@
 # core/availability.nix — the availability level: one word for how much
 # failure a workload must survive, and the arithmetic every consumer of it
-# shares. Design: v2_discussions/145_availability_level.md.
+# shares. Design: v2_discussions/archive/145_availability_level.md.
 #
 #   none  downtime on any failure or update is accepted
 #   pod   a pod crash or a rolling update causes no downtime

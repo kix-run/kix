@@ -4,7 +4,7 @@
 # kind itself is one node per container, so zones are node labels set by
 # the kind config (scripts/kind-spread.sh); the flavor's multiNode = false
 # and availabilityZones = [ ] are overridden here to say so.
-# Design: v2_discussions/145_availability_level.md (spread mechanism: archive/143).
+# Design: v2_discussions/archive/145_availability_level.md (spread mechanism: archive/143).
 #
 # Build:  nix build .#cluster-spread --extra-experimental-features pipe-operators
 # Deploy: scripts/kind-spread.sh
