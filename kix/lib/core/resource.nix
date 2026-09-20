@@ -1,8 +1,6 @@
 { lib }:
 
 let
-  # Kix's own annotation keys and API names, spelled once in
-  # core/annotations.nix.
   kixAnnotations = import ./annotations.nix;
   kixKeys = kixAnnotations.keys;
 in
@@ -103,10 +101,8 @@ rec {
         else
           null;
 
-      # imported Services are endpoint producers too — no seal exists, but
-      # the fact is pure payload, so a reference can mint it all the same.
-      # This closes an old blindspot: dialing an imported Service now
-      # produces a netpol edge instead of silently nothing.
+      # Imported Services with selectors supply endpoint facts for network
+      # policy derivation even though Kix does not seal or deploy them.
       _importFactCtx =
         if kind == "Service" && (spec.selector or { }) != { } then
           facts.mkFact "endpoint" {
@@ -169,7 +165,7 @@ rec {
       # (CRD-owner declared via meta.factBehavior, or cluster override).
       # null = fall back to the core K8s table (facts.conducts).
       factBehavior ? null,
-      # Fields another controller takes over once the object exists. kix
+      # Fields another controller takes over once the object exists. Kix
       # sets them at creation; when a later apply meets a field-ownership
       # conflict confined to these paths, deploy applies again without them
       # and the other manager keeps them. A conflict on any other field
@@ -280,14 +276,9 @@ rec {
 
       manifestJson = builtins.toJSON rawManifest;
 
-      # Two kinds of path ride the same context channel without being
-      # derivation edges, and neither may become a depends-on entry:
-      #   fact tokens          semantic claims, not identity
-      #   untracked-ref marker inert proof that a name was deliberately
-      #                        opted out of tracking — there is no resource
-      #                        behind it, so stamping it yields a hash the
-      #                        deploy DAG can never resolve and `kix health`
-      #                        reports as permanently MISSING
+      # Fact tokens and untracked-reference markers carry metadata, not
+      # deployable resources. Exclude them from depends-on: their hashes
+      # cannot be resolved to manifests by the deploy scheduler.
       implicitCtxPaths = builtins.filter (
         p: lib.hasPrefix "/nix/store/" p && !facts.isFactPath p && !markers.isUntrackedRefPath p
       ) (builtins.attrNames (builtins.getContext manifestJson));
@@ -334,17 +325,14 @@ rec {
 
       manifestJsonWithDeps = builtins.appendContext manifestJsonStamped depContexts;
 
-      # Split the context channels at the seal boundary: identity paths
-      # become store references of the sealed file; fact tokens are harvested
-      # for re-emission on out.* (conduction) and stripped so they never
-      # enter the store DAG — facts live in eval-time context only.
+      # Forward facts from manifest values through out.* for conducting
+      # resources. manifestJsonSealed removes fact tokens from store references
+      # while retaining resource identity context for deployment ordering.
       #
-      # Harvest from manifestJson (pre-stamp), NOT manifestJsonWithDeps:
-      # facts only ever arrive embedded in VALUES; the requires/extraDeps
-      # fold contributes identity context only. Reading the withDeps string
-      # here would force every dep's seal whenever any out.* field is
-      # touched — a fixpoint hazard (e.g. service.out.name inside a webhook
-      # config whose consumer the service itself requires).
+      # Read manifestJson here, before adding requires/extraDeps context.
+      # Reading manifestJsonWithDeps would force explicit dependencies' seals
+      # when an output is accessed. That can recurse when a Service's name
+      # appears in a webhook config and the Service requires its consumer.
       _conducts =
         if factBehavior != null then
           (factBehavior.endpoint or "conduct") == "conduct"
@@ -354,21 +342,18 @@ rec {
       _forwardedFactCtx =
         if _conducts then (facts.partitionCtx (builtins.getContext manifestJson)).facts else { };
 
-      # terminate-declared CRs: the absorbed endpoint payloads, for the
-      # instance-phase projection (netpol opens holes for the OPERAND pods
-      # named by the declaration's podSelector — the resource itself has no
-      # pods). Read lazily; only forced when a processor consumes it.
+      # The netpol instance processor uses these endpoint payloads to build
+      # policies for pods selected by a terminating CR's podSelector.
+      # Keep this lazy until the processor reads it.
       _absorbedEndpointFacts =
         if factBehavior != null && (factBehavior.endpoint or "") == "terminate" then
           facts.factsOfKind "endpoint" manifestJson
         else
           [ ];
 
-      # undeclared foreign kind (CRD) absorbing endpoint facts: kix cannot
-      # know whether the controller dials them (terminate) or the resource
-      # merely carries them (conduct — the current default). Warn, three-
-      # valued style: declared-terminate/conduct pass silently, unknown
-      # warns naming the fix. Anchored on outPath (forced at embedding).
+      # Without factBehavior, a custom kind forwards endpoint facts by default.
+      # Warn when it absorbs an endpoint so the author can declare whether its
+      # controller's pods connect to it. Emit the warning when outPath is forced.
       _undeclaredCrWarning =
         if
           factBehavior == null
@@ -389,7 +374,8 @@ rec {
         builtins.getContext manifestJsonWithDeps
       )).rest;
 
-      # toFile's filename cannot carry references — content keeps full context
+      # toFile requires a context-free filename. Retain dependency context in
+      # the file content, and replace colons that Nix store names cannot contain.
       sanitizedName = builtins.unsafeDiscardStringContext (builtins.replaceStrings [ ":" ] [ "_" ] name);
       sanitizedNsKey = builtins.unsafeDiscardStringContext (toString nsKey);
 
@@ -399,10 +385,8 @@ rec {
 
       _identityCtx = builtins.getContext "${_identityPath}";
 
-      # Services with a selector are endpoint producers: dialing their
-      # address reaches pods. The fact is pure payload — no reference to
-      # this seal — so it only changes when the semantics (selector, ports,
-      # namespace) change, not on every content churn.
+      # A selector-based Service supplies endpoint facts for its backend pods.
+      # ExternalName Services do not select pods.
       _isEndpointProducer =
         kind == "Service"
         && (rawManifest.spec.selector or { }) != { }
@@ -419,15 +403,11 @@ rec {
         else
           { };
 
-      # Two attach flavors, one semantic difference:
-      #   attachCtx        identity + conducted facts. "This value was
-      #                    computed from me (and carries what I carry)."
-      #   attachConnectCtx additionally stamps my own endpoint fact:
-      #                    "using this value means dialing me."
-      # name/selector are structural (naming ≠ dialing); fqdn/url and user
-      # outputs are address-shaped. `facts.refOnly` is the per-use escape;
-      # `facts.structural` is the producer's, for an output that is a fact
-      # about the resource and not an address.
+      # Both helpers attach resource identity and forwarded facts.
+      # attachConnectCtx also attaches this Service's endpoint fact to address
+      # outputs (fqdn, url, and unmarked user outputs). Names and selectors use
+      # attachCtx. Callers can use facts.refOnly for a non-address use, or
+      # producers can mark such outputs with facts.structural.
       attachCtx = value: builtins.appendContext (toString value) (_identityCtx // _forwardedFactCtx);
       attachConnectCtx =
         value: builtins.appendContext (toString value) (_identityCtx // _forwardedFactCtx // _ownFactCtx);
@@ -474,8 +454,7 @@ rec {
         if v == null then
           null
         else if facts.isStructural v then
-          # identity for ordering, the endpoint claim replaced by its
-          # acknowledgment, as refOnly does at a use site
+          # Retain ordering context without declaring an endpoint connection.
           facts.refOnly (attachConnectCtx (toString v.value))
         else
           attachConnectCtx (toString v)
@@ -506,13 +485,11 @@ rec {
 
         out = mergedOut;
 
-        # fact tokens this resource mints, for the `facts.connect` escape
-        # hatch (stamp dialing intent onto a value that lacks it)
+        # Endpoint context available to callers of facts.connect.
         factTokens = lib.optionalAttrs _isEndpointProducer { endpoint = _ownFactCtx; };
 
-        # the resolved behavior + endpoint payloads absorbed by a
-        # terminate-declared CR — consumed by the netpol instance processor
-        # (operand CNPs read podSelector straight off the resource)
+        # The netpol instance processor uses podSelector and absorbed endpoint
+        # facts to derive policies for pods created by custom controllers.
         inherit factBehavior;
         absorbedEndpointFacts = _absorbedEndpointFacts;
 
@@ -656,11 +633,9 @@ rec {
 
   resourceId = r: "${r.kind}/${r.name}@${nsOf r}";
 
-  # Validate a readiness declaration (or pass null through). Throws with a
-  # named context on shape violations. Exposed so mkCRD/mkCRDRef can force
-  # it EAGERLY at the declaration site — a bad declaration must fail the
-  # declaring package's eval, not detonate at the first CR construction
-  # months later (same principle as cluster.factBehavior validation).
+  # Validate { path; equals; }, allowing null to omit a readiness declaration.
+  # mkCRD/mkCRDRef force this at declaration time so malformed declarations
+  # fail even when the package builds no custom resources of that kind.
   validateReadiness =
     context: groupKind: readiness:
     if readiness == null then
@@ -693,22 +668,13 @@ rec {
       kind,
       version,
       crdScope,
-      # fact behavior of this kind's controller (validated at the
-      # declaration site): threaded into every CR built via mkCR, so the
-      # seal knows terminate/conduct without any registry — behavior is a
-      # property of the CRD, delivered along the same chain as the kind
-      # name and the CRD-before-CR ordering edge.
+      # Validated behavior to pass to each CR for endpoint fact handling.
       factBehavior ? null,
-      # readiness convention of this kind's controller — like factBehavior,
-      # a property of the CRD, delivered along the typed chain. Stamped on
-      # every CR built via mkCR as the `kix.run/readiness` annotation
-      # (JSON), which the kix CLI evaluates at deploy time instead of
-      # falling back to the generic Ready/Available condition check (many
-      # operators never stamp those; the VictoriaMetrics operator, for
-      # one, uses status.updateStatus == "operational"). Shape:
+      # Stamp kix.run/readiness on each CR for the CLI to evaluate at deploy.
+      # Use this for operators with conditions other than Ready/Available:
       #   readiness = { path = "/status/updateStatus"; equals = "operational"; }
-      # `path` is a JSON pointer into the live object; the CR is ready
-      # when the value at `path` equals `equals`.
+      # path is a JSON pointer into the live object; readiness requires its
+      # value to equal the string in equals.
       readiness ? null,
     }:
     let
@@ -716,13 +682,10 @@ rec {
 
       _validatedReadiness = validateReadiness "mkCRDBuilders" "${group}/${kind}" readiness;
 
-      # `version` picks a served version other than the CRD's storage
-      # version. The storage version is what a CR gets by default and is
-      # almost always right; this is the escape for the case where a
-      # consumer must write through an older served version, and it is
-      # checked against nothing here because the CRD's served set is not
-      # in hand at this point. The CRD ordering edge and the behaviour
-      # declarations are unchanged by it.
+      # A CR can override the default version, normally the CRD's storage
+      # version. The caller must choose a served version; this helper does not
+      # have the served-version list to validate it. Retain the CRD dependency
+      # and behavior declarations with either version.
       cr =
         args:
         removeAttrs args [ "version" ]

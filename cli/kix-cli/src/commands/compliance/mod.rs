@@ -1,10 +1,10 @@
-//! `kix compliance` — export formats for auditors, CI, and compliance tools.
+//! Export formats for auditors, CI, and compliance tools.
 //!
 //! Three subcommands, each a serialization of data kix already has:
 //!
-//! - `sbom`   — CycloneDX 1.6 Software Bill of Materials
-//! - `attest` — SLSA v1 provenance (in-toto statement)
-//! - `audit`  — bundle: SARIF + SBOM + SLSA + OSCAL assessment + markdown summary
+//! - `sbom`: CycloneDX 1.6 Software Bill of Materials
+//! - `attest`: SLSA v1 provenance as an in-toto statement
+//! - `audit`: SARIF, SBOM, SLSA, OSCAL assessment, and markdown summary
 //!
 //! The provenance those subcommands print is the same provenance a deploy
 //! writes into the Activation record ([`receipt`]), so `attest --from-cluster`

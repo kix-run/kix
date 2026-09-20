@@ -60,8 +60,8 @@ in
       isSentinelNs = nsName: lib.hasPrefix "_" nsName;
       realNsNames = builtins.filter (n: !isSentinelNs n) allNsNames;
 
-      # Pod Security Standards, most permissive first. A namespace runs
-      # at the most permissive level any of its instances needs.
+      # Pod Security Standards from most to least permissive. A namespace
+      # uses the most permissive level required by any of its instances.
       podSecurityLevels = [
         "privileged"
         "baseline"
@@ -80,11 +80,9 @@ in
         else
           i;
 
-      # The level a namespace carries: what its instances need, checked
-      # against what the cluster set on it by hand. An instance that needs
-      # `privileged` in a namespace pinned to `restricted` is an error
-      # here, at eval, rather than a pod the apiserver refuses with a
-      # message naming the pod and not the label.
+      # Derive the namespace level from its instances unless the cluster sets
+      # one explicitly. Reject an explicit level that is more restrictive than
+      # an instance requirement before Kubernetes rejects the resulting pod.
       namespacePodSecurity =
         nsName:
         let
@@ -127,9 +125,8 @@ in
         }) allNsNames
       );
 
-      # Peek every package's meta exactly once per instance — staticMeta,
-      # the roles/annotation indexes, and instanceInfo all read this map
-      # instead of re-applying the package function.
+      # Cache package metadata once per instance for the resolution indexes
+      # and instanceInfo.
       peekedMetas = lib.mapAttrs (
         _nsName: nsInsts:
         lib.mapAttrs (
@@ -141,13 +138,9 @@ in
         ) nsInsts
       ) mergedInstances;
 
-      # Instances that participate in symbol resolution (DI, roles,
-      # annotation domains): everything that can appear in the artifact —
-      # mandatory instances plus optionals the demand closure activated —
-      # and platform imports. An import's out and role claims are
-      # environment facts, valid whether or not its marker was activated;
-      # a never-activated managed optional emits nothing, so resolving it
-      # would hand consumers outputs of resources that don't exist.
+      # Resolve dependencies, roles, and annotation domains against active
+      # managed instances and all platform imports. Inactive optional instances
+      # emit no resources and must not satisfy a dependency.
       isResolvable =
         nsName: instName:
         isActive nsName instName
@@ -181,9 +174,8 @@ in
 
       resolutionIndex = buildResolutionIndex staticMeta;
 
-      # Built over ALL merged instances so a typo'd role on an inactive
-      # optional still throws (deepSeq-forced below); role RESOLUTION uses
-      # the resolvable-filtered view.
+      # Validate role declarations for every configured instance, including
+      # inactive optionals. Role lookup uses the filtered rolesIndex below.
       rolesIndexAll = hooks.buildRolesIndex {
         instances = mergedInstances;
         inherit peekedMetas;
@@ -194,22 +186,19 @@ in
         nsName: nsInsts: lib.filterAttrs (instName: _: isResolvable nsName instName) nsInsts
       ) rolesIndexAll;
 
-      # domain → declarer, for the annotationDomainOwnership lint. Eagerly
-      # forced below: a duplicate declarer or malformed domain must throw
-      # even when the scorecard is disabled.
+      # Map annotation domains to declarers. Force the index below so duplicate
+      # or malformed declarations fail even when the scorecard is disabled.
       annotationDomainIndex = hooks.buildAnnotationDomainIndex {
         instances = resolvableInstances;
         inherit peekedMetas;
       };
-      # (also rides the same eager-force point as the factBehavior check)
+      # Force annotation-domain and fact-behavior validation together.
       _annotationDomainsCheck = builtins.seq (builtins.deepSeq annotationDomainIndex null) _factBehaviorCheck;
 
-      # cluster.factBehavior: per-kind override of CRD-declared behavior
-      # (and fallback for builder-less CRs). Keys are "group/Kind" — bare
-      # kinds would collide across API groups (CNPG and Cluster API both
-      # ship kind "Cluster"). Package-side declarations live on the CRD
-      # itself (mkCRD/mkCRDRef factBehavior arg), validated there.
-      # Eagerly validated: malformed entries throw even if no CR exists.
+      # cluster.factBehavior overrides CRD declarations and covers custom
+      # resources without typed builders. Require "group/Kind" keys because
+      # different API groups can define the same kind. Validate every entry
+      # even when the cluster contains no resource of that kind.
       factBehaviorOverrides = cfg.cluster.factBehavior or { };
       _factBehaviorCheck = builtins.foldl' (
         acc: key:
@@ -230,11 +219,10 @@ in
         )
       ) null (builtins.attrNames factBehaviorOverrides);
 
-      # `out` reads from the cluster fixpoint lazily — must not be forced during
-      # module merge. The shallow role out-contract is checked at the same lazy
-      # point (first consumer force), never eagerly. One memoized lookup per
-      # role — findRoleProvider is called per consumer instance and per
-      # LoadBalancer Service, so the instance scan must not repeat.
+      # Keep provider outputs lazy because they read the clusterInstances
+      # fixpoint. Check each output contract when a consumer first accesses
+      # the role. Memoize one provider lookup per role because many consumers
+      # can request the same provider.
       roleProviders = lib.genAttrs roles.roleNames (
         role:
         let
@@ -259,8 +247,8 @@ in
       findRoleProvider =
         role: builtins.seq (roles.assertKnownRole "findRoleProvider" role) roleProviders.${role};
 
-      # Eager refusal pass: exclusive-binding conflicts and duplicate strong
-      # providers must throw even when no consumer looks the role up.
+      # Reject exclusive-binding conflicts and duplicate strong providers even
+      # when no consumer requests the role.
       _roleBindingsCheck = hooks.checkRoleBindings {
         clusterRoles = cfg.cluster.roles;
         inherit rolesIndex;
@@ -275,7 +263,8 @@ in
       instanceProcessors = hooks.collectHooks cfg "instanceProcessors";
       clusterProcessors = hooks.collectHooks cfg "clusterProcessors";
 
-      # explicitOverrides stays {} — instCfg.deps may reference the cluster fixpoint and must not be forced here
+      # Do not read instCfg.deps during phase 1; it may reference the cluster
+      # fixpoint. Explicit overrides are resolved during full evaluation.
       phase1Instances = lib.mapAttrs (
         nsName: nsInsts:
         lib.mapAttrs (
@@ -327,7 +316,8 @@ in
             inj
         ) (configInjections.${nsName}.${instName} or [ ]);
 
-      # config-only fixpoint: consumer→dep injection must not cycle through the full view
+      # Resolve consumer-to-dependency config injections in a config-only
+      # fixpoint so they do not depend on full instance views.
       instanceConfigs = lib.fix (
         selfCfg:
         lib.mapAttrs (
@@ -349,7 +339,7 @@ in
 
       resolveInjections = resolveInjectionsAgainst instanceConfigs;
 
-      # Phase 2b: full-evaluation fixpoint — every injection's config is a plain attrset by now.
+      # Evaluate full instance views after every injected config is an attrset.
       clusterInstances = lib.fix (
         self:
         lib.mapAttrs (
@@ -425,9 +415,8 @@ in
         inherit nsResources realNsNames;
       };
       clusterHookResults = map (p: p clusterHookCtx) clusterProcessors;
-      # Canonical order: hook execution order (priority, then name), used for
-      # BOTH the Activation extraDeps and the manifest list. This order is
-      # content-addressed into the output.
+      # Preserve hook execution order (priority, then name) in both Activation
+      # dependencies and the manifest list because order affects output hashes.
       clusterHookResources = builtins.concatMap (r: r.resources or [ ]) clusterHookResults;
       clusterHookChecks = builtins.concatMap (r: r.checks or [ ]) clusterHookResults;
       clusterHookWarnings = builtins.concatMap (r: r.warnings or [ ]) clusterHookResults;
@@ -470,11 +459,8 @@ in
           scorecard.evaluateClusterRules {
             rules = scorecardConfig.rules;
             externalNames = externalRefNames;
-            # Active view only, restricted to real namespaces: a namespace
-            # whose sole instances are never-activated optionals is NOT
-            # "managed" for cluster-rule purposes (the namespace-rule path
-            # above applies the same filter), and sentinel namespaces are
-            # not namespaces at all.
+            # Cluster rules see active instances in real namespaces. Inactive
+            # optionals and sentinel namespaces do not make a namespace managed.
             allInstances = lib.filterAttrs (_: insts: insts != { }) (
               lib.mapAttrs (nsName: nsInsts: lib.filterAttrs (instName: _: isActive nsName instName) nsInsts) (
                 lib.filterAttrs (nsName: _: builtins.elem nsName realNsNames) clusterInstances
@@ -522,13 +508,9 @@ in
         else
           null;
 
-      # One entry per store path. An instance's parts may name the same
-      # resource twice (an alias next to the part, a dependency's marker
-      # held as a part), and collectResources walks every attribute, so
-      # the raw list carries duplicates. Resources are content-addressed:
-      # same store path, same manifest. The manifest writer already keeps
-      # one file per identity; without this the duplicate check below saw
-      # the same resource twice and reported a collision that was not one.
+      # collectResources can encounter aliases of the same resource. Collapse
+      # equal store paths before checking identity collisions and writing the
+      # manifest list.
       allResources = dedupeByOutPath (
         [
           k8s.kixCRDs.packageInstance
@@ -548,8 +530,8 @@ in
         ++ [ activation ]
       );
 
-      # The finished, context-free manifest list: what the CLI reads, what
-      # the manifest writer emits, and what the cross-resource checks see.
+      # Remove Nix string context from the manifest list consumed by the CLI,
+      # manifest writer, and cross-resource validation.
       rawManifestList = map (
         r: builtins.fromJSON (builtins.unsafeDiscardStringContext (builtins.toJSON r.rawManifest))
       ) allResources;
@@ -603,20 +585,15 @@ in
         }
       );
 
-      # Cross-cutting scorecard findings (namespace + cluster level) have no
-      # owning instance, so they surface here: warnings trace at cluster
-      # eval, error-severity findings fail the build alongside instance
-      # assertions. Without this they only ever reached the (lazily built)
-      # kix-scorecard.json report.
+      # Surface namespace and cluster scorecard findings here because no
+      # instance owns them. Warnings trace during evaluation; error findings
+      # become build assertions.
       crossScorecardDiag = scorecard.scorecardToWarnings (
         namespaceScorecardFindings ++ clusterScorecardFindings
       );
 
-      # Cross-resource resolution checks (kix/lib/eval/validate.nix) run on
-      # the finished manifest list and fail the build like any other
-      # assertion. Until 2026-09 they lived only in the flake `checks`
-      # output, which `nix build` and the kix CLI never evaluate
-      # (v2_discussions/135, kixpkgs#70).
+      # Run cross-resource checks on the finished manifest list and convert
+      # each failure into a build assertion.
       crossResourceAssertions =
         map
           (f: {
@@ -630,14 +607,9 @@ in
             }
           );
 
-      # Names a package declared external with `kix.untrackedRef`: the value
-      # carries the inert marker's store path in its string context. Read
-      # here, before rawManifestList strips context, so the resolution
-      # checks can accept a ServiceAccount, ConfigMap, Role, Service or HPA
-      # target the author said kix does not own. Keyed "<namespace>/<name>"
-      # by the namespace of the resource that made the reference (or
-      # "cluster-scoped"), so a name marked external in one namespace does
-      # not excuse a dangling reference in another.
+      # Collect names marked with kix.untrackedRef before rawManifestList
+      # removes string context. Key entries by the referring resource's
+      # namespace so an exemption does not apply across namespaces.
       externalRefNames =
         let
           isMarked =

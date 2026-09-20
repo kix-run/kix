@@ -17,11 +17,9 @@ use crate::plan::{self, PackageDiff};
 
 use super::CommandContext;
 
-// ── Diff-specific types ──────────────────────────────────────────────
-
 struct DiffResult {
     packages: PackageDiff,
-    /// Detected stateful migration pairs (doc 67). Phase 1: informational only.
+    /// Detected stateful migration pairs, reported without execution.
     migration_pairs: Vec<MigrationPair>,
 }
 
@@ -30,8 +28,6 @@ impl DiffResult {
         self.packages.has_changes() || !self.migration_pairs.is_empty()
     }
 }
-
-// ── Entry point ──────────────────────────────────────────────────────
 
 /// Every mode is one comparison of two store graphs. The new side is
 /// always a build. The old side is a build result when `--from` names one,
@@ -89,8 +85,6 @@ pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<()> {
     Ok(())
 }
 
-// ── Graph construction ───────────────────────────────────────────────
-
 fn build_store_graph(
     flake_path: &Path,
     cluster_name: &str,
@@ -136,8 +130,6 @@ fn diff_graphs(old: &StoreGraph, new: &StoreGraph) -> DiffResult {
         migration_pairs,
     }
 }
-
-// ── Live cluster fetch ───────────────────────────────────────────────
 
 async fn fetch_live_manifests(global: &crate::cli::GlobalArgs) -> Result<Vec<Value>> {
     let client = fetch::make_client(global.context.as_deref())
@@ -193,8 +185,6 @@ async fn fetch_live_manifests(global: &crate::cli::GlobalArgs) -> Result<Vec<Val
     Ok(fetch::kix_owned_manifests(sweep.managed))
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────
-
 fn make_spinner(ctx: &CommandContext, msg: &str) -> Option<indicatif::ProgressBar> {
     if std::io::stderr().is_terminal() && !ctx.global.quiet {
         let sp = indicatif::ProgressBar::new_spinner();
@@ -230,8 +220,6 @@ fn resolve_flake_path(flake: &str) -> Result<PathBuf> {
         }
     }
 }
-
-// ── Text output ──────────────────────────────────────────────────────
 
 fn print_text_output(result: &DiffResult, global: &crate::cli::GlobalArgs) {
     let pkg = &result.packages;
@@ -273,8 +261,7 @@ fn print_text_output(result: &DiffResult, global: &crate::cli::GlobalArgs) {
     }
 }
 
-/// Render detected stateful migration pairs. Phase 1 is informational:
-/// we tell the user what kix *would* migrate — no execution. See doc 67 §9.
+/// Render detected stateful migration pairs without executing them.
 fn print_migration_pairs(pairs: &[MigrationPair]) {
     if pairs.is_empty() {
         return;
@@ -304,10 +291,8 @@ fn print_migration_pairs(pairs: &[MigrationPair]) {
     println!();
 }
 
-// ── JSON output ──────────────────────────────────────────────────────
-
 fn print_json_output(result: &DiffResult, as_yaml: bool) -> Result<()> {
-    // Shared PackageDiff renderer — same structure produced by the deploy
+    // Shared PackageDiff renderer used by deploy
     // modal and the CI PR-comment action. Migration pairs are appended.
     let mut output = serde_json::json!({
         "packages": plan::render_package_diff_json(&result.packages),
@@ -340,8 +325,6 @@ fn print_json_output(result: &DiffResult, as_yaml: bool) -> Result<()> {
     }
     Ok(())
 }
-
-// ── Markdown output (GitHub PR comment format) ──────────────────────
 
 fn print_markdown_output(result: &DiffResult) {
     // Shared package-level renderer. Same producer used by the deploy

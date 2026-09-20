@@ -22,7 +22,7 @@
 //! It is also the correct half by Kubernetes convention, where spec is intent
 //! and status is observation, and a receipt is an observation.
 //!
-//! What is deliberately not here: the manifests. Helm stores rendered
+//! Manifests are excluded. Helm stores rendered
 //! manifests in cluster Secrets and pays for it twice, once at the 1 MiB
 //! object limit and once because those records become a readable archive of
 //! every credential the release ever held. Kix's built manifests carry secret
@@ -54,7 +54,7 @@ pub fn build_receipt(graph: &StoreGraph, flake_ref: &str) -> Value {
     if let Some(git) = &git {
         source["gitCommit"] = json!(git.rev);
         source["dirty"] = json!(git.dirty);
-        // Nix's own spelling, so the two agree when compared by hand.
+        // Use Nix's spelling so direct comparisons agree.
         source["revision"] = json!(git.dirty_rev());
     }
     if let Some(d) = &flake_lock_digest {
@@ -88,10 +88,8 @@ pub fn build_receipt(graph: &StoreGraph, flake_ref: &str) -> Value {
 
 /// Every container image the build renders, sorted and deduplicated.
 ///
-/// This is the line that answers the question doc 138 exists for. A tag alone
-/// is not enough, because a tag can be moved after it is read; what makes this
-/// worth recording is that a reference resolved from a pin file carries its
-/// digest, so the receipt names exactly what the cluster was told to pull.
+/// Tags can move after they are read. Pin-file references carry digests, so
+/// the receipt names exactly what the cluster was told to pull.
 fn images(graph: &StoreGraph) -> Value {
     let mut found: BTreeSet<String> = BTreeSet::new();
     for resource in graph.resources.values() {

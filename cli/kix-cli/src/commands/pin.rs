@@ -1,4 +1,4 @@
-//! `kix pin` — the promotion verb.
+//! Promote a built cluster by updating its pin.
 //!
 //! The problem it solves is narrow and keeps recurring. Something outside the
 //! compilation unit decides an image tag: a CI build finishes, or a person
@@ -521,7 +521,7 @@ fn resolve(reference: &Reference) -> Result<String> {
 }
 
 /// Whether a promotion actually changes what runs. `promotedBy` and
-/// `resolvedAt` are deliberately not part of this: they describe the
+/// `resolvedAt` are excluded because they describe the
 /// promotion, not the thing promoted.
 fn moved(
     existing: Option<&Pin>,

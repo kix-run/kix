@@ -1,8 +1,8 @@
 //! Build a cluster's activation derivation via `nix build`.
 //!
 //! Returns the store path of the activation folder, which contains:
-//! - `activation` — symlink to the Activation CRD store path
-//! - `kix-packages.json` — PI→resource store path index
+//! - `activation`: symlink to the Activation resource store path
+//! - `kix-packages.json`: package-to-resource store path index
 //!
 //! The Rust CLI then uses `StoreGraph::from_result_dir` to load the graph.
 
@@ -80,7 +80,7 @@ pub fn build_cluster_activation_with_status(
             Ok(l) => l,
             Err(_) => continue,
         };
-        // Nix build outputs progress on stderr — show the latest line
+        // Show the latest Nix build progress line from stderr.
         let trimmed = line.trim();
         if !trimmed.is_empty() {
             // Extract meaningful progress from nix output

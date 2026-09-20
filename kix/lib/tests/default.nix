@@ -237,7 +237,7 @@ let
     };
 
   # v2_discussions/143/145 fixtures: a dep-free multi-replica Deployment, with
-  # optional pod-spec extras (hand-written placement rules) and an optional
+  # optional pod-spec extras (explicit placement rules) and an optional
   # author-written PDB over the same selector.
   mkReplicatedPackage =
     {
@@ -4508,7 +4508,7 @@ let
       )
       || throw "ceiling not applied: ${builtins.toJSON keys}";
 
-    # A hand-written hard placement rule on a multi-replica workload cannot
+    # An explicit hard placement rule on a multi-replica workload cannot
     # be satisfied on one node: refused when multiNode is declared false.
     s12-single-node-refuses-hard-anti-affinity = evalFails (mkCluster [
       singleNode

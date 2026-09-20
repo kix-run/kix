@@ -1,22 +1,9 @@
-# plugins/availability/module.nix — the availability level, and what the
-# compiler derives from it: topology spread, PodDisruptionBudgets, and the
-# checks that the level is honoured.
+# Derive topology spread and PodDisruptionBudgets from availability levels.
 #
-# The package states intent in `spec.replicas` (mapping the level it was
-# given as its `availability` argument); the cluster states what a failure
-# domain is (`cluster.capabilities.availabilityZones`, `multiNode`); the
-# operator states how much failure to survive (`cluster.availability`).
-# Design: v2_discussions/archive/145_availability_level.md (spread mechanism from
-# archive/143).
-#
-# The level itself is resolved once per instance in eval/instance.nix
-# (core/availability.nix `resolve`) and arrives here as `ctx.availability`.
-# Three hooks:
-#   workloadInterceptors.availability — the podSpec patch, pre-seal
-#   instanceProcessors.availability   — the PDB, the ladder's warnings and
-#                                       the shortfall check, post-fixpoint
-#   clusterProcessors.availability    — one warning per cluster when the
-#                                       substrate is uncertain
+# Packages map ctx.availability to replica counts. Cluster capabilities define
+# available failure domains. The workload interceptor adds placement before
+# sealing; the instance processor adds PDBs and checks replica shortfalls; the
+# cluster processor reports uncertain substrate capabilities once per cluster.
 {
   config,
   lib,
@@ -27,9 +14,8 @@ let
   avail = import ../../core/availability.nix { inherit lib; };
   caps = config.cluster.capabilities;
 
-  # The labels that name a zone and a host. Both default to the well-known
-  # Kubernetes labels; a cluster whose nodes are labelled by hand (racks,
-  # hypervisor hosts, no cloud controller) sets its own.
+  # Labels identifying zone and host failure domains. Clusters with custom
+  # node labels can override the Kubernetes defaults.
   zoneKey = config.cluster.topology.zoneKey;
   hostKey = config.cluster.topology.hostKey;
 
@@ -42,9 +28,8 @@ let
   multiNode = caps.multiNode or null;
   substrate = avail.substrate caps;
 
-  # Three-valued: multiNode=false derives nothing; zones unknown or
-  # single-zone spreads across hosts only. The rename onto doc 127's
-  # cluster.substrate.topology happens here and nowhere else.
+  # Derive no topology keys for a confirmed single-node cluster. Unknown or
+  # single-zone clusters spread by host; multi-zone clusters add the zone key.
   failureDomainKeys =
     if multiNode == false then
       [ ]
@@ -56,11 +41,9 @@ let
     else
       [ hostKey ];
 
-  # Strictness is a lowering of the level (145 §6): hard on the key that
-  # names the level, best effort on the others. With maxSkew = 1 a hard
-  # constraint is even distribution, not one pod per domain, so more
-  # replicas than domains is fine; what it refuses is a domain that cannot
-  # take its share.
+  # Use DoNotSchedule on the key represented by the requested level and
+  # ScheduleAnyway on lower-priority keys. maxSkew=1 permits more replicas
+  # than domains while keeping their distribution within one pod.
   whenUnsatisfiable =
     level: key:
     if level == "zone" && key == zoneKey then
@@ -78,15 +61,11 @@ let
   # derives neither constraints nor a PDB for it (one signal, one meaning).
   authorPlaced = spec: (spec.template.spec or { }) ? topologySpreadConstraints;
 
-  # nodeTaintsPolicy = Honor: a node the pod cannot land on (a tainted
-  # control plane) must not count as a domain with zero pods, or a hard
-  # hostname constraint caps every worker at one pod. Found on kind: with
-  # the zone key also hard the control plane was excluded for lacking a
-  # zone label, which hid it; with hostname alone it blocked the fourth pod.
-  # matchLabelKeys = [ pod-template-hash ] on Deployments: during a rolling
-  # update the new pods are counted against the old ones, so once the old
-  # ones leave a domain can be empty. Keying on the revision counts only
-  # the new pods. StatefulSets replace pods in place and have no such label.
+  # Exclude nodes rejected by taints from topology counts. Otherwise an
+  # unschedulable control-plane node can make a hard hostname constraint
+  # prevent additional worker pods.
+  # Count only the current Deployment revision during rolling updates.
+  # StatefulSets replace pods in place and have no pod-template-hash label.
   mkConstraints =
     kind: level: selector:
     map (
@@ -148,7 +127,7 @@ in
       description = ''
         The node label whose value names the availability zone. Cloud
         controllers set the well-known default; a cluster whose nodes are
-        labelled by hand (racks, hypervisor hosts, no cloud controller)
+        using custom labels (racks, hypervisor hosts, no cloud controller)
         names its own label here. A flavor may set it with mkDefault.
       '';
     };
@@ -222,12 +201,9 @@ in
         workloads = builtins.filter (r: (r.rawManifest or { }) ? kind) ctx.allPartResources;
         manifests = map (r: r.rawManifest) workloads;
         pdbs = builtins.filter (m: m.kind == "PodDisruptionBudget") manifests;
-        # Post-seal the manifest carries the derived constraints, so "the
-        # author placed this" is "constraints are present and are not the
-        # ones we would have derived" (a pure function of level and
-        # selector). No constraints at all means a workload the seal never
-        # patched (a raw mkResource Deployment, housekeeping 2026-09-19); it
-        # still gets its PDB.
+        # Constraints that differ from deriveConstraints are package supplied;
+        # skip PDB derivation for those workloads. A workload with no constraints
+        # still receives a PDB.
         derivedConstraints =
           r:
           let
@@ -266,11 +242,8 @@ in
             };
           };
 
-        # The derivation skips a workload the package placed itself (one
-        # signal, one meaning), so that workload has no PDB unless the
-        # package wrote one. Here the skip is decided, so here it is said:
-        # a scorecard rule could see the derived PDBs now (the rules score
-        # the shipped set since 2026-09-20) but not why one is absent.
+        # Warn when package-supplied placement disables PDB derivation and no
+        # package-supplied PDB selects the workload.
         uncoveredPlaced = builtins.filter (
           r:
           let
@@ -293,11 +266,9 @@ in
           + "drop the constraints and let the availability level derive both."
         ) uncoveredPlaced;
 
-        # 145 §7: the package promised to honour the level; check the
-        # result. From "node" up every root-reachable workload must run more
-        # than one replica (at "pod" a stateful component may still be
-        # standalone by design, §5.3). Ancillary workloads off the root path
-        # are not judged.
+        # At node and zone levels, require each root-reachable workload to run
+        # more than one replica. Do not judge ancillary workloads outside the
+        # root closure.
         shortfall = builtins.filter (
           r:
           let
@@ -323,7 +294,7 @@ in
         warnings = ctx.availability.warnings ++ placedWarnings ++ shortfallWarnings;
       };
 
-    # One line per cluster, not per instance: what the derived level rests on.
+    # Report uncertain substrate capabilities once per cluster.
     hooks.clusterProcessors.availability = _ctx: {
       warnings =
         lib.optional (multiNode == null) (

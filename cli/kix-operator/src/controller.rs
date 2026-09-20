@@ -1,12 +1,10 @@
-//! Activation controller — reconcile logic for the kix operator.
+//! Reconcile Activation resources for the kix operator.
 //!
 //! # Phase-based lifecycle
 //!
 //! The operator manages Activation CRs through a phase-based lifecycle:
 //!
-//! ```text
-//! (new CR, no status) → Queued → Deploying → Active → Superseded
-//! ```
+//! New resources progress through Queued, Deploying, Active, and Superseded.
 //!
 //! - **Queued**: A new activation waiting to be deployed. The operator
 //!   supersedes the current Active activation and begins deploying this one.
@@ -24,9 +22,9 @@
 //!
 //! # Reconcile loop prevention
 //!
-//! 1. **Generation predicate** — the watcher stream filters out events where
+//! 1. The generation predicate filters events where
 //!    only `.status` changed (no generation bump).
-//! 2. **Status subresource** — all status writes go through `patch_status`,
+//! 2. Status writes use the status subresource through `patch_status`,
 //!    which never bumps generation.
 
 use std::path::Path;
@@ -191,11 +189,7 @@ fn build_deploy_plan(
 
 /// Main reconcile function called by the kube-rs controller runtime.
 ///
-/// Dispatches based on phase:
-/// - Queued/empty → handle activation switchover, then reconcile
-/// - Active → drift detection reconcile
-/// - Deploying → resume deploy
-/// - Superseded → no-op
+/// Dispatch reconciliation according to the Activation phase.
 pub async fn reconcile_activation(
     activation: Arc<DynamicObject>,
     ctx: Arc<Context>,
@@ -211,7 +205,7 @@ pub async fn reconcile_activation(
     let phase = activation::read_phase(&activation);
 
     match phase {
-        // Superseded activations are done — nothing to do
+        // Superseded activations require no further work.
         s if s == PHASE_SUPERSEDED => {
             tracing::debug!(name, "Activation is Superseded, skipping");
             Ok(Action::await_change())
@@ -283,11 +277,11 @@ pub async fn reconcile_activation(
             return run_reconcile(&activation, &ctx, name, &cluster, true).await;
         }
 
-        // Active or Degraded — drift detection on requeue. Degraded means the
+        // Active and Degraded records run drift detection on requeue. Degraded means the
         // last deploy completed with some failures; the CR is still the
         // current intended state and we want drift correction to keep trying.
         s if s == PHASE_ACTIVE || s == PHASE_DEGRADED => {
-            // Check for Queued CRs — if any, yield to let them handle the transition
+            // Yield to a queued Activation so it can perform the transition.
             let queued = activation::find_queued(&ctx.client, &ctx.activation_ar, &cluster)
                 .await
                 .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
@@ -350,7 +344,7 @@ pub async fn reconcile_activation(
 ///
 /// If `manage_lifecycle` is true, passes `activation_name` to the reconcile engine
 /// so it runs begin_deploy/record_waves/finalize_deploy. Used for new deployments.
-/// If false, drift correction only — no lifecycle changes.
+/// If false, run drift correction without lifecycle changes.
 async fn run_reconcile(
     activation: &DynamicObject,
     ctx: &Context,
@@ -371,7 +365,7 @@ async fn run_reconcile(
 
     // 3. Filter out CRDs and Activation CRs
     //    CRDs: re-applying triggers API watch restarts.
-    //    Activation CRs: the Activation is the control input — applying the
+    //    Activation CRs: the Activation is the control input. Applying the
     //    Nix-generated manifest would overwrite spec.source via SSA.
     let managed_manifests: Vec<Value> = new_manifests
         .iter()
@@ -426,9 +420,8 @@ async fn run_reconcile(
     // 7. Run the DAG-streaming scheduler.
     //
     // TODO(operator-cancel): wire this token to a per-Activation supervisor
-    // so a newer Activation arriving on the cluster can cancel the in-flight
-    // loop. For now this is a never-cancelled token — same semantics as
-    // before, but the plumbing is in place.
+    // so a newer Activation can cancel the in-flight loop. This caller does
+    // not currently trigger cancellation.
     let config = SchedulerConfig {
         timeout: Duration::from_secs(300),
         on_error: OnErrorPolicy::Stop,
@@ -516,10 +509,6 @@ async fn run_reconcile(
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Deletion handler
-// ---------------------------------------------------------------------------
 
 /// Handle deletion of an Activation CR (finalizer cleanup).
 ///

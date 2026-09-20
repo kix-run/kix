@@ -1,4 +1,4 @@
-# Built-in scorecard rule library — imports all rule categories.
+# Built-in scorecard rule library.
 #
 # Usage in cluster definitions:
 #   rules = kix.rules;                    # all rules

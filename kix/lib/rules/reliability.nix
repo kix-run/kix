@@ -36,7 +36,7 @@ in
   # node", so an OOM that escapes a workload becomes a kernel-level event.
   # `requests` and `limits` are the only thing standing between a runaway pod
   # and a hung host. This rule is stricter than `hasResourceLimits` /
-  # `hasResourceRequests` above — it requires *both* CPU and memory in *both*
+  # `hasResourceRequests` above; it requires CPU and memory in both
   # requests and limits on every container.
   #
   # Parameterization is via the scorecard override machinery rather than a

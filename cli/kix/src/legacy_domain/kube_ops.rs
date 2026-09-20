@@ -63,7 +63,7 @@ impl KubeMigrationOps {
 
     /// A dynamic API for one record kind in one group.
     ///
-    /// Built by hand rather than from discovery: during the migration both
+    /// Constructed directly rather than from discovery: during the migration both
     /// groups can be registered, and discovery lookup is first-kind-wins, so
     /// it cannot say which `Activation` a caller meant.
     ///

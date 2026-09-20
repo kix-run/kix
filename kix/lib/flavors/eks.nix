@@ -1,10 +1,10 @@
-# Flavor: EKS — Amazon Elastic Kubernetes Service.
+# Amazon EKS flavor.
 #
-# Managed control plane. aws-vpc-cni gives pods real VPC IPs — the cni
+# Managed control plane. aws-vpc-cni gives pods real VPC IPs, and the cni
 # role is environment-owned (exclusive). LoadBalancer works via the in-tree
 # cloud provider (CLBs) or the AWS Load Balancer Controller addon (NLB/ALB),
 # so the role is shadowable. EBS CSI driver addon provides persistent
-# storage (RWO only — RWX needs EFS). No ingress controller — bring your own.
+# storage with RWO access; RWX needs EFS. No ingress controller is included.
 #
 # Platform imports: DNS (coredns, managed by EKS), storage (gp3 via EBS CSI).
 

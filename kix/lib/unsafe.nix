@@ -1,16 +1,15 @@
-# The unsafe-grant registry — the compiler's closed vocabulary of structural
-# authoring rules a package may explicitly opt out of (v2_discussions/128).
+# The compiler's closed vocabulary of structural rules that a package may
+# explicitly opt out of.
 #
 # Mirrors the role registry's philosophy (eval/roles.nix): the vocabulary is
 # closed on purpose so a typo'd grant throws instead of silently never
 # matching. A package opts out with a single declared line
 # (`meta.unsafe = [ "raw-pvc" ]`); the grant is validated when the package's
 # scope is constructed and surfaced by the scorecard's
-# `architecture.unsafeGrants` audit rule — an unsafe grant is never invisible
-# in review, it just isn't a warning to dismiss.
+# `architecture.unsafeGrants` audit rule, keeping unsafe grants visible in
+# review without producing a warning for the waived rule.
 #
-# Adding a grant here requires a rule that enforces its absence (doc 119's
-# demand test applies: no speculative vocabulary).
+# Each grant requires a rule that enforces its absence.
 
 { lib }:
 

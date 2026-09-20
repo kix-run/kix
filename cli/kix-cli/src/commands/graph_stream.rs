@@ -1,4 +1,4 @@
-//! Graph-streaming deploy renderer (doc 99 §1–§6).
+//! Interactive renderer for graph-streaming deploys.
 //!
 //! Replaces the wave-shaped `deploy_tui.rs` dashboard. Consumes the
 //! [`DeployEvent`] stream from the scheduler and renders a live tree grouped
@@ -6,21 +6,10 @@
 //! subtrees; a failure keeps its subtree expanded and pins a failure frame
 //! at the top of the viewport.
 //!
-//! Architecture mirrors the previous dashboard:
-//!   - [`GraphStreamObserver`] is a cheap clone that forwards `DeployEvent`
-//!     over an mpsc channel; it never draws or blocks.
-//!   - A dedicated OS thread owns the ratatui [`Terminal`], receives events
-//!     and a periodic tick, updates [`ViewState`], and redraws the inline
-//!     viewport. Completed rows that are folded are pushed into the
-//!     terminal's scrollback via [`insert_before`] so the user keeps the
-//!     nix-build-L line history above the live view.
-//!
-//! Not yet wired in this module (tracked for follow-up):
-//!   - `--group-by-ns` axis toggle (doc 99 §3);
-//!   - configurable `--fold-height` override (user feedback: default to ½
-//!     screen, configurable);
-//!   - `--show-refs=full` cross-package duplication (doc 99 §4 rule 6);
-//!   - ASCII / NO_COLOR fallbacks (doc 99 §1).
+//! [`GraphStreamObserver`] forwards events over an mpsc channel without
+//! drawing or blocking. A dedicated thread owns the terminal, updates
+//! [`ViewState`], and redraws the inline viewport. Folded rows move into
+//! terminal scrollback so completed work remains visible.
 
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Stdout};
@@ -55,24 +44,20 @@ use kix::cluster::stream::{
 /// Poll cadence for elapsed-timer redraws even when no events arrive.
 const TICK: Duration = Duration::from_millis(200);
 
-/// Default cap on the inline viewport. User feedback: bump to 3/4 so there's
-/// room for both the active resource rows and a few pending packages without
-/// pushing interesting state off-screen. Rows beyond this are either folded
-/// away (completed subtrees) or pushed into scrollback via `insert_before`.
+/// Default fraction of terminal rows available to the inline viewport.
 const DEFAULT_FOLD_FRACTION: f32 = 0.75;
 
-/// Grouping axis for the tree view (doc 99 §2–§3).
+/// Grouping axis for the tree view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GroupAxis {
-    /// Default — group resources by their `kix.run/package` label.
+    /// Group resources by their `kix.run/package` label.
     Package,
     /// Group resources by Kubernetes namespace; cluster-scoped resources
     /// land under a synthetic `<cluster>` group.
     Namespace,
 }
 
-/// Runtime glyph table — flips between Unicode + color and ASCII + bold when
-/// NO_COLOR / dumb terminals require it.
+/// Glyph capabilities derived from NO_COLOR and terminal type.
 #[derive(Debug, Clone, Copy)]
 pub struct GlyphStyle {
     pub ascii: bool,
@@ -90,8 +75,6 @@ impl GlyphStyle {
     }
 }
 
-// ── Public surface ──────────────────────────────────────────────────────────
-
 #[allow(dead_code)]
 pub fn is_supported() -> bool {
     crate::output::is_interactive()
@@ -105,8 +88,7 @@ pub struct GraphStreamObserver {
 impl DeployObserver for GraphStreamObserver {
     fn on_event(&self, event: &DeployEvent) {
         // The render thread owning the channel might have panicked during
-        // teardown; dropping the event is strictly better than panicking the
-        // scheduler on `unwrap()`.
+        // teardown; an observer must not panic the scheduler when that happens.
         let _ = self.tx.send(Msg::Event(Box::new(event.clone())));
     }
 }
@@ -128,7 +110,7 @@ impl GraphStreamDriver {
         axis: GroupAxis,
         glyph_style: GlyphStyle,
     ) -> io::Result<Self> {
-        // Redirect tracing to a file before we take over the screen — any
+        // Redirect tracing before taking over the screen because any
         // stderr write under the live viewport tears the ratatui rendering.
         let trace_log_path = {
             let path = std::env::temp_dir().join(format!("kix-tui-{}.log", std::process::id()));
@@ -206,14 +188,10 @@ fn initial_viewport_height() -> u16 {
     fold.clamp(10, 40)
 }
 
-// ── Messages ────────────────────────────────────────────────────────────────
-
 enum Msg {
     Event(Box<DeployEvent>),
     Shutdown,
 }
-
-// ── State ───────────────────────────────────────────────────────────────────
 
 struct ViewState {
     cluster_name: String,
@@ -233,10 +211,10 @@ struct ViewState {
     /// Plan-time ordering, so the tree renders deterministically even before
     /// any nodes execute.
     plan_order: Vec<NodeId>,
-    /// Reverse adjacency (predecessor → dependents) for rendering cross-
+    /// Reverse adjacency from predecessor to dependents for rendering cross-
     /// package references.
     dependents: HashMap<NodeId, Vec<NodeId>>,
-    /// Forward adjacency (dependent → predecessors) for cross-package ref
+    /// Forward adjacency from dependent to predecessors for cross-package ref
     /// discovery.
     predecessors: HashMap<NodeId, Vec<NodeId>>,
     /// Active grouping map (derived from axis). `groups` is the ordered list
@@ -252,12 +230,12 @@ struct ViewState {
     count_pending: usize,
     count_failed: usize,
     count_cancelled: usize,
-    /// The home group of every node — where it anchors in the tree. Used to
+    /// The home group where each node anchors in the tree. Used to
     /// compute cross-group reference arrows.
     home_group: HashMap<NodeId, String>,
     /// Spanning-tree render order: `(node, depth)` pairs produced by DFS
     /// from DAG roots so each child appears directly under its parent at
-    /// `parent.depth + 1`. Computed once at `PlanComputed` time — every
+    /// `parent.depth + 1`. Computed once at `PlanComputed`; every
     /// subsequent tick just iterates this list, filtering flushed rows.
     render_tree: Vec<(NodeId, usize)>,
 }
@@ -266,14 +244,14 @@ struct NodeView {
     kind: TransitionKind,
     verdict: Verdict,
     meta: NodeMeta,
-    /// Latest detail — carried from mid-flight Running events (readiness
+    /// Latest detail carried from mid-flight Running events (readiness
     /// progress, apply outcome) to the terminal event so the renderer can
     /// display a current status line.
     detail: Option<NodeDetail>,
     started_at: Instant,
     last_update: Instant,
     last_msg: Option<String>,
-    /// Sticky record of the apply outcome — `detail` gets overwritten by
+    /// Sticky record of the apply outcome. `detail` gets overwritten by
     /// subsequent ReadinessProgress events, so we copy the action out the
     /// first time Applied arrives and keep it for the scrollback emitter.
     applied_action: Option<ApplyAction>,
@@ -360,7 +338,7 @@ impl ViewState {
                 }
                 // Build a spanning-tree render order by DFS from DAG roots.
                 // plan_order is insertion order (not topological), so a
-                // naive single-pass depth computation is wrong — we instead
+                // naive single-pass depth computation is wrong. Instead,
                 // walk `dependents` edges downward so each node is emitted
                 // directly under its parent. Nodes with multiple parents
                 // anchor under whichever root reaches them first; the rest
@@ -411,7 +389,7 @@ impl ViewState {
                 let old = std::mem::replace(&mut entry.verdict, verdict.clone());
                 entry.kind = kind;
                 entry.last_update = Instant::now();
-                // Reset the node's started_at clock on the Pending → Running
+                // Reset the node's clock when it moves from Pending to Running
                 // edge so the timer in the tree measures "time applying this
                 // resource", not "time since deploy start".
                 if matches!(old, Verdict::Pending) && matches!(verdict, Verdict::Running) {
@@ -545,14 +523,12 @@ fn apply_label(action: &ApplyAction) -> &'static str {
     }
 }
 
-// ── Render loop ─────────────────────────────────────────────────────────────
-
 fn run_ui(
     mut terminal: Terminal<CrosstermBackend<Stdout>>,
     mut state: ViewState,
     rx: mpsc::Receiver<Msg>,
 ) {
-    // Rows already flushed to scrollback (via insert_before) — never drawn in
+    // Rows already flushed to scrollback are never drawn in
     // the viewport again.
     let mut flushed: HashSet<NodeId> = HashSet::new();
     // Apply-phase scrollback tracking: ensures each node emits exactly one
@@ -702,8 +678,6 @@ fn render_header(area: Rect, buf: &mut Buffer, state: &ViewState) {
     Paragraph::new(Line::from(spans)).render(area, buf);
 }
 
-// ── Tree rendering ──────────────────────────────────────────────────────────
-
 fn render_tree(area: Rect, buf: &mut Buffer, state: &ViewState, flushed: &HashSet<NodeId>) {
     let lines = build_tree_lines(state, flushed);
     Paragraph::new(lines).render(area, buf);
@@ -715,7 +689,7 @@ fn render_tree(area: Rect, buf: &mut Buffer, state: &ViewState, flushed: &HashSe
 fn build_tree_lines(state: &ViewState, flushed: &HashSet<NodeId>) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
 
-    // Failure frame (doc 99 §6): pinned at top if anything has failed.
+    // Pin failures at the top of the viewport.
     if state.count_failed > 0 {
         let mut frame: Vec<Line<'static>> = Vec::new();
         frame.push(Line::from(vec![Span::styled(
@@ -753,7 +727,7 @@ fn build_tree_lines(state: &ViewState, flushed: &HashSet<NodeId>) -> Vec<Line<'s
     //   - Pending parents whose entire subtree is also pending collapse
     //     with a `(+N pending)` tail; their children are not drawn.
     //   - When a pending parent has active descendants it renders with a
-    //     ▼ glyph to signal "drilled through — real work is below".
+    //     marker to show that active work exists below it.
     //   - Under every expanded parent, any direct child whose own subtree
     //     has no active work (pending leaves + all-pending branches) is
     //     aggregated into a single synthetic `⏸ (+N pending)` sibling line
@@ -765,7 +739,7 @@ fn build_tree_lines(state: &ViewState, flushed: &HashSet<NodeId>) -> Vec<Line<'s
         i = render_tree_node(&mut lines, i, state, flushed, &subtree_info);
     }
 
-    // Footer (doc 99 §2 example).
+    // Render deploy-wide status below the tree.
     if let Some(stall) = &state.stall {
         lines.push(Line::from(""));
         lines.push(Line::from(vec![Span::styled(
@@ -835,7 +809,7 @@ fn render_tree_node(
     let has_visible_desc = info.visible_descendants > 0;
 
     // Whole-subtree collapse: a pending node whose subtree carries no
-    // active work either — render one line with a `(+N pending)` tail and
+    // active work either. Render one line with a `(+N pending)` tail and
     // skip every descendant.
     if is_pending && !info.has_active && has_visible_desc {
         lines.push(node_line_with_tail(
@@ -925,7 +899,7 @@ fn node_line_with_tail(
     let (glyph, glyph_style) = match glyph_override {
         Some((unicode, ascii)) => {
             let g = if state.glyph.ascii { ascii } else { unicode };
-            // ▼ means "drilled through a pending parent" — the branch is
+            // This marker means a pending parent has active work below it.
             // only there to host something interesting below, so keep it
             // muted and let the real work own the color.
             let style = Style::default().add_modifier(Modifier::DIM);
@@ -935,7 +909,7 @@ fn node_line_with_tail(
     };
     let tag = node.kind.tag().map(|t| format!("{t} ")).unwrap_or_default();
 
-    // Tree uses short labels (no @package) — the parent PackageInstance
+    // Tree rows use short labels because the parent PackageInstance
     // already provides that context. Scrollback keeps the qualified form.
     let label = node_label_short(id, &node.meta);
     let elapsed = node.last_update.saturating_duration_since(node.started_at);
@@ -947,7 +921,7 @@ fn node_line_with_tail(
         _ => String::new(),
     };
     // Strip the readiness-progress prefix when it duplicates the row label.
-    // Pollers emit strings like "Deployment/foo: 1/3 ready (…)" — the
+    // Pollers include the resource name in messages; the
     // leading "Kind/name:" is redundant with the row itself.
     let msg = node
         .last_msg
@@ -1035,7 +1009,7 @@ fn compute_subtree_info(
 
     // Scan the full descendant range per parent. O(sum of subtree depths),
     // which in practice is well under a millisecond for deploys under a
-    // few thousand nodes — acceptable at 200ms tick cadence.
+    // few thousand nodes, within the 200ms tick cadence.
     for (i, entry) in info.iter_mut().enumerate() {
         let end = entry.subtree_end;
         let mut any_active = false;
@@ -1060,12 +1034,12 @@ fn compute_subtree_info(
 
 /// Compute intra-group depth per node: the longest chain of predecessors
 /// that also belong to this group. Cross-package predecessors are ignored
-/// here — they manifest as the `└┄► pkg` tail on the node row, which marks
+/// here. They appear as a cross-package tail on the node row, which marks
 /// the boundary the user asked to see. Traversal happens in `plan_order`
 /// which the scheduler emits in topological order, so one pass suffices.
 /// Produce a DFS spanning-tree over the deploy DAG for display. Roots are
-/// nodes with no `incoming_for_roots` entries — i.e. sinks of that adjacency
-/// (typically PackageInstances that nothing else consumes). We then walk
+/// nodes with no `incoming_for_roots` entries, typically PackageInstances
+/// that nothing else consumes. Then walk
 /// `walk_edges` downward, emitting each node exactly once at its DFS depth.
 /// Nodes reachable through multiple paths anchor under whichever root
 /// reached them first; other edges surface as the `└┄►` tail on the row.
@@ -1174,15 +1148,13 @@ fn strip_resource_prefix(msg: &str, id: &NodeId) -> String {
     msg.to_string()
 }
 
-// ── Flush to scrollback ─────────────────────────────────────────────────────
-
 /// Decide which rows to push into terminal scrollback on this tick.
 ///
 /// Nom-style: every Ready resource is flushed as soon as it completes, so the
 /// live viewport only ever shows in-flight / pending / failed work. When the
 /// last resource of a package becomes Ready we also emit a one-line package
 /// summary so the user can see groups collapse as the deploy progresses.
-/// Failed subtrees are never flushed — they stay pinned in the viewport
+/// Failed subtrees are never flushed; they stay pinned in the viewport
 /// until the deploy ends.
 fn build_flush_lines(
     state: &ViewState,
@@ -1312,8 +1284,6 @@ fn resource_history_line(id: &NodeId, node: &NodeView, state: &ViewState) -> Lin
     Line::from(spans)
 }
 
-// ── Glyph / color ───────────────────────────────────────────────────────────
-
 fn glyph_for(v: &Verdict, style: GlyphStyle) -> (&'static str, Style) {
     // Palette intent: color only when the state is actively interesting
     // (Running, Failed, Awaiting, Drift, Ready). Pending and Cancelled
@@ -1336,8 +1306,6 @@ fn glyph_for(v: &Verdict, style: GlyphStyle) -> (&'static str, Style) {
     (glyph, base)
 }
 
-// ── Input thread ────────────────────────────────────────────────────────────
-
 fn input_loop(shutdown: Arc<AtomicBool>, cancel: CancelToken) {
     while !shutdown.load(Ordering::Acquire) {
         if let Ok(true) = event::poll(Duration::from_millis(100))
@@ -1352,8 +1320,6 @@ fn input_loop(shutdown: Arc<AtomicBool>, cancel: CancelToken) {
         }
     }
 }
-
-// ── Format helpers ──────────────────────────────────────────────────────────
 
 fn format_elapsed(d: Duration) -> String {
     let secs = d.as_secs();

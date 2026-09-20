@@ -1,4 +1,4 @@
-//! Apply engine — SSA-based resource application with local DAG diff change detection.
+//! Apply resources with server-side apply and local DAG change detection.
 //!
 //! Uses server-side apply (`Patch::Apply`) with `kix` as the field manager.
 //! Change detection diffs two sets of stamped manifests locally by comparing
@@ -137,7 +137,7 @@ pub enum ChangeAction {
     Apply(Value),
     /// Resource is unchanged (same identity-hash), skip it.
     Skip(ResourceId),
-    /// Resource exists in old activation but not new — candidate for pruning.
+    /// Resource exists in the old activation but not the new one; candidate for pruning.
     Orphan(ResourceId),
 }
 
@@ -209,16 +209,11 @@ pub fn detect_changes(new_manifests: &[Value], old_manifests: &[Value]) -> Vec<C
         }
     }
 
-    // Find orphans: old resources not matched by any new resource. Only
-    // stamped resources qualify: an old manifest without an identity hash
-    // came from live reconstruction of something kix never applied (a
-    // controller child that inherited the label, a kubectl-applied render),
-    // and kix only ever deletes what it stamped.
+    // Only stamped resources can become orphans. An unstamped manifest may be
+    // a controller child or an object applied outside Kix and must not be deleted.
     //
-    // The previous deploy's record is never an orphan: it is superseded by
-    // finalize, not pruned, and its name differs from the new record's on
-    // every changed deploy, so treating it like desired state would invent
-    // an orphan that `--prune` then deleted (kixpkgs#59).
+    // Finalization supersedes the previous deploy record. Exclude it from
+    // orphan detection because each changed activation has a different name.
     for old_manifest in old_manifests {
         if manifest_identity_hash(old_manifest).is_none() || !lifecycle_of(old_manifest).prunable()
         {
@@ -239,10 +234,10 @@ pub fn detect_changes(new_manifests: &[Value], old_manifests: &[Value]) -> Vec<C
 /// A run that dies mid-wave applied some of its closure and recorded nothing,
 /// so [`detect_changes`] against the still-Active closure cannot see any of
 /// it: the objects it created are not orphans, and the objects it changed do
-/// not read as changed. That is kixpkgs#82, in both its halves.
+/// not read as changed.
 ///
-/// The honest statement is that for any resource in a failed closure we do
-/// not know which of two compiler outputs the cluster holds. So:
+/// For a resource that differs between the active and failed closures, the
+/// cluster may hold either compiler output. Apply these rules:
 ///
 /// - A `Skip` whose identity appears in a failed closure under a DIFFERENT
 ///   hash becomes an `Apply`. The cluster holds either the new hash or that
@@ -253,9 +248,8 @@ pub fn detect_changes(new_manifests: &[Value], old_manifests: &[Value]) -> Vec<C
 ///   the same rules [`detect_changes`] uses: stamped, prunable, and not a
 ///   record.
 ///
-/// Every input is a compiler output. Nothing here reads the cluster, which is
-/// the point: the kix invariant is that we never reason against live state to
-/// decide what to do (v2_discussions/81 §"Closure A to closure B").
+/// Every input is a compiler output. This function does not read live cluster
+/// state when deciding how to combine closures.
 pub fn fold_failed_closures(
     actions: Vec<ChangeAction>,
     new_manifests: &[Value],
@@ -454,12 +448,8 @@ pub fn detect_changes_live(
         }
     }
 
-    // Find orphans: live resources not matched by any desired manifest.
-    // Unstamped live objects are never orphans: kix did not apply them, so
-    // kix does not delete them (see detect_changes). Neither are live
-    // records: the operator strips the record from the desired side and
-    // prunes with `PrunePolicy::Delete`, so a live record that reached this
-    // loop would be deleted on every reconcile (kixpkgs#59).
+    // An orphan is a stamped live resource absent from desired manifests.
+    // Exclude unstamped objects and activation records from deletion.
     for (k8s_id, rid) in &live_rids {
         let stamped = live_by_k8s_id.get(k8s_id).copied().flatten().is_some();
         if stamped && live_prunable.contains(k8s_id) && !matched_live_ids.contains(k8s_id) {
@@ -492,16 +482,11 @@ fn api_for(
 
 /// Record this activation on a resource the deploy did NOT apply.
 ///
-/// An unchanged resource is skipped — its identity hash already matches, so
-/// there is nothing to send. But it is still part of THIS activation, and
-/// `kix.run/activations` is the record of that. Without this, any resource
-/// whose identity hash does not churn between deploys (ServiceAccounts,
-/// ConfigMaps, import markers, leaf Services) freezes its activation set at
-/// the last deploy that happened to change it, and the annotation silently
-/// under-counts — it cannot be used for reference-counted GC.
+/// An unchanged resource is still part of the current activation. Add the
+/// activation to `kix.run/activations` even though no content patch is needed,
+/// keeping the reference set complete for garbage collection.
 ///
-/// Deliberately does not touch `kix.run/applied-hash`: nothing was applied, so
-/// the existing stamp is still the truth about the content on the cluster.
+/// Leave `kix.run/applied-hash` unchanged because no content was applied.
 /// Writes nothing when the annotation already says the right thing.
 pub async fn record_activation_on_skipped(
     client: &Client,
@@ -545,10 +530,8 @@ pub async fn apply_resource(
 
     let api: Api<DynamicObject> = api_for(client, ar, scope, &rid);
 
-    // Build patch params. We default to NON-force SSA: conflicts surface as 409
-    // with the conflicting field paths and current owner, instead of silently
-    // clobbering. The user opts in to clobber via --force-conflicts (typically
-    // for first-time migration of a resource away from kubectl/helm).
+    // Default to non-force SSA so ownership conflicts return their field paths
+    // and current manager. --force-conflicts opts into taking ownership.
     let mut pp = PatchParams::apply(FIELD_MANAGER);
     if force_conflicts {
         pp = pp.force();
@@ -589,8 +572,8 @@ pub async fn apply_resource(
         Err(e) => return Err(e),
     };
 
-    // Compute the applied-content hash from the SSA response echo (doc 122):
-    // the echo IS the committed, canonicalized server representation, so a
+    // Compute the applied-content hash from the SSA response. It is the
+    // committed, canonicalized server representation, so a
     // hash of its kix-owned projection is directly comparable to a hash of
     // the live object at any later check.
     let applied_hash = if dry_run {
@@ -615,7 +598,7 @@ pub async fn apply_resource(
     // like the SSA, so a transient webhook outage (e.g. ingress-nginx admission pod
     // rolling) can fail it. The transport retries those; if the failure
     // outlasts the retry budget it is surfaced as a hard error, because
-    // silently dropping this update would corrupt reference counting and
+    // Dropping this update would corrupt reference counting and
     // cause GC to delete the resource on the next deploy.
     if !dry_run && (activation_hash.is_some() || applied_hash.is_some()) {
         update_bookkeeping_annotations_checked(
@@ -644,11 +627,10 @@ pub async fn apply_resource(
 }
 
 /// Send the SSA patch and classify a failure: 409 conflicts become
-/// [`ApplyError::Conflict`] so the user gets an actionable message instead
-/// of silently clobbering field ownership.
+/// [`ApplyError::Conflict`] with the conflicting field ownership.
 ///
-/// Returns the SSA response echo — the committed, server-canonicalized object,
-/// used to compute the applied-content hash (doc 122).
+/// Return the server-canonicalized SSA response used to compute the
+/// applied-content hash.
 async fn apply_patch(
     api: &Api<DynamicObject>,
     name: &str,
@@ -662,9 +644,8 @@ async fn apply_patch(
 }
 
 /// Wrapper around [`update_bookkeeping_annotations`] that turns a failure
-/// into a hard [`ApplyError::BookkeepingAnnotationsFailed`] so the deploy
-/// halts under `on_error=stop` instead of silently corrupting
-/// `kix.run/activations` reference counting.
+/// into [`ApplyError::BookkeepingAnnotationsFailed`]. Under `on_error=stop`,
+/// the deploy halts before it can continue with incomplete activation data.
 async fn update_bookkeeping_annotations_checked(
     api: &Api<DynamicObject>,
     name: &str,
@@ -859,12 +840,9 @@ fn classify_apply_error(rid: &ResourceId, err: kube::Error) -> ApplyError {
 /// Detect the apiserver rejecting a CRD that drops a version the cluster
 /// still has objects stored at.
 ///
-/// It reports this as a plain validation error on `status.storedVersions`,
-/// which says what is wrong and nothing about what to do, and the operator
-/// is left reading it against a CRD they did not hand-write. A deploy hits
-/// it whenever a vendored CRD is re-vendored after upstream retired a
-/// version. Matching on the field path keeps this narrow: no other
-/// rejection names it.
+/// The API server reports this as a validation error on status.storedVersions.
+/// Match that field path to identify the case without classifying unrelated
+/// validation failures.
 fn is_stored_version_message(msg: &str) -> bool {
     msg.contains("status.storedVersions")
 }
@@ -889,9 +867,8 @@ fn is_immutable_field_message(msg: &str) -> bool {
 /// list it: its CR is applied in the last wave, so it is legitimately absent
 /// while its own resources are being stamped.
 ///
-/// `live == None` means "could not establish the set" and disables pruning
-/// entirely — keeping a dead reference is recoverable, dropping a live one is
-/// not. Output is sorted and deduplicated so a re-run is byte-identical and
+/// `live == None` means the set could not be established and disables pruning.
+/// Output is sorted and deduplicated so a re-run is byte-identical and
 /// the caller can compare against `existing` to decide whether to write.
 fn merge_activation_set(
     existing: &str,
@@ -916,8 +893,7 @@ fn merge_activation_set(
 ///
 /// `live_activations`, when `Some`, is the set of identity hashes of every
 /// Activation CR currently on the cluster. `None` means the set could not be
-/// established, in which case nothing is pruned — a dead reference is a lesser
-/// evil than dropping a live one.
+/// established, in which case existing activation references are retained.
 async fn update_bookkeeping_annotations(
     api: &Api<DynamicObject>,
     name: &str,
@@ -989,11 +965,11 @@ async fn update_bookkeeping_annotations(
         }
     }
 
-    // Patch with strategic merge (not SSA — we only want to touch these
-    // annotations, without disturbing kix's Apply fieldset).
+    // Use strategic merge to update these annotations without changing Kix's
+    // server-side apply field set.
     // Name the field manager explicitly: kube's default would record this write
     // under manager "unknown" in managedFields, which pollutes ownership-based
-    // drift attribution (doc 122).
+    // drift attribution.
     let patch = serde_json::json!({
         "metadata": {
             "annotations": annotations,
@@ -1528,7 +1504,7 @@ mod tests {
         assert_eq!(orphans, 1);
     }
 
-    // ---- kixpkgs#59: the deploy record never takes part in change detection
+    // Deploy records do not participate in change detection.
 
     fn record(name: &str, hash: &str) -> Value {
         json!({

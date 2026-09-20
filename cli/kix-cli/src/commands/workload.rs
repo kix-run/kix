@@ -2,10 +2,8 @@
 //! package-instance name to its primary workload (Deployment / StatefulSet /
 //! DaemonSet), and extract the label selector for downstream `kubectl` calls.
 //!
-//! Both commands deliberately shell out to `kubectl logs` / `kubectl
-//! port-forward`. The point is "one tool" in the demo, not re-implementing
-//! log streaming or port proxying. Per
-//! `v2_discussions/84_m0_m1_implementation_plan.md` §4.
+//! Both commands invoke `kubectl logs` or `kubectl port-forward` rather than
+//! implementing log streaming or port proxying.
 
 use std::path::{Path, PathBuf};
 
@@ -36,7 +34,7 @@ impl WorkloadTarget {
 }
 
 /// Kinds we treat as a package's "primary workload" when it has no explicit
-/// pointer. Ordered by preference — e.g. if a package ships both a
+/// pointer. Ordered by preference; if a package ships both a
 /// Deployment and a Job, the Deployment wins.
 const WORKLOAD_KINDS: &[&str] = &["Deployment", "StatefulSet", "DaemonSet"];
 
@@ -72,7 +70,7 @@ pub fn resolve_package_workload(
 }
 
 /// Match a package by instance name. Matches are case-sensitive and prefer
-/// the shortest `<namespace>/<instance>` key that ends with the query — so
+/// the shortest `<namespace>/<instance>` key that ends with the query, so
 /// `kix logs ludo vaultwarden` works even when there are multiple namespaces.
 fn find_package<'a>(graph: &'a StoreGraph, query: &str) -> Result<&'a PackageNode> {
     // Exact instance-name match first.

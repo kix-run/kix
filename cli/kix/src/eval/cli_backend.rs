@@ -161,7 +161,7 @@ impl NixBackend for CliNixBackend {
         // CLI path. Previously we shelled out to `nix flake show
         // --json` and walked the packages tree, but Determinate Nix
         // sometimes omits cluster attrs from that output when
-        // `--override-input` introduces a path: input — `nix eval` is a
+        // `--override-input` introduces a path input. `nix eval` is a
         // direct attribute query and stays stable.
         let attr = format!(".#legacyPackages.{}.kixClusters", current_nix_system());
 

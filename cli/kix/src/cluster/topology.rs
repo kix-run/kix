@@ -5,7 +5,7 @@
 //! and host labels (`kix/lib/plugins/availability/module.nix`) and never
 //! sees a node. Under `DoNotSchedule` a node without the label is not a
 //! domain and cannot host the pod, so on a cluster whose nodes are labelled
-//! by hand a wrong `cluster.topology.zoneKey` leaves every replica Pending.
+//! with custom labels, a wrong `cluster.topology.zoneKey` leaves every replica Pending.
 //! Without this check the first sign is a readiness stall that names the
 //! Deployment and nothing else. One LIST of nodes before apply turns that
 //! into a line that names the label and the nodes lacking it.

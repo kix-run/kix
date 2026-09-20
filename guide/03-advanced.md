@@ -412,7 +412,7 @@ Package-declared `warnings` / `assertions` functions (called with `{ config; sel
 
 Wrap upstream Helm charts; turn rendered manifests into first-class kix resources. Code: `kix/lib/helm.nix` (fetch, template, wrap, `importChart`, `mkParts`), `kix/lib/helm-dag.nix` (intra-chart edge inference).
 
-Mechanism: chart rendered once via IFD (`helm template`), every resource re-wrapped through `scope.mkResource` so it joins the same store-path DAG, identity hashing, and netpol generation as a hand-written package (see 02-authoring.md#resources-and-the-out-surface).
+Mechanism: chart rendered once via IFD (`helm template`), every resource re-wrapped through `scope.mkResource` so it joins the same store-path DAG, identity hashing, and netpol generation as a native Kix package (see 02-authoring.md#resources-and-the-out-surface).
 
 ### Three tiers
 
@@ -1033,7 +1033,7 @@ instances = kix.mkEnv "dev" {
 - Isolation is the namespace prefix and nothing else. A plain auto-instantiated dep follows the requesting namespace, so each env gets its own; role-named deps are keyed by the role and shared, as are packages pinned by `namespace` or `autoNamespace`.
 - Call once per env (`"prod"`, `"stage"`, `"demo"`); merge results into `instances`. DI graph independent per env (namespaces differ, resolution is namespace-scoped; see 02-authoring.md#dependency-injection).
 
-Gotcha: override merge is shallow `//`, unlike instance `config` deep-merge. `overrides.app.api.config.resources = { cpu = ...; }` replaces the whole `resources` block, dropping sibling defaults. For deep semantics prefer plain `instances."dev-app"` defs with `lib.mkDefault`, or hand-written prefixed instances (`ludo/variants/cluster-kind-env-stamped.nix`).
+Gotcha: override merge is shallow `//`, unlike instance `config` deep-merge. `overrides.app.api.config.resources = { cpu = ...; }` replaces the whole `resources` block, dropping sibling defaults. For deep semantics prefer plain `instances."dev-app"` defs with `lib.mkDefault`, or explicitly declared prefixed instances (`ludo/variants/cluster-kind-env-stamped.nix`).
 
 ### Gotchas
 
@@ -1057,7 +1057,7 @@ Gotcha: override merge is shallow `//`, unlike instance `config` deep-merge. `ov
 | Apply a transform to every instance | `globalPartsOverlays` |
 | Forbid a consumer from injecting into a field | `kix.mkLocked value` |
 | Forward config from a consumer into its dep | `deps.<arg>.config` (in the package) |
-| Run the same stack in dev/stage/prod namespaces | `kix.mkEnv` (or hand-written prefixed instances) |
+| Run the same stack in dev/stage/prod namespaces | `kix.mkEnv` (or explicitly declared prefixed instances) |
 | Add an extra ordering edge to the deploy graph | `extraDeps` |
 | Override the version on the PackageInstance marker | `version` |
 

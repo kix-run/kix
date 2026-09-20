@@ -1,28 +1,22 @@
-//! DAG-streaming deploy scheduler (doc 99 Stage A, reshaped by doc 134).
+//! DAG-streaming deploy scheduler.
 //!
-//! Replaces the wave-barrier loop in `reconcile.rs`. Every node in the
-//! [`DeployPlan`] becomes ready to execute the moment its direct predecessors
+//! Every node in the [`DeployPlan`] becomes ready to execute when its direct predecessors
 //! have emitted [`Verdict::Ready`]; independent subtrees stream through in
-//! parallel, bounded by [`SchedulerConfig::concurrency`]. See doc 98 §4 for
-//! the motivation (head-of-line blocking under wave barriers) and doc 99 §9
-//! for scope.
+//! parallel, bounded by [`SchedulerConfig::concurrency`].
 //!
 //! # The engine task never awaits foreign I/O while nodes are in flight
 //!
 //! Every unit of work (a node, a discovery refresh, a checkpoint) is a task
-//! spawned into one `JoinSet`, so the runtime polls it whatever the
+//! spawned into one `JoinSet`, so the runtime continues polling it while the
 //! supervisor is doing. The supervisor's only awaits are its own `JoinSet`,
-//! the cancel token and the watchdog. The first version of this loop held
-//! its node futures in a `FuturesUnordered` and awaited CRD rediscovery
-//! inline; a future nobody polls makes no progress and fires no deadline,
-//! and on 2026-09-07 that sat silent for 35 minutes (kixpkgs#62, doc 134).
+//! the cancel token, and the watchdog. Work that may block another task must
+//! remain spawned because an unpolled future makes no progress and fires no
+//! deadline.
 //!
 //! Every cluster call goes through [`ClusterOps`], so the loop runs under
 //! test against `ops::scripted::ScriptedOps` with no cluster.
 //!
-//! Today the planner tags every node as [`TransitionKind::Apply`] or
-//! [`TransitionKind::Skip`]; the other variants exist on the enum but are
-//! not yet produced. Recreate/Migrate/Drain/Delete/Pause are Stage E–F.
+//! The planner currently produces Apply, Skip, and Recreate transitions.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
@@ -50,10 +44,9 @@ use crate::manifest::keys;
 pub use super::ops::kube::delete_propagation_for;
 
 // ---------------------------------------------------------------------------
-// Plan
 // ---------------------------------------------------------------------------
 
-/// A single node in the plan — resource or synthetic — paired with the work
+/// A single resource or synthetic node paired with the work
 /// the scheduler will perform on it.
 #[derive(Debug, Clone)]
 pub struct PlanNodeEntry {
@@ -73,7 +66,7 @@ pub struct PlanNodeEntry {
 
 /// The planner's output. Handed to [`run_deploy`] which consumes it.
 ///
-/// `edges` is `(dependent, predecessor)` — the dependent waits on the
+/// `edges` is `(dependent, predecessor)`; the dependent waits on the
 /// predecessor. Both endpoints must also appear in `nodes`.
 #[derive(Debug, Clone, Default)]
 pub struct DeployPlan {
@@ -85,7 +78,7 @@ impl DeployPlan {
     /// Build a plan from the resource dependency graph and the change
     /// actions produced by `detect_changes` / `detect_changes_live`.
     ///
-    /// Orphans are not part of the plan — they are handed to the scheduler
+    /// Orphans are not part of the plan. They are handed to the scheduler
     /// separately and pruned after every non-orphan node has terminated.
     pub fn from_graph_and_changes(graph: &ResourceGraph, changes: &[ChangeAction]) -> Self {
         // Index changes by K8s identity so we can look them up per-node.
@@ -109,7 +102,7 @@ impl DeployPlan {
             let action = match by_id.get(&k8s_id) {
                 Some(ChangeAction::Apply(m)) => ChangeAction::Apply((*m).clone()),
                 Some(ChangeAction::Skip(rid)) => ChangeAction::Skip(rid.clone()),
-                // Node in the graph but no change action — treat as Skip.
+                // A graph node without a change action is skipped.
                 // Happens for manifests that weren't in the diff input (shouldn't
                 // occur in practice, but stay defensive).
                 None | Some(ChangeAction::Orphan(_)) => ChangeAction::Skip(node.id.clone()),
@@ -138,7 +131,7 @@ impl DeployPlan {
             });
         }
 
-        // Edges: in ResourceGraph, outgoing edges point from dependent → predecessor.
+        // ResourceGraph edges point from dependent to predecessor.
         let mut edges = Vec::new();
         for idx in graph.graph.node_indices() {
             let dependent_id = NodeId::Resource(graph.graph[idx].id.clone());
@@ -167,7 +160,6 @@ impl DeployPlan {
 }
 
 // ---------------------------------------------------------------------------
-// Shared policy enums
 // ---------------------------------------------------------------------------
 
 /// What to do when a node's verdict lands on `Failed`.
@@ -176,7 +168,7 @@ pub enum OnErrorPolicy {
     /// Halt the deploy immediately.
     Stop,
     /// Continue sibling subtrees; cancel transitive dependents of the failed
-    /// node (doc 98 §4.4).
+    /// node.
     Continue,
 }
 
@@ -192,7 +184,6 @@ pub enum PrunePolicy {
 }
 
 // ---------------------------------------------------------------------------
-// Configuration
 // ---------------------------------------------------------------------------
 
 /// Default for [`SchedulerConfig::concurrency`]: max nodes in flight. Same
@@ -219,7 +210,7 @@ pub struct SchedulerConfig {
     /// Activation CR's `status` subresource is never patched, and readiness
     /// short-circuits to Ready (because nothing was persisted to poll for).
     /// The same DeployEvent stream is emitted, so the same renderer paints
-    /// dry-run output as the real path — no parallel render path.
+    /// dry-run output as the real path.
     pub dry_run: bool,
     /// Max nodes in flight. See [`CONCURRENCY`].
     pub concurrency: usize,
@@ -235,7 +226,6 @@ pub struct SchedulerConfig {
 }
 
 // ---------------------------------------------------------------------------
-// Errors
 // ---------------------------------------------------------------------------
 
 #[derive(Error, Debug)]
@@ -283,7 +273,6 @@ impl DeployError {
 }
 
 // ---------------------------------------------------------------------------
-// Entry point
 // ---------------------------------------------------------------------------
 
 /// Which task a `JoinSet` entry is, for accounting aborted and panicked
@@ -317,7 +306,7 @@ enum Done {
 /// ([`OnErrorPolicy::Continue`]).
 ///
 /// Dependents of a CRD wait for one discovery refresh after the CRD is Ready
-/// (the CRD barrier, doc 134 §2.3). Several CRDs finishing together share
+/// through the CRD barrier. Several CRDs finishing together share
 /// one refresh. A refresh that fails stops the run.
 ///
 /// After every non-orphan node has reached a terminal verdict, orphans are
@@ -972,8 +961,8 @@ pub async fn run_deploy(
                 continue;
             }
             if never_pruned(&rid.kind) {
-                // Same policy as the legacy reconcile: report it, leave it,
-                // and let a human remove it deliberately. See `never_pruned`.
+                // Report protected kinds and leave their removal to an
+                // explicit operation. See `never_pruned`.
                 continue;
             }
             let deleted =
@@ -1060,7 +1049,7 @@ fn finish_success(
     }
 }
 
-/// CRD barrier bookkeeping (doc 134 §2.3).
+/// CRD barrier bookkeeping.
 #[derive(Default)]
 struct CrdBarrier {
     /// CRD nodes that are Ready and need a refresh to start after them.
@@ -1145,14 +1134,13 @@ impl Checkpoints {
 }
 
 // ---------------------------------------------------------------------------
-// Scheduler state
 // ---------------------------------------------------------------------------
 
 struct SchedulerState {
     entries: HashMap<NodeId, PlanNodeEntry>,
     /// Remaining non-Ready predecessors.
     pending_preds: HashMap<NodeId, usize>,
-    /// Predecessor → dependents (reverse adjacency).
+    /// Predecessor to dependents (reverse adjacency).
     dependents: HashMap<NodeId, Vec<NodeId>>,
     /// Nodes ready to execute.
     ready: VecDeque<NodeId>,
@@ -1301,10 +1289,6 @@ fn node_sort_key(id: &NodeId) -> (String, String, String) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Per-node execution
-// ---------------------------------------------------------------------------
-
 struct NodeCtx {
     ops: Arc<dyn ClusterOps>,
     cancel: CancelToken,
@@ -1343,23 +1327,18 @@ enum NodeOutcome {
     Cancelled,
 }
 
-/// Runs on its own task. Hydrate, apply, wait for readiness, report.
+/// Hydrate, apply, wait for readiness, and report one node.
 ///
-/// Apply and Recreate nodes come here; so does a Skip node carrying
-/// `kix.run/rerun`, whose live object is read and recreated when it
-/// failed. Other Skip nodes are short-circuited in the main loop;
-/// Migrate/Drain/Delete/Pause are Stage E/F.
+/// A skipped resource carrying `kix.run/rerun` is recreated when its live
+/// object failed. Other skipped resources do not reach this function.
 async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome {
-    // Why a rerun node is deleted before it is applied. `None` for a plain
-    // apply.
+    // Reason a rerun node is deleted before apply. None means a plain apply.
     let mut rerun_reason: Option<&'static str> = None;
     let manifest = match (&entry.action, &entry.rerun) {
         (ChangeAction::Apply(m), _) => m.clone(),
         (ChangeAction::Skip(rid), Some(manifest)) => {
-            // Unchanged, but a probe that failed against the last
-            // activation must run again without a manual delete. Where the
-            // retry is off (the operator) the failure is still reported:
-            // a red deploy gate must not read as healthy.
+            // Rerun a failed probe even when its manifest is unchanged.
+            // When reruns are disabled, preserve its failed result.
             let live = ctx.ops.get_live(rid).await;
             let terminal = match &live {
                 Ok(Some(obj)) => readiness::classify_workload_terminal(obj, &rid.kind),
@@ -1526,10 +1505,8 @@ async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome {
         },
     };
 
-    // Under apiserver dry-run (`?dryRun=All`) the object was never persisted,
-    // so polling readiness would 404 or time out. Readiness is a runtime-cluster
-    // outcome and orthogonal to "what would this apply do", so we synthesise
-    // Ready immediately. The renderer paints the same terminal line.
+    // A dry-run apply is not persisted, so a readiness poll would fail or
+    // time out. Report it ready once the simulated apply succeeds.
     if ctx.dry_run {
         return done(recreated_reason);
     }
@@ -1608,10 +1585,6 @@ async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 /// Rerun-annotated Skip nodes whose live object failed.
 ///
 /// `kix deploy` and `kix rollback` stop before the engine when the plan has
@@ -1662,17 +1635,13 @@ pub async fn failed_rerun_nodes(
     failed
 }
 
-/// Kinds a prune reports but never deletes, because deleting one takes far
-/// more with it than the object named.
+/// Kinds reported as orphans but never deleted because deletion cascades to
+/// resources outside the deployment.
 ///
 /// A Namespace takes every object inside it, whether Kix manages it or not.
 /// A CustomResourceDefinition takes every custom resource of that kind in
-/// the whole cluster: drop `sgclusters.stackgres.io` because an instance
-/// left the cluster definition, and every SGCluster on that apiserver goes
-/// with it, including ones no Kix cluster ever touched. Neither deletion is
-/// recoverable from the deploy's side, and neither object is dangerous to
-/// leave behind, so an orphan of either kind is named in the prune report
-/// and left alone.
+/// the cluster, including resources Kix does not manage. The prune report
+/// names these orphans and leaves them in place.
 fn never_pruned(kind: &str) -> bool {
     matches!(kind, "Namespace" | "CustomResourceDefinition")
 }
@@ -1693,10 +1662,7 @@ mod never_pruned_tests {
     }
 }
 
-/// Reverse-topological ordering over the subset of `old_manifests` matching
-/// `orphan_rids`. Lifted here so scheduler.rs stops depending on
-/// `reconcile::compute_prune_order` (which exists only until reconcile.rs is
-/// deleted in doc 99 Stage D.5).
+/// Reverse-topological ordering of orphaned resources in `old_manifests`.
 fn prune_order(orphan_rids: &[ResourceId], old_manifests: &[Value]) -> Vec<ResourceId> {
     let orphan_set: HashSet<String> = orphan_rids
         .iter()
@@ -1728,7 +1694,6 @@ fn is_crd_like(entry: &PlanNodeEntry) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Tests
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
@@ -1934,7 +1899,7 @@ mod tests {
 
 /// Engine tests: `run_deploy` against the scripted fake, no cluster, paused
 /// clock. Every run is wrapped in a one-hour virtual timeout: a parked engine
-/// fails at once instead of hanging the suite (doc 134 §3).
+/// fails at once instead of hanging the suite.
 #[cfg(test)]
 mod engine_tests {
     use super::*;
@@ -2158,9 +2123,8 @@ mod engine_tests {
         r.created + r.configured + r.unchanged + r.failed + r.cancelled
     }
 
-    /// Doc 134 test 1. 64 slow applies fill the concurrency cap; a CRD
-    /// finishes at once and its dependent must not wait for the slow ones,
-    /// only for the discovery refresh.
+    /// Slow applies can fill the concurrency cap without blocking a completed
+    /// CRD's discovery refresh or its dependent.
     #[tokio::test(start_paused = true)]
     async fn crd_barrier_does_not_park_running_nodes() {
         let mut manifests: Vec<Value> = (0..64)
@@ -2206,7 +2170,7 @@ mod engine_tests {
         );
     }
 
-    /// Doc 134 test 2. A failed refresh stops the run; the dependent is never
+    /// A failed discovery refresh stops the run before its dependent is
     /// applied; nodes already in flight finish.
     #[tokio::test(start_paused = true)]
     async fn rediscovery_failure_stops_the_run() {
@@ -2240,7 +2204,7 @@ mod engine_tests {
         assert!(rec.stopped().unwrap().contains("rediscovery failed"));
     }
 
-    /// Doc 134 test 3. A hung apply is named within the warn bound and the
+    /// A hung apply is named within the warning bound and the
     /// run is cancelled at the abort bound.
     #[tokio::test(start_paused = true)]
     async fn hung_apply_is_reported_then_aborted() {
@@ -2302,8 +2266,8 @@ mod engine_tests {
         assert_eq!(partial.cancelled, 1);
     }
 
-    /// Doc 134 test 4. A slow but healthy rollout reports every 2s for five
-    /// minutes. That is activity; the watchdog stays quiet.
+    /// A slow but healthy rollout reports progress often enough to keep the
+    /// watchdog quiet.
     #[tokio::test(start_paused = true)]
     async fn readiness_progress_keeps_the_watchdog_quiet() {
         let manifests = vec![m("StatefulSet", "db", &[])];
@@ -2332,7 +2296,7 @@ mod engine_tests {
         assert!(rec.stalls().is_empty(), "{:?}", rec.stalls());
     }
 
-    /// Doc 134 test 5. Cancel with every node hung returns at once, aborts
+    /// Cancellation with every node hung returns promptly and aborts
     /// the in-flight tasks (they never complete once released), and gives
     /// every node a verdict: the in-flight ones Cancelled, the pending
     /// dependent Cancelled.
@@ -2603,8 +2567,8 @@ mod engine_tests {
         );
     }
 
-    /// Doc 134 test 6. A checkpoint write that never answers neither parks
-    /// the nodes nor holds the run open.
+    /// A checkpoint write that never answers does not park nodes or hold the
+    /// run open.
     #[tokio::test(start_paused = true)]
     async fn hung_checkpoint_does_not_hold_the_run() {
         let manifests: Vec<Value> = (0..40)
@@ -2693,7 +2657,7 @@ mod engine_tests {
         assert_eq!(start.elapsed(), secs(11));
     }
 
-    /// Doc 134 test 7. Peak concurrency equals the cap and never exceeds it.
+    /// Peak concurrency reaches the configured cap without exceeding it.
     #[tokio::test(start_paused = true)]
     async fn concurrency_never_exceeds_the_cap() {
         let manifests: Vec<Value> = (0..200)
@@ -2715,7 +2679,7 @@ mod engine_tests {
         assert_eq!(start.elapsed(), secs(4), "200 nodes in batches of 64");
     }
 
-    /// Doc 134 test 8. A node task that panics is a fatal engine error, not
+    /// A node task panic is a fatal engine error rather than
     /// a lost node.
     #[tokio::test(start_paused = true)]
     async fn panicking_node_is_fatal() {
@@ -2806,7 +2770,7 @@ mod engine_tests {
             .collect()
     }
 
-    /// The rerun rule (doc 136): a changed Job carrying `kix.run/rerun`
+    /// A changed Job carrying `kix.run/rerun`
     /// with a live object is deleted and created again, not applied. The
     /// delete goes through `recreate_in_place`, never through the prune
     /// path, and the node reports `Rerun`.
@@ -2836,7 +2800,7 @@ mod engine_tests {
         assert_eq!(rerun_details(&rec), vec!["changed since the last run"]);
     }
 
-    /// Nothing live (first deploy, TTL-reaped, deleted by hand): a plain
+    /// Nothing live (first deploy, TTL-reaped, or deleted externally): a plain
     /// apply, no delete.
     #[tokio::test(start_paused = true)]
     async fn rerun_job_without_live_object_is_applied() {
@@ -3041,9 +3005,7 @@ mod engine_tests {
         );
     }
 
-    /// Red team finding: the watchdog must see a hung discovery refresh. With
-    /// every node done and the barrier waiting, the run is not silent and
-    /// gives up at the bound, naming the refresh.
+    /// A hung discovery refresh is bounded and named in the error.
     #[tokio::test(start_paused = true)]
     async fn hung_rediscovery_is_reported_and_aborted() {
         let manifests = vec![
@@ -3080,8 +3042,7 @@ mod engine_tests {
         assert_eq!(rec.terminal_count(&NodeId::Resource(rid("Widget", "w"))), 1);
     }
 
-    /// Red team finding: a hung stamp of an unchanged resource is bounded and
-    /// reported, never a silent park.
+    /// Stamping an unchanged resource is bounded by the watchdog.
     #[tokio::test(start_paused = true)]
     async fn hung_stamp_of_unchanged_resource_is_bounded() {
         let manifests = vec![m("ConfigMap", "same", &[]), m("ConfigMap", "new", &[])];
@@ -3109,8 +3070,7 @@ mod engine_tests {
         assert!(failures[0].starts_with("activation stamp on unchanged resources: 1 of 1"));
     }
 
-    /// Red team finding: a hung prune delete is bounded and reported as a
-    /// failed delete, never a silent park. Namespaces are never pruned.
+    /// A hung prune delete is reported as failed. Namespaces are never pruned.
     #[tokio::test(start_paused = true)]
     async fn hung_prune_delete_is_bounded() {
         let manifests = vec![m("ConfigMap", "keep", &[])];
@@ -3196,9 +3156,7 @@ mod engine_tests {
         assert!(rec.stopped().unwrap().starts_with("halt-on-first-failure"));
     }
 
-    // ----------------------------------------------------------------------
-    // Doc 134 test 9: property test over random DAGs and outcomes.
-    // ----------------------------------------------------------------------
+    // Property tests over generated DAGs and outcomes.
 
     #[derive(Debug, Clone, Copy)]
     enum Outcome {

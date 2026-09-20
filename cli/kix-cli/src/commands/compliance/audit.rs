@@ -1,4 +1,4 @@
-//! `kix compliance audit` — write a full audit bundle to disk.
+//! Write a compliance audit bundle to disk.
 //!
 //! Produces the following tree:
 //!
@@ -12,7 +12,7 @@
 //! ```
 //!
 //! The OSCAL assessment maps scorecard findings to framework controls via a
-//! static mapping table (see `framework_mapping`). Start with SOC 2 — other
+//! static mapping table in `framework_mapping`. Other
 //! frameworks reuse the same mechanism.
 
 use std::collections::BTreeMap;

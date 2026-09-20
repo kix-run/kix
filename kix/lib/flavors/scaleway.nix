@@ -1,8 +1,8 @@
-# Flavor: scaleway — Scaleway Kapsule (managed Kubernetes).
+# Scaleway Kapsule flavor.
 #
 # Managed control plane (the shared/mutualized plane is free; `type = "kapsule"`
 # on the cluster resource). Node pools (multi-node capable). Default CNI is
-# Cilium (which also enforces NetworkPolicy via CiliumNetworkPolicy) —
+# Cilium, which also enforces NetworkPolicy via CiliumNetworkPolicy, is
 # environment-owned, exclusive. Scaleway Load Balancer is available for
 # Services of type=LoadBalancer (a paid add-on).
 #
@@ -11,19 +11,18 @@
 #     sbs-15k (+ *-retain variants). `sbs-default` is the cluster default.
 #     RWO only. Preinstalled on every node.
 #   - File Storage CSI `filestorage.csi.scaleway.com`: classes sfs-standard
-#     (+ -retain), RWX (ReadWriteMany, NFS-backed). NOT preinstalled — enable by
+#     (+ -retain), RWX (ReadWriteMany, NFS-backed). Enable it by
 #     tagging the cluster `scw-filestorage-csi`. CAVEAT: its filestorage-csi-node
 #     DaemonSet has a nodeAffinity allow-list of instance types (BASIC3 / POP2 /
-#     STANDARD2-3 / COMPUTE3 / MEMORY3 / GPU) that EXCLUDES the cheap DEV1 /
-#     PLAY2 development range — on those nodes the driver never schedules and
+#     STANDARD2-3 / COMPUTE3 / MEMORY3 / GPU), excluding the DEV1 and
+#     PLAY2 development ranges. On those nodes the driver never schedules and
 #     sfs PVCs fail with "no topology key found on CSINode". So RWX is only
 #     usable on a BASIC3+ node.
 #
 # Platform imports: DNS (coredns, bundled), storage (sbs-default).
 #
-# Note: like the other cloud flavors, this DESCRIBES what a Kapsule cluster
-# provides — it does not provision one. In the Paperhound PoC the cluster itself
-# is provisioned declaratively with Terranix (Terraform-via-Nix); this flavor is
+# This flavor describes a Kapsule cluster; it does not provision one. The cluster
+# can be provisioned separately with tools such as Terranix. This flavor is
 # the KiX-side description that workloads deploy against.
 
 { lib, kix, ... }:
@@ -72,7 +71,7 @@
         out = {
           # Kapsule's default StorageClass. Override per-cluster for the other
           # block classes (scw-bssd, sbs-5k/15k, *-retain) or the File Storage
-          # class (sfs-standard, RWX — needs a BASIC3+ node + the
+          # class (sfs-standard, RWX, requiring a BASIC3+ node and the
           # scw-filestorage-csi cluster tag).
           storageClassName = "sbs-default";
         };

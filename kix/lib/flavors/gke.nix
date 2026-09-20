@@ -1,8 +1,8 @@
-# Flavor: GKE Standard — Google Kubernetes Engine (standard mode).
+# GKE Standard flavor.
 #
 # Managed control plane. GKE dataplane v2 (eBPF/Cilium-based) is the
 # default CNI but exposes only k8s-standard NetworkPolicy, not
-# CiliumNetworkPolicy — the cni role is environment-owned (exclusive).
+# CiliumNetworkPolicy. The cni role is environment-owned and exclusive.
 # Built-in GCE ingress controller. PD CSI with volume snapshot support.
 #
 # Platform imports: DNS (kube-dns), storage (standard-rwo via PD CSI).

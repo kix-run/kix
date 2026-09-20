@@ -64,8 +64,8 @@ pub async fn connect_and_verify(
 
 /// Create or update an Activation CR to trigger operator reconciliation.
 ///
-/// The CR is created without a phase — the operator treats it as Queued
-/// and handles the lifecycle transition (Queued → Deploying → Active).
+/// The CR is created without a phase. The operator treats it as Queued and
+/// advances it through Deploying to Active.
 pub async fn apply_activation(
     client: &Client,
     ar: &ApiResource,
@@ -233,7 +233,7 @@ pub async fn watch_activation_progress(
         }
 
         // Completion: phase is Active or Degraded (deploy finished, possibly
-        // with failures — see Activation status for the failed-resource list)
+        // with failures; Activation status contains the failed-resource list.)
         if phase == "Active" || phase == "Degraded" {
             if !quiet {
                 let phase_colored = if phase == "Active" {

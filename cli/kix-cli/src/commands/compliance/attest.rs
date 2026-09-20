@@ -1,4 +1,4 @@
-//! SLSA v1 provenance — an in-toto Statement whose predicate is a SLSA
+//! SLSA v1 provenance as an in-toto Statement whose predicate is a SLSA
 //! `https://slsa.dev/provenance/v1` predicate.
 //!
 //! The activation identity hash IS the subject digest. Nix content-addressing
@@ -12,9 +12,8 @@
 //! Both go through [`super::receipt::attestation_from_receipt`], so the two
 //! cannot drift apart.
 //!
-//! Signing is designed in `v2_discussions/54_activation_signing.md` and is
-//! intentionally out of scope here — this command emits the unsigned
-//! Statement so signing can be layered on independently.
+//! This command emits an unsigned Statement so signing can be added
+//! independently.
 
 use miette::{IntoDiagnostic, Result, miette};
 use serde_json::Value;

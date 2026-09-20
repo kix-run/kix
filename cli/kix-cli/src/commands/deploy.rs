@@ -1,20 +1,13 @@
-//! `kix deploy` — wave-based deployment with local DAG diff.
+//! Build, plan, and deploy a cluster activation.
 //!
 //! Uses the store graph for proper stamping and dependency tracking.
-//! Change detection is a local operation — diffs two Nix store graphs
+//! Change detection compares two Nix store graphs
 //! by K8s identity (kind+ns+name) and identity-hash, without querying
 //! the live cluster.
 //!
-//! Flow:
-//!   1. `nix build .#cluster-<name>-activation`  → result dir
-//!   2. StoreGraph::from_result_dir              → packages + resources
-//!   3. stamp_annotations                        → identity/depends-on
-//!   4. Connect to cluster, fetch Active Activation (unless --current-activation)
-//!   5. Resolve old activation to local store graph (fallback: reconstruct
-//!      old manifests from live kix-managed resources if the path was GC'd)
-//!   6. Package-grouped plan display
-//!   7. Confirm → Apply wave-by-wave with readiness checks
-//!   8. Prune orphans (reverse topo order from old graph)
+//! It builds and stamps the requested activation, resolves the current state,
+//! displays the package-grouped diff, applies the dependency graph, and prunes
+//! authorized orphans in reverse dependency order.
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -58,7 +51,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
 
     let flake_path = resolve_flake_path(&ctx.global.flake)?;
 
-    // 1. Build new activation and load store graph
+    // Build the new activation and load its store graph.
     if !ctx.global.quiet {
         println!("Building cluster '{}'...", output::bold(&args.cluster));
     }
@@ -75,7 +68,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         .map_err(|e| miette!("{e}"))?;
     // A kixpkgs pin from before the domain move renders Kix's own CRDs under
     // the retired group. Deploying it would put those CRDs back and leave two
-    // groups live, which the CLI cannot tell apart. Checked BEFORE
+    // groups live, which the CLI cannot tell apart. Check before
     // `stamp_annotations`, which upgrades a loaded build to the current
     // domain: after that a stale pin is indistinguishable from a current one.
     kix::legacy_domain::check_build(
@@ -91,7 +84,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         eprint!("\r\x1b[2K");
     }
 
-    // 2. Collect stamped manifests from new graph
+    // Collect stamped manifests from the new graph.
     let new_manifests: Vec<Value> = new_graph
         .resources
         .values()
@@ -114,28 +107,26 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         return Ok(());
     }
 
-    // 3. Resolve old activation
-    //    Default: connect to cluster, fetch Active Activation, resolve to local store graph
-    //    --current-activation: use local cache (no cluster connection yet)
+    // Resolve the old activation from the cluster or local cache.
     let (old_graph, active_manifests, pre_client, active_hash) = if args.current_activation {
-        // Local cache mode — no cluster connection
+        // Local cache mode does not connect before confirmation.
         let (og, om) = load_old_from_cache(&args.cluster, &ctx.global);
         let hash = find_activation_identity_hash(&om);
         (og, om, None, hash)
     } else {
-        // Cluster-aware mode — connect and fetch Active Activation
+        // Fetch the active Activation from the cluster.
         let (og, om, client, hash) = ctx
             .runtime
             .block_on(load_old_from_cluster(&args.cluster, &ctx.global))?;
         (og, om, client, hash)
     };
 
-    // 3b. Closures of deploys that stopped part way. They applied objects and
+    // Include closures from deploys that stopped part way. They applied objects and
     //     never became Active, so neither side of the comparison above knows
     //     about them (kixpkgs#82). Resolved from the local store by hash, so
     //     every input to the plan is still a compiler output.
     //
-    //     `--current-activation` deliberately has no cluster connection, so it
+    //     `--current-activation` has no cluster connection, so it
     //     cannot see the records and says so in its own flag documentation.
     let failed_baseline = match (&pre_client, args.current_activation) {
         (Some(client), false) => ctx.runtime.block_on(async {
@@ -176,8 +167,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         &failed_baseline.closures,
     );
 
-    // Stateful migration pair detection (doc 67). Phase 1: detect + refuse
-    // to proceed without explicit --accept-migrations. No execution yet.
+    // Detect stateful migration pairs and require --accept-migrations.
     // Against the Active closure only. A half-applied closure is not a
     // previous intended state, so pairing against it would invent migrations
     // nobody declared.
@@ -209,7 +199,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         }
     }
 
-    // --reconcile: force re-apply of all resources regardless of identity match
+    // --reconcile reapplies resources regardless of identity match.
     let all_actions: Vec<ChangeAction> = if args.reconcile {
         let manifest_by_k8s_id: std::collections::HashMap<String, &Value> = new_manifests
             .iter()
@@ -237,7 +227,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         all_actions
     };
 
-    // Separate into apply actions and orphans
+    // Separate apply actions from orphans.
     let mut orphan_rids: Vec<ResourceId> = Vec::new();
 
     for action in &all_actions {
@@ -246,7 +236,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         }
     }
 
-    // 5. Build DAG and streaming plan.
+    // Build the DAG and streaming plan.
     let resource_graph = ResourceGraph::from_manifests(&new_manifests).into_diagnostic()?;
 
     if resource_graph.graph.node_count() == 0 {
@@ -258,7 +248,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
 
     let plan = DeployPlan::from_graph_and_changes(&resource_graph, &all_actions);
 
-    // Find the Activation resource name and identity-hash from the new manifests
+    // Read the Activation name and identity hash from the new manifests.
     let activation_manifest = lifecycle::record_of(&new_manifests);
     let activation_name = activation_manifest.and_then(|m| {
         m.pointer("/metadata/name")
@@ -268,18 +258,18 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     let activation_identity_hash =
         activation_manifest.and_then(|m| keys::get(m, keys::IDENTITY_HASH).map(|s| s.to_string()));
 
-    // 6. Display plan — package-grouped, changes only
+    // Display package-grouped changes.
     if !ctx.global.quiet {
         let pkg_diff = if let Some(old) = &old_graph {
             plan::diff_graphs(old, &new_graph)
         } else if !old_manifests.is_empty() {
-            // Old store graph unavailable (live reconstruction) — synthesize
+            // Synthesize a package view when the old store graph is unavailable
             // a package view from the old manifests so untouched packages
             // show as unchanged instead of everything "added".
             let synthetic = StoreGraph::synthesize(&old_manifests, &new_graph);
             plan::diff_graphs(&synthetic, &new_graph)
         } else {
-            // First deploy — everything is "added"
+            // A first deploy adds every package.
             plan::diff_graphs(&StoreGraph::empty(&new_graph.cluster_name), &new_graph)
         };
 
@@ -413,32 +403,21 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         }
     }
 
-    // Offline dry-run (e.g. `--current-activation --dry-run`): we don't
-    // have a cluster connection, so we can't route through SSA dry-run.
-    // Synthesise the per-node Create/Configured labels from the local
-    // identity-hash diff we already have in `old_manifests`, render through
-    // the same `apply_symbol` mapping the real path uses, and return
-    // without ever reaching for a kubeconfig. Same labels and summary line
-    // as the online dry-run path — just no admission/RBAC/conflict
-    // validation, which is the price of offline.
+    // An offline dry run classifies Create and Configured from the local
+    // identity diff. It cannot perform admission, RBAC, or conflict checks.
     if args.dry_run && pre_client.is_none() {
         return render_offline_dry_run(&plan, &old_manifests, &orphan_rids, &ctx.global);
     }
 
-    // Banner so the streamed output is self-labelling. The actual dry-run
-    // semantics ride on `args.dry_run` plumbed all the way to apply_resource
-    // and api.delete — there's no parallel render path. SSA + DELETE both
-    // route through the apiserver with `?dryRun=All`, so per-resource verbs
-    // ("created" / "configured") come from the apiserver's response rather
-    // than a CLI guess. See `kix::cluster::scheduler::SchedulerConfig.dry_run`.
+    // Online dry runs send apply and delete requests with `dryRun=All`, so
+    // per-resource outcomes come from the apiserver.
     if args.dry_run && !ctx.global.quiet {
         println!();
         println!("{}", output::dim("Dry run. No changes will be applied."));
     }
 
-    // The receipt: what this deploy will record about itself. Assembled here
-    // rather than inside the apply so a dirty tree can be reported above the
-    // confirmation, where somebody can still decide not to.
+    // Build the deployment receipt before confirmation so dirty source state
+    // is visible in the prompt.
     let receipt = if args.dry_run {
         None
     } else {
@@ -452,10 +431,8 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         && receipt["source"]["dirty"] == Value::Bool(true)
         && !ctx.global.quiet
     {
-        // Not a refusal. Deploying from a dirty tree is a normal thing to do
-        // while working, and it was our own CI's deliberate method. What is
-        // not acceptable is doing it while recording a commit that does not
-        // contain what is being deployed, so this says so before you agree.
+        // A dirty tree is allowed, but its recorded commit does not fully
+        // describe the deployed source.
         println!();
         println!(
             "{}",
@@ -481,7 +458,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         report_topology_labels(ctx, client, &new_manifests);
     }
 
-    // Confirmation
+    // Confirm before writing to the cluster.
     if !args.yes && !args.dry_run {
         if !output::is_interactive() {
             eprintln!(
@@ -535,8 +512,6 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
 
     deploy_result
 }
-
-// ── Old activation resolution ────────────────────────────────────────
 
 /// Load old activation from local cache (--current-activation mode).
 fn load_old_from_cache(
@@ -633,7 +608,7 @@ async fn load_old_from_cluster(
                 );
             }
 
-            // Resolve to local store graph: prefer built-via, fall back to hash lookup
+            // Prefer built-via, then fall back to the activation hash.
             let result_dir = act
                 .built_via
                 .as_ref()
@@ -735,9 +710,6 @@ fn supersede_consumed(
 /// The prune policy the flags ask for. `--prune-mode=no` skips, plain
 /// `deploy` reports orphans without deleting (warn-only), `--prune` deletes.
 ///
-/// The removed `eager` mode claimed to interleave prune and apply waves, but
-/// mapped to the same `Delete` policy as `--prune`. The actual scheduling
-/// feature is tracked in ROADMAP.
 /// The topology label preflight, printed above the confirmation. The
 /// compiler derives spread on cluster.topology.zoneKey and cannot see a
 /// node; under DoNotSchedule a node without the label cannot take the pod,
@@ -821,15 +793,10 @@ async fn reconstruct_old_from_live(
     )))
 }
 
-// ── Apply engine (async) — DAG-streaming scheduler (doc 99) ─────────
-
-/// Line-oriented observer for DAG-streaming deploy (doc 99 §7 "nix-build-L
-/// style"). Emits one line per terminal verdict / phase boundary; readiness
+/// Line-oriented observer for DAG-streaming deploys. Emits one line per
+/// terminal verdict or phase boundary; readiness
 /// heartbeats land on stderr with `-v`.
 ///
-/// Until Stage C lands the tree renderer, this is the default CLI output for
-/// every deploy, TTY or not. The design doc's redrawable grid (§5) is built
-/// on top of the same event stream.
 pub(crate) struct StreamCliObserver {
     pub(crate) quiet: bool,
     pub(crate) verbose: bool,
@@ -1072,7 +1039,7 @@ impl StreamCliObserver {
 }
 
 fn apply_symbol(action: &ApplyAction) -> (std::borrow::Cow<'static, str>, &'static str) {
-    // Apply-phase glyphs are intentionally muted — they share the screen with
+    // Apply-phase glyphs are muted because they share the screen with
     // the terminal ✔ `ready` lines, which should own the green accent.
     // Created: white (neutral new), Configured: yellow (changed), Skipped /
     // Unchanged: dim grey (no-op).
@@ -1170,12 +1137,8 @@ async fn run_deploy_async(
         },
     ));
 
-    // Observer selection (doc 99 §7, Stage D):
-    //   --tui            → graph_stream TUI (requires interactive stdout)
-    //   --log-format=json → NDJSON
-    //   --log-format=line → nix-build-L idiom (no ANSI)
-    //   --log-format=pretty on TTY → colored StreamCliObserver
-    //   --log-format=pretty non-TTY → auto-fallback to line
+    // Select the TUI, NDJSON, plain line, or colored observer from CLI flags
+    // and terminal capabilities.
     let interactive = output::is_interactive();
     let use_tui = args.tui && interactive;
     let tui_driver = if use_tui {
@@ -1257,10 +1220,7 @@ async fn run_deploy_async(
 
 /// Decide whether an offline-dry-run Apply node corresponds to a Create or
 /// a Configured action, by checking whether its K8s identity
-/// (`kind/namespace/name`) is present in the old activation. Mirrors the
-/// equivalent check that `apply_resource` does via `get_opt` against the
-/// live cluster (apply.rs:326) — but locally, against the cached old
-/// manifest set.
+/// (`kind/namespace/name`) is present in the old activation.
 fn classify_offline_apply(
     rid: &ResourceId,
     old_by_k8s_id: &std::collections::HashSet<String>,
@@ -1274,12 +1234,11 @@ fn classify_offline_apply(
     }
 }
 
-/// Offline dry-run preview — used when we don't have a cluster connection
-/// (e.g. `--current-activation --dry-run`). Walks the plan, classifies each
+/// Offline dry-run preview used without a cluster connection. Walks the plan, classifies each
 /// Apply as Created/Configured by checking whether the K8s identity exists
 /// in `old_manifests`, prints lines using the same `apply_symbol` glyphs the
 /// real-deploy renderer uses, and prints the same summary line. No cluster
-/// access. The classification is bounded — it doesn't run admission
+/// access. The classification does not run admission
 /// webhooks or detect 409 conflicts; that's only possible with an online
 /// SSA dry-run.
 fn render_offline_dry_run(
@@ -1295,7 +1254,7 @@ fn render_offline_dry_run(
     }
 
     // Index old manifests by K8s identity so we can ask "did this exist?"
-    // — same shape detect_changes uses internally (apply.rs:132-188).
+    // using the same identity shape as detect_changes.
     let old_by_k8s_id: std::collections::HashSet<String> = old_manifests
         .iter()
         .map(|m| {
@@ -1426,12 +1385,10 @@ pub(crate) fn resolve_flake_path(flake: &str) -> Result<PathBuf> {
     }
 }
 
-// ── Operator-delegated deploy ────────────────────────────────────────
-
 fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     let flake_path = resolve_flake_path(&ctx.global.flake)?;
 
-    // 1. Build new activation and load store graph (same as direct mode)
+    // Build the new activation and load its store graph.
     if !ctx.global.quiet {
         println!(
             "Building cluster '{}' (operator mode)...",
@@ -1490,7 +1447,7 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         return Ok(());
     }
 
-    // 2. Find activation name and identity hash from manifests
+    // Read the Activation name and identity hash.
     let activation_manifest = lifecycle::record_of(&new_manifests);
     let activation_name = activation_manifest
         .and_then(|m| {
@@ -1506,7 +1463,7 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
             .map(|s| s.to_string())
     });
 
-    // 3. Show plan (optional, same as direct mode)
+    // Show the plan when requested.
     if !ctx.global.quiet {
         let old_graph = if args.current_activation {
             let (og, _) = load_old_from_cache(&args.cluster, &ctx.global);
@@ -1526,7 +1483,7 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         plan::print_package_plan(&pkg_diff, ctx.global.verbose > 0);
         plan::print_plan_summary(&pkg_diff);
 
-        // Migration pair detection (doc 67) — same gate as direct mode.
+        // Apply the same migration acknowledgement gate as direct mode.
         // Operator-mode is non-interactive on the operator side, so the
         // CLI must enforce the gate before handing off the Activation CR.
         let old_manifests_for_pairs: Vec<Value> = old_graph
@@ -1578,7 +1535,7 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         }
     }
 
-    // 4. Confirmation
+    // Confirm before submitting the Activation.
     if !args.yes {
         if !output::is_interactive() {
             eprintln!(
@@ -1600,7 +1557,7 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         }
     }
 
-    // 5. Apply Activation CR and watch progress
+    // Apply the Activation and watch its progress.
     let global = ctx.global.clone();
     let source_path = result_path.display().to_string();
     let cluster_name = new_graph.cluster_name.clone();
@@ -1665,8 +1622,7 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     Ok(())
 }
 
-/// Render detected stateful migration pairs to stdout. Phase 1 of doc 67:
-/// awareness only, the user must handle data movement out-of-band before
+/// Render detected stateful migration pairs. The user must handle data movement before
 /// re-running deploy with --accept-migrations.
 fn print_migration_pairs(pairs: &[MigrationPair]) {
     println!();
@@ -1721,14 +1677,8 @@ mod tests {
         assert!(parse_timeout(Some("abc")).is_err());
     }
 
-    // ── Offline-dry-run classification ───────────────────────────────────
-    //
-    // The dangerous regression #15 surfaced was: an in-place update
-    // mis-rendered as a Create. These tests pin the apiserver-shaped
-    // semantics that classify_offline_apply implements (mirror of
-    // apply_resource's `existed` check at apply.rs:326): when the K8s
-    // identity (kind/namespace/name) is in the old activation, it's a
-    // Configured; otherwise, it's a Created.
+    // Offline classification uses Kubernetes identity: an existing identity
+    // is Configured and an absent identity is Created.
 
     use kix::cluster::apply::ApplyAction;
     use kix::manifest::types::ResourceId;
@@ -1766,7 +1716,7 @@ mod tests {
 
     #[test]
     fn classify_offline_apply_distinguishes_kind() {
-        // Same name+namespace but different kind must classify as Created —
+        // The same name and namespace with a different kind is Created;
         // an in-cluster Service and Deployment named "foo" in "default" are
         // genuinely distinct resources.
         let old = old_by_id(&[("Service", "default", "foo")]);

@@ -15,8 +15,6 @@ use kix::manifest::types::{CLUSTER_SCOPED, ResourceId};
 use super::CommandContext;
 use kix::manifest::keys;
 
-// ── Flat resource view (legacy) ──────────────────────────────────────
-
 #[derive(serde::Serialize)]
 struct ResourceStatus {
     name: String,
@@ -46,8 +44,6 @@ impl CommandResponse for StatusResponse {
         serde_json::to_value(&self.statuses).unwrap_or_default()
     }
 }
-
-// ── Operator-aware view ──────────────────────────────────────────────
 
 #[derive(serde::Serialize)]
 struct PackageStatus {
@@ -212,8 +208,6 @@ impl CommandResponse for OperatorStatusResponse {
     }
 }
 
-// ── Entry point ──────────────────────────────────────────────────────
-
 pub fn run(args: &StatusArgs, ctx: &mut CommandContext) -> Result<()> {
     if args.operator {
         return run_operator(args, ctx);
@@ -224,8 +218,6 @@ pub fn run(args: &StatusArgs, ctx: &mut CommandContext) -> Result<()> {
     let global = ctx.global.clone();
     ctx.runtime.block_on(run_flat_async(args, &global))
 }
-
-// ── Operator-aware status ────────────────────────────────────────────
 
 fn run_operator(args: &StatusArgs, ctx: &mut CommandContext) -> Result<()> {
     let global = ctx.global.clone();
@@ -304,7 +296,7 @@ async fn run_operator_async(cluster_name: &str, global: &crate::cli::GlobalArgs)
         sp.finish_and_clear();
     }
 
-    // 5. Build resource identity → live object lookup
+    // Index live objects by resource identity.
     let live_by_id: HashMap<String, &kube::api::DynamicObject> = live_resources
         .iter()
         .map(|obj| {
@@ -317,7 +309,7 @@ async fn run_operator_async(cluster_name: &str, global: &crate::cli::GlobalArgs)
     let (packages, unowned) = match &store_graph {
         Some(graph) => build_package_view(graph, &live_by_id),
         None => {
-            // No store graph — put everything in unowned
+            // Without a store graph, every resource is unowned.
             let unowned = live_resources
                 .iter()
                 .map(resource_status_from_obj)
@@ -423,8 +415,6 @@ fn build_package_view(
     (packages, unowned)
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────
-
 fn resource_id_from_obj(obj: &kube::api::DynamicObject) -> ResourceId {
     let kind = obj
         .data
@@ -503,8 +493,6 @@ fn compute_age_from_obj(obj: &kube::api::DynamicObject) -> String {
     }
 }
 
-// ── Legacy flat view ─────────────────────────────────────────────────
-
 async fn run_flat_async(_args: &StatusArgs, global: &crate::cli::GlobalArgs) -> Result<()> {
     let spinner = make_spinner(global);
 
@@ -558,8 +546,6 @@ async fn run_flat_async(_args: &StatusArgs, global: &crate::cli::GlobalArgs) -> 
 
     Ok(())
 }
-
-// ── Shared helpers ───────────────────────────────────────────────────
 
 /// Compute a human-readable status string for a resource.
 fn compute_status(obj: &kube::api::DynamicObject, kind: &str) -> String {

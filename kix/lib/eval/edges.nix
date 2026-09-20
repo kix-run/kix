@@ -3,23 +3,23 @@
 # The primary signal is the `endpoint` fact (core/facts.nix): a Service's
 # address-shaped out fields carry a self-describing token whose payload is
 # {name, namespace, selector, ports}. Whatever a workload's manifest JSON
-# still holds in context at seal time — directly referenced, or conducted
-# through ConfigMaps/Secrets — IS the set of endpoints its pods dial.
+# still holds in context at seal time, directly or through ConfigMaps and
+# Secrets, is the set of endpoints its pods dial.
 # `readFile` on the token replaces the old registry intersection, so edges
 # work across instances and through indirection with no collectibility or
 # fixpoint constraints.
 #
 # Identity hits (a Service's *store path* in context, the pre-fact signal)
 # are kept for three demoted roles:
-#   1. DNS conservatism — naming a Service is weak evidence of dialing it;
+#   1. DNS conservatism: naming a Service is weak evidence of dialing it;
 #      an extra DNS-ordering dep is harmless, a missing one breaks startup.
-#   2. Helm workloads — the lossy chart pipeline can't always flow address
+#   2. Helm workloads: the lossy chart pipeline cannot always flow address
 #      values, so `_helmNetworkDeps` workloads keep identity-derived netpol
 #      edges (conservative = extra holes, never missing ones).
-#   3. The observed-vs-declared lint — identity without a matching fact
+#   3. The observed-vs-declared lint: identity without a matching fact
 #      means "you name it but no address flowed": either a structural use
-#      (fine, silence with facts.refOnly) or a missed dial (netpol will NOT
-#      open a hole — use out.fqdn/out.url or facts.connect).
+#      (silence with facts.refOnly) or a missed dial (use out.fqdn, out.url,
+#      or facts.connect to create the network policy edge).
 
 { k8s }:
 
@@ -54,7 +54,7 @@ rec {
     && (r.rawManifest.metadata.annotations.${kixKeys.mode} or "") == "import"
     && (r.rawManifest.metadata.annotations.${kixKeys.importKind} or "") == "Service";
 
-  # identity-keyed: store path → Service resource (identity hits, lint)
+  # Identity-keyed map from store path to Service resource.
   mkServiceRegistry =
     resources:
     builtins.foldl' (
@@ -76,7 +76,7 @@ rec {
       // {
         ${builtins.unsafeDiscardStringContext r.outPath} = {
           marker = r;
-          # the IMPORTED service's name, not the marker's — edge identity
+          # Use the imported Service's name rather than the marker's; edge identity
           # must match what the ref's endpoint fact claims
           name = annotations.${kixKeys.importName} or r.name;
           targetSelector = builtins.fromJSON (annotations.${kixKeys.serviceSelector} or "{}");
@@ -88,7 +88,7 @@ rec {
 
   # "ns/name"-keyed: enrichment map from fact payload back to the producing
   # resource, when it exists in this instance's resolved deps. Only used to
-  # hand netpol a `service` for CNP extraDeps — edges through indirection or
+  # give netpol a `service` for CNP extraDeps. Edges through indirection or
   # import-mode refs have service = null, and wave ordering still holds via
   # store-DAG transitivity.
   mkServiceIndex =
@@ -118,7 +118,7 @@ rec {
       serviceRefRegistry ? { },
       serviceIndex ? { },
       # helm-sourced workloads: identity hits stay netpol edges (lossy
-      # pipeline — conservative beats broken)
+      # pipeline, so preserve conservative edges.)
       conservative ? false,
     }:
     let
@@ -174,7 +174,7 @@ rec {
         e: !(builtins.elem (edgeKey e) (factKeys ++ ackedKeys))
       ) identityEdges;
 
-      # deterministic by ns/name — context sets are ordered by token hash,
+      # Sort by namespace and name. Context sets are ordered by token hash,
       # which churns whenever a payload changes; CNP rule order must not
       bySortedKey = builtins.sort (a: b: edgeKey a < edgeKey b);
     in

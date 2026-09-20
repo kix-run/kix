@@ -1,4 +1,4 @@
-//! Secret hydration — SOPS decryption at deploy time.
+//! SOPS secret decryption at deploy time.
 //!
 //! Scans manifests for K8s Secrets with `kix.run/sops-source` annotations,
 //! decrypts the SOPS file via the `sops` CLI, optionally verifies the
@@ -190,7 +190,7 @@ fn decrypt_sops(path: &Path) -> Result<String, SecretError> {
 /// Parse decrypted SOPS output into a flat key-value map.
 ///
 /// Supports both flat YAML/JSON (`{ key: value }`) and nested structures
-/// (flattened with dot notation isn't needed — K8s Secret data is always flat).
+/// without flattening nested values because Kubernetes Secret data is flat.
 fn parse_secret_data(
     path: &Path,
     plaintext: &str,

@@ -1,10 +1,10 @@
-# Flavor: Talos — immutable, API-driven Kubernetes OS.
+# Talos flavor.
 #
 # No SSH, no shell, no package manager. All OS config is declarative via
 # machineconfig YAML applied through talosctl. Kernel modules (NVIDIA, etc.)
 # require custom system extensions baked at image build time.
 #
-# Ships Flannel by default — cni is environment-owned (exclusive). When
+# Ships Flannel by default, with an exclusive environment-owned cni role. When
 # replacing it with Cilium (common in production: `cni.name = "none"` in
 # the machineconfig), override `cluster.roles.cni.binding = "absent"` and
 # add a managed CNI instance. No default StorageClass or LoadBalancer.

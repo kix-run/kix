@@ -1,12 +1,12 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
-//! kix — Nix-based Kubernetes manifest generator library.
+//! Nix-based Kubernetes manifest generation and deployment.
 //!
 //! Three module groups:
 //!
-//! - [`eval`] — Nix FFI, store graph, eval caching, error translation
-//! - [`manifest`] — K8s types, structural diff, annotation stamping, validation
-//! - [`cluster`] — apply, fetch, DAG, waves, readiness, activation lifecycle, reconcile
+//! - [`eval`]: Nix evaluation, store graphs, caching, and error translation
+//! - [`manifest`]: Kubernetes types, diffs, annotation stamping, and validation
+//! - [`cluster`]: apply, fetch, DAG, readiness, activation lifecycle, and reconcile
 //!
 //! Two smaller modules sit beside them: [`pins`], the committed record of what
 //! each image reference resolved to, and [`registry`], the one place Kix asks

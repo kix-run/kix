@@ -3,14 +3,9 @@
 //! The Activation CR is the cluster-level record of "what is deployed."
 //! This module manages the state machine:
 //!
-//! ```text
-//! deploy starts   → Deploying (the record is created before the first wave)
-//! deploy succeeds → Active
-//! deploy stops    → Failed (nothing else moves it; the next deploy folds it in)
-//! new deploy      → old becomes Superseded, new becomes Active
-//! kix gc          → Superseded gets deleted (after its orphaned resources are cleaned up)
-//! kix rollback    → current becomes Superseded, target becomes Active
-//! ```
+//! A deploy creates a Deploying record before applying resources. Completion
+//! moves it to Active or Failed. A later deploy supersedes the current record;
+//! garbage collection removes superseded records after their resources.
 //!
 //! The record is created at the start of the deploy, not at the end. It is
 //! also a node of the plan, and by construction the last one: its spec lists
@@ -42,7 +37,7 @@ pub const PHASE_DEGRADED: &str = "Degraded";
 /// a Stop policy, discovery broke, or the process died and something later
 /// marked the record.
 ///
-/// Terminal, and deliberately NOT a current state. [`find_active`] must never
+/// Terminal and never a current state. [`find_active`] must not
 /// return one: a half-applied closure is not what the cluster is running, and
 /// diffing against it would compute every object only the still-Active closure
 /// has as an orphan. The next deploy reads it only as an extra baseline, to
@@ -137,7 +132,7 @@ fn parsed_deployed_at(item: &DynamicObject) -> Option<chrono::DateTime<chrono::U
 /// Which of several current records is *the* current one.
 ///
 /// A cluster should only ever hold one Active or Degraded record, but nothing
-/// enforces that: a partial supersede, two deploys racing, or a hand-edited
+/// enforces that: a partial supersede, two deploys racing, or an externally edited
 /// status can all leave two. Picking whichever the apiserver listed first
 /// makes the plan depend on list order, so the newest `deployed-at` wins and
 /// the name breaks ties. Split out from [`find_active`] so it can be tested
@@ -159,7 +154,7 @@ fn pick_current<T>(
 /// still the most recent description of intended state and the next deploy
 /// should diff against it instead of treating the cluster as empty.
 ///
-/// `Failed` is deliberately not matched. That record describes a deploy that
+/// `Failed` is excluded because it describes a deploy that
 /// stopped part way, so it is not what the cluster is running, and diffing
 /// against it would read every object only the Active closure has as an
 /// orphan. `Deploying` is not matched either: it is in flight.
@@ -321,27 +316,11 @@ pub async fn find_deploying(
     Ok(results)
 }
 
-/// After a deploy, update the activation lifecycle:
-/// 1. Mark the old activation as Superseded (status.phase=Superseded)
-/// 2. Set kix.run/previous on the new activation pointing to the old one
-/// 3. Set kix.run/deployed-at timestamp on the new activation
-/// 4. Set the new activation phase: `Active` on a clean deploy, `Degraded` if
-///    `had_failures` is true. Either way, it becomes the cluster's current
-///    state — the next deploy must be able to find it via `find_active` to
-///    compute a meaningful diff. Marking it Active despite failures would
-///    misrepresent the state; refusing to finalize at all (the previous
-///    behavior) leaves an orphaned Activation that nothing can find.
-/// 5. Add kix.run/cluster label for filtering (also stamped at build time
-///    via `mkActivation`, but re-asserted here for older CRs).
-/// 6. Mark every Failed record this deploy folded into its plan as
-///    Superseded, since its leftovers have now been reconciled.
-/// 7. Write the deploy receipt into status, when the caller computed one.
-///    Status rather than spec on purpose: the status subresource is untouched
-///    by an apply of the main resource, so a later rollback that re-applies
-///    this Activation cannot erase the record of what happened.
-// Eight, and every one is a distinct type, so there is nothing here a caller
-// can transpose. Following the house precedent rather than wrapping a single
-// call site in a params struct.
+/// Supersede the old activation and finalize the new one as Active or
+/// Degraded. The new record stores its predecessor, deployment timestamp,
+/// cluster label, and receipt. Consumed Failed records are also superseded.
+/// Degraded remains current so the next deploy can compute its diff.
+// The parameters have distinct types and this function has one call site.
 #[allow(clippy::too_many_arguments)]
 pub async fn finalize_deploy(
     client: &Client,
@@ -356,12 +335,12 @@ pub async fn finalize_deploy(
     let api: Api<DynamicObject> = Api::all_with(client.clone(), ar);
     let now = chrono::Utc::now().to_rfc3339();
 
-    // 1. Supersede old activation
+    // Supersede the old activation.
     if let Some(old) = old_activation {
         supersede_activation(client, ar, &old.name).await?;
     }
 
-    // 1b. Supersede the Failed records this deploy folded into its plan. Their
+    // Supersede Failed records folded into this plan. Their
     //     leftovers have now been re-applied or pruned, so they describe
     //     nothing outstanding and belong in history with everything else.
     //
@@ -417,7 +396,7 @@ pub async fn finalize_deploy(
         source: e,
     })?;
 
-    // 3. Set status phase with previousActivation link
+    // Set the final phase and predecessor link.
     let new_phase = if had_failures {
         PHASE_DEGRADED
     } else {
@@ -519,7 +498,7 @@ pub async fn list_superseded(
 ///
 /// This is the authority for pruning `kix.run/activations`: a hash in that set
 /// that names no Activation here is a reference to something that no longer
-/// exists. Deliberately NOT filtered by cluster label — one resource can be
+/// exists. Do not filter by cluster label because one resource can be
 /// referenced by activations of more than one cluster, and pruning another
 /// cluster's live reference would be worse than keeping a dead one.
 ///
@@ -899,10 +878,6 @@ pub async fn delete_activation(
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Phase transition helpers
-// ---------------------------------------------------------------------------
-
 /// Info about a Queued activation.
 #[derive(Debug, Clone)]
 pub struct QueuedActivation {
@@ -1271,7 +1246,7 @@ pub async fn resume_point(
         .and_then(|v| v.as_array());
 
     let Some(waves) = waves else {
-        return Ok(Some(0)); // Deploying but no wave progress — start from 0
+        return Ok(Some(0)); // Deploying with no wave progress starts at zero.
     };
 
     for (i, wave) in waves.iter().enumerate() {
@@ -1286,7 +1261,7 @@ pub async fn resume_point(
         }
     }
 
-    // All recorded waves complete — but there might be more waves beyond what's recorded
+    // The activation may contain waves beyond those already recorded.
     let total_waves = current
         .data
         .pointer("/status/totalWaves")

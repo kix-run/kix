@@ -1,58 +1,37 @@
-# Typed facts — the semantic channel beside the derivation record.
+# Encode and read typed facts in Nix string context.
 #
-# String context carries two distinct things through evaluation:
+# Resource identity paths record dependencies used for deployment ordering.
+# Fact tokens describe endpoint use for edge analysis, network policies, and
+# DNS dependencies. core/resource.nix removes fact tokens before sealing the
+# manifest so they do not become references in its store path.
 #
-#   identity paths   the derivation record: "this value was computed from
-#                    resource X". Maximal, exact, never filtered. Drives
-#                    kix.run/depends-on and the deploy DAG.
-#   fact tokens      typed claims riding the same channel: "using this value
-#                    means dialing an L4 endpoint {selector, ports, ns}".
-#                    Read back by interpreters (edge analysis, netpol);
-#                    stripped before sealing so they never enter the store DAG.
+# A token is a store file named kix-fact-<kind> containing { kind; payload; }
+# as JSON. Payload string context is discarded before writing, so the token
+# depends on the payload values without referencing producer identity paths.
+# Changing a producer's image therefore leaves its endpoint token unchanged
+# when the endpoint's name, namespace, selector, and ports stay the same.
+# Deployment ordering uses the separately retained resource identity context.
 #
-# A fact token is a content-addressed store path whose NAME encodes the kind
-# (`kix-fact-<kind>`) and whose CONTENT is the full payload as JSON — the
-# token is self-describing, so interpreters need `readFile`, not a registry.
-# That kills the two failure modes registries had: cross-instance
-# collectibility holes and fixpoint hazards at interceptor call sites.
-#
-# Facts are DEPENDENCY-FREE ON PURPOSE: the payload never references the
-# producer's identity path. A producer's seal churns on every content change
-# (image bump), but its endpoint fact only changes when the *semantics*
-# change (selector/ports/ns) — so tokens are write-once-read-many across
-# evals, and the fact is the claim, not the claimant. Ordering never needs
-# the fact→producer link: the identity path always co-travels in the same
-# context (direct references), and store-DAG transitivity covers indirected
-# ones.
-#
-# Seal semantics per resource kind (core/resource.nix applies this):
-#   emit       producers mint facts onto address-shaped out fields
-#   conduct    non-workload resources re-emit absorbed facts on their own
-#              out.* — a ConfigMap carrying postgres's fqdn hands the
-#              endpoint fact to whoever mounts it (indirection is the
-#              default case, not a special one)
-#   terminate  workloads absorb facts and do not re-emit: their pods are
-#              the ones dialing. Termination is what interpreters project
-#              into egress holes / DNS waits.
+# core/resource.nix attaches endpoint facts to address outputs. Conducting
+# resources forward absorbed facts through their outputs: a ConfigMap can
+# pass an endpoint fact to a workload that mounts it. Terminating resources
+# consume those facts without forwarding them; their endpoint use determines
+# network policy and DNS dependencies. terminatorKinds supplies the defaults,
+# which a resource's factBehavior declaration can override.
 
 { lib }:
 
 let
-  # Kix's own annotation keys and API names, spelled once in
-  # core/annotations.nix.
   kixAnnotations = import ./annotations.nix;
   kixKeys = kixAnnotations.keys;
   markers = import ./markers.nix { inherit lib; };
 in
 
 rec {
-  # ---- vocabulary ---------------------------------------------------------
-  # Closed set, validated at mint. One kind today; api-surface (webhook
-  # ingress) and podSet (operator operands) are the known next entries.
+  # Supported fact kinds and required payload fields, checked by mkFact.
   kinds = {
     endpoint = {
-      # "dialing me reaches pods selected by `selector` in `namespace` on
-      # `ports`" — everything netpol/DNS need, nothing they don't.
+      # Pods reached through an endpoint, used to derive network policies.
       requiredFields = [
         "name"
         "namespace"
@@ -61,10 +40,8 @@ rec {
       ];
     };
     refonly = {
-      # acknowledgment minted by `refOnly`: "this value names endpoint
-      # ns/name deliberately without dialing it" — suppresses the
-      # observed-vs-declared lint and the conservative DNS dep for exactly
-      # that endpoint.
+      # Records a reference without a connection to this endpoint. Suppresses
+      # the observed-vs-declared lint and conservative DNS dependency for it.
       requiredFields = [
         "name"
         "namespace"
@@ -74,9 +51,7 @@ rec {
 
   factPrefix = "kix-fact-";
 
-  # Terminators absorb facts without re-emitting them: their pods are the
-  # ones dialing. Everything else conducts (re-emits absorbed facts on its
-  # own out.*) — a ConfigMap is a carrier, not a caller.
+  # These workload kinds consume endpoint facts; other kinds forward them.
   terminatorKinds = [
     "Deployment"
     "StatefulSet"
@@ -123,11 +98,9 @@ rec {
     in
     builtins.seq _enum (builtins.seq _sel entry);
 
-  # A "foreign" apiVersion group is CRD territory: kix's core table can't
-  # know whether the kind's controller dials absorbed endpoints — the
-  # CRD-owning package declares it on the CRD (mkCRD/mkCRDRef factBehavior
-  # arg), or the cluster overrides per "group/Kind". Builtin groups (no
-  # dot, or *.k8s.io) and kix's own CRs are exempt.
+  # Custom API groups need factBehavior from their CRD declaration or a
+  # cluster override keyed by "group/Kind". Groups without a dot, *.k8s.io,
+  # and Kix's own group are exempt from this check.
   isForeignGroup =
     apiVersion:
     let
@@ -137,12 +110,9 @@ rec {
 
   isFactPath = p: lib.hasPrefix factPrefix (markers.pathName p);
 
-  # ---- minting ------------------------------------------------------------
-
-  # mkFact "endpoint" { name; namespace; selector; ports; }
-  # → context attrset ({ <token-path> = { path = true; }; }) ready for
-  #   builtins.appendContext. The token file is written once per distinct
-  #   payload (content-addressed; the daemon write is idempotent).
+  # Return string context { <token-path> = { path = true; }; } for
+  # builtins.appendContext. Reject unknown kinds and missing required fields.
+  # Identical kind and payload values produce the same token path.
   mkFact =
     kind: payload:
     let
@@ -155,10 +125,8 @@ rec {
           throw "mkFact ${kind}: missing payload field(s): ${builtins.concatStringsSep ", " missing}"
         else
           payload;
-      # payload values may carry context (e.g. a selector derived from a
-      # sealed sibling); toFile would then embed store references and tie the
-      # token's identity to the producer's — exactly what dependency-freedom
-      # forbids. Discard deeply: facts are data.
+      # Remove context recursively so payload values derived from resources
+      # do not add store references to the fact token.
       plain = discardCtxDeep checked;
       token = builtins.toFile "${factPrefix}${kind}" (
         builtins.toJSON {
@@ -180,9 +148,7 @@ rec {
     else
       value;
 
-  # ---- context surgery ----------------------------------------------------
-
-  # Split a context attrset into the two channels.
+  # Separate fact tokens from resource identity and other string context.
   partitionCtx = ctx: {
     facts = lib.filterAttrs (p: _: isFactPath p) ctx;
     rest = lib.filterAttrs (p: _: !isFactPath p) ctx;
@@ -196,26 +162,19 @@ rec {
       builtins.getContext s
     )).rest;
 
-  # ---- readback -----------------------------------------------------------
-
   readFact = p: builtins.fromJSON (builtins.readFile p);
 
-  # All facts carried by a string (e.g. a workload's manifest JSON),
-  # optionally filtered by kind. Deduped by token path for free (context is
-  # a set).
+  # Read facts carried by a string. Context keys deduplicate token paths;
+  # factsOfKind additionally filters the decoded records by kind.
   factsFromString =
     s: map readFact (builtins.filter isFactPath (builtins.attrNames (builtins.getContext s)));
 
   factsOfKind = kind: s: builtins.filter (f: f.kind == kind) (factsFromString s);
 
-  # ---- user-facing escape hatches ----------------------------------------
-
-  # "I name it, I don't dial it": keep the derivation record (ordering),
-  # drop the semantic claim. For the rare case where an address-shaped
-  # value is used structurally (labels, display strings). Each stripped
-  # endpoint is replaced by a `refonly` acknowledgment so the deliberate
-  # non-dial travels with the value (suppressing the lint and the
-  # conservative DNS dep at whatever workload eventually absorbs it).
+  # For endpoint values used as labels or display text rather than addresses.
+  # Remove facts while preserving resource identity context for ordering.
+  # Replace each endpoint fact with a refonly record, suppressing that endpoint's
+  # observed-vs-declared lint and conservative DNS dependency at the consumer.
   refOnly =
     s:
     let
@@ -237,16 +196,13 @@ rec {
     in
     builtins.appendContext (builtins.unsafeDiscardStringContext s) (parts.rest // acks);
 
-  # Stamp an endpoint fact onto a value that lacks one — e.g. a bare
-  # `out.name` used as an intra-namespace host. Takes the producing
-  # resource (anything with out.factTokens.endpoint) or a raw fact ctx.
+  # Attach fact context to a value that lacks it, such as a bare service name:
+  # connect svc.factTokens.endpoint svc.out.name
   connect = factCtx: s: builtins.appendContext s factCtx;
 
-  # "Read it, don't dial it", declared by the producer: a value for
-  # `outputs` that states something about the resource (a replica count,
-  # the job label its operator gives it) rather than an address. mkResource
-  # applies `refOnly` to it at the seal, so a consumer that reads it gets
-  # the ordering edge and the acknowledgment, never the dial claim.
+  # Mark an output as descriptive data, such as a replica count or label.
+  # mkResource applies refOnly when sealing it, retaining ordering context
+  # and replacing endpoint facts with refonly records.
   structural = value: {
     _type = "kix-structural-output";
     inherit value;

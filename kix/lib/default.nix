@@ -16,12 +16,8 @@ let
 
   inherit (normalize) normalizeManifest;
 
-  # Upstream RBAC names a ClusterRole `kubevirt.io:operator` by convention,
-  # and a colon is legal in Kubernetes. Every manifest file is its own
-  # store path, and a colon is not legal there: `builtins.toFile
-  # "a:b.yaml"` fails with "name contains illegal character ':'". So the
-  # file name is encoded. The manifest keeps its real name, and nothing
-  # reads identity off the file name (the CLI takes it from the content).
+  # Kubernetes names can contain colons, but Nix store path names cannot.
+  # Encode colons in filenames only; resource identity comes from the manifest.
   manifestFileName =
     manifest:
     let
@@ -65,20 +61,13 @@ in
 
   inherit (env) mkEnv;
 
-  # `fragments` is imported above for this one export. It was imported and
-  # never re-exported, so every documented call to `kix.mergeFragments` from
-  # a consuming flake failed with "attribute 'mergeFragments' missing"
-  # (kixpkgs handbook §"Composition", FEATURE-CATALOG §mergeFragments).
   inherit (fragments) mergeFragments;
 
   inherit rbac;
 
   inherit kixlib;
 
-  # Read at cluster level, where `kix.pins ./pins.json` and `kix.image.ref`
-  # are the two calls a cluster definition makes. They live in `kixlib`
-  # because packages need them too; they are re-exported here so a cluster
-  # file does not have to know that.
+  # Expose image and pin helpers to cluster definitions as well as packages.
   inherit (kixlib) pins image;
 
   inherit (meta) peekPackageMeta;

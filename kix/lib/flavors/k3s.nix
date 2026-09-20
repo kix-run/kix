@@ -1,7 +1,7 @@
-# Flavor: k3s — lightweight K8s distribution by Rancher.
+# k3s flavor.
 #
 # Pre-installs: flannel CNI, local-path StorageClass, servicelb, traefik.
-# Flannel does NOT enforce NetworkPolicy — to replace it with Cilium, run
+# Flannel does not enforce NetworkPolicy. To replace it with Cilium, run
 # k3s with `--flannel-backend=none --disable-network-policy` and override
 # `cluster.roles.cni.binding = "absent"` (see ludo/cluster.nix).
 #

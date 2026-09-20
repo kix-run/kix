@@ -1,14 +1,13 @@
-//! `kix export` — dump a built cluster activation as plain Kubernetes YAML.
+//! Export a built cluster activation as Kubernetes YAML.
 //!
 //! Two modes, selected via `--for`:
 //!
 //! - `exit` (default): strip all `kix.run/*` annotations, skip kix-internal CRs
 //!   (Activation, PackageInstance). Produces kix-neutral YAML the operator can
-//!   hand off to any other tool (`kubectl apply -f`, Flux, Argo, ...). Answers
-//!   Sam's "what if I want to leave kix" question in doc 84 §1.
+//!   pass to another tool such as kubectl, Flux, or Argo.
 //!
 //! - `audit`: preserve `kix.run/*` provenance annotations and all manifests.
-//!   This mode is the M3 compliance-evidence precursor — the same rendered
+//!   This mode preserves the same rendered
 //!   state but with its kix provenance intact so auditors can trace who
 //!   deployed what when.
 //!
@@ -141,7 +140,7 @@ pub fn run(args: &ExportArgs, ctx: &mut CommandContext) -> Result<()> {
 
 /// Apply the per-mode manifest transform. `Exit` strips kix.run/* annotations
 /// (using the shared helper in `cluster::normalize`) and null values. `Audit`
-/// is a passthrough — we want the full stamped manifest for compliance.
+/// is a passthrough because compliance needs the full stamped manifest.
 fn transform_manifest(manifest: &Value, mode: ExportMode) -> Value {
     let mut v = manifest.clone();
     match mode {

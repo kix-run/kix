@@ -263,7 +263,7 @@ rec {
         let
           selector = svc.spec.selector or { };
         in
-        # No selector — headless or external-name service.
+        # Headless and external-name Services have no selector.
         selector == { }
         # Targets a K8s system component (metrics scraping).
         || builtins.any (sc: selectorMatchesLabels sc selector) systemComponentSelectors
@@ -318,8 +318,7 @@ rec {
             ) resources
           );
 
-      # --- 3. ConfigMap volume references ---
-      # Secrets are intentionally not checked — they are commonly managed
+      # Secrets are not checked because they are commonly managed
       # externally (Infisical, sealed-secrets, manual creation).
 
       volumeRefFailures = builtins.concatMap (
@@ -393,7 +392,7 @@ rec {
           ]
       ) (builtins.filter (r: r.kind == "HorizontalPodAutoscaler") resources);
 
-      # --- 6. StatefulSet serviceName → headless Service validation ---
+      # Validate StatefulSet serviceName against a headless Service.
       # spec.serviceName must match a headless Service (clusterIP: None) in the
       # same namespace. A mismatch silently breaks per-pod DNS identity.
       serviceNameFailures =
@@ -571,7 +570,7 @@ rec {
           selector = np.spec.podSelector.matchLabels or { };
           ns = np.metadata.namespace or "cluster-scoped";
         in
-        # Empty selector matches all pods in the namespace — always valid.
+        # An empty selector matches all pods in the namespace.
         if selector == { } then
           [ ]
         else if selectsPodsIn ns selector || selectsRefPods ns selector then
@@ -582,7 +581,7 @@ rec {
           ]
       ) (builtins.filter (r: r.kind == "NetworkPolicy") resources);
 
-      # --- 13. Service port name → container port name consistency ---
+      # Validate named Service targetPorts against container port names.
       # When a Service uses a named targetPort, that port name must exist in
       # at least one matched workload's container ports. A Service that
       # matches no pod template in the build is skipped here on purpose:
@@ -637,7 +636,7 @@ rec {
           ) namedTargetPorts
       ) (builtins.filter (r: r.kind == "Service") resources);
 
-      # --- 14. PodDisruptionBudget selector → pod template matching ---
+      # Validate PodDisruptionBudget selectors against pod templates.
       # A PDB whose selector matches no pod in the build protects nothing,
       # and it is also the one thing helm-dag.findOrphans used to compute
       # (for chart-internal resources only) that no other check covered.

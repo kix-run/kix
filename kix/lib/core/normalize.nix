@@ -25,7 +25,7 @@
 # functions replace lists wholesale, so a kept list cannot be re-filled
 # with nulls after the fact, and `keep` normalizes them eagerly instead.
 #
-# Derivations pass through untouched. There is deliberately no field-name
+# Derivations pass through untouched. There is no field-name
 # carve-out (CRD openAPIV3Schema subtrees are normalized like everything
 # else): the collapse rule keeps literal empties on its own, so a schema
 # needs no shield. The only value normalization can remove from a schema
@@ -92,7 +92,7 @@ rec {
     else
       v;
 
-  # kix.keep — mark a container "never collapse to absent; render the empty
+  # kix.keep marks a container "never collapse to absent; render the empty
   # shell instead". For constructors of presence-meaningful fields
   # (emptyDir, selectors) built from optional arguments.
   keep =

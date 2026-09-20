@@ -1,10 +1,8 @@
-//! Manifest normalization helpers — strip server metadata, kix annotations,
+//! Manifest normalization helpers for stripping server metadata, Kix annotations,
 //! status, nulls; canonical (sorted-keys) Blake3 hashing.
 //!
-//! The old build-vs-live drift machinery (`detect_drift`, shape projection)
-//! lived here; it was superseded by the applied-hash design (doc 122, see
-//! `fieldsv1.rs` + `drift.rs`) and deleted. The hash/strip helpers remain in
-//! active use (export, applied-hash recipe).
+//! The hash and strip helpers are shared by export and applied-content drift
+//! checks.
 
 use std::collections::BTreeMap;
 

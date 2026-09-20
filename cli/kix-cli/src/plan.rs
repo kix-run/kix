@@ -16,8 +16,6 @@ use serde_json::Value;
 use crate::output;
 use kix::manifest::keys;
 
-// ── Package-level diff types ─────────────────────────────────────────
-
 pub struct PackageDiff {
     pub added: Vec<PackageInfo>,
     pub removed: Vec<PackageInfo>,
@@ -72,7 +70,7 @@ pub struct PackageChangeDiff {
     pub resource_diffs: Vec<(ResourceId, Vec<Difference>)>,
     /// Resources whose identity-hash changed purely because a dependency's hash
     /// propagated up (via `kix.run/identity-hash`/`kix.run/depends-on`/`kix.run/activations`/
-    /// `kix.run/built-via`). Manifest content is otherwise identical — will redeploy
+    /// `kix.run/built-via`). Manifest content is otherwise identical and redeploys
     /// only to update stamped annotations.
     pub dep_affected_resources: Vec<ResourceId>,
     pub added_resources: Vec<ResourceId>,
@@ -97,7 +95,7 @@ fn is_propagation_path(path: &str) -> bool {
         .iter()
         .flat_map(|k| kix::legacy_domain::legacy_spellings(k))
         .collect();
-    // Only match top-level metadata.annotations — pod template annotations
+    // Match only top-level metadata.annotations. Pod template annotations
     // (e.g. $.spec.template.metadata.annotations.*) are real content changes.
     for ann in PROPAGATION_ANNS
         .iter()
@@ -125,8 +123,6 @@ pub(crate) fn partition_propagation(diffs: Vec<Difference>) -> (Vec<Difference>,
     }
     (real, propagation)
 }
-
-// ── Compute package-level diff between two store graphs ──────────────
 
 pub fn diff_graphs(old: &StoreGraph, new: &StoreGraph) -> PackageDiff {
     let config = DiffConfig::new("old", "new");
@@ -283,7 +279,7 @@ fn diff_resource_maps(
             }
             let (real, _propagation) = partition_propagation(diffs);
             if real.is_empty() {
-                // Only kix.run propagation annotations changed — identity hash
+                // Only kix.run propagation annotations changed. The identity hash
                 // bumped because a dependency changed, but content is the same.
                 dep_affected_resources.push(id.clone());
             } else {
@@ -325,8 +321,6 @@ fn resource_map_for_package<'a>(
         .collect()
 }
 
-// ── Build a PackageDiff for garbage (removed resources only) ─────────
-
 pub fn diff_garbage(old: &StoreGraph, new: &StoreGraph) -> PackageDiff {
     let old_pkgs: BTreeMap<String, &PackageNode> = old
         .packages
@@ -357,7 +351,7 @@ pub fn diff_garbage(old: &StoreGraph, new: &StoreGraph) -> PackageDiff {
                 unchanged += 1;
                 continue;
             }
-            // Package changed — only care about removed resources (garbage)
+            // Garbage collection only needs removed resources.
             let old_res = resource_map_for_package(old_pkg, old);
             let new_res = resource_map_for_package(new_pkg, new);
             let removed_resources: Vec<ResourceId> = old_res
@@ -391,9 +385,7 @@ pub fn diff_garbage(old: &StoreGraph, new: &StoreGraph) -> PackageDiff {
     }
 }
 
-// ── Structured renderers (shared producer) ──────────────────────────
-//
-// These are the canonical PackageDiff → (JSON | Markdown) producers. The
+// These are the canonical PackageDiff JSON and Markdown producers. The
 // deploy modal, `kix diff`, rollback change summary, and the CI PR-comment
 // GitHub Action all consume the same output here so formats stay in sync.
 // See v2_discussions/84_m0_m1_implementation_plan.md §5.
@@ -617,8 +609,6 @@ pub fn render_package_diff_markdown(diff: &PackageDiff) -> String {
     out
 }
 
-// ── Display ──────────────────────────────────────────────────────────
-
 /// Print a package-grouped plan. Only shows changes.
 pub fn print_package_plan(diff: &PackageDiff, verbose: bool) {
     let color = output::color_enabled();
@@ -832,8 +822,6 @@ pub fn print_plan_summary(diff: &PackageDiff) {
         }
     }
 }
-
-// ── Helpers ──────────────────────────────────────────────────────────
 
 enum PlanEntry<'a> {
     Added(&'a str, &'a PackageInfo),
@@ -1072,7 +1060,7 @@ mod diff_graph_tests {
 
     #[test]
     fn drift_under_the_same_stamp_is_a_content_change() {
-        // Old side: the live object, replicas scaled by hand, stamp intact.
+        // Old side: the live object, replicas changed externally, stamp intact.
         let mut old = baseline();
         old[4] = stamped(
             "Deployment",

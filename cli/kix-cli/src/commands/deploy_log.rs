@@ -1,18 +1,18 @@
-//! Non-interactive deploy observers (doc 99 §7, Stage D).
+//! Non-interactive deploy observers.
 //!
 //! Two output modes beyond the colored [`StreamCliObserver`]:
 //!
-//! - [`LineObserver`] — "nix-build-L" idiom. One line per terminal verdict,
+//! - [`LineObserver`]: one line per terminal verdict,
 //!   phase boundary, prune event, or finalization. No ANSI codes, no cursor
 //!   motion. Safe to pipe into `less`, CI logs, `tee`. Used automatically
 //!   when `--log-format=pretty` is requested against a non-TTY stdout.
-//! - [`JsonObserver`] — NDJSON. One JSON object per [`DeployEvent`],
+//! - [`JsonObserver`]: one NDJSON object per [`DeployEvent`],
 //!   flushed immediately. Shape is stable across events (every object
 //!   carries `type` and timestamp); consumers can `jq -c` or pipe to log
 //!   aggregators. Readiness progress events are suppressed unless `-v` is
 //!   on to match the `line` format's suppression rule.
 //!
-//! Both observers are deliberately simple and allocation-light. They do not
+//! Both observers are allocation-light and do not
 //! track state beyond a `started_at` timestamp for elapsed fields.
 
 use std::io::{self, Write};
@@ -24,8 +24,6 @@ use kix::cluster::apply::ApplyAction;
 use kix::cluster::stream::{
     CancelReason, DeployEvent, DeployObserver, NodeDetail, NodeId, TransitionKind, Verdict,
 };
-
-// ── Line format ─────────────────────────────────────────────────────────────
 
 pub struct LineObserver {
     pub verbose: bool,
@@ -160,8 +158,6 @@ impl DeployObserver for LineObserver {
     }
 }
 
-// ── JSON format ─────────────────────────────────────────────────────────────
-
 pub struct JsonObserver {
     pub started_at: Instant,
 }
@@ -283,8 +279,6 @@ impl DeployObserver for JsonObserver {
         let _ = io::stdout().flush();
     }
 }
-
-// ── Shared shaping ──────────────────────────────────────────────────────────
 
 fn node_label(id: &NodeId) -> String {
     match id {

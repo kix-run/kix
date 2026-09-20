@@ -1,7 +1,6 @@
-//! `kix drift` — runtime content drift check via the applied-hash stamp
-//! (doc 122). Cluster-only: needs a kubeconfig, deliberately NO flake or nix
-//! build — the whole point is that the commitment was cached on the object
-//! at apply time.
+//! Check runtime content drift through the applied-hash stamp. This command
+//! needs a kubeconfig but no flake or Nix build because the hash is cached on
+//! the object at apply time.
 
 use miette::{IntoDiagnostic, Result, miette};
 

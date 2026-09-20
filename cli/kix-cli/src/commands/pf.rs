@@ -1,4 +1,4 @@
-//! `kix pf <package> <port>` — port-forward to a package's primary workload.
+//! Port-forward to a package's primary workload.
 //!
 //! Shells out to `kubectl port-forward -n <ns> <kind>/<name> <ports...>`.
 //! Uses the workload resource directly (not the matching pod) so kubectl

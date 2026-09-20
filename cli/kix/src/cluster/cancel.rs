@@ -45,7 +45,7 @@ impl CancelToken {
     /// `Failed` and lets the next deploy reconcile what this one applied.
     ///
     /// A second interrupt exits the process immediately. That has to be done
-    /// by hand: registering a signal with tokio replaces the OS default for
+    /// explicitly: registering a signal with tokio replaces the OS default for
     /// the life of the process, so after the first Ctrl-C nothing but SIGKILL
     /// would end it, and an orderly stop against an unresponsive apiserver
     /// can sit through a 60 second bound. Exiting this way leaves the record

@@ -1,17 +1,8 @@
-# Inert context markers.
-#
-# `kix.untrackedRef "foo"` names a resource kix does not own (a Secret an
-# operator mints at runtime, a ConfigMap another system owns). The validators
-# reject bare string refs — a name with no Nix string context is an untracked
-# reference — so the value has to carry SOME context to be accepted. The marker
-# supplies it: a `builtins.toFile` whose only job is to exist.
-#
-# The marker is not a resource. It has no manifest, no identity hash, nothing
-# to apply. So its store path must never be mistaken for a derivation edge:
-# stamped into `kix.run/depends-on` it becomes a hash no manifest can ever
-# resolve, and `kix health` reports the consuming workload as depending on a
-# permanently MISSING resource. `isUntrackedRefPath` is how the depends-on
-# stamper tells the inert channel from the real one.
+# Mark references to resources created outside this cluster definition.
+# The marker supplies string context so reference validators accept the name.
+# core/resource.nix excludes marker paths from depends-on because they have
+# no deployable manifest. A marker with a kind also supplies an expectation
+# that deploy checks before applying the resource that refers to it.
 { lib }:
 
 rec {
@@ -20,17 +11,14 @@ rec {
 
   untrackedRefName = "kix-untracked-ref";
 
-  # EXPERIMENTAL (2026-09-20). `kix.untrackedRef "name"` is the bare claim:
-  # something else creates it, and nothing checks. The attrset form names
-  # the creator and the kind: `kix.untrackedRef { kind = "Secret"; name =
-  # "x"; by = self.job; }`. The creator's context rides on the string, so
-  # the referring resource depends on it like on any resource it names,
-  # and the marker carries the kind, so the referring resource is stamped
-  # `kix.run/expects` and deploy waits for the object before applying it
-  # (cli readiness.rs, wait_for_expectations). If that wait proves to be
-  # the wrong place, or the kind cannot be known where the reference is
-  # written, fall back to recording `by` without the check, or to the bare
-  # claim plus the untrackedReferences audit.
+  # Accept a name or { name; kind?; apiVersion?; by?; } and return the name
+  # with marker context. A string alone adds no deployment existence check.
+  #
+  # The experimental attrset form supports two additional constraints:
+  # by adds the creator's resource context for dependency ordering; kind adds
+  # a kix.run/expects entry checked before applying the referring resource.
+  # apiVersion defaults to "v1".
+  #   kix.untrackedRef { kind = "Secret"; name = "x"; by = self.job; }
   mkUntrackedRef =
     ref:
     let

@@ -45,56 +45,23 @@ in
 
 rec {
 
-  # Kix's own annotation keys, from core/annotations.nix. A package that
-  # writes one of Kix's keys spells it `kix.keys.<name>` rather than the
-  # literal, so a domain move is a one-line change in that file.
+  # Use kix.keys.<name> for annotation keys defined in core/annotations.nix.
   keys = kixKeys;
 
-  # Typed-fact escape hatches (core/facts.nix), re-exported for package
-  # authors: `kix.facts.refOnly svc.out.fqdn` (name it, don't dial it),
-  # `kix.facts.connect svc.factTokens.endpoint value` (dial by a value
-  # that lacks the claim, e.g. a bare intra-namespace name).
+  # Package helpers for endpoint facts; see core/facts.nix for their contracts.
   facts = {
     inherit (import ../core/facts.nix { inherit lib; }) refOnly connect structural;
   };
 
-  # ------------------------------------------------------------------ images
+  # Image reference helpers. ref renders repository:tag and an optional
+  # @digest; a digest selects fixed image content even when the tag moves.
+  # These helpers do not validate digest syntax or query a registry.
   #
-  # A container image reference has three parts, and only two of them can be
-  # trusted. `repository` and `tag` record what was asked for. `digest`
-  # records what will actually run, because a tag can be moved after it is
-  # read and a digest cannot. `kix.image.ref` renders both, so the manifest
-  # stays readable and the pull stays exact:
+  #   image = kix.image.ref config.serverImage;
+  #   # docker.io/library/nginx:1.27@sha256:0d17b1...
   #
-  #     image = kix.image.ref config.serverImage;
-  #     # docker.io/library/nginx:1.27@sha256:0d17b1...
-  #
-  # Where the values come from is the other half. A cluster that decides an
-  # image reference by editing its definition at deploy time has no committed
-  # answer to "what is running", and a clean checkout of that definition
-  # renders something that was never meant to be deployed. So the values live
-  # in a pin file next to the cluster, committed, written by `kix pin`:
-  #
-  #     # flake.nix
-  #     kix.lib.mkFlake { inherit inputs; pins = ./pins.json; clusters = { ... }; }
-  #
-  #     # the cluster definition, which never names the path
-  #     { kix, pins, ... }:
-  #     ...
-  #     config.serverImage = pins.get "atlasServer";
-  #
-  # A cluster that wants a pin file of its own reads one directly instead:
-  #
-  #     let pins = kix.pins ./other-pins.json; in ...
-  #
-  # `pins.get` throws when the key is missing and names the command that adds
-  # it. That matters more than it looks. The state that produces the error is
-  # exactly the state in which the reader needs a remedy they can run.
-  #
-  # What this does not do: check that the digest refers to anything. Nix
-  # evaluation is pure, so a well-formed invented digest passes every check
-  # here. `kix pin --check` is what asks the registry, and it is meant to run
-  # on every change to a pin file. See `v2_discussions/archive/138_*`.
+  # Cluster definitions can supply config.serverImage = pins.get "server";
+  # from a committed pin file. See pins.nix for loading and validation.
   image =
     let
       needField =
@@ -114,15 +81,7 @@ rec {
         "${needField image "repository"}:${needField image "tag"}"
         + lib.optionalString (image.digest or null != null) "@${image.digest}";
 
-      # True when the reference names a digest, so a package or a rule can
-      # tell a resolved reference from an unresolved one.
-      #
-      # Public API with no caller inside Kix, deliberately. It is the obvious
-      # companion question to `ref` and a package may branch on it. It cannot
-      # currently serve `security.noUnresolvedPlaceholder`, which inspects
-      # rendered manifest strings while this takes an image attrset; closing
-      # that gap needs a rule at the package-config level, which is the one
-      # `rules/security.nix` describes and does not yet have. Not dead code.
+      # Test whether digest is present and non-null; this does not validate it.
       isPinned = image: (image.digest or null) != null;
     };
 
@@ -211,12 +170,9 @@ rec {
           && builtins.isString p.targetPort
           && !(builtins.elem p.targetPort workloadPortNames)
         ) finalPorts;
-        # The Service is written with numeric targetPorts even when the
-        # author named them. The netpol layer copies targetPort into every
-        # consumer's egress rule, and cilium drops egress traffic on a
-        # named port (verified on cilium 1.19: the same rule passes with
-        # the number). The name still identifies the port on the workload;
-        # here it is resolved once, where the workload is in hand.
+        # Resolve named targetPorts while the workload is available. The
+        # network-policy layer copies targetPort into egress rules, and Cilium
+        # 1.19 drops egress traffic when those policy ports remain named.
         resolvedPorts = map (
           p:
           if (p ? targetPort) && builtins.isString p.targetPort then
@@ -233,13 +189,10 @@ rec {
           else
             null;
       in
-      # Passthrough merges into the built Service rather than over it, so
-      # `spec.clusterIP = "None"` adds a field instead of replacing the
-      # selector and ports with a one-key spec. That replacement is why a
-      # headless Service had to be hand-written, which cost the workload
-      # dependency and a `selectorCoherence` warning with it. Lists are
-      # replaced wholesale, which is what a caller passing `spec.ports`
-      # means; `ports` has its own argument and is removed above.
+      # Merge passthrough fields into the generated Service so additions such
+      # as spec.clusterIP preserve its selector and ports. Recursive update
+      # replaces lists as complete values; remove ports above because it has a
+      # dedicated argument.
       builtins.seq _portCheck (
         lib.recursiveUpdate {
           apiVersion = "v1";
@@ -612,21 +565,16 @@ rec {
   untrackedRef = markers.mkUntrackedRef;
 
   options = {
-    # A package's image, declared once so every package spells the digest
-    # slot the same way and `kix pin` has somewhere to put a resolution.
+    # Image option with repository, tag, and optional digest and pull policy.
+    # A null digest leaves the reference unpinned.
     #
     #   options.image = kix.options.image {
     #     repository = "docker.io/library/nginx";
     #     tag = "1.27";
     #   };
     #
-    # The cluster then overrides the whole attrset from its pin file:
-    #
+    # Supply a resolved reference from the cluster's pin file:
     #   config.image = pins.get "web";
-    #
-    # `digest` defaults to null rather than to a value, because a null that
-    # says "not resolved yet" is worth more than a plausible-looking string
-    # that was never checked against a registry.
     image =
       {
         repository,
@@ -729,16 +677,10 @@ rec {
     };
   };
 
-  # A post-deploy health probe. The probe is a Job in the package's own
-  # namespace whose script dials the things it checks through addresses
-  # passed in as env vars from `out.*` values. Everything else is the
-  # machinery every workload already has: the addresses carry the
-  # dependency edges, so the Job runs after its targets are ready and the
-  # netpol plugin opens the same egress a real consumer gets; the deploy
-  # engine treats a Job as ready when it succeeds and as failed when
-  # backoffLimit is exceeded, so a failing probe fails the deploy exactly
-  # like a pod that never came up. The pod resolves names through cluster
-  # DNS over the pod network, the path consumers actually use.
+  # Build a post-deploy health probe as a Job in the package namespace.
+  # Addresses passed from out.* values carry dependency and network-policy
+  # context, so the Job runs after its targets and receives matching egress.
+  # Job success completes the probe; exhausting backoffLimit fails the deploy.
   #
   #   options.healthCheck = kix.options.healthCheck;   # enable, retryFor
   #   build = [
@@ -752,42 +694,23 @@ rec {
   #     })
   #   ];
   #
-  # Two parts are rendered: `<partName>Script`, a ConfigMap holding the
-  # script under a stable name, and `<partName>`, the Job that mounts it at
-  # /probe and runs it. The Job always waits for the package root, so it
-  # runs after the package it belongs to without anyone remembering to say
-  # so; `requires` adds to that. It carries `kix.run/rerun = "on-change"`
-  # (core/annotations.nix): the deploy engine deletes and recreates a Job
-  # with that annotation whenever its identity hash differs from the one
-  # the cluster last ran, or when the live Job failed. So under
-  # `kix deploy` and `kix rollback` the probe runs again when it, or
-  # anything upstream of what it checks, changes, and never otherwise. The
-  # operator diffs against live objects instead of the activation record,
-  # so once `ttlSecondsAfterFinished` has reaped a finished Job the
-  # operator's next reconcile creates and runs it again.
+  # The helper emits a ConfigMap named `<partName>Script` and a Job named
+  # `<partName>` that mounts it at /probe. The Job depends on the package root
+  # plus `requires`. kix.run/rerun="on-change" recreates the Job after its
+  # identity changes or after a failure. An operator reconcile also recreates
+  # a completed Job after ttlSecondsAfterFinished removes it.
   #
-  # `script` is Python by default (`runtimes.python`, the official slim
-  # image pinned by digest, standard library only). A non-zero exit fails
-  # the probe. Keep the script in a file next to the package so it can be
-  # read, linted and run by hand. The helper owns the probe's time budget:
-  # it hands the script its retry window as `RETRY_FOR` and sizes the
-  # Job's `activeDeadlineSeconds` to fit that window plus one worst-case
-  # round of checks (`roundBudget`), because the Job deadline deletes the
-  # pod and leaves no output behind. The script's part of the contract is
-  # to give up once `RETRY_FOR` has passed and to keep one round of checks
-  # under `roundBudget`. On failure the last lines the script printed
-  # travel on the pod (terminationMessagePolicy FallbackToLogsOnError) and
-  # the deploy prints them under the failure line.
+  # Python is the default runtime. A nonzero exit fails the probe. RETRY_FOR
+  # gives the script its retry window, and activeDeadlineSeconds includes that
+  # window plus roundBudget for one final check. The script must stop after
+  # RETRY_FOR and keep each round within roundBudget. On failure,
+  # FallbackToLogsOnError supplies the final log lines to deploy output.
   #
-  # The probe pod carries its own labels, never the package's selector
-  # labels: a Service selecting the package's pods must not route traffic
-  # to the probe. It runs as nobody with a read-only root filesystem and no
-  # service account token; the probe talks to Services, never to the API
-  # server.
+  # Probe labels do not overlap the package selector, which prevents package
+  # Services from routing to the probe. The pod runs as nobody with a read-only
+  # root filesystem and no service account token.
   healthCheck =
     let
-      # The public renderer; see `kix.image` above. Kept as a local name so
-      # the call sites below read the same as they always did.
       imageRef = image.ref;
 
       # Seconds one worst-case round of checks may take: every query timing
@@ -1100,20 +1023,12 @@ rec {
           }
         ];
 
-      # --- The controller's way in ---
+      # Under default-deny policy, allow the ingress controller to reach each
+      # backend on the routed pod port. kix.expose has both the backend Service
+      # and the controller dependency needed to derive this rule.
       #
-      # An Ingress routes; it opens nothing. Cilium enforces at the pod,
-      # so under default deny the backend refuses the controller like any
-      # other pod in any other namespace, and every request through the
-      # Ingress ends as a 504 that no amount of evaluation can see. This
-      # is the one place that holds both ends of that edge: the backing
-      # Service is right here, and the controller arrived as a dep. So
-      # `kix.expose` opens the hole it just created, on the port the
-      # Ingress actually routes to and no other.
-      #
-      # Gateway API is not covered. A Gateway's data plane is whatever
-      # the implementation schedules, in whatever namespace, and
-      # `gateway.out` carries a parentRef rather than a pod selector.
+      # Gateway API is excluded because gateway.out supplies a parentRef, not
+      # the data-plane pod selector and namespace required by this rule.
       backends =
         if paths != null then
           map (p: {
@@ -1134,9 +1049,8 @@ rec {
 
       wantsControllerEdge = hasExposure && useIngress && scope.networkPolicyEnforcer != null;
 
-      # A controller that does not say where its pods are cannot be named
-      # in a rule. Say so rather than emitting nothing: the symptom
-      # otherwise is a 504 with a healthy-looking cluster behind it.
+      # A policy requires the controller pod selector and namespace. Warn when
+      # the controller package does not expose them.
       _controllerEdgeWarn =
         if wantsControllerEdge && controllerSelector == null then
           lib.warn (

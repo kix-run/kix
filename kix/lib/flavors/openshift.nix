@@ -1,7 +1,7 @@
-# Flavor: OpenShift — Red Hat's enterprise Kubernetes platform.
+# OpenShift flavor.
 #
 # Significant security posture: SCC (Security Context Constraints) enforce
-# restricted-v2 by default — all containers run as random non-root UIDs.
+# restricted-v2 by default, so containers run as random non-root UIDs.
 # Images that hardcode USER root will fail without explicit SCC grants.
 #
 # Uses OVN-Kubernetes CNI (environment-owned, exclusive), HAProxy-based
@@ -9,7 +9,7 @@
 # container runtime.
 #
 # On cloud providers: LoadBalancer and persistent storage work via cloud
-# CSI — override the role bindings for cloud installs. On bare metal
+# CSI. Override the role bindings for cloud installs. On bare metal
 # (this preset's default): both roles vacant.
 #
 # Platform imports: DNS (coredns, managed by OpenShift).

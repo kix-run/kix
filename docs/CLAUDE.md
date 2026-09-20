@@ -61,7 +61,7 @@ boundaries are the biggest places to slow down and teach deliberately.
   shape was already taught, long or unstable output that distracts from the
   lesson, or commands whose result depends heavily on local machine state.
   When success is obvious from the next prose step, omit the output.
-- Prefer generated output over hand-written output for Kix commands where
+- Prefer captured command output over separately maintained examples where
   correctness matters. Declare both offline and live captures in
   `docs/nix/captures.nix`. Keep its steps grouped by docs page or example so
   it stays readable as the docs grow.
@@ -85,7 +85,7 @@ boundaries are the biggest places to slow down and teach deliberately.
 - Hand-write `stdout` on `Command` only for short, stable output that the
   capture pipelines cannot produce, such as the deterministic response from
   `curl` against an example echo server. Add a docs comment explaining why it
-  is hand-written so future maintainers know it can drift.
+  is maintained separately so future maintainers know it can drift.
 - `CommandCwd.astro` is retained only so the frozen `v0.1/` snapshot keeps
   building. Do not import it in new pages.
 - Fenced code blocks (```` ```nix ````, ```` ```text ````, ```` ```yaml ````)

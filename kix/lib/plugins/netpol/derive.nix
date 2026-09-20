@@ -298,13 +298,13 @@ in
 
       # terminate-declared CRs (meta.factBehavior): the controller dials the
       # endpoints absorbed by the CR spec, so the holes open for the OPERAND
-      # pods named by the declaration's podSelector — the CR has no pods of
+      # pods named by the declaration's podSelector. The CR has no pods of
       # its own and never went through sealWorkload.
       # the resolved behavior rides on the resource itself (threaded through
-      # the CRD builder chain, or the cluster override, at seal time) — no
+      # the CRD builder chain or the cluster override at seal time, with no
       # index lookup needed here
       terminatingCrs =
-        # self-enforcer instances arrive with a null enforcer — no policies
+        # Self-enforcer instances arrive with a null enforcer, so no policies
         if networkPolicyEnforcer == null then
           [ ]
         else

@@ -1,21 +1,9 @@
-//! Progress watchdog for the deploy engine (kixpkgs#62).
+//! Detect deploy runs that stop reporting progress.
 //!
-//! The transport bounds one attempt. Readiness bounds one node. Nothing
-//! bounded the run: on 2026-09-07 `kix deploy` sat silent for 35 minutes
-//! with every thread idle. This module owns the invariant "the run makes
-//! progress, or the user is told what it is waiting on, or the run stops."
-//!
-//! Shape:
-//! - [`Progress`] is a shared record. Node tasks set their phase on it and
-//!   the engine touches it on every event, including readiness heartbeats,
-//!   so a StatefulSet that takes ten minutes to come up does not count as a
-//!   stall (it reports every two seconds).
-//! - [`assess`] is the pure policy: given the idle time and the in-flight
-//!   set, decide whether to say nothing, warn, or abort. Unit-tested on its
-//!   own.
-//! - [`run`] is the task. It ticks on its own timer, so it is polled even
-//!   when the engine is not, and it cancels the run through the shared
-//!   [`CancelToken`] rather than touching the cluster itself.
+//! Node tasks record phases in [`Progress`], and every deploy event or
+//! readiness heartbeat resets its idle timer. [`assess`] decides whether a
+//! timer tick should warn or abort. [`run`] emits stall events and cancels the
+//! run through [`CancelToken`]; it does not access the cluster.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -31,7 +19,7 @@ use super::stream::{DeployEvent, DeployObserver, InFlight, NodeId, Phase};
 /// abort (the warnings still print).
 pub const STALL_TIMEOUT_ENV: &str = "KIX_STALL_TIMEOUT";
 
-/// When to warn and when to give up.
+/// Idle thresholds for warnings and cancellation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StallPolicy {
     /// Idle time after which the first `Stalled` event fires; repeated at
@@ -60,8 +48,7 @@ impl StallPolicy {
         policy
     }
 
-    /// A policy that never warns or aborts. For runs that do not want a
-    /// watchdog at all.
+    /// Disable warnings and cancellation.
     pub fn off() -> Self {
         Self {
             warn_after: Duration::MAX,
@@ -95,8 +82,7 @@ impl Progress {
         }
     }
 
-    /// Something happened: a node changed state, a readiness poll returned,
-    /// a task finished. Resets the idle clock.
+    /// Reset the idle clock after any deploy or readiness activity.
     pub fn touch(&self) {
         let ms = self.started.elapsed().as_millis() as u64;
         self.last_activity_ms.fetch_max(ms, Ordering::Relaxed);
@@ -149,20 +135,20 @@ impl Progress {
     }
 }
 
-/// What the watchdog decided on one tick.
+/// Action selected for one watchdog tick.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Assessment {
-    /// Progress within the warn bound, or nothing in flight.
+    /// Activity is within the warning threshold, or no nodes are in flight.
     Quiet,
-    /// Idle past the warn bound; say so.
+    /// Emit a stall warning.
     Warn,
-    /// Idle past the abort bound; say so and cancel.
+    /// Emit a stall event and cancel the run.
     Abort,
 }
 
-/// The pure policy. `last_warned` is the idle time at the previous warning
-/// (`None` if none yet), so warnings repeat every `warn_after` and not on
-/// every tick.
+/// Select an action from idle time and in-flight work. `last_warned` records
+/// the idle duration of the previous warning so warnings repeat no more often
+/// than `warn_after`.
 pub fn assess(
     policy: &StallPolicy,
     idle: Duration,
@@ -186,7 +172,7 @@ pub fn assess(
     }
 }
 
-/// One line for humans: what the run is waiting on.
+/// Describe the current stall and up to five in-flight nodes.
 pub fn describe(idle: Duration, in_flight: &[InFlight]) -> String {
     const SHOWN: usize = 5;
     let mut parts: Vec<String> = in_flight
@@ -218,10 +204,9 @@ fn node_label(id: &NodeId) -> String {
     }
 }
 
-/// The watchdog task body. Ticks every `min(warn_after, abort_after, 5s)`
-/// (at least 100ms), emits `Stalled` events, and cancels through `cancel`
-/// when the abort bound passes. Returns when `cancel` fires; the engine
-/// aborts it when the run ends.
+/// Check progress every `min(warn_after, abort_after, 5s)`, with a 100ms
+/// minimum interval. Emit `Stalled` events and cancel after the abort threshold.
+/// Return when cancellation fires; the engine aborts this task when the run ends.
 pub async fn run(
     policy: StallPolicy,
     progress: Arc<Progress>,
@@ -237,8 +222,8 @@ pub async fn run(
         .min(Duration::from_secs(5))
         .max(Duration::from_millis(100));
     let mut ticker = tokio::time::interval(period);
-    // `Burst` would fire catch-up ticks after the very stall we are
-    // watching for and report it several times over.
+    // Delay missed ticks so a stalled executor does not produce several
+    // catch-up warnings at once.
     ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut last_warned: Option<Duration> = None;
     loop {

@@ -157,7 +157,7 @@ rec {
   # A named port here is a policy that drops traffic: cilium resolves
   # names on ingress rules but not on egress ones (verified on 1.19), and
   # the same port list feeds both. Services from `kix.service.fromWorkload`
-  # arrive numeric; a hand-written Service with `targetPort = "http"`
+  # arrive numeric; a Service defined directly with `targetPort = "http"`
   # gets this warning and its consumers get no egress.
   portsToCilium =
     ports:

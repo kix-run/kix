@@ -74,7 +74,7 @@ fn main() -> miette::Result<()> {
         return commands::pin::run(command, &cli.global);
     }
 
-    // Drift is cluster-only by design (doc 122): no flake, no Nix backend —
+    // Drift uses only the cluster: no flake or Nix backend is needed, and
     // it must work from a bare kubeconfig outside any kix repo.
     if let Command::Drift(args) = &cli.command {
         return commands::drift::run(args, &cli.global);

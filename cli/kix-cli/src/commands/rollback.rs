@@ -1,8 +1,8 @@
-//! `kix rollback` — revert to the most recent Superseded activation.
+//! Revert to a Superseded activation.
 //!
 //! Finds the previous activation on the cluster, resolves its store path,
 //! and re-applies its manifests through the standard reconcile engine.
-//! No nix build is required — the old activation's manifests are already
+//! No Nix build is required because the target activation's manifests are already
 //! in the local Nix store.
 
 use std::io::Write;
@@ -42,8 +42,6 @@ pub fn run(args: &RollbackArgs, ctx: &mut CommandContext) -> Result<()> {
     ctx.runtime.block_on(run_async(args, ctx))
 }
 
-// ── Rollback history listing (`kix rollback --list`) ────────────────
-
 /// Read-only: connect, enumerate Superseded activations, print history, exit.
 /// Works the same whether the cluster is operator-managed or direct-apply
 /// because it only inspects Activation CRs. Supports `--output json|yaml`.
@@ -61,7 +59,7 @@ async fn run_list_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()>
         .ok_or_else(|| miette!("the Kix Activation resource type is not installed on this cluster. Check the Kubernetes context and deploy the Kix CRDs before retrying."))?
         .clone();
 
-    // Current Active activation — optional: useful as a "you are here" marker
+    // The current Active activation is an optional position marker
     // in the history listing, but we must still print even if none exists.
     let current = activation::find_active(&client, &activation_ar, &args.cluster)
         .await
@@ -410,7 +408,7 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
     let baseline_manifests =
         kix::cluster::apply::baseline_manifests(&current_manifests, &failed_baseline.closures);
 
-    // 6. Compute changes (current → target), then fold in what the failed
+    // Compute changes from current to target, then fold in what failed
     //    deploys may have left behind.
     let all_actions = kix::cluster::apply::fold_failed_closures(
         kix::cluster::apply::detect_changes(&target_manifests, &current_manifests),
@@ -617,8 +615,6 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
     }
 }
 
-// ── Operator-delegated rollback ──────────────────────────────────────
-
 async fn run_operator_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
     // 1. Connect and find current + superseded activations
     let (client, ar) =
@@ -824,7 +820,7 @@ async fn run_operator_async(args: &RollbackArgs, ctx: &CommandContext) -> Result
     Ok(())
 }
 
-/// Shared formatter for a list of superseded activations — used by both the
+/// Shared formatter for a list of superseded activations used by both the
 /// interactive rollback selector and `kix rollback --list`. Shows store path
 /// availability, source directory, and the `previousActivation` link so the
 /// operator sees exactly what each history entry points at.

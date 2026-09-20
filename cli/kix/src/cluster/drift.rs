@@ -1,4 +1,4 @@
-//! Runtime content drift check (doc 122).
+//! Runtime content drift checks.
 //!
 //! For every kix-managed live object: project it onto kix's current SSA
 //! fieldset, hash, and compare against the `kix.run/applied-hash` stamp
@@ -27,15 +27,15 @@ pub enum DriftVerdict {
     /// Every field kix applied is byte-identical to the state committed at
     /// apply time.
     InSync,
-    /// The kix-owned projection no longer hashes to the stamp — content
+    /// The kix-owned projection no longer hashes to the stamp. Content
     /// changed under kix's ownership or ownership was taken by another
     /// manager. `foreign` attributes the co-owners.
     Drifted { foreign: Vec<ForeignOwner> },
     /// No `kix.run/applied-hash` annotation: the resource predates stamping
-    /// or the stamp patch was lost. NOT drift — re-stamped on next deploy.
+    /// or the stamp patch was lost. This is restamped on the next deploy.
     Unstamped,
     /// `managedFields` missing or stripped (backup/restore tools, etcd
-    /// surgery) — the check cannot run for this object.
+    /// surgery); the check cannot run for this object.
     NoFieldset,
 }
 
@@ -64,8 +64,8 @@ pub struct DriftReport {
 
 /// Check every kix-managed resource on the cluster.
 ///
-/// Fetches via [`fetch::fetch_managed_resources`] and hashes the RAW objects —
-/// deliberately no `fetch::normalize_for_diff`, which deletes `managedFields`.
+/// Fetches through [`fetch::fetch_managed_resources`] and hashes raw objects.
+/// `fetch::normalize_for_diff` cannot be used because it removes managedFields.
 pub async fn check_cluster(
     client: &Client,
     discovery: &[(ApiResource, Scope)],
@@ -96,8 +96,8 @@ pub fn check_object(obj: &DynamicObject) -> DriftReport {
 
     // Same recipe as the stamp side: project onto kix's current fieldset,
     // strip kix.run self-references, hash canonical JSON.
-    // TODO(doc-123): exclude PI spec.driftIgnore pointers here (resolved via
-    // the kix.run/package annotations → PackageInstance GET) so compiled
+    // TODO: exclude PI spec.driftIgnore pointers here, resolved through
+    // kix.run/package annotations and a PackageInstance GET, so compiled
     // delegation (HPA on replicas, cert-manager on Secret data) is an
     // expected co-owner, not drift.
     let Some(current) = fieldsv1::applied_content_hash(obj) else {
@@ -125,10 +125,10 @@ pub fn check_object(obj: &DynamicObject) -> DriftReport {
 /// Attribute co-ownership: flatten every OTHER manager's fieldsV1 into field
 /// paths with manager name, operation, subresource, and timestamp.
 ///
-/// Excludes ONLY entries with subresource == "status" — status writes are
+/// Excludes entries with subresource == "status" because status writes are
 /// controller noise, never drift. Other subresources stay visible on purpose:
 /// autoscalers and `kubectl scale` write through the "/scale" subresource,
-/// which is exactly the rogue-scaling case the check must attribute (doc 123).
+/// which the check must attribute as scaling drift.
 pub fn foreign_owners(obj: &DynamicObject) -> Vec<ForeignOwner> {
     let Some(entries) = obj.metadata.managed_fields.as_deref() else {
         return Vec::new();
@@ -181,7 +181,7 @@ fn walk_paths(fields: &Value, prefix: String, out: &mut Vec<String>) {
         } else if let Some(idx) = key.strip_prefix("i:") {
             format!("[{idx}]")
         } else {
-            // "." — node-itself marker, not a child.
+            // "." marks the node itself rather than a child.
             continue;
         };
         has_children = true;

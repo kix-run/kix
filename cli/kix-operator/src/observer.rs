@@ -1,4 +1,4 @@
-//! Operator observer — maps DAG-streaming [`DeployEvent`]s to structured
+//! Map graph-streaming [`DeployEvent`]s to structured
 //! tracing output.
 //!
 //! Every terminal verdict, prune outcome, and lifecycle transition becomes a

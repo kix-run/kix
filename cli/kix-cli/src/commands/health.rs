@@ -1,4 +1,4 @@
-//! `kix health` — cluster-side integrity check via Merkle walk.
+//! Check cluster integrity by walking identity-hash dependencies.
 //!
 //! No nix build required. Finds the active Activation CR, fetches all
 //! kix-managed resources, builds an identity-hash index, and walks the
@@ -43,7 +43,7 @@ struct LiveResource {
 enum ResourceHealth {
     /// Reachable from activation root, all deps present.
     Healthy,
-    /// Import marker — external resource, not managed by kix.
+    /// Import marker for an external resource.
     External,
     /// Referenced in depends-on but not found in live resources.
     Missing { expected_by: String },
@@ -197,7 +197,7 @@ pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
             .map(|s| {
-                // Strip dependency type prefix (e.g. "requires:hash" → "hash")
+                // Strip an optional dependency type prefix.
                 s.rsplit_once(':')
                     .map(|(_, hash)| hash)
                     .unwrap_or(s)
@@ -253,21 +253,21 @@ pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
 }
 
 /// Check every resource's dependencies against the live index.
-/// No root needed — we check all resources and verify their deps exist.
+/// Checks all resources directly; no root is required.
 fn walk_graph(
     _activation: &ActiveActivation,
     live_by_hash: &HashMap<String, LiveResource>,
     verbose: u8,
 ) -> BTreeMap<String, ResourceHealth> {
     let mut health: BTreeMap<String, ResourceHealth> = BTreeMap::new();
-    let mut missing_hashes: BTreeMap<String, String> = BTreeMap::new(); // hash → expected_by
-    let mut reaped_hashes: BTreeMap<String, String> = BTreeMap::new(); // hash → expected_by
+    let mut missing_hashes: BTreeMap<String, String> = BTreeMap::new(); // hash to expected_by
+    let mut reaped_hashes: BTreeMap<String, String> = BTreeMap::new(); // hash to expected_by
 
     // Pre-pass: an absent dependency is only a fault if it was supposed to
     // still be there. Hook Jobs delete themselves on success (delete policy)
     // or are reaped by the TTL controller, so their absence is the success
     // path. The manifest is not on the cluster to ask, but the seal that
-    // minted the hash is in the local nix store — that is what
+    // minted the hash is in the local Nix store. That is what
     // `resolve_hash_to_rid` already reads to name missing resources.
     let reaped: std::collections::HashSet<String> = live_by_hash
         .values()
@@ -282,7 +282,7 @@ fn walk_graph(
 
     // First pass: check each resource's direct dependencies
     for (hash, resource) in live_by_hash {
-        // Import markers are external — skip dependency checking
+        // Import markers refer to external resources.
         if resource.is_import {
             health.insert(hash.clone(), ResourceHealth::External);
             continue;
@@ -396,7 +396,7 @@ fn walk_graph(
 ///     rendered from a chart: Helm's convention, kept so imported hooks read
 ///     the same way. Kix has no hook vocabulary of its own; a Job that
 ///     must run again is the rerun rule's business (`kix.run/rerun`).
-///   * a Job's `spec.ttlSecondsAfterFinished` — Kubernetes' TTL controller
+///   * a Job's `spec.ttlSecondsAfterFinished`: Kubernetes' TTL controller
 ///     deletes it some time after completion.
 fn declares_own_deletion(manifest: &serde_json::Value) -> bool {
     let annotations = manifest.pointer("/metadata/annotations");
@@ -721,7 +721,7 @@ fn display_results(packages: &[PackageHealth], verbose: u8, quiet: bool) {
 ///
 /// A hash names exactly one store path, so a directory scan for the
 /// `{hash}-` prefix is the whole lookup. Returns `None` when the store does
-/// not have it — e.g. health run from a machine that never built this
+/// not have it, for example when health runs on a machine that never built this
 /// activation, or after a `nix-collect-garbage`.
 fn store_path_for_hash(hash: &str) -> Option<std::path::PathBuf> {
     let prefix = format!("{}-", hash);
@@ -843,7 +843,7 @@ mod tests {
 
     #[test]
     fn before_hook_creation_alone_does_not() {
-        // Deleted before the NEXT run, not after this one — a job that is
+        // Deletion before the next run does not prove that this run succeeded; a job that is
         // absent now is still a job that never ran.
         assert!(!declares_own_deletion(&json!({
             "kind": "Job",

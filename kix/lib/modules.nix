@@ -1,8 +1,4 @@
-# lib/modules.nix — NixOS module options for kix cluster definitions.
-#
-# Provides the option declarations used by buildCluster's evalModules.
-# Each cluster is composed of modules that set these options.
-# See v2_discussions/20_module_system_design.md for design rationale.
+# NixOS module options consumed by buildCluster.
 
 { lib, ... }:
 {
@@ -245,14 +241,8 @@
       '';
     };
 
-    # --- Cluster target model (v2_discussions/127) ---
-    # The target description splits into:
-    #   cluster.roles         — binding modes for environment-owned roles
-    #   cluster.capabilities  — substrate axioms (facts below the compilation
-    #                           boundary; three-valued: null = unknown)
-    # Role-backed capability bools (cni, networkPolicyAPI, loadBalancer,
-    # persistentStorage, ...) are gone: the compiler derives role providers
-    # from `meta.roles` + platform imports (see eval/roles.nix).
+    # Target roles describe provider bindings; capabilities describe substrate
+    # facts, where null means unknown.
 
     cluster.provider = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
@@ -333,7 +323,6 @@
 
     cluster.capabilities = {
 
-      # --- Topology ---
 
       multiNode = lib.mkOption {
         type = lib.types.nullOr lib.types.bool;
@@ -371,7 +360,6 @@
         '';
       };
 
-      # --- Compute ---
 
       gpu = lib.mkOption {
         type = lib.types.nullOr lib.types.bool;
@@ -379,7 +367,6 @@
         description = "Whether GPU scheduling (nvidia.com/gpu) is available. null = unknown.";
       };
 
-      # --- Security ---
 
       privilegedContainers = lib.mkOption {
         type = lib.types.nullOr lib.types.bool;
@@ -419,11 +406,8 @@
       };
     };
 
-    # --- Maintenance-mode marker ---
-    # Operator-declared "the cluster is in a planned maintenance window" flag.
-    # No-op for now — surfaced through `cluster.out.maintenance` so future
-    # Alertmanager routing (silence non-actionable pages) and the operator
-    # UI can read it. See v2_discussions/105 §A6 / B7.
+    # Exposed through `cluster.out.maintenance` for consumers that suppress
+    # actions during a declared maintenance window.
 
     cluster.maintenance = lib.mkOption {
       type = lib.types.submodule {
@@ -517,10 +501,6 @@
       '';
     };
 
-    # --- Scorecard rule system ---
-    # Declarative policy framework with multi-level evaluation and
-    # configurable severity. See v2_discussions/60_scorecard_rules_design.md.
-
     scorecard = lib.mkOption {
       type = lib.types.submodule {
         options = {
@@ -600,7 +580,7 @@
     };
 
     # Each hook is a function `ctx -> result` or `{ priority ? 1000; fn; }`.
-    # Execution order is (priority ascending, then name) — declare a priority
+    # Execution order is priority ascending, then name. Declare a priority
     # instead of encoding order into hook names. Results are shape-checked;
     # unknown keys throw at the call site.
     hooks = {

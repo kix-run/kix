@@ -240,8 +240,8 @@ pub fn walk_nix_files(flake_path: &Path) -> Result<Vec<(String, u64)>, KixEvalEr
                     .modified()
                     .map_err(|e| KixEvalError::CacheError { source: e.into() })?
                     .duration_since(UNIX_EPOCH)
-                    // Safe: mtime before UNIX epoch (1970) is harmless — it just means the
-                    // fast-path won't match, forcing a content-hash recompute.
+                    // An mtime before the Unix epoch cannot match the fast path,
+                    // forcing a content-hash recompute.
                     .unwrap_or_default()
                     .as_secs();
                 results.push((rel, mtime));
@@ -253,7 +253,7 @@ pub fn walk_nix_files(flake_path: &Path) -> Result<Vec<(String, u64)>, KixEvalEr
     Ok(results)
 }
 
-/// Extension trait on `rusqlite::OptionalExtension` — re-export for internal use.
+/// Internal extension trait on `rusqlite::OptionalExtension`.
 trait OptionalExt<T> {
     fn optional(self) -> Result<Option<T>, rusqlite::Error>;
 }

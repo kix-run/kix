@@ -428,7 +428,7 @@ impl ClusterOps for KubeOps {
             dry_run: self.cfg.dry_run,
             ..Default::default()
         };
-        // An object that is already gone (TTL-reaped, deleted by hand,
+        // An object that is already gone (TTL-reaped, deleted externally,
         // or deleted by a concurrent run) is what we wanted anyway.
         let deleted = match api.delete(&rid.name, &dp).await {
             Ok(_) => true,

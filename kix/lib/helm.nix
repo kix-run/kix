@@ -1,29 +1,15 @@
-# Helm chart bridge — imports Helm charts as kix resources via IFD.
+# Import Helm charts as kix resources through IFD.
 #
-# Two tiers of usage:
-#
-#   Tier 1 (inline, zero friction):
+# Inline use:
 #     package = kix.helmChart { repo = "..."; name = "loki"; version = "..."; hash = "..."; };
 #
-#   Tier 2 (real package with full control):
+# Package use:
 #     build = { scope, ... }:
 #       let resources = scope.helm.importChart { chart = ...; scope = ...; };
 #       in resources.mkParts { root = resources.get "Deployment" "foo"; };
 #
-# `mkParts` auto-derives a public `out` surface for downstream consumers:
-#
-#   • `out.byKind.<Kind>.<name>` — flat lookup of every wrapped chart
-#     resource. Lets a consumer reach a non-root chart resource without
-#     the producer having to hand-roll `out` overrides.
-#
-#   • For workload roots (Deployment/StatefulSet/DaemonSet/Job) with
-#     exactly one Service that selects them, the Service's
-#     `out.{name, fqdn, selector, ports, url}` is promoted onto the
-#     package's rootOut so `pkg.out.fqdn` is the public Service FQDN
-#     rather than the workload's synthetic one. Skipped silently when
-#     0 or >1 Services match.
-#
-# See v2_discussions/87_helm_integration_v2.md for design rationale.
+# `mkParts` exposes every resource through `out.byKind`. For a workload root
+# selected by exactly one Service, it also promotes that Service's outputs.
 
 { pkgs, lib }:
 
@@ -213,17 +199,7 @@ rec {
           > $out
       '';
 
-  # ── importChartCrds — CRD-only chart templating ─────────────────────
-  #
-  # Render only the CRDs from a chart and wrap them as cluster-scoped
-  # kix resources. Use from a *native* kix package that wraps a charted
-  # upstream (cert-manager, velero, infisical-operator, arc, tailscale,
-  # openebs LVM/ZFS, kubevirt-extras, …) so the package automatically
-  # ships the chart's CRDs without re-authoring each one via
-  # `scope.crd.fromKind`.
-  #
-  # Returns a list of wrapped resources (cluster-scoped). Add them to
-  # `extraParts` / requires of your package's root.
+  # Render a chart's CRDs and wrap them as cluster-scoped resources.
   importChartCrds =
     {
       chart,
@@ -321,13 +297,8 @@ rec {
       // lib.optionalAttrs (extra != { }) { inherit extra; }
     );
 
-  # ── importChart — build-time resource import ──────────────────────────
-  #
-  # Runs `helm template` via IFD and returns a structured resource collection.
-  # Not a package. Not a package factory. A tool that packages use inside
-  # their `build` function.
-  #
-  # See v2_discussions/87_helm_integration_v2.md §Design.
+  # Run `helm template` through IFD and return a resource collection for use
+  # inside a package's `build` function.
   importChart =
     {
       chart, # from fetchHelmChart (or a local path)
@@ -339,11 +310,11 @@ rec {
       includeHooks ? true,
       extraFlags ? [ ],
 
-      # Annotation/label control
+      # Annotation and label control.
       strip ? { },
       preserveAnnotationPrefixes ? [ ],
 
-      # Pre-wrap resource patching (same as current patchResources)
+      # Applied to parsed resources before wrapping.
       patchResources ? lib.id,
 
       # Extra intra-chart dependency edges injected before wrapping.
@@ -361,17 +332,15 @@ rec {
       # The DI dep must also be declared in the build function args
       # so its Services appear in _netpolServiceRegistry.
       #
-      # Use this for context that auto-discovery (`deps`) misses —
-      # values nested inside `dep.out.byKind` or hand-built strings
+      # Use this for context that auto-discovery (`deps`) misses, including
+      # values nested inside `dep.out.byKind` or explicitly constructed strings
       # that don't appear at `dep.out.*`.
       networkDeps ? [ ],
 
       # Cross-package DI dependencies the chart's manifests reference.
       # Each entry is a dep package instance (the same value the build
-      # function receives as an arg). Phase 2: every context-carrying
-      # string at `dep.out.*` is auto-collected and merged into
-      # `networkDeps`, so manual `networkDeps = [ dep.out.fqdn ]`
-      # plumbing is unnecessary for the common case.
+      # function receives as an argument). Context-carrying strings at
+      # `dep.out.*` are merged into `networkDeps`.
       deps ? [ ],
     }:
     let
@@ -397,7 +366,7 @@ rec {
 
       # Auto-collect context-carrying string values from each DI dep's
       # top-level `out` attrs. Anything bearing Nix string context here
-      # is a candidate egress edge — a chart that interpolates the
+      # is a candidate egress edge. A chart that interpolates the
       # value (FQDN, name, host) into a manifest gives the netpol
       # generator a hook to discover the cross-package edge. Nested
       # values (e.g. `dep.out.byKind.Service.x.out.fqdn`) are NOT
@@ -490,7 +459,6 @@ rec {
           }
         );
 
-      # ── Helm template + parse + filter + wrap ────────────────────────
       templateDrv = helmTemplateDerivation {
         inherit
           chart
@@ -541,8 +509,6 @@ rec {
       # Apply user-provided patches to raw resources before wrapping.
       patchedResources = patchResources filteredResources;
 
-      # ── DAG reconstruction (from raw JSON, before wrapping) ────────
-      #
       # Infer edges between raw resources, then wrap each resource with
       # its inferred dependencies as `requires`. Uses Nix laziness:
       # wrappedResources references itself through indexByRawId, but
@@ -579,7 +545,7 @@ rec {
       rawEdges = inferredEdges ++ resolvedExtraEdges;
       rawDepsMap = helmDag.buildDepsMap rawEdges;
 
-      # Index: rawId → position in patchedResources list.
+      # Map each rawId to its position in patchedResources.
       indexByRawId = builtins.listToAttrs (
         lib.imap0 (i: raw: {
           name = helmDag.resourceId raw;
@@ -638,12 +604,10 @@ rec {
         acc // { ${key} = existing ++ [ edge.to ]; }
       ) { } wrappedEdges;
 
-      # ResourceIds that are targets of edges — reachable through the DAG,
+      # ResourceIds that are targets of edges are reachable through the DAG,
       # so root doesn't need to directly require them.
       depTargetIds = helmDag.dependedOnIds rawEdges;
 
-      # ── Resource collection ────────────────────────────────────────
-      #
       # Built recursively to support `replaceResource`: substituting a
       # chart resource with a kix-native one returns a new collection
       # with the swap applied to all lookups, mkParts, and DAG-aware
@@ -659,7 +623,7 @@ rec {
           effectiveResources =
             (builtins.filter (r: !(isReplaced r)) wrappedResources) ++ (builtins.attrValues replacements);
 
-          # Edges where neither endpoint has been replaced — chart-internal
+          # Edges where neither endpoint has been replaced form the chart-internal
           # DAG that the substitution preserves untouched. Edges touching a
           # replaced resource are dropped; the caller must wire the new
           # resource's `requires` themselves.
@@ -676,13 +640,10 @@ rec {
 
           effectiveDepTargetIds = lib.unique (map (e: "${e.to.kind}/${e.to.name}") effectiveEdges);
 
-          # ── Auto-derived CRD builders (Phase 3) ────────────────────
-          #
           # For every CustomResourceDefinition the chart ships, emit a
           # builder pair { cr, mkCR } so consumer packages can construct
-          # CRs without hand-rolling `scope.mkCRDRef`. The builder adds
-          # the CRD itself plus every chart workload to `requires`, so a
-          # consumer CR's wave is gated on:
+          # CRs from the chart's declarations. The builder adds the CRD and every
+          # chart workload to `requires`, so a consumer CR waits for:
           #   1. the CRD being Established, and
           #   2. every controller workload being Ready (any of them
           #      could be the admission/conversion webhook).
@@ -788,38 +749,29 @@ rec {
             }) effectiveResources
           );
 
-          # ── DAG ──────────────────────────────────────────────────────
-
           # Inferred internal dependencies for a wrapped resource.
-          # Returns [] for replacement resources — the caller is
+          # Returns [] for replacement resources; the caller is
           # responsible for setting the new resource's own `requires`.
           depsOf = resource: effectiveDepsMap.${resource.outPath} or [ ];
 
           # All link edges as { from, to, type } triples (wrapped resources).
           edges = effectiveEdges;
 
-          # ── CRD builders (Phase 3) ───────────────────────────────────
           # Auto-derived `{ cr, mkCR }` builder pair for every CRD the
           # chart ships, keyed by CR kind. See mkCrdBuilder above.
           crds = crdBuilders;
 
-          # ── Substitution ─────────────────────────────────────────────
-
           # Replace a chart resource with a kix-native one, returning a
-          # new collection. Use case: a chart ships an Ingress, but kix
-          # wants to decide per-cluster whether to materialize as
-          # Ingress, HTTPRoute, or nothing. Build the replacement up
-          # front (e.g. via `scope.expose.mk { ... }`) and substitute.
+          # new collection. Build the replacement first, then substitute it.
           #
-          # Caller responsibility — DAG edges INTO the original (other
-          # chart resources that depended on it) are dropped; the
+          # DAG edges into the original are dropped; the
           # replacement must declare its own `requires` if it needs to
           # wait for chart resources to come up. For leaf resources
           # (Ingress, ServiceMonitor, etc.) this is usually nothing.
           #
           # Edges OUT of the original (resources the original depended
           # on) are still in the chart DAG via `mkParts`'s
-          # `dagRootRequires` — the replacement doesn't have to thread
+          # `dagRootRequires`, so the replacement does not need to thread
           # them through.
           replaceResource =
             kind: name: newResource:
@@ -831,10 +783,8 @@ rec {
             else
               mkResourceCollection (replacements // { ${key} = newResource; });
 
-          # ── Root selection ────────────────────────────────────────────
-
-          # Auto-selected root (first Service → Deployment → StatefulSet →
-          # DaemonSet → first resource).
+          # Select the first Service, Deployment, StatefulSet, DaemonSet, or
+          # other resource, in that order.
           autoRoot =
             let
               services = builtins.filter (r: r.kind == "Service") effectiveResources;
@@ -855,61 +805,29 @@ rec {
             else
               throw "importChart: chart ${releaseName} produced no resources";
 
-          # ── Convenience ──────────────────────────────────────────────
-
           # Build a complete parts tree for simple charts.
-          #
-          # DAG-aware: root only directly requires resources that are NOT
-          # targets of intra-chart edges. Everything else is reachable
-          # through the DAG (each resource carries its own `requires`
-          # in kix.run/depends-on). This gives the same forward-closure
-          # behavior as native kix packages.
-          #
-          # Auto-derived `out` (Phase 1a):
-          #
-          #   • out.byKind.<Kind>.<name> = wrapped resource — always emitted,
-          #     gives downstream packages a stable lookup into the chart.
-          #     Example: `redis.out.byKind.Service.redis-master.out.fqdn`.
-          #
-          #   • When `root` is a workload (Deployment/StatefulSet/DaemonSet/
-          #     Job) and exactly one Service in the chart selects it, that
-          #     Service's `out.{name, fqdn, selector, ports, url}` are
-          #     promoted onto rootOut so consumers reading
-          #     `pkg.out.fqdn` get the Service FQDN, not the workload's
-          #     synthetic one. Skipped when 0 or >1 Services match (caller
-          #     should override via the `out` arg).
-          #
-          #   • When `root.kind == "Service"`, no promotion is needed —
-          #     k8s.mkResource already auto-derives the right outs on the
-          #     root itself. Only `byKind` is added.
-          #
-          #   • `out.crds.<Kind> = { cr, mkCR }` (Phase 3) — for every
-          #     CustomResourceDefinition the chart ships. Builders inject
-          #     the CRD plus all chart workloads as `requires` so a
-          #     consumer's CR waits for both the CRD's Establishment and
-          #     every controller workload's readiness.
-          #
-          # User-supplied `out = {...}` shallow-merges over auto-derived
-          # values (user wins on collisions).
+#
+          # The root directly requires DAG entry points; their dependencies
+          # remain reachable through each resource's `requires`.
+          # `out.byKind` contains every wrapped resource. A unique Service
+          # selecting a workload root contributes its public outputs. CRD
+          # builders appear under `out.crds`. Explicit `out` values win.
           mkParts =
             {
-              root, # the root resource (explicit — no heuristic)
+              root, # Explicit root resource.
               extraParts ? { }, # additional parts to merge (CRD refs, etc.)
               extraRequires ? [ ], # additional root.requires beyond chart resources
               out ? { }, # root.out overrides (DI builders, CRD refs, etc.)
             }:
             let
-              # Non-root resources that are NOT depended on by other
-              # chart resources. These are the DAG "entry points" that
-              # root must directly require — everything else is pulled
+              # Non-root resources that no other chart resource depends on.
+              # The root directly requires these DAG entry points; the rest follows
               # in transitively.
               dagRootRequires = builtins.filter (
                 r: r.outPath != root.outPath && !(builtins.elem "${r.kind}/${r.name}" effectiveDepTargetIds)
               ) effectiveResources;
 
               allRequires = dagRootRequires ++ extraRequires;
-
-              # ── Auto-derived out ──────────────────────────────────────
 
               # byKind.<Kind>.<name> = wrapped resource.
               byKindLookup = builtins.foldl' (
@@ -978,12 +896,10 @@ rec {
     in
     resourceCollection;
 
-  # ── helmChart — Tier 1 inline convenience ───────────────────────────
-  #
-  # For new users or quick one-offs. Inline in the cluster definition:
+  # Define a chart inline in the cluster definition:
   #   package = kix.helmChart { repo = "..."; name = "loki"; version = "..."; hash = "..."; };
   #
-  # Returns a package function with a `values` option. Uses autoRoot.
+  # Returns a package function with a `values` option and an automatic root.
   helmChart =
     {
       repo,
@@ -994,7 +910,7 @@ rec {
       includeCrds ? true,
       strip ? { },
       patchResources ? lib.id,
-      # Extra meta merged over the defaults — e.g. `metaExtra.unsafe =
+      # Extra meta merged over the defaults, e.g. `metaExtra.unsafe =
       # [ "raw-pvc" ]` for charts that render their own PVCs.
       metaExtra ? { },
     }:

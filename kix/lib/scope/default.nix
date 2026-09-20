@@ -64,7 +64,7 @@ rec {
 
       # Role satisfaction for validator gates: "provided" (managed provider
       # or environment binding), "absent" (declared vacant), "unknown"
-      # (axiom never declared). Lazy — findRoleProvider only peeks meta.
+      # (axiom never declared). This is lazy because findRoleProvider only peeks meta.
       roleStatus =
         role:
         let
@@ -87,7 +87,7 @@ rec {
           capabilities
           roleStatus
           ;
-        # Closed vocabulary — a typo'd grant throws here, at scope
+        # A typo in this closed vocabulary throws during scope
         # construction, naming the declaring instance.
         unsafeGrants = map (unsafe.assertKnownGrant "meta.unsafe of instance ${instanceName}") (
           peekedPackageMeta.unsafe or [ ]
@@ -147,7 +147,7 @@ rec {
         mkResource = scopeMkResource;
 
         # Internal: the hook emission facade (see builders.nix). Not part of
-        # the package-authoring surface — hooks receive it as ctx.emit.
+        # the package-authoring surface; hooks receive it as ctx.emit.
         _emit = emit;
 
         augmentEdge =

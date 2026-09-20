@@ -1,15 +1,15 @@
-# Flavor: Lithus — RKE2 + external Cilium + OpenEBS (LocalPV-ZFS + Mayastor).
+# Lithus flavor: RKE2, external Cilium, and OpenEBS.
 #
-# Decomposed per doc 127 §5 into:
+# Split into:
 #
 #   - Target preset (this module's `config`): rke2 axioms + Lithus role
 #     bindings. RKE2 here is configured with external Cilium instead of
-#     Canal (still environment-owned — kix does not deploy the CNI; the
+#     Canal. Kix does not deploy this environment-owned CNI; the
 #     cilium-external package only emits the CRD ref marker and claims the
 #     enforcer role, not cni).
 #   - Stock catalog (`availablePackages.lithus-storage`): the OpenEBS
-#     storage surface — StorageClasses, StorageProfiles, DiskPools,
-#     VolumeSnapshotClasses, the mayastor CSIDriver — as ONE package that
+#     storage surface as one package: StorageClasses, StorageProfiles,
+#     DiskPools, VolumeSnapshotClasses, and the Mayastor CSIDriver. It
 #     claims the `storageClasses` role and is instantiated only when the
 #     graph demands storage. A cluster with no PVC-bearing workload
 #     compiles on lithus without OpenEBS in the artifact.
@@ -171,7 +171,7 @@ let
     }
   ];
 
-  # CDI StorageProfiles — one per StorageClass that backs CDI-managed PVCs.
+  # One CDI StorageProfile per StorageClass used by CDI-managed PVCs.
   storageProfileNames = [
     "lbs1-pool1-2x"
     "openebs-hostpath"
@@ -212,7 +212,7 @@ let
 
   # Stock catalog package: the whole OpenEBS storage surface as one
   # instance. Claims the `storageClasses` role, so it is pulled in by
-  # auto-instantiation when the graph demands storage (weak role demand —
+  # auto-instantiation when the graph demands storage. A weak role demand
   # PVC-bearing packages take `storageClasses` as an optional dep) and
   # its out satisfies the role contract for consumers.
   lithusStorage = {

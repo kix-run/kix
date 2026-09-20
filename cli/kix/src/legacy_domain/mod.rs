@@ -267,7 +267,7 @@ fn upgrade_map(map: &mut Map<String, Value>, domains: &[&str]) {
 /// `writing` is what the patch actually sets. Only those keys are cleared.
 /// Clearing a retired key the patch is not replacing would leave the object
 /// with no value under either domain: on the skipped path, where nothing was
-/// applied and `applied-hash` is deliberately not rewritten, that would blind
+/// applied and `applied-hash` is not rewritten, that would blind
 /// drift detection on the resource for good, because an unchanged resource is
 /// never applied again.
 pub fn bookkeeping_null_outs(writing: &[&str]) -> Vec<String> {

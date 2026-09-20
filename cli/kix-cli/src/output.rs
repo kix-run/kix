@@ -107,7 +107,7 @@ pub trait CommandResponse {
 
 /// Render a CommandResponse based on the output format.
 ///
-/// `Markdown` is not a generic `CommandResponse` format — only specific commands
+/// `Markdown` is not a generic `CommandResponse` format. Only specific commands
 /// (currently `kix diff`) implement it. For other commands we fall back to
 /// `Text` so the flag remains a no-op rather than an error.
 pub fn render(response: &dyn CommandResponse, format: OutputFormat) -> miette::Result<String> {

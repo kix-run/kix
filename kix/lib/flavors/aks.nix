@@ -1,6 +1,6 @@
-# Flavor: AKS — Azure Kubernetes Service.
+# Azure Kubernetes Service flavor.
 #
-# Managed control plane. Azure CNI gives pods VNet IPs — the cni role is
+# Managed control plane. Azure CNI gives pods VNet IPs, and the cni role is
 # environment-owned (exclusive). Azure Load Balancer provides external IPs
 # automatically (shadowable). Azure Disk CSI with snapshot support
 # pre-installed. No ingress controller by default (AGIC and nginx are

@@ -6,7 +6,7 @@
 //! Also handles "import marker" PackageInstance resources whose readiness is
 //! defined as "the described external resource exists on the cluster AND passes
 //! the same per-kind readiness checks as managed resources". Used to gate waves
-//! on CRDs installed out-of-band by operators (e.g. stackgres `INSTALL_CRDS=true`)
+//! on CRDs installed by operators outside Kix (e.g. stackgres `INSTALL_CRDS=true`)
 //! and on platform-provided workloads (e.g. coredns Deployment).
 //! See [`ImportTarget`] and [`wait_for_import_target`].
 
@@ -36,7 +36,7 @@ const CRD_DISCOVERY_PROBE_INTERVAL: Duration = Duration::from_millis(300);
 /// Run a bounded discovery probe until the CRD's group/version/kind appears.
 /// Called after a freshly-applied CRD reports `Established=True`. Returns
 /// `true` if the kind was observed in discovery, `false` if the budget
-/// elapsed without it showing up (deploy still proceeds — the retry-on-miss
+/// elapsed without it showing up (deploy still proceeds; the retry-on-miss
 /// in the scheduler will absorb residual skew).
 async fn probe_crd_discovery(client: &Client, crd: &Value) -> bool {
     let Some(group) = crd.pointer("/spec/group").and_then(Value::as_str) else {
@@ -62,14 +62,14 @@ async fn probe_crd_discovery(client: &Client, crd: &Value) -> bool {
 }
 
 /// A resource described by an import marker. The CLI polls the cluster for
-/// this resource and blocks the wave until it's present and ready — using the
+/// this resource and blocks the wave until it's present and ready, using the
 /// same per-kind readiness checks as managed resources (e.g. for Deployments,
 /// waits for `readyReplicas == spec.replicas`). CRDs additionally require
 /// `Established=True`; Secrets with `expected_keys` verify every key in `data`.
 ///
 /// The marker lives in its own namespace and the described resource is
 /// expected in the same namespace (for namespaced kinds). Cross-namespace
-/// imports are not supported — use a dedicated adapter instance in the owning
+/// imports are not supported; use a dedicated adapter instance in the owning
 /// namespace and DI the resource handle instead.
 #[derive(Debug, Clone)]
 pub struct ImportTarget {
@@ -128,7 +128,7 @@ pub fn import_target_from_manifest(manifest: &Value) -> Option<ImportTarget> {
     };
 
     // Parse expected Secret keys (comma-separated, no spaces). Empty list is
-    // valid — it means "only check that the Secret exists".
+    // valid; it means "only check that the Secret exists".
     let expected_keys = annotations
         .get(keys::IMPORT_SECRET_KEYS)
         .and_then(Value::as_str)
@@ -156,10 +156,10 @@ pub fn import_target_from_manifest(manifest: &Value) -> Option<ImportTarget> {
 /// verification), or the timeout elapses.
 ///
 /// Unlike [`wait_for_ready`] this does not need the target kind to be in the
-/// CLI's discovery cache — for `CustomResourceDefinition` targets we construct
+/// CLI's discovery cache. For `CustomResourceDefinition` targets we construct
 /// the `ApiResource` directly from the well-known `apiextensions.k8s.io/v1`
 /// group, so we can wait for a CRD that doesn't exist yet at the start of the
-/// deploy (which is exactly the case for operator-installed CRDs).
+/// deploy, as happens with operator-installed CRDs.
 ///
 /// Scope is determined by the target kind: `CustomResourceDefinition` is
 /// cluster-scoped, everything else is namespaced and queried in
@@ -172,7 +172,7 @@ pub async fn wait_for_import_target(
     on_status: impl Fn(&str),
 ) -> Result<ReadinessResult, ReadinessError> {
     // Build an ApiResource for the target. CRDs are handled specially so we
-    // don't depend on discovery — the target may not be registered yet.
+    // do not depend on discovery because the target may not be registered yet.
     let (ar, scope) = if target.kind == "CustomResourceDefinition" {
         (
             ApiResource {
@@ -211,9 +211,9 @@ pub async fn wait_for_import_target(
     let api: Api<DynamicObject> = match scope {
         Scope::Namespaced => {
             // Namespaced imports must carry a namespace from the marker.
-            // This is a build-time invariant enforced by mkImportMarker — if
+            // mkImportMarker enforces this at build time. If
             // it's ever missing, the target is malformed and we bail rather
-            // than silently querying "default".
+            // rather than querying "default".
             let ns = target.namespace.as_deref().ok_or_else(|| {
                 ReadinessError::MalformedImportTarget(format!(
                     "namespaced import target {}/{} has no namespace (marker malformed)",
@@ -241,7 +241,7 @@ pub async fn wait_for_import_target(
                     }
                     "CRD present, waiting for Established=True".into()
                 } else if target.kind == "Secret" && !target.expected_keys.is_empty() {
-                    // Secret exists — verify every declared key is present in
+                    // The Secret exists. Verify every declared key is present in
                     // `data`. Missing keys are a hard failure, not a transient
                     // state: if kix deploy got here the owning reconciler
                     // (ESO/Vault/etc.) already considers the secret populated,
@@ -265,14 +265,12 @@ pub async fn wait_for_import_target(
                     }
                 } else if target.kind == "Service" {
                     // Service imports must wait for at least one ready
-                    // endpoint, not just object existence. Operators (e.g.
-                    // StackGres) create the Service before the backing
-                    // StatefulSet pods are ready, so existence alone races
-                    // the workload boot sequence.
+                    // endpoint rather than object existence. A controller may
+                    // create the Service before its backing pods are ready.
                     //
                     // Edge cases to revisit:
                     //   - ExternalName Services have no selector / no
-                    //     endpoints — they'd time out here. If we ever
+                    //     endpoints; they would time out here. If we ever
                     //     import an ExternalName, add a type check.
                     //   - Headless Services (clusterIP: None) populate
                     //     Endpoints the same way, so this works.
@@ -300,7 +298,7 @@ pub async fn wait_for_import_target(
             Ok(None) => "not found yet".into(),
             Err(e) if classify(&e) == FailureClass::NotFound => "not found yet".into(),
             Err(e) => {
-                // Network errors / transient failures — keep polling until
+                // Keep polling through network and other transient failures until
                 // timeout rather than failing immediately.
                 tracing::debug!(
                     target.kind = %target.kind,
@@ -336,7 +334,7 @@ pub async fn wait_for_import_target(
 ///
 /// We use the legacy Endpoints API (v1) rather than EndpointSlice because:
 ///   1. It's always available (EndpointSlice requires discovery.k8s.io/v1).
-///   2. A single GET returns all addresses — no label-selector list needed.
+///   2. A single GET returns all addresses without a label-selector list.
 ///   3. The Endpoints object shares the Service's name, so the lookup is trivial.
 async fn check_service_has_ready_endpoints(
     client: &Client,
@@ -355,7 +353,7 @@ async fn check_service_has_ready_endpoints(
         Some(ep) => {
             // subsets[].addresses[] contains ready endpoints.
             // subsets[].notReadyAddresses[] contains not-yet-ready endpoints.
-            // We need at least one entry in addresses.
+            // At least one address must be ready.
             let has_ready = ep
                 .data
                 .pointer("/subsets")
@@ -375,7 +373,7 @@ async fn check_service_has_ready_endpoints(
 }
 
 /// Return the subset of `expected` not present in the live Secret's `data`
-/// field. Only key presence is checked — values may be empty strings.
+/// field. Only key presence is checked; values may be empty strings.
 fn check_secret_keys(secret: &Value, expected: &[String]) -> Vec<String> {
     let Some(data) = secret.pointer("/data").and_then(Value::as_object) else {
         // No `data` at all → every expected key is missing.
@@ -659,7 +657,7 @@ pub fn classify_pod_terminal(pod: &Value) -> Option<(TerminalReason, String)> {
 
             // Also detect containers currently in a terminated state with a
             // non-zero exit code and enough restarts. This catches Job pods
-            // between restart attempts — the container shows terminated/Error
+            // between restart attempts; the container shows terminated/Error
             // rather than waiting/CrashLoopBackOff.
             let terminated_exit = cs
                 .pointer("/state/terminated/exitCode")
@@ -852,8 +850,8 @@ async fn current_revision_selector(
     }
 }
 
-/// List pods matching a workload's label selector. Best-effort — returns an
-/// empty Vec on API errors so the terminal classifier can keep running off
+/// List pods matching a workload's label selector. Returns an empty Vec on API
+/// errors so the terminal classifier can keep running from
 /// workload-level signals alone.
 async fn list_pods_for_workload(
     client: &Client,
@@ -1008,7 +1006,7 @@ async fn scan_terminal(client: &Client, obj: &Value, kind: &str, namespace: &str
 /// full idle budget do we declare a no-progress timeout.
 ///
 /// Includes the readiness message (which already encodes the per-kind
-/// counters), `observedGeneration`, and aggregated pod state — phase
+/// counters), `observedGeneration`, and aggregated pod state: phase
 /// counts, total restart count, and the set of distinct waiting reasons.
 /// Excludes timestamps and other always-bumping fields so a reconcile
 /// loop on the controller side doesn't register as forward progress on
@@ -1050,7 +1048,7 @@ fn progress_fingerprint(obj: &DynamicObject, kind: &str, pods: &[Value]) -> Stri
                             waiting_reasons.insert(r);
                         }
                         // Also fold the running/terminated transition into
-                        // the fingerprint via the discriminant — going from
+                        // the fingerprint via the discriminant. Going from
                         // waiting → running is forward progress even if no
                         // counter on the workload moved yet.
                         if cs.pointer("/state/running").is_some() {
@@ -1075,7 +1073,7 @@ fn progress_fingerprint(obj: &DynamicObject, kind: &str, pods: &[Value]) -> Stri
 /// Absolute upper bound on how long any single resource may take to become
 /// Ready. Catches pathological "fingerprint flickers forever but never
 /// reaches Ready" cases. Enforced regardless of the per-resource idle
-/// budget — even an actively-progressing rollout has to finish in this
+/// budget; even an actively progressing rollout has to finish in this
 /// time or we declare it stuck.
 const HARD_CEILING: Duration = Duration::from_secs(5 * 60);
 
@@ -1087,8 +1085,8 @@ const HARD_CEILING: Duration = Duration::from_secs(5 * 60);
 ///   wait without observing *any* progress in the resource's status. The
 ///   "progress fingerprint" combines the readiness message, observedGeneration,
 ///   and pod-level state (phases, restart counts, waiting reasons). Whenever
-///   the fingerprint changes between polls we reset this timer — so a slow
-///   but actively rolling Deployment never trips it.
+///   the fingerprint changes between polls, we reset this timer so a slow
+///   but actively rolling Deployment does not trip it.
 /// * **Hard ceiling** (`HARD_CEILING`, currently 5 minutes): an absolute
 ///   upper bound regardless of progress. Catches pathological resources
 ///   whose fingerprint flickers forever but never reaches Ready.
@@ -1137,14 +1135,9 @@ pub async fn wait_for_ready(
         }
         let obj = match api.get(name).await {
             Ok(obj) => obj,
-            // A Job with a short `ttlSecondsAfterFinished` is deleted by the
-            // apiserver the moment it completes, so the poll after that one
-            // gets a 404. The TTL controller only ever removes a Job that has
-            // finished, and this Job was applied by the deploy that is now
-            // waiting on it, so gone means done. Reporting the 404 as a fetch
-            // failure instead cancelled every successor: on one cluster a
-            // `ttlSecondsAfterFinished: 0` admission Job took out
-            // ingress-nginx, its Ingress and the Activation behind it.
+            // The TTL controller deletes only finished Jobs. If a Job applied
+            // by this deploy disappears while readiness is polling it, treat
+            // the deletion as successful completion.
             Err(e) if kind == "Job" && classify(&e) == FailureClass::NotFound => {
                 on_status("Job finished and was removed by its ttlSecondsAfterFinished");
                 return Ok(ReadinessResult::Ready);
@@ -1172,9 +1165,8 @@ pub async fn wait_for_ready(
             }
         }
 
-        // Terminal-failure scan runs BEFORE readiness so that a failed Job
-        // (or any other terminal signal) is not masked by a partial success
-        // (e.g. status.succeeded >= 1 while the Job also has a Failed condition).
+        // Check terminal failures before readiness so partial success does not
+        // hide a Failed condition.
         let ns_for_pods = namespace.unwrap_or("default");
         let scan = scan_terminal(client, &obj.data, kind, ns_for_pods).await;
         if let Some((reason, detail)) = scan.terminal {
@@ -1268,19 +1260,12 @@ struct DeclaredReadiness {
     equals: String,
 }
 
-/// Parse the `kix.run/readiness` annotation, if present and well-formed.
-/// Malformed declarations are ignored (fall through to kind-based checks)
-/// rather than treated as never-ready: the annotation is kix-authored, and a
-/// shape mismatch means a version skew between the CLI and the library, not
-/// an unhealthy resource.
+/// Parse a well-formed `kix.run/readiness` annotation.
 ///
-/// Be honest about what the fallthrough means for a CR with NO annotation
-/// (manifests built by a pre-declaration library): check_generic_ready
-/// treats a status-less CR as READY, so a freshly-created CR races its
-/// operator instead of waiting — strictly worse than a timeout. The
-/// information simply isn't in old manifests; rebuild them with a library
-/// that stamps the annotation. (Old CLI + new manifests is safe: the
-/// annotation is inert there.)
+/// Ignore malformed annotations and use kind-based readiness. This supports
+/// manifests produced by a different library version. A custom resource with
+/// no recognized readiness rule follows `check_generic_ready`, which treats an
+/// empty status as ready. Rebuild older manifests to add declared readiness.
 fn declared_readiness(obj: &DynamicObject) -> Option<DeclaredReadiness> {
     let raw = keys::get_meta(obj.metadata.annotations.as_ref()?, keys::READINESS)?;
     let v: Value = serde_json::from_str(raw).ok()?;
@@ -1298,15 +1283,9 @@ pub fn check_readiness(obj: &DynamicObject, kind: &str) -> bool {
         return true;
     }
 
-    // A CRD-owning package can declare its kinds' readiness convention on
-    // the CRD builder (readiness = { path; equals; }); kix stamps it on
-    // every CR built through the typed chain as the `kix.run/readiness`
-    // annotation. Honoring it here keeps controller vocabulary out of the
-    // CLI: the VictoriaMetrics operator's status.updateStatus ==
-    // "operational" convention (15 kinds) used to be a hardcoded list in
-    // this match. The SGCluster / Gateway arms below predate the
-    // annotation and are candidates to migrate when their packages gain
-    // typed CRD builders.
+    // Prefer readiness declared by the CRD-owning package. The remaining
+    // kind-specific arms cover resources whose packages do not yet stamp the
+    // readiness annotation.
     if let Some(rule) = declared_readiness(obj) {
         return obj
             .data
@@ -1324,13 +1303,8 @@ pub fn check_readiness(obj: &DynamicObject, kind: &str) -> bool {
         "CiliumNetworkPolicy" | "CiliumClusterwideNetworkPolicy" => {
             has_condition(&obj.data, "Valid", "True")
         }
-        // StackGres clusters never surface a Ready/Available condition;
-        // they report Bootstrapped=True once the primary is initialized
-        // and accepting connections — which is exactly what dependents
-        // (stackgres-database bootstrap jobs) need. Without this they fall
-        // through to check_generic_ready, which waits forever for a
-        // Ready/Available=True that never comes, times out, and cancels
-        // everything downstream (e.g. the whole immich stack).
+        // StackGres reports Bootstrapped=True when the primary accepts
+        // connections; it does not publish Ready or Available conditions.
         "SGCluster" | "SGShardedCluster" => has_condition(&obj.data, "Bootstrapped", "True"),
         // Gateway API kinds use their own condition vocabulary, not
         // Ready/Available: a GatewayClass is usable once Accepted=True, a
@@ -1345,11 +1319,9 @@ pub fn check_readiness(obj: &DynamicObject, kind: &str) -> bool {
 /// Deployment/StatefulSet: readyReplicas == spec.replicas && updatedReplicas == spec.replicas
 /// && observedGeneration >= generation
 fn check_deployment_ready(generation: Option<i64>, data: &Value) -> bool {
-    // `generation` comes from the TYPED ObjectMeta: kube-rs's DynamicObject
-    // consumes the `metadata` key into its named field, so
-    // data.pointer("/metadata/...") is ALWAYS None on live objects — the
-    // original guard read it from there and was dead code in production
-    // (first-poll readiness on a stale previous-generation status).
+    // kube-rs stores generation in DynamicObject.metadata, outside data.
+    // Compare observedGeneration with this typed metadata field to reject
+    // readiness left over from the previous generation.
     let generation = generation.unwrap_or(0);
     let observed = data
         .pointer("/status/observedGeneration")
@@ -1386,7 +1358,7 @@ fn check_deployment_ready(generation: Option<i64>, data: &Value) -> bool {
 /// after the deploy. The observedGeneration guard is what keeps an
 /// unobserved, status-less object from passing on the first poll.
 fn check_daemonset_ready(generation: Option<i64>, data: &Value) -> bool {
-    // Typed-metadata generation — see check_deployment_ready.
+    // Read generation from typed metadata; see check_deployment_ready.
     let generation = generation.unwrap_or(0);
     let observed = data
         .pointer("/status/observedGeneration")
@@ -1471,7 +1443,7 @@ fn check_generic_ready(data: &Value) -> bool {
         });
         return has_ready;
     }
-    // No conditions at all — treat as immediate
+    // Treat a resource with no conditions as ready.
     true
 }
 
@@ -1492,10 +1464,8 @@ fn has_condition(data: &Value, condition_type: &str, expected_status: &str) -> b
 fn readiness_message(obj: &DynamicObject, kind: &str) -> String {
     let name = obj.metadata.name.as_deref().unwrap_or("unknown");
     if let Some(rule) = declared_readiness(obj) {
-        // Render the truth about what sits at the path: a present but
-        // non-string value silently never matches (comparison is string
-        // equality), and calling it "<absent>" sent operators hunting for
-        // a field that exists.
+        // Distinguish an absent path from a non-string value because declared
+        // readiness compares strings only.
         let current = match obj.data.pointer(&rule.path) {
             None => "<absent>".to_string(),
             Some(Value::String(v)) => format!("\"{v}\""),
@@ -1573,12 +1543,8 @@ fn readiness_message(obj: &DynamicObject, kind: &str) -> String {
             format!("{kind}/{name}: {reason}")
         }
         _ => {
-            // For a generic CR the usual stall is a condition-vocabulary
-            // mismatch: the controller stamps conditions, but none named
-            // Ready/Available (stage1's VMServiceScrape stamped only
-            // "<consumer>/Applied" and timed out silently). Name what we
-            // saw so the fix — a kind-specific rule in check_readiness —
-            // is obvious from the failure message alone.
+            // Show condition types when a generic custom resource has neither
+            // Ready nor Available, so the missing readiness convention is visible.
             let seen: Vec<String> = obj
                 .data
                 .pointer("/status/conditions")
@@ -1631,11 +1597,7 @@ mod tests {
         }
     }
 
-    /// Like make_obj but with metadata.generation set on the TYPED
-    /// ObjectMeta — the shape live objects actually have. Stuffing a
-    /// "metadata" key inside `data` tests a shape the apiserver never
-    /// produces (kube-rs consumes it into the named field) and is how the
-    /// dead generation guard stayed green for so long.
+    /// Build the live-object shape with generation in the typed ObjectMeta.
     fn make_obj_gen(generation: i64, data: Value) -> DynamicObject {
         DynamicObject {
             metadata: ObjectMeta {
@@ -1720,9 +1682,8 @@ mod tests {
 
     #[test]
     fn malformed_annotation_falls_through_to_kind_rules() {
-        // Deliberate design: version skew is not unhealthiness. A CR whose
-        // annotation is garbage falls to check_generic_ready — which treats
-        // an empty status as READY (documented on declared_readiness).
+        // Malformed annotations fall through for version compatibility. The CR
+        // then uses check_generic_ready, which treats an empty status as ready.
         let no_status = make_annotated_obj("not json", json!({}));
         assert!(check_readiness(&no_status, "VMCluster"));
 
@@ -1984,7 +1945,7 @@ mod tests {
         assert_eq!(target.kind, "CustomResourceDefinition");
         assert_eq!(target.api_version, "apiextensions.k8s.io/v1");
         assert_eq!(target.name, "sgclusters.stackgres.io");
-        // CRDs are cluster-scoped — namespace is always None regardless of
+        // CRDs are cluster-scoped; namespace is always None regardless of
         // the marker's own metadata.namespace.
         assert_eq!(target.namespace, None);
         assert!(target.expected_keys.is_empty());

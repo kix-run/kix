@@ -46,6 +46,59 @@ Two rules the skill enforces and you should honor outside it too:
 - **Keep discussion docs short.** When a topic needs a new take, don't extend the old doc — start a fresh one, carry forward only the undiscussed/still-important parts, and archive the old. Target ~400 lines per doc. Future / non-blocking ideas go to `v2_discussions/interesting_thoughts/`, never the active folder.
 - **Archive on ship.** When a feature that traces back to a v2_discussions doc lands, re-invoke the skill in the same session: split shipped content from still-open questions (lift to `ROADMAP.md § Open design questions` or `interesting_thoughts/`), move the doc to `archive/`, update the README.
 
+## Code comments
+
+Write comments for a maintainer reading the current code without the chat or
+PR. Apply `CLAUDE.prose.md` to comments and docstrings too.
+
+- **Add information the code cannot readily convey.** Explain a constraint,
+  invariant, external quirk, unit, ordering requirement, or reason for a
+  surprising choice. Delete comments that only narrate the next statement.
+  Prefer clearer names or smaller functions when they remove the need for an
+  explanation.
+- **Describe the current contract.** Keep bug histories, abandoned designs,
+  implementation plans, and accounts of what this patch fixed in commits or
+  discussion docs. Keep compatibility history only when it explains behavior
+  that still exists. A regression-test comment should name the triggering
+  condition and expected result.
+- **State the fact and its consequence directly.** Avoid punchlines, rhetorical
+  questions, metaphors, personification, and appeals to honesty or correctness.
+  Do not praise the implementation or defend it against an imagined reviewer.
+  Words such as "deliberately" and "by design" do not explain a reason.
+- **Use exact names and ordinary sentences.** Name the field, function, or
+  resource involved. Use established technical terms where needed; do not
+  invent shorthand that makes the reader decode a second vocabulary.
+- **Keep comments local and proportionate.** Usually one to three sentences
+  suffice for an inline comment. Put shared explanations at the owning API or
+  module, not at every caller. A module header should state its responsibility
+  and essential constraints, not retell its development. Use plain section
+  labels when they help navigation; avoid decorative banners.
+- **Preserve necessary technical detail.** Public API docs, safety invariants,
+  subtle algorithms, and compatibility workarounds may need longer explanations
+  or examples. Document inputs, outputs, errors, and side effects where callers
+  need them. Keep the reason a tempting simplification would break the code.
+  Link to deeper design material without making it necessary to understand the
+  local constraint.
+- **Verify claims against the code or a reproducer.** Scope "always", "never",
+  "safe", and "only" to the conditions actually enforced. Do not invent a
+  failure mode to justify a change. Distinguish intended behavior from a
+  guarantee, and update or remove nearby comments when behavior changes.
+
+Examples of the desired level of detail:
+
+```nix
+# Helm may emit `volumes: null`; Nix's `or` handles missing attributes only.
+safeList = v: if builtins.isList v then v else [ ];
+
+# A null digest means the image reference has not been resolved.
+digest ? null,
+```
+
+Before finishing, read the comments you added or touched. Remove repetition,
+patch narration, and unsupported claims. Preserve the facts a maintainer needs
+to change the code safely. Do not reword unrelated comments as part of a code
+change unless a comment cleanup was requested.
+
 ## Copywriting / positioning
 
 When editing homepage, README, pitch, or positioning copy, preserve strong
@@ -64,7 +117,8 @@ For Kix public copy:
 - Avoid sentence-ending "with confidence"; prefer "know what will happen before
   they change Kubernetes."
 
-Before writing ANY prose (copy, docs, blog posts), read `CLAUDE.prose.md` for
+Before writing ANY prose (including code comments and docstrings), read
+`CLAUDE.prose.md` for
 Adam's accumulated writing corrections (no em dashes, banned words, AI-tell
 constructions, messaging constraints). Add to it when he corrects style.
 

@@ -1,26 +1,12 @@
-# Built-in scorecard rules: Architecture / Dependency-Injection hygiene
+# Built-in scorecard rules for architecture and dependency injection.
 #
-# These rules catch "code smells" where a package hand-wires something that
-# should be a declared edge in the graph: annotations that configure an
-# operator the package doesn't link against, Service selectors detached from
-# their workload, cluster-internal FQDNs with no store-path context.
-#
-# The old `capabilityOwnership` fingerprint rule (resource-content patterns +
-# `kix.run/capability` provenance stamps) was decomposed in
-# v2_discussions/128 into:
-#
-#   - an eval-time *error* on raw PersistentVolumeClaims with a
-#     `meta.unsafe = [ "raw-pvc" ]` escape (scope/validators.nix
-#     checkRawPvc; the closed grant vocabulary lives in kix/lib/unsafe.nix)
-#     — audited here by `unsafeGrants`;
-#   - the `annotationDomainOwnership` lint below, driven by declared
-#     `meta.annotationDomains` + DI edges instead of string fingerprints.
+# These rules find operator annotations without matching dependencies, Service
+# selectors detached from workloads, internal Service names without dependency
+# context, and uses of declared unsafe grants.
 
 { lib }:
 
 let
-  # Kix's own annotation keys and API names, spelled once in
-  # core/annotations.nix.
   kixAnnotations = import ../core/annotations.nix;
   kixKeys = kixAnnotations.keys;
   unsafe = import ../unsafe.nix { inherit lib; };
@@ -85,19 +71,9 @@ let
 
 in
 {
-  # v2_discussions/128 mechanism 2: every domain-shaped annotation prefix
-  # needs a declarer — the reserved set above, a package in the cluster
-  # declaring `meta.annotationDomains` (then a DI dep edge on it too), or the
-  # operator's `scorecard.knownAnnotationDomains` list. Two warnings fall
-  # out: "declared domain, missing dep edge" (you are writing config for an
-  # operator you don't link against) and "unknown domain" (the annotation is
-  # dead — you likely forgot to link the operator).
-  #
-  # v1 scans resource-level `metadata.annotations` keys only: no labels, no
-  # pod-template annotations, no container-arg scanning. The old arg-string
-  # scan caught runtime `kubectl annotate` Jobs; that loss is accepted —
-  # that pattern's real smell is "package runs kubectl against foreign
-  # resources", not its domain string.
+  # A domain-qualified annotation must use a reserved or configured domain, or
+  # a domain declared by a dependency. Inspect resource metadata annotations;
+  # pod-template annotations, labels, and container arguments are out of scope.
   annotationDomainOwnership = {
     description = "Annotations under an operator-managed domain require a DI dep on the declaring package";
     level = "package";
@@ -219,10 +195,8 @@ in
       ) (builtins.attrNames externalNames);
   };
 
-  # The `#![allow]` audit (v2_discussions/128 mechanism 1): every
-  # `meta.unsafe` grant in the cluster is listed so an escape from a
-  # structural rule is visible in review — info severity, it is not a
-  # warning to dismiss but a fact to see.
+  # Report each meta.unsafe grant at info severity so exceptions remain visible
+  # in the scorecard without producing a warning.
   unsafeGrants = {
     description = "Audit: packages holding unsafe grants (meta.unsafe)";
     level = "package";
@@ -240,30 +214,16 @@ in
       }) (meta.unsafe or [ ]);
   };
 
-  # kixpkgs#46, producer side: two same-kind resources in one instance with
-  # indistinguishable labels cannot be told apart by ANY label-selecting
-  # consumer — present or future. This fires on the ambiguity itself, not
-  # on a consumer tripping over it (monitorSelectorMatchesService covers
-  # that, including cross-instance), so a package is forced to give each
-  # Service its own identity the moment it grows a second one.
+  # Same-kind resources selected by labels must be distinguishable when a
+  # consumer uses either resource's full label set.
   #
   # "Indistinguishable" is subset-or-equal, both directions: label matching
   # means "has at least these labels", so if A's labels are a subset of
   # B's, a selector built from A's full label set still matches B. Each
   # resource must carry at least one (key, value) the other lacks.
   #
-  # Kinds checked: only those discovered BY label selector in practice.
-  # Extending to every kind would error on harmless twins (two ConfigMaps
-  # in one instance are label-identical everywhere and selected by name).
-  # The producer-side twin of distinctSameKindLabels, one level down: not
-  # "two Services cannot be told apart" but "two workloads' POD SETS cannot
-  # be told apart". `kix deploy` judged velero's server Deployment from a
-  # node-agent pod, because the Deployment selected on the instance labels
-  # alone and the DaemonSet's pod template carried those plus its own name.
-  # Every label-selecting consumer downstream inherits the ambiguity:
-  # readiness, Services, PodDisruptionBudgets and network policy. The only
-  # sign anything was wrong was that velero's Service had already worked
-  # around it by adding a label to its own selector.
+  # Check kinds commonly discovered by label. Name-selected resources such as
+  # ConfigMaps may share labels without ambiguity.
   distinctWorkloadSelectors = {
     description = "One workload's selector must not also match another workload's pods";
     level = "package";
@@ -281,8 +241,8 @@ in
           "DaemonSet"
           "Job"
         ];
-        # A CronJob has no selector of its own, so it can be claimed but
-        # never claims. Its pods are still someone else's to steal.
+        # CronJob pods can match another workload's selector, but a CronJob has
+        # no selector with which to claim other pods.
         targetKinds = selectorKinds ++ [ "CronJob" ];
         podLabels =
           r:
@@ -408,14 +368,9 @@ in
           a: b:
           (a.metadata.name or null) == (b.metadata.name or null)
           && (a.metadata.namespace or null) == (b.metadata.namespace or null);
-        # The first sentence of the finding states the exact relationship,
-        # because the reader's fix differs slightly: identical label sets
-        # mean neither can be picked out; a one-way subset means the
-        # smaller set can never be selected without also hitting the
-        # larger. Two resources with the same name are a different problem
-        # (a collision, not a label question) and get their own message
-        # below, since no label fix can make two same-named Services
-        # coexist (kixpkgs#71 item 14).
+        # Report equality and one-way subsets separately because they require
+        # different label changes. A same-name pair is an identity collision,
+        # which labels cannot resolve.
         relationship =
           a: b:
           let
@@ -477,27 +432,10 @@ in
       builtins.concatMap checkKind labelSelectedKinds;
   };
 
-  # v2_discussions/97 §6: cluster-internal FQDNs should originate from a
-  # ServiceRef/Service `out.*` value so store-path context carries netpol,
-  # DNS, and wave-ordering edges. Hand-rolled `"${name}.${ns}.svc"` strings
-  # build succeed, deploy succeeds, runtime fails obscurely.
-  #
-  # v1 bar is structural: "no context at all". A string whose context is
-  # non-empty is trusted — something in the graph carries the edge.
-  # Tightening to "context must resolve to a known ServiceRef marker" is
-  # a follow-up once we have cross-package registry access inside rules.
-  # Services whose selector is a literal `{ ... }` attrset (no store-path
-  # context on any value) are hand-wired to the workload's label set
-  # instead of derived from the workload itself. This is fragile: changing
-  # the workload's labels silently breaks routing.
-  #
-  # The fix is `kix.service.fromWorkload` (reads workload.out.selector,
-  # which carries the workload's own store-path context) or, in cycle
-  # cases, `workload.rawSelector` (raw attrset — user must then accept
-  # loss of the DAG edge, since context is absent). This rule fires on
-  # both the raw-attrset case AND the rawSelector case; the rawSelector
-  # form should only appear as an explicit workaround and is thus a
-  # reasonable warning surface.
+  # A Service selector should carry context from workload.out.selector so the
+  # dependency graph follows label changes. Literal selectors and rawSelector
+  # lack this context and trigger the warning. Use kix.service.fromWorkload for
+  # the normal case; rawSelector remains available to break evaluation cycles.
   selectorCoherence = {
     description = "Service selector should be sourced from a workload (kix.service.fromWorkload), not a literal attrset";
     level = "manifest";
@@ -526,34 +464,15 @@ in
         ];
   };
 
-  # The ServiceMonitor selector-mismatch class: three packages (grafana,
-  # node-exporter, kube-state-metrics) shipped monitors whose selector was
-  # built from the WORKLOAD's pod selector. ServiceMonitor/VMServiceScrape
-  # selectors match the target Service's METADATA LABELS, not its
-  # spec.selector — every target was dropped at relabeling and the jobs
-  # were silently absent from `up` (caught live on kind + stage1,
-  # 2026-08-31). This rule makes the class unshippable: a monitor whose
-  # selector matches no Service in its target namespaces is always a bug
-  # in kix-authored manifests.
+  # ServiceMonitor and VMServiceScrape selectors match Service metadata labels,
+  # not pod selectors. Require one matching Service with a compatible port.
   #
-  # Scoping: only monitors whose target namespaces are ALL kix-managed
-  # (have at least one ACTIVE kix instance) are checked — a monitor aimed
-  # at an unmanaged namespace may legitimately select Services kix cannot
-  # see. matchExpressions are not evaluated (skip, don't guess).
+  # Check only monitors whose target namespaces all contain active Kix
+  # instances. Skip matchExpressions and namespaces with incomplete visibility.
   #
-  # This predicate is a HEURISTIC, permanently: "namespace has an active
-  # kix instance" neither implies kix renders every Service there (rke2
-  # owns most of stage2's kube-system while kix supplies only coredns) nor
-  # covers namespaces kix renders Services into without an instance
-  # (prometheus-default-rules' bridge Services via forNamespace). The
-  # false-positive relief valves are the annotation below and severity
-  # overrides; the false-negative side is accepted.
-  #
-  # Escape hatch: a monitor that deliberately targets a Service kix does
-  # not render (created by an operator at runtime, e.g. prometheus-
-  # operator's kubelet Service) declares
-  # `annotations.${kixKeys.monitorsExternalService} = "true"` — the claim
-  # then rides the resource into the cluster, where it documents itself.
+  # Namespace ownership is an approximation because external controllers may
+  # create Services in managed namespaces. Set the monitorsExternalService
+  # annotation when a monitor intentionally targets such a Service.
   monitorSelectorMatchesService = {
     description = "ServiceMonitor/VMServiceScrape selectors must match exactly one scrapable Service's metadata labels";
     level = "cluster";
@@ -621,14 +540,9 @@ in
         subsetOf =
           needle: hay: builtins.all (k: (hay.${k} or null) == needle.${k}) (builtins.attrNames needle);
 
-        # prometheus-operator NamespaceSelector semantics (the VM operator
-        # mirrors them): `any = true` takes precedence and means ALL
-        # namespaces; a non-empty matchNames lists them; empty matchNames
-        # and the empty selector both mean the monitor's own namespace.
-        # `any = true` returns null as a sentinel — the target set includes
-        # namespaces kix cannot see, so the monitor is skipped per the
-        # scoping contract above (a false-negative surface, but the only
-        # honest answer: absence of a match is unprovable there).
+        # Implement prometheus-operator NamespaceSelector semantics, also used
+        # by the VM operator. Return null for any=true because Kix cannot prove
+        # matches across every namespace and must skip the check.
         targetNamespaces =
           mon:
           let
@@ -645,14 +559,8 @@ in
           else
             [ ];
 
-        # ── Over-match detection (the silent half of the bug class) ──────
-        # A selector matching MORE than one Service double-scrapes every
-        # pod behind both. But label-matching alone over-counts: a monitor
-        # also names the port it scrapes, and a matched Service without
-        # that port produces no targets. So a Service only counts if one
-        # of the monitor's endpoints can hit one of its ports. Comparison
-        # stays within the monitor's target kind (Services) — no
-        # cross-kind counting.
+        # Count a Service only when labels and at least one endpoint port match.
+        # This distinguishes an actual duplicate scrape from a label-only match.
         endpointHitsService =
           ep: svc:
           let
@@ -667,8 +575,7 @@ in
               p: (p.targetPort or p.port or null) == epTarget || (p.name or null) == epTarget
             ) svcPorts
           else
-            # No port named at all: prometheus-operator scrapes every
-            # endpoint port — any Service counts.
+            # Without an endpoint port filter, any matched Service qualifies.
             true;
 
         scrapesService =
@@ -713,12 +620,8 @@ in
               }
             ]
           else if scraped == [ ] then
-            # The labels match, the port does not: prometheus-operator keeps
-            # the Service and drops every endpoint at relabeling, so the job
-            # is just as absent from `up` as with no match at all. Harbor
-            # shipped this shape (selector on the redis Service, scrape port
-            # only on core/registry/jobservice/exporter) and passed silently
-            # before this branch existed (2026-09-18).
+            # Matching labels with no compatible endpoint port produces no
+            # scrape target.
             [
               {
                 namespace = mon.metadata.namespace or null;
@@ -762,12 +665,8 @@ in
       builtins.concatMap checkMonitor monitors;
   };
 
-  # Companion audit to monitorSelectorMatchesService's escape hatch: every
-  # `kix.run/monitors-external-service` claim is listed at info level, the
-  # same "never invisible in review" property the meta.unsafe vocabulary
-  # gets from unsafeGrants. A stale claim (the target Service later becomes
-  # kix-rendered) is otherwise undetectable — the escape silently disables
-  # checking forever.
+  # Report monitorsExternalService exemptions at info severity so reviewers
+  # can remove them if Kix later starts rendering the target Service.
   externalMonitorTargets = {
     description = "Audit: monitors claiming an external (non-kix-rendered) target Service";
     level = "manifest";

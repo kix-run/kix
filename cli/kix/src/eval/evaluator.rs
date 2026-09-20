@@ -163,18 +163,18 @@ impl KixEvaluator {
                 tracing::info!(cluster = cluster_name, elapsed = ?start.elapsed(), "cache hit");
                 return Ok(output);
             }
-            // Corrupted cache entry — fall through to re-evaluate
+            // Re-evaluate a corrupted cache entry.
             tracing::warn!(
                 cluster = cluster_name,
                 "corrupted cache entry, re-evaluating"
             );
         }
 
-        // Cache miss — evaluate
+        // Evaluate a cache miss.
         let output = self.backend.eval_cluster(&self.flake_path, cluster_name)?;
 
-        // Store result in cache. Failure is intentionally non-fatal: the evaluation
-        // succeeded and we have the result — a cache write failure (e.g. disk full, permissions)
+        // Cache writes are non-fatal because evaluation already succeeded. A
+        // write failure, such as a full disk or insufficient permissions,
         // just means the next invocation will re-evaluate instead of hitting cache.
         if let Ok(json) = serde_json::to_string(&output)
             && let Err(e) = self.cache.put(&cache_key, &json)

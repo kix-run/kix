@@ -227,11 +227,8 @@ rec {
             owner
             ;
         };
-        # `meta` is here so a manifest rule can honour an unsafe grant the
-        # package declares (kix/lib/unsafe.nix). Without it a package whose
-        # whole job breaks a rule — a CNI on the host network — has no way
-        # to say so, and the cluster has to downgrade the rule for everyone
-        # in its namespace.
+        # Include package metadata so a manifest rule can honor a scoped
+        # meta.unsafe grant without lowering severity for the namespace.
         ctx = {
           inherit
             resource
@@ -270,9 +267,8 @@ rec {
       ruleOverrides ? { },
       maxSeverity ? "error",
       owner ? null,
-      # v2_discussions/128: cluster-wide domain → declarer index, this
-      # instance's resolved dep identities ("ns/inst"), and operator-declared
-      # known domains — consumed by architecture.annotationDomainOwnership.
+      # Inputs for architecture.annotationDomainOwnership: domain declarers,
+      # dependency identities as "namespace/instance", and known domains.
       annotationDomainIndex ? { },
       resolvedDepTargets ? [ ],
       knownAnnotationDomains ? [ ],
@@ -412,11 +408,8 @@ rec {
           level = "cluster";
           finding = f;
           tags = rule.tags or [ ];
-          # Cluster rules may attach an identity to each finding (the
-          # offending resource lives SOMEWHERE even when the rule needs
-          # cluster-wide context to judge it) — without this, findings
-          # render with an empty location and same-named resources in
-          # different namespaces are indistinguishable.
+          # Preserve an optional resource identity on cluster-level findings
+          # so reports distinguish equal names in different namespaces.
           namespaceName = f.namespace or null;
           resourceName = f.resource or null;
         }

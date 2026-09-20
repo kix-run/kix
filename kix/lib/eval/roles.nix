@@ -1,20 +1,17 @@
-# The role registry — the compiler's closed vocabulary of infrastructure
-# roles (v2_discussions/127). A package claims a role with a single declared
-# line (`meta.roles = [ "cni" ]`); everything else derives from it: the role
+# The compiler's closed vocabulary of infrastructure roles. A package claims
+# a role through `meta.roles`; everything else derives from it: the role
 # name doubles as a DI alias, the provider index is built from peeked roles,
 # and binding-mode conflicts against environment-provided roles
 # (`cluster.roles.<name>.binding`) are refused at eval.
 #
 # The vocabulary is closed on purpose: the old `meta.provides` was
 # free-form, so a typo'd capability silently never matched. Adding a role
-# here requires a consumer (doc 119's demand test). `meta.provides` is gone.
-# Two sibling declared vocabularies (v2_discussions/128) are not roles:
-# `meta.unsafe` (closed, kix/lib/unsafe.nix — structural-rule escapes) and
-# `meta.annotationDomains` (open, eval/hooks.nix — operator-owned annotation
-# prefixes for the scorecard's domain-ownership lint).
+# here requires a consumer. `meta.unsafe` is the closed vocabulary for
+# structural-rule escapes, while `meta.annotationDomains` is the open
+# vocabulary for operator-owned annotation prefixes.
 #
 # Out-contracts are shallow (attribute presence on the provider's `out`).
-# They are enforced lazily on the findRoleProvider path — eager checking
+# They are enforced lazily on the findRoleProvider path because eager checking
 # would force provider instances out of fixpoint order. Deep contracts
 # (e.g. the 13-attr enforcer interface) stay with their consumer
 # (plugins/netpol/interface.nix).

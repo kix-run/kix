@@ -1,8 +1,8 @@
-# Flavor: ovh — OVHcloud Managed Kubernetes Service (MKS).
+# OVHcloud Managed Kubernetes Service flavor.
 #
 # Managed control plane. Node pools (multi-node capable). Default CNI is
 # Canal (Flannel for pod networking + Calico for NetworkPolicy enforcement)
-# — environment-owned, exclusive. Block storage via the OpenStack Cinder
+# is environment-owned and exclusive. Block storage uses the OpenStack Cinder
 # CSI driver (several `csi-cinder-*` StorageClasses; `csi-cinder-high-speed`
 # is the cluster default). OVH Load Balancer is available for Services of
 # type=LoadBalancer (a paid add-on).
@@ -10,7 +10,7 @@
 # Platform imports: DNS (coredns, bundled), storage (csi-cinder-high-speed).
 #
 # Note: this flavor describes what an OVH MKS cluster *provides*. A minimal
-# single-node deployment that deliberately avoids the paid LB / block storage
+# single-node deployment that avoids the paid load balancer and block storage
 # (e.g. hostPath volumes + NodePort + a Cloudflare tunnel) expresses those as
 # per-cluster overrides on top of this flavor, not here.
 

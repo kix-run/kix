@@ -1,9 +1,9 @@
-# Flavor: RKE2 — Rancher's next-generation Kubernetes distribution.
+# RKE2 flavor.
 #
 # Designed for security-conscious environments. Ships Canal (Flannel +
-# Calico NetworkPolicy enforcement) by default — the cni role is
+# Calico NetworkPolicy enforcement) by default. The cni role is
 # environment-owned (exclusive). CIS benchmark hardened out of the box.
-# No default StorageClass or LoadBalancer — those roles are vacant; install
+# No default StorageClass or LoadBalancer is provided; install
 # Longhorn, MetalLB, etc. (The lithus flavor extends this with RKE2
 # configured for external Cilium instead of Canal.)
 #

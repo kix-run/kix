@@ -1,14 +1,14 @@
 //! Real Nix FFI backend using nix-bindings-rust.
 //!
 //! Evaluates flake attributes directly via the Nix C API.
-//! No subprocess, no shell-out — pure FFI.
+//! Uses FFI without spawning a Nix subprocess.
 //!
 //! # Build requirements
 //!
 //! This module requires the Nix C libraries to be available via pkg-config.
 //! In development, `devenv shell` provides them automatically via `pkgs.nix.libs.*`.
 //! The nix-bindings-* crates are from the mainline `nixops4/nix-bindings-rust`
-//! repo (not the cachix fork) — the mainline has the flake API we need.
+//! repository because it provides the required flake API.
 //!
 //! # Key decisions
 //!
@@ -83,12 +83,12 @@ fn gc_register_current_thread() -> Result<()> {
 /// Real Nix FFI backend.
 ///
 /// Uses the `LockedFlake` API to participate in Nix's built-in eval cache
-/// (`~/.cache/nix/eval-cache-v*/`). This makes repeated evaluations fast —
+/// (`~/.cache/nix/eval-cache-v*/`). This makes repeated evaluations fast;
 /// attribute names and values are cached by Nix itself, unlike the previous
 /// `eval_from_string` + `builtins.getFlake` approach which bypassed the cache.
 ///
 /// SAFETY: This type wraps Nix C pointers that are not Send/Sync by default.
-/// We guarantee single-threaded access — all evaluation happens on one thread.
+/// All evaluation happens on one thread.
 /// The KixEvaluator wraps this behind a non-shared mutable reference.
 pub struct FfiNixBackend {
     eval_state: EvalState,
@@ -103,7 +103,7 @@ pub struct FfiNixBackend {
 /// Cached LockedFlake and its outputs Value for a specific flake path.
 struct CachedFlakeOutputs {
     flake_path: PathBuf,
-    /// The locked flake — kept alive so the outputs Value remains valid.
+    /// Kept alive so the outputs Value remains valid.
     _locked_flake: LockedFlake,
     /// The lazy outputs attrset from `locked_flake.outputs()`.
     outputs: nix_bindings_expr::value::Value,
@@ -111,10 +111,10 @@ struct CachedFlakeOutputs {
 
 // SAFETY: FfiNixBackend wraps Nix C pointers (via EvalState) that are not Send.
 // We guarantee single-threaded access through these invariants:
-// 1. KixEvaluator holds this as Box<dyn NixBackend> behind &mut self — no shared access.
+// 1. KixEvaluator holds this as Box<dyn NixBackend> behind &mut self, with no shared access.
 // 2. eval_cluster() and list_clusters() are the only entry points; both take &mut self.
-// 3. The NixBackend trait requires Send for boxing, but the evaluator is never moved
-//    across threads — it lives on the main thread for its entire lifetime.
+// 3. The NixBackend trait requires Send for boxing, but the evaluator remains
+//    on the main thread.
 unsafe impl Send for FfiNixBackend {}
 
 impl FfiNixBackend {
@@ -158,7 +158,7 @@ impl FfiNixBackend {
     /// Ensure the cached flake outputs are populated for the given flake path.
     ///
     /// Uses the `LockedFlake` API which participates in Nix's eval cache.
-    /// The outputs are lazy — only attributes that are actually accessed get evaluated.
+    /// Outputs are lazy; only accessed attributes are evaluated.
     fn ensure_flake_outputs(&mut self, flake_path: &Path) -> Result<(), KixEvalError> {
         // Already cached for this path?
         if let Some(ref cached) = self.cached_outputs {
@@ -387,7 +387,7 @@ impl NixBackend for FfiNixBackend {
                 }
             },
             Err(_) => {
-                // Attribute not present — no extra images declared.
+                // The attribute is optional.
                 None
             }
         };

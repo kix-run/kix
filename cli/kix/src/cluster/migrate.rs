@@ -1,33 +1,22 @@
 //! Stateful migration pair detection.
 //!
 //! When a deploy removes a stateful resource and adds a different stateful
-//! resource in the *same logical slot*, the pair represents a data migration
-//! the user needs to acknowledge (and, eventually, that kix will orchestrate).
-//!
-//! This module implements **Phase 1** of the RFC in
-//! `v2_discussions/67_stateful_migration_orchestration.md` — detection only.
-//! No execution, no mutation of the deploy flow yet. The output is surfaced
-//! by `kix diff` / `kix deploy` as a warning block.
+//! resource in the same logical slot, the pair represents a data migration
+//! the user needs to acknowledge. This module only detects and reports pairs;
+//! it does not execute the migration.
 //!
 //! # Logical slot identity
 //!
-//! A resource's logical slot is `kix.run/package-namespace` + `kix.run/package`
-//! — i.e., the (namespace, instance) pair from the cluster definition. Two
-//! different K8s resources in the same slot represent "the thing that fills
-//! dep slot X for namespace Y" across two closures. See doc 67 §2 "Same
-//! logical identity".
+//! A resource's logical slot is the pair of `kix.run/package-namespace` and
+//! `kix.run/package` annotations.
 //!
 //! A pair is flagged only when **both** sides are marked
 //! `kix.run/lifecycle = "stateful"`. L7 swaps, cache rebinds, and monitoring
 //! storage flips are suppressed because their packages declare
 //! `lifecycle = "ephemeral"` (or leave it unset).
 //!
-//! # What it does NOT do yet
-//!
-//! - No strategy selection (rsync vs pg_dump vs operator-managed).
-//! - No scale-down / copy-job / scale-up sequencing.
-//! - No pair removal from the `Apply`/`Orphan` action sets — detection is
-//!   read-only so current deploy behavior is unchanged while we iterate.
+//! Detection does not select a migration strategy, schedule migration steps,
+//! or remove resources from the Apply and Orphan action sets.
 
 use std::collections::HashMap;
 
@@ -36,14 +25,14 @@ use serde_json::Value;
 use crate::manifest::keys;
 use crate::manifest::types::ResourceId;
 
-/// The "stateful" lifecycle value — user data that requires migration.
+/// The lifecycle value for resources whose data requires migration.
 const LIFECYCLE_STATEFUL: &str = "stateful";
 
 /// A pairing of an about-to-be-removed stateful resource with an
 /// about-to-be-added replacement in the same logical slot.
 #[derive(Debug, Clone)]
 pub struct MigrationPair {
-    /// The logical slot (`namespace/instance`) — stable across closures.
+    /// The logical slot (`namespace/instance`), stable across closures.
     pub slot: String,
     /// Resource being removed from the cluster (source of data).
     pub source: ResourceId,
@@ -69,7 +58,7 @@ impl MigrationPair {
 }
 
 /// Pull `(ns, instance)` from stamped annotations. Returns `None` when the
-/// resource isn't owned by a package (cluster-scoped Namespaces, CRDs, …).
+/// resource is not owned by a package.
 fn slot_of(manifest: &Value) -> Option<String> {
     let anns = manifest.pointer("/metadata/annotations")?;
     let ns = anns.get(keys::PACKAGE_NAMESPACE).and_then(Value::as_str)?;
@@ -90,9 +79,8 @@ fn is_stateful(manifest: &Value) -> bool {
 }
 
 /// Derive a short "why did this change" reason by comparing source and target
-/// manifests. Today we look at PVC-relevant fields (storageClassName, size);
-/// unknown diffs fall back to a generic message. This is the same
-/// information humans need in the deploy prompt — see doc 67 §3.3.
+/// manifests. PVC storage class and size changes receive specific messages;
+/// other differences use a generic message.
 fn derive_reason(source: &Value, target: &Value) -> String {
     let src_kind = source
         .pointer("/kind")
@@ -145,17 +133,15 @@ fn derive_reason(source: &Value, target: &Value) -> String {
 /// Scans `old_manifests` for resources that:
 ///   1. are lifecycle=stateful,
 ///   2. have a `(namespace, instance)` slot,
-///   3. are NOT present in `new_manifests` under the same K8s identity
-///      (kind/ns/name) — i.e., they are being removed.
+///   3. are absent from `new_manifests` under the same Kubernetes identity.
 ///
 /// For each removed stateful resource, looks in `new_manifests` for an
-/// added stateful resource in the same slot that is also NOT present in
+/// added stateful resource in the same slot that is also absent from
 /// `old_manifests` under the same K8s identity. When found, emits a
 /// `MigrationPair`.
 ///
-/// This is intentionally independent of `detect_changes` so we can evolve
-/// the detector without destabilizing the apply path. Callers today use
-/// both outputs side-by-side.
+/// This detector is independent of `detect_changes`; callers combine their
+/// outputs.
 pub fn detect_migration_pairs(
     new_manifests: &[Value],
     old_manifests: &[Value],
@@ -178,7 +164,7 @@ pub fn detect_migration_pairs(
         })
         .collect();
 
-    // Bucket added stateful manifests by slot → list of (rid, manifest).
+    // Bucket added stateful manifests by slot.
     let mut added_by_slot: HashMap<String, Vec<(ResourceId, &Value)>> = HashMap::new();
     for manifest in new_manifests {
         if !is_stateful(manifest) {
@@ -187,7 +173,7 @@ pub fn detect_migration_pairs(
         let rid = ResourceId::from_value(manifest);
         let k8s_id = format!("{}/{}/{}", rid.kind, rid.namespace, rid.name);
         if old_by_k8s_id.contains_key(&k8s_id) {
-            // Same K8s identity already in old set → not a new resource,
+            // The same identity in the old set is a content change,
             // just a content change. Not a migration pair: the PVC is
             // being patched in place (e.g. a label edit) and data stays.
             continue;
@@ -210,21 +196,19 @@ pub fn detect_migration_pairs(
         let rid = ResourceId::from_value(manifest);
         let k8s_id = format!("{}/{}/{}", rid.kind, rid.namespace, rid.name);
         if new_by_k8s_id.contains_key(&k8s_id) {
-            continue; // still present under the same identity — not removed
+            continue; // Still present under the same identity.
         }
         let Some(slot) = slot_of(manifest) else {
             continue;
         };
         let Some(candidates) = added_by_slot.get(&slot) else {
             // Removed stateful resource with no replacement in the slot.
-            // This is a straight orphan — a separate prune-stateful warning
-            // concern (doc 67 §10.7). Not a migration pair.
+            // An orphan without a replacement is not a migration pair.
             continue;
         };
 
         // Prefer a same-kind candidate; fall back to any candidate in the slot.
-        // Same-kind covers the "local-path → zpool PVC swap" case; cross-kind
-        // covers operator swaps (SGCluster → postgresql) per doc 67 §4.5.
+        // Same-kind replacements are less ambiguous than cross-kind candidates.
         let chosen = candidates
             .iter()
             .find(|(target_rid, m)| {
@@ -306,7 +290,7 @@ mod tests {
     #[test]
     fn detects_storage_class_swap() {
         // Same slot (immich/storage), same kind, different PVC name and
-        // storageClass — the canonical local-path → zpool migration.
+        // storageClass, representing a storage backend migration.
         let old = vec![stamped(
             "PersistentVolumeClaim",
             "immich",
@@ -337,8 +321,7 @@ mod tests {
 
     #[test]
     fn detects_operator_swap_cross_kind() {
-        // Same slot (data/postgres) but kind changes (SGCluster → Cluster)
-        // per doc 67 §4.5.
+        // A replacement in the same slot may use a different kind.
         let old = vec![stamped(
             "SGCluster",
             "data",
@@ -369,7 +352,7 @@ mod tests {
     #[test]
     fn ignores_same_k8s_identity_patch() {
         // Identity (kind/ns/name) unchanged, content changed. That is a
-        // straight SSA patch, not a migration — data stays put.
+        // regular SSA patch; the data stays in place.
         let old = vec![stamped(
             "PersistentVolumeClaim",
             "immich",
@@ -398,7 +381,7 @@ mod tests {
 
     #[test]
     fn ignores_ephemeral_lifecycle() {
-        // Loki logs — lifecycle=ephemeral, no pair.
+        // Ephemeral resources do not form migration pairs.
         let old = vec![stamped(
             "PersistentVolumeClaim",
             "monitoring",
@@ -427,9 +410,7 @@ mod tests {
 
     #[test]
     fn ignores_l7_swap_ingress_to_httproute() {
-        // The ludo kind → k3s transition swaps ingress-nginx for
-        // envoy-gateway. Even though both resources target the immich
-        // service, neither is lifecycle=stateful — no migration pair.
+        // Two non-stateful resources in the same slot do not form a pair.
         let old = vec![stamped(
             "Ingress", "immich", "immich", "immich", "immich", None, None, None, "aaaa",
         )];
@@ -450,7 +431,7 @@ mod tests {
 
     #[test]
     fn orphan_stateful_without_replacement_is_not_a_pair() {
-        // PVC removed, nothing added in the slot — pure orphan.
+        // A removed PVC without a replacement is an orphan.
         let old = vec![stamped(
             "PersistentVolumeClaim",
             "immich",
@@ -469,8 +450,7 @@ mod tests {
 
     #[test]
     fn matches_multiple_pairs_in_one_diff() {
-        // Storage backend sweep: both immich/storage and vaultwarden/storage
-        // flip at once — doc 67 §7.
+        // Multiple storage slots can migrate in one plan.
         let old = vec![
             stamped(
                 "PersistentVolumeClaim",

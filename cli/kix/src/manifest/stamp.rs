@@ -1,12 +1,11 @@
 //! Annotation stamping: add `kix.run/*` annotations to resource manifests.
 //!
 //! After building a `StoreGraph`, this module stamps each resource with:
-//! - `kix.run/identity-hash` — the 32-char Nix store hash of the resource
-//! - `kix.run/package` — owning package instance name
-//! - `kix.run/package-namespace` — namespace of the owning package
-//! - `kix.run/lifecycle` — "stateful" | "durable" | "ephemeral" (from package meta);
-//!   drives migration pair detection (doc 67)
-//! - `kix.run/activations` — comma-separated activation identity-hashes (set during apply)
+//! - `kix.run/identity-hash`: the 32-character Nix store hash
+//! - `kix.run/package`: owning package instance name
+//! - `kix.run/package-namespace`: namespace of the owning package
+//! - `kix.run/lifecycle`: package lifecycle used by migration detection
+//! - `kix.run/activations`: activation identity hashes, set during apply
 //!
 //! Note: `kix.run/depends-on` is stamped at resource creation time in Nix (lib/k8s.nix).
 
@@ -27,7 +26,7 @@ struct StampEntry {
 /// Stamp kix.run annotations onto every resource manifest in the graph.
 /// Modifies manifests in place.
 ///
-/// Uses the bulk-loaded ref_cache from StoreGraph — no subprocess calls.
+/// Uses StoreGraph's bulk-loaded ref_cache without spawning subprocesses.
 pub fn stamp_annotations(graph: &mut StoreGraph) {
     // A build loaded from an activation that predates a domain move carries
     // the retired keys in its store paths. Bring them to the current domain

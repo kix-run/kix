@@ -1,4 +1,4 @@
-//! The engine's one seam to the cluster (doc 134 §2.5).
+//! The engine's interface to cluster operations.
 //!
 //! Every apiserver call and every other piece of I/O the deploy engine
 //! performs goes through [`ClusterOps`]. Two implementations:

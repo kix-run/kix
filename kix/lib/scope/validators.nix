@@ -223,7 +223,7 @@ in
     in
     {
       # Structural authoring rule (v2_discussions/128 mechanism 1): raw PVCs
-      # are a cluster-operator concern — packages request storage via DI and
+      # are a cluster-operator concern. Packages request storage via DI and
       # the `persistent-volume-claim` package is the canonical claim author.
       # Unlike the capability gates above this is target-independent, so it
       # has no `capabilities == { }` escape: the only way out is the explicit

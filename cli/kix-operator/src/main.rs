@@ -1,4 +1,4 @@
-//! kix-operator — Kubernetes operator that watches Activation CRs and reconciles cluster state.
+//! Kubernetes operator that watches Activations and reconciles cluster state.
 //!
 //! The operator reuses the same deploy engine as `kix deploy` (from `kix-cluster`),
 //! but runs as a long-lived controller instead of a one-shot CLI command.
@@ -13,7 +13,7 @@
 //!
 //! # Reconcile loop prevention
 //!
-//! **Stream-level generation filter** — a custom `generation_filter` on the
+//! A stream-level `generation_filter`
 //! watcher stream drops events where `metadata.generation` hasn't changed.
 //! This prevents status-only changes from even reaching the reconciler.
 //! (kube-rs's built-in `predicate_filter` can't be used with `DynamicObject`

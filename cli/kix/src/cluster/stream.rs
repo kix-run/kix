@@ -1,15 +1,13 @@
-//! Graph-streaming deploy vocabulary (doc 99).
+//! Types shared by the deploy scheduler and its observers.
 //!
 //! This module defines the per-node state machine and event shape for
-//! DAG-streaming deploys — the model that replaces the wave-barrier loop.
-//! Each transition in the plan is one node; its state advances through
-//! [`Verdict`] variants, and observers consume [`DeployEvent`]s.
+//! DAG-streaming deploys. Each transition in the plan is one node; its state
+//! advances through [`Verdict`] variants, and observers consume
+//! [`DeployEvent`]s.
 //!
-//! Today the planner produces only [`TransitionKind::Apply`] and
-//! [`TransitionKind::Skip`]. The other variants (Recreate, Migrate, Drain,
-//! Delete, Pause) exist so the renderer's match arms are complete and the
-//! wire format is frozen; they become first-class scheduled operations in
-//! a later stage (doc 99 §9 Stage E–F).
+//! The planner currently produces Apply, Skip, and Recreate transitions.
+//! The remaining variants reserve the event shape for operations handled
+//! outside the scheduler.
 
 use std::time::Duration;
 
@@ -18,46 +16,37 @@ use crate::manifest::types::ResourceId;
 use super::apply::ApplyAction;
 use super::readiness::ImportTarget;
 
-// ---------------------------------------------------------------------------
-// Transition vocabulary
-// ---------------------------------------------------------------------------
-
 /// What kind of operation a node represents.
 ///
 /// The planner tags every node in the plan with one of these. Rendering and
 /// scheduling both branch on this tag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TransitionKind {
-    /// The common case — server-side apply a manifest.
+    /// Server-side apply a manifest.
     Apply,
     /// Identity-hash unchanged; no work needed. Rendered dim, folded
     /// aggressively.
     Skip,
     /// Delete the live object, then apply. Tagged `recreate` because that
-    /// is the act, whatever the trigger. Today the only producer is the
+    /// is the act, whatever the trigger. The current producer is the
     /// rerun rule: a manifest carrying `kix.run/rerun` (a probe Job) whose
     /// identity hash changed is run again, never patched, and the reason
     /// rides [`NodeDetail::Rerun`]. The executor applies plainly when
-    /// nothing is live. Stage E (future) will produce it for an
-    /// immutable-field conflict on any kind; today that recovers under
-    /// `Apply` for a pre-authorized orphan (doc 81 folds both into the
-    /// planner's registry).
+    /// nothing is live.
     Recreate,
-    /// Stage E (future): doc 67 stateful migration pair barrier. Today
-    /// detected as warnings by `accept_migrations`; not yet a transition.
+    /// Stateful migration pair barrier. Detection currently happens before
+    /// scheduling.
     Migrate,
-    /// Stage E (future): consumers drain before their provider is deleted.
-    /// Today implicit in prune ordering.
+    /// Drain consumers before deleting their provider.
     Drain,
-    /// Stage E (future): explicit delete of an orphaned resource. Today
-    /// handled by the prune phase after apply finishes.
+    /// Delete an orphaned resource.
     Delete,
-    /// Stage F (future): operator-approval gate. Today does not exist.
+    /// Wait for operator approval.
     Pause,
 }
 
 impl TransitionKind {
-    /// Short tag used as the prefix in renderers (doc 99 §1 table).
+    /// Short tag used as the prefix in renderers.
     ///
     /// `Apply` has no prefix (it's the default); the others render their tag.
     pub fn tag(self) -> Option<&'static str> {
@@ -73,22 +62,18 @@ impl TransitionKind {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Verdict — per-node state machine
-// ---------------------------------------------------------------------------
-
 /// Terminal-or-in-flight state of a single node.
 ///
 /// A node enters `Pending`, advances to `Running` when the scheduler picks it
 /// up, and lands on exactly one of `Ready` / `Failed` / `Cancelled` (or
 /// `AwaitingInput` for Pause gates). `DriftDetected` is a post-terminal flag
-/// the readiness watcher raises when a previously-`Ready` node slips back —
-/// dependents are not cancelled (doc 81 §4 + doc 99 §5 "Drift").
+/// the readiness watcher raises when a previously ready node slips back.
+/// Dependents are not cancelled.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Verdict {
     /// Predecessors not all Ready; not yet eligible to run.
     Pending,
-    /// In flight — apply issued, readiness being watched.
+    /// Apply issued and readiness being watched.
     Running,
     /// Terminal success.
     Ready,
@@ -127,10 +112,6 @@ impl Verdict {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Event stream
-// ---------------------------------------------------------------------------
-
 /// A node in the deploy plan, keyed for events.
 ///
 /// For concrete transitions this is the `ResourceId`. Synthetic nodes
@@ -151,8 +132,8 @@ impl From<ResourceId> for NodeId {
 /// Structured per-node detail piggy-backed on state changes.
 ///
 /// The renderer reads this to build the "2/3 ready, rollout 0/1" per-kind
-/// strings from doc 99 §5 Apply. JSON log format serializes the variants
-/// directly; pretty/line renderers format them.
+/// strings. JSON logs serialize the variants directly; other renderers format
+/// them for display.
 #[derive(Debug, Clone)]
 pub enum NodeDetail {
     /// Apply returned this outcome (Created/Configured/Unchanged/Skipped).
@@ -166,11 +147,11 @@ pub enum NodeDetail {
     /// Readiness returned a hard Failed result.
     ReadinessFailed {
         message: String,
-        /// Populated for Secret import mismatches — the exact missing keys.
+        /// Exact keys missing from a Secret import.
         missing_keys: Vec<String>,
         /// The last lines a failed container wrote, read from its
-        /// termination message (a Job whose pod ran with
-        /// `terminationMessagePolicy: FallbackToLogsOnError`). Empty when
+        /// termination message. A Job whose pod ran with
+        /// `terminationMessagePolicy: FallbackToLogsOnError` provides these. Empty when
         /// nothing was recorded.
         output: Vec<String>,
     },
@@ -213,7 +194,7 @@ pub enum DeployEvent {
     /// paint the tree skeleton before execution begins.
     PlanComputed {
         nodes: Vec<PlanNode>,
-        /// Directed edges: `(dependent, predecessor)` — the dependent waits
+        /// Directed edges: `(dependent, predecessor)`; the dependent waits
         /// on the predecessor.
         edges: Vec<(NodeId, NodeId)>,
     },
@@ -236,13 +217,13 @@ pub enum DeployEvent {
         resources: Vec<ResourceId>,
         delete: bool,
     },
-    /// Activation lifecycle finalized — new CR marked Active (or Degraded),
+    /// Activation lifecycle finalized. The new CR is Active or Degraded and the
     /// old one Superseded.
     Finalized {
         activation: String,
         previous: Option<String>,
     },
-    /// Scheduler bailed — either caller cancellation or a halting failure
+    /// Scheduler stopped because of caller cancellation or a halting failure
     /// under `halt-on-first-failure`.
     Stopped { reason: String },
     /// Nothing has happened for `idle`. Names every node in flight, what it
@@ -304,15 +285,11 @@ pub struct PlanNode {
     pub meta: NodeMeta,
 }
 
-// ---------------------------------------------------------------------------
-// Observer
-// ---------------------------------------------------------------------------
-
 /// Progress observer for a DAG-streaming deploy.
 ///
 /// Observers are called synchronously on the scheduler thread; heavy work
 /// (redraw, JSON serialization, K8s Event emission) should be queued and
-/// executed on a different task — see `cli/kix-cli/src/commands/deploy_tui.rs`
+/// executed on a different task. See `cli/kix-cli/src/commands/deploy_tui.rs`
 /// for the mpsc pattern.
 pub trait DeployObserver: Send + Sync {
     fn on_event(&self, event: &DeployEvent);
@@ -325,10 +302,6 @@ pub struct NullObserver;
 impl DeployObserver for NullObserver {
     fn on_event(&self, _event: &DeployEvent) {}
 }
-
-// ---------------------------------------------------------------------------
-// Result
-// ---------------------------------------------------------------------------
 
 /// Summary of a completed deploy run.
 ///

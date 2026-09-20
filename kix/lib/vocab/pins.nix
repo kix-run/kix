@@ -1,35 +1,18 @@
-# Reading the committed record of what each image reference resolved to.
-#
-# Separate from `compose.nix` because that file composes Kubernetes objects in
-# memory and this one reads a file off disk. It is the only piece of the
-# vocabulary that touches the filesystem.
-#
-# Written by `kix pin`, read here. See `kix.image` in `compose.nix` for the
-# reasoning about digests.
-#
-# Takes the path to a pin file, or an already-imported attrset (which is what
-# the tests use). Returns:
+# Read image references from a pin file or an attrset. The returned interface is:
 #
 #     .get <key>   the pin, shape-checked, ready for kix.image.ref
 #     .ref <key>   sugar for `kix.image.ref (get key)`
 #     .keys        every pin name in the file
 #     .all         every pin, shape-checked
 #
-# `get` throws when the key is missing and names the command that adds it.
-# That matters more than it looks: the state that produces the error is
-# exactly the state in which the reader needs a remedy they can run. `get`
-# and `find` are the same pair `importChart` uses (`../helm.nix`), so the
-# spelling is the one a reader already knows.
+# `get` validates the entry and reports the command for adding a missing key.
 #
-# A pin file is JSON. Reading a Nix file would mean evaluating it, and writing
-# one would mean escaping registry-supplied strings into a programming
-# language by hand; neither belongs in a file a bot rewrites every build. The
-# evaluation cache fingerprints `.json` alongside `.nix`
-# (`cli/kix/src/eval/cache.rs`), so it lands in the fingerprint either way.
+# Pin files use JSON so Kix can rewrite registry values as data without
+# evaluating them as Nix. The evaluation cache includes JSON files in its
+# input fingerprint (`cli/kix/src/eval/cache.rs`).
 #
-# What this does not do: check that the digest refers to anything. Nix
-# evaluation is pure, so a well-formed invented digest passes every check
-# here. `kix pin check` is what asks the registry.
+# Shape validation does not verify a digest against a registry. Use
+# `kix pin check` for registry verification.
 { lib, image }:
 
 source:
@@ -37,10 +20,8 @@ let
   isPath = builtins.isPath source;
   parsed = if isPath then builtins.fromJSON (builtins.readFile source) else source;
 
-  # A path literal inside a flake evaluates to a store path, so
-  # `toString source` here is `/nix/store/<hash>-source/clusters/pins.json`
-  # and naming it in an error would point the reader at a read-only copy of
-  # their own file. The last two segments are what they recognise.
+  # Flake path literals evaluate to store paths. Show the last two components
+  # in errors so they identify the source file rather than its store copy.
   where =
     if isPath then
       let
@@ -51,13 +32,10 @@ let
     else
       "the pins attrset";
 
-  # The version `kix pin` writes, and the only one this understands. Checked
-  # rather than ignored: a file from a newer Kix read as though it were this
-  # one is the failure a version field exists to prevent.
+  # Reject other schema versions before interpreting their fields.
   SCHEMA_VERSION = 1;
 
-  # `{ version, managedBy, images }` is what `kix pin` writes. A bare map of
-  # pins is what a hand-written file tends to look like, and both read here.
+  # Accept the kix pin envelope and a bare map without that envelope.
   version = parsed.version or SCHEMA_VERSION;
 
   raw =
@@ -66,12 +44,8 @@ let
     else
       parsed.images or parsed;
 
-  # `repository` and `tag` are required: without both there is nothing to
-  # pull. Everything else is optional, because an upstream image has no
-  # source revision and a pin that has never been resolved has no digest.
-  # `note` is whatever a person wanted to say about the entry; Kix never
-  # reads it, and `kix.options.image` declares it so it passes through the
-  # same way the other record-keeping fields do.
+  # repository and tag are required. digest, provenance fields, and the
+  # user-maintained note remain optional.
   known = [
     "repository"
     "tag"

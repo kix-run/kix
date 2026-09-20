@@ -1,11 +1,7 @@
-//! Talking to a container registry.
+//! Resolve container image references for `kix pin`.
 //!
-//! This exists for one command, `kix pin`, and one question: what digest does
-//! this image reference resolve to? Kix asks that at promotion time, writes
-//! the answer into a committed pin file, and never asks again. Resolving a
-//! tag during a deploy is a non-goal (`v2_discussions/120` §3.9): a value
-//! obtained by a network call at apply time cannot be reviewed before it is
-//! applied, and a `digest: null` that tells the truth is worth more.
+//! Resolution occurs when updating a committed pin file. Deploy reads that
+//! file and does not resolve tags through the registry.
 
 pub mod client;
 pub mod credentials;

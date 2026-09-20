@@ -1,11 +1,11 @@
-//! fieldsV1 interpretation for the applied-hash drift design (doc 122).
+//! Interpret fieldsV1 for applied-content drift detection.
 //!
-//! Pure module — no cluster access. Extracts kix's server-side-apply
+//! Extracts kix's server-side-apply
 //! managedFields entry from a live object and projects the object onto that
 //! fieldset: "the subset of the live object that kix put there". Hashing the
 //! projection at apply time (from the SSA response echo) and again at check
 //! time (from a GET) makes runtime content drift a hash comparison between
-//! two *server* representations — no build, no normalization heroics.
+//! two server representations.
 
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ManagedFieldsEntry;
 use kube::api::DynamicObject;
@@ -19,7 +19,7 @@ pub const KIX_FIELD_MANAGER: &str = "kix";
 /// Extract the fieldsV1 tree of kix's SSA entry: manager == "kix",
 /// operation == "Apply", no subresource.
 ///
-/// Reads the TYPED `metadata.managed_fields` — LIST responses split metadata
+/// Reads typed `metadata.managed_fields`. LIST responses split metadata
 /// out of `obj.data`, so the raw data must never be consulted for this.
 pub fn kix_fieldset(obj: &DynamicObject) -> Option<Value> {
     kix_apply_entry(obj.metadata.managed_fields.as_deref()?)
@@ -36,32 +36,32 @@ pub fn kix_apply_entry(entries: &[ManagedFieldsEntry]) -> Option<&ManagedFieldsE
     })
 }
 
-/// Project a live value onto a fieldsV1 tree — keep exactly the fields the
+/// Project a live value onto a fieldsV1 tree, keeping exactly the fields the
 /// fieldset lists, at the granularity the server tracked them.
 ///
 /// fieldsV1 semantics implemented:
-/// - `f:<name>` — member of a map. Empty subtree `{}` means the server tracks
-///   the field as one atomic leaf → copy the whole live value; a non-empty
+/// - `f:<name>`: member of a map. An empty subtree means the server tracks
+///   the field as one atomic leaf; copy the whole live value. A non-empty
 ///   subtree recurses into it.
-/// - `k:{...}` — associative-list element, matched by ALL key/value pairs
+/// - `k:{...}`: associative-list element, matched by every key/value pair
 ///   against live array elements.
-/// - `v:<json>` — set element, matched by value.
-/// - `i:<n>` — positional element.
-/// - `.` — the node itself; marks existence, contributes no content. An
+/// - `v:<json>`: set element, matched by value.
+/// - `i:<n>`: positional element.
+/// - `.`: the node itself; marks existence and contributes no content. An
 ///   element owned only via `.` still appears in the projection (as an empty
 ///   object), so its deletion is detected.
 ///
 /// Live array order is preserved and arrays are never sorted: both hash
 /// inputs are server representations, so order is stable unless someone
 /// actually changed it. Fieldset entries with no matching live counterpart
-/// are skipped — that is how deletions are detected (the projection shrinks,
-/// the hash changes).
+/// are skipped. This detects deletions because the projection shrinks and
+/// the hash changes.
 pub fn project(live: &Value, fields: &Value) -> Value {
     let Some(fmap) = fields.as_object() else {
         return live.clone();
     };
     if fmap.is_empty() {
-        // Atomic leaf — the server tracks this whole subtree as one field.
+        // The server tracks an atomic leaf as one field.
         return live.clone();
     }
     match live {
@@ -128,7 +128,7 @@ fn match_element<'a>(
 /// Reconstruct a full manifest `Value` from a `DynamicObject` by merging the
 /// typed metadata back into the raw data. kube's `DynamicObject` always
 /// deserializes `metadata` into the typed field, so `obj.data` never carries
-/// it — name/namespace/labels/annotations must be merged back before the
+/// it. Name, namespace, labels, and annotations must be merged back before the
 /// object can be projected.
 pub fn merge_typed_metadata(obj: &DynamicObject) -> Value {
     let mut value = obj.data.clone();
@@ -174,8 +174,8 @@ pub fn merge_typed_metadata(obj: &DynamicObject) -> Value {
     value
 }
 
-/// The applied-content hash — ONE shared recipe, used at stamp time (on the
-/// SSA response echo) and at check time (on a GET/LIST result):
+/// The applied-content hash recipe used at stamp time on the
+/// SSA response and at check time on a GET or LIST result:
 ///
 /// 1. Merge typed metadata back into the data `Value`.
 /// 2. Project onto kix's fieldsV1 (the subset kix owns).
@@ -185,7 +185,7 @@ pub fn merge_typed_metadata(obj: &DynamicObject) -> Value {
 ///
 /// Returns `None` when the object has no kix SSA managedFields entry.
 pub fn applied_content_hash(obj: &DynamicObject) -> Option<String> {
-    // TODO(doc-123): exclude PI spec.driftIgnore pointers here — compiled
+    // TODO: exclude PI spec.driftIgnore pointers here. Compiled
     // delegation drops the listed JSON pointers from the projection on both
     // the stamp and the check side, so expected co-owners (HPA on replicas,
     // cert-manager on Secret data) never enter the hash.
@@ -229,7 +229,7 @@ mod tests {
     #[test]
     fn missing_live_field_is_skipped() {
         // Deletion detection: the fieldset still lists the field but live
-        // lost it → projection shrinks.
+        // lost it, so the projection shrinks.
         let live = json!({"spec": {}});
         let fields = json!({"f:spec": {"f:replicas": {}}});
         assert_eq!(project(&live, &fields), json!({"spec": {}}));
@@ -273,7 +273,7 @@ mod tests {
             "k:{\"name\":\"a\"}": {"f:name": {}, "f:v": {}},
             "k:{\"name\":\"b\"}": {"f:name": {}, "f:v": {}}
         });
-        // serde_json object keys iterate sorted (a before b) — the projection
+        // serde_json object keys iterate sorted (a before b); the projection
         // must follow LIVE order (b before a) regardless.
         assert_eq!(
             project(&live, &fields),
@@ -284,7 +284,7 @@ mod tests {
     #[test]
     fn dot_only_element_is_included_empty() {
         // An element owned only via "." still appears, so deleting it is
-        // detected — but its (foreign-owned) content stays out of the hash.
+        // detected while its foreign-owned content stays out of the hash.
         let live = json!([{"name": "a", "foreign": 1}]);
         let fields = json!({"k:{\"name\":\"a\"}": {".": {}}});
         assert_eq!(project(&live, &fields), json!([{}]));
@@ -306,7 +306,7 @@ mod tests {
 
     #[test]
     fn type_change_keeps_live_value() {
-        // Live changed type since apply — keep it so the hash differs.
+        // Keep a live type change so the hash differs.
         let live = json!({"spec": "now-a-string"});
         let fields = json!({"f:spec": {"f:replicas": {}}});
         assert_eq!(project(&live, &fields), json!({"spec": "now-a-string"}));

@@ -547,7 +547,7 @@ in
       # annotator bundle (SA + Role + RoleBinding + one-shot Job). The
       # `reflector` dep edge is what marks this as DI-provided — reflector
       # declares the annotation domain, and the architecture scorecard lints
-      # hand-written reflector annotations against that edge.
+      # explicitly configured reflector annotations against that edge.
 
       reflectorBundle =
         if reflectionEnabled then

@@ -4,7 +4,7 @@
 //! JSON rather than Nix for a reason that has nothing to do with taste:
 //! reading a Nix file means evaluating it, so reading a pin file would
 //! execute whatever the file contains, and writing one means escaping
-//! registry-supplied strings into a programming language by hand. Neither is
+//! registry-supplied strings as programming-language source. Neither is
 //! a thing to do to a file a bot rewrites on every build. JSON parses inert
 //! and serialises with serde.
 //!
@@ -268,7 +268,7 @@ impl PinFile {
 /// managed.
 ///
 /// Two shapes are accepted. The canonical envelope, and a bare map of pins,
-/// which is what a hand-written file tends to look like. A bare map is never
+/// which is what a file without the generated envelope looks like. A bare map is never
 /// managed, so `kix pin set` will not rewrite one without `--force`.
 fn parse_file(text: &str) -> Result<(BTreeMap<String, Pin>, bool), String> {
     let value: serde_json::Value = serde_json::from_str(text).map_err(|e| {
@@ -464,7 +464,7 @@ mod tests {
         std::fs::write(&path, r#"{"web":{"repository":"r/w","tag":"v1"}}"#).unwrap();
 
         let mut f = PinFile::read(&path).unwrap();
-        assert!(!f.managed, "a hand-written file is not managed");
+        assert!(!f.managed, "a bare pin map is not managed");
         assert!(matches!(f.write(false), Err(PinError::NotManaged { .. })));
 
         // …but a reader can still read it, and --force still writes it.

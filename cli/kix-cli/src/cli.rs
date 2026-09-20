@@ -183,7 +183,7 @@ impl Command {
     }
 }
 
-/// `kix pin` — the promotion verb.
+/// Promote a built cluster with `kix pin`.
 ///
 /// A cluster definition that decides an image reference at deploy time has no
 /// committed answer to "what is running", and a clean checkout of it renders
@@ -191,7 +191,7 @@ impl Command {
 /// asks the registry what a tag resolves to, refuses a tag that does not
 /// exist, and records the digest in a pin file next to the cluster.
 ///
-/// It deliberately needs no cluster evaluation and no flake. The state in
+/// It needs no cluster evaluation or flake. The state in
 /// which you most need to run it is the state in which evaluation is
 /// unhappy, so it takes a file path and nothing else.
 #[derive(Subcommand)]
@@ -456,7 +456,7 @@ pub struct DeployArgs {
     #[arg(long)]
     pub accept_migrations: bool,
 
-    /// Render a live inline graph-streaming dashboard (doc 99). Falls back to
+    /// Render a live inline graph-streaming dashboard. Falls back to
     /// line-oriented output on non-interactive terminals.
     #[arg(long)]
     pub tui: bool,
@@ -601,7 +601,7 @@ pub struct RollbackArgs {
     /// Cluster name
     pub cluster: String,
 
-    /// List available Superseded activations (history) and exit — no rollback.
+    /// List available Superseded activations without rolling back.
     /// Shows name, identity-hash, timestamp, source store path, and the
     /// previousActivation link so the deploy chain is easy to follow.
     /// Respects `--output json|yaml` for machine consumption.
@@ -710,7 +710,7 @@ pub struct HealthArgs {
 
 /// Deliberately no cluster/flake argument: the check compares live objects
 /// against the `kix.run/applied-hash` stamps written at deploy time, so it
-/// runs from any kubeconfig-only context (doc 122). Uses the global
+/// runs from any kubeconfig-only context. Uses the global
 /// `--context` and `--output` flags.
 #[derive(clap::Args)]
 pub struct DriftArgs {}

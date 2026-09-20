@@ -2,22 +2,22 @@
 //!
 //! Provides store management, expression evaluation, flake attribute
 //! navigation, eval caching, and error translation. All Nix complexity
-//! is contained here — consumers get `serde_json::Value` results.
+//! is contained here; consumers get `serde_json::Value` results.
 //!
 //! # Backend selection
 //!
 //! The `NixBackend` trait in [`evaluator`] abstracts over Nix evaluation.
 //! Three implementations exist:
 //!
-//! - [`cli_backend::CliNixBackend`] — shells out to `nix` CLI commands.
+//! - [`cli_backend::CliNixBackend`] shells out to `nix` CLI commands.
 //!   Default backend for production use. Benefits from Nix's built-in
 //!   eval cache for fast repeated invocations.
 //!
-//! - [`mock::MockNixBackend`] — returns canned data, always available,
+//! - [`mock::MockNixBackend`] returns canned data and is always available,
 //!   used for testing and development without a Nix installation.
 //!
-//! - `FfiNixBackend` (gated behind `#[cfg(feature = "nix-ffi")]`) —
-//!   direct FFI evaluation via `nix-bindings-*` crates. Experimental,
+//! - `FfiNixBackend`, gated behind `#[cfg(feature = "nix-ffi")]`, provides
+//!   direct FFI evaluation via `nix-bindings-*` crates. It is experimental and
 //!   not currently used by the CLI.
 
 pub mod build;
@@ -38,7 +38,7 @@ pub use evaluator::{
 };
 pub use store_graph::{CrossDep, KixPackageIndex, PackageNode, ResourceNode, StoreGraph};
 
-/// Real Nix FFI backend — available only when built with Nix C libraries.
+/// Nix FFI backend available only when built with Nix C libraries.
 /// Experimental: not currently used by the CLI.
 #[cfg(feature = "nix-ffi")]
 pub mod ffi;

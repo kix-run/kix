@@ -214,12 +214,10 @@ pub async fn discover_resources(client: &Client) -> Result<Vec<(ApiResource, Sco
 
 /// Walk one ApiGroup's resources across EVERY served version.
 ///
-/// recommended_resources() only covers the group's PREFERRED version. A
-/// group mixing versions (e.g. operator.victoriametrics.com ships v1beta1
-/// kinds plus a v1 kind, making v1 preferred) would hide every
-/// non-preferred kind from the deploy scheduler ("kind X not in discovery
-/// cache"). Walk every version, preferred first, and keep the first
-/// ApiResource seen per kind.
+/// recommended_resources() only covers the group's preferred version. A group
+/// may serve different kinds at different versions, so using only the preferred
+/// version can hide kinds from the deploy scheduler. Walk every version,
+/// preferred first, and keep the first ApiResource seen per kind.
 fn collect_group_resources(group: &kube::discovery::ApiGroup) -> Vec<(ApiResource, Scope)> {
     let mut resources = Vec::new();
     let mut seen_kinds = std::collections::HashSet::new();
@@ -241,12 +239,10 @@ fn collect_group_resources(group: &kube::discovery::ApiGroup) -> Vec<(ApiResourc
     resources
 }
 
-/// Targeted single-group discovery — the reliable fallback when the full
+/// Targeted single-group discovery is the fallback when the full
 /// sweep misses a kind. A bulk Discovery::run() under deploy load can
-/// transiently drop whole groups (observed live on stage1: helm.cattle.io
-/// absent from every refresh during a deploy while kubectl saw it fine);
-/// fetching exactly one group is a single small request and doesn't share
-/// that failure mode. `group` is "" for the core group.
+/// transiently omit a group. Fetching one group uses a separate, smaller
+/// request. `group` is "" for the core group.
 pub async fn discover_group(
     client: &Client,
     group: &str,
@@ -259,12 +255,10 @@ pub async fn discover_group(
 
 /// Merge a fresh discovery result into an existing cache, unioned by
 /// (group, kind) with the fresh entry winning. Kubernetes' aggregated
-/// discovery document is rebuilt after CRD writes and can transiently
-/// omit whole unrelated groups (observed live on rke2 1.33 right after a
-/// deploy applied 25 CRDs: helm.cattle.io vanished for a while, failing
-/// every later HelmChartConfig apply with "kind not in discovery cache").
+/// discovery document is rebuilt after CRD writes and can transiently omit
+/// unrelated groups.
 /// A refresh must therefore never *forget* kinds the cluster already
-/// proved it serves — stale entries for genuinely deleted CRDs are
+/// proved it serves. Stale entries for genuinely deleted CRDs are
 /// harmless by comparison (their applies would fail anyway).
 pub fn merge_discovery(
     existing: &[(ApiResource, Scope)],
@@ -343,9 +337,9 @@ pub async fn sweep_managed(
 ///   mirror; the endpoints controller copies the Service's labels and sets
 ///   no owner reference, so ownership alone cannot tell them apart. Dropped.
 ///
-/// These rules replace the old hand-maintained list of "ephemeral" kinds,
-/// which also made every listed kind undeployable because the same
-/// discovery cache resolved kinds on the apply path (kixpkgs#41).
+/// These rules replace the fixed list of "ephemeral" kinds, which made every
+/// listed kind undeployable because the apply path used the same discovery
+/// cache (kixpkgs#41).
 pub fn partition_sweep(objects: Vec<DynamicObject>) -> ManagedSweep {
     let (managed, rest): (Vec<DynamicObject>, Vec<DynamicObject>) =
         objects.into_iter().partition(is_stamped);
@@ -498,7 +492,7 @@ pub fn normalize_for_diff(obj: &mut DynamicObject) {
 }
 
 /// The kix-owned view of a live object: the live value projected onto the
-/// fieldset kix's server-side apply owns (doc 122's recipe), with the type
+/// fieldset kix's server-side apply owns, with the type
 /// meta and identity that fieldsV1 never lists (`apiVersion`, `kind`,
 /// `metadata.name`, `metadata.namespace`) restored.
 ///
@@ -511,7 +505,7 @@ pub fn normalize_for_diff(obj: &mut DynamicObject) {
 /// question a change review actually needs answered: "does what kix would
 /// apply differ from what kix last applied?"
 ///
-/// Objects without a kix `Apply` entry (adopted by hand, or predating SSA)
+/// Objects without a kix `Apply` entry (adopted externally, or predating SSA)
 /// fall back to the whole object with server metadata stripped.
 pub fn kix_owned_view(obj: &DynamicObject) -> serde_json::Value {
     let Some(mut view) = super::fieldsv1::kix_owned_projection(obj) else {
@@ -565,9 +559,9 @@ pub fn kix_owned_manifests(
 ///
 /// `DynamicObject` keeps `metadata` in a typed field and puts only the
 /// *remaining* keys (`spec`, `data`, …) in `.data`. Serialising `.data`
-/// alone therefore yields a manifest with no `metadata` — and so no
-/// name or namespace — which silently degrades every `ResourceId` built
-/// from it to `Kind/unknown`. Every live object of the same kind then
+/// alone therefore yields a manifest with no `metadata`, name, or namespace.
+/// This silently degrades every `ResourceId` built from it to `Kind/unknown`.
+/// Every live object of the same kind then
 /// collapses onto one id, matches nothing on the kix side, and the diff
 /// reports the whole cluster as "will be created".
 ///
@@ -615,9 +609,8 @@ fn sweep_concurrency() -> usize {
 /// The transport layer already retried each LIST on 429, 5xx and
 /// connection errors, so an error here is one that outlasted the budget.
 /// It is returned, and dropping the `JoinSet` cancels the lists still in
-/// flight. The old behaviour, logging a warning and continuing with an
-/// empty list for that kind, made `kix diff` report every PackageInstance
-/// as "will be created" during an apiserver restart (2026-09-07, stage1).
+/// flight. Treating a failed list as empty would make `kix diff` report live
+/// resources as new during an apiserver restart.
 async fn fetch_parallel(
     client: &Client,
     discovery: &[(ApiResource, Scope)],
@@ -866,7 +859,7 @@ mod tests {
         );
     }
 
-    /// No kix Apply entry (adopted by hand, or pre-SSA): the whole object,
+    /// No kix Apply entry (adopted externally, or pre-SSA): the whole object,
     /// minus server metadata, so the diff still has something to show.
     #[test]
     fn kix_owned_view_falls_back_without_an_apply_entry() {
@@ -972,9 +965,9 @@ mod tests {
     }
 
     /// Pins the shape the whole bug turned on: kube-rs parses `metadata`
-    /// into the typed field and leaves it OUT of `.data`. The hand-built
+    /// into the typed field and leaves it OUT of `.data`. The synthetic
     /// fixtures above put `metadata` inside `.data`, which the apiserver
-    /// never does — so anything reading `.data["metadata"]` reads nothing.
+    /// never does, so anything reading `.data["metadata"]` reads nothing.
     #[test]
     fn deserialized_object_keeps_metadata_out_of_data() {
         let obj = list_item();
@@ -1118,8 +1111,6 @@ mod tests {
         );
     }
 
-    // ── First contact (kixpkgs#36) ───────────────────────────────────────
-    //
     // These drive a real localhost socket rather than mocking kube, because
     // the mode that matters is a TCP-level one: accept the connection and
     // then say nothing. A mock at the kube layer cannot express it.

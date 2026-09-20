@@ -1,6 +1,6 @@
 //! Asking a container registry what a reference resolves to.
 //!
-//! Only one question is asked here, and it is deliberately the smallest one:
+//! This client answers one question:
 //! *does this reference exist, and what is its manifest digest*. Kix does not
 //! pull layers, does not inspect image configuration and does not cache. The
 //! answer is written into a pin file and committed, so the network is touched

@@ -51,7 +51,7 @@ impl ResourceGraph {
         let mut id_to_node = HashMap::new();
         let mut hash_to_node = HashMap::new();
 
-        // Phase 1: Create all nodes
+        // Create nodes before resolving dependency hashes.
         for manifest in manifests {
             let id = ResourceId::from_value(manifest);
             let identity_hash = get_annotation(manifest, keys::IDENTITY_HASH);
@@ -69,7 +69,7 @@ impl ResourceGraph {
             }
         }
 
-        // Phase 2: Create edges from depends-on annotations
+        // Create edges from depends-on annotations.
         for manifest in manifests {
             let id = ResourceId::from_value(manifest);
             let from_idx = id_to_node[&id];
@@ -89,85 +89,18 @@ impl ResourceGraph {
                         // Edge: from depends on to
                         graph.add_edge(from_idx, to_idx, ());
                     }
-                    // Silently skip dangling deps — they may reference resources
-                    // outside this manifest set (e.g., imported instances)
+                    // Dependencies may refer to imported resources outside this set.
                 }
             }
         }
 
-        // Phase 2b: Collapse cross-package edges onto the target package's
-        // PackageInstance marker.
-        //
-        // DISABLED: this rewrite creates dependency cycles whenever two
-        // packages reference each other in any direction (PI_A → wA → PI_B →
-        // wB → PI_A). The intended semantics ("consumer waits until target
-        // package is fully Ready") will be reintroduced as a wave-computation
-        // concern via a side-table of package gates, so the literal DAG stays
-        // honest and cycles can be detected + degraded gracefully instead of
-        // hard-failing graph construction.
-        //
-        // Context (kept for when this is rewritten): a resource R in package
-        // A may carry a direct edge to a specific resource S in package B
-        // (e.g. n8n's Ingress → ingress-nginx's IngressClass). The direct
-        // edge only gates R on S being applied, not on B being fully Ready.
-        // In practice this races the operator that reconciles R (controller
-        // Deployment, admission webhook, etc.).
-        /*
-        {
-            // Build package name → PackageInstance node map.
-            let mut package_to_pi: HashMap<String, NodeIndex> = HashMap::new();
-            for idx in graph.node_indices() {
-                let node = &graph[idx];
-                if node.id.kind == crate::manifest::lifecycle::PACKAGE_INSTANCE_KIND
-                    && let Some(pkg) = get_annotation(&node.manifest, keys::PACKAGE)
-                {
-                    package_to_pi.insert(pkg, idx);
-                }
-            }
+        // Cross-package edges remain attached to their referenced resources.
+        // Rewriting them to PackageInstance nodes creates cycles when packages
+        // depend on each other.
 
-            // Collect edges to add in a separate pass so we don't mutate the
-            // graph while iterating its edges.
-            let mut edges_to_add: Vec<(NodeIndex, NodeIndex)> = Vec::new();
-            for edge in graph.edge_indices() {
-                let (src, dst) = graph.edge_endpoints(edge).unwrap();
-                let src_pkg = match get_annotation(&graph[src].manifest, keys::PACKAGE) {
-                    Some(p) => p,
-                    None => continue,
-                };
-                let dst_pkg = match get_annotation(&graph[dst].manifest, keys::PACKAGE) {
-                    Some(p) => p,
-                    None => continue,
-                };
-                if src_pkg == dst_pkg {
-                    continue;
-                }
-                let dst_pi = match package_to_pi.get(&dst_pkg) {
-                    Some(&idx) => idx,
-                    None => continue,
-                };
-                // Skip reflexive: an edge whose src is already the target
-                // PI (the edge we'd add is a self-loop) or whose dst is
-                // already the target PI (the existing edge is the PI edge).
-                if src == dst_pi || dst == dst_pi {
-                    continue;
-                }
-                edges_to_add.push((src, dst_pi));
-            }
-
-            // Deduplicate and add, skipping pairs already connected.
-            edges_to_add.sort_by_key(|(s, d)| (s.index(), d.index()));
-            edges_to_add.dedup();
-            for (src, dst_pi) in edges_to_add {
-                if !graph.contains_edge(src, dst_pi) {
-                    graph.add_edge(src, dst_pi, ());
-                }
-            }
-        }
-        */
-
-        // Phase 3: Check for cycles
+        // Reject cycles before scheduling.
         if petgraph::algo::is_cyclic_directed(&graph) {
-            // Find a node in a cycle for the error message
+            // Name one node in the cycle.
             let cycle_node = petgraph::algo::toposort(&graph, None)
                 .err()
                 .map(|cycle| graph[cycle.node_id()].id.display_id())
@@ -208,7 +141,7 @@ impl ResourceGraph {
     /// where we must remove consumers before the providers they reference.
     ///
     /// Falls back to the natural (kind, namespace, name) order when the
-    /// graph has a cycle — deletion is best-effort anyway, and a cycle among
+    /// graph has a cycle. Deletion is best-effort, and a cycle among
     /// orphans is not an error we want to propagate.
     pub fn reverse_topo_ids(&self) -> Vec<ResourceId> {
         use petgraph::Direction;
@@ -218,7 +151,7 @@ impl ResourceGraph {
         // Out-degree in the ResourceGraph model = number of dependencies of a
         // node. Reverse-topo = delete leaves (zero dependents) first, then
         // work inward. We pop nodes with zero *incoming* edges (no dependents
-        // left) instead, since our edges point dependent → predecessor.
+        // left) because edges point from dependent to predecessor.
         let mut in_degree: HashMap<_, usize> = dag
             .node_indices()
             .map(|i| (i, dag.neighbors_directed(i, Direction::Incoming).count()))
@@ -554,7 +487,7 @@ mod tests {
         // consumer_b has a direct edge to workload_a (cross-package).
         //
         // The graph keeps that direct edge as written and synthesizes no
-        // consumer_b → pi_a edge. The PI collapse is disabled (phase 2b): it
+        // consumer_b-to-pi_a edge. PI collapse is disabled because it
         // produced cycles whenever two packages referenced each other. The
         // "wait for the whole package" semantics will come back as a wave
         // gate, not as a DAG edge. This test pins the current contract so
@@ -592,7 +525,7 @@ mod tests {
     #[test]
     fn intra_package_edges_are_not_collapsed() {
         // Two resources in the same package: no PI rewrite. The PI edge
-        // would collapse to src → (its own PI), which is skipped.
+        // would collapse to the source's own PI, which is skipped.
         let manifests = vec![
             pkg_manifest("ConfigMap", "cm", "ns-a", "h_cm", "", "pkg-a"),
             pkg_manifest("Deployment", "dep", "ns-a", "h_dep", "h_cm", "pkg-a"),
@@ -614,7 +547,7 @@ mod tests {
         };
         let deps = graph.dependencies(&dep_id);
 
-        // Deployment depends only on ConfigMap — no extra PI edge (same package).
+        // Deployment depends only on ConfigMap; no PI edge is added.
         assert_eq!(deps.len(), 1);
         assert_eq!(deps[0].id.name, "cm");
     }
@@ -668,7 +601,7 @@ mod tests {
             name: "root".into(),
         };
         let deps = graph.dependencies(&act_id);
-        // Only the direct edge to controller — no PI rewrite.
+        // Only the direct edge to controller remains.
         assert_eq!(deps.len(), 1);
         assert_eq!(deps[0].id.name, "controller");
     }

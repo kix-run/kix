@@ -46,8 +46,8 @@ impl FailedBaseline {
 
 /// Resolve every `Failed` record for a cluster to its closure.
 ///
-/// A record that cannot be resolved is reported, not fatal, and deliberately
-/// not consumed. It usually means the deploy that failed ran on a different
+/// A record that cannot be resolved is reported without being consumed. It
+/// usually means the failed deploy ran on a different
 /// machine, so this one cannot know what it applied; saying so and leaving the
 /// record in place is more honest than superseding it and forgetting.
 pub async fn load_failed(

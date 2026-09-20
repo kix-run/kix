@@ -1,4 +1,4 @@
-# core/availability.nix — the availability level: one word for how much
+# The availability level: one word for how much
 # failure a workload must survive, and the arithmetic every consumer of it
 # shares. Design: v2_discussions/archive/145_availability_level.md.
 #
@@ -47,7 +47,7 @@ let
 
   # The largest level the substrate can honour, and whether that is known.
   # `certain = false` when the capabilities that decide it are unknown
-  # (three-valued, doc 127): asking above an uncertain substrate warns,
+  # under three-valued logic. Asking above an uncertain substrate warns;
   # asking above a certain one is an error.
   substrate =
     capabilities:

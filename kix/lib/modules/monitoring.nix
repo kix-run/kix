@@ -1,4 +1,4 @@
-# Monitoring module — native Prometheus monitoring stack.
+# Native Prometheus monitoring stack.
 #
 # Instantiates prometheus-operator, prometheus, alertmanager, node-exporter,
 # kube-state-metrics, and grafana as individual native packages.
@@ -51,13 +51,11 @@ in
       '';
     };
 
-    # ── Prometheus Operator ────────────────────────────────────────────
     operator.enabled = lib.mkOption {
       type = lib.types.bool;
       default = true;
     };
 
-    # ── Prometheus Server ──────────────────────────────────────────────
     prometheus = {
       enabled = lib.mkOption {
         type = lib.types.bool;
@@ -98,7 +96,6 @@ in
       };
     };
 
-    # ── Alertmanager ───────────────────────────────────────────────────
     alertmanager = {
       enabled = lib.mkOption {
         type = lib.types.bool;
@@ -111,19 +108,16 @@ in
       };
     };
 
-    # ── Node Exporter ──────────────────────────────────────────────────
     nodeExporter.enabled = lib.mkOption {
       type = lib.types.bool;
       default = true;
     };
 
-    # ── Kube State Metrics ─────────────────────────────────────────────
     kubeStateMetrics.enabled = lib.mkOption {
       type = lib.types.bool;
       default = true;
     };
 
-    # ── Grafana ────────────────────────────────────────────────────────
     grafana = {
       enabled = lib.mkOption {
         type = lib.types.bool;
@@ -152,7 +146,6 @@ in
       };
     };
 
-    # ── Default rules & monitors ─────────────────────────────────────
     defaultRules = {
       enabled = lib.mkOption {
         type = lib.types.bool;
@@ -164,7 +157,7 @@ in
           and kube-proxy. Equivalent to kube-prometheus-stack defaults.
         '';
       };
-      # Per-group toggles (forwarded to prometheus-default-rules package)
+      # Forwarded to the prometheus-default-rules package.
       rules = lib.mkOption {
         type = lib.types.anything;
         default = { };
@@ -177,7 +170,6 @@ in
       };
     };
 
-    # ── Loki ───────────────────────────────────────────────────────────
     loki = {
       enabled = lib.mkOption {
         type = lib.types.bool;
@@ -204,7 +196,6 @@ in
       };
     };
 
-    # ── Promtail ───────────────────────────────────────────────────────
     promtail.enabled = lib.mkOption {
       type = lib.types.bool;
       default = cfg.loki.enabled;
@@ -225,7 +216,7 @@ in
           else
             "http://grafana.localhost";
 
-        # Internal-key → chart-template suffix, used when releaseName is set.
+        # Map internal keys to chart template suffixes when releaseName is set.
         # The prefixed instance key becomes "${releaseName}-${chartSuffix.<key>}"
         # which mirrors kube-prometheus-stack's rendered resource names.
         chartSuffix = {
@@ -236,7 +227,7 @@ in
           kube-state-metrics = "kube-state-metrics";
           grafana = "grafana";
           default-rules = "kube-prometheus";
-          # NOTE: `storage` (the grafana PVC) intentionally stays unrenamed.
+          # Keep `storage`, the Grafana PVC, unrenamed.
           # Renaming it to `prometheus-grafana` would shadow the package's
           # `storage` alias for grafana's DI (the alias resolver matches the
           # named "storage" instance in the loki namespace before falling
@@ -250,12 +241,10 @@ in
           else
             "${cfg.releaseName}-${chartSuffix.${k}}";
         rawInstances = {
-          # ── Prometheus Operator ────────────────────────────────────────
           prometheus-operator = lib.mkIf cfg.operator.enabled {
             package = packages.prometheus-operator;
           };
 
-          # ── Prometheus Server ──────────────────────────────────────────
           prometheus-server = lib.mkIf cfg.prometheus.enabled {
             package = packages.prometheus;
             config = {
@@ -287,7 +276,6 @@ in
             };
           };
 
-          # ── Alertmanager ───────────────────────────────────────────────
           alertmanager = lib.mkIf cfg.alertmanager.enabled {
             package = packages.alertmanager;
             config = lib.optionalAttrs (cfg.alertmanager.routing != null) {
@@ -295,17 +283,14 @@ in
             };
           };
 
-          # ── Node Exporter ──────────────────────────────────────────────
           node-exporter = lib.mkIf cfg.nodeExporter.enabled {
             package = packages.node-exporter;
           };
 
-          # ── Kube State Metrics ─────────────────────────────────────────
           kube-state-metrics = lib.mkIf cfg.kubeStateMetrics.enabled {
             package = packages.kube-state-metrics;
           };
 
-          # ── Default rules & monitors ─────────────────────────────────
           default-rules = lib.mkIf cfg.defaultRules.enabled {
             package = packages.prometheus-default-rules;
             config = {
@@ -320,7 +305,6 @@ in
             };
           };
 
-          # ── Grafana persistent storage (DI sibling) ─────────────────────
           # Storage lives as its own instance so cluster operators control
           # size / storageClass without reaching into grafana's config. The
           # `storage` alias auto-wires into grafana's `storage` dep arg via
@@ -338,14 +322,12 @@ in
                 };
           };
 
-          # ── Grafana ───────────────────────────────────────────────────────
           grafana = lib.mkIf cfg.grafana.enabled {
             package = packages.grafana;
             config = {
               rootUrl = grafanaRootUrl;
               replicas = cfg.grafana.replicas;
-              # Loki is still Helm-wrapped so doesn't expose out.serviceUrl via DI.
-              # Pass the datasource URL explicitly until Loki is migrated to native.
+              # The Helm-wrapped Loki package does not expose out.serviceUrl.
               datasources =
                 lib.optional cfg.loki.enabled {
                   name = "Loki";
@@ -359,9 +341,8 @@ in
             };
           };
 
-          # ── Promtail priority class ───────────────────────────────────
-          # Promtail hardcodes priorityClassName = "monitoring-loki". We must
-          # create that PriorityClass before the DaemonSet can schedule pods.
+          # Promtail hardcodes priorityClassName = "monitoring-loki", so the
+          # PriorityClass must exist before the DaemonSet can schedule pods.
           priority-classes = lib.mkIf cfg.promtail.enabled {
             package = packages.priority-classes;
             config.classes = {
@@ -372,7 +353,6 @@ in
             };
           };
 
-          # ── Promtail ────────────────────────────────────────────────────
           promtail = lib.mkIf cfg.promtail.enabled {
             package = packages.promtail;
           };
@@ -380,17 +360,14 @@ in
       in
       lib.mapAttrs' (k: v: lib.nameValuePair (rename k) v) rawInstances;
 
-    # ── Loki (own namespace, helm-rendered + DI'd sibling PVC) ──────────
-    # Lives in its own namespace so the sibling PVC can be named `storage`
-    # (immich pattern). The PVC participates in real DI for its
-    # storageClassName via the flavor's storageClasses import. Helm
-    # rendering happens here at the module level (rather than inside a
-    # native package) because the helm bridge isn't available to package
-    # build functions — see kix/packages/loki/default.nix for the rationale.
+    # Loki uses its own namespace so its sibling PVC can be named `storage`.
+    # The flavor's storageClasses import supplies the PVC storageClassName.
+    # Helm rendering runs at module level because package build functions do
+    # not receive the Helm bridge.
     instances.${cfg.loki.namespace} = lib.mkIf cfg.loki.enabled {
       # The PVC instance is named "storage", which matches the
       # extraVolumes claimName baked into the package's default values.
-      # Same-namespace PVC + StatefulSet → claim resolves by name.
+      # The same-namespace StatefulSet resolves the PVC by name.
       storage = {
         package = packages."persistent-volume-claim";
         config.size = cfg.loki.storageSize;

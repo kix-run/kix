@@ -1,47 +1,14 @@
-//! The apiserver transport policy: retries, deadlines and a concurrency
-//! cap, applied once at the client so every call site inherits them.
+//! Apiserver retry and deadline policy shared by every client call.
 //!
-//! kube's `Client` is a tower service. [`build_client`] wraps the stack kube
-//! builds from a `Config` in one more layer, [`ResilienceLayer`], and that
-//! layer owns three things nothing else in the tree should own:
+//! 429 responses may be retried for every method. Server errors and connection
+//! failures are retried only for idempotent methods, except a POST whose
+//! connection never opened. Backoff is bounded by an attempt count and time
+//! budget; `Retry-After` takes precedence.
 //!
-//! - **Retries.** 429 is retried for every method: the server refused the
-//!   request before doing any work, and it tells us how long to wait. 5xx
-//!   and connection failures are retried for idempotent methods only (GET,
-//!   HEAD, DELETE, PUT, PATCH; server-side apply is a PATCH). A POST is
-//!   retried only when the connection never opened. Backoff is exponential
-//!   with jitter, capped, under a total time budget, and a `Retry-After`
-//!   header wins over the computed delay.
-//! - **Deadlines.** A connect timeout on the transport, and a per-attempt
-//!   deadline for every request that is not a watch. Watches are long-lived
-//!   by design and keep kube's own idle read timeout.
-//!
-//! Two things this layer deliberately does not do.
-//!
-//! - **Cap requests in flight.** The first version held a semaphore permit
-//!   for the duration of each request. That deadlocked `kix deploy`: the
-//!   scheduler of the day drove its apply futures from a `FuturesUnordered`
-//!   in one task, and after a CRD apply it awaited API rediscovery inline,
-//!   without polling those futures. Sixteen CRD applies held every permit
-//!   while parked, rediscovery waited for a permit, and nothing moved. Not
-//!   even the per-attempt deadline fired, because a future nobody polls
-//!   cannot time out. The scheduler now spawns its work (doc 134), but the
-//!   rule stands: a permit that lives inside a future is only safe when
-//!   every owner keeps polling, and a transport layer cannot know its
-//!   callers.
-//!   Burst control belongs where the burst is made: the managed sweep in
-//!   [`super::fetch`] bounds its own parallel LISTs, on spawned tasks the
-//!   runtime always polls.
-//! - **Turn a failure into an empty result.** When the budget is spent the
-//!   last response or error is returned as is, and kube maps it to the same
-//!   `kube::Error` the caller would have seen with no retries at all.
-//!   Callers decide what a failure means; see [`super::errors`].
-//!
-//! Every knob has an environment override for debugging (`KIX_RETRY_ATTEMPTS`,
-//! `KIX_REQUEST_TIMEOUT`, `KIX_CONNECT_TIMEOUT`); see
-//! [`ResiliencePolicy::from_env`]. `KIX_PREFLIGHT=0` turns off the
-//! first-contact probe in [`super::fetch::make_client`], which rides this
-//! layer marked with [`FirstContact`].
+//! The layer does not limit requests in flight. A permit held inside an
+//! unpolled request future can block work needed to resume that future. Callers
+//! that create bursts, such as [`super::fetch`], bound their own concurrency.
+//! Exhausted requests return their last response or error unchanged.
 
 use std::{
     future::Future,
@@ -65,24 +32,18 @@ use tower::{BoxError, Layer, Service, ServiceExt, buffer::Buffer};
 
 use super::errors::{FailureClass, classify_status, error_chain_find};
 
-/// The knobs. Defaults are sized for a real cluster mid-incident: an
-/// apiserver restart, a webhook pod rolling, a control-plane node reboot.
+/// Retry and timeout settings for apiserver requests.
 #[derive(Debug, Clone)]
 pub struct ResiliencePolicy {
     /// Total attempts per request, including the first. `1` disables retries.
     ///
-    /// Sized to outlast a webhook controller restart: seven attempts with
-    /// the default backoff span roughly twenty seconds before jitter, which
-    /// covers JVM-cold-start webhooks like the stackgres operator. That
-    /// number used to live in `apply.rs` as a per-patch retry loop.
+    /// The default spans roughly twenty seconds of backoff before jitter.
     pub max_attempts: usize,
     /// First backoff. Doubles each attempt up to `max_backoff`.
     pub initial_backoff: Duration,
     /// Cap on the computed backoff.
     pub max_backoff: Duration,
-    /// Cap on a `Retry-After` the server asks for. Longer waits are cut to
-    /// this; a server asking for minutes is a server we should stop
-    /// waiting on and tell the user about.
+    /// Maximum delay accepted from a `Retry-After` header.
     pub retry_after_cap: Duration,
     /// Total wall-clock budget across all attempts of one request. Once
     /// spent, the last outcome is returned.
@@ -138,29 +99,11 @@ impl ResiliencePolicy {
     }
 }
 
-/// Request extension marking the one request that proves the cluster answers.
+/// Marks the request that verifies the cluster answers.
 ///
-/// A request carrying this gets exactly one attempt and no deadline of its
-/// own. Insert it with [`mark_first_contact`].
-///
-/// First contact is not the place for this layer's generosity. The retries
-/// exist to carry a deploy through an apiserver restart or a webhook
-/// rolling, where persistence is what gets the run through. But a cluster
-/// that is not there will not become there, and seven attempts over a 60s
-/// budget only delay the one thing the user needs, which is the error: a
-/// refused port takes ~18s of retries and 0.1s without them.
-///
-/// The per-attempt deadline goes too, so the caller's own deadline is the
-/// only one running. Two deadlines of the same length would race, and which
-/// message the user got would be a coin flip. `connect_timeout` stays,
-/// because a connect that times out produces a better cause than a bare
-/// "time passed".
-///
-/// This rides the real client's request rather than a second client built
-/// from a second policy. A second client means a second connection pool: the
-/// probe would pay its own TLS handshake and then throw the connection away,
-/// measured at ~0.6s against stage1 and stage2, on every cluster command. On the
-/// real client the probe is a connection pre-warm instead of a tax.
+/// This request gets one attempt and relies on the caller's deadline. The
+/// transport connect timeout still applies so connection failures retain
+/// their specific cause. It uses the shared client to preserve its connection.
 #[derive(Clone, Copy, Debug)]
 pub struct FirstContact;
 
@@ -169,9 +112,7 @@ pub fn mark_first_contact<T>(req: &mut Request<T>) {
     req.extensions_mut().insert(FirstContact);
 }
 
-/// Is the first-contact probe enabled? `KIX_PREFLIGHT=0` turns it off and
-/// restores the pre-probe behaviour, where an unreachable endpoint surfaces
-/// from whatever request happens to run first.
+/// Whether to run the first-contact probe. `KIX_PREFLIGHT=0` disables it.
 pub fn preflight_enabled() -> bool {
     env_number(PREFLIGHT_ENV).is_none_or(|n| n > 0)
 }
@@ -201,7 +142,7 @@ pub async fn build_client(
     Ok(builder.with_layer(&ResilienceLayer::new(policy)).build())
 }
 
-/// Counters the layer keeps. Read by tests; a future `-v` summary can print them.
+/// Request counters maintained by the layer.
 #[derive(Debug, Default)]
 pub struct Stats {
     /// Requests that entered the layer.
@@ -414,12 +355,9 @@ pub fn decide(
             FailureClass::Unavailable | FailureClass::ServerError => shape_idempotent,
             _ => false,
         },
-        // A connect that timed out is a black hole (stale server address,
-        // tailnet down, routing). Waiting the whole budget on it would turn
-        // a 15-second connect timeout into a minute of silence; the user
-        // needs the error, not persistence. A refused or reset connection
-        // is different: that is a process restarting, and retrying is what
-        // gets a deploy through a control-plane node reboot.
+        // Do not extend a connect timeout across the full retry budget.
+        // Refused and reset connections remain retryable because the server
+        // may be restarting.
         Observed::Error(err) if is_connect_timeout(err.as_ref()) => false,
         Observed::Error(err) => shape_idempotent || is_connect_error(err.as_ref()),
     };

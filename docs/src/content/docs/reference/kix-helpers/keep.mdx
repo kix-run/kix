@@ -49,7 +49,7 @@ even when every member was null.
 
 ## When it is not needed
 
-- A hand-written empty (`emptyDir = { };`) renders as-is. No keep required.
+- An explicit empty value (`emptyDir = { };`) renders as-is. No keep required.
 - A constructor that filters its own nulls (`lib.optionalAttrs`) produces a
   literal empty and needs no keep. `kix.mount.emptyDir` works this way.
 - CRD schema subtrees rarely need it: the collapse rule keeps their literal

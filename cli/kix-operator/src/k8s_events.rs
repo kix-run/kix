@@ -1,11 +1,11 @@
-//! K8s Event emission for the DAG-streaming deploy (doc 99 Stage H).
+//! Kubernetes Event emission for graph-streaming deploys.
 //!
 //! Wraps a [`kube::runtime::events::Recorder`] in a [`DeployObserver`]. Every
 //! terminal node verdict, prune outcome, and lifecycle transition becomes an
 //! Event attached to the Activation CR, so `kubectl describe activation` and
 //! downstream log aggregators surface the full deploy timeline.
 //!
-//! The observer is deliberately fire-and-forget:
+//! The observer is fire-and-forget:
 //!   - [`DeployObserver::on_event`] is sync, so each call spawns a short
 //!     async task that publishes the Event via the Recorder.
 //!   - Failures are logged via `tracing` and dropped; K8s Events are best-
@@ -303,8 +303,6 @@ fn node_label(id: &NodeId) -> String {
         NodeId::Synthetic(s) => format!("⟦{s}⟧"),
     }
 }
-
-// ── Composite observer ──────────────────────────────────────────────────────
 
 /// Dispatches each [`DeployEvent`] to every wrapped observer.
 ///

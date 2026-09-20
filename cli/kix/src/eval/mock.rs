@@ -1,7 +1,7 @@
 //! Mock Nix backend for testing.
 //!
 //! Returns canned responses without any real Nix evaluation.
-//! Useful for all downstream testing — commands can use this
+//! Commands can use this for downstream testing
 //! without a Nix installation.
 
 use std::collections::HashMap;

@@ -29,7 +29,7 @@ let
 in
 
 rec {
-  # ns → inst → { roles, isImport }, built from peeked meta (phase-1 timing,
+  # Map namespace and instance to roles and import state from peeked meta,
   # no fixpoint). Role names are validated against the registry here, so a
   # typo'd `meta.roles` entry throws with the declaring instance named
   # instead of silently never matching (the meta.provides failure mode).
@@ -45,12 +45,12 @@ rec {
       }) nsInsts
     ) instances;
 
-  # domain → { ns, inst }, built from peeked `meta.annotationDomains`
+  # Map domains to namespace and instance from peeked `meta.annotationDomains`.
   # (v2_discussions/128 mechanism 2). An operator package declares the
   # annotation domains it manages (e.g. reflector declares
   # "reflector.v1.k8s.emberstack.com"); the scorecard's
   # `architecture.annotationDomainOwnership` rule lints consumers against
-  # this index. Unlike roles the vocabulary is open — domains are foreign
+  # this index. Unlike roles, the vocabulary is open because domains are foreign
   # identifiers owned by upstream operators, so the declarer itself is the
   # registry. Two declarers of one domain is a duplicate-symbol error
   # (eagerly forced by buildCluster, same spirit as checkRoleBindings).
@@ -144,7 +144,7 @@ rec {
 
   # Resolve a role to its provider. Managed instances are strong symbols,
   # imports weak (mirrors the DI managed-over-import filter). Two strong
-  # providers never coexist — whether both are managed, or one is the
+  # providers never coexist, whether both are managed or one is the
   # environment (binding = "exclusive"). Returns { ns, inst, isImport } or
   # null; the out-contract wrapper lives at the cluster.nix call site.
   findRoleProvider =
@@ -211,7 +211,7 @@ rec {
       builtins.foldl' (acc: l: builtins.seq l acc) null lookups
     );
 
-  # Hook execution order is (priority ascending, then name) — never bare
+  # Hook execution order is priority ascending, then name, rather than bare
   # attribute-name order. A hook is either a plain function (priority 1000)
   # or { priority ? 1000; fn; }. This order is a contract: for
   # clusterProcessors it determines Activation extraDeps order, which is
@@ -270,7 +270,7 @@ rec {
 
   # Force each check in order. A check is any lazy value that throws its own
   # error message on failure and evaluates to anything (conventionally null)
-  # on success — so validators keep authorship of their messages instead of
+  # on success, so validators retain their messages instead of
   # being squeezed into an assertion/message pair.
   runChecks = checks: builtins.foldl' (acc: c: builtins.seq c acc) null checks;
 }

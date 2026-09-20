@@ -1,12 +1,8 @@
-//! One classification of apiserver failures, decided once.
+//! Classify Kubernetes API failures for retry and reporting decisions.
 //!
-//! Every place that talks to the apiserver used to pattern-match on the
-//! HTTP status code by hand (`resp.code == 403`, `resp.code >= 500`, ...).
-//! Each site drew its own line between "transient" and "permanent", and
-//! the lines did not agree. This module is the single table. The transport
-//! layer in [`super::client`] uses it to decide what to retry; the sweep in
-//! [`super::fetch`] uses it to tell "forbidden" from "failed"; apply and
-//! readiness use it for conflicts and not-found.
+//! [`super::client`] uses the classification for retries, [`super::fetch`]
+//! distinguishes forbidden requests from other failures, and apply and
+//! readiness handle conflicts and missing resources from the same table.
 
 use std::error::Error as StdError;
 
@@ -19,8 +15,7 @@ pub enum FailureClass {
     /// HTTP 502, 503 or 504. The request may or may not have reached the server.
     /// Safe to retry for idempotent methods.
     Unavailable,
-    /// Any other 5xx. Usually a webhook or storage backend having a bad
-    /// moment. Safe to retry for idempotent methods.
+    /// Any other 5xx. Safe to retry for idempotent methods.
     ServerError,
     /// The connection failed or dropped: refused, reset, TLS, EOF.
     Transport,
@@ -28,7 +23,7 @@ pub enum FailureClass {
     Timeout,
     /// HTTP 401.
     Unauthorized,
-    /// HTTP 403. A stable fact about the credentials, not a fault.
+    /// HTTP 403. Retrying with the same credentials will not grant access.
     Forbidden,
     /// HTTP 404.
     NotFound,
@@ -38,12 +33,12 @@ pub enum FailureClass {
     Invalid,
     /// Any other 4xx.
     ClientError,
-    /// Everything else: serialisation, auth plugin, kubeconfig.
+    /// Errors outside the classes above, such as serialization or kubeconfig errors.
     Other,
 }
 
 impl FailureClass {
-    /// Would the same request plausibly succeed if sent again?
+    /// Whether retry policy may repeat the same request.
     pub fn is_transient(self) -> bool {
         matches!(
             self,

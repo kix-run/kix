@@ -13,8 +13,6 @@
 }:
 
 let
-  # Kix's own annotation keys and API names, spelled once in
-  # core/annotations.nix.
   kixAnnotations = import ../core/annotations.nix;
   kixKeys = kixAnnotations.keys;
   inherit (k8s) mkPackageInstance;
@@ -63,11 +61,9 @@ in
           inherit kixlib;
         };
 
-        # The availability ladder for this instance (core/availability.nix,
-        # v2_discussions/145): instance override, else cluster default,
-        # capped by the package ceiling, refused above the substrate.
-        # `.level` reaches the package as the `availability` argument, the
-        # scope's workload interceptors and the instance processors.
+        # Resolve the instance override or cluster default against the package
+        # ceiling and substrate capabilities. Pass the result to the package,
+        # workload interceptors, and instance processors.
         availability = availabilityLib.resolve {
           capabilities = clusterConfig.cluster.capabilities or { };
           clusterDefault =
@@ -85,13 +81,8 @@ in
           hasDefault = true;
           explicitOverride = null;
         };
-        # FUTURE (2026-08-31): this fired on stage2 — a cluster with NO DNS at
-        # all — and scrolled past in deploy output while alertmanager
-        # gossip and vmagent remote-write hung on resolution. "Your
-        # workloads cannot resolve anything" is a different species from
-        # advisory lints: eval diagnostics want severity levels, with the
-        # fatal ones surfaced (or gated on) by the deploy path. See
-        # ROADMAP § Open design questions.
+        # Missing DNS prevents Kix from ordering workloads after a DNS provider.
+        # This remains a warning until diagnostics support severity levels.
         _dnsResolutionCheck =
           if !_dnsResolution.found then
             builtins.trace "[kix] warning: no DNS instance (alias 'dns') was found. Kix will not wait for DNS to be ready before deploying workloads. Add a DNS provider or import if this ordering is required" null
@@ -104,7 +95,7 @@ in
             let
               dnsInst = allInstances.${_dnsResolution.namespace}.${_dnsResolution.instanceName};
             in
-            # Self-dep guard: the DNS provider's own workloads must not depend on their own root.
+            # Do not add the DNS provider's root as its own dependency.
             if _dnsResolution.namespace == namespaceName && _dnsResolution.instanceName == instanceName then
               null
             else if dnsInst ? root then
@@ -118,19 +109,16 @@ in
           else
             clusterCtx.findRoleProvider "network-policy-enforcer";
 
-        # Self-dep guard: the enforcer's own scope must not depend on itself.
+        # Do not expose the enforcer to its own package scope.
         _isSelfEnforcer =
           _enforcerProvider != null
           && _enforcerProvider.ns == namespaceName
           && _enforcerProvider.inst == instanceName;
 
-        # The package-facing handle contract (`scope.networkPolicyEnforcer`):
-        # null unless policy generation is enabled cluster-wide, an enforcer
-        # is declared, and this instance is not the enforcer itself. Packages
-        # (e.g. stackgres-cluster) branch on this handle to decide whether to
-        # emit their own policies — with `networkPolicy.enable = false` they
-        # must see null even when an enforcer instance exists. The option is
-        # declared by the netpol plugin, hence the `or false` read.
+        # scope.networkPolicyEnforcer is available only when policy generation
+        # is enabled, a provider exists, and this is not the provider instance.
+        # The plugin declares networkPolicy.enable, so clusters without the
+        # plugin use the false default.
         _netpolEnabled = (clusterConfig.networkPolicy or { }).enable or false;
 
         _networkPolicyEnforcer =
@@ -149,8 +137,8 @@ in
             workloadInput:
             edgeAnalysis.analyzeEdges {
               json = builtins.toJSON workloadInput;
-              # helm workloads: address values rarely survive the chart
-              # pipeline — identity hits stay netpol edges (conservative)
+              # Helm rendering can discard address facts while retaining
+              # resource identity, so treat identity matches as connections.
               conservative = workloadInput ? _helmNetworkDeps;
               inherit serviceRegistry serviceRefRegistry serviceIndex;
             };
@@ -333,26 +321,16 @@ in
           } parts
         );
 
-        # Sideband drain: interceptor-emitted resources ride workloads' _injectedResources, attached pre-seal by scope.mkWorkload.
+        # Collect resources that workload interceptors attached before sealing.
         _scopeInjectedResources = builtins.concatMap (
           r: r._injectedResources or [ ]
         ) _partResourcesFromParts;
 
-        # --- Silent-drop guard (kixpkgs#25) ---------------------------------
-        # `collectTypedAttrs` above excludes the `root` key, so a package
-        # whose only k8s-resource lives *at* `root` contributes nothing to
-        # the manifests — it still emits a PackageInstance marker, so the
-        # cluster builds green and the resource simply never exists. The
-        # convention is a named part with `root` pointing at it (same store
-        # path, dedup'd by the manifest writer):
+        # collectTypedAttrs excludes root. Require the root resource to also
+        # appear under a named part so it is included in the manifest set:
         #
         #   claim = scope.mkResource { ... };
         #   root  = claim;
-        #
-        # persistent-volume-claim shipped exactly this bug; the review that
-        # fixed it warned "nothing prevents the next package from tripping
-        # it", and the next package duly did. This turns that silence into a
-        # build error that names the offender (PRINCIPLES §6).
         _rootRendersCheck =
           let
             plainPath = r: builtins.unsafeDiscardStringContext r.outPath;
@@ -509,20 +487,17 @@ in
             availability
             ;
           cluster = clusterCtx;
-          # Root-reachability of a part, from the forward closure only (never
-          # from processor output, which would recurse).
+          # Use the forward closure only; processor output depends on this
+          # context and would introduce recursion.
           forwardReachable = r: builtins.hasAttr (builtins.unsafeDiscardStringContext r.outPath) forwardPaths;
         };
         processorResults = map (p: p processorCtx) instanceProcessors;
         processorResources = builtins.concatMap (r: r.resources or [ ]) processorResults;
         processorWarnings = builtins.concatMap (r: r.warnings or [ ]) processorResults;
 
-        # This instance's dependencies, as "ns/inst" plus the evaluated
-        # instance, so a consumer can walk on to the dependency's own
-        # links. Resolved DI deps come from resolvedDepMeta; directly wired
-        # deps (deps.X = ref.<ns>.<inst>) skip it, so their identity is
-        # recovered from the target's own _meta. Explicit wiring counts as
-        # linking against the operator.
+        # Record each dependency as "namespace/instance" with its evaluated
+        # view. resolvedDepMeta covers DI; directly wired deps expose their
+        # identity through _meta.
         directDepLinks =
           lib.mapAttrsToList (_: depInfo: {
             id = "${depInfo.resolution.namespace}/${depInfo.resolution.instanceName}";
@@ -544,13 +519,9 @@ in
               [ ]
           ) (builtins.attrValues deps);
 
-        # The closure of directDepLinks. An annotation's declarer is often
-        # a dependency of a dependency: every TLS Ingress carries a
-        # cert-manager.io annotation stamped by the cluster-issuer, which
-        # depends on cert-manager, which declares the domain. One level
-        # cannot see that; the closure can. Walks `_depLinks` on each
-        # evaluated dependency with a seen set, so a shared dependency is
-        # visited once.
+        # Follow _depLinks transitively so annotation-domain checks recognize
+        # declarers reached through another dependency. The seen set handles
+        # shared dependencies and cycles.
         transitiveDepTargets =
           let
             go =
@@ -573,13 +544,8 @@ in
         scorecardEnabled = (scorecardConfig.enable or false) && (scorecardConfig.rules or { }) != { };
         owner = packageMeta.owner or null;
 
-        # What the instance ships: its own parts, what the scope injected,
-        # and what the processors derived (PodDisruptionBudgets, the
-        # materialised network policies). The scorecard scores this set,
-        # not the author's manifests alone. A rule about a derived resource
-        # was otherwise unwritable (reliability.hasPDB was retired for it,
-        # 2026-09-20), and a derived resource the rules never see is one
-        # the score does not describe.
+        # Score the complete instance output: package parts, resources injected
+        # by the scope, and resources derived by processors.
         shippedResources = allPartResources ++ processorResources;
 
         scorecardManifestFindings =
@@ -617,10 +583,8 @@ in
                 ;
               config = evaluatedConfig;
               meta = packageMeta;
-              # "ns/inst" identities of every instance this one depends
-              # on, directly or through a dependency's own dependencies —
-              # the annotationDomainOwnership rule checks declarers
-              # against these.
+              # annotationDomainOwnership accepts declarers from direct and
+              # transitive dependencies, identified as "namespace/instance".
               resolvedDepTargets = transitiveDepTargets;
               knownAnnotationDomains = scorecardConfig.knownAnnotationDomains or [ ];
               ruleDefaults = scorecardConfig.ruleDefaults or { };

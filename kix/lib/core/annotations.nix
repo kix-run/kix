@@ -16,8 +16,7 @@
 #
 #     annotations.${kix.keys.derived} = "true";
 #
-# A key spelled by hand in one helper and one checker drifts. A key spelled
-# here does not.
+# Centralizing keys keeps helpers and checkers aligned.
 rec {
   # The DNS domain that prefixes every key Kix stamps, and the group of the
   # CRDs Kix owns. The one literal.

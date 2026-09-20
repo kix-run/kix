@@ -1,4 +1,4 @@
-# Flavor: kubeadm — vanilla upstream Kubernetes bootstrap.
+# kubeadm flavor for an upstream Kubernetes bootstrap.
 #
 # Ships nothing beyond the control plane. CNI, storage, and load balancing
 # are bring-your-own: the roles are declared vacant ("absent"), so managed

@@ -1,11 +1,6 @@
-# Helm DAG reconstruction — infer intra-chart resource dependencies
-# from well-known K8s reference patterns.
-#
-# Works on raw JSON resources (pre-wrapping) so that inferred edges
-# can be passed as `requires` to mkResource, making them part of the
-# content-addressed hash and kix.run/depends-on annotation.
-#
-# See v2_discussions/86_helm_dag_reconstruction.md for design rationale.
+# Infer intra-chart dependencies from Kubernetes resource references.
+# Inference runs before wrapping so `requires` affects the resource hash and
+# the kix.run/depends-on annotation.
 
 { lib }:
 
@@ -59,16 +54,14 @@ rec {
   # Kind/name is unique within a single Helm release.
   resourceId = r: "${r.kind}/${(r.metadata or { }).name or ""}";
 
-  # ── Edge inference ──────────────────────────────────────────────────
-  #
-  # Infer edges from raw JSON resources (before wrapping).
+  # Infer edges from raw JSON resources before wrapping.
   # Returns a list of { from, to, type } where from/to are raw resource objects.
   #
   # Edge direction: `from` depends on `to` (from is deployed after to).
   inferEdges =
     resources:
     let
-      # Lookup: "Kind/name" → resource
+      # Lookup by "Kind/name".
       byKindName = builtins.listToAttrs (
         map (r: {
           name = "${r.kind}/${(r.metadata or { }).name or ""}";
@@ -78,7 +71,7 @@ rec {
 
       workloads = builtins.filter (r: isWorkloadKind r.kind) resources;
 
-      # ── 1. Workload → ServiceAccount ──────────────────────────────
+      # Workload to ServiceAccount.
       saEdges = builtins.concatMap (
         r:
         let
@@ -97,19 +90,19 @@ rec {
           [ ]
       ) workloads;
 
-      # ── 2. Workload → ConfigMap/Secret (volumes, envFrom, env) ────
+      # Workload to ConfigMap or Secret through volumes and environment.
       volumeEdges = builtins.concatMap (
         r:
         let
           ps = podSpecOf r;
 
-          # Volume mounts
+          # Volume sources.
           volRefs = builtins.concatMap (
             v:
             let
               cmName = (v.configMap or { }).name or null;
               secName = (v.secret or { }).secretName or null;
-              # Projected volume sources
+              # Projected volume sources.
               projRefs = builtins.concatMap (
                 s:
                 let
@@ -169,7 +162,7 @@ rec {
             ++ projRefs
           ) (safeList (ps.volumes or [ ]));
 
-          # envFrom refs from all containers
+          # envFrom references from all containers.
           containers = safeList (ps.containers or [ ]) ++ safeList (ps.initContainers or [ ]);
           envFromRefs = builtins.concatMap (
             c:
@@ -206,7 +199,7 @@ rec {
             ) (safeList (c.envFrom or [ ]))
           ) containers;
 
-          # env[].valueFrom.configMapKeyRef / secretKeyRef
+          # env[].valueFrom references.
           envValueFromRefs = builtins.concatMap (
             c:
             builtins.concatMap (
@@ -246,7 +239,7 @@ rec {
         volRefs ++ envFromRefs ++ envValueFromRefs
       ) workloads;
 
-      # ── 3. RoleBinding/ClusterRoleBinding → ServiceAccount ────────
+      # Role bindings to ServiceAccounts.
       bindingEdges = builtins.concatMap (
         r:
         builtins.concatMap (
@@ -267,7 +260,7 @@ rec {
         ) (safeList (r.subjects or [ ]))
       ) (builtins.filter (r: r.kind == "RoleBinding" || r.kind == "ClusterRoleBinding") resources);
 
-      # ── 4. Service → Workload (selector label subset match) ───────
+      # Services to workloads selected by label subset.
       serviceEdges = builtins.concatMap (
         svc:
         let
@@ -281,7 +274,7 @@ rec {
         }) matching
       ) (builtins.filter (r: r.kind == "Service") resources);
 
-      # ── 5. HPA → Workload (scaleTargetRef) ────────────────────────
+      # HPAs to scale targets.
       hpaEdges = builtins.concatMap (
         r:
         let
@@ -300,7 +293,7 @@ rec {
           [ ]
       ) (builtins.filter (r: r.kind == "HorizontalPodAutoscaler") resources);
 
-      # ── 6. PDB → Workload (selector match) ───────────────────────
+      # PDBs to workloads selected by labels.
       pdbEdges = builtins.concatMap (
         r:
         let
@@ -314,11 +307,11 @@ rec {
         }) matching
       ) (builtins.filter (r: r.kind == "PodDisruptionBudget") resources);
 
-      # ── 7. Ingress → Service (backend refs) ──────────────────────
+      # Ingresses to backend Services.
       ingressEdges = builtins.concatMap (
         r:
         let
-          # Default backend
+          # Default backend.
           defaultSvcName = ((r.spec or { }).defaultBackend.service or { }).name or null;
           defaultEdges =
             if defaultSvcName != null && byKindName ? "Service/${defaultSvcName}" then
@@ -331,7 +324,7 @@ rec {
               ]
             else
               [ ];
-          # Rule backends
+          # Rule backends.
           ruleEdges = builtins.concatMap (
             rule:
             builtins.concatMap (
@@ -355,7 +348,7 @@ rec {
         defaultEdges ++ ruleEdges
       ) (builtins.filter (r: r.kind == "Ingress") resources);
 
-      # ── 8. HTTPRoute → Service (backendRefs) ─────────────────────
+      # HTTPRoutes to backend Services.
       httpRouteEdges = builtins.concatMap (
         r:
         builtins.concatMap (
@@ -380,7 +373,7 @@ rec {
         ) (safeList ((r.spec or { }).rules or [ ]))
       ) (builtins.filter (r: r.kind == "HTTPRoute") resources);
 
-      # ── 9. ServiceMonitor → Service (selector match) ──────────────
+      # ServiceMonitors to Services selected by labels.
       serviceMonitorEdges = builtins.concatMap (
         r:
         let
@@ -407,9 +400,7 @@ rec {
     ++ httpRouteEdges
     ++ serviceMonitorEdges;
 
-  # ── Dependency map ────────────────────────────────────────────────
-  #
-  # Converts edge list to resourceId → [resourceId] map.
+  # Convert edges to a resourceId -> [resourceId] map.
   # Direction: from depends on to.
   buildDepsMap =
     edges:

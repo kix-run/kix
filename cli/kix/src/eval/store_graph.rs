@@ -22,7 +22,7 @@ use super::error::KixEvalError;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KixPackageIndex {
     pub cluster: String,
-    /// PI store path → owned resource store paths.
+    /// PI store path to owned resource store paths.
     pub packages: IndexMap<PathBuf, Vec<PathBuf>>,
 }
 
@@ -35,9 +35,9 @@ pub struct StoreGraph {
     pub result_dir: PathBuf,
     pub packages: IndexMap<PathBuf, PackageNode>,
     pub resources: HashMap<PathBuf, ResourceNode>,
-    /// resource store path → owning PI store path.
+    /// Resource store path to owning PI store path.
     pub resource_owner: HashMap<PathBuf, PathBuf>,
-    /// Cached store references: path → direct references.
+    /// Cached direct store references by path.
     /// Populated by bulk_load_graph, reusable by stamp_annotations.
     pub ref_cache: HashMap<PathBuf, Vec<PathBuf>>,
 }
@@ -51,8 +51,8 @@ pub struct PackageNode {
     pub namespace: String,
     /// From the PI manifest: spec.version
     pub version: Option<String>,
-    /// From the PI manifest: spec.lifecycle — "stateful" | "durable" |
-    /// "ephemeral" | None. Drives migration pair detection.
+    /// From the PI manifest: spec.lifecycle, one of "stateful", "durable",
+    /// "ephemeral", or absent. Drives migration pair detection.
     /// See v2_discussions/67_stateful_migration_orchestration.md.
     pub lifecycle: Option<String>,
     /// Ordered list of owned resource store paths.
@@ -79,7 +79,7 @@ pub struct CrossDep {
 }
 
 /// Bulk-load the entire dependency graph with one `nix-store -q --graph` call.
-/// Parses the dot output and returns a map of path → direct references.
+/// Parses the dot output and returns direct references by path.
 fn bulk_load_graph(root_path: &Path) -> HashMap<PathBuf, Vec<PathBuf>> {
     let output = Command::new("nix-store")
         .args(["-q", "--graph"])
@@ -120,8 +120,7 @@ fn bulk_load_graph(root_path: &Path) -> HashMap<PathBuf, Vec<PathBuf>> {
         let src = PathBuf::from(format!("{nix_store}{src_base}"));
         let dst = PathBuf::from(format!("{nix_store}{dst_base}"));
 
-        // In dot output, edge is "dependency -> dependent" (reference → referrer).
-        // We store as: dependent → [dependencies] (dst depends on src).
+        // Dot edges run from dependency to dependent. Store the inverse map.
         deps.entry(dst).or_default().push(src);
     }
 
@@ -138,7 +137,7 @@ fn bulk_load_graph(root_path: &Path) -> HashMap<PathBuf, Vec<PathBuf>> {
 }
 
 /// Extract the 32-char base32 hash from a Nix store path.
-/// `/nix/store/<32-char-hash>-name` → first 32 chars of the filename.
+/// Reads the first 32 characters of `/nix/store/<hash>-name`.
 pub fn store_hash(path: &Path) -> String {
     path.file_name()
         .and_then(|n| n.to_str())
@@ -388,8 +387,8 @@ impl StoreGraph {
         })
     }
 
-    /// Build a graph from a flat set of stamped manifests — live objects in
-    /// their kix-owned view, or a snapshot directory — so it can stand in
+    /// Build a graph from a flat set of stamped manifests, such as live
+    /// kix-owned objects or a snapshot directory, so it can stand in
     /// for a store graph that is not on this machine: the previous
     /// activation when its store path is gone, or the cluster side of
     /// `kix diff`.
@@ -401,7 +400,7 @@ impl StoreGraph {
     /// matched resource reuses the reference path and manifest (equal hash
     /// ⇒ identical content), so untouched packages compare path-equal and
     /// read as unchanged; unmatched resources keep their own manifest under
-    /// a synthetic path so their diff renders old → new. Versions come from
+    /// a synthetic path so their diff keeps the old and new sides aligned. Versions come from
     /// PackageInstance manifests.
     pub fn synthesize(manifests: &[serde_json::Value], reference: &StoreGraph) -> StoreGraph {
         use crate::manifest::keys;
@@ -423,7 +422,7 @@ impl StoreGraph {
         };
 
         let mut graph = StoreGraph::empty(&reference.cluster_name);
-        // "ns/instance" → resource paths, and → the PackageInstance manifest
+        // Map "ns/instance" to resource paths and its PackageInstance manifest
         // (its path, version, lifecycle). A package exists for every
         // PackageInstance seen, resources or not, so an empty package on
         // the reference side compares as unchanged rather than added.
@@ -514,7 +513,7 @@ impl StoreGraph {
             let (pkg_ns, pkg_name) = key.split_once('/').unwrap_or(("_cluster", key.as_str()));
 
             // Order shared paths exactly like the reference package so an
-            // untouched package compares Vec-equal (→ unchanged); extras go
+            // untouched package compares equal; extras go
             // last.
             let ordered = match reference
                 .packages
@@ -590,7 +589,7 @@ impl StoreGraph {
     }
 
     /// Get cross-package store references for a specific resource.
-    /// Uses the bulk-loaded ref_cache — no subprocess calls.
+    /// Uses the bulk-loaded ref_cache without spawning subprocesses.
     pub fn cross_pkg_refs(&self, res_path: &Path) -> Vec<PathBuf> {
         let owner = match self.resource_owner.get(res_path) {
             Some(o) => o,
@@ -632,8 +631,6 @@ mod tests {
             "/nix/store/abc123def456ghi789jkl012mno345pq-python3-3.11"
         )));
     }
-
-    // ── synthesize ──────────────────────────────────────────────────
 
     mod synthesize {
         use super::super::*;

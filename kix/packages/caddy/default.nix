@@ -310,7 +310,7 @@ in
 
       # --- Entry point ---
       # No PodDisruptionBudget here: the availability plugin derives one for
-      # every workload above a single replica, and a hand-written
+      # every workload above a single replica, and an explicit
       # minAvailable = 1 blocked eviction outright on a single-replica
       # cluster.
       root = self.service;

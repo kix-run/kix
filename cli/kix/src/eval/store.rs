@@ -19,8 +19,8 @@ pub fn default_cache_db() -> PathBuf {
     default_cache_dir().join("eval-cache.db")
 }
 
-/// Resolve symlinks in a path. Important on macOS where `/tmp` is a
-/// symlink to `/private/tmp` — Nix store paths must not traverse symlinks.
+/// Resolve symlinks because Nix store paths must not traverse them. On macOS,
+/// `/tmp` commonly points to `/private/tmp`.
 pub fn resolve_symlinks(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|e| {
         tracing::warn!(path = ?path, error = %e, "failed to canonicalize path, using as-is");
@@ -46,8 +46,8 @@ pub fn save_activation_path(cluster: &str, result_dir: &Path) -> std::io::Result
     let file = dir.join(format!("{cluster}.path"));
     std::fs::write(&file, result_dir.to_string_lossy().as_bytes())?;
 
-    // Best-effort GC root — a missing nix-store binary or a store path that
-    // is already gone should not fail the deploy bookkeeping.
+    // A missing nix-store binary or an absent store path must not fail deploy
+    // bookkeeping.
     let root_link = dir.join(format!("{cluster}.root"));
     let _ = std::fs::remove_file(&root_link);
     match std::process::Command::new("nix-store")

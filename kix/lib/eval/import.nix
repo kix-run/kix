@@ -28,7 +28,7 @@ rec {
       apiVersion ? null,
       # Registry roles this environment-provided service fills (weak symbols;
       # a managed instance with the same role shadows it). The role name is
-      # also the import's DI alias — no instance-level `aliases` needed.
+      # also the import's DI alias, so no instance-level `aliases` are needed.
       roles ? [ ],
     }:
     {
@@ -86,7 +86,7 @@ rec {
           requires ? [ ],
         }:
         let
-          # import-mode refs have no store resource at all — facts are the
+          # Import-mode refs have no store resource, so facts are the
           # first channel that lets them participate in edge detection
           endpointFactCtx = k8s.facts.mkFact "endpoint" {
             inherit name selector ports;
@@ -326,7 +326,8 @@ rec {
       networkConfig = clusterConfig.networkPolicy or { enable = false; };
       rawPlatformIntents = instCfg.platformIntents or { };
 
-      # Fallback materializer path (v2_discussions/121): intents must be extraDeps on the marker, sealed at mkResource time — instanceProcessors run too late.
+      # Fallback materializer intents must be extraDeps on the marker and
+      # sealed at mkResource time; instanceProcessors run too late.
       intentProvider =
         if rawPlatformIntents == { } || !networkConfig.enable || !(clusterCtx ? findRoleProvider) then
           null

@@ -344,7 +344,7 @@ mod tests {
             // Test fixtures and integration tests: literal API objects and
             // literal cluster YAML. These are the independent restatement
             // that catches a constant changed by mistake, so they spell the
-            // domain on purpose and a move updates them by hand. The
+            // domain directly and a move updates them explicitly. The
             // checklist is in v2_discussions/archive/137_kix_run_domain_migration.md.
             "cli/kix/tests/fixtures",
             "cli/kix-operator/tests",
@@ -365,7 +365,7 @@ mod tests {
         // Every tree that can carry a Kix domain into something that runs.
         // `kix` and `cli` alone left the domain free to appear in scripts,
         // plugins and cluster definitions, which is exactly where this move
-        // had to sweep it by hand.
+        // had to update every occurrence explicitly.
         let mut stack: Vec<std::path::PathBuf> = ["kix", "cli", "scripts", "tools", "clusters"]
             .iter()
             .map(|d| root.join(d))
@@ -452,7 +452,7 @@ mod tests {
 
     /// The part of one line that is not a comment.
     ///
-    /// Everything else on the line counts as code, which is deliberately
+    /// Everything else on the line counts as code. This is
     /// broader than "inside a string literal". The earlier version of this
     /// walked a line for double-quoted spans and reset that state at every
     /// newline, so a domain anywhere inside a Nix `''` block or a Rust raw

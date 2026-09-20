@@ -1,4 +1,4 @@
-# Flavor: GKE Autopilot — fully managed GKE with hard platform restrictions.
+# GKE Autopilot flavor with managed platform restrictions.
 #
 # Google manages both control plane and worker nodes. Significant restrictions:
 # - No privileged pods, hostNetwork, hostPID, hostIPC, hostPath volumes
@@ -8,7 +8,7 @@
 # - Baseline PSA enforcement
 # - Mutating admission webhooks have restrictions
 #
-# cni and loadBalancer are environment-owned exclusively — Autopilot does
+# cni and loadBalancer are environment-owned exclusively because Autopilot does
 # not permit user-run network infrastructure.
 #
 # Platform imports: DNS (kube-dns), storage (premium-rwo via PD CSI).

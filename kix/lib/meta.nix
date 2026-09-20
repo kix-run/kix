@@ -113,7 +113,7 @@ rec {
         package = availEntry.package;
         inherit kixlib;
       };
-      # Shelf packages bypass buildRolesIndex until instantiated — validate
+      # Shelf packages bypass buildRolesIndex until instantiated, so validate
       # meta.roles here so a typo'd role on a catalog entry throws instead
       # of silently never matching a weak demand.
       shelfRoles = map (roles.assertKnownRole "meta.roles of ${context}") (packageMeta.roles or [ ]);

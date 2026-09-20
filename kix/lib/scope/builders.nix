@@ -1,8 +1,6 @@
 { lib, k8s }:
 
 let
-  # Kix's own annotation keys and API names, spelled once in
-  # core/annotations.nix.
   kixAnnotations = import ../core/annotations.nix;
   kixKeys = kixAnnotations.keys;
   availabilityLib = import ../core/availability.nix { inherit lib; };
@@ -23,20 +21,17 @@ in
       peekedPackageMeta,
       clusterCtx,
       availability,
-      # cluster.factBehavior, keyed "group/Kind": operator override (wins
-      # over the CRD-declared behavior arriving via mkCR) and fallback for
-      # builder-less CRs (helm-rendered, raw mkResource)
+      # Overrides keyed by "group/Kind" take precedence over CRD declarations
+      # and also cover custom resources without typed builders.
       factBehaviorOverrides ? { },
-      # scopeObj is the enclosing mkScope fixpoint — only consume lazily (interceptor ctx, mkCR); forcing it while default.nix constructs it would recurse
+      # scopeObj is the enclosing mkScope fixpoint. Access it only from lazy
+      # interceptor and mkCR paths to avoid recursion while building the scope.
       scopeObj,
     }:
     rec {
-      # A workload is sealed by its typed builder only: mkDeployment,
-      # mkStatefulSet, mkDaemonSet, mkJob and mkHelmWorkload run the pod-spec
-      # validators, the edge analysis and the interceptors (derived spread,
-      # netpol) before the seal. A raw mkResource of one of these kinds used
-      # to skip all of that without a word, so it is refused; sealWorkload
-      # reaches the seal through sealResource below.
+      # Workload kinds must use their typed builders so pod validation, edge
+      # analysis, and workload interceptors run before sealing. sealWorkload
+      # calls sealResource after that processing.
       workloadKinds = [
         "Deployment"
         "StatefulSet"
@@ -75,9 +70,8 @@ in
         }@args:
         let
           behavior = resolveFactBehavior args;
-          # a terminate-declared CR dials out (via its operands) — it waits
-          # on DNS like any dialing workload would. Conservative: spliced
-          # even when this particular CR absorbed no endpoint (harmless).
+          # A terminating custom resource represents pods that connect to
+          # endpoints, so order it after DNS when a DNS provider exists.
           dnsRequires = lib.optional (
             behavior != null && behavior.endpoint == "terminate" && edgeAnalysis.dnsRoot != null
           ) edgeAnalysis.dnsRoot;
@@ -102,10 +96,8 @@ in
           )
         );
 
-      # Behavior is a property of the CRD: it normally arrives in args via
-      # the typed builder chain (mkCRD/mkCRDRef → mkCRDBuilders.cr → mkCR).
-      # The cluster override (keyed "group/Kind") wins; it also covers
-      # builder-less CRs (helm-rendered, raw mkResource by kind string).
+      # Prefer the cluster's "group/Kind" override to behavior passed through
+      # a typed CRD builder. The override also covers untyped custom resources.
       resolveFactBehavior =
         args:
         let
@@ -178,16 +170,14 @@ in
           else
             (removeAttrs spec [ "headlessService" ])
             // {
-              # plain svc.name (no string context): a context-carrying serviceName would create a Service→StatefulSet store edge that recurses when the Service requires the StatefulSet
+              # Keep serviceName free of string context. A dependency from the
+              # Service back to this StatefulSet would otherwise recurse.
               serviceName = svc.name;
             };
 
-      # The emission facade handed to hooks: sealing capability only, never
-      # the authoring scope. `mkResource` seals in this instance's namespace
-      # with instance labels and validators; `inNamespace` parents a resource
-      # into another namespace while keeping this instance as owner. If a
-      # plugin needs more than this, extend the facade deliberately (design
-      # doc first) — do not hand hooks the scope object.
+      # Hooks receive only the resource constructors they need. mkResource
+      # uses this instance's namespace, labels, and validators; inNamespace
+      # emits into another namespace while retaining this instance as owner.
       emit = {
         mkResource = scopeMkResource;
         mkClusterResource = scopeMkClusterResource;
@@ -202,18 +192,13 @@ in
           workloadKind,
           selector,
           hostNetwork,
-          # `availability.max` on the builder call: the largest level this
-          # one workload can honour, or null.
+          # Highest availability level this workload supports, or null.
           workloadCeiling ? null,
         }:
         let
-          # The instance ceiling (meta.availability.max) lowers every
-          # workload alike, which misstates a package with one single-replica
-          # controller beside a quorum store that wants hard spread (openebs,
-          # housekeeping 2026-09-19). A ceiling on the builder call lowers
-          # this workload only. The package's `availability` argument is not
-          # lowered: a replica count mapped from it belongs to the workload
-          # that maps it, and the capped workload is the one that does not.
+          # Apply a builder ceiling to this workload only. Keep the package's
+          # availability argument unchanged because other workloads in the
+          # same package may support the requested level.
           capped =
             workloadCeiling != null
             && availabilityLib.rank availability.level > availabilityLib.rank workloadCeiling;
@@ -235,8 +220,8 @@ in
           );
           edgeReport = edgeAnalysis.edgesFor workloadInput;
           edges = edgeReport.edges;
-          # DNS ordering uses the conservative edge set: naming a Service is
-          # weak dial evidence, and a spurious DNS wait is harmless
+          # Use conservative connection evidence for DNS ordering so Helm
+          # workloads whose address facts were lost still wait for DNS.
           dnsDeps =
             if edgeReport.dnsEdges != [ ] && edgeAnalysis.dnsRoot != null then
               [ edgeAnalysis.dnsRoot ]
@@ -264,21 +249,13 @@ in
           interceptorRequires = builtins.concatMap (r: r.requires or [ ]) interceptorResults;
           interceptorResources = builtins.concatMap (r: r.resources or [ ]) interceptorResults;
           interceptorWarnings = builtins.concatMap (r: r.warnings or [ ]) interceptorResults;
-          # podSpec patches land in spec.template.spec before the seal, so
-          # they are part of the workload's store-path identity. Author
-          # fields win per top-level pod-spec field; between interceptors
-          # the earlier one (lower priority) wins, which keeps the merge
-          # deterministic and therefore content-addressed.
+          # Merge interceptor podSpec fields before sealing so they affect the
+          # workload identity. Author fields override interceptor fields; an
+          # earlier interceptor wins conflicts between interceptors.
           interceptorPodSpec = builtins.foldl' (acc: r: (r.podSpec or { }) // acc) { } interceptorResults;
-          # The choice sits inside `spec`, not around the whole input.
-          # Reading `rawSelector` off the returned workload forces this
-          # value's weak head normal form, and deciding out here would run
-          # every interceptor to do it: the netpol edge analysis walks the
-          # pod spec, reaches the ConfigMap the pod mounts and from there the
-          # Service that is asking for the selector in the first place. That
-          # is the cycle BEST-PRACTICES §7.3 offers `rawSelector` as the
-          # escape from, so the escape must not force the seal
-          # (housekeeping 2026-09-18).
+          # Keep the conditional merge inside spec. Selecting between whole
+          # workload values here would force interceptors when rawSelector is
+          # read, which can recurse through ConfigMap and Service references.
           patchedInput = workloadInput // {
             spec =
               if interceptorPodSpec == { } then
@@ -291,10 +268,9 @@ in
                   };
                 };
           };
-          # Splice order contract: author-declared requires, then plugin
-          # requires, then core DNS deps. kix.run/depends-on stamps entries
-          # in list order, so this order is content-addressed into the
-          # manifest — change it only as a deliberate output change.
+          # Preserve dependency order: author requirements, interceptor
+          # requirements, then DNS. kix.run/depends-on retains list order, so
+          # changing it changes the manifest identity.
           workload = sealResource (
             removeAttrs patchedInput [ "_helmNetworkDeps" ]
             // {
@@ -302,13 +278,9 @@ in
             }
           );
         in
-        # Trace warnings anchored on outPath, NOT on the whole attrset:
-        # edge-lint warnings force toJSON(workloadInput) — serializing
-        # `requires` whose sealed manifests may reference this workload's
-        # rawSelector (e.g. a webhook config embedding the admission
-        # Service's out.name, whose selector reads rawSelector). rawSelector
-        # must stay reachable without forcing edge analysis; outPath is
-        # forced at every embedding anyway, so no warning is lost.
+        # Attach warnings to outPath so reading rawSelector does not force edge
+        # analysis. Edge analysis may traverse a dependency whose Service
+        # selector reads this workload's rawSelector, causing recursion.
         workload
         // {
           outPath = builtins.foldl' (acc: warning: builtins.trace warning acc) workload.outPath (
@@ -316,19 +288,14 @@ in
           );
           _injectedResources = interceptorResources;
           rawSelector = selector;
-          # The level this workload was sealed at, for the instance
-          # processors that judge it after the fact.
+          # Resolved level used by instance processors after sealing.
           _availability = workloadAvailability;
         };
 
-      # The pod-spec validators are anchored on the workload's outPath, not
-      # on the workload's own evaluation. Checking a pod spec walks it, and
-      # a pod spec can reach a ConfigMap that names a Service that is
-      # waiting for this workload's `rawSelector` — the cycle
-      # BEST-PRACTICES §7.3 offers `rawSelector` as the escape from, which
-      # only works if reading it seals nothing (housekeeping 2026-09-18).
-      # Every resource in a build forces its outPath, so no check is
-      # skipped; each one runs a moment later than it used to.
+      # Force pod validation through outPath so rawSelector remains available
+      # without sealing the workload. Validation can traverse ConfigMap and
+      # Service references that lead back to rawSelector. Every emitted
+      # resource forces outPath, so each check still runs.
       withChecks =
         checks: res:
         res
@@ -368,12 +335,8 @@ in
               };
             };
 
-          # The workload's own metadata carries its selector labels, so a
-          # workload describes itself the way every other tool reads it:
-          # `app.kubernetes.io/name` lived only in the selector and the pod
-          # template before, and `governance.labelStandards` fired on every
-          # workload the typed builders produced. A package's own `labels`
-          # still win.
+          # Copy selector labels to workload metadata. Explicit workload labels
+          # override them.
           baseArgs =
             removeAttrs attrs [
               "spec"
@@ -413,12 +376,8 @@ in
             workloadCeiling = (attrs.availability or { }).max or null;
           });
 
-      # A CronJob's pods are pods. It slipped past `mkResource`'s refusal
-      # list, so `kix/packages/stackgres-pgpass-perms-fix` built one raw and
-      # its pods got no pod-spec validators, no DNS ordering and no
-      # network-policy edges. The only structural difference from a Job is
-      # that the pod template sits one level deeper, under
-      # `spec.jobTemplate.spec.template`, so the seal is handed that.
+      # Process a CronJob's nested pod template through the same validation,
+      # DNS ordering, and network-policy path as other workloads.
       mkCronJob =
         attrs:
         let
@@ -432,10 +391,8 @@ in
 
           hostNetwork = templateSpec.hostNetwork or false;
 
-          # A CronJob has no selector of its own: the Jobs it creates get
-          # one from the controller. The pod template's labels are the only
-          # identity its pods carry, and the seal needs something to key the
-          # network-policy edges on.
+          # CronJobs have no selector, so use pod-template labels to identify
+          # their pods during network-policy analysis.
           selector =
             templateMeta.labels
               or (throw "mkCronJob: spec.jobTemplate.spec.template.metadata.labels is required. Use scope.selectorLabels");
@@ -513,7 +470,7 @@ in
               };
             };
 
-          # Same as mkWorkload: the Job's metadata carries its selector.
+          # Copy the Job selector to its metadata labels.
           baseArgs =
             removeAttrs attrs [
               "spec"
@@ -540,13 +497,10 @@ in
             workloadCeiling = (attrs.availability or { }).max or null;
           });
 
-      # Chart-rendered workloads get the same pod-spec validators as
-      # mkWorkload: capability gates, selector within template labels,
-      # probe port names, limits >= requests, duplicate names, fieldRef
-      # paths. Not checkNamespacedRefs: it wants DI-tracked names, and a
-      # chart's ConfigMap and Secret names are plain strings (the
-      # cross-resource checks in eval/validate.nix resolve those instead).
-      # Duplicate env names are allowed here (see checkDuplicateNamesChart).
+      # Apply workload validation to chart output. Skip checkNamespacedRefs
+      # because chart ConfigMap and Secret names lack DI context; cross-resource
+      # validation resolves them later. Chart validation permits duplicate env
+      # names through checkDuplicateNamesChart.
       mkHelmWorkload =
         attrs:
         let
@@ -560,7 +514,8 @@ in
           templateSpec = rawSpec.template.spec or { };
           hostNetwork = templateSpec.hostNetwork or false;
 
-          # _helmNetworkDeps stays in workloadInput so edge detection sees its store-path context; sealWorkload strips it before mkResource
+          # Keep _helmNetworkDeps through edge analysis, then remove it before
+          # sealing so its store context does not enter the manifest.
           workloadInput = attrs // {
             inherit apiVersion kind;
           };
@@ -700,14 +655,9 @@ in
           crKind = crdSpec.names.kind;
           group = crdSpec.group;
           plural = crdSpec.names.plural;
-          # The storage version, not the first listed one. A vendored CRD
-          # carries every version upstream still serves, and upstream does
-          # not always list the storage version first: cdi lists v1alpha1
-          # before v1beta1, so a CR built from this CRD targeted a
-          # deprecated version the operator was about to drop. The package
-          # hid that by filtering the version out of the vendored file.
-          # Falling back to the first entry keeps a single-version CRD and
-          # any hand-written spec that omits the flag working.
+          # Prefer the CRD storage version; served versions are not necessarily
+          # listed in stability order. Fall back to the first version for
+          # single-version CRDs or CRDs that omit the storage flag.
           storageVersions = builtins.filter (v: v.storage or false) crdSpec.versions;
           version =
             if storageVersions != [ ] then
@@ -720,8 +670,8 @@ in
               k8s.facts.validateBehavior "mkCRD ${instanceName}" "${group}/${crKind}" attrs.factBehavior
             else
               null;
-          # Forced via the seq below so a malformed declaration fails HERE,
-          # at the declaring package's eval — not at the first CR build.
+          # Force validation below so malformed declarations fail while
+          # evaluating the CRD-owning package, even if no CR is built.
           readiness = k8s.validateReadiness "mkCRD ${instanceName}" "${group}/${crKind}" (
             attrs.readiness or null
           );
@@ -793,15 +743,11 @@ in
           version ? "v1",
           crdScope ? "Namespaced",
           installedBy ? null,
-          # controller semantics of this kind (see core/facts.nix): declared
-          # here because behavior is a property of the CRD, and this is where
-          # the CRD-owning package reifies the kind. Threads through mkCR
-          # into every CR's seal.
+          # Endpoint handling for this kind's controller. mkCR passes it to
+          # each custom resource seal.
           factBehavior ? null,
-          # readiness convention of this kind's controller — see
-          # mkCRDBuilders in core/resource.nix. Stamped on every CR built
-          # via mkCR as the `kix.run/readiness` annotation. Validated
-          # eagerly (seq'd into the marker) like factBehavior.
+          # Readiness condition stamped on each CR as kix.run/readiness and
+          # validated while evaluating the CRD-owning package.
           readiness ? null,
         }:
         let
@@ -879,7 +825,8 @@ in
             else
               builtins.path {
                 path = source;
-                # toFile-style name cannot carry string context — baseNameOf + discard keeps it plain
+                # A toFile-style name cannot carry string context; baseNameOf
+                # and unsafeDiscardStringContext keep it plain.
                 name = baseNameOf (builtins.unsafeDiscardStringContext (toString source));
               };
 
@@ -1013,7 +960,7 @@ in
           resourceCtx = builtins.getContext "${marker}";
           attachCtx = value: builtins.appendContext (toString value) resourceCtx;
 
-          # the ref knows selector+ports explicitly — mint the endpoint fact
+          # The ref knows selector and ports, so mint the endpoint fact
           # from the declaration, same channel as a managed Service's seal
           endpointFactCtx = k8s.facts.mkFact "endpoint" {
             inherit name selector ports;

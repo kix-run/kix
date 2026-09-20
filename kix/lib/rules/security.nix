@@ -20,10 +20,8 @@ let
     # see the manifest before the null is stripped at emission.
     listOr (podSpec.containers or [ ]) ++ listOr (podSpec.initContainers or [ ]);
 
-  # Kubernetes resolves `runAsNonRoot` and `runAsUser` per container, falling
-  # back to the pod's securityContext when the container sets neither. Reading
-  # only the container field failed cert-manager, prometheus-operator and
-  # stackgres-operator, all three of which set it once for the whole pod.
+  # Container securityContext fields override the pod securityContext. Use the
+  # pod value when the container does not set the field.
   effectiveSecurity =
     resource: container: field:
     let
@@ -37,9 +35,7 @@ let
     else
       null;
 
-  # A container is non-root if it says so, or if the UID it resolves to is
-  # not 0. A package that pins `runAsUser = 65534` is as non-root as one
-  # that sets the flag, and the kubelet refuses to start either as root.
+  # Treat runAsNonRoot=true or a resolved nonzero runAsUser as non-root.
   runsAsNonRoot =
     resource: container:
     let
@@ -179,7 +175,7 @@ in
           c:
           let
             image = c.image or "";
-            # After the last '/' (or start), check for ':' — no colon means no tag
+            # A colon after the last slash separates the tag from the repository.
             afterSlash = lib.last (lib.splitString "/" image);
             parts = lib.splitString ":" afterSlash;
           in
@@ -191,20 +187,9 @@ in
       }) failing;
   };
 
-  # The sentinel class: a committed placeholder that renders a manifest which
-  # is well-formed and wrong. `sha-REPLACE_ME` is a valid tag string, so the
-  # build passes, `noLatestTag` passes, `kix check` passes and `kix deploy
-  # --dry-run` reports "configured". The first signal is ImagePullBackOff, in
-  # production, minutes later.
-  #
-  # This rule is a ratchet, not the fix. A predicate over spelling cannot tell
-  # you that `sha-typo12` is wrong, which is the same limitation `noLatestTag`
-  # has. What closes the class is resolving the reference to a digest and
-  # checking that digest against a registry: `kix.pins` plus `kix pin --check`.
-  # This rule's one job is to make the known placeholders unwriteable again.
-  #
-  # Warning by default. Promote it to error in any flavor that deploys
-  # something you care about.
+  # Detect known placeholder spellings and unexpanded variables in image
+  # references. This cannot detect plausible but incorrect tags or digests;
+  # `kix pin check` performs registry verification. The rule warns by default.
   noUnresolvedPlaceholder = {
     description = "Image references must not carry an unresolved placeholder";
     level = "manifest";
@@ -217,10 +202,7 @@ in
     check =
       { resource, ... }:
       let
-        # Spellings seen in the wild, plus an unexpanded shell or template
-        # variable, which means a substitution step did not run.
-        # `label` is what the message shows; `pattern` is the regex. They
-        # differ only where the regex would read as noise.
+        # label is user-facing text; pattern is the regular expression.
         patterns = [
           {
             pattern = "REPLACE_ME";
@@ -254,8 +236,7 @@ in
             pattern = "XXX";
             label = "the placeholder XXX";
           }
-          # An unexpanded shell or template variable: a substitution step
-          # that was meant to run did not.
+          # Match the start of an unexpanded ${...} variable.
           {
             pattern = "[$][{]";
             label = "an unexpanded variable";

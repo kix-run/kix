@@ -66,8 +66,8 @@ rec {
 
   getRequiredDeps = getDepsWhere (_name: spec: !(spec.optional or false));
 
-  # Weak role demand (doc 127 §5): an OPTIONAL dep whose arg name is a
-  # registry role still demands that role — optional only means "compile
+  # An optional dependency whose argument name is a registry role still
+  # demands that role. Optional means "compile
   # even when nothing provides it", not "don't pull curated stock". These
   # deps seed auto-instantiation, but only as a last resort: an existing
   # instance, platform import, or environment binding providing the role
@@ -81,7 +81,7 @@ rec {
       explicitInstances,
       availablePackages,
       autoNamespace,
-      # cluster.roles binding modes — an environment-bound role (exclusive
+      # An environment-bound role with an exclusive
       # or shadowable) is provided by the platform, so weak demand must not
       # pull stock for it (stock would either fight the environment CNI or
       # silently shadow the platform default).
@@ -168,7 +168,7 @@ rec {
       );
 
       # Roles the environment itself provides. "absent" and null (unknown)
-      # leave the role vacant — stock may fill it.
+      # leave the role vacant, allowing stock to fill it.
       isEnvBoundRole =
         role:
         builtins.elem ((clusterRoles.${role} or { }).binding or null) [
@@ -177,7 +177,7 @@ rec {
         ];
 
       # Role providers are cluster-scoped: a stock pull for a role-named dep
-      # is keyed by the role itself, never per requesting namespace — two
+      # is keyed by the role itself rather than the requesting namespace. Two
       # consumers in two namespaces share one provider instead of
       # instantiating two strong symbols of the same role.
       mkItem = depName: requesterNs: {
@@ -187,8 +187,8 @@ rec {
       };
 
       # Weak demands that actually pull stock: the role resolves nowhere
-      # else — no explicit instance, no (possibly inactive) platform import,
-      # no environment binding — and the catalog has a provider. Applied to
+      # else: no explicit instance, platform import, or environment binding,
+      # and the catalog has a provider. Applied to
       # explicit instances AND to every package the closure discovers, so
       # demand propagates transitively (an auto-instantiated package's own
       # weak role deps still pull their stock).

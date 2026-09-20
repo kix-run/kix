@@ -3,17 +3,10 @@
 
   clusters ? { },
 
-  # The pin file this flake's clusters read, declared once here rather than
-  # named again in every cluster definition. A cluster that asks for a `pins`
-  # argument gets it already loaded; one that wants its own still calls
-  # `kix.pins ./elsewhere.nix` itself.
+  # Passed to cluster functions that declare a required `pins` argument.
   pins ? null,
 
-  # Modules every cluster in this flake starts from, ahead of its own. This
-  # repository's flakes use it to raise `scorecard.maxSeverity` to error, so
-  # a finding an error-severity rule makes fails the build here while the
-  # shipped default stays a warning. A cluster that wants otherwise sets the
-  # option itself with lib.mkForce.
+  # Prepended to each cluster's modules.
   clusterModules ? [ ],
 
   systems ? [
@@ -77,8 +70,7 @@ let
           available = {
             inherit kix;
             packages = catalogPackages;
-            # Lazy, so a flake with no pin file is only a problem for a
-            # cluster that actually asks for one.
+            # Evaluated only when the cluster function requires `pins`.
             pins =
               if pins == null then
                 throw "mkFlake: cluster '${name}' takes a `pins` argument, but this flake declares no pin file. Add `pins = ./pins.json;` beside `clusters` in flake.nix, or read one directly with `kix.pins ./pins.json`."
@@ -89,12 +81,8 @@ let
         if builtins.isFunction fn then
           let
             fArgs = builtins.functionArgs fn;
-            # `builtins.functionArgs` reports an argument even when it has a
-            # default, and an argument that is passed beats its default. So a
-            # cluster written `{ pins ? null, ... }` would receive the throw
-            # rather than its own null. Withholding `pins` in that case is
-            # what makes the argument genuinely optional: the author has
-            # already said what they want when there is no pin file.
+            # functionArgs marks defaulted arguments as true. Omit `pins`
+            # when no shared file exists so the function's default applies.
             wantsItsOwnDefault = pins == null && (fArgs.pins or false);
             passArgs =
               let

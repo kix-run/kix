@@ -1,8 +1,9 @@
 # Prose corrections
 
 Writing rules Adam has corrected in review. Apply to ALL prose written in this
-repo: marketing copy, docs, READMEs, blog posts, discussion docs. Add new
-entries here whenever Adam corrects writing style.
+repo: marketing copy, docs, READMEs, blog posts, discussion docs, code comments,
+and docstrings. See `CLAUDE.md` for the code-comment rules. Add new entries here
+whenever Adam corrects writing style.
 
 ## Punctuation
 
@@ -34,6 +35,10 @@ entries here whenever Adam corrects writing style.
   override" introduces a concept they did not need to consider. Use a contrast
   only when readers are likely to arrive with that expectation and resolving it
   helps them complete the task.
+- **Avoid "hand-written" and "manually written" as categories.** They imply a
+  human-versus-agent distinction that is usually irrelevant. Name the actual
+  distinction: generated, derived, explicitly configured, defined directly,
+  checked in, or a bare file without the generated envelope.
 
 ## Capitalization
 

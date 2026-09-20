@@ -9,7 +9,7 @@
 //! - Each Nix flake input as a `library` component (purl `pkg:nix/<name>@<rev>`)
 //! - A `dependencies` graph derived from `StoreGraph::cross_deps`
 //!
-//! Everything is available at build time — we do not shell out to a scanner.
+//! All inputs are available at build time without invoking a scanner.
 
 use std::collections::BTreeMap;
 use std::io::IsTerminal;

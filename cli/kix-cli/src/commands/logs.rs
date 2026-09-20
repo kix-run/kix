@@ -1,8 +1,7 @@
-//! `kix logs <package>` — tail logs for a package's primary workload.
+//! Tail logs for a package's primary workload.
 //!
 //! Shells out to `kubectl logs -n <ns> -l <selector>`. The point of this
-//! command is "one tool" in the demo — no custom log-streaming machinery.
-//! See `v2_discussions/84_m0_m1_implementation_plan.md` §4.
+//! command is a convenience wrapper around kubectl.
 
 use std::os::unix::process::CommandExt;
 use std::process::Command;
@@ -58,7 +57,7 @@ pub fn run(args: &LogsArgs, ctx: &mut CommandContext) -> Result<()> {
     }
     if let Some(container) = args.container.as_deref() {
         // When --container is set, --all-containers is ignored by kubectl;
-        // that's fine — the user asked for a specific one.
+        // kubectl ignores --all-containers when a container is selected.
         cmd.args(["-c", container]);
     }
     if let Some(since) = args.since.as_deref() {

@@ -1,12 +1,12 @@
-//! `kix gc` — garbage-collect stale kix-managed resources from the cluster.
+//! Garbage-collect stale kix-managed resources from the cluster.
 //!
 //! Three modes:
 //!   - **Soft (default):** Diff old vs new activation store graphs locally.
 //!     Resources only in the old graph are garbage. Deletes in reverse
 //!     dependency order (dependents first). Fast: no cluster-wide resource scan.
-//!     This is the same diff that deploy computes — soft GC is essentially
+//!     This is the same diff that deploy computes; soft GC is
 //!     "deploy's prune phase, run separately."
-//!   - **Hard (`--hard`):** Full cluster scan — fetches all kix-managed resources,
+//!   - **Hard (`--hard`):** Fetch all kix-managed resources,
 //!     compares identity hashes against the expected set from all active
 //!     activations, deletes orphans.
 //!   - **Operator (`--operator`):** Deletes retired Activation records and lets
@@ -142,7 +142,7 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     }
 
     // 5. Display package-grouped garbage plan.
-    //    Always render per-resource detail — GC is destructive, the user
+    //    Always render per-resource detail because the user
     //    must see what exactly will be deleted before confirming.
     if !garbage_manifests.is_empty() {
         let pkg_diff = plan::diff_garbage(&old_graph, &new_graph);
@@ -307,7 +307,7 @@ async fn run_hard_async(
     }
 
     // Find resources with identity-hash not in expected set.
-    // Skip Activation CRs here — they're handled separately below.
+    // Activation CRs are handled separately below.
     let mut garbage: Vec<GarbageEntry> = Vec::new();
     for obj in &live {
         if kix::manifest::lifecycle::lifecycle_of_live(obj)
@@ -463,7 +463,7 @@ async fn run_hard_async(
 enum GarbageReason {
     /// Resource carries a `kix.run/identity-hash` that isn't in the expected set.
     HashNotExpected,
-    /// Resource has no `kix.run/identity-hash` annotation — it looks kix-managed
+    /// Resource has no `kix.run/identity-hash` annotation. It looks kix-managed
     /// (matched the managed-by label) but was never properly stamped.
     NoIdentityHash,
     /// An `Activation` CR in phase `Superseded` older than the `--keep`

@@ -1,10 +1,10 @@
-# Flavor: kind — Kubernetes in Docker, for local development and CI.
+# kind flavor for local development and CI.
 #
-# Pre-installs: kindnet CNI, standard StorageClass (local, ephemeral —
+# Pre-installs kindnet CNI and a local, ephemeral StorageClass whose
 # volumes do not survive container restarts). No LoadBalancer support.
 #
 # Role bindings (v2_discussions/127): kindnet owns the pod network
-# EXCLUSIVELY — deploying a managed CNI on stock kind breaks the cluster,
+# exclusively. Deploying a managed CNI on stock kind breaks the cluster,
 # so it is refused at eval. A kind cluster created with the default CNI
 # disabled overrides `cluster.roles.cni.binding = "absent"` and fills the
 # role with a managed instance (this is what ludo-kind does with cilium).
@@ -129,7 +129,7 @@
     };
   };
 
-  # Platform intents — connectivity for kind's pre-installed system pods
+  # Connectivity for kind's pre-installed system pods
   # that don't have an associated import instance. Intents for pods with
   # imports (CoreDNS) live on the import's `platformIntents` field instead,
   # so the import marker transitively depends on its CNPs.
