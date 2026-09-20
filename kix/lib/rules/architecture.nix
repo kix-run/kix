@@ -540,9 +540,13 @@ in
         subsetOf =
           needle: hay: builtins.all (k: (hay.${k} or null) == needle.${k}) (builtins.attrNames needle);
 
-        # Implement prometheus-operator NamespaceSelector semantics, also used
-        # by the VM operator. Return null for any=true because Kix cannot prove
-        # matches across every namespace and must skip the check.
+        # Both monitor kinds share prometheus-operator's namespaceSelector
+        # semantics: `any = true` selects every namespace, a non-empty
+        # matchNames lists them, and an empty selector or empty matchNames
+        # means the monitor's own namespace. `any = true` returns null,
+        # the sentinel for a target set that includes namespaces kix
+        # cannot see; the monitor is then skipped under the scoping
+        # contract above, because a missing match cannot be proven there.
         targetNamespaces =
           mon:
           let

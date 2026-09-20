@@ -18,6 +18,23 @@ on the CRD or CRD reference, then create resources through its typed builder:
 value that indicates readiness. In this example, Kix waits until
 `status.phase` is `Ready`.
 
+A controller that reports a condition instead of a plain status field takes
+the condition form:
+
+```nix
+readiness = {
+  condition = {
+    type = "Bootstrapped";
+    status = "True";
+  };
+};
+```
+
+Kix then waits until `status.conditions` holds an entry with that `type` and
+`status`. Use this form for operators such as StackGres (`Bootstrapped`) and
+for Gateway API kinds (`Accepted` on a GatewayClass, `Programmed` on a
+Gateway), which never set `Ready` or `Available`.
+
 Keep this declaration in the package that owns or imports the CRD. Every custom
 resource created through `widgetCrd.out.mkCR` then receives the same readiness
 rule, along with its dependency on the CRD.

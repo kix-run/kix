@@ -638,25 +638,37 @@ rec {
   # fail even when the package builds no custom resources of that kind.
   validateReadiness =
     context: groupKind: readiness:
+    let
+      isPathForm =
+        builtins.isAttrs readiness
+        &&
+          builtins.attrNames readiness == [
+            "equals"
+            "path"
+          ]
+        && builtins.isString readiness.path
+        && lib.hasPrefix "/" readiness.path
+        && builtins.isString readiness.equals;
+      isConditionForm =
+        builtins.isAttrs readiness
+        && builtins.attrNames readiness == [ "condition" ]
+        && builtins.isAttrs readiness.condition
+        &&
+          builtins.attrNames readiness.condition == [
+            "status"
+            "type"
+          ]
+        && builtins.isString readiness.condition.type
+        && builtins.isString readiness.condition.status;
+    in
     if readiness == null then
       null
-    else if
-      !(builtins.isAttrs readiness)
-      || !(readiness ? path)
-      || !(readiness ? equals)
-      || !(builtins.isString readiness.path)
-      || !(lib.hasPrefix "/" readiness.path)
-      || !(builtins.isString readiness.equals)
-      ||
-        builtins.attrNames readiness != [
-          "equals"
-          "path"
-        ]
-    then
+    else if !(isPathForm || isConditionForm) then
       throw ''
-        ${context}: readiness declaration for ${groupKind} must be
-        { path = "/status/..."; equals = "<value>"; }
-        (path: a JSON pointer string starting with "/"; equals: a string; no other keys)
+        ${context}: readiness declaration for ${groupKind} must be one of
+          { path = "/status/..."; equals = "<value>"; }
+          { condition = { type = "<Type>"; status = "True"; }; }
+        (path: a JSON pointer string starting with "/"; every value a string; no other keys)
       ''
     else
       readiness;
@@ -671,10 +683,13 @@ rec {
       # Validated behavior to pass to each CR for endpoint fact handling.
       factBehavior ? null,
       # Stamp kix.run/readiness on each CR for the CLI to evaluate at deploy.
-      # Use this for operators with conditions other than Ready/Available:
+      # Use this for operators with conditions other than Ready/Available.
+      # Two shapes:
       #   readiness = { path = "/status/updateStatus"; equals = "operational"; }
+      #   readiness = { condition = { type = "Bootstrapped"; status = "True"; }; }
       # path is a JSON pointer into the live object; readiness requires its
-      # value to equal the string in equals.
+      # value to equal the string in equals. The condition form requires an
+      # entry in status.conditions whose type and status both match.
       readiness ? null,
     }:
     let

@@ -131,7 +131,7 @@ Auto-derives CiliumNetworkPolicy from the DI graph:
 - `noHostNetwork` — No hostNetwork/hostPID/hostIPC (error, CIS).
 - `noLatestTag` — No `:latest` or untagged images (warning).
 - `noUnresolvedPlaceholder` — Image references must not carry `REPLACE_ME`, `CHANGEME`, `PLACEHOLDER`, `TODO`, `FIXME`, `XXX` or an unexpanded `${...}` (warning; promote to error in a cluster that deploys something you care about). A ratchet, not the fix: a predicate over spelling cannot tell you `sha-typo12` is wrong. What closes the class is a resolved digest checked against a registry (`kix.pins` plus `kix pin check`). Its one job is to make the known placeholders unwriteable again (`v2_discussions/archive/138`).
-- `hasNetworkPolicy` — Workload namespaces need at least one policy (warning).
+- `hasNetworkPolicy` — Workload namespaces need at least one network policy: a NetworkPolicy or any kind the network-policy-enforcer provider lists in `out.netpol.policyKinds` (warning).
 
 **Reliability:**
 - `hasResourceLimits` — Every container needs limits (warning).
@@ -271,7 +271,11 @@ rather than a second one. Live on stage1 and stage2 since 2026-08-31.
 
 Readiness is declared, not hardcoded: the CRDs carry
 `readiness = { path; equals; }` (`status.updateStatus == operational`), which
-the CLI evaluates generically.
+the CLI evaluates generically. Controllers that report a condition instead
+declare `readiness = { condition = { type; status; }; }`: StackGres clusters
+(`Bootstrapped=True`), Gateway API (`Accepted=True` for a GatewayClass,
+`Programmed=True` for a Gateway) and Cilium policies (`Valid=True`) all use
+this form, so the CLI holds no per-operator condition list.
 
 ### Flake Generation (`mkFlake.nix`)
 

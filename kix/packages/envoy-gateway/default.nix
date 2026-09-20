@@ -11,7 +11,8 @@
 # Supports multiple instances (public gateway, private gateway, etc.)
 # — all resource names derive from scope.instanceName.
 #
-# Resources: EnvoyProxy (optional), GatewayClass, Gateway.
+# Resources: EnvoyProxy (optional), GatewayClass, Gateway, plus CRD refs
+# for the two Gateway API kinds.
 # root = Gateway, with out.gatewayRef for kix.expose consumption.
 
 {
@@ -163,6 +164,8 @@ in
       ) config.listeners;
 
       haveProxy = config.proxySpec != null;
+
+      gatewayApiGroup = "gateway.networking.k8s.io";
     in
     # --- EnvoyProxy (optional, namespaced) ---
     # Envoy Gateway reads this through the GatewayClass's parametersRef and
@@ -179,10 +182,37 @@ in
       };
     }
     // {
-      # --- GatewayClass (cluster-scoped) ---
-      gatewayClass = scope.mkClusterResource {
-        apiVersion = "gateway.networking.k8s.io/v1";
+      # --- Gateway API CRD refs ---
+      # The CRDs arrive with the controller, outside kix. The refs give each
+      # CR its CRD-before-CR edge and carry the Gateway API's readiness
+      # conditions: a GatewayClass is usable once Accepted=True, a Gateway
+      # once Programmed=True. Neither kind sets Ready or Available.
+      gatewayClassCrd = scope.mkCRDRef {
+        group = gatewayApiGroup;
         kind = "GatewayClass";
+        plural = "gatewayclasses";
+        version = "v1";
+        crdScope = "Cluster";
+        readiness.condition = {
+          type = "Accepted";
+          status = "True";
+        };
+      };
+
+      gatewayCrd = scope.mkCRDRef {
+        group = gatewayApiGroup;
+        kind = "Gateway";
+        plural = "gateways";
+        version = "v1";
+        crdScope = "Namespaced";
+        readiness.condition = {
+          type = "Programmed";
+          status = "True";
+        };
+      };
+
+      # --- GatewayClass (cluster-scoped) ---
+      gatewayClass = self.gatewayClassCrd.out.mkCR scope {
         name = gatewayClassName;
         labels = selectorLabels;
         spec = {
@@ -199,9 +229,7 @@ in
       };
 
       # --- Gateway ---
-      gateway = scope.mkResource {
-        apiVersion = "gateway.networking.k8s.io/v1";
-        kind = "Gateway";
+      gateway = self.gatewayCrd.out.mkCR scope {
         name = gatewayName;
         labels = selectorLabels;
         spec = {

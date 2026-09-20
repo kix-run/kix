@@ -430,6 +430,14 @@ in
         else
           [ ];
 
+      # The enforcer's policy kinds reach the namespace rules through the
+      # role lookup, so the rules stay free of any enforcer's vocabulary.
+      networkPolicyKinds =
+        let
+          provider = findRoleProvider "network-policy-enforcer";
+        in
+        [ "NetworkPolicy" ] ++ (if provider == null then [ ] else provider.out.netpol.policyKinds or [ ]);
+
       namespaceScorecardFindings =
         if scorecardEnabled then
           builtins.concatMap (
@@ -446,6 +454,7 @@ in
               instances = activeNsInstances;
               resources = nsResources;
               namespaceName = nsName;
+              inherit networkPolicyKinds;
               ruleDefaults = scorecardConfig.ruleDefaults or { };
               ruleOverrides = scorecardConfig.ruleOverrides or { };
               maxSeverity = scorecardConfig.maxSeverity or "error";

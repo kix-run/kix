@@ -328,6 +328,10 @@ rec {
       ruleDefaults ? { },
       ruleOverrides ? { },
       maxSeverity ? "error",
+      # Kinds that count as a network policy in this cluster: the Kubernetes
+      # NetworkPolicy plus whatever the network-policy-enforcer provider
+      # emits. The caller reads the provider so no rule names an enforcer.
+      networkPolicyKinds ? [ "NetworkPolicy" ],
     }:
     let
       nsRules = builtins.filter (r: (r.rule.level or "") == "namespace") (flattenRules rules);
@@ -346,7 +350,12 @@ rec {
             ;
         };
         ctx = {
-          inherit instances resources namespaceName;
+          inherit
+            instances
+            resources
+            namespaceName
+            networkPolicyKinds
+            ;
         };
         applies = checkAppliesTo rule ctx;
         findings = if severity != null && applies then rule.check ctx else [ ];

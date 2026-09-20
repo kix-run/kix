@@ -330,13 +330,17 @@ edge but NO netpol hole. Consequences when authoring:
 
 - **Readiness rides the same chain.** If the operator never stamps
   Ready/Available conditions, declare its health convention on the CRD
-  builder: `readiness = { path = "/status/updateStatus"; equals =
-  "operational"; }` (mkCRD and mkCRDRef both accept it). kix stamps it on
-  every typed-chain CR as the `kix.run/readiness` annotation and
-  `kix deploy` evaluates it instead of the generic condition check —
-  without it, deploys time out waiting on healthy CRs (the
-  VictoriaMetrics operator's `updateStatus` convention is the canonical
-  example; see `victoria-metrics-operator/crds.nix`).
+  builder (mkCRD and mkCRDRef both accept it). Two shapes: `readiness =
+  { path = "/status/updateStatus"; equals = "operational"; }` compares one
+  status field with a string (`victoria-metrics-operator/crds.nix`);
+  `readiness = { condition = { type = "Bootstrapped"; status = "True"; }; }`
+  looks for that entry in `status.conditions` (`stackgres-operator`,
+  `envoy-gateway`, `cilium-external/netpol-rules.nix`). kix stamps the
+  declaration on every typed-chain CR as the `kix.run/readiness`
+  annotation and `kix deploy` evaluates it instead of the generic
+  condition check. The CLI keeps no per-operator kind list: a new
+  operator's convention goes in its package, never in `readiness.rs`.
+  Without a declaration, deploys time out waiting on healthy CRs.
 
 ### Composition helpers (kix.*)
 

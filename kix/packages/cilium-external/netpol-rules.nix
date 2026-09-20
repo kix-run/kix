@@ -10,6 +10,21 @@
 { lib }:
 
 rec {
+  # The kinds this enforcer emits. Rules that look for a policy in a
+  # namespace accept these alongside the Kubernetes NetworkPolicy.
+  policyKinds = [
+    "CiliumNetworkPolicy"
+    "CiliumClusterwideNetworkPolicy"
+  ];
+
+  # The cilium operator reports Valid=True once it has accepted a policy;
+  # it sets no Ready or Available condition. Declared on the CRD refs so
+  # every policy carries it as the `kix.run/readiness` annotation.
+  policyReadiness.condition = {
+    type = "Valid";
+    status = "True";
+  };
+
   # Build a network-policy resource routed through the CNP CRD ref.
   # mkResource is the caller's scope.mkResource or k8s.mkResource.
   mkPolicy =

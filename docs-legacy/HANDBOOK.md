@@ -1058,7 +1058,7 @@ Configure via `scorecard.{enable, rules, maxSeverity, ruleDefaults, ruleOverride
 | `noHostNetwork` | manifest | error | No `hostNetwork`/`hostPID`/`hostIPC` |
 | `noLatestTag` | manifest | warning | Images explicitly tagged (not `:latest` or untagged) |
 | `noUnresolvedPlaceholder` | manifest | warning | No `REPLACE_ME`, `CHANGEME`, `PLACEHOLDER`, `TODO`, `FIXME`, `XXX` or unexpanded `${...}` in an image reference (§29) |
-| `hasNetworkPolicy` | namespace | warning | Workload namespaces have at least one NetworkPolicy |
+| `hasNetworkPolicy` | namespace | warning | Workload namespaces have at least one network policy (NetworkPolicy or a kind from the enforcer's `out.netpol.policyKinds`) |
 
 **Reliability** (`kix.rules.reliability`):
 
@@ -1318,7 +1318,7 @@ skill and `v2_discussions/146_crd_vendoring_and_upgrades.md`.
 Both `mkCRD` and `mkCRDRef` accept two per-kind controller-semantics declarations that ride the typed chain into every CR built via `mkCR`:
 
 - `factBehavior = { endpoint = "terminate"|"conduct"; podSelector = cr: {...}; }` — netpol semantics (§facts).
-- `readiness = { path = "/status/updateStatus"; equals = "operational"; }` — the controller's health convention, stamped on each CR as the `kix.run/readiness` annotation; `kix deploy` evaluates it instead of the generic Ready/Available condition check. Declare it whenever the operator never stamps Ready/Available (the VictoriaMetrics operator's `updateStatus` convention is the canonical example) — without it, deploys time out waiting on healthy CRs.
+- `readiness = { path = "/status/updateStatus"; equals = "operational"; }` or `readiness = { condition = { type = "Bootstrapped"; status = "True"; }; }` — the controller's health convention, stamped on each CR as the `kix.run/readiness` annotation; `kix deploy` evaluates it instead of the generic Ready/Available condition check. The path form compares one status field with a string; the condition form looks for an entry in `status.conditions` with that type and status. Declare one whenever the operator never stamps Ready/Available (VictoriaMetrics uses `updateStatus`, StackGres reports `Bootstrapped`, the Gateway API reports `Accepted` and `Programmed`) — without it, deploys time out waiting on healthy CRs.
 
 ## 23. Imports
 

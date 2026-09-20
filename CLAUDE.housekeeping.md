@@ -75,5 +75,11 @@ resolve and no entry is ever lost to one.
 - **Housekeeping is not the roadmap.** A missing feature goes in
   `ROADMAP.md`; a design still being argued goes in `v2_discussions/`.
   An entry here is something that is wrong today.
+- **Say when a decision is required.** Some problems have no fix until
+  someone chooses between designs. Write "Decision required from
+  <who>:" as its own line, name the choice in a few words, and link the
+  `v2_discussions/` doc that frames it. Without that line a reader
+  assumes the entry is waiting for time, not for a call, and the review
+  keeps re-triaging it.
 
 Reviews of the whole directory land in `housekeeping/reviews/`.

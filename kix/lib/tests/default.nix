@@ -755,6 +755,7 @@ let
         rule = kind: extra: { stubRule = kind; } // extra;
 
         netpolApi = {
+          policyKinds = [ "CiliumNetworkPolicy" ];
           mkPolicy =
             { mkResource, extraArgs }:
             mkResource (

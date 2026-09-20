@@ -48,11 +48,20 @@ let
   #   webhook: whether to generate validating/mutating webhooks for this CRD.
   #   shortNames: short aliases for kubectl.
   #   specOverrides: deep-merged into crd.fromKind output (for irregular names).
+  # The operator sets no Ready or Available condition on a cluster CR.
+  # Bootstrapped=True means the primary accepts connections, which is the
+  # point dependents such as bootstrap Jobs can proceed from.
+  sgClusterReadiness.condition = {
+    type = "Bootstrapped";
+    status = "True";
+  };
+
   crdDefs = {
     sgCluster = {
       kind = "SGCluster";
       shortNames = [ "sgclu" ];
       webhook = true;
+      readiness = sgClusterReadiness;
       # Match upstream helm chart: sgcluster validating webhook omits DELETE
       # (no delete-time validator is registered in the operator for SGCluster).
       validatingWebhookOperations = [
@@ -118,6 +127,7 @@ let
       kind = "SGShardedCluster";
       shortNames = [ "sgshr" ];
       webhook = true;
+      readiness = sgClusterReadiness;
     };
     sgScript = {
       kind = "SGScript";
@@ -863,6 +873,7 @@ in
           plural = resolvedNames.${attr}.plural;
           version = "v1";
           factBehavior = def.factBehavior or null;
+          readiness = def.readiness or null;
           # Tie markers to the operator Deployment: the CLI readiness check
           # won't poll for each CRD until the operator pod is Running and
           # has had a chance to install its built-in CRD schemas.

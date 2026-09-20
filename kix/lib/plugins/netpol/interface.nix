@@ -2,6 +2,8 @@
 
 let
   requiredAttrs = {
+    policyKinds = "[kind]. the policy kinds this enforcer emits; the hasNetworkPolicy rule accepts them as a namespace's policy";
+
     mkPolicy = "{ mkResource, extraArgs } -> resource. build a network-policy resource";
 
     mkDefaultDenySpec = "{ denyIngress, denyEgress } -> spec attrs for a default-deny policy";

@@ -47,6 +47,7 @@ in
         plural = "ciliumnetworkpolicies";
         version = "v2";
         crdScope = "Namespaced";
+        readiness = rules.policyReadiness;
       };
     in
     {

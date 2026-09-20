@@ -219,6 +219,7 @@ in
         version = "v2";
         crdScope = "Namespaced";
         installedBy = resources.workloads;
+        readiness = ciliumNetpol.policyReadiness;
       };
 
       ccnpCrdRef = scope.mkCRDRef {
@@ -228,6 +229,7 @@ in
         version = "v2";
         crdScope = "Cluster";
         installedBy = resources.workloads;
+        readiness = ciliumNetpol.policyReadiness;
       };
       # Everything Kix does not render still has to resolve a name.
       #

@@ -1,4 +1,22 @@
 ---
 title: "`kix.run/readiness`"
-description: TODO
+description: "The annotation that tells `kix deploy` when a custom resource counts as ready."
 ---
+
+Kix stamps `kix.run/readiness` on every custom resource built through a typed
+CRD builder whose CRD declares a `readiness` convention. The value is JSON in
+one of two shapes.
+
+| Declaration on the CRD | Annotation value | Ready when |
+| --- | --- | --- |
+| `readiness = { path = "/status/phase"; equals = "Ready"; }` | `{"path":"/status/phase","equals":"Ready"}` | the string at the JSON pointer `path` equals `equals` |
+| `readiness = { condition = { type = "Programmed"; status = "True"; }; }` | `{"condition":{"type":"Programmed","status":"True"}}` | `status.conditions` holds an entry with that `type` and `status` |
+
+`kix deploy` evaluates the annotation before any kind-based rule. A custom
+resource without the annotation falls back to the generic check, which looks
+for a `Ready` or `Available` condition. A malformed annotation is ignored and
+the generic check applies; this signals a version skew between the CLI and the
+library, not an unhealthy resource.
+
+See [Declare readiness for custom resources](/docs/how-to/author-packages-and-clusters/declare-readiness-for-custom-resources/)
+for where the declaration goes.

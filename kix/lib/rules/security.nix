@@ -257,7 +257,7 @@ in
   };
 
   hasNetworkPolicy = {
-    description = "Namespaces with workloads must have at least one NetworkPolicy";
+    description = "Namespaces with workloads must have at least one network policy";
     level = "namespace";
     severity = "warning";
     tags = [
@@ -265,7 +265,14 @@ in
       "network"
     ];
     check =
-      { resources, namespaceName, ... }:
+      {
+        resources,
+        namespaceName,
+        # NetworkPolicy plus the kinds the cluster's enforcer emits; the
+        # rule runner reads them from the network-policy-enforcer role.
+        networkPolicyKinds ? [ "NetworkPolicy" ],
+        ...
+      }:
       let
         hasWorkload = builtins.any (
           r:
@@ -275,16 +282,10 @@ in
             "DaemonSet"
           ]
         ) resources;
-        hasNetpol = builtins.any (
-          r:
-          builtins.elem (r.kind or "") [
-            "NetworkPolicy"
-            "CiliumNetworkPolicy"
-          ]
-        ) resources;
+        hasNetpol = builtins.any (r: builtins.elem (r.kind or "") networkPolicyKinds) resources;
       in
       if hasWorkload && !hasNetpol then
-        [ { message = "namespace '${namespaceName}' has workloads but no NetworkPolicy"; } ]
+        [ { message = "namespace '${namespaceName}' has workloads but no network policy"; } ]
       else
         [ ];
   };

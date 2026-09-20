@@ -1252,12 +1252,19 @@ pub fn is_immediate_kind(kind: &str) -> bool {
 }
 
 /// A readiness convention declared by the CRD-owning package and stamped on
-/// the CR as the `kix.run/readiness` annotation (JSON: `{"path": "/status/...",
-/// "equals": "<value>"}`). The CR is ready when the string at `path` equals
-/// `equals`.
-struct DeclaredReadiness {
-    path: String,
-    equals: String,
+/// the CR as the `kix.run/readiness` annotation. Two JSON shapes:
+/// `{"path": "/status/...", "equals": "<value>"}` is ready when the string at
+/// `path` equals `equals`; `{"condition": {"type": "<Type>", "status": "True"}}`
+/// is ready when `status.conditions` holds an entry with that type and status.
+enum DeclaredReadiness {
+    Path {
+        path: String,
+        equals: String,
+    },
+    Condition {
+        condition_type: String,
+        status: String,
+    },
 }
 
 /// Parse a well-formed `kix.run/readiness` annotation.
@@ -1269,7 +1276,13 @@ struct DeclaredReadiness {
 fn declared_readiness(obj: &DynamicObject) -> Option<DeclaredReadiness> {
     let raw = keys::get_meta(obj.metadata.annotations.as_ref()?, keys::READINESS)?;
     let v: Value = serde_json::from_str(raw).ok()?;
-    Some(DeclaredReadiness {
+    if let Some(condition) = v.get("condition") {
+        return Some(DeclaredReadiness::Condition {
+            condition_type: condition.get("type")?.as_str()?.to_string(),
+            status: condition.get("status")?.as_str()?.to_string(),
+        });
+    }
+    Some(DeclaredReadiness::Path {
         path: v.get("path")?.as_str()?.to_string(),
         equals: v.get("equals")?.as_str()?.to_string(),
     })
@@ -1283,15 +1296,25 @@ pub fn check_readiness(obj: &DynamicObject, kind: &str) -> bool {
         return true;
     }
 
-    // Prefer readiness declared by the CRD-owning package. The remaining
-    // kind-specific arms cover resources whose packages do not yet stamp the
-    // readiness annotation.
+    // A CRD-owning package declares its kinds' readiness convention on the
+    // CRD builder (readiness = { path; equals; } or readiness = { condition
+    // = { type; status; }; }) and kix stamps it on every CR built through
+    // the typed chain as the `kix.run/readiness` annotation. The match
+    // below covers only kinds whose readiness the Kubernetes API itself
+    // defines. An operator's condition vocabulary belongs in the owning
+    // package's declaration, not in this list.
     if let Some(rule) = declared_readiness(obj) {
-        return obj
-            .data
-            .pointer(&rule.path)
-            .and_then(Value::as_str)
-            .is_some_and(|v| v == rule.equals);
+        return match rule {
+            DeclaredReadiness::Path { path, equals } => obj
+                .data
+                .pointer(&path)
+                .and_then(Value::as_str)
+                .is_some_and(|v| v == equals),
+            DeclaredReadiness::Condition {
+                condition_type,
+                status,
+            } => has_condition(&obj.data, &condition_type, &status),
+        };
     }
 
     match kind {
@@ -1300,18 +1323,6 @@ pub fn check_readiness(obj: &DynamicObject, kind: &str) -> bool {
         "Job" => check_job_ready(&obj.data),
         "PersistentVolumeClaim" => check_pvc_ready(&obj.data),
         "CustomResourceDefinition" => check_crd_ready(&obj.data),
-        "CiliumNetworkPolicy" | "CiliumClusterwideNetworkPolicy" => {
-            has_condition(&obj.data, "Valid", "True")
-        }
-        // StackGres reports Bootstrapped=True when the primary accepts
-        // connections; it does not publish Ready or Available conditions.
-        "SGCluster" | "SGShardedCluster" => has_condition(&obj.data, "Bootstrapped", "True"),
-        // Gateway API kinds use their own condition vocabulary, not
-        // Ready/Available: a GatewayClass is usable once Accepted=True, a
-        // Gateway once Programmed=True. Without these they fall through to
-        // check_generic_ready and time out.
-        "GatewayClass" => has_condition(&obj.data, "Accepted", "True"),
-        "Gateway" => has_condition(&obj.data, "Programmed", "True"),
         _ => check_generic_ready(&obj.data),
     }
 }
@@ -1448,33 +1459,61 @@ fn check_generic_ready(data: &Value) -> bool {
 }
 
 /// Check if a specific condition type has a given status.
+/// The entry of `status.conditions` whose `type` is `condition_type`.
+fn find_condition<'a>(data: &'a Value, condition_type: &str) -> Option<&'a Value> {
+    data.pointer("/status/conditions")?
+        .as_array()?
+        .iter()
+        .find(|c| c.get("type").and_then(Value::as_str) == Some(condition_type))
+}
+
 fn has_condition(data: &Value, condition_type: &str, expected_status: &str) -> bool {
-    data.pointer("/status/conditions")
-        .and_then(Value::as_array)
-        .is_some_and(|conditions| {
-            conditions.iter().any(|c| {
-                let ctype = c.get("type").and_then(Value::as_str).unwrap_or("");
-                let status = c.get("status").and_then(Value::as_str).unwrap_or("");
-                ctype == condition_type && status == expected_status
-            })
-        })
+    find_condition(data, condition_type)
+        .and_then(|c| c.get("status"))
+        .and_then(Value::as_str)
+        == Some(expected_status)
 }
 
 /// Build a human-readable message about why a resource isn't ready.
 fn readiness_message(obj: &DynamicObject, kind: &str) -> String {
     let name = obj.metadata.name.as_deref().unwrap_or("unknown");
     if let Some(rule) = declared_readiness(obj) {
-        // Distinguish an absent path from a non-string value because declared
-        // readiness compares strings only.
-        let current = match obj.data.pointer(&rule.path) {
-            None => "<absent>".to_string(),
-            Some(Value::String(v)) => format!("\"{v}\""),
-            Some(other) => format!("{other} (non-string; declared readiness compares strings)"),
+        return match rule {
+            DeclaredReadiness::Path { path, equals } => {
+                // Distinguish an absent path from a non-string value because
+                // declared readiness compares strings only.
+                let current = match obj.data.pointer(&path) {
+                    None => "<absent>".to_string(),
+                    Some(Value::String(v)) => format!("\"{v}\""),
+                    Some(other) => {
+                        format!("{other} (non-string; declared readiness compares strings)")
+                    }
+                };
+                format!(
+                    "{kind}/{name}: declared readiness {path}=\"{equals}\", currently {current}"
+                )
+            }
+            DeclaredReadiness::Condition {
+                condition_type,
+                status,
+            } => {
+                let current = match find_condition(&obj.data, &condition_type) {
+                    None => format!("no {condition_type} condition yet"),
+                    Some(c) => {
+                        let actual = c.get("status").and_then(Value::as_str).unwrap_or("?");
+                        match c.get("message").and_then(Value::as_str) {
+                            Some(msg) if !msg.is_empty() => {
+                                format!("{condition_type}={actual} ({msg})")
+                            }
+                            _ => format!("{condition_type}={actual}"),
+                        }
+                    }
+                };
+                format!(
+                    "{kind}/{name}: declared readiness condition {condition_type}={status}, currently {current}"
+                )
+            }
         };
-        return format!(
-            "{kind}/{name}: declared readiness {}=\"{}\", currently {current}",
-            rule.path, rule.equals
-        );
     }
     match kind {
         "Deployment" | "StatefulSet" => {
@@ -1524,24 +1563,6 @@ fn readiness_message(obj: &DynamicObject, kind: &str) -> String {
                 .unwrap_or("Unknown");
             format!("PVC/{name}: phase={phase}")
         }
-        "CiliumNetworkPolicy" | "CiliumClusterwideNetworkPolicy" => {
-            let reason = obj
-                .data
-                .pointer("/status/conditions")
-                .and_then(Value::as_array)
-                .and_then(|conds| {
-                    conds.iter().find_map(|c| {
-                        let ctype = c.get("type").and_then(Value::as_str)?;
-                        if ctype == "Valid" {
-                            c.get("message").and_then(Value::as_str)
-                        } else {
-                            None
-                        }
-                    })
-                })
-                .unwrap_or("no Valid=True condition");
-            format!("{kind}/{name}: {reason}")
-        }
         _ => {
             // Show condition types when a generic custom resource has neither
             // Ready nor Available, so the missing readiness convention is visible.
@@ -1566,9 +1587,9 @@ fn readiness_message(obj: &DynamicObject, kind: &str) -> String {
                 format!(
                     concat!(
                         "{kind}/{name}: no Ready or Available condition; the controller reports [{seen}]. ",
-                        "If these conditions indicate success, set the readiness ",
-                        "check on the owning package's CRD builder (readiness = {{ path; ",
-                        "equals; }}, stamped as the {readiness_key} annotation)."
+                        "check on the owning package's CRD builder (readiness = {{ condition = ",
+                        "{{ type; status; }}; }} or {{ path; equals; }}, stamped as the ",
+                        "{readiness_key} annotation)."
                     ),
                     kind = kind,
                     name = name,
@@ -1631,9 +1652,13 @@ mod tests {
     #[test]
     fn declared_readiness_parses_valid_annotation() {
         let obj = make_annotated_obj(VM_RULE, json!({}));
-        let rule = declared_readiness(&obj).expect("should parse");
-        assert_eq!(rule.path, "/status/updateStatus");
-        assert_eq!(rule.equals, "operational");
+        match declared_readiness(&obj).expect("should parse") {
+            DeclaredReadiness::Path { path, equals } => {
+                assert_eq!(path, "/status/updateStatus");
+                assert_eq!(equals, "operational");
+            }
+            DeclaredReadiness::Condition { .. } => panic!("parsed as condition form"),
+        }
     }
 
     #[test]
@@ -1666,18 +1691,77 @@ mod tests {
         assert!(!check_readiness(&fresh, "VMCluster"));
     }
 
+    const CONDITION_RULE: &str = r#"{"condition":{"type":"Bootstrapped","status":"True"}}"#;
+
     #[test]
-    fn declared_readiness_beats_kind_rules() {
-        // SGCluster has a hardcoded Bootstrapped-condition arm; a declared
-        // rule must take precedence over it.
-        let obj = make_annotated_obj(
-            VM_RULE,
-            json!({"status": {
-                "updateStatus": "operational",
-                "conditions": [{"type": "Bootstrapped", "status": "False"}]
-            }}),
+    fn declared_condition_parses() {
+        let obj = make_annotated_obj(CONDITION_RULE, json!({}));
+        match declared_readiness(&obj).expect("should parse") {
+            DeclaredReadiness::Condition {
+                condition_type,
+                status,
+            } => {
+                assert_eq!(condition_type, "Bootstrapped");
+                assert_eq!(status, "True");
+            }
+            DeclaredReadiness::Path { .. } => panic!("parsed as path form"),
+        }
+        for bad in [
+            r#"{"condition":{"type":"Bootstrapped"}}"#, // missing status
+            r#"{"condition":{"status":"True"}}"#,       // missing type
+            r#"{"condition":"Bootstrapped"}"#,          // not an object
+        ] {
+            let obj = make_annotated_obj(bad, json!({}));
+            assert!(declared_readiness(&obj).is_none(), "should reject: {bad}");
+        }
+    }
+
+    #[test]
+    fn declared_condition_gates_check_readiness() {
+        let ready = make_annotated_obj(
+            CONDITION_RULE,
+            json!({"status": {"conditions": [{"type": "Bootstrapped", "status": "True"}]}}),
         );
-        assert!(check_readiness(&obj, "SGCluster"));
+        assert!(check_readiness(&ready, "SGCluster"));
+
+        let pending = make_annotated_obj(
+            CONDITION_RULE,
+            json!({"status": {"conditions": [{"type": "Bootstrapped", "status": "False"}]}}),
+        );
+        assert!(!check_readiness(&pending, "SGCluster"));
+
+        // A generic Ready=True does not satisfy a declared condition.
+        let other = make_annotated_obj(
+            CONDITION_RULE,
+            json!({"status": {"conditions": [{"type": "Ready", "status": "True"}]}}),
+        );
+        assert!(!check_readiness(&other, "SGCluster"));
+
+        // No status yet: declared readiness waits.
+        let fresh = make_annotated_obj(CONDITION_RULE, json!({}));
+        assert!(!check_readiness(&fresh, "SGCluster"));
+    }
+
+    #[test]
+    fn declared_condition_message_shapes() {
+        let rule = r#"{"condition":{"type":"Valid","status":"True"}}"#;
+        let invalid = make_annotated_obj(
+            rule,
+            json!({"status": {"conditions": [
+                {"type": "Valid", "status": "False", "message": "bad selector"}
+            ]}}),
+        );
+        let msg = readiness_message(&invalid, "CiliumNetworkPolicy");
+        assert!(
+            msg.contains(
+                "declared readiness condition Valid=True, currently Valid=False (bad selector)"
+            ),
+            "got: {msg}"
+        );
+
+        let absent = make_annotated_obj(rule, json!({}));
+        let msg = readiness_message(&absent, "CiliumNetworkPolicy");
+        assert!(msg.contains("no Valid condition yet"), "got: {msg}");
     }
 
     #[test]
@@ -1841,35 +1925,18 @@ mod tests {
     }
 
     #[test]
-    fn cilium_network_policy_valid() {
-        let obj = make_obj(json!({
-            "status": {
-                "conditions": [
-                    {"type": "Valid", "status": "True", "message": "Policy validation succeeded"},
-                ]
-            }
+    fn undeclared_custom_kind_uses_generic_conditions() {
+        // Without a declaration the CLI knows nothing about an operator's
+        // vocabulary: Valid=True is not readiness, Ready=True is.
+        let valid_only = make_obj(json!({
+            "status": {"conditions": [{"type": "Valid", "status": "True"}]}
         }));
-        assert!(check_readiness(&obj, "CiliumNetworkPolicy"));
-        assert!(check_readiness(&obj, "CiliumClusterwideNetworkPolicy"));
-    }
+        assert!(!check_readiness(&valid_only, "CiliumNetworkPolicy"));
 
-    #[test]
-    fn cilium_network_policy_invalid() {
-        let obj = make_obj(json!({
-            "status": {
-                "conditions": [
-                    {"type": "Valid", "status": "False", "message": "bad selector"},
-                ]
-            }
+        let ready = make_obj(json!({
+            "status": {"conditions": [{"type": "Ready", "status": "True"}]}
         }));
-        assert!(!check_readiness(&obj, "CiliumNetworkPolicy"));
-    }
-
-    #[test]
-    fn cilium_network_policy_missing_status() {
-        // Freshly created CNP before cilium-operator has set status.
-        let obj = make_obj(json!({}));
-        assert!(!check_readiness(&obj, "CiliumNetworkPolicy"));
+        assert!(check_readiness(&ready, "CiliumNetworkPolicy"));
     }
 
     #[test]
