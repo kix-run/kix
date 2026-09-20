@@ -93,8 +93,7 @@ const stackLines: CodeLine[] = [
 ];
 
 const controlLines: CodeLine[] = [
-  line(c("# The same cluster.nix, a few months on: the defaults are now")),
-  line(c("# decisions, made where production demanded them.")),
+  line(c("# Customize versions, replicas, resource limits, and secrets.")),
   dim(k("instances.app"), p(" = {")),
   dim(k("  api"), p(" = {")),
   dim(k("    package"), p(" = "), r("packages.app"), p(";")),
@@ -362,8 +361,7 @@ const tabs: {
           Four instances, wired by reference.
         </strong>{" "}
         Services, network policies, storage, backups, and certificates are{" "}
-        <strong className="text-foreground">derived from this</strong>; there is
-        no hand-rolled glue to forget about.
+        <strong className="text-foreground">derived from this definition</strong>.
       </>
     ),
   },
@@ -374,12 +372,8 @@ const tabs: {
     agent: controlAgent,
     caption: (
       <>
-        The same four instances after production{" "}
-        <strong className="text-foreground">
-          turned the defaults into decisions
-        </strong>
-        : pinned versions, an HA pair, resource limits, encrypted secrets. The
-        rest of the stack is{" "}
+        The same four instances with pinned versions, an HA pair, resource
+        limits, and encrypted secrets. The rest of the stack is{" "}
         <strong className="text-foreground">unchanged, and dimmed</strong>.
       </>
     ),
@@ -504,8 +498,8 @@ export default function Example() {
       <Container>
         <SectionHeading
           kicker="A real stack"
-          title="A real architecture, with every layer still yours"
-          lede="The hero shows the short version. Here is a fuller one: an API and its worker, Postgres with a vector store, and a cache, wired together by reference so the whole graph hangs together at compile time. When you need more than the defaults, every layer opens, down to the generated manifests."
+          title="Explore a complete stack definition"
+          lede="An API, a worker, Postgres with vector support, and a cache. Explore the definition, customize its settings, and inspect the generated Kubernetes resources."
         />
 
         <Reveal delay={1} className="mt-12">

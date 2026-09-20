@@ -212,11 +212,9 @@ export default function Hero() {
         </Reveal>
         <Reveal delay={2}>
           <p className="mx-auto mt-6 max-w-2xl text-balance text-lg text-muted-foreground sm:text-xl">
-            Compile your whole cluster from one definition, locally or in CI.
+            Compile your whole cluster from one definition
             <br />
             If it compiles, it will deploy safely.
-            <br />
-            Easier to learn than Kubernetes itself.
           </p>
         </Reveal>
         <Reveal delay={3}>

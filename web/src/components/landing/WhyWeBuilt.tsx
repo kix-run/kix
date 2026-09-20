@@ -21,8 +21,7 @@ export default function WhyWeBuilt() {
       <Container>
         <SectionHeading
           kicker="Why we built it"
-          title="We felt this pain before we sold the fix"
-          lede="We ran into this the way you are running into it: real workloads, real customers, and platforms that stopped fitting. We went looking for the tool and found a landscape of partial answers instead; each one solved a layer and added one. So we built what we kept wishing existed: a compiler that takes a definition of your stack and produces a cluster you can trust."
+          title="Why we built Kix"
         />
 
         <div className="mt-14 grid gap-4 lg:grid-cols-2">

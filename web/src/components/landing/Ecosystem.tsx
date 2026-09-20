@@ -37,16 +37,16 @@ export default function Ecosystem() {
     <section id="ecosystem" className="py-24 sm:py-28">
       <Container>
         <SectionHeading
-          kicker="The alternative"
-          title="Learn all of this, or just use Kix"
-          lede="Running Kubernetes the usual way means assembling a stack of tools, each with its own config language, upgrade cycle, and failure modes. That stack is what the specialist is for."
+          kicker="Kubernetes components"
+          title="A Kubernetes stack, configured together"
+          lede="A Kubernetes stack combines tools for networking, storage, monitoring, and security. Kix packages these components and configures their connections from your definition."
         />
 
         <div className="mt-14 grid items-stretch gap-4 lg:grid-cols-[3fr_2fr]">
           <Reveal>
             <div className="h-full rounded-2xl border border-border bg-card/60 p-7">
               <h3 className="text-sm font-semibold text-muted-foreground">
-                Kubernetes, sold separately
+                The Kubernetes ecosystem
               </h3>
               <div className="mt-5 flex flex-wrap gap-2">
                 {tools.map((tool) => (
@@ -76,24 +76,13 @@ export default function Ecosystem() {
                   <span className="text-(--brand-on-dark)">kix deploy</span>
                 </p>
                 <p className="mt-4 text-sm leading-relaxed text-zinc-400">
-                  One definition, one command. The same production-grade
-                  components underneath, chosen and configured to work
-                  together. You compile instead of learning them.
+                  Kix configures the components your stack needs from one
+                  definition.
                 </p>
               </div>
             </div>
           </Reveal>
         </div>
-
-        <Reveal className="mt-20">
-          <div className="mx-auto max-w-2xl text-center">
-            <div className="mx-auto mb-14 h-px w-12 bg-brand" />
-            <p className="text-balance font-display text-4xl italic text-foreground sm:text-5xl">
-              Kix turns Kubernetes from a specialist skill into{" "}
-              <span className="text-brand">a tool you run.</span>
-            </p>
-          </div>
-        </Reveal>
       </Container>
     </section>
   )

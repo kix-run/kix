@@ -10,12 +10,12 @@ const items: { question: string; answer: string }[] = [
   {
     question: "Do I need to know Kubernetes to use Kix?",
     answer:
-      "No. The definition you write is at the level of services, databases, and domains, and the defaults are production-grade out of the box. Kubernetes knowledge helps but isn't required.",
+      "You don't need to be a Kubernetes specialist. You define services, databases, and domains, and Kix configures the underlying resources. Your team still manages the applications and infrastructure.",
   },
   {
     question: "The definition is a .nix file. Do we need to learn Nix?",
     answer:
-      "No. A Kix definition is declarative settings in Nix syntax: typed options you fill in, not a program you write. If you can read the snippet at the top of this page, you can write one. The compiler checks what you wrote and its errors point at your settings, not at language internals, and coding agents write the format fluently. The full power of Nix is underneath if you ever want it, and ignorable if you don't.",
+      "You'll use Nix syntax to fill in typed settings for your stack. The examples show the format, and compiler errors point to settings that need fixing. You can use more of Nix as your definitions grow.",
   },
   {
     question: "What if we need a Kubernetes setting Kix doesn't expose?",
@@ -25,7 +25,7 @@ const items: { question: string; answer: string }[] = [
   {
     question: "Can Claude Code or Cursor write our Kix definition?",
     answer:
-      "Yes, and it works well today. The definition is compact and typed, and Kix checks every selector, reference, and dependency an agent writes before deploy, so agent mistakes fail the build instead of reaching production. The docs are also published in llms.txt form for agents to read.",
+      "Yes. Agents can write definitions and run local checks for configuration errors. We provide documentation and an MCP server for checks, schemas, and package discovery. You review changes before deploying.",
   },
   {
     question: "What does Kix actually run on?",
@@ -35,27 +35,27 @@ const items: { question: string; answer: string }[] = [
   {
     question: "Can we deploy into a customer's VPC or data center?",
     answer:
-      "Yes, this is one of the main reasons teams adopt Kix. Your stack compiles into standard Kubernetes resources, so the same definition deploys into your cluster, a customer's AWS or Azure account, or their data center. Each customer environment is the same definition with different settings, and everything is checked and previewed before it touches their cluster, which is exactly what their security review wants to see.",
+      "Yes. Use the same stack definition with settings for each customer's environment. You can check the configuration and review the deployment changes before applying them to their cluster.",
   },
   {
     question: "What happens if we leave Kix?",
     answer:
-      "You keep a working cluster and standard Kubernetes manifests: leaving Kix is losing a tool, not replatforming.",
+      "You keep your running cluster and the generated Kubernetes manifests. You'll need to manage future changes with other tooling.",
   },
   {
     question: "Is Kix open source?",
     answer:
-      "No, Kix is a commercial product. Everything it produces is plain, inspectable Kubernetes, so your clusters and manifests are always fully yours.",
+      "No. Kix is proprietary software. Its generated Kubernetes resources are inspectable, and you keep your clusters and manifests if you stop using Kix.",
   },
   {
     question: "What does it cost?",
     answer:
-      "Pricing scales with the size of your deployment, with bare-metal support as a paid add-on. Kix plus your own infrastructure should cost well under the PaaS bill it replaces. Final numbers ship with early access, and teams joining now lock in founding rates.",
+      "Pricing scales with the size of your deployment, with bare-metal support as a paid add-on. Early access is free, and early teams lock in founding rates. We haven't published final pricing yet.",
   },
   {
     question: "Is Kix in our runtime data path?",
     answer:
-      "No. Kix compiles, checks, and deploys; your software runs on your clusters, on your infrastructure. If Kix disappeared tomorrow, your production wouldn't notice.",
+      "No. Kix compiles, checks, and deploys. Your software runs on your own infrastructure without Kix in the runtime data path.",
   },
 ]
 
@@ -65,7 +65,7 @@ export default function Faq() {
       <Container className="lg:grid lg:grid-cols-12 lg:gap-16">
         <SectionHeading
           kicker="FAQ"
-          title="Questions a careful buyer should ask"
+          title="Common questions"
           className="lg:col-span-5"
         />
 

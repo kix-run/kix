@@ -6,11 +6,11 @@ import {
   Check,
   Database,
   DatabaseBackup,
+  Eye,
   FileCheck,
   FileCode2,
   KeyRound,
   Network,
-  RefreshCcw,
   Rocket,
   UserCheck,
   type LucideIcon,
@@ -107,22 +107,22 @@ const steps: { title: string; body: string; icon: LucideIcon }[] = [
   {
     title: "Define your stack",
     icon: FileCode2,
-    body: "Describe your deployment stack in a single definition.",
+    body: "Describe your services, databases, and their connections in one definition.",
   },
   {
     title: "Compile & check",
     icon: BadgeCheck,
-    body: "Kix verifies your definition compiles, and generates everything your cluster needs (network policies, storage, backups, certificates...).",
+    body: "Run checks on your laptop before committing. Kix checks your definition and generates resources for networking, storage, backups, and certificates.",
   },
   {
-    title: "Deploy verified",
+    title: "Preview",
+    icon: Eye,
+    body: "Review the changes to your cluster before applying them.",
+  },
+  {
+    title: "Deploy",
     icon: Rocket,
-    body: "Deploy your signed and verifiable build. See the diff before anything changes.",
-  },
-  {
-    title: "Iterate",
-    icon: RefreshCcw,
-    body: "Day two is the same fast-feedback loop. Ideal for both humans and agents.",
+    body: "Deploy the verified build you reviewed. Repeat these steps for each update.",
   },
 ];
 
@@ -134,12 +134,12 @@ const features: { title: string; body: string; icon: LucideIcon }[] = [
   },
   {
     title: "Integrated secrets",
-    body: "Defined once in your stack, injected wherever they're referenced. No hand-rolled vault setup.",
+    body: "Defined once in your stack, injected wherever they're referenced.",
     icon: KeyRound,
   },
   {
     title: "Monitoring & alerting",
-    body: "Metrics, dashboards, and alert rules wired in from day one, not bolted on later.",
+    body: "Metrics, dashboards, and alert rules included.",
     icon: Activity,
   },
   {
@@ -149,7 +149,7 @@ const features: { title: string; body: string; icon: LucideIcon }[] = [
   },
   {
     title: "Human-in-the-loop fixes",
-    body: "When something breaks, Kix knows your whole stack and proposes the fix. You approve it, not diagnose it.",
+    body: "Kix proposes a fix for you to review.",
     icon: UserCheck,
   },
   {
@@ -159,7 +159,7 @@ const features: { title: string; body: string; icon: LucideIcon }[] = [
   },
   {
     title: "Network & security policies",
-    body: "Generated from what your definition says talks to what. You never write Cilium rules.",
+    body: "Generated from the connections between services in your definition.",
     icon: Network,
   },
   {
@@ -264,10 +264,6 @@ export default function Mechanism() {
           <h3 className="text-balance text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
             Handled for you
           </h3>
-          <p className="mt-2 max-w-2xl text-muted-foreground">
-            Somewhere in this list is the thing you never wanted to deal with
-            again.
-          </p>
         </Reveal>
         <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {features.map((feature, i) => (
@@ -299,11 +295,10 @@ export default function Mechanism() {
               Bring your coding agent.
             </h3>
             <p className="mt-3 leading-relaxed text-muted-foreground">
-              Agents write Kix well: the definition is compact and typed, and
-              kix check gives an agent the same fast, local feedback it gives
-              you. A hallucinated selector doesn't reach your cluster; it fails
-              to compile, the agent reads the error and fixes it before you ever
-              see it.
+              Coding agents can write definitions and run kix check locally.
+              The compiler reports errors such as mismatched selectors and
+              missing secrets, so the agent can revise the definition. You
+              review the changes before deploying.
             </p>
             <ul className="mt-5 space-y-2 text-sm text-muted-foreground">
               {agentFacilities.map((item, i) => (
@@ -317,8 +312,8 @@ export default function Mechanism() {
           <Reveal delay={1} className="min-w-0">
             <AgentLoop />
             <p className="mt-3 text-center text-xs text-muted-foreground">
-              Your agent writes it, Kix checks every line. You review the
-              preview and deploy.
+              The agent adds Redis and uses the compiler error to identify
+              a missing secret.
             </p>
           </Reveal>
         </div>

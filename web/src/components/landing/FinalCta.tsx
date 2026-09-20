@@ -95,9 +95,8 @@ export default function FinalCta() {
                   Get shit done with Kubernetes
                 </h2>
                 <p className="mt-5 text-lg leading-relaxed text-zinc-400">
-                  Kix is onboarding early-access teams now. Tell us what you're
-                  trying to do and we'll get you set up. We onboard a small
-                  number of teams at a time.
+                  Tell us what you're trying to do and we'll get you set up.
+                  We're onboarding a small number of teams at a time.
                 </p>
                 <ul className="mt-7 space-y-3 text-sm text-zinc-300">
                   {reassurances.map((line) => (
@@ -108,11 +107,9 @@ export default function FinalCta() {
                   ))}
                 </ul>
                 <p className="mt-7 text-sm leading-relaxed text-zinc-400">
-                  Migrating something gnarly, like years of Heroku history or
-                  a tangle of half-documented services? Mention it in the
-                  notes and we'll pair you with a Kix migration partner. The
-                  partner's job is to leave your team running it, not to stay
-                  on retainer.
+                  If you need help migrating, describe your current setup in
+                  the notes. We can pair you with a Kix migration partner to
+                  help your team move and operate the stack.
                 </p>
               </div>
 
