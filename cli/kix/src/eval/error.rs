@@ -4,20 +4,20 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum KixEvalError {
-    #[error("failed to initialize evaluator")]
+    #[error("could not initialize the Nix evaluator: {source}")]
     InitFailed {
         #[source]
         source: anyhow::Error,
     },
 
-    #[error("failed to open store at '{path}'")]
+    #[error("could not open the Nix store at '{path}': {source}")]
     StoreOpenFailed {
         path: String,
         #[source]
         source: anyhow::Error,
     },
 
-    #[error("failed to evaluate cluster attribute '{attr}' in '{flake}'")]
+    #[error("could not evaluate cluster attribute '{attr}' in '{flake}': {source}")]
     EvalFailed {
         flake: String,
         attr: String,
@@ -25,10 +25,12 @@ pub enum KixEvalError {
         source: anyhow::Error,
     },
 
-    #[error("cluster '{name}' not found")]
+    #[error(
+        "cluster '{name}' was not found. Run `kix list clusters` with the same flake to see available clusters"
+    )]
     ClusterNotFound { name: String },
 
-    #[error("evaluation error in {file}:{line}")]
+    #[error("Nix evaluation failed at {file}:{line}: {message}")]
     NixError {
         file: String,
         line: u32,
@@ -36,13 +38,13 @@ pub enum KixEvalError {
         suggestion: Option<String>,
     },
 
-    #[error("eval cache error")]
+    #[error("could not access the Nix evaluation cache: {source}")]
     CacheError {
         #[source]
         source: anyhow::Error,
     },
 
-    #[error("store graph error: {message}")]
+    #[error("could not read the built resources and their dependencies: {message}")]
     StoreGraphError { message: String },
 }
 

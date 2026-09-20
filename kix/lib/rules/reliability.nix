@@ -80,9 +80,9 @@ in
             [
               {
                 message =
-                  "container '${c.name or "unnamed"}' is unbounded (missing: "
+                  "container '${c.name or "unnamed"}' is missing resource settings: "
                   + builtins.concatStringsSep ", " missing
-                  + "). On single-node clusters this means a runaway workload can OOM the host.";
+                  + ". Set CPU and memory requests and limits. Without a memory limit, a workload can exhaust the node's memory.";
               }
             ]
         ) containers;
@@ -171,7 +171,11 @@ in
         hasPDB = builtins.any (r: (r.kind or "") == "PodDisruptionBudget") resources;
       in
       if multiReplicaDeployments != [ ] && !hasPDB then
-        [ { message = "'${instanceName}' has multi-replica Deployments but no PDB"; } ]
+        [
+          {
+            message = "'${instanceName}' has Deployments with multiple replicas but no PodDisruptionBudget. Add one to limit how many pods can be disrupted during maintenance";
+          }
+        ]
       else
         [ ];
   };

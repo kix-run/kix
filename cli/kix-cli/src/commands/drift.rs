@@ -26,7 +26,7 @@ pub fn run(args: &DriftArgs, global: &GlobalArgs) -> Result<()> {
             .map_err(|e| miette!("failed to connect: {e}"))?;
         let discovery = fetch::discover_resources(&client)
             .await
-            .map_err(|e| miette!("API discovery failed: {e}"))?;
+            .map_err(|e| miette!("{e}"))?;
         drift::check_cluster(&client, &discovery)
             .await
             .map_err(|e| miette!("drift check failed: {e}"))
@@ -79,7 +79,7 @@ fn print_text(reports: &[DriftReport], quiet: bool) {
                     "  {} {:<50} {}",
                     output::yellow("?"),
                     rid,
-                    output::yellow("no managedFields — check cannot run"),
+                    output::yellow("no managedFields. Check cannot run"),
                 );
             }
             DriftVerdict::Drifted { foreign } => {
@@ -96,7 +96,7 @@ fn print_text(reports: &[DriftReport], quiet: bool) {
                     println!(
                         "      {}",
                         output::dim(
-                            "no foreign co-owner recorded — content changed under kix's own fieldset"
+                            "fields managed by Kix have changed; Kubernetes has not recorded another tool as their owner"
                         ),
                     );
                 }

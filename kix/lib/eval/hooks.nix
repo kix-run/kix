@@ -66,7 +66,7 @@ rec {
               if !(lib.hasInfix "." domain) || lib.hasInfix "/" domain then
                 throw (
                   "kix: meta.annotationDomains of instance ${entry.ns}/${entry.inst} contains "
-                  + "'${domain}', which is not a DNS-domain-shaped annotation prefix "
+                  + "'${domain}', which is not a valid annotation domain "
                   + "(expected e.g. \"reflector.v1.k8s.emberstack.com\")"
                 )
               else
@@ -168,8 +168,8 @@ rec {
           "kix: role '${role}' is exclusively provided by the environment"
           + lib.optionalString (envProvider != null) " (${envProvider})"
           + ", but managed instance(s) also claim it: ${fmt managed}. "
-          + "Two strong providers cannot coexist — switch to a target where the role is not "
-          + "environment-owned (cluster.roles.${role}.binding = \"absent\"), or drop the managed instance."
+          + "Remove the conflicting instance or use an environment where this role is not "
+          + "already provided. Set cluster.roles.${role}.binding to match that environment."
         )
       else if builtins.length managed > 1 then
         throw (
@@ -246,7 +246,7 @@ rec {
         if !(builtins.isAttrs result) then
           throw (
             "kix: hooks.${channel}.${name} returned ${builtins.typeOf result}; "
-            + "expected an attrset with keys: ${builtins.concatStringsSep ", " allowedKeys}"
+            + "expected an attribute set with keys: ${builtins.concatStringsSep ", " allowedKeys}"
           )
         else
           let

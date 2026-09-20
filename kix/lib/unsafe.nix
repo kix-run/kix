@@ -42,6 +42,6 @@ rec {
     else
       throw (
         "kix: unknown unsafe grant '${grant}' (${context}). ${knownGrantsHint}. "
-        + "The unsafe vocabulary is closed — a new grant is added to kix/lib/unsafe.nix together with the rule it escapes (v2_discussions/128)."
+        + "Use a supported grant from this list, or remove the entry from meta.unsafe."
       );
 }

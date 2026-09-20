@@ -79,8 +79,8 @@ fn kix_crds_from_build(args: &MigrateArgs, ctx: &mut CommandContext) -> Result<V
     let result_dir =
         build_cluster_activation_with_status(&flake_path, &args.cluster, &overrides, &noop)
             .map_err(|e| miette!("failed to build cluster: {e}"))?;
-    let mut graph = StoreGraph::from_result_dir_with_status(&result_dir, &noop)
-        .map_err(|e| miette!("failed to load store graph: {e}"))?;
+    let mut graph =
+        StoreGraph::from_result_dir_with_status(&result_dir, &noop).map_err(|e| miette!("{e}"))?;
     // A pin from before the domain move renders Kix's own CRDs under the
     // retired group, and this command would then install CRDs synthesised
     // from it. Checked BEFORE stamping, for the same reason `kix deploy`

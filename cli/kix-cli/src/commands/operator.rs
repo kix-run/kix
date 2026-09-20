@@ -50,8 +50,8 @@ pub async fn connect_and_verify(
         .await
         .map_err(|e| {
             miette!(
-                "Activation CRD not registered on cluster: {e}\n\
-                 Ensure the kix-operator is deployed and CRDs are applied."
+                "could not access Kix Activation records on this cluster: {e}\n\
+                 Check the Kubernetes context, access permissions, and that the Kix operator and CRDs are installed."
             )
         })?;
 

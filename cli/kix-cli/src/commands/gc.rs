@@ -90,8 +90,10 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         println!("Loading old activation...");
     }
     let noop = |_: &str| {};
-    let mut old_graph = StoreGraph::from_result_dir_with_status(&old_result_dir, &noop)
-        .map_err(|e| miette!("failed to load old store graph: {e}"))?;
+    let mut old_graph =
+        StoreGraph::from_result_dir_with_status(&old_result_dir, &noop).map_err(|e| {
+            miette!("could not read the previous build's resources and dependencies: {e}")
+        })?;
     stamp_annotations(&mut old_graph);
 
     // 3. Build new activation
@@ -108,7 +110,7 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         build_cluster_activation_with_status(&flake_path, &args.cluster, &overrides, &status)
             .map_err(|e| miette!("failed to build cluster: {e}"))?;
     let mut new_graph = StoreGraph::from_result_dir_with_status(&new_result_dir, &status)
-        .map_err(|e| miette!("failed to load new store graph: {e}"))?;
+        .map_err(|e| miette!("could not read the new build's resources and dependencies: {e}"))?;
     stamp_annotations(&mut new_graph);
     if !ctx.global.quiet {
         eprint!("\r\x1b[2K");
@@ -203,8 +205,8 @@ fn run_hard(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     let result_path =
         build_cluster_activation_with_status(&flake_path, &args.cluster, &overrides, &noop)
             .map_err(|e| miette!("failed to build cluster: {e}"))?;
-    let mut graph = StoreGraph::from_result_dir_with_status(&result_path, &noop)
-        .map_err(|e| miette!("failed to load store graph: {e}"))?;
+    let mut graph =
+        StoreGraph::from_result_dir_with_status(&result_path, &noop).map_err(|e| miette!("{e}"))?;
     stamp_annotations(&mut graph);
 
     // 2. Collect expected identity hashes, and the Kubernetes identities
@@ -256,7 +258,7 @@ async fn run_hard_async(
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
     let discovery = fetch::discover_resources(&client)
         .await
-        .map_err(|e| miette!("API discovery failed: {e}"))?;
+        .map_err(|e| miette!("{e}"))?;
     let sweep = fetch::sweep_managed(&client, &discovery)
         .await
         .map_err(|e| miette!("failed to fetch live resources: {e}"))?;
@@ -595,11 +597,11 @@ async fn run_operator(args: &GcArgs, ctx: &CommandContext) -> Result<()> {
 
     let discovery = kix::cluster::fetch::discover_resources(&client)
         .await
-        .map_err(|e| miette!("API discovery failed: {e}"))?;
+        .map_err(|e| miette!("{e}"))?;
 
     let (activation_ar, _) = kix::cluster::activation::find_activation_ar(&discovery)
         .map_err(|e| miette!("{e}"))?
-        .ok_or_else(|| miette!("Activation CRD not registered on cluster"))?
+        .ok_or_else(|| miette!("the Kix Activation resource type is not installed on this cluster. Check the Kubernetes context and deploy the Kix CRDs before retrying."))?
         .clone();
 
     // Superseded activations under the retention policy
@@ -772,7 +774,7 @@ async fn plan_record_retirement(
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
     let discovery = fetch::discover_resources(&client)
         .await
-        .map_err(|e| miette!("API discovery failed: {e}"))?;
+        .map_err(|e| miette!("{e}"))?;
     plan_records_with(&client, &discovery, cluster, policy).await
 }
 
@@ -1002,7 +1004,7 @@ async fn delete_resources(
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
     let discovery = fetch::discover_resources(&client)
         .await
-        .map_err(|e| miette!("API discovery failed: {e}"))?;
+        .map_err(|e| miette!("{e}"))?;
 
     let ar_by_kind: HashMap<String, (&kube::discovery::ApiResource, kube::discovery::Scope)> =
         discovery
@@ -1016,7 +1018,7 @@ async fn delete_resources(
     for rid in resources {
         if rid.kind == "Namespace" {
             println!(
-                "  {} {} — skipping Namespace — delete manually",
+                "  {} {}: Namespace deletion is skipped; delete it manually if needed",
                 output::yellow("!"),
                 rid,
             );
@@ -1024,7 +1026,11 @@ async fn delete_resources(
         }
 
         let Some(&(ar, ref scope)) = ar_by_kind.get(&rid.kind) else {
-            eprintln!("  {} {} — unknown kind, skipping", output::red("!"), rid);
+            eprintln!(
+                "  {} {}: Kubernetes does not recognize this kind; skipping it",
+                output::red("!"),
+                rid
+            );
             failed += 1;
             continue;
         };

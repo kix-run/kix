@@ -49,7 +49,7 @@ in
           v = parts.${folderName} or null;
         in
         if v != null && builtins.isAttrs v && v ? _type then
-          throw "${ctx}: '${folderName}' must be an attrset of resources, not a resource directly. Use '${folderName}.someName = ...' instead."
+          throw "${ctx}: '${folderName}' must be an attribute set of resources, not a resource directly. Use '${folderName}.someName = ...' instead."
         else
           acc
       ) null (builtins.attrNames knownFolders);
@@ -64,7 +64,7 @@ in
         in
         lib.foldl' (
           inner: r:
-          builtins.trace "warning: ${ctx}.${folderName} contains ${r.kind or "?"}/${r.name or "?"} — unexpected _type '${r._type or "unknown"}'" inner
+          builtins.trace "warning: ${ctx}.${folderName} contains ${r.kind or "?"}/${r.name or "?"}; unexpected _type '${r._type or "unknown"}'" inner
         ) acc bad
       ) null (builtins.attrNames knownFolders);
 

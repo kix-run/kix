@@ -139,10 +139,11 @@ rec {
     else
       let
         msgs = map (
-          v: "'${v.resource}' in instance '${v.instance}' depends on PI of '${v.piInstance}'"
+          v:
+          "'${v.resource}' in instance '${v.instance}' depends on the PackageInstance record for '${v.piInstance}'"
         ) violations;
       in
-      throw "validatePIWiring(${clusterName}): Invariant 1 violated — resources depend on PIs: ${lib.concatStringsSep "; " msgs}";
+      throw "cluster '${clusterName}' has invalid package dependencies: resources must depend on the resources they use, not PackageInstance records: ${lib.concatStringsSep "; " msgs}";
 
   # --- Invariant 3: PI references resources via annotation string context ---
 
@@ -173,9 +174,11 @@ rec {
       true
     else
       let
-        msgs = map (v: "PI of '${v.instance}' does not reference any of its own resources") violations;
+        msgs = map (
+          v: "PackageInstance '${v.instance}' does not reference any of its own resources"
+        ) violations;
       in
-      throw "validatePIWiring(${clusterName}): Invariant 3 violated — ${lib.concatStringsSep "; " msgs}";
+      throw "cluster '${clusterName}' has invalid package dependencies: package resource references are missing: ${lib.concatStringsSep "; " msgs}";
 
   # --- Invariant 4: PI closure covers all non-orphaned package resources ---
 
@@ -247,9 +250,11 @@ rec {
       true
     else
       let
-        msgs = map (v: "'${v.resource}' in '${v.instance}' not reachable from its PI") violations;
+        msgs = map (
+          v: "'${v.resource}' in '${v.instance}' is not referenced by its PackageInstance or its dependencies"
+        ) violations;
       in
-      throw "validatePIWiring(${clusterName}): Invariant 4 violated — resources not in PI closure: ${lib.concatStringsSep "; " msgs}";
+      throw "cluster '${clusterName}' has invalid package dependencies: package dependencies do not include all resources: ${lib.concatStringsSep "; " msgs}";
 
   # --- Invariant 5: Activation only references PIs ---
 
@@ -267,9 +272,11 @@ rec {
       true
     else
       let
-        msgs = map (r: "'${r.kind}/${r.name}' is referenced by Activation but is not a PI") nonPIResources;
+        msgs = map (
+          r: "'${r.kind}/${r.name}' is referenced by Activation but is not a PackageInstance"
+        ) nonPIResources;
       in
-      throw "validatePIWiring(${clusterName}): Invariant 5 violated — Activation references non-PI resources: ${lib.concatStringsSep "; " msgs}";
+      throw "cluster '${clusterName}' has invalid package dependencies: Activation must reference PackageInstance records: ${lib.concatStringsSep "; " msgs}";
 
   # --- Top-level validator ---
 

@@ -37,12 +37,12 @@ const TIMEOUT: Duration = Duration::from_secs(30);
 #[derive(Debug, thiserror::Error)]
 pub enum RegistryError {
     #[error(
-        "{reference} was not found in the registry. Check the tag exists: the registry answered 404."
+        "{reference} was not found in the registry. Check the repository and tag or digest. The registry returned HTTP 404."
     )]
     NotFound { reference: String },
 
     #[error(
-        "the registry refused the request for {reference}. Kix authenticated with {via}. Either the credentials do not cover this repository, or there are none: run `docker login {registry}`, or set KIX_REGISTRY_USERNAME and KIX_REGISTRY_PASSWORD."
+        "the registry refused the request for {reference}. Credential source: {via}. Check that the credentials have access to this repository. To sign in, run `docker login {registry}`, or set KIX_REGISTRY_USERNAME and KIX_REGISTRY_PASSWORD."
     )]
     Unauthorized {
         reference: String,
@@ -67,7 +67,7 @@ pub enum RegistryError {
     },
 
     #[error(
-        "the registry served a manifest for {reference} whose bytes hash to {computed} but whose Docker-Content-Digest header says {header}. One of them is wrong, so Kix will not record either."
+        "the registry served a manifest for {reference} whose bytes hash to {computed} but whose Docker-Content-Digest header says {header}. The response is inconsistent, so Kix has not saved a digest. Check the registry or proxy and retry."
     )]
     DigestMismatch {
         reference: String,

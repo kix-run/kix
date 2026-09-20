@@ -162,7 +162,7 @@ pub enum PinError {
     Invalid { path: String, detail: String },
 
     #[error(
-        "{path} was not written by `kix pin`, so rewriting it would discard whatever is in it. Check it, then re-run with --force if replacing it is what you want."
+        "{path} was not written by `kix pin`, so Kix has not overwritten it. Review the file, then rerun with --force if you want Kix to replace it."
     )]
     NotManaged { path: String },
 
@@ -332,7 +332,7 @@ fn check_pins(pins: &BTreeMap<String, Pin>) -> Result<(), String> {
             && !is_sha256_digest(d)
         {
             return Err(format!(
-                "Pin '{key}' has a digest that is not sha256 followed by 64 hex characters: '{d}'."
+                "Pin '{key}' has a digest that is not sha256: followed by 64 hexadecimal characters: '{d}'."
             ));
         }
     }

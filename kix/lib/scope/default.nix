@@ -195,7 +195,7 @@ rec {
           let
             depNs =
               dep._meta.namespaceName
-                or (throw "scope.forService: dep has no _meta.namespaceName (external/passthrough?); use scope.forNamespace explicitly");
+                or (throw "scope.forService: the dependency does not declare its namespace (_meta.namespaceName is missing). Use scope.forNamespace with the namespace name instead");
           in
           scopeObj.forNamespace depNs;
 

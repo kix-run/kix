@@ -104,7 +104,7 @@ fn set(args: &PinSetArgs, global: &GlobalArgs) -> Result<()> {
     let digest = if let Some(d) = &args.digest {
         if !is_sha256_digest(d) {
             return Err(miette!(
-                "--digest must be sha256 followed by 64 hex characters, and got '{d}'"
+                "invalid digest '{d}'. Use sha256: followed by 64 hexadecimal characters"
             ));
         }
         Some(d.clone())
@@ -121,7 +121,7 @@ fn set(args: &PinSetArgs, global: &GlobalArgs) -> Result<()> {
         eprintln!(
             "{}",
             output::yellow(
-                "warning: writing a pin with no digest. Nothing checks that this tag exists, now or at deploy time."
+                "warning: saving this pin without a digest. Kix has not checked whether the tag exists and will not check it during deployment."
             )
         );
     }
@@ -347,7 +347,7 @@ fn judge(
 ) -> Verdict {
     let Some(digest_ref) = pin.digest_reference() else {
         let msg = format!(
-            "{} has no digest, so nothing verifies that this tag exists",
+            "{} has no digest. Kix cannot verify the pinned image",
             pin.reference()
         );
         return if args.allow_unresolved {
@@ -360,7 +360,10 @@ fn judge(
     };
 
     let Some(client) = client else {
-        return Verdict::Ok(format!("{} (shape only, offline)", pin.reference()));
+        return Verdict::Ok(format!(
+            "{} (format checked offline; registry not checked)",
+            pin.reference()
+        ));
     };
 
     // By digest, not by tag. A tag that has moved is a fact worth reporting;
@@ -371,7 +374,9 @@ fn judge(
         Err(e) => Err(e),
     };
     if let Err(e) = digest_result {
-        return Verdict::Fail(format!("{digest_ref} is not in the registry: {e}"));
+        return Verdict::Fail(format!(
+            "could not verify {digest_ref} in the registry: {e}"
+        ));
     }
 
     // The tag is secondary. A retention job that deletes an old tag whose
@@ -383,11 +388,11 @@ fn judge(
                 Verdict::Ok(format!("{} resolves to the pinned digest", pin.reference()))
             }
             Ok(resolved) => Verdict::Warn(format!(
-                "the digest is present, but tag {} now points at {}. The pinned digest is what runs.",
+                "the digest is present, but tag {} now points at {}. Deployments continue to use the pinned digest.",
                 pin.tag, resolved.digest
             )),
-            Err(_) => Verdict::Warn(format!(
-                "the digest is present, but tag {} is gone from the registry. The pinned digest is what runs.",
+            Err(e) => Verdict::Warn(format!(
+                "the digest is present, but Kix could not check tag {}: {e}. Deployments continue to use the pinned digest.",
                 pin.tag
             )),
         },

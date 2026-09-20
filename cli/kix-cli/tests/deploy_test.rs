@@ -37,7 +37,7 @@ fn deploy_dry_run_shows_plan() {
         .stdout(predicate::str::contains("Plan:"))
         // Offline-dry-run banner (kixpkgs#15): must lead the per-resource list.
         .stdout(predicate::str::contains(
-            "Dry run — no changes will be applied.",
+            "Dry run. No changes will be applied.",
         ))
         // No prior activation cache for the example flake → every Apply node
         // classifies as Created and uses the runtime "created" verb (not the

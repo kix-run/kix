@@ -273,8 +273,8 @@ in
             r:
             "[${ctx.instanceName}] ${r.rawManifest.kind} '${r.rawManifest.metadata.name}' runs "
             + "${toString r.rawManifest.spec.replicas} replica under availability \"${level}\": "
-            + "a lost node takes it down, which the level promised to avoid. The package should map the level "
-            + "(kix.availability.pick) or declare meta.availability.max."
+            + "losing its node would cause downtime. Set the replica count based on the availability level "
+            + "(kix.availability.pick), or set meta.availability.max to the level the package supports."
           ) shortfall
         );
       in
@@ -288,12 +288,12 @@ in
       warnings =
         lib.optional (multiNode == null) (
           "[kix] cluster.capabilities.multiNode is unknown, so availability is derived as "
-          + "\"${substrate.level}\" and hard placement rules are only warned about. Declare multiNode."
+          + "\"${substrate.level}\" and Kix cannot verify whether required pod placement rules can be met. Set cluster.capabilities.multiNode to match your environment."
         )
         ++ lib.optional (multiNode == true && zones == null) (
           "[kix] cluster.capabilities.availabilityZones is unknown, so availability is derived as "
           + "\"node\" and derived pod spread uses ${hostKey} only. Declare the zones "
-          + "(or [ ] for single-zone) in the target."
+          + "(or [ ] for a single zone) in the cluster definition."
         );
     };
   };

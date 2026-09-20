@@ -35,7 +35,7 @@ pub fn run(args: &PortForwardArgs, ctx: &mut CommandContext) -> Result<()> {
 
     if !ctx.global.quiet {
         eprintln!(
-            "  {} {} in {} — forwarding {}",
+            "  {} {} in {}; forwarding {}",
             output::dim("→ kubectl port-forward"),
             output::bold(&target.kubectl_ref()),
             output::bold(&target.namespace),
@@ -59,5 +59,5 @@ pub fn run(args: &PortForwardArgs, ctx: &mut CommandContext) -> Result<()> {
     }
 
     let err = cmd.exec();
-    Err(miette!("failed to exec kubectl port-forward: {err}"))
+    Err(miette!("could not start kubectl port-forward: {err}"))
 }

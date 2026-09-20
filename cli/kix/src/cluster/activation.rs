@@ -52,7 +52,9 @@ pub const PHASE_FAILED: &str = "Failed";
 
 #[derive(Error, Debug)]
 pub enum ActivationError {
-    #[error("Activation CRD not registered on cluster")]
+    #[error(
+        "the Kix Activation resource type is not installed on this cluster. Check the Kubernetes context and deploy the Kix CRDs before retrying."
+    )]
     CrdNotRegistered,
 
     #[error("failed to list activations: {0}")]

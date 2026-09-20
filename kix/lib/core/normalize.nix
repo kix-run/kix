@@ -107,5 +107,5 @@ rec {
         if n == null then [ ] else n
       )
     else
-      throw "kix.keep: expected an attrset or list, got ${builtins.typeOf v}";
+      throw "kix.keep: expected an attribute set or list, got ${builtins.typeOf v}";
 }

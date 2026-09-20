@@ -72,5 +72,5 @@ pub fn run(args: &LogsArgs, ctx: &mut CommandContext) -> Result<()> {
     // kubectl instead of being intercepted here. On Unix this never
     // returns on success.
     let err = cmd.exec();
-    Err(miette!("failed to exec kubectl logs: {err}"))
+    Err(miette!("could not start kubectl logs: {err}"))
 }

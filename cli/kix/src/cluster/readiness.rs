@@ -1387,11 +1387,10 @@ fn readiness_message(obj: &DynamicObject, kind: &str) -> String {
             } else {
                 format!(
                     concat!(
-                        "{kind}/{name}: no Ready/Available condition; controller reports [{seen}] — ",
-                        "if this vocabulary is healthy for this kind, declare its readiness ",
-                        "convention on the owning package's CRD builder (readiness = {{ path; ",
-                        "equals; }}, stamped as the {readiness_key} annotation) or add a ",
-                        "rule in check_readiness"
+                        "{kind}/{name}: no Ready or Available condition; the controller reports [{seen}]. ",
+                        "If these conditions indicate success, set the readiness ",
+                        "check on the owning package's CRD builder (readiness = {{ path; ",
+                        "equals; }}, stamped as the {readiness_key} annotation)."
                     ),
                     kind = kind,
                     name = name,

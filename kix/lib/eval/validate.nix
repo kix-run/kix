@@ -284,7 +284,9 @@ rec {
         else if hasResource "ServiceAccount" ns saName then
           [ ]
         else
-          [ "${w.kind} ${ns}/${w.metadata.name} references ServiceAccount '${saName}' which does not exist" ]
+          [
+            "${w.kind} ${ns}/${w.metadata.name} references ServiceAccount '${saName}' which is not in the cluster build. Add the resource, or declare it as externally managed with an import or kix.untrackedRef"
+          ]
       ) workloads;
 
       # --- 2. RoleBinding/ClusterRoleBinding roleRef ---
@@ -303,7 +305,7 @@ rec {
               [ ]
             else
               [
-                "${binding.kind} ${ns}/${binding.metadata.name} references ${refKind} '${refName}' which does not exist"
+                "${binding.kind} ${ns}/${binding.metadata.name} references ${refKind} '${refName}' which is not in the cluster build. Add the resource, or declare it as externally managed with an import or kix.untrackedRef"
               ]
           )
           (
@@ -338,7 +340,7 @@ rec {
           in
           if cmName != null && !(hasResource "ConfigMap" ns cmName) then
             [
-              "${w.kind} ${ns}/${w.metadata.name} mounts ConfigMap '${cmName}' which does not exist"
+              "${w.kind} ${ns}/${w.metadata.name} mounts ConfigMap '${cmName}' which is not in the cluster build. Add the resource, or declare it as externally managed with an import or kix.untrackedRef"
             ]
           else
             [ ]
@@ -365,11 +367,11 @@ rec {
             ]
           else if operandOf svc != null then
             [
-              "Service ${ns}/${svc.metadata.name} declares ${operandOfAnnotation}=${operandOf svc} but no such CR is in the build in namespace ${ns}"
+              "Service ${ns}/${svc.metadata.name} declares ${operandOfAnnotation}=${operandOf svc} but that custom resource is not in the build in namespace ${ns}. Check the annotation and include the referenced resource"
             ]
           else
             [
-              "Service ${ns}/${svc.metadata.name} selector ${builtins.toJSON selector} matches no workload pod template"
+              "Service ${ns}/${svc.metadata.name} selector ${builtins.toJSON selector} matches no workload pod template in namespace ${ns}. Check the selector against the intended workload's pod labels"
             ]
       ) (builtins.filter (r: r.kind == "Service") resources);
 
@@ -387,7 +389,7 @@ rec {
           [ ]
         else
           [
-            "HorizontalPodAutoscaler ${ns}/${hpa.metadata.name} targets ${refKind} '${refName}' which does not exist"
+            "HorizontalPodAutoscaler ${ns}/${hpa.metadata.name} targets ${refKind} '${refName}' which is not in the cluster build. Add the resource, or declare it as externally managed with an import or kix.untrackedRef"
           ]
       ) (builtins.filter (r: r.kind == "HorizontalPodAutoscaler") resources);
 
@@ -468,7 +470,7 @@ rec {
               [ ]
             else
               [
-                "${w.kind} ${ns}/${w.metadata.name} selector ${builtins.toJSON selectorLabels} is not a subset of pod template labels ${builtins.toJSON templateLabels}"
+                "${w.kind} ${ns}/${w.metadata.name} selector ${builtins.toJSON selectorLabels} does not match pod template labels ${builtins.toJSON templateLabels}"
               ]
           )
           (
@@ -513,7 +515,9 @@ rec {
           if hasResource "Service" ns svcName then
             [ ]
           else
-            [ "Ingress ${ns}/${ing.metadata.name} references Service '${svcName}' which does not exist" ]
+            [
+              "Ingress ${ns}/${ing.metadata.name} references Service '${svcName}' which is not in the cluster build. Add the resource, or declare it as externally managed with an import or kix.untrackedRef"
+            ]
         ) allBackends
       ) (builtins.filter (r: r.kind == "Ingress") resources);
 
@@ -574,7 +578,7 @@ rec {
           [ ]
         else
           [
-            "NetworkPolicy ${ns}/${np.metadata.name} podSelector ${builtins.toJSON selector} matches no workload pod template"
+            "NetworkPolicy ${ns}/${np.metadata.name} podSelector ${builtins.toJSON selector} matches no workload pod template in namespace ${ns}. Check the selector against the intended workload's pod labels"
           ]
       ) (builtins.filter (r: r.kind == "NetworkPolicy") resources);
 
@@ -658,11 +662,11 @@ rec {
           ]
         else if decl != null then
           [
-            "PodDisruptionBudget ${ns}/${pdb.metadata.name} declares ${operandOfAnnotation}=${decl} but no such CR is in the build in namespace ${ns}"
+            "PodDisruptionBudget ${ns}/${pdb.metadata.name} declares ${operandOfAnnotation}=${decl} but that custom resource is not in the build in namespace ${ns}. Check the annotation and include the referenced resource"
           ]
         else
           [
-            "PodDisruptionBudget ${ns}/${pdb.metadata.name} selector ${builtins.toJSON selector} matches no workload pod template"
+            "PodDisruptionBudget ${ns}/${pdb.metadata.name} selector ${builtins.toJSON selector} matches no workload pod template in namespace ${ns}. Check the selector against the intended workload's pod labels"
           ]
       ) (builtins.filter (r: r.kind == "PodDisruptionBudget") resources);
 
@@ -710,7 +714,7 @@ rec {
           ]
         else if value != kixAnnotations.values.rerunOnChange then
           [
-            "Job ${ns}/${r.metadata.name} carries ${kixKeys.rerun}=${toString value}; the only value the deploy engine honours is \"${kixAnnotations.values.rerunOnChange}\""
+            "Job ${ns}/${r.metadata.name} carries ${kixKeys.rerun}=${toString value}; the supported value is \"${kixAnnotations.values.rerunOnChange}\""
           ]
         else
           [ ]
@@ -749,7 +753,7 @@ rec {
     if failures == [ ] then
       true
     else
-      throw "validateManifestSet(${clusterName}):\n${
+      throw "cluster '${clusterName}' has invalid resource references or configuration:\n${
         lib.concatMapStringsSep "\n" (f: "  - ${f}") failures
       }";
 }

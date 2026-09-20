@@ -43,14 +43,14 @@ let
       constraint,
     }:
     let
-      reason = lib.optionalString (constraint ? reason) " — ${constraint.reason}";
+      reason = lib.optionalString (constraint ? reason) ". ${constraint.reason}";
     in
     lib.concatLists [
       (lib.optional (constraint ? minVersion && !(versionAtLeast depVersion constraint.minVersion)) (
-        fail "dependency '${depName}' version ${depVersion} < required minimum ${constraint.minVersion}${reason}"
+        fail "dependency '${depName}' version ${depVersion} is older than the required minimum ${constraint.minVersion}${reason}"
       ))
       (lib.optional (constraint ? maxVersion && !(versionAtMost depVersion constraint.maxVersion)) (
-        fail "dependency '${depName}' version ${depVersion} > required maximum ${constraint.maxVersion}${reason}"
+        fail "dependency '${depName}' version ${depVersion} is newer than the supported maximum ${constraint.maxVersion}${reason}"
       ))
     ];
 
@@ -139,10 +139,10 @@ rec {
         else
           lib.concatLists [
             (lib.optional (k8s ? minVersion && !(versionAtLeast clusterK8s k8s.minVersion)) (
-              fail "package requires Kubernetes >= ${k8s.minVersion}, cluster targets ${clusterK8s}"
+              fail "package requires Kubernetes ${k8s.minVersion} or newer, cluster targets ${clusterK8s}"
             ))
             (lib.optional (k8s ? maxVersion && !(versionAtMost clusterK8s k8s.maxVersion)) (
-              fail "package requires Kubernetes <= ${k8s.maxVersion}, cluster targets ${clusterK8s}"
+              fail "package requires Kubernetes ${k8s.maxVersion} or older, cluster targets ${clusterK8s}"
             ))
           ];
 
@@ -178,7 +178,9 @@ rec {
           scope = if isClusterWide then "(cluster-wide)" else "in namespace '${namespaceName}'";
           instances = builtins.concatStringsSep ", " (map (c: "${c.namespace}/${c.instName}") matching);
         in
-        lib.optional (matching != [ ]) (fail "conflicts with '${name}' ${scope} — instances: ${instances}")
+        lib.optional (matching != [ ]) (
+          fail "conflicts with '${name}' ${scope}. Conflicting instances: ${instances}"
+        )
       ) (packageMeta.conflictsWith or [ ]);
 
       # Closed unsafe vocabulary (kix/lib/unsafe.nix): validate here so a
@@ -199,7 +201,7 @@ rec {
           [
             (
               "package '${instanceName}' is deprecated: ${deprecated.message or "no reason given"}"
-              + lib.optionalString (deprecated ? replacement) " — use '${deprecated.replacement}' instead"
+              + lib.optionalString (deprecated ? replacement) ". Use '${deprecated.replacement}' instead"
             )
           ];
     in

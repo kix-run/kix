@@ -54,11 +54,11 @@ async fn run_list_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()>
 
     let discovery = fetch::discover_resources(&client)
         .await
-        .map_err(|e| miette!("API discovery failed: {e}"))?;
+        .map_err(|e| miette!("{e}"))?;
 
     let (activation_ar, _) = activation::find_activation_ar(&discovery)
         .map_err(|e| miette!("{e}"))?
-        .ok_or_else(|| miette!("Activation CRD not registered on cluster"))?
+        .ok_or_else(|| miette!("the Kix Activation resource type is not installed on this cluster. Check the Kubernetes context and deploy the Kix CRDs before retrying."))?
         .clone();
 
     // Current Active activation — optional: useful as a "you are here" marker
@@ -158,7 +158,7 @@ fn print_history_text(
     if superseded.is_empty() {
         println!(
             "  {}",
-            output::dim("No superseded activations — nothing to roll back to.")
+            output::dim("No superseded activations. Nothing to roll back to.")
         );
         return;
     }
@@ -222,18 +222,23 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
 
     let discovery = fetch::discover_resources(&client)
         .await
-        .map_err(|e| miette!("API discovery failed: {e}"))?;
+        .map_err(|e| miette!("{e}"))?;
 
     let (activation_ar, _) = activation::find_activation_ar(&discovery)
         .map_err(|e| miette!("{e}"))?
-        .ok_or_else(|| miette!("Activation CRD not registered on cluster"))?
+        .ok_or_else(|| miette!("the Kix Activation resource type is not installed on this cluster. Check the Kubernetes context and deploy the Kix CRDs before retrying."))?
         .clone();
 
     // 2. Find current Active activation
     let current = activation::find_active(&client, &activation_ar, &args.cluster)
         .await
         .map_err(|e| miette!("failed to find active activation: {e}"))?
-        .ok_or_else(|| miette!("no active activation found for cluster '{}'", args.cluster))?;
+        .ok_or_else(|| {
+            miette!(
+                "no active deployment record found for cluster '{}'",
+                args.cluster
+            )
+        })?;
 
     if !ctx.global.quiet {
         let hash_preview = current
@@ -263,7 +268,7 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
 
     if superseded.is_empty() {
         return Err(miette!(
-            "no superseded activations found — nothing to rollback to"
+            "no previous deployments are available to roll back to"
         ));
     }
 
@@ -286,9 +291,14 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
         } else {
             input
                 .parse::<usize>()
-                .map_err(|_| miette!("invalid selection: '{}'", input))?
+                .map_err(|_| {
+                    miette!(
+                        "'{}' is not a valid selection. Enter a number from the list",
+                        input
+                    )
+                })?
                 .checked_sub(1)
-                .ok_or_else(|| miette!("selection must be >= 1"))?
+                .ok_or_else(|| miette!("enter a number from the list, starting at 1"))?
         };
 
         if idx >= superseded.len() {
@@ -329,7 +339,7 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
         .ok_or_else(|| {
             miette!(
                 "store path for activation '{}' not found locally (hash: {}). \
-                 Was it garbage-collected?",
+                 The build may have been garbage-collected or created on another machine. Restore it to the local Nix store or run the rollback on a machine that still has it.",
                 target_name,
                 target_hash,
             )
@@ -459,7 +469,7 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
     if args.dry_run {
         if !ctx.global.quiet {
             println!();
-            println!("{}", output::dim("Dry run — no changes applied."));
+            println!("{}", output::dim("Dry run. No changes applied."));
         }
         return Ok(());
     }
@@ -474,7 +484,7 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
         };
         if failed_reruns.is_empty() {
             if !ctx.global.quiet {
-                println!("Nothing to change — cluster already matches target activation.");
+                println!("Nothing to change. Cluster already matches target activation.");
             }
             return Ok(());
         }
@@ -586,7 +596,9 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
     if result.is_ok()
         && let Err(e) = kix::eval::store::save_activation_path(&args.cluster, &target_result_dir)
     {
-        tracing::warn!("failed to save activation path: {e}");
+        tracing::warn!(
+            "could not save the local build path; later commands may be unable to find this deployment: {e}"
+        );
     }
 
     match result {
@@ -615,18 +627,23 @@ async fn run_operator_async(args: &RollbackArgs, ctx: &CommandContext) -> Result
 
     let discovery = kix::cluster::fetch::discover_resources(&client)
         .await
-        .map_err(|e| miette!("API discovery failed: {e}"))?;
+        .map_err(|e| miette!("{e}"))?;
 
     let (activation_ar, _) = activation::find_activation_ar(&discovery)
         .map_err(|e| miette!("{e}"))?
-        .ok_or_else(|| miette!("Activation CRD not registered on cluster"))?
+        .ok_or_else(|| miette!("the Kix Activation resource type is not installed on this cluster. Check the Kubernetes context and deploy the Kix CRDs before retrying."))?
         .clone();
 
     // 2. Find current Active activation
     let current = activation::find_active(&client, &activation_ar, &args.cluster)
         .await
         .map_err(|e| miette!("failed to find active activation: {e}"))?
-        .ok_or_else(|| miette!("no active activation found for cluster '{}'", args.cluster))?;
+        .ok_or_else(|| {
+            miette!(
+                "no active deployment record found for cluster '{}'",
+                args.cluster
+            )
+        })?;
 
     if !ctx.global.quiet {
         let hash_preview = current
@@ -656,7 +673,7 @@ async fn run_operator_async(args: &RollbackArgs, ctx: &CommandContext) -> Result
 
     if superseded.is_empty() {
         return Err(miette!(
-            "no superseded activations found — nothing to rollback to"
+            "no previous deployments are available to roll back to"
         ));
     }
 
@@ -679,9 +696,14 @@ async fn run_operator_async(args: &RollbackArgs, ctx: &CommandContext) -> Result
         } else {
             input
                 .parse::<usize>()
-                .map_err(|_| miette!("invalid selection: '{}'", input))?
+                .map_err(|_| {
+                    miette!(
+                        "'{}' is not a valid selection. Enter a number from the list",
+                        input
+                    )
+                })?
                 .checked_sub(1)
-                .ok_or_else(|| miette!("selection must be >= 1"))?
+                .ok_or_else(|| miette!("enter a number from the list, starting at 1"))?
         };
 
         if idx >= superseded.len() {
@@ -712,7 +734,7 @@ async fn run_operator_async(args: &RollbackArgs, ctx: &CommandContext) -> Result
         })
         .ok_or_else(|| {
             miette!(
-                "store path for activation '{}' not found locally. Was it garbage-collected?",
+                "store path for activation '{}' not found locally. The build may have been garbage-collected or created on another machine. Restore it to the local Nix store or run the rollback on a machine that still has it.",
                 target_name,
             )
         })?;
@@ -727,7 +749,7 @@ async fn run_operator_async(args: &RollbackArgs, ctx: &CommandContext) -> Result
     if args.dry_run {
         if !ctx.global.quiet {
             println!();
-            println!("{}", output::dim("Dry run — no changes applied."));
+            println!("{}", output::dim("Dry run. No changes applied."));
         }
         return Ok(());
     }
@@ -778,7 +800,7 @@ async fn run_operator_async(args: &RollbackArgs, ctx: &CommandContext) -> Result
 
     if !ctx.global.quiet {
         println!(
-            "  {} Activation CR updated — waiting for operator...",
+            "  {} Activation CR updated. Waiting for operator...",
             output::green("✓"),
         );
     }
@@ -832,7 +854,7 @@ fn print_superseded_entries(
             output::red("store path missing")
         };
         println!(
-            "  {} {} ({}) — deployed {} [{}]",
+            "  {} {} ({}), deployed {} [{}]",
             output::bold(&format!("[{}]", i + 1)),
             act.name,
             hash_preview,

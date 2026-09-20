@@ -63,7 +63,7 @@ pub fn resolve_package_workload(
             .map_err(|e| miette!("failed to build cluster activation: {e}"))?;
 
     let mut graph = StoreGraph::from_result_dir_with_status(&result_path, &status)
-        .map_err(|e| miette!("failed to load store graph: {e}"))?;
+        .map_err(|e| miette!("{e}"))?;
     // Stamp so downstream labels are in the same shape as deploy.
     stamp_annotations(&mut graph);
 
@@ -90,7 +90,7 @@ fn find_package<'a>(graph: &'a StoreGraph, query: &str) -> Result<&'a PackageNod
             .map(|p| format!("{}/{}", p.namespace, p.instance_name))
             .collect();
         return Err(miette!(
-            "package '{}' is ambiguous — matches: {}. \
+            "package '{}' is ambiguous. Matches: {}. \
              Qualify with <namespace>/<name>.",
             query,
             choices.join(", ")
@@ -138,8 +138,8 @@ fn resolve_workload_in_package(graph: &StoreGraph, pkg: &PackageNode) -> Result<
     }
 
     Err(miette!(
-        "package '{}/{}' has no Deployment, StatefulSet, or DaemonSet — nothing to tail logs for. \
-         If this package exposes logs via a custom kind, open an issue.",
+        "package '{}/{}' has no Deployment, StatefulSet, or DaemonSet that Kix can select for this command. \
+         For workloads created by an operator, select the pod directly with kubectl.",
         pkg.namespace,
         pkg.instance_name
     ))

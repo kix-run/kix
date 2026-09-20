@@ -31,7 +31,9 @@ pub enum ReferenceError {
     Empty,
     #[error("image reference '{0}' has no repository")]
     NoRepository(String),
-    #[error("image reference '{0}' has a digest that is not sha256 followed by 64 hex characters")]
+    #[error(
+        "image reference '{0}' has a digest that is not sha256: followed by 64 hexadecimal characters"
+    )]
     BadDigest(String),
 }
 

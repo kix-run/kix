@@ -2589,7 +2589,7 @@ let
       in
       (
         builtins.length findings == 1
-        && lib.hasInfix "name collision" msg
+        && lib.hasInfix "duplicate name" msg
         && !(lib.hasInfix "own label" msg)
       )
       || throw "expected one collision finding, got: ${msg}";

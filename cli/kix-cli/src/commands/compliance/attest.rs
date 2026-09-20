@@ -67,7 +67,7 @@ pub fn build_attestation(
         // Warned rather than refused. Attesting from a dirty tree is
         // sometimes the honest thing to do; doing it silently never is.
         eprintln!(
-            "warning: the working tree has uncommitted changes, so the commit this attests to does not contain what was built. The statement says so."
+            "warning: the working tree has uncommitted changes, so the recorded commit does not fully describe this build. The attestation marks the working tree as dirty."
         );
     }
     receipt::attestation_from_receipt(&record, builder_id, invocation_id)
@@ -82,7 +82,7 @@ async fn fetch_receipt(cluster: &str, context: Option<&str>) -> Result<Value> {
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
     let discovery = fetch::discover_resources(&client)
         .await
-        .map_err(|e| miette!("API discovery failed: {e}"))?;
+        .map_err(|e| miette!("{e}"))?;
     let Some((ar, _)) = activation::find_activation_ar(&discovery).map_err(|e| miette!("{e}"))?
     else {
         return Err(miette!(

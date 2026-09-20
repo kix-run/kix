@@ -397,11 +397,11 @@ in
       warnings =
         map (
           w:
-          "[${instanceName}] workload '${w.kind}/${w.name}' uses hostNetwork — CiliumNetworkPolicy has no effect"
+          "[${instanceName}] workload '${w.kind}/${w.name}' uses hostNetwork, so CiliumNetworkPolicy does not control its traffic. Review network access on the host"
         ) hostNetworkWorkloads
         ++
           lib.optional (packageMeta.isHelm or false)
-            "[${instanceName}] Helm-wrapped package: intra-package network policies may be incomplete — review or add manual policies";
+            "[${instanceName}] Kix may not detect every connection between workloads in this Helm chart. Review the generated network policies and add any missing rules";
 
     in
     {

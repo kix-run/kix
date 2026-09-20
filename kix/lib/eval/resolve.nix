@@ -92,7 +92,7 @@ rec {
         }
 
       else if builtins.length sameNs > 1 then
-        throw "ambiguous auto-resolution for '${argName}' in namespace '${requesterNamespace}': multiple matches"
+        throw "dependency '${argName}' matches multiple instances in namespace '${requesterNamespace}'. Set deps.${argName} explicitly to the intended instance."
 
       else if sameNs == [ ] && builtins.length otherNs == 1 then
         let
@@ -106,13 +106,13 @@ rec {
         }
 
       else if builtins.length otherNs > 1 then
-        throw "ambiguous auto-resolution for '${argName}': found in multiple namespaces — specify explicitly"
+        throw "dependency '${argName}' matches instances in multiple namespaces. Set deps.${argName} explicitly to the intended instance."
 
       else if hasDefault then
         { found = false; }
 
       else
-        throw "no '${argName}' found in cluster for namespace '${requesterNamespace}'";
+        throw "dependency '${argName}' was not found for namespace '${requesterNamespace}'. Add an instance with that name or alias, or set deps.${argName} explicitly.";
 
   extractDeferredValues =
     deferredConfig:
@@ -170,7 +170,7 @@ rec {
           let
             msgs = map (c: "'${c.key}' (injected by ${c.source})") lockedConflicts;
           in
-          throw "dep config injection blocked by locked fields: ${builtins.concatStringsSep ", " msgs}"
+          throw "dependency configuration tries to override locked fields: ${builtins.concatStringsSep ", " msgs}"
         else
           null;
 

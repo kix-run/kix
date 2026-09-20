@@ -55,10 +55,10 @@ in
         in
         if builtins.elem kind workloadKinds then
           throw (
-            "[${instanceName}] ${kind} '${args.name or "?"}' is built with scope.mkResource, which does not seal "
-            + "a workload: no pod-spec checks, no derived spread or PodDisruptionBudget, no network "
-            + "policy edges. Build it with ${builderFor.${kind}} instead (drop apiVersion and kind; "
-            + "the rest of the attrset is the same)."
+            "[${instanceName}] ${kind} '${args.name or "?"}' is built with scope.mkResource, which skips workload-specific processing: "
+            + "pod validation, automatic replica placement and PodDisruptionBudgets, and network "
+            + "policy dependencies. Build it with ${builderFor.${kind}} instead (drop apiVersion and kind; "
+            + "keep the other attributes)."
           )
         else
           null;
@@ -284,7 +284,7 @@ in
           spec = if kind == "StatefulSet" then _expandHeadlessService rawSpec else rawSpec;
           selector =
             spec.selector.matchLabels
-              or (throw "mkWorkload (${kind}): spec.selector.matchLabels is required — use scope.selectorLabels");
+              or (throw "mkWorkload (${kind}): spec.selector.matchLabels is required. Use scope.selectorLabels");
           templateMeta = spec.template.metadata or { };
           rawTemplateSpec = spec.template.spec or { };
           templateSpec = _expandServiceAccount rawTemplateSpec;

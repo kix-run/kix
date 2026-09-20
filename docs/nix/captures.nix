@@ -465,7 +465,7 @@
           "06-service-dep"
         ];
         allowFailure = true;
-        stdoutGrep = "error: no 'backend' found in cluster";
+        stdoutGrep = "error: dependency 'backend' was not found";
       }
     ];
   }
@@ -2184,7 +2184,7 @@
           "-y"
         ];
         allowFailure = true;
-        stdoutGrep = "field-ownership conflict|Dry run complete";
+        stdoutGrep = "another tool owns fields|Dry run complete";
       }
       {
         capture = "take-ownership";
@@ -2236,7 +2236,7 @@
           "-y"
         ];
         allowFailure = true;
-        stdoutGrep = "field-ownership conflict|Dry run complete";
+        stdoutGrep = "another tool owns fields|Dry run complete";
       }
       {
         capture = "force-preview";
@@ -2332,7 +2332,7 @@
           "-y"
         ];
         allowFailure = true;
-        stdoutGrep = "field-ownership conflict|Dry run complete";
+        stdoutGrep = "another tool owns fields|Dry run complete";
       }
       {
         capture = "take-ownership";
@@ -2422,7 +2422,7 @@
           "stateful-before"
         ];
         allowFailure = true;
-        stdoutGrep = "PersistentVolumeClaim/media-v[12]|Stateful migrations detected|data/volume:|source:|target:|data migration is NOT yet automated";
+        stdoutGrep = "PersistentVolumeClaim/media-v[12]|Stateful migrations detected|data/volume:|source:|target:|Data migration is not automated";
       }
     ];
     live = [

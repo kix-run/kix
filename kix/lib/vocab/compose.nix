@@ -40,7 +40,7 @@ let
     else if svc ? out.port then
       builtins.fromJSON (builtins.unsafeDiscardStringContext svc.out.port)
     else
-      throw "${caller}: service '${svc.name or "unknown"}' has no out.port — specify port explicitly";
+      throw "${caller}: service '${svc.name or "unknown"}' has no out.port. Specify port explicitly";
 in
 
 rec {
@@ -523,7 +523,7 @@ rec {
         else if containers == [ ] then
           containers
         else
-          throw "withMounts: multiple containers — use withMountsOn to target a specific one";
+          throw "withMounts: the workload has multiple containers. Use withMountsOn to select the container to mount into";
     in
     builtins.seq _dupeCheck attrs
     // {
@@ -958,7 +958,7 @@ rec {
         else if tlsSecretName != null then
           if builtins.getContext tlsSecretName == { } then
             throw "kix.expose (${name}): tlsSecretName \"${tlsSecretName}\" is a raw string literal. "
-            + "Use `tlsSecret = someSecretResource` (resource form — also enables cross-namespace validation), "
+            + "Use `tlsSecret = someSecretResource` (so Kix can check that the secret is in the correct namespace), "
             + "`tlsSecretName = someSecret.out.name` (tracked string), "
             + "or `tlsSecretName = kix.untrackedRef \"...\"` to opt out explicitly."
           else
@@ -1013,7 +1013,7 @@ rec {
                 if backendSvc ? out.port then
                   builtins.fromJSON (builtins.unsafeDiscardStringContext backendSvc.out.port)
                 else
-                  throw "kix.expose (${name}): paths entry for service '${p.service}' has no out.port — specify `port` explicitly.";
+                  throw "kix.expose (${name}): paths entry for service '${p.service}' has no out.port. Specify `port` explicitly.";
               svcPort = p.port or autoPort;
             in
             {

@@ -61,7 +61,7 @@ rec {
     else
       throw (
         "kix: unknown role '${role}' (${context}). ${knownRolesHint}. "
-        + "The role vocabulary is closed — a new role is added to kix/lib/eval/roles.nix together with its first consumer (v2_discussions/127)."
+        + "Choose a supported role from this list. For dependency aliases, use meta.defaultAliases."
       );
 
   # Shallow out-contract check. Returns `out` so callers can wrap lazily;
@@ -78,8 +78,8 @@ rec {
     in
     if required != [ ] && missing != [ ] then
       throw (
-        "kix: '${providerLabel}' declares role '${role}' but its out does not satisfy the role contract — "
-        + "missing out attribute(s): ${builtins.concatStringsSep ", " missing}"
+        "kix: '${providerLabel}' declares role '${role}' but its out is missing required fields. Add these fields to the provider package: "
+        + "${builtins.concatStringsSep ", " missing}"
       )
     else
       out;

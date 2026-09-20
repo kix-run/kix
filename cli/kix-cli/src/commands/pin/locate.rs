@@ -113,7 +113,7 @@ fn decide(mut found: Vec<PathBuf>) -> Result<Option<Location>> {
         })),
         0 => Ok(None),
         _ => Err(miette!(
-            "this repository has more than one pin file, so say which:\n{}\n\nPass --pins-file <path>.",
+            "multiple pin files were found in this repository:\n{}\n\nPass --pins-file <path>.",
             found
                 .iter()
                 .map(|p| format!("  {}", display_from_cwd(p)))
@@ -127,7 +127,7 @@ fn decide(mut found: Vec<PathBuf>) -> Result<Option<Location>> {
 pub fn locate(explicit: Option<&Path>, flake: &str) -> Result<Location> {
     find(explicit, flake)?.ok_or_else(|| {
         miette!(
-            "no pin file found. Looked for pins.json in the working directory{}{}.\n\nName one with --pins-file <path>, or create one with:\n  kix pin set <key> --repository <registry/repository> --tag <tag> --init",
+            "no pin file found. Looked for pins.json in the working directory{}{}.\n\nSelect a file with --pins-file <path>, or create one with:\n  kix pin set <key> --repository <registry/repository> --tag <tag> --init",
             match flake_dir(flake) {
                 // "." is the working directory, which the first clause
                 // already named.
@@ -136,7 +136,7 @@ pub fn locate(explicit: Option<&Path>, flake: &str) -> Result<Location> {
             },
             match repo_root() {
                 Some(root) => format!(", and for a pin file under {}", root.display()),
-                None => ", and this is not a git repository, so there was nowhere else to look"
+                None => ", but skipped the repository search because the working directory is not in a Git repository"
                     .to_string(),
             },
         )
@@ -312,7 +312,7 @@ mod tests {
             PathBuf::from("b/pins.json"),
         ]);
         let message = format!("{:?}", several.unwrap_err());
-        assert!(message.contains("more than one pin file"), "{message}");
+        assert!(message.contains("multiple pin files"), "{message}");
         assert!(message.contains("a/pins.json"), "{message}");
         assert!(message.contains("b/pins.json"), "{message}");
     }

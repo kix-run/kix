@@ -9,9 +9,9 @@
   "commands": [
     {
       "command": "kix check how-to-package-python",
-      "stdout": " TOOL         RESULT  DETAILS                                     \n eval         pass    10 manifests evaluated                      \n kubeconform  pass    skipped (not installed)                     \n pluto        pass    skipped (not installed)                     \n kyverno      pass    skipped (not installed)                     \n scorecard    skip    scorecard not enabled in cluster definition \n",
+      "stdout": " TOOL         RESULT  DETAILS                                                       \n eval         pass    10 manifests evaluated                                        \n kubeconform  pass    skipped (this validation tool is not yet integrated with Kix) \n pluto        pass    skipped (this validation tool is not yet integrated with Kix) \n kyverno      pass    skipped (this validation tool is not yet integrated with Kix) \n scorecard    skip    scorecard not enabled in cluster definition                   \n",
       "stderr": "",
-      "stdoutDrift": "TOOL RESULT DETAILS\neval pass 10 manifests evaluated\nkubeconform pass skipped (not installed)\nkyverno pass skipped (not installed)\npluto pass skipped (not installed)\nscorecard skip scorecard not enabled in cluster definition\n",
+      "stdoutDrift": "TOOL RESULT DETAILS\neval pass 10 manifests evaluated\nkubeconform pass skipped (this validation tool is not yet integrated with Kix)\nkyverno pass skipped (this validation tool is not yet integrated with Kix)\npluto pass skipped (this validation tool is not yet integrated with Kix)\nscorecard skip scorecard not enabled in cluster definition\n",
       "stderrDrift": "",
       "exitCode": 0
     }

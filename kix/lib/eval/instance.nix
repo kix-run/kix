@@ -94,7 +94,7 @@ in
         # ROADMAP § Open design questions.
         _dnsResolutionCheck =
           if !_dnsResolution.found then
-            builtins.trace "[kix] warning: no DNS instance (alias 'dns') found in cluster — workloads will not depend on DNS readiness" null
+            builtins.trace "[kix] warning: no DNS instance (alias 'dns') was found. Kix will not wait for DNS to be ready before deploying workloads. Add a DNS provider or import if this ordering is required" null
           else
             null;
         _dnsRoot =
@@ -249,7 +249,7 @@ in
           in
           lib.foldlAttrs (
             acc: argName: depInfo:
-            throw "instance '${instanceName}' (namespace '${namespaceName}') depends on '${depInfo.resolution.instanceName}' (namespace '${depInfo.resolution.namespace}') which declares meta.scope = \"namespace\" — cross-namespace reference not allowed"
+            throw "instance '${instanceName}' (namespace '${namespaceName}') depends on '${depInfo.resolution.instanceName}' (namespace '${depInfo.resolution.namespace}') which declares meta.scope = \"namespace\" and can only be used within its own namespace"
           ) null crossNsDeps;
 
         metaResult = meta.checkMetaStatic {
@@ -364,10 +364,9 @@ in
             throw (
               "Instance '${instanceName}' in namespace '${namespaceName}': `root` points at "
               + "${rootRes.kind or "a resource"}/${rootRes.name or "?"}, which is not assigned to "
-              + "any named part — it would render no manifest at all, while still emitting a "
-              + "PackageInstance, so the cluster would build green with the resource simply "
-              + "absent. Assign it to a part and alias root to it, e.g. "
-              + "`myPart = scope.mkResource { ... }; root = self.myPart;`. See kixpkgs#25."
+              + "any named part, so its manifest will not be included in the build. "
+              + "Assign the resource to a named part and reference it from root, for example "
+              + "`myPart = scope.mkResource { ... }; root = self.myPart;`."
             );
 
         allPartResources = builtins.seq _rootRendersCheck (
@@ -742,15 +741,18 @@ in
           lib.concatLists [
             (warn (
               w:
-              "resource '${res w.resource}' has redundant requires on '${res w.req}' — already tracked via store path reference"
+              "resource '${res w.resource}' already references '${res w.req}'. Remove the redundant entry from requires; Kix tracks this dependency automatically."
             ) redundantRequiresWarnings)
             (warn (
               w: "resource '${res w.resource}' requires '${res w.req}' multiple times"
             ) duplicateRequiresWarnings)
-            (warn (r: "resource '${res r}' is defined but not reachable from root (orphaned)") orphanedWarnings)
             (warn (
               r:
-              "post-hook '${res r}' does not depend on any forward-closure resource — it won't be ordered after root in the deploy graph"
+              "resource '${res r}' is not referenced by root or its dependencies. Reference it from root, add it to requires, or remove the unused definition."
+            ) orphanedWarnings)
+            (warn (
+              r:
+              "post-hook '${res r}' has no dependency on root or any resource that root requires. Add a dependency to ensure the hook runs after the resource it needs."
             ) postHookWarnings)
             processorWarnings
             scorecardDiag.warnings

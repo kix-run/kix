@@ -32,7 +32,7 @@ pub fn build_and_load(ctx: &CommandContext, cluster: &str) -> Result<(PathBuf, S
             eprintln!("  {msg}");
         }
     })
-    .map_err(|e| miette!("failed to load store graph: {e}"))?;
+    .map_err(|e| miette!("{e}"))?;
 
     stamp_annotations(&mut graph);
     Ok((result_path, graph))

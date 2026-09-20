@@ -72,7 +72,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         build_cluster_activation_with_status(&flake_path, &args.cluster, &overrides, &status)
             .map_err(|e| miette!("failed to build cluster: {e}"))?;
     let mut new_graph = StoreGraph::from_result_dir_with_status(&result_path, &status)
-        .map_err(|e| miette!("failed to load store graph: {e}"))?;
+        .map_err(|e| miette!("{e}"))?;
     // A kixpkgs pin from before the domain move renders Kix's own CRDs under
     // the retired group. Deploying it would put those CRDs back and leave two
     // groups live, which the CLI cannot tell apart. Checked BEFORE
@@ -141,7 +141,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         (Some(client), false) => ctx.runtime.block_on(async {
             let discovery = fetch::discover_resources(client)
                 .await
-                .map_err(|e| miette!("API discovery failed: {e}"))?;
+                .map_err(|e| miette!("{e}"))?;
             let Some((ar, _)) = kix::cluster::activation::find_activation_ar(&discovery)
                 .map_err(|e| miette!("{e}"))?
             else {
@@ -188,13 +188,13 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
             eprintln!(
                 "{}",
                 output::red(
-                    "Refusing to deploy: stateful migration pairs detected but --accept-migrations was not passed."
+                    "Deployment stopped: these changes move workloads to different storage. Migrate the data before continuing."
                 )
             );
             eprintln!(
                 "{}",
                 output::yellow(
-                    "Data migration is NOT yet automated. Review the pairs above, handle the data out-of-band, then re-run with --accept-migrations."
+                    "Data migration is not automated. Review the source and target resources above, migrate the data yourself, then rerun with --accept-migrations."
                 )
             );
             std::process::exit(1);
@@ -203,7 +203,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
             println!(
                 "{}",
                 output::yellow(
-                    "--accept-migrations set: proceeding with deploy. kix will NOT copy data; consumers on new backing will start empty."
+                    "--accept-migrations set: continuing deployment. Kix will not copy data. Workloads using the new storage will see only the data already present there."
                 )
             );
         }
@@ -364,7 +364,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
             Some(client) if has_reruns => ctx.runtime.block_on(async {
                 let discovery = fetch::discover_resources(client)
                     .await
-                    .map_err(|e| miette!("API discovery failed: {e}"))?;
+                    .map_err(|e| miette!("{e}"))?;
                 Ok::<_, miette::Report>(
                     scheduler::failed_rerun_nodes(client, &discovery, &plan).await,
                 )
@@ -387,7 +387,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
             if !ctx.global.quiet {
                 match (&activation_identity_hash, &active_hash) {
                     (Some(new), Some(old)) if new == old => println!(
-                        "{} activation identical to active ({}...) — nothing to apply.",
+                        "{} activation identical to active ({}...). Nothing to apply.",
                         output::dim("="),
                         &new[..8.min(new.len())],
                     ),
@@ -433,7 +433,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     // than a CLI guess. See `kix::cluster::scheduler::SchedulerConfig.dry_run`.
     if args.dry_run && !ctx.global.quiet {
         println!();
-        println!("{}", output::dim("Dry run — no changes will be applied."));
+        println!("{}", output::dim("Dry run. No changes will be applied."));
     }
 
     // The receipt: what this deploy will record about itself. Assembled here
@@ -528,7 +528,9 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         && !args.dry_run
         && let Err(e) = kix::eval::store::save_activation_path(&args.cluster, &result_path)
     {
-        tracing::warn!("failed to save activation path: {e}");
+        tracing::warn!(
+            "could not save the local build path; later commands may be unable to find this deployment: {e}"
+        );
     }
 
     deploy_result
@@ -566,7 +568,7 @@ fn load_old_from_cache(
         }
         None => {
             if !global.quiet {
-                println!("No previous activation — first deploy.");
+                println!("No previous activation. First deploy.");
             }
             (None, vec![])
         }
@@ -606,7 +608,7 @@ async fn load_old_from_cluster(
 
     let discovery = fetch::discover_resources(&client)
         .await
-        .map_err(|e| miette!("API discovery failed: {e}"))?;
+        .map_err(|e| miette!("{e}"))?;
 
     // Try to find the Active Activation on the cluster
     let active = if let Some((ar, _)) =
@@ -658,7 +660,7 @@ async fn load_old_from_cluster(
                             // rather than planning against nothing.
                             if !global.quiet {
                                 println!(
-                                    "  {} previous build at {} would not load ({e}) — reconstructing previous state from cluster",
+                                    "  {} previous build at {} would not load ({e}). Reconstructing previous state from cluster",
                                     output::yellow("!"),
                                     result_dir.display(),
                                 );
@@ -672,7 +674,7 @@ async fn load_old_from_cluster(
                 None => {
                     if !global.quiet {
                         println!(
-                            "  {} store path for activation not found locally — reconstructing previous state from cluster",
+                            "  {} store path for activation not found locally. Reconstructing previous state from cluster",
                             output::yellow("!"),
                         );
                     }
@@ -683,7 +685,7 @@ async fn load_old_from_cluster(
         }
         _ => {
             if !global.quiet {
-                println!("No previous activation on cluster — first deploy.");
+                println!("No previous activation on cluster. First deploy.");
             }
             Ok((None, vec![], Some(client), None))
         }
@@ -1109,7 +1111,7 @@ async fn run_deploy_async(
 
     let discovery = fetch::discover_resources(&client)
         .await
-        .map_err(|e| miette!("API discovery failed: {e}"))?;
+        .map_err(|e| miette!("{e}"))?;
 
     // The gate, again, here. `load_old_from_cluster` checks it too, but
     // `--current-activation` reads the previous build from the local cache
@@ -1192,7 +1194,7 @@ async fn run_deploy_async(
             Ok(d) => Some(d),
             Err(e) => {
                 eprintln!(
-                    "{} {e} — falling back to plain output",
+                    "{} {e}. Falling back to plain output",
                     output::yellow("warn: failed to start --tui renderer:"),
                 );
                 None
@@ -1303,7 +1305,7 @@ fn render_offline_dry_run(
         .collect();
 
     println!();
-    println!("{}", output::dim("Dry run — no changes will be applied."));
+    println!("{}", output::dim("Dry run. No changes will be applied."));
 
     let mut result = DeployResult::default();
 
@@ -1446,7 +1448,7 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         build_cluster_activation_with_status(&flake_path, &args.cluster, &overrides, &status)
             .map_err(|e| miette!("failed to build cluster: {e}"))?;
     let mut new_graph = StoreGraph::from_result_dir_with_status(&result_path, &status)
-        .map_err(|e| miette!("failed to load store graph: {e}"))?;
+        .map_err(|e| miette!("{e}"))?;
     // The same stale-pin check the direct path makes, and for the same
     // reason: a pin from before the domain move renders Kix's own CRDs under
     // the retired group. Before `stamp_annotations`, which would upgrade
@@ -1549,7 +1551,7 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     if args.dry_run {
         if !ctx.global.quiet {
             println!();
-            println!("{}", output::dim("Dry run — no changes applied."));
+            println!("{}", output::dim("Dry run. No changes applied."));
         }
         return Ok(());
     }
@@ -1628,7 +1630,7 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
 
         if !global.quiet {
             println!(
-                "  {} Activation CR applied — waiting for operator...",
+                "  {} Activation CR applied. Waiting for operator...",
                 output::green("✓"),
             );
         }
@@ -1655,7 +1657,9 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
 
     // Save activation path for next deploy's diff
     if let Err(e) = kix::eval::store::save_activation_path(&args.cluster, &result_path) {
-        tracing::warn!("failed to save activation path: {e}");
+        tracing::warn!(
+            "could not save the local build path; later commands may be unable to find this deployment: {e}"
+        );
     }
 
     Ok(())

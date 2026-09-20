@@ -11,11 +11,13 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum GraphError {
-    #[error("dependency cycle detected involving {0}")]
+    #[error(
+        "deployment dependencies form a cycle involving {0}. Remove a circular reference or requires entry so Kix can determine deployment order"
+    )]
     CycleDetected(String),
 
     #[error(
-        "dangling dependency: {from} depends on identity hash {hash} which does not map to any resource"
+        "{from} depends on a resource with identity hash {hash}, but that resource is missing from the manifest set. Include the dependency or remove the reference"
     )]
     DanglingDependency { from: String, hash: String },
 }

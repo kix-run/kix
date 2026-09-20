@@ -70,3 +70,21 @@ entries here whenever Adam corrects writing style.
 - The landing page tells one storyline: we felt the pain, tried the tools,
   built a Kubernetes compiler. New sections should serve that arc, not
   restart it.
+
+## Errors and warnings
+
+- Name what failed and the affected resource, instance, field, or file. Keep
+  identifiers users need to locate the problem.
+- Explain the consequence in plain language. Prefer "dependency" to "edge",
+  "built resources" to "closure", and "cluster capability" to "axiom" unless
+  the internal term is itself the API the user must edit.
+- Give a concrete next step when one is known. Check command names, flags,
+  and configuration fields against the code before recommending them.
+- Distinguish what Kix knows from what it cannot verify. A failed registry
+  request does not prove an image is missing; an undeclared operator does
+  not prove its annotations are unused.
+- For warnings, say what Kix skips, assumes, or continues doing. For errors,
+  preserve the underlying cause instead of replacing it with generic text.
+- Keep routine messages short. Put the explanation next to the failure;
+  avoid internal design history, issue numbers, mathematical shorthand,
+  and implementation vocabulary that does not help the user fix it.

@@ -104,7 +104,7 @@ fn build_store_graph(
             .map_err(|e| miette!("failed to build cluster activation: {e}"))?;
 
     let mut graph = StoreGraph::from_result_dir_with_status(&result_path, &status)
-        .map_err(|e| miette!("failed to load store graph: {e}"))?;
+        .map_err(|e| miette!("{e}"))?;
 
     set_spinner(spinner, "Stamping annotations...");
     stamp_annotations(&mut graph);
@@ -150,7 +150,7 @@ async fn fetch_live_manifests(global: &crate::cli::GlobalArgs) -> Result<Vec<Val
 
     let discovery = fetch::discover_resources(&client)
         .await
-        .map_err(|e| miette!("API discovery failed: {e}"))?;
+        .map_err(|e| miette!("{e}"))?;
 
     // The gate. `kix diff` reads no Activation record, so it never reaches
     // the check inside `find_activation_ar` that every other cluster command
@@ -298,7 +298,7 @@ fn print_migration_pairs(pairs: &[MigrationPair]) {
     println!(
         "{}",
         output::yellow(
-            "Note: data migration is NOT yet automated. See v2_discussions/67_stateful_migration_orchestration.md."
+            "Data migration is not automated. Review the source and target resources above and migrate the data before deploying with --accept-migrations."
         )
     );
     println!();
@@ -367,7 +367,7 @@ fn print_markdown_output(result: &DiffResult) {
         }
         println!();
         println!(
-            "> :warning: Data migration is **not** yet automated. See `v2_discussions/67_stateful_migration_orchestration.md`."
+            "> :warning: Data migration is not automated. Review the source and target resources above and migrate the data before deploying with `--accept-migrations`."
         );
         println!();
     }

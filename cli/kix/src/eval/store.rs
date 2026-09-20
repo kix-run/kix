@@ -61,10 +61,10 @@ pub fn save_activation_path(cluster: &str, result_dir: &Path) -> std::io::Result
     {
         Ok(status) if status.success() => {}
         Ok(status) => {
-            tracing::warn!(cluster, ?result_dir, %status, "failed to register GC root for activation");
+            tracing::warn!(cluster, ?result_dir, %status, "could not protect this deployment build from Nix garbage collection; it may become unavailable for rollback");
         }
         Err(e) => {
-            tracing::warn!(cluster, ?result_dir, error = %e, "failed to run nix-store --add-root");
+            tracing::warn!(cluster, ?result_dir, error = %e, "could not run nix-store --add-root; this deployment build may be garbage-collected and become unavailable for rollback");
         }
     }
     Ok(())

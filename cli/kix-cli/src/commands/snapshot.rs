@@ -42,7 +42,7 @@ fn run_save(args: &SnapshotSaveArgs, ctx: &mut CommandContext) -> Result<()> {
 
         let discovery = fetch::discover_resources(&client)
             .await
-            .map_err(|e| miette!("API discovery failed: {e}"))?;
+            .map_err(|e| miette!("{e}"))?;
 
         if !global.quiet {
             eprintln!(

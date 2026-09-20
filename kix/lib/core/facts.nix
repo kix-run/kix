@@ -114,9 +114,9 @@ rec {
         then
           throw (
             "kix: factBehavior for '${kindKey}' (${source}) declares endpoint = \"terminate\" "
-            + "but no `podSelector` — termination-by-CR opens holes for the OPERAND pods, "
-            + "and only the CRD owner can name them (a function `cr: { ... }` over the raw "
-            + "manifest, or a static label attrset)."
+            + "but has no valid `podSelector`. Kix needs the labels of the pods created by the controller "
+            + "to generate their network policies. Set podSelector to a function `cr: { ... }` of the "
+            + "manifest, or to an attribute set of pod labels."
           )
         else
           null;
@@ -148,7 +148,7 @@ rec {
     let
       spec =
         kinds.${kind}
-          or (throw "mkFact: unknown fact kind '${kind}' — known: ${builtins.concatStringsSep ", " (builtins.attrNames kinds)}");
+          or (throw "mkFact: unknown fact kind '${kind}'. Supported kinds: ${builtins.concatStringsSep ", " (builtins.attrNames kinds)}");
       missing = builtins.filter (f: !(payload ? ${f})) spec.requiredFields;
       checked =
         if missing != [ ] then

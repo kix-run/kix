@@ -100,7 +100,7 @@ let
     else if unknown != [ ] then
       throw "kix.pins: pin '${key}' in ${where} has fields Kix does not know: ${builtins.concatStringsSep ", " unknown}. Known fields are ${builtins.concatStringsSep ", " known}."
     else if !digestOk then
-      throw "kix.pins: pin '${key}' in ${where} has a digest that is not sha256 followed by 64 hex characters: '${digest}'. Re-resolve it with `kix pin set ${key}`."
+      throw "kix.pins: pin '${key}' in ${where} has a digest that is not sha256: followed by 64 hexadecimal characters: '${digest}'. Re-resolve it with `kix pin set ${key}`."
     else
       pin;
 

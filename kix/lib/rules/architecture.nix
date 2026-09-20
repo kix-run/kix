@@ -155,9 +155,9 @@ in
               [
                 {
                   message =
-                    "'${instanceName}' carries annotations under domain '${domain}' (${describeCarriers carriers}) "
-                    + "but no package in this cluster declares that domain — the annotations are dead. "
-                    + "You likely forgot to add the operator that consumes them; if something outside kix "
+                    "'${instanceName}' uses annotations under domain '${domain}' (${describeCarriers carriers}) "
+                    + "but no package in this cluster declares that it handles them. "
+                    + "Add the operator package that handles these annotations. If something outside Kix "
                     + "consumes this domain, declare it in `scorecard.knownAnnotationDomains`.";
                 }
               ]
@@ -169,10 +169,10 @@ in
               [
                 {
                   message =
-                    "'${instanceName}' carries annotations under domain '${domain}' (${describeCarriers carriers}), "
-                    + "which is managed by '${declarer.ns}/${declarer.inst}' — but has no DI dep on it. "
-                    + "You are writing config for an operator you don't link against: declare the dep "
-                    + "so presence and ordering are checked at eval.";
+                    "'${instanceName}' uses annotations under domain '${domain}' (${describeCarriers carriers}), "
+                    + "but does not declare a dependency on '${declarer.ns}/${declarer.inst}', which handles them. "
+                    + "Add that operator to deps "
+                    + "so Kix can check that it is present and deploy it first.";
                 }
               ];
       in
@@ -194,7 +194,7 @@ in
     check =
       { meta, instanceName, ... }:
       map (grant: {
-        message = "'${instanceName}' holds unsafe grant '${grant}' — ${
+        message = "'${instanceName}' declares the '${grant}' exception in meta.unsafe: ${
           (unsafe.registry.${grant} or { description = "unknown grant"; }).description
         }";
       }) (meta.unsafe or [ ]);
@@ -278,8 +278,8 @@ in
                     {
                       message =
                         "In instance '${instanceName}': two ${kind}s are both named '${a.metadata.name or "?"}'"
-                        + " in namespace '${a.metadata.namespace or "?"}'. That is a name collision, not a label"
-                        + " problem: the manifest writer keeps one and drops the other. Rename one of them.";
+                        + " in namespace '${a.metadata.namespace or "?"}'. The duplicate name causes one"
+                        + " resource to replace the other in the output. Rename one of them.";
                     }
                   ]
                 else if rel != null then
@@ -289,7 +289,7 @@ in
                         "In instance '${instanceName}': ${rel}. "
                         + "To fix it, give each ${kind} in this instance its own label: the same key with a "
                         + "different value on each, for example `labels.\"app.kubernetes.io/component\"`. "
-                        + "Each one needs its own value. A label selector matches anything that has at "
+                        + "A label selector matches anything that has at "
                         + "least the selected labels, so adding a label to only one of them leaves the "
                         + "other still matching both.";
                     }
@@ -347,9 +347,8 @@ in
         [
           {
             message =
-              "Service '${resource.metadata.name or "?"}' has a selector with no store-path context on any value — "
-              + "likely a hand-written `{ app = \"...\"; }` literal. "
-              + "Source the selector from a workload via `kix.service.fromWorkload` so the Service → Deployment edge is explicit.";
+              "Service '${resource.metadata.name or "?"}' has selector labels that Kix cannot trace to a workload. "
+              + "Use `kix.service.fromWorkload` to derive the selector and track the dependency on the workload.";
           }
         ];
   };
@@ -563,7 +562,7 @@ in
                          )
                        })"
                   }, "
-                  + "so every target is dropped at relabeling and the job is silently missing from `up`. "
+                  + "so the monitor will not collect metrics from these Services. "
                   + "Point the endpoint at a port the Service declares by name, or select the Service that "
                   + "serves metrics: `self.<service>.out.selector`, or use `kix.monitor` with `port = \"<name>\"`.";
               }
@@ -618,8 +617,8 @@ in
         {
           message =
             "${resource.kind} '${resource.metadata.name or "?"}' claims its target Service is created "
-            + "outside kix (${kixKeys.monitorsExternalService}), so selector matching is skipped for it. "
-            + "Check that the claim still holds if kix ever starts rendering the target.";
+            + "outside Kix (${kixKeys.monitorsExternalService}), so selector matching is skipped for it. "
+            + "Remove this annotation if Kix starts creating the target Service.";
         }
       ];
   };
@@ -642,8 +641,8 @@ in
       in
       map (s: {
         message =
-          "string \"${s}\" contains a *.svc FQDN with no store-path context — likely hand-rolled. "
-          + "Use `svc.out.fqdn`/`out.host` from a ServiceRef or `scope.augmentEdge` so netpol/DNS/wave edges follow automatically.";
+          "string \"${s}\" contains a cluster Service address (*.svc) that Kix cannot trace to a Service. "
+          + "Use the Service or ServiceRef's `out.fqdn` or `out.host` so Kix can derive network policies and deployment order.";
       }) (lib.unique offending);
   };
 }

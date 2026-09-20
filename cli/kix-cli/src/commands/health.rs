@@ -137,17 +137,17 @@ pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
 
         let discovery = fetch::discover_resources(&client)
             .await
-            .map_err(|e| miette!("API discovery failed: {e}"))?;
+            .map_err(|e| miette!("{e}"))?;
 
         // 2. Find active Activation CR
         let activation_ar = activation::find_activation_ar(&discovery)
             .map_err(|e| miette!("{e}"))?
-            .ok_or_else(|| miette!("Activation CRD not registered on cluster"))?;
+            .ok_or_else(|| miette!("the Kix Activation resource type is not installed on this cluster. Check the Kubernetes context and deploy the Kix CRDs before retrying."))?;
 
         let active = activation::find_active(&client, &activation_ar.0, &args.cluster)
             .await
             .map_err(|e| miette!("failed to find activation: {e}"))?
-            .ok_or_else(|| miette!("no active activation found for cluster '{}'", args.cluster))?;
+            .ok_or_else(|| miette!("no active deployment record found for cluster '{}'", args.cluster))?;
 
         // 3. Fetch all kix-managed resources
         let live_objects = fetch::fetch_managed_resources(&client, &discovery)
@@ -564,7 +564,7 @@ fn display_results(packages: &[PackageHealth], verbose: u8, quiet: bool) {
         } else {
             let issues = summarize_issues(&pkg.resources);
             println!(
-                "  {} {:<40} {} — {}",
+                "  {} {:<40} {}. {}",
                 status_colored,
                 pkg.display_name,
                 counts_colored,

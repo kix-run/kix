@@ -127,8 +127,8 @@ in
           throw message
         else if value == null then
           builtins.trace (
-            "[kix] warning: [${instanceName}] relies on unknown axiom "
-            + "cluster.capabilities.${cap} — declare it in the target (null means unknown, not false)"
+            "[kix] warning: [${instanceName}] needs a cluster capability that has not been declared: "
+            + "cluster.capabilities.${cap}. Set it to true or false in the cluster definition to match your environment. Kix cannot verify this requirement while it is null."
           ) null
         else
           null;
@@ -268,7 +268,7 @@ in
         else if tooLong then
           throw "[${instanceName}] ${kind} name '${name}' is ${toString (builtins.stringLength name)} characters; Kubernetes allows at most ${toString rule.max} for this kind."
         else if malformed then
-          throw "[${instanceName}] ${kind} name '${name}' is not valid. It must be ${rule.desc}.${hint} Kix checks this during evaluation because the Kubernetes OpenAPI schema does not constrain `metadata.name`."
+          throw "[${instanceName}] ${kind} name '${name}' is not valid. It must be ${rule.desc}.${hint}"
         else
           null;
 
@@ -277,11 +277,11 @@ in
         if (args.kind or "") == "PersistentVolumeClaim" && !(builtins.elem "raw-pvc" unsafeGrants) then
           throw (
             "[${instanceName}] PersistentVolumeClaim '${args.name or "unknown"}' is built directly by this package. "
-            + "Storage is the cluster operator's concern: declare a `storage` dep and mount it via "
-            + "`kix.mount.pvc storage { mountPath = ...; }`, provisioning the claim as a sibling "
+            + "Declare a `storage` dependency and mount it with "
+            + "`kix.mount.pvc storage { mountPath = ...; }`, and add a "
             + "`persistent-volume-claim` instance in the cluster definition. Packages that must author "
-            + "claims themselves (the canonical storage package, helm charts with persistence) declare "
-            + "`meta.unsafe = [ \"raw-pvc\" ]` — the grant is listed by the scorecard unsafe-grant audit."
+            + "claims themselves, such as Helm charts with persistence, must declare "
+            + "`meta.unsafe = [ \"raw-pvc\" ]`. The scorecard will report this exception."
           )
         else
           null;
@@ -297,16 +297,16 @@ in
           if status == "absent" then
             throw (
               serviceDesc
-              + " but the loadBalancer role is vacant (cluster.roles.loadBalancer.binding = \"absent\", "
-              + "no managed provider). Use type=ClusterIP or NodePort, add a provider instance, "
-              + "or declare the environment binding on the target."
+              + " but no load balancer provider is configured (cluster.roles.loadBalancer.binding = \"absent\", "
+              + "no provider instance). Use type=ClusterIP or NodePort, add a provider instance, "
+              + "or configure cluster.roles.loadBalancer.binding to match your environment."
             )
           else if status == "unknown" then
             builtins.trace (
               "[kix] warning: "
               + serviceDesc
-              + " but the loadBalancer role is unknown on this target — declare "
-              + "cluster.roles.loadBalancer.binding or add a provider"
+              + " but Kix cannot verify that this cluster has a load balancer provider. Set "
+              + "cluster.roles.loadBalancer.binding to match your environment, or add a provider instance."
             ) null
           else
             null
@@ -343,7 +343,7 @@ in
             message =
               "[${instanceName}] Workload uses ${reason} "
               + "but cluster.capabilities.privilegedContainers is false. "
-              + "This cluster (e.g. GKE Autopilot, OpenShift) restricts privileged workloads.";
+              + "Remove the privileged settings or use a cluster that supports them.";
           }
         else
           null;
@@ -354,9 +354,9 @@ in
           checkCapability {
             cap = "daemonSets";
             message =
-              "[${instanceName}] DaemonSet cannot be deployed — "
+              "[${instanceName}] DaemonSet cannot be deployed: "
               + "cluster.capabilities.daemonSets is false. "
-              + "This cluster (e.g. GKE Autopilot) does not support DaemonSets.";
+              + "Remove this DaemonSet or use a cluster that supports it.";
           }
         else
           null;
@@ -391,10 +391,10 @@ in
               null;
           multiNode = capabilities.multiNode or null;
           message =
-            "[${instanceName}] ${kind} '${name}' wants ${toString replicas} replicas with ${toString rule}, "
+            "[${instanceName}] ${kind} '${name}' requests ${toString replicas} replicas with ${toString rule}, "
             + "and cluster.capabilities.multiNode is ${if multiNode == null then "unknown" else "false"}. "
-            + "On one node this leaves ${toString (replicas - 1)} pods Pending forever. "
-            + "Make the rule preferred/ScheduleAnyway, set replicas to 1, or declare multiNode.";
+            + "This placement rule may prevent replicas from starting on a single node. "
+            + "Use preferred anti-affinity or ScheduleAnyway, set replicas to 1, or set multiNode = true if the cluster has multiple nodes.";
         in
         if capabilities == { } || rule == null || !(builtins.isInt replicas) || replicas <= 1 then
           null
@@ -421,14 +421,14 @@ in
             if builtins.getContext refName == { } then
               throw "[${instanceName}] Untracked ${kind} reference in ${fieldDesc}: "
               + "\"${plainName}\". "
-              + "Use resource.out.name / resource.out.* helpers, "
+              + "Use the resource's out.name or other out helpers so Kix can track the dependency, "
               + "or kix.untrackedRef to opt out explicitly."
             else if refNs != null && refNs != namespaceName && !refReflected then
               throw "[${instanceName}] Cross-namespace ${kind} reference in ${fieldDesc}: "
               + "${kind} \"${plainName}\" is declared in namespace \"${refNs}\" "
               + "but the consuming workload is in namespace \"${namespaceName}\". "
-              + "Kubernetes does not allow cross-namespace ${kind} references — "
-              + "create or mirror the ${kind} in \"${namespaceName}\" "
+              + "Kubernetes requires this ${kind} to be in the workload's namespace. "
+              + "Create or mirror the ${kind} in \"${namespaceName}\" "
               + "(e.g. via scope.forNamespace \"${namespaceName}\"), "
               + "or replicate it with an ExternalSecret / Reflector "
               + "(producers can opt in via `scope.mkSecretRef { reflect = true; }`)."
@@ -497,7 +497,7 @@ in
                     throw "[${instanceName}] Untracked serviceAccount reference in spec.template.spec.serviceAccountName: "
                     + "\"${plainName}\". "
                     + "Use `serviceAccount = self.serviceAccount;` (kix shorthand that also enables "
-                    + "cross-namespace validation) or kix.untrackedRef for external SAs."
+                    + "cross-namespace validation) or kix.untrackedRef for an externally managed ServiceAccount."
                   )
                 ]
               else if saNs != null && saNs != namespaceName then
@@ -530,11 +530,11 @@ in
             "{ ${builtins.concatStringsSep ", " (lib.mapAttrsToList (k: v: "${k}=${toString v}") labels)} }";
         in
         if missingKeys != [ ] then
-          throw "[${instanceName}] ${kind} spec.selector.matchLabels ⊄ spec.template.metadata.labels: "
+          throw "[${instanceName}] ${kind} pod labels do not include all labels in spec.selector.matchLabels: "
           + "selector key(s) ${builtins.concatStringsSep ", " missingKeys} are missing from template labels. "
           + "selector=${fmt selector} templateLabels=${fmt userTemplateLabels}. "
-          + "A Deployment's controller uses selector to find pods built from template — "
-          + "mismatched keys make the workload deploy pods it can't manage."
+          + "Add the missing selector labels to spec.template.metadata.labels. "
+          + "Kubernetes requires every selector label to match the pod template."
         else if mismatchedKeys != [ ] then
           throw "[${instanceName}] ${kind} spec.selector.matchLabels value mismatch on key(s) "
           + "${builtins.concatStringsSep ", " mismatchedKeys}: "
@@ -627,8 +627,8 @@ in
                   if l == null || r == null then
                     null
                   else if l < r then
-                    throw "[${instanceName}] Container '${c.name}' resources.limits.${res} (${toString limits.${res}}) < resources.requests.${res} (${toString requests.${res}}). "
-                    + "Kubernetes rejects limits < requests at admission."
+                    throw "[${instanceName}] Container '${c.name}' resources.limits.${res} (${toString limits.${res}}) is lower than resources.requests.${res} (${toString requests.${res}}). "
+                    + "Increase the limit or lower the request. Kubernetes requires the limit to be at least the request."
                   else
                     null;
             in

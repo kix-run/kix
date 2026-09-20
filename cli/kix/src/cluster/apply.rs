@@ -48,8 +48,8 @@ pub enum ApplyError {
     },
 
     #[error(
-        "field-ownership conflict on {resource}: another field manager owns one or more fields kix is trying to set. \
-         Re-run with --force-conflicts to take ownership. Underlying error: {source}"
+        "cannot update {resource}: another tool owns fields that Kix is trying to change. \
+         Review the fields listed below. If Kix should manage them, rerun with --force-conflicts to take ownership. Kubernetes reported: {source}"
     )]
     Conflict {
         resource: String,
@@ -58,10 +58,10 @@ pub enum ApplyError {
     },
 
     #[error(
-        "immutable-field conflict on {resource}: the live object has one or more fields that cannot change in place. \
-         Kix recreates a Job marked to rerun on change, and a resource that is being pruned; \
-         for anything else, delete the object and deploy again. \
-         Underlying error: {source}"
+        "cannot update {resource}: the change includes a field that Kubernetes does not allow to be modified. \
+         To apply this change, the resource must be deleted and recreated; \
+         review the impact before deleting it, then deploy again. \
+         Kubernetes reported: {source}"
     )]
     ImmutableConflict {
         resource: String,
@@ -70,7 +70,7 @@ pub enum ApplyError {
     },
 
     #[error(
-        "failed to update kix bookkeeping annotations (activations, applied-hash) on {resource}: {source}"
+        "could not record Kix deployment tracking annotations (activations, applied-hash) on {resource}: {source}"
     )]
     BookkeepingAnnotationsFailed {
         resource: String,
@@ -78,7 +78,9 @@ pub enum ApplyError {
         source: kube::Error,
     },
 
-    #[error("no API resource found for kind '{kind}'")]
+    #[error(
+        "the Kubernetes API does not recognize resource kind '{kind}'. Check the kind and API version, and install its CRD if it is a custom resource"
+    )]
     UnknownKind { kind: String },
 }
 

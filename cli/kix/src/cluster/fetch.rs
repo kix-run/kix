@@ -31,9 +31,9 @@ pub enum FetchError {
     /// VPN or tailnet that is not up, or a load balancer that terminates TLS
     /// in front of an apiserver that has stopped answering all land here.
     #[error(
-        "no response from the Kubernetes apiserver at {endpoint} within {}s. \
+        "no response from the Kubernetes API server at {endpoint} within {}s. \
          Check the server address in your kubeconfig, or try --context <name>. \
-         Raise KIX_CONNECT_TIMEOUT for genuinely slow links.",
+         If the connection is working but needs more time, increase KIX_CONNECT_TIMEOUT (seconds).",
         timeout.as_secs()
     )]
     Unreachable { endpoint: String, timeout: Duration },
@@ -41,7 +41,7 @@ pub enum FetchError {
     /// First contact failed outright: DNS, connection refused, TLS, or a
     /// credential plugin that could not produce a token.
     #[error(
-        "cannot reach the Kubernetes apiserver at {endpoint}: {}. \
+        "cannot reach the Kubernetes API server at {endpoint}: {}. \
          Check your kubeconfig, or try --context <name>.",
         super::errors::describe(source)
     )]
@@ -51,7 +51,7 @@ pub enum FetchError {
         source: kube::Error,
     },
 
-    #[error("failed to run API discovery: {}", super::errors::describe(.0))]
+    #[error("could not discover the resource types supported by the Kubernetes API: {}", super::errors::describe(.0))]
     DiscoveryError(#[source] kube::Error),
 
     #[error("failed to list {resource}: {}", super::errors::describe(source))]
@@ -418,7 +418,7 @@ pub async fn fetch_matching_resources(
     for rid in manifests {
         let kind_lower = rid.kind.to_lowercase();
         let Some(&(ar, scope)) = ar_by_kind.get(&kind_lower) else {
-            tracing::warn!(kind = %rid.kind, "no API resource found for kind, skipping");
+            tracing::warn!(kind = %rid.kind, "Kubernetes does not recognize this resource kind; skipping it");
             continue;
         };
 
@@ -452,7 +452,9 @@ pub async fn fetch_matching_resources(
         match join_result {
             Ok(Some(obj)) => results.push(obj),
             Ok(None) => {} // not found, already logged
-            Err(e) => tracing::warn!(error = %e, "task join error during fetch"),
+            Err(e) => {
+                tracing::warn!(error = %e, "a resource-fetching task stopped unexpectedly; results may be incomplete")
+            }
         }
     }
     Ok(results)

@@ -190,9 +190,9 @@ rec {
         else
           map (
             e:
-            "workload references Service '${edgeKey e}' by identity but no address value flowed — "
-            + "no netpol edge derived. Dial via out.fqdn/out.url (or facts.connect); "
-            + "if the use is structural (label, display), silence with facts.refOnly."
+            "workload references Service '${edgeKey e}' without using its address. "
+            + "Kix has not generated a network policy for this connection. Use out.fqdn/out.url (or facts.connect) to connect to it; "
+            + "if you only need its name or labels, use facts.refOnly to mark that intent."
           ) unmatchedIdentity;
     };
 }

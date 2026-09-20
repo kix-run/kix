@@ -163,7 +163,7 @@ in
             if !(lib.hasInfix "/" key) then
               throw (
                 "kix: cluster.factBehavior key '${key}' must be \"group/Kind\" "
-                + "(e.g. \"stackgres.io/SGCluster\") — bare kinds collide across API groups."
+                + "(e.g. \"stackgres.io/SGCluster\"). bare kinds collide across API groups."
               )
             else
               null;

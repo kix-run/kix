@@ -9,9 +9,9 @@
   "commands": [
     {
       "command": "kix diff how-to-stateful-migration --from stateful-before",
-      "stdout": "+ PersistentVolumeClaim/media-v2@data\n- PersistentVolumeClaim/media-v1@data\nStateful migrations detected (1):\n~ data/volume: PersistentVolumeClaim/media-v1 -> PersistentVolumeClaim/media-v2 (size changed: 5Gi -> 10Gi)\nsource: PersistentVolumeClaim/data/media-v1\ntarget: PersistentVolumeClaim/data/media-v2\nNote: data migration is NOT yet automated. See v2_discussions/67_stateful_migration_orchestration.md.\n",
+      "stdout": "+ PersistentVolumeClaim/media-v2@data\n- PersistentVolumeClaim/media-v1@data\nStateful migrations detected (1):\n~ data/volume: PersistentVolumeClaim/media-v1 -> PersistentVolumeClaim/media-v2 (size changed: 5Gi -> 10Gi)\nsource: PersistentVolumeClaim/data/media-v1\ntarget: PersistentVolumeClaim/data/media-v2\nData migration is not automated. Review the source and target resources above and migrate the data before deploying with --accept-migrations.\n",
       "stderr": "",
-      "stdoutDrift": "+ PersistentVolumeClaim/media-v2@data\n- PersistentVolumeClaim/media-v1@data\nNote: data migration is NOT yet automated. See v2_discussions/67_stateful_migration_orchestration.md.\nStateful migrations detected (1):\nsource: PersistentVolumeClaim/data/media-v1\ntarget: PersistentVolumeClaim/data/media-v2\n~ data/volume: PersistentVolumeClaim/media-v1 -> PersistentVolumeClaim/media-v2 (size changed: 5Gi -> 10Gi)\n",
+      "stdoutDrift": "+ PersistentVolumeClaim/media-v2@data\n- PersistentVolumeClaim/media-v1@data\nData migration is not automated. Review the source and target resources above and migrate the data before deploying with --accept-migrations.\nStateful migrations detected (1):\nsource: PersistentVolumeClaim/data/media-v1\ntarget: PersistentVolumeClaim/data/media-v2\n~ data/volume: PersistentVolumeClaim/media-v1 -> PersistentVolumeClaim/media-v2 (size changed: 5Gi -> 10Gi)\n",
       "stderrDrift": "",
       "exitCode": 2
     }

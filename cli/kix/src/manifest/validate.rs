@@ -62,7 +62,7 @@ impl PreflightTool for KubeconformTool {
         PreflightResult {
             passed: true,
             tool: self.name().to_string(),
-            details: "skipped (not installed)".into(),
+            details: "skipped (this validation tool is not yet integrated with Kix)".into(),
             findings: vec![],
         }
     }
@@ -80,7 +80,7 @@ impl PreflightTool for PlutoTool {
         PreflightResult {
             passed: true,
             tool: self.name().to_string(),
-            details: "skipped (not installed)".into(),
+            details: "skipped (this validation tool is not yet integrated with Kix)".into(),
             findings: vec![],
         }
     }
@@ -98,7 +98,7 @@ impl PreflightTool for KyvernoTool {
         PreflightResult {
             passed: true,
             tool: self.name().to_string(),
-            details: "skipped (not installed)".into(),
+            details: "skipped (this validation tool is not yet integrated with Kix)".into(),
             findings: vec![],
         }
     }

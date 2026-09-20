@@ -9,9 +9,9 @@
   "commands": [
     {
       "command": "kix check 06-service-dep",
-      "stdout": "error: no 'backend' found in cluster for namespace 'tutorial-06'                                                                                           \n",
+      "stdout": "error: dependency 'backend' was not found for namespace 'tutorial-06'. Add an instance with that name or alias, or set deps.backend explicitly.                \n",
       "stderr": "",
-      "stdoutDrift": "error: no 'backend' found in cluster for namespace 'tutorial-06'\n",
+      "stdoutDrift": "error: dependency 'backend' was not found for namespace 'tutorial-06'. Add an instance with that name or alias, or set deps.backend explicitly.\n",
       "stderrDrift": "",
       "exitCode": 1
     }

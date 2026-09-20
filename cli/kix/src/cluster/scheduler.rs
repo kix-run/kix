@@ -240,18 +240,18 @@ pub struct SchedulerConfig {
 
 #[derive(Error, Debug)]
 pub enum DeployError {
-    #[error("deploy stopped: {count} node(s) failed")]
+    #[error("deployment stopped: {count} resource operations failed")]
     NodesFailed { count: usize, partial: DeployResult },
 
     /// Discovery could not be refreshed after a CRD landed. The run stopped
     /// rather than continue on a stale view of which kinds exist.
-    #[error("API discovery failed: {message}")]
+    #[error("could not discover the resource types supported by the Kubernetes API: {message}")]
     DiscoveryFailed {
         message: String,
         partial: DeployResult,
     },
 
-    #[error("activation lifecycle error: {0}")]
+    #[error("could not update the deployment record: {0}")]
     ActivationError(String),
 
     #[error("deploy cancelled: {reason}")]
@@ -262,7 +262,7 @@ pub enum DeployError {
 
     /// A spawned task panicked or was aborted from outside. A bug, never a
     /// cluster condition.
-    #[error("deploy engine failure: {message}")]
+    #[error("deployment could not continue: {message}")]
     Internal {
         message: String,
         partial: DeployResult,
@@ -1433,7 +1433,7 @@ async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome {
             Err(e) => {
                 return NodeOutcome::Failed {
                     detail: NodeDetail::SecretHydrationFailed(e.to_string()),
-                    message: format!("secret hydration failed: {e}"),
+                    message: format!("could not prepare secret values for deployment: {e}"),
                 };
             }
         }

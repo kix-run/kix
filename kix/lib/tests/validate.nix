@@ -305,26 +305,28 @@ in
     ]
   );
 
-  v03-configmap-volume-missing = onlyFailure "mounts ConfigMap 'cfg-typo' which does not exist" (
-    base "a"
-    ++ [
-      (deployment "a" "api" {
-        spec.template.spec.volumes = [
-          {
-            name = "cfg";
-            configMap.name = "cfg-typo";
-          }
-        ];
-      })
-    ]
-  );
+  v03-configmap-volume-missing =
+    onlyFailure "mounts ConfigMap 'cfg-typo' which is not in the cluster build"
+      (
+        base "a"
+        ++ [
+          (deployment "a" "api" {
+            spec.template.spec.volumes = [
+              {
+                name = "cfg";
+                configMap.name = "cfg-typo";
+              }
+            ];
+          })
+        ]
+      );
 
   # A namespaced lookup must not be satisfied by a cluster-scoped object of
   # the same kind and name (kixpkgs#71 item 5). ConfigMap is namespaced in
   # Kubernetes; the cluster-scoped one here is synthetic, which is the point:
   # the checker must not guess.
   v03b-cluster-scoped-namesake-does-not-satisfy-namespaced-lookup =
-    onlyFailure "mounts ConfigMap 'shared' which does not exist"
+    onlyFailure "mounts ConfigMap 'shared' which is not in the cluster build"
       (
         base "a"
         ++ [
@@ -374,7 +376,8 @@ in
 
   # The declaration is namespaced: the CR must be in the Service's namespace.
   v04d-operand-of-is-namespaced =
-    onlyFailure "declares ${kixKeys.operandOf}=monitoring.coreos.com/Prometheus/prom but no such CR"
+    onlyFailure
+      "declares ${kixKeys.operandOf}=monitoring.coreos.com/Prometheus/prom but that custom resource"
       (
         base "a"
         ++ base "b"
@@ -472,7 +475,7 @@ in
     ]
   );
 
-  v09-selector-outside-template-labels = onlyFailure "is not a subset of pod template labels" (
+  v09-selector-outside-template-labels = onlyFailure "does not match pod template labels" (
     base "a" ++ [ (deployment "a" "api" { spec.selector.matchLabels.tier = "api"; }) ]
   );
 
@@ -566,7 +569,7 @@ in
     base "a" ++ [ (pdb "a" "lost" { app = "nope"; } { }) ]
   );
 
-  v14b-pdb-operand-of-missing-cr = onlyFailure "but no such CR is in the build" (
+  v14b-pdb-operand-of-missing-cr = onlyFailure "but that custom resource is not in the build" (
     base "a"
     ++ [
       (pdb "a" "am" { "app.kubernetes.io/name" = "alertmanager"; } {
@@ -720,7 +723,8 @@ in
 
   # A cluster-scoped CR (no namespace) cannot be the operand source of a namespaced Service.
   p04d-cluster-scoped-cr-does-not-exempt =
-    onlyFailure "declares ${kixKeys.operandOf}=monitoring.coreos.com/Prometheus/prom but no such CR"
+    onlyFailure
+      "declares ${kixKeys.operandOf}=monitoring.coreos.com/Prometheus/prom but that custom resource"
       (
         base "a"
         ++ [
@@ -970,7 +974,7 @@ in
     ]
   );
 
-  v16c-rerun-with-another-value-is-refused = onlyFailure "the only value the deploy engine honours" (
+  v16c-rerun-with-another-value-is-refused = onlyFailure "the supported value" (
     base "a"
     ++ [
       (lib.recursiveUpdate (job "a" "probe" { app = "probe"; }) {

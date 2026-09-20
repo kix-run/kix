@@ -39,7 +39,7 @@ rec {
             if unknown != [ ] then
               throw "unknown _kix marker key(s): ${builtins.concatStringsSep ", " unknown}. "
               + "Valid keys: ${builtins.concatStringsSep ", " validKixKeys}. "
-              + "This is almost always a typo — check the fragment that set _kix."
+              + "Check the field names in the fragment that sets _kix."
             else
               null
           else
@@ -62,7 +62,7 @@ rec {
     else if builtins.isList value then
       map (attachCtxDeep ctx) value
     else
-      builtins.trace "warning: non-string leaf (${builtins.typeOf value}) in .manifest access — dependency not tracked" value;
+      builtins.trace "warning: .manifest returned a ${builtins.typeOf value} value. Kix cannot track dependencies through this value; use an out helper or an explicit requires entry" value;
 
   extractStoreHash =
     path: builtins.substring 11 32 (builtins.unsafeDiscardStringContext (toString path));
@@ -336,12 +336,12 @@ rec {
           && facts.isForeignGroup apiVersion
           && facts.factsOfKind "endpoint" manifestJson != [ ]
         then
-          "kix: ${kind}/${name} (${apiVersion}) absorbed endpoint fact(s) but carries no "
-          + "fact behavior — kix assumes \"conduct\" (the resource carries the address "
-          + "onward). If this kind's controller DIALS the endpoint (operator-managed "
-          + "pods): build the CR via the typed builder (`scope.mkCR <owner>.out.crds.…`) "
+          "kix: ${kind}/${name} (${apiVersion}) references a Service address but does not declare how its controller uses it. "
+          + "Kix assumes endpoint = \"conduct\" (the resource passes the address "
+          + "to other resources). If pods created by this controller connect to the address "
+          + "directly, build the custom resource with `scope.mkCR <owner>.out.crds.<kind>` "
           + "and declare `factBehavior = { endpoint = \"terminate\"; podSelector = cr: "
-          + "{ ... }; }` on the owner's mkCRD/mkCRDRef — or, for builder-less CRs (helm, "
+          + "{ ... }; }` on the owner's mkCRD/mkCRDRef. For resources built without a typed builder (Helm or "
           + "raw kind strings), set `cluster.factBehavior.\"<group>/${kind}\"`."
         else
           null;

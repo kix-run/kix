@@ -87,7 +87,7 @@ pub async fn load_failed(
                 stamp_annotations(&mut graph);
                 if !quiet {
                     println!(
-                        "  {} folding in the closure of failed deploy {} ({}...)",
+                        "  {} including resources from failed deployment {} ({}...)",
                         output::yellow("!"),
                         output::bold(&record.name),
                         &hash[..8.min(hash.len())],
@@ -118,14 +118,14 @@ pub async fn load_failed(
 fn report_unresolved(unresolved: &[FailedActivation], cluster: &str) {
     for record in unresolved {
         eprintln!(
-            "{} failed deploy {} left objects behind, and its build is not in this machine's store.",
+            "{} cannot read the build for failed deployment {} on this machine. It may have left resources on the cluster.",
             output::yellow("warning:"),
             output::bold(&record.name),
         );
         eprintln!(
-            "  Nothing here can say what it applied, so this plan leaves it alone. Deploy from \
-             the machine that built it, or sweep the objects with `kix gc --hard {cluster}` and \
-             then discard the record, which hard gc does not touch:"
+            "  Kix cannot determine which resources it applied, so this plan will not clean them up. Deploy from \
+             the machine that built it, or review and remove unused resources with `kix gc --hard {cluster}` and \
+             then mark the failed record as superseded (hard GC does not update it):"
         );
         eprintln!(
             "    kubectl patch {}/{} --subresource=status --type=merge \
@@ -182,12 +182,14 @@ pub fn report_in_flight(record: &DeployingActivation, quiet: bool) {
         .unwrap_or_default();
     eprintln!(
         "{} activation {}{since} is still marked as deploying, so this plan leaves \
-         any half-applied work alone.",
+         resources from incomplete deployments unchanged.",
         output::yellow("note:"),
         output::bold(&record.name),
     );
-    eprintln!("  If that deploy is still running, let it finish. If its process is gone, mark the");
-    eprintln!("  record failed and re-run; the next plan will then reconcile what it left:");
+    eprintln!(
+        "  If that deployment is still running, let it finish. If its process has stopped, mark the"
+    );
+    eprintln!("  record as failed and rerun this command so Kix can account for its resources:");
     eprintln!(
         "    kubectl patch {}/{} --subresource=status --type=merge \\",
         kix::manifest::keys::ACTIVATIONS_CRD,

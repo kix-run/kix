@@ -250,7 +250,7 @@ impl StoreGraph {
                 .pointer("/spec/instanceName")
                 .and_then(|v| v.as_str())
                 .unwrap_or_else(|| {
-                    tracing::warn!(pi = %pi_path.display(), "PI missing spec.instanceName");
+                    tracing::warn!(pi = %pi_path.display(), "PackageInstance is missing spec.instanceName; displaying its name as unknown");
                     "unknown"
                 })
                 .to_string();

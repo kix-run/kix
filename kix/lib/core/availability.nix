@@ -103,7 +103,7 @@ let
         if overSubstrate && sub.certain then
           throw (
             "[${where}] ${requestedFrom} = \"${requested}\" but the cluster can offer at most "
-            + "\"${sub.level}\": it needs ${needs}. Lower the level or declare the capability."
+            + "\"${sub.level}\": it needs ${needs}. Lower the availability level, or update the capability declaration if the cluster supports it."
           )
         else
           null;
@@ -119,12 +119,12 @@ let
       warnings =
         lib.optional (overSubstrate && !sub.certain) (
           "[${where}] ${requestedFrom} = \"${requested}\" needs ${needs}, which this cluster has not declared. "
-          + "Declare it, or lower the level; on a cluster without it this is downtime the level promised to avoid."
+          + "Set the capability to match your environment, or lower the availability level. Kix cannot verify the requested availability without this information."
         )
         ++ lib.optional capped (
           "[${where}] availability \"${requested}\" was requested but the package declares "
           + "meta.availability.max = \"${ceiling}\", so it runs at \"${ceiling}\". "
-          + "The loss the level names will cause downtime for this instance."
+          + "This instance does not meet the requested availability level."
         );
     };
 in

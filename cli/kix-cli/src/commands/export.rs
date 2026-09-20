@@ -54,7 +54,7 @@ pub fn run(args: &ExportArgs, ctx: &mut CommandContext) -> Result<()> {
             eprintln!("  {msg}");
         }
     })
-    .map_err(|e| miette!("failed to load store graph: {e}"))?;
+    .map_err(|e| miette!("{e}"))?;
 
     // Stamp so the graph is in the same shape the deploy/diff pipelines see.
     // For `--for=audit` we want those annotations preserved; for `--for=exit`
@@ -77,7 +77,7 @@ pub fn run(args: &ExportArgs, ctx: &mut CommandContext) -> Result<()> {
         // `--out` is user input, so deleting an arbitrary directory is unsafe.
         if let Some(intruder) = first_non_export_entry(&out_dir)? {
             return Err(miette!(
-                "refusing to overwrite '{}': it holds '{}', which no kix export wrote. \
+                "cannot overwrite '{}': it contains '{}', which Kix does not recognize as an exported file. \
                  Remove the directory yourself, or export somewhere else.",
                 args.out,
                 intruder.display()

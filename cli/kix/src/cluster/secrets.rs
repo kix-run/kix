@@ -25,7 +25,7 @@ pub enum SecretError {
 
     #[error(
         "content hash mismatch for secret '{name}': expected {expected}, got {actual}. \
-         Run `kix secrets update-hash {name}` to update."
+         Check that you are using the intended SOPS file. If the change is intentional, update the secret's hash in its Nix definition and rebuild."
     )]
     HashMismatch {
         name: String,
