@@ -17,6 +17,7 @@
   scope,
   lib,
   kix,
+  availability,
 }:
 
 let
@@ -26,6 +27,7 @@ in
   meta = {
     version = "1.0.0";
     description = "Generic Django/Next.js application platform";
+    owner = "app-team";
   };
 
   options = {
@@ -49,7 +51,21 @@ in
           tag = "latest";
           pullPolicy = "IfNotPresent";
         };
-        replicaCount = 1;
+        # The backend and migrate containers run under this. Non-root by
+        # default: an image that must run as root sets `runAsNonRoot =
+        # false` here and declares why.
+        securityContext = {
+          runAsNonRoot = true;
+        };
+        # A request server: two replicas once a pod restart must not drop the
+        # app, three once a whole zone may go. Defaults from the cluster's
+        # availability level (v2_discussions/145).
+        replicaCount = kix.availability.pick availability {
+          none = 1;
+          pod = 2;
+          node = 2;
+          zone = 3;
+        };
         gunicornWorkers = 4;
         port = 8080;
         containerName = null; # if set, overrides the container name (default: componentName)
@@ -104,7 +120,15 @@ in
           tag = "latest";
           pullPolicy = "IfNotPresent";
         };
-        replicaCount = 1;
+        # A request server: two replicas once a pod restart must not drop the
+        # app, three once a whole zone may go. Defaults from the cluster's
+        # availability level (v2_discussions/145).
+        replicaCount = kix.availability.pick availability {
+          none = 1;
+          pod = 2;
+          node = 2;
+          zone = 3;
+        };
         port = 3000;
         command = null;
         args = null;
@@ -143,7 +167,15 @@ in
           tag = "latest";
           pullPolicy = "IfNotPresent";
         };
-        replicaCount = 1;
+        # The front door for every request: two replicas once a pod restart
+        # must not drop traffic, three once a whole zone may go. Defaults from
+        # the cluster's availability level (v2_discussions/145).
+        replicaCount = kix.availability.pick availability {
+          none = 1;
+          pod = 2;
+          node = 2;
+          zone = 3;
+        };
         port = 8080;
         resources = { };
         hpa = {
@@ -169,7 +201,9 @@ in
       default = { };
     };
 
-    # Redis
+    # Redis — a single standalone store. It carries no replicaCount, and its
+    # Deployment stays at one replica on every availability level, because
+    # there is no replication between two copies of it.
     redis = lib.mkOption {
       type = lib.types.anything;
       default = {
@@ -246,16 +280,6 @@ in
       default = {
         enabled = false;
         name = null; # null means use releaseName or name
-      };
-    };
-
-    # PodDisruptionBudget
-    pdb = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        enabled = false;
-        minAvailable = null; # e.g. "50%" or 1
-        maxUnavailable = null;
       };
     };
 
@@ -468,6 +492,10 @@ in
           name = containerName;
           image = "${config.backend.image.repository}:${config.backend.image.tag}";
           imagePullPolicy = config.backend.image.pullPolicy;
+          securityContext =
+            config.backend.securityContext or {
+              runAsNonRoot = true;
+            };
           envFrom = mkEnvFrom self self.configmap config.backend.secrets;
           ports = [
             (kix.port "http" config.backend.port)
@@ -994,27 +1022,6 @@ in
         else
           null;
 
-      # ── PodDisruptionBudget ──────────────────────────────────────────
-      pdb =
-        if config.pdb.enabled then
-          scope.mkResource {
-            apiVersion = "policy/v1";
-            kind = "PodDisruptionBudget";
-            name = "${rName}-${compName}";
-            labels = componentLabels compName;
-            spec = {
-              selector.matchLabels = selectorLabels compName;
-            }
-            // lib.optionalAttrs (config.pdb.minAvailable != null) {
-              minAvailable = config.pdb.minAvailable;
-            }
-            // lib.optionalAttrs (config.pdb.maxUnavailable != null) {
-              maxUnavailable = config.pdb.maxUnavailable;
-            };
-          }
-        else
-          null;
-
       # ── Frontend Deployment ─────────────────────────────────────────
       frontendDeployment =
         if config.frontend.enabled then
@@ -1148,7 +1155,7 @@ in
                 {
                   name = "http";
                   port = config.caddy.port;
-                  targetPort = "http";
+                  targetPort = config.caddy.port;
                   protocol = "TCP";
                 }
               ];
@@ -1201,6 +1208,9 @@ in
             name = "${name}-redis";
             labels = componentLabels "redis";
             spec = {
+              # Fixed at one, whatever the cluster's availability level: this
+              # redis is standalone and has no replication, so a second
+              # replica is a second unsynchronised store, not availability.
               replicas = 1;
               strategy.type = "Recreate";
               selector.matchLabels = selectorLabels "redis";
@@ -1252,7 +1262,7 @@ in
                 {
                   name = "redis";
                   port = 6379;
-                  targetPort = "redis";
+                  targetPort = 6379;
                   protocol = "TCP";
                 }
               ];
@@ -1363,6 +1373,10 @@ in
                       name = "migrate";
                       image = "${config.backend.image.repository}:${config.backend.image.tag}";
                       imagePullPolicy = config.backend.image.pullPolicy;
+                      securityContext =
+                        config.backend.securityContext or {
+                          runAsNonRoot = true;
+                        };
                       command = config.hooks.migrate.command;
                       envFrom = mkEnvFrom self self.configmap config.backend.secrets;
                       volumeMounts = secretVolumeMounts;
@@ -1388,8 +1402,7 @@ in
           ++ lib.optional (self.migrateJob != null) self.migrateJob
           ++ lib.optional (self.secret != null) self.secret
           ++ lib.optional (self.secretFilesResource != null) self.secretFilesResource
-          ++ lib.optional (self.frontendService != null) self.frontendService
-          ++ lib.optional (self.pdb != null) self.pdb;
+          ++ lib.optional (self.frontendService != null) self.frontendService;
       };
     }
     # Merge dynamic worker parts into the fixpoint so they appear in

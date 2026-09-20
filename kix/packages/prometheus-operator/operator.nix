@@ -230,7 +230,7 @@ in
         {
           name = "http-metrics";
           port = 8080;
-          targetPort = "http-metrics";
+          targetPort = 8080;
         }
       ];
     };

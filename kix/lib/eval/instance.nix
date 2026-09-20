@@ -517,9 +517,70 @@ in
         processorResources = builtins.concatMap (r: r.resources or [ ]) processorResults;
         processorWarnings = builtins.concatMap (r: r.warnings or [ ]) processorResults;
 
+        # This instance's dependencies, as "ns/inst" plus the evaluated
+        # instance, so a consumer can walk on to the dependency's own
+        # links. Resolved DI deps come from resolvedDepMeta; directly wired
+        # deps (deps.X = ref.<ns>.<inst>) skip it, so their identity is
+        # recovered from the target's own _meta. Explicit wiring counts as
+        # linking against the operator.
+        directDepLinks =
+          lib.mapAttrsToList (_: depInfo: {
+            id = "${depInfo.resolution.namespace}/${depInfo.resolution.instanceName}";
+            instance = depInfo.instance;
+          }) resolvedDepMeta
+          ++ builtins.concatMap (
+            v:
+            let
+              m = if builtins.isAttrs v then v._meta or null else null;
+            in
+            if builtins.isAttrs m && m ? namespaceName && m ? instanceName then
+              [
+                {
+                  id = "${m.namespaceName}/${m.instanceName}";
+                  instance = v;
+                }
+              ]
+            else
+              [ ]
+          ) (builtins.attrValues deps);
+
+        # The closure of directDepLinks. An annotation's declarer is often
+        # a dependency of a dependency: every TLS Ingress carries a
+        # cert-manager.io annotation stamped by the cluster-issuer, which
+        # depends on cert-manager, which declares the domain. One level
+        # cannot see that; the closure can. Walks `_depLinks` on each
+        # evaluated dependency with a seen set, so a shared dependency is
+        # visited once.
+        transitiveDepTargets =
+          let
+            go =
+              seen: queue:
+              if queue == [ ] then
+                seen
+              else
+                let
+                  link = builtins.head queue;
+                  rest = builtins.tail queue;
+                in
+                if builtins.hasAttr link.id seen then
+                  go seen rest
+                else
+                  go (seen // { ${link.id} = true; }) (rest ++ (link.instance._depLinks or [ ]));
+          in
+          builtins.attrNames (go { } directDepLinks);
+
         scorecardConfig = clusterConfig.scorecard or { };
         scorecardEnabled = (scorecardConfig.enable or false) && (scorecardConfig.rules or { }) != { };
         owner = packageMeta.owner or null;
+
+        # What the instance ships: its own parts, what the scope injected,
+        # and what the processors derived (PodDisruptionBudgets, the
+        # materialised network policies). The scorecard scores this set,
+        # not the author's manifests alone. A rule about a derived resource
+        # was otherwise unwritable (reliability.hasPDB was retired for it,
+        # 2026-09-20), and a derived resource the rules never see is one
+        # the score does not describe.
+        shippedResources = allPartResources ++ processorResources;
 
         scorecardManifestFindings =
           if scorecardEnabled then
@@ -533,10 +594,12 @@ in
                   namespaceName
                   owner
                   ;
+                meta = packageMeta;
                 ruleDefaults = scorecardConfig.ruleDefaults or { };
                 ruleOverrides = scorecardConfig.ruleOverrides or { };
+                maxSeverity = scorecardConfig.maxSeverity or "error";
               }
-            ) (builtins.filter (r: r ? kind) (map (r: r.rawManifest or { }) allPartResources))
+            ) (builtins.filter (r: r ? kind) (map (r: r.rawManifest or { }) shippedResources))
           else
             [ ];
 
@@ -544,7 +607,7 @@ in
           if scorecardEnabled then
             scorecard.evaluatePackageRules {
               rules = scorecardConfig.rules;
-              resources = map (r: r.rawManifest or { }) allPartResources;
+              resources = map (r: r.rawManifest or { }) shippedResources;
               inherit
                 parts
                 instanceName
@@ -554,29 +617,15 @@ in
                 ;
               config = evaluatedConfig;
               meta = packageMeta;
-              # "ns/inst" identities of this instance's resolved DI deps —
-              # the annotationDomainOwnership rule checks declarers against
-              # these. Names only; deps are resolved before rules run.
-              # Directly wired deps (deps.X = ref...) skip resolvedDepMeta,
-              # so their identity is recovered from the target's own _meta —
-              # explicit wiring must count as linking against the operator.
-              resolvedDepTargets =
-                lib.mapAttrsToList (
-                  _: depInfo: "${depInfo.resolution.namespace}/${depInfo.resolution.instanceName}"
-                ) resolvedDepMeta
-                ++ builtins.concatMap (
-                  v:
-                  let
-                    m = if builtins.isAttrs v then v._meta or null else null;
-                  in
-                  if builtins.isAttrs m && m ? namespaceName && m ? instanceName then
-                    [ "${m.namespaceName}/${m.instanceName}" ]
-                  else
-                    [ ]
-                ) (builtins.attrValues deps);
+              # "ns/inst" identities of every instance this one depends
+              # on, directly or through a dependency's own dependencies —
+              # the annotationDomainOwnership rule checks declarers
+              # against these.
+              resolvedDepTargets = transitiveDepTargets;
               knownAnnotationDomains = scorecardConfig.knownAnnotationDomains or [ ];
               ruleDefaults = scorecardConfig.ruleDefaults or { };
               ruleOverrides = scorecardConfig.ruleOverrides or { };
+              maxSeverity = scorecardConfig.maxSeverity or "error";
             }
           else
             [ ];
@@ -788,6 +837,7 @@ in
               in
               view'
               // {
+                _depLinks = directDepLinks;
                 _hookResources = _scopeInjectedResources ++ processorResources;
                 _scorecardFindings = scorecardFindings;
                 _diagnostics = {

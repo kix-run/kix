@@ -1,0 +1,57 @@
+---
+title: "Fail the build on scorecard findings"
+description: "Raise the scorecard severity cap so an error-severity finding stops kix check, builds, and deploys."
+---
+
+import Command from '/src/components/Command.astro';
+
+The scorecard runs on every cluster by default, and every finding is capped at
+`scorecard.maxSeverity`. The default cap is `warning`: `kix check` prints what
+the rules found, and the cluster still builds. Raise the cap to `error` when a
+finding from an error-severity rule should stop the build.
+
+This guide assumes the cluster is defined with `kix.buildCluster`.
+
+## Raise the cap on one cluster
+
+Set the option in the cluster definition:
+
+```nix title="cluster.nix"
+scorecard.maxSeverity = "error";
+```
+
+Rules that declare `severity = "error"`, and rules raised to it through
+`ruleOverrides`, now fail evaluation at the first finding. Warnings and
+informational findings are unaffected.
+
+## Raise the cap on every cluster in a flake
+
+Put the setting in `clusterModules` so each cluster starts from it:
+
+```nix title="flake.nix"
+outputs = inputs: inputs.kixpkgs.lib.mkFlake {
+  inherit inputs;
+  clusters.production = ./clusters/production.nix;
+  clusterModules = [ { scorecard.maxSeverity = "error"; } ];
+};
+```
+
+A cluster that needs the default back sets `scorecard.maxSeverity =
+lib.mkForce "warning"` in its own modules.
+
+## Check the result
+
+Run the cluster checks:
+
+<Command commands={["kix check production"]} cwd="infrastructure/" />
+
+With the cap raised, an error-severity finding ends the run with a failed
+assertion that names the rule and the resource. Fix the resource, disable the
+rule for that package, or lower the rule's severity with an override.
+
+:::note[Reference]
+See [`scorecard`](/docs/reference/cluster-module/scorecard/) for the cap and
+the other scorecard options, and
+[Override scorecard severity](/docs/how-to/policy-ci-and-compliance/override-scorecard-severity/)
+for per-rule changes.
+:::

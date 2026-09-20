@@ -10,8 +10,13 @@ Use a severity override to promote a finding to an error or reduce it to a
 warning or informational result. Valid severities are `error`, `warning`, and
 `info`.
 
-This guide assumes scorecard evaluation is enabled and the target rule is
-present under `scorecard.rules`.
+This guide assumes the target rule is in the active set. The built-in rules
+are, by default; a custom rule must be present under `scorecard.rules`.
+
+A cluster caps every finding at `scorecard.maxSeverity`, which defaults to
+`warning`. An override above the cap is reported at the cap, so raising a
+rule to `error` only stops the build once the cap is `error` as well. See
+[Fail the build on scorecard findings](/docs/how-to/policy-ci-and-compliance/fail-the-build-on-scorecard-findings/).
 
 ## Override one rule everywhere
 
@@ -19,9 +24,7 @@ Use the full rule name under `ruleOverrides.byRule`:
 
 ```nix title="cluster.nix"
 scorecard = {
-  enable = true;
-  rules.reliability = kix.rules.reliability;
-
+  maxSeverity = "error";
   ruleOverrides.byRule."reliability.hasProbes".severity = "error";
 };
 ```
@@ -68,7 +71,7 @@ Run the cluster checks and confirm that the finding has the intended severity:
 
 If several overrides match, a direct `byRule` override wins. Owner overrides
 then take precedence over namespace overrides, followed by the rule's declared
-severity and `ruleDefaults`.
+severity and `ruleDefaults`. The cluster's `maxSeverity` cap applies last.
 
 :::note[Reference]
 See [Severity override schema](/docs/reference/scorecard/severity-override-schema/)

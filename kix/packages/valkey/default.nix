@@ -9,8 +9,10 @@
 # Mirrors the Bitnami Valkey Helm chart topology.
 #
 # Resources: ServiceAccount, ConfigMap (scripts + health + configuration),
-# StatefulSet, Service (main), Service (headless), NetworkPolicy,
-# PodDisruptionBudget, and optionally: Service (metrics), Secret (credentials).
+# StatefulSet, Service (main), Service (headless), NetworkPolicy, and
+# optionally: Service (metrics), Secret (credentials). The
+# PodDisruptionBudget is derived by the compiler from the availability
+# level, not written here.
 #
 # root = primary Service.
 
@@ -25,6 +27,7 @@
   meta = {
     version = "8.1.1";
     description = "Valkey — Redis-compatible in-memory data store";
+    owner = "platform";
     lifecycle = "stateful";
     defaultAliases = [
       "valkey"
@@ -1331,15 +1334,16 @@
         |> scope.mkStatefulSet;
 
       # --- Service (headless, for StatefulSet DNS) ---
-      headlessService = scope.mkResource {
-        apiVersion = "v1";
-        kind = "Service";
-        name = "${name}-headless";
-        labels = selectorLabels // headlessComponentLabel;
-        spec = {
-          type = "ClusterIP";
-          clusterIP = "None";
-          selector = selectorLabels;
+      # The selector comes from the workload, so the dependency on the
+      # StatefulSet is tracked and `selectorCoherence` has a workload to
+      # trace it to. `clusterIP = "None"` merges into the built spec rather
+      # than replacing it.
+      headlessService =
+        self.statefulSet
+        |> kix.service.fromWorkload {
+          name = "${name}-headless";
+          labels = selectorLabels // headlessComponentLabel;
+          spec.clusterIP = "None";
           ports = [
             {
               name = "tcp-redis";
@@ -1354,19 +1358,15 @@
             targetPort = 26379;
             protocol = "TCP";
           };
-        };
-        requires = [ self.statefulSet ];
-      };
+        }
+        |> scope.mkResource;
 
       # --- Service (main entry point — exposes both redis and sentinel) ---
-      mainService = scope.mkResource {
-        apiVersion = "v1";
-        kind = "Service";
-        name = "${name}";
-        labels = commonLabels;
-        spec = {
-          type = "ClusterIP";
-          selector = selectorLabels // componentLabel;
+      mainService =
+        self.statefulSet
+        |> kix.service.fromWorkload {
+          name = "${name}";
+          labels = commonLabels;
           ports = [
             {
               name = "tcp-redis";
@@ -1381,17 +1381,16 @@
             targetPort = 26379;
             protocol = "TCP";
           };
-        };
-        outputs = {
-          port = "6379";
-          primaryFqdn = "${name}-primary.${scope.namespaceName}.svc.cluster.local";
+          outputs = {
+            port = "6379";
+            primaryFqdn = "${name}-primary.${scope.namespaceName}.svc.cluster.local";
+          }
+          // lib.optionalAttrs config.sentinel.enabled {
+            sentinelPort = "26379";
+            primarySet = config.sentinel.primarySet;
+          };
         }
-        // lib.optionalAttrs config.sentinel.enabled {
-          sentinelPort = "26379";
-          primarySet = config.sentinel.primarySet;
-        };
-        requires = [ self.statefulSet ];
-      };
+        |> scope.mkResource;
 
       # --- NetworkPolicy ---
       networkPolicy = scope.mkResource {
@@ -1431,18 +1430,6 @@
         };
       };
 
-      # --- PodDisruptionBudget (node) ---
-      podDisruptionBudget = scope.mkResource {
-        apiVersion = "policy/v1";
-        kind = "PodDisruptionBudget";
-        name = "${name}-${if config.sentinel.enabled then "node" else "primary"}";
-        labels = commonLabels;
-        spec = {
-          maxUnavailable = 1;
-          selector.matchLabels = selectorLabels // componentLabel;
-        };
-      };
-
       # --- Service (metrics, optional) ---
       metricsService =
         if config.metrics.enabled then
@@ -1464,7 +1451,7 @@
                 {
                   name = "http-metrics";
                   port = 9121;
-                  targetPort = "metrics";
+                  targetPort = 9121;
                   protocol = "TCP";
                 }
               ];
@@ -1598,7 +1585,6 @@
         ++ lib.optional (self.prometheusRules != null) self.prometheusRules
         ++ [
           self.networkPolicy
-          self.podDisruptionBudget
         ];
       };
     };

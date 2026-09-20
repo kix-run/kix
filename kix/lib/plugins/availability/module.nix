@@ -215,8 +215,12 @@ in
     hooks.instanceProcessors.availability =
       ctx:
       let
-        level = ctx.availability.level;
-        manifests = builtins.filter (m: m ? kind) (map (r: r.rawManifest or { }) ctx.allPartResources);
+        # A workload sealed under its own ceiling (`availability.max` on
+        # the builder call) carries the level it was sealed at; every other
+        # resource is judged at the instance's.
+        levelOf = r: (r._availability or ctx.availability).level;
+        workloads = builtins.filter (r: (r.rawManifest or { }) ? kind) ctx.allPartResources;
+        manifests = map (r: r.rawManifest) workloads;
         pdbs = builtins.filter (m: m.kind == "PodDisruptionBudget") manifests;
         # Post-seal the manifest carries the derived constraints, so "the
         # author placed this" is "constraints are present and are not the
@@ -224,22 +228,31 @@ in
         # selector). No constraints at all means a workload the seal never
         # patched (a raw mkResource Deployment, housekeeping 2026-09-19); it
         # still gets its PDB.
-        derivedConstraints = m: mkConstraints m.kind level (m.spec.selector.matchLabels or { });
-        authorPlacedSealed =
-          m:
+        derivedConstraints =
+          r:
           let
-            sealed = m.spec.template.spec.topologySpreadConstraints or null;
+            m = r.rawManifest;
           in
-          sealed != null && sealed != derivedConstraints m;
+          mkConstraints m.kind (levelOf r) (m.spec.selector.matchLabels or { });
+        authorPlacedSealed =
+          r:
+          let
+            sealed = r.rawManifest.spec.template.spec.topologySpreadConstraints or null;
+          in
+          sealed != null && sealed != derivedConstraints r;
         wantsPdb =
-          m:
+          r:
+          let
+            m = r.rawManifest;
+          in
           isMultiReplica m.kind m.spec
           && failureDomainKeys != [ ]
-          && !(authorPlacedSealed m)
+          && !(authorPlacedSealed r)
           && !(builtins.any (isCoveredBy m) pdbs);
         mkPdb =
-          m:
+          r:
           let
+            m = r.rawManifest;
             ns = m.metadata.namespace or ctx.namespaceName;
             emitter = if ns == ctx.namespaceName then ctx.emit else ctx.emit.inNamespace ns;
           in
@@ -252,6 +265,33 @@ in
               selector.matchLabels = m.spec.selector.matchLabels;
             };
           };
+
+        # The derivation skips a workload the package placed itself (one
+        # signal, one meaning), so that workload has no PDB unless the
+        # package wrote one. Here the skip is decided, so here it is said:
+        # a scorecard rule could see the derived PDBs now (the rules score
+        # the shipped set since 2026-09-20) but not why one is absent.
+        uncoveredPlaced = builtins.filter (
+          r:
+          let
+            m = r.rawManifest;
+          in
+          isMultiReplica m.kind m.spec
+          && failureDomainKeys != [ ]
+          && authorPlacedSealed r
+          && !(builtins.any (isCoveredBy m) pdbs)
+        ) workloads;
+        placedWarnings = map (
+          r:
+          let
+            m = r.rawManifest;
+          in
+          "[${ctx.instanceName}] ${m.kind} '${m.metadata.name}' sets its own "
+          + "topologySpreadConstraints, so the compiler derives neither spread nor a "
+          + "PodDisruptionBudget for it, and no PodDisruptionBudget in this instance "
+          + "selects its pods: a drain can take every replica at once. Write one, or "
+          + "drop the constraints and let the availability level derive both."
+        ) uncoveredPlaced;
 
         # 145 §7: the package promised to honour the level; check the
         # result. From "node" up every root-reachable workload must run more
@@ -266,21 +306,21 @@ in
           builtins.elem (m.kind or "") spreadKinds
           && builtins.isInt (m.spec.replicas or null)
           && m.spec.replicas < 2
+          && avail.atLeast "node" (levelOf r)
           && ctx.forwardReachable r
         ) ctx.allPartResources;
-        shortfallWarnings = lib.optionals (avail.atLeast "node" level) (
-          map (
-            r:
-            "[${ctx.instanceName}] ${r.rawManifest.kind} '${r.rawManifest.metadata.name}' runs "
-            + "${toString r.rawManifest.spec.replicas} replica under availability \"${level}\": "
-            + "losing its node would cause downtime. Set the replica count based on the availability level "
-            + "(kix.availability.pick), or set meta.availability.max to the level the package supports."
-          ) shortfall
-        );
+        shortfallWarnings = map (
+          r:
+          "[${ctx.instanceName}] ${r.rawManifest.kind} '${r.rawManifest.metadata.name}' runs "
+          + "${toString r.rawManifest.spec.replicas} replica under availability \"${levelOf r}\": "
+          + "losing its node would cause downtime. Set the replica count based on the availability level "
+          + "(kix.availability.pick), set meta.availability.max to the level the package supports, "
+          + "or availability.max on this workload alone."
+        ) shortfall;
       in
       {
-        resources = map mkPdb (builtins.filter wantsPdb manifests);
-        warnings = ctx.availability.warnings ++ shortfallWarnings;
+        resources = map mkPdb (builtins.filter wantsPdb workloads);
+        warnings = ctx.availability.warnings ++ placedWarnings ++ shortfallWarnings;
       };
 
     # One line per cluster, not per instance: what the derived level rests on.

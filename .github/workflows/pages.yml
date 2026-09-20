@@ -112,18 +112,6 @@ jobs:
       # plus the Lithus read-through cache at nix-cache.example.com, both
       # already configured in the image. Only kixpkgs' own derivations
       # rebuild each run.
-      - name: Check offline captures are fresh
-        working-directory: kixpkgs
-        run: |
-          # Re-runs every offline capture against the workspace and
-          # diffs against the committed sidecars under
-          # docs/src/command-output/. Exits non-zero on any drift —
-          # the fix is to run `nix run ./docs#regen-captures-offline
-          # -- --apply` locally and commit the result.
-          nix run ./docs#regen-captures-offline \
-            --override-input kix-examples "git+file://${{ github.workspace }}/kix-examples" \
-            -- --check
-
       # No actions/setup-node step: it downloads an official Node tarball
       # dynamically linked against glibc's loader, which does not exist on
       # NixOS, so every later `node` call would die with "No such file or

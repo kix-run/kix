@@ -13,6 +13,7 @@
 {
   meta = {
     version = "1.0.0";
+    owner = "platform";
     roles = [ "storageClasses" ];
   };
 

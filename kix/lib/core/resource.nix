@@ -169,8 +169,29 @@ rec {
       # (CRD-owner declared via meta.factBehavior, or cluster override).
       # null = fall back to the core K8s table (facts.conducts).
       factBehavior ? null,
+      # Fields another controller takes over once the object exists. kix
+      # sets them at creation; when a later apply meets a field-ownership
+      # conflict confined to these paths, deploy applies again without them
+      # and the other manager keeps them. A conflict on any other field
+      # still fails. `cede` lists paths in the apiserver's own syntax without
+      # the leading dot, `*` standing for any list element:
+      # `ownership.cede = [ "spec.versions" "webhooks[*].rules" ]`.
+      ownership ? { },
     }:
     let
+      cede = ownership.cede or [ ];
+      _ownershipCheck =
+        if builtins.attrNames ownership != (if ownership == { } then [ ] else [ "cede" ]) then
+          throw "k8s-resource '${kind}/${name}': ownership takes only `cede`, got ${builtins.toJSON (builtins.attrNames ownership)}"
+        else if !(builtins.isList cede) || !(builtins.all builtins.isString cede) then
+          throw "k8s-resource '${kind}/${name}': ownership.cede must be a list of field paths, e.g. [ \"spec.versions\" ]"
+        else
+          null;
+      cedeAnnotations = lib.optionalAttrs (cede != [ ]) {
+        ${kixAnnotations.keys.cedeFields} = builtins.concatStringsSep "," cede;
+      };
+      allAnnotations = annotations // cedeAnnotations;
+
       isClusterScoped = builtins.isAttrs namespace && (namespace._type or "") == "k8s-cluster-scoped";
       isNsResource = builtins.isAttrs namespace && namespace ? outPath;
 
@@ -234,23 +255,25 @@ rec {
       # resolveKeeps runs here so rawManifest (and the identity JSON derived
       # from it) never carries the _kixKeep marker, and so rawManifest
       # consumers see keep-built containers the way they will render.
-      rawManifest = builtins.seq _extraShadowCheck (
-        normalize.resolveKeeps (
-          stripKixMeta (
-            lib.recursiveUpdate (
-              {
-                inherit apiVersion kind;
-                metadata = {
-                  inherit name;
+      rawManifest = builtins.seq _ownershipCheck (
+        builtins.seq _extraShadowCheck (
+          normalize.resolveKeeps (
+            stripKixMeta (
+              lib.recursiveUpdate (
+                {
+                  inherit apiVersion kind;
+                  metadata = {
+                    inherit name;
+                  }
+                  // lib.optionalAttrs (nsName != null) { namespace = nsName; }
+                  // lib.optionalAttrs (labels != { }) { inherit labels; }
+                  // lib.optionalAttrs (allAnnotations != { }) { annotations = allAnnotations; };
                 }
-                // lib.optionalAttrs (nsName != null) { namespace = nsName; }
-                // lib.optionalAttrs (labels != { }) { inherit labels; }
-                // lib.optionalAttrs (annotations != { }) { inherit annotations; };
-              }
-              // lib.optionalAttrs (spec != { }) { inherit spec; }
-              // lib.optionalAttrs (data != { }) { inherit data; }
-              // lib.optionalAttrs (stringData != { }) { inherit stringData; }
-            ) extra
+                // lib.optionalAttrs (spec != { }) { inherit spec; }
+                // lib.optionalAttrs (data != { }) { inherit data; }
+                // lib.optionalAttrs (stringData != { }) { inherit stringData; }
+              ) extra
+            )
           )
         )
       );
@@ -278,13 +301,29 @@ rec {
 
       depEntries = implicitEntries ++ requiresEntries ++ extraEntries;
 
+      # Objects this manifest expects something else to have created: the
+      # untracked references that named a kind (core/markers.nix,
+      # experimental). Deploy waits for each before applying this resource.
+      expectations = builtins.filter (e: e != null) (
+        map markers.readExpectation (
+          builtins.filter markers.isUntrackedRefPath (builtins.attrNames (builtins.getContext manifestJson))
+        )
+      );
+      expectEntries = lib.unique (map (e: "${e.apiVersion}|${e.kind}|${e.name}") expectations);
+
+      stampedAnnotations =
+        lib.optionalAttrs (depEntries != [ ]) {
+          ${kixKeys.dependsOn} = builtins.concatStringsSep "," depEntries;
+        }
+        // lib.optionalAttrs (expectEntries != [ ]) {
+          ${kixKeys.expects} = builtins.concatStringsSep "," expectEntries;
+        };
+
       rawManifestStamped =
-        if depEntries == [ ] then
+        if stampedAnnotations == { } then
           rawManifest
         else
-          lib.recursiveUpdate rawManifest {
-            metadata.annotations.${kixKeys.dependsOn} = builtins.concatStringsSep "," depEntries;
-          };
+          lib.recursiveUpdate rawManifest { metadata.annotations = stampedAnnotations; };
 
       manifestJsonStamped = builtins.toJSON rawManifestStamped;
 
@@ -673,16 +712,22 @@ rec {
       readiness ? null,
     }:
     let
-      crApiVersion = "${group}/${version}";
       crKind = kind;
 
       _validatedReadiness = validateReadiness "mkCRDBuilders" "${group}/${kind}" readiness;
 
+      # `version` picks a served version other than the CRD's storage
+      # version. The storage version is what a CR gets by default and is
+      # almost always right; this is the escape for the case where a
+      # consumer must write through an older served version, and it is
+      # checked against nothing here because the CRD's served set is not
+      # in hand at this point. The CRD ordering edge and the behaviour
+      # declarations are unchanged by it.
       cr =
         args:
-        args
+        removeAttrs args [ "version" ]
         // {
-          apiVersion = crApiVersion;
+          apiVersion = "${group}/${args.version or version}";
           kind = crKind;
           requires = (args.requires or [ ]) ++ [ crdOrRef ];
         }

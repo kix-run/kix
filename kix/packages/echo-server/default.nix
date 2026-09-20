@@ -17,13 +17,14 @@ in
   meta = {
     version = "1.27";
     description = "Nginx echo server for connectivity testing";
+    owner = "app-team";
   };
 
   options = {
     image = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
       default = {
-        repository = "nginx";
+        repository = "nginxinc/nginx-unprivileged";
         tag = "1.27-alpine";
         pullPolicy = "IfNotPresent";
       };
@@ -84,7 +85,7 @@ in
         data = {
           "default.conf" = ''
             server {
-                listen 80;
+                listen 8080;
                 location / {
                     default_type text/plain;
                     return 200 '${config.message}\n';
@@ -111,13 +112,15 @@ in
                   name = "nginx";
                   image = "${config.image.repository}:${config.image.tag}";
                   imagePullPolicy = config.image.pullPolicy;
+                  # nginx-unprivileged runs as uid 101 and listens on 8080.
+                  securityContext.runAsNonRoot = true;
                   ports = [
-                    (kix.port "http" 80)
+                    (kix.port "http" 8080)
                   ];
                   livenessProbe = {
                     httpGet = {
                       path = "/healthz";
-                      port = 80;
+                      port = 8080;
                     };
                     periodSeconds = 10;
                     failureThreshold = 3;
@@ -125,7 +128,7 @@ in
                   readinessProbe = {
                     httpGet = {
                       path = "/healthz";
-                      port = 80;
+                      port = 8080;
                     };
                     periodSeconds = 5;
                     failureThreshold = 1;
@@ -170,7 +173,7 @@ in
             {
               name = "http";
               port = config.service.port;
-              targetPort = "http";
+              targetPort = 8080;
               protocol = "TCP";
             }
           ];

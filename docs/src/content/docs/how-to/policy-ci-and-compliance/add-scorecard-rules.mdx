@@ -8,33 +8,32 @@ import check from '/src/command-output/how-to/scorecard-rules/check.json';
 import Snippet from '/src/components/Snippet.astro';
 import packageRule from '/src/snippets/tutorials/19-scorecards/scorecard/packageRule.json';
 
-Scorecard rules run while Kix evaluates a cluster. Add built-in rule sets when
-you want their existing checks, and add custom rules for policy specific to
-your packages or organization.
+Scorecard rules run while Kix evaluates a cluster. Every built-in rule set
+runs by default. Narrow the set when you want fewer checks, and add custom
+rules for policy specific to your packages or organization.
 
 This guide assumes the cluster is defined with `kix.buildCluster`.
 
-## Enable a built-in rule set
+## Choose the built-in rule sets
 
-Set `scorecard.enable`, then add a rule set under `scorecard.rules`:
+`scorecard.rules` defaults to `kix.rules`, the four built-in categories:
+`security`, `reliability`, `governance`, and `architecture`. Setting the
+option replaces that default, so name every set you want to keep:
 
 ```nix title="cluster.nix"
-scorecard = {
-  enable = true;
-  rules.reliability = kix.rules.reliability;
+scorecard.rules = {
+  inherit (kix.rules) security reliability;
 };
 ```
 
 The attribute name becomes the rule category. For example,
 `kix.rules.reliability.hasProbes` is reported as `reliability.hasProbes`.
 
-You can enable several built-in sets together:
-
-```nix title="cluster.nix"
-scorecard.rules = {
-  inherit (kix.rules) security reliability governance architecture;
-};
-```
+To keep the whole built-in set and change one rule, leave `rules` alone and
+use an override instead. See
+[Disable scorecard rules](/docs/how-to/policy-ci-and-compliance/disable-scorecard-rules/)
+and
+[Override scorecard severity](/docs/how-to/policy-ci-and-compliance/override-scorecard-severity/).
 
 ## Add a custom rule
 
@@ -45,7 +44,14 @@ then checks their evaluated configuration:
 <Snippet {...packageRule} />
 
 Add the rule inside `scorecard.rules`. Its full name is
-`custom.proxyMaxBodySizeMustBeExplicit`.
+`custom.proxyMaxBodySizeMustBeExplicit`. Because setting `rules` replaces the
+default, merge the custom category into the built-in set to keep both:
+
+```nix title="cluster.nix"
+scorecard.rules = kix.rules // {
+  custom.proxyMaxBodySizeMustBeExplicit = { /* the rule above */ };
+};
+```
 
 Every rule declares a `level` that determines the value passed to its check:
 
@@ -70,10 +76,14 @@ Run the cluster checks after adding or changing a rule:
 <Command {...check} />
 
 Kix reports the number of scorecard errors, warnings, and informational
-findings. An error-severity finding becomes a failed assertion. Evaluation
-stops at the first error, the cluster does not build, and only that finding is
-reported. Warnings and informational findings are collected across the
-cluster and reported together.
+findings. Every finding is capped at `scorecard.maxSeverity`, which defaults
+to `warning`, so a new cluster prints what the rules found and still builds.
+With the cap raised to `error`, an error-severity finding becomes a failed
+assertion: evaluation stops at the first error, the cluster does not build,
+and only that finding is reported. Warnings and informational findings are
+collected across the cluster and reported together. See
+[Fail the build on scorecard findings](/docs/how-to/policy-ci-and-compliance/fail-the-build-on-scorecard-findings/)
+for the cap.
 
 :::note[Reference]
 See [Rule schema](/docs/reference/scorecard/rule-schema/) for the context

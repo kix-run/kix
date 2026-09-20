@@ -161,10 +161,18 @@ in
 {
   meta = {
     version = "v2.8.0";
-    # The Mayastor control-plane agents (agent-core, api-rest,
-    # operator-diskpool) run one replica by upstream design; volume
-    # availability comes from the replica count on the StorageClass.
-    availability.max = "pod";
+    owner = "platform";
+    # No instance-wide ceiling: etcd and NATS are quorums that want the
+    # cluster's level in full. The single-replica controllers declare
+    # `availability.max = "pod"` on their own Deployments instead.
+    # A storage engine: io-engine, csi-node, agent-ha-node and the ZFS and
+    # LVM node plugins run privileged on the host network by upstream design,
+    # and every Mayastor image runs as root. Audited by unsafeGrants.
+    unsafe = [
+      "run-as-root"
+      "privileged"
+      "host-network"
+    ];
   };
 
   options = {
@@ -997,7 +1005,8 @@ in
       #
       #  There is no DiskPool CRD here. Mayastor ships no manifest for it: the
       #  operator-diskpool binary installs the CRD itself at startup, so the
-      #  DiskPool CRs below are ordered after that Deployment instead.
+      #  package declares it as a `scope.mkCRDRef` installed by that
+      #  Deployment, and the DiskPool CRs are ordered after the marker.
       #
       #  Each entry is null when the workload that needs it is disabled, so a
       #  cluster that runs only one driver does not claim another driver's API.
@@ -1089,7 +1098,9 @@ in
             labels = {
               "app.kubernetes.io/name" = "etcd";
               "app.kubernetes.io/instance" = name;
-              "app.kubernetes.io/component" = "etcd";
+              # Not "etcd": the client Service carries that, and two Services
+              # with one label set cannot be told apart by any selector.
+              "app.kubernetes.io/component" = "etcd-headless";
             };
             annotations = {
               "service.alpha.kubernetes.io/tolerate-unready-endpoints" = "true";
@@ -1106,13 +1117,13 @@ in
                 {
                   name = "client";
                   port = 2379;
-                  targetPort = "client";
+                  targetPort = 2379;
                   protocol = "TCP";
                 }
                 {
                   name = "peer";
                   port = 2380;
-                  targetPort = "peer";
+                  targetPort = 2380;
                   protocol = "TCP";
                 }
               ];
@@ -1140,13 +1151,13 @@ in
                 {
                   name = "client";
                   port = 2379;
-                  targetPort = "client";
+                  targetPort = 2379;
                   protocol = "TCP";
                 }
                 {
                   name = "peer";
                   port = 2380;
-                  targetPort = "peer";
+                  targetPort = 2380;
                   protocol = "TCP";
                 }
               ];
@@ -1783,6 +1794,9 @@ in
         if config.mayastor.enabled then
           (scope.mkDeployment {
             name = "${name}-agent-core";
+            # One replica by upstream design; volume availability comes from
+            # the replica count on the StorageClass, not from this controller.
+            availability.max = "pod";
             labels = mayastorLabels // {
               app = "agent-core";
             };
@@ -1942,6 +1956,9 @@ in
         if config.mayastor.enabled then
           (scope.mkDeployment {
             name = "${name}-api-rest";
+            # One replica by upstream design; volume availability comes from
+            # the replica count on the StorageClass, not from this controller.
+            availability.max = "pod";
             labels = mayastorLabels // {
               app = "api-rest";
             };
@@ -2048,6 +2065,9 @@ in
         if config.mayastor.enabled then
           (scope.mkDeployment {
             name = "${name}-operator-diskpool";
+            # One replica by upstream design; volume availability comes from
+            # the replica count on the StorageClass, not from this controller.
+            availability.max = "pod";
             labels = mayastorLabels // {
               app = "operator-diskpool";
             };
@@ -2135,6 +2155,9 @@ in
         if config.mayastor.enabled then
           (scope.mkDeployment {
             name = "${name}-csi-controller";
+            # The CSI sidecars run with --leader-election=false, so a second
+            # replica would fight the first. One replica by upstream design.
+            availability.max = "pod";
             labels = mayastorLabels // {
               app = "csi-controller";
             };
@@ -2951,12 +2974,15 @@ in
           null;
 
       # --- PriorityClasses (the zfs-localpv chart ships these) ---
+      # Cluster-scoped names carry the instance name so two openebs instances can
+      # coexist in one cluster. The CSIDriver names below cannot: the driver binary
+      # registers itself under that exact string.
       zfsControllerPriorityClass =
         if config.zfsLocalPv.enabled then
           (scope.mkClusterResource {
             apiVersion = "scheduling.k8s.io/v1";
             kind = "PriorityClass";
-            name = "openebs-zfs-csi-controller-critical";
+            name = "${name}-zfs-csi-controller-critical";
             labels = zfsControllerLabels;
             extra = {
               value = 900000000;
@@ -2972,7 +2998,7 @@ in
           (scope.mkClusterResource {
             apiVersion = "scheduling.k8s.io/v1";
             kind = "PriorityClass";
-            name = "openebs-zfs-csi-node-critical";
+            name = "${name}-zfs-csi-node-critical";
             labels = zfsNodeLabels;
             extra = {
               value = 900001000;
@@ -3027,6 +3053,9 @@ in
         if config.zfsLocalPv.enabled then
           (scope.mkDeployment {
             name = "${name}-zfs-localpv-controller";
+            # One replica by upstream design; volume availability comes from
+            # the replica count on the StorageClass, not from this controller.
+            availability.max = "pod";
             labels = zfsControllerLabels // {
               app = "openebs-zfs-controller";
             };
@@ -3427,7 +3456,7 @@ in
           (scope.mkClusterResource {
             apiVersion = "scheduling.k8s.io/v1";
             kind = "PriorityClass";
-            name = "openebs-lvm-localpv-csi-controller-critical";
+            name = "${name}-lvm-csi-controller-critical";
             labels = lvmControllerLabels;
             extra = {
               value = 900000000;
@@ -3443,7 +3472,7 @@ in
           (scope.mkClusterResource {
             apiVersion = "scheduling.k8s.io/v1";
             kind = "PriorityClass";
-            name = "openebs-lvm-localpv-csi-node-critical";
+            name = "${name}-lvm-csi-node-critical";
             labels = lvmNodeLabels;
             extra = {
               value = 900001000;
@@ -3476,6 +3505,9 @@ in
         if config.lvmLocalPv.enabled then
           (scope.mkDeployment {
             name = "${name}-lvm-localpv-controller";
+            # One replica by upstream design; volume availability comes from
+            # the replica count on the StorageClass, not from this controller.
+            availability.max = "pod";
             labels = lvmControllerLabels // {
               app = "openebs-lvm-controller";
             };
@@ -3862,6 +3894,9 @@ in
         if config.localPvProvisioner.enabled then
           (scope.mkDeployment {
             name = "${name}-localpv-provisioner";
+            # One replica by upstream design; volume availability comes from
+            # the replica count on the StorageClass, not from this controller.
+            availability.max = "pod";
             labels = localPvLabels // {
               "openebs.io/component-name" = "${name}-localpv-provisioner";
             };
@@ -3977,20 +4012,32 @@ in
       #  DiskPool custom resources
       # ==========================================================================
 
+      # The CRD is not in this package: operator-diskpool creates it when it
+      # starts. The marker makes deploy wait for the CRD to be served and
+      # refresh API discovery before any DiskPool is applied, which a
+      # `requires` on the Deployment alone cannot promise. Absent when no
+      # pool is declared, so a cluster without pools waits on nothing.
+      diskPoolCrd =
+        if config.diskPools == [ ] then
+          null
+        else
+          scope.mkCRDRef {
+            group = "openebs.io";
+            kind = "DiskPool";
+            plural = "diskpools";
+            version = "v1beta2";
+            installedBy = self.operatorDiskpoolDeployment;
+          };
+
       diskPoolResources = lib.listToAttrs (
         map (pool: {
           name = "diskPool-${pool.name}";
-          value = scope.mkResource {
-            apiVersion = "openebs.io/v1beta2";
-            kind = "DiskPool";
+          value = scope.mkCR self.diskPoolCrd {
             name = pool.name;
             spec = {
               node = pool.node;
               disks = pool.disks;
             };
-            # operator-diskpool installs the DiskPool CRD itself at startup, so
-            # its Deployment is the only thing this CR can be ordered after.
-            requires = [ self.operatorDiskpoolDeployment ];
           };
         }) config.diskPools
       );
@@ -4041,6 +4088,9 @@ in
         if config.mayastor.enabled then
           (scope.mkDeployment {
             name = "${name}-obs-callhome";
+            # One replica by upstream design; volume availability comes from
+            # the replica count on the StorageClass, not from this controller.
+            availability.max = "pod";
             labels = {
               app = "obs-callhome";
               "openebs.io/release" = name;

@@ -23,6 +23,7 @@ in
   meta = {
     version = "v0.33.1";
     description = "Alertmanager — alert routing and deduplication";
+    owner = "platform";
     defaultAliases = [ "alertmanager" ];
     k8s.minVersion = "1.25";
     # Silences and notification state are recoverable — expendable on
@@ -392,6 +393,10 @@ in
       # the labels the Prometheus Operator stamps on Alertmanager pods. Those
       # pods are not in the build, so the PDB declares the CR whose pods it
       # selects (kix.run/operand-of), which the cross-resource check accepts.
+      # This is the one PDB a package still writes by hand, and it is not a
+      # duplicate of the derived one: the availability plugin derives a PDB
+      # from a rendered workload's replica count, and there is no rendered
+      # workload here.
       podDisruptionBudget = lib.optionalAttrs config.podDisruptionBudget.enabled {
         pdb = scope.mkResource {
           apiVersion = "policy/v1";

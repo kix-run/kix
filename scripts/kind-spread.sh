@@ -11,6 +11,12 @@
 # Then scales "pinned" to four: with maxSkew = 1 a DoNotSchedule constraint
 # is even distribution, so the fourth pod lands (2/1/1), nothing pends.
 #
+# On a NixOS host with networking.firewall.checkReversePath on, pods on
+# different kind nodes cannot reach each other (the host drops bridged
+# packets from the pod CIDRs it has no route to). Exempt the kind bridge:
+#   sudo nft add rule inet nixos-fw rpfilter-allow \
+#     iifname "br-$(docker network inspect kind -f '{{.Id}}' | cut -c1-12)" accept
+#
 # Usage: scripts/kind-spread.sh [--keep]
 set -euo pipefail
 cd "$(dirname "$0")/.."

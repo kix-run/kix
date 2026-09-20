@@ -77,3 +77,23 @@ Inspect the generated HTTPRoute:
 
 The route attaches to the `gateway-system/gateway` Gateway and sends requests
 for `web.example.test` to port 80 of the `web` Service.
+
+## Route several paths
+
+Pass `paths` instead of `service` when one hostname fans out to several
+Service parts. Each entry names a path and the Service part behind it;
+`pathType` defaults to `Prefix` and `port` to the port the Service part
+publishes through `out.port`:
+
+```nix
+(kix.expose {
+  paths = [
+    { path = "/"; service = "frontend"; }
+    { path = "/api"; pathType = "Exact"; service = "api"; }
+  ];
+})
+```
+
+Kix renders one HTTPRoute with a rule per entry. In a cluster that routes
+through ingress-nginx, the same `paths` list renders one Ingress with a path
+entry per element.

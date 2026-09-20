@@ -43,6 +43,7 @@ in
   meta = {
     version = "v1.15.1";
     description = "NGINX Ingress Controller for Kubernetes";
+    owner = "platform";
     defaultAliases = [ "ingressNginx" ];
     k8s.minVersion = "1.25";
     # The ingress controller proxies external traffic to backend pods.
@@ -482,8 +483,9 @@ in
       deployment = scope.mkDeployment {
         name = ctrlName;
         labels = commonLabels;
-        # Must deploy after admissionCreate so the ingress-nginx-admission
-        # secret exists before the pod tries to mount it. Controller RBAC
+        # The admission Secret's untracked reference below names
+        # admissionCreate as its creator, which orders this Deployment after
+        # the Job and makes deploy wait for the Secret. Controller RBAC
         # must be reachable from root so the ServiceAccount has permissions
         # to list ingressclasses, services, etc — without these, the
         # controller's caches time out and the pod CrashLoops.
@@ -491,7 +493,6 @@ in
         # below references it, and the controller fatally exits with
         # `no service with name ${name} found` if the lookup fails at startup.
         requires = [
-          self.admissionCreate
           self.service
         ]
         ++ builtins.attrValues clusterRoles
@@ -622,8 +623,12 @@ in
                 {
                   name = "webhook-cert";
                   secret = {
-                    # Created by the webhook setup job, not by kix.
-                    secretName = kix.untrackedRef "${name}-admission";
+                    # Minted by the admission-create Job, not rendered here.
+                    secretName = kix.untrackedRef {
+                      kind = "Secret";
+                      name = "${name}-admission";
+                      by = self.admissionCreate;
+                    };
                     defaultMode = 420;
                   };
                 }
@@ -666,14 +671,14 @@ in
                 name = "http";
                 port = 80;
                 protocol = "TCP";
-                targetPort = "http";
+                targetPort = 80;
                 appProtocol = "http";
               }
               {
                 name = "https";
                 port = 443;
                 protocol = "TCP";
-                targetPort = "https";
+                targetPort = 443;
                 appProtocol = "https";
               }
             ];
@@ -695,26 +700,11 @@ in
           requires = [
             self.ingressClass
             self.configmap
-            self.pdb
             self.admissionService
             self.admissionWebhook
             self.admissionCreate
           ];
         };
-
-      # --- PodDisruptionBudget ---
-      pdb = scope.mkResource {
-        apiVersion = "policy/v1";
-        kind = "PodDisruptionBudget";
-        name = ctrlName;
-        labels = commonLabels;
-        spec = {
-          minAvailable = 1;
-          # See selector comment on the Service: rawSelector avoids the
-          # manifest-hash cycle caused by deployment requiring the service.
-          selector.matchLabels = self.deployment.rawSelector;
-        };
-      };
 
       # --- Admission webhook ServiceAccount ---
       admissionServiceAccount = scope.mkResource {
@@ -880,7 +870,7 @@ in
               name = "https-webhook";
               port = 443;
               protocol = "TCP";
-              targetPort = "webhook";
+              targetPort = 8443;
               appProtocol = "https";
             }
           ];
@@ -964,6 +954,13 @@ in
           ingressClassName = builtins.appendContext self.ingressClass.out.name (
             builtins.getContext self.deployment.out.name
           );
+          # Where the controller's pods are, for whoever has to let them
+          # in. `kix.expose` turns these two into the ingress rule that
+          # makes an exposed backend reachable under default deny; raw
+          # labels, because the reader is writing a policy selector and
+          # already depends on this instance through ingressClassName.
+          podSelector = selectorLabels;
+          podNamespace = scope.namespaceName;
         };
       };
     }

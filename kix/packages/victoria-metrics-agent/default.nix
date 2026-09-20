@@ -35,6 +35,7 @@ in
   meta = {
     version = "v1.150.0";
     description = "VictoriaMetrics agent — HA metrics scraper via VMAgent CR";
+    owner = "platform";
     defaultAliases = [ "vmAgent" ];
     k8s.minVersion = "1.25";
   };

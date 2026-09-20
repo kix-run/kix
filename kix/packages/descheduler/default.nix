@@ -24,11 +24,18 @@ let
   defaultValues = {
     # Deployment mode (not CronJob) — matches live cluster.
     kind = "Deployment";
-    # Not mapped to the availability level: the descheduler is a
-    # leader-elected singleton that rebalances in the background, so its
-    # own downtime is not the cluster's downtime. Zero keeps it inert
-    # until a cluster opts in through `values`.
-    replicas = 0;
+    # One replica, and it does not follow the availability level. The
+    # descheduler is a background rebalancer whose own downtime is not the
+    # cluster's downtime, and this chart's leader election is not turned on
+    # here, so a second replica would be a second controller evicting pods
+    # against the same policy. The ceiling is declared in
+    # `meta.availability.max` so a cluster at "node" or above gets no
+    # shortfall warning for it.
+    #
+    # This was `0` until 2026-09-20, which made the package render a
+    # Deployment that could never run: instantiating it did nothing and
+    # said nothing. A package is on when a cluster asks for it.
+    replicas = 1;
 
     deschedulingInterval = "5m";
 
@@ -122,6 +129,11 @@ let
 in
 {
   meta.version = "0.32.2";
+  meta.owner = "platform";
+  meta.description = "Descheduler — evicts pods to rebalance cluster utilization";
+  # No leader election in the values below, so a second replica would
+  # evict against the same policy twice. See the `replicas` comment.
+  meta.availability.max = "pod";
 
   options.values = lib.mkOption {
     type = lib.types.attrsOf lib.types.anything;

@@ -56,8 +56,9 @@ let
                 template.spec.containers = [
                   {
                     name = "web";
-                    image = "docker.io/library/nginx:1.27-alpine";
-                    ports = [ (kix.port "http" 80) ];
+                    image = "docker.io/nginxinc/nginx-unprivileged:1.27-alpine";
+                    securityContext.runAsNonRoot = true;
+                    ports = [ (kix.port "http" 8080) ];
                   }
                 ];
               };

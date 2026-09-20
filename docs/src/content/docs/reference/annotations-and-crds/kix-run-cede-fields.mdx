@@ -1,0 +1,6 @@
+---
+title: "`kix.run/cede-fields`"
+description: TODO
+---
+
+{/* Stub. Source: kix/lib/core/annotations.nix (cedeFields), kix/lib/core/resource.nix (ownership argument and cedeAnnotations), cli/kix/src/cluster/apply.rs (ceded_fields, conflict_paths, without_ceded_conflicts). Value: the field paths a resource's `ownership.cede` lists, in API server managed-fields syntax with `[*]` as the list wildcard. Deploy retries a 409 that is confined to those paths with the fields removed from the apply, and fails any conflict that reaches outside them. Test: apply.rs ceded_conflict_is_stripped_and_others_are_not. Users: kix/packages/cdi (spec.versions), kix/packages/stackgres-operator (webhook rules). */}

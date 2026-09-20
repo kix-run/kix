@@ -171,6 +171,16 @@ pub const DEPENDS_ON: &str = key!("depends-on");
 /// Readiness rule for a custom resource, as JSON.
 pub const READINESS: &str = key!("readiness");
 
+/// Comma-separated field paths the resource cedes to another field manager
+/// after creation (`spec.versions`, `webhooks[*].rules`). On a 409 confined
+/// to these paths, apply retries without them.
+pub const CEDE_FIELDS: &str = key!("cede-fields");
+
+/// Objects the resource expects something else to have created, as
+/// comma-separated `apiVersion|Kind|name` entries in the resource's own
+/// namespace. Apply waits for each to exist first.
+pub const EXPECTS: &str = key!("expects");
+
 /// A Job carrying `rerun: on-change` is deleted and created again rather than
 /// patched. See [`RERUN_ON_CHANGE`].
 pub const RERUN: &str = key!("rerun");

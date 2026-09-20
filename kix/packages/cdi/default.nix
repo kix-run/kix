@@ -40,6 +40,7 @@ in
 {
   meta = {
     version = "v1.62.0";
+    owner = "platform";
     # The cdi-operator has no leader election, so one replica is the
     # ceiling it can honour. The components it deploys are unaffected.
     availability.max = "pod";
@@ -976,19 +977,19 @@ in
       # Only the CDI CR's own definition, vendored from upstream v1.62.0.
       # The operator installs the CRDs for the kinds it serves.
       #
-      # The operator also rewrites this CRD once it runs: it drops the
-      # deprecated v1alpha1 version, leaving v1beta1 alone. Shipping v1alpha1
-      # would make every deploy after the first a field-ownership conflict
-      # on spec.versions, so it is left out here and both sides agree.
+      # The operator rewrites this CRD once it runs: it drops the deprecated
+      # v1alpha1 version. That makes `spec.versions` its field, so the
+      # package cedes it: kix ships upstream's list at creation, and when
+      # the next deploy meets the operator's ownership it applies without
+      # the field rather than failing the deploy.
       crds =
         let
           upstream = builtins.fromJSON (builtins.readFile ./crds/cdis.cdi.kubevirt.io.json);
         in
         {
           cdi = scope.mkCRD {
-            spec = upstream.spec // {
-              versions = builtins.filter (v: v.name != "v1alpha1") upstream.spec.versions;
-            };
+            spec = upstream.spec;
+            ownership.cede = [ "spec.versions" ];
           };
         };
 

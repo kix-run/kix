@@ -185,21 +185,27 @@ pub async fn wait_for_import_target(
             Scope::Cluster,
         )
     } else {
-        // Generic path: construct from the import-apiversion annotation.
-        // Used for non-CRD imports (e.g. waiting on an external Secret).
-        // Namespaced by definition — the marker carries its namespace.
+        // Ask the apiserver what the kind is and where it lives. The marker
+        // is namespaced; what it imports need not be. A StorageClass or a
+        // ClusterIssuer is cluster-scoped, and looking for one inside the
+        // marker's namespace found nothing every time. A kind discovery
+        // cannot see yet (an operator's, not served) falls back to the
+        // annotation and the marker's namespace, as before.
         let (group, version) = split_api_version(&target.api_version);
-        let plural = pluralize_kind(&target.kind);
-        (
-            ApiResource {
-                group: group.to_string(),
-                version: version.to_string(),
-                api_version: target.api_version.clone(),
-                kind: target.kind.clone(),
-                plural,
-            },
-            Scope::Namespaced,
-        )
+        let gvk = kube::core::GroupVersionKind::gvk(group, version, &target.kind);
+        match kube::discovery::oneshot::pinned_kind(client, &gvk).await {
+            Ok((ar, caps)) => (ar, caps.scope),
+            Err(_) => (
+                ApiResource {
+                    group: group.to_string(),
+                    version: version.to_string(),
+                    api_version: target.api_version.clone(),
+                    kind: target.kind.clone(),
+                    plural: pluralize_kind(&target.kind),
+                },
+                Scope::Namespaced,
+            ),
+        }
     };
 
     let api: Api<DynamicObject> = match scope {
@@ -418,6 +424,105 @@ pub enum ReadinessError {
     FetchError(#[source] kube::Error),
     #[error("malformed import target: {0}")]
     MalformedImportTarget(String),
+}
+
+// ---------------------------------------------------------------------------
+// Expected objects (`kix.run/expects`)
+// ---------------------------------------------------------------------------
+
+/// One object a manifest expects something else to have created.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Expectation {
+    pub api_version: String,
+    pub kind: String,
+    pub name: String,
+}
+
+impl Expectation {
+    pub fn display(&self) -> String {
+        format!("{}/{}", self.kind, self.name)
+    }
+}
+
+/// The `kix.run/expects` entries of a manifest, malformed ones dropped.
+pub fn expectations(manifest: &Value) -> Vec<Expectation> {
+    manifest
+        .pointer("/metadata/annotations")
+        .and_then(|a| a.get(keys::EXPECTS))
+        .and_then(Value::as_str)
+        .map(|s| {
+            s.split(',')
+                .filter_map(|entry| {
+                    let mut parts = entry.trim().splitn(3, '|');
+                    let api_version = parts.next()?.to_string();
+                    let kind = parts.next()?.to_string();
+                    let name = parts.next()?.to_string();
+                    if api_version.is_empty() || kind.is_empty() || name.is_empty() {
+                        return None;
+                    }
+                    Some(Expectation {
+                        api_version,
+                        kind,
+                        name,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Wait until every object the manifest expects exists, in the manifest's
+/// namespace (or at cluster scope for a cluster-scoped kind). Returns the
+/// first expectation still unmet at the timeout, with the reason.
+pub async fn wait_for_expectations(
+    client: &Client,
+    manifest: &Value,
+    timeout: Duration,
+    cancel: &CancelToken,
+) -> Result<(), (Expectation, String)> {
+    let expected = expectations(manifest);
+    if expected.is_empty() {
+        return Ok(());
+    }
+    let namespace = manifest
+        .pointer("/metadata/namespace")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let start = Instant::now();
+    for e in expected {
+        let (group, version) = split_api_version(&e.api_version);
+        let gvk = kube::core::GroupVersionKind::gvk(group, version, &e.kind);
+        let (ar, caps) = kube::discovery::oneshot::pinned_kind(client, &gvk)
+            .await
+            .map_err(|err| (e.clone(), format!("the kind is not served: {err}")))?;
+        let api: Api<DynamicObject> = match caps.scope {
+            Scope::Cluster => Api::all_with(client.clone(), &ar),
+            Scope::Namespaced => {
+                let ns = namespace.as_deref().ok_or_else(|| {
+                    (
+                        e.clone(),
+                        "the referring manifest has no namespace".to_string(),
+                    )
+                })?;
+                Api::namespaced_with(client.clone(), ns, &ar)
+            }
+        };
+        loop {
+            if cancel.is_cancelled() {
+                return Err((e, "cancelled".to_string()));
+            }
+            match api.get_opt(&e.name).await {
+                Ok(Some(_)) => break,
+                Ok(None) => {}
+                Err(err) => return Err((e, format!("lookup failed: {err}"))),
+            }
+            if start.elapsed() >= timeout {
+                return Err((e, format!("not found after {}s", timeout.as_secs())));
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    }
+    Ok(())
 }
 
 /// Number of container restarts required before CrashLoopBackOff is treated
@@ -660,6 +765,93 @@ fn workload_label_selector(obj: &Value) -> Option<String> {
     Some(parts.join(","))
 }
 
+/// The label that pins a pod to one revision of its controller, and the
+/// controller field naming the revision that should be running now.
+///
+/// A workload's label selector matches every pod it has ever owned,
+/// including the ones a rollout is in the middle of replacing. Judging the
+/// workload by those was wrong four times on one kind run: a Deployment
+/// that gained its CRDs failed on the pod crash-looping from before the
+/// fix, and a StatefulSet on a new image failed on the old pod's
+/// ImagePullBackOff while the controller was already deleting it. Narrowing
+/// the list to the current revision means the verdict is about the rollout
+/// that is happening, not the one it replaces. When the current revision
+/// has no pods yet the list is empty, nothing is classified, and the poll
+/// loop keeps waiting, which is the right answer.
+///
+/// Returns a label selector fragment to AND with the workload's own, or
+/// `None` when the kind has no revision concept or the controller has not
+/// published one yet. A DaemonSet is not covered: its revision lives in a
+/// ControllerRevision the DaemonSet's own status does not name.
+async fn current_revision_selector(
+    client: &Client,
+    obj: &Value,
+    kind: &str,
+    namespace: &str,
+    selector: &str,
+) -> Option<String> {
+    match kind {
+        // The StatefulSet controller publishes the revision it is rolling
+        // towards, and stamps it on each pod it creates.
+        "StatefulSet" => {
+            let rev = obj
+                .pointer("/status/updateRevision")
+                .and_then(Value::as_str)?;
+            Some(format!("controller-revision-hash={rev}"))
+        }
+        // A Deployment owns one ReplicaSet per revision and never names the
+        // newest itself, so find it: the ReplicaSets this Deployment owns,
+        // highest `deployment.kubernetes.io/revision` first. Its
+        // `pod-template-hash` is what its pods carry.
+        "Deployment" => {
+            let uid = obj.pointer("/metadata/uid").and_then(Value::as_str)?;
+            let rs_ar = ApiResource {
+                group: "apps".into(),
+                version: "v1".into(),
+                api_version: "apps/v1".into(),
+                kind: "ReplicaSet".into(),
+                plural: "replicasets".into(),
+            };
+            let api: Api<DynamicObject> = Api::namespaced_with(client.clone(), namespace, &rs_ar);
+            let lp = kube::api::ListParams::default().labels(selector);
+            let list = api.list(&lp).await.ok()?;
+            let newest = list
+                .items
+                .iter()
+                .filter(|rs| {
+                    rs.data
+                        .pointer("/metadata/ownerReferences")
+                        .and_then(Value::as_array)
+                        .is_some_and(|refs| {
+                            refs.iter()
+                                .any(|r| r.get("uid").and_then(Value::as_str) == Some(uid))
+                        })
+                })
+                .max_by_key(|rs| {
+                    let revision = rs
+                        .data
+                        .pointer("/metadata/annotations/deployment.kubernetes.io~1revision")
+                        .and_then(Value::as_str)
+                        .and_then(|r| r.parse::<i64>().ok())
+                        .unwrap_or(0);
+                    let created = rs
+                        .data
+                        .pointer("/metadata/creationTimestamp")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string();
+                    (revision, created)
+                })?;
+            let hash = newest
+                .data
+                .pointer("/spec/selector/matchLabels/pod-template-hash")
+                .and_then(Value::as_str)?;
+            Some(format!("pod-template-hash={hash}"))
+        }
+        _ => None,
+    }
+}
+
 /// List pods matching a workload's label selector. Best-effort — returns an
 /// empty Vec on API errors so the terminal classifier can keep running off
 /// workload-level signals alone.
@@ -800,6 +992,11 @@ async fn scan_terminal(client: &Client, obj: &Value, kind: &str, namespace: &str
             pods: Vec::new(),
         };
     };
+    // Judge the rollout that is happening, not the one it replaces.
+    let selector = match current_revision_selector(client, obj, kind, namespace, &selector).await {
+        Some(revision) => format!("{selector},{revision}"),
+        None => selector,
+    };
     let pods = list_pods_for_workload(client, namespace, &selector).await;
     let terminal = pods.iter().find_map(classify_pod_terminal);
     ScanResult { terminal, pods }
@@ -938,7 +1135,22 @@ pub async fn wait_for_ready(
         if cancel.is_cancelled() {
             return Ok(ReadinessResult::Cancelled);
         }
-        let obj = api.get(name).await.map_err(ReadinessError::FetchError)?;
+        let obj = match api.get(name).await {
+            Ok(obj) => obj,
+            // A Job with a short `ttlSecondsAfterFinished` is deleted by the
+            // apiserver the moment it completes, so the poll after that one
+            // gets a 404. The TTL controller only ever removes a Job that has
+            // finished, and this Job was applied by the deploy that is now
+            // waiting on it, so gone means done. Reporting the 404 as a fetch
+            // failure instead cancelled every successor: on one cluster a
+            // `ttlSecondsAfterFinished: 0` admission Job took out
+            // ingress-nginx, its Ingress and the Activation behind it.
+            Err(e) if kind == "Job" && classify(&e) == FailureClass::NotFound => {
+                on_status("Job finished and was removed by its ttlSecondsAfterFinished");
+                return Ok(ReadinessResult::Ready);
+            }
+            Err(e) => return Err(ReadinessError::FetchError(e)),
+        };
 
         // PVCs with WaitForFirstConsumer storage classes stay Pending until a pod
         // mounts them. Treat these as ready so downstream pods can be created,
@@ -1730,6 +1942,26 @@ mod tests {
             "status": {"succeeded": 1}
         }));
         assert!(check_readiness(&obj, "Job"));
+    }
+
+    #[test]
+    fn expectations_are_read_from_the_annotation() {
+        let manifest = json!({
+            "kind": "Deployment",
+            "metadata": {
+                "name": "ctrl",
+                "namespace": "ingress-system",
+                "annotations": { keys::EXPECTS: "v1|Secret|ctrl-admission,cert-manager.io/v1|Certificate|c,broken" }
+            }
+        });
+        let got = expectations(&manifest);
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].api_version, "v1");
+        assert_eq!(got[0].kind, "Secret");
+        assert_eq!(got[0].name, "ctrl-admission");
+        assert_eq!(got[1].api_version, "cert-manager.io/v1");
+        assert_eq!(got[1].display(), "Certificate/c");
+        assert!(expectations(&json!({ "metadata": { "name": "n" } })).is_empty());
     }
 
     #[test]

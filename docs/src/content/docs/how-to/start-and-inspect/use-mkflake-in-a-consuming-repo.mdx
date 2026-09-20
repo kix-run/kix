@@ -63,6 +63,23 @@ outputs = inputs: inputs.kixpkgs.lib.mkFlake {
 };
 ```
 
+## Apply one setting to every cluster
+
+`clusterModules` lists modules every cluster in the flake starts from, ahead
+of the cluster's own. Use it for a setting the repository wants everywhere,
+such as making scorecard findings fail the build:
+
+```nix title="flake.nix"
+outputs = inputs: inputs.kixpkgs.lib.mkFlake {
+  inherit inputs;
+  clusters.production = ./clusters/production.nix;
+  clusterModules = [ { scorecard.maxSeverity = "error"; } ];
+};
+```
+
+A cluster that needs a different value sets the option itself with
+`lib.mkForce`.
+
 ## Lock the inputs
 
 Create or update `flake.lock` after adding the inputs:

@@ -23,6 +23,7 @@ in
   meta = {
     version = "0.1.0";
     description = "Cloudflare Tunnel connector (cloudflared)";
+    owner = "platform";
     lifecycle = "stateless";
     defaultAliases = [ "tunnel" ];
   };

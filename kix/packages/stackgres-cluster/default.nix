@@ -30,6 +30,8 @@ in
 {
   meta = {
     version = "1.0.0";
+    description = "PostgreSQL cluster (SGCluster) managed by the StackGres operator";
+    owner = "platform";
     defaultAliases = [ "postgres" ];
     lifecycle = "stateful";
   };

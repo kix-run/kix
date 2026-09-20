@@ -201,6 +201,25 @@
               type = lib.types.attrsOf lib.types.anything;
               default = { };
             };
+            podSecurity = lib.mkOption {
+              type = lib.types.nullOr (
+                lib.types.enum [
+                  "privileged"
+                  "baseline"
+                  "restricted"
+                ]
+              );
+              default = null;
+              description = ''
+                Pod Security Standards level enforced on this namespace
+                (`pod-security.kubernetes.io/enforce`). A package whose pods
+                need more declares `meta.podSecurity`; the namespace gets the
+                most permissive level any of its instances needs, and a level
+                set here that is stricter than an instance needs is an eval
+                error. Unset with no instance declaring one, the namespace
+                carries no label.
+              '';
+            };
           };
         }
       );
@@ -214,15 +233,6 @@
         Parts overlay functions applied to ALL instances. Signature:
         scope → self → base → attrset. The overlay decides per-instance
         whether to act by inspecting base.
-      '';
-    };
-
-    global = lib.mkOption {
-      type = lib.types.attrsOf lib.types.anything;
-      default = { };
-      description = ''
-        Cluster-wide configuration values. Packages read these via
-        _kixOptions defaults that reference them.
       '';
     };
 
@@ -516,16 +526,40 @@
         options = {
           enable = lib.mkOption {
             type = lib.types.bool;
-            default = false;
-            description = "Enable scorecard rule evaluation during cluster build.";
+            default = true;
+            description = ''
+              Evaluate the scorecard rules during the cluster build. On by
+              default, with every finding capped at `maxSeverity` (warning),
+              so a cluster sees what the rules have to say and nothing fails
+              until it raises the cap.
+            '';
           };
           rules = lib.mkOption {
             type = lib.types.attrsOf lib.types.anything;
-            default = { };
+            default = import ./rules { inherit lib; };
+            defaultText = lib.literalExpression "kix.rules";
             description = ''
               Rule definitions. Nested attrset: { category.ruleName = rule; }.
               Each rule has: description, level, severity, check, and optional
-              tags and appliesTo fields.
+              tags and appliesTo fields. Defaults to the full built-in set;
+              setting this replaces it, so a cluster that wants the built-in
+              set plus a change to one rule uses `ruleOverrides` instead.
+            '';
+          };
+          maxSeverity = lib.mkOption {
+            type = lib.types.enum [
+              "info"
+              "warning"
+              "error"
+            ];
+            default = "warning";
+            description = ''
+              The highest severity a finding can have in this cluster. A rule
+              resolved above it is reported at this level instead, so the
+              default, `warning`, means every finding is printed and none
+              fails the build. A repository that wants a red build on an
+              error-severity rule sets `error`; this repository's own
+              clusters do, through `clusterModules` in their flakes.
             '';
           };
           ruleDefaults = lib.mkOption {

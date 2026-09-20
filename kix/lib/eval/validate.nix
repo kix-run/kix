@@ -720,6 +720,37 @@ rec {
           [ ]
       ) resources;
 
+      # --- 17. priorityClassName references ---
+      # The apiserver rejects every pod of a workload naming a PriorityClass
+      # that does not exist ("no PriorityClass with name X was found"), at
+      # admission, so the workload applies and then never schedules. kubevirt
+      # shipped that way, and the openebs ZFS and LVM drivers named four
+      # classes the package never built. PriorityClass is cluster-scoped, so
+      # `hasResource` finds one built anywhere in the cluster; the `system-`
+      # classes ship with Kubernetes itself.
+
+      builtInPriorityClasses = [
+        "system-cluster-critical"
+        "system-node-critical"
+      ];
+
+      priorityClassFailures = builtins.concatMap (
+        w:
+        let
+          podSpec = getPodSpec w;
+          pcName = podSpec.priorityClassName or null;
+          ns = w.metadata.namespace or "cluster-scoped";
+        in
+        if pcName == null || builtins.elem pcName builtInPriorityClasses then
+          [ ]
+        else if hasResource "PriorityClass" ns pcName then
+          [ ]
+        else
+          [
+            "${w.kind} ${ns}/${w.metadata.name} sets priorityClassName '${pcName}', which no resource in this cluster creates. Every pod of this workload would be rejected at admission. Add the PriorityClass, or declare it as externally managed with an import or kix.untrackedRef"
+          ]
+      ) workloads;
+
       # --- Collect all failures ---
 
       allFailures =
@@ -738,7 +769,8 @@ rec {
         ++ portNameFailures
         ++ pdbFailures
         ++ jobEndpointFailures
-        ++ rerunFailures;
+        ++ rerunFailures
+        ++ priorityClassFailures;
     in
     allFailures;
 

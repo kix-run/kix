@@ -119,6 +119,7 @@ rec {
         emit
         mkWorkload
         mkJob
+        mkCronJob
         mkHelmWorkload
         mkOptional
         mkWebhookService
@@ -238,7 +239,7 @@ rec {
         mkDeployment = mkWorkload "apps/v1" "Deployment";
         mkStatefulSet = mkWorkload "apps/v1" "StatefulSet";
         mkDaemonSet = mkWorkload "apps/v1" "DaemonSet";
-        inherit mkJob mkHelmWorkload;
+        inherit mkJob mkCronJob mkHelmWorkload;
 
         inherit
           crd

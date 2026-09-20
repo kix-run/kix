@@ -22,6 +22,7 @@ in
 {
   meta = {
     version = "0.13.1";
+    owner = "platform";
     isHelm = true;
   };
 

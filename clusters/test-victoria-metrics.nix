@@ -110,25 +110,13 @@ kix.buildCluster {
     {
       namespaces.monitoring-system = { };
 
-      # Lint the VM packages with the full rule set.
-      scorecard = {
-        enable = true;
-        rules = {
-          architecture = kix.rules.architecture;
-          reliability = kix.rules.reliability;
-          security = kix.rules.security // {
-            # Pre-existing finding in the grafana package (here only as the
-            # datasource auto-wire consumer): its container securityContext
-            # lacks runAsNonRoot. Downgraded from error so it doesn't fail a
-            # fixture about the VM packages. The probe Job kix.healthCheck
-            # renders passes this rule at error (t66 in kix/lib/tests); the
-            # VM packages' own workloads are operator-created.
-            nonRoot = kix.rules.security.nonRoot // {
-              severity = "warning";
-            };
-          };
-        };
-      };
+      # The full rule set runs by default. Pre-existing finding in the
+      # grafana package (here only as the datasource auto-wire consumer):
+      # its container securityContext lacks runAsNonRoot. Downgraded from
+      # error so it doesn't fail a fixture about the VM packages. The probe
+      # Job kix.healthCheck renders passes this rule at error (t66 in
+      # kix/lib/tests); the VM packages' own workloads are operator-created.
+      scorecard.ruleOverrides.byNamespace."*"."security.nonRoot".severity = "warning";
 
       instances.monitoring-system = {
         vm-operator = {

@@ -7,8 +7,8 @@ kind: MutatingWebhookConfiguration
 metadata:
   annotations:
     cert-manager.io/inject-ca-from-secret: cert-manager/cert-manager-webhook-ca
-    kix.run/depends-on: vhc5yj8d48indsxrkryh6ywzykcb1r5m
-    kix.run/identity-hash: '5j4rvyfqygla426a4ax3xf01s6fyz7a4'
+    kix.run/depends-on: '4lnmxqw4a6rkrp401xrgqmax9hpwh97a'
+    kix.run/identity-hash: '7q7cis5g1a4d5s9nqgfx1wlg90z3kdb4'
     kix.run/package: cert-manager
     kix.run/package-namespace: cert-manager
   labels:
@@ -46,8 +46,9 @@ apiVersion: admissionregistration.k8s.io/v1
 kind: MutatingWebhookConfiguration
 metadata:
   annotations:
-    kix.run/depends-on: gl5aixavqj3lqajnnyj2asz8fayd12mr
-    kix.run/identity-hash: '92y0465z7fifvwwc9ffz64z8jr0ihmwq'
+    kix.run/cede-fields: webhooks[*].rules
+    kix.run/depends-on: x76ic7qk6ym4zlgp96yx61r8k039nifw
+    kix.run/identity-hash: ndr5rhbzza8w3ar3dzifki1b0bbimd6m
     kix.run/package: stackgres-operator
     kix.run/package-namespace: stackgres-system
   labels:
@@ -375,8 +376,8 @@ kind: ValidatingWebhookConfiguration
 metadata:
   annotations:
     cert-manager.io/inject-ca-from-secret: cert-manager/cert-manager-webhook-ca
-    kix.run/depends-on: vhc5yj8d48indsxrkryh6ywzykcb1r5m
-    kix.run/identity-hash: '1grxnhv5yn2ga2q4qk209289lf9y16zb'
+    kix.run/depends-on: '4lnmxqw4a6rkrp401xrgqmax9hpwh97a'
+    kix.run/identity-hash: '8brgzrys5mz62lh023sccg0z73rnqzw2'
     kix.run/package: cert-manager
     kix.run/package-namespace: cert-manager
   labels:
@@ -422,8 +423,9 @@ apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingWebhookConfiguration
 metadata:
   annotations:
-    kix.run/depends-on: gl5aixavqj3lqajnnyj2asz8fayd12mr
-    kix.run/identity-hash: xrqrp1lvy86692mjwlzqqhkwdfd3zm7s
+    kix.run/cede-fields: webhooks[*].rules
+    kix.run/depends-on: x76ic7qk6ym4zlgp96yx61r8k039nifw
+    kix.run/identity-hash: bqi0s6v3zafh2s6azxkqgpirxv85r0lj
     kix.run/package: stackgres-operator
     kix.run/package-namespace: stackgres-system
   labels:
@@ -1795,7 +1797,7 @@ kind: Deployment
 metadata:
   annotations:
     kix.run/depends-on: nxmwb9c04vrqlc9ry6is95js51yjybi9,rn40hbw8756809l5h5bwh65g8klv5bg3
-    kix.run/identity-hash: nl3i0shgglki99bd41033rjmcbmk7xn2
+    kix.run/identity-hash: '7lhj73fnr9wff00n0w9c4n4qggrgq2f0'
     kix.run/package: cert-manager
     kix.run/package-namespace: cert-manager
   labels:
@@ -1808,7 +1810,7 @@ metadata:
   name: cert-manager
   namespace: cert-manager
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app.kubernetes.io/component: controller
@@ -1872,13 +1874,25 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       serviceAccountName: cert-manager
+      topologySpreadConstraints:
+      - labelSelector:
+          matchLabels:
+            app.kubernetes.io/component: controller
+            app.kubernetes.io/instance: cert-manager
+            app.kubernetes.io/name: cert-manager
+        matchLabelKeys:
+        - pod-template-hash
+        maxSkew: 1
+        nodeTaintsPolicy: Honor
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   annotations:
     kix.run/depends-on: nqh5j9g4c7fmzx3dmqmcagbp8n2x1qkk,rn40hbw8756809l5h5bwh65g8klv5bg3
-    kix.run/identity-hash: q230w538i6lns8ml2phccy9gyxkjk59g
+    kix.run/identity-hash: gryx409wfxs86xcw8b8k1hw8a2bklak1
     kix.run/package: cert-manager
     kix.run/package-namespace: cert-manager
   labels:
@@ -1891,7 +1905,7 @@ metadata:
   name: cert-manager-cainjector
   namespace: cert-manager
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app.kubernetes.io/component: cainjector
@@ -1939,13 +1953,25 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       serviceAccountName: cert-manager-cainjector
+      topologySpreadConstraints:
+      - labelSelector:
+          matchLabels:
+            app.kubernetes.io/component: cainjector
+            app.kubernetes.io/instance: cert-manager
+            app.kubernetes.io/name: cainjector
+        matchLabelKeys:
+        - pod-template-hash
+        maxSkew: 1
+        nodeTaintsPolicy: Honor
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   annotations:
     kix.run/depends-on: rn40hbw8756809l5h5bwh65g8klv5bg3,vjrwgvi1gsi0lqmgz1iifkr5jdalp91l
-    kix.run/identity-hash: g0l9xqlv2gnian2yv1n8x66css57qnz6
+    kix.run/identity-hash: zn0jqlr4y4hrb1g6fim5khp1sii10ag3
     kix.run/package: cert-manager
     kix.run/package-namespace: cert-manager
   labels:
@@ -1958,7 +1984,7 @@ metadata:
   name: cert-manager-webhook
   namespace: cert-manager
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app.kubernetes.io/component: webhook
@@ -2037,18 +2063,31 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       serviceAccountName: cert-manager-webhook
+      topologySpreadConstraints:
+      - labelSelector:
+          matchLabels:
+            app.kubernetes.io/component: webhook
+            app.kubernetes.io/instance: cert-manager
+            app.kubernetes.io/name: webhook
+        matchLabelKeys:
+        - pod-template-hash
+        maxSkew: 1
+        nodeTaintsPolicy: Honor
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   annotations:
-    kix.run/depends-on: amcy3an3i9m37k3xvvkjsbrw1w5nhwrl,awzwpm53w1kb4ysngrwmj47whaddgkih,h65kdsdsn35hn2r9dnypxyw30k2624wh,nmkyq34qvmimmx5ww652blhhg57z3frg,qm6c1siifkgbif978fm9s274l8amsyxq,vkr302x5d6cdl4asw5ywy0d6gfc46724,y5306x1zp2rfmfx2iv28ndna6gz86z8p
-    kix.run/identity-hash: pk5rfgcwcphnxyd1n6vgnazkpkzypvcp
+    kix.run/depends-on: '68ma8mgsdkfr3wyx4jf2zn48srgvshc1,amcy3an3i9m37k3xvvkjsbrw1w5nhwrl,awzwpm53w1kb4ysngrwmj47whaddgkih,czxgp07gfy0xb4s1049xa02clqigvx4j,jfv5x3q25ifqwp7nnh1x1696g5vz8dsn,nmkyq34qvmimmx5ww652blhhg57z3frg,y5306x1zp2rfmfx2iv28ndna6gz86z8p'
+    kix.run/identity-hash: jzrk7b44s5s24d4s1ks5wzrvm2a7nak3
     kix.run/package: immich
     kix.run/package-namespace: immich
   labels:
     app.kubernetes.io/instance: immich
     app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: immich
     app.kubernetes.io/part-of: kix-example
     team: platform
   name: immich-server
@@ -2130,18 +2169,19 @@ kind: Deployment
 metadata:
   annotations:
     kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih
-    kix.run/identity-hash: db3x6v273wa7w5hpnyg8qsv2p092wzia
+    kix.run/identity-hash: '8fx07k4b82jzc3afvsnal6hvw1abvdhj'
     kix.run/package: machine-learning
     kix.run/package-namespace: immich
   labels:
     app.kubernetes.io/instance: machine-learning
     app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: machine-learning
     app.kubernetes.io/part-of: kix-example
     team: platform
   name: machine-learning
   namespace: immich
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app.kubernetes.io/instance: machine-learning
@@ -2193,6 +2233,17 @@ spec:
         volumeMounts:
         - mountPath: /cache
           name: cache
+      topologySpreadConstraints:
+      - labelSelector:
+          matchLabels:
+            app.kubernetes.io/instance: machine-learning
+            app.kubernetes.io/name: machine-learning
+        matchLabelKeys:
+        - pod-template-hash
+        maxSkew: 1
+        nodeTaintsPolicy: Honor
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
       volumes:
       - emptyDir: {}
         name: cache
@@ -2202,7 +2253,7 @@ kind: Deployment
 metadata:
   annotations:
     kix.run/depends-on: '6wfpy0fv3p2gcwfsixijfckxxmz43c6b,sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m,v61n7sgpgmyp76xy8i7hx4fjhpmq7zpq'
-    kix.run/identity-hash: '0fyd0l7w0vdlafh9hn37ls940rrciq7h'
+    kix.run/identity-hash: s5wkfyqh3dc8ryx8yx19gzxw8wp655yk
     kix.run/package: coredns
     kix.run/package-namespace: kube-system
   labels:
@@ -2231,8 +2282,6 @@ spec:
     type: RollingUpdate
   template:
     metadata:
-      annotations:
-        scheduler.alpha.kubernetes.io/tolerations: '[{"key":"CriticalAddonsOnly", "operator":"Exists"}]'
       labels:
         app.kubernetes.io/instance: coredns
         app.kubernetes.io/name: coredns
@@ -2290,12 +2339,28 @@ spec:
             drop:
             - ALL
           readOnlyRootFilesystem: true
+          runAsNonRoot: true
         volumeMounts:
         - mountPath: /etc/coredns
           name: config-volume
       dnsPolicy: Default
       serviceAccountName: coredns
       terminationGracePeriodSeconds: 30
+      tolerations:
+      - key: CriticalAddonsOnly
+        operator: Exists
+      topologySpreadConstraints:
+      - labelSelector:
+          matchLabels:
+            app.kubernetes.io/instance: coredns
+            app.kubernetes.io/name: coredns
+            k8s-app: coredns
+        matchLabelKeys:
+        - pod-template-hash
+        maxSkew: 1
+        nodeTaintsPolicy: Honor
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
       volumes:
       - configMap:
           defaultMode: 420
@@ -2449,7 +2514,7 @@ kind: StatefulSet
 metadata:
   annotations:
     kix.run/depends-on: '5qnhwbbp86vqas3vp4iwirdfd1gi2469,6d0a44nqqwwv27qciwy6bfiayy951k76,8588icvyzk564kvg8bcwrssl2785qx3l,gc71hyi1iymywm9dg1vvilkr96l4sszg,pr6na2idmnni6w5mrsc4vva34ghd68q8'
-    kix.run/identity-hash: gjpayjil4wpb0raxhllw7fnya7zrihnp
+    kix.run/identity-hash: x6qdsc847pdi2dhjakn6vk5qbivl42hv
     kix.run/lifecycle: stateful
     kix.run/package: valkey
     kix.run/package-namespace: cache
@@ -2485,17 +2550,6 @@ spec:
         app.kubernetes.io/instance: valkey
         app.kubernetes.io/name: valkey
     spec:
-      affinity:
-        podAntiAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-          - podAffinityTerm:
-              labelSelector:
-                matchLabels:
-                  app.kubernetes.io/component: node
-                  app.kubernetes.io/instance: valkey
-                  app.kubernetes.io/name: valkey
-              topologyKey: kubernetes.io/hostname
-            weight: 1
       automountServiceAccountToken: false
       containers:
       - command:
@@ -2765,6 +2819,16 @@ spec:
         fsGroupChangePolicy: Always
       serviceAccountName: valkey
       terminationGracePeriodSeconds: 30
+      topologySpreadConstraints:
+      - labelSelector:
+          matchLabels:
+            app.kubernetes.io/component: node
+            app.kubernetes.io/instance: valkey
+            app.kubernetes.io/name: valkey
+        maxSkew: 1
+        nodeTaintsPolicy: Honor
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
       volumes:
       - configMap:
           defaultMode: 420
@@ -2802,8 +2866,8 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   annotations:
-    kix.run/depends-on: qg0s4n90hfas0m78rgw3qk6p77jf2748,rn40hbw8756809l5h5bwh65g8klv5bg3,requires:qg0s4n90hfas0m78rgw3qk6p77jf2748
-    kix.run/identity-hash: haf8naq1pq0ap3sx3y9b3nmxlfvbmrzf
+    kix.run/depends-on: qg0s4n90hfas0m78rgw3qk6p77jf2748,rn40hbw8756809l5h5bwh65g8klv5bg3
+    kix.run/identity-hash: vqjki6gmxz2jjvi3aarai0d93bk7kb97
     kix.run/package: cert-manager
     kix.run/package-namespace: cert-manager
   labels:
@@ -2861,7 +2925,7 @@ kind: Job
 metadata:
   annotations:
     kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,jpmzfsa4mjzf33hm6k65l56l7j9vd1y1,nmkyq34qvmimmx5ww652blhhg57z3frg,wm2l6psdb29kqc42pj7k97q3srx3681q
-    kix.run/identity-hash: qm6c1siifkgbif978fm9s274l8amsyxq
+    kix.run/identity-hash: czxgp07gfy0xb4s1049xa02clqigvx4j
     kix.run/lifecycle: stateful
     kix.run/package: immich-db
     kix.run/package-namespace: immich
@@ -2965,21 +3029,25 @@ spec:
         image: postgres:16-alpine
         name: bootstrap
       restartPolicy: OnFailure
+      securityContext:
+        runAsGroup: 999
+        runAsNonRoot: true
+        runAsUser: 999
   ttlSecondsAfterFinished: 86400
 ---
 apiVersion: kix.run/v1alpha1
 kind: Activation
 metadata:
   annotations:
-    kix.run/built-via: /nix/store/qkdaq7cbpyjyd0n5mqgx769lkkq217w9-k8s-activation-example
-    kix.run/depends-on: '1bbhhi1xxyi8gwmlzbhbnpad4ws35ra7,7s1j23k48jrpkcfql6y5zwrdnpx2j6j1,a2kqmkidnpm2rp0nchixaacx0mr45xhr,dbp875hmfrmh2mbcjxwllqaiahh86lwn,h5vfss5dl9q5hbpq4rrh44idncmn39i3,jbxbg4y1yi3g7r9glqahavayqmq4ivyy,jz418q101ijbmikn1g1arkm2gzr4xzbq,vmnnjy4wzjll87gfafn4cr72wgshn9kw,wiyvwgcds793mcysbzdh1xr8rc2nksj6,yd165yf11lfpldh835wvq7l3kl1bjc7s,requires:gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj'
-    kix.run/identity-hash: xv94r9l5jhb9525snz0szv0s8s4jaf7s
+    kix.run/built-via: /nix/store/9rz4z1dhip7gzs19s2vz3aj3v8hac96s-k8s-activation-example
+    kix.run/depends-on: '0iq67p4var2drxj3fnik545qgdf2hlgy,74n58f0rjmj1ldg3c470lx5lhfil5vlv,azsh2xz3xqmx9nm8rdyx85cir5skgzm7,g7460cvrkvf78xng9w741vw95fg0618j,jbxbg4y1yi3g7r9glqahavayqmq4ivyy,jr0ww26f6jm0glnx17bvc4aixxx271qr,kymq061l5jy4y33n72zm9snghi1cdqmn,vmnnjy4wzjll87gfafn4cr72wgshn9kw,wgr11rv93ss5ppb4ym2l9k1kzwm2h1zp,yd165yf11lfpldh835wvq7l3kl1bjc7s,requires:gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj'
+    kix.run/identity-hash: yk7xid7k8hgj0jh2wcjy6g3l5h3gqaj7
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
   labels:
     app.kubernetes.io/managed-by: kix
     kix.run/cluster: example
-  name: example-xv94r9l5jhb9
+  name: example-yk7xid7k8hgj
 spec:
   instances:
     cache:
@@ -3002,11 +3070,12 @@ apiVersion: kix.run/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.run/depends-on: '5qnhwbbp86vqas3vp4iwirdfd1gi2469,6d0a44nqqwwv27qciwy6bfiayy951k76,8588icvyzk564kvg8bcwrssl2785qx3l,gc71hyi1iymywm9dg1vvilkr96l4sszg,gjpayjil4wpb0raxhllw7fnya7zrihnp,m1r0aqpbgvg8j5ylkymm4gwg6z8c9106,pr6na2idmnni6w5mrsc4vva34ghd68q8,qb75yxpbw6350znff7ig0rpgvl5d1a1m,vkr302x5d6cdl4asw5ywy0d6gfc46724,x05rrdwq5wf96w5vbdydiavl34w628l2,yc4ww248xbr0i6nxvj6y3klmy3f69p10,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs'
-    kix.run/identity-hash: a2kqmkidnpm2rp0nchixaacx0mr45xhr
+    kix.run/depends-on: '5qnhwbbp86vqas3vp4iwirdfd1gi2469,68ma8mgsdkfr3wyx4jf2zn48srgvshc1,6d0a44nqqwwv27qciwy6bfiayy951k76,8588icvyzk564kvg8bcwrssl2785qx3l,d67fn2090v2ad613pka8lgkdxf7clw6j,gc71hyi1iymywm9dg1vvilkr96l4sszg,l3f30md9qsicbwxh8sfr4a68c6nnldyi,m1r0aqpbgvg8j5ylkymm4gwg6z8c9106,pr6na2idmnni6w5mrsc4vva34ghd68q8,x6qdsc847pdi2dhjakn6vk5qbivl42hv,ykazlrjm10vjz9cy3h8yx14kn55lxaxs,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs'
+    kix.run/identity-hash: azsh2xz3xqmx9nm8rdyx85cir5skgzm7
+    kix.run/inverse-deps: PodDisruptionBudget/valkey-node
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
-    kix.run/package-requires: ServiceAccount/valkey,ConfigMap/valkey-scripts,ConfigMap/valkey-health,ConfigMap/valkey-configuration,StatefulSet/valkey-node,Service/valkey-headless,Service/valkey-metrics,NetworkPolicy/valkey,PodDisruptionBudget/valkey-node
+    kix.run/package-requires: ServiceAccount/valkey,ConfigMap/valkey-scripts,ConfigMap/valkey-health,ConfigMap/valkey-configuration,StatefulSet/valkey-node,Service/valkey-headless,Service/valkey-metrics,NetworkPolicy/valkey
     kix.run/root: valkey
   labels:
     app.kubernetes.io/instance: valkey
@@ -3025,9 +3094,9 @@ apiVersion: kix.run/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.run/depends-on: '1grxnhv5yn2ga2q4qk209289lf9y16zb,1yi9hj2pkbnhglhzc2n5mqz53d7hlw2b,353rk14kjxqkd5qgv87pv8v8ylqmijfi,3l2z2bv35l6dxbb8fjkfximnis0bbpgm,4yvhx0wjvagip9xjvx6y638hjjlwyycn,58c399fcph1y90b7jjb7igrmamqid6s5,5g06mjghl1f5bnzcbhphd3g47p1img5a,5j4rvyfqygla426a4ax3xf01s6fyz7a4,7dxbym3zymk6rjcygmvycz5bf7psqdvn,93c70jfy3wb5mhw2cb3c843gpkkjds33,994cw2jrj49k7yd1bcscq82p0crzffyc,apirskai5ryrgsxxa9y71c1856qryflh,cszy78ybis945fhdi5040gs1lzj6gbxl,fc4g87dn0z4wwh78rb9cq1i7wc2abb0w,g0l9xqlv2gnian2yv1n8x66css57qnz6,gr3ww31dm7v88ifk5grqlkhl341drwfz,haf8naq1pq0ap3sx3y9b3nmxlfvbmrzf,iarlrbcqhf08j8k9qdq70n7c1v9ndfr0,l5p2pfcss2hkcnbbk9113pxi7280bski,n7ikrcngmhsdm5cj3n81hphjcz3szrvi,njmlyc3iqyqj4984qklxxjp7xqjbrm0q,nl3i0shgglki99bd41033rjmcbmk7xn2,nqh5j9g4c7fmzx3dmqmcagbp8n2x1qkk,nxmwb9c04vrqlc9ry6is95js51yjybi9,q230w538i6lns8ml2phccy9gyxkjk59g,rn40hbw8756809l5h5bwh65g8klv5bg3,rygl8kzyrvmm8qkh1ys22b6xlhz657cl,salsax7wcwdmg2j40651yr4whhjkb5b0,v4fwdrj1684aii6rsjzb7qa2xhxql9kw,vhc5yj8d48indsxrkryh6ywzykcb1r5m,vhsclsf63hxyf8m5j6wgpb60gli2n6ya,vjrwgvi1gsi0lqmgz1iifkr5jdalp91l,vpq33xvpgrf7mcdw12j88jis2y1h7yb6,w0h3rf1v0ph1w2i7s6nkwmysyniij7mf,w7sfvk9sb7gmwlav6f9qwgi2qg9gp2q5,wizcll2p6n5dnvlqc8q4p2683fp8rp6j,wn7ag6vdap9qwdh33dchmcyj854vviq0,ywm20x2d423vxzdjyc3ssirr96a7pq57,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs'
-    kix.run/identity-hash: dbp875hmfrmh2mbcjxwllqaiahh86lwn
-    kix.run/inverse-deps: ClusterRoleBinding/cert-manager-cainjector,RoleBinding/cert-manager-cainjector:leaderelection,ClusterRoleBinding/cert-manager-controller-approve:cert-manager-io,ClusterRoleBinding/cert-manager-controller-certificates,ClusterRoleBinding/cert-manager-controller-certificatesigningrequests,ClusterRoleBinding/cert-manager-controller-challenges,ClusterRoleBinding/cert-manager-controller-clusterissuers,ClusterRoleBinding/cert-manager-controller-ingress-shim,ClusterRoleBinding/cert-manager-controller-issuers,ClusterRoleBinding/cert-manager-controller-orders,RoleBinding/cert-manager-startupapicheck:create-cert,Role/cert-manager-tokenrequest,RoleBinding/cert-manager-cert-manager-tokenrequest,RoleBinding/cert-manager-webhook:dynamic-serving,ClusterRoleBinding/cert-manager-webhook:subjectaccessreviews,RoleBinding/cert-manager:leaderelection
+    kix.run/depends-on: '185a41hr3i6bvmgqyvwbh83p52r2l6nx,1yi9hj2pkbnhglhzc2n5mqz53d7hlw2b,3l2z2bv35l6dxbb8fjkfximnis0bbpgm,4lnmxqw4a6rkrp401xrgqmax9hpwh97a,4yvhx0wjvagip9xjvx6y638hjjlwyycn,58c399fcph1y90b7jjb7igrmamqid6s5,5g06mjghl1f5bnzcbhphd3g47p1img5a,7dxbym3zymk6rjcygmvycz5bf7psqdvn,7lhj73fnr9wff00n0w9c4n4qggrgq2f0,7q7cis5g1a4d5s9nqgfx1wlg90z3kdb4,8brgzrys5mz62lh023sccg0z73rnqzw2,93c70jfy3wb5mhw2cb3c843gpkkjds33,994cw2jrj49k7yd1bcscq82p0crzffyc,apirskai5ryrgsxxa9y71c1856qryflh,cszy78ybis945fhdi5040gs1lzj6gbxl,fc4g87dn0z4wwh78rb9cq1i7wc2abb0w,gr3ww31dm7v88ifk5grqlkhl341drwfz,gryx409wfxs86xcw8b8k1hw8a2bklak1,iarlrbcqhf08j8k9qdq70n7c1v9ndfr0,l5p2pfcss2hkcnbbk9113pxi7280bski,n7ikrcngmhsdm5cj3n81hphjcz3szrvi,n9c8fsq1l3x86ak3nwalrs594k5rgw6p,njmlyc3iqyqj4984qklxxjp7xqjbrm0q,nqh5j9g4c7fmzx3dmqmcagbp8n2x1qkk,nxmwb9c04vrqlc9ry6is95js51yjybi9,ph7p720s1s7jlmghh944dn23brpkv09a,pkxjy11rizcf97w0m6gjqvhmvb00117z,rn40hbw8756809l5h5bwh65g8klv5bg3,rygl8kzyrvmm8qkh1ys22b6xlhz657cl,salsax7wcwdmg2j40651yr4whhjkb5b0,v4fwdrj1684aii6rsjzb7qa2xhxql9kw,vhsclsf63hxyf8m5j6wgpb60gli2n6ya,vjrwgvi1gsi0lqmgz1iifkr5jdalp91l,vqjki6gmxz2jjvi3aarai0d93bk7kb97,w0h3rf1v0ph1w2i7s6nkwmysyniij7mf,w7sfvk9sb7gmwlav6f9qwgi2qg9gp2q5,wdfza3l6r4bwbyq33zh20726g8jdpv19,wizcll2p6n5dnvlqc8q4p2683fp8rp6j,wn7ag6vdap9qwdh33dchmcyj854vviq0,ywm20x2d423vxzdjyc3ssirr96a7pq57,zn0jqlr4y4hrb1g6fim5khp1sii10ag3,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs'
+    kix.run/identity-hash: g7460cvrkvf78xng9w741vw95fg0618j
+    kix.run/inverse-deps: ClusterRoleBinding/cert-manager-cainjector,RoleBinding/cert-manager-cainjector:leaderelection,ClusterRoleBinding/cert-manager-controller-approve:cert-manager-io,ClusterRoleBinding/cert-manager-controller-certificates,ClusterRoleBinding/cert-manager-controller-certificatesigningrequests,ClusterRoleBinding/cert-manager-controller-challenges,ClusterRoleBinding/cert-manager-controller-clusterissuers,ClusterRoleBinding/cert-manager-controller-ingress-shim,ClusterRoleBinding/cert-manager-controller-issuers,ClusterRoleBinding/cert-manager-controller-orders,RoleBinding/cert-manager-startupapicheck:create-cert,Role/cert-manager-tokenrequest,RoleBinding/cert-manager-cert-manager-tokenrequest,RoleBinding/cert-manager-webhook:dynamic-serving,ClusterRoleBinding/cert-manager-webhook:subjectaccessreviews,RoleBinding/cert-manager:leaderelection,PodDisruptionBudget/cert-manager-cainjector,PodDisruptionBudget/cert-manager,PodDisruptionBudget/cert-manager-webhook
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
     kix.run/package-requires: CustomResourceDefinition/certificates.cert-manager.io,CustomResourceDefinition/certificaterequests.cert-manager.io,CustomResourceDefinition/challenges.acme.cert-manager.io,CustomResourceDefinition/clusterissuers.cert-manager.io,CustomResourceDefinition/issuers.cert-manager.io,CustomResourceDefinition/orders.acme.cert-manager.io,ServiceAccount/cert-manager,Service/cert-manager,ClusterRole/cert-manager-cluster-view,ClusterRole/cert-manager-view,ClusterRole/cert-manager-edit,ServiceAccount/cert-manager-webhook,Service/cert-manager-webhook,Deployment/cert-manager-webhook,MutatingWebhookConfiguration/cert-manager-webhook,ValidatingWebhookConfiguration/cert-manager-webhook,ServiceAccount/cert-manager-cainjector,Service/cert-manager-cainjector,Deployment/cert-manager-cainjector,Job/cert-manager-startupapicheck
@@ -3048,8 +3117,8 @@ apiVersion: kix.run/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,qf6vhk2qbl8f9qlshkf9rrm16393zdhs,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs
-    kix.run/identity-hash: '1bbhhi1xxyi8gwmlzbhbnpad4ws35ra7'
+    kix.run/depends-on: '0v549srkwy8skw60qa51swv4dhwfh4ah,awzwpm53w1kb4ysngrwmj47whaddgkih,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs'
+    kix.run/identity-hash: jr0ww26f6jm0glnx17bvc4aixxx271qr
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
     kix.run/root: immich-server
@@ -3069,8 +3138,8 @@ apiVersion: kix.run/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.run/depends-on: a0wgxa1wszzqnbk8vxyh3afsky7795jq,awzwpm53w1kb4ysngrwmj47whaddgkih,jpmzfsa4mjzf33hm6k65l56l7j9vd1y1,nmkyq34qvmimmx5ww652blhhg57z3frg,qm6c1siifkgbif978fm9s274l8amsyxq,wm2l6psdb29kqc42pj7k97q3srx3681q,y5306x1zp2rfmfx2iv28ndna6gz86z8p,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs
-    kix.run/identity-hash: wiyvwgcds793mcysbzdh1xr8rc2nksj6
+    kix.run/depends-on: a0wgxa1wszzqnbk8vxyh3afsky7795jq,awzwpm53w1kb4ysngrwmj47whaddgkih,czxgp07gfy0xb4s1049xa02clqigvx4j,jpmzfsa4mjzf33hm6k65l56l7j9vd1y1,nmkyq34qvmimmx5ww652blhhg57z3frg,wm2l6psdb29kqc42pj7k97q3srx3681q,y5306x1zp2rfmfx2iv28ndna6gz86z8p,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs
+    kix.run/identity-hash: '74n58f0rjmj1ldg3c470lx5lhfil5vlv'
     kix.run/inverse-deps: Job/immich-db-bootstrap-55078afb92,Secret/immich-db-bootstrap-password,PackageInstance/postgres,PackageInstance/postgres
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
@@ -3092,8 +3161,9 @@ apiVersion: kix.run/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,h65kdsdsn35hn2r9dnypxyw30k2624wh,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs
-    kix.run/identity-hash: '7s1j23k48jrpkcfql6y5zwrdnpx2j6j1'
+    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,jfv5x3q25ifqwp7nnh1x1696g5vz8dsn,vc4lw2i2hl8317anzdd6wxvz67kvbijh,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs
+    kix.run/identity-hash: wgr11rv93ss5ppb4ym2l9k1kzwm2h1zp
+    kix.run/inverse-deps: PodDisruptionBudget/machine-learning
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
     kix.run/root: machine-learning
@@ -3172,7 +3242,7 @@ metadata:
     kix.run/import-secret-keys: superuser-username,superuser-password
     kix.run/lifecycle: stateful
     kix.run/mode: import
-    kix.run/package: immich-db
+    kix.run/package: postgres
     kix.run/package-namespace: immich
     kix.run/secret-type: Opaque
   labels:
@@ -3198,7 +3268,7 @@ metadata:
     kix.run/import-name: postgres
     kix.run/lifecycle: stateful
     kix.run/mode: import
-    kix.run/package: immich-db
+    kix.run/package: postgres
     kix.run/package-namespace: immich
     kix.run/service-ports: '[{"port":"5432","protocol":"TCP"}]'
     kix.run/service-selector: '{"app":"StackGresCluster","stackgres.io/cluster-name":"postgres"}'
@@ -3240,9 +3310,9 @@ apiVersion: kix.run/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.run/depends-on: '0xij7iww86kr2qc4r8xz4wrwi7b05sjr,sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m,vy5s6am4z3nsbmq3rqf6myjd71jbfnxa,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs'
-    kix.run/identity-hash: h5vfss5dl9q5hbpq4rrh44idncmn39i3
-    kix.run/inverse-deps: ClusterRoleBinding/coredns
+    kix.run/depends-on: '0xij7iww86kr2qc4r8xz4wrwi7b05sjr,9xlvh9g4lk1131y695pv4ya26fwy3fxg,sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m,v5a87idqlkg5csr03npdnk7zbiw7yqns,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs'
+    kix.run/identity-hash: '0iq67p4var2drxj3fnik545qgdf2hlgy'
+    kix.run/inverse-deps: ClusterRoleBinding/coredns,PodDisruptionBudget/coredns
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
     kix.run/root: coredns
@@ -3596,8 +3666,8 @@ apiVersion: kix.run/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.run/depends-on: '1hf2fh97pymk5wzkdjg05nq3z6l3np6n,2nzps007bz23d2sqw2snj7xxssmp6hp1,2pv0ikx4vpa7hwljxjfbvc8wzwmkkapc,3pm3k0p7f6hjzrcanzh5hgdkj7kcw7s8,5fqsk9vrqkjj4lmlmvg98rsqafbsswhs,92y0465z7fifvwwc9ffz64z8jr0ihmwq,9hgbvipfbm102bzfz8f8xvzfrl236a1g,9x7xp1ljkilz9dyr03yhpx2irn0adln8,a5vcrmxm1ld0nnxp2rdhllkain95ipm2,aam95f46rg9s76vk4ylj2n38vanzw782,ahbfjwgm2imdgpwn95pxd1da55swbgjp,gl5aixavqj3lqajnnyj2asz8fayd12mr,m801m5gx0lh6y55zkqn4rwbwwssnffxf,mm65yrp340h4r5hkffcskpnagv1fngrx,vd8nqajj2dbrwyhz78kx5dpx73s8q4q2,xaaplv5cjn51hpffkfsmxwfiv7l71abx,xrqrp1lvy86692mjwlzqqhkwdfd3zm7s,y59zvirxjaw6rpnk29bgrv3lg3fczgyq,y5xv502hsj3c7dm97inf3a9n174yv1li,z6px32x86czzn9vwdaa4pqrf8y0f0jqp,z78phvh7qhxbzsnz28by0l64ngzfqxyx,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs'
-    kix.run/identity-hash: jz418q101ijbmikn1g1arkm2gzr4xzbq
+    kix.run/depends-on: '1hf2fh97pymk5wzkdjg05nq3z6l3np6n,2nzps007bz23d2sqw2snj7xxssmp6hp1,2pv0ikx4vpa7hwljxjfbvc8wzwmkkapc,3pm3k0p7f6hjzrcanzh5hgdkj7kcw7s8,5fqsk9vrqkjj4lmlmvg98rsqafbsswhs,9hgbvipfbm102bzfz8f8xvzfrl236a1g,9x7xp1ljkilz9dyr03yhpx2irn0adln8,a5vcrmxm1ld0nnxp2rdhllkain95ipm2,aam95f46rg9s76vk4ylj2n38vanzw782,ahbfjwgm2imdgpwn95pxd1da55swbgjp,bqi0s6v3zafh2s6azxkqgpirxv85r0lj,m801m5gx0lh6y55zkqn4rwbwwssnffxf,mm65yrp340h4r5hkffcskpnagv1fngrx,ndr5rhbzza8w3ar3dzifki1b0bbimd6m,ns7h8ksg0x04ms4mddxkdr676xkjmnlf,s7kqzmffnsllk2csn881bfyy815dc6sq,vd8nqajj2dbrwyhz78kx5dpx73s8q4q2,x76ic7qk6ym4zlgp96yx61r8k039nifw,xaaplv5cjn51hpffkfsmxwfiv7l71abx,y59zvirxjaw6rpnk29bgrv3lg3fczgyq,z6px32x86czzn9vwdaa4pqrf8y0f0jqp,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs'
+    kix.run/identity-hash: kymq061l5jy4y33n72zm9snghi1cdqmn
     kix.run/inverse-deps: PackageInstance/crd-ref-sgbackups-stackgres-io,PackageInstance/crd-ref-sgclusters-stackgres-io,PackageInstance/crd-ref-sgdbops-stackgres-io,PackageInstance/crd-ref-sgdistributedlogs-stackgres-io,PackageInstance/crd-ref-sginstanceprofiles-stackgres-io,PackageInstance/crd-ref-sgobjectstorages-stackgres-io,PackageInstance/crd-ref-sgpoolconfigs-stackgres-io,PackageInstance/crd-ref-sgpgconfigs-stackgres-io,PackageInstance/crd-ref-sgscripts-stackgres-io,PackageInstance/crd-ref-sgshardedbackups-stackgres-io,PackageInstance/crd-ref-sgshardedclusters-stackgres-io,PackageInstance/crd-ref-sgshardeddbops-stackgres-io,PackageInstance/crd-ref-sgstreams-stackgres-io
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
@@ -3657,15 +3727,13 @@ kind: PodDisruptionBudget
 metadata:
   annotations:
     kix.run/depends-on: '6d0a44nqqwwv27qciwy6bfiayy951k76'
-    kix.run/identity-hash: qb75yxpbw6350znff7ig0rpgvl5d1a1m
+    kix.run/identity-hash: ykazlrjm10vjz9cy3h8yx14kn55lxaxs
     kix.run/lifecycle: stateful
     kix.run/package: valkey
     kix.run/package-namespace: cache
   labels:
-    app.kubernetes.io/component: node
     app.kubernetes.io/instance: valkey
     app.kubernetes.io/managed-by: kix
-    app.kubernetes.io/name: valkey
     app.kubernetes.io/part-of: kix-example
     team: platform
   name: valkey-node
@@ -3677,6 +3745,120 @@ spec:
       app.kubernetes.io/component: node
       app.kubernetes.io/instance: valkey
       app.kubernetes.io/name: valkey
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  annotations:
+    kix.run/depends-on: rn40hbw8756809l5h5bwh65g8klv5bg3
+    kix.run/identity-hash: ph7p720s1s7jlmghh944dn23brpkv09a
+    kix.run/package: cert-manager
+    kix.run/package-namespace: cert-manager
+  labels:
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: cert-manager
+  namespace: cert-manager
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: controller
+      app.kubernetes.io/instance: cert-manager
+      app.kubernetes.io/name: cert-manager
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  annotations:
+    kix.run/depends-on: rn40hbw8756809l5h5bwh65g8klv5bg3
+    kix.run/identity-hash: n9c8fsq1l3x86ak3nwalrs594k5rgw6p
+    kix.run/package: cert-manager
+    kix.run/package-namespace: cert-manager
+  labels:
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: cert-manager-cainjector
+  namespace: cert-manager
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: cainjector
+      app.kubernetes.io/instance: cert-manager
+      app.kubernetes.io/name: cainjector
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  annotations:
+    kix.run/depends-on: rn40hbw8756809l5h5bwh65g8klv5bg3
+    kix.run/identity-hash: pkxjy11rizcf97w0m6gjqvhmvb00117z
+    kix.run/package: cert-manager
+    kix.run/package-namespace: cert-manager
+  labels:
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: cert-manager-webhook
+  namespace: cert-manager
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: webhook
+      app.kubernetes.io/instance: cert-manager
+      app.kubernetes.io/name: webhook
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  annotations:
+    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih
+    kix.run/identity-hash: vc4lw2i2hl8317anzdd6wxvz67kvbijh
+    kix.run/package: machine-learning
+    kix.run/package-namespace: immich
+  labels:
+    app.kubernetes.io/instance: machine-learning
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: machine-learning
+  namespace: immich
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: machine-learning
+      app.kubernetes.io/name: machine-learning
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  annotations:
+    kix.run/depends-on: sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m
+    kix.run/identity-hash: v5a87idqlkg5csr03npdnk7zbiw7yqns
+    kix.run/package: coredns
+    kix.run/package-namespace: kube-system
+  labels:
+    app.kubernetes.io/instance: coredns
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: coredns
+  namespace: kube-system
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: coredns
+      app.kubernetes.io/name: coredns
+      k8s-app: coredns
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -4425,7 +4607,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   annotations:
-    kix.run/identity-hash: y5xv502hsj3c7dm97inf3a9n174yv1li
+    kix.run/identity-hash: ns7h8ksg0x04ms4mddxkdr676xkjmnlf
     kix.run/package: stackgres-operator
     kix.run/package-namespace: stackgres-system
   labels:
@@ -4470,6 +4652,18 @@ rules:
   - delete
   - deletecollection
   - patch
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
 - apiGroups:
   - ''
   - apps
@@ -4996,8 +5190,8 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
   annotations:
-    kix.run/depends-on: '9hgbvipfbm102bzfz8f8xvzfrl236a1g,y5xv502hsj3c7dm97inf3a9n174yv1li'
-    kix.run/identity-hash: z78phvh7qhxbzsnz28by0l64ngzfqxyx
+    kix.run/depends-on: '9hgbvipfbm102bzfz8f8xvzfrl236a1g,ns7h8ksg0x04ms4mddxkdr676xkjmnlf'
+    kix.run/identity-hash: s7kqzmffnsllk2csn881bfyy815dc6sq
     kix.run/package: stackgres-operator
     kix.run/package-namespace: stackgres-system
   labels:
@@ -6246,8 +6440,8 @@ apiVersion: v1
 kind: Service
 metadata:
   annotations:
-    kix.run/depends-on: '6d0a44nqqwwv27qciwy6bfiayy951k76,requires:gjpayjil4wpb0raxhllw7fnya7zrihnp'
-    kix.run/identity-hash: vkr302x5d6cdl4asw5ywy0d6gfc46724
+    kix.run/depends-on: '6d0a44nqqwwv27qciwy6bfiayy951k76,x6qdsc847pdi2dhjakn6vk5qbivl42hv'
+    kix.run/identity-hash: '68ma8mgsdkfr3wyx4jf2zn48srgvshc1'
     kix.run/lifecycle: stateful
     kix.run/package: valkey
     kix.run/package-namespace: cache
@@ -6280,8 +6474,8 @@ apiVersion: v1
 kind: Service
 metadata:
   annotations:
-    kix.run/depends-on: '6d0a44nqqwwv27qciwy6bfiayy951k76,requires:gjpayjil4wpb0raxhllw7fnya7zrihnp'
-    kix.run/identity-hash: yc4ww248xbr0i6nxvj6y3klmy3f69p10
+    kix.run/depends-on: '6d0a44nqqwwv27qciwy6bfiayy951k76,x6qdsc847pdi2dhjakn6vk5qbivl42hv'
+    kix.run/identity-hash: l3f30md9qsicbwxh8sfr4a68c6nnldyi
     kix.run/lifecycle: stateful
     kix.run/package: valkey
     kix.run/package-namespace: cache
@@ -6306,6 +6500,7 @@ spec:
     protocol: TCP
     targetPort: 26379
   selector:
+    app.kubernetes.io/component: node
     app.kubernetes.io/instance: valkey
     app.kubernetes.io/name: valkey
   type: ClusterIP
@@ -6314,8 +6509,8 @@ apiVersion: v1
 kind: Service
 metadata:
   annotations:
-    kix.run/depends-on: '6d0a44nqqwwv27qciwy6bfiayy951k76,requires:gjpayjil4wpb0raxhllw7fnya7zrihnp'
-    kix.run/identity-hash: x05rrdwq5wf96w5vbdydiavl34w628l2
+    kix.run/depends-on: '6d0a44nqqwwv27qciwy6bfiayy951k76,requires:x6qdsc847pdi2dhjakn6vk5qbivl42hv'
+    kix.run/identity-hash: d67fn2090v2ad613pka8lgkdxf7clw6j
     kix.run/lifecycle: stateful
     kix.run/package: valkey
     kix.run/package-namespace: cache
@@ -6335,7 +6530,7 @@ spec:
   - name: http-metrics
     port: 9121
     protocol: TCP
-    targetPort: metrics
+    targetPort: 9121
   selector:
     app.kubernetes.io/instance: valkey
     app.kubernetes.io/name: valkey
@@ -6345,8 +6540,8 @@ apiVersion: v1
 kind: Service
 metadata:
   annotations:
-    kix.run/depends-on: nl3i0shgglki99bd41033rjmcbmk7xn2,rn40hbw8756809l5h5bwh65g8klv5bg3
-    kix.run/identity-hash: '353rk14kjxqkd5qgv87pv8v8ylqmijfi'
+    kix.run/depends-on: '7lhj73fnr9wff00n0w9c4n4qggrgq2f0,rn40hbw8756809l5h5bwh65g8klv5bg3'
+    kix.run/identity-hash: wdfza3l6r4bwbyq33zh20726g8jdpv19
     kix.run/package: cert-manager
     kix.run/package-namespace: cert-manager
   labels:
@@ -6374,8 +6569,8 @@ apiVersion: v1
 kind: Service
 metadata:
   annotations:
-    kix.run/depends-on: q230w538i6lns8ml2phccy9gyxkjk59g,rn40hbw8756809l5h5bwh65g8klv5bg3
-    kix.run/identity-hash: vpq33xvpgrf7mcdw12j88jis2y1h7yb6
+    kix.run/depends-on: gryx409wfxs86xcw8b8k1hw8a2bklak1,rn40hbw8756809l5h5bwh65g8klv5bg3
+    kix.run/identity-hash: '185a41hr3i6bvmgqyvwbh83p52r2l6nx'
     kix.run/package: cert-manager
     kix.run/package-namespace: cert-manager
   labels:
@@ -6402,8 +6597,8 @@ apiVersion: v1
 kind: Service
 metadata:
   annotations:
-    kix.run/depends-on: g0l9xqlv2gnian2yv1n8x66css57qnz6,rn40hbw8756809l5h5bwh65g8klv5bg3
-    kix.run/identity-hash: vhc5yj8d48indsxrkryh6ywzykcb1r5m
+    kix.run/depends-on: rn40hbw8756809l5h5bwh65g8klv5bg3,zn0jqlr4y4hrb1g6fim5khp1sii10ag3
+    kix.run/identity-hash: '4lnmxqw4a6rkrp401xrgqmax9hpwh97a'
     kix.run/package: cert-manager
     kix.run/package-namespace: cert-manager
   labels:
@@ -6420,11 +6615,11 @@ spec:
   - name: https
     port: 443
     protocol: TCP
-    targetPort: https
+    targetPort: 10250
   - name: metrics
     port: 9402
     protocol: TCP
-    targetPort: http-metrics
+    targetPort: 9402
   selector:
     app.kubernetes.io/component: webhook
     app.kubernetes.io/instance: cert-manager
@@ -6435,8 +6630,8 @@ apiVersion: v1
 kind: Service
 metadata:
   annotations:
-    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,pk5rfgcwcphnxyd1n6vgnazkpkzypvcp
-    kix.run/identity-hash: qf6vhk2qbl8f9qlshkf9rrm16393zdhs
+    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,jzrk7b44s5s24d4s1ks5wzrvm2a7nak3
+    kix.run/identity-hash: '0v549srkwy8skw60qa51swv4dhwfh4ah'
     kix.run/package: immich
     kix.run/package-namespace: immich
   labels:
@@ -6451,7 +6646,6 @@ spec:
   - name: http
     port: 2283
     protocol: TCP
-    targetPort: http
   selector:
     app.kubernetes.io/instance: immich
     app.kubernetes.io/name: immich
@@ -6461,8 +6655,8 @@ apiVersion: v1
 kind: Service
 metadata:
   annotations:
-    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,db3x6v273wa7w5hpnyg8qsv2p092wzia
-    kix.run/identity-hash: h65kdsdsn35hn2r9dnypxyw30k2624wh
+    kix.run/depends-on: '8fx07k4b82jzc3afvsnal6hvw1abvdhj,awzwpm53w1kb4ysngrwmj47whaddgkih'
+    kix.run/identity-hash: jfv5x3q25ifqwp7nnh1x1696g5vz8dsn
     kix.run/package: machine-learning
     kix.run/package-namespace: immich
   labels:
@@ -6477,7 +6671,6 @@ spec:
   - name: http
     port: 3003
     protocol: TCP
-    targetPort: http
   selector:
     app.kubernetes.io/instance: machine-learning
     app.kubernetes.io/name: machine-learning
@@ -6487,11 +6680,12 @@ apiVersion: v1
 kind: Service
 metadata:
   annotations:
-    kix.run/depends-on: '0fyd0l7w0vdlafh9hn37ls940rrciq7h,sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m,requires:gxpr5zm199q7dc4gg14h946d0mg0fcbr'
-    kix.run/identity-hash: vy5s6am4z3nsbmq3rqf6myjd71jbfnxa
+    kix.run/depends-on: s5wkfyqh3dc8ryx8yx19gzxw8wp655yk,sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m,requires:0229b8rdpjwcg5xl4qzsgnsvlr1aip5l
+    kix.run/identity-hash: '9xlvh9g4lk1131y695pv4ya26fwy3fxg'
     kix.run/package: coredns
     kix.run/package-namespace: kube-system
   labels:
+    app.kubernetes.io/component: dns
     app.kubernetes.io/instance: coredns
     app.kubernetes.io/managed-by: kix
     app.kubernetes.io/name: coredns
@@ -6522,8 +6716,8 @@ apiVersion: v1
 kind: Service
 metadata:
   annotations:
-    kix.run/depends-on: '0fyd0l7w0vdlafh9hn37ls940rrciq7h,sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m'
-    kix.run/identity-hash: gxpr5zm199q7dc4gg14h946d0mg0fcbr
+    kix.run/depends-on: s5wkfyqh3dc8ryx8yx19gzxw8wp655yk,sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m
+    kix.run/identity-hash: '0229b8rdpjwcg5xl4qzsgnsvlr1aip5l'
     kix.run/package: coredns
     kix.run/package-namespace: kube-system
     prometheus.io/port: '9153'
@@ -6557,7 +6751,7 @@ kind: Service
 metadata:
   annotations:
     kix.run/depends-on: mm65yrp340h4r5hkffcskpnagv1fngrx
-    kix.run/identity-hash: gl5aixavqj3lqajnnyj2asz8fayd12mr
+    kix.run/identity-hash: x76ic7qk6ym4zlgp96yx61r8k039nifw
     kix.run/package: stackgres-operator
     kix.run/package-namespace: stackgres-system
   labels:
@@ -6572,7 +6766,7 @@ spec:
   - name: https
     port: 443
     protocol: TCP
-    targetPort: https
+    targetPort: 8443
   selector:
     app: stackgres-operator
   type: ClusterIP

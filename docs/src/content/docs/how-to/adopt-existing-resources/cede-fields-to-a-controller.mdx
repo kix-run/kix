@@ -1,0 +1,6 @@
+---
+title: "Cede fields to a controller"
+description: TODO
+---
+
+{/* Stub. Recipe for a resource whose controller rewrites part of its spec after apply, for example a CRD whose operator manages spec.versions or a webhook configuration whose operator injects caBundle and rules. Declare `ownership.cede = [ "spec.versions[*]" ]` on the resource, deploy, and read the retry line in the apply output. Contrast with handle-server-side-apply-conflicts-safely, which forces ownership the other way. Source: kix/lib/core/resource.nix, cli/kix/src/cluster/apply.rs, kix/packages/cdi, kix/packages/stackgres-operator. Needs a kix-examples adoption scenario and a live capture of the retried apply. */}

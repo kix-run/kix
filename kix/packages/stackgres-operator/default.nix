@@ -241,6 +241,8 @@ in
 {
   meta = {
     version = "1.19.0";
+    description = "StackGres operator — PostgreSQL clusters via the stackgres.io CRDs";
+    owner = "platform";
     defaultAliases = [ "stackgresOperator" ];
     network.intents = {
       # The operator fetches extensions from extensions.stackgres.io at runtime.
@@ -834,7 +836,7 @@ in
             {
               name = "https";
               port = 443;
-              targetPort = "https";
+              targetPort = 8443;
               protocol = "TCP";
             }
           ];
@@ -871,6 +873,10 @@ in
       # ===== ValidatingWebhookConfiguration =====
 
       validatingWebhook = scope.mkClusterResource {
+        # The operator (field manager fabric8-kubernetes-client) rewrites
+        # each webhook's `rules` once it runs. Ceded, so the second deploy
+        # applies without them instead of failing on the conflict.
+        ownership.cede = [ "webhooks[*].rules" ];
         apiVersion = "admissionregistration.k8s.io/v1";
         kind = "ValidatingWebhookConfiguration";
         name = name;
@@ -880,6 +886,10 @@ in
       # ===== MutatingWebhookConfiguration =====
 
       mutatingWebhook = scope.mkClusterResource {
+        # The operator (field manager fabric8-kubernetes-client) rewrites
+        # each webhook's `rules` once it runs. Ceded, so the second deploy
+        # applies without them instead of failing on the conflict.
+        ownership.cede = [ "webhooks[*].rules" ];
         apiVersion = "admissionregistration.k8s.io/v1";
         kind = "MutatingWebhookConfiguration";
         name = name;

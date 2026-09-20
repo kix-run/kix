@@ -100,6 +100,10 @@ let
                 {
                   name = "annotate";
                   image = "bitnamilegacy/kubectl:1.33";
+                  securityContext = {
+                    runAsNonRoot = true;
+                    runAsUser = 1001;
+                  };
                   command = [
                     "/bin/sh"
                     "-c"
@@ -140,6 +144,7 @@ in
 {
   meta = {
     version = "10.0.60";
+    owner = "platform";
     defaultAliases = [ "reflector" ];
     # This package owns the reflector annotation domain: resources carrying
     # annotations under it without a DI dep on this instance trip the

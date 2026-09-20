@@ -33,7 +33,14 @@ let
       stubs = {
         inherit lib;
         scope = throw "kix-reference: package '${packageName}' touched `scope` during options-declaration evaluation; refactor so `options` is static.";
-        kix = throw "kix-reference: package '${packageName}' touched `kix` during options-declaration evaluation; refactor so `options` is static.";
+        # Option defaults read `kix.availability.pick availability { ... }`
+        # to size replica counts, and nixosOptionsDoc renders every default
+        # that has no `defaultText`. The package sees the level a cluster
+        # without an availability setting resolves to, so the rendered
+        # default is the single-replica one. Any other `kix` attribute is
+        # missing here, and the error names it.
+        kix.availability = import ../../kix/lib/core/availability.nix { inherit lib; };
+        availability = "none";
       };
       pkg = package (lib.intersectAttrs fnArgs stubs);
       evaluated = lib.evalModules {

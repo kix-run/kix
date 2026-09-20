@@ -126,6 +126,7 @@ in
   meta = {
     version = "7.1.0";
     description = "Loki — log aggregation system (single-binary, filesystem)";
+    owner = "platform";
     lifecycle = "ephemeral";
     # Single-binary Loki over a filesystem store on one ReadWriteOnce PVC:
     # a second replica has no volume to mount and no shared object store to

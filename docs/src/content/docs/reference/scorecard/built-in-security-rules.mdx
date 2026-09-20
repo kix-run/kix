@@ -2,3 +2,5 @@
 title: "Built-in security rules"
 description: TODO
 ---
+
+{/* Stub. Source: kix/lib/rules/security.nix. Rules run on every cluster by default (capped at warning). Each rule is disabled for a package by the matching meta.unsafe grant. security.nonRoot expects runAsNonRoot or a non-zero runAsUser on the pod or every container; images that run as uid 0 need the run-as-root grant. The container collector tolerates `initContainers = null` from Helm output. */}

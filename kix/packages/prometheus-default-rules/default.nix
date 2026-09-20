@@ -40,6 +40,7 @@ in
   meta = {
     version = "84.5.0";
     description = "Default Kubernetes monitoring rules and service monitors";
+    owner = "platform";
   };
 
   options = lib.recursiveUpdate {

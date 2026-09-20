@@ -190,7 +190,6 @@ rec {
           (lib.evalModules {
             modules = [
               { options = packageOptions; }
-              { config = clusterConfig.global or { }; }
             ]
             ++ injectionModules
             ++ wrappedModules;

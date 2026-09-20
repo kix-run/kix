@@ -131,6 +131,18 @@ in
   meta = {
     version = "1.19.6";
     description = "Cilium — eBPF CNI, load balancer, and CiliumNetworkPolicy enforcer";
+    owner = "platform";
+    # A CNI programs the node's own networking and loads BPF into the
+    # kernel, so the agent, envoy and operator pods run on the host
+    # network with a privileged mount. Declared here rather than
+    # downgraded per namespace in every cluster that installs cilium:
+    # the grant is scoped to this package and listed by
+    # `architecture.unsafeGrants` in every build.
+    unsafe = [
+      "host-network"
+      "privileged"
+      "run-as-root"
+    ];
     roles = [
       "cni"
       "network-policy-enforcer"
@@ -138,10 +150,34 @@ in
     k8s.minVersion = "1.27";
   };
 
-  options.values = lib.mkOption {
-    type = lib.types.attrsOf lib.types.anything;
-    default = { };
-    description = "Helm values to deep-merge with the chart's package-level values.";
+  options = {
+    values = lib.mkOption {
+      type = lib.types.attrsOf lib.types.anything;
+      default = { };
+      description = "Helm values to deep-merge with the chart's package-level values.";
+    };
+
+    clusterDnsEgress = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = ''
+        Allow every pod in the cluster to reach cluster DNS, as one
+        CiliumClusterwideNetworkPolicy. Only emitted when
+        `policyEnforcementMode` is "always", which is this package's
+        default.
+
+        In that mode every pod in the cluster is in default deny, including
+        the ones Kix never writes a policy for: a `kubectl run` debug pod,
+        an operator's own Job, anything in a namespace Kix does not manage.
+        Kix writes DNS egress for the workloads it renders and for nothing
+        else, so without this those pods cannot resolve a name, and the
+        failure reads as a DNS outage rather than as a policy decision.
+
+        Set it false to write that policy yourself. Turning it off while
+        leaving enforcement at "always" means anything outside a Kix
+        namespace has no DNS.
+      '';
+    };
   };
 
   build =
@@ -167,6 +203,10 @@ in
         includeCrds = true;
       };
 
+      # The enforcement mode actually in effect, after the cluster's own
+      # values are merged over this package's.
+      effectiveEnforcement = config.values.policyEnforcementMode or defaultValues.policyEnforcementMode;
+
       # CRD refs — wired against ALL workloads so the wave engine gates
       # CNP/CCNP application on the entire cilium stack being Ready.
       # Phase 3 auto-discovery doesn't apply here: the cilium chart
@@ -189,10 +229,46 @@ in
         crdScope = "Cluster";
         installedBy = resources.workloads;
       };
+      # Everything Kix does not render still has to resolve a name.
+      #
+      # `policyEnforcementMode = "always"` puts every pod in the cluster
+      # into default deny, not just the ones in Kix namespaces. Kix writes
+      # DNS egress for the workloads it renders and for nothing else, so a
+      # `kubectl run` debug pod, an operator's own Job, or anything in a
+      # namespace Kix does not manage gets "Temporary failure in name
+      # resolution" on every lookup, and reads as a DNS outage rather than
+      # as the policy decision it is. This package chose `always`, so it
+      # opens the one port that makes the rest of the cluster diagnosable.
+      # It is an allow rule and adds nothing to what a Kix-managed workload
+      # could already reach.
+      clusterDnsEgress =
+        if config.clusterDnsEgress && effectiveEnforcement == "always" then
+          scope.mkClusterResource (
+            ccnpCrdRef.out.cr {
+              name = "cilium-cluster-dns-egress";
+              labels = {
+                ${kix.keys.derived} = "true";
+              };
+              spec = {
+                endpointSelector = { };
+                egress = [ ciliumNetpol.dnsEgressRule ];
+              };
+            }
+          )
+        else
+          null;
     in
     resources.mkParts {
       root = resources.get "DaemonSet" "cilium";
-      extraParts = { inherit cnpCrdRef ccnpCrdRef; };
+      extraParts = {
+        inherit cnpCrdRef ccnpCrdRef;
+      }
+      // lib.optionalAttrs (clusterDnsEgress != null) { inherit clusterDnsEgress; };
+      # The policy hangs off nothing in the chart, so root has to name it or
+      # it is a part no dependency reaches and the build says so. An allow
+      # rule needs no ordering against the agent; it needs the CRD, which it
+      # already requires.
+      extraRequires = lib.optional (clusterDnsEgress != null) clusterDnsEgress;
       out = {
         inherit cnpCrdRef ccnpCrdRef;
         # Network-policy rule builder API — see kix/lib/netpol-interface.nix.

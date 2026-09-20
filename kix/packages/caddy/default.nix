@@ -20,6 +20,7 @@ in
   meta = {
     version = "2.10.0-cf";
     description = "Caddy reverse proxy";
+    owner = "app-team";
     network = {
       # Entities for auto-derived external ingress (LoadBalancer Service).
       externalIngressEntities = [ "all" ];
@@ -106,14 +107,6 @@ in
         };
         maxReplicas = 10;
         targetCPUUtilization = 60;
-      };
-    };
-
-    # --- PDB ---
-    pdb = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        minAvailable = 1;
       };
     };
 
@@ -247,13 +240,13 @@ in
             {
               name = "http";
               port = 80;
-              targetPort = "http";
+              targetPort = 80;
               protocol = "TCP";
             }
             {
               name = "https";
               port = 443;
-              targetPort = "https";
+              targetPort = 443;
               protocol = "TCP";
             }
           ];
@@ -272,13 +265,13 @@ in
               {
                 name = "http";
                 port = 80;
-                targetPort = "http";
+                targetPort = 80;
                 protocol = "TCP";
               }
               {
                 name = "https";
                 port = 443;
-                targetPort = "https";
+                targetPort = 443;
                 protocol = "TCP";
               }
             ];
@@ -315,24 +308,11 @@ in
         };
       };
 
-      # --- PodDisruptionBudget ---
-      pdb = scope.mkResource {
-        apiVersion = "policy/v1";
-        kind = "PodDisruptionBudget";
-        inherit name;
-        requires = [ self.deployment ];
-        spec = {
-          minAvailable = config.pdb.minAvailable;
-          selector.matchLabels = scope.selectorLabels;
-        };
-      };
-
       # --- Entry point ---
-      root = {
-        resource = self.service;
-        requires = [
-          self.pdb
-        ];
-      };
+      # No PodDisruptionBudget here: the availability plugin derives one for
+      # every workload above a single replica, and a hand-written
+      # minAvailable = 1 blocked eviction outright on a single-replica
+      # cluster.
+      root = self.service;
     };
 }

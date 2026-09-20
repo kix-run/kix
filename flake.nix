@@ -88,9 +88,59 @@
             touch $out
           '';
       });
+      # A shell that can build and TEST the CLI.
+      #
+      # The crane package (`packages.kix`) sets `doCheck = false`, because
+      # the integration tests need a writable Nix store for the eval cache
+      # and the build sandbox has none. So `nix flake check` cannot run
+      # them and CI needs somewhere outside a build to run them from. This
+      # is that place, and it is also the one entry point that does not
+      # need devenv installed.
+      #
+      # The Nix C libraries are what the nix-bindings-*-sys crates find
+      # through pkg-config; mkShell puts their .dev outputs on
+      # PKG_CONFIG_PATH. devenv.nix lists the same set for the same reason.
+      devShells = lib.genAttrs systems (
+        system:
+        let
+          pkgs = inputs.nixpkgs.legacyPackages.${system};
+        in
+        {
+          default = pkgs.mkShell {
+            packages = [
+              pkgs.cargo
+              pkgs.rustc
+              pkgs.clippy
+              pkgs.rustfmt
+              pkgs.pkg-config
+              pkgs.openssl
+              pkgs.nix.libs.nix-expr-c
+              pkgs.nix.libs.nix-store-c
+              pkgs.nix.libs.nix-util-c
+              pkgs.nix.libs.nix-flake-c
+              pkgs.nix.libs.nix-fetchers-c
+              pkgs.nix.libs.nix-main-c
+            ]
+            ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.dbus ];
+
+            # Keyed on the checkout path and kept OUT of the checkout, for
+            # the reason devenv.nix spells out at length: a `path:` flakeref
+            # copies a directory into the store with no filtering at all, so
+            # an in-tree target dir is copied verbatim on every change. Same
+            # scheme as devenv's, so the two share a directory rather than
+            # building two cold copies of the same tree.
+            shellHook = ''
+              export CARGO_TARGET_DIR="''${XDG_CACHE_HOME:-$HOME/.cache}/kix-cargo-target/$(basename "$PWD")-$(printf %s "$PWD" | sha256sum | cut -c1-12)"
+              mkdir -p "$CARGO_TARGET_DIR"
+            '';
+          };
+        }
+      );
     in
     clusterOutputs
     // {
+      inherit devShells;
+
       # Merge kix CLI into per-system packages alongside cluster outputs.
       packages = lib.mapAttrs (
         system: clusterPkgs: clusterPkgs // (cliPackages.${system} or { })

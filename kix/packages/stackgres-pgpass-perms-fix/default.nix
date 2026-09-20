@@ -26,6 +26,7 @@ in
   meta = {
     version = "1.0.0";
     description = "CronJob workaround for StackGres #1441 (pgpass perms revert)";
+    owner = "platform";
   };
 
   options = {
@@ -97,18 +98,17 @@ in
         };
       };
 
-      cronJob = scope.mkResource {
-        apiVersion = "batch/v1";
-        kind = "CronJob";
+      cronJob = scope.mkCronJob {
         name = saName;
         inherit labels;
-        extra.spec = {
+        spec = {
           schedule = config.schedule;
           concurrencyPolicy = "Forbid";
           successfulJobsHistoryLimit = 1;
           failedJobsHistoryLimit = 3;
           jobTemplate.spec = {
             backoffLimit = 0;
+            template.metadata.labels = labels;
             template.spec = {
               serviceAccountName = self.serviceAccount.out.name;
               restartPolicy = "Never";

@@ -31,6 +31,7 @@ in
   meta = {
     version = "13.1.1";
     description = "Grafana — observability and data visualization";
+    owner = "platform";
     defaultAliases = [ "grafana" ];
     k8s.minVersion = "1.25";
     # This package configures no external database, so Grafana runs on
@@ -39,7 +40,12 @@ in
     # persistence.inlinePvc hand-rolls a claim; the preferred path is the
     # `storage` dep + sibling persistent-volume-claim instance. Grant kept
     # until the inline option is removed (audited by unsafeGrants).
-    unsafe = [ "raw-pvc" ];
+    # init-chown-data runs as root to hand the data volume to uid 472. The
+    # grafana container itself runs as 472.
+    unsafe = [
+      "raw-pvc"
+      "run-as-root"
+    ];
   };
 
   options = {
@@ -1082,7 +1088,7 @@ in
             {
               name = "http-web";
               port = 80;
-              targetPort = "grafana";
+              targetPort = 3000;
               protocol = "TCP";
             }
           ];

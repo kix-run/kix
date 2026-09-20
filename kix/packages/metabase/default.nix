@@ -27,6 +27,7 @@ in
 {
   meta = {
     version = "v0.50.34";
+    owner = "app-team";
   };
 
   options = {

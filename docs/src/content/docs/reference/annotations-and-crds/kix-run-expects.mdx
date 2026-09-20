@@ -1,0 +1,6 @@
+---
+title: "`kix.run/expects`"
+description: TODO
+---
+
+{/* Stub. Experimental. Source: kix/lib/core/annotations.nix (expects), kix/lib/core/markers.nix (mkUntrackedRef attrset form, readExpectation), kix/lib/core/resource.nix (expectEntries), cli/kix/src/cluster/readiness.rs (Expectation, wait_for_expectations), cli/kix/src/cluster/ops/kube.rs (EXPECTS_TIMEOUT). Value: `apiVersion|kind|name` entries, one per `kix.untrackedRef { kind; name; by; }` the resource holds. Deploy waits up to 180s for each named object to exist before applying the resource. The `by` package also lands in kix.run/depends-on. Test: kix/lib/tests t97, readiness.rs expectations_are_read_from_the_annotation. User: kix/packages/ingress-nginx admission Secret. */}

@@ -9,15 +9,19 @@
 let
   normalize = import ../core/normalize.nix { inherit lib; };
 
+  listOr = v: if v == null then [ ] else v;
+
   getContainers =
     resource:
     let
       podSpec = resource.spec.template.spec or { };
     in
-    (podSpec.containers or [ ]) ++ (podSpec.initContainers or [ ]);
+    # A chart-rendered pod spec can carry `initContainers: null`; the rules
+    # see the manifest before the null is stripped at emission.
+    listOr (podSpec.containers or [ ]) ++ listOr (podSpec.initContainers or [ ]);
 
   # Only check main containers for probes (not init containers).
-  getMainContainers = resource: (resource.spec.template.spec or { }).containers or [ ];
+  getMainContainers = resource: listOr ((resource.spec.template.spec or { }).containers or [ ]);
 
   isWorkload =
     resource:
@@ -154,31 +158,13 @@ in
       }) missingReadiness);
   };
 
-  hasPDB = {
-    description = "Multi-replica Deployments should have a PodDisruptionBudget";
-    level = "package";
-    severity = "warning";
-    tags = [
-      "reliability"
-      "ha"
-    ];
-    check =
-      { resources, instanceName, ... }:
-      let
-        multiReplicaDeployments = builtins.filter (
-          r: (r.kind or "") == "Deployment" && (r.spec.replicas or 1) > 1
-        ) resources;
-        hasPDB = builtins.any (r: (r.kind or "") == "PodDisruptionBudget") resources;
-      in
-      if multiReplicaDeployments != [ ] && !hasPDB then
-        [
-          {
-            message = "'${instanceName}' has Deployments with multiple replicas but no PodDisruptionBudget. Add one to limit how many pods can be disrupted during maintenance";
-          }
-        ]
-      else
-        [ ];
-  };
+  # hasPDB retired 2026-09-20. The availability plugin derives a
+  # PodDisruptionBudget for every multi-replica workload. The rules score the
+  # shipped set now, derived PDBs included, so the rule could be written
+  # again; it stays retired because the one case the derivation skips, a
+  # workload the package placed itself, is warned about in
+  # plugins/availability/module.nix, where the skip is decided and the
+  # reason is known.
 
   gracefulShutdown = {
     description = "Workloads should set terminationGracePeriodSeconds";

@@ -31,6 +31,12 @@ and rules: [`CLAUDE.housekeeping.md`](CLAUDE.housekeeping.md).
 
 Never `git stash pop`/`apply` unless you created the stash in this session and verified it is the top entry (`git stash list` — check the message matches yours). This repo's stash stack carries old `autostash` leftovers; a blind pop resurrects them into the working tree. To test a hypothesis against a clean tree, use `git worktree add` (or `git show HEAD:<file>`) instead of stashing. Chain stash push→pop with `&&`, never `;`.
 
+**No `Co-Authored-By` trailers.** The `commit-msg` hook in `lefthook.yml`
+rejects them and the hook wins. This repo does not record co-authorship in
+commit messages, so an agent harness that appends the trailer automatically
+must leave it off here. Git history and the pull request already record who
+did the work.
+
 ## Structured thinking
 
 Use the `structured-thinking` skill (instead of plan mode) when the user wants to think through, brainstorm, design, or analyze something. It routes to `business_discussions/`, `v2_discussions/`, or `v2_discussions/interesting_thoughts/` and produces a durable doc.

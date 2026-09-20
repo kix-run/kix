@@ -35,6 +35,7 @@ in
 {
   meta = {
     version = "1.13.1";
+    owner = "platform";
   };
 
   options = {
@@ -338,6 +339,8 @@ in
                   };
                   securityContext = {
                     allowPrivilegeEscalation = false;
+                    # The image runs as its own non-root user.
+                    runAsNonRoot = true;
                     capabilities = {
                       add = [ "NET_BIND_SERVICE" ];
                       drop = [ "ALL" ];
@@ -371,7 +374,11 @@ in
         apiVersion = "v1";
         kind = "Service";
         name = "${scope.instanceName}";
-        labels = commonLabels;
+        # A component of its own, so the metrics Service (component=metrics)
+        # is not a superset of this one's labels.
+        labels = commonLabels // {
+          "app.kubernetes.io/component" = "dns";
+        };
         spec = {
           selector = self.deployment.out.selector;
           ports = [

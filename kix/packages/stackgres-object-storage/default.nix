@@ -22,6 +22,7 @@
   meta = {
     version = "1.0.0";
     description = "Standalone SGObjectStorage for cross-namespace backup targets";
+    owner = "platform";
   };
 
   options = {

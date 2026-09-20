@@ -2,3 +2,5 @@
 title: "Scorecard levels: manifest, package, namespace, cluster"
 description: TODO
 ---
+
+{/* Stub. Manifest and package rules score what ships: package parts plus the resources kix derives (PodDisruptionBudgets, NetworkPolicies, Namespaces). The default cap at warning keeps a first cluster building while every rule still reports; raising scorecard.maxSeverity is the switch from advice to policy. Source: kix/lib/eval/instance.nix (shippedResources), kix/lib/scorecard.nix (capSeverity). */}

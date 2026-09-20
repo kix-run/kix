@@ -88,13 +88,13 @@ in
           name = "https";
           port = 443;
           protocol = "TCP";
-          targetPort = "https";
+          targetPort = 10250;
         }
         {
           name = "metrics";
           port = 9402;
           protocol = "TCP";
-          targetPort = "http-metrics";
+          targetPort = 9402;
         }
       ];
     };

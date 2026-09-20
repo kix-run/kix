@@ -22,6 +22,7 @@ in
   meta = {
     version = "v2.63.18";
     description = "Filebrowser — web-based file manager";
+    owner = "app-team";
   };
 
   options = {
@@ -57,6 +58,13 @@ in
                 {
                   name = "filebrowser";
                   image = "${config.image.repository}:${config.image.tag}";
+                  # The image's own user is uid 1000; stated so the kubelet
+                  # can verify it rather than trust the image.
+                  securityContext = {
+                    runAsNonRoot = true;
+                    runAsUser = 1000;
+                    runAsGroup = 1000;
+                  };
                   ports = [
                     {
                       name = "http";

@@ -49,7 +49,8 @@ pub enum ApplyError {
 
     #[error(
         "cannot update {resource}: another tool owns fields that Kix is trying to change. \
-         Review the fields listed below. If Kix should manage them, rerun with --force-conflicts to take ownership. Kubernetes reported: {source}"
+         Review the fields listed below. If Kix should manage them, rerun with --force-conflicts to take ownership; \
+         if the other tool is meant to own them, declare them on the resource with `ownership.cede`. Kubernetes reported: {source}"
     )]
     Conflict {
         resource: String,
@@ -70,6 +71,19 @@ pub enum ApplyError {
     },
 
     #[error(
+        "cannot update {resource}: it drops an API version that the cluster still has objects stored at. \
+         Kubernetes keeps the versions it has written in the CRD's status.storedVersions, and refuses to \
+         remove one until nothing is stored at it. Migrate the existing objects to a version this CRD still \
+         serves (read and re-apply each one, or run a storage-version migrator), then deploy again. \
+         Keeping the old version in spec.versions also unblocks the deploy. Kubernetes reported: {source}"
+    )]
+    CrdStoredVersion {
+        resource: String,
+        #[source]
+        source: kube::Error,
+    },
+
+    #[error(
         "could not record Kix deployment tracking annotations (activations, applied-hash) on {resource}: {source}"
     )]
     BookkeepingAnnotationsFailed {
@@ -82,6 +96,16 @@ pub enum ApplyError {
         "the Kubernetes API does not recognize resource kind '{kind}'. Check the kind and API version, and install its CRD if it is a custom resource"
     )]
     UnknownKind { kind: String },
+
+    #[error(
+        "cannot apply {resource}: it expects {expected} to exist, declared with kix.untrackedRef as created by something else, \
+         and it has not appeared: {detail}. Check that the declared creator really creates it."
+    )]
+    ExpectationUnmet {
+        resource: String,
+        expected: String,
+        detail: String,
+    },
 }
 
 /// Result of applying a single resource.
@@ -540,7 +564,30 @@ pub async fn apply_resource(
     // client transport (cluster::client), not here. 409 conflicts are
     // permanent and surface immediately as ApplyError::Conflict so the user
     // sees an actionable error pointing at --force-conflicts.
-    let echo = apply_patch(&api, &name, &pp, manifest, &rid).await?;
+    let echo = match apply_patch(&api, &name, &pp, manifest, &rid).await {
+        Ok(echo) => echo,
+        Err(ApplyError::Conflict { resource, source }) => {
+            // A conflict confined to fields the resource ceded is not a
+            // failure: the other manager has taken what it was meant to
+            // take. Apply again without those fields and it keeps them.
+            let message = match &source {
+                kube::Error::Api(resp) => resp.message.clone(),
+                _ => String::new(),
+            };
+            match without_ceded_conflicts(manifest, &message) {
+                Some(stripped) => {
+                    tracing::info!(
+                        resource = %rid.display_id(),
+                        fields = %conflict_paths(&message).join(", "),
+                        "another manager owns ceded fields; applying without them"
+                    );
+                    apply_patch(&api, &name, &pp, &stripped, &rid).await?
+                }
+                None => return Err(ApplyError::Conflict { resource, source }),
+            }
+        }
+        Err(e) => return Err(e),
+    };
 
     // Compute the applied-content hash from the SSA response echo (doc 122):
     // the echo IS the committed, canonicalized server representation, so a
@@ -634,6 +681,145 @@ async fn update_bookkeeping_annotations_checked(
         })
 }
 
+// ---------------------------------------------------------------------------
+// Ceded fields (`kix.run/cede-fields`)
+// ---------------------------------------------------------------------------
+
+/// One step of an apiserver field path: `.spec`, `[name="x"]`, `[0]`, or
+/// `[*]` in a ceded declaration for any list element.
+#[derive(Debug, Clone, PartialEq)]
+enum Seg {
+    Field(String),
+    Key(String, String),
+    Index(usize),
+    Any,
+}
+
+/// Parse `.webhooks[name="x"].rules` (leading dot optional) into segments.
+/// `None` on anything malformed.
+fn parse_path(path: &str) -> Option<Vec<Seg>> {
+    let mut segs = Vec::new();
+    let mut rest = path.strip_prefix('.').unwrap_or(path);
+    while !rest.is_empty() {
+        if let Some(after) = rest.strip_prefix('[') {
+            let end = after.find(']')?;
+            let inner = &after[..end];
+            let seg = if inner == "*" {
+                Seg::Any
+            } else if let Ok(i) = inner.parse::<usize>() {
+                Seg::Index(i)
+            } else {
+                let (k, v) = inner.split_once('=')?;
+                Seg::Key(k.to_string(), v.trim_matches('"').to_string())
+            };
+            segs.push(seg);
+            rest = &after[end + 1..];
+            rest = rest.strip_prefix('.').unwrap_or(rest);
+        } else {
+            let end = rest.find(['.', '[']).unwrap_or(rest.len());
+            if end == 0 {
+                return None;
+            }
+            segs.push(Seg::Field(rest[..end].to_string()));
+            rest = &rest[end..];
+            rest = rest.strip_prefix('.').unwrap_or(rest);
+        }
+    }
+    if segs.is_empty() { None } else { Some(segs) }
+}
+
+/// The paths the resource declared ceded, parsed.
+fn ceded_fields(manifest: &Value) -> Vec<Vec<Seg>> {
+    manifest
+        .pointer("/metadata/annotations")
+        .and_then(|a| a.get(keys::CEDE_FIELDS))
+        .and_then(Value::as_str)
+        .map(|s| s.split(',').filter_map(|p| parse_path(p.trim())).collect())
+        .unwrap_or_default()
+}
+
+/// The field paths a 409 message names. The apiserver writes them as
+/// dot-led tokens (`conflict with "cdi-operator" using v1: .spec.versions`,
+/// one per line or comma separated when there are several).
+fn conflict_paths(message: &str) -> Vec<String> {
+    message
+        .split(|c: char| c.is_whitespace() || c == ',')
+        .filter(|t| t.len() > 1 && t.starts_with('.'))
+        .map(str::to_string)
+        .collect()
+}
+
+/// Whether a ceded declaration covers a conflicting path: the declaration
+/// is a prefix, with `[*]` standing for any list element.
+fn covers(ceded: &[Seg], path: &[Seg]) -> bool {
+    ceded.len() <= path.len()
+        && ceded.iter().zip(path).all(|(c, p)| match (c, p) {
+            (Seg::Any, Seg::Key(..)) | (Seg::Any, Seg::Index(_)) => true,
+            _ => c == p,
+        })
+}
+
+fn step_mut<'a>(v: &'a mut Value, seg: &Seg) -> Option<&'a mut Value> {
+    match seg {
+        Seg::Field(f) => v.get_mut(f),
+        Seg::Index(i) => v.get_mut(*i),
+        Seg::Key(k, val) => v
+            .as_array_mut()?
+            .iter_mut()
+            .find(|e| e.get(k).and_then(Value::as_str) == Some(val)),
+        Seg::Any => None,
+    }
+}
+
+fn remove_path(v: &mut Value, path: &[Seg]) -> bool {
+    match path {
+        [] => false,
+        [last] => match last {
+            Seg::Field(f) => v.as_object_mut().is_some_and(|o| o.remove(f).is_some()),
+            Seg::Index(i) => v.as_array_mut().is_some_and(|a| {
+                if *i < a.len() {
+                    a.remove(*i);
+                    true
+                } else {
+                    false
+                }
+            }),
+            Seg::Key(k, val) => v.as_array_mut().is_some_and(|a| {
+                let before = a.len();
+                a.retain(|e| e.get(k).and_then(Value::as_str) != Some(val));
+                a.len() != before
+            }),
+            Seg::Any => false,
+        },
+        [head, rest @ ..] => match step_mut(v, head) {
+            Some(child) => remove_path(child, rest),
+            None => false,
+        },
+    }
+}
+
+/// The manifest without the fields a 409 names, when every one of them is
+/// ceded; `None` when nothing is ceded, the message names no field, or
+/// any conflicting field is outside the declaration.
+fn without_ceded_conflicts(manifest: &Value, message: &str) -> Option<Value> {
+    let ceded = ceded_fields(manifest);
+    if ceded.is_empty() {
+        return None;
+    }
+    let paths: Vec<Vec<Seg>> = conflict_paths(message)
+        .iter()
+        .map(|p| parse_path(p))
+        .collect::<Option<_>>()?;
+    if paths.is_empty() || !paths.iter().all(|p| ceded.iter().any(|c| covers(c, p))) {
+        return None;
+    }
+    let mut stripped = manifest.clone();
+    for p in &paths {
+        remove_path(&mut stripped, p);
+    }
+    Some(stripped)
+}
+
 /// Classify a `kube::Error` from an SSA patch into the
 /// right `ApplyError` variant. 409 Conflict → `Conflict`. 422 Invalid with an
 /// immutable-field message → `ImmutableConflict`. Everything else falls
@@ -647,13 +833,19 @@ fn classify_apply_error(rid: &ResourceId, err: kube::Error) -> ApplyError {
             };
         }
         FailureClass::Invalid => {
-            if let kube::Error::Api(ref resp) = err
-                && is_immutable_field_message(&resp.message)
-            {
-                return ApplyError::ImmutableConflict {
-                    resource: rid.display_id(),
-                    source: err,
-                };
+            if let kube::Error::Api(ref resp) = err {
+                if is_stored_version_message(&resp.message) {
+                    return ApplyError::CrdStoredVersion {
+                        resource: rid.display_id(),
+                        source: err,
+                    };
+                }
+                if is_immutable_field_message(&resp.message) {
+                    return ApplyError::ImmutableConflict {
+                        resource: rid.display_id(),
+                        source: err,
+                    };
+                }
             }
         }
         _ => {}
@@ -662,6 +854,19 @@ fn classify_apply_error(rid: &ResourceId, err: kube::Error) -> ApplyError {
         resource: rid.display_id(),
         source: err,
     }
+}
+
+/// Detect the apiserver rejecting a CRD that drops a version the cluster
+/// still has objects stored at.
+///
+/// It reports this as a plain validation error on `status.storedVersions`,
+/// which says what is wrong and nothing about what to do, and the operator
+/// is left reading it against a CRD they did not hand-write. A deploy hits
+/// it whenever a vendored CRD is re-vendored after upstream retired a
+/// version. Matching on the field path keeps this narrow: no other
+/// rejection names it.
+fn is_stored_version_message(msg: &str) -> bool {
+    msg.contains("status.storedVersions")
 }
 
 /// Detect the wire-format signatures the API server uses to reject updates to
@@ -907,6 +1112,73 @@ pub async fn apply_wave(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ceded_conflict_is_stripped_and_others_are_not() {
+        let manifest = serde_json::json!({
+            "apiVersion": "admissionregistration.k8s.io/v1",
+            "kind": "ValidatingWebhookConfiguration",
+            "metadata": { "name": "op", "annotations": { super::keys::CEDE_FIELDS: "webhooks[*].rules,spec.versions" } },
+            "webhooks": [
+                { "name": "a.example.io", "rules": [ { "apiGroups": ["x"] } ], "clientConfig": { "service": { "name": "op" } } },
+                { "name": "b.example.io", "rules": [ { "apiGroups": ["y"] } ] }
+            ]
+        });
+        let msg = "Apply failed with 1 conflict: conflict with \"fabric8-kubernetes-client\" using \
+                   admissionregistration.k8s.io/v1: .webhooks[name=\"a.example.io\"].rules";
+        let stripped = super::without_ceded_conflicts(&manifest, msg).expect("ceded");
+        assert!(stripped["webhooks"][0].get("rules").is_none());
+        assert!(stripped["webhooks"][0].get("clientConfig").is_some());
+        assert!(stripped["webhooks"][1].get("rules").is_some());
+
+        // A conflict outside the declaration is still a conflict.
+        let other = "conflict with \"x\" using v1: .webhooks[name=\"a.example.io\"].clientConfig";
+        assert!(super::without_ceded_conflicts(&manifest, other).is_none());
+        // Two paths, one outside: still a conflict.
+        let mixed = "conflicts with \"x\" using v1:\n- .spec.versions\n- .metadata.labels";
+        assert!(super::without_ceded_conflicts(&manifest, mixed).is_none());
+        // Nothing ceded: never stripped.
+        let plain = serde_json::json!({ "metadata": { "name": "n" }, "spec": { "versions": [] } });
+        assert!(super::without_ceded_conflicts(&plain, ".spec.versions").is_none());
+    }
+
+    #[test]
+    fn conflict_paths_are_read_from_the_message() {
+        let msg = "Apply failed with 2 conflicts: conflicts with \"cdi-operator\" using apiextensions.k8s.io/v1:\n- .spec.versions\n- .spec.conversion";
+        assert_eq!(
+            super::conflict_paths(msg),
+            vec![".spec.versions", ".spec.conversion"]
+        );
+        assert_eq!(
+            super::parse_path(".a[name=\"x y\"].b[0]").unwrap(),
+            vec![
+                super::Seg::Field("a".into()),
+                super::Seg::Key("name".into(), "x y".into()),
+                super::Seg::Field("b".into()),
+                super::Seg::Index(0)
+            ]
+        );
+        assert!(super::parse_path("").is_none());
+    }
+
+    #[test]
+    fn stored_version_rejection_is_recognised() {
+        // What the apiserver actually says when a CRD drops a version that
+        // still has objects stored at it.
+        let msg = "CustomResourceDefinition.apiextensions.k8s.io \"cdis.cdi.kubevirt.io\" \
+                   is invalid: status.storedVersions[0]: Invalid value: \"v1alpha1\": \
+                   must appear in spec.versions";
+        assert!(super::is_stored_version_message(msg));
+        assert!(!super::is_immutable_field_message(msg));
+    }
+
+    #[test]
+    fn immutable_rejection_is_not_a_stored_version_one() {
+        let msg =
+            "Job.batch \"probe\" is invalid: spec.template: Invalid value: ...: field is immutable";
+        assert!(super::is_immutable_field_message(msg));
+        assert!(!super::is_stored_version_message(msg));
+    }
+
     use super::*;
     use kube::api::ObjectMeta;
     use serde_json::json;

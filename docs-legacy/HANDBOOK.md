@@ -455,9 +455,12 @@ scope.mkResource {
   requires    = [ ... ];     # explicit dep edges not visible via string interpolation
   extraDeps   = [ ... ];     # additional dep edges (tagged "extra:" in kix.run/depends-on)
   extra       = { ... };     # top-level passthrough for fields kix doesn't model (e.g. `rules` for ClusterRole, `provisioner` for StorageClass)
+  ownership.cede = [ ... ];  # field paths another controller takes over after creation (see below)
   clusterDomain = "...";     # rarely overridden — comes from clusterConfig.cluster.domain
 }
 ```
+
+**Ceded fields.** An operator that rewrites an object kix applied takes ownership of the fields it rewrites, and the next server-side apply of the same object meets a 409 conflict on them; `--force-conflicts` takes them back for the whole deploy and hides real conflicts everywhere else. `ownership.cede = [ "spec.versions" "webhooks[*].rules" ]` says which fields the resource expects to lose: kix sets them at creation, and when a later apply conflicts only on ceded paths it applies again without those fields, so the operator keeps them. A conflict on any other field still fails. Paths use the apiserver's own syntax without the leading dot, with `*` for any list element; `scope.mkCRD` takes the same argument. cdi cedes `spec.versions` (the operator drops a deprecated version), stackgres-operator cedes `webhooks[*].rules` on its webhook configurations. Stamped as `kix.run/cede-fields`.
 
 **`extra.*` shadowing check.** `extra` may NOT redefine `apiVersion`, `kind`, `metadata.name`, `metadata.namespace`, `spec` (when `spec != {}`), `data` (when `data != {}`), `stringData` (when `stringData != {}`). The check fires at eval time with a remediation hint. `metadata.labels` and `metadata.annotations` are deliberately allowed because they merge additively with scope-injected values.
 
@@ -507,7 +510,7 @@ The `kix` arg to packages comes from `compose.nix` (`kixlib`).
 | `kix.mkEnvVars { K = "v"; OPT = null; }` | `→ [{ name, value }]`. Null values filtered (`lib.optionalAttrs` plays nicely). |
 | `kix.mkEnv attrs rawList` | `(mkEnvVars attrs) ++ rawList`. Combines named env vars with raw entries (e.g. `valueFrom.secretKeyRef`) |
 | `kix.parseGi "50Gi"` | `→ 50` (number). Supports `Ti`/`Gi`/`Mi`. Strips Nix string context so it works on `dep.out.size` |
-| `kix.untrackedRef "name"` | Escape hatch: a string carrying an "untracked" context marker. Use when referring to resource names not managed by kix (Helm hook secrets, cert-manager-issued secrets, etc.). Bypasses the DI-tracking check in `mkDeployment`. The marker is inert: it satisfies the ref check and is filtered out of `kix.run/depends-on`, so it never becomes a deploy-ordering edge |
+| `kix.untrackedRef "name"` / `kix.untrackedRef { kind; name; by; apiVersion? }` | A name kix does not render. The string form is a bare claim: an inert marker that satisfies the ref check and is filtered out of `kix.run/depends-on`, listed by the `untrackedReferences` audit. The attrset form (experimental, 2026-09-20) names the creator (`by`, a Job or workload resource) and the kind: the referring resource depends on the creator, and is stamped `kix.run/expects` so `kix deploy` waits for the object to exist before applying it (`ingress-nginx` does this for the Secret its admission Job mints) |
 | `kix.keep container` | Marks an attrset "never collapse to absent": it renders as `{}` even when every member is null, and the protection survives later merges that introduce fresh nulls (additive `_kixKeep` marker, resolved at `mkResource`, never rendered). Lists are normalized eagerly instead, since merges replace lists whole. Use in constructors of presence-meaningful fields (`emptyDir`, selectors) built from optional arguments; a hand-written empty needs no keep, a literal `{ }` renders as-is (§7) |
 
 ### 9.2 Mounts
@@ -550,7 +553,7 @@ These return functions whose own DI args are auto-discovered.
 ```nix
 (kix.expose {
   service ? null,                # string: part name in self (single-backend mode)
-  paths ? null,                  # list of { path, pathType?, service, port? } (Ingress multi-backend)
+  paths ? null,                  # list of { path, pathType?, service, port? }: several backends behind one host
   partName ? "ingress",          # name of the generated part in self
   defaultAnnotations ? {},       # package-level Ingress annotations
   port ? null,                   # override auto-derived service port
@@ -564,8 +567,9 @@ These return functions whose own DI args are auto-discovered.
 - `ingressNginx` DI dep present → emits `Ingress` with optional TLS via `clusterIssuer`.
 - Both present → fail loudly (ambiguous; cluster must wire exactly one).
 - Neither present → no exposure resource emitted.
-- `service` and `paths` are mutually exclusive. `paths` is Ingress-only.
+- `service` and `paths` are mutually exclusive. `paths` renders an Ingress with a rule per path, or one HTTPRoute with a rule per path in Gateway mode; `pathType` uses the Ingress words (`Prefix`, `Exact`) in both and is translated for the Gateway.
 - TLS-secret cross-namespace check fires at build time — K8s ingress controllers only read TLS secrets from their own namespace.
+- With `networkPolicy.enable` on, the Ingress path also emits one policy per backing Service, opening that Service's pod port to the controller's pods and nothing else. An Ingress routes but opens nothing, so without it a default-deny cluster answers every request through the Ingress with a 504 that evaluation cannot see. The controller supplies the two facts through its root `out`: `podSelector` and `podNamespace`. A controller package that publishes neither gets a warning and no policy. Gateway API is not covered — a Gateway's data plane is whatever the implementation schedules, and `gateway.out` carries a parentRef, not a pod selector.
 
 **`kix.monitor`** — auto-creates `ServiceMonitor` + optional `PrometheusRule` when `prometheus` DI dep is present:
 
@@ -878,9 +882,8 @@ Set at the top level of the cluster module (or under `config.*` in module form).
 | `instances` | nested attrset | `{}` | `{ namespace: { instance: { package, ... } } }` (§13.3) |
 | `availablePackages` | `attrsOf raw` | `{}` | Package registry; auto-instantiates on DI miss |
 | `autoNamespace` | `nullOr str` | `null` | Default ns for auto-instantiated packages |
-| `namespaces` | attrset | `{}` | Per-ns labels, annotations, ResourceQuota, NetworkPolicies |
+| `namespaces` | attrset | `{}` | Per-ns labels, annotations, ResourceQuota, NetworkPolicies, `podSecurity` level |
 | `globalPartsOverlays` | list | `[]` | Parts overlays applied to ALL instances |
-| `global` | `attrsOf anything` | `{}` | Cluster-wide configuration accessed via `_kixOptions` |
 | `k8sVersion` | `nullOr str` | `null` | Target K8s version — used for meta version-compat checks |
 | `cluster.domain` | `nullOr str` | `null` | Public base domain — `kix.expose` derives `<instance>.<domain>` |
 | `cluster.provider` | `nullOr str` | flavor-set | Distribution name (informational) |
@@ -889,7 +892,7 @@ Set at the top level of the cluster module (or under `config.*` in module form).
 | `cluster.maintenance` | submodule | `{}` | `{ enable, reason?, until? }` — maintenance window marker |
 | `cluster.network` | submodule | – | `{ podCidr, serviceCidr, dnsUpstream }` |
 | `cluster.nodes` | attrset | `{}` | Static node inventory: `{ nodeName: { roles, cpu?, memory?, labels, taints? } }` |
-| `scorecard` | submodule | `{}` | `{ enable, rules, ruleDefaults, ruleOverrides }` (§17) |
+| `scorecard` | submodule | on, full rule set, capped at warning | `{ enable, rules, maxSeverity, ruleDefaults, ruleOverrides, knownAnnotationDomains }` (§17) |
 | `networkPolicy` | submodule | `{}` | `{ enable, defaultDeny, directions, platformIntents }` (§16) |
 
 `clusterDomain` and `cluster.domain` serve different purposes:
@@ -934,7 +937,7 @@ modules = [
 
 **Capability flags** (full list, all on `cluster.capabilities`): `multiNode`, `availabilityZones` (list), `nodeAutoscaling`, `managedControlPlane`, `gpu`, `privilegedContainers`, `podSecurityEnforcement` (`"privileged" | "baseline" | "restricted" | null`), `daemonSets`. Flags are three-valued substrate axioms: `null` = unknown (relying workloads warn), `false` = hard error, `true` = pass.
 
-**Availability level, pod spread and PDBs** (`kix/lib/plugins/availability/module.nix`, v2_discussions/145; spread mechanism from archive/143). `cluster.availability.default = "none" | "pod" | "node" | "zone"` names the largest failure a workload must survive without downtime. It is derived from the capabilities when unset (`multiNode = false` gives `none`, two or more `availabilityZones` give `zone`, otherwise `node`; unknown capabilities derive `node` with one warning), capped by them (asking `zone` without zones is an eval error), and overridable per instance with `instances.<ns>.<inst>.availability`, which may exceed the cluster default up to the substrate. `cluster.availability.substrate` (read-only) is the derived maximum. Every package receives the resolved level as its `availability` function argument, and every replica-shaped option default maps it: `kix.availability.pick availability { none = 1; pod = 2; node = 2; zone = 3; }`, `kix.availability.atLeast "node" availability`. An explicit instance value still wins. A package that cannot reach a level declares `meta.availability.max = "pod"`; a request above it is lowered with a warning. Every Deployment or StatefulSet with `spec.replicas > 1` gets `topologySpreadConstraints` on `cluster.topology.failureDomainKeys` (read-only: `[ zoneKey hostKey ]` with more than one zone, `[ hostKey ]` otherwise, `[ ]` on `multiNode = false`; `cluster.topology.zoneKey` and `cluster.topology.hostKey` default to the well-known labels `topology.kubernetes.io/zone` and `kubernetes.io/hostname`, and a cluster whose nodes are labelled by hand sets its own) and a `PodDisruptionBudget` (`maxUnavailable = 1`). Strictness is a lowering of the level: `zone` is DoNotSchedule on the zone key, `node` is DoNotSchedule on hostname, `pod` and `none` are ScheduleAnyway everywhere; an explicit replica count above one under `none` still gets best-effort spread and a PDB. Author-written `topologySpreadConstraints` on a workload switch off both derivations for it; an author PDB over the same pods is kept. On `multiNode = false`, a hand-written `requiredDuringScheduling` anti-affinity or `DoNotSchedule` spread on a multi-replica workload is an eval error; on `multiNode = null` it warns. A root-reachable workload with one replica under `node` or above warns (the package did not map the level). Packages whose pods an operator renders (VMCluster) read `clusterConfig.cluster.topology.failureDomainKeys` for their CR's affinity. With `maxSkew = 1` a hard constraint means even distribution, not one pod per domain: five replicas across three zones is 2/2/1.
+**Availability level, pod spread and PDBs** (`kix/lib/plugins/availability/module.nix`, v2_discussions/145; spread mechanism from archive/143). `cluster.availability.default = "none" | "pod" | "node" | "zone"` names the largest failure a workload must survive without downtime. It is derived from the capabilities when unset (`multiNode = false` gives `none`, two or more `availabilityZones` give `zone`, otherwise `node`; unknown capabilities derive `node` with one warning), capped by them (asking `zone` without zones is an eval error), and overridable per instance with `instances.<ns>.<inst>.availability`, which may exceed the cluster default up to the substrate. `cluster.availability.substrate` (read-only) is the derived maximum. Every package receives the resolved level as its `availability` function argument, and every replica-shaped option default maps it: `kix.availability.pick availability { none = 1; pod = 2; node = 2; zone = 3; }`, `kix.availability.atLeast "node" availability`. An explicit instance value still wins. A package that cannot reach a level declares `meta.availability.max = "pod"`; a request above it is lowered with a warning. A package where only some workloads cannot reach it puts `availability.max = "pod"` on those builder calls instead (`scope.mkDeployment { availability.max = "pod"; ... }`): that workload is sealed at the lower level and says so once, the rest of the instance and the package's `availability` argument keep the requested level, and the one-replica warning judges each workload at its own level. openebs does this for its single-replica controllers while etcd and NATS keep hard zone spread. Every Deployment or StatefulSet with `spec.replicas > 1` gets `topologySpreadConstraints` on `cluster.topology.failureDomainKeys` (read-only: `[ zoneKey hostKey ]` with more than one zone, `[ hostKey ]` otherwise, `[ ]` on `multiNode = false`; `cluster.topology.zoneKey` and `cluster.topology.hostKey` default to the well-known labels `topology.kubernetes.io/zone` and `kubernetes.io/hostname`, and a cluster whose nodes are labelled by hand sets its own) and a `PodDisruptionBudget` (`maxUnavailable = 1`). Strictness is a lowering of the level: `zone` is DoNotSchedule on the zone key, `node` is DoNotSchedule on hostname, `pod` and `none` are ScheduleAnyway everywhere; an explicit replica count above one under `none` still gets best-effort spread and a PDB. Author-written `topologySpreadConstraints` on a workload switch off both derivations for it; an author PDB over the same pods is kept. A workload that switches the derivations off and then has no PDB selecting its pods warns, naming the workload; the plugin says it because the plugin is where the skip is decided (`reliability.hasPDB` stays retired for that reason, not because rules cannot see derived resources: since 2026-09-20 manifest and package rules score the shipped set, derived PodDisruptionBudgets and materialised network policies included). On `multiNode = false`, a hand-written `requiredDuringScheduling` anti-affinity or `DoNotSchedule` spread on a multi-replica workload is an eval error; on `multiNode = null` it warns. A root-reachable workload with one replica under `node` or above warns (the package did not map the level). Packages whose pods an operator renders (VMCluster) read `clusterConfig.cluster.topology.failureDomainKeys` for their CR's affinity. With `maxSkew = 1` a hard constraint means even distribution, not one pod per domain: five replicas across three zones is 2/2/1.
 
 The old role-backed bools (`cni`, `networkPolicyAPI`, `loadBalancer`, `persistentStorage`, `rwxStorage`, `volumeSnapshots`, `ingressController`) are gone (v2_discussions/127): role providers derive from `meta.roles`, the environment's claim on a role is a `cluster.roles.<name>.binding`, and rwx/snapshot facts live on the storage provider's `out`. The CNI/LB/storage columns in the table above describe role bindings and platform imports, not capability flags.
 
@@ -1001,6 +1004,8 @@ networkPolicy = {
 
 `namespaces.<ns>.networkPolicies.{directions, defaultDeny}` allows per-namespace overrides.
 
+**Pod Security Standards.** A package whose pods need a level declares it: `meta.podSecurity = "privileged"` (kubevirt's virt-handler). The namespace gets `pod-security.kubernetes.io/enforce` at the most permissive level any of its instances needs, and nothing when none declares one. `namespaces.<ns>.podSecurity` sets the level by hand; setting it stricter than an instance in that namespace needs is an eval error naming the instance, rather than a pod the apiserver refuses with a message naming the pod.
+
 Each default-deny CNP carries one empty rule per denied direction (`ingress: [ { } ]`), which is what puts the namespace's endpoints into default deny with nothing allowed. An empty list is not the same: cilium 1.19 rejects it as invalid and enforces nothing.
 
 ### 16.5 Package intents
@@ -1014,7 +1019,7 @@ meta.network.intents.<name> = {
 };
 ```
 
-`all-pods` is cilium's `cluster` entity. An ingress controller needs `egress = [ { to = "all-pods"; } ]` because its backends are whatever the cluster's Ingress objects name; a backend that an ingress controller fronts currently needs `from = "all-pods"` on its web port, since `kix.expose` does not yet add that edge (housekeeping). Ports in rules and in Services are numbers: cilium resolves a named port on an ingress rule but drops egress on one.
+`all-pods` is cilium's `cluster` entity. An ingress controller needs `egress = [ { to = "all-pods"; } ]` because its backends are whatever the cluster's Ingress objects name. The other half of that edge is written for you: `kix.expose` emits the ingress rule on the backend, so a fronted backend declares no intent of its own. Ports in rules and in Services are numbers: cilium resolves a named port on an ingress rule but drops egress on one.
 
 ## 17. Scorecard
 
@@ -1037,7 +1042,9 @@ rule disable          (rule excluded outright)
 > ruleDefaults
 ```
 
-Configure via `scorecard.{enable, rules, ruleDefaults, ruleOverrides}`.
+The result is then capped at `scorecard.maxSeverity`.
+
+Configure via `scorecard.{enable, rules, maxSeverity, ruleDefaults, ruleOverrides}`. The scorecard is on by default with the full built-in rule set (`kix.rules`) and `maxSeverity = "warning"`: every finding is printed, none fails the build. Raise the cap to `"error"` for a build that goes red on an error-severity rule; this repository's own flakes do it for every cluster through `mkFlake { clusterModules = [ { scorecard.maxSeverity = "error"; } ]; }`. Setting `rules` replaces the set, so a cluster that wants the built-in rules plus one change to one rule uses `ruleOverrides` (`ruleOverrides.byNamespace."*"."security.nonRoot".severity = "warning"`) rather than copying a category.
 
 ### 17.2 Built-in rules
 
@@ -1061,14 +1068,16 @@ Configure via `scorecard.{enable, rules, ruleDefaults, ruleOverrides}`.
 | `hasResourceLimits` | manifest | warning | All containers have limits |
 | `hasResourceRequests` | manifest | warning | All containers have requests |
 | `hasProbes` | manifest | warning | Workload containers have liveness + readiness probes |
-| `hasPDB` | package | warning | Multi-replica Deployments have PodDisruptionBudget (derived by `cluster.availability`; fires only where the author placed the workload) |
 | `gracefulShutdown` | manifest | info | `terminationGracePeriodSeconds` set |
 
 **Governance** (`kix.rules.governance`):
 
 | Rule | Level | Severity | Check |
 |---|---|---|---|
+| `distinctWorkloadSelectors` | package | error | No workload's `spec.selector.matchLabels` is also a subset of another workload's pod template labels. Two pod sets answering one selector cannot be told apart by readiness, Services, PDBs or network policy |
+| `untrackedReferences` | cluster | info | Audit: every name declared external with `kix.untrackedRef`, listed so the claims are reviewable in one place |
 | `hasOwner` | package | warning | `meta.owner` set |
+| `nonRoot` | manifest | error | Every container resolves to a non-root uid. Reads the container's `securityContext` first, then the pod's, the way Kubernetes does; a non-zero `runAsUser` counts. Skipped for a package holding the `run-as-root` grant |
 | `hasDescription` | package | info | `meta.description` set |
 | `labelStandards` | manifest | info | Standard labels (`app.kubernetes.io/name`, `managed-by`) |
 
@@ -1076,8 +1085,9 @@ Configure via `scorecard.{enable, rules, ruleDefaults, ruleOverrides}`.
 
 DI-hygiene rules (v2_discussions/128 replaced the old fingerprint-based capabilityOwnership rule):
 
-- `annotationDomainOwnership` — a package's `metadata.annotations` keys under an operator-declared domain (`meta.annotationDomains`, e.g. reflector's `reflector.v1.k8s.emberstack.com`) require a DI dep on the declarer; a domain nobody declares warns as a dead annotation. Reserved suffixes (`kubernetes.io`, `k8s.io`, `kix.run`, `helm.sh`, `kubebuilder.io`) and the cluster's `scorecard.knownAnnotationDomains` are exempt.
-- `unsafeGrants` — info-level audit listing every `meta.unsafe` grant (currently only `raw-pvc`, whose absence is enforced as an eval *error* in `scope/validators.nix`, not a scorecard rule).
+- `annotationDomainOwnership` — a package's `metadata.annotations` keys under an operator-declared domain (`meta.annotationDomains`, e.g. reflector's `reflector.v1.k8s.emberstack.com`) require a dependency on the declarer, direct or through another dependency (a TLS Ingress carries `cert-manager.io/cluster-issuer`; the consumer depends on the cluster-issuer, which depends on cert-manager, which declares the domain); a domain nobody declares warns as a dead annotation. Reserved suffixes (`kubernetes.io`, `k8s.io`, `kix.run`, `helm.sh`, `kubebuilder.io`) and the cluster's `scorecard.knownAnnotationDomains` are exempt.
+- `consistentPortNames` — warning: one port name must mean one number across an instance's workloads. Kubernetes scopes a port name to its pod, so two workloads may legally disagree; Kix's consumers are wider than a pod, and anything that resolves a name without naming the workload it belongs to picks one of the numbers by accident. A warning rather than an error because a vendored Helm chart can carry the clash (cilium's `health` is 9879 on the agent and 9234 on the operator) and the package cannot rename it.
+- `unsafeGrants` — info-level audit listing every `meta.unsafe` grant. Four exist: `raw-pvc`, whose absence is enforced as an eval *error* in `scope/validators.nix` rather than by a scorecard rule, and `host-network`, `privileged` and `run-as-root`, which switch off `security.noHostNetwork`, `security.noPrivileged` and `security.nonRoot` for the declaring package. A CNI agent, a CSI node plugin or a node-level exporter holds the last three; an application package that trips those rules has a bug, not a grant.
 
 Kix validates `level` and `severity` when loading a rule
 (`scorecard.nix#checkLevel`, `#checkSeverity`). This prevents an unknown level
@@ -1146,9 +1156,9 @@ error: Cluster 'ludo-kind' has 1 failed assertion(s):
 1. `scope.mkServiceRef` for a Service the operator itself creates (`prometheus-operated`, `alertmanager-operated`, `vmselect-<name>`). It carries the selector, ports and the Service's labels, renders as a marker, and no check or rule fires on it. The prometheus, alertmanager, victoria-metrics-cluster and stackgres-cluster packages do this. Two consequences to know: consumers now wait until the operator's Service has ready endpoints (the per-node readiness timeout, 180s by default, applies to a slow Prometheus start), and the declared selector should be as wide as the operator's own (`prometheus-operated` selects every Prometheus in the namespace; a ref that adds the instance label describes fewer pods than the Service reaches).
 2. When kix must render the Service itself (the operator creates none, as for the Thanos sidecar), the Service declares the CR whose pods it selects: `metadata.annotations."kix.run/operand-of" = "<group>/<Kind>/<name>"`. Check 4 accepts the Service when that CR is in the build in the same namespace, and reports the declaration when it is not. A PodDisruptionBudget over operator-created pods declares the same annotation for check 14 (the alertmanager package does). Group and kind together, because kind names are not unique across API groups. There is no list of operator kinds anywhere in the checker.
 
-**References to things kix does not render.** Wrap the name in `kix.untrackedRef` (a ServiceAccount the cluster provides, a ConfigMap another system owns). The value carries an inert marker in its string context; `buildCluster` collects those names before context is stripped, keyed by the referring resource's namespace, and the checks accept them there. A `scope.mkServiceRef` or `scope.mkSecretRef` marker counts as the Service or Secret it describes, in its namespace, and its declared pod selector counts as pods for the Service and NetworkPolicy selector checks. For a cluster-level `kix.mkImport`, pass `kind = "Service"` so the marker carries the kind; a consumer in another namespace wraps the name in `kix.untrackedRef`. A bare string that names nothing in the build fails, and so does a name derived from a resource with a suffix added (`self.sa.out.name + "-typo"`): provenance is not resolution. A suffix on an untracked ref stays untracked, since the author marked it. The StatefulSet headless-Service check reads `clusterIP: None` off a rendered Service and cannot accept a marker.
+**References to things kix does not render.** Wrap the name in `kix.untrackedRef` (a ServiceAccount the cluster provides, a ConfigMap another system owns); when a Job or operator in the same package creates it, say so with `kix.untrackedRef { kind = "Secret"; name; by = self.thatJob; }`, which orders the referrer after the creator and makes deploy wait for the object. The value carries an inert marker in its string context; `buildCluster` collects those names before context is stripped, keyed by the referring resource's namespace, and the checks accept them there. A `scope.mkServiceRef` or `scope.mkSecretRef` marker counts as the Service or Secret it describes, in its namespace, and its declared pod selector counts as pods for the Service and NetworkPolicy selector checks. For a cluster-level `kix.mkImport`, pass `kind = "Service"` so the marker carries the kind; a consumer in another namespace wraps the name in `kix.untrackedRef`. A bare string that names nothing in the build fails, and so does a name derived from a resource with a suffix added (`self.sa.out.name + "-typo"`): provenance is not resolution. A suffix on an untracked ref stays untracked, since the author marked it. The StatefulSet headless-Service check reads `clusterIP: None` off a rendered Service and cannot accept a marker.
 
-**Where it sits.** `kix/lib/tests/validate.nix` holds a failing and a passing case per check. The scorecard is off unless a cluster enables it; these checks are always on.
+**Where it sits.** `kix/lib/tests/validate.nix` holds a failing and a passing case per check. The scorecard runs by default and can be capped (§17); these checks are always on and never capped.
 
 ## 18. Multi-environment stamping
 
@@ -1328,6 +1338,15 @@ Both `mkCRD` and `mkCRDRef` accept two per-kind controller-semantics declaration
 }
 ```
 
+A package run in import mode renders nothing, so its scope is cut down: it
+offers `mkResource`, `mkClusterResource`, `mkCR`, the two ref builders and the
+workload builders (`mkDeployment`, `mkStatefulSet`, `mkDaemonSet`, `mkJob`,
+`mkCronJob`). The workload builders seal nothing and emit nothing; they exist
+because the documented way to write a Service is `kix.service.fromWorkload`,
+which reads the workload's selector and container ports on the way to the `out`
+values the import does need. A package that reaches anything else — a dependency
+argument, a builder not in that list — fails with the reason named.
+
 Before applying dependent resources, `kix deploy` waits for each
 `kix.run/mode=import` PackageInstance to exist. This check cannot be skipped.
 Set `optional = true` when the resource may legitimately be absent. Kix checks
@@ -1459,7 +1478,7 @@ Diff features:
 | Reading `out.selector` cycles through a back-reference | Use `workload.rawSelector`. Trade-off: `architecture.selectorCoherence` warns; live with it |
 | Raw PVC throws at eval | Provision via a sibling `persistent-volume-claim` instance + `storage` dep; only canonical/chart-persistence packages hold `meta.unsafe = [ "raw-pvc" ]` |
 | `<Kind> name '<n>' is not a legal Kubernetes object name` | Packages usually derive resource names from `scope.instanceName`, so rename the instance with a lowercase name. If consumers use a camel-case build argument, preserve it with `meta.defaultAliases = [ "camelCaseArgName" ]` |
-| `annotationDomainOwnership` warns about an operator's annotations | Declare the DI dep on the operator (e.g. `reflector`) and use its builder; for domains consumed outside kix add `scorecard.knownAnnotationDomains` |
+| `annotationDomainOwnership` warns about an operator's annotations | Declare the DI dep on the operator (e.g. `reflector`), or on something that depends on it, and use its builder; for domains consumed outside kix add `scorecard.knownAnnotationDomains` |
 | Cross-namespace mount or secret-ref errors at build | Either move the resource to the right ns, use `scope.forNamespace`, or set `reflected = true` if reflector mirrors it |
 | Dep injection overrides a value you want to pin | Wrap with `mkLocked` |
 | Reflected secret looks unhealthy | Reflector controller copies on schedule; `reflected = true` relaxes ns-check but does not guarantee the copy exists. Order via DI on the reflector |

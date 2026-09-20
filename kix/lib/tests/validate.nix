@@ -992,6 +992,33 @@ in
     ]
   );
 
+  # --- 17. priorityClassName references ---
+
+  v17a-priority-class-missing = onlyFailure "sets priorityClassName 'nope'" (
+    base "a"
+    ++ [
+      (deployment "a" "prio" { spec.template.spec.priorityClassName = "nope"; })
+    ]
+  );
+
+  v17b-priority-class-built-is-fine = clean (
+    base "a"
+    ++ [
+      (deployment "a" "prio" { spec.template.spec.priorityClassName = "mine"; })
+      (res "PriorityClass" null "mine" { apiVersion = "scheduling.k8s.io/v1"; })
+    ]
+  );
+
+  # The classes Kubernetes ships with are never in a kix build.
+  v17c-system-priority-class-is-builtin = clean (
+    base "a"
+    ++ [
+      (deployment "a" "prio" {
+        spec.template.spec.priorityClassName = "system-cluster-critical";
+      })
+    ]
+  );
+
   # --- wiring into buildCluster ---
 
   # kix.untrackedRef on a ServiceAccount name builds.

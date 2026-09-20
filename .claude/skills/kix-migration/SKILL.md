@@ -5,8 +5,9 @@ description: Guide for migrating Kubernetes services into kix packages. Use this
 
 # kix Migration Guide
 
-> This is a living document. Update it as we learn new patterns during migrations.
-> **Before modifying this document, ask the user for confirmation using the AskUserQuestion tool.** Do not silently update it.
+> This is a living document. Keep it current: `CLAUDE.md` makes updating it
+> part of any change to kix APIs, package conventions or the diff tooling.
+> Edit it in the same change, without asking first.
 
 ## Source Material
 
@@ -199,6 +200,8 @@ This bit `persistent-volume-claim` (it shipped root-only and rendered no PVC), a
 
 ### `self` and dependency tracking
 
+A name kix does not render is wrapped in `kix.untrackedRef`. When something in the package creates it (a Job minting a Secret, an operator), use the attrset form `kix.untrackedRef { kind = "Secret"; name = "..."; by = self.thatJob; }`: the referrer then depends on the creator and deploy waits for the object (`ingress-nginx`'s admission Secret). Do not also list the creator in `requires`. Never point `by` at the resource that holds the reference.
+
 `self` is a lazy-recursive reference to the build function's return attrset. Use `"${self.resourceName}"` to reference another resource — this creates a Nix store-path dependency that kix tracks automatically. For label-based selectors (Services, PDBs), use `scope.selectorLabels` and `requires`:
 
 ```nix
@@ -243,6 +246,10 @@ Fix all warnings before committing.
 Workload constructors (`mkDeployment`, `mkStatefulSet`, `mkDaemonSet`, `mkJob`) are pipe-friendly — use at the end of a `|>` chain. They auto-set `apiVersion`/`kind` and copy `spec.selector.matchLabels` to `spec.template.metadata.labels` (preventing selector mismatch). The `name` field is required. They are the only way to build a workload: `scope.mkResource { kind = "Deployment"; ... }` is refused at eval, because a workload that skips `sealWorkload` gets no pod-spec validation, no derived spread or PodDisruptionBudget and no network-policy edges. Inside `spec.template.spec` write `serviceAccount = self.sa;` (not `serviceAccountName`), and in a StatefulSet `headlessService = self.svc;` (not `serviceName`).
 
 ### mkResource / mkClusterResource fields
+
+`ownership.cede = [ "spec.versions" "webhooks[*].rules" ]` names fields an operator takes over after creation (also on `scope.mkCRD`): deploy applies without them when a 409 is confined to those paths, and fails any other conflict. cdi and stackgres-operator use it; never reach for `--force-conflicts` in a package.
+
+A CRD an operator installs at runtime is a `scope.mkCRDRef { ...; installedBy = self.operatorDeployment; }`; CRs of that kind are built with `scope.mkCR self.thatRef { ... }` (openebs DiskPool).
 
 | Field | Description |
 |-------|-------------|
@@ -374,11 +381,11 @@ The `volumeHasSource` scorecard rule (severity error) fails the build on any vol
 - `ingressNginx` DI dep present → emits `Ingress` with optional TLS
 - Neither present → no exposure resource
 
-Parameters: `service` (string key in self), `partName`, `defaultAnnotations` (Ingress only), `port`, `tlsSecretName` (Ingress only).
+Parameters: `service` (string key in self) or `paths` (a list of `{ path, pathType?, service, port? }` for several backends behind one host, rendered as an Ingress with a rule per path or one HTTPRoute with a rule per path), `partName`, `defaultAnnotations` (Ingress only), `port`, `tlsSecretName` (Ingress only). Build for Gateway API first: Ingress stays supported, but every cluster is moving off it.
 
 Use `options.ingress = kix.options.ingress;` for standardized `{ host, annotations }` options.
 
-For complex routing with multiple backends/paths, build HTTPRoute/Ingress manually via `kix.httpRoute.fromService` / `kix.ingress.fromService` or raw `scope.mkResource`.
+For routing `paths` cannot express, build HTTPRoute/Ingress manually via `kix.httpRoute.fromService` / `kix.httpRoute.fromPaths` / `kix.ingress.fromService` or raw `scope.mkResource`.
 
 **`kix.monitor`** — composable build entry. Creates ServiceMonitor + optional PrometheusRule when `prometheus` DI dep is present, emits nothing otherwise.
 
@@ -401,6 +408,8 @@ The script gives up once `RETRY_FOR` seconds have passed and keeps one round of 
 | Function | Description |
 |----------|-------------|
 | `kix.port name containerPort` | `→ { name, containerPort, protocol = "TCP" }` |
+
+A port name is unique per pod in Kubernetes, but `architecture.consistentPortNames` asks for one meaning per instance: if a package's main workload calls 5678 `http`, its worker's own port needs a different name (`health`, `metrics`), not the same one on another number. Resolvers that are handed a name without a workload cannot tell the two apart.
 | `kix.mkEnvVars { KEY = "val"; OPT = null; }` | `→ [{ name, value }]`. Nulls filtered. |
 | `kix.mkEnv { KEY = "val"; } [ rawEntries ]` | Combine named env vars with raw K8s env entries (e.g. `valueFrom.secretKeyRef`). |
 | `kix.parseGi "50Gi"` | `→ 50`. Supports Ti/Gi/Mi. |
@@ -587,14 +596,20 @@ DI resolution priority: (1) explicit dep overrides, (2) same-namespace match, (3
 
 **Raw PVCs are an eval error.** A package building `kind: PersistentVolumeClaim` directly throws at build time — including PVCs emitted by an imported helm chart with persistence enabled. The escape is an explicit grant in package meta: `meta.unsafe = [ "raw-pvc" ]` (closed vocabulary, `kix/lib/unsafe.nix`; every grant is listed by the `architecture.unsafeGrants` scorecard audit). Prefer restructuring to the `storage` DI dep; grant `raw-pvc` only for chart-emitted claims or genuinely inline multi-component claims.
 
+**A package that cannot pass a structural security rule declares why.** Three more grants exist for the cases where the rule is right and the package is still correct: `host-network` (pods on the host network, PID or IPC namespace), `privileged` (privileged containers) and `run-as-root` (containers as uid 0). Each switches its rule off for that package alone and is listed by `unsafeGrants` in every build. `kix/packages/cilium` holds all three, because programming the node's networking is what a CNI does. Reach for one only for a CNI, a CSI node plugin or a node-level agent — an application package that trips these rules has a bug. The alternative they replace, a per-namespace severity override in the cluster definition, exempts everything else in that namespace too.
+
 ### Package Meta
+
+- **`meta.podSecurity`** — `"privileged" | "baseline" | "restricted"`, the Pod Security level the package's pods need (kubevirt: privileged). The namespace carries `pod-security.kubernetes.io/enforce` at the most permissive level any of its instances needs.
+- **`meta.availability.max`** caps the whole instance; a package where only some workloads cannot reach the level puts `availability.max = "pod"` on those builder calls (`scope.mkDeployment { availability.max = "pod"; ... }`) so a quorum store beside a single-replica controller keeps hard spread (openebs).
 
 ```nix
 meta = {
   lifecycle = "stateful";   # "stateless" (default) | "stateful"
   scope = "namespace";      # "cluster" (default) | "namespace"
   version = "1.2.0";        # package version (used for version constraint checks)
-  description = "...";
+  description = "...";      # required: governance.hasDescription warns without it
+  owner = "platform";       # required: "platform" or "app-team"
   maintainer = "team-name";
   conflictsWith = [ "other-pkg" ];          # same-namespace mutual exclusion
   "cluster:conflictsWith" = [ "alt-cni" ];  # cluster-wide mutual exclusion
@@ -604,10 +619,15 @@ meta = {
 - `lifecycle = "stateful"` — this package **provides state that other packages depend on**. Triggers kix-diff protection (PVC deletion = error) and migration pair detection. Examples: `persistent-volume-claim`, `stackgres-cluster`, `valkey`. A package that merely *consumes* stateful services is **not** stateful.
 - `scope = "namespace"` — DI resolution errors if a consumer in a different namespace depends on this package.
 - `version` — enables dependency version compatibility checks via `checkMetaStatic`. Read `kix/lib/meta.nix` for `parseVersion`, `versionAtLeast`, `versionAtMost`.
+- `owner` — every package in the tree declares one, `"platform"` for infrastructure and `"app-team"` for user-facing applications. `governance.hasOwner` warns without it.
 - `conflictsWith` / `cluster:conflictsWith` — build-time error if conflicting packages are co-instantiated.
 - All enforced by `kix/lib/eval.nix` at build time.
 
-**Scorecard:** Packages are automatically scored against built-in policy rules at build time. Rules check for: resource requests/limits, liveness+readiness probes, non-root containers, no `:latest` tags, `meta.owner`, `meta.description`, PDBs for multi-replica deployments, network policies, and more. Violations surface as warnings or errors. Read `kix/lib/rules/` and `kix/lib/scorecard.nix` for the full rule set and override mechanism.
+**Every workload kind has a typed builder, and `scope.mkResource` refuses all of them.** `mkDeployment`, `mkStatefulSet`, `mkDaemonSet`, `mkJob`, `mkCronJob` and `mkHelmWorkload`. A CronJob's pod template sits one level deeper, under `spec.jobTemplate.spec.template`, and `mkCronJob` needs `spec.jobTemplate.spec.template.metadata.labels`, because a CronJob has no selector of its own and those labels are the only identity its pods carry.
+
+**Workload labels.** The typed workload builders stamp the workload's own selector labels onto its `metadata.labels`, on top of the cluster and instance labels, so `app.kubernetes.io/name` is on the object and not only in the selector and the pod template. A package's explicit `labels` argument still wins. Helm-parity packages (`labelStyle = "helm"`) keep the chart's `app`/`release` labels.
+
+**Scorecard:** on by default with the full built-in rule set, every finding capped at `scorecard.maxSeverity = "warning"` for users; this repository's flakes raise the cap to `error` for every cluster (`mkFlake { clusterModules }`), so a package that trips an error-severity rule fails every test cluster it is in. Rules score what ships, derived resources included. Rules check for: resource requests/limits, liveness+readiness probes, non-root containers (`security.nonRoot`: set `runAsNonRoot = true` when the image runs as a non-root user, numeric `runAsUser` when the image names its user by name, and hold `meta.unsafe = [ "run-as-root" ]` with a comment saying why only when the image needs root), no `:latest` tags, `meta.owner`, `meta.description`, network policies, a source on every volume (`emptyDir = kix.keep { }` for an empty one), distinct labels on same-kind resources, and more. A cluster changes one rule with `scorecard.ruleOverrides`, never by copying `rules`. Read `kix/lib/rules/` and `kix/lib/scorecard.nix`.
 
 **Annotation domains (v2_discussions/128):** operator packages declare the annotation prefixes they manage via `meta.annotationDomains = [ "reflector.v1.k8s.emberstack.com" ]` (reflector, prometheus-operator do). The `architecture.annotationDomainOwnership` rule warns when a package's resources carry `metadata.annotations` keys under a declared domain without a DI dep on the declarer, and when a domain-shaped annotation has no declarer anywhere (dead annotation — the operator is probably missing). Reserved suffixes (`kubernetes.io`, `k8s.io`, `kix.run`, `helm.sh`, `kubebuilder.io`) are exempt; by-convention domains consumed outside kix (e.g. `prometheus.io` scrape annotations) go in the cluster's `scorecard.knownAnnotationDomains`. There is no `kix.run/capability` stamping anymore — the dep edge is the legitimacy marker.
 

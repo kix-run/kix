@@ -233,18 +233,26 @@ rec {
           else
             null;
       in
-      builtins.seq _portCheck {
-        apiVersion = "v1";
-        kind = "Service";
-        inherit name;
-        spec = {
-          inherit type;
-          selector = workload.out.selector;
-          ports = resolvedPorts;
-        };
-        outputs = autoOutputs // (cfg.outputs or { });
-      }
-      // removeAttrs passthrough [ "outputs" ];
+      # Passthrough merges into the built Service rather than over it, so
+      # `spec.clusterIP = "None"` adds a field instead of replacing the
+      # selector and ports with a one-key spec. That replacement is why a
+      # headless Service had to be hand-written, which cost the workload
+      # dependency and a `selectorCoherence` warning with it. Lists are
+      # replaced wholesale, which is what a caller passing `spec.ports`
+      # means; `ports` has its own argument and is removed above.
+      builtins.seq _portCheck (
+        lib.recursiveUpdate {
+          apiVersion = "v1";
+          kind = "Service";
+          inherit name;
+          spec = {
+            inherit type;
+            selector = workload.out.selector;
+            ports = resolvedPorts;
+          };
+          outputs = autoOutputs // (cfg.outputs or { });
+        } (removeAttrs passthrough [ "outputs" ])
+      );
   };
 
   ingress = {
@@ -365,6 +373,66 @@ rec {
       }
       // passthrough;
   };
+
+  # Ingress pathType to Gateway API path match type. `paths` entries are
+  # written in the Ingress vocabulary so one declaration serves both modes.
+  gatewayPathType =
+    caller: t:
+    if t == "Prefix" || t == "PathPrefix" then
+      "PathPrefix"
+    else if t == "Exact" then
+      "Exact"
+    else
+      throw "${caller}: pathType \"${toString t}\" has no Gateway API equivalent (use Prefix or Exact)";
+
+  # One HTTPRoute, one rule per path, each to its own backend. The Gateway
+  # orders rules by precedence itself, so the list order carries no
+  # meaning.
+  httpRoute.fromPaths =
+    {
+      name,
+      host,
+      parentRef,
+      timeouts ? null,
+      # [ { path; pathType ? "Prefix"; svc; port ? null } ]
+      paths,
+    }:
+    {
+      apiVersion = "gateway.networking.k8s.io/v1";
+      kind = "HTTPRoute";
+      inherit name;
+      spec = {
+        parentRefs = [
+          (
+            {
+              name = parentRef.name;
+            }
+            // lib.optionalAttrs (parentRef ? namespace) { namespace = parentRef.namespace; }
+          )
+        ];
+        hostnames = [ host ];
+        rules = map (
+          p:
+          {
+            matches = [
+              {
+                path = {
+                  type = gatewayPathType "httpRoute.fromPaths (${name})" (p.pathType or "Prefix");
+                  value = p.path;
+                };
+              }
+            ];
+            backendRefs = [
+              {
+                name = p.svc.out.name;
+                port = resolveServicePort "httpRoute.fromPaths (${name})" (p.port or null) p.svc;
+              }
+            ];
+          }
+          // lib.optionalAttrs (timeouts != null) { inherit timeouts; }
+        ) paths;
+      };
+    };
 
   inherit (normalize) keep;
 
@@ -1031,70 +1099,187 @@ rec {
             http.paths = map buildPath paths;
           }
         ];
-    in
-    builtins.seq _modeCheck {
-      ${partName} =
-        if hasExposure && useGateway then
-          if paths != null then
-            throw "kix.expose (${name}): `paths` (multi-backend) is not yet supported in Gateway API mode."
-          else
-            svc
-            |> httpRoute.fromService (
-              {
-                inherit name;
-                host = effectiveHost;
-                parentRef = gateway.out.gatewayRef;
-              }
-              // lib.optionalAttrs (port != null) { inherit port; }
-              // lib.optionalAttrs (timeouts != null) { inherit timeouts; }
-            )
-            |> scope.mkResource
 
-        else if hasExposure && useIngress then
-          builtins.seq _tlsSecretNsCheck (
-            (
-              if paths != null then
-                {
-                  apiVersion = "networking.k8s.io/v1";
-                  kind = "Ingress";
-                  inherit name;
-                  annotations = defaultAnnotations // configAnnotations;
-                  spec = {
-                    ingressClassName = ingressNginx.out.ingressClassName;
-                    rules = multiPathRules;
-                  }
-                  // lib.optionalAttrs hasTls {
-                    tls = [
-                      {
-                        hosts = [ effectiveHost ];
-                        secretName = tlsSecretNameEffective;
-                      }
-                    ];
-                  };
-                }
-              else
-                svc
-                |> ingress.fromService (
+      # --- The controller's way in ---
+      #
+      # An Ingress routes; it opens nothing. Cilium enforces at the pod,
+      # so under default deny the backend refuses the controller like any
+      # other pod in any other namespace, and every request through the
+      # Ingress ends as a 504 that no amount of evaluation can see. This
+      # is the one place that holds both ends of that edge: the backing
+      # Service is right here, and the controller arrived as a dep. So
+      # `kix.expose` opens the hole it just created, on the port the
+      # Ingress actually routes to and no other.
+      #
+      # Gateway API is not covered. A Gateway's data plane is whatever
+      # the implementation schedules, in whatever namespace, and
+      # `gateway.out` carries a parentRef rather than a pod selector.
+      backends =
+        if paths != null then
+          map (p: {
+            part = p.service;
+            svc = self.${p.service};
+            port = p.port or null;
+          }) paths
+        else
+          [
+            {
+              part = service;
+              inherit svc port;
+            }
+          ];
+
+      controllerSelector = (ingressNginx.out or { }).podSelector or null;
+      controllerNamespace = (ingressNginx.out or { }).podNamespace or null;
+
+      wantsControllerEdge = hasExposure && useIngress && scope.networkPolicyEnforcer != null;
+
+      # A controller that does not say where its pods are cannot be named
+      # in a rule. Say so rather than emitting nothing: the symptom
+      # otherwise is a 504 with a healthy-looking cluster behind it.
+      _controllerEdgeWarn =
+        if wantsControllerEdge && controllerSelector == null then
+          lib.warn (
+            "kix.expose (${name}): the ingress controller does not publish `out.podSelector` "
+            + "and `out.podNamespace`, so no network policy opens the backend to it. Under "
+            + "default deny every request through this Ingress will time out. Add both to the "
+            + "controller package's root `out`."
+          )
+        else
+          lib.id;
+
+      # The rule carries the pod port, not the Service port: the policy
+      # lands on the backend's pods.
+      podPortsFor =
+        b:
+        let
+          servicePort = resolveServicePort "kix.expose (${name})" b.port b.svc;
+          declared = b.svc.rawManifest.spec.ports or [ ];
+          matched = builtins.filter (p: (p.port or null) == servicePort) declared;
+        in
+        if matched == [ ] then declared else matched;
+
+      controllerEdgeFor =
+        b:
+        scope.networkPolicyEnforcer.netpol.mkPolicy {
+          mkResource = scope.mkResource;
+          extraArgs = {
+            # The Service's own name, not the part's: a part name is a
+            # Nix identifier and `coreService` is not a legal object name.
+            name = "${b.svc.name}-from-ingress-controller";
+            labels = {
+              ${kixKeys.derived} = "true";
+              ${kixKeys.policyType} = "ingress-controller";
+            };
+            spec = {
+              endpointSelector.matchLabels = b.svc.rawManifest.spec.selector or { };
+              ingress = [
+                (scope.networkPolicyEnforcer.netpol.mkCallerIngressRule {
+                  callerSelector = controllerSelector;
+                  callerNamespace = controllerNamespace;
+                  ports = podPortsFor b;
+                })
+              ];
+            };
+            # The selector above is raw labels and carries no context, so
+            # without this the policy is a part no dependency reaches.
+            extraDeps = [ b.svc ];
+          };
+        };
+
+      controllerEdgeParts =
+        if !(wantsControllerEdge && controllerSelector != null) then
+          { }
+        else
+          builtins.listToAttrs (
+            map (b: {
+              name = "${partName}-netpol-${b.part}";
+              value = controllerEdgeFor b;
+            }) backends
+          );
+    in
+    builtins.seq _modeCheck (
+      controllerEdgeParts
+      // {
+        ${partName} =
+          if hasExposure && useGateway then
+            if paths != null then
+              scope.mkResource (
+                httpRoute.fromPaths (
                   {
                     inherit name;
                     host = effectiveHost;
-                    className = ingressNginx.out.ingressClassName;
-                    tls = lib.optional hasTls {
-                      hosts = [ effectiveHost ];
-                      secretName = tlsSecretNameEffective;
-                    };
-                    annotations = defaultAnnotations // configAnnotations;
+                    parentRef = gateway.out.gatewayRef;
+                    paths = map (p: {
+                      inherit (p) path;
+                      pathType = p.pathType or "Prefix";
+                      svc = self.${p.service};
+                      port = p.port or null;
+                    }) paths;
                   }
-                  // lib.optionalAttrs (port != null) { inherit port; }
+                  // lib.optionalAttrs (timeouts != null) { inherit timeouts; }
                 )
-            )
-            |> (if hasTls then clusterIssuer.out.withCert else lib.id)
-            |> scope.mkResource
-          )
+              )
+            else
+              svc
+              |> httpRoute.fromService (
+                {
+                  inherit name;
+                  host = effectiveHost;
+                  parentRef = gateway.out.gatewayRef;
+                }
+                // lib.optionalAttrs (port != null) { inherit port; }
+                // lib.optionalAttrs (timeouts != null) { inherit timeouts; }
+              )
+              |> scope.mkResource
 
-        else
-          null;
-    };
+          else if hasExposure && useIngress then
+            builtins.seq _tlsSecretNsCheck (
+              (
+                if paths != null then
+                  {
+                    apiVersion = "networking.k8s.io/v1";
+                    kind = "Ingress";
+                    inherit name;
+                    annotations = defaultAnnotations // configAnnotations;
+                    spec = {
+                      ingressClassName = ingressNginx.out.ingressClassName;
+                      rules = multiPathRules;
+                    }
+                    // lib.optionalAttrs hasTls {
+                      tls = [
+                        {
+                          hosts = [ effectiveHost ];
+                          secretName = tlsSecretNameEffective;
+                        }
+                      ];
+                    };
+                  }
+                else
+                  svc
+                  |> ingress.fromService (
+                    {
+                      inherit name;
+                      host = effectiveHost;
+                      className = ingressNginx.out.ingressClassName;
+                      tls = lib.optional hasTls {
+                        hosts = [ effectiveHost ];
+                        secretName = tlsSecretNameEffective;
+                      };
+                      annotations = defaultAnnotations // configAnnotations;
+                    }
+                    // lib.optionalAttrs (port != null) { inherit port; }
+                  )
+              )
+              |> (if hasTls then clusterIssuer.out.withCert else lib.id)
+              |> _controllerEdgeWarn
+              |> scope.mkResource
+            )
+
+          else
+            null;
+      }
+    );
 
   # `name`, `monitorPart` and `rulesPart` let a package with several
   # metrics Services (harbor: core, registry, jobservice, exporter) call

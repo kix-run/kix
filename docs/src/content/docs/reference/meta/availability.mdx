@@ -3,4 +3,4 @@ title: "`availability`"
 description: TODO
 ---
 
-{/* Stub. Source: kix/lib/eval/instance.nix (ceiling), v2_discussions/archive/145_availability_level.md section 5.4. meta.availability.max caps the level a package receives and warns when the cluster asked for more. */}
+{/* Stub. Source: kix/lib/eval/instance.nix (ceiling), v2_discussions/archive/145_availability_level.md section 5.4. meta.availability.max caps the level a package receives and warns when the cluster asked for more. A workload builder call (mkDeployment, mkStatefulSet, mkDaemonSet, mkCronJob, mkJob) also takes `availability.max` for one workload; kix/lib/scope/builders.nix sealWorkload caps that workload and records `_availability` on the sealed resource, which the availability plugin reads for spread and PDBs. Test: kix/lib/tests a21. User: kix/packages/openebs (single-replica controllers at pod, etcd and NATS at zone). */}

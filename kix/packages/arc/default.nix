@@ -52,6 +52,7 @@ in
 {
   meta = {
     version = "0.13.1";
+    owner = "platform";
     # The controller runs without leader election here (no lease RBAC), so
     # one replica is the ceiling it can honour.
     availability.max = "pod";
@@ -87,6 +88,17 @@ in
     updateStrategy = lib.mkOption {
       type = lib.types.str;
       default = "immediate";
+    };
+    healthProbePort = lib.mkOption {
+      type = lib.types.port;
+      default = 8081;
+      description = ''
+        Port the controller's health endpoints bind to
+        (`--health-probe-bind-address`). Upstream's chart leaves this unset,
+        which switches the endpoints off and leaves the pod Ready the moment
+        the process starts; kix turns it on so the deploy verdict means
+        something.
+      '';
     };
     resources = lib.mkOption {
       type = lib.types.anything;
@@ -304,7 +316,33 @@ in
                     "--listener-metrics-addr=0"
                     "--listener-metrics-endpoint="
                     "--metrics-addr=0"
+                    "--health-probe-bind-address=:${toString config.healthProbePort}"
                   ];
+                  # Without the flag above the manager serves no health
+                  # endpoints, so a container that starts and then crash-loops
+                  # on a missing CRD is Ready in between and `kix deploy` goes
+                  # on to apply what depends on it. /healthz and /readyz are
+                  # controller-runtime's own, and upstream's chart adds the
+                  # same two probes whenever the address is set.
+                  ports = [
+                    (kix.port "health" config.healthProbePort)
+                  ];
+                  livenessProbe = {
+                    httpGet = {
+                      path = "/healthz";
+                      port = "health";
+                    };
+                    initialDelaySeconds = 15;
+                    periodSeconds = 20;
+                  };
+                  readinessProbe = {
+                    httpGet = {
+                      path = "/readyz";
+                      port = "health";
+                    };
+                    initialDelaySeconds = 5;
+                    periodSeconds = 10;
+                  };
                   env = [
                     {
                       name = "CONTROLLER_MANAGER_CONTAINER_IMAGE";
@@ -319,6 +357,8 @@ in
                     }
                   ];
                   resources = config.resources;
+                  # The image runs as 65532.
+                  securityContext.runAsNonRoot = true;
                   volumeMounts = [
                     {
                       name = "tmp";
@@ -328,7 +368,12 @@ in
                 }
               ];
               volumes = [
-                { name = "tmp"; }
+                # An empty emptyDir is a source, not an absence: kept so the
+                # collapse rule does not render a volume without one.
+                {
+                  name = "tmp";
+                  emptyDir = kix.keep { };
+                }
               ];
             };
           };

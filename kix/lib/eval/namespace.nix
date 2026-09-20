@@ -12,6 +12,8 @@ in
       annotations ? { },
       resourceQuota ? null,
       networkPolicies ? { },
+      # Pod Security Standards level, or null for no label.
+      podSecurity ? null,
     }:
     let
       # Bare k8s.mkResource stamps no labels; every other sealing path
@@ -27,10 +29,15 @@ in
         kind = "Namespace";
         inherit name;
         namespace = clusterScoped;
-        labels = labels // {
-          "kubernetes.io/metadata.name" = name;
-          "app.kubernetes.io/managed-by" = "kix";
-        };
+        labels =
+          labels
+          // {
+            "kubernetes.io/metadata.name" = name;
+            "app.kubernetes.io/managed-by" = "kix";
+          }
+          // lib.optionalAttrs (podSecurity != null) {
+            "pod-security.kubernetes.io/enforce" = podSecurity;
+          };
         inherit annotations;
         requires = lib.optional (resourceQuota != null) ns.quota ++ builtins.attrValues ns.netpols;
       };

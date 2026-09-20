@@ -65,8 +65,9 @@ kix.buildCluster {
                         spec.containers = [
                           {
                             name = "web";
-                            image = "nginx:1.27-alpine";
-                            ports = [ (kix.port "http" 80) ];
+                            image = "nginxinc/nginx-unprivileged:1.27-alpine";
+                            securityContext.runAsNonRoot = true;
+                            ports = [ (kix.port "http" 8080) ];
                             resources = {
                               requests = {
                                 cpu = "10m";

@@ -45,16 +45,11 @@ kix.buildCluster {
       # relatives cannot reach a manifest in this cluster: they pass every
       # other check, because they are valid tag strings, and this is the only
       # rule that looks at them.
-      scorecard = {
-        enable = true;
-        rules.security.noUnresolvedPlaceholder = kix.rules.security.noUnresolvedPlaceholder // {
-          # Warning is the shipped default, so a repository can adopt the rule
-          # without a flag day. A cluster that deploys something you care
-          # about promotes it, which is the same move a lab1-style flavor makes
-          # with noLatestTag.
-          severity = "error";
-        };
-      };
+      # Warning is the rule's shipped severity, so a repository can adopt
+      # it without a flag day. A cluster that deploys something you care
+      # about promotes it, which is the same move a lab1-style flavor makes
+      # with noLatestTag.
+      scorecard.ruleOverrides.byNamespace."*"."security.noUnresolvedPlaceholder".severity = "error";
 
       namespaces.kix-pins = { };
 

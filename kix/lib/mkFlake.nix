@@ -9,6 +9,13 @@
   # `kix.pins ./elsewhere.nix` itself.
   pins ? null,
 
+  # Modules every cluster in this flake starts from, ahead of its own. This
+  # repository's flakes use it to raise `scorecard.maxSeverity` to error, so
+  # a finding an error-severity rule makes fails the build here while the
+  # shipped default stays a warning. A cluster that wants otherwise sets the
+  # option itself with lib.mkForce.
+  clusterModules ? [ ],
+
   systems ? [
     "x86_64-linux"
     "aarch64-linux"
@@ -41,10 +48,18 @@ let
     { pkgs, system }:
     let
       slib = pkgs.lib;
-      kix = import ./. {
-        inherit pkgs;
-        lib = slib;
-      };
+      kix =
+        let
+          base = import ./. {
+            inherit pkgs;
+            lib = slib;
+          };
+        in
+        base
+        // {
+          buildCluster =
+            args: base.buildCluster (args // { modules = clusterModules ++ (args.modules or [ ]); });
+        };
       kixChecks = import ../checks.nix {
         inherit pkgs;
         lib = slib;

@@ -24,6 +24,13 @@ in
   meta = {
     version = "1.36.0";
     description = "Vaultwarden — Bitwarden-compatible password manager";
+    owner = "app-team";
+    # The upstream image runs as root and writes /data as root. Running it as
+    # another user needs fsGroup on the data volume, which not every
+    # provisioner honours; a change to test on a cluster, not by hand.
+    unsafe = [
+      "run-as-root"
+    ];
   };
 
   options = {

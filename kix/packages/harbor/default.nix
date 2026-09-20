@@ -155,30 +155,12 @@ in
   meta = {
     version = harborVersion;
     description = "Harbor — OCI container registry";
+    owner = "platform";
     # The registry keeps its blobs on one ReadWriteOnce claim and this
     # package does not wire up object storage, so it cannot run twice: a
     # restart of the registry pod is downtime for every push and pull.
     # core and portal still map the level for an operator who raises them.
     availability.max = "none";
-    # The ingress controller has to reach core and portal, and kix.expose
-    # gives it no netpol edge yet (housekeeping: no-netpol-edge-from-
-    # ingress-controller). Until it does, the web port accepts any pod in
-    # the cluster, which a registry wants anyway: in-cluster clients pull
-    # through the same Service the Ingress fronts. Every request past
-    # this port is still authenticated by core.
-    network.intents.in-cluster-clients = {
-      ingress = [
-        {
-          from = "all-pods";
-          ports = [
-            {
-              port = 8080;
-              protocol = "TCP";
-            }
-          ];
-        }
-      ];
-    };
   };
 
   options = {
@@ -753,7 +735,7 @@ in
               {
                 name = "http-web";
                 port = 80;
-                targetPort = "http";
+                targetPort = 8080;
                 protocol = "TCP";
               }
             ];
@@ -880,13 +862,13 @@ in
               {
                 name = "http-registry";
                 port = 5000;
-                targetPort = "registry";
+                targetPort = 5000;
                 protocol = "TCP";
               }
               {
                 name = "http-controller";
                 port = 8080;
-                targetPort = "registryctl";
+                targetPort = 8080;
                 protocol = "TCP";
               }
             ]

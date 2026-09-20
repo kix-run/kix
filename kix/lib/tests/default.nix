@@ -2513,9 +2513,650 @@ let
       )
       || throw "fromWorkload targetPorts: named=${builtins.toJSON targets} extracted=${builtins.toJSON extracted}";
 
+    # BEST-PRACTICES §7.3 offers `workload.rawSelector` as the escape from a
+    # Service/workload cycle, and the cycle it escapes from usually runs
+    # through the manifest: the pod mounts a ConfigMap that names the
+    # Service, so sealing the workload walks to the Service, which is
+    # waiting for this selector. The escape therefore has to be readable
+    # without sealing the workload (housekeeping 2026-09-18). A regression
+    # here is an infinite recursion, which aborts the whole matrix rather
+    # than failing this one test.
+    t89-raw-selector-readable-through-a-manifest-cycle =
+      let
+        pkg = {
+          build =
+            { self, scope, ... }:
+            {
+              svc = scope.mkResource {
+                apiVersion = "v1";
+                kind = "Service";
+                name = "cycle-web";
+                spec = {
+                  selector = self.deployment.rawSelector;
+                  ports = [
+                    {
+                      port = 80;
+                      targetPort = 80;
+                    }
+                  ];
+                };
+              };
+              cm = scope.mkResource {
+                apiVersion = "v1";
+                kind = "ConfigMap";
+                name = "cycle-web-config";
+                data.upstream = "http://${self.svc.out.fqdn}/";
+              };
+              deployment = scope.mkDeployment {
+                name = "cycle-web";
+                spec = {
+                  replicas = 1;
+                  selector.matchLabels.app = "cycle-web";
+                  template.spec = {
+                    volumes = [
+                      {
+                        name = "config";
+                        configMap.name = self.cm.out.name;
+                      }
+                    ];
+                    containers = [
+                      {
+                        name = "web";
+                        image = "web:1";
+                        ports = [
+                          {
+                            name = "http";
+                            containerPort = 80;
+                          }
+                        ];
+                        volumeMounts = [
+                          {
+                            name = "config";
+                            mountPath = "/etc/web";
+                          }
+                        ];
+                      }
+                    ];
+                  };
+                };
+              };
+              # Root is the workload: the Service is reached through the
+              # ConfigMap the pod mounts, and that is the edge closing the
+              # cycle. Nothing points back the other way, which is what
+              # `rawSelector` is for.
+              root = self.deployment;
+            };
+        };
+        ms = manifests (mkCluster [
+          baseInstances
+          netpolOn
+          { instances.appns.cycle.package = pkg; }
+        ]);
+        svc = byName "cycle-web" (ofKind "Service" ms);
+      in
+      (svc.spec.selector.app or null) == "cycle-web"
+      || throw "rawSelector through a manifest cycle: ${builtins.toJSON (svc.spec.selector or null)}";
+
+    # An Ingress routes but opens nothing, and under default deny the
+    # backend refuses the controller like any other pod in any other
+    # namespace: every request through it times out, and no amount of
+    # evaluation sees it (housekeeping 2026-09-18). `kix.expose` holds
+    # both ends of that edge, so it writes the rule, on the pod port the
+    # Service routes to.
+    t90-expose-opens-the-ingress-controller-edge =
+      let
+        stubController = {
+          meta.version = "test";
+          build =
+            { self, scope, ... }:
+            {
+              class = scope.mkClusterResource {
+                apiVersion = "networking.k8s.io/v1";
+                kind = "IngressClass";
+                name = "nginx";
+                spec.controller = "k8s.io/ingress-nginx";
+              };
+              root = {
+                resource = self.class;
+                out = {
+                  ingressClassName = self.class.out.name;
+                  podSelector."app.kubernetes.io/name" = "ingress-nginx";
+                  podNamespace = "ingressns";
+                };
+              };
+            };
+        };
+        backend = {
+          meta.version = "test";
+          build = [
+            (
+              {
+                self,
+                scope,
+                kix,
+                ...
+              }:
+              {
+                deployment = scope.mkDeployment {
+                  name = "web";
+                  spec = {
+                    replicas = 1;
+                    selector.matchLabels = scope.selectorLabels;
+                    template = {
+                      metadata.labels = scope.selectorLabels;
+                      spec.containers = [
+                        (
+                          {
+                            name = "web";
+                            image = "web:1";
+                            ports = [
+                              {
+                                name = "http";
+                                containerPort = 8080;
+                              }
+                            ];
+                          }
+                          // containerBase
+                        )
+                      ];
+                    };
+                  };
+                };
+                service = self.deployment |> kix.service.fromWorkload { name = "web"; } |> scope.mkResource;
+                root = self.service;
+              }
+            )
+            (kixlib.expose { service = "service"; })
+          ];
+        };
+        ms = manifests (mkCluster [
+          netpolOn
+          {
+            cluster.domain = "test.local";
+            instances.ingressns.ingress-nginx.package = stubController;
+          }
+          (
+            { ref, ... }:
+            {
+              instances.appns.web = {
+                package = backend;
+                deps.ingressNginx = ref.ingressns.ingress-nginx;
+              };
+            }
+          )
+        ]);
+        cnps = ofKind "CiliumNetworkPolicy" ms;
+        edge = byName "web-from-ingress-controller" cnps;
+      in
+      (
+        edge != null
+        && edge.metadata.namespace == "appns"
+        && (edge.spec.endpointSelector.matchLabels."app.kubernetes.io/name" or null) == "web"
+        && (builtins.head edge.spec.ingress).stubRule == "caller-ingress"
+        && (builtins.head edge.spec.ingress).callerNamespace == "ingressns"
+        && (
+          let
+            port = builtins.head (builtins.head edge.spec.ingress).ports;
+          in
+          (port.targetPort or port.port) == 8080
+        )
+      )
+      || throw "no ingress-controller edge; CNPs: ${builtins.toJSON (namesOf cnps)}";
+
     # A ServiceRef's out.fqdn has the same form as a rendered Service's:
     # `<name>.<ns>.svc.<clusterDomain>`. It used to stop at `.svc`, which
     # only resolves through the pod's DNS search path.
+    # The declarer two hops away satisfies the lint. cert-manager declares
+    # cert-manager.io, the cluster-issuer depends on cert-manager, and the
+    # Ingress that carries the annotation depends on the cluster-issuer:
+    # the rule follows the chain rather than the first edge only.
+    t91-annotation-domain-transitive-dep-satisfies =
+      let
+        # Depends on `operator` and writes nothing under the domain.
+        intermediary = {
+          meta.version = "test";
+          build =
+            {
+              self,
+              scope,
+              operator,
+              ...
+            }:
+            {
+              cm = scope.mkResource {
+                apiVersion = "v1";
+                kind = "ConfigMap";
+                name = "issuer-cm";
+              };
+              root = self.cm;
+            };
+        };
+        # Depends on `issuer` only, and writes under the operator's domain.
+        writer = {
+          meta.version = "test";
+          build =
+            {
+              self,
+              scope,
+              issuer,
+              ...
+            }:
+            {
+              cm = scope.mkResource {
+                apiVersion = "v1";
+                kind = "ConfigMap";
+                name = "writer-cm";
+                annotations."example.io/managed" = "true";
+              };
+              root = self.cm;
+            };
+        };
+        cluster = mkCluster [
+          baseInstances
+          scorecardOn
+          {
+            instances.infra.operator.package = mkCmPackage {
+              name = "operator-cm";
+              metaExtra.annotationDomains = [ "example.io" ];
+            };
+            instances.mid.issuer.package = intermediary;
+            instances.appns.writer.package = writer;
+          }
+        ];
+        findings = domainFindings cluster;
+      in
+      findings == [ ] || throw "transitive declarer not found: ${builtins.toJSON findings}";
+
+    # A package that needs a Pod Security level gets it on its namespace;
+    # a namespace pinned stricter than an instance needs is an eval error;
+    # a namespace nobody asks about carries no label.
+    t92-pod-security-level-from-package-meta =
+      let
+        privileged = mkCmPackage {
+          name = "priv-cm";
+          metaExtra.podSecurity = "privileged";
+        };
+        ms = manifests (mkCluster [
+          baseInstances
+          {
+            instances.virt.operator.package = privileged;
+            instances.virt.other.package = mkCmPackage { name = "other-cm"; };
+            instances.plain.app.package = mkCmPackage { name = "plain-cm"; };
+            namespaces.pinned.podSecurity = "restricted";
+            instances.pinned.app.package = mkCmPackage { name = "pinned-cm"; };
+          }
+        ]);
+        label =
+          ns:
+          ((byName ns (ofKind "Namespace" ms)).metadata.labels or { })."pod-security.kubernetes.io/enforce"
+            or null;
+        conflict = evalFails (mkCluster [
+          baseInstances
+          {
+            namespaces.virt.podSecurity = "restricted";
+            instances.virt.operator.package = privileged;
+          }
+        ]);
+      in
+      (
+        label "virt" == "privileged" && label "plain" == null && label "pinned" == "restricted" && conflict
+      )
+      || throw "pod security: virt=${toString (label "virt")} plain=${toString (label "plain")} pinned=${toString (label "pinned")} conflict=${toString conflict}";
+
+    # Manifest rules see what the compiler derived, not only what the
+    # package wrote: a probe rule that fires on PodDisruptionBudgets fires
+    # on the one the availability plugin derived for a replicated workload.
+    t93-scorecard-scores-derived-resources =
+      let
+        probe.seesPdb = {
+          description = "probe: a derived PodDisruptionBudget reaches manifest rules";
+          level = "manifest";
+          severity = "info";
+          tags = [ "test" ];
+          check =
+            { resource, ... }:
+            if (resource.kind or "") == "PodDisruptionBudget" then
+              [ { message = "derived pdb seen"; } ]
+            else
+              [ ];
+        };
+        cluster = mkCluster [
+          multiZone
+          {
+            scorecard = {
+              enable = true;
+              rules.probe = probe;
+            };
+            instances.appns.web.package = mkReplicatedPackage { };
+          }
+        ];
+        findings = builtins.filter (f: lib.hasSuffix "seesPdb" (f.rule or "")) (
+          (cluster.scorecardReport or { findings = [ ]; }).findings
+        );
+      in
+      (builtins.length findings == 1 && (builtins.head findings).instance == "web")
+      || throw "derived PDB not scored: ${builtins.toJSON findings}";
+
+    # The scorecard runs by default, and the cap decides whether an
+    # error-severity finding fails the build: at the default cap the
+    # finding is reported as a warning and the cluster builds; at "error"
+    # the same cluster fails.
+    t94-scorecard-default-on-capped-at-warning =
+      let
+        probe.always = {
+          description = "probe: fires on every ConfigMap at error";
+          level = "manifest";
+          severity = "error";
+          tags = [ "test" ];
+          check =
+            { resource, ... }: if (resource.kind or "") == "ConfigMap" then [ { message = "probe"; } ] else [ ];
+        };
+        withProbe = {
+          scorecard.rules.probe = probe;
+          instances.appns.web.package = mkCmPackage { name = "web-cm"; };
+        };
+        capped = mkCluster [
+          baseInstances
+          withProbe
+        ];
+        findings = builtins.filter (f: lib.hasSuffix "always" (f.rule or "") && f.instance == "web") (
+          (capped.scorecardReport or { findings = [ ]; }).findings
+        );
+        strictFails = evalFails (mkCluster [
+          baseInstances
+          withProbe
+          { scorecard.maxSeverity = "error"; }
+        ]);
+      in
+      (
+        builtins.length findings == 1
+        && (builtins.head findings).severity == "warning"
+        && (manifests capped) != [ ]
+        && strictFails
+      )
+      || throw "scorecard default: findings=${builtins.toJSON findings} strictFails=${toString strictFails}";
+
+    # ownership.cede lands as the kix.run/cede-fields annotation, in order,
+    # comma separated; anything but a list of strings, or any other key
+    # under ownership, is refused at eval.
+    t95-ownership-cede-is-stamped =
+      let
+        pkg = {
+          meta.version = "test";
+          build =
+            { self, scope, ... }:
+            {
+              cm = scope.mkResource {
+                apiVersion = "v1";
+                kind = "ConfigMap";
+                name = "ceded";
+                ownership.cede = [
+                  "data.owned"
+                  "metadata.labels[*].x"
+                ];
+              };
+              root = self.cm;
+            };
+        };
+        ms = manifests (mkCluster [
+          baseInstances
+          { instances.appns.a.package = pkg; }
+        ]);
+        cm = byName "ceded" (ofKind "ConfigMap" ms);
+        bad =
+          cede:
+          evalFails (mkCluster [
+            baseInstances
+            {
+              instances.appns.a.package = {
+                meta.version = "test";
+                build =
+                  { self, scope, ... }:
+                  {
+                    cm = scope.mkResource {
+                      apiVersion = "v1";
+                      kind = "ConfigMap";
+                      name = "bad";
+                      ownership = cede;
+                    };
+                    root = self.cm;
+                  };
+              };
+            }
+          ]);
+      in
+      (
+        cm.metadata.annotations.${kixKeys.cedeFields} == "data.owned,metadata.labels[*].x"
+        && bad { cede = "data.owned"; }
+        && bad { take = [ "x" ]; }
+      )
+      || throw "cede annotation: ${builtins.toJSON (cm.metadata.annotations or { })}";
+
+    # `paths` on a Gateway API cluster renders one HTTPRoute with a rule per
+    # path, each to its own backend, in the Gateway's path vocabulary.
+    t96-expose-paths-render-an-httproute =
+      let
+        backend = {
+          meta.version = "test";
+          build = [
+            (
+              {
+                self,
+                scope,
+                kix,
+                ...
+              }:
+              let
+                mkWeb = n: port: {
+                  inherit n;
+                  deployment = scope.mkDeployment {
+                    name = n;
+                    spec = {
+                      selector.matchLabels = scope.selectorLabels // {
+                        part = n;
+                      };
+                      template = {
+                        metadata.labels = scope.selectorLabels // {
+                          part = n;
+                        };
+                        spec.containers = [
+                          (
+                            {
+                              name = n;
+                              image = "example/${n}:1";
+                              ports = [ (kix.port "http" port) ];
+                            }
+                            // containerBase
+                          )
+                        ];
+                      };
+                    };
+                  };
+                };
+                a = mkWeb "front" 8080;
+                b = mkWeb "api" 9090;
+              in
+              {
+                frontDeployment = a.deployment;
+                apiDeployment = b.deployment;
+                front = a.deployment |> kix.service.fromWorkload { name = "front"; } |> scope.mkResource;
+                api = b.deployment |> kix.service.fromWorkload { name = "api"; } |> scope.mkResource;
+                root = {
+                  resource = self.frontDeployment;
+                  requires = [
+                    self.apiDeployment
+                    self.ingress
+                  ];
+                };
+              }
+            )
+            (kixlib.expose {
+              paths = [
+                {
+                  path = "/";
+                  service = "front";
+                }
+                {
+                  path = "/api";
+                  pathType = "Exact";
+                  service = "api";
+                }
+              ];
+            })
+          ];
+        };
+        ms = manifests (mkCluster [
+          {
+            cluster.domain = "test.local";
+            instances.gwns.gateway = {
+              package = envoyGatewayPackage;
+              config.proxySpec = kindProxySpec;
+            };
+            instances.appns.web.package = backend;
+          }
+        ]);
+        route = byName "web" (ofKind "HTTPRoute" ms);
+        rules = route.spec.rules;
+        rule = i: builtins.elemAt rules i;
+      in
+      (
+        route.spec.hostnames == [ "web.test.local" ]
+        && builtins.length rules == 2
+        &&
+          (builtins.head (rule 0).matches).path == {
+            type = "PathPrefix";
+            value = "/";
+          }
+        && (builtins.head (rule 0).backendRefs).name == "front"
+        && (builtins.head (rule 0).backendRefs).port == 8080
+        &&
+          (builtins.head (rule 1).matches).path == {
+            type = "Exact";
+            value = "/api";
+          }
+        && (builtins.head (rule 1).backendRefs).name == "api"
+        && (builtins.head (rule 1).backendRefs).port == 9090
+      )
+      || throw "multi-path HTTPRoute: ${builtins.toJSON (route.spec or null)}";
+
+    # An untracked reference that names its creator and kind orders the
+    # referring resource after the creator and stamps what it expects;
+    # the bare string form stamps nothing, as before.
+    t97-untracked-ref-with-creator =
+      let
+        pkg = {
+          meta.version = "test";
+          build =
+            {
+              self,
+              scope,
+              kix,
+              ...
+            }:
+            {
+              minter = scope.mkJob {
+                name = "minter";
+                spec.template = {
+                  metadata.labels = scope.selectorLabels // {
+                    part = "minter";
+                  };
+                  spec = {
+                    restartPolicy = "Never";
+                    containers = [
+                      (
+                        {
+                          name = "mint";
+                          image = "example/mint:1";
+                        }
+                        // containerBase
+                      )
+                    ];
+                  };
+                };
+              };
+              web = scope.mkDeployment {
+                name = "web";
+                spec = {
+                  replicas = 1;
+                  selector.matchLabels = scope.selectorLabels;
+                  template = {
+                    metadata.labels = scope.selectorLabels;
+                    spec = {
+                      containers = [
+                        (
+                          {
+                            name = "web";
+                            image = "example/web:1";
+                            volumeMounts = [
+                              {
+                                name = "cert";
+                                mountPath = "/cert";
+                              }
+                            ];
+                          }
+                          // containerBase
+                        )
+                      ];
+                      volumes = [
+                        {
+                          name = "cert";
+                          secret.secretName = kix.untrackedRef {
+                            kind = "Secret";
+                            name = "minted-cert";
+                            by = self.minter;
+                          };
+                        }
+                      ];
+                      serviceAccountName = kix.untrackedRef "cluster-provided";
+                    };
+                  };
+                };
+              };
+              root = self.web;
+            };
+        };
+        cluster = mkCluster [
+          baseInstances
+          { instances.appns.a.package = pkg; }
+        ];
+        web = byName "web" (ofKind "Deployment" (manifests cluster));
+        minterHash = k8s.extractStoreHash cluster.instances.appns.a.raw.minter.outPath;
+        badBy = evalFails (mkCluster [
+          baseInstances
+          {
+            instances.appns.a.package = {
+              meta.version = "test";
+              build =
+                {
+                  self,
+                  scope,
+                  kix,
+                  ...
+                }:
+                {
+                  cm = scope.mkResource {
+                    apiVersion = "v1";
+                    kind = "ConfigMap";
+                    name = "c";
+                    data.x = kix.untrackedRef {
+                      kind = "Secret";
+                      name = "s";
+                      by = "not-a-resource";
+                    };
+                  };
+                  root = self.cm;
+                };
+            };
+          }
+        ]);
+      in
+      (
+        web.metadata.annotations.${kixKeys.expects} == "v1|Secret|minted-cert"
+        && lib.hasInfix minterHash (dependsOn web)
+        && badBy
+      )
+      || throw "untracked ref with creator: ${builtins.toJSON (web.metadata.annotations or { })}";
+
     t57-service-ref-fqdn-carries-cluster-domain =
       let
         refPackage = {
@@ -2567,6 +3208,66 @@ let
     # Two same-named Services are a name collision, not a label question:
     # the rule must say so instead of prescribing a label fix that cannot
     # converge (kixpkgs#71 item 14).
+    # The velero shape: a Deployment selecting on the instance labels alone
+    # while a DaemonSet's pod template carries those plus its own name. The
+    # Deployment's selector matches both pod sets, so `kix deploy` judged it
+    # from a node-agent pod.
+    t55b-workload-selector-claims-another-pod-set =
+      let
+        rule = (import ../rules/architecture.nix { inherit lib; }).distinctWorkloadSelectors;
+        shared = {
+          "app.kubernetes.io/instance" = "velero";
+        };
+        workload = kind: name: selector: podLabels: {
+          inherit kind;
+          metadata = {
+            inherit name;
+            namespace = "ns";
+          };
+          spec = {
+            selector.matchLabels = selector;
+            template.metadata.labels = podLabels;
+          };
+        };
+        findings = rule.check {
+          instanceName = "velero";
+          resources = [
+            (workload "Deployment" "velero" shared shared)
+            (workload "DaemonSet" "node-agent" (shared // { name = "node-agent"; }) (
+              shared // { name = "node-agent"; }
+            ))
+          ];
+        };
+        msg = builtins.concatStringsSep " " (map (f: f.message) findings);
+      in
+      (builtins.length findings == 1 && lib.hasInfix "also matches the pods of" msg)
+      || throw "expected one selector-overlap finding, got: ${msg}";
+
+    # Each workload carrying its own label is the fix, and passes.
+    t55c-distinct-workload-selectors-pass =
+      let
+        rule = (import ../rules/architecture.nix { inherit lib; }).distinctWorkloadSelectors;
+        workload = kind: name: labels: {
+          inherit kind;
+          metadata = {
+            inherit name;
+            namespace = "ns";
+          };
+          spec = {
+            selector.matchLabels = labels;
+            template.metadata.labels = labels;
+          };
+        };
+        findings = rule.check {
+          instanceName = "velero";
+          resources = [
+            (workload "Deployment" "velero" { name = "velero"; })
+            (workload "DaemonSet" "node-agent" { name = "node-agent"; })
+          ];
+        };
+      in
+      findings == [ ] || throw "expected no findings, got: ${builtins.toJSON findings}";
+
     t55-distinct-labels-rule-names-a-collision =
       let
         rule = (import ../rules/architecture.nix { inherit lib; }).distinctSameKindLabels;
@@ -3573,6 +4274,27 @@ let
       { instances.appns.raw.package = mkRawDeploymentPackage; }
     ]);
 
+    # A CronJob used to slip past the refusal list, so its pods got no
+    # pod-spec validators, no DNS ordering and no network-policy edges.
+    t87b-raw-cronjob-kind-throws = evalFails (mkCluster [
+      baseInstances
+      {
+        instances.appns.rawcj.package = {
+          build =
+            { self, scope, ... }:
+            {
+              cj = scope.mkResource {
+                apiVersion = "batch/v1";
+                kind = "CronJob";
+                name = "raw-cronjob";
+                extra.spec.schedule = "* * * * *";
+              };
+              root = self.cj;
+            };
+        };
+      }
+    ]);
+
     # ---------------------------------------------------- v2_discussions/145
     # The availability level: derived from the substrate, overridable per
     # instance, capped by the package, refused above the substrate. Spread
@@ -4046,6 +4768,95 @@ let
 
     # kix.availability.pick refuses an incomplete table, so a package's
     # mapping is complete by construction.
+    # A ceiling on one workload lowers that workload only: the controller
+    # declares availability.max = "pod" and spreads best-effort, the
+    # quorum store beside it keeps the hard zone constraint, and the
+    # package's `availability` argument still says "zone". The instance
+    # ceiling would have lowered all three.
+    a21-workload-ceiling-lowers-one-workload =
+      let
+        pkg = {
+          meta.version = "test";
+          build =
+            {
+              self,
+              scope,
+              availability,
+              ...
+            }:
+            let
+              body =
+                name: extra:
+                {
+                  inherit name;
+                  spec = {
+                    replicas = 3;
+                    selector.matchLabels = scope.selectorLabels // {
+                      part = name;
+                    };
+                    template = {
+                      metadata.labels = scope.selectorLabels // {
+                        part = name;
+                      };
+                      spec.containers = [
+                        (
+                          {
+                            inherit name;
+                            image = "example/${name}:1";
+                          }
+                          // containerBase
+                        )
+                      ];
+                    };
+                  };
+                }
+                // extra;
+            in
+            {
+              controller = scope.mkDeployment (body "controller" { availability.max = "pod"; });
+              quorum = scope.mkStatefulSet (body "quorum" { });
+              seen = scope.mkResource {
+                apiVersion = "v1";
+                kind = "ConfigMap";
+                name = "level";
+                data.level = availability;
+              };
+              root = {
+                resource = self.controller;
+                requires = [
+                  self.quorum
+                  self.seen
+                ];
+              };
+            };
+        };
+        ms = manifests (mkCluster [
+          multiZone
+          { instances.appns.mixed.package = pkg; }
+        ]);
+        keysOf =
+          kind: name:
+          spreadKeys ((byName name (ofKind kind ms)).spec.template.spec.topologySpreadConstraints or [ ]);
+        controllerKeys = keysOf "Deployment" "controller";
+        quorumKeys = keysOf "StatefulSet" "quorum";
+        seen = (byName "level" (ofKind "ConfigMap" ms)).data.level;
+        notInManifest = !((byName "controller" (ofKind "Deployment" ms)) ? availability);
+      in
+      (
+        controllerKeys == [
+          "topology.kubernetes.io/zone=ScheduleAnyway"
+          "kubernetes.io/hostname=ScheduleAnyway"
+        ]
+        &&
+          quorumKeys == [
+            "topology.kubernetes.io/zone=DoNotSchedule"
+            "kubernetes.io/hostname=ScheduleAnyway"
+          ]
+        && seen == "zone"
+        && notInManifest
+      )
+      || throw "workload ceiling: controller=${builtins.toJSON controllerKeys} quorum=${builtins.toJSON quorumKeys} seen=${seen}";
+
     a20-pick-refuses-incomplete-table =
       !(builtins.tryEval (
         kixlib.availability.pick "zone" {

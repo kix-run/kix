@@ -57,6 +57,12 @@ let
 
 in
 {
+  meta = {
+    version = "rke2-bundled";
+    description = "Cilium (RKE2-bundled) — HelmChartConfig that configures RKE2's own Cilium";
+    owner = "platform";
+  };
+
   options = {
     # --- Cluster topology (set by cluster definition) ---
     clusterNodes = lib.mkOption {

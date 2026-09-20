@@ -5,6 +5,7 @@ let
   # core/annotations.nix.
   kixAnnotations = import ../core/annotations.nix;
   kixKeys = kixAnnotations.keys;
+  availabilityLib = import ../core/availability.nix { inherit lib; };
   inherit (k8s) clusterScoped;
 in
 {
@@ -41,12 +42,14 @@ in
         "StatefulSet"
         "DaemonSet"
         "Job"
+        "CronJob"
       ];
       builderFor = {
         Deployment = "scope.mkDeployment";
         StatefulSet = "scope.mkStatefulSet";
         DaemonSet = "scope.mkDaemonSet";
         Job = "scope.mkJob";
+        CronJob = "scope.mkCronJob";
       };
       checkNotRawWorkload =
         args:
@@ -199,8 +202,37 @@ in
           workloadKind,
           selector,
           hostNetwork,
+          # `availability.max` on the builder call: the largest level this
+          # one workload can honour, or null.
+          workloadCeiling ? null,
         }:
         let
+          # The instance ceiling (meta.availability.max) lowers every
+          # workload alike, which misstates a package with one single-replica
+          # controller beside a quorum store that wants hard spread (openebs,
+          # housekeeping 2026-09-19). A ceiling on the builder call lowers
+          # this workload only. The package's `availability` argument is not
+          # lowered: a replica count mapped from it belongs to the workload
+          # that maps it, and the capped workload is the one that does not.
+          capped =
+            workloadCeiling != null
+            && availabilityLib.rank availability.level > availabilityLib.rank workloadCeiling;
+          workloadAvailability =
+            if capped then
+              availability
+              // {
+                level = workloadCeiling;
+                ceiling = workloadCeiling;
+                capped = true;
+                warnings = [ ];
+              }
+            else
+              availability;
+          ceilingWarnings = lib.optional capped (
+            "${workloadKind} '${workloadInput.name or "?"}' declares availability.max = "
+            + "\"${workloadCeiling}\", so it runs at \"${workloadCeiling}\" under availability "
+            + "\"${availability.level}\". The rest of the instance is unaffected."
+          );
           edgeReport = edgeAnalysis.edgesFor workloadInput;
           edges = edgeReport.edges;
           # DNS ordering uses the conservative edge set: naming a Service is
@@ -226,7 +258,7 @@ in
               inherit (edgeAnalysis) serviceRegistry serviceRefRegistry;
               packageMeta = peekedPackageMeta;
               cluster = clusterCtx;
-              inherit availability;
+              availability = workloadAvailability;
             }
           ) workloadInterceptors;
           interceptorRequires = builtins.concatMap (r: r.requires or [ ]) interceptorResults;
@@ -238,18 +270,27 @@ in
           # the earlier one (lower priority) wins, which keeps the merge
           # deterministic and therefore content-addressed.
           interceptorPodSpec = builtins.foldl' (acc: r: (r.podSpec or { }) // acc) { } interceptorResults;
-          patchedInput =
-            if interceptorPodSpec == { } then
-              workloadInput
-            else
-              workloadInput
-              // {
-                spec = workloadInput.spec // {
+          # The choice sits inside `spec`, not around the whole input.
+          # Reading `rawSelector` off the returned workload forces this
+          # value's weak head normal form, and deciding out here would run
+          # every interceptor to do it: the netpol edge analysis walks the
+          # pod spec, reaches the ConfigMap the pod mounts and from there the
+          # Service that is asking for the selector in the first place. That
+          # is the cycle BEST-PRACTICES §7.3 offers `rawSelector` as the
+          # escape from, so the escape must not force the seal
+          # (housekeeping 2026-09-18).
+          patchedInput = workloadInput // {
+            spec =
+              if interceptorPodSpec == { } then
+                workloadInput.spec
+              else
+                workloadInput.spec
+                // {
                   template = workloadInput.spec.template // {
                     spec = interceptorPodSpec // (workloadInput.spec.template.spec or { });
                   };
                 };
-              };
+          };
           # Splice order contract: author-declared requires, then plugin
           # requires, then core DNS deps. kix.run/depends-on stamps entries
           # in list order, so this order is content-addressed into the
@@ -271,10 +312,28 @@ in
         workload
         // {
           outPath = builtins.foldl' (acc: warning: builtins.trace warning acc) workload.outPath (
-            interceptorWarnings ++ map (w: "[${instanceName}] ${w}") edgeReport.warnings
+            interceptorWarnings ++ map (w: "[${instanceName}] ${w}") (ceilingWarnings ++ edgeReport.warnings)
           );
           _injectedResources = interceptorResources;
           rawSelector = selector;
+          # The level this workload was sealed at, for the instance
+          # processors that judge it after the fact.
+          _availability = workloadAvailability;
+        };
+
+      # The pod-spec validators are anchored on the workload's outPath, not
+      # on the workload's own evaluation. Checking a pod spec walks it, and
+      # a pod spec can reach a ConfigMap that names a Service that is
+      # waiting for this workload's `rawSelector` — the cycle
+      # BEST-PRACTICES §7.3 offers `rawSelector` as the escape from, which
+      # only works if reading it seals nothing (housekeeping 2026-09-18).
+      # Every resource in a build forces its outPath, so no check is
+      # skipped; each one runs a moment later than it used to.
+      withChecks =
+        checks: res:
+        res
+        // {
+          outPath = builtins.foldl' (acc: c: builtins.seq c acc) res.outPath checks;
         };
 
       mkWorkload =
@@ -309,45 +368,116 @@ in
               };
             };
 
-          baseArgs = removeAttrs attrs [ "spec" ] // {
-            inherit apiVersion kind;
-            spec = finalSpec;
-          };
+          # The workload's own metadata carries its selector labels, so a
+          # workload describes itself the way every other tool reads it:
+          # `app.kubernetes.io/name` lived only in the selector and the pod
+          # template before, and `governance.labelStandards` fired on every
+          # workload the typed builders produced. A package's own `labels`
+          # still win.
+          baseArgs =
+            removeAttrs attrs [
+              "spec"
+              "availability"
+            ]
+            // {
+              inherit apiVersion kind;
+              spec = finalSpec;
+              labels = selector // (attrs.labels or { });
+            };
         in
-        builtins.seq (validators.checkDaemonSet kind) (
-          builtins.seq
+        withChecks
+          [
+            (validators.checkDaemonSet kind)
             (validators.checkSpreadFeasible {
               inherit kind;
               name = attrs.name or "?";
               spec = finalSpec;
             })
+            (validators.checkPrivileged templateSpec)
             (
-              builtins.seq (validators.checkPrivileged templateSpec) (
-                builtins.seq
-                  (
-                    if userSuppliedLabels then
-                      validators.checkSelectorSubset selector templateMeta.labels kind
-                    else
-                      null
-                  )
-                  (
-                    builtins.seq (validators.checkNamespacedRefs templateSpec) (
-                      builtins.seq (validators.checkNamedPorts templateSpec) (
-                        builtins.seq (validators.checkContainerResources templateSpec) (
-                          builtins.seq (validators.checkDuplicateNames templateSpec) (
-                            builtins.seq (validators.checkFieldRefs templateSpec) (sealWorkload {
-                              workloadInput = baseArgs;
-                              workloadKind = kind;
-                              inherit selector hostNetwork;
-                            })
-                          )
-                        )
-                      )
-                    )
-                  )
-              )
+              if userSuppliedLabels then
+                validators.checkSelectorSubset selector templateMeta.labels kind
+              else
+                null
             )
-        );
+            (validators.checkNamespacedRefs templateSpec)
+            (validators.checkNamedPorts templateSpec)
+            (validators.checkContainerResources templateSpec)
+            (validators.checkDuplicateNames templateSpec)
+            (validators.checkFieldRefs templateSpec)
+          ]
+          (sealWorkload {
+            workloadInput = baseArgs;
+            workloadKind = kind;
+            inherit selector hostNetwork;
+            workloadCeiling = (attrs.availability or { }).max or null;
+          });
+
+      # A CronJob's pods are pods. It slipped past `mkResource`'s refusal
+      # list, so `kix/packages/stackgres-pgpass-perms-fix` built one raw and
+      # its pods got no pod-spec validators, no DNS ordering and no
+      # network-policy edges. The only structural difference from a Job is
+      # that the pod template sits one level deeper, under
+      # `spec.jobTemplate.spec.template`, so the seal is handed that.
+      mkCronJob =
+        attrs:
+        let
+          kind = "CronJob";
+          apiVersion = "batch/v1";
+          rawSpec = attrs.spec or { };
+          jobSpec = rawSpec.jobTemplate.spec or { };
+          templateMeta = jobSpec.template.metadata or { };
+          rawTemplateSpec = jobSpec.template.spec or { };
+          templateSpec = _expandServiceAccount rawTemplateSpec;
+
+          hostNetwork = templateSpec.hostNetwork or false;
+
+          # A CronJob has no selector of its own: the Jobs it creates get
+          # one from the controller. The pod template's labels are the only
+          # identity its pods carry, and the seal needs something to key the
+          # network-policy edges on.
+          selector =
+            templateMeta.labels
+              or (throw "mkCronJob: spec.jobTemplate.spec.template.metadata.labels is required. Use scope.selectorLabels");
+
+          finalSpec = rawSpec // {
+            jobTemplate = (rawSpec.jobTemplate or { }) // {
+              spec = jobSpec // {
+                template = {
+                  metadata = templateMeta // {
+                    labels = selector;
+                  };
+                  spec = templateSpec;
+                };
+              };
+            };
+          };
+
+          baseArgs =
+            removeAttrs attrs [
+              "spec"
+              "availability"
+            ]
+            // {
+              inherit apiVersion kind;
+              spec = finalSpec;
+              labels = selector // (attrs.labels or { });
+            };
+        in
+        withChecks
+          [
+            (validators.checkPrivileged templateSpec)
+            (validators.checkNamespacedRefs templateSpec)
+            (validators.checkContainerResources templateSpec)
+            (validators.checkDuplicateNames templateSpec)
+            (validators.checkFieldRefs templateSpec)
+          ]
+          (sealWorkload {
+            workloadInput = baseArgs;
+            workloadKind = kind;
+            inherit selector hostNetwork;
+            workloadCeiling = (attrs.availability or { }).max or null;
+          });
 
       mkJob =
         attrs:
@@ -383,24 +513,32 @@ in
               };
             };
 
-          baseArgs = removeAttrs attrs [ "spec" ] // {
-            inherit apiVersion kind;
-            spec = finalSpec;
-          };
+          # Same as mkWorkload: the Job's metadata carries its selector.
+          baseArgs =
+            removeAttrs attrs [
+              "spec"
+              "availability"
+            ]
+            // {
+              inherit apiVersion kind;
+              spec = finalSpec;
+              labels = selector // (attrs.labels or { });
+            };
         in
-        builtins.seq (validators.checkPrivileged templateSpec) (
-          builtins.seq (validators.checkNamespacedRefs templateSpec) (
-            builtins.seq (validators.checkContainerResources templateSpec) (
-              builtins.seq (validators.checkDuplicateNames templateSpec) (
-                builtins.seq (validators.checkFieldRefs templateSpec) (sealWorkload {
-                  workloadInput = baseArgs;
-                  workloadKind = kind;
-                  inherit selector hostNetwork;
-                })
-              )
-            )
-          )
-        );
+        withChecks
+          [
+            (validators.checkPrivileged templateSpec)
+            (validators.checkNamespacedRefs templateSpec)
+            (validators.checkContainerResources templateSpec)
+            (validators.checkDuplicateNames templateSpec)
+            (validators.checkFieldRefs templateSpec)
+          ]
+          (sealWorkload {
+            workloadInput = baseArgs;
+            workloadKind = kind;
+            inherit selector hostNetwork;
+            workloadCeiling = (attrs.availability or { }).max or null;
+          });
 
       # Chart-rendered workloads get the same pod-spec validators as
       # mkWorkload: capability gates, selector within template labels,
@@ -562,7 +700,20 @@ in
           crKind = crdSpec.names.kind;
           group = crdSpec.group;
           plural = crdSpec.names.plural;
-          version = (builtins.head crdSpec.versions).name;
+          # The storage version, not the first listed one. A vendored CRD
+          # carries every version upstream still serves, and upstream does
+          # not always list the storage version first: cdi lists v1alpha1
+          # before v1beta1, so a CR built from this CRD targeted a
+          # deprecated version the operator was about to drop. The package
+          # hid that by filtering the version out of the vendored file.
+          # Falling back to the first entry keeps a single-version CRD and
+          # any hand-written spec that omits the flag working.
+          storageVersions = builtins.filter (v: v.storage or false) crdSpec.versions;
+          version =
+            if storageVersions != [ ] then
+              (builtins.head storageVersions).name
+            else
+              (builtins.head crdSpec.versions).name;
           crdScope = crdSpec.scope or "Namespaced";
           factBehavior =
             if attrs ? factBehavior && attrs.factBehavior != null then
@@ -580,6 +731,7 @@ in
             kind = "CustomResourceDefinition";
             name = "${plural}.${group}";
             inherit labels;
+            ownership = attrs.ownership or { };
             extra = {
               spec = crdSpec;
             }

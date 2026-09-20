@@ -20,7 +20,13 @@
   meta = {
     version = "v1.17.1";
     description = "cert-manager — X.509 certificate management for Kubernetes";
+    owner = "platform";
     defaultAliases = [ "certManager" ];
+    # Every TLS Ingress carries `cert-manager.io/cluster-issuer`, stamped
+    # by the cluster-issuer's `out.withCert`. The consumer depends on the
+    # cluster-issuer, the cluster-issuer depends on this package, and the
+    # annotation-ownership rule follows that chain.
+    annotationDomains = [ "cert-manager.io" ];
     k8s.minVersion = "1.21";
     k8s.platformNotes = {
       gke-private = {

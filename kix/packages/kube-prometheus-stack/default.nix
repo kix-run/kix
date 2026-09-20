@@ -254,10 +254,17 @@ in
 {
   meta = {
     version = "71.2.0";
+    owner = "platform";
     isHelm = true;
     # The chart renders grafana's PVC itself (persistence.enabled above) —
     # the raw-PVC refusal needs an explicit escape here.
-    unsafe = [ "raw-pvc" ];
+    # An imported chart: its node-exporter is on the host network and PID
+    # namespace, and grafana's init-chown-data runs as root, as upstream ships.
+    unsafe = [
+      "raw-pvc"
+      "run-as-root"
+      "host-network"
+    ];
     # Match prometheus-operator's defaultAliases so DI lookups work
     # like consumers expect — see kix/packages/prometheus-operator/
     # default.nix:30-33. Naming the instance `prometheus` claims the
@@ -304,8 +311,20 @@ in
               null
             else
               "monitoring.coreos.com/${kind}/${crName}";
+          # The chart's kubelet ServiceMonitor selects a Service the operator
+          # creates at runtime in kube-system (`--kubelet-service`), which no
+          # manifest here renders. Said so on the monitor, where the
+          # monitorSelectorMatchesService rule reads it and the
+          # externalMonitorTargets audit lists it.
+          monitorsKubelet =
+            (r.kind or "") == "ServiceMonitor" && (r.spec.selector.matchLabels."k8s-app" or null) == "kubelet";
         in
-        if cr == null then r else lib.recursiveUpdate r { metadata.annotations.${kix.keys.operandOf} = cr; }
+        if cr != null then
+          lib.recursiveUpdate r { metadata.annotations.${kix.keys.operandOf} = cr; }
+        else if monitorsKubelet then
+          lib.recursiveUpdate r { metadata.annotations.${kix.keys.monitorsExternalService} = "true"; }
+        else
+          r
       );
 
       resources = scope.helm.importChart {

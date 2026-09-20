@@ -27,20 +27,11 @@ kix.buildCluster {
         availablePackages = packages;
         cluster.domain = "harbor.test";
         networkPolicy.enable = true;
-        scorecard = {
-          enable = true;
-          rules = kix.rules;
-          # Operator packages outside this test still fail nonRoot; see
-          # housekeeping/. Harbor itself passes it.
-          ruleOverrides.byRule."security.nonRoot".severity = "warning";
-          # cilium is a CNI: host network and a privileged BPF mount are
-          # what it is for. Scoped to its namespace so nothing else gets
-          # the exemption.
-          ruleOverrides.byNamespace."kube-system" = {
-            "security.noHostNetwork".severity = "warning";
-            "security.noPrivileged".severity = "warning";
-          };
-        };
+        # The full built-in rule set at its own severities, with no
+        # override, is the default now, and clusters/flake.nix raises the
+        # cap to error: a rule that disagrees with what the builders
+        # produce fails this build. cilium's host network and privileged
+        # mount are declared in its own meta.unsafe, not downgraded here.
 
         # kind runs with the default CNI disabled (see the deploy scripts
         # under demo/), so the managed cilium instance fills the cni role,

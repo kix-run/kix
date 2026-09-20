@@ -24,6 +24,11 @@
       ]
     },
     {
+      "page": "adopt-existing-resources/cede-fields-to-a-controller",
+      "scenario": "adoption",
+      "status": "planned"
+    },
+    {
       "page": "adopt-existing-resources/handle-server-side-apply-conflicts-safely",
       "scenario": "adoption",
       "status": "implemented",
@@ -31,7 +36,8 @@
         "how-to/adoption-ssa-conflicts/conflict",
         "how-to/adoption-ssa-conflicts/force-preview",
         "how-to/adoption-ssa-conflicts/resolve"
-      ]
+      ],
+      "unverifiedNixBlocks": 1
     },
     {
       "page": "adopt-existing-resources/handle-stateful-migration-prompts-safely",
@@ -717,7 +723,8 @@
       "offlineCaptures": [
         "how-to/platform-gateway/check",
         "how-to/platform-gateway/http-route"
-      ]
+      ],
+      "unverifiedNixBlocks": 1
     },
     {
       "page": "platform-capabilities/expose-a-service-with-ingress",
@@ -819,6 +826,12 @@
       "scenario": "policy",
       "status": "implemented",
       "unverifiedNixBlocks": 1
+    },
+    {
+      "page": "policy-ci-and-compliance/fail-the-build-on-scorecard-findings",
+      "scenario": "policy",
+      "status": "implemented",
+      "unverifiedNixBlocks": 2
     },
     {
       "page": "policy-ci-and-compliance/generate-a-cyclonedx-sbom",
@@ -952,7 +965,7 @@
       "offlineCaptures": [
         "how-to/application-list/list-clusters"
       ],
-      "unverifiedNixBlocks": 2
+      "unverifiedNixBlocks": 3
     }
   ]
 }

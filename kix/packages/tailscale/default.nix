@@ -26,6 +26,7 @@ in
 {
   meta = {
     version = "1.0.0";
+    owner = "platform";
     # The operator is a single-leader controller with no leader
     # election, so only one replica may run at a time.
     availability.max = "none";

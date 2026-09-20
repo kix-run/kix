@@ -948,13 +948,13 @@ pub async fn run_deploy(
     if !effective_orphans.is_empty() && config.prune != PrunePolicy::Skip {
         let ordered = prune_order(&effective_orphans, old_manifests);
         let delete = config.prune == PrunePolicy::Delete;
-        // Namespaces are never deleted automatically, so when deleting, the
-        // announced list is what will actually go. Under warn-only they are
-        // still worth naming.
+        // Namespaces and CRDs are never deleted automatically, so when
+        // deleting, the announced list is what will actually go. Under
+        // warn-only they are still worth naming.
         let announced: Vec<ResourceId> = if delete {
             ordered
                 .iter()
-                .filter(|r| r.kind != "Namespace")
+                .filter(|r| !never_pruned(&r.kind))
                 .cloned()
                 .collect()
         } else {
@@ -971,9 +971,9 @@ pub async fn run_deploy(
             if config.prune == PrunePolicy::WarnOnly {
                 continue;
             }
-            if rid.kind == "Namespace" {
-                // Same policy as the legacy reconcile: never prune a Namespace
-                // automatically; sweep the cluster manually after confirming.
+            if never_pruned(&rid.kind) {
+                // Same policy as the legacy reconcile: report it, leave it,
+                // and let a human remove it deliberately. See `never_pruned`.
                 continue;
             }
             let deleted =
@@ -1660,6 +1660,37 @@ pub async fn failed_rerun_nodes(
         }
     }
     failed
+}
+
+/// Kinds a prune reports but never deletes, because deleting one takes far
+/// more with it than the object named.
+///
+/// A Namespace takes every object inside it, whether Kix manages it or not.
+/// A CustomResourceDefinition takes every custom resource of that kind in
+/// the whole cluster: drop `sgclusters.stackgres.io` because an instance
+/// left the cluster definition, and every SGCluster on that apiserver goes
+/// with it, including ones no Kix cluster ever touched. Neither deletion is
+/// recoverable from the deploy's side, and neither object is dangerous to
+/// leave behind, so an orphan of either kind is named in the prune report
+/// and left alone.
+fn never_pruned(kind: &str) -> bool {
+    matches!(kind, "Namespace" | "CustomResourceDefinition")
+}
+
+#[cfg(test)]
+mod never_pruned_tests {
+    #[test]
+    fn namespaces_and_crds_are_kept() {
+        assert!(super::never_pruned("Namespace"));
+        assert!(super::never_pruned("CustomResourceDefinition"));
+    }
+
+    #[test]
+    fn ordinary_kinds_are_pruned() {
+        for kind in ["Deployment", "Service", "ConfigMap", "Secret", "SGCluster"] {
+            assert!(!super::never_pruned(kind), "{kind} should be prunable");
+        }
+    }
 }
 
 /// Reverse-topological ordering over the subset of `old_manifests` matching

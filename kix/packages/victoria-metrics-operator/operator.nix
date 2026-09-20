@@ -272,7 +272,7 @@ in
         {
           name = "http";
           port = 8080;
-          targetPort = "http";
+          targetPort = 8080;
         }
       ];
     };

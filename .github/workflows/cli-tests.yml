@@ -1,0 +1,89 @@
+name: CLI tests
+
+# Nothing ran `cargo test` in CI until 2026-09-20. Four snapshot tests had
+# been failing on main for days and the only way to find out was to run the
+# suite by hand, which told whoever did that they had broken something they
+# had not.
+#
+# The tests cannot run inside a Nix build: the crane package sets
+# `doCheck = false` because the integration tests need a writable Nix store
+# for the eval cache and the build sandbox has none. So this runs them from
+# the flake's devShell instead, which carries the Rust toolchain and the
+# Nix C libraries the nix-bindings-*-sys crates link against.
+#
+# Spindle (runners.example.com) brokers this onto an ephemeral GCE VM whose
+# image ships Nix; see .github/workflows/spindle-smoke.yml for the runner
+# and the `runs-on` label grammar.
+
+on:
+  pull_request:
+    paths:
+      - 'cli/**'
+      # The snapshot tests build a cluster, so a change to the compiler or
+      # to a package changes their expected output.
+      - 'kix/**'
+      - 'clusters/**'
+      - 'flake.nix'
+      - 'flake.lock'
+      - '.github/workflows/cli-tests.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'cli/**'
+      - 'kix/**'
+      - 'clusters/**'
+      - 'flake.nix'
+      - 'flake.lock'
+      - '.github/workflows/cli-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cli-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: [self-hosted, spindle-8c-16g]
+    env:
+      # The image ships Nix, so there is no installer step to carry this
+      # into /etc/nix/nix.conf. `extra-` matters: the bare
+      # `experimental-features` REPLACES what the image enabled, which
+      # breaks `configurable-impure-env`. Same form as pages.yml.
+      NIX_CONFIG: |
+        extra-experimental-features = nix-command flakes pipe-operators
+        accept-flake-config = true
+        access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          # Nix's git fetcher needs the full history to resolve refs
+          # cleanly; the default shallow clone breaks it.
+          fetch-depth: 0
+
+      # `cargo-fmt` and `cargo-clippy`, not `cargo fmt` and `cargo clippy`.
+      # Cargo looks a subcommand up next to its own binary and in
+      # $CARGO_HOME/bin before it looks at PATH, so on any machine with
+      # rustup installed those two forms find rustup's shims instead of the
+      # toolchain this shell provides, and fail with "rustup could not
+      # choose a version". Naming the binary keeps the command honest here
+      # and on a contributor's laptop.
+      - name: Formatting
+        run: nix develop --command bash -c 'cd cli && cargo-fmt --check'
+
+      - name: Clippy
+        run: |
+          nix develop --command bash -c \
+            'cd cli && cargo-clippy --workspace --all-targets -- -D warnings'
+
+      # Includes the four output snapshots under
+      # cli/kix-cli/tests/snapshots/. They capture whole rendered manifests,
+      # identity hashes included, so a deliberate change to what the
+      # compiler emits fails this step. That is the point: refresh them with
+      # `INSTA_UPDATE=always cargo test -p kix-cli --test snapshot_test` and
+      # commit the result in the same change that moved the output.
+      - name: Tests
+        run: nix develop --command bash -c 'cd cli && cargo test --workspace'

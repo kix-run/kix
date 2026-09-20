@@ -2,3 +2,5 @@
 title: "Server-side apply, field ownership, and drift"
 description: TODO
 ---
+
+{/* Stub. Cover the two directions of a conflict: kix takes a field back (handle-server-side-apply-conflicts-safely) and kix gives a field up (`ownership.cede`, the cede-fields-to-a-controller guide). Why the package author declares ceded paths rather than the operator forcing every apply: the retry is confined to named paths, so an unexpected manager still fails the deploy. Source: kix/lib/core/resource.nix, cli/kix/src/cluster/apply.rs. */}

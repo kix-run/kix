@@ -9,20 +9,15 @@ import check from '/src/command-output/how-to/scorecard-rules/check.json';
 Disable an individual rule through `scorecard.ruleOverrides.byRule`. This
 keeps the rest of its built-in or custom category active.
 
-This guide assumes scorecard evaluation is enabled and the rule is present
-under `scorecard.rules`.
+This guide assumes the rule is in the active set. The built-in rules are,
+by default; a custom rule must be present under `scorecard.rules`.
 
 ## Add the override
 
 Use the rule's full `<category>.<rule>` name and set `enabled = false`:
 
 ```nix title="cluster.nix"
-scorecard = {
-  enable = true;
-  rules.reliability = kix.rules.reliability;
-
-  ruleOverrides.byRule."reliability.hasProbes".enabled = false;
-};
+scorecard.ruleOverrides.byRule."reliability.hasProbes".enabled = false;
 ```
 
 Kix excludes the rule before evaluating it, so it produces no findings. Other

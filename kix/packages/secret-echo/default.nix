@@ -19,13 +19,14 @@ in
   meta = {
     version = "1.0.0";
     description = "Echo server that reads secrets from env vars (test only)";
+    owner = "platform";
   };
 
   options = {
     image = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
       default = {
-        repository = "nginx";
+        repository = "nginxinc/nginx-unprivileged";
         tag = "1.27-alpine";
         pullPolicy = "IfNotPresent";
       };
@@ -58,7 +59,7 @@ in
           '';
           "default.conf" = ''
             server {
-                listen 80;
+                listen 8080;
                 location / {
                     root /usr/share/nginx/html;
                     default_type text/plain;
@@ -89,8 +90,10 @@ in
                     "/bin/sh"
                     "/etc/config/entrypoint.sh"
                   ];
+                  # nginx-unprivileged runs as uid 101 and listens on 8080.
+                  securityContext.runAsNonRoot = true;
                   ports = [
-                    (kix.port "http" 80)
+                    (kix.port "http" 8080)
                   ];
                   env = credentials.out.mkEnv {
                     DB_USERNAME = "username";
@@ -101,7 +104,7 @@ in
                   readinessProbe = {
                     httpGet = {
                       path = "/healthz";
-                      port = 80;
+                      port = 8080;
                     };
                     periodSeconds = 5;
                     failureThreshold = 1;
@@ -171,7 +174,7 @@ in
             {
               name = "http";
               port = 80;
-              targetPort = "http";
+              targetPort = 8080;
               protocol = "TCP";
             }
           ];

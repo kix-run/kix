@@ -8,7 +8,9 @@
 # external-dns-northwind for shopfront.example).
 #
 # Resources: ServiceAccount, ClusterRole, ClusterRoleBinding, Deployment,
-#            Service (metrics), NetworkPolicy, PodDisruptionBudget, Secret.
+#            Service (metrics), NetworkPolicy, Secret. Disruption budgets
+#            are derived by the compiler from the availability level, not
+#            written here.
 #
 # root = Deployment
 
@@ -21,6 +23,7 @@
 {
   meta = {
     version = "0.16.1";
+    owner = "platform";
   };
 
   options = {
@@ -132,13 +135,6 @@
         the cluster (cluster.spread); set this only for node affinity or a
         rule stronger than the derived one.
       '';
-    };
-    pdb = lib.mkOption {
-      type = lib.types.attrsOf lib.types.anything;
-      default = {
-        enabled = true;
-        maxUnavailable = 1;
-      };
     };
     networkPolicy = lib.mkOption {
       type = lib.types.attrsOf lib.types.anything;
@@ -418,7 +414,7 @@
             {
               name = "http";
               port = config.metricsPort;
-              targetPort = "http";
+              targetPort = config.metricsPort;
               protocol = "TCP";
             }
           ];
@@ -460,22 +456,6 @@
         else
           null;
 
-      # --- PodDisruptionBudget ---
-      podDisruptionBudget =
-        if config.pdb.enabled then
-          scope.mkResource {
-            apiVersion = "policy/v1";
-            kind = "PodDisruptionBudget";
-            inherit name;
-            labels = allLabels;
-            spec = {
-              maxUnavailable = config.pdb.maxUnavailable;
-              selector.matchLabels = edSelectorLabels;
-            };
-          }
-        else
-          null;
-
       # --- Deployment ---
       deployment =
         {
@@ -485,8 +465,7 @@
             builtins.attrValues clusterRoles
             ++ [ self.service ]
             ++ lib.optional (self.secret != null) self.secret
-            ++ lib.optional (self.networkPolicy != null) self.networkPolicy
-            ++ lib.optional (self.podDisruptionBudget != null) self.podDisruptionBudget;
+            ++ lib.optional (self.networkPolicy != null) self.networkPolicy;
           spec = {
             replicas = 1;
             selector.matchLabels = edSelectorLabels;

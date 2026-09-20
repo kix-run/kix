@@ -15,8 +15,14 @@ in
   meta = {
     version = "v1.12.1";
     description = "Prometheus Node Exporter — host-level metrics";
+    owner = "platform";
     defaultAliases = [ "nodeExporter" ];
     k8s.minVersion = "1.25";
+    # A node-level exporter: host network and host PID namespace are what it
+    # is for.
+    unsafe = [
+      "host-network"
+    ];
   };
 
   options = {

@@ -78,6 +78,11 @@ rec {
     dependsOn = key "depends-on";
     readiness = key "readiness";
     rerun = key "rerun";
+    # Field paths a resource cedes to another manager after creation.
+    cedeFields = key "cede-fields";
+    # Objects this resource expects something else to have created
+    # (`apiVersion|Kind|name`, comma separated); deploy waits for them.
+    expects = key "expects";
 
     # Secrets.
     sopsSource = key "sops-source";

@@ -68,6 +68,23 @@ let
       ) rules
     );
 
+  severityRank = {
+    info = 0;
+    warning = 1;
+    error = 2;
+  };
+
+  # The lower of a resolved severity and the cluster's cap. The cap is
+  # what lets the scorecard run by default: every finding is printed at
+  # its resolved level or below, and the build fails only where the
+  # cluster has raised the cap to error.
+  capSeverity =
+    maxSeverity: severity:
+    if severity == null || severityRank.${severity} <= severityRank.${maxSeverity} then
+      severity
+    else
+      maxSeverity;
+
   resolveEffectiveSeverity =
     {
       ruleName,
@@ -76,6 +93,7 @@ let
       ruleOverrides ? { },
       namespaceName ? null,
       owner ? null,
+      maxSeverity ? "error",
     }:
     let
       baseSeverity = rule.severity or ruleDefaults.severity or "warning";
@@ -137,17 +155,19 @@ let
         )
       );
     in
-    builtins.seq _severityChecks (
-      if ruleDisabled then
-        null
-      else if ruleSeverity != null then
-        ruleSeverity
-      else if ownerSeverity != null then
-        ownerSeverity
-      else if nsSeverity != null then
-        nsSeverity
-      else
-        baseSeverity
+    capSeverity maxSeverity (
+      builtins.seq _severityChecks (
+        if ruleDisabled then
+          null
+        else if ruleSeverity != null then
+          ruleSeverity
+        else if ownerSeverity != null then
+          ownerSeverity
+        else if nsSeverity != null then
+          nsSeverity
+        else
+          baseSeverity
+      )
     );
 
   checkAppliesTo =
@@ -186,7 +206,9 @@ rec {
       namespaceName,
       ruleDefaults ? { },
       ruleOverrides ? { },
+      maxSeverity ? "error",
       owner ? null,
+      meta ? { },
     }:
     let
       manifestRules = builtins.filter (r: (r.rule.level or "") == "manifest") (flattenRules rules);
@@ -195,6 +217,7 @@ rec {
       { name, rule }:
       let
         severity = resolveEffectiveSeverity {
+          inherit maxSeverity;
           ruleName = name;
           inherit
             rule
@@ -204,8 +227,18 @@ rec {
             owner
             ;
         };
+        # `meta` is here so a manifest rule can honour an unsafe grant the
+        # package declares (kix/lib/unsafe.nix). Without it a package whose
+        # whole job breaks a rule — a CNI on the host network — has no way
+        # to say so, and the cluster has to downgrade the rule for everyone
+        # in its namespace.
         ctx = {
-          inherit resource instanceName namespaceName;
+          inherit
+            resource
+            instanceName
+            namespaceName
+            meta
+            ;
         };
         applies = checkAppliesTo rule ctx;
         findings = if severity != null && applies then rule.check ctx else [ ];
@@ -235,6 +268,7 @@ rec {
       namespaceName,
       ruleDefaults ? { },
       ruleOverrides ? { },
+      maxSeverity ? "error",
       owner ? null,
       # v2_discussions/128: cluster-wide domain → declarer index, this
       # instance's resolved dep identities ("ns/inst"), and operator-declared
@@ -250,6 +284,7 @@ rec {
       { name, rule }:
       let
         severity = resolveEffectiveSeverity {
+          inherit maxSeverity;
           ruleName = name;
           inherit
             rule
@@ -296,6 +331,7 @@ rec {
       namespaceName,
       ruleDefaults ? { },
       ruleOverrides ? { },
+      maxSeverity ? "error",
     }:
     let
       nsRules = builtins.filter (r: (r.rule.level or "") == "namespace") (flattenRules rules);
@@ -304,6 +340,7 @@ rec {
       { name, rule }:
       let
         severity = resolveEffectiveSeverity {
+          inherit maxSeverity;
           ruleName = name;
           inherit
             rule
@@ -339,6 +376,11 @@ rec {
       clusterConfig ? { },
       ruleDefaults ? { },
       ruleOverrides ? { },
+      maxSeverity ? "error",
+      # "<namespace>/<name>" → true for every name a package declared
+      # external with kix.untrackedRef. Collected before string context is
+      # stripped, which is the only point it can be read at.
+      externalNames ? { },
     }:
     let
       clusterRules = builtins.filter (r: (r.rule.level or "") == "cluster") (flattenRules rules);
@@ -347,11 +389,17 @@ rec {
       { name, rule }:
       let
         severity = resolveEffectiveSeverity {
+          inherit maxSeverity;
           ruleName = name;
           inherit rule ruleDefaults ruleOverrides;
         };
         ctx = {
-          inherit allInstances allResources clusterConfig;
+          inherit
+            allInstances
+            allResources
+            clusterConfig
+            externalNames
+            ;
         };
         applies = checkAppliesTo rule ctx;
         findings = if severity != null && applies then rule.check ctx else [ ];

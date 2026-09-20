@@ -15,6 +15,7 @@
   meta = {
     version = "1.0.0";
     description = "Reference to an externally-managed secret";
+    owner = "platform";
     scope = "namespace";
     defaultAliases = [ "secret" ];
   };

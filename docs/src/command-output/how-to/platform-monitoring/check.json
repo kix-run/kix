@@ -9,9 +9,9 @@
   "commands": [
     {
       "command": "kix check how-to-platform-monitoring",
-      "stdout": " TOOL         RESULT  DETAILS                                                       \n eval         pass    29 manifests evaluated                                        \n kubeconform  pass    skipped (this validation tool is not yet integrated with Kix) \n pluto        pass    skipped (this validation tool is not yet integrated with Kix) \n kyverno      pass    skipped (this validation tool is not yet integrated with Kix) \n scorecard    skip    scorecard not enabled in cluster definition                   \n",
+      "stdout": " TOOL         RESULT  DETAILS                                                       \n eval         pass    29 manifests evaluated                                        \n kubeconform  pass    skipped (this validation tool is not yet integrated with Kix) \n pluto        pass    skipped (this validation tool is not yet integrated with Kix) \n kyverno      pass    skipped (this validation tool is not yet integrated with Kix) \n scorecard    pass    0 errors, 10 warnings, 2 info                                 \n",
       "stderr": "",
-      "stdoutDrift": "TOOL RESULT DETAILS\neval pass 29 manifests evaluated\nkubeconform pass skipped (this validation tool is not yet integrated with Kix)\nkyverno pass skipped (this validation tool is not yet integrated with Kix)\npluto pass skipped (this validation tool is not yet integrated with Kix)\nscorecard skip scorecard not enabled in cluster definition\n",
+      "stdoutDrift": "TOOL RESULT DETAILS\neval pass 29 manifests evaluated\nkubeconform pass skipped (this validation tool is not yet integrated with Kix)\nkyverno pass skipped (this validation tool is not yet integrated with Kix)\npluto pass skipped (this validation tool is not yet integrated with Kix)\nscorecard pass 0 errors, 10 warnings, 2 info\n",
       "stderrDrift": "",
       "exitCode": 0
     }

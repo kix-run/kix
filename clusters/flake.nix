@@ -17,6 +17,10 @@
     inputs:
     inputs.kix.lib.mkFlake {
       inherit inputs;
+      # Every cluster here runs the full built-in rule set, which is the
+      # shipped default, with the severity cap raised: a finding an
+      # error-severity rule makes fails the build in this repository.
+      clusterModules = [ { scorecard.maxSeverity = "error"; } ];
 
       # region:pinFile
       # Declared once. A cluster that takes a `pins` argument gets this file
@@ -44,10 +48,9 @@
         multi-env = ./test-multi-env.nix;
         doc-how-tos = ./test-doc-how-tos.nix;
         harbor = ./test-harbor.nix;
-        satchel-dev = ./satchel/dev.nix;
-        satchel-prod = ./satchel/prod.nix;
         operators = ./test-operators.nix;
         sealed-jobs = ./test-sealed-jobs.nix;
+        ingress-netpol = ./test-ingress-netpol.nix;
       };
     };
 }

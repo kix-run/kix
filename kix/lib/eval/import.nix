@@ -125,6 +125,50 @@ rec {
           };
         };
 
+      # Import mode renders no resources, but a package reaches its
+      # workloads on the way to the `out` values an import does need:
+      # `kix.service.fromWorkload` reads the workload's selector and its
+      # container ports, and that is the documented way to write a Service.
+      # Without these builders such a package failed on a bare
+      # `attribute 'mkStatefulSet' missing` naming its own line
+      # (housekeeping 2026-09-20). They seal nothing, patch nothing and emit
+      # nothing: what an import promises is the root's `out`, so a workload
+      # only has to carry the selector and the ports a Service is built from.
+      mkWorkloadImport =
+        apiVersion: kind: args:
+        let
+          spec = args.spec or { };
+          templateMeta =
+            if kind == "CronJob" then
+              spec.jobTemplate.spec.template.metadata or { }
+            else
+              spec.template.metadata or { };
+          selector =
+            spec.selector.matchLabels or templateMeta.labels
+              or (throw "Import instance '${instanceName}': ${kind} '${args.name or "?"}' has no spec.selector.matchLabels and no pod template labels. Use scope.selectorLabels.");
+          ref = mkRes namespaceResource (
+            {
+              inherit apiVersion kind spec;
+              name = args.name or (throw "Import instance '${instanceName}': ${kind} needs a name");
+              labels = args.labels or { };
+            }
+            // lib.optionalAttrs (args ? annotations) { inherit (args) annotations; }
+            // lib.optionalAttrs (args ? outputs) { inherit (args) outputs; }
+          );
+        in
+        ref
+        // {
+          rawSelector = selector;
+          rawManifest = {
+            inherit apiVersion kind spec;
+            metadata = {
+              name = args.name;
+              namespace = namespaceName;
+              labels = args.labels or { };
+            };
+          };
+        };
+
       scope = {
         inherit instanceName namespaceName selectorLabels;
         labelStyle = "kix";
@@ -132,6 +176,11 @@ rec {
         mkResource = mkRes namespaceResource;
         mkClusterResource = mkRes clusterScoped;
         mkCR = _crd: args: scope.mkResource args;
+        mkDeployment = mkWorkloadImport "apps/v1" "Deployment";
+        mkStatefulSet = mkWorkloadImport "apps/v1" "StatefulSet";
+        mkDaemonSet = mkWorkloadImport "apps/v1" "DaemonSet";
+        mkJob = mkWorkloadImport "batch/v1" "Job";
+        mkCronJob = mkWorkloadImport "batch/v1" "CronJob";
         mkServiceRef = mkServiceRefImport;
         mkSecretRef = mkSecretRefImport;
         inherit rbac;

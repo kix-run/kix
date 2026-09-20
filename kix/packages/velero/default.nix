@@ -34,9 +34,15 @@ in
 {
   meta = {
     version = "v1.15.2";
+    owner = "platform";
     # The velero server has no leader election and a second one would race
     # the first over backups, so one replica is the ceiling it can honour.
     availability.max = "pod";
+    # node-agent reads every pod's volumes from the host path, which needs
+    # root. The server image runs as a non-root user on its own.
+    unsafe = [
+      "run-as-root"
+    ];
   };
 
   options = {
@@ -385,7 +391,7 @@ in
               name = "http-monitoring";
               port = 8085;
               protocol = "TCP";
-              targetPort = "http-monitoring";
+              targetPort = 8085;
             }
           ];
           selector = selectorLabels // {

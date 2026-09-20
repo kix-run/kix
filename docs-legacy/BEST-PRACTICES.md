@@ -119,6 +119,8 @@ reconciler, and no runbook should need to.
 | Volume name collision | `kix.withMounts` `_dupeCheck` |
 | Selector references unnamed container port | `kix.service.fromWorkload` validates against workload's container ports |
 | Both `gateway` and `ingressNginx` wired | `kix.expose` errors at build time |
+| Exposed backend unreachable under default deny | `kix.expose` emits the controller's ingress rule alongside the Ingress |
+| Every deploy after the first conflicts with an operator that rewrote a CRD or webhook | `ownership.cede` on the resource names the fields the operator owns; deploy applies without them instead of failing or forcing |
 | Unknown extension/option | NixOS module system errors |
 
 ### 4.2 Bar for adding new compile-time checks
@@ -440,6 +442,14 @@ The consumer loses the workload DAG edge, so
 `scorecard:architecture.selectorCoherence` fires to keep the workaround
 visible. Don't suppress the warning — the visibility is the point.
 
+Reading `rawSelector` seals nothing, so it works when the cycle runs through
+the manifest as well: a Service whose selector comes from a workload that
+mounts a ConfigMap naming that same Service. Until 2026-09-20 it did not —
+reading it ran the pod-spec validators and the network-policy interceptor,
+which walked to the ConfigMap and back to the Service, and the escape hatch
+recursed like the thing it was escaping. `t89-raw-selector-readable-through-a-manifest-cycle`
+in `kix/lib/tests` holds that shape.
+
 ## 8. Workloads are explicit; everything else is DI'd
 
 A package author is explicit about *what* they need (Postgres, not "a
@@ -483,7 +493,8 @@ instance aliases *replace* package defaults, they don't merge). Capability
 ownership is enforced by declared invariants, not provenance stamps
 (v2_discussions/128): raw PVCs are an eval error unless the package holds
 `meta.unsafe = [ "raw-pvc" ]`, and annotations under an operator-declared
-domain (`meta.annotationDomains`) without a DI dep on the declarer trip
+domain (`meta.annotationDomains`) without a dependency on the declarer,
+direct or through another dependency, trip
 `architecture.annotationDomainOwnership`.
 
 ### 8.3 What does NOT go on `meta.roles`
@@ -856,7 +867,12 @@ they're skill-loaded only during migration work.
 
 ---
 
-**Source-of-truth dates** (last reconciled with this doc):
+**Source-of-truth dates** (last reconciled with this doc). `kix/lib` was
+rewritten through August and September 2026 — the ring model, the seal on
+every workload, derived pod spread and PDBs, the availability level — so
+every section below that describes builders, workloads, selectors or
+scorecard rules is older than the code it documents. Check it against
+`kix/lib/` before relying on it.
 
 ```
 PRINCIPLES.md                          2026-04-27

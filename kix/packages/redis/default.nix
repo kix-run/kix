@@ -31,6 +31,7 @@ in
 {
   meta = {
     version = "19.1.0";
+    owner = "platform";
     isHelm = true;
   };
 

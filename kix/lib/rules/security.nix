@@ -9,12 +9,49 @@
 
 let
   # Extract all containers (regular + init) from a workload resource.
+  listOr = v: if v == null then [ ] else v;
+
   getContainers =
     resource:
     let
       podSpec = resource.spec.template.spec or { };
     in
-    (podSpec.containers or [ ]) ++ (podSpec.initContainers or [ ]);
+    # A chart-rendered pod spec can carry `initContainers: null`; the rules
+    # see the manifest before the null is stripped at emission.
+    listOr (podSpec.containers or [ ]) ++ listOr (podSpec.initContainers or [ ]);
+
+  # Kubernetes resolves `runAsNonRoot` and `runAsUser` per container, falling
+  # back to the pod's securityContext when the container sets neither. Reading
+  # only the container field failed cert-manager, prometheus-operator and
+  # stackgres-operator, all three of which set it once for the whole pod.
+  effectiveSecurity =
+    resource: container: field:
+    let
+      podLevel = resource.spec.template.spec.securityContext or { };
+      containerLevel = container.securityContext or { };
+    in
+    if containerLevel ? ${field} then
+      containerLevel.${field}
+    else if podLevel ? ${field} then
+      podLevel.${field}
+    else
+      null;
+
+  # A container is non-root if it says so, or if the UID it resolves to is
+  # not 0. A package that pins `runAsUser = 65534` is as non-root as one
+  # that sets the flag, and the kubelet refuses to start either as root.
+  runsAsNonRoot =
+    resource: container:
+    let
+      flag = effectiveSecurity resource container "runAsNonRoot";
+      uid = effectiveSecurity resource container "runAsUser";
+    in
+    (flag == true) || (flag == null && uid != null && uid != 0);
+
+  # A package opts out of a structural rule with a declared grant
+  # (kix/lib/unsafe.nix), which `architecture.unsafeGrants` then lists in
+  # every build, so the exception stays visible in review.
+  holdsGrant = meta: grant: builtins.elem grant (meta.unsafe or [ ]);
 
   isWorkload =
     resource:
@@ -34,15 +71,23 @@ in
       "security"
       "cis-benchmark"
     ];
-    appliesTo = { resource, ... }: isWorkload resource;
+    appliesTo =
+      {
+        resource,
+        meta ? { },
+        ...
+      }:
+      isWorkload resource && !(holdsGrant meta "run-as-root");
     check =
       { resource, ... }:
       let
         containers = getContainers resource;
-        failing = builtins.filter (c: !(c.securityContext.runAsNonRoot or false)) containers;
+        failing = builtins.filter (c: !(runsAsNonRoot resource c)) containers;
       in
       map (c: {
-        message = "container '${c.name or "unnamed"}' does not set runAsNonRoot";
+        message =
+          "container '${c.name or "unnamed"}' may run as root: neither it nor the pod "
+          + "sets securityContext.runAsNonRoot, and no non-zero runAsUser resolves for it";
       }) failing;
   };
 
@@ -54,7 +99,13 @@ in
       "security"
       "cis-benchmark"
     ];
-    appliesTo = { resource, ... }: isWorkload resource;
+    appliesTo =
+      {
+        resource,
+        meta ? { },
+        ...
+      }:
+      isWorkload resource && !(holdsGrant meta "privileged");
     check =
       { resource, ... }:
       let
@@ -91,7 +142,13 @@ in
       "security"
       "cis-benchmark"
     ];
-    appliesTo = { resource, ... }: isWorkload resource;
+    appliesTo =
+      {
+        resource,
+        meta ? { },
+        ...
+      }:
+      isWorkload resource && !(holdsGrant meta "host-network");
     check =
       { resource, ... }:
       let

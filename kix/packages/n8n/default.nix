@@ -40,6 +40,7 @@ in
 {
   meta = {
     version = "1.74.2";
+    owner = "app-team";
     # The main process owns the scheduler and active webhooks, and n8n's
     # multi-main setup is an enterprise feature this package does not wire
     # up, so the main instance can never be made redundant: even a rolling
@@ -298,13 +299,17 @@ in
                           "--concurrency=${toString config.worker.concurrency}"
                         ];
                         envFrom = workerEnvFrom;
+                        # Named "health" rather than "http": the worker
+                        # serves only /healthz on it, and the main
+                        # Deployment in this same instance already calls
+                        # its port "http" with a different number.
                         ports = [
-                          (kix.port "http" config.worker.port)
+                          (kix.port "health" config.worker.port)
                         ];
                         livenessProbe = {
                           httpGet = {
                             path = "/healthz";
-                            port = "http";
+                            port = "health";
                           };
                           periodSeconds = 10;
                           timeoutSeconds = 1;
@@ -313,7 +318,7 @@ in
                         readinessProbe = {
                           httpGet = {
                             path = "/healthz";
-                            port = "http";
+                            port = "health";
                           };
                           periodSeconds = 10;
                           timeoutSeconds = 1;
@@ -347,7 +352,7 @@ in
               {
                 name = "http";
                 port = config.servicePort;
-                targetPort = "http";
+                targetPort = config.port;
                 protocol = "TCP";
               }
             ];

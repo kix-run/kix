@@ -60,6 +60,58 @@ in
       isSentinelNs = nsName: lib.hasPrefix "_" nsName;
       realNsNames = builtins.filter (n: !isSentinelNs n) allNsNames;
 
+      # Pod Security Standards, most permissive first. A namespace runs
+      # at the most permissive level any of its instances needs.
+      podSecurityLevels = [
+        "privileged"
+        "baseline"
+        "restricted"
+      ];
+      podSecurityRank =
+        nsName: instName: level:
+        let
+          i = lib.lists.findFirstIndex (l: l == level) null podSecurityLevels;
+        in
+        if i == null then
+          throw (
+            "[${nsName}/${instName}] meta.podSecurity = \"${toString level}\" is not one of "
+            + lib.concatStringsSep ", " podSecurityLevels
+          )
+        else
+          i;
+
+      # The level a namespace carries: what its instances need, checked
+      # against what the cluster set on it by hand. An instance that needs
+      # `privileged` in a namespace pinned to `restricted` is an error
+      # here, at eval, rather than a pod the apiserver refuses with a
+      # message naming the pod and not the label.
+      namespacePodSecurity =
+        nsName:
+        let
+          declared = (cfg.namespaces.${nsName} or { }).podSecurity or null;
+          needs = lib.filter (n: n.level != null) (
+            lib.mapAttrsToList (instName: _: {
+              inherit instName;
+              level = (peekedMetas.${nsName}.${instName}).podSecurity or null;
+            }) (mergedInstances.${nsName} or { })
+          );
+          ranked = map (n: n // { rank = podSecurityRank nsName n.instName n.level; }) needs;
+          mostPermissive = builtins.foldl' (
+            acc: n: if acc == null || n.rank < acc.rank then n else acc
+          ) null ranked;
+          declaredRank = if declared == null then null else podSecurityRank nsName "namespace" declared;
+        in
+        if mostPermissive == null then
+          declared
+        else if declaredRank != null && declaredRank > mostPermissive.rank then
+          throw (
+            "namespace '${nsName}' sets podSecurity = \"${declared}\", but instance "
+            + "'${mostPermissive.instName}' declares meta.podSecurity = \"${mostPermissive.level}\": "
+            + "its pods would be refused. Raise the namespace level, or move the instance."
+          )
+        else
+          mostPermissive.level;
+
       nsResources = builtins.listToAttrs (
         map (nsName: {
           name = nsName;
@@ -68,6 +120,9 @@ in
               name = nsName;
             }
             // (cfg.namespaces.${nsName} or { })
+            // {
+              podSecurity = namespacePodSecurity nsName;
+            }
           );
         }) allNsNames
       );
@@ -404,6 +459,7 @@ in
               namespaceName = nsName;
               ruleDefaults = scorecardConfig.ruleDefaults or { };
               ruleOverrides = scorecardConfig.ruleOverrides or { };
+              maxSeverity = scorecardConfig.maxSeverity or "error";
             }
           ) realNsNames
         else
@@ -413,6 +469,7 @@ in
         if scorecardEnabled then
           scorecard.evaluateClusterRules {
             rules = scorecardConfig.rules;
+            externalNames = externalRefNames;
             # Active view only, restricted to real namespaces: a namespace
             # whose sole instances are never-activated optionals is NOT
             # "managed" for cluster-rule purposes (the namespace-rule path
@@ -429,6 +486,7 @@ in
             clusterConfig = cfg;
             ruleDefaults = scorecardConfig.ruleDefaults or { };
             ruleOverrides = scorecardConfig.ruleOverrides or { };
+            maxSeverity = scorecardConfig.maxSeverity or "error";
           }
         else
           [ ];

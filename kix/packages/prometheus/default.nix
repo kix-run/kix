@@ -24,6 +24,7 @@ in
   meta = {
     version = "v3.13.1";
     description = "Prometheus time-series database";
+    owner = "platform";
     defaultAliases = [
       "prometheusServer"
       "promServer"

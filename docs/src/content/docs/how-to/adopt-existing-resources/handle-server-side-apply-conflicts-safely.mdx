@@ -67,8 +67,22 @@ evidence that the other value is wrong.
 
 If the other controller should continue managing the field, change the Kix
 package or its configuration so it no longer emits that field. When the
-package cannot omit it, choose one manager rather than letting both repeatedly
-take ownership from each other.
+package cannot omit it, because the field is required on create or the whole
+object comes from upstream, declare the field as ceded on the resource:
+
+```nix
+scope.mkResource {
+  # ...
+  ownership.cede = [ "spec.replicas" ];
+}
+```
+
+Kix stamps the paths as `kix.run/cede-fields`. When a later apply conflicts
+only on those paths, deploy retries without them and the other manager keeps
+the field; a conflict anywhere else still fails. See
+[Cede fields to a controller](/docs/how-to/adopt-existing-resources/cede-fields-to-a-controller/).
+Choose one manager either way, rather than letting both repeatedly take
+ownership from each other.
 
 If Kix should manage the field, first disable or reconfigure the other manager
 for this resource. Otherwise the conflict will return after both systems

@@ -17,6 +17,7 @@ in
 {
   meta = {
     version = "1.0.0";
+    owner = "platform";
   };
 
   options = {

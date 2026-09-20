@@ -39,6 +39,10 @@ in
 {
   meta = {
     version = "v1.5.0";
+    owner = "platform";
+    # virt-handler runs a privileged pod on every node. Upstream labels
+    # its namespace `pod-security.kubernetes.io/enforce: privileged`.
+    podSecurity = "privileged";
   };
 
   options = {
@@ -1783,6 +1787,7 @@ in
                 }
                 {
                   name = "profile-data";
+                  emptyDir = kix.keep { };
                 }
               ];
             };

@@ -179,6 +179,46 @@ in
       builtins.concatLists (lib.mapAttrsToList findingFor domainCarriers);
   };
 
+  # An untracked reference says "something else creates this", and nothing
+  # checks that anything does. The openebs etcd StatefulSet mounted a Secret
+  # whose comment said the operator made it at runtime; nothing did, every
+  # eval passed, and the pods sat in Init with "secret not found" until
+  # someone read the mount. There is no way to say WHO creates one, so a
+  # wrong claim lives forever. Until there is, put every claim in a build
+  # in one place, so a reviewer reads a list instead of finding them one
+  # mount at a time.
+  untrackedReferences = {
+    description = "Audit: names declared external with kix.untrackedRef";
+    level = "cluster";
+    severity = "info";
+    tags = [
+      "architecture"
+      "unsafe"
+    ];
+    check =
+      {
+        externalNames ? { },
+        ...
+      }:
+      map (
+        ref:
+        let
+          parts = lib.splitString "/" ref;
+          ns = builtins.head parts;
+          refName = builtins.concatStringsSep "/" (builtins.tail parts);
+        in
+        {
+          namespace = ns;
+          resource = refName;
+          message =
+            "'${refName}' is declared external with kix.untrackedRef, so Kix does not create it "
+            + "and no check confirms that anything else does. Name the creator and the kind "
+            + "(kix.untrackedRef { kind; name; by; }) so deploy waits for it, or check that something really does: "
+            + "an operator that mints it at runtime, or a step outside Kix.";
+        }
+      ) (builtins.attrNames externalNames);
+  };
+
   # The `#![allow]` audit (v2_discussions/128 mechanism 1): every
   # `meta.unsafe` grant in the cluster is listed so an escape from a
   # structural rule is visible in review — info severity, it is not a
@@ -215,6 +255,139 @@ in
   # Kinds checked: only those discovered BY label selector in practice.
   # Extending to every kind would error on harmless twins (two ConfigMaps
   # in one instance are label-identical everywhere and selected by name).
+  # The producer-side twin of distinctSameKindLabels, one level down: not
+  # "two Services cannot be told apart" but "two workloads' POD SETS cannot
+  # be told apart". `kix deploy` judged velero's server Deployment from a
+  # node-agent pod, because the Deployment selected on the instance labels
+  # alone and the DaemonSet's pod template carried those plus its own name.
+  # Every label-selecting consumer downstream inherits the ambiguity:
+  # readiness, Services, PodDisruptionBudgets and network policy. The only
+  # sign anything was wrong was that velero's Service had already worked
+  # around it by adding a label to its own selector.
+  distinctWorkloadSelectors = {
+    description = "One workload's selector must not also match another workload's pods";
+    level = "package";
+    severity = "error";
+    tags = [
+      "architecture"
+      "identity"
+    ];
+    check =
+      { resources, ... }:
+      let
+        selectorKinds = [
+          "Deployment"
+          "StatefulSet"
+          "DaemonSet"
+          "Job"
+        ];
+        # A CronJob has no selector of its own, so it can be claimed but
+        # never claims. Its pods are still someone else's to steal.
+        targetKinds = selectorKinds ++ [ "CronJob" ];
+        podLabels =
+          r:
+          if (r.kind or "") == "CronJob" then
+            r.spec.jobTemplate.spec.template.metadata.labels or { }
+          else
+            r.spec.template.metadata.labels or { };
+        subsetOf =
+          needle: hay: builtins.all (k: (hay.${k} or null) == needle.${k}) (builtins.attrNames needle);
+        rid = r: "${r.kind or "?"}/${r.metadata.name or "?"}";
+        sameIdentity =
+          a: b:
+          (a.metadata.name or null) == (b.metadata.name or null)
+          && (a.metadata.namespace or null) == (b.metadata.namespace or null)
+          && (a.kind or null) == (b.kind or null);
+        selectors = builtins.filter (r: builtins.elem (r.kind or "") selectorKinds) resources;
+        targets = builtins.filter (r: builtins.elem (r.kind or "") targetKinds) resources;
+      in
+      builtins.concatMap (
+        a:
+        let
+          selector = a.spec.selector.matchLabels or { };
+          claims = b: !(sameIdentity a b) && selector != { } && subsetOf selector (podLabels b);
+        in
+        map (b: {
+          message =
+            "${rid a} selects on ${builtins.toJSON selector}, which also matches the pods of ${rid b}. "
+            + "Both pod sets answer to that selector, so readiness, Services, PodDisruptionBudgets and "
+            + "network policy cannot tell them apart. Give each workload a label of its own.";
+        }) (builtins.filter claims targets)
+      ) selectors;
+  };
+
+  # Kubernetes scopes a port name to its pod, so two workloads in one
+  # instance may legally name different numbers the same thing. Kix's
+  # consumers are wider than a pod: `kix.service.fromWorkload` resolves a
+  # name against the one workload it is handed, and cross-resource check 13
+  # matches a Service's port names against the container ports of the whole
+  # package. Anything that resolves a name without naming the workload it
+  # belongs to picks one of the two numbers by accident, and the manifest
+  # that results is valid, so nothing downstream catches it.
+  consistentPortNames = {
+    description = "One port name must mean one number across an instance's workloads";
+    level = "package";
+    severity = "warning";
+    tags = [
+      "architecture"
+      "identity"
+      "networking"
+    ];
+    check =
+      { resources, ... }:
+      let
+        podSpec =
+          r:
+          if (r.kind or "") == "CronJob" then
+            r.spec.jobTemplate.spec.template.spec or { }
+          else if (r.kind or "") == "Pod" then
+            r.spec or { }
+          else
+            r.spec.template.spec or { };
+        rid = r: "${r.kind or "?"}/${r.metadata.name or "?"}";
+        workloads = builtins.filter (r: builtins.elem (r.kind or "") workloadKinds) resources;
+        # Every (name, number, owner) a workload's containers declare.
+        portsOf =
+          r:
+          let
+            spec = podSpec r;
+            listOr = v: if v == null then [ ] else v;
+            containers = listOr (spec.containers or [ ]) ++ listOr (spec.initContainers or [ ]);
+          in
+          builtins.concatMap (
+            c:
+            builtins.concatMap (
+              p:
+              lib.optional (p ? name && p ? containerPort) {
+                inherit (p) name containerPort;
+                owner = "${rid r} container ${c.name or "?"}";
+              }
+            ) (c.ports or [ ])
+          ) containers;
+        declared = builtins.concatMap portsOf workloads;
+        names = lib.unique (map (p: p.name) declared);
+        conflicts = builtins.filter (
+          n:
+          builtins.length (lib.unique (map (p: p.containerPort) (builtins.filter (p: p.name == n) declared)))
+          > 1
+        ) names;
+      in
+      map (
+        n:
+        let
+          uses = builtins.filter (p: p.name == n) declared;
+          spelt = map (p: "${p.owner} = ${toString p.containerPort}") uses;
+        in
+        {
+          message =
+            "port name \"${n}\" means more than one number in this instance: "
+            + builtins.concatStringsSep ", " spelt
+            + ". A consumer that resolves the name without naming the workload picks one of them "
+            + "by accident. Give each component a name of its own.";
+        }
+      ) conflicts;
+  };
+
   distinctSameKindLabels = {
     description = "Same-kind label-selectable resources in one instance must be label-distinguishable";
     level = "package";

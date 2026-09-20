@@ -21,13 +21,18 @@ in
 {
   meta = {
     version = "v2.0.0";
+    owner = "app-team";
     # Keep the `machineLearning` build argument while using a lowercase
     # Kubernetes instance name.
     defaultAliases = [ "machineLearning" ];
     # persistence.enabled hand-rolls the model-cache claim; the preferred
     # path is a `storage` dep + sibling persistent-volume-claim instance.
     # Grant kept until refactored (audited by unsafeGrants).
-    unsafe = [ "raw-pvc" ];
+    # The upstream image runs as root; the model cache is written by it.
+    unsafe = [
+      "raw-pvc"
+      "run-as-root"
+    ];
   };
 
   options = {

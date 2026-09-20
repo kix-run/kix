@@ -58,6 +58,7 @@ let
 in
 {
   meta.version = "0.16.0";
+  meta.owner = "platform";
 
   options.values = lib.mkOption {
     type = lib.types.attrsOf lib.types.anything;

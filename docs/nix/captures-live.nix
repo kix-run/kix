@@ -48,7 +48,25 @@ let
   kubeContext = "kind-kix-docs";
   kindClusterName = "kix-docs";
 
-  # Live kix/kubectl/Helm invocation. PTY wrapping via `script -q /dev/null`
+  # PTY wrapper. kix and kubectl disable colour when their output is not a
+  # terminal, and a capture redirects to a file, so every invocation runs
+  # under `script`. The two implementations take the command differently:
+  # util-linux (Linux) wants one string after `-c`, BSD (macOS) takes it as
+  # trailing argv. A prefix string cannot be both, so this wrapper is the
+  # prefix and it re-quotes the command for whichever `script` is present.
+  ptyrun = pkgs.writeShellScriptBin "ptyrun" (
+    if pkgs.stdenv.isLinux then
+      ''
+        exec ${pkgs.util-linux}/bin/script --quiet --return \
+          --command "$(printf '%q ' "$@")" /dev/null
+      ''
+    else
+      ''
+        exec /usr/bin/script -q /dev/null "$@"
+      ''
+  );
+
+  # Live kix/kubectl/Helm invocation. PTY wrapping via `ptyrun`
   # so kix/kubectl produce ANSI colour even though we redirect to a
   # file (their output detects non-TTY and disables colour otherwise).
   # --context is injected uniformly to keep the trust boundary tight.
@@ -65,11 +83,11 @@ let
     if bin == "kix" && plain then
       ''kix --no-color --no-cache --context "${kubeContext}" --flake "$workspace" ${kixOverrideArgs}''
     else if bin == "kix" then
-      ''script -q /dev/null kix --no-cache --context "${kubeContext}" --flake "$workspace" ${kixOverrideArgs}''
+      ''ptyrun kix --no-cache --context "${kubeContext}" --flake "$workspace" ${kixOverrideArgs}''
     else if bin == "kubectl" && plain then
       ''kubectl --context "${kubeContext}"''
     else if bin == "kubectl" then
-      ''script -q /dev/null kubectl --context "${kubeContext}"''
+      ''ptyrun kubectl --context "${kubeContext}"''
     else if bin == "helm" then
       ''env HELM_PLUGINS= helm --kube-context "${kubeContext}"''
     else
@@ -135,6 +153,7 @@ let
   groupBlocks = lib.concatMapStringsSep "\n" mkGroupBlock groupsWithLive;
 
   scriptDeps = lib.makeBinPath [
+    ptyrun
     pkgs.coreutils
     pkgs.gnused
     pkgs.gnugrep

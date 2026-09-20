@@ -15,6 +15,7 @@
   meta = {
     version = "1.0.0";
     description = "Standalone secret instance (kix-managed)";
+    owner = "platform";
     lifecycle = "stateful";
     scope = "namespace";
     defaultAliases = [ "secret" ];

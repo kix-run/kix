@@ -28,6 +28,38 @@ rec {
         enabled.
       '';
     };
+    "host-network" = {
+      description = "may run pods on the host network, PID or IPC namespace";
+      rationale = ''
+        A CNI agent programs the node's own networking, so it has to see
+        the host's namespace: cilium's agent, envoy and operator all run
+        with `hostNetwork`. The same holds for a node-level exporter that
+        reads host metrics. The alternative was a per-namespace severity
+        override in every cluster that installs a CNI through kix, which
+        exempts everything else in `kube-system` too. Legitimate holders:
+        CNI packages and node-level agents.
+      '';
+    };
+    "run-as-root" = {
+      description = "may run containers as root";
+      rationale = ''
+        Writing the node's CNI configuration, mounting the BPF filesystem
+        and loading programs into the kernel all need uid 0, so a CNI
+        agent and its init containers cannot pass `security.nonRoot`.
+        Legitimate holders: CNI packages, CSI node plugins and node-level
+        agents. An application package that trips this rule has a bug, not
+        a grant: run it as a non-zero uid instead.
+      '';
+    };
+    "privileged" = {
+      description = "may run privileged containers";
+      rationale = ''
+        Mounting BPF into the kernel, writing sysfs parameters or attaching
+        to block devices needs a privileged container, and a CNI or a
+        storage driver cannot do its job without one. Legitimate holders:
+        CNI packages, CSI node plugins and node-level agents.
+      '';
+    };
   };
 
   grantNames = builtins.attrNames registry;

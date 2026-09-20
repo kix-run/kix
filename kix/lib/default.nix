@@ -15,6 +15,20 @@ let
   normalize = import ./core/normalize.nix { inherit lib; };
 
   inherit (normalize) normalizeManifest;
+
+  # Upstream RBAC names a ClusterRole `kubevirt.io:operator` by convention,
+  # and a colon is legal in Kubernetes. Every manifest file is its own
+  # store path, and a colon is not legal there: `builtins.toFile
+  # "a:b.yaml"` fails with "name contains illegal character ':'". So the
+  # file name is encoded. The manifest keeps its real name, and nothing
+  # reads identity off the file name (the CLI takes it from the content).
+  manifestFileName =
+    manifest:
+    let
+      name = manifest.metadata.name or "unnamed";
+      kind = manifest.kind or "resource";
+    in
+    "${builtins.replaceStrings [ ":" ] [ "_" ] name}-${lib.toLower kind}.yaml";
 in
 
 {
@@ -106,10 +120,8 @@ in
     let
       yamlFormat = pkgs.formats.yaml { };
       cleaned = normalizeManifest manifest;
-      name = manifest.metadata.name or "unnamed";
-      kind = manifest.kind or "resource";
     in
-    yamlFormat.generate "${name}-${lib.toLower kind}.yaml" cleaned;
+    yamlFormat.generate (manifestFileName manifest) cleaned;
 
   mkManifests =
     cluster:
@@ -123,12 +135,11 @@ in
         let
           yamlFormat = pkgs.formats.yaml { };
           cleaned = normalizeManifest manifest;
-          name = manifest.metadata.name or "unnamed";
-          kind = manifest.kind or "resource";
+          filename = manifestFileName manifest;
         in
         {
-          filename = "${name}-${lib.toLower kind}.yaml";
-          drv = yamlFormat.generate "${name}-${lib.toLower kind}.yaml" cleaned;
+          inherit filename;
+          drv = yamlFormat.generate filename cleaned;
         };
 
       nsCopyCommands = lib.concatStringsSep "\n" (

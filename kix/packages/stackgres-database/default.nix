@@ -59,6 +59,7 @@ in
   meta = {
     version = "0.1.0";
     description = "Logical database + role provisioned on a StackGres cluster";
+    owner = "platform";
     lifecycle = "stateful"; # other packages depend on this database existing
     scope = "namespace";
     defaultAliases = [ "database" ];
@@ -356,6 +357,14 @@ in
             metadata.labels = labels;
             spec = {
               restartPolicy = "OnFailure";
+              # The Job runs psql, a client, which needs no root. 999 is
+              # the `postgres` user in the official postgres image that
+              # `psqlImage` defaults to.
+              securityContext = {
+                runAsNonRoot = true;
+                runAsUser = 999;
+                runAsGroup = 999;
+              };
               containers = [
                 {
                   name = "bootstrap";

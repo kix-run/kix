@@ -28,6 +28,7 @@
   meta = {
     version = "1.0.0";
     description = "Persistent Volume Claim — operator-managed storage";
+    owner = "platform";
     lifecycle = "stateful";
     scope = "namespace";
     defaultAliases = [ "storage" ];

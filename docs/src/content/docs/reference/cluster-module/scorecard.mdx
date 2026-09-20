@@ -2,3 +2,5 @@
 title: "`scorecard`"
 description: TODO
 ---
+
+{/* Stub. Source: kix/lib/modules.nix (scorecard options), kix/lib/scorecard.nix (capSeverity, resolveEffectiveSeverity), kix/lib/mkFlake.nix (clusterModules). `enable` defaults to true and `rules` to every rule set in kix.rules; `maxSeverity` (info | warning | error, default warning) caps every finding after overrides, so a plain cluster warns and never fails. This repository's flakes raise the cap to error through mkFlake clusterModules. Rules score the shipped set: package parts plus derived resources such as PodDisruptionBudgets and NetworkPolicies. Test: kix/lib/tests t93, t94. */}

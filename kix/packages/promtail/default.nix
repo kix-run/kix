@@ -108,6 +108,11 @@ let
 in
 {
   meta.version = "6.17.1";
+  # A log-shipping agent: it reads /var/log and the container runtime's log
+  # directory from the host, which the chart does as root. Audited by
+  # unsafeGrants.
+  meta.unsafe = [ "run-as-root" ];
+  meta.owner = "platform";
 
   options.values = lib.mkOption {
     type = lib.types.attrsOf lib.types.anything;

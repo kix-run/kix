@@ -53,6 +53,13 @@ pub fn delete_propagation_for(kind: &str) -> kube::api::PropagationPolicy {
 }
 
 /// What a run needs to know about its Activation and its flags.
+/// How long apply waits for an object a manifest expects something else to
+/// have created (`kix.run/expects`). The creator is ready by the time this
+/// runs, so the wait covers what it does after becoming ready: a Job's
+/// last step, an operator's first reconcile. Matches the default per-node
+/// readiness timeout.
+const EXPECTS_TIMEOUT: Duration = Duration::from_secs(180);
+
 #[derive(Debug, Clone, Default)]
 pub struct KubeOpsConfig {
     pub cluster_name: String,
@@ -356,6 +363,24 @@ impl ClusterOps for KubeOps {
 
     async fn apply(&self, manifest: &Value) -> Result<ApplyResult, ApplyError> {
         let (ar, scope) = self.resolve_kind(manifest).await?;
+        // What the manifest expects something else to have created
+        // (kix.untrackedRef with a kind and a creator). The creator is a
+        // dependency, so it is ready by now; what is checked is that it
+        // did what the package said it does. Experimental: see
+        // core/markers.nix in the lib.
+        if !self.cfg.dry_run {
+            let cancel = CancelToken::new();
+            if let Err((expected, detail)) =
+                readiness::wait_for_expectations(&self.client, manifest, EXPECTS_TIMEOUT, &cancel)
+                    .await
+            {
+                return Err(ApplyError::ExpectationUnmet {
+                    resource: ResourceId::from_value(manifest).display_id(),
+                    expected: expected.display(),
+                    detail,
+                });
+            }
+        }
         let live = self.live_activations();
         apply::apply_resource(
             &self.client,

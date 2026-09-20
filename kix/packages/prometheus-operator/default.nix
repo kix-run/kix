@@ -27,6 +27,7 @@
     # is the ceiling this package can honour.
     availability.max = "pod";
     description = "Prometheus Operator — monitoring.coreos.com CRD controller";
+    owner = "platform";
     defaultAliases = [
       "prometheus"
       "prometheusOperator"

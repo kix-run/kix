@@ -17,6 +17,7 @@ in
   meta = {
     version = "v2.19.1";
     description = "kube-state-metrics — Kubernetes object state exporter";
+    owner = "platform";
     defaultAliases = [ "kubeStateMetrics" ];
     k8s.minVersion = "1.25";
     # Unsharded exporter: a second replica duplicates every series, so
@@ -251,13 +252,13 @@ in
             {
               name = "http-metrics";
               port = 8080;
-              targetPort = "http-metrics";
+              targetPort = 8080;
               protocol = "TCP";
             }
             {
               name = "telemetry";
               port = 8081;
-              targetPort = "telemetry";
+              targetPort = 8081;
               protocol = "TCP";
             }
           ];

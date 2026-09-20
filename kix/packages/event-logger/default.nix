@@ -28,6 +28,7 @@ in
 {
   meta = {
     version = "1.0.0";
+    owner = "platform";
     # The watcher has no coordination between replicas, so one replica is
     # the ceiling it can honour.
     availability.max = "pod";

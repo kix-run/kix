@@ -40,6 +40,11 @@ in
     compatibleWith.database = {
       reason = "immich requires the VectorChord (vchord) extension plus uuid-ossp, cube, earthdistance, unaccent, pg_trgm on its postgres backend";
     };
+    # The upstream server image runs as root; non-root needs fsGroup on the
+    # library volume, which not every provisioner honours.
+    unsafe = [
+      "run-as-root"
+    ];
   };
 
   # Per-dep diagnostics + config injections — co-located with the dep.

@@ -3,14 +3,14 @@ source: kix-cli/tests/snapshot_test.rs
 expression: stdout
 ---
 Cluster: example
-Total resources: 124
+Total resources: 129
 
 Namespaces (6):
   (cluster-scoped) (48 resources)
   cache (11 resources)
-  cert-manager (22 resources)
-  immich (19 resources)
-  kube-system (7 resources)
+  cert-manager (25 resources)
+  immich (20 resources)
+  kube-system (8 resources)
   stackgres-system (17 resources)
 
 Resource kinds:
@@ -22,6 +22,7 @@ Resource kinds:
  CustomResourceDefinition        8     
  Deployment                      7     
  ServiceAccount                  7     
+ PodDisruptionBudget             6     
  Namespace                       5     
  Role                            5     
  RoleBinding                     5     
@@ -34,7 +35,6 @@ Resource kinds:
  Activation                      1     
  NetworkPolicy                   1     
  PersistentVolumeClaim           1     
- PodDisruptionBudget             1     
  SGCluster                       1     
  SGInstanceProfile               1     
  SGPostgresConfig                1     
@@ -42,7 +42,7 @@ Resource kinds:
 
 Resources:
   (cluster-scoped):
-    Activation/example-xv94r9l5jhb9
+    Activation/example-yk7xid7k8hgj
     ClusterRole/cert-manager-cainjector
     ClusterRole/cert-manager-cluster-view
     ClusterRole/cert-manager-controller-approve:cert-manager-io
@@ -108,6 +108,9 @@ Resources:
     Deployment/cert-manager-webhook
     Job/cert-manager-startupapicheck
     PackageInstance/cert-manager
+    PodDisruptionBudget/cert-manager
+    PodDisruptionBudget/cert-manager-cainjector
+    PodDisruptionBudget/cert-manager-webhook
     Role/cert-manager-cainjector:leaderelection
     Role/cert-manager-startupapicheck:create-cert
     Role/cert-manager-tokenrequest
@@ -138,6 +141,7 @@ Resources:
     PackageInstance/service-ref-postgres-postgres
     PackageInstance/storage
     PersistentVolumeClaim/storage
+    PodDisruptionBudget/machine-learning
     SGCluster/postgres
     SGInstanceProfile/postgres-profile
     SGPostgresConfig/postgres-pg16-config
@@ -150,6 +154,7 @@ Resources:
     Deployment/coredns
     PackageInstance/coredns
     PackageInstance/storage-classes
+    PodDisruptionBudget/coredns
     Service/coredns
     Service/coredns-metrics
     ServiceAccount/coredns

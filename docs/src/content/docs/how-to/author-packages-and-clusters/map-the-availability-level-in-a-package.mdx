@@ -3,4 +3,4 @@ title: "Map the availability level in a package"
 description: TODO
 ---
 
-{/* Stub. Package author recipe: take the `availability` argument, map replica counts with kix.availability.pick, gate HA features with atLeast, set meta.availability.max for a package that cannot run more than one copy, and know that author-written topologySpreadConstraints win over the derived ones. Source: kix/packages/echo-server, kix/packages/valkey, docs-legacy/BEST-PRACTICES.md section 6.1. */}
+{/* Stub. Package author recipe: take the `availability` argument, map replica counts with kix.availability.pick, gate HA features with atLeast, set meta.availability.max for a package that cannot run more than one copy, and know that author-written topologySpreadConstraints win over the derived ones. Source: kix/packages/echo-server, kix/packages/valkey, docs-legacy/BEST-PRACTICES.md section 6.1. Add the per-workload form: pass `availability.max = "pod"` to one builder call when a single controller must stay at one replica while the package's stateful workloads spread; kix/packages/openebs shows both in one package. */}
