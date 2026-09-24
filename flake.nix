@@ -32,6 +32,10 @@
           auto = ./clusters/test-auto.nix;
           auto2 = ./clusters/test-auto2.nix;
           immich = ./clusters/test-immich.nix;
+          clickhouse = ./clusters/test-clickhouse.nix;
+          clickhouse-operator = ./clusters/test-clickhouse-operator.nix;
+          clickhouse-swap-bare = ./clusters/test-clickhouse-swap/bare.nix;
+          clickhouse-swap-replicated = ./clusters/test-clickhouse-swap/replicated.nix;
           kind = ./clusters/test-kind.nix;
           monitoring-helm = ./clusters/test-monitoring-helm.nix;
           monitoring-native = ./clusters/test-monitoring-native.nix;
@@ -136,6 +140,43 @@
           };
         }
       );
+
+      # One consumer, built once on the bare `clickhouse` package and once
+      # on `clickhouse-cluster` (v2_discussions/148). Everything rendered
+      # into the consumer's namespace, and the facade's bootstrap Job next
+      # to the server, must come out the same but for the ClickHouse
+      # hostname. The contract itself is defined and checked at eval in
+      # kix/packages/clickhouse/contract.nix; this is the rendering
+      # regression test. Kix's own dependency bookkeeping is set aside
+      # first, since it names what is upstream and upstream is the thing
+      # that changed.
+      clickhouseSwap = lib.genAttrs systems (system: {
+        clickhouse-swap =
+          let
+            pkgs = inputs.nixpkgs.legacyPackages.${system};
+            built = name: clusterOutputs.packages.${system}."cluster-clickhouse-swap-${name}";
+          in
+          pkgs.runCommand "clickhouse-swap" { } ''
+            normalise() {
+              mkdir -p "$2"
+              for f in "$1"/app/*.yaml "$1"/db/*bootstrap*.yaml; do
+                sed -E \
+                  -e 's/(clickhouse-)?ch\.db\.svc\.cluster\.local/CLICKHOUSE_HOST/g' \
+                  -e '/kix\.run\/(depends-on|identity-hash|closure-hash)/d' \
+                  "$f" > "$2/$(basename "$f")"
+              done
+            }
+            normalise ${built "bare"} bare
+            normalise ${built "replicated"} replicated
+            if ! diff -ru bare replicated; then
+              echo "the consumer's manifests changed with the clickhouse implementation" >&2
+              exit 1
+            fi
+            grep -rq CLICKHOUSE_HOST bare || { echo "no ClickHouse address reached the consumer" >&2; exit 1; }
+            echo "$(ls bare | wc -l) consumer manifests identical across both implementations"
+            touch $out
+          '';
+      });
     in
     clusterOutputs
     // {
@@ -147,7 +188,8 @@
       ) clusterOutputs.packages;
 
       checks = lib.mapAttrs (
-        system: clusterChecks: clusterChecks // (libTests.${system} or { })
+        system: clusterChecks:
+        clusterChecks // (libTests.${system} or { }) // (clickhouseSwap.${system} or { })
       ) clusterOutputs.checks;
 
       # Preserve the forPkgs API for external consumers.

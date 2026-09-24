@@ -4867,6 +4867,189 @@ let
       )).success
       && kixlib.availability.atLeast "node" "zone"
       && !(kixlib.availability.atLeast "node" "pod");
+
+    # Two instances answer the dep's name from two namespaces, and the
+    # consumer in a third names the one it wants. The first resolution
+    # pass cannot see explicit wiring and used to throw "ambiguous" before
+    # the pass that can got a turn.
+    t98-explicit-dep-wins-over-ambiguous-name =
+      let
+        cluster = mkCluster [
+          baseInstances
+          {
+            instances.infra.operator.package = mkCmPackage { name = "operator-a"; };
+            instances.infra2.operator.package = mkCmPackage { name = "operator-b"; };
+          }
+          (
+            { ref, ... }:
+            {
+              instances.appns.writer = {
+                package = mkAnnotatedCmPackage {
+                  key = "example.test/x";
+                  withOperatorDep = true;
+                };
+                deps.operator = ref.infra2.operator;
+              };
+            }
+          )
+        ];
+      in
+      builtins.deepSeq (manifests cluster) true;
+
+    # Without the explicit wiring the same cluster is still an error.
+    t99-ambiguous-dep-still-refused = evalFails (mkCluster [
+      baseInstances
+      {
+        instances.infra.operator.package = mkCmPackage { name = "operator-a"; };
+        instances.infra2.operator.package = mkCmPackage { name = "operator-b"; };
+        instances.appns.writer.package = mkAnnotatedCmPackage {
+          key = "example.test/x";
+          withOperatorDep = true;
+        };
+      }
+    ]);
+
+    # A consumer's `deps.<arg>.config` lands on the instance the consumer
+    # wired, and not on the one that merely answers the name in the
+    # consumer's namespace.
+    t100-injection-follows-explicit-wiring =
+      let
+        target = {
+          meta.version = "test";
+          options.marker = lib.mkOption {
+            type = lib.types.str;
+            default = "unset";
+          };
+          build =
+            {
+              self,
+              scope,
+              config,
+              ...
+            }:
+            {
+              cm = scope.mkResource {
+                apiVersion = "v1";
+                kind = "ConfigMap";
+                name = "target-cm";
+                extra.data.marker = config.marker;
+              };
+              root = self.cm;
+            };
+        };
+        consumer = {
+          meta.version = "test";
+          deps.target.config.marker = "injected";
+          build =
+            {
+              self,
+              scope,
+              target,
+              ...
+            }:
+            {
+              cm = scope.mkResource {
+                apiVersion = "v1";
+                kind = "ConfigMap";
+                name = "consumer-cm";
+                extra.data.dep = target.out.name;
+              };
+              root = self.cm;
+            };
+        };
+        cluster = mkCluster [
+          baseInstances
+          {
+            # One in the consumer's own namespace: the name alone would
+            # pick this one.
+            instances.appns.target.package = target;
+            instances.infra.target.package = target;
+          }
+          (
+            { ref, ... }:
+            {
+              instances.appns.consumer = {
+                package = consumer;
+                deps.target = ref.infra.target;
+              };
+            }
+          )
+        ];
+        markerIn =
+          ns:
+          (lib.findFirst (
+            m: (m.kind or "") == "ConfigMap" && m.metadata.name == "target-cm" && m.metadata.namespace == ns
+          ) (throw "no target-cm in ${ns}") (manifests cluster)).data.marker;
+      in
+      (markerIn "infra" == "injected" && markerIn "appns" == "unset")
+      || throw "injection went to infra=${markerIn "infra"} appns=${markerIn "appns"}";
+
+    # ------------------------------------------------------ kix.mergeGuarded
+    t101-merge-guarded =
+      let
+        guard = kixlib.mergeGuarded {
+          who = "pkg (x)";
+          locked = [
+            [
+              "a"
+              "b"
+            ]
+            [ "c" ]
+          ];
+        };
+        base = {
+          a.b = 1;
+          a.z = 1;
+          c = 1;
+        };
+        merged = guard base { a.z = 2; };
+        refused = spec: !(builtins.tryEval (builtins.deepSeq (guard base spec) true)).success;
+      in
+      (
+        merged == {
+          a.b = 1;
+          a.z = 2;
+          c = 1;
+        }
+      )
+      && refused { a.b = 2; }
+      && refused { c = 2; }
+      || throw "mergeGuarded: ${builtins.toJSON merged}";
+
+    # ------------------------------------------------------- kix.mkEnvVars
+    #
+    # A value is a string or a `valueFrom` source (what
+    # `secret.out.keyRef` returns). Any other attrset would render as an
+    # env var whose value is an object, which the API server rejects at
+    # apply time, so it is refused here.
+    t102-mkenvvars-accepts-value-from =
+      let
+        source = {
+          # A stray `name` in the source must not rename the variable.
+          name = "not-the-env-name";
+          valueFrom.secretKeyRef = {
+            name = "creds";
+            key = "password";
+          };
+        };
+        rendered = kixlib.mkEnvVars {
+          A_PLAIN = "x";
+          B_DROPPED = null;
+          C_SECRET = source;
+        };
+      in
+      rendered == [
+        {
+          name = "A_PLAIN";
+          value = "x";
+        }
+        (source // { name = "C_SECRET"; })
+      ]
+      || throw "mkEnvVars rendered: ${builtins.toJSON rendered}";
+
+    t103-mkenvvars-refuses-object-value =
+      !(builtins.tryEval (builtins.deepSeq (kixlib.mkEnvVars { BAD.nested = "x"; }) true)).success
+      || throw "mkEnvVars accepted an attrset with no valueFrom";
   }
   // import ./validate.nix {
     inherit

@@ -401,7 +401,7 @@ Use `options.metrics = kix.options.monitor;` for standardized metrics options.
 
 Parameters, every callback taking `{ self, config, deps }` (`deps` is every DI package some other entry of the package declares): `script` (usually `builtins.readFile ./health-check.py`), `env` (`-> attrset`; the helper adds `RETRY_FOR`), `when` (`-> bool`, default `config.healthCheck.enable or true`), `retryFor` (`-> int`, default `config.healthCheck.retryFor or 90`), `requires` (`-> [ resources ]`, on top of the package root, which the Job always waits for), `partName`, `runtime` (`kix.healthCheck.runtimes.python` by default, `runtimes.shell` on curl, or your own `{ image = { repository; tag; digest; }; file; interpreter; env; }`), `activeDeadlineSeconds` (null: `retryFor` plus `kix.healthCheck.roundBudget`, 90 s; a given value must leave that room or the build fails), `ttlSecondsAfterFinished`. Declare `options.healthCheck = kix.options.healthCheck;` (`enable`, `retryFor`) and the defaults read it.
 
-The script gives up once `RETRY_FOR` seconds have passed and keeps one round of checks under the round budget. It reads what it expects off resources (`self.vmAgent.out.replicas`, a structural output), never off the option that produced them. The Job carries `kix.run/rerun: on-change` (`kix/lib/core/annotations.nix`): the deploy engine recreates it when its identity hash changed or the last run failed, so the probe runs again when it, or anything upstream of what it checks, changes. Keep the script a file next to `default.nix` so it can be linted and run from a laptop through `kubectl proxy`. Example: `packages/victoria-metrics-agent/`.
+The script gives up once `RETRY_FOR` seconds have passed and keeps one round of checks under the round budget. It reads what it expects off resources (`self.vmAgent.out.replicas`, a structural output), never off the option that produced them. The Job carries `kix.run/rerun: on-change` (`kix/lib/core/annotations.nix`): the deploy engine recreates it when its identity hash changed or the last run failed, so the probe runs again when it, or anything upstream of what it checks, changes. Keep the script a file next to `default.nix` so it can be linted and run from a laptop through `kubectl proxy`. Example: `packages/victoria-metrics-agent/`. A probe that must log in takes the credential the same way a container does: `env = { self, ... }: { CLICKHOUSE_PASSWORD = self.credentials.out.keyRef "password"; ... }` (see `SECRETS.md`). Example: `packages/clickhouse/`.
 
 **Cluster-side wiring:**
 - Gateway API: instantiate `packages/envoy-gateway` with alias `"gateway"`
@@ -412,11 +412,12 @@ The script gives up once `RETRY_FOR` seconds have passed and keeps one round of 
 | Function | Description |
 |----------|-------------|
 | `kix.port name containerPort` | `→ { name, containerPort, protocol = "TCP" }` |
+| `kix.mkEnvVars { KEY = "val"; OPT = null; }` | `→ [{ name, value }]`. Nulls filtered. A value that is a `valueFrom` source (`secret.out.keyRef "password"`) renders as one, with the env name winning; any other attrset throws. |
+| `kix.mkEnv { KEY = "val"; } [ rawEntries ]` | Combine named env vars with raw K8s env entries (e.g. `valueFrom.secretKeyRef`). |
+| `kix.mergeGuarded { who; locked; } base overrides` | `lib.recursiveUpdate` for an `extraSpec` escape hatch that throws when `overrides` touches a path in `locked` (a list of attribute paths the package computed for correctness). Use it for every `extraSpec`. |
+| `kix.parseGi "50Gi"` | `→ 50`. Supports Ti/Gi/Mi. |
 
 A port name is unique per pod in Kubernetes, but `architecture.consistentPortNames` asks for one meaning per instance: if a package's main workload calls 5678 `http`, its worker's own port needs a different name (`health`, `metrics`), not the same one on another number. Resolvers that are handed a name without a workload cannot tell the two apart.
-| `kix.mkEnvVars { KEY = "val"; OPT = null; }` | `→ [{ name, value }]`. Nulls filtered. |
-| `kix.mkEnv { KEY = "val"; } [ rawEntries ]` | Combine named env vars with raw K8s env entries (e.g. `valueFrom.secretKeyRef`). |
-| `kix.parseGi "50Gi"` | `→ 50`. Supports Ti/Gi/Mi. |
 
 #### Writing one of Kix's own annotations
 
@@ -527,7 +528,7 @@ Each module file receives `{ config, lib, ref, packages, ... }` and can declare 
 - **`cluster.capabilities`** — substrate axioms (`multiNode`, `privilegedContainers`, `daemonSets`, `gpu`, ...), three-valued: `null` = unknown (relying workloads warn), `false` = hard error, `true` = pass. Read `kix/lib/modules.nix` for the full list. The old role-backed bools (`cni`, `networkPolicyAPI`, `loadBalancer`, `persistentStorage`, `rwxStorage`, `volumeSnapshots`, `ingressController`) no longer exist — role providers are derived from `meta.roles`; rwx/snapshot facts live on the storage provider's `out`.
 - **`cluster.network`** — `podCidr`, `serviceCidr`, `dnsUpstream`.
 - **`cluster.availability`** — `none | pod | node | zone`, the largest failure a workload must survive; derived from the capabilities when unset, capped by them, overridable with `instances.<ns>.<inst>.availability`. Every package takes an `availability` argument and maps it in every replica-shaped default: `default = kix.availability.pick availability { none = 1; pod = 2; node = 2; zone = 3; }` (a literal replica default is wrong; an explicit instance value still wins). A package that cannot run more than one replica declares `meta.availability.max = "none"` (or `"pod"` if it cannot fail over) with a reason. Do not write `topologySpreadConstraints` or pod anti-affinity in a package: any Deployment/StatefulSet with `replicas > 1` gets spread across `cluster.topology.failureDomainKeys` (zone, then hostname, from `cluster.topology.zoneKey` and `hostKey`, which default to the well-known labels; nothing on `multiNode = false`) and a PDB, derived at build time, with strictness lowered from the level. Author-written constraints switch both derivations off for that workload. On a single-node cluster a hand-written `requiredDuringScheduling` anti-affinity with `replicas > 1` is an eval error. Operator-CR packages (VMCluster) read `clusterConfig.cluster.topology.failureDomainKeys`. Read `kix/lib/plugins/availability/module.nix` and `kix/lib/core/availability.nix`.
-- **`ref`** — module arg for referencing other instances by path (e.g. `ref.instances.kube-system.coredns`).
+- **`ref`** — module arg, `ref.<namespace>.<instance>`, a pointer to another instance for `deps.<arg> = ref.kube-system.coredns`. The wired dep resolves like an auto-resolved one (config injection lands on it, meta checks apply).
 - **`mkLocked`** — marks a config field as immutable; blocks dep injection overrides.
 - **Monitoring module** — declarative Prometheus/Grafana/Loki stack. Read `kix/lib/modules/monitoring.nix`.
 
@@ -681,6 +682,19 @@ on the cluster package, and existing packages (grafana datasource,
 optional node-pin module lives in the lithus monorepo at
 `client/lithus/clusters/shared/monitoring-stack.nix`.
 
+## Two Implementations, One Alias (ClickHouse reference)
+
+When a service has a small form and an operator form, build both as separate packages that answer one alias with one `out` contract, so a consumer is wired once and the cluster picks the implementation. The ClickHouse packages are the reference (design: `v2_discussions/148`):
+
+- `packages/clickhouse/` renders a single StatefulSet with embedded Keeper. `packages/clickhouse-cluster/` builds a ClickHouseInstallation through `packages/clickhouse-operator/` and `packages/clickhouse-keeper/`. Both carry `defaultAliases = [ "clickhouse" ]` and the `out` that `packages/clickhouse/contract.nix` defines (`httpUrl`, `nativeEndpoint`, `host`, `ports`, `username`, `authSecret`, `authPasswordKey`, `clusterName`, `version`).
+- The contract is a file, imported by both implementations (`root.out = contract.check "clickhouse (${name})" { ... }`) and by the facade (`deps.clickhouse.assertions = dep: contract.assertions who dep.out`), so a missing or misshapen field fails at eval and names the package. Keep it small. A field one implementation cannot honour means a different alias, not a `null`.
+- `version` is a contract field (the server release as `YY.M`). A consumer states a requirement as an assertion on the dep: `lib.optional (lib.versionOlder dep.out.version "25.3") { assertion = false; message = ...; }`, as `clickhouse-database` does. Selection among several instances stays explicit (`deps.clickhouse = ref.<ns>.<inst>`).
+- An operator package exposes the selectors of the pods it creates (`out.operandSelector.<kind> name`) from its kinds table, and the CR packages read them for the policies they write over operator pods. Their `extraSpec` goes through `kix.mergeGuarded` with the computed paths locked.
+- Consumers go through a facade, `packages/clickhouse-database/` (the `stackgres-database` shape), which owns the credentials in the consumer's namespace and forwards the server's `out`. No consumer touches the server package.
+- Share what is genuinely the same: `clickhouse-cluster` runs the probe script from `packages/clickhouse/health-check.py`, with an env var for what differs (the replica count).
+- Prove the contract with a build: `clusters/test-clickhouse-swap/` builds one consumer on each implementation and the `clickhouse-swap` flake check diffs the rendered manifests, allowing only the hostname to differ.
+- Upstream vocabulary, not a Kix dialect: server config is ClickHouse YAML fragments as Nix attrsets, merged with `null` deleting a key, so anything in the ClickHouse docs can be set without a new option.
+
 ## Migration Tips
 
 - **Read the Ansible role first.** Understand what the role creates — which Deployments, Services, ConfigMaps, RBAC, etc. Don't reverse-engineer from the cluster dump alone.
@@ -698,3 +712,4 @@ optional node-pin module lives in the lithus monorepo at
   - `packages/valkey/` — complex multi-resource package
   - `packages/storage-classes/` — `lib.mapAttrs` to generate resources from config
   - `packages/victoria-metrics-*/` — operator + operand CRs, compat CRDs behind an alias (see "Operator-Managed Stacks")
+  - `packages/clickhouse*/` — one alias and contract served by a bare package and an operator stack, with a facade for consumers (see "Two Implementations, One Alias")

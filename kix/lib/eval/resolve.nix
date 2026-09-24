@@ -64,11 +64,21 @@ rec {
       explicitOverride,
     }:
     if explicitOverride != null then
-      {
-        found = true;
-        value = explicitOverride;
-        direct = true;
-      }
+      # `deps.x = ref.a.b` names an instance and resolves like the index
+      # would have, so every check an auto-resolved dep gets applies to it.
+      # Any other value is bound as it is.
+      if builtins.isAttrs explicitOverride && (explicitOverride._type or "") == "kix-ref" then
+        {
+          found = true;
+          inherit (explicitOverride) namespace instanceName;
+          direct = false;
+        }
+      else
+        {
+          found = true;
+          value = explicitOverride;
+          direct = true;
+        }
 
     else
       let

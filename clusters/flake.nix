@@ -36,6 +36,10 @@
         auto = ./test-auto.nix;
         auto2 = ./test-auto2.nix;
         immich = ./test-immich.nix;
+        clickhouse = ./test-clickhouse.nix;
+        clickhouse-operator = ./test-clickhouse-operator.nix;
+        clickhouse-swap-bare = ./test-clickhouse-swap/bare.nix;
+        clickhouse-swap-replicated = ./test-clickhouse-swap/replicated.nix;
         kind = ./test-kind.nix;
         spread = ./test-spread.nix;
         monitoring-helm = ./test-monitoring-helm.nix;

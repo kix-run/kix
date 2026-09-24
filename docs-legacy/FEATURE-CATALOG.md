@@ -49,7 +49,9 @@ Complete inventory of kix/lib (Nix library) and CLI features. Breadth-first — 
 
 - **`port`** — Shorthand: `port "http" 8080` → `{ name, containerPort, protocol }`.
 - **`keep`** — Mark a constructor-built container "never collapse to absent": renders `{}` even when every member is null, survives later merges. Backed by collapse-rule normalization (`kix/lib/core/normalize.nix`): literal empties render, all-null containers collapse.
-- **`mkEnvVars`** — Attrset → K8s `[{ name, value }]` list. Null values filtered.
+- **`mkEnvVars`** — Attrset → K8s `[{ name, value }]` list. Null values filtered. A value may also be a `valueFrom` source, so `{ DB_PASSWORD = creds.out.keyRef "password"; }` works and keeps the edge to the Secret; any other attrset is refused at eval time.
+- **`mergeGuarded`** — `{ who; locked; what?; } base overrides`: `recursiveUpdate` that throws when `overrides` touches a locked attribute path. The guard for `extraSpec` escape hatches (clickhouse-cluster, clickhouse-keeper, victoria-metrics-cluster).
+- **ClickHouse packages** — `clickhouse` (single node) and `clickhouse-cluster` (Altinity operator, with `clickhouse-operator` and `clickhouse-keeper`) answer one `clickhouse` alias with the `out` contract in `kix/packages/clickhouse/contract.nix` (`httpUrl`, `nativeEndpoint`, `host`, `ports`, `username`, `authSecret`, `authPasswordKey`, `clusterName`, `version`), checked at eval on both the implementation and the consumer side. Consumers depend on `clickhouse-database` (database, user, privileges, optional `schema` SQL files; credentials in the consumer's namespace). `clickhouse-logs` ships pod logs with Vector. The pattern to copy for a service with a single-node and an operator form. `v2_discussions/148`, `149`.
 - **`mkEnv`** — Combine named env vars with raw K8s env entries (e.g. valueFrom.secretKeyRef).
 - **`parseGi`** — Parse K8s resource quantity string (Ti/Gi/Mi) to GiB number.
 - **`service.extractPorts`** — Extract service ports from a workload's container spec.

@@ -227,6 +227,7 @@ in
       self,
       config,
       clusterConfig,
+      kix,
       vmOperator,
       storageClasses ? null,
       ...
@@ -257,10 +258,10 @@ in
       };
 
       # FUTURE (purist note, 2026-08-31): dedup correctness rides in a
-      # string flag merged into extraArgs — a cluster-side extraArgs
-      # override can silently clobber it. Consider a first-class operator
-      # spec field (or an eval assertion that extraArgs never overrides a
-      # package-computed arg) if the VM operator ever grows one.
+      # string flag merged into extraArgs. `extraSpec` can no longer reach
+      # it (kix.mergeGuarded below), but the `extraArgs` option merges over
+      # it and can still clobber it. Consider a first-class operator spec
+      # field if the VM operator ever grows one.
       dedupArgs = {
         "dedup.minScrapeInterval" = config.scrapeInterval;
       };
@@ -314,7 +315,28 @@ in
     {
       vmCluster = vmOperator.out.mkVMCluster scope {
         inherit name;
-        spec = lib.recursiveUpdate baseSpec config.extraSpec;
+        spec = kix.mergeGuarded {
+          who = "victoria-metrics-cluster (${name})";
+          # Everything here is computed (the storage class from the
+          # dep, the dedup flag) or has an option of its own.
+          locked = [
+            [ "retentionPeriod" ]
+            [ "replicationFactor" ]
+            [ "clusterVersion" ]
+            [
+              "vmstorage"
+              "storage"
+            ]
+            [
+              "vmstorage"
+              "extraArgs"
+            ]
+            [
+              "vmselect"
+              "extraArgs"
+            ]
+          ];
+        } baseSpec config.extraSpec;
       };
 
       # The operator creates the operand Services itself: vmselect-<name>

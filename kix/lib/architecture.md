@@ -23,6 +23,9 @@ flake.nix → mkFlake.nix → buildCluster (eval/cluster.nix)
   3. namespaces: real vs sentinel (`_`-prefixed)
   4. resolution index (eval/resolve.nix)       # DNS-like DI map
   5. phase-1 pre-pass                          # introspect, resolve dep targets, config injections
+                                               # (`ref.<ns>.<inst>` is a static pointer built over the
+                                               # merged instance names, so explicit wiring is visible
+                                               # here and injections follow it)
   ── three fixpoints ──
   6. instanceConfigs fixpoint                  # config-only; breaks function-injection cycles
   7. clusterInstances fixpoint: evaluateInstance (eval/instance.nix)

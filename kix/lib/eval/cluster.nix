@@ -36,7 +36,7 @@ in
       evaluated = lib.evalModules {
         modules = [ (import ../modules.nix) ] ++ modules;
         specialArgs = {
-          ref = clusterInstances;
+          inherit ref;
           kix = {
             inherit mkImport;
           };
@@ -54,6 +54,22 @@ in
       };
 
       mergedInstances = lib.recursiveUpdate autoResult.autoInstances cfg.instances;
+
+      # `ref.<ns>.<inst>` is a pointer to an instance, not the instance. It
+      # is built over the merged instance names, which exist before any
+      # fixpoint, so the phase-1 pre-pass can read `deps.x = ref.a.b`
+      # without forcing an evaluation: the wired dep then resolves like an
+      # auto-resolved one (config injection lands on it, meta.scope and
+      # version constraints apply to it). resolveArg dereferences it. A
+      # name that is not an instance fails at the `ref.a.b` access.
+      ref = lib.mapAttrs (
+        nsName: nsInsts:
+        lib.mapAttrs (instName: _: {
+          _type = "kix-ref";
+          namespace = nsName;
+          instanceName = instName;
+        }) nsInsts
+      ) mergedInstances;
 
       allNsNames = lib.unique (builtins.attrNames cfg.namespaces ++ builtins.attrNames mergedInstances);
 
@@ -263,8 +279,9 @@ in
       instanceProcessors = hooks.collectHooks cfg "instanceProcessors";
       clusterProcessors = hooks.collectHooks cfg "clusterProcessors";
 
-      # Do not read instCfg.deps during phase 1; it may reference the cluster
-      # fixpoint. Explicit overrides are resolved during full evaluation.
+      # Only `ref` pointers are read here. Any other explicit dep value is a
+      # foreign object the fixpoint may own, so it is bound in step 7 and
+      # never injected into.
       phase1Instances = lib.mapAttrs (
         nsName: nsInsts:
         lib.mapAttrs (
@@ -291,7 +308,9 @@ in
                 declaredDeps = discoveredDeps;
                 inherit resolutionIndex;
                 namespace = nsName;
-                explicitOverrides = { };
+                explicitOverrides = lib.filterAttrs (_: v: builtins.isAttrs v && (v._type or "") == "kix-ref") (
+                  instCfg.deps or { }
+                );
               };
             in
             {

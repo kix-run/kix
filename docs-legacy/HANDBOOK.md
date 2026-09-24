@@ -227,7 +227,11 @@ prometheus inserts a ServiceMonitor; storage forwards the storage class). Phase
 
 **DNS-like DI resolution.** A package requests deps by build-arg name
 (`{ vault, ... }`). The resolver walks: explicit override → same-namespace match
-→ cluster-wide unambiguous match → arg default → error. Aliases (instance-level
+→ cluster-wide unambiguous match → arg default → error. An explicit override
+that is a `ref.<ns>.<inst>` pointer resolves to that instance and is then
+treated as an auto-resolved dep (config injection, `meta.scope`, version
+checks); any other explicit value is bound as it is and receives no
+injection. Aliases (instance-level
 or package `meta.defaultAliases`) participate in the index. Managed instances
 beat imports.
 
@@ -507,8 +511,9 @@ The `kix` arg to packages comes from `compose.nix` (`kixlib`).
 | Symbol | Signature |
 |---|---|
 | `kix.port name containerPort` | `→ { name, containerPort, protocol = "TCP" }` |
-| `kix.mkEnvVars { K = "v"; OPT = null; }` | `→ [{ name, value }]`. Null values filtered (`lib.optionalAttrs` plays nicely). |
+| `kix.mkEnvVars { K = "v"; OPT = null; }` | `→ [{ name, value }]`. Null values filtered (`lib.optionalAttrs` plays nicely). A value that is a `valueFrom` source renders as one: `{ PASSWORD = secret.out.keyRef "password"; }`. This is also how a `kix.healthCheck` probe receives a credential, since its `env` goes through `mkEnvVars`. An attrset with no `valueFrom` throws. |
 | `kix.mkEnv attrs rawList` | `(mkEnvVars attrs) ++ rawList`. Combines named env vars with raw entries (e.g. `valueFrom.secretKeyRef`) |
+| `kix.mergeGuarded { who; locked; what ? "extraSpec"; } base overrides` | `lib.recursiveUpdate base overrides`, refusing at eval when `overrides` carries any path in `locked` (a list of attribute paths, e.g. `[ [ "configuration" "zookeeper" ] ]`). For `extraSpec` escape hatches on CR packages: the paths the package computed for correctness cannot be clobbered silently. The error names `who`, the path and says to use the owning option |
 | `kix.parseGi "50Gi"` | `→ 50` (number). Supports `Ti`/`Gi`/`Mi`. Strips Nix string context so it works on `dep.out.size` |
 | `kix.untrackedRef "name"` / `kix.untrackedRef { kind; name; by; apiVersion? }` | A name kix does not render. The string form is a bare claim: an inert marker that satisfies the ref check and is filtered out of `kix.run/depends-on`, listed by the `untrackedReferences` audit. The attrset form (experimental, 2026-09-20) names the creator (`by`, a Job or workload resource) and the kind: the referring resource depends on the creator, and is stamped `kix.run/expects` so `kix deploy` waits for the object to exist before applying it (`ingress-nginx` does this for the Secret its admission Job mints) |
 | `kix.keep container` | Marks an attrset "never collapse to absent": it renders as `{}` even when every member is null, and the protection survives later merges that introduce fresh nulls (additive `_kixKeep` marker, resolved at `mkResource`, never rendered). Lists are normalized eagerly instead, since merges replace lists whole. Use in constructors of presence-meaningful fields (`emptyDir`, selectors) built from optional arguments; a hand-written empty needs no keep, a literal `{ }` renders as-is (§7) |

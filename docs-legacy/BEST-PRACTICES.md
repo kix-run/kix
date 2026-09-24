@@ -450,6 +450,23 @@ which walked to the ConfigMap and back to the Service, and the escape hatch
 recursed like the thing it was escaping. `t89-raw-selector-readable-through-a-manifest-cycle`
 in `kix/lib/tests` holds that shape.
 
+### 7.4 One alias, one contract, several implementations
+
+When a service has a small form and an operator form, both are packages
+that answer the same alias with the same `out`. The consumer is wired once;
+the cluster picks the implementation. The contract is code, not a header
+comment: one `contract.nix` next to the first implementation names the
+fields and their shapes, every implementation passes its `out` through
+`contract.check`, and the facade consumers go through holds its dep to the
+same table with `contract.assertions`. A field an implementation cannot
+honour is a different alias, not a `null`. The version of the thing behind
+the alias is a contract field (`version`), so a consumer's requirement is
+an assertion on the dep and not a guess about the package. A build check
+that renders one consumer on each implementation and diffs the result is
+the regression test, not the definition. Reference: the `clickhouse`
+packages (`v2_discussions/148`, `kix/packages/clickhouse/contract.nix`,
+`checks.clickhouse-swap`).
+
 ## 8. Workloads are explicit; everything else is DI'd
 
 A package author is explicit about *what* they need (Postgres, not "a
@@ -526,10 +543,12 @@ site:
 }
 ```
 
-`ref` is the cluster fixpoint, exposed via `specialArgs` to every
-cluster module. `ref.<namespace>.<instanceName>` is a lazy reference
-that resolves to the same value DI auto-resolution would produce —
-short-circuiting alias-based discovery entirely.
+`ref` is exposed via `specialArgs` to every cluster module.
+`ref.<namespace>.<instanceName>` is a pointer to that instance. The
+resolver dereferences it, so a wired dep is the same value DI
+auto-resolution would have produced and gets the same treatment: config
+injection from the consumer lands on it, and `meta.scope` and version
+constraints apply to it. Alias-based discovery is skipped for that arg.
 
 **Aliases are not the right tool here.** It's tempting to disambiguate
 by giving each instance a unique alias (`ingressNginxPublic`,
@@ -538,29 +557,6 @@ one. That ties the consumer's wiring to whichever instance happens to
 keep the package's bare default alias — coupling-by-side-effect. Use
 `deps.<argName> = ref.<ns>.<inst>` instead; it makes the dependency
 graph legible from the consumer site.
-
-**Phase-1 caveat (current limitation).** kix runs a phase-1 dep
-pre-pass (config injection / DAG seeding) with `explicitOverrides = {}`
-deliberately, to avoid `ref`-fixpoint recursion. If DNS-based
-auto-resolution is *ambiguous* in phase-1 (multiple candidates with the
-same alias), eval throws before any consumer's explicit override
-applies. Until that's lifted, multi-instance clusters need at least
-one of the instances to claim a unique alias so phase-1 has a single
-match — the consumer's explicit `deps` then takes over for the actual
-build:
-
-```nix
-instances.nginx-system = {
-  public        = { package = packages.ingress-nginx; aliases = [ "ingressNginxLegacyPublic" ]; ... };
-  public-v2     = { package = packages.ingress-nginx; aliases = [ "ingressNginxPublic" ];       ... };
-  private-v2    = { package = packages.ingress-nginx;                                            ... };  # keeps default `ingressNginx`
-};
-```
-
-The aliases here are phase-1 plumbing, not load-bearing intent — the
-consumer's `deps.ingressNginx = ref.nginx-system."private-v2"` is what
-documents the wiring. Once the phase-1 limitation is addressed, the
-aliases can be dropped.
 
 ## 9. Operational principles
 

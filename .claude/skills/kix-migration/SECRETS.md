@@ -104,6 +104,17 @@ envFrom = [ creds.out.envFrom ];
 volumes = [ (creds.out.volume "creds-vol") ];
 ```
 
+`kix.mkEnvVars` accepts a `keyRef` as a value, so a mixed map needs no `mkEnv` split:
+
+```nix
+env = kix.mkEnvVars {
+  DB_HOST = db.out.host;
+  DB_PASSWORD = creds.out.keyRef "password";
+};
+```
+
+That is also how a `kix.healthCheck` probe gets a credential: its `env` callback returns an attrset that goes through `mkEnvVars`, so `CLICKHOUSE_PASSWORD = self.credentials.out.keyRef "password";` gives the probe Job the value, the dependency edge and the key check. Never render a password into the probe's ConfigMap or its `out`.
+
 ## Standalone packages for DI
 
 `packages/secret` and `packages/secret-ref` wrap the primitives as first-class instances:

@@ -90,11 +90,45 @@ rec {
     protocol = "TCP";
   };
 
+  # A value is a string, or a `valueFrom` source such as the one
+  # `secret.out.keyRef "password"` returns. The source keeps its dependency
+  # context, so `{ DB_PASSWORD = creds.out.keyRef "password"; }` orders the
+  # workload after the Secret the same way a string from `out.*` would.
   mkEnvVars =
     attrs:
-    lib.mapAttrsToList (name: value: { inherit name value; }) (lib.filterAttrs (_: v: v != null) attrs);
+    lib.mapAttrsToList (
+      name: value:
+      if !builtins.isAttrs value || value ? outPath || value ? __toString then
+        { inherit name value; }
+      else if value ? valueFrom then
+        value // { inherit name; }
+      else
+        throw "kix.mkEnvVars: ${name} is an attrset with no `valueFrom`, which would render as an env var whose value is an object. Pass a string, or a source such as `secret.out.keyRef \"key\"`. Got: ${builtins.toJSON (builtins.attrNames value)}"
+    ) (lib.filterAttrs (_: v: v != null) attrs);
 
   mkEnv = attrs: raw: (mkEnvVars attrs) ++ raw;
+
+  # lib.recursiveUpdate for an escape hatch such as `extraSpec`, refusing an
+  # override on any path the package computed for correctness (an address
+  # that carries a netpol edge, a credential reference, a quorum size) or
+  # that has an option of its own. `locked` is a list of attribute paths;
+  # `who` names the package instance and `what` the option, for the error.
+  mergeGuarded =
+    {
+      who,
+      locked,
+      what ? "extraSpec",
+    }:
+    base: overrides:
+    let
+      touched = builtins.filter (path: lib.hasAttrByPath path overrides) locked;
+    in
+    if touched != [ ] then
+      throw "${who}: ${what} overrides ${
+        lib.concatMapStringsSep ", " (lib.concatStringsSep ".") touched
+      }, which the package sets for correctness. Use the option that owns it."
+    else
+      lib.recursiveUpdate base overrides;
 
   parseGi =
     s:
