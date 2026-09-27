@@ -36,7 +36,7 @@ in
 {
   meta = {
     version = "v0.74.1";
-    description = "VictoriaMetrics Operator — operator.victoriametrics.com CRD controller";
+    description = "VictoriaMetrics Operator: operator.victoriametrics.com CRD controller";
     owner = "platform";
     defaultAliases = [
       "prometheus"

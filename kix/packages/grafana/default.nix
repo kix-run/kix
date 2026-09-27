@@ -30,7 +30,7 @@ in
 {
   meta = {
     version = "13.1.1";
-    description = "Grafana — observability and data visualization";
+    description = "Grafana: observability and data visualization";
     owner = "platform";
     defaultAliases = [ "grafana" ];
     k8s.minVersion = "1.25";

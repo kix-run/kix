@@ -40,6 +40,7 @@ in
 {
   meta = {
     version = "1.74.2";
+    description = "n8n workflow automation, a main instance and queue workers backed by PostgreSQL and Valkey";
     owner = "app-team";
     # The main process owns the scheduler and active webhooks, and n8n's
     # multi-main setup is an enterprise feature this package does not wire

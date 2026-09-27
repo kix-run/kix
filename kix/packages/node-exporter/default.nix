@@ -14,7 +14,7 @@ in
 {
   meta = {
     version = "v1.12.1";
-    description = "Prometheus Node Exporter — host-level metrics";
+    description = "Prometheus Node Exporter: host-level metrics";
     owner = "platform";
     defaultAliases = [ "nodeExporter" ];
     k8s.minVersion = "1.25";

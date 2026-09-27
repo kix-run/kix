@@ -130,7 +130,7 @@ in
 {
   meta = {
     version = "1.19.6";
-    description = "Cilium — eBPF CNI, load balancer, and CiliumNetworkPolicy enforcer";
+    description = "Cilium: eBPF CNI, load balancer, and CiliumNetworkPolicy enforcer";
     owner = "platform";
     # A CNI programs the node's own networking and loads BPF into the
     # kernel, so the agent, envoy and operator pods run on the host

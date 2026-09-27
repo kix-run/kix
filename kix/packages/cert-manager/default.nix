@@ -19,7 +19,7 @@
 {
   meta = {
     version = "v1.17.1";
-    description = "cert-manager — X.509 certificate management for Kubernetes";
+    description = "cert-manager: X.509 certificate management for Kubernetes";
     owner = "platform";
     defaultAliases = [ "certManager" ];
     # Every TLS Ingress carries `cert-manager.io/cluster-issuer`, stamped

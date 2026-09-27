@@ -26,6 +26,7 @@ in
 {
   meta = {
     version = "1.0.0";
+    description = "Tailscale Kubernetes operator with an IngressClass, plus any ProxyClasses and Connectors you configure";
     owner = "platform";
     # The operator is a single-leader controller with no leader
     # election, so only one replica may run at a time.

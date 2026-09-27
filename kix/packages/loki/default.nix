@@ -125,7 +125,7 @@ in
 {
   meta = {
     version = "7.1.0";
-    description = "Loki — log aggregation system (single-binary, filesystem)";
+    description = "Loki: log aggregation system (single-binary, filesystem)";
     owner = "platform";
     lifecycle = "ephemeral";
     # Single-binary Loki over a filesystem store on one ReadWriteOnce PVC:

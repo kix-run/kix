@@ -34,6 +34,7 @@ in
 {
   meta = {
     version = "v1.15.2";
+    description = "Velero backup and restore: the server, a node-agent DaemonSet for filesystem backups, storage locations and scheduled backups";
     owner = "platform";
     # The velero server has no leader election and a second one would race
     # the first over backups, so one replica is the ceiling it can honour.

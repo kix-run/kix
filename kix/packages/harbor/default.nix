@@ -154,7 +154,7 @@ in
 {
   meta = {
     version = harborVersion;
-    description = "Harbor — OCI container registry";
+    description = "Harbor: OCI container registry";
     owner = "platform";
     # The registry keeps its blobs on one ReadWriteOnce claim and this
     # package does not wire up object storage, so it cannot run twice: a

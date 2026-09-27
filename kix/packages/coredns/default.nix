@@ -35,6 +35,7 @@ in
 {
   meta = {
     version = "1.13.1";
+    description = "CoreDNS as the cluster DNS server behind the kube-dns Service, with a Corefile built from structured server blocks";
     owner = "platform";
   };
 

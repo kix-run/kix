@@ -52,6 +52,7 @@ in
 {
   meta = {
     version = "0.13.1";
+    description = "GitHub Actions Runner Controller (gha-runner-scale-set-controller), which runs self-hosted runner scale sets";
     owner = "platform";
     # The controller runs without leader election here (no lease RBAC), so
     # one replica is the ceiling it can honour.

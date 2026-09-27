@@ -28,6 +28,7 @@ in
 {
   meta = {
     version = "1.0.0";
+    description = "A watcher that streams every cluster event to stdout as JSON for log pipelines";
     owner = "platform";
     # The watcher has no coordination between replicas, so one replica is
     # the ceiling it can honour.

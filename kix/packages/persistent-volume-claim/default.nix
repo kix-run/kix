@@ -27,7 +27,7 @@
 {
   meta = {
     version = "1.0.0";
-    description = "Persistent Volume Claim — operator-managed storage";
+    description = "A PersistentVolumeClaim as its own cluster instance, with its StorageClass set explicitly or taken from the storageClasses dependency";
     owner = "platform";
     lifecycle = "stateful";
     scope = "namespace";

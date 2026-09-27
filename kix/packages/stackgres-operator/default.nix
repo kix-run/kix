@@ -251,7 +251,7 @@ in
 {
   meta = {
     version = "1.19.0";
-    description = "StackGres operator — PostgreSQL clusters via the stackgres.io CRDs";
+    description = "StackGres operator: PostgreSQL clusters via the stackgres.io CRDs";
     owner = "platform";
     defaultAliases = [ "stackgresOperator" ];
     network.intents = {

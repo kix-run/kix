@@ -37,7 +37,7 @@ in
 {
   meta = {
     version = "v1.150.0";
-    description = "VictoriaMetrics alerting — VMAlert + VMAlertmanager in HA pairs";
+    description = "VictoriaMetrics alerting: VMAlert and VMAlertmanager";
     owner = "platform";
     defaultAliases = [ "vmAlert" ];
     k8s.minVersion = "1.25";

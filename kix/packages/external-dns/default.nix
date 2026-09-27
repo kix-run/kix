@@ -23,6 +23,7 @@
 {
   meta = {
     version = "0.16.1";
+    description = "ExternalDNS, which manages records in an external DNS provider (Cloudflare by default) from Ingresses and Services";
     owner = "platform";
   };
 

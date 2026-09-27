@@ -144,6 +144,7 @@ in
 {
   meta = {
     version = "10.0.60";
+    description = "Emberstack Reflector, which copies Secrets and ConfigMaps across namespaces based on annotations";
     owner = "platform";
     defaultAliases = [ "reflector" ];
     # This package owns the reflector annotation domain: resources carrying

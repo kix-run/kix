@@ -21,6 +21,7 @@ in
 {
   meta = {
     version = "v2.0.0";
+    description = "Immich machine-learning worker for face recognition, smart search and duplicate detection, called by immich-server over HTTP";
     owner = "app-team";
     # Keep the `machineLearning` build argument while using a lowercase
     # Kubernetes instance name.

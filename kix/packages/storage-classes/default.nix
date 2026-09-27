@@ -13,6 +13,7 @@
 {
   meta = {
     version = "1.0.0";
+    description = "StorageClasses for OpenEBS Mayastor replicated storage and LocalPV-ZFS";
     owner = "platform";
     roles = [ "storageClasses" ];
   };

@@ -254,6 +254,7 @@ in
 {
   meta = {
     version = "71.2.0";
+    description = "The upstream kube-prometheus-stack Helm chart: the Prometheus Operator, Prometheus, Grafana, Alertmanager, node-exporter and kube-state-metrics";
     owner = "platform";
     isHelm = true;
     # The chart renders grafana's PVC itself (persistence.enabled above) —

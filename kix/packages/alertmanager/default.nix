@@ -22,7 +22,7 @@ in
 {
   meta = {
     version = "v0.33.1";
-    description = "Alertmanager — alert routing and deduplication";
+    description = "Alertmanager: alert routing and deduplication";
     owner = "platform";
     defaultAliases = [ "alertmanager" ];
     k8s.minVersion = "1.25";

@@ -25,7 +25,7 @@ in
 {
   meta = {
     version = "external";
-    description = "Cilium (externally managed) — CNP CRD ref marker only";
+    description = "Cilium (externally managed): a CiliumNetworkPolicy CRD reference for clusters that install Cilium separately";
     owner = "platform";
     roles = [ "network-policy-enforcer" ];
   };

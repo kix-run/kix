@@ -85,6 +85,7 @@ in
 {
   meta = {
     version = "1.0.0";
+    description = "Cilium network policies: cluster-wide baseline connectivity, per-namespace system traffic rules and tenant isolation";
     owner = "platform";
   };
 

@@ -56,7 +56,7 @@ in
 {
   meta = {
     version = "v1.150.0";
-    description = "VictoriaMetrics cluster — HA vmstorage/vmselect/vminsert via VMCluster CR";
+    description = "VictoriaMetrics cluster: vmstorage, vmselect and vminsert through a VMCluster CR";
     owner = "platform";
     defaultAliases = [
       "prometheusServer"

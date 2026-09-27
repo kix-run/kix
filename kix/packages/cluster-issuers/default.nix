@@ -15,7 +15,7 @@
 {
   meta = {
     version = "1.0.0";
-    description = "cert-manager ClusterIssuers — the TLS issuers `kix.expose` stamps onto Ingresses";
+    description = "cert-manager ClusterIssuers: the TLS issuers `kix.expose` stamps onto Ingresses";
     owner = "platform";
     # Auto-wire as `clusterIssuer` DI dep so any instance in the cluster
     # activates TLS on packages using `kix.expose` without per-app deps.

@@ -26,7 +26,7 @@
 {
   meta = {
     version = "8.1.1";
-    description = "Valkey — Redis-compatible in-memory data store";
+    description = "Valkey: Redis-compatible in-memory data store";
     owner = "platform";
     lifecycle = "stateful";
     defaultAliases = [

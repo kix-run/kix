@@ -56,6 +56,7 @@ in
 {
   meta = {
     version = "v1.3.0";
+    description = "Stakater Reloader, which restarts annotated workloads when a ConfigMap or Secret they reference changes";
     owner = "platform";
     # Reloader coordinates replicas only in its HA mode, which this package
     # does not enable, so one replica is the ceiling it can honour.

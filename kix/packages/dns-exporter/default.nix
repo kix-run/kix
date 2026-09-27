@@ -17,6 +17,7 @@ in
 {
   meta = {
     version = "1.0.0";
+    description = "dns_exporter, a Prometheus exporter that runs DNS queries and reports the results as metrics";
     owner = "platform";
   };
 

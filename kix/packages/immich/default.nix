@@ -32,7 +32,7 @@ in
 {
   meta = {
     version = "v3.0.3";
-    description = "Immich — self-hosted photo management";
+    description = "Immich: self-hosted photo management";
     owner = "app-team";
     # The server mounts the photo library from a single ReadWriteOnce
     # claim and runs the job workers in-process, so it is single-writer.

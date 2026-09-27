@@ -108,6 +108,7 @@ let
 in
 {
   meta.version = "6.17.1";
+  meta.description = "Promtail from the upstream Helm chart, a DaemonSet that ships container logs to Loki";
   # A log-shipping agent: it reads /var/log and the container runtime's log
   # directory from the host, which the chart does as root. Audited by
   # unsafeGrants.

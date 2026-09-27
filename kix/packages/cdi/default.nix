@@ -40,6 +40,7 @@ in
 {
   meta = {
     version = "v1.62.0";
+    description = "KubeVirt Containerized Data Importer: the cdi-operator and a CDI resource; CDI imports disk images into PVCs";
     owner = "platform";
     # The cdi-operator has no leader election, so one replica is the
     # ceiling it can honour. The components it deploys are unaffected.

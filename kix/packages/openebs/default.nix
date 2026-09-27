@@ -161,6 +161,7 @@ in
 {
   meta = {
     version = "v2.8.0";
+    description = "OpenEBS storage: Mayastor replicated block storage, ZFS and LVM LocalPV, and the hostpath LocalPV provisioner";
     owner = "platform";
     # No instance-wide ceiling: etcd and NATS are quorums that want the
     # cluster's level in full. The single-replica controllers declare

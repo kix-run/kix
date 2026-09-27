@@ -130,7 +130,7 @@ in
 {
   meta.version = "0.32.2";
   meta.owner = "platform";
-  meta.description = "Descheduler — evicts pods to rebalance cluster utilization";
+  meta.description = "Descheduler: evicts pods to rebalance cluster utilization";
   # No leader election in the values below, so a second replica would
   # evict against the same policy twice. See the `replicas` comment.
   meta.availability.max = "pod";

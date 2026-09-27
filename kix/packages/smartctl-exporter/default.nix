@@ -58,6 +58,7 @@ let
 in
 {
   meta.version = "0.16.0";
+  meta.description = "smartctl_exporter from the upstream Helm chart, a privileged DaemonSet that exports SMART disk health metrics to Prometheus";
   meta.owner = "platform";
 
   options.values = lib.mkOption {

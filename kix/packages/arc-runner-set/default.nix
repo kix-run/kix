@@ -22,6 +22,7 @@ in
 {
   meta = {
     version = "0.13.1";
+    description = "A GitHub Actions runner scale set from the upstream gha-runner-scale-set chart, reconciled by the arc controller";
     owner = "platform";
     isHelm = true;
   };

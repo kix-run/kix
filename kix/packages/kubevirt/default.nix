@@ -39,6 +39,7 @@ in
 {
   meta = {
     version = "v1.5.0";
+    description = "KubeVirt, for running virtual machines on Kubernetes: the virt-operator and a KubeVirt resource";
     owner = "platform";
     # virt-handler runs a privileged pod on every node. Upstream labels
     # its namespace `pod-security.kubernetes.io/enforce: privileged`.

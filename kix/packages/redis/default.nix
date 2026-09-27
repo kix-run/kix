@@ -31,6 +31,7 @@ in
 {
   meta = {
     version = "19.1.0";
+    description = "Redis from the upstream Bitnami Helm chart, for clusters that already run that release; new deployments use valkey";
     owner = "platform";
     isHelm = true;
   };

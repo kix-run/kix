@@ -25,7 +25,7 @@ in
 {
   meta = {
     version = "0.7.26";
-    description = "Firezone — self-hosted WireGuard VPN";
+    description = "Firezone: self-hosted WireGuard VPN";
     owner = "app-team";
     # One process owns the WireGuard interface and its peer state, so
     # Firezone 0.7 cannot run more than one replica.

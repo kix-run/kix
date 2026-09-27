@@ -16,7 +16,7 @@ in
 {
   meta = {
     version = "v2.19.1";
-    description = "kube-state-metrics — Kubernetes object state exporter";
+    description = "kube-state-metrics: Kubernetes object state exporter";
     owner = "platform";
     defaultAliases = [ "kubeStateMetrics" ];
     k8s.minVersion = "1.25";

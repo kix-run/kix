@@ -26,7 +26,7 @@
     # Leader election is not enabled in the operator args, so one replica
     # is the ceiling this package can honour.
     availability.max = "pod";
-    description = "Prometheus Operator — monitoring.coreos.com CRD controller";
+    description = "Prometheus Operator: monitoring.coreos.com CRD controller";
     owner = "platform";
     defaultAliases = [
       "prometheus"

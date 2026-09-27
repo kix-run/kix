@@ -21,6 +21,7 @@ in
 {
   meta = {
     version = "1.0.0";
+    description = "An Ingress that proxies PostHog ingestion and asset traffic through ExternalName Services on a first-party hostname";
     owner = "app-team";
   };
 

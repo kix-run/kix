@@ -65,6 +65,7 @@ in
 {
   meta = {
     version = "v0.9.1";
+    description = "Infisical Secrets Operator, which syncs secrets from Infisical into Kubernetes Secrets through InfisicalSecret resources";
     owner = "platform";
   };
 

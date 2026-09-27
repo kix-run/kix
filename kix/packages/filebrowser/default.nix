@@ -21,7 +21,7 @@ in
 {
   meta = {
     version = "v2.63.18";
-    description = "Filebrowser — web-based file manager";
+    description = "Filebrowser: web-based file manager";
     owner = "app-team";
   };
 

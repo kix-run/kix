@@ -27,6 +27,7 @@ in
 {
   meta = {
     version = "v0.50.34";
+    description = "Metabase, a business intelligence and analytics tool, backed by PostgreSQL";
     owner = "app-team";
   };
 
