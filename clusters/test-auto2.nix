@@ -54,6 +54,8 @@ let
   };
 
   # A package that requires coredns — used to test optional activation.
+  # No instance uses this yet; see housekeeping/2026-09-27-test-auto2-never-activates-optional-coredns.md.
+  # deadnix: skip
   needsCorednsPackage = {
     meta.version = "0.0.0";
     build =

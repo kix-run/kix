@@ -339,8 +339,6 @@ mod tests {
             "cli/kix/src/legacy_domain/mod.rs",
             // The one Nix literal.
             "kix/lib/core/annotations.nix",
-            // The previous library. Not built by any flake output.
-            "kix/libv1",
             // Test fixtures and integration tests: literal API objects and
             // literal cluster YAML. These are the independent restatement
             // that catches a constant changed by mistake, so they spell the

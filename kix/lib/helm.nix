@@ -554,10 +554,10 @@ rec {
       );
 
       # Wrap each resource with its DAG-inferred requires.
-      # Lazy self-reference: element i looks up its deps in wrappedResources
+      # Lazy self-reference: each element looks up its deps in wrappedResources
       # by index. Safe because K8s resource deps are acyclic.
-      wrappedResources = lib.imap0 (
-        i: raw:
+      wrappedResources = map (
+        raw:
         let
           rawId = helmDag.resourceId raw;
           depIds = rawDepsMap.${rawId} or [ ];
@@ -593,20 +593,6 @@ rec {
         else
           [ ]
       ) rawEdges;
-
-      # Build a map from wrapped resource outPath to its inferred deps.
-      depsMap = builtins.foldl' (
-        acc: edge:
-        let
-          key = edge.from.outPath;
-          existing = acc.${key} or [ ];
-        in
-        acc // { ${key} = existing ++ [ edge.to ]; }
-      ) { } wrappedEdges;
-
-      # ResourceIds that are targets of edges are reachable through the DAG,
-      # so root doesn't need to directly require them.
-      depTargetIds = helmDag.dependedOnIds rawEdges;
 
       # Built recursively to support `replaceResource`: substituting a
       # chart resource with a kix-native one returns a new collection
@@ -806,7 +792,7 @@ rec {
               throw "importChart: chart ${releaseName} produced no resources";
 
           # Build a complete parts tree for simple charts.
-#
+          #
           # The root directly requires DAG entry points; their dependencies
           # remain reachable through each resource's `requires`.
           # `out.byKind` contains every wrapped resource. A unique Service

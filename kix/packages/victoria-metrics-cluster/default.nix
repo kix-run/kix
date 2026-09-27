@@ -42,7 +42,6 @@
 }:
 let
   name = scope.instanceName;
-  ns = scope.namespaceName;
 
   mkComponentResources =
     requests: limits:

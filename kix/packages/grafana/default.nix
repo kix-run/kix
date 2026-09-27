@@ -469,13 +469,9 @@ in
       # Storage precedence: DI alias `storage` wins (existing behaviour);
       # falls back to inline PVC when `persistence.enabled = true && type =
       # "pvc"` AND no DI storage is supplied; falls back to emptyDir
-      # otherwise. STS mode is not implemented — surface a clear error.
-      _stsRequested = config.persistence.enabled && config.persistence.type == "sts";
-      _ = lib.optional _stsRequested (throw ''
-        [grafana] persistence.type = "sts" is not implemented in kix.
-        Either use the `storage` DI alias with a sibling
-        persistent-volume-claim instance, or set persistence.type = "pvc".
-      '');
+      # otherwise. STS mode is not implemented; without DI storage,
+      # grafanaStorageVolume throws.
+      stsRequested = config.persistence.enabled && config.persistence.type == "sts";
 
       useInlinePvc =
         storage == null
@@ -492,26 +488,34 @@ in
       # Volume entry that mounts grafana's /var/lib/grafana. Picks PVC
       # (DI / inline / existing-claim) or falls back to emptyDir.
       grafanaStorageVolume =
-        if storage != null then
-          {
-            name = self.storageMount.name;
-          }
-          // self.storageMount.source
-        else if useInlinePvc then
-          {
-            name = "storage";
-            persistentVolumeClaim.claimName = self.persistencePvc.out.name;
-          }
-        else if useExistingClaim then
-          {
-            name = "storage";
-            persistentVolumeClaim.claimName = config.persistence.existingClaim;
-          }
-        else
-          {
-            name = "storage";
-            emptyDir = { };
-          };
+        lib.throwIf (stsRequested && storage == null)
+          ''
+            [grafana] persistence.type = "sts" is not implemented in kix.
+            Either use the `storage` DI alias with a sibling
+            persistent-volume-claim instance, or set persistence.type = "pvc".
+          ''
+          (
+            if storage != null then
+              {
+                name = self.storageMount.name;
+              }
+              // self.storageMount.source
+            else if useInlinePvc then
+              {
+                name = "storage";
+                persistentVolumeClaim.claimName = self.persistencePvc.out.name;
+              }
+            else if useExistingClaim then
+              {
+                name = "storage";
+                persistentVolumeClaim.claimName = config.persistence.existingClaim;
+              }
+            else
+              {
+                name = "storage";
+                emptyDir = { };
+              }
+          );
 
       # ── Extra mount conversion ──────────────────────────────────────────
       # Names supplied via `extraConfigmapMounts`/`extraSecretMounts`/
@@ -674,16 +678,6 @@ in
         };
       };
 
-      allProviders =
-        defaultProviders
-        ++ lib.optional config.sidecar.dashboards.enabled sidecarProvider
-        ++ config.dashboardProviders;
-
-      dashboardProvidersYaml = builtins.toJSON {
-        apiVersion = 1;
-        providers = allProviders;
-      };
-
       # ── Sidecar security context ────────────────────────────────────────
       sidecarSecCtx = {
         allowPrivilegeEscalation = false;
@@ -801,7 +795,7 @@ in
           "grafana.ini" = grafanaIniStr;
           "dashboardproviders.yaml" = builtins.toJSON {
             apiVersion = 1;
-            providers = defaultProviders;
+            providers = defaultProviders ++ config.dashboardProviders;
           };
         };
       };

@@ -236,7 +236,7 @@ in
             ) resolvedDepMeta;
           in
           lib.foldlAttrs (
-            acc: argName: depInfo:
+            _: _: depInfo:
             throw "instance '${instanceName}' (namespace '${namespaceName}') depends on '${depInfo.resolution.instanceName}' (namespace '${depInfo.resolution.namespace}') which declares meta.scope = \"namespace\" and can only be used within its own namespace"
           ) null crossNsDeps;
 

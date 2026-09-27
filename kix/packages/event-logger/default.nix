@@ -14,8 +14,6 @@
 }:
 
 let
-  name = scope.instanceName;
-
   commonLabels = {
     app = "event-logger";
   };

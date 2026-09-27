@@ -15,9 +15,6 @@
   kix,
 }:
 
-let
-  name = scope.instanceName;
-in
 {
   meta = {
     version = "1.0.0";

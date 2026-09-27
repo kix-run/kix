@@ -27,8 +27,6 @@ let
     grant
     watch
     reconcile
-    finalize
-    own
     readWrite
     full
     allow

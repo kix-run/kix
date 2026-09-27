@@ -23,7 +23,6 @@
 
 let
   kixAnnotations = import ./annotations.nix;
-  kixKeys = kixAnnotations.keys;
   markers = import ./markers.nix { inherit lib; };
 in
 

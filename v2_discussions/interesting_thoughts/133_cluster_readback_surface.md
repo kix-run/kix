@@ -153,9 +153,8 @@ matters for retries and `--reconcile`.
 - **`kix diff <cluster>` renders every resource as `Kind/unknown`**, so the
   command is currently useless. Fell back to `deploy --dry-run` for plan
   inspection.
-- **`kix/libv1` still carries the same `untrackedRef` bug** in its own copy of
-  the stamper (`libv1/k8s.nix`). Nothing imports it. A divergent dead copy is
-  worse than no copy; delete it.
+- `kix/libv1` carried the same `untrackedRef` bug in its own copy of the
+  stamper; it has since been deleted.
 
 ---
 

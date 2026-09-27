@@ -206,9 +206,6 @@
           { "app.kubernetes.io/component" = "headless"; };
 
       # Auth-related helpers.
-      credentialsSecretName =
-        if config.auth.existingSecret != null then config.auth.existingSecret else "${name}-credentials";
-
       authPasswordKey = config.auth.existingSecretPasswordKey;
 
       # ── ConfigMap data (scripts) ──────────────────────────────────

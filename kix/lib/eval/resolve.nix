@@ -278,7 +278,7 @@ rec {
       ) { } buildEntries;
       depArgs = removeAttrs allBuildArgs systemBuildArgNames;
     in
-    lib.mapAttrs (name: hasDefault: { optional = hasDefault; }) depArgs;
+    lib.mapAttrs (_: hasDefault: { optional = hasDefault; }) depArgs;
 
   resolveDeclaredDeps =
     {

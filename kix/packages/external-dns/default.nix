@@ -177,18 +177,6 @@
         "transportservers"
       ];
       kong = group "configuration.konghq.com" [ "tcpingresses" ];
-      extensions = group "extensions" [
-        "ingresses"
-        "hosts"
-      ];
-      networkingK8s = group "networking.k8s.io" [
-        "ingresses"
-        "hosts"
-      ];
-      ambassador = group "getambassador.io" [
-        "ingresses"
-        "hosts"
-      ];
       gateway = group "gateway.networking.k8s.io" [
         "gateways"
         "httproutes"
@@ -196,14 +184,6 @@
         "tcproutes"
         "udproutes"
         "grpcroutes"
-      ];
-      gloo = group "gloo.solo.io" [
-        "proxies"
-        "virtualservices"
-      ];
-      gatewaySolo = group "gateway.solo.io" [
-        "proxies"
-        "virtualservices"
       ];
       istio = group "networking.istio.io" [
         "gateways"
@@ -320,6 +300,8 @@
         };
       };
 
+      # Not passed as --txt-owner-id yet; see housekeeping/2026-09-27-external-dns-ignores-txt-owner-id.md.
+      # deadnix: skip
       ownerId = if config.txtOwnerId != null then config.txtOwnerId else name;
 
       # Merge extra labels into all resource labels.

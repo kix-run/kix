@@ -402,7 +402,7 @@ in
       # Each is wrapped in mkSecretRef to create a DI-tracked store path,
       # satisfying the checkSecretRefs invariant in mkWorkload.
       mkEnvFrom =
-        self: configMapName: secretNames:
+        configMapName: secretNames:
         lib.optional config.useConfigMap { configMapRef.name = configMapName.out.name; }
         ++ map (
           sName:
@@ -413,7 +413,6 @@ in
         ) secretNames;
 
       mkPodSpec =
-        self:
         {
           containers,
           initContainers ? [ ],
@@ -496,7 +495,7 @@ in
             config.backend.securityContext or {
               runAsNonRoot = true;
             };
-          envFrom = mkEnvFrom self self.configmap config.backend.secrets;
+          envFrom = mkEnvFrom self.configmap config.backend.secrets;
           ports = [
             (kix.port "http" config.backend.port)
           ]
@@ -589,9 +588,7 @@ in
           image =
             if image != null then image else "${config.backend.image.repository}:${config.backend.image.tag}";
           imagePullPolicy = config.backend.image.pullPolicy;
-          envFrom = mkEnvFrom self self.configmap (
-            if secrets != null then secrets else config.backend.secrets
-          );
+          envFrom = mkEnvFrom self.configmap (if secrets != null then secrets else config.backend.secrets);
           volumeMounts = secretVolumeMounts;
           inherit resources;
         }
@@ -659,7 +656,7 @@ in
             selector.matchLabels = selectorLabels workerName;
             template = {
               metadata.labels = selectorLabels workerName;
-              spec = mkPodSpec self {
+              spec = mkPodSpec {
                 containers = [
                   (mkWorkerContainer self {
                     inherit
@@ -947,7 +944,7 @@ in
                 };
               };
               spec =
-                mkPodSpec self {
+                mkPodSpec {
                   containers = [ (mkBackendContainer self) ];
                   initContainers = config.backend.initContainers;
                 }
@@ -1053,7 +1050,7 @@ in
                     "checksum/config" = self.frontendConfigmap.out.identityHash;
                   };
                 };
-                spec = mkPodSpec self {
+                spec = mkPodSpec {
                   containers = [ (mkFrontendContainer self) ];
                   volumes = [ ];
                 };
@@ -1113,7 +1110,7 @@ in
               selector.matchLabels = selectorLabels "caddy";
               template = {
                 metadata.labels = selectorLabels "caddy";
-                spec = mkPodSpec self {
+                spec = mkPodSpec {
                   containers = [
                     {
                       name = "caddy";
@@ -1378,7 +1375,7 @@ in
                           runAsNonRoot = true;
                         };
                       command = config.hooks.migrate.command;
-                      envFrom = mkEnvFrom self self.configmap config.backend.secrets;
+                      envFrom = mkEnvFrom self.configmap config.backend.secrets;
                       volumeMounts = secretVolumeMounts;
                     }
                   ];

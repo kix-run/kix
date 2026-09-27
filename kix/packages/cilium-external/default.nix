@@ -18,10 +18,6 @@
 #     package = packages.cilium-external;
 #   };
 
-let
-  ciliumNetpol = import ./netpol-rules.nix { lib = import <nixpkgs/lib>; };
-in
-
 {
   meta = {
     version = "external";

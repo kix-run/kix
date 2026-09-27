@@ -87,7 +87,6 @@ in
         core
         grant
         watch
-        allow
         mkClusterRoleSet
         ;
 

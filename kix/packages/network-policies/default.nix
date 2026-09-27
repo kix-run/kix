@@ -25,7 +25,7 @@ let
     };
 
   mkTenantPolicy =
-    tenantName: tenantCfg:
+    tenantName: _:
     mkCiliumPolicy {
       name = "allow-within-tenant-${tenantName}";
       spec = {

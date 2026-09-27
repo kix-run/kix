@@ -22,7 +22,7 @@ kix.buildCluster {
           # Expose CRD builders (the old partsOverlays pattern)
           partsOverlays = [
             (
-              scope: self: base:
+              scope: _: base:
               let
                 smRef = scope.mkCRDRef {
                   group = "monitoring.coreos.com";
