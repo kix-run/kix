@@ -11,7 +11,8 @@
 #   ingressNginx        — optional, auto-creates ingress when present (+ hosts non-empty)
 #   clusterIssuer       — optional, auto-enables TLS when present
 #
-# root = backend Service (or caddy Service if caddy enabled).
+# root = caddy Service if caddy is enabled, else the backend Service, else
+# the frontend Service.
 
 {
   scope,
@@ -22,6 +23,13 @@
 
 let
   name = scope.instanceName;
+
+  workerImageDoc = ''
+    One Deployment per entry. `<name>.image` is optional and takes an image
+    record (`{ repository, tag, digest?, pullPolicy? }`, or `pins.get
+    "<key>"`) rendered through `kix.image.ref`, or a plain reference string.
+    Unset, the worker runs `backend.image`.
+  '';
 in
 {
   meta = {
@@ -45,10 +53,13 @@ in
     backend = lib.mkOption {
       type = lib.types.anything;
       default = {
+        # False renders no backend Deployment, Service or HPA, for a
+        # frontend-only app. The migrate hook, and any worker without its own
+        # `image`, still run `backend.image`.
         enabled = true;
+        # The application image has no default: set `repository` and `tag`
+        # (or assign a pin, `pins.get "<key>"`, which may carry a digest).
         image = {
-          repository = "";
-          tag = "latest";
           pullPolicy = "IfNotPresent";
         };
         # The backend and migrate containers run under this. Non-root by
@@ -116,8 +127,6 @@ in
       default = {
         enabled = false;
         image = {
-          repository = "";
-          tag = "latest";
           pullPolicy = "IfNotPresent";
         };
         # A request server: two replicas once a pod restart must not drop the
@@ -163,8 +172,6 @@ in
       default = {
         enabled = false;
         image = {
-          repository = "";
-          tag = "latest";
           pullPolicy = "IfNotPresent";
         };
         # The front door for every request: two replicas once a pod restart
@@ -191,14 +198,17 @@ in
     cronWorkers = lib.mkOption {
       type = lib.types.attrsOf lib.types.anything;
       default = { };
+      description = workerImageDoc;
     };
     queueWorkers = lib.mkOption {
       type = lib.types.attrsOf lib.types.anything;
       default = { };
+      description = workerImageDoc;
     };
     customProcesses = lib.mkOption {
       type = lib.types.attrsOf lib.types.anything;
       default = { };
+      description = workerImageDoc;
     };
 
     # Redis — a single standalone store. It carries no replicaCount, and its
@@ -332,6 +342,29 @@ in
       probePort =
         if config.backend.probes.port != null then config.backend.probes.port else config.backend.port;
       appLabel = if config.appName != null then config.appName else name;
+
+      backendEnabled = config.backend.enabled;
+
+      # The backend, workers and migrate hook read the environment ConfigMap;
+      # a frontend-only app has no consumer for it.
+      hasBackendProcesses =
+        backendEnabled
+        || config.hooks.migrate.enabled
+        || config.queueWorkers != { }
+        || config.cronWorkers != { }
+        || config.customProcesses != { };
+
+      # Renders `<component>.image` for backend, frontend and caddy, which
+      # have no default repository or tag.
+      imageRef =
+        component:
+        let
+          image = config.${component}.image;
+        in
+        if (image.repository or "") == "" || (image.tag or "") == "" then
+          throw "python-app '${name}': set ${component}.image.repository and ${component}.image.tag in the instance config (or ${component}.image = pins.get \"<key>\"). The package has no default ${component} image."
+        else
+          kix.image.ref image;
 
       # ── Labels ──────────────────────────────────────────────────────
       commonLabels = {
@@ -489,7 +522,7 @@ in
         self:
         {
           name = containerName;
-          image = "${config.backend.image.repository}:${config.backend.image.tag}";
+          image = imageRef "backend";
           imagePullPolicy = config.backend.image.pullPolicy;
           securityContext =
             config.backend.securityContext or {
@@ -522,7 +555,7 @@ in
         self:
         {
           name = "frontend";
-          image = "${config.frontend.image.repository}:${config.frontend.image.tag}";
+          image = imageRef "frontend";
           imagePullPolicy = config.frontend.image.pullPolicy;
           envFrom =
             lib.optional config.frontend.useConfigMap { configMapRef.name = self.frontendConfigmap.out.name; }
@@ -586,8 +619,17 @@ in
         {
           name = workerName;
           image =
-            if image != null then image else "${config.backend.image.repository}:${config.backend.image.tag}";
-          imagePullPolicy = config.backend.image.pullPolicy;
+            if image == null then
+              imageRef "backend"
+            else if builtins.isAttrs image then
+              kix.image.ref image
+            else
+              image;
+          imagePullPolicy =
+            if builtins.isAttrs image then
+              image.pullPolicy or config.backend.image.pullPolicy
+            else
+              config.backend.image.pullPolicy;
           envFrom = mkEnvFrom self.configmap (if secrets != null then secrets else config.backend.secrets);
           volumeMounts = secretVolumeMounts;
           inherit resources;
@@ -863,7 +905,7 @@ in
 
       # ── ConfigMap (backend environment) ─────────────────────────────
       configmap =
-        if config.useConfigMap then
+        if config.useConfigMap && hasBackendProcesses then
           scope.mkResource {
             apiVersion = "v1";
             kind = "ConfigMap";
@@ -927,65 +969,72 @@ in
 
       # ── Backend Deployment ──────────────────────────────────────────
       backendDeployment =
-        {
-          name = "${rName}-${compName}";
-          labels = componentLabels compName;
-          spec = {
-            replicas = config.backend.replicaCount;
-            strategy = strategySpec;
-            selector.matchLabels = selectorLabels compName;
-            template = {
-              metadata = {
-                labels = selectorLabels compName;
-              }
-              // lib.optionalAttrs config.useConfigMap {
-                annotations = {
-                  "checksum/config" = self.configmap.out.identityHash;
-                };
-              };
-              spec =
-                mkPodSpec {
-                  containers = [ (mkBackendContainer self) ];
-                  initContainers = config.backend.initContainers;
+        if backendEnabled then
+          {
+            name = "${rName}-${compName}";
+            labels = componentLabels compName;
+            spec = {
+              replicas = config.backend.replicaCount;
+              strategy = strategySpec;
+              selector.matchLabels = selectorLabels compName;
+              template = {
+                metadata = {
+                  labels = selectorLabels compName;
                 }
-                // lib.optionalAttrs (config.backend.topologySpreadConstraints != [ ]) {
-                  topologySpreadConstraints = config.backend.topologySpreadConstraints;
+                // lib.optionalAttrs config.useConfigMap {
+                  annotations = {
+                    "checksum/config" = self.configmap.out.identityHash;
+                  };
                 };
+                spec =
+                  mkPodSpec {
+                    containers = [ (mkBackendContainer self) ];
+                    initContainers = config.backend.initContainers;
+                  }
+                  // lib.optionalAttrs (config.backend.topologySpreadConstraints != [ ]) {
+                    topologySpreadConstraints = config.backend.topologySpreadConstraints;
+                  };
+              };
             };
-          };
-        }
-        |> scope.mkDeployment;
+          }
+          |> scope.mkDeployment
+        else
+          null;
 
       # ── Backend Service ─────────────────────────────────────────────
-      backendService = scope.mkResource {
-        apiVersion = "v1";
-        kind = "Service";
-        name = "${rName}-${compName}-internal";
-        labels = componentLabels compName // config.extraServiceLabels;
-        spec = {
-          type = "ClusterIP";
-          selector = selectorLabels compName;
-          ports = [
-            {
-              name = "http";
-              port = servicePort;
-              targetPort = config.backend.port;
-              protocol = "TCP";
-            }
-          ];
-        };
-        outputs = {
-          port = toString servicePort;
-        };
-        requires = [
-          self.backendDeployment
-        ]
-        ++ lib.optional (self.serviceAccount != null) self.serviceAccount;
-      };
+      backendService =
+        if backendEnabled then
+          scope.mkResource {
+            apiVersion = "v1";
+            kind = "Service";
+            name = "${rName}-${compName}-internal";
+            labels = componentLabels compName // config.extraServiceLabels;
+            spec = {
+              type = "ClusterIP";
+              selector = selectorLabels compName;
+              ports = [
+                {
+                  name = "http";
+                  port = servicePort;
+                  targetPort = config.backend.port;
+                  protocol = "TCP";
+                }
+              ];
+            };
+            outputs = {
+              port = toString servicePort;
+            };
+            requires = [
+              self.backendDeployment
+            ]
+            ++ lib.optional (self.serviceAccount != null) self.serviceAccount;
+          }
+        else
+          null;
 
       # ── Backend HPA ─────────────────────────────────────────────────
       backendHpa =
-        if config.backend.hpa.enabled then
+        if backendEnabled && config.backend.hpa.enabled then
           scope.mkResource {
             apiVersion = "autoscaling/v2";
             kind = "HorizontalPodAutoscaler";
@@ -1114,14 +1163,14 @@ in
                   containers = [
                     {
                       name = "caddy";
-                      image = "${config.caddy.image.repository}:${config.caddy.image.tag}";
+                      image = imageRef "caddy";
                       imagePullPolicy = config.caddy.image.pullPolicy;
                       ports = [
                         (kix.port "http" config.caddy.port)
                       ];
                       env = kix.mkEnvVars {
-                        BACKEND_HOST = self.backendService.out.name;
-                        BACKEND_PORT = toString config.backend.port;
+                        BACKEND_HOST = if backendEnabled then self.backendService.out.name else null;
+                        BACKEND_PORT = if backendEnabled then toString config.backend.port else null;
                         FRONTEND_HOST = if config.frontend.enabled then self.frontendService.out.name else null;
                         FRONTEND_PORT = if config.frontend.enabled then toString config.frontend.port else null;
                       };
@@ -1280,7 +1329,7 @@ in
           let
             resolveServiceName =
               svcName:
-              if svcName == "backend" then
+              if svcName == "backend" && backendEnabled then
                 self.backendService.out.name
               else if svcName == "frontend" && config.frontend.enabled then
                 self.frontendService.out.name
@@ -1368,7 +1417,7 @@ in
                   containers = [
                     {
                       name = "migrate";
-                      image = "${config.backend.image.repository}:${config.backend.image.tag}";
+                      image = imageRef "backend";
                       imagePullPolicy = config.backend.image.pullPolicy;
                       securityContext =
                         config.backend.securityContext or {
@@ -1389,9 +1438,18 @@ in
 
       # ── Entry point ─────────────────────────────────────────────────
       root = {
-        resource = if config.caddy.enabled then self.caddyService else self.backendService;
+        resource =
+          if config.caddy.enabled then
+            self.caddyService
+          else if backendEnabled then
+            self.backendService
+          else if config.frontend.enabled then
+            self.frontendService
+          else
+            throw "python-app '${name}': enable at least one of backend, frontend or caddy.";
         requires =
           allWorkerResources
+          ++ lib.optional (!backendEnabled && self.serviceAccount != null) self.serviceAccount
           ++ lib.optional (self.backendHpa != null) self.backendHpa
           ++ lib.optional (self.caddyHpa != null) self.caddyHpa
           ++ lib.optional (self.redisService != null) self.redisService
@@ -1399,7 +1457,9 @@ in
           ++ lib.optional (self.migrateJob != null) self.migrateJob
           ++ lib.optional (self.secret != null) self.secret
           ++ lib.optional (self.secretFilesResource != null) self.secretFilesResource
-          ++ lib.optional (self.frontendService != null) self.frontendService;
+          ++ lib.optional (
+            self.frontendService != null && (config.caddy.enabled || backendEnabled)
+          ) self.frontendService;
       };
     }
     # Merge dynamic worker parts into the fixpoint so they appear in

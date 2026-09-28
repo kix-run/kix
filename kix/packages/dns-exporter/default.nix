@@ -22,12 +22,9 @@ in
   };
 
   options = {
-    image = lib.mkOption {
-      type = lib.types.attrsOf lib.types.str;
-      default = {
-        repository = "tykling/dns_exporter";
-        tag = "latest";
-      };
+    image = kix.options.image {
+      repository = "tykling/dns_exporter";
+      tag = "v1.2.3";
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;
@@ -66,7 +63,7 @@ in
             template.spec.containers = [
               {
                 name = "dns-exporter";
-                image = "${config.image.repository}:${config.image.tag}";
+                image = kix.image.ref config.image;
                 ports = [
                   (kix.port "metrics" 15353)
                 ];

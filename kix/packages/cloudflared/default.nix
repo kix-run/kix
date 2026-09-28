@@ -29,10 +29,9 @@ in
   };
 
   options = {
-    image = lib.mkOption {
-      type = lib.types.str;
-      default = "cloudflare/cloudflared:latest";
-      description = "cloudflared container image.";
+    image = kix.options.image {
+      repository = "cloudflare/cloudflared";
+      tag = "2026.9.3";
     };
     token = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
@@ -106,7 +105,7 @@ in
               containers = [
                 {
                   inherit name;
-                  image = config.image;
+                  image = kix.image.ref config.image;
                   args = [
                     "tunnel"
                     "--no-autoupdate"

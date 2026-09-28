@@ -187,6 +187,10 @@ let
     };
     posthog-proxy.config.host = "posthog.example.com";
     priority-classes.config.classes.default.value = 1000;
+    python-app.config.backend.image = {
+      repository = "ghcr.io/example/python-app";
+      tag = "1.0.0";
+    };
     # housekeeping/2026-09-27-promtail-needs-an-undeclared-priority-class.md
     promtail.instances.priority-classes = {
       package = packages.priority-classes;
