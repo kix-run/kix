@@ -73,7 +73,7 @@ let
       roles
       ;
     inherit (namespaceMod) mkNamespace;
-    inherit (auto) computeAutoInstances;
+    inherit (auto) computeAutoInstances possibleInstanceNames;
     inherit (resolve)
       buildResolutionIndex
       callPackagePhase1

@@ -23,9 +23,9 @@ flake.nix → mkFlake.nix → buildCluster (eval/cluster.nix)
   3. namespaces: real vs sentinel (`_`-prefixed)
   4. resolution index (eval/resolve.nix)       # DNS-like DI map
   5. phase-1 pre-pass                          # introspect, resolve dep targets, config injections
-                                               # (`ref.<ns>.<inst>` is a static pointer built over the
-                                               # merged instance names, so explicit wiring is visible
-                                               # here and injections follow it)
+                                               # (`ref.<ns>.<inst>` is a static pointer built over
+                                               # every name step 2 could produce, so explicit wiring
+                                               # is visible to steps 2 and 5 and injections follow it)
   ── three fixpoints ──
   6. instanceConfigs fixpoint                  # config-only; breaks function-injection cycles
   7. clusterInstances fixpoint: evaluateInstance (eval/instance.nix)
@@ -50,7 +50,7 @@ flake.nix → mkFlake.nix → buildCluster (eval/cluster.nix)
 | `eval/cluster.nix` | `buildCluster`: the three fixpoints, hook running, aggregation. Invariant comments at the fixpoint split points are load-bearing. |
 | `eval/instance.nix` | `evaluateInstance`: DI binding, availability resolution (`core/availability.nix` `resolve`, once per instance, passed to the package call, build functions, scope and processors), parts fixpoint, overlays, `_injectedResources` drain, instanceProcessors call site (`ctx.forwardReachable`), diagnostics. |
 | `eval/resolve.nix` | Resolution index, `resolveArg` ladder, phase-1 calling (`availability` is a system argument, not a dependency), config injections, `mkLocked`. |
-| `eval/auto.nix` | Auto-instantiation over `availablePackages`. |
+| `eval/auto.nix` | Auto-instantiation over `availablePackages`: a `genericClosure` over demands (required deps and weak role deps not answered by a mandatory instance or wired with a non-null `deps.<arg>`, plus every optional instance a `deps.<arg> = ref…` points at). `availableByKey` and `optionalByKey` map a key to every claimant; `pickShelf` throws when a demanded key has more than one, and `pickOptional` applies `resolveArg`'s ladder (managed over import, then the requester's namespace) and throws only on a tie. An undemanded contested key is never looked up. `possibleInstanceNames` lists every instance the closure could create without running it; `cluster.nix` builds `ref` from it so reading `deps` values here does not recurse, and `_refTargetsCheck` refuses a ref to a listed name that was not created. |
 | `eval/roles.nix` | The role registry (doc 127): closed vocabulary (network-policy-enforcer, dns, storageClasses, cni, loadBalancer), each with a shallow out-contract. `meta.roles` declarations are validated against it; a role name doubles as a DI alias (`meta.effectiveAliases`); binding modes (`cluster.roles.<role>.binding` = absent/shadowable/exclusive) model environment-owned roles — exclusive + managed claimant throws eagerly. |
 | `eval/edges.nix` | Edge analysis on typed facts: `analyzeEdges` reads endpoint facts back from workload context (`readFile`, no registry dependency); identity hits demoted to DNS conservatism, helm fallback (`conservative`), and the observed-vs-declared lint. Registries remain as enrichment (`serviceIndex`: fact → producing resource for CNP extraDeps). Shared by DNS injection (core) and the netpol plugin (via ctx.edges). |
 | `eval/validate.nix` | `crossResourceFailures { manifests, externalNames }`: the 16 resolution checks over the finished, context-free manifest list (references resolve, selectors match a pod template, one identity per resource, managed-by label, no Service selects a Job's pods, `kix.run/rerun` on Jobs only). `buildCluster` feeds the list into the cluster diagnostics, so they gate every eval; `kix/checks.nix` re-exports the throwing form for `nix flake check`. Complements the scorecard's provenance rules, which run before context is stripped (doc 135, kixpkgs#70). |

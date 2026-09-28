@@ -24,7 +24,7 @@ Complete inventory of kix/lib (Nix library) and CLI features. Breadth-first — 
 ### Cluster Evaluation (`eval.nix`, `eval/`)
 
 - **`buildCluster`** — Top-level orchestrator. Evaluates NixOS modules, auto-instantiates packages, resolves DI, builds fixpoint, collects resources, generates activation.
-- **Auto-instantiation** (`eval/auto.nix`) — Transitive closure via `builtins.genericClosure` from mandatory deps. Seeds from explicit instances, discovers transitively required packages. Handles optional vs. available packages.
+- **Auto-instantiation** (`eval/auto.nix`) — Transitive closure via `builtins.genericClosure` from mandatory deps. Seeds from explicit instances, discovers transitively required packages. Handles optional vs. available packages. A dependency wired with `deps.<arg>` places no demand on the shelf; a `ref` to an optional instance activates it. A demanded name that more than one shelf package (or more than one optional instance after the managed-over-import and same-namespace preferences) answers is refused with every claimant and its claim source; select with an optional instance of that name.
 - **Dependency injection** (`eval/resolve.nix`) — DNS-like resolution: explicit override > same-namespace > cluster-wide > default. Managed instances preferred over imports.
 - **`callPackagePhase1`** — Calls package with system args (scope, lib, kix).
 - **`discoverBuildDeps`** — Introspects build function args for DI dependency names.

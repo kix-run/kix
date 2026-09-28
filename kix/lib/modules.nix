@@ -163,6 +163,11 @@
         When DI resolution fails for a required dep, the system checks this
         registry and auto-creates an instance with default config.
         Nice DX: availablePackages = packages;
+
+        A name that more than one entry answers (by entry name,
+        meta.roles, meta.defaultAliases or the entry's aliases) is refused
+        when something depends on it. Select one with an optional instance
+        of that name, or remove the others from this registry.
       '';
     };
 

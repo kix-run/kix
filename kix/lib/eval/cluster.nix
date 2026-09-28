@@ -10,6 +10,7 @@
   roles,
   mkNamespace,
   computeAutoInstances,
+  possibleInstanceNames,
   buildResolutionIndex,
   callPackagePhase1,
   discoverBuildDeps,
@@ -52,20 +53,47 @@
       mergedInstances = lib.recursiveUpdate autoResult.autoInstances cfg.instances;
 
       # `ref.<ns>.<inst>` is a pointer to an instance, not the instance. It
-      # is built over the merged instance names, which exist before any
-      # fixpoint, so the phase-1 pre-pass can read `deps.x = ref.a.b`
-      # without forcing an evaluation: the wired dep then resolves like an
-      # auto-resolved one (config injection lands on it, meta.scope and
-      # version constraints apply to it). resolveArg dereferences it. A
-      # name that is not an instance fails at the `ref.a.b` access.
-      ref = lib.mapAttrs (
-        nsName: nsInsts:
-        lib.mapAttrs (instName: _: {
-          _type = "kix-ref";
-          namespace = nsName;
-          instanceName = instName;
-        }) nsInsts
-      ) mergedInstances;
+      # is built over every name auto-instantiation could produce, which is
+      # known before auto-instantiation runs, so computeAutoInstances and the
+      # phase-1 pre-pass can both read `deps.x = ref.a.b` without recursion:
+      # the wired dep then resolves like an auto-resolved one (config
+      # injection lands on it, meta.scope and version constraints apply to
+      # it). resolveArg dereferences it. A name outside that set fails at the
+      # `ref.a.b` access; one inside it that was not created fails in
+      # _refTargetsCheck.
+      ref =
+        lib.mapAttrs
+          (
+            nsName: instNames:
+            lib.genAttrs instNames (instName: {
+              _type = "kix-ref";
+              namespace = nsName;
+              instanceName = instName;
+            })
+          )
+          (possibleInstanceNames {
+            explicitInstances = cfg.instances;
+            availablePackages = cfg.availablePackages;
+            autoNamespace = cfg.autoNamespace;
+          });
+
+      _refTargetsCheck = lib.foldlAttrs (
+        acc: nsName: nsInsts:
+        lib.foldlAttrs (
+          acc: instName: instCfg:
+          lib.foldlAttrs (
+            acc: arg: v:
+            if
+              builtins.isAttrs v
+              && (v._type or "") == "kix-ref"
+              && !((mergedInstances.${v.namespace} or { }) ? ${v.instanceName})
+            then
+              throw "kix: ${nsName}/${instName} sets deps.${arg} = ref.${v.namespace}.${v.instanceName}, which is not an instance. It names a package in availablePackages that nothing auto-instantiated there; declare it under instances.${v.namespace}.${v.instanceName}."
+            else
+              acc
+          ) acc (instCfg.deps or { })
+        ) acc nsInsts
+      ) null cfg.instances;
 
       allNsNames = lib.unique (builtins.attrNames cfg.namespaces ++ builtins.attrNames mergedInstances);
 
@@ -740,44 +768,46 @@
       _clusterHookChecksRun = hooks.runChecks clusterHookChecks;
 
     in
-    builtins.seq _rolesValidation (
-      builtins.seq _roleBindingsCheck (
-        builtins.seq _annotationDomainsCheck (
-          builtins.seq _clusterHookChecksRun (
-            builtins.seq clusterDiagnostics.emitExtraWarnings (
-              builtins.seq clusterDiagnostics.assertionCheck {
-                _type = "k8s-cluster-v2";
-                inherit name;
+    builtins.seq _refTargetsCheck (
+      builtins.seq _rolesValidation (
+        builtins.seq _roleBindingsCheck (
+          builtins.seq _annotationDomainsCheck (
+            builtins.seq _clusterHookChecksRun (
+              builtins.seq clusterDiagnostics.emitExtraWarnings (
+                builtins.seq clusterDiagnostics.assertionCheck {
+                  _type = "k8s-cluster-v2";
+                  inherit name;
 
-                inherit clusterInstances;
-                instances = clusterInstances;
+                  inherit clusterInstances;
+                  instances = clusterInstances;
 
-                namespaces = nsResources;
+                  namespaces = nsResources;
 
-                inherit
-                  activation
-                  packageIndex
-                  info
-                  extraImages
-                  ;
+                  inherit
+                    activation
+                    packageIndex
+                    info
+                    extraImages
+                    ;
 
-                diagnostics = {
-                  warnings = clusterDiagnostics.warnings ++ clusterHookWarnings;
-                  inherit (clusterDiagnostics) assertions failedAssertions;
-                };
-
-                out = {
-                  maintenance = {
-                    enable = cfg.cluster.maintenance.enable or false;
-                    reason = cfg.cluster.maintenance.reason or null;
-                    until = cfg.cluster.maintenance.until or null;
+                  diagnostics = {
+                    warnings = clusterDiagnostics.warnings ++ clusterHookWarnings;
+                    inherit (clusterDiagnostics) assertions failedAssertions;
                   };
-                };
 
-                inherit scorecardReport;
+                  out = {
+                    maintenance = {
+                      enable = cfg.cluster.maintenance.enable or false;
+                      reason = cfg.cluster.maintenance.reason or null;
+                      until = cfg.cluster.maintenance.until or null;
+                    };
+                  };
 
-                rawManifests = rawManifestList;
-              }
+                  inherit scorecardReport;
+
+                  rawManifests = rawManifestList;
+                }
+              )
             )
           )
         )

@@ -1022,6 +1022,61 @@ let
       };
   };
 
+  # Contested-alias fixtures: shelf packages answering `x`, and a consumer
+  # requiring `x` that records which one it got.
+  shelfX =
+    who:
+    mkCmPackage {
+      name = "shelf-${who}";
+      metaExtra.defaultAliases = [ "x" ];
+      out = { inherit who; };
+    };
+
+  xConsumer = {
+    meta.version = "test";
+    build =
+      {
+        self,
+        scope,
+        x,
+        ...
+      }:
+      {
+        cm = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          name = "x-consumer";
+          extra.data.who = x.out.who;
+        };
+        root = self.cm;
+      };
+  };
+
+  whoOf = ms: (byName "x-consumer" ms).data.who or "missing";
+
+  # A package with no alias that requires `z` and reports it as `who`.
+  zRequirer = {
+    meta.version = "test";
+    build =
+      {
+        self,
+        scope,
+        z,
+        ...
+      }:
+      {
+        cm = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          name = "z-requirer";
+        };
+        root = {
+          resource = self.cm;
+          out.who = "via-${z.out.who}";
+        };
+      };
+  };
+
   # Transitive weak-demand fixtures: a shelf package with its own weak
   # storageClasses demand, and a consumer whose REQUIRED dep pulls it.
   weakMiddlePackage = {
@@ -5095,6 +5150,292 @@ let
       in
       builtins.all lib.id (builtins.attrValues cases)
       || throw "options.image digest default wrong: ${builtins.toJSON cases}";
+
+    # --- contested shelf keys (v2_discussions/151) ---
+
+    t105-uncontested-alias-pulls-its-claimant =
+      let
+        ms = manifests (mkCluster [
+          baseInstances
+          {
+            availablePackages.a.package = shelfX "a";
+            instances.appns.consumer.package = xConsumer;
+          }
+        ]);
+      in
+      whoOf ms == "a" || throw "uncontested alias not auto-instantiated: ${whoOf ms}";
+
+    t106-contested-alias-without-demand-builds =
+      let
+        ms = manifests (mkCluster [
+          baseInstances
+          {
+            availablePackages.a.package = shelfX "a";
+            availablePackages.b.package = shelfX "b";
+          }
+        ]);
+      in
+      !(hasName "shelf-a" ms || hasName "shelf-b" ms)
+      || throw "contested shelf key instantiated without demand";
+
+    t107-contested-alias-with-demand-throws = evalFails (mkCluster [
+      baseInstances
+      {
+        availablePackages.a.package = shelfX "a";
+        availablePackages.b.package = shelfX "b";
+        instances.appns.consumer.package = xConsumer;
+      }
+    ]);
+
+    # An optional instance answering the key is the selection: it is
+    # activated and neither shelf claimant is instantiated.
+    t108-optional-instance-selects-contested-alias =
+      let
+        ms = manifests (mkCluster [
+          baseInstances
+          {
+            availablePackages.a.package = shelfX "a";
+            availablePackages.b.package = shelfX "b";
+            instances.infra.x = {
+              package = shelfX "chosen";
+              optional = true;
+            };
+            instances.appns.consumer.package = xConsumer;
+          }
+        ]);
+      in
+      (whoOf ms == "chosen" && !(hasName "shelf-a" ms || hasName "shelf-b" ms))
+      || throw "optional instance did not select the contested alias: ${whoOf ms}";
+
+    # A package named `x` gets no priority over a package aliased `x`.
+    t109-package-name-does-not-outrank-alias = evalFails (mkCluster [
+      baseInstances
+      {
+        availablePackages.x.package = shelfX "named";
+        availablePackages.b.package = shelfX "b";
+        instances.appns.consumer.package = xConsumer;
+      }
+    ]);
+
+    t110-two-optional-instances-for-one-key-throw = evalFails (mkCluster [
+      baseInstances
+      {
+        instances.infra.x = {
+          package = shelfX "one";
+          optional = true;
+        };
+        instances.other.x = {
+          package = shelfX "two";
+          optional = true;
+        };
+        instances.appns.consumer.package = xConsumer;
+      }
+    ]);
+
+    # An optional import yields to a managed optional instance for the
+    # same key, so the pair is not a conflict.
+    t111-managed-optional-outranks-optional-import =
+      let
+        ms = manifests (mkCluster [
+          baseInstances
+          {
+            instances.platform.x = {
+              package = eval.mkImport { out.who = "import"; };
+              optional = true;
+            };
+            instances.infra.x = {
+              package = shelfX "managed";
+              optional = true;
+            };
+            instances.appns.consumer.package = xConsumer;
+          }
+        ]);
+      in
+      whoOf ms == "managed" || throw "managed optional did not outrank the import: ${whoOf ms}";
+
+    t112-contested-weak-role-demand-throws = evalFails (mkCluster [
+      baseInstances
+      {
+        availablePackages.stock-a.package = stockStorage;
+        availablePackages.stock-b.package = stockStorage;
+        instances.appns.consumer.package = optionalScConsumer;
+      }
+    ]);
+
+    # An environment binding retires the weak demand, so the contested
+    # role is never looked up.
+    t113-env-binding-retires-contested-weak-role-demand =
+      let
+        ms = manifests (mkCluster [
+          baseInstances
+          {
+            cluster.roles.storageClasses.binding = "shadowable";
+            availablePackages.stock-a.package = stockStorage;
+            availablePackages.stock-b.package = stockStorage;
+            instances.appns.consumer.package = optionalScConsumer;
+          }
+        ]);
+      in
+      !(hasName "stock-sc" ms) || throw "bound role still pulled stock";
+
+    # `deps.x = ref...` wires the dependency, so the consumer places no
+    # demand on the shelf, contested or not.
+    t114-explicit-deps-wiring-places-no-shelf-demand =
+      let
+        ms = manifests (mkCluster [
+          baseInstances
+          (
+            { ref, ... }:
+            {
+              availablePackages.a.package = shelfX "a";
+              availablePackages.b.package = shelfX "b";
+              instances.infra.wired.package = mkCmPackage {
+                name = "wired";
+                out.who = "wired";
+              };
+              instances.appns.consumer = {
+                package = xConsumer;
+                deps.x = ref.infra.wired;
+              };
+            }
+          )
+        ]);
+      in
+      (whoOf ms == "wired" && !(hasName "shelf-a" ms || hasName "shelf-b" ms))
+      || throw "explicitly wired dep still demanded the shelf: ${whoOf ms}";
+
+    # `deps.x = ref...` to an optional instance activates it, and the
+    # activated instance's own demands are walked.
+    t119-explicit-ref-activates-optional-instance =
+      let
+        ms = manifests (mkCluster [
+          baseInstances
+          (
+            { ref, ... }:
+            {
+              instances.infra.x = {
+                package = zRequirer;
+                optional = true;
+              };
+              instances.infra.z = {
+                package = mkCmPackage {
+                  name = "opt-z";
+                  out.who = "z";
+                };
+                optional = true;
+              };
+              instances.appns.consumer = {
+                package = xConsumer;
+                deps.x = ref.infra.x;
+              };
+            }
+          )
+        ]);
+      in
+      (whoOf ms == "via-z" && hasName "z-requirer" ms && hasName "opt-z" ms)
+      || throw "explicit ref did not activate the optional instance: ${whoOf ms}";
+
+    t120-explicit-ref-activates-optional-of-another-name =
+      let
+        ms = manifests (mkCluster [
+          baseInstances
+          (
+            { ref, ... }:
+            {
+              instances.infra.y = {
+                package = mkCmPackage {
+                  name = "opt-y";
+                  out.who = "y";
+                };
+                optional = true;
+              };
+              instances.appns.consumer = {
+                package = xConsumer;
+                deps.x = ref.infra.y;
+              };
+            }
+          )
+        ]);
+      in
+      (whoOf ms == "y" && hasName "opt-y" ms)
+      || throw "explicit ref to another name did not activate it: ${whoOf ms}";
+
+    # `deps.x = null` leaves the dependency to normal resolution.
+    t121-null-deps-entry-keeps-shelf-demand =
+      let
+        ms = manifests (mkCluster [
+          baseInstances
+          {
+            availablePackages.a.package = shelfX "a";
+            instances.appns.consumer = {
+              package = xConsumer;
+              deps.x = null;
+            };
+          }
+        ]);
+      in
+      whoOf ms == "a" || throw "deps.x = null suppressed the shelf demand: ${whoOf ms}";
+
+    # Optional instances follow resolveArg's ladder: the one in the
+    # requester's namespace wins over one elsewhere.
+    t122-optional-in-requester-namespace-wins =
+      let
+        ms = manifests (mkCluster [
+          baseInstances
+          {
+            instances.appns.x = {
+              package = shelfX "near";
+              optional = true;
+            };
+            instances.infra.x = {
+              package = shelfX "far";
+              optional = true;
+            };
+            instances.appns.consumer.package = xConsumer;
+          }
+        ]);
+      in
+      (whoOf ms == "near" && !(hasName "shelf-far" ms))
+      || throw "same-namespace optional did not win: ${whoOf ms}";
+
+    # A `deps` entry under `mkIf false` is absent.
+    t123-mkif-false-deps-entry-is-absent =
+      let
+        ms = manifests (mkCluster [
+          baseInstances
+          (
+            { ref, ... }:
+            {
+              availablePackages.a.package = shelfX "a";
+              instances.infra.wired.package = mkCmPackage {
+                name = "wired";
+                out.who = "wired";
+              };
+              instances.appns.consumer = {
+                package = xConsumer;
+                deps.x = lib.mkIf false ref.infra.wired;
+              };
+            }
+          )
+        ]);
+      in
+      whoOf ms == "a" || throw "mkIf false deps entry was not dropped: ${whoOf ms}";
+
+    # `ref` covers every name auto-instantiation could create; a ref to one
+    # it did not create is refused with a Kix error.
+    t124-ref-to-uncreated-shelf-name-throws = evalFails (mkCluster [
+      baseInstances
+      (
+        { ref, ... }:
+        {
+          availablePackages.a.package = shelfX "a";
+          instances.appns.consumer = {
+            package = xConsumer;
+            deps.x = ref.appns.a;
+          };
+        }
+      )
+    ]);
   }
   // import ./validate.nix {
     inherit
@@ -5126,6 +5467,10 @@ in
       mkProbedPackage
       partHash
       manifests
+      shelfX
+      xConsumer
+      stockStorage
+      optionalScConsumer
       ;
   };
   result =

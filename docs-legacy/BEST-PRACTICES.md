@@ -467,6 +467,18 @@ the regression test, not the definition. Reference: the `clickhouse`
 packages (`v2_discussions/148`, `kix/packages/clickhouse/contract.nix`,
 `checks.clickhouse-swap`).
 
+Auto-instantiation does not pick between implementations. With both on
+the shelf, a demanded alias is refused until the cluster selects one with
+an optional instance named after the alias, which is created only when
+something depends on it:
+
+```nix
+instances.data.clickhouse = {
+  package = packages.clickhouse-cluster;
+  optional = true;
+};
+```
+
 ## 8. Workloads are explicit; everything else is DI'd
 
 A package author is explicit about *what* they need (Postgres, not "a

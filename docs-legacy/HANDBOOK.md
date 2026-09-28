@@ -841,6 +841,17 @@ kix.buildCluster {
 }
 ```
 
+When a required dependency has no instance, `eval/auto.nix` looks its argument name up in `availablePackages`. A dependency wired with `deps.<arg>` places no demand on the shelf; when it is `ref.<ns>.<inst>` to an optional instance, that instance is activated. An entry answers its own name, its `meta.roles`, its `meta.defaultAliases` and its entry `aliases`. When more than one entry answers a demanded name, the build stops and lists every claimant with the source of its claim; an unused contested name is fine, so `availablePackages = packages` keeps working. Select one implementation with an optional instance named after the dependency, which is checked before the shelf and created only on demand:
+
+```nix
+instances.data.clickhouse = {
+  package = packages.clickhouse-cluster;
+  optional = true;
+};
+```
+
+or remove the other claimants from `availablePackages`. Optional instances answering one demanded name are chosen as `resolveArg` chooses: an optional import yields to a managed optional instance, and one in the requester's namespace wins over others. A tie that remains is refused.
+
 ### 13.2 Module-based (production clusters)
 
 Each module is a NixOS-style function `{ config, lib, ref, packages, kix, ... }: { options?, config?, imports? }`. See `ludo/` for a clean example: `flake.nix` → `cluster.nix` (real) and `cluster-kind.nix` (kind variant) → `base.nix` → `platform.nix` + `services.nix`.
@@ -1503,6 +1514,7 @@ Diff features:
 | A `let`-bound `mkSecretRef` doesn't appear in the output | Return it from `build` (inherit it into the return attrset) |
 | `extra.spec = ...` errors with shadowing | Use the dedicated `spec` arg. `extra` is for sibling fields kix doesn't model (e.g. `provisioner` on StorageClass) |
 | `kix.expose` does nothing | Neither `gateway` nor `ingressNginx` is wired. Wire one in the cluster: `instances.<ns>.gateway = { package = packages.envoy-gateway; ... };` or `instances.<ns>.ingress-nginx = { package = packages.ingress-nginx; };` |
+| Build fails: "dependency 'x' of ns/inst has no instance, and 2 packages in availablePackages provide it" | Kix does not choose between shelf packages that answer one name. Declare the one you want as `instances.<ns>.x = { package = ...; optional = true; }`, or remove the others from `availablePackages` (§13.1) |
 | `kix.monitor` does nothing | No `prometheus` instance; or the prometheus package doesn't expose `out.mkServiceMonitor` |
 | Build fails: "extra.* shadows managed field" | Move customizations into `spec`/`data`/`stringData` directly |
 | Workload starts before its CNPs | Per-workload CNPs are emitted *inside* `mkDeployment`/`mkStatefulSet`/`mkDaemonSet` and spliced into the workload's `extraDeps` so the workload depends on its own policies. If you see ordering issues, you're likely on the post-fixpoint path (RBAC/CRD/LB CNPs); check `processInstance` in `netpol.nix` |

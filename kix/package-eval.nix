@@ -33,11 +33,16 @@ let
       name: _: builtins.addErrorContext "while loading kix/packages/${name}" (import ./packages/${name})
     ) dirs;
 
-  # kube-prometheus-stack claims the `prometheus` and `prometheusOperator`
-  # aliases that prometheus-operator also claims. Auto-instantiation takes
-  # the alphabetically first package for a shared key, so leaving it in
-  # would give every monitoring consumer the Helm stack.
-  availablePackages = removeAttrs packages [ "kube-prometheus-stack" ];
+  # Auto-instantiation refuses a key that two shelf packages answer, so the
+  # shelf keeps one implementation per contested required key:
+  # prometheus-operator for `prometheusOperator` (kube-prometheus-stack's
+  # `out` lacks mkAlertmanager and mkPrometheus), and the single-node
+  # clickhouse for `clickhouse`. Both removed packages are still evaluated
+  # as their own instance.
+  availablePackages = removeAttrs packages [
+    "kube-prometheus-stack"
+    "clickhouse-cluster"
+  ];
 
   # A `credentials` secret for packages that read one.
   credentials = {
