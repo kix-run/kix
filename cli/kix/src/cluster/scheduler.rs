@@ -938,21 +938,12 @@ pub async fn run_deploy(
     if !effective_orphans.is_empty() && config.prune != PrunePolicy::Skip {
         let ordered = prune_order(&effective_orphans, old_manifests);
         let delete = config.prune == PrunePolicy::Delete;
-        // Namespaces and CRDs are never deleted automatically, so when
-        // deleting, the announced list is what will actually go. Under
-        // warn-only they are still worth naming.
-        let announced: Vec<ResourceId> = if delete {
-            ordered
-                .iter()
-                .filter(|r| !never_pruned(&r.kind))
-                .cloned()
-                .collect()
-        } else {
-            ordered.clone()
-        };
+        let (kept, prunable): (Vec<ResourceId>, Vec<ResourceId>) =
+            ordered.iter().cloned().partition(|r| never_pruned(&r.kind));
         emit(DeployEvent::PruneStart {
-            count: announced.len(),
-            resources: announced,
+            count: prunable.len(),
+            resources: prunable,
+            kept,
             delete,
         });
 
@@ -2035,7 +2026,7 @@ mod engine_tests {
                 .collect()
         }
 
-        fn prune_starts(&self) -> Vec<(usize, Vec<ResourceId>, bool)> {
+        fn prune_starts(&self) -> Vec<(usize, Vec<ResourceId>, Vec<ResourceId>, bool)> {
             self.0
                 .lock()
                 .unwrap()
@@ -2044,8 +2035,9 @@ mod engine_tests {
                     DeployEvent::PruneStart {
                         count,
                         resources,
+                        kept,
                         delete,
-                    } => Some((*count, resources.clone(), *delete)),
+                    } => Some((*count, resources.clone(), kept.clone(), *delete)),
                     _ => None,
                 })
                 .collect()
@@ -3161,10 +3153,15 @@ mod engine_tests {
             .collect();
         assert_eq!(delete_calls, vec![Call::Delete(rid("ConfigMap", "old"))]);
         // The announced prune list matches what is acted on: the Namespace
-        // is never deleted, so it is not announced as a deletion.
+        // is never deleted, so it is announced as kept.
         assert_eq!(
             rec.prune_starts(),
-            vec![(1, vec![rid("ConfigMap", "old")], true)]
+            vec![(
+                1,
+                vec![rid("ConfigMap", "old")],
+                vec![rid("Namespace", "ns")],
+                true
+            )]
         );
         let failed: Vec<(NodeId, Verdict)> = rec
             .terminals()
@@ -3173,6 +3170,35 @@ mod engine_tests {
             .collect();
         assert_eq!(failed.len(), 1);
         assert_eq!(failed[0].0, NodeId::Resource(rid("ConfigMap", "old")));
+    }
+
+    /// Under warn-only, a Namespace orphan is announced as kept, apart from
+    /// the orphans the policy reports, and nothing is deleted.
+    #[tokio::test(start_paused = true)]
+    async fn warn_only_announces_a_namespace_orphan_as_kept() {
+        let manifests = vec![m("ConfigMap", "keep", &[])];
+        let ops = Arc::new(ScriptedOps::new());
+        let rec = Arc::new(Recorder::default());
+        let mut cfg = config(quiet_watchdog());
+        cfg.prune = PrunePolicy::WarnOnly;
+        let orphans = [rid("ConfigMap", "old"), rid("Namespace", "ns")];
+        let old = [m("ConfigMap", "old", &[]), m("Namespace", "ns", &[])];
+
+        let result = run_with_orphans(&ops, plan_of(&manifests), &orphans, &old, &cfg, rec.clone())
+            .await
+            .unwrap();
+
+        assert_eq!(result.pruned, 0);
+        assert!(!ops.calls().iter().any(|c| matches!(c, Call::Delete(_))));
+        assert_eq!(
+            rec.prune_starts(),
+            vec![(
+                1,
+                vec![rid("ConfigMap", "old")],
+                vec![rid("Namespace", "ns")],
+                false
+            )]
+        );
     }
 
     /// Under `OnErrorPolicy::Stop`, nodes still in flight finish and are

@@ -23,6 +23,7 @@ use kube::runtime::events::{Event as KEvent, EventType, Recorder, Reporter};
 use kix::cluster::stream::{
     CancelReason, DeployEvent, DeployObserver, NodeDetail, NodeId, Verdict,
 };
+use kix::manifest::types::ResourceId;
 
 /// Controller identity reported on every Event's `reportingComponent`.
 const REPORTER_CONTROLLER: &str = "kix-operator";
@@ -114,24 +115,14 @@ fn to_k8s_event(event: &DeployEvent) -> Option<KEvent> {
             secondary: None,
         }),
         DeployEvent::PruneStart {
-            count, resources, ..
+            resources,
+            kept,
+            delete,
+            ..
         } => Some(KEvent {
             type_: EventType::Normal,
             reason: "PruneStart".into(),
-            // Event notes are capped at 1 KiB by the apiserver; a note over
-            // the cap is rejected and the event vanishes. Name a few.
-            note: Some({
-                const SHOWN: usize = 10;
-                let mut names: Vec<String> = resources
-                    .iter()
-                    .take(SHOWN)
-                    .map(|r| r.display_id())
-                    .collect();
-                if resources.len() > SHOWN {
-                    names.push(format!("and {} more", resources.len() - SHOWN));
-                }
-                format!("Pruning {count} orphaned resources: {}", names.join(", "))
-            }),
+            note: Some(prune_note(resources, kept, *delete)),
             action: "Pruning".into(),
             secondary: None,
         }),
@@ -297,6 +288,38 @@ fn node_event(node: &NodeId, verdict: &Verdict, detail: Option<&NodeDetail>) -> 
     }
 }
 
+/// The `PruneStart` Event note: the orphans prune deletes or reports, then
+/// the ones no prune policy deletes. Event notes are capped at 1 KiB by the
+/// apiserver, and a note over the cap is rejected and the event vanishes, so
+/// each list names at most `SHOWN` resources.
+fn prune_note(resources: &[ResourceId], kept: &[ResourceId], delete: bool) -> String {
+    const SHOWN: usize = 5;
+    let names = |rids: &[ResourceId]| {
+        let mut names: Vec<String> = rids.iter().take(SHOWN).map(|r| r.display_id()).collect();
+        if rids.len() > SHOWN {
+            names.push(format!("and {} more", rids.len() - SHOWN));
+        }
+        names.join(", ")
+    };
+    let mut parts = Vec::new();
+    if !resources.is_empty() {
+        let verb = if delete { "Pruning" } else { "Reporting" };
+        parts.push(format!(
+            "{verb} {} orphaned resources: {}",
+            resources.len(),
+            names(resources)
+        ));
+    }
+    if !kept.is_empty() {
+        parts.push(format!(
+            "Keeping {} orphaned resources that are never deleted automatically: {}",
+            kept.len(),
+            names(kept)
+        ));
+    }
+    parts.join(". ")
+}
+
 fn node_label(id: &NodeId) -> String {
     match id {
         NodeId::Resource(rid) => rid.to_string(),
@@ -323,5 +346,49 @@ impl DeployObserver for CompositeObserver {
         for o in &self.observers {
             o.on_event(event);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rid(kind: &str, name: &str) -> ResourceId {
+        ResourceId {
+            kind: kind.into(),
+            name: name.into(),
+            namespace: "app".into(),
+        }
+    }
+
+    /// A kept orphan is named as kept, not as a resource being pruned.
+    #[test]
+    fn prune_start_names_kept_orphans_apart() {
+        let event = to_k8s_event(&DeployEvent::PruneStart {
+            count: 1,
+            resources: vec![rid("ConfigMap", "old")],
+            kept: vec![rid("Namespace", "gone")],
+            delete: true,
+        })
+        .unwrap();
+        assert_eq!(
+            event.note.as_deref(),
+            Some(
+                "Pruning 1 orphaned resources: ConfigMap/old@app. Keeping 1 orphaned \
+                 resources that are never deleted automatically: Namespace/gone@app"
+            )
+        );
+    }
+
+    /// Both lists together stay under the apiserver's 1 KiB note cap.
+    #[test]
+    fn prune_note_stays_under_the_event_note_cap() {
+        let long = |kind: &str| -> Vec<ResourceId> {
+            (0..50)
+                .map(|i| rid(kind, &format!("{}-{i}", "x".repeat(60))))
+                .collect()
+        };
+        let note = prune_note(&long("ConfigMap"), &long("Namespace"), true);
+        assert!(note.len() < 1024, "{} bytes", note.len());
     }
 }

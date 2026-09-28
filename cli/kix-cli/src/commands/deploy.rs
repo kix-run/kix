@@ -296,20 +296,14 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
             );
         }
 
-        if !orphan_rids.is_empty() {
-            let orphan_str = orphan_rids.len().to_string();
-            let fate = if args.prune_mode == Some(PruneMode::No) {
-                "kept (--prune-mode=no)"
-            } else if prune_flag_requested(args) {
-                "will be deleted"
-            } else {
-                "kept; pass --prune to delete"
-            };
-            println!("  {} orphaned ({fate})", output::red(&orphan_str));
-            for rid in &orphan_rids {
-                println!("    {} {}", output::red("-"), rid.display_id());
-            }
-        }
+        let fate = if args.prune_mode == Some(PruneMode::No) {
+            "kept (--prune-mode=no)"
+        } else if prune_flag_requested(args) {
+            "will be deleted"
+        } else {
+            "kept; pass --prune to delete"
+        };
+        print!("{}", render_plan_orphans(&orphan_rids, fate));
 
         // Where the extra work in this plan came from. Without this the
         // reader sees a deploy of an unchanged config proposing changes, and
@@ -822,28 +816,11 @@ impl DeployObserver for StreamCliObserver {
                 }
             }
             DeployEvent::PruneStart {
-                count,
                 resources,
+                kept,
                 delete,
-            } => {
-                println!();
-                if *delete {
-                    println!(
-                        "{} deleting {} orphaned resources...",
-                        output::bold("prune:"),
-                        count,
-                    );
-                } else {
-                    println!(
-                        "{} {} orphaned resources kept (warn-only; pass --prune to delete)",
-                        output::bold("prune:"),
-                        count,
-                    );
-                }
-                for rid in resources {
-                    println!("  {} {}", output::dim("-"), rid.display_id());
-                }
-            }
+                ..
+            } => print!("{}", render_prune_start(resources, kept, *delete)),
             DeployEvent::Finalized {
                 activation,
                 previous,
@@ -1294,22 +1271,94 @@ fn render_offline_dry_run(
         }
     }
 
-    if !orphan_rids.is_empty() {
-        println!();
-        println!(
-            "{} {} resources would be orphaned:",
-            output::yellow("Orphans:"),
-            orphan_rids.len(),
-        );
-        for rid in orphan_rids {
-            println!("  {} {}", output::red("-"), rid);
-        }
-        result.pruned = orphan_rids.len();
-    }
+    let (text, pruned) = render_offline_orphans(orphan_rids);
+    print!("{text}");
+    result.pruned = pruned;
 
     println!();
     print_summary(&result, true);
     Ok(())
+}
+
+/// The orphan lines of deploy's plan. `fate` says what this deploy does with
+/// the orphans prune may delete; the kinds `lifecycle::never_pruned` protects
+/// are listed apart and are never counted as orphans.
+fn render_plan_orphans(orphan_rids: &[ResourceId], fate: &str) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    let (prunable, kept) = plan::split_never_pruned(orphan_rids.to_vec());
+    if !prunable.is_empty() {
+        let orphan_str = prunable.len().to_string();
+        let _ = writeln!(out, "  {} orphaned ({fate})", output::red(&orphan_str));
+        for rid in &prunable {
+            let _ = writeln!(out, "    {} {}", output::red("-"), rid.display_id());
+        }
+    }
+    out.push_str(&plan::render_never_pruned(&kept));
+    out
+}
+
+/// The orphan lines of the offline dry run and the number it reports as
+/// pruned, which leaves out the kinds `lifecycle::never_pruned` protects.
+fn render_offline_orphans(orphan_rids: &[ResourceId]) -> (String, usize) {
+    use std::fmt::Write;
+    let mut out = String::new();
+    let (prunable, kept) = plan::split_never_pruned(orphan_rids.to_vec());
+    if !prunable.is_empty() {
+        let _ = writeln!(out);
+        let _ = writeln!(
+            out,
+            "{} {} resources would be orphaned:",
+            output::yellow("Orphans:"),
+            prunable.len(),
+        );
+        for rid in &prunable {
+            let _ = writeln!(out, "  {} {}", output::red("-"), rid);
+        }
+    }
+    out.push_str(&plan::render_never_pruned(&kept));
+    (out, prunable.len())
+}
+
+/// The engine's prune section: the orphans prune deletes or reports, then
+/// the ones no prune policy deletes.
+fn render_prune_start(resources: &[ResourceId], kept: &[ResourceId], delete: bool) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    if !resources.is_empty() {
+        let _ = writeln!(out);
+        if delete {
+            let _ = writeln!(
+                out,
+                "{} deleting {} orphaned resources...",
+                output::bold("prune:"),
+                resources.len(),
+            );
+        } else {
+            let _ = writeln!(
+                out,
+                "{} {} orphaned resources kept (warn-only; pass --prune to delete)",
+                output::bold("prune:"),
+                resources.len(),
+            );
+        }
+        for rid in resources {
+            let _ = writeln!(out, "  {} {}", output::dim("-"), rid.display_id());
+        }
+    }
+    if !kept.is_empty() {
+        let _ = writeln!(out);
+        let _ = writeln!(
+            out,
+            "{} {} orphaned resources are never deleted automatically",
+            output::bold("prune:"),
+            kept.len(),
+        );
+        for rid in kept {
+            let _ = writeln!(out, "  {} {}", output::yellow("!"), rid.display_id());
+        }
+    }
+    out
 }
 
 fn print_summary(r: &DeployResult, dry_run: bool) {
@@ -1647,6 +1696,61 @@ fn print_migration_pairs(pairs: &[MigrationPair]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn orphans() -> Vec<ResourceId> {
+        vec![
+            ResourceId {
+                kind: "ConfigMap".into(),
+                name: "old".into(),
+                namespace: "app".into(),
+            },
+            ResourceId {
+                kind: "Namespace".into(),
+                name: "gone".into(),
+                namespace: kix::manifest::types::CLUSTER_SCOPED.into(),
+            },
+        ]
+    }
+
+    /// Deploy's plan counts a Namespace orphan as kept, not as an orphan.
+    #[test]
+    fn plan_orphans_list_a_namespace_as_kept() {
+        let text = render_plan_orphans(&orphans(), "will be deleted");
+        assert!(text.contains("1 orphaned (will be deleted)"), "{text}");
+        assert!(text.contains("- ConfigMap/old@app"), "{text}");
+        assert!(!text.contains("- Namespace"), "{text}");
+        assert!(text.contains("! Namespace/gone"), "{text}");
+    }
+
+    /// The offline dry run neither lists nor counts a Namespace orphan as
+    /// pruned.
+    #[test]
+    fn offline_dry_run_does_not_count_a_namespace_as_pruned() {
+        let (text, pruned) = render_offline_orphans(&orphans());
+        assert_eq!(pruned, 1);
+        assert!(text.contains("1 resources would be orphaned"), "{text}");
+        assert!(!text.contains("- Namespace"), "{text}");
+        assert!(text.contains("! Namespace/gone"), "{text}");
+    }
+
+    /// The engine's prune section under warn-only lists a Namespace orphan
+    /// as kept, apart from the orphans it reports.
+    #[test]
+    fn prune_section_lists_kept_orphans_apart() {
+        let all = orphans();
+        let text = render_prune_start(&all[..1], &all[1..], false);
+        assert!(
+            text.contains("1 orphaned resources kept (warn-only"),
+            "{text}"
+        );
+        assert!(text.contains("- ConfigMap/old@app"), "{text}");
+        assert!(
+            text.contains(
+                "1 orphaned resources are never deleted automatically\n  ! Namespace/gone"
+            ),
+            "{text}"
+        );
+    }
 
     #[test]
     fn parse_timeout_none() {

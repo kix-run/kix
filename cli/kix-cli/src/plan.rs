@@ -15,6 +15,7 @@ use serde_json::Value;
 
 use crate::output;
 use kix::manifest::keys;
+use kix::manifest::lifecycle;
 
 pub struct PackageDiff {
     pub added: Vec<PackageInfo>,
@@ -52,6 +53,37 @@ impl PackageDiff {
     pub fn changed_with_cluster_level(&self) -> impl Iterator<Item = &PackageChangeDiff> {
         self.changed.iter().chain(self.cluster_level.iter())
     }
+
+    /// Resource counts summed over `changed_with_cluster_level`. Each
+    /// resource lands in exactly one bucket.
+    pub fn resource_totals(&self) -> ResourceTotals {
+        let mut totals = ResourceTotals::default();
+        for c in self.changed_with_cluster_level() {
+            let (removed, kept) = c.removed_and_kept();
+            totals.real_content += c.resource_diffs.len() + c.added_resources.len() + removed.len();
+            totals.kept += kept.len();
+            totals.dep_affected += c.dep_affected_resources.len();
+        }
+        totals
+    }
+}
+
+/// See `PackageDiff::resource_totals`.
+#[derive(Default)]
+pub struct ResourceTotals {
+    /// Modified, added, and removed resources that deploy or gc delete.
+    pub real_content: usize,
+    /// Resources that left the build but whose kind `lifecycle::never_pruned`
+    /// protects.
+    pub kept: usize,
+    /// Resources whose only change is a propagated hash.
+    pub dep_affected: usize,
+}
+
+impl ResourceTotals {
+    fn any(&self) -> bool {
+        self.real_content > 0 || self.kept > 0 || self.dep_affected > 0
+    }
 }
 
 #[derive(Clone)]
@@ -59,6 +91,43 @@ pub struct PackageInfo {
     pub key: String, // ns/name
     pub version: Option<String>,
     pub resource_count: usize,
+    /// For a removed package, the resources whose kind
+    /// `lifecycle::never_pruned` protects: they stay on the cluster. Counted
+    /// in `resource_count`. Empty for an added package.
+    pub kept: Vec<ResourceId>,
+}
+
+impl PackageInfo {
+    fn removed(key: &str, pkg: &PackageNode, graph: &StoreGraph) -> Self {
+        let kept = pkg
+            .resource_paths
+            .iter()
+            .filter_map(|p| graph.resources.get(p))
+            .map(|node| ResourceId::from_value(&node.manifest))
+            .filter(|rid| lifecycle::never_pruned(&rid.kind))
+            .collect();
+        PackageInfo {
+            key: key.to_string(),
+            version: pkg.version.clone(),
+            resource_count: pkg.resource_paths.len(),
+            kept,
+        }
+    }
+
+    /// The parenthesised count after a package name: `3 resources`, or for
+    /// a removed package that leaves kept resources behind,
+    /// `2 removed, 1 kept`.
+    fn counts(&self) -> String {
+        if self.kept.is_empty() {
+            return format!("{} resources", self.resource_count);
+        }
+        let removed = self.resource_count - self.kept.len();
+        if removed == 0 {
+            format!("{} kept", self.kept.len())
+        } else {
+            format!("{removed} removed, {} kept", self.kept.len())
+        }
+    }
 }
 
 pub struct PackageChangeDiff {
@@ -75,6 +144,18 @@ pub struct PackageChangeDiff {
     pub dep_affected_resources: Vec<ResourceId>,
     pub added_resources: Vec<ResourceId>,
     pub removed_resources: Vec<ResourceId>,
+}
+
+impl PackageChangeDiff {
+    /// `removed_resources` split into `(removed, kept)`. `kept` holds the
+    /// kinds `lifecycle::never_pruned` protects: they left the build, but
+    /// deploy and `kix gc` never delete them, so renderers do not show them
+    /// as deletions.
+    pub fn removed_and_kept(&self) -> (Vec<&ResourceId>, Vec<&ResourceId>) {
+        self.removed_resources
+            .iter()
+            .partition(|id| !lifecycle::never_pruned(&id.kind))
+    }
 }
 
 /// Returns true if a structural-diff path points at a kix.run stamped annotation
@@ -156,17 +237,14 @@ pub fn diff_graphs(old: &StoreGraph, new: &StoreGraph) -> PackageDiff {
                 key: key.clone(),
                 version: new_pkg.version.clone(),
                 resource_count: new_pkg.resource_paths.len(),
+                kept: Vec::new(),
             });
         }
     }
 
     for (key, old_pkg) in &old_pkgs {
         if !new_pkgs.contains_key(key) {
-            removed.push(PackageInfo {
-                key: key.clone(),
-                version: old_pkg.version.clone(),
-                resource_count: old_pkg.resource_paths.len(),
-            });
+            removed.push(PackageInfo::removed(key, old_pkg, old));
         }
     }
 
@@ -339,12 +417,7 @@ pub fn diff_garbage(old: &StoreGraph, new: &StoreGraph) -> PackageDiff {
 
     for (key, old_pkg) in &old_pkgs {
         if !new_pkgs.contains_key(key) {
-            // Entire package removed
-            removed.push(PackageInfo {
-                key: key.clone(),
-                version: old_pkg.version.clone(),
-                resource_count: old_pkg.resource_paths.len(),
-            });
+            removed.push(PackageInfo::removed(key, old_pkg, old));
         } else {
             let new_pkg = new_pkgs[key];
             if old_pkg.resource_paths == new_pkg.resource_paths {
@@ -395,16 +468,8 @@ pub fn diff_garbage(old: &StoreGraph, new: &StoreGraph) -> PackageDiff {
 /// legacy resource / migration-pair sections).
 pub fn render_package_diff_json(diff: &PackageDiff) -> Value {
     serde_json::json!({
-        "added": diff.added.iter().map(|p| serde_json::json!({
-            "key": p.key,
-            "version": p.version,
-            "resources": p.resource_count,
-        })).collect::<Vec<_>>(),
-        "removed": diff.removed.iter().map(|p| serde_json::json!({
-            "key": p.key,
-            "version": p.version,
-            "resources": p.resource_count,
-        })).collect::<Vec<_>>(),
+        "added": diff.added.iter().map(render_package_info_json).collect::<Vec<_>>(),
+        "removed": diff.removed.iter().map(render_package_info_json).collect::<Vec<_>>(),
         "changed": diff.changed.iter().map(render_change_json).collect::<Vec<_>>(),
         "cluster_level": diff.cluster_level.as_ref().map(render_change_json),
         "activation": diff.activation.as_ref().map(|a| serde_json::json!({
@@ -421,13 +486,26 @@ pub fn render_package_diff_json(diff: &PackageDiff) -> Value {
     })
 }
 
+/// `resources` counts every resource of the package, including the ones in
+/// `kept_resources`.
+fn render_package_info_json(p: &PackageInfo) -> Value {
+    serde_json::json!({
+        "key": p.key,
+        "version": p.version,
+        "resources": p.resource_count,
+        "kept_resources": p.kept.iter().map(|id| id.display_id()).collect::<Vec<_>>(),
+    })
+}
+
 fn render_change_json(c: &PackageChangeDiff) -> Value {
+    let (removed, kept) = c.removed_and_kept();
     serde_json::json!({
         "key": c.key,
         "old_version": c.old_version,
         "new_version": c.new_version,
         "added_resources": c.added_resources.iter().map(|id| id.display_id()).collect::<Vec<_>>(),
-        "removed_resources": c.removed_resources.iter().map(|id| id.display_id()).collect::<Vec<_>>(),
+        "removed_resources": removed.iter().map(|id| id.display_id()).collect::<Vec<_>>(),
+        "kept_resources": kept.iter().map(|id| id.display_id()).collect::<Vec<_>>(),
         "modified_resources": c.resource_diffs.iter().map(|(id, diffs)| serde_json::json!({
             "resource": id.display_id(),
             "diff_count": diffs.len(),
@@ -453,8 +531,12 @@ fn render_change_markdown(out: &mut String, c: &PackageChangeDiff) {
     if !c.added_resources.is_empty() {
         parts.push(format!("{} added", c.added_resources.len()));
     }
-    if !c.removed_resources.is_empty() {
-        parts.push(format!("{} removed", c.removed_resources.len()));
+    let (removed, kept) = c.removed_and_kept();
+    if !removed.is_empty() {
+        parts.push(format!("{} removed", removed.len()));
+    }
+    if !kept.is_empty() {
+        parts.push(format!("{} kept", kept.len()));
     }
     if !c.dep_affected_resources.is_empty() {
         parts.push(format!("{} dep-affected", c.dep_affected_resources.len()));
@@ -481,10 +563,18 @@ fn render_change_markdown(out: &mut String, c: &PackageChangeDiff) {
         }
         let _ = writeln!(out);
     }
-    if !c.removed_resources.is_empty() {
+    if !removed.is_empty() {
         let _ = writeln!(out, "**Removed resources:**");
         let _ = writeln!(out);
-        for id in &c.removed_resources {
+        for id in &removed {
+            let _ = writeln!(out, "- `{}`", id);
+        }
+        let _ = writeln!(out);
+    }
+    if !kept.is_empty() {
+        let _ = writeln!(out, "**Left the build, never deleted automatically:**");
+        let _ = writeln!(out);
+        for id in &kept {
             let _ = writeln!(out, "- `{}`", id);
         }
         let _ = writeln!(out);
@@ -532,24 +622,23 @@ pub fn render_package_diff_markdown(diff: &PackageDiff) -> String {
         return out;
     }
 
-    // Aggregate resource counts across changed packages.
-    let mut real_resources = 0usize;
-    let mut dep_affected = 0usize;
-    for c in diff.changed_with_cluster_level() {
-        real_resources +=
-            c.resource_diffs.len() + c.added_resources.len() + c.removed_resources.len();
-        dep_affected += c.dep_affected_resources.len();
-    }
+    let totals = diff.resource_totals();
 
     let _ = writeln!(
         out,
         "**Plan:** {changed} updated, {added} added, {removed} removed, {} unchanged",
         diff.unchanged
     );
-    if real_resources > 0 || dep_affected > 0 {
+    if totals.any() {
+        let kept = if totals.kept > 0 {
+            format!(", {} kept (never deleted automatically)", totals.kept)
+        } else {
+            String::new()
+        };
         let _ = writeln!(
             out,
-            "**Resources:** {real_resources} with real content changes, {dep_affected} dep-affected (hash bump only)"
+            "**Resources:** {} with real content changes{kept}, {} dep-affected (hash bump only)",
+            totals.real_content, totals.dep_affected,
         );
     }
     let _ = writeln!(out);
@@ -563,7 +652,7 @@ pub fn render_package_diff_markdown(diff: &PackageDiff) -> String {
                 .as_deref()
                 .map(|v| format!(" `{v}`"))
                 .unwrap_or_default();
-            let _ = writeln!(out, "- `{}`{ver} ({} resources)", p.key, p.resource_count);
+            let _ = writeln!(out, "- `{}`{ver} ({})", p.key, p.counts());
         }
         let _ = writeln!(out);
     }
@@ -577,7 +666,10 @@ pub fn render_package_diff_markdown(diff: &PackageDiff) -> String {
                 .as_deref()
                 .map(|v| format!(" `{v}`"))
                 .unwrap_or_default();
-            let _ = writeln!(out, "- `{}`{ver} ({} resources)", p.key, p.resource_count);
+            let _ = writeln!(out, "- `{}`{ver} ({})", p.key, p.counts());
+            for id in &p.kept {
+                let _ = writeln!(out, "  - kept, never deleted automatically: `{id}`");
+            }
         }
         let _ = writeln!(out);
     }
@@ -611,6 +703,13 @@ pub fn render_package_diff_markdown(diff: &PackageDiff) -> String {
 
 /// Print a package-grouped plan. Only shows changes.
 pub fn print_package_plan(diff: &PackageDiff, verbose: bool) {
+    print!("{}", render_package_plan(diff, verbose));
+}
+
+/// The text `print_package_plan` prints.
+fn render_package_plan(diff: &PackageDiff, verbose: bool) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
     let color = output::color_enabled();
     let config = DiffConfig::new("old", "new");
 
@@ -643,12 +742,12 @@ pub fn print_package_plan(diff: &PackageDiff, verbose: bool) {
     }
 
     if by_ns.is_empty() {
-        return;
+        return out;
     }
 
-    println!();
+    let _ = writeln!(out);
     for (ns, entries) in &by_ns {
-        println!("  {}", output::bold(ns));
+        let _ = writeln!(out, "  {}", output::bold(ns));
         for entry in entries {
             match entry {
                 PlanEntry::Added(name, info) => {
@@ -658,7 +757,8 @@ pub fn print_package_plan(diff: &PackageDiff, verbose: bool) {
                     } else {
                         format!(" {ver}")
                     };
-                    println!(
+                    let _ = writeln!(
+                        out,
                         "    {} {}{} ({} resources)",
                         output::green("+"),
                         output::green(name),
@@ -673,13 +773,19 @@ pub fn print_package_plan(diff: &PackageDiff, verbose: bool) {
                     } else {
                         format!(" {ver}")
                     };
-                    println!(
-                        "    {} {}{} ({} resources)",
+                    let _ = writeln!(
+                        out,
+                        "    {} {}{} ({})",
                         output::red("-"),
                         output::red(name),
                         ver_str,
-                        info.resource_count,
+                        info.counts(),
                     );
+                    if verbose {
+                        for id in &info.kept {
+                            write_kept_line(&mut out, id);
+                        }
+                    }
                 }
                 PlanEntry::Changed(name, change) => {
                     let old_ver = change.old_version.as_deref().unwrap_or("");
@@ -700,8 +806,12 @@ pub fn print_package_plan(diff: &PackageDiff, verbose: bool) {
                     if !change.added_resources.is_empty() {
                         parts.push(format!("{} added", change.added_resources.len()));
                     }
-                    if !change.removed_resources.is_empty() {
-                        parts.push(format!("{} removed", change.removed_resources.len()));
+                    let (removed, kept) = change.removed_and_kept();
+                    if !removed.is_empty() {
+                        parts.push(format!("{} removed", removed.len()));
+                    }
+                    if !kept.is_empty() {
+                        parts.push(format!("{} kept", kept.len()));
                     }
                     if !change.dep_affected_resources.is_empty() {
                         parts.push(format!(
@@ -715,7 +825,8 @@ pub fn print_package_plan(diff: &PackageDiff, verbose: bool) {
                         format!(" ({})", parts.join(", "))
                     };
 
-                    println!(
+                    let _ = writeln!(
+                        out,
                         "    {} {}{}{}",
                         output::yellow("~"),
                         output::yellow(name),
@@ -725,32 +836,39 @@ pub fn print_package_plan(diff: &PackageDiff, verbose: bool) {
 
                     if verbose {
                         for id in &change.added_resources {
-                            println!(
+                            let _ = writeln!(
+                                out,
                                 "      {} {}",
                                 output::green("+"),
                                 output::green(&id.to_string()),
                             );
                         }
-                        for id in &change.removed_resources {
-                            println!(
+                        for id in &removed {
+                            let _ = writeln!(
+                                out,
                                 "      {} {}",
                                 output::red("-"),
                                 output::red(&id.to_string()),
                             );
                         }
+                        for id in &kept {
+                            write_kept_line(&mut out, id);
+                        }
                         for (id, diffs) in &change.resource_diffs {
-                            println!(
+                            let _ = writeln!(
+                                out,
                                 "      {} {}",
                                 output::yellow("~"),
                                 output::yellow(&id.to_string()),
                             );
                             let formatted = format_diffs(diffs, &config, color, true);
                             for line in formatted.lines() {
-                                println!("        {line}");
+                                let _ = writeln!(out, "        {line}");
                             }
                         }
                         for id in &change.dep_affected_resources {
-                            println!(
+                            let _ = writeln!(
+                                out,
                                 "      {} {} {}",
                                 output::dim("~"),
                                 output::dim(&id.to_string()),
@@ -762,6 +880,63 @@ pub fn print_package_plan(diff: &PackageDiff, verbose: bool) {
             }
         }
     }
+    out
+}
+
+/// A resource that left the build, but deploy and gc never delete.
+fn write_kept_line(out: &mut String, id: &ResourceId) {
+    use std::fmt::Write;
+    let _ = writeln!(
+        out,
+        "      {} {} {}",
+        output::yellow("!"),
+        output::yellow(&id.to_string()),
+        output::dim("(kept)"),
+    );
+}
+
+/// Split resources that left the build into `(delete, kept)`, keeping each
+/// list's order. `kept` holds the kinds `lifecycle::never_pruned` protects,
+/// which deploy's prune and `kix gc` report but never delete.
+pub fn split_never_pruned(rids: Vec<ResourceId>) -> (Vec<ResourceId>, Vec<ResourceId>) {
+    let (kept, delete) = rids
+        .into_iter()
+        .partition(|rid| lifecycle::never_pruned(&rid.kind));
+    (delete, kept)
+}
+
+/// List resources that left the build and stay in place because deleting
+/// them would also delete objects outside the build.
+pub fn print_never_pruned(kept: &[ResourceId]) {
+    print!("{}", render_never_pruned(kept));
+}
+
+pub fn render_never_pruned(kept: &[ResourceId]) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    if kept.is_empty() {
+        return out;
+    }
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "{} {} resources are not in the build but are never deleted automatically:",
+        output::bold("Kept:"),
+        kept.len(),
+    );
+    for rid in kept {
+        let _ = writeln!(out, "    {} {}", output::yellow("!"), rid);
+    }
+    let _ = writeln!(
+        out,
+        "  {}",
+        output::dim(
+            "Deleting a Namespace deletes everything in it, and deleting a \
+             CustomResourceDefinition deletes every resource of that kind. \
+             Delete them with kubectl if that is intended."
+        ),
+    );
+    out
 }
 
 /// Print plan summary line.
@@ -770,15 +945,7 @@ pub fn print_plan_summary(diff: &PackageDiff) {
     let added = diff.added.len();
     let removed = diff.removed.len();
 
-    // Aggregate resource-level counts across all changed packages to
-    // distinguish real content changes from dependency-propagated bumps.
-    let mut real_resources = 0usize;
-    let mut dep_affected_resources = 0usize;
-    for c in diff.changed_with_cluster_level() {
-        real_resources +=
-            c.resource_diffs.len() + c.added_resources.len() + c.removed_resources.len();
-        dep_affected_resources += c.dep_affected_resources.len();
-    }
+    let totals = diff.resource_totals();
 
     let mut parts = Vec::new();
     if diff.cluster_level.is_some() {
@@ -813,10 +980,15 @@ pub fn print_plan_summary(diff: &PackageDiff) {
     } else {
         println!();
         println!("  Plan: {}", parts.join(", "));
-        if real_resources > 0 || dep_affected_resources > 0 {
+        if totals.any() {
+            let kept = if totals.kept > 0 {
+                format!(", {} kept", totals.kept)
+            } else {
+                String::new()
+            };
             let res_line = format!(
-                "  Resources: {} real content, {} dep-affected",
-                real_resources, dep_affected_resources,
+                "  Resources: {} real content{kept}, {} dep-affected",
+                totals.real_content, totals.dep_affected,
             );
             println!("{}", output::dim(&res_line));
         }
@@ -1113,6 +1285,149 @@ mod diff_graph_tests {
         );
     }
 
+    fn crd(name: &str, pkg: (&str, &str), hash: &str) -> Value {
+        json!({
+            "apiVersion": "apiextensions.k8s.io/v1",
+            "kind": "CustomResourceDefinition",
+            "metadata": {
+                "name": name,
+                "annotations": {
+                    keys::PACKAGE: pkg.1,
+                    keys::PACKAGE_NAMESPACE: pkg.0,
+                    keys::IDENTITY_HASH: hash,
+                    keys::DEPENDS_ON: "",
+                }
+            },
+            "spec": {},
+        })
+    }
+
+    #[test]
+    fn a_kept_kind_that_left_the_build_is_not_shown_as_a_deletion() {
+        let mut old = baseline();
+        old.push(crd("widgets.example.com", ("app", "web"), &h("crd")));
+        let new_graph = StoreGraph::synthesize(&baseline(), &StoreGraph::empty("c"));
+        let old_graph = StoreGraph::synthesize(&old, &new_graph);
+        let text = render_package_plan(&diff_garbage(&old_graph, &new_graph), true);
+        assert!(text.contains("~ web 1.0.0 (1 kept)"), "{text}");
+        assert!(
+            text.contains("! CustomResourceDefinition/widgets.example.com (kept)"),
+            "{text}"
+        );
+        assert!(!text.contains("- CustomResourceDefinition"), "{text}");
+    }
+
+    /// `kix diff` renders the same removal the same way in every format.
+    #[test]
+    fn diff_renderers_list_a_kept_kind_apart_from_removals() {
+        let mut old = baseline();
+        old.push(crd("widgets.example.com", ("app", "web"), &h("crd")));
+        let d = diff_of(&old, &baseline());
+
+        let text = render_package_plan(&d, true);
+        assert!(text.contains("(1 kept)"), "{text}");
+        assert!(!text.contains("- CustomResourceDefinition"), "{text}");
+
+        let md = render_package_diff_markdown(&d);
+        assert!(md.contains("(1 kept)"), "{md}");
+        assert!(!md.contains("**Removed resources:**"), "{md}");
+        assert!(
+            md.contains("**Left the build, never deleted automatically:**\n\n- `CustomResourceDefinition/widgets.example.com`"),
+            "{md}"
+        );
+
+        let json = render_package_diff_json(&d);
+        let web = &json["changed"][0];
+        assert_eq!(web["removed_resources"], json!([]));
+        assert_eq!(
+            web["kept_resources"],
+            json!(["CustomResourceDefinition/widgets.example.com"])
+        );
+    }
+
+    /// A removed package lists the protected resources it leaves behind
+    /// apart from the ones it removes.
+    #[test]
+    fn a_removed_package_lists_its_kept_resources() {
+        let mut old = baseline();
+        old.push(crd("widgets.example.com", ("app", "web"), &h("crd")));
+        let new = vec![
+            record("c-old", &h("rec1")),
+            cluster_level("Namespace", "app", &h("ns"), json!({})),
+        ];
+        let new_graph = StoreGraph::synthesize(&new, &StoreGraph::empty("c"));
+        let old_graph = StoreGraph::synthesize(&old, &new_graph);
+        for d in [
+            diff_garbage(&old_graph, &new_graph),
+            diff_graphs(&old_graph, &new_graph),
+        ] {
+            assert_eq!(d.removed.len(), 1);
+            let removed = d.removed[0].resource_count - 1;
+            let text = render_package_plan(&d, true);
+            assert!(
+                text.contains(&format!("- web 1.0.0 ({removed} removed, 1 kept)")),
+                "{text}"
+            );
+            assert!(
+                text.contains("! CustomResourceDefinition/widgets.example.com (kept)"),
+                "{text}"
+            );
+            let md = render_package_diff_markdown(&d);
+            assert!(
+                md.contains(&format!(
+                    "({removed} removed, 1 kept)\n  - kept, never deleted automatically: `CustomResourceDefinition/widgets.example.com`"
+                )),
+                "{md}"
+            );
+            let json = render_package_diff_json(&d);
+            assert_eq!(
+                json["removed"][0]["kept_resources"],
+                json!(["CustomResourceDefinition/widgets.example.com"])
+            );
+            assert_eq!(json["removed"][0]["resources"], json!(removed + 1));
+        }
+    }
+
+    /// Added and removed packages share one JSON shape.
+    #[test]
+    fn an_added_package_has_an_empty_kept_list() {
+        let mut new = baseline();
+        new.push(package_instance("app", "api", "2.0.0", &h("pi2")));
+        let json = render_package_diff_json(&diff_of(&baseline(), &new));
+        assert_eq!(json["added"][0]["kept_resources"], json!([]));
+    }
+
+    /// A kept resource counts as kept in the resource totals, not as a real
+    /// content change.
+    #[test]
+    fn resource_totals_count_a_kept_resource_once() {
+        let mut old = baseline();
+        old.push(crd("widgets.example.com", ("app", "web"), &h("crd")));
+        let mut new = baseline();
+        new.remove(3);
+        let d = diff_of(&old, &new);
+        let totals = d.resource_totals();
+        assert_eq!((totals.real_content, totals.kept), (1, 1));
+        let md = render_package_diff_markdown(&d);
+        assert!(
+            md.contains(
+                "**Resources:** 1 with real content changes, 1 kept (never deleted automatically),"
+            ),
+            "{md}"
+        );
+    }
+
+    #[test]
+    fn a_prunable_resource_that_left_the_build_is_a_deletion() {
+        let mut new = baseline();
+        new.remove(3);
+        let new_graph = StoreGraph::synthesize(&new, &StoreGraph::empty("c"));
+        let old_graph = StoreGraph::synthesize(&baseline(), &new_graph);
+        let text = render_package_plan(&diff_garbage(&old_graph, &new_graph), true);
+        assert!(text.contains("~ web 1.0.0 (1 removed)"), "{text}");
+        assert!(text.contains("- ConfigMap/web@app"), "{text}");
+    }
+
     #[test]
     fn renderers_carry_the_new_sections() {
         let mut new = baseline();
@@ -1128,5 +1443,40 @@ mod diff_graph_tests {
         let md = render_package_diff_markdown(&d);
         assert!(md.contains("#### Cluster-level resources"), "{md}");
         assert!(md.contains("**Activation:** `c-old` → `c-new`"), "{md}");
+    }
+}
+
+#[cfg(test)]
+mod never_pruned_tests {
+    use super::*;
+    use kix::manifest::types::CLUSTER_SCOPED;
+
+    fn rid(kind: &str, name: &str) -> ResourceId {
+        ResourceId {
+            kind: kind.into(),
+            name: name.into(),
+            namespace: CLUSTER_SCOPED.into(),
+        }
+    }
+
+    /// A CRD or Namespace dropped from the build is kept; everything else,
+    /// including custom resources of a kept CRD, is deleted in the given order.
+    #[test]
+    fn crds_and_namespaces_are_kept() {
+        let garbage = vec![
+            rid("Widget", "w1"),
+            rid("CustomResourceDefinition", "widgets.example.com"),
+            rid("ConfigMap", "old"),
+            rid("Namespace", "gone"),
+        ];
+        let (delete, kept) = split_never_pruned(garbage);
+        assert_eq!(delete, vec![rid("Widget", "w1"), rid("ConfigMap", "old")]);
+        assert_eq!(
+            kept,
+            vec![
+                rid("CustomResourceDefinition", "widgets.example.com"),
+                rid("Namespace", "gone"),
+            ]
+        );
     }
 }

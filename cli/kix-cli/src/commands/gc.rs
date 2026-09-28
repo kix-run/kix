@@ -46,7 +46,7 @@ use kix::manifest::types::{CLUSTER_SCOPED, ResourceId};
 
 use crate::cli::GcArgs;
 use crate::output;
-use crate::plan;
+use crate::plan::{self, print_never_pruned, split_never_pruned};
 
 use super::CommandContext;
 
@@ -1018,102 +1018,6 @@ fn confirm(args: &GcArgs, prompt: &str) -> Result<bool> {
 }
 
 // ---------------------------------------------------------------------------
-// Shared: kinds gc reports but never deletes
-// ---------------------------------------------------------------------------
-
-/// Split garbage into `(delete, kept)`, keeping each list's order. `kept`
-/// holds the kinds `lifecycle::never_pruned` protects.
-fn split_never_pruned(rids: Vec<ResourceId>) -> (Vec<ResourceId>, Vec<ResourceId>) {
-    let (kept, delete) = rids
-        .into_iter()
-        .partition(|rid| lifecycle::never_pruned(&rid.kind));
-    (delete, kept)
-}
-
-/// List garbage gc leaves in place because deleting it would also delete
-/// objects outside the build.
-fn print_never_pruned(kept: &[ResourceId]) {
-    if kept.is_empty() {
-        return;
-    }
-    println!();
-    println!(
-        "{} {} resources are not in the build but are never deleted automatically:",
-        output::bold("Kept:"),
-        kept.len(),
-    );
-    for rid in kept {
-        println!("    {} {}", output::yellow("!"), rid);
-    }
-    println!(
-        "  {}",
-        output::dim(
-            "Deleting a Namespace deletes everything in it, and deleting a \
-             CustomResourceDefinition deletes every resource of that kind. \
-             Delete them with kubectl if that is intended."
-        ),
-    );
-}
-
-#[cfg(test)]
-mod never_pruned_tests {
-    use super::*;
-
-    fn rid(kind: &str, name: &str) -> ResourceId {
-        ResourceId {
-            kind: kind.into(),
-            name: name.into(),
-            namespace: CLUSTER_SCOPED.into(),
-        }
-    }
-
-    /// A CRD or Namespace dropped from the build is kept; everything else,
-    /// including custom resources of a kept CRD, is deleted in the given order.
-    #[test]
-    fn crds_and_namespaces_are_kept() {
-        let garbage = vec![
-            rid("Widget", "w1"),
-            rid("CustomResourceDefinition", "widgets.example.com"),
-            rid("ConfigMap", "old"),
-            rid("Namespace", "gone"),
-        ];
-        let (delete, kept) = split_never_pruned(garbage);
-        assert_eq!(delete, vec![rid("Widget", "w1"), rid("ConfigMap", "old")]);
-        assert_eq!(
-            kept,
-            vec![
-                rid("CustomResourceDefinition", "widgets.example.com"),
-                rid("Namespace", "gone"),
-            ]
-        );
-    }
-
-    /// `delete_resources` drops protected kinds before it connects, so a list
-    /// of only a CRD and a Namespace deletes nothing and never reaches the
-    /// (nonexistent) kube context.
-    #[tokio::test]
-    async fn delete_resources_skips_protected_kinds() {
-        #[derive(clap::Parser)]
-        struct Wrapper {
-            #[command(flatten)]
-            global: crate::cli::GlobalArgs,
-        }
-        let global = <Wrapper as clap::Parser>::parse_from([
-            "kix",
-            "--context",
-            "kix-gc-test-no-such-context",
-        ])
-        .global;
-        let resources = vec![
-            rid("CustomResourceDefinition", "widgets.example.com"),
-            rid("Namespace", "gone"),
-        ];
-        let (deleted, failed) = delete_resources(&global, &resources).await.unwrap();
-        assert_eq!((deleted, failed), (0, 0));
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Shared: delete a list of resources from the cluster
 // ---------------------------------------------------------------------------
 
@@ -1380,5 +1284,42 @@ mod prompt_tests {
             deletion_prompt(3, 2),
             "Delete 3 resources and 2 activation record(s)? [y/N] "
         );
+    }
+}
+
+#[cfg(test)]
+mod delete_tests {
+    use super::*;
+
+    fn rid(kind: &str, name: &str) -> ResourceId {
+        ResourceId {
+            kind: kind.into(),
+            name: name.into(),
+            namespace: CLUSTER_SCOPED.into(),
+        }
+    }
+
+    /// `delete_resources` drops protected kinds before it connects, so a list
+    /// of only a CRD and a Namespace deletes nothing and never reaches the
+    /// (nonexistent) kube context.
+    #[tokio::test]
+    async fn delete_resources_skips_protected_kinds() {
+        #[derive(clap::Parser)]
+        struct Wrapper {
+            #[command(flatten)]
+            global: crate::cli::GlobalArgs,
+        }
+        let global = <Wrapper as clap::Parser>::parse_from([
+            "kix",
+            "--context",
+            "kix-gc-test-no-such-context",
+        ])
+        .global;
+        let resources = vec![
+            rid("CustomResourceDefinition", "widgets.example.com"),
+            rid("Namespace", "gone"),
+        ];
+        let (deleted, failed) = delete_resources(&global, &resources).await.unwrap();
+        assert_eq!((deleted, failed), (0, 0));
     }
 }

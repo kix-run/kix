@@ -158,10 +158,12 @@ impl DeployObserver for OperatorObserver {
             DeployEvent::PruneStart {
                 count,
                 resources,
+                kept,
                 delete,
             } => {
                 let names: Vec<String> = resources.iter().map(|r| r.display_id()).collect();
-                tracing::info!(activation, count = *count, delete = *delete, resources = ?names, "Starting prune");
+                let kept: Vec<String> = kept.iter().map(|r| r.display_id()).collect();
+                tracing::info!(activation, count = *count, delete = *delete, resources = ?names, kept = ?kept, "Starting prune");
             }
             DeployEvent::Finalized {
                 activation: new,

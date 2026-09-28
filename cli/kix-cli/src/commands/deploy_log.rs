@@ -24,6 +24,7 @@ use kix::cluster::apply::ApplyAction;
 use kix::cluster::stream::{
     CancelReason, DeployEvent, DeployObserver, NodeDetail, NodeId, TransitionKind, Verdict,
 };
+use kix::manifest::types::ResourceId;
 
 pub struct LineObserver {
     pub verbose: bool,
@@ -110,19 +111,13 @@ impl DeployObserver for LineObserver {
                 }
             }
             DeployEvent::PruneStart {
-                count,
                 resources,
+                kept,
                 delete,
+                ..
             } => {
-                if *delete {
-                    println!("prune> deleting {count} orphaned resources");
-                } else {
-                    println!(
-                        "prune> {count} orphaned resources kept (warn-only; pass --prune to delete)"
-                    );
-                }
-                for rid in resources {
-                    println!("{}> orphan", rid.display_id());
+                for line in prune_lines(resources, kept, *delete) {
+                    println!("{line}");
                 }
             }
             DeployEvent::Finalized {
@@ -228,6 +223,7 @@ impl DeployObserver for JsonObserver {
             DeployEvent::PruneStart {
                 count,
                 resources,
+                kept,
                 delete,
             } => json!({
                 "type": "prune_start",
@@ -235,6 +231,7 @@ impl DeployObserver for JsonObserver {
                 "count": count,
                 "delete": delete,
                 "resources": resources.iter().map(|r| r.display_id()).collect::<Vec<_>>(),
+                "kept": kept.iter().map(|r| r.display_id()).collect::<Vec<_>>(),
             }),
             DeployEvent::Finalized {
                 activation,
@@ -278,6 +275,36 @@ impl DeployObserver for JsonObserver {
         println!("{obj}");
         let _ = io::stdout().flush();
     }
+}
+
+/// `LineObserver`'s lines for a `PruneStart`: the orphans prune deletes or
+/// reports, then the ones no prune policy deletes.
+fn prune_lines(resources: &[ResourceId], kept: &[ResourceId], delete: bool) -> Vec<String> {
+    let mut lines = Vec::new();
+    if !resources.is_empty() {
+        let count = resources.len();
+        lines.push(if delete {
+            format!("prune> deleting {count} orphaned resources")
+        } else {
+            format!("prune> {count} orphaned resources kept (warn-only; pass --prune to delete)")
+        });
+        lines.extend(
+            resources
+                .iter()
+                .map(|rid| format!("{}> orphan", rid.display_id())),
+        );
+    }
+    if !kept.is_empty() {
+        lines.push(format!(
+            "prune> {} orphaned resources are never deleted automatically",
+            kept.len()
+        ));
+        lines.extend(
+            kept.iter()
+                .map(|rid| format!("{}> orphan, kept", rid.display_id())),
+        );
+    }
+    lines
 }
 
 fn node_label(id: &NodeId) -> String {
@@ -377,5 +404,38 @@ fn apply_label(action: &ApplyAction) -> &'static str {
         ApplyAction::Configured => "configured",
         ApplyAction::Unchanged => "unchanged",
         ApplyAction::Skipped => "skipped",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rid(kind: &str, name: &str) -> ResourceId {
+        ResourceId {
+            kind: kind.into(),
+            name: name.into(),
+            namespace: "app".into(),
+        }
+    }
+
+    /// Under warn-only, a kept orphan is not counted or listed with the
+    /// orphans the policy reports.
+    #[test]
+    fn prune_lines_list_kept_orphans_apart() {
+        let lines = prune_lines(
+            &[rid("ConfigMap", "old")],
+            &[rid("Namespace", "gone")],
+            false,
+        );
+        assert_eq!(
+            lines,
+            vec![
+                "prune> 1 orphaned resources kept (warn-only; pass --prune to delete)",
+                "ConfigMap/old@app> orphan",
+                "prune> 1 orphaned resources are never deleted automatically",
+                "Namespace/gone@app> orphan, kept",
+            ]
+        );
     }
 }
