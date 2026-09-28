@@ -72,6 +72,17 @@ kix deploy <CLUSTER> [-y] [--dry-run] [--prune | --prune-mode default|no]
    --hard` also removes its orphans. While a build is listed, the machine
    that recorded it keeps a Nix GC root for it in
    `~/.cache/kix/activations/`, so `nix-collect-garbage` does not remove it.
+   When two deploys are planned against the same Active record, the one that
+   finishes second writes a list computed without the first one's builds, and
+   only `kix gc --hard` then finds the orphans the first one kept.
+
+   To avoid relying on this list, pass `--prune` to every deploy and
+   rollback. A run that deletes every orphan adds nothing to the list, so it
+   stays empty; a failed delete still adds the build it came from. No
+   configuration setting makes `--prune` the default, so put the flag in the
+   command your scripts or CI run. In
+   [operator mode](/docs/reference/cli/operator-mode/) the operator deletes
+   orphans on every deploy.
 7. Marks the Activation `Active`, or `Degraded` or `Failed` when resources
    failed.
 

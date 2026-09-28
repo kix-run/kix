@@ -54,7 +54,9 @@ those orphans too, listed under "Orphans kept by earlier deploys". When soft
 or hard gc deletes without failures and the fresh build is the one the
 Active record describes, it removes the list. Soft gc leaves the list if this
 machine could not read one of the builds, and hard gc leaves it if it was
-forbidden to list some kinds.
+forbidden to list some kinds. Deploying with `--prune` every time keeps the
+list empty, so soft gc has no kept orphans to find; see
+[`deploy`](/docs/reference/cli/deploy-apply/).
 
 Retiring a record removes it as a rollback target. Each record kept adds one
 entry to the `kix.run/activations` annotation on every managed resource, which

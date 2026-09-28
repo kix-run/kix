@@ -62,6 +62,14 @@
     txtOwnerId = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
+      description = ''
+        Owner id written into the TXT registry records, passed as
+        `--txt-owner-id`. Null omits the flag, so external-dns uses its own
+        default id, `default`, which is the id existing records carry. Every
+        instance writing the same zone needs a distinct id. Changing the id
+        on a running install leaves the TXT records written under the old id
+        unowned: external-dns no longer updates or deletes those records.
+      '';
     };
     txtPrefix = lib.mkOption {
       type = lib.types.str;
@@ -296,10 +304,6 @@
         };
       };
 
-      # Not passed as --txt-owner-id yet; see housekeeping/2026-09-27-external-dns-ignores-txt-owner-id.md.
-      # deadnix: skip
-      ownerId = if config.txtOwnerId != null then config.txtOwnerId else name;
-
       # Merge extra labels into all resource labels.
       allLabels = edSelectorLabels // config.extraLabels;
 
@@ -320,6 +324,7 @@
         "--interval=${config.interval}"
         "--txt-prefix=${config.txtPrefix}"
       ]
+      ++ lib.optional (config.txtOwnerId != null) "--txt-owner-id=${config.txtOwnerId}"
       ++ lib.optional (config.annotationFilter != null) "--annotation-filter=${config.annotationFilter}"
       ++ map (s: "--source=${s}") config.sources
       ++ [ "--cloudflare-dns-records-per-page=${toString config.cloudflare.dnsRecordsPerPage}" ]

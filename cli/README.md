@@ -156,6 +156,13 @@ run could have deleted their orphans), and, with `carry_current`
 (`--current-activation`, whose plan never read the record), the list on the
 record current at finalize. An empty list removes the field. A run that never
 finalizes (nothing changed) leaves the Active record's list as it was.
+Finalize writes the list whole, so of two deploys planned against the same
+Active record, the one that finalizes second drops the first one's kept builds
+(`housekeeping/2026-09-28-kept-orphans-list-last-finalize-wins.md`). Users who
+want the list to stay empty deploy with `--prune` every time
+(`PrunePolicy::Delete` leaves `orphans_left` false unless a delete fails); no
+config or env var sets that policy for the CLI, and the operator always runs
+with it.
 
 After finalize, deploy and rollback call `baseline::sync_kept_roots` with the
 list `KubeOps::recorded_orphans_kept_from` reports. It keeps one Nix GC root

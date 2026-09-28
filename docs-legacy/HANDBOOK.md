@@ -1454,6 +1454,15 @@ current state and `kix deploy` never diffs against it. The next deploy reads a
 `Failed` record only as an extra baseline, to re-apply what that run may have
 changed and prune what it left behind, then supersedes it.
 
+A deploy or rollback that keeps orphans (no `--prune`, `--prune-mode=no`, or a
+failed delete) lists the builds they came from under the new record's
+`status.orphansKeptFrom`, so a later `kix deploy --prune` or soft `kix gc` can
+still delete them. Two deploys planned against the same Active record can lose
+part of that list: the one that finalizes second writes it without the first
+one's builds. To keep the list empty, pass `--prune` to every deploy and
+rollback; no configuration setting makes it the default for the CLI, and the
+operator always deletes orphans.
+
 | Path | Behavior |
 |---|---|
 | Default (no `--operator`) | CLI runs the scheduler directly. Reads/writes `Activation` CR for state. Wave-based apply with SSA, readiness, prune. |
